@@ -642,3 +642,74 @@ pass, readiness/completion or root-cause/performance-fix claim. Four command
 children exited;no jobs. No push/PR/main/status-save/native/closure/other-worktree
 or real profile/display/app/key/context/draft actions. Ticket remains
 **implementing / review-and-runtime BLOCKED**;controller owns continuation.
+
+## Follow-up — source-reviewed refresh clock; current library GREEN, desktop Busy
+
+**Owner explicit yes** to the narrow clock correction/plan26283e60 is retained.
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**,
+then SAME whole QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,
+**zero findings** over completefb6bbbb..64a6 on d701, including injected/mixed-clock
+callers. That lifted this once-only shared-source final sequence, not runtime
+acceptance. No agents/fetch/merge/fix/probe/profiling during frozen gates.
+
+Frozen source **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**, main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**, accepted docs-only merge57de16ce
+and owner plan26283e60. Only production refresh cutoff + existing resume case
+changed sincefb6. Current repository.rs SHA222d5f57 and resume.rs SHAc33db6e8 match
+the authenticated refresh-clock21 manifest and13 relevant recorded source/build
+inputs. All25 older manifest digests preserved, no bulk inventories/old writes.
+
+**Current Clippy/fmt reused, not rerun**: exit0,19.656576638s/18.196607690s from
+`task8-refresh-clock-*`. Old e6bc check no longer qualifies; a fresh required
+`devenv shell -- cargo check --all-features --locked` **exit0**,4.165545239s
+monotonic/3.97s Cargo. Then **exact full AGENTS fast command** once, lib+bins+all27,
+default threads/no instrumentation, only approved local-sync exclusion:
+
+- Current library **1530 passed/0 failed/160 filtered**,**1865.59s tests**.
+- Current desktop **1578 passed/2 failed/0 filtered**,**2123.31s tests**.
+- **Command exit101; only2/30 planned binaries ran.** CLI units/all27 integrations,
+  including whole mutation_replay384, did not start. No later gate admitted.
+
+Two exact failures, both unwrapping **ReadError code Busy,has_source:true** at
+**`src/desktop/view/settings/repositories_tests.rs:108:10`**:
+
+- `desktop::view::settings::repositories::tests::pressing_confirm_twice_creates_one_repository`
+  — received **2026-11-08T00:00:30.582032Z**,sequence3213.
+- `desktop::view::settings::repositories::tests::create_in_an_empty_directory_previews_nothing_then_creates_and_refreshes`
+  — received **2026-11-08T00:00:35.345710Z**,sequence3215.
+
+Underlying Busy origin/cause **undiagnosed**, not timeout/parking failure messages,
+no cache/SQLite/worker/clock/retirement attribution or infrastructure waiver.
+No additional source inspection/probe, wait/lock/expectation change, retry or fix.
+
+Check UTC2026-11-07T22:55:19.701516Z→22:55:23.867071Z, mono4.165545239s/
+boot4.165544924s. Fast2026-11-07T22:55:26.849777Z→2026-11-08T00:02:16.465713Z,
+mono**4009.615926955s**/boot**4009.615926714s**. Both PM-only interval queries had
+zero matches/exit1/empty stderr; sub-microsecond differences: **no measured suspend**.
+No power changes/full user logs/synthetic waits/progress polling. Raw output and
+8/3319 receipt rows cover every byte and reconcile3108 pass/2 fail completions;
+receipt clocks are not test starts/internal phases. Inputs stayed frozen.
+
+Old library1530/0/1601972.73s at e6bc, desktop1580/02158.17s/CLIunits307/canonical65
+at d49, wholeCLI477/0+ten greens atfb6 remain **prior baselines only**, not current
+passes or failures relabeled. Historical383/1 and other failures stay actual;
+exact corrected1/0 never combines with old383 into whole384. Shared production
+change justified this one full fast refresh, not routine repeats of green binaries.
+Preserve current library/check/current-input statics on unchanged relevant inputs.
+
+**NOT RUN on64a6:**CLI units/all27 integrations, selected local-sync160, all ten
+SSH targets, both smokes and SAME whole final runtime-evidence SPEC→QUALITY /
+controller-owner handoff. No display/socket/app/profile/native operation. Retained44
+C/L/S/M1/Q1/enum/D5/D6/native/combinatorial limits unchanged; no all-essential or
+performance/root-cause fix claim. WAIT60s/POLL10ms/GPUI15s-per-park and production
+safety budgets/assertions unchanged; profiling/optimization stays stopped.
+
+New-only **`/tmp/opencode/task8-clock-final-*`**: owner/review/barrier/reuse and
+baseline links, exact commands/source/hashes/raw/receipt/results/power, failure
+analysis, coverage/handoff/final manifest. Only ledger/current standing/this append
+committed with coauthor, preserving original ID/parent/time/all history. No new ID/
+extra build/status save/source-golden-schema-dependency change/push/PR/main/close/
+other-worktree/real profile-key-context-draft action. Known gate processes exited;
+no jobs. **FIRSTFAIL barrier restored**, controller authorization required. Ticket
+**implementing / runtime BLOCKED**, not feature-complete/review-ready; final runtime
+reviews/owner handoff remain owed.

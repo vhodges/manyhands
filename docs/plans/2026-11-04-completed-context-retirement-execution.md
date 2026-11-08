@@ -12,9 +12,10 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current Refresh-Claim Correction Standing — 2026-11-07 UTC
+### Current Shared-Clock Gate Standing — 2026-11-08 UTC
 
-**Owner-approved narrow correction delivered locally; exact TDD GREEN only.**
+**Owner-approved/source-reviewed shared correction; fresh final gates STOPPED at
+desktop Busy failures.** Current frozen source **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**.
 Owner replied **yes**,2026-11-07, to the deterministic refresh-claim clock design.
 Accepted controller preflight: clean4a7dc4c3, documentation-only incoming main
 **`d70142b63a952f5e1aade369e0cd654ca9a03617`**, conflict-free merge
@@ -30,12 +31,28 @@ one epoch increment, discovery-current effects and finished request settlement.
 Lifecycle claim/raw SQL/heartbeat writes/SystemClock/TTL3s remain unchanged.
 Default SystemClock still reads real UTC; this is **not a performance fix**.
 
-| New bounded evidence | Actual standing |
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**,
+then SAME whole QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,
+completefb6bbbb..64a6 on d701 main, **zero findings**. Both reviewed concrete
+shared/injected-clock callers and lifted this sequence's barrier; not final
+runtime acceptance. Shared Rust changed, authorizing one conservative full fast
+refresh rather than unchanged-green repetitions. No fetch/merge during frozen gates.
+
+| Current-source final evidence | Actual standing |
 | --- | --- |
-| Exact case, amended test + OLD production cutoff | **Compiled RED**,exit101;0 passed/1 failed/383 filtered;1.09s tests/4.310144528s elapsed. Actual Success/Ok vs Error/Busy proves injected cutoff was ignored. |
-| Same exact case + one-line production correction | **GREEN**,exit0;1 passed/0 failed/383 filtered;1.58s tests/13.343988555s elapsed. Both Busy boundaries and strict stale takeover assertions executed. |
-| Strict whole-tree Clippy | **exit0**,19.656576638s elapsed;all targets/all features/locked/-D warnings. |
-| Whole-tree fmt-check | **exit0**,18.196607690s elapsed;no formatting edit needed. |
+| Fresh required check | **exit0**,4.165545239s monotonic/3.97s Cargo; prior e6bc check not reused. |
+| Strict whole-tree Clippy | **REUSED exit0**,19.656576638s; identical current inputs, not rerun. |
+| Whole-tree fmt-check | **REUSED exit0**,18.196607690s; identical current inputs, not rerun. |
+| Library in exact full fast command | **1530 passed/0 failed/160 local-sync filtered**,1865.59s tests; current source64a6. |
+| Desktop in that command | **1578 passed/2 failed/0 ignored/0 filtered**,2123.31s tests; command **exit101**, then STOP. |
+
+Both failed cases unwrap **ReadError code Busy** at
+`src/desktop/view/settings/repositories_tests.rs:108:10`: **pressing_confirm_twice_creates_one_repository**
+and **create_in_an_empty_directory_previews_nothing_then_creates_and_refreshes**.
+No measured suspend in either command. Underlying Busy origin/cause remains
+undiagnosed; no source probe, expectation/limit relaxation, infrastructure waiver,
+fix or retry. CLI unit binary and **all27 integrations did not start on64a6**,
+including whole mutation_replay384. Prior exact1/0 stays targeted, not whole384.
 
 **Shared Rust source now differs** from the old library/compiled freezes; do not
 relabel old passes as unchanged-current-input evidence. They remain valid prior
@@ -54,20 +71,16 @@ cutoff/row age: **its actual cause remains unproven**, no live-owner exclusion
 defect or load/retirement/suspend cause is claimed. Historical failures and
 diagnostic outcomes stay intact. Profiling/optimization remains stopped.
 
-**Next barrier:** SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, THEN SAME
-QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** must re-review the changed shared source
-before controller-owned fresh cargo-check/final runtime gates resume. Old SOURCE
-approvals throughfb6bbbb do not approve this delta. Concrete callers, injected-clock
-usages and conservative final revalidation footprint are appended below and in
-`/tmp/opencode/task8-refresh-clock-coverage.md`; no coverage waiver or broad rerun.
-
-**Still NOT RUN:**14 later fast integrations, selected library local-sync160,
-ten SSH targets, both isolated smokes and final runtime-evidence SPEC→QUALITY /
-controller-owner handoff. No broad runtime/check command ran in this correction.
+**FIRSTFAIL barrier restored:** no further test/probe/fix authorized. Concrete
+caller/clock coverage remains owed beyond the current library pass; no inherited
+baseline or exact-case/whole-target combination replaces actual current gates.
+**Still NOT RUN on current source:**CLI units/all27 integrations, selected library
+local-sync160, ten SSH targets, both isolated smokes and SAME whole final
+runtime-evidence SPEC→QUALITY/controller-owner handoff. No display/app operation.
 WAIT60s/GPUI15s per-park/POLL10ms/default threads/safety budgets/assertions and all
 retained44/M1/Q1/enum/D5/D6/native/combinatorial limits are unchanged. No real
 profile/display/app/key/context/draft or native action. Ticket **implementing /
-review-and-runtime BLOCKED**, not SOURCE-approved, whole-target-passed,
+runtime BLOCKED**, source-approved but not all-target-passed,
 feature-complete or review-ready. Latest appended checkpoint governs older prose.
 
 ### Historical Main Integration And Gate Standing — 2026-11-07 UTC
@@ -9250,3 +9263,128 @@ whole-target success, performance/root-cause fix or readiness/completion claim.
 No push/PR/native/main/status-save/closure/other-worktree or real profile/display/
 app/key/draft/context operation. All four owned command children exited; no jobs.
 Ticket **implementing / review-and-runtime BLOCKED**; controller owns continuation.
+
+## Task 8 — Current Shared-Clock Final Gate: Library Green, Desktop Busy Failure
+
+### Owner/Review Authority, Source And Static Reuse — 2026-11-08 UTC
+
+Owner's explicit **yes** to the narrow refresh eligibility clock correction and
+existing plan amendment **`26283e60b8f318f6093d24bb0e7cb359737a414f`** remain the
+authority. Controller reports SAME whole SPEC
+**`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**, then SAME whole QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**, **zero findings** over
+completefb6bbbb..64a6 on main d701, including mixed-clock callers. That lifted
+the source barrier for this once-only changed-source sequence, not runtime
+review/owner handoff. No agents, fixes, probes or profiling authorized here.
+
+Clean frozen source **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**, main baseline
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**, accepted merge
+**`57de16ce505a4a0e39256f5c1948c139d73bde74`**. Incoming main since707 adds86 lines
+in one canonical ticket Markdown; AGENTS unchanged. Accepted completed preflight;
+no new fetch/merge/other-worktree/main edit during frozen gates. Only two source/
+test paths differ fromfb6: `src/repository.rs` and `tests/mutation_replay/resume.rs`.
+Current SHA-256 values:
+
+- repository.rs **`222d5f57397156b4f7410afa70948920763270aecb779f9b1dc0fe043005f8fb`**
+- resume.rs **`c33db6e81f4f833b978222ef0bd9d4e29f7dc6fb16ea337232ad957758dd1209`**
+
+Authenticated refresh-clock21 manifest
+**`77f17d85c170370ba21d3538ca57d2decfbdffe9369435502a6a234711504b2a`** and all21
+entries. Thirteen relevant recorded source/build hashes match current inputs;
+only25 older manifest digests snapshotted, no thousands-of-inputs re-inventory.
+**Current-input Clippy/fmt reused, not rerun**:
+
+| Static evidence | Exact retained scope |
+| --- | --- |
+| `task8-refresh-clock-clippy.log` | `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`, exit0,19.656576638s monotonic/19.40s Cargo. |
+| `task8-refresh-clock-fmt.log` | `devenv shell -- cargo fmt --check`, exit0,18.196607690s monotonic. |
+
+Old e6bc check no longer qualifies after the production-line change. Old
+library1530/0/1601972.73s, desktop1580/02158.17s, CLIunits307/00.52s, canonical65/0,
+wholeCLI477/0 and ten fb6 fast greens are **prior baselines only**, not current
+passes/failures. Historical mutation_replay383/1 and all earlier failures retain
+their real outcomes. Exact amended-case RED0/1→GREEN1/0 is bounded evidence,
+never combined with old383 to invent whole384 green. No performance/root-cause
+fix for historic load failures is asserted.
+
+### Actual Current Commands And First-Failure Boundary
+
+Exactly once, serialized Devenv:
+
+```sh
+devenv shell -- cargo check --all-features --locked
+```
+
+**Fresh exit0**,4.165545239s monotonic elapsed,3.97s Cargo, clean setup. Then the
+**exact current AGENTS full fast command**, lib+bins+all27 named integrations,
+default threads, only **`-- --skip repository::local_sync::`**, no other filter,
+skip, retry, instrumentation or budget/thread override. Full literal argv in
+**`task8-clock-final-results.json`** and the new runner. **Exit101**:
+
+| Actual finished binary | Passed / failed / filtered | Test seconds |
+| --- | --- | --- |
+| `unittests src/lib.rs` | **1530/0/160** | **1865.59** |
+| `unittests src/main.rs` | **1578/2/0** | **2123.31** |
+
+Zero ignored/measured tests. **Only2 of30 planned binaries ran**. CLI units and
+all27 integrations did not start; no selected local-sync/SSH/smoke gate followed.
+The library green is actual64a6 runtime, not the old1972.73s result relabeled.
+Preserve this green on unchanged relevant inputs rather than routinely rerunning it.
+
+Both failures at **`src/desktop/view/settings/repositories_tests.rs:108:10`**:
+
+| Exact desktop test | Completion-line receipt UTC / sequence |
+| --- | --- |
+| `desktop::view::settings::repositories::tests::pressing_confirm_twice_creates_one_repository` | **2026-11-08T00:00:30.582032Z /3213** |
+| `desktop::view::settings::repositories::tests::create_in_an_empty_directory_previews_nothing_then_creates_and_refreshes` | **2026-11-08T00:00:35.345710Z /3215** |
+
+Both panic unwrapping **`ReadError { code: Busy, ... recovery: [], has_source: true }`**.
+The saved Debug output does not establish the underlying Busy origin. These are
+not timeout/parking failure messages. **Cause undiagnosed**; no clock/audit/cache/
+SQLite/worker causation, prior-race explanation or infrastructure waiver inferred.
+No additional source inspection/probe, changed expectation, lock/timeout/thread
+adjustment, retry, optimization or profiling after this first failed binary.
+
+### Clocks, Runtime Scope And Untouched Remainder
+
+| Command | Actual UTC interval | REALTIME / MONOTONIC / BOOTTIME seconds |
+| --- | --- | --- |
+| Fresh check | **2026-11-07T22:55:19.701516Z→22:55:23.867071Z** | **4.165555062 /4.165545239 /4.165544924** |
+| Full fast selection | **2026-11-07T22:55:26.849777Z→2026-11-08T00:02:16.465713Z** | **4009.615935617 /4009.615926955 /4009.615926714** |
+
+Boot-minus-mono **−0.000000315s /−0.000000241s** is sampling noise; both interval-
+only kernel PM suspend entry/exit queries returned **zero matches,exit1/no-match,
+empty stderr**. **No measured suspend**. No full/user journal, inhibitor/power
+change, induced/prevented sleep, synthetic waits or progress polling. Foreground
+blocking capture waited for normal completion; final selected gates may exceed
+the interim15-minute limit. Raw output is separate from **8/3319** receipt rows,
+covering every byte and reconciling fast**3108 pass/2 fail** named completions.
+Receipt times are not case-start or internal wait/claim/worker/Busy phase clocks.
+
+**`task8-clock-final-coverage.md`** maps these actual scopes. Included library
+M1/Q1/domain cases now have current1530-case evidence; skipped local-sync160,
+all CLI/confirmation/contract/replay/read integrations and RowClock SSH paths do
+not. Whole mutation_replay384 was not reached; its exact1/0 and prior383/1 remain
+separate. Retained44 C/L/S/essential, enum/D5/D6/native/combinatorial limitations
+are unchanged; no current all-essential coverage/feature-ready claim. Owner
+WAIT60s/POLL10ms/GPUI15s-per-park and all production safety/lease/heartbeat/cache/
+SQLite/consent limits remain unchanged. Profiling/optimization stays stopped.
+
+**NOT RUN on64a6:**CLI units and all27 fast integrations; selected library local-
+sync (160 intentionally excluded above); all ten selected whole SSH targets;
+both isolated smokes; SAME whole SPEC then QUALITY final runtime-evidence reviews
+and controller/owner handoff. No display/socket/app/profile/native action.
+**FIRSTFAIL barrier restored**; controller must authorize further execution/fix.
+
+New-only **`/tmp/opencode/task8-clock-final-*`** holds owner/review/reuse/baseline
+scope proof, exact argv/current source/raw/receipt/results/power evidence, input
+hashes, failure classification, coverage/handoff and computed manifest. All25
+older manifest digests preserved, no old runner/log/result rewritten. Final
+source/hash/whitespace/known-main ancestry/merge-tree/comment-prefix/no-jobs checks
+and metadata HEAD accompany handoff. Only owned ledger/current standing and append
+to canonical **`01M6TYJATB44WZPJABX9GMBVS1`** committed with coauthor; original
+ID/parent **`01M6SYJK4CJGHWKZC7MTP18GTA`**/creation time/prior body unchanged.
+No ID/extra build/status save/source-golden-schema-dependency change/push/PR/
+main/close/other-worktree/real key-profile-draft-context operation. Known gate
+runner/Cargo processes exited; no jobs. Ticket **implementing / runtime BLOCKED**,
+not feature-complete/review-ready; final runtime reviews/owner handoff remain owed.
