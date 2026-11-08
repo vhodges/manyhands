@@ -1472,3 +1472,7 @@ impl Binding for SyncBinding {
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "sync_tests.rs"]
+mod tests;

@@ -159,7 +159,7 @@ const SCHEMA:&str="CREATE TABLE document_promotions (
     cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1)),
     updated_at INTEGER NOT NULL CHECK(updated_at>=0),
     refusal_category TEXT CHECK(refusal_category IN ('blocked','external_change','reconfirmation_required')),
-    refusal_blockers INTEGER CHECK(refusal_blockers BETWEEN 1 AND 65535),
+    refusal_blockers INTEGER CHECK(refusal_blockers BETWEEN 1 AND 131071),
     CHECK((context_attempt=0)=(context_sync_id IS NULL)),
     CHECK((primary_attempt=0)=(primary_sync_id IS NULL)),
     CHECK(context_sync_id IS NULL OR context_sync_id!=operation_id),
@@ -168,7 +168,9 @@ const SCHEMA:&str="CREATE TABLE document_promotions (
     CHECK((refusal_category IS 'blocked')=(refusal_blockers IS NOT NULL))
 )";
 const INDEX: &str = "CREATE UNIQUE INDEX document_promotions_unfinished ON document_promotions(repository_id,item_id) WHERE step NOT IN ('complete','abandoned','superseded')";
+const BLOCKERS_MARKER: &str = "promotion_refusal_blockers_v2";
 pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
+    let mut created = false;
     let marked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='cycle_09_document_promotions')",[],|r|r.get(0)).map_err(|_|state::recovery_required())?;
     if !marked {
         let partial:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name IN ('document_promotions','document_promotions_unfinished'))",[],|r|r.get(0)).map_err(|_|state::recovery_required())?;
@@ -181,6 +183,26 @@ pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryEr
         tx.execute(
             "INSERT INTO registry_migrations(name) VALUES('cycle_09_document_promotions')",
             [],
+        )
+        .map_err(|_| state::recovery_required())?;
+        created = true;
+    }
+    let widened: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [BLOCKERS_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| state::recovery_required())?;
+    if !widened {
+        // The refusal mask CHECK gained a bit; rebuild a table that predates
+        // it. The index goes first so the rename cannot carry its name along.
+        if !created {
+            tx.execute_batch(&format!("DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO document_promotions_before_blockers; {SCHEMA}; {INDEX}; INSERT INTO document_promotions SELECT * FROM document_promotions_before_blockers; DROP TABLE document_promotions_before_blockers;")).map_err(|_| state::recovery_required())?;
+        }
+        tx.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [BLOCKERS_MARKER],
         )
         .map_err(|_| state::recovery_required())?;
     }

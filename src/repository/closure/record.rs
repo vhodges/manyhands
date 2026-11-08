@@ -247,7 +247,7 @@ const SCHEMA:&str="CREATE TABLE ticket_closures (
     cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1)),
     updated_at INTEGER NOT NULL CHECK(updated_at>=0),
     refusal_category TEXT CHECK(refusal_category IN ('blocked','external_change','reconfirmation_required')),
-    refusal_blockers INTEGER CHECK(refusal_blockers BETWEEN 1 AND 2097151),
+    refusal_blockers INTEGER CHECK(refusal_blockers BETWEEN 1 AND 4194303),
     closure_kind TEXT CHECK(closure_kind IN ('record','existing')),
     closed_at TEXT CHECK(closed_at IS NULL OR (typeof(closed_at)='text' AND length(closed_at)=20 AND closed_at GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]Z')),
     closure_oid TEXT CHECK(length(closure_oid)=40 AND closure_oid NOT GLOB '*[^0-9a-f]*' AND closure_oid!='0000000000000000000000000000000000000000'),
@@ -266,9 +266,11 @@ const SCHEMA:&str="CREATE TABLE ticket_closures (
 )";
 const INDEX: &str = "CREATE UNIQUE INDEX ticket_closures_unfinished ON ticket_closures(repository_id,item_id) WHERE step NOT IN ('complete','abandoned','superseded')";
 const MARKER: &str = "cycle_10_ticket_closures";
+const BLOCKERS_MARKER: &str = "closure_refusal_blockers_v2";
 
 /// All or nothing inside the registry-schema transaction, marked once.
 pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
+    let mut created = false;
     let marked: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
@@ -286,6 +288,26 @@ pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryEr
             .map_err(|_| state::recovery_required())?;
         tx.execute("INSERT INTO registry_migrations(name) VALUES(?1)", [MARKER])
             .map_err(|_| state::recovery_required())?;
+        created = true;
+    }
+    let widened: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [BLOCKERS_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| state::recovery_required())?;
+    if !widened {
+        // The refusal mask CHECK gained a bit; rebuild a table that predates
+        // it. The index goes first so the rename cannot carry its name along.
+        if !created {
+            tx.execute_batch(&format!("DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO ticket_closures_before_blockers; {SCHEMA}; {INDEX}; INSERT INTO ticket_closures SELECT * FROM ticket_closures_before_blockers; DROP TABLE ticket_closures_before_blockers;")).map_err(|_| state::recovery_required())?;
+        }
+        tx.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [BLOCKERS_MARKER],
+        )
+        .map_err(|_| state::recovery_required())?;
     }
     validate_schema(tx)
 }

@@ -563,7 +563,7 @@ fn schema_rejects_free_text_categories_steps_and_refusal_payloads() {
         "publication_category='ssh://endpoint'",
         "cleanup_category='path sentinel'",
         "refusal_category='title sentinel'",
-        "refusal_blockers=65536",
+        "refusal_blockers=131072",
         "expectation=x'01'",
         "context_attempt=-1",
     ] {
@@ -1356,4 +1356,100 @@ fn finalization_without_applicable_reservation_does_not_fabricate_history() {
             0
         );
     }
+}
+
+fn refused_promotion(
+    tx: &rusqlite::Transaction<'_>,
+    blockers: Vec<PromotionBlocker>,
+) -> PromotionRecord {
+    refuse_record(
+        tx,
+        1,
+        OperationId::new(),
+        &ITEM.parse().unwrap(),
+        PromotionExpectation::from_bytes([7; 32]),
+        None,
+        &Refusal::Blocked(blockers),
+    )
+    .unwrap()
+}
+#[test]
+fn blocker_mask_round_trips_all_17() {
+    assert_eq!(BLOCKERS.len(), 17);
+    assert!(BLOCKERS.windows(2).all(|p| p[0] < p[1]));
+    assert_eq!(BLOCKERS[16], PromotionBlocker::HistoryUnresolved);
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    for (bit, blocker) in BLOCKERS.iter().enumerate() {
+        let r = refused_promotion(&tx, vec![*blocker]);
+        let mask: i64 = tx
+            .query_row(
+                "SELECT refusal_blockers FROM document_promotions WHERE operation_id=?1",
+                [r.operation_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mask, 1 << bit);
+        assert_eq!(
+            read_record(&tx, 1, r.operation_id)
+                .unwrap()
+                .unwrap()
+                .refusal,
+            Some(Refusal::Blocked(vec![*blocker]))
+        );
+    }
+    let every = refused_promotion(&tx, BLOCKERS.to_vec());
+    assert_eq!(
+        read_record(&tx, 1, every.operation_id)
+            .unwrap()
+            .unwrap()
+            .refusal,
+        Some(Refusal::Blocked(BLOCKERS.to_vec()))
+    );
+}
+/// A registry from before the widened mask CHECK is rebuilt once, keeping
+/// its rows, and then takes the new bit.
+#[test]
+fn promotion_refusal_blockers_v2_rebuilds_an_old_bound_table_once() {
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let old = refused_promotion(&tx, vec![PromotionBlocker::ContextDirty]);
+    let sql: String = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='document_promotions'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    tx.execute_batch(&format!(
+        "DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO before; {}; {INDEX}; INSERT INTO document_promotions SELECT * FROM before; DROP TABLE before; DELETE FROM registry_migrations WHERE name='promotion_refusal_blockers_v2';",
+        sql.replace("131071", "65535")
+    ))
+    .unwrap();
+    assert!(
+        tx.execute("UPDATE document_promotions SET refusal_blockers=65536", [])
+            .is_err()
+    );
+    for _ in 0..2 {
+        migrate(&tx).unwrap();
+        assert_eq!(
+            read_record(&tx, 1, old.operation_id)
+                .unwrap()
+                .unwrap()
+                .refusal,
+            old.refusal
+        );
+        let marked: i64 = tx
+            .query_row("SELECT count(*) FROM registry_migrations WHERE name='promotion_refusal_blockers_v2'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(marked, 1);
+    }
+    let new = refused_promotion(&tx, vec![PromotionBlocker::HistoryUnresolved]);
+    assert_eq!(
+        read_record(&tx, 1, new.operation_id)
+            .unwrap()
+            .unwrap()
+            .refusal,
+        new.refusal
+    );
 }

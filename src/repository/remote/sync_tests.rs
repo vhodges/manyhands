@@ -15870,11 +15870,31 @@ fn unresolved_history_ends_the_operation_and_frees_the_reservation() {
         kind: AuthoringKind::Ticket,
         item_id: id.parse().unwrap(),
     };
-    for (error, push_intent, ends) in [
-        (SynchronizationError::HistoryUnresolved, false, true),
-        (SynchronizationError::HistoryUnresolved, true, false),
-        (SynchronizationError::HistoryUnknown, false, false),
-        (SynchronizationError::RecoveryRequired, false, false),
+    for (error, push_intent, ends, expected) in [
+        (
+            SynchronizationError::HistoryUnresolved,
+            false,
+            true,
+            SynchronizationError::HistoryUnresolved,
+        ),
+        (
+            SynchronizationError::HistoryUnresolved,
+            true,
+            false,
+            SynchronizationError::HistoryUnresolved,
+        ),
+        (
+            SynchronizationError::HistoryUnknown,
+            false,
+            false,
+            SynchronizationError::HistoryUnknown,
+        ),
+        (
+            SynchronizationError::RecoveryRequired,
+            false,
+            false,
+            SynchronizationError::RecoveryRequired,
+        ),
     ] {
         let data = fixture_tempdir();
         let root = fixture_tempdir();
@@ -15895,12 +15915,7 @@ fn unresolved_history_ends_the_operation_and_frees_the_reservation() {
             other => panic!("{other:?}"),
         };
         let returned = service.ended_if_unresolved(root.path(), &owner, push_intent, error);
-        assert!(matches!(
-            returned,
-            SynchronizationError::HistoryUnresolved
-                | SynchronizationError::HistoryUnknown
-                | SynchronizationError::RecoveryRequired
-        ));
+        assert_eq!(returned.to_string(), expected.to_string());
         let other = context("01ARZ3NDEKTSV4RRFFQ69G5FAW").operation_target(&plan);
         let second = service
             .reserve_remote_operation(root.path(), OperationId::new(), &other)

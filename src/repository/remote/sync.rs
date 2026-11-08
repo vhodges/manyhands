@@ -4013,17 +4013,19 @@ impl RepositoryService {
     /// the owner's repair, not a call of the same request, settles that, so
     /// the operation is cancelled and the reservation let go (as for a
     /// refused push). With a push intended an earlier call may have
-    /// published, so the operation is left as it is. Should the ending
+    /// published, and a lifecycle child belongs to its parent, which blocks
+    /// on unresolved history before it runs one: both are left as they are
+    /// (`keep`). Should the ending
     /// fail, the operation stays pending and its row says so.
     fn ended_if_unresolved(
         &self,
         root: &Path,
         owner: &RemoteReservation,
-        push_intent: bool,
+        keep: bool,
         error: SynchronizationError,
     ) -> SynchronizationError {
         if matches!(error, SynchronizationError::HistoryUnresolved)
-            && !push_intent
+            && !keep
             && self
                 .request_synchronization_cancellation(root, owner)
                 .is_ok()
@@ -6437,7 +6439,12 @@ impl RepositoryService {
                 Ok(_) => false,
                 Err(SynchronizationError::MergeRequired { .. }) => true,
                 Err(error) => {
-                    return Err(self.ended_if_unresolved(&root, &owner, push_intent, error));
+                    return Err(self.ended_if_unresolved(
+                        &root,
+                        &owner,
+                        push_intent || execution.is_some(),
+                        error,
+                    ));
                 }
             }
         };
@@ -6560,7 +6567,14 @@ impl RepositoryService {
                     context,
                     publication,
                 )
-                .map_err(|error| self.ended_if_unresolved(&root, &owner, push_intent, error))?;
+                .map_err(|error| {
+                    self.ended_if_unresolved(
+                        &root,
+                        &owner,
+                        push_intent || execution.is_some(),
+                        error,
+                    )
+                })?;
                 if resumed.is_some_and(|c| {
                     matches!(
                         c,
