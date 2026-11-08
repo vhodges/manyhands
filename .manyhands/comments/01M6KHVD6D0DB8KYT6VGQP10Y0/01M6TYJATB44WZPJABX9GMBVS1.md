@@ -1122,3 +1122,81 @@ creation time/entire69172-byte prior body preserved. Clean **UNPUSHED**, known g
 PIDs exited/no jobs; no source/golden/schema/dependency edit/new ID/status save/
 push/PR/merge/close/native/real profile-key-context-draft/cleanup action. Ticket
 **implementing / runtime BLOCKED**, not feature-complete/review-ready.
+
+## Follow-up — bounded schema-inventory correction, exact case GREEN — 2026-11-08 UTC
+
+Owner: "Just run the one failing test, any fix there is not likely to cause a
+regression elsewhere." Controller authorized ONE TEST-ONLY literal inventory fix,
+one exact failing-case run plus strict Clippy/fmt once;no broader regression/gate.
+Fresh AGENTS/fetch at**2026-11-08T04:04:05Z**,clean entry/postmerge base
+**`09491b8e4170de10f46d635b43308525852db984`**. `git fetch origin main` found no new
+changes;`git merge origin/main` Already up to date,ancestry exit0,against
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Prior test freeze
+**`7eda8be7258859ab419fe2323eb7282d80af9cd0`**;production/library unchanged
+**`64a6c2495d999916823346b8e1fec5ce9e328e4c`**. No conflict/rebase/merge commit,
+incoming Rust/schema/build change or main/other-worktree work.
+
+Fresh-startup source proof,not blind saved-output acceptance: empty tempdir test
+opens RepositoryService;`discovery.rs:1735–1740` always reaches retirement migrate
+after companions. Absent markers select `record::objects()` at738–742;!marked
+893–911 executes every definition,then audits/commits948–949. Static tables are
+**record11 + preserve2 + pass4** (`record.rs:453–472`,`preserve.rs:20–32`,
+`pass.rs:24–81`),including quoted RELEASES CREATE at438–449. No action/opt-in gate.
+All17 saved actual-only/zero expected-only names are delivered startup tables;
+cause is a stale expected inventory,not a production migration defect.
+
+Only `tests/repository_enablement.rs`'s expected array gains**17 static sorted
+literal lines,49→66**. Original49/order,strict complete `assert_eq!`,all other file
+bytes and every later columns/index/CHECK/uniqueness/state assertion stay verbatim.
+Removing17 lines restores the whole original file byte-for-byte. No filter/subset/
+dynamic-DDL oracle,new case/target/helper/API,migration/schema/production/dependency
+change. Source SHA-256
+**`1f8c184112f28cc10c623581529ec486320d2fc93aaa019ef60e1cae22183f54`** frozen through:
+
+```sh
+devenv shell -- cargo test --all-features --locked --test repository_enablement registry_creates_repository_and_discovery_metadata_schema -- --exact
+```
+
+**Exit0;1 passed/0 failed/0 ignored/102 filtered,0.12s tests**,3.074926389s elapsed,
+2.63s rebuild;UTC**04:07:09.395551Z→04:07:12.470438Z**. Actual nonzero case/footer
+verified and all later assertions completed. Existing compiled**102/1,61.35s** is
+RED,not repeated or overwritten. **No fresh whole103 pass** by combining old102
+with new1. Default threads,diagnostic flag unset,no retry/override/update mode.
+Strict whole-tree/all-target/all-feature/locked Clippy `-D warnings` **exit0,
+1.419890137s elapsed**,no warnings;fmt-check **exit0,17.671805088s**,no edits.
+No normal check repeat for integration-test-only input;unchanged current check
+**exit0,4.165545239s** and library**1530/0/160 filtered,1865.59s** retained NOT rerun.
+
+Prior headless**2459 passed/1 failed/1 ignored**,26 footers/24 active-green/1 ignored-
+only/1 failed remains intact. Whole mutation_replay**384/0,925.11s**,CLI**477/0,
+369.60s**,CLIunits307/0,canonical65/0,read_contract72/0/read-suite greens are current
+on unchanged production64a,NOT rerun. A17 exact**1/0/1579 filtered,2.58s** and old
+whole desktop**1579/1,2142.63s** keep distinct scopes;no whole desktop/previous-green
+regression repeat or fresh1580/0 claim. No other Rust test/SSH/local-sync/smoke.
+
+Read-only source confirms `read_characterization.rs:1–8,101–103` is an explicitly
+manual performance characterization,`#[ignore = "a characterization, run on request with --ignored --nocapture"]`.
+Its actual**0 passed/1 ignored** is intentional default-gate behavior,not active
+benchmark coverage,a new failure or a missing required active case to hold the
+gate. No edit/unignore/run or profiling permission. Active read greens cover only
+their own scopes;owner performance/profiling STOP and performance tickets untouched.
+
+**Next SAME SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` THEN SAME QUALITY
+`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** before controller-authorized unrun
+`session_credentials`/`shared_key_registry`,selected local-sync160,all10 SSH targets
+and both isolated smokes. No agents or post-review gates here. Final runtime-
+evidence reviews/controller-owner acceptance and retained44 C/L/S/M1/Q1/enum/D5/D6/
+native/combinatorial limits remain owed/unwaived. WAIT60s/GPUI15s-per-park/POLL10ms/
+default concurrency/production safety unchanged. Ticket **implementing / review-and-
+runtime BLOCKED**,not full-pass/feature-complete/review-ready.
+
+New-only **`/tmp/opencode/task8-schema-inventory-20261108T040405Z/`** contains literal
+argv/raw/results/counts/times/exits/input23 hashes,startup11+2+4/literal delta/inverse
+proof,statics/preflight/handoff/small manifest. Old headless17 manifest
+**`d6f4ecb55b5f9364c139bcaee8839df93a53ab601e2dd50628049b902d3477f8`** plus17 artifacts
+authenticated,zero mismatches;16 prior inputs unchanged,no old writes/huge inventory.
+Only one integration-test file plus owned ledger/current-standing/append and this
+append checkpointed with coauthor;original ID/parent/time/full prior body preserved.
+Foreground children exited,no owned jobs;clean **UNPUSHED**. No new doc/ticket/ID/
+status save/push/PR/main/lifecycle/close/native/other-worktree/real profile-key-
+context-draft/dependency/performance work;controller owns all next steps.

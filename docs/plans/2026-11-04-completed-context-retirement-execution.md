@@ -12,7 +12,69 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current Owner-Selected Headless Gate Standing — 2026-11-08 UTC
+### Current Schema-Inventory Correction Standing — 2026-11-08 UTC
+
+**Bounded TEST-ONLY inventory correction; exact case GREEN, same SPEC→QUALITY
+reviews pending. Ticket implementing / review-and-runtime BLOCKED, not review-ready.**
+Fresh AGENTS preflight at **2026-11-08T04:04:05Z**, clean entry/postmerge base
+**`09491b8e4170de10f46d635b43308525852db984`**. `git fetch origin main` found no
+incoming commits/files; `git merge origin/main` was Already up to date against
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**, ancestry exit0. Prior test freeze
+**`7eda8be7258859ab419fe2323eb7282d80af9cd0`**; production/library remains
+**`64a6c2495d999916823346b8e1fec5ce9e328e4c`**. No rebase/conflict/merge commit,
+incoming Rust/schema/build change, main-checkout or other-worktree work.
+
+Source-grounded cause: the strict expected literal omitted17 delivered startup
+tables, not a production migration defect. Fresh empty-registry open always reaches
+retirement migration after companion journals; absent markers select `objects()`
+and execute every definition. Catalog is **record11 + preserve2 + pass4**; the
+pin-release table's quoted CREATE is included. Only the literal expected array in
+`tests/repository_enablement.rs` gains17 lines, **49→66** static sorted names.
+Original49/in-order, strict `assert_eq!`, all other file bytes and all later column/
+index/CHECK/uniqueness/state assertions are preserved; no subset/filter/dynamic
+oracle, new test/helper/API, migration/production/schema/dependency change.
+
+| New checkpoint evidence, each command once through Devenv | Actual standing |
+| --- | --- |
+| Exact `registry_creates_repository_and_discovery_metadata_schema` | **Exit0;1 passed/0 failed/0 ignored/102 filtered**,0.12s tests;3.074926389s elapsed,2.63s rebuild. All later assertions completed. **Not a fresh whole103 pass.** |
+| Whole-tree all-target/all-feature locked Clippy, `-D warnings` | **Exit0**,1.419890137s elapsed,1.14s Cargo;no warnings. |
+| Whole-tree `cargo fmt --check` | **Exit0**,17.671805088s elapsed;no edits. |
+| Library/check, retained NOT rerun | **1530/0/160 filtered,1865.59s**;check **exit0,4.165545239s**,unchanged production/normal-check inputs. No fresh normal check for this integration-test-only change. |
+| Prior current headless run, preserved NOT rerun | **2459 passed/1 failed/1 ignored** across26 footers:24 active-green,1 intentional ignored-only,1 failed. Whole mutation_replay**384/0,925.11s**,CLI**477/0,369.60s**,CLI units307/0,canonical65/0,read_contract72/0/read-suite greens retain their scopes. |
+
+The prior repository_enablement **102/1,61.35s,exit101** is retained RED; no ritual
+unchanged RED or whole-target retry. Owner: "Just run the one failing test, any fix
+there is not likely to cause a regression elsewhere." Exact-only follow-up is
+selected here; no whole103 claim by adding old102 to new1. Owner-selected A17
+**1/0/1579 filtered,2.58s** and historical b84 whole desktop**1579/1,2142.63s** retain
+their distinct scopes; **no whole desktop/previous-green regression repeat**.
+
+`read_characterization.rs:1–8,101–103` explicitly defines an opt-in manual performance
+characterization, ignored unless requested. Its actual **0 passed/1 ignored** is
+intentional default-gate behavior, **not active benchmark coverage or a missing
+required active case holding the gate**. No edit/unignore/run/profiling permission;
+active read greens cover only their own scopes. Owner performance STOP remains.
+
+**Next: SAME SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` THEN SAME QUALITY
+`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, before controller resumption of the two unrun
+fast integrations (`session_credentials`,`shared_key_registry`), selected local-sync160,
+ten SSH targets and both isolated smokes. No post-review gate runs here. Final
+runtime-evidence reviews/controller-owner acceptance and retained44 C/L/S/M1/Q1/
+enum/D5/D6/native/combinatorial limits remain owed/unwaived.
+
+New-only **`/tmp/opencode/task8-schema-inventory-20261108T040405Z/`** holds preflight,
+11+2+4 startup proof/excerpts, before/after literal/delta/inverse proof,23 current
+input hashes, exact/static literal argv/raw/results/times/exits, handoff and small
+manifest. Test source SHA-256 **`1f8c184112f28cc10c623581529ec486320d2fc93aaa019ef60e1cae22183f54`**
+stayed frozen. Prior headless17 manifest **`d6f4ecb55b5f9364c139bcaee8839df93a53ab601e2dd50628049b902d3477f8`**
+and all17 entries authenticated,zero mismatches;16 prior inputs unchanged, no old
+artifact writes/huge inventories. Only this ledger/current standing plus append,
+existing canonical-comment append and one integration-test file checkpointed with
+coauthor; comment ID/parent/time/full prior body preserved. Clean **UNPUSHED**, no
+owned jobs; no agents/new ID/status save/PR/lifecycle/native/real profile-key-context-
+draft/performance-ticket or other-worktree action.
+
+### Prior Owner-Selected Headless Gate Standing — 2026-11-08 UTC
 
 **Source-reviewed A17 exact follow-up accepted under owner selection; first current
 headless command FAILED at repository_enablement. Runtime BLOCKED.** Clean frozen
@@ -10272,3 +10334,134 @@ checks accompany handoff. Clean **UNPUSHED**, no owned jobs. Ticket **implementi
 runtime BLOCKED**, not feature-complete/review-ready; no source/golden/schema/
 dependency change, agent, new ID/status save/push/PR/merge/close/native/real profile-
 key-context-draft/worktree cleanup action.
+
+## Task 8 — Bounded Schema-Inventory Oracle Correction, 2026-11-08 UTC
+
+### Authority And Fresh Preflight
+
+Owner steering: "Just run the one failing test, any fix there is not likely to
+cause a regression elsewhere." Controller authorized ONE bounded TEST-ONLY static
+inventory correction, the exact failed case once and strict whole-tree Clippy/fmt
+once. No production/migration/schema/API/performance work, whole failed target,
+desktop/previous-green regression, additional diagnostic or later gate authorized.
+Existing compiled repository_enablement102/1 is RED; no ritual unchanged rerun.
+
+Freshly read AGENTS and verified clean existing ticket branch/worktree at
+**`09491b8e4170de10f46d635b43308525852db984`**, **2026-11-08T04:04:05Z**. Fresh
+`git fetch origin main` found no incoming changes; `git merge origin/main` returned
+Already up to date against **`d70142b63a952f5e1aade369e0cd654ca9a03617`**, ancestry
+exit0,postmerge HEAD unchanged. No conflict/rebase/new worktree/main/other-worktree
+work or incoming Rust/schema/build scope expansion. Prior test source freeze
+**`7eda8be7258859ab419fe2323eb7282d80af9cd0`**; production/library remains
+**`64a6c2495d999916823346b8e1fec5ce9e328e4c`**.
+
+### Source Proof And Exactly17 Literal Additions
+
+The test creates an empty tempdir then calls `RepositoryService::open_at` before
+querying **all** table names in SQL ORDER BY order (`tests/repository_enablement.rs:475–486`).
+`src/repository.rs:1325–1327,4090–4113` routes startup through `migrate_registry`.
+`discovery.rs:1735–1740` always calls retirement migration after item-read/local/
+request companions. For a fresh registry, retirement markers/consumers are absent:
+`record.rs:738–742` selects `objects()`; `893–911` rejects preexisting objects and
+executes **every** definition, then markers/audit/commit finish at948–949. No
+retirement-action/opt-in/data gate controls fresh installation. This validates the
+delivered startup contract independently of the saved actual list.
+
+Static source map,17 tables:
+
+- **record11**, `record.rs:453–470`: `context_retirement_records`,
+  `context_retirement_attempts`, `context_retirement_reentries`,
+  `context_retirement_absence_receipts`, `context_retirement_worktree_resumptions`,
+  `retirement_advertisement_provenance`, `retirement_observation_receipts`,
+  `context_retirement_effect_intents`, `retirement_observation_pins`,
+  `retirement_observation_pin_releases`, `context_retirement_index_claims`.
+  RELEASES at438–449 is a **quoted CREATE TABLE**, not absent DDL.
+- **preserve2**, extended at `record.rs:471`, `preserve.rs:20–32`:
+  `context_retirement_preservations`, `context_retirement_preservation_claims`.
+- **pass4**, extended at `record.rs:472`, `pass.rs:24–81`:
+  `poll_retirement_passes`, `poll_retirement_candidates`, `poll_retirement_targets`,
+  `poll_retirement_child_sources`.
+
+Saved actual66/expected49 has exactly these17 actual-only/zero expected-only names.
+Only `tests/repository_enablement.rs`'s expected literal array changed: **17 added
+lines,0 removed;49→66 sorted,unique static names**. Original49/order and strict
+complete `assert_eq!` remain. Removing exactly those17 lines restores the entire
+original file byte-for-byte: every other repository/shared-key column/index/CHECK/
+uniqueness/state assertion, including all after original634, is verbatim. No
+unknown-name filter, subset/dynamic-DDL expectation, opaque autoaccept, new case/
+target/helper/API or production/migration/schema/dependency change.
+
+Source/build/schema diff to entry is empty. Against production64a, only the three
+previously reviewed desktop cfg-test files differ in `src`; excluding precisely
+those yields an empty production/normal-check-input diff. Prior16 relevant hashes
+match; current23-hash snapshot includes this corrected integration test and the
+startup/characterization source. Test SHA-256
+**`1f8c184112f28cc10c623581529ec486320d2fc93aaa019ef60e1cae22183f54`** stays unchanged
+through all three commands.
+
+### Exact Verification And Statics, Each Once
+
+```sh
+devenv shell -- cargo test --all-features --locked --test repository_enablement registry_creates_repository_and_discovery_metadata_schema -- --exact
+```
+
+**Exit0;1 passed/0 failed/0 ignored/0 measured/102 filtered**,**0.12s tests**;
+**3.074926389s monotonic elapsed**,2.63s rebuild. UTC
+**2026-11-08T04:07:09.395551Z→04:07:12.470438Z**. Exact completion and footer both
+verified,nonzero actual case; all later constraints/assertions completed. Raw SHA-256
+**`7cc53c9303bc6b1cb95f5a47a422d6a6f43ce3714542f2b694a1eb051ad30f24`**.
+Default concurrency, `RUST_TEST_THREADS`/diagnostic flag unset, no golden update,
+thread/deadline/expectation override,retry,filter expansion or extra test.
+
+- `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`:
+  **exit0**,1.419890137s elapsed,1.14s Cargo,no warnings.
+- `devenv shell -- cargo fmt --check`: **exit0**,17.671805088s elapsed,no edits.
+
+No fresh normal `cargo check`: this integration-test-only input is excluded from
+normal check, and unchanged-production check **exit0,4.165545239s** remains current.
+No other Rust command/test,broad target,lib/desktop/CLI/SSH/local-sync/smoke/no-GPUI/
+native command or post-review gate ran. Interim900s stop guard was not approached.
+
+Prior headless **2459/1/1 ignored**,26 footers/24 active-green/1 intentional ignored-
+only/1 failed, and repository_enablement**102/1,61.35s,exit101** remain unchanged.
+The selected exact1/0 is **not a fresh whole103 pass**, nor combined with old102.
+Current library**1530/0/160 filtered,1865.59s**,whole mutation_replay**384/0,925.11s**,
+CLI**477/0,369.60s**,CLIunits307/0,canonical65/0,read_contract72/0/read-suite greens
+are preserved NOT rerun. A17 exact**1/0/1579 filtered,2.58s** remains owner-selected;
+historical whole desktop**1579/1,2142.63s** is not relabeled/combined into1580/0.
+No whole desktop or unchanged-green regression repeat is required here.
+
+### Intentional Manual Characterization And Review Handoff
+
+Source `tests/read_characterization.rs:1–8,101–103` explicitly describes a manual
+performance benchmark and marks it ignored, "a characterization, run on request
+with --ignored --nocapture". Its recorded **0 passed/0 failed/1 ignored** is the
+intentional default gate behavior, **not active/nonzero benchmark coverage**, not
+a new failure/missing required active case to hold the gate, and not permission to
+enable owner-stopped profiling. No edit/unignore/run occurred. Existing active
+read_contract/read_items/etc greens establish only their own scopes, not benchmark
+coverage. No performance-ticket/profile/optimization work.
+
+Return for **SAME SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` THEN SAME QUALITY
+`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** bounded-delta reviews. No agents spawned here.
+Before those reviews/controller authorization, no unrun gate continues. Still
+owed: `session_credentials`,`shared_key_registry`,selected local-sync160,all10 SSH
+targets,both isolated smokes,final runtime-evidence SPEC→QUALITY/controller-owner
+acceptance. Retained44 C/L/S/M1/Q1/enum/D5/D6/native/combinatorial limits stand;
+WAIT60s/GPUI15s-per-park/POLL10ms/default concurrency and production safety unchanged.
+Ticket remains **implementing / review-and-runtime BLOCKED**,not feature-complete/
+full-pass/review-ready.
+
+New-only **`/tmp/opencode/task8-schema-inventory-20261108T040405Z/`** stores raw exact/
+Clippy/fmt logs with literal argv/counts/exits/times/current inputs,preflight/startup
+11+2+4 source map/excerpts,literal-before/after/delta/inverse proof,retained evidence,
+source diff,metadata/commit/handoff and small manifest. Old headless17 manifest
+**`d6f4ecb55b5f9364c139bcaee8839df93a53ab601e2dd50628049b902d3477f8`** and all17
+artifacts authenticated,zero mismatches;16 prior inputs unchanged. All old logs/
+root-CLI/schema failures/manifests retain actual scopes;no old writes/huge inventory.
+Only one integration-test file plus owned ledger/current-standing/append and
+canonical **`01M6TYJATB44WZPJABX9GMBVS1`** append checkpointed with coauthor.
+Original ID/parent**`01M6SYJK4CJGHWKZC7MTP18GTA`**/creation time/full prior body are
+preserved. Foreground children exited,no owned jobs;clean **UNPUSHED**. No new doc/
+ticket/ID/status save/PR/push/main/close/lifecycle/native/other-worktree/real profile-
+key-context-draft action or dependency change;controller owns all further work.
