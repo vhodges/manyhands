@@ -26,6 +26,8 @@ pushes.
 | 8 | done | 651774aa | f457e894 | approved on re-review | terminal `HistoryUnresolved`; `remote.history` recovery; `ResolveHistory` way out; refusal-blocker CHECK bounds widened, with rebuilds |
 | 9 | done | 68a0b743 | 45d5acda | approved | CLI `remote history`, `item resolve-history`, `remote resolve-history`; goldens and schemas; one SSH case `cli_remote remote_history_repair_journey` |
 | 10 | done | 59561bc0 | 56aba82d | approved | desktop guidance for unresolved history; Share failure `HistoryUnresolved` with no Retry |
+| 11 | done | 2a025654 | 7f6717cb | approved | named test edits (SSH ones by reading); dead resets removed |
+| 12 | done | 7f6717cb | cd7ed4e2 | approved | RFC and Wave 02 C4 amendments; CLI `choices=publish (release: desktop only)` |
 
 ## Test Filters (Task 0)
 
@@ -398,3 +400,51 @@ All commands passed:
   - **The lifecycle text.** `HistoryUnresolved` and `ResolveHistory` share
     `HISTORY_UNRESOLVED_GUIDANCE`. `HistoryUnknown` and `PollOnce` are
     unchanged.
+
+## Tasks 11–12 Results
+
+- **Task 11 named edits** (the SSH-target ones were made by reading and
+  first run at Task 13):
+  - `tests/remote_polling.rs`: `poll_history_unknown_after_registry_loss` is
+    renamed **`poll_unpublished_after_key_selection_in_new_registry`** and
+    expects `Unpublished`. It never exercised cache loss; cache loss stays
+    covered by `lose_registry`.
+  - `tests/document_promotion.rs`: `HistoryUnresolved`. The `restart=true`
+    replay is now `Interrupted`, because the ended record replays as
+    cancelled.
+  - `tests/document_promotion/journeys.rs`: `retained_r1`'s sync error is
+    `HistoryUnresolved`.
+  - `tests/ssh_transport/synchronization.rs`: `context_absence_boundaries`
+    expects `HistoryUnresolved`.
+  - `tests/ticket_closure/journeys.rs`: case 16 is renamed
+    **`blocker_history_unresolved`**.
+  - `tests/remote_observation.rs`:
+    `same_name_endpoint_replacement_after_reopen_is_not_remote_deletion`
+    expects `NeverPublished`, since it has no active context.
+  - `tests/mutation_bridges/context.rs`
+    (`release_with_an_unknown_publication_history_and_no_tracking_ref_is_ok`)
+    is non-SSH and the plan missed it. It now uses a real identity change.
+  - `remote/poll_tests.rs` task6: the key-source variant asserts the carry.
+  - The four dead resets are removed, and the "invalid marker" label is
+    fixed.
+- **Confirmed unchanged:** the push-proof cases
+  (`incompatible_generation_history_unknown`,
+  `push_history_generation_fencing`), the cache-loss cases, and
+  ObservedPublished-without-deletion cases.
+- **Task 12:**
+  - RFC: the known limit is marked fixed; the `history_unknown` guidance is
+    split; the three verbs' rows and options; `unpublished` and
+    `history_unresolved`; a "History repair goldens" paragraph. It is a
+    paragraph, not table rows, because `tests/cli/recovery_tables.rs`
+    fixes the families;
+  - the Wave 02 C4 amendment;
+  - the CLI listing wording.
+- Tests, all passed:
+  - `--test cli` 474, `--bin manyhands-cli` 315;
+  - `read_contract` 73 and `mutation_contract` 45;
+  - `closure::`, `promotion::` and the resolve modules: 375 passed, plus 1
+    apparent flake, `closure::checkpoint::tests::changed_identity_at_the_hook_is_external_change`.
+    It passed alone and in a module rerun.
+- The reviewer approved. Nits left: the `unknown()` wording in
+  `journeys.rs`, and the configuration arm of `poll_tests` task6 asserts
+  nothing about batches.
