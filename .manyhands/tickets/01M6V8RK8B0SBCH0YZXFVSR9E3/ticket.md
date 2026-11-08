@@ -20,13 +20,14 @@ exit evidence. The design is `docs/design/` (`01`, `02`, `07`, `08`).
 
 ## Planning
 
-- [ ] Merge the latest main into this ticket branch.
-- [ ] Create `docs/Cycles/wave-04-cycle-01-workspace-shell.md`.
+- [x] Merge the latest main into this ticket branch.
+- [x] Create `docs/Cycles/wave-04-cycle-01-workspace-shell.md`.
 - [ ] Verify every GPUI Kit 0.6.6 name the plan uses (`DockArea`,
   `DockAreaState`, `TitleBar`, `StatusBar`, `Menu`, resizable groups).
 - [ ] Create the design and implementation plan and record their checkpoints
   as ticket comments.
-- [ ] Decide at plan time whether the Wave's split line (01a / 01b) applies.
+- [x] Decide at plan time whether the Wave's split line (01a / 01b) applies.
+  No: one Cycle (owner, 2026-11-08; Cycle decision 1).
 
 ## Entry Gate
 
