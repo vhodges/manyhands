@@ -17,6 +17,7 @@ pushes.
 | --- | --- | --- | --- | --- | --- |
 | 0 | done | 74bc1f94 | 74bc1f94 | n/a (no code) | baseline green; all four test-only flag resets dead |
 | 1 | done | ea29a9ac | 9539e43c | approved | `ConfigurationChange`, known identity; interim weakening of `replacing_configuration_does_not_turn_known_publication_into_first_publication` (Task 2 restores it); review should-fix 1 and 2 carried to Task 2 |
+| 2 | done | 27ae78fd | 875590f8 | approved | carry-forward; evidence held while the plan is unavailable (implementer's decision, reviewed); review should-fix 1 and 2 carried to Task 3 |
 
 ## Test Filters (Task 0)
 
@@ -81,3 +82,33 @@ All commands passed:
     (should-fix 2).
 - Nits left as they are: the known-identity UPDATE is separate, and the
   `Unavailable` doc comment.
+
+## Task 2 Results
+
+- Implementer:
+  - `remote::state` 70, `remote::poll::tests` 79, `remote::sync::tests` 182
+    and `remote::reservation::tests` 58, all passed;
+  - clippy, fmt and `check --tests` clean.
+- Reviewer: `remote::state::` 70 and `remote::tests::` 15 passed. Approved.
+- **Decisions, accepted by the orchestrator after review:**
+  1. While `policy.plan` is None, a current batch at the current
+     generation is held: validated but not exposed. Context rows are
+     skipped until a plan returns. The reviewer found no path by which held
+     evidence authorizes an effect.
+  2. A batch is carried only to a plan with the same remote name and
+     primary branch.
+- The restored assertion
+  (`replacing_configuration_does_not_turn_known_publication_into_first_publication`)
+  expects `ObservedPublished`. The reviewer confirmed it: the test is a
+  same-identity credentials fence, not an identity change.
+- Carried to Task 3:
+  - **should-fix 1:** with NULL `known_*` columns (a registry from before
+    Task 1) and no current batch, a change of plan could carry rows to a
+    different remote. When the known columns are NULL, `forgets()` falls
+    back to the policy's last non-NULL remote name and branch, and the
+    table gets a row for this case;
+  - **should-fix 2:** held context rows are still parsed and their enums
+    checked during the startup audit. Only the plan-dependent comparisons
+    are skipped.
+- For final review (outside the plan's boundary): `read/status.rs:730`
+  shows the held batch's `observed_at` while the plan is unavailable.
