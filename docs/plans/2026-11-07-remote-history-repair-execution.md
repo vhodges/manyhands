@@ -28,6 +28,7 @@ pushes.
 | 10 | done | 59561bc0 | 56aba82d | approved | desktop guidance for unresolved history; Share failure `HistoryUnresolved` with no Retry |
 | 11 | done | 2a025654 | 7f6717cb | approved | named test edits (SSH ones by reading); dead resets removed |
 | 12 | done | 7f6717cb | cd7ed4e2 | approved | RFC and Wave 02 C4 amendments; CLI `choices=publish (release: desktop only)` |
+| 13 | done | 22f72aab | 9efffcda | final review READY; gates green | round 1 found 18 failures (3 code bugs); round 2 green apart from one marker-list expectation, fixed |
 
 ## Test Filters (Task 0)
 
@@ -502,3 +503,56 @@ All commands passed:
 - Also: a comment on `configure_endpoints` naming, and the conformance
   mismatch row now targets an item with a context.
 - Each failing case passed alone by exact name after its fix.
+
+## Task 13: Gate Round 2 (at `fc8fbb3f`), Review-Ready
+
+Every command ran once, through Devenv, with `--locked`:
+
+| Command | Result |
+| --- | --- |
+| `cargo check --all-features` | ok |
+| `cargo fmt --check` | ok |
+| `cargo clippy --all-targets --all-features -- -D warnings` | ok |
+| fast tier (AGENTS.md list, `--no-fail-fast`) | 5,503 passed, 1 failed (see below) |
+| `--test ssh_transport` | 123 passed |
+| `--test remote_observation` | 15 passed |
+| `--test remote_polling` | 84 passed |
+| `--test remote_synchronization` | 69 passed |
+| `--test remote_merge_recovery` | 29 passed |
+| `--test cli_remote` | 162 passed |
+| `--test document_promotion` | 79 passed |
+| `--test ticket_closure` | 78 passed |
+| `--test mutation_remote` | 703 passed (about 87 min) |
+
+- **The one failure.** `recovery_foundation_gate`
+  `failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly`
+  pins the committed `registry_migrations` names. The four new markers
+  (`closure_refusal_blockers_v2`, `promotion_refusal_blockers_v2`,
+  `remote_history_per_context_v1`, `remote_poll_dispositions_unpublished_v1`)
+  commit in the registry-schema transaction, before the recovery migration,
+  so they are expected. This named edit then passed `--test
+  recovery_foundation_gate` 52/52. Only that test file changed after
+  round 2.
+- **Not rerun in round 2, because nothing they cover changed since
+  round 1:** `--lib repository::local_sync::` (160) and
+  `--test comment_publication` (41).
+- **Merge check.** `git merge-tree --write-tree HEAD origin/main` is clean
+  against `d70142b6`.
+
+**Notes for the owner:**
+
+- **One-way schema.** This branch's binary rebuilds three registry tables
+  (the poll-dispositions table and the promotion and closure refusal
+  tables). Once it has opened a registry, a binary built from main will
+  probably refuse that registry. So run the owner check on the real
+  registry only after the merge and a rebuild of main, or on a copy.
+- **Owner check, still to do** (plan Task 13): on the real registry,
+  `remote history` lists nothing unresolved, and `key select` of the same
+  key followed by `item sync` of a new ticket publishes.
+- **Known limits:**
+  - a replayed final sync result shows `repo.inspect`, not
+    `remote.history`;
+  - `release` is desktop-only; the sheet is vh-ez4y9;
+  - `busy` doesn't name its holder (vh-vsfbp);
+  - after an identity change, a retired item's recreated context relies on
+    its first push being non-forced.
