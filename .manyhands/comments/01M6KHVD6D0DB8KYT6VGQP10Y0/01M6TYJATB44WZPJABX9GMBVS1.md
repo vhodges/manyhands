@@ -775,3 +775,66 @@ Return unpushed commit/full delta to controller: SAME whole SPEC
 CLI units/all27 integrations/local-sync160/ten SSH targets/both smokes/final
 runtime-evidence reviews/owner handoff remain owed on64a6/current. Ticket remains
 **implementing / runtime BLOCKED**, not feature-complete/review-ready.
+
+## Follow-up — reviewed two awaits, whole desktop1579/1 FAILED at keyboard Busy
+
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**,
+then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,zero findings,
+complete64a6..84e plus bounded91f..84e. Controller lifted this final sequence's
+barrier, **not final runtime acceptance**. Accepted unchanged-main/no-op preflight
+2026-11-08T00:18:22Z; no extra fetch/merge, agents or other-worktree updates.
+
+Frozen test **`84e5772d809b5d0051c321e917865b5fb8909290`**, unchanged production/library
+**`64a6c2495d999916823346b8e1fec5ce9e328e4c`**, main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Only cfg-test repositories_tests.rs
+differs from64a, SHA7826c568. No production/helper/other-case/limits changed.
+Current library**1530/0/160,1865.59s** and check**exit0,4.165545239s** retained,
+NOT rerun; changed module excluded from normal check. Current84e strict Clippy
+**exit0,9.996290582s** and fmt**exit0,17.871146450s** reused, NOT rerun. Settings-
+order47 manifest/entries authenticated, clock-final28 reuse proof linked.
+
+Exactly once/default threads/no flags/filters/retries:
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands
+```
+
+**Exit101;1579 passed/1 failed/0 ignored/0 filtered**,**2110.61s tests**. Both changed
+settings cases actually passed, but full binary **FAILED**. Prior exact2/0 remains
+targeted; old whole1578/2 at64a stays a separate failure, no arithmetic combination.
+
+Only failed case:
+**`desktop::view::keyboard_tests::settings::add_an_existing_repository_by_keyboard`**,
+**`src/desktop/view/keyboard_tests/settings.rs:66:67`**, unwrap of **ReadError code
+Busy,has_source:true**. Completion received **2026-11-08T00:59:05.002582Z**,sequence1230.
+Cause/underlying origin **undiagnosed**; no source inspection/probe/fix/retry,
+broader await sweep, suppression or infrastructure/performance explanation.
+Helper semantics remain background Finished ANY outcome+visible membership, not
+guaranteed successful refresh; historical preview/post-create Busy ambiguity stays.
+
+UTC**2026-11-08T00:35:27.693409Z→01:10:39.029953Z**, REALTIME2111.336543151s,
+MONOTONIC2111.336537562s, BOOTTIME2111.336537278s; sub-microsecond difference.
+PM-only interval query zero matches/exit1/empty stderr, **no measured suspend**.
+Raw166214 bytes/separate1662 receipts cover all bytes and1580 completions; clocks
+are receipt times, not test starts/internal phases. No power policy/inhibitor,
+induced sleep, synthetic waits or progress polling. Inputs frozen through command.
+
+**NOT RUN:**current-production CLI units/all27 integrations (including whole384
+mutation_replay), selected local-sync160, all10 SSH targets, both smokes and SAME
+whole final runtime-evidence SPEC→QUALITY/controller-owner handoff. No display/
+socket/profile/app/native action. Retained44 C/L/S/essential/M1/Q1/enum/D5/D6/
+native/combinatorial limits unchanged; no all-essential/runtime/performance claim.
+WAIT60s/POLL10ms/default threads/GPUI15s-per-park/production limits unchanged;
+owner-stopped profiling/optimization remains stopped. Older e6bc/d49/fb6 results
+keep original baseline scopes, not current64a passes.
+
+New-only **`/tmp/opencode/task8-settings-final-*`** stores reviews/lifted+restored
+barrier/reuse/scopes, exact argv/current hashes/raw/receipt/results/power/failure
+analysis/coverage/handoff/final manifest. All28 older manifest digests preserved,
+no old artifact writes/bulk inventories. Only ledger/current standing/this append
+committed with coauthor; original ID/parent/time/all prior body preserved. No ID/
+extra build/status save/source-golden-schema-dependency edit/push/PR/main/close/
+other-worktree/real profile-key-context-draft action. Known gate processes exited;
+no jobs. **FIRSTFAIL barrier restored**, controller authorization needed. Ticket
+**implementing / runtime BLOCKED**, not feature-complete/review-ready; final runtime
+reviews and owner handoff remain owed.

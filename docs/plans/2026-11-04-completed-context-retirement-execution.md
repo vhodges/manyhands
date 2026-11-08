@@ -14,8 +14,10 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ### Current Settings-Test Ordering Standing — 2026-11-08 UTC
 
-**Controller-authorized test-only correction: targeted GREEN; whole desktop and
-runtime acceptance still BLOCKED.** Entry and postmerge HEAD are both
+**Reviewed test-only correction; whole desktop FAILED1579/1, runtime BLOCKED.**
+Frozen test source **`84e5772d809b5d0051c321e917865b5fb8909290`**; unchanged
+production/library **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**. Accepted implementer
+preflight only; its entry and postmerge HEAD were both
 **`91f2561816c7da265c330c423c69b78e637b3741`**. Fresh `git fetch origin` found no
 new main commits; `git merge origin/main` was already up to date against
 **`d70142b63a952f5e1aade369e0cd654ca9a03617`**, ancestry exit0. No merge commit,
@@ -38,23 +40,31 @@ semantics remain background `Finished` of any outcome plus visible membership;
 refresh requires registration and cannot create one. Green add/partial cases
 remain untouched, not silently swept into scope.
 
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**,
+then SAME whole QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,
+**zero findings** over complete64a6..84e plus bounded91f..84e. Controller lifted
+this once-only final sequence's barrier, not final runtime acceptance. Both
+explicitly allow unchanged production-library/check reuse; no lib/check repetition.
+
 | Evidence on the corrected test source | Actual standing |
 | --- | --- |
-| Both changed full names, one exact desktop command | **2 passed/0 failed/1578 filtered**,1.92s tests; exit0,20.679633274s elapsed. |
-| Fresh strict all-target/all-feature locked Clippy | **exit0**,9.996290582s elapsed/9.72s Cargo. |
-| Fresh whole-tree fmt-check | **exit0**,17.871146450s elapsed. |
+| Actual whole changed desktop, once | **1579 passed/1 failed/0 ignored/0 filtered**,2110.61s tests; **exit101**,2111.336537562s monotonic. Both corrected cases passed, but binary FAILED. |
+| Previous exact two, retained targeted evidence | **2 passed/0 failed/1578 filtered**,1.92s tests; not rerun or combined with prior1578 into a whole pass. |
+| Current strict all-target/all-feature locked Clippy | **REUSED exit0**,9.996290582s elapsed/9.72s Cargo; not rerun. |
+| Current whole-tree fmt-check | **REUSED exit0**,17.871146450s elapsed; not rerun. |
 | Unchanged library and check, retained NOT rerun | Library **1530/0/160 filtered**,1865.59s tests; check exit0,4.165545239s elapsed. |
 | Prior whole desktop, still FAILED | **1578/2/0 filtered**,2123.31s tests at64a6; exact2/0 is not whole1580/0. |
 
-Recorded whole-desktop failure is the existing RED; no ritual unchanged RED run,
-fabricated Busy, new test, hold gate, retry, probe or profiling was added. Known
-test/Clippy/fmt command process groups exited; no jobs remain. New-only evidence:
-**`/tmp/opencode/task8-settings-order-*`**, small manifest
-**`task8-settings-order-evidence.sha256`**. Old evidence remains immutable.
+Current failure is **`desktop::view::keyboard_tests::settings::add_an_existing_repository_by_keyboard`**,
+`src/desktop/view/keyboard_tests/settings.rs:66:67`, unwrap of **ReadError code Busy,
+has_source:true**. Cause undiagnosed, not waived as timing/infrastructure; no new
+probe/fix/retry or broader test change. No measured suspend; source/production
+hashes unchanged during the whole command. Raw and receipt clocks are separate,
+not internal-phase timestamps. New-only **`/tmp/opencode/task8-settings-final-*`**
+contains actual whole result/handoff; older settings-order47/clock-final28 and
+all prior manifests remain immutable at their original scopes.
 
-**Next barrier:** SAME whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`, then SAME whole
-QUALITY `ses_e4c8be2f1ffegiPUEUuB0QgyBE`, before controller-authorized changed whole
-desktop/remaining gates. No postreview gates ran here. CLI units/all27 fast
+**FIRSTFAIL barrier restored:** no later gate or probe admitted. CLI units/all27 fast
 integrations, selected local-sync160, ten SSH targets, both smokes and final
 runtime-evidence reviews/owner handoff remain owed on64a6/current source.
 WAIT60s/GPUI15s-per-park/POLL10ms/default threads, the one-line clock correction,
@@ -9529,3 +9539,119 @@ gates may follow only after that review/authorization; none ran here. CLI units/
 all27 integrations/local-sync160/ten SSH targets/both smokes/final runtime-evidence
 reviews and owner handoff remain owed on64a6/current. Ticket **implementing /
 runtime BLOCKED**, not feature-complete/review-ready.
+
+## Task 8 — Reviewed Two-Await Whole Desktop Gate Failed At Keyboard Busy
+
+### Reviews, Accepted Preflight And Valid Reuse — 2026-11-08 UTC
+
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**,
+then SAME whole QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,
+**zero findings**, complete64a6..84e plus bounded91f..84e. Controller lifted the
+first-failure barrier for one changed whole desktop then remaining current-
+production gates; these source reviews are not final runtime acceptance.
+Sole owner, existing ticket branch/worktree, no agents or extra source work.
+
+Clean test/gate source **`84e5772d809b5d0051c321e917865b5fb8909290`**, unchanged
+production/library **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**, main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Accepted implementer's fresh
+2026-11-08T00:18:22Z preflight/no-op merge, main/rules unchanged, no other worktree
+updates. No fetch/merge while gates frozen. Source/build comparison from64a finds
+only `src/desktop/view/settings/repositories_tests.rs`, SHA-256
+**`7826c56838723da437ea4578deee8e63502170ea08881bd55abf9528d13817ad`**.
+
+Only two existing onboarding awaits moved before post-create registry assertions;
+all assertions/relative order/preview-empty read remain. No helper/other case,
+production/build/schema/dependency/thread/lock/clock/wait-budget change. The
+unchanged helper still means background Finished of ANY outcome plus visible
+membership, not guaranteed successful refresh. The source-proven ordering gap is
+not proof of historical Busy origin or a performance fix; earlier preview versus
+post-create ambiguity remains. No new causal inference or profiling here.
+
+Authenticated **settings-order47** manifest
+**`b68d18bb6b23ebcff52519859cc19128cdf7ce361b57369c4977a493fa8f8865`** and47 entries;
+linked **clock-final28** manifest
+**`5286472b99402133cb7d38f8263253bca3c9863001428e60f6e9889d4939edf9`**. Fourteen
+relevant source/build hashes match current inputs;28 older manifest digests
+snapshotted without wholesale input/artifact re-inventory.
+
+**Current valid greens reused, NOT rerun:**
+
+| Evidence | Valid source scope |
+| --- | --- |
+| Library1530/0/160 filtered,1865.59s | Production64a unchanged; `task8-clock-final-fast-raw.log`, no lib fast repeat. |
+| Check exit0,4.165545239s | Normal all-feature non-cfg(test) inputs unchanged; repositories_tests module is `#[cfg(all(test, feature = "desktop-test-support"))]`, excluded from check. |
+| Strict Clippy exit0,9.996290582s/9.72s Cargo | `task8-settings-order-clippy.log`, all targets/features/locked/-D warnings, identical current84e source. |
+| Fmt-check exit0,17.871146450s | `task8-settings-order-fmt.log`, identical current inputs. |
+
+Prior exact2/0,1578 filtered,1.92s remains targeted correction evidence, not a
+whole1580 pass. Historical whole1578/2 at64a and older e6bc/d49/fb6 outcomes
+remain unchanged at their actual scopes; neither cases nor runtime are relabeled.
+
+### Exactly One Whole Desktop Command And First Failure
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands
+```
+
+**Exit101;1579 passed/1 failed/0 ignored/0 measured/0 filtered**,**2110.61s tests**.
+All1580 named completions accounted. Default threads, no diagnostic/fault/update
+flags, no filter/skips/thread override/new waits or retry. Source remained frozen.
+The two reviewed settings cases **both actually passed in this whole run**;
+that does not pass the full binary or establish successful background refresh.
+
+Only failure:
+**`desktop::view::keyboard_tests::settings::add_an_existing_repository_by_keyboard`**,
+**`src/desktop/view/keyboard_tests/settings.rs:66:67`**:
+
+```text
+called `Result::unwrap()` on an `Err` value:
+ReadError { code: Busy, scope: Scope { repository: None, item_id: None,
+branch: None, worktree: None, remote: None }, recovery: [], has_source: true }
+```
+
+Completion-line receipt **2026-11-08T00:59:05.002582Z**, sequence1230. Full message
+and receipt clocks preserved. Underlying Busy origin/cause **undiagnosed**; no
+clock/cache/SQL/worker/ordering/suspend/infrastructure attribution or waiver.
+No additional source inspection, diagnostic probe, broader await sweep, assertion
+relaxation, retry or fix after this first failed target.
+
+### Clock/Power Facts, Limits And Exact Remainder
+
+Actual command UTC **2026-11-08T00:35:27.693409Z→01:10:39.029953Z**;
+REALTIME**2111.336543151s**, MONOTONIC**2111.336537562s**,
+BOOTTIME**2111.336537278s**, boot-minus-mono**−0.000000284s** sampling noise.
+Interval-only kernel PM entry/exit query returned **zero matches,exit1/no-match,
+empty stderr**: **no measured suspend**. No full/user journal, inhibitor/power
+change, induced/prevented sleep, synthetic waits or progress polling. Foreground
+blocking capture waited for normal completion, no interim15-minute truncation.
+Verbatim raw**166214 bytes** and separate**1662 receipt rows** have complete byte
+coverage, reconciling1579/1. Receipt times are not case starts/internal phases.
+
+**`task8-settings-final-coverage.md`** records current production64a/test84e scopes,
+both changed-case passes and the failed whole result. Retained44 C/L/S/essential,
+M1/Q1/enum/D5/D6/native/combinatorial limits remain unchanged; no current all-
+essential coverage or performance/root-cause fix claim. Library coverage stays
+valid on unchanged production64a, not a substitute for unrun CLI/mutation384/
+read-contract/RowClock paths. WAIT60s/POLL10ms/default threads/GPUI15s-per-park
+and production heartbeat/lease/cache/SQLite/confirmation limits unchanged.
+Owner-stopped profiling/optimization and performance tickets remain untouched.
+
+**NOT RUN:**current-production CLI units/all27 integrations; selected library
+local-sync160; all ten whole SSH targets; both isolated smokes; SAME whole SPEC
+then QUALITY final runtime-evidence reviews and controller/owner handoff. No
+display/socket/profile/app/native action. **FIRSTFAIL barrier restored**, further
+execution/fix needs controller authorization. Preserve current library/check/
+matching statics, not the failed desktop, for unchanged-input reuse.
+
+New-only **`/tmp/opencode/task8-settings-final-*`** contains reviews/barrier/reuse/
+scope proof, exact argv/source/hashes/raw/receipt/results/power, failure analysis,
+coverage/handoff and computed manifest. All28 older manifest digests preserved,
+no prior runner/log/result written. Final source/hash/whitespace/known-main
+ancestry/merge-tree/comment-prefix/no-jobs checks and metadata HEAD accompany
+handoff. Only ledger/current standing and append to canonical
+**`01M6TYJATB44WZPJABX9GMBVS1`** committed with coauthor; original ID/parent
+**`01M6SYJK4CJGHWKZC7MTP18GTA`**/creation time/all previous body preserved.
+No ID/extra build/status save/source-golden-schema-dependency edit/push/PR/main/
+close/other-worktree/real profile-key-context-draft action. Known owned gate
+processes exited; no jobs. Ticket **implementing / runtime BLOCKED**, not
+feature-complete/review-ready; final runtime reviews/owner handoff remain owed.
