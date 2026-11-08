@@ -24,6 +24,20 @@ unchanged-main/no-op preflight from clean **`ed3a7232bb0b2cdee7a4d7a7929eb3f21ba
 against **`d70142b63a952f5e1aade369e0cd654ca9a03617`**; no repeated fetch/merge,
 other worktree/main edit or agents. The already-committed plan was not rewritten.
 
+**Metadata-only fidelity correction after `5efbab59729af0e61f81a473855858f005dc7222`:**
+the implementation plan's claim of retained “engine-specific rollback” is now
+corrected to actual SQLite transaction rollback/image restoration/reopen/replay
+after prior real SQL writes and an injected Rust error before INSERT1. Neither
+that private hook nor the new `InjectedFailure` points establishes a SQLite-generated
+constraint error or its propagation. Placement/scope/assertions/runtime freeze d87
+are unchanged; no additional design or runtime verification is owed for this prose.
+Controller independently read the full4-file source diff, all3 RED/4 GREEN/3 static
+raw logs and result argv/exits, and verified the latest35-entry manifest
+**`8c7d8b323982f97c25980077ded5bb32eba11239f04fe1892dd1a88446e3e37c`** with **ZERO
+mismatches**, all4 current source hashes matching. This records that verification,
+not a repeat or SAME SPEC/QUALITY approval. Historical entries/evidence remain
+intact; no Rust/Cargo/static/test/probe/profile/smoke/fetch/merge or gate resumption.
+
 - Three compiled type-only REDs each **0 passed/1 failed, Cargo exit1**, at the
   expected injected-error assertions, before either runtime check existed.
 - Four exact SSH GREENs each **1 actual case passed/0 failed, Cargo exit0**:
@@ -10863,3 +10877,50 @@ ses_e4c8be2f1ffegiPUEUuB0QgyBE before any unrun gate.** Five remaining SSH targe
 `comment_publication`, isolated CLI/desktop smokes and final runtime-evidence/owner
 acceptance are still owed. No auto-run/ready/complete/status-save/new ticket/ID/
 push/PR/native/main/close/other-worktree/real profile-key-context-draft/cleanup action.
+
+## Task 8 — Metadata-Only Poll-Fault Fidelity Correction, 2026-11-08 UTC
+
+Controller authorized only the existing implementation-plan fidelity paragraph,
+this current-standing/append and canonical checkpoint append. Clean entry
+**`5efbab59729af0e61f81a473855858f005dc7222`**; runtime/test freeze remains
+**`d87d4568cd185cebf7e880dd92e179c30966efce`**, known main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. No fetch/merge during frozen evidence,
+agent, other worktree/main or real profile/key/context/draft action.
+
+The prior plan's phrase “engine-specific rollback” overstated the retained private
+test's fault provenance. Source at `poll_tests.rs:2389–2432` proves advertisement/
+context SQL, old-report DELETE and INSERT0, then returns Rust
+`Err(state::recovery_required())` **before INSERT1**. This verifies real SQLite
+transaction rollback, image restoration and legitimate reopen/replay after prior
+actual SQL writes; it is not a SQLite-generated RAISE/constraint error or proof of
+its propagation. New points likewise return Rust `InjectedFailure`. **No new
+engine-specific error proof has been established by this correction.** Only this
+claim is corrected; owner-approved placements, scope, all84 cases/assertions and
+retained verification selection are unchanged. No new test/fault type/engine probe,
+design change or runtime gate is added or owed for this metadata correction.
+
+**Controller verification, recorded rather than repeated:** independently read
+the full4-file source diff and all3 RED/4 GREEN/3 static raw logs/results argv/exits;
+verified `/tmp/opencode/task8-poll-write-faults-20261108T112107Z/evidence.sha256`,
+**35 entries**, SHA-256
+**`8c7d8b323982f97c25980077ded5bb32eba11239f04fe1892dd1a88446e3e37c`**, **ZERO mismatches**,
+all4 current source hashes MATCH. Existing source-proof/ledger qualification was
+already accurate. Old manifest/logs/artifacts and every historical entry remain
+immutable; no old `/tmp` writes or historical reinventory.
+
+Metadata checks only: exact4 source hashes match entry and runtime freeze, no
+Rust/test/build-input diff from entry, `git diff --check`, and canonical full-byte
+prefix preservation. Only3 owned metadata paths are committed with required
+coauthor; clean UNPUSHED handoff, no jobs started or left. No Rust/Cargo/static/test/
+probe/profile/smoke command, new doc/ticket/ID/status save, push/PR/native/closure or
+auto-resumption. Prior runtime results retain their actual scopes, not rerun.
+
+**SAME whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`, THEN SAME whole QUALITY
+`ses_e4c8be2f1ffegiPUEUuB0QgyBE` over complete4cc..returnedHEAD including the plan
+amendment/correction remain pending.** Five SSH targets `cli_remote`,
+`mutation_remote`, `document_promotion`, `ticket_closure`, `comment_publication`,
+both isolated smokes and final runtime-evidence reviews/owner acceptance are still
+owed. Historical whole80/4 is not fresh84/0; retained greens and manual
+characterization0passed/1ignored/NOT MEASURED remain unchanged. Owner performance
+STOP and retained44/M1/Q1/enum/D5/D6/native limits stand; ticket remains
+**implementing / review-and-runtime BLOCKED**, not ALLPASS/ready/complete.

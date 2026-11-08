@@ -713,13 +713,17 @@ schema, new public setter or callback framework change.
    and fmt once on the coherent amended Rust tree. Obtain same whole SPEC,
    then same QUALITY review before resuming the five unrun SSH targets/smokes.
 
-The new errors exercise owned Rust-transaction rollback at the same public
-effect windows; they are not SQLite `RAISE(ABORT)` errors. Existing private
-library INSERT-fault coverage retains the engine-specific rollback, old-report
-DELETE/partial-INSERT, complete-image restoration and legitimate reopen/replay
-proof. Do not relabel old runtime evidence as newly executed on the amended
-source. This owner-approved narrow selection adds no performance investigation,
-safety-budget relaxation, native dispatch, push, PR, merge or closure authority.
+The new points return `InjectedFailure` Rust errors at the same public effect
+windows, not SQLite-generated `RAISE(ABORT)` or constraint errors. Retained private
+library INSERT-fault coverage proves real SQLite transaction rollback after actual
+advertisement/context writes, the old-report DELETE and INSERT0, followed by a Rust
+`Err(state::recovery_required())` before INSERT1. It retains complete-image
+restoration and legitimate reopen/replay proof, not an engine-generated constraint
+error or its propagation. No new engine-specific error proof has been established
+by this correction. Do not relabel old runtime evidence as newly executed on the
+amended source. This owner-approved narrow selection adds no performance
+investigation, safety-budget relaxation, native dispatch, push, PR, merge or closure
+authority.
 
 ## Plan Self-Review
 

@@ -1388,3 +1388,45 @@ standing + this append checkpointed with coauthor, preserving this ID/parent/tim
 entire prior body. Clean UNPUSHED; no auto-gate/status save/ID/push/PR/native/main/
 close/other-worktree/real profile-key-context-draft/cleanup. Ticket remains
 **implementing / review-and-runtime BLOCKED**, not ALLPASS/ready/feature-complete.
+
+## Follow-up — metadata-only poll-fault fidelity correction — 2026-11-08 UTC
+
+Controller authorized ONLY the existing implementation-plan fidelity paragraph,
+ledger current-standing/append and this append. Entry
+**5efbab59729af0e61f81a473855858f005dc7222**; runtime/test freeze stays
+**d87d4568cd185cebf7e880dd92e179c30966efce**, known main
+**d70142b63a952f5e1aade369e0cd654ca9a03617**. No runtime/code change or gate command.
+
+Corrected the plan's overstated “engine-specific rollback” claim: retained private
+ordinal1 coverage proves real advertisement/context SQL, old-report DELETE and
+INSERT0, then returns Rust **Err(state::recovery_required()) before INSERT1**. It
+proves real SQLite transaction rollback/image restoration/legitimate reopen/replay
+after prior actual SQL writes, not a SQLite-generated RAISE/constraint error or its
+propagation. New points likewise return Rust **InjectedFailure**. **No new
+engine-specific error proof is established by this correction.** Existing ledger/
+source-proof qualification was accurate; placements/scope/all84 cases/assertions
+and approved narrow selection are unchanged. No new design/test/fault type/engine
+probe or runtime verification is owed for this prose-only correction.
+
+**Controller evidence verification, NOT repeated here:** full4-file source diff,
+all3 RED/4 GREEN/3 static raw logs/result argv/exits independently read; latest
+**35-entry** `/tmp/opencode/task8-poll-write-faults-20261108T112107Z/evidence.sha256`
+SHA-256 **8c7d8b323982f97c25980077ded5bb32eba11239f04fe1892dd1a88446e3e37c**, **ZERO
+mismatches**, all4 current source hashes MATCH. Old logs/manifests/evidence and all
+historical entries stay immutable; no old `/tmp` writes or historical reinventory.
+
+Only metadata checks:4 source hashes against entry/runtime freeze, no Rust/test/
+build-input diff, `git diff --check`, entire prior canonical byte prefix unchanged.
+This ID, parent **01M6SYJK4CJGHWKZC7MTP18GTA**, creation time and complete prior body
+are preserved. Commit only3 authorized metadata files with coauthor; clean UNPUSHED,
+no jobs. No Rust/Cargo/static/test/probe/profile/smoke/fetch/merge/agents/other-worktree/
+main/real profile-key-context-draft action; no new doc/ticket/ID/status save/push/PR/
+native/closure/cleanup or auto-resumption. Owner performance STOP remains.
+
+**SAME whole SPEC ses_e4cc1a00bffeO0qOz2Do4Qx1Bd THEN SAME whole QUALITY
+ses_e4c8be2f1ffegiPUEUuB0QgyBE over complete4cc..returnedHEAD including the plan
+amendment/correction remain pending**, before5 unrun SSH targets cli_remote/
+mutation_remote/document_promotion/ticket_closure/comment_publication and both
+isolated smokes. Final runtime-evidence/owner acceptance still owed. Historical80/4,
+retained greens/actual source scopes and characterization0passed/1ignored/NOT MEASURED
+unchanged. Ticket **implementing / review-and-runtime BLOCKED**, not ready/complete.
