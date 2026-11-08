@@ -838,3 +838,71 @@ other-worktree/real profile-key-context-draft action. Known gate processes exite
 no jobs. **FIRSTFAIL barrier restored**, controller authorization needed. Ticket
 **implementing / runtime BLOCKED**, not feature-complete/review-ready; final runtime
 reviews and owner handoff remain owed.
+
+## Follow-up — Three Audited Onboarding-Oracle Waits, 2026-11-08 UTC
+
+Controller authorized exactly three TEST-ONLY sequencing corrections under the
+approved Cycle, not new product policy or production lock semantics. Fresh fetch
+**2026-11-08T01:28:31.197528Z** succeeded; main remains
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**, no incoming main commits/files.
+Current main AGENTS read; merge at01:28:58.851253Z already up to date, ancestry
+exit0. Clean entry/postmerge **`996b6734a02adf9f37259aabb51d20d0dda876d1`**, parent
+**`84e5772d809b5d0051c321e917865b5fb8909290`**; no new merge commit/conflict/rebase,
+main/other-worktree edit or additional agent.
+
+Only `src/desktop/view/keyboard_tests/settings.rs` and
+`src/desktop/view/settings/repositories_tests.rs` changed among Rust/build inputs:
+
+- `add_an_existing_repository_by_keyboard`: after foreground Success, existing
+  `walk.shell.until` awaits exact plain root + Background + IndexRefresh +
+  Finished(..) ANY outcome. Clone root; add only Lane/RequestState imports.
+- `adding_a_repository_without_identity_asks_for_one_and_keeps_it`: move existing
+  onboarding await before post-enable registry read.
+- `a_partial_create_is_completed_by_retry_under_the_same_request`: move existing
+  await before post-retry registry read.
+
+All assertions remain verbatim/in order, all keyboard actions/Region::Content
+focus check remain, same request/partial/attempt2/recovery/one-follow-up checks
+remain. Previous two fixes, helpers, APIs, harness and other cases untouched.
+Audit **`/tmp/opencode/task8-onboarding-order-audit.json`** preserves complete
+entry-line classifications: these3 gaps; already joined2; preview/no-request/
+non-Ok/removal/synchronous fixture and second-actor oracles; read-wrapper/production
+closures. No other gap found within that family is not a no-other-failures claim.
+
+Worker foreground Finished precedes refresh submission; foreground-only waits
+therefore miss the follow-up. Refresh requires registration and cannot create it;
+Finished ANY outcome is the existing meaning, not a new background-success assert.
+This removes source-proven avoidable overlap, **not proven historical Busy cause**.
+Coordination versus SQL origin remains UNKNOWN; no clock/load/suspend/performance/
+infrastructure attribution, retry/suppression/budget change or waiver. No fabricated
+RED/new test/canned answer/API/framework/probe/profiling; owner stop still applies.
+
+Retained RED: whole desktop1579/1 at84e,2110.61s, earlier corrected2 actually PASS.
+Exactly one default-thread Devenv full-name `--exact` command ran only changed3:
+**exit0;3 passed/0 failed/0 ignored/0 measured/1577 filtered**,2.74s tests,
+**40.990219306s** elapsed,01:30:12.057658Z→01:30:53.047864Z; compiled37.98s.
+Fresh strict Devenv `cargo clippy --all-targets --all-features --locked -- -D warnings`
+**exit0,11.048345194s**; fresh Devenv `cargo fmt --check`
+**exit0,19.123687616s**. Source hashes still match; known command groups exited.
+Current library **1530/0/160 filtered,1865.59s** and check
+**exit0,4.165545239s** retained NOT rerun; production64a6/clock/TTL/guards/SQL/
+leases/consent/build/schema/dependencies/WAIT60s/GPUI15s/POLL10ms unchanged.
+Target3/0 is not whole1580/0: latest whole1579/1 remains FAILED at84e; earlier
+1578/2/exact2/e6bc/d49/fb6 outcomes retain original scopes. No broader gate ran.
+
+New-only **`/tmp/opencode/task8-onboarding-order-*`** holds exact argv/raw/counts/
+exits/times/default environment/source hashes/production proof/audit/full delta/
+handoff, small **`task8-onboarding-order-evidence.sha256`** manifest. All30 older
+manifest digests preserved, including verified settings-final25
+**`bb9ffc0c313d4f0e3f240fe231b0925f26947df40e89347a40af67e66dae55a3`**; no old writes/
+thousands-of-input inventory. Only2 test files plus owned ledger/this append
+committed with coauthor; original ID/parent/time/full prior comment body preserved.
+No jobs/push/PR/native/main/closure/status save/new ID/ticket/plan/other-worktree/
+real profile-key-context-draft or cleanup action.
+
+**Barrier:** SAME whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` THEN SAME whole QUALITY
+`ses_e4c8be2f1ffegiPUEUuB0QgyBE` before changed whole desktop only/remaining gates.
+CLI units/all27 integrations including whole mutation_replay384/local-sync160/
+ten SSH targets/both smokes/final runtime-evidence reviews and owner handoff still
+owed. No later gate auto-admitted. Ticket **implementing / runtime BLOCKED**, not
+feature-complete/review-ready; retained44/D5/D6/native/combinatorial limits stand.

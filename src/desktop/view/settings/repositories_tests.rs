@@ -295,8 +295,8 @@ async fn adding_a_repository_without_identity_asks_for_one_and_keeps_it(cx: &mut
     let local = config.open_level(git2::ConfigLevel::Local).unwrap();
     assert_eq!(local.get_string("user.name").unwrap(), ada().name);
     assert_eq!(local.get_string("user.email").unwrap(), ada().email);
-    assert_eq!(registered(&shell), [key(&root)]);
     until_onboarded(&shell, &root, cx).await;
+    assert_eq!(registered(&shell), [key(&root)]);
     assert_eq!(background_refreshes(&shell, &root, cx), 1);
 
     // Checked again, it is registered.
@@ -589,8 +589,8 @@ async fn a_partial_create_is_completed_by_retry_under_the_same_request(cx: &mut 
         operations.request(id).unwrap().request_id == request_id
     });
     assert!(same, "Retry is the same request to the library");
-    assert_eq!(registered(&shell), [key(&root)]);
     until_onboarded(&shell, &root, cx).await;
+    assert_eq!(registered(&shell), [key(&root)]);
     assert_eq!(background_refreshes(&shell, &root, cx), 1);
 }
 

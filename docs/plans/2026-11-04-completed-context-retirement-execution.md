@@ -12,7 +12,51 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current Settings-Test Ordering Standing — 2026-11-08 UTC
+### Current Onboarding-Oracle Correction Standing — 2026-11-08 UTC
+
+**Controller-authorized three-case TEST-ONLY correction: targeted GREEN; source
+re-review pending, runtime BLOCKED.** Clean entry/postmerge HEAD
+**`996b6734a02adf9f37259aabb51d20d0dda876d1`**, parent/reviewed test source
+**`84e5772d809b5d0051c321e917865b5fb8909290`**. Fresh fetch and no-op merge of
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`** found no new main commits/files;
+ancestry exit0, no conflict/merge commit/main-checkout or other-worktree edit.
+
+Only two cfg(test) files changed: keyboard settings adds a local existing-Shell
+wait for its exact root's background IndexRefresh Finished of ANY outcome before
+the raw registry oracle; repository settings moves two EXISTING onboarding awaits
+before the identity-add and partial-retry registry assertions. Every assertion and
+keyboard action/focus check remains verbatim/in order; previous two reviewed fixes
+are untouched. No helper/API/framework/other-case/production/build/limit change.
+Production/library remains **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**.
+
+| Current evidence | Actual standing |
+| --- | --- |
+| Three changed full names, one exact desktop command | **3 passed/0 failed/1577 filtered**,2.74s tests; exit0,40.990219306s elapsed. |
+| Fresh strict all-target/all-feature locked Clippy | **exit0**,11.048345194s elapsed/10.77s Cargo. |
+| Fresh whole-tree fmt-check | **exit0**,19.123687616s elapsed. |
+| Unchanged library and check, retained NOT rerun | **1530/0/160 filtered**,1865.59s tests; check exit0,4.165545239s. |
+| Latest whole desktop, still FAILED at84e | **1579/1/0 filtered**,2110.61s tests; targeted3/0 is not whole1580/0. |
+
+Source proves the missing foreground/follow-up ordering, **not the actual historical
+Busy origin** (coordination versus SQL remains unknown), performance/clock/load/
+suspend/infrastructure causation or waiver. The compiled1579/1 keyboard failure
+is retained RED; no manufactured Busy, new case, ritual RED/repeat, retry,
+suppression, instrumentation or profiling. Source-only family audit found only
+these three remaining gaps; it does not promise no other desktop failures.
+The complete classified map is **`/tmp/opencode/task8-onboarding-order-audit.json`**.
+
+**Next barrier:** SAME whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` THEN SAME whole
+QUALITY `ses_e4c8be2f1ffegiPUEUuB0QgyBE` before changed whole desktop/remaining gates.
+CLI units/all27 integrations including whole mutation_replay384, selected local-
+sync160, ten SSH targets, both smokes and final runtime reviews/owner handoff
+remain owed. No broader gate ran. New-only **`/tmp/opencode/task8-onboarding-order-*`**
+holds receipts/hashes/source map/full delta and small manifest;30 older manifest
+digests preserved without linked-input re-inventory. Known test/static jobs exited.
+All production safety budgets, WAIT60s/GPUI15s-per-park/POLL10ms/default threads and
+retained44/D5/D6/native limits remain unchanged. Ticket **implementing / runtime
+BLOCKED**, not feature-complete/review-ready.
+
+### Prior Settings-Test Ordering Standing — 2026-11-08 UTC
 
 **Reviewed test-only correction; whole desktop FAILED1579/1, runtime BLOCKED.**
 Frozen test source **`84e5772d809b5d0051c321e917865b5fb8909290`**; unchanged
@@ -9655,3 +9699,107 @@ No ID/extra build/status save/source-golden-schema-dependency edit/push/PR/main/
 close/other-worktree/real profile-key-context-draft action. Known owned gate
 processes exited; no jobs. Ticket **implementing / runtime BLOCKED**, not
 feature-complete/review-ready; final runtime reviews/owner handoff remain owed.
+
+## Task 8 — Audited Remaining Onboarding-Oracles: Three Test-Only Corrections
+
+### Controller Authority And Fresh Preflight — 2026-11-08 UTC
+
+Controller authorized exactly three source-audited cases in two cfg(test) files,
+routine test sequencing under the approved Cycle, not new user/product policy
+or production lock semantics. Fresh `git fetch origin` at
+**2026-11-08T01:28:31.197528Z** succeeded. Main stayed
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`** with no incoming commits/files;
+current main AGENTS read. `git merge origin/main` at01:28:58.851253Z answered
+already up to date, ancestry exit0. Clean entry/postmerge
+**`996b6734a02adf9f37259aabb51d20d0dda876d1`**, parent
+**`84e5772d809b5d0051c321e917865b5fb8909290`**; no new merge parents/conflict/rebase.
+Registered main checkout clean/behind170 and left unchanged; no other-worktree
+edit or additional agent. All work stays on the existing ticket branch/worktree.
+
+### Exact Source Delta And Preserved Contracts
+
+| Case / file | Only authorized correction |
+| --- | --- |
+| `desktop::view::keyboard_tests::settings::add_an_existing_repository_by_keyboard`, `src/desktop/view/keyboard_tests/settings.rs` | After foreground Success, clone `plain` and await existing `walk.shell.until`: exact root + Lane::Background + Intent::IndexRefresh + RequestState::Finished(..), ANY outcome. Add only Lane/RequestState imports. Raw registry unwrap/root assertion and final Region::Content check remain. |
+| `desktop::view::settings::repositories::tests::adding_a_repository_without_identity_asks_for_one_and_keeps_it`, `src/desktop/view/settings/repositories_tests.rs` | Move existing onboarding await before post-enable registry assertion, after unchanged Git identity assertions. |
+| `desktop::view::settings::repositories::tests::a_partial_create_is_completed_by_retry_under_the_same_request`, same file | Move existing onboarding await before post-retry registry assertion; preserve partial code/recovery/attempt2/same request/one follow-up checks. |
+
+Every existing assertion line is verbatim and in order; all keyboard controls and
+actions are unchanged. Previous two corrected cases are byte-unchanged within
+their functions. Helpers, visibility, shared harness, public APIs, preview/cancel/
+failed-mutation/removal/second-actor oracles and other tests remain untouched.
+Source/build proof against production **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**
+finds no other input changes outside the two test files and owned metadata.
+Current test-file SHA-256 values:
+
+- keyboard settings: **`33982e85c03750bdc1bbcde1fd2527528225536e5995e68d036f6e65ab9a6e89`**
+- repository settings: **`1fd5cfba0efbb27384cdaba3a1537361b5e96dfe945655a9d7a53c0127fa8881`**
+
+Source-only audit map **`task8-onboarding-order-audit.json`** names every direct
+registry oracle and imported `registered()` use with entry996b line references:
+three unjoined cases above; two already joined; previews/no-request/non-Ok
+mutations; imported removal oracles; synchronous fixture/second-actor reads;
+services-read Probe and three production read closures. Synchronous fixture calls
+finish before observation, test-window launch refresh is disabled, and removal/
+non-Ok answers schedule no onboarding follow-up. No other gap was found within
+this family, **not a claim that no other desktop failures are possible**.
+
+Worker1034–1059 sends foreground Finished BEFORE submitting automatic refresh;
+Walk.ended/Shell.until_ended wait foreground only. The direct read takes the shared
+coordination guard and refresh claim takes its exclusive counterpart. This proves
+an avoidable unjoined overlap, **not actual historical Busy causation**: coordination
+timeout versus SQL busy/locked origin remains UNKNOWN. No clock, performance,
+load, suspend or infrastructure attribution/waiver. Refresh requires registration
+and cannot manufacture it; unchanged helpers mean Finished ANY outcome plus
+visible membership, not guaranteed successful background refresh. No Busy retry/
+suppression, canned result, added test/gate/API/framework/sleep/thread override.
+Owner-stopped profiling and performance work remain stopped.
+
+### Once-Only Exact Verification And Retained Evidence
+
+The previous whole desktop **1579/1**,2110.61s at84e, contains keyboard RED and actual
+PASS for both earlier corrected cases. Retain that actual outcome; no ritual
+unchanged RED or whole/probe rerun. Exactly once after all three edits:
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands -- desktop::view::keyboard_tests::settings::add_an_existing_repository_by_keyboard desktop::view::settings::repositories::tests::adding_a_repository_without_identity_asks_for_one_and_keeps_it desktop::view::settings::repositories::tests::a_partial_create_is_completed_by_retry_under_the_same_request --exact
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo fmt --check
+```
+
+| Command | Actual UTC interval, 2026-11-08 | Result |
+| --- | --- | --- |
+| Exact three desktop cases | 01:30:12.057658Z →01:30:53.047864Z | **exit0;3 passed/0 failed/0 ignored/0 measured/1577 filtered**,2.74s tests,40.990219306s elapsed; test-profile compile37.98s. |
+| Strict whole-tree Clippy | 01:30:59.647118Z →01:31:10.695454Z | **exit0**,11.048345194s elapsed/10.77s Cargo. |
+| Whole-tree fmt-check | 01:30:59.651371Z →01:31:18.775049Z | **exit0**,19.123687616s elapsed. |
+
+Default threads; diagnostic/golden/thread environment overrides absent. Source
+hashes match after gates; parsed full names/counts confirm actual3, not zero cases.
+At01:31:53.080121Z, all three known command process groups had exited; no jobs.
+No separate check/library/full desktop/CLI/other fast/local-sync/SSH/smoke command.
+Production64a6 including the clock line, owner TTL/heartbeat/250ms coordination,
+SQL/lease/consent limits, dependency/schema/build inputs and WAIT60s/GPUI15s/POLL10ms
+remain unchanged. Library **1530/0/160 filtered,1865.59s** and check
+**exit0,4.165545239s** remain valid and were NOT rerun. New Clippy/fmt cover these
+changed test inputs. Latest whole desktop1579/1 remains FAILED at84e; targeted3/0
+is not whole1580/0. Older whole1578/2/exact2/e6bc/d49/fb6 scopes remain historical.
+
+New-only **`/tmp/opencode/task8-onboarding-order-*`** stores literal argv/default
+environment/raw logs/receipts/counts/source and production proof/audit/full delta/
+handoff and small **`task8-onboarding-order-evidence.sha256`** manifest. All30 older
+SHA-256 manifest digests preserved, no linked-input inventory or old artifact write.
+Controller-verified settings-final25 digest remains
+**`bb9ffc0c313d4f0e3f240fe231b0925f26947df40e89347a40af67e66dae55a3`**.
+Only two cfg(test) files plus ledger/current standing/checkpoint and append to
+existing canonical comment are committed with coauthor. Original comment ID/
+parent01M6SYJK4CJGHWKZC7MTP18GTA/created_at/full prior body remain unchanged.
+No push/PR/native/main/closure/status save/new ID/ticket/plan/worktree cleanup or
+real profile/key/context/draft operation.
+
+**Return barrier:** SAME whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` THEN SAME whole
+QUALITY `ses_e4c8be2f1ffegiPUEUuB0QgyBE` before changed whole DESKTOP ONLY and unrun
+remaining gates. No later gate auto-admitted. CLI units/all27 fast integrations
+including whole mutation_replay384/local-sync160/ten SSH targets/both smokes/final
+runtime-evidence SPEC→QUALITY and owner handoff remain owed. Retained44/M1/Q1/enum/
+D5/D6/native/combinatorial limitations stand. Ticket **implementing / runtime
+BLOCKED**, not feature-complete/review-ready.
