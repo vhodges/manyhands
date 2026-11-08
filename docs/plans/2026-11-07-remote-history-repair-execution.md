@@ -18,6 +18,7 @@ pushes.
 | 0 | done | 74bc1f94 | 74bc1f94 | n/a (no code) | baseline green; all four test-only flag resets dead |
 | 1 | done | ea29a9ac | 9539e43c | approved | `ConfigurationChange`, known identity; interim weakening of `replacing_configuration_does_not_turn_known_publication_into_first_publication` (Task 2 restores it); review should-fix 1 and 2 carried to Task 2 |
 | 2 | done | 27ae78fd | 875590f8 | approved | carry-forward; evidence held while the plan is unavailable (implementer's decision, reviewed); review should-fix 1 and 2 carried to Task 3 |
+| 3 | done | 54257d6b | 354c9599 | approved | per-context unknown rows; known-column fallback; held rows validated; review should-fix 1 carried to Task 5 |
 
 ## Test Filters (Task 0)
 
@@ -112,3 +113,28 @@ All commands passed:
     are skipped.
 - For final review (outside the plan's boundary): `read/status.rs:730`
   shows the held batch's `observed_at` while the plan is unavailable.
+
+## Task 3 Results
+
+- Implementer, all passed:
+  - `remote::state::` 73, `refs::tests` 10, `poll::tests` 79, `sync::tests`
+    182;
+  - `cleanup` 27, `closure::observe::tests` 61, `promotion::observe::tests`
+    53;
+  - clippy, fmt and `check --tests` clean.
+- Reviewer: `remote::state::` 73 and `remote::tests::` 15 passed. Approved.
+- No existing R1 or invariant test needed an edit.
+- Decision: an active context whose stored branch can't be parsed aborts a
+  forgetting fence with `recovery_required`. The reviewer confirmed that the
+  read at the start of `configure_known` already fails in that case, and
+  that a credentials fence can't reach the insert loop.
+- Carried to Task 5:
+  - **should-fix 1:** NULL known columns, plan already None, rows kept, then
+    a different remote. Evidence can't apply to the wrong remote (the
+    tracking ref includes the remote name), but every read is then
+    `recovery_required`. Fix: a carry also requires each kept row's
+    tracking ref to equal the new plan's, and otherwise takes the forget
+    path. Add test rows for NULL known + NULL plan + a different remote,
+    and NULL known + the same remote (rows kept).
+- Nits left: the `plan.ok_or_else` that can't be reached needs a comment;
+  the real clock is consistent with the file.
