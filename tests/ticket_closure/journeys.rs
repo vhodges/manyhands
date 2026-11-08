@@ -94,7 +94,7 @@ pub(super) const BLOCKERS: &[ssh_harness::Case] = &[
     ("blocker_context_behind_remote", || blocker(13)),
     ("blocker_integration_conflict", || blocker(14)),
     ("blocker_remote_context_deleted", || blocker(15)),
-    ("blocker_history_unknown", || blocker(16)),
+    ("blocker_history_unresolved", || blocker(16)),
     ("blocker_already_closed", || blocker(17)),
     ("blocker_primary_reopened", || blocker(18)),
     ("blocker_ticket_invalid_after_closure", || blocker(19)),
@@ -1345,7 +1345,7 @@ fn blocker(mode: usize) -> Result<(), FixtureError> {
         }
         16 => {
             lose_registry(&p.server, &mut p.a)?;
-            ClosureBlocker::HistoryUnknown
+            ClosureBlocker::HistoryUnresolved
         }
         17 => {
             p.close(&p.a)?;

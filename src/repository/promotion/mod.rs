@@ -215,6 +215,8 @@ pub enum PromotionBlocker {
     RemoteContextDeleted,
     HistoryUnknown,
     DocumentInvalidAfterIntegration,
+    /// Last, so the stored blocker masks keep their bits.
+    HistoryUnresolved,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

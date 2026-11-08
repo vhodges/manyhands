@@ -174,6 +174,7 @@ fn promotion_blocker(blocker: PromotionBlocker) -> LifecycleBlocker {
         PromotionBlocker::IntegrationConflict => LifecycleBlocker::IntegrationConflict,
         PromotionBlocker::RemoteContextDeleted => LifecycleBlocker::RemoteContextDeleted,
         PromotionBlocker::HistoryUnknown => LifecycleBlocker::HistoryUnknown,
+        PromotionBlocker::HistoryUnresolved => LifecycleBlocker::HistoryUnresolved,
         PromotionBlocker::DocumentInvalidAfterIntegration => {
             LifecycleBlocker::DocumentInvalidAfterIntegration
         }
@@ -199,6 +200,7 @@ fn closure_blocker(blocker: ClosureBlocker) -> LifecycleBlocker {
         ClosureBlocker::IntegrationConflict => LifecycleBlocker::IntegrationConflict,
         ClosureBlocker::RemoteContextDeleted => LifecycleBlocker::RemoteContextDeleted,
         ClosureBlocker::HistoryUnknown => LifecycleBlocker::HistoryUnknown,
+        ClosureBlocker::HistoryUnresolved => LifecycleBlocker::HistoryUnresolved,
         ClosureBlocker::AlreadyClosed => LifecycleBlocker::AlreadyClosed,
         ClosureBlocker::PrimaryReopened => LifecycleBlocker::PrimaryReopened,
         ClosureBlocker::TicketInvalidAfterClosure => LifecycleBlocker::TicketInvalidAfterClosure,

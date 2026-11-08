@@ -1816,6 +1816,99 @@
       },
       {
         "available": true,
+        "command": "item resolve-history",
+        "delivered_by": "C5",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--as",
+            "required": true,
+            "summary": "The choice for a context whose publication history is unknown.",
+            "value": "publish|release"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "Record a context whose publication history is unknown as never published."
+      },
+      {
+        "available": true,
+        "command": "remote history",
+        "delivered_by": "C5",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "Poll the publication remote and list the contexts whose publication history is unknown."
+      },
+      {
+        "available": true,
+        "command": "remote resolve-history",
+        "delivered_by": "C5",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "Clear the repository's lost-history flag once no context reads unknown."
+      },
+      {
+        "available": true,
         "command": "conflict show",
         "delivered_by": "C4",
         "options": [

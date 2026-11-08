@@ -186,7 +186,7 @@ fn local_owner_reciprocally_blocks_closure_preview_and_adoption() {
 fn remote(f: &Fixture, item: canonical::ItemId) -> (OperationId, RemoteOperationTarget) {
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&f.service, f.root.path(), |tx, rid| {
-        state::configure(tx, rid, Some(&plan), false)
+        state::configure(tx, rid, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_context(

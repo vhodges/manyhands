@@ -56,7 +56,7 @@ pub enum Home {
 /// Where the row of every bound command is. `run` fails when this is
 /// not exactly the bound commands, so a command that is built and has
 /// no home here fails all four targets.
-pub const HOMES: [(&str, Home); 43] = [
+pub const HOMES: [(&str, Home); 45] = [
     ("context sync-local", Home::Replay),
     ("context resolve-local", Home::Replay),
     ("comment add", Home::Remote),
@@ -100,6 +100,8 @@ pub const HOMES: [(&str, Home); 43] = [
     ("poll pause", Home::Replay),
     ("poll resume", Home::Replay),
     ("poll once", Home::Remote),
+    ("item resolve-history", Home::Confirmation),
+    ("remote resolve-history", Home::Confirmation),
 ];
 
 /// The request IDs the rules use. No fixture uses them.

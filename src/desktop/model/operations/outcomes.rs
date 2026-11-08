@@ -38,6 +38,14 @@ pub(crate) const ANOTHER_SHARE_HOLDS: &str = "Another share may be holding this 
 pub(crate) const NOWHERE_TO_SHARE: &str = "This repository has nowhere to share to";
 pub(crate) const BRANCH_DELETED: &str = "The shared copy of this item was deleted. \
      Republish it to share it again.";
+/// Unresolved remote history: what a blocker, a way out and a failed share
+/// say until the app has a repair sheet (follow-on vh-ez4y9). Repair runs
+/// in the command line, so no button is offered.
+pub(crate) const HISTORY_UNRESOLVED_BLOCKER: &str =
+    "Manyhands cannot confirm whether this item's shared copy was ever published to this remote.";
+pub(crate) const HISTORY_UNRESOLVED_GUIDANCE: &str = "Manyhands can't confirm whether this \
+     item's shared copy was ever published to this remote. Check it and resolve it with \
+     `manyhands-cli remote history`.";
 /// What the texts call the repository's primary branch while its name is
 /// not known: before navigation lists the repository, or when its
 /// configuration names none (R-35).
@@ -100,6 +108,7 @@ pub(crate) fn sync_text(outcome: &SyncOutcome, holder: Option<&str>) -> Option<S
         }
         SyncOutcome::NoRemote => NOWHERE_TO_SHARE,
         SyncOutcome::BranchDeleted => BRANCH_DELETED,
+        SyncOutcome::HistoryUnresolved => HISTORY_UNRESOLVED_GUIDANCE,
         SyncOutcome::NothingToShare => NOTHING_TO_SHARE,
         SyncOutcome::Failed { .. } => return None,
     };

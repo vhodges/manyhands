@@ -6,6 +6,8 @@ mod cli_pair;
 mod collaboration;
 #[path = "cli_remote/conflicts.rs"]
 mod conflicts;
+#[path = "cli_remote/history.rs"]
+mod history;
 #[path = "cli_remote/hosts.rs"]
 mod hosts;
 #[path = "cli_remote/interruption.rs"]
@@ -111,6 +113,7 @@ fn main() {
         .chain(lifecycle::BOTH)
         .chain(lifecycle::ONE)
         .chain(journeys_c5::CASES)
+        .chain(history::CASES)
         .copied()
         .collect();
     ssh_harness::run(&cases);

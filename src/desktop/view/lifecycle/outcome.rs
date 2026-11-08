@@ -480,7 +480,10 @@ pub(crate) fn guidance(
         LifecycleWayOut::RepairOutside => {
             format!("Fix the conflict with {primary} outside Manyhands, then retry.")
         }
-        LifecycleWayOut::PollOnce | LifecycleWayOut::SaveItem { .. } | LifecycleWayOut::Inspect => {
+        LifecycleWayOut::PollOnce
+        | LifecycleWayOut::ResolveHistory
+        | LifecycleWayOut::SaveItem { .. }
+        | LifecycleWayOut::Inspect => {
             return super::prepare::guidance(way_out, item, primary);
         }
         LifecycleWayOut::SendAgain

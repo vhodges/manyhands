@@ -88,6 +88,7 @@ fn verb_command(spec: &CommandSpec) -> Command {
                     "direction" => arg
                         .value_parser(["down", "up", "both"])
                         .default_value("down"),
+                    "as" => arg.value_parser(["publish", "release"]),
                     "depth" => arg.value_parser(clap::value_parser!(u32)),
                     _ => arg,
                 };

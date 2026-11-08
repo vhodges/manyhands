@@ -491,3 +491,30 @@ async fn the_operation_entry_reopens_the_dialog(cx: &mut TestAppContext) {
         Some(ENDING_DONE)
     );
 }
+
+/// Unresolved remote history is guidance in the CLI, in the dialog's
+/// blocker, its way out and a finished run's way out alike, and is told
+/// apart from push-proof unknown, which polls.
+#[test]
+fn unresolved_history_guides_to_the_command_line() {
+    use crate::desktop::model::operations::{
+        HISTORY_UNRESOLVED_BLOCKER, HISTORY_UNRESOLVED_GUIDANCE,
+    };
+    use manyhands::repository::{LifecycleBlocker, LifecycleWayOut};
+    assert_eq!(
+        super::prepare::blocker_words(LifecycleBlocker::HistoryUnresolved, None),
+        HISTORY_UNRESOLVED_BLOCKER
+    );
+    assert_ne!(
+        super::prepare::blocker_words(LifecycleBlocker::HistoryUnknown, None),
+        HISTORY_UNRESOLVED_BLOCKER
+    );
+    let way = LifecycleWayOut::ResolveHistory;
+    let expected = Some(HISTORY_UNRESOLVED_GUIDANCE.to_owned());
+    assert_eq!(super::prepare::guidance(&way, "ticket", "main"), expected);
+    assert_eq!(super::outcome::guidance(&way, "ticket", "main"), expected);
+    assert_ne!(
+        super::prepare::guidance(&LifecycleWayOut::PollOnce, "ticket", "main"),
+        expected
+    );
+}
