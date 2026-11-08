@@ -64,7 +64,7 @@ fn the_report_lists_each_context_and_the_commands_that_resolve_it() {
             data(vec![entry(ITEM)], false),
             vec![
                 format!(
-                    "{ITEM}  ticket  manyhands/ticket/{ITEM}  absent  local-only  history_unknown  unresolved  choices=publish,release\n"
+                    "{ITEM}  ticket  manyhands/ticket/{ITEM}  absent  local-only  history_unknown  unresolved  choices=publish (release: desktop only)\n"
                 ),
                 "Cache loss: no\n".to_owned(),
                 format!(

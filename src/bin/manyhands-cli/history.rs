@@ -102,18 +102,14 @@ fn relation(entry: &RemoteHistoryEntryDto) -> String {
     text
 }
 
+/// The CLI can only publish; a release is the desktop's, so the listing says
+/// so beside it (the JSON keeps both choices).
 fn choices(entry: &RemoteHistoryEntryDto) -> String {
-    let names: Vec<&str> = [
-        ("publish", entry.choices.publish),
-        ("release", entry.choices.release),
-    ]
-    .into_iter()
-    .filter_map(|(name, offered)| offered.then_some(name))
-    .collect();
-    if names.is_empty() {
-        String::new()
-    } else {
-        format!("  choices={}", names.join(","))
+    match (entry.choices.publish, entry.choices.release) {
+        (true, true) => "  choices=publish (release: desktop only)".to_owned(),
+        (true, false) => "  choices=publish".to_owned(),
+        (false, true) => "  choices=release (desktop only)".to_owned(),
+        (false, false) => String::new(),
     }
 }
 

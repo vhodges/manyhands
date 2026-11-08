@@ -129,7 +129,7 @@ fn remote_history_repair_journey() -> Result<(), FixtureError> {
         "{}",
         text(&listed.stdout)
     );
-    assert!(text(&listed.stdout).contains("unresolved  choices=publish,release\n"));
+    assert!(text(&listed.stdout).contains("unresolved  choices=publish (release: desktop only)\n"));
     assert!(text(&listed.stdout).contains("Cache loss: yes\n"));
     assert_eq!(
         next_lines(text(&listed.stdout)),
