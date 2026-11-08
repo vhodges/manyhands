@@ -419,3 +419,54 @@ fn a_newer_fetch_that_still_lacks_the_branch_does_not_stale_the_observation() {
         .unwrap();
     assert_eq!(f.evidence(), RemotePublicationEvidence::NeverPublished);
 }
+
+#[test]
+fn clearing_the_flag_reports_a_marker_that_cannot_be_deleted_and_refuses_what_moved() {
+    // (case, marker, expected result of clear_cache_loss)
+    for (name, directory) in [("marker file", false), ("undeletable marker", true)] {
+        let f = Fixture::new();
+        f.lose_history(true, Some("never_published"));
+        if directory {
+            std::fs::create_dir(f.marker()).unwrap();
+        } else {
+            f.publish_marker();
+        }
+        let expected = f.service.cache_loss_observation(f.root.path()).unwrap();
+        assert!(
+            expected.cache_loss && expected.unresolved.is_empty(),
+            "{name}"
+        );
+        let done = f
+            .service
+            .clear_cache_loss(f.root.path(), &expected)
+            .unwrap();
+        assert!(done.cache_loss_cleared, "{name}");
+        assert_eq!(
+            done.marker,
+            if directory {
+                MarkerRetirement::Failed
+            } else {
+                MarkerRetirement::Removed
+            },
+            "{name}"
+        );
+        assert!(!f.flag(), "{name}: the commit stands");
+        // Nothing left to clear.
+        let again = f
+            .service
+            .clear_cache_loss(f.root.path(), &expected)
+            .unwrap_err();
+        assert_eq!(again.kind, RepositoryErrorKind::ExternalChange, "{name}");
+    }
+    // A context that turns unknown after the observation is not cleared over.
+    let f = Fixture::new();
+    f.lose_history(true, Some("never_published"));
+    let expected = f.service.cache_loss_observation(f.root.path()).unwrap();
+    f.add_context();
+    let error = f
+        .service
+        .clear_cache_loss(f.root.path(), &expected)
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    assert!(f.flag());
+}

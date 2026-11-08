@@ -13,6 +13,7 @@ use crate::{
 
 use super::{
     LifecycleBlocker, LifecycleMutationDto, LifecycleRecording, MutationDataDto, PrepareDataDto,
+    ResolveHistoryChoice,
 };
 
 /// One step of the way out of a lifecycle answer. Its IDs are the answer's;
@@ -67,16 +68,35 @@ pub enum HistoryWayOut {
     /// `item sync` of the item, which publishes it or integrates what the
     /// remote has.
     Sync { item_id: String },
+    /// `remote history`, then `item resolve-history` for what it lists:
+    /// some context still reads unknown, so the flag stays.
+    RemoteHistory,
+}
+
+/// The way out of an answer of `remote resolve-history`: `recovery_required`
+/// means a context still reads unknown.
+pub fn clear_cache_loss_way_out(code: ResultCode) -> Option<HistoryWayOut> {
+    (code == ResultCode::RecoveryRequired).then_some(HistoryWayOut::RemoteHistory)
 }
 
 /// The way out of an answer of `item resolve-history`, from its code alone:
 /// a refused `release`, a deleted branch, a context already resolved or
 /// present on the remote, and a resolution that was made. Nothing for any
 /// other code.
-pub fn resolve_history_way_out(code: ResultCode, item_id: &str) -> Option<HistoryWayOut> {
+///
+/// `InvalidInput` names the release only for the choice `release`, which is
+/// the one input the verb refuses that way; any other `InvalidInput` is a
+/// malformed request and is told nothing.
+pub fn resolve_history_way_out(
+    choice: ResolveHistoryChoice,
+    code: ResultCode,
+    item_id: &str,
+) -> Option<HistoryWayOut> {
     let item_id = item_id.to_owned();
     match code {
-        ResultCode::InvalidInput => Some(HistoryWayOut::ReleaseContext { item_id }),
+        ResultCode::InvalidInput if choice == ResolveHistoryChoice::Release => {
+            Some(HistoryWayOut::ReleaseContext { item_id })
+        }
         ResultCode::RemoteBranchDeleted => Some(HistoryWayOut::Republish { item_id }),
         ResultCode::Ok | ResultCode::AlreadyApplied => Some(HistoryWayOut::Sync { item_id }),
         _ => None,

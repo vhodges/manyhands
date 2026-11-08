@@ -79,6 +79,7 @@ commands! {
     PollResume => "poll resume",
     PollOnce => "poll once",
     ItemResolveHistory => "item resolve-history",
+    RemoteResolveHistory => "remote resolve-history",
 }
 
 impl Command {
@@ -155,7 +156,7 @@ impl Command {
             // One write in the request's own transaction, with no operation
             // ID and no row: the record finished with it is
             // what says it was made.
-            Self::PollConfigure | Self::PollPause | Self::PollResume | Self::ItemResolveHistory => false,
+            Self::PollConfigure | Self::PollPause | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => false,
             // Never made twice, and so recorded against nothing: a key's
             // ID is not registered again.
             Self::KeyRemove => false,
@@ -235,7 +236,8 @@ impl Command {
             | Self::PollConfigure
             | Self::PollPause
             | Self::PollResume
-            | Self::ItemResolveHistory => false,
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -288,7 +290,8 @@ impl Command {
             | Self::PollConfigure
             | Self::PollPause
             | Self::PollResume
-            | Self::ItemResolveHistory => false,
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -340,7 +343,8 @@ impl Command {
             | Self::PollConfigure
             | Self::PollPause
             | Self::PollResume
-            | Self::ItemResolveHistory => false,
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -400,7 +404,8 @@ impl Command {
             | Self::PollConfigure
             | Self::PollPause
             | Self::PollResume
-            | Self::ItemResolveHistory => false,
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
             // A resume has no operation. One that takes up another
             // request's synchronization honors its own call's token at
             // that operation's safe points and reports their stages, but
@@ -476,7 +481,7 @@ impl Command {
             | Self::ConflictResolve
             | Self::PollConfigure
             | Self::PollPause
-            | Self::PollResume | Self::ItemResolveHistory => false,
+            | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -540,7 +545,7 @@ impl Command {
             // What a policy verb does is write its one field.
             | Self::PollConfigure
             | Self::PollPause
-            | Self::PollResume | Self::ItemResolveHistory => ProgressStage::Writing,
+            | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => ProgressStage::Writing,
         }
     }
 
@@ -600,7 +605,7 @@ impl Command {
             | Self::ContextRelease
             | Self::PollConfigure
             | Self::PollPause
-            | Self::PollResume | Self::ItemResolveHistory => false,
+            | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -645,7 +650,7 @@ impl Command {
             | Self::TicketClose
             // A resolution records that a context was never published: its
             // caller is shown the context, the remote's answer and the choice.
-            | Self::ItemResolveHistory => true,
+            | Self::ItemResolveHistory | Self::RemoteResolveHistory => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -858,6 +863,7 @@ mod tests {
                         | Command::DocumentPromote
                         | Command::TicketClose
                         | Command::ItemResolveHistory
+                        | Command::RemoteResolveHistory
                 ),
                 "{command:?}"
             );
@@ -896,6 +902,7 @@ mod tests {
                     | Command::PollPause
                     | Command::PollResume
                     | Command::ItemResolveHistory
+                    | Command::RemoteResolveHistory
             );
             assert_eq!(
                 command.has_operation(),

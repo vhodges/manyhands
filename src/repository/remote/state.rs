@@ -2476,6 +2476,51 @@ pub(in super::super) fn record_context_resolved(
     Ok(())
 }
 
+/// The contexts that still read unknown while the cache-loss flag is set:
+/// rows that say so, and active contexts with no row. Empty when the flag is
+/// clear (contexts with rows are then listed by `remote history` alone).
+pub(in super::super) fn unresolved_contexts(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+) -> Result<(bool, Vec<(AuthoringKind, ItemId)>), RepositoryError> {
+    let snapshot = read_snapshot(transaction, repository_id)?;
+    let mut unknown: Vec<(AuthoringKind, ItemId)> = snapshot
+        .contexts
+        .iter()
+        .filter(|context| context.publication_evidence == RemotePublicationEvidence::HistoryUnknown)
+        .filter_map(|context| Some((context.kind?, context.item_id.clone()?)))
+        .collect();
+    if snapshot.history_unknown {
+        let active = transaction
+            .prepare("SELECT branch FROM contexts WHERE repository_id=?1 AND kind='active'")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([repository_id], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|_| recovery_required())?;
+        for branch in active {
+            let (kind, item_id) = crate::repository::stored_authoring_branch(&branch)
+                .ok_or_else(recovery_required)?;
+            if snapshot.fetch_publication_evidence_for(kind, &item_id)
+                == RemotePublicationEvidence::HistoryUnknown
+                && !unknown.contains(&(kind, item_id.clone()))
+            {
+                unknown.push((kind, item_id));
+            }
+        }
+    }
+    unknown.sort_by_key(|(kind, id)| (authoring_kind_sort(*kind), id.to_string()));
+    Ok((snapshot.history_unknown, unknown))
+}
+
+fn authoring_kind_sort(kind: AuthoringKind) -> u8 {
+    match kind {
+        AuthoringKind::Document => 0,
+        AuthoringKind::Ticket => 1,
+    }
+}
+
 /// Clears the cache-loss flag when no context still reads unknown: no row
 /// says so, and no active context without a row is unknown under the flag.
 /// Returns whether the flag was set and is now clear.
@@ -2483,32 +2528,9 @@ pub(in super::super) fn clear_cache_loss_when_resolved(
     transaction: &Transaction<'_>,
     repository_id: i64,
 ) -> Result<bool, RepositoryError> {
-    let snapshot = read_snapshot(transaction, repository_id)?;
-    if !snapshot.history_unknown {
+    let (flag, unknown) = unresolved_contexts(transaction, repository_id)?;
+    if !flag || !unknown.is_empty() {
         return Ok(false);
-    }
-    if snapshot.contexts.iter().any(|context| {
-        context.kind.is_some()
-            && context.publication_evidence == RemotePublicationEvidence::HistoryUnknown
-    }) {
-        return Ok(false);
-    }
-    let active = transaction
-        .prepare("SELECT branch FROM contexts WHERE repository_id=?1 AND kind='active'")
-        .and_then(|mut statement| {
-            statement
-                .query_map([repository_id], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .map_err(|_| recovery_required())?;
-    for branch in active {
-        let (kind, item_id) =
-            crate::repository::stored_authoring_branch(&branch).ok_or_else(recovery_required)?;
-        if snapshot.fetch_publication_evidence_for(kind, &item_id)
-            == RemotePublicationEvidence::HistoryUnknown
-        {
-            return Ok(false);
-        }
     }
     transaction
         .execute(

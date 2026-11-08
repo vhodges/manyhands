@@ -181,7 +181,7 @@ impl Observed {
     }
 }
 
-fn data(resolution: HistoryResolution) -> MutationDataDto {
+pub(super) fn data_of(resolution: HistoryResolution) -> MutationDataDto {
     let HistoryResolution {
         cache_loss_cleared,
         marker,
@@ -255,7 +255,7 @@ impl ItemResolveHistoryBinding {
         };
         match service.resolve_history(&accepted.root(), self.kind, &self.id, seen) {
             Ok(resolution) => Ran {
-                answer: Answer::stopped(ResultCode::Ok).with_data(data(resolution)),
+                answer: Answer::stopped(ResultCode::Ok).with_data(data_of(resolution)),
                 standing: Standing::Final,
             },
             // Changed between this call's observation and its transaction:

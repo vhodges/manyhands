@@ -143,6 +143,10 @@ contract_enum!(
     /// synchronization of the item may publish it. Nothing is pushed or
     /// fetched, and no branch moves.
     ///
+    /// `history_flag_cleared` is the repository-wide cache-loss flag cleared
+    /// once no context reads unknown (`remote resolve-history`), with the
+    /// marker file deleted after it.
+    ///
     /// `context_synchronized` to `branch_deleted` are a promotion's and a
     /// closure's, in order, each listed when the preview plans it:
     /// `context_synchronized` is the editing branch synchronized with the
@@ -179,6 +183,7 @@ contract_enum!(
         CheckpointCommitted => "checkpoint_committed",
         BranchRepublished => "branch_republished",
         HistoryResolved => "history_resolved",
+        HistoryFlagCleared => "history_flag_cleared",
         ContextSynchronized => "context_synchronized",
         ClosureRecorded => "closure_recorded",
         PrimaryIntegrated => "primary_integrated",
@@ -247,6 +252,7 @@ pub enum PreviewDetailsDto {
     Repair(RepairPreviewDto),
     Republish(ItemRepublishPreviewDto),
     ResolveHistory(ItemResolveHistoryPreviewDto),
+    ResolveCacheLoss(RemoteResolveHistoryPreviewDto),
     Lifecycle(Box<LifecyclePreviewDto>),
 }
 
@@ -412,6 +418,16 @@ pub struct ItemResolveHistoryPreviewDto {
     /// Whether the repository-wide cache-loss flag is set; the last
     /// resolution clears it.
     pub cache_loss: bool,
+}
+
+/// What a preview of `remote resolve-history` shows: the cache-loss flag is
+/// set and no context reads unknown, so it can be cleared.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteResolveHistoryPreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    /// Whether the marker file is there to be deleted after the commit.
+    pub marker_present: bool,
 }
 
 contract_enum!(
@@ -1974,7 +1990,7 @@ impl MutationDataDto {
                     SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
                 }
             }
-            Command::ItemResolveHistory => {
+            Command::ItemResolveHistory | Command::RemoteResolveHistory => {
                 ItemResolveHistoryMutationDto::from_stored(stored).map(Self::ResolveHistory)
             }
             // A resume reports data only of a synchronization it took

@@ -71,6 +71,17 @@ pub(crate) struct HistoryResolution {
     pub(crate) marker: MarkerRetirement,
 }
 
+/// What `remote resolve-history` reads: the repository-wide flag, and the
+/// contexts that still read unknown (which must be none to clear it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CacheLossObservation {
+    pub(crate) cache_loss: bool,
+    pub(crate) generation: i64,
+    pub(crate) unresolved: Vec<(AuthoringKind, ItemId)>,
+    /// Whether the cache-loss marker file is there.
+    pub(crate) marker_present: bool,
+}
+
 fn external_change(root: &Path) -> RepositoryError {
     RepositoryError::new(
         OPERATION,
@@ -123,6 +134,74 @@ fn observe_in(
 }
 
 impl RepositoryService {
+    fn marker_present(&self) -> bool {
+        self.registry_path
+            .parent()
+            .is_some_and(|data| recovery::remote_history_lost(data).unwrap_or(true))
+    }
+
+    /// Reads what `remote resolve-history` covers. No reservation, no remote.
+    pub(crate) fn cache_loss_observation(
+        &self,
+        root: &Path,
+    ) -> Result<CacheLossObservation, RepositoryError> {
+        let marker_present = self.marker_present();
+        state::with_transaction(self, root, |tx, id| {
+            let (cache_loss, unresolved) = state::unresolved_contexts(tx, id)?;
+            Ok(CacheLossObservation {
+                cache_loss,
+                generation: state::generation(tx, id)?,
+                unresolved,
+                marker_present,
+            })
+        })
+    }
+
+    /// Clears the cache-loss flag when it is set and no context reads
+    /// unknown: one transaction that re-reads and answers `ExternalChange`
+    /// if anything `expected` covers moved. The marker file is then deleted
+    /// after the commit, as for `resolve_history`.
+    pub(crate) fn clear_cache_loss(
+        &self,
+        root: &Path,
+        expected: &CacheLossObservation,
+    ) -> Result<HistoryResolution, RepositoryError> {
+        let marker_present = self.marker_present();
+        state::with_transaction(self, root, |tx, id| {
+            let (cache_loss, unresolved) = state::unresolved_contexts(tx, id)?;
+            let found = CacheLossObservation {
+                cache_loss,
+                generation: state::generation(tx, id)?,
+                unresolved,
+                marker_present,
+            };
+            if found != *expected
+                || !found.cache_loss
+                || !found.unresolved.is_empty()
+                || !state::clear_cache_loss_when_resolved(tx, id)?
+            {
+                return Err(external_change(root));
+            }
+            Ok(())
+        })?;
+        Ok(HistoryResolution {
+            cache_loss_cleared: true,
+            marker: self.retire_marker(),
+        })
+    }
+
+    fn retire_marker(&self) -> MarkerRetirement {
+        match self
+            .registry_path
+            .parent()
+            .map(recovery::retire_remote_history_marker)
+        {
+            Some(Ok(true)) => MarkerRetirement::Removed,
+            Some(Ok(false)) => MarkerRetirement::Absent,
+            Some(Err(_)) | None => MarkerRetirement::Failed,
+        }
+    }
+
     /// Reads what `item resolve-history` covers for one context. It takes no
     /// reservation and touches no remote.
     pub(crate) fn history_observation(
@@ -163,18 +242,10 @@ impl RepositoryService {
             state::record_context_resolved(tx, id, &plan, kind, item_id)?;
             state::clear_cache_loss_when_resolved(tx, id)
         })?;
-        let marker = if !cache_loss_cleared {
-            MarkerRetirement::NotApplicable
+        let marker = if cache_loss_cleared {
+            self.retire_marker()
         } else {
-            match self
-                .registry_path
-                .parent()
-                .map(recovery::retire_remote_history_marker)
-            {
-                Some(Ok(true)) => MarkerRetirement::Removed,
-                Some(Ok(false)) => MarkerRetirement::Absent,
-                Some(Err(_)) | None => MarkerRetirement::Failed,
-            }
+            MarkerRetirement::NotApplicable
         };
         Ok(HistoryResolution {
             cache_loss_cleared,

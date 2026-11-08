@@ -80,6 +80,7 @@ use bind::{
     local_sync::LocalSyncBinding,
     poll::{PollOnceBinding, PollPolicyBinding},
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
+    remote_resolve_history::RemoteResolveHistoryBinding,
     repair::RepairBinding,
     repo::RepoBinding,
     repo_identity::RepoIdentityBinding,
@@ -107,6 +108,7 @@ pub use bind::{
     local_sync::{LocalConflictResolutionInput, LocalContextResolveInput, LocalContextSyncInput},
     poll::{PollConfigureInput, PollOnceInput, PollPauseInput, PollResumeInput},
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
+    remote_resolve_history::RemoteResolveHistoryInput,
     repair::{DocumentRepairInput, TicketRepairInput},
     repo::{RepoCreateInput, RepoEnableInput},
     repo_identity::RepoIdentitySetInput,
@@ -136,8 +138,8 @@ pub use dto::{
     PollMutationCompletion, PollMutationDto, PollPolicyMutationDto, PollTargetDisposition,
     PollTargetDto, PrepareDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto,
     PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto,
-    RepairMutationDto, RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto,
-    RequestDto, RequestOperationDto, RequestResultDto, RequestState,
+    RemoteResolveHistoryPreviewDto, RepairMutationDto, RepairPreviewDto, RepositoryPreviewDto,
+    RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
     SynchronizationConflictMutationDto, SynchronizationConflictType, SynchronizationMutationDto,
     TicketMutationDto,
 };
@@ -153,8 +155,8 @@ use records::RequestRecord;
 pub(super) use records::migrate as migrate_request_tables;
 pub(super) use records::{operation_owner, release_operation_owner};
 pub use way_out::{
-    HistoryWayOut, LifecycleWayOut, lifecycle_prepare_way_out, lifecycle_way_out,
-    resolve_history_way_out,
+    HistoryWayOut, LifecycleWayOut, clear_cache_loss_way_out, lifecycle_prepare_way_out,
+    lifecycle_way_out, resolve_history_way_out,
 };
 
 /// What the service reads the time from when it times a record. Tests
@@ -443,6 +445,7 @@ pub enum Mutation {
     ConflictResolve(ConflictResolveInput),
     ItemRepublish(ItemRepublishInput),
     ItemResolveHistory(ItemResolveHistoryInput),
+    RemoteResolveHistory(RemoteResolveHistoryInput),
     DocumentCreate(DocumentCreateInput),
     DocumentSave(DocumentSaveInput),
     DocumentMove(DocumentMoveInput),
@@ -497,6 +500,7 @@ impl Mutation {
             Self::ConflictResolve(_) => Command::ConflictResolve,
             Self::ItemRepublish(_) => Command::ItemRepublish,
             Self::ItemResolveHistory(_) => Command::ItemResolveHistory,
+            Self::RemoteResolveHistory(_) => Command::RemoteResolveHistory,
             Self::DocumentCreate(_) => Command::DocumentCreate,
             Self::DocumentSave(_) => Command::DocumentSave,
             Self::DocumentMove(_) => Command::DocumentMove,
@@ -551,6 +555,9 @@ impl Mutation {
             Self::ItemResolveHistory(input) => {
                 Some(Box::new(ItemResolveHistoryBinding::from(input.clone())))
             }
+            Self::RemoteResolveHistory(input) => {
+                Some(Box::new(RemoteResolveHistoryBinding::from(input.clone())))
+            }
             Self::RepoCreate(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
@@ -604,6 +611,7 @@ impl Mutation {
             Self::ConflictResolve(input) => Box::new(ConflictResolveBinding::from(input)),
             Self::ItemRepublish(input) => Box::new(ItemRepublishBinding::from(input)),
             Self::ItemResolveHistory(input) => Box::new(ItemResolveHistoryBinding::from(input)),
+            Self::RemoteResolveHistory(input) => Box::new(RemoteResolveHistoryBinding::from(input)),
             Self::DocumentCreate(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentSave(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentMove(input) => Box::new(DocumentBinding::from(input)),

@@ -704,6 +704,9 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
         }
         // No desktop path asks the boundary for this preview yet (the
         // repair sheet is a follow-on ticket).
+        PreviewDetailsDto::ResolveCacheLoss(resolve) => {
+            put("Root", Some(resolve.root.clone()));
+        }
         PreviewDetailsDto::ResolveHistory(resolve) => {
             put("Branch", Some(resolve.branch.clone()));
             put("Local commit", resolve.local_oid.clone());

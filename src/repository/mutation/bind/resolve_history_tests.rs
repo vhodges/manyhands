@@ -163,7 +163,7 @@ fn a_prepare_previews_only_an_unknown_absent_context() {
         assert_eq!(prepared.code, code, "{name}");
         assert_eq!(prepared.data.is_some(), previewed, "{name} preview");
         assert_eq!(
-            resolve_history_way_out(prepared.code, ITEM),
+            resolve_history_way_out(choice, prepared.code, ITEM),
             way_out,
             "{name} way out"
         );
