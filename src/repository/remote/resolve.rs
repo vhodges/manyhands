@@ -183,13 +183,10 @@ impl RepositoryService {
                 unresolved,
                 marker_present,
             };
-            if found != *expected
-                || !found.cache_loss
-                || !found.unresolved.is_empty()
-                || !state::clear_cache_loss_when_resolved(tx, id)?
-            {
+            if found != *expected || !found.cache_loss || !found.unresolved.is_empty() {
                 return Err(external_change(root));
             }
+            state::clear_cache_loss_flag(tx, id)?;
             state::cache_loss_remains(tx)
         })?;
         Ok(HistoryResolution {

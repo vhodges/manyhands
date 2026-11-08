@@ -83,9 +83,10 @@ pub fn clear_cache_loss_way_out(code: ResultCode) -> Option<HistoryWayOut> {
 }
 
 /// The way out of an answer of `item resolve-history`, from its code alone:
-/// a refused `release`, a deleted branch, a context already resolved or
-/// present on the remote, and a resolution that was made. Nothing for any
-/// other code.
+/// a refused `release`, a deleted branch (or a tracking ref that says it was
+/// published), a context already resolved or present on the remote, a
+/// resolution that was made, and `recovery_required` (no current batch to
+/// read absence from: `remote history` first). Nothing for any other code.
 ///
 /// `InvalidInput` names the release only for the choice `release`, which is
 /// the one input the verb refuses that way; any other `InvalidInput` is a

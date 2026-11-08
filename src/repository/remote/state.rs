@@ -2408,7 +2408,9 @@ pub(super) fn outcome_name(value: RemoteOutcomeCategory) -> &'static str {
 }
 
 /// Why a configuration fence is taken. Every reason bumps the generation and
-/// drops the live observation; only a differing identity forgets the evidence.
+/// interrupts active operations. A fence that forgets nothing carries the
+/// current observation batch and the context rows into the new generation;
+/// only a differing identity drops them and forgets the evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum ConfigurationChange {
     /// Key selection or credentials changed: always fences, forgets nothing.
@@ -2561,10 +2563,12 @@ pub(in super::super) fn active_contexts(
         .collect()
 }
 
-/// The contexts that still read unknown while the cache-loss flag is set:
-/// rows that say so, and active contexts with no row. A row whose context is
-/// no longer active is neither listed nor blocking. Empty when the flag is
-/// clear (contexts with rows are then listed by `remote history` alone).
+/// The active contexts that still read unknown: rows that say so and, while
+/// the cache-loss flag is set, active contexts with no row (which
+/// `read_snapshot` lists with the evidence `fetch_publication_evidence_for`
+/// gives them). A row whose context is no longer active is neither listed nor
+/// blocking. With the flag clear, contexts with no row read as never
+/// published, so only rows that say unknown are listed.
 pub(in super::super) fn unresolved_contexts(
     transaction: &Transaction<'_>,
     repository_id: i64,
@@ -2578,16 +2582,6 @@ pub(in super::super) fn unresolved_contexts(
         .filter_map(|context| Some((context.kind?, context.item_id.clone()?)))
         .filter(|context| active.contains(context))
         .collect();
-    if snapshot.history_unknown {
-        for (kind, item_id) in active {
-            if snapshot.fetch_publication_evidence_for(kind, &item_id)
-                == RemotePublicationEvidence::HistoryUnknown
-                && !unknown.contains(&(kind, item_id.clone()))
-            {
-                unknown.push((kind, item_id));
-            }
-        }
-    }
     unknown.sort_by_key(|(kind, id)| (authoring_kind_sort(*kind), id.to_string()));
     Ok((snapshot.history_unknown, unknown))
 }
@@ -2610,13 +2604,22 @@ pub(in super::super) fn clear_cache_loss_when_resolved(
     if !flag || !unknown.is_empty() {
         return Ok(false);
     }
+    clear_cache_loss_flag(transaction, repository_id)?;
+    Ok(true)
+}
+
+/// Clears the flag; the caller has read that it is set and nothing is unknown.
+pub(in super::super) fn clear_cache_loss_flag(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+) -> Result<(), RepositoryError> {
     transaction
         .execute(
             "UPDATE remote_polling_state SET history_unknown=0 WHERE repository_id=?1",
             [repository_id],
         )
-        .map_err(|_| recovery_required())?;
-    Ok(true)
+        .map(drop)
+        .map_err(|_| recovery_required())
 }
 
 /// Whether any repository of the registry still has the cache-loss flag set.
@@ -2657,7 +2660,9 @@ fn configure_known(
     transaction.execute("UPDATE remote_operation_records SET phase='interrupted',outcome='configuration_required' WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')",[repository_id]).map_err(|_| recovery_required())?;
     // The mutable current snapshot is invalidated, but a pass referenced by an
     // immutable window is retained as historical intent. It is never made
-    // current again, nor used to authorize effects at the new generation.
+    // current again: a fence that forgets nothing carries a copy of the
+    // current batch to the new generation (below), and that copy is
+    // re-validated on every read like any other batch.
     let previous: Option<(i64, String, String)> = transaction.query_row("SELECT id,remote_name,primary_branch FROM remote_observation_batches WHERE repository_id=?1 AND is_current=1", [repository_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(|_| recovery_required())?;
     transaction.execute("UPDATE remote_observation_batches SET is_current=0 WHERE repository_id=?1 AND is_current=1", [repository_id]).map_err(|_| recovery_required())?;
     // A fence that forgets nothing carries the evidence into the new
