@@ -10,7 +10,9 @@ id: "01M6V02CC0B7ZKMR3XYHHXMQQV"
 
 # Desktop Background Polling And Shutdown Implementation Plan
 
-> **For agentic workers:** Revision 1, 2026-11-07, draft and unreviewed. Not
+> **For agentic workers:** Revision 2, 2026-11-08, draft and unreviewed
+> (revision 1, 2026-11-07; revision 2 adds the Wave 04 Cycle 01
+> coordination). Not
 > authorized for execution: it waits for ticket `01M6KHVD6D0DB8KYT6VGQP10Y0`
 > to land, for the Cycle's re-grounding, and for the owner's approval. Then use
 > `implementing-a-cycle` task by task, re-read the design, repeat the ticket
@@ -60,6 +62,13 @@ ticket.
 **Main.** Merge `origin/main` at Task 0, at each Part checkpoint and whenever
 main moves; never rebase.
 
+**Wave 04 Cycle 01** (`01M6V8RK8B0SBCH0YZXFVSR9E3`) is expected to merge
+before D6 (Cycle, Wave 04 Cycle 01 Coordination; design W-1 to W-5). At
+Task 0 and at every merge of main, note in the ledger whether it is on main.
+Tasks 5, 8, 10 and 11 each have a step that applies only when it is. If it
+merges mid-task, finish the task, merge main, then apply the steps the
+earlier tasks skipped before starting the next one.
+
 **GPUI** only through `gpui_kit::*`, never a glob import.
 
 **Privacy.** No type holding a title, body, comment or key material derives
@@ -97,7 +106,7 @@ removes it.
 
 **Test-first.** Each behaviour's test is written before its code.
 
-**Existing tests** change only as E-1 to E-3 (design Testing); anything else
+**Existing tests** change only as E-1 to E-5 (design Testing); anything else
 stops for the owner.
 
 **Commits.** One per task, conventional message, ending
@@ -160,14 +169,19 @@ Order: 0 → 1 → 2 → … → 12, one at a time.
   (the library ticket must be on it); `git merge-tree --write-tree HEAD
   origin/main` is clean.
 - [ ] Re-grounding: compare design Fact 5 and the API Audit Refresh against
-  main; add the library ticket's disposition to the design and to the
-  tasks' mapping; record it in the design's Re-grounding.
+  main; add the library ticket's disposition and `Unpublished` to the design
+  and to the tasks' mapping; record it in the design's Re-grounding.
+- [ ] Wave 04 Cycle 01: if it is on main, check W-1 to W-5 against its code
+  (the Needs attention count function, where the launch refresh and
+  `finishing` now live, the panel names in tests) and record the answers in
+  the design's Re-grounding; a difference that changes a W item stops for the
+  owner. If it is not on main, record its ticket's state in the ledger.
 - [ ] Run the required static gates and the fast tier once at baseline
   (entry-gate item 7); record counts. Do not rerun them later on an unchanged
   tree.
 - [ ] Settle U-1 to U-8 by reading source; write each answer in the ledger. An
   answer that differs from the design (U-1 in particular) stops for the owner.
-- [ ] Confirm decisions 3–10 are approved as written.
+- [ ] Confirm decisions 3–11 are approved as written.
 - [ ] Create the ledger; post a ticket comment.
 
 **Verify:** the ledger lists baseline counts and every U answer.
@@ -265,7 +279,12 @@ table), `D/model/polling_tests.rs`; edit `D/model/mod.rs`.
 ## Task 5: The Scheduler In `Services`
 
 **Files:** `D/services/scheduler.rs` (the entity), `D/services/mod.rs`,
-`D/view/workspace/repositories.rs`, tests.
+`D/view/workspace/repositories.rs` (one call only, design W-3), tests.
+
+The scheduler is held by `Services`; `Workspace` gains no field (R-16). The
+launch poll is one call beside the launch refresh in `repositories_loaded`,
+or wherever Wave 04 Cycle 01 moved that refresh. Keep every other edit out of
+`D/view/workspace/`.
 
 - [ ] Test first: `Services::start` creates one scheduler and a clone starts
   none (A17); after the repository list loads, each enabled, unpaused,
@@ -336,8 +355,18 @@ event), `D/view/operations/`, `D/model/operations.rs`, tests.
   `resume_remote_polling_after_recovery`, with U-7's answer for what follows.
 - [ ] Implement keyed attention (U-8 for the key and host of a repository);
   Unlock… submits `PollOnce` on the user lane.
+- [ ] Add the model's read-only `attention()` query (design W-1), with a
+  model test that it yields exactly the five reasons and nothing for Paused,
+  Checking is off, Can't reach, Checking soon or Waiting for a conflict
+  (decision 11, R-14).
+- [ ] **With Wave 04 Cycle 01 on main:** add `attention()`'s count as one
+  term of its Needs attention count function, and extend that function's
+  existing count test with a row per reason and per state that does not count
+  (E-4, A18). Do not change how it counts anything else. Without Cycle 01,
+  note in the ledger that its merge adds the term.
 
-**Verify:** `… attention`.
+**Verify:** `… attention`; with Cycle 01 on main, also its count test by
+exact name.
 
 ## Task 9: Unsaved Work Across A Bring-In; Part C Checkpoint
 
@@ -377,9 +406,17 @@ unless a test fails.
   without a poll; relaunch (a fresh `Services` over the same data directory)
   uses the stored deadline (A7).
 - [ ] Implement; the ten-second duration is injected. E-3 changes
-  `finishing_text`'s existing test only for the new wording.
+  `finishing_text`'s existing test only for the new wording. The new text
+  lives only in `finishing_text`; no other view draws stopping feedback
+  (R-15).
+- [ ] **With Wave 04 Cycle 01 on main:** hide the Activity panel, start a
+  quit with a job held, advance the injected ten seconds, and assert that the
+  Activity panel is shown and `quit-finishing` carries the still-stopping text
+  (E-5, A18). Extend whichever of Cycle 01's quit-with-Activity-hidden test
+  and this task's test is narrower; leave the other alone.
 
-**Verify:** `… quit_polling`.
+**Verify:** `… quit_polling`; with Cycle 01 on main, also the extended test
+by exact name.
 
 # Part E: Evidence
 
@@ -393,9 +430,11 @@ unless a test fails.
 - [ ] Consent (A8): one test drives a full day of the scheduler (launch, due,
   busy, preempt, attention, quit) and asserts the recording backend saw only
   design B4's calls and the user's own intents.
-- [ ] One keyboard walk (A15): open Settings, move to the page, change the
-  interval, toggle the switch, Check now, Unlock…, by keystrokes alone, focus
-  visible.
+- [ ] One keyboard walk (A15): open Settings with `secondary-,` (it opens
+  the page in both layouts, design W-4), move to the page, change the
+  interval, toggle the switch, Check now, then reach Unlock… in the operation
+  area (`secondary-4`, which Wave 04 Cycle 01 keeps for Activity), by
+  keystrokes alone, focus visible.
 
 **Verify:** `… polling_privacy`; `… polling_consent`; `… polling_keyboard`.
 
@@ -408,6 +447,8 @@ the ledger, the Cycle's Status and Acceptance table, ticket records.
   checklist's format: before you start (two scratch repositories, a stalled
   server recipe), known limits, sections and a results table.
 - [ ] Merge main; `git merge-tree --write-tree HEAD origin/main` is clean.
+  If Wave 04 Cycle 01 landed after Task 8 or Task 10 ran, apply their Cycle 01
+  steps now and record them.
 - [ ] Run, once, the static gates across the tree, the AGENTS.md fast tier, and
   the SSH tier for the changed test file (`remote_polling`). Record counts.
 - [ ] Update the Cycle: Acceptance table (met / pending native), Status,
@@ -423,10 +464,13 @@ the ledger, the Cycle's Status and Acceptance table, ticket records.
 - Every Acceptance row A1–A17 maps to a task: A1 native + Task 12; A2 Task 9;
   A3 Tasks 2, 8; A4 Tasks 4, 12; A5 Tasks 1, 10; A6 Tasks 5, 6, 7; A7 Task 10;
   A8 Tasks 3, 11; A9 Task 10; A10 Task 4; A11 Tasks 2, 5; A12 Task 2;
-  A13 Task 8; A14 Task 9; A15 Tasks 7, 11; A16 Task 11; A17 Task 5.
+  A13 Task 8; A14 Task 9; A15 Tasks 7, 11; A16 Task 11; A17 Task 5;
+  A18 Tasks 8, 10 (or Cycle 01, if D6 merges first).
 - No task changes a library file; U-1 is the one place that could force it,
   and stops for the owner.
 - One SSH case, justified in Task 1; every other test is model, worker or
   desktop-behaviour level, with an injected clock.
 - Existing-test edits are named: E-1 (exhaustive matches, Task 6), E-2 (Settings
-  page list, Task 7), E-3 (`finishing_text`, Task 10).
+  page list, Task 7), E-3 (`finishing_text`, Task 10), and, with Wave 04
+  Cycle 01 on main, E-4 (its Needs attention count test, Task 8) and E-5 (quit
+  with Activity hidden, Task 10).

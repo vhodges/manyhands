@@ -20,8 +20,12 @@ implementation (that waits for `01M6KHVD6D0DB8KYT6VGQP10Y0` and the
 re-grounding in the Cycle), pushing beyond the ticket branch, merging or
 closing.
 
-Revision 1, drafted at `3364370c`, not reviewed. Facts are from current source
-unless marked; unverified points are U-questions for Task 0.
+Revision 2, not reviewed. Revision 1 was drafted at `3364370c` on
+2026-11-07. Revision 2 (2026-11-08) adds the Wave 04 Cycle 01 coordination
+(section Wave 04 Coordination, R-14 to R-16, E-4, E-5, K-10) and the
+Re-grounding section; the Baseline Facts are still those at `3364370c`. Facts
+are from that source unless marked; unverified points are U-questions for
+Task 0.
 
 Conventions: "Fact n" is a Baseline Fact; `D/` is `src/desktop/`; `R/` is
 `src/repository/`; "the handoff" is `docs/design/05-sheets-and-dialogs.md`;
@@ -77,6 +81,7 @@ Conventions: "Fact n" is a Baseline Fact; `D/` is `src/desktop/`; `R/` is
    `HistoryUnknown`, `NotReached`; each has `guidance()` text. The library
    ticket `01M6KHVD6D0DB8KYT6VGQP10Y0` adds one for a remotely deleted context
    whose item is closed on primary (**not yet on main**; Re-grounding).
+   `Unpublished` has landed on main since `3364370c` (Re-grounding).
 6. **Results and errors.** `RemotePollResult::{Complete, IndexPending}` over
    `RemotePollOutcome::{NotEligible{reason, next_eligible_at}, Polled(report)}`;
    `RemotePollReport` exposes `operation_id`, `completion`
@@ -425,6 +430,10 @@ returns (U-8). Approve host… uses D1's host approval, then the same. A key or
 remote change clears the state (R-11). No modal ever opens from an automatic
 poll (contract 3).
 
+These five states are the ones Wave 04's footer counts as needing attention
+(decision 11, W-1); the scheduler's model answers them through one read-only
+query.
+
 ### C4: Status truthfulness (R-9)
 
 Text comes from the model's `last` and `phase`. At launch `last` is restored
@@ -444,7 +453,10 @@ by `manyhands-cli` appears only through the stored latest attempt.
    duration; `cx.background_executor().timer`, Fact 16) changes
    `finishing_text` to "Still stopping — waiting for Manyhands to reach a safe
    point. Your work is saved." The UI stays interactive; the Quit now button
-   stays (decision 7). Nothing is cleared or reclaimed at ten seconds.
+   stays (decision 7). Nothing is cleared or reclaimed at ten seconds. The
+   text changes in `finishing_text` only, the quit feedback's one element
+   (`D/view/quit.rs`, drawn by `D/view/workspace/render.rs`), so wherever
+   Wave 04 Cycle 01 puts that feedback the new text goes with it (W-2).
 3. **Join.** When `quit()` answers `Idle`, the worker handle is dropped and
    the thread joined (bounded: it is idle) before `cx.quit()`, so a graceful
    exit leaves no worker thread (A9). Quit now is unchanged: it exits at once
@@ -452,6 +464,48 @@ by `manyhands-cli` appears only through the stored latest attempt.
 
 On relaunch the stored deadline governs; an `interrupted` row from a quit is
 restarted or superseded per U-4.
+
+## Wave 04 Coordination
+
+Wave 04 Cycle 01 (`01M6V8RK8B0SBCH0YZXFVSR9E3`, drafted 2026-11-08) will
+probably merge before D6 starts, so D6 is designed to merge second and adapt.
+Each item says what D6 does in either order. Sources: the Wave 04 design
+(lines 229–246 and 512–514), Cycle 01's draft (scope 4, 7 and 12; decisions
+3 and 7) and its ticket's "D6 Coordination" section.
+
+- **W-1. Needs attention count.** Cycle 01's footer item counts, through a
+  new read-only function, the requests that finished blocked, partial or
+  with an error and are not dismissed, draft save failures, drafts
+  unavailable, and unfinished pending operations. D6's model adds
+  `attention(&self) -> impl Iterator<Item = (&Root, &Reason)>`, holding the
+  five `Reason`s of A2 and nothing else (decision 11). With Cycle 01 on main,
+  Task 8 adds that count as one term of Cycle 01's function and extends its
+  count test (E-4). Otherwise Cycle 01 adds the term when it merges.
+- **W-2. Quit feedback.** Cycle 01 shows the Activity panel and its dock
+  when a quit starts waiting and does not save that into the layout. D6 keeps
+  "still stopping" inside `finishing_text` (Part D) and adds no other place
+  for it. With Cycle 01 on main, Task 10's still-stopping test hides Activity
+  first and asserts that the panel is shown and the text is present (E-5).
+- **W-3. Footprint in shared files.** The scheduler entity is held by
+  `Services` (R-16), so `Workspace` gains no field for it. The launch poll is
+  one call to the scheduler beside the launch refresh in
+  `repositories_loaded` (`D/view/workspace/repositories.rs`), or wherever
+  Cycle 01 moved that refresh. Window activation, which re-reads policies
+  (Task 5), is one subscription made where `Services` is started. Expected
+  textual conflicts: `repositories.rs`, `D/view/workspace/lifecycle.rs`, the
+  `Workspace` struct and constructor, `D/view/harness.rs` and the keyboard
+  tests.
+- **W-4. Settings page.** "Checking for updates" is a fifth `SettingsPage`
+  with its rows in `D/view/settings/polling.rs`, using no route but
+  `SettingsPage`, so Wave 04 Cycle 04 can move it into the sheet. Cycle 01
+  keeps Settings as a page in the item area and adds a footer button for it;
+  `secondary-,` reaches it in both layouts and is what Task 11 uses.
+- **W-5. Surfaces for Wave 04 Cycle 03.** The footer's "Checked for updates
+  …", the Repositories panel's "Checking…" and "Paused", Check all for updates
+  now and the popover are Cycle 03's. D6's model answers, per repository, the
+  status text of A4 and the last attempt (`AttemptSummary`), so Cycle 03 reads
+  them instead of deriving its own. Check all can submit Check now
+  (`PollOnce`) per repository; D6 adds no separate action for it.
 
 ## Required Outcomes
 
@@ -492,6 +546,11 @@ restarted or superseded per U-4.
   its schedule; a re-added remote leaves a stored pause alone.
 - **R-12.** Quit follows Part D (decision 7).
 - **R-13.** The page uses only C5's bindings and public reads (decision 5).
+- **R-14.** Needs attention counts exactly A2's five `Reason`s from D6 (decision
+  11, W-1).
+- **R-15.** "Still stopping" lives only in `finishing_text` (W-2).
+- **R-16.** The scheduler is held by `Services`; D6 adds no `Workspace` field,
+  and one call in `repositories_loaded` (W-3).
 
 ## Testing (AGENTS.md Testing Strategy; Decision 9)
 
@@ -518,9 +577,19 @@ Default layer is a unit test. The cost of each layer is the point.
 5. **Native** (Linux, owner): the real SSH journey, a second process, a stalled
    server, quit and restart.
 
-Existing tests change only as named edits E-1 to E-3 (exhaustive matches that
-now include poll variants, the Settings page list, `finishing_text`); anything
-else stops for the owner.
+Existing tests change only as named edits E-1 to E-5; anything else stops for
+the owner:
+
+- **E-1.** Exhaustive matches that now include poll variants (Task 6).
+- **E-2.** The Settings page list (Task 7).
+- **E-3.** `finishing_text`'s test, for the new wording (Task 10).
+- **E-4.** With Wave 04 Cycle 01 on main: its Needs attention count test
+  gains a row for each of the five reasons and for each state that does not
+  count (W-1, Task 8).
+- **E-5.** With Wave 04 Cycle 01 on main: its test of a waiting quit with
+  Activity hidden, or D6's still-stopping test, covers "still stopping" with
+  Activity hidden (W-2, Task 10). Whichever is narrower is extended; the other
+  is left alone.
 
 ## Privacy
 
@@ -569,8 +638,10 @@ Proposed with approval:
   stays; the poll reports `ConflictPending`, shown as waiting.
 - **K-9.** Quit now is an interruption, not a rollback; DNS and total transfer
   have no deadline (RFC).
-- **K-10.** The handoff's footer and Activity panel are not built; status
-  lives on the Settings page and in the operation area.
+- **K-10.** D6 builds no footer status, Repositories panel state or popover.
+  Its status lives on the Settings page and in the operation area, which Wave
+  04 Cycle 01 shows as the Activity panel; Cycle 03 adds the rest from D6's
+  model (W-5).
 - **K-11.** Windows and macOS stall and suspend behaviour is unmeasured (G1).
 
 ## Alternatives Rejected
@@ -591,6 +662,22 @@ Proposed with approval:
 - U-4 may show an old interrupted row blocking new automatic polls.
 - Cancel latency under a blocked connect makes K-1 visible to the person.
 - The `closed` disposition from the library ticket may change the mapping.
+- Wave 04 Cycle 01 merging first moves the files D6 edits in the view
+  (W-3); Task 0 re-grounds against it, and a rename there renames D6's calls,
+  not its behaviour.
+
+## Re-grounding
+
+Not yet done. Task 0 records here, once `01M6KHVD6D0DB8KYT6VGQP10Y0` is on
+main:
+
+- Fact 5 and A4's disposition list against `PollDisposition` on main,
+  including the library ticket's closed disposition and `Unpublished` (ticket
+  `01M66HFV44YXNQ7ANJVA16TQ1H`, on main since 2026-11-08).
+- The API Audit Refresh rows.
+- If Wave 04 Cycle 01 has merged: W-1 to W-5 against its code (the count
+  function, the launch refresh's new home, where `finishing` is drawn, the
+  panel names in tests).
 
 ## Review Record
 

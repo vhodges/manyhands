@@ -15,8 +15,11 @@ Ticket `01M4CC0VN3VPVVQ3RNWJKXWEVX`. Design:
 Plan:
 [2026-11-07-wave-03-desktop-06-polling-and-shutdown-implementation.md](../plans/2026-11-07-wave-03-desktop-06-polling-and-shutdown-implementation.md).
 
-Status: **draft, 2026-11-07.** Not reviewed and not approved. Planned at
-`3364370c` (origin/main `1e5616af` merged into the ticket branch). Approval
+Status: **draft, 2026-11-07; amended 2026-11-08.** Not reviewed and not
+approved. Planned at `3364370c` (origin/main `1e5616af` merged into the ticket
+branch). On 2026-11-08 origin/main `8da9afd4` was merged as `1869cf14`, and
+coordination with Wave 04 Cycle 01 was added (Wave 04 Cycle 01 Coordination
+below); the Baseline Facts were not re-checked against that merge. Approval
 of these documents does not authorize implementation: that waits for ticket
 `01M6KHVD6D0DB8KYT6VGQP10Y0` to land and for the re-grounding below.
 
@@ -63,6 +66,7 @@ Authorities, in order:
 | Runtime readiness (entry-gate item 5) | Partly present: the transport initializes before threads (`src/runtime.rs:25`, `src/main.rs:11`) and raw stalls are characterized (Wave 02 Cycle 03). Cancellation during a stall is **not** characterized. Task 1 closes that. |
 | Required checks at baseline (entry-gate item 7) | Not run during planning. Task 0 runs them. |
 | Tester assignment (entry-gate item 6) | Linux (Wayland): the product owner. Windows and macOS: G1. |
+| Wave 04 Cycle 01 (`01M6V8RK8B0SBCH0YZXFVSR9E3`) | **In flight, not a dependency.** Drafted 2026-11-08 and due to start before D6 can, so it is expected to merge first. Coordination below. |
 
 **Dependency boundary.** D6 changes **no** file in `src/repository.rs`,
 `src/repository/`, `src/results.rs`, `src/canonical.rs`, `src/drafts/`,
@@ -70,6 +74,64 @@ Authorities, in order:
 exception). Its one change under `tests/` is a single case in
 `tests/remote_polling.rs` (Task 1). Any other library gap becomes its own
 ticket.
+
+## Wave 04 Cycle 01 Coordination
+
+[Wave 04](../Waves/wave-04-workspace-design.md) Cycle 01 (workspace shell,
+ticket `01M6V8RK8B0SBCH0YZXFVSR9E3`) moves the desktop into docked panels.
+What it does that meets D6, from its draft Cycle document and its ticket's
+"D6 Coordination" section:
+
+- It wraps today's operation area, as it is, in an **Activity panel** in the
+  bottom dock, and does not edit `D/view/operations.rs`, `D/view/operations/`
+  or `D/model/operations.rs`.
+- It adds a **footer** whose **Needs attention** item counts what awaits the
+  person through a new read-only function over the existing models (its
+  decision 3). D6's attention states join that count in whichever of the two
+  Cycles merges second.
+- A quit that has to wait **shows the Activity panel** and its dock, so the
+  quit feedback ("Finishing …" and Quit now) is never hidden (its decision 7).
+- **Settings stays a page in the item area**, opened by `secondary-,`, the
+  sidebar entry and the new footer button, until Wave 04 Cycle 04 moves it
+  into a sheet.
+
+Cycle 01 starts while D6 still waits for `01M6KHVD6D0DB8KYT6VGQP10Y0`, so D6
+plans to merge second and to do the adapting. If Cycle 01 has not merged when
+D6 reaches a step below, D6 records that and leaves the step to Cycle 01. The
+obligations:
+
+1. **Attention in the count (decision 11).** D6's five attention states (key
+   locked, host not approved, key missing, configuration required, recovery
+   hold) count toward Needs attention. Paused, Checking is off, Can't reach,
+   Checking soon and Waiting for a conflict do not. The polling model
+   exposes its attention through one read-only query, so the second Cycle to
+   merge adds one term to Cycle 01's count function and extends its count test
+   (design W-1; Task 8).
+2. **Quit feedback in one place.** "Still stopping" is a change to the
+   existing `finishing_text` only. D6 draws no stopping feedback anywhere
+   else, so Cycle 01's rule shows it. With Cycle 01 on main, D6's
+   still-stopping test also runs with Activity hidden (design W-2; Task 10).
+3. **A small footprint in shared files.** The scheduler is held by
+   `Services`, not by `Workspace`. D6's only edit to the repository list is one
+   call beside the launch refresh in `repositories_loaded`, wherever Cycle 01
+   has moved it. Small textual conflicts are expected in
+   `D/view/workspace/repositories.rs`, `D/view/workspace/lifecycle.rs`, the
+   `Workspace` struct and constructor, and the shared harness and keyboard
+   tests (design W-3).
+4. **The Settings page moves later.** "Checking for updates" is a fifth page
+   of today's Settings, in a view module of its own, so Wave 04 Cycle 04 can
+   fold it into the sheet. D6's keyboard walk opens it with `secondary-,`,
+   which every layout keeps (design W-4; Task 11).
+5. **Status surfaces for Wave 04 Cycle 03.** The footer's "Checked for
+   updates …", the Repositories panel's "Checking…" and "Paused", Check all
+   for updates now and the Needs attention popover are Cycle 03's. D6 exposes
+   each repository's status text and last attempt from its model for them,
+   and adds nothing to the sidebar or the footer (design W-5, K-10).
+
+The follow-up tickets `01M6RAS63EWVHWWVBSZ836RXG2` and
+`01M6H7VXJJHRYHTW9S8TJ88921` plan to split `D/model/operations.rs` and
+`D/view/operations.rs`, which D6 edits (Tasks 6 and 8) and Cycle 01 does not.
+Whichever of those and D6 merges second adapts, per `AGENTS.md`.
 
 ## Scope
 
@@ -122,9 +184,12 @@ ticket.
 - Any background push, checkpoint, merge, cleanup or publication.
 - Automatic retirement of a remotely deleted context (the library ticket's
   verb is explicit; D6 only shows what polls report).
-- The Activity panel, the Needs attention popover and the footer the handoff
-  draws: D1's operation area carries entry points (D4 decision 2). A global
-  "pause all" switch (decision 8).
+- The Activity panel, the footer, the Needs attention popover and the
+  Repositories panel's polling states the handoff draws: Wave 04 Cycles 01
+  and 03 (Wave 04 Cycle 01 Coordination). D6's entry points stay in the
+  operation area (D4 decision 2), which Cycle 01 shows as the Activity panel,
+  and on the Settings page. Moving that page into the Settings sheet: Wave 04
+  Cycle 04. A global "pause all" switch (decision 8).
 - Clearing the recovery suspension automatically. D6 offers a deliberate
   "Resume checking" only (decision 10).
 - CLI-against-desktop scenarios: G1 (track rule 4). Windows and macOS native
@@ -181,6 +246,7 @@ ticket.
 | A15 | Keyboard and focus (contract 9) | Keyboard tests; native §7 | Pending |
 | A16 | Privacy (contract 10) | Sentinel tests | Pending |
 | A17 | One scheduler whatever the windows | Test: the scheduler is owned by `Services`; a second `Services` clone starts none | Pending |
+| A18 | Wave 04 Cycle 01 coordination: D6's attention states in the Needs attention count; "still stopping" visible with Activity hidden | With Cycle 01 on main: its count test extended with each attention state and each state that does not count (E-4); D6's still-stopping test run with Activity hidden (E-5). Otherwise recorded as Cycle 01's to wire | Pending |
 
 Native evidence: Linux (Wayland), release build, against a real SSH remote,
 run by the product owner from the checklist written in the final task. The
@@ -226,10 +292,15 @@ Proposed by the planner, confirmed with the documents' approval:
 10. **Resume checking is deliberate.** A recovery-suspended repository shows
     "Checking is held until recovery" and a Resume checking action that calls
     `resume_remote_polling_after_recovery`. Nothing clears it automatically.
+11. **What D6 adds to Needs attention** (2026-11-08, for Wave 04 Cycle 01).
+    The five attention states count, since each waits for the person to act.
+    Paused and Checking is off are the person's own choice; Can't reach and
+    Checking soon retry by themselves; Waiting for a conflict points at a
+    conflict that is already shown where it is resolved. None of those count.
 
 ## Open Questions
 
-None for the owner beyond confirming decisions 3–10 at approval. U-1 to U-8
+None for the owner beyond confirming decisions 3–11 at approval. U-1 to U-8
 (design) are settled in Task 0 by reading the source; an answer that
 differs stops for the owner.
 
@@ -241,6 +312,16 @@ before approval: merge main, compare the design's Baseline Fact 5,
 add the new disposition to the desktop's mapping and to the tests that
 enumerate dispositions, and record the check in the design's Re-grounding.
 
+Two more things re-ground at the same time:
+
+- **`Unpublished`.** Ticket `01M66HFV44YXNQ7ANJVA16TQ1H`, merged to main on
+  2026-11-08 and brought in by `1869cf14`, added a `PollDisposition::Unpublished`
+  that Fact 5 and the disposition lists in the design and plan do not name.
+- **Wave 04 Cycle 01.** If it has merged, check each coordination obligation
+  against its code: the count function's name and inputs, where the launch
+  refresh and the quit feedback now live, and the panel names the tests use.
+  Record the result in the design's Re-grounding.
+
 ## Review Record
 
 | Source | Concern | Classification | Resolution | Evidence |
@@ -251,4 +332,5 @@ enumerate dispositions, and record the check in the design's Re-grounding.
 | Planning research | The read boundary has no `latest_attempt_at` or dispositions | Settled | Status uses `remote_snapshot` through the backend (design U-3). | `read/status.rs:717`; `state.rs:2125`. |
 | Planning research | Handoff draws a global pause and an on/off switch; the library has per-repository pause and no verb for `enabled` | Owner decision | Decision 5 (switch is pause) and 8. | `bind/poll.rs`; handoff 66. |
 | Planning research | Raw stalls are characterized; cancellation during a stall is not | Settled | Task 1. | `tests/ssh_fixture.rs:660-733`; no cancel-under-stall test. |
+| Owner, 2026-11-08 | Wave 04 Cycle 01 starts soon and reworks the operation area, the quit feedback's placement and Settings' entry points | Settled | Wave 04 Cycle 01 Coordination; decision 11 proposed; A18. | Wave 04 design 229–246, 512–514; Cycle 01 draft decisions 3 and 7; its ticket's "D6 Coordination". |
 | Drafting | Not yet reviewed | — | Review rounds follow. | — |
