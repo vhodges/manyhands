@@ -2427,7 +2427,9 @@ fn kept_rows_match(
 }
 
 /// An `('history_unknown','history_unknown')` row, under `plan`'s refs, for
-/// each active context that has no row yet.
+/// each active context that has no row yet and is not retired: the history
+/// of a retired item was consumed (R1), so its new context reads as never
+/// published, as it did before the fence.
 fn insert_unknown_context_rows(
     transaction: &Transaction<'_>,
     repository_id: i64,
@@ -2443,7 +2445,7 @@ fn insert_unknown_context_rows(
             return Err(recovery_required());
         }
         let segment = crate::repository::authoring_kind_segment(&kind);
-        let present: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM remote_context_states WHERE repository_id=?1 AND kind=?2 AND item_id=?3)",params![repository_id,segment,id],|row|row.get(0)).map_err(|_| recovery_required())?;
+        let present: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM remote_context_states WHERE repository_id=?1 AND kind=?2 AND item_id=?3) OR EXISTS(SELECT 1 FROM retired_contexts WHERE repository_id=?1 AND kind=?2 AND item_id=?3)",params![repository_id,segment,id],|row|row.get(0)).map_err(|_| recovery_required())?;
         if present {
             continue;
         }

@@ -3875,6 +3875,30 @@ fn configure_reasons_fence_and_forget() {
     }
 }
 
+/// A forgetting fence writes an unknown row for each active context except
+/// one whose item is retired (R1): that history was consumed, and its new
+/// context keeps reading as never published.
+#[test]
+fn a_forgetting_fence_writes_no_unknown_row_for_a_retired_item() {
+    const OTHER: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+    let (data, root, service) = fixture();
+    apply_call(&service, root.path(), Call::Plan("origin", "main"));
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    for item in [ITEM, OTHER] {
+        db.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,?3,?2)", params![format!("manyhands/ticket/{item}"), item, format!("/{item}")]).unwrap();
+    }
+    seed_retirement(&db, AuthoringKind::Ticket, ITEM);
+    apply_call(&service, root.path(), Call::Plan("upstream", "main"));
+    let items: Vec<String> = db
+        .prepare("SELECT item_id FROM remote_context_states")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(items, [OTHER]);
+}
+
 #[test]
 fn null_known_columns_fall_back_to_the_current_plan() {
     let (data, root, service) = fixture();
