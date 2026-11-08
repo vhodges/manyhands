@@ -4015,8 +4015,9 @@ impl RepositoryService {
     /// refused push). With a push intended an earlier call may have
     /// published, and a lifecycle child belongs to its parent, which blocks
     /// on unresolved history before it runs one: both are left as they are
-    /// (`keep`). Should the ending
-    /// fail, the operation stays pending and its row says so.
+    /// (`keep`). Should the ending fail, the operation is still pending and
+    /// still holds the reservation, which `HistoryUnresolved` would deny, so
+    /// the answer is `RecoveryRequired` and the row says it is pending.
     fn ended_if_unresolved(
         &self,
         root: &Path,
@@ -4028,9 +4029,10 @@ impl RepositoryService {
             && !keep
             && self
                 .request_synchronization_cancellation(root, owner)
-                .is_ok()
+                .and_then(|()| self.check_synchronization_requests(root, owner))
+                .is_err()
         {
-            let _ = self.check_synchronization_requests(root, owner);
+            return SynchronizationError::RecoveryRequired;
         }
         error
     }

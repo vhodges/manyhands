@@ -15862,7 +15862,8 @@ fn an_index_hand_off_whose_row_was_abandoned_is_refused_and_stays_owed() {
 /// Evidence-based unknown history ends the operation and lets the
 /// reservation go, so a sync of another context isn't busy behind it; push
 /// proof of an earlier generation, and an operation that intended a push,
-/// stay pending and resumable.
+/// stay pending and resumable. Should the ending itself fail, the operation
+/// is still held, so the answer is `RecoveryRequired`, not `HistoryUnresolved`.
 #[test]
 fn unresolved_history_ends_the_operation_and_frees_the_reservation() {
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
@@ -15870,35 +15871,54 @@ fn unresolved_history_ends_the_operation_and_frees_the_reservation() {
         kind: AuthoringKind::Ticket,
         item_id: id.parse().unwrap(),
     };
-    for (error, push_intent, ends, expected) in [
+    for (error, push_intent, ends, expected, ending_fails) in [
         (
             SynchronizationError::HistoryUnresolved,
             false,
             true,
             SynchronizationError::HistoryUnresolved,
+            false,
+        ),
+        (
+            SynchronizationError::HistoryUnresolved,
+            false,
+            false,
+            SynchronizationError::RecoveryRequired,
+            true,
         ),
         (
             SynchronizationError::HistoryUnresolved,
             true,
             false,
             SynchronizationError::HistoryUnresolved,
+            false,
         ),
         (
             SynchronizationError::HistoryUnknown,
             false,
             false,
             SynchronizationError::HistoryUnknown,
+            false,
         ),
         (
             SynchronizationError::RecoveryRequired,
             false,
             false,
             SynchronizationError::RecoveryRequired,
+            false,
         ),
     ] {
         let data = fixture_tempdir();
         let root = fixture_tempdir();
-        let service = RepositoryService::open_at(data.path()).unwrap();
+        let service = if ending_fails {
+            RepositoryService::open_at_with_failure_point_for_testing(
+                data.path(),
+                crate::repository::FailurePoint::BeforeSynchronizationCancellation,
+            )
+        } else {
+            RepositoryService::open_at(data.path())
+        }
+        .unwrap();
         rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap().execute(
             "INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)",
             [root.path().to_str().unwrap()]).unwrap();
