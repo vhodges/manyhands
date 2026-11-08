@@ -1200,3 +1200,95 @@ append checkpointed with coauthor;original ID/parent/time/full prior body preser
 Foreground children exited,no owned jobs;clean **UNPUSHED**. No new doc/ticket/ID/
 status save/push/PR/main/lifecycle/close/native/other-worktree/real profile-key-
 context-draft/dependency/performance work;controller owns all next steps.
+
+## Follow-up — final tail greens, then remote_polling80/4 FAILED — 2026-11-08 UTC
+
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**,
+then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,zero findings,
+complete7eda..4cc/bounded094..4cc. Inventory17 sorted literal pins only,49old names/
+strict array/every other assertion preserved; startup11+2+4 proof, no production
+migration change. Controller lifted repository_enablement FIRSTFAIL only for the
+remaining tail, not final runtime acceptance. Owner lean exact inventory**1/0/
+102filtered,0.12s** and A17**1/0/1579filtered,2.58s** remain sufficient; historical
+whole102/1 and desktop1579/1 stay historical, not fresh103/0 or1580/0. No broad/
+whole/previous-green/static/exact-fix repeat was run or owed. Sole owner, no agents.
+
+Clean entry/test freeze **`4cc6ca5a9fb1b4742717abac5052d355a2918448`**, production/
+library **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**, main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Accepted corrective fresh unchanged-
+main/no-op preflight from09491b8e; no new fetch/merge while frozen or other-worktree/
+main action. Source23 hashes unchanged; test hash1f8c184112f28cc10c623581529ec486320d2fc93aaa019ef60e1cae22183f54.
+Schema36/headless17 manifests authenticated zero mismatches;39 older manifest/
+input-manifest digests preserved, no old writes/huge inventories.
+
+Previous24 active headless footers (including wholemutation_replay384) retained,
+not rerun. Current LIB**1530/0/160filtered,1865.59s** and CHECK**exit0,4.165545239s**
+valid unchanged production; latest strict Clippy**exit0,1.419890137s** and fmt
+**exit0,17.671805088s** reused, not rerun. Manual read_characterization default
+**0passed/1ignored** intentionally opt-in TIMING benchmark, confirmed by controller/
+both reviewers: **NOT MEASURED**,not active coverage/new failure/missing required
+active gate. No unignore/rerun/profile or active-count inflation; owner STOP applies.
+
+New commands ran once/default threads/serially through Devenv, no filters/retries/
+new skips except selected module; exact argv/full per-command clocks in ledger/
+results/handoff. Actuals:
+
+| Gate | Counts | Cargo exit | Monotonic seconds |
+| --- | --- | ---: | ---: |
+| session_credentials + shared_key_registry | **11/0**,0.00s + **39/0**,3.57s;0ignored/filtered | 0 | 4.178218284 |
+| selected local-sync | **160/0/0ignored/1530filtered**,917.76s tests | 0 | 918.308445816 |
+| ssh_transport | **123/0** custom cases | 0 | 347.635066896 |
+| remote_observation | **15/0** custom cases | 0 | 18.469540805 |
+| remote_synchronization | **69/0** custom cases | 0 | 1028.913574776 |
+| remote_merge_recovery | **29/0** custom cases | 0 | 466.262427250 |
+| remote_polling — FAILED | **80 passed/4 failed**,84 parent cases | **1** | 318.419941219 |
+
+All7 commands/8 binary executions: **526 new passes/4 failures,530 completions**;
+all3 standard+5 custom SSH case-line/footers reconcile. No zero/masked-child pass.
+Selected160 is not a fresh unfiltered1690 library run. Failed polling's80passing
+cases are partial, not a green target. Default custom parent finished all84 then
+returned1; no following target admitted. Final selected targets past15min were
+authorized, no interim cap or artificial termination applied.
+
+Four failed cases in remote_polling:
+
+- `poll_whole_review_disposition_fault_cancel_keeps_index_pending`:
+  receipt**05:11:48.954814Z**,seq13,opaque observation1998.
+- `poll_partial_batch_yield_report_and_restart`:
+  receipt**05:15:42.715846Z**,seq71,no underlying observation exposed.
+- `poll_batch_commit_failure_atomic_restart`:
+  receipt**05:15:59.466269Z**,seq79,opaque observation2561.
+- `poll_fast_forward_before_disposition_failure_restart`:
+  receipt**05:16:01.228050Z**,seq81,opaque observation2561.
+
+Parent reports **FAILED (isolated child or watchdog failure)**, no underlying
+assertion location/stack. Do not decode observations as source locations or infer
+cause. Saved output cannot distinguish child/fixture versus watchdog. **Cause
+undiagnosed; no source lookup/investigation/probe/fix/retry/infrastructure waiver
+or clock/load/performance/production attribution**. Privacy boundary unchanged.
+
+UTC new-tail envelope**2026-11-08T04:25:11.397980Z→05:16:53.775417Z**. All7 saved
+PM-only interval queries0matches/exit1/no-match/empty stderr; no measured suspend.
+Per-command REALTIME/MONO/BOOT recorded, sub-microsecond boot-minus-mono samples;
+receipt clocks are not case starts/phases. Raw52348bytes/690receipts cover all530
+completions. No full/user journal/power/inhibitor/sleep/progress polling.
+
+**FIRSTFAIL barrier restored at remote_polling**. **NOT RUN:**remaining5 whole SSH
+targets `cli_remote`,`mutation_remote`,`document_promotion`,`ticket_closure`,
+`comment_publication`; both isolated smokes; final SAME whole runtime-evidence
+SPEC→QUALITY/controller-owner acceptance. No display/socket/profile/app action or
+availability inference. Further execution/fix needs controller authorization.
+Completed fast2/local-sync/fourSSH/prior greens retain their scopes; no broad repeat
+or manual timing benchmark added to remainder. Retained44 C/L/S/M1/Q1/enum/D5/D6/
+native/combinatorial limits unwaived; no all-essential/full-pass/performance claim.
+WAIT60s/GPUI15s-per-park/POLL10ms/default threads/production3sTTL/250mscache/SQL/
+lease/consent/safety unchanged; owner STOPprofiling/optimization/perftickets retained.
+
+New-only **`/tmp/opencode/task8-final-tail-20261108T042302Z/`** holds owner/reviews/
+source/reuse/lifted+restored barrier/literal argv/raw/receipts/counts/exits/clocks/PM/
+analysis/coverage/validation/handoff/new-only manifest. Only owned ledger/current
+standing/this append checkpointed with coauthor; original ID/parent/time/entire
+80122-byte prior body preserved. Clean **UNPUSHED**, known runner/Cargo PIDs/sessions
+absent,no owned jobs; no source/golden/schema/dependency edit/new ID/status save/
+push/PR/merge/close/native/main/other-worktree/real profile-key-context-draft/cleanup.
+Ticket **implementing / runtime BLOCKED**,not ALLPASS/feature-complete/review-ready.

@@ -12,67 +12,72 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current Schema-Inventory Correction Standing — 2026-11-08 UTC
+### Current Final-Tail Gate Standing — 2026-11-08 UTC
 
-**Bounded TEST-ONLY inventory correction; exact case GREEN, same SPEC→QUALITY
-reviews pending. Ticket implementing / review-and-runtime BLOCKED, not review-ready.**
-Fresh AGENTS preflight at **2026-11-08T04:04:05Z**, clean entry/postmerge base
-**`09491b8e4170de10f46d635b43308525852db984`**. `git fetch origin main` found no
-incoming commits/files; `git merge origin/main` was Already up to date against
-**`d70142b63a952f5e1aade369e0cd654ca9a03617`**, ancestry exit0. Prior test freeze
-**`7eda8be7258859ab419fe2323eb7282d80af9cd0`**; production/library remains
-**`64a6c2495d999916823346b8e1fec5ce9e328e4c`**. No rebase/conflict/merge commit,
-incoming Rust/schema/build change, main-checkout or other-worktree work.
+**Source-approved inventory correction; remaining fast targets/local-sync/four
+whole SSH targets GREEN, then remote_polling FAILED80/4. Runtime BLOCKED.** Clean
+entry/test freeze **`4cc6ca5a9fb1b4742717abac5052d355a2918448`**, production/library
+**`64a6c2495d999916823346b8e1fec5ce9e328e4c`**, known main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Accepted corrective fresh unchanged-
+main/no-op preflight from09491b8e; no new fetch/merge while frozen, source edit,
+agent or other-worktree/main action. All23 relevant source/build hashes unchanged.
 
-Source-grounded cause: the strict expected literal omitted17 delivered startup
-tables, not a production migration defect. Fresh empty-registry open always reaches
-retirement migration after companion journals; absent markers select `objects()`
-and execute every definition. Catalog is **record11 + preserve2 + pass4**; the
-pin-release table's quoted CREATE is included. Only the literal expected array in
-`tests/repository_enablement.rs` gains17 lines, **49→66** static sorted names.
-Original49/in-order, strict `assert_eq!`, all other file bytes and all later column/
-index/CHECK/uniqueness/state assertions are preserved; no subset/filter/dynamic
-oracle, new test/helper/API, migration/production/schema/dependency change.
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**,
+then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,zero findings,
+complete7eda..4cc/bounded094..4cc. The only new source is17 sorted static expected
+table pins; strict whole-array/all other assertions preserved, startup11+2+4 proof,
+not production migration change. Controller lifted FIRSTFAIL only for the unrun
+tail, not final runtime acceptance. Owner lean follow-ups remain sufficient:
+inventory**1/0/102 filtered,0.12s** and A17**1/0/1579 filtered,2.58s**; no whole103/
+desktop1580/previous-green regression repeat owed. Historical failed whole runs
+remain history, never synthesized into fresh whole passes.
 
-| New checkpoint evidence, each command once through Devenv | Actual standing |
-| --- | --- |
-| Exact `registry_creates_repository_and_discovery_metadata_schema` | **Exit0;1 passed/0 failed/0 ignored/102 filtered**,0.12s tests;3.074926389s elapsed,2.63s rebuild. All later assertions completed. **Not a fresh whole103 pass.** |
-| Whole-tree all-target/all-feature locked Clippy, `-D warnings` | **Exit0**,1.419890137s elapsed,1.14s Cargo;no warnings. |
-| Whole-tree `cargo fmt --check` | **Exit0**,17.671805088s elapsed;no edits. |
-| Library/check, retained NOT rerun | **1530/0/160 filtered,1865.59s**;check **exit0,4.165545239s**,unchanged production/normal-check inputs. No fresh normal check for this integration-test-only change. |
-| Prior current headless run, preserved NOT rerun | **2459 passed/1 failed/1 ignored** across26 footers:24 active-green,1 intentional ignored-only,1 failed. Whole mutation_replay**384/0,925.11s**,CLI**477/0,369.60s**,CLI units307/0,canonical65/0,read_contract72/0/read-suite greens retain their scopes. |
+| Actual new gate, once serially | Result | Cargo exit | Monotonic seconds |
+| --- | --- | ---: | ---: |
+| session_credentials + shared_key_registry | **11/0**,0.00s + **39/0**,3.57s;0 ignored/filtered | 0 | 4.178218284 |
+| selected library local-sync | **160/0**,0 ignored/**1530 filtered**,917.76s tests | 0 | 918.308445816 |
+| ssh_transport | **123/0** custom SSH cases | 0 | 347.635066896 |
+| remote_observation | **15/0** custom SSH cases | 0 | 18.469540805 |
+| remote_synchronization | **69/0** custom SSH cases | 0 | 1028.913574776 |
+| remote_merge_recovery | **29/0** custom SSH cases | 0 | 466.262427250 |
+| remote_polling — FAILED | **80 passed/4 failed**,all84 parent cases accounted | **1** | 318.419941219 |
 
-The prior repository_enablement **102/1,61.35s,exit101** is retained RED; no ritual
-unchanged RED or whole-target retry. Owner: "Just run the one failing test, any fix
-there is not likely to cause a regression elsewhere." Exact-only follow-up is
-selected here; no whole103 claim by adding old102 to new1. Owner-selected A17
-**1/0/1579 filtered,2.58s** and historical b84 whole desktop**1579/1,2142.63s** retain
-their distinct scopes; **no whole desktop/previous-green regression repeat**.
+All7 commands/8 binary executions reconcile: **526 passed/4 failed/530 unique
+completions**,7 active-green binary scopes/1 failed scope. Four polling parent
+reports say **isolated child or watchdog failure**; only opaque observations1998/
+2561 are exposed for3 cases, no underlying assertion locations. Cause undiagnosed;
+no source investigation/probe/fix/retry/infrastructure/performance/clock waiver.
+The harness naturally completed84 cases, then **no next target was admitted**.
 
-`read_characterization.rs:1–8,101–103` explicitly defines an opt-in manual performance
-characterization, ignored unless requested. Its actual **0 passed/1 ignored** is
-intentional default-gate behavior, **not active benchmark coverage or a missing
-required active case holding the gate**. No edit/unignore/run/profiling permission;
-active read greens cover only their own scopes. Owner performance STOP remains.
+**FIRSTFAIL barrier restored at remote_polling. NOT RUN:** `cli_remote`,
+`mutation_remote`, `document_promotion`, `ticket_closure`, `comment_publication`,
+both isolated smokes and final runtime-evidence SAME SPEC→QUALITY/controller-owner
+acceptance. No display/socket/profile/app action or availability inference.
+Further execution/fix requires controller authorization; preserve finished greens.
 
-**Next: SAME SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` THEN SAME QUALITY
-`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, before controller resumption of the two unrun
-fast integrations (`session_credentials`,`shared_key_registry`), selected local-sync160,
-ten SSH targets and both isolated smokes. No post-review gate runs here. Final
-runtime-evidence reviews/controller-owner acceptance and retained44 C/L/S/M1/Q1/
-enum/D5/D6/native/combinatorial limits remain owed/unwaived.
+Previous24 active headless binary footers (including whole mutation_replay384) are
+retained, not rerun. Current library**1530/0/160 filtered,1865.59s** and check
+**exit0,4.165545239s** remain valid; newly selected160 cases do not imply a fresh
+unfiltered1690-case run. Latest strict Clippy**exit0,1.419890137s** and fmt
+**exit0,17.671805088s** reused, not rerun. Manual `read_characterization` default
+**0 passed/1 ignored** is intentional opt-in TIMING behavior, **NOT MEASURED**,not
+active coverage/new failure/missing required active gate; no unignore/profiling run
+or active-count inflation. Owner performance/profiling/optimization STOP retained.
 
-New-only **`/tmp/opencode/task8-schema-inventory-20261108T040405Z/`** holds preflight,
-11+2+4 startup proof/excerpts, before/after literal/delta/inverse proof,23 current
-input hashes, exact/static literal argv/raw/results/times/exits, handoff and small
-manifest. Test source SHA-256 **`1f8c184112f28cc10c623581529ec486320d2fc93aaa019ef60e1cae22183f54`**
-stayed frozen. Prior headless17 manifest **`d6f4ecb55b5f9364c139bcaee8839df93a53ab601e2dd50628049b902d3477f8`**
-and all17 entries authenticated,zero mismatches;16 prior inputs unchanged, no old
-artifact writes/huge inventories. Only this ledger/current standing plus append,
-existing canonical-comment append and one integration-test file checkpointed with
-coauthor; comment ID/parent/time/full prior body preserved. Clean **UNPUSHED**, no
-owned jobs; no agents/new ID/status save/PR/lifecycle/native/real profile-key-context-
-draft/performance-ticket or other-worktree action.
+UTC new-tail command envelope**2026-11-08T04:25:11.397980Z→05:16:53.775417Z**. All7
+interval-only kernel PM queries:zero matches/exit1/no-match/empty stderr, no measured
+suspend. Full per-command REALTIME/MONOTONIC/BOOTTIME retained; receipt clocks are
+not case starts/phases. Raw**52348 bytes**/**690 receipt rows** cover all530 cases.
+
+New-only **`/tmp/opencode/task8-final-tail-20261108T042302Z/`** holds source/review/
+owner-selection/reuse/lifted+restored barrier/raw/results/clocks/PM/coverage/failure/
+validation/handoff/manifest proof. Schema36/headless17 authenticated,39 old manifest/
+input-manifest digests preserved, no old writes/huge inventory. Retained44 C/L/S/
+M1/Q1/enum/D5/D6/native/combinatorial limitations and production safety/WAIT60s/
+GPUI15s-per-park/POLL10ms/default threads unchanged. Metadata-only ledger/comment
+append with coauthor, original ID/parent/time/full80122-byte prior body preserved;
+clean **UNPUSHED**, no owned gate jobs. Ticket **implementing / runtime BLOCKED**,
+not ALLPASS/review-ready/complete; no status save/push/PR/native/lifecycle authority.
 
 ### Prior Owner-Selected Headless Gate Standing — 2026-11-08 UTC
 
@@ -10465,3 +10470,183 @@ Original ID/parent**`01M6SYJK4CJGHWKZC7MTP18GTA`**/creation time/full prior body
 preserved. Foreground children exited,no owned jobs;clean **UNPUSHED**. No new doc/
 ticket/ID/status save/PR/push/main/close/lifecycle/native/other-worktree/real profile-
 key-context-draft action or dependency change;controller owns all further work.
+
+## Task 8 — Final Tail: Two Fast Targets, Local-Sync And Four SSH Greens; Polling Failed
+
+### Source Approval, Owner Selection And Frozen Reuse — 2026-11-08 UTC
+
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**,
+then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,zero findings,
+complete7eda..4cc plus bounded094..4cc. Controller read17-line literal delta/all3
+logs and authenticated schema36. Source review approves strict static startup-table
+inventory pins, not production migration change or final runtime acceptance.
+Controller lifted repository_enablement FIRSTFAIL **only** for the remaining2
+fast integrations, selected local-sync,10 whole SSH targets and isolated smokes.
+
+Owner's "Just run the one failing test, any fix there is not likely to cause a
+regression elsewhere" remains controlling. Inventory exact**1/0/102 filtered,
+0.12s** suffices for its delta; historical whole repository_enablement**102/1**
+is not combined into fresh103/0. A17 exact**1/0/1579 filtered,2.58s** suffices for
+its delta; historical b84 whole desktop**1579/1**,with five onboarding passes,
+is not combined into fresh1580/0. **No previous-green/headless/CLI/library-fast/
+whole desktop/whole103/exact-fix/static/broad regression repeat** was run or owed.
+Unrun active checks remain required. Sole gate owner, no agents or source fixes.
+
+Clean entry/test freeze **`4cc6ca5a9fb1b4742717abac5052d355a2918448`**, production/
+library **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**, known main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Accepted corrective implementer's
+fresh unchanged-main/no-op preflight from verifier metadata
+**`09491b8e4170de10f46d635b43308525852db984`**, no new fetch/merge while frozen or
+main/other-worktree edit. Only3 reviewed desktop cfg-test files+one integration
+expected array differ from production64a. All23 source/build hashes match and
+remain unchanged throughout every command. Integration-test source SHA-256
+**`1f8c184112f28cc10c623581529ec486320d2fc93aaa019ef60e1cae22183f54`**. Only17 literal
+names added9context+4poll+4shared, original49/order/strict array/all other assertions
+verbatim; prior startup record11+preserve2+pass4 proof retained, not re-investigated.
+
+Authenticated36-artifact schema manifest
+**`3b62add26525ad35b85ad599eef7d948ab33979fb3dcaf5f6018d586574faf7c`** and prior17
+headless manifest **`d6f4ecb55b5f9364c139bcaee8839df93a53ab601e2dd50628049b902d3477f8`**,
+zero mismatches. Snapshot39 older manifest/input-manifest digests without large
+linked-input inventories or old artifact writes. Retained24 current active headless
+binary footers at7eda remain valid on unchanged relevant inputs: whole replay384/
+CLI477/CLIunits307/canonical65/read_contract72/etc are **not rerun** or relabeled.
+
+Library**1530/0/160 filtered,1865.59s** and normal check**exit0,4.165545239s** remain
+valid at unchanged64a production/normal-check inputs, NOT rerun. Current strict
+all-target/all-feature/locked Clippy `-D warnings` **exit0,1.419890137s** and fmt
+**exit0,17.671805088s** reused from schema-inventory raw logs/results, not rerun.
+Owner-selected A17/inventory exact follow-ups retained, not rerun. Historical
+e6bc/d49/fb6/failed/diagnostic/exact scopes remain unchanged.
+
+**Manual benchmark classification:** controller and both source reviewers read
+`tests/read_characterization.rs:1–8,101–103`. It is explicitly an opt-in manual
+TIMING benchmark; default**0 passed/1 ignored** is intentional, **not** active
+measured coverage, a new failure or a missing required active gate. Benchmark
+coverage remains **NOT MEASURED**. Do not unignore/rerun/profile or inflate active
+binary counts; owner performance STOP remains. Active read greens retain only
+their own scopes. This supersedes the earlier unresolved gate-blocker reading,
+without editing that historical checkpoint or claiming measured timing coverage.
+
+### Exact Once-Only New Commands, Serial Default Threads
+
+```sh
+devenv shell -- cargo test --all-features --locked --test session_credentials --test shared_key_registry
+devenv shell -- cargo test --all-features --locked --lib repository::local_sync::
+devenv shell -- cargo test --all-features --locked --test ssh_transport
+devenv shell -- cargo test --all-features --locked --test remote_observation
+devenv shell -- cargo test --all-features --locked --test remote_synchronization
+devenv shell -- cargo test --all-features --locked --test remote_merge_recovery
+devenv shell -- cargo test --all-features --locked --test remote_polling
+```
+
+No filters/skips/retries beyond the authorized local-sync selector; no threads/
+diagnostic/golden/fault overrides, bare suite/native test or source/budget change.
+Final selected gates were allowed past the interim15-minute cap. Each command
+finished before the next admission. `remote_polling`'s own custom parent naturally
+finished84 isolated cases then returned1; **no following target was admitted**.
+
+| New binary scope | Passed | Failed | Ignored / filtered | Footer seconds | Cargo exit | Command monotonic seconds |
+| --- | ---: | ---: | --- | ---: | ---: | ---: |
+| session_credentials | 11 | 0 | 0 / 0 | 0.00 | 0 | 4.178218284 (shared command) |
+| shared_key_registry | 39 | 0 | 0 / 0 | 3.57 | 0 | 4.178218284 (shared command) |
+| selected library local-sync | 160 | 0 | 0 / 1530 | 917.76 | 0 | 918.308445816 |
+| ssh_transport | 123 | 0 | custom harness | n/a | 0 | 347.635066896 |
+| remote_observation | 15 | 0 | custom harness | n/a | 0 | 18.469540805 |
+| remote_synchronization | 69 | 0 | custom harness | n/a | 0 | 1028.913574776 |
+| remote_merge_recovery | 29 | 0 | custom harness | n/a | 0 | 466.262427250 |
+| remote_polling — FAILED | 80 | 4 | custom harness | n/a | **1** | 318.419941219 |
+
+**7 commands,8 binary executions,7 active-green scopes/1 failed scope;526 new
+passes/4 failures,530 unique completions.** All3 standard footers and all5 SSH
+custom case-line/pass-fail footers reconcile; no zero-case or masked-child success.
+SSH custom harness has no standard ignored/filtered/test-seconds footer, so those
+are not fabricated. Each successful target emitted its nonzero passed footer;
+failed polling emitted80 passed+4 failed, not a target green. Binary child exit
+codes were not separately observed except the polling parent exit1 printed by
+Cargo; command exits above are actual observations.
+
+Both previously unreached fast targets now have first current-production evidence;
+retain them with prior24 active headless footers rather than repeat those targets.
+Selected local-sync now actually passed160 previously filtered cases, leaving1530
+others filtered as requested; **not** a fresh unfiltered1690 library run. Four
+whole SSH targets actually passed; polling's80 passing cases remain partial evidence.
+
+### First Failed Target: Four Saved Parent Reports, No Diagnosis Or Retry
+
+All failures are in `remote_polling`, whose parent and Cargo exit**1**. Saved
+failure-completion receipts are:
+
+| Case | UTC receipt on2026-11-08 | Sequence | Saved opaque observation |
+| --- | --- | ---: | --- |
+| poll_whole_review_disposition_fault_cancel_keeps_index_pending | 05:11:48.954814Z | 13 | 1998 |
+| poll_partial_batch_yield_report_and_restart | 05:15:42.715846Z | 71 | none exposed |
+| poll_batch_commit_failure_atomic_restart | 05:15:59.466269Z | 79 | 2561 |
+| poll_fast_forward_before_disposition_failure_restart | 05:16:01.228050Z | 81 | 2561 |
+
+Each parent line says **FAILED (isolated child or watchdog failure)**. No saved
+underlying assertion location/stack is exposed; observations1998/2561 are retained
+as opaque output, not source locations or decoded cause. Saved output cannot
+distinguish child assertion/fixture versus watchdog failure. **Cause remains
+undiagnosed**; no source lookup/investigation/probe/fix/retry, infrastructure waiver,
+clock/load/suspend/performance/retirement/production-policy explanation is inferred.
+The existing custom privacy boundary is unchanged, not loosened for diagnostics.
+
+### Command Clocks, PM Facts And Artifact Integrity
+
+| Command | UTC interval on2026-11-08 | REALTIME seconds | MONOTONIC seconds | BOOTTIME seconds |
+| --- | --- | ---: | ---: | ---: |
+| fast-tail | 04:25:11.397980Z→04:25:15.576202Z | 4.178221857 | 4.178218284 | 4.178217805 |
+| local-sync | 04:25:15.611105Z→04:40:33.919546Z | 918.308439855 | 918.308445816 | 918.308445468 |
+| ssh_transport | 04:40:33.949930Z→04:46:21.584992Z | 347.635061809 | 347.635066896 | 347.635066970 |
+| remote_observation | 04:46:21.619995Z→04:46:40.089517Z | 18.469522460 | 18.469540805 | 18.469540892 |
+| remote_synchronization | 04:46:40.117826Z→05:03:49.031384Z | 1028.913558080 | 1028.913574776 | 1028.913574872 |
+| remote_merge_recovery | 05:03:49.060260Z→05:11:35.322682Z | 466.262421818 | 466.262427250 | 466.262427336 |
+| remote_polling | 05:11:35.355465Z→05:16:53.775417Z | 318.419951197 | 318.419941219 | 318.419941051 |
+
+All7 saved interval-only kernel PM entry/exit queries returned **zero matches,
+exit1/no-match,empty stderr**. BOOTTIME-minus-MONOTONIC differences are sub-
+microsecond samples; **no measured suspend**. No full/user journal, power policy/
+inhibitor, synthetic wait, induced/prevented sleep or progress polling. Blocking
+serial runner waited for normal target completion. Command/receipt clocks are
+**not case starts or internal phase timestamps**; no per-case SSH duration inferred.
+
+Seven raw logs total**52348 bytes**,seven sidecars**690 receipt rows**,cover all
+**530 unique completions**,with complete byte offsets and count/exit reconciliation.
+Per-command raw/sidecar hashes and literal argv are in results/handoff. Failed
+polling raw SHA-256**`0afc4d7c6bcdd0d71cf56dffc72ec206cdd5febdd2a41eb87e9b6782ad80e22c`**.
+Source/main/input23 proof remained frozen throughout. Known runner/Cargo PIDs and
+their owned sessions are absent; no owned gate jobs.
+
+### Restored Barrier, Exact Remainder And Metadata Checkpoint
+
+**FIRSTFAIL barrier restored at remote_polling**. Further execution/fix requires
+controller authorization. **NOT RUN:**five remaining whole SSH targets,
+`cli_remote`,`mutation_remote`,`document_promotion`,`ticket_closure`,
+`comment_publication`; both isolated CLI/desktop smokes; final SAME whole
+runtime-evidence SPEC→QUALITY/controller-owner acceptance. No display/socket/
+profile/app action or availability inference. No local-sync/remaining2-fast debt
+remains; do not repeat completed greens. Manual timing benchmark is intentional
+NOT MEASURED, not a missing required gate; no profiling run or broad repeat added.
+
+Retain prior24 current headless greens, current LIB/check/latest statics/owner-
+selected A17+inventory exact follow-ups and all newly finished greens with their
+precise scopes. Historical failed whole targets remain immutable, no manufactured
+fresh103/1580/1690/full-suite or all-essential acceptance. Retained44 C/L/S/M1/Q1/
+enum/D5/D6/native/combinatorial limitations stand. WAIT60s/GPUI15s-per-park/POLL10ms/
+default threads and production3s TTL/250ms cache/SQL/lease/consent/safety unchanged.
+Owner profiling/optimization/performance-ticket STOP remains in force.
+
+New-only **`/tmp/opencode/task8-final-tail-20261108T042302Z/`** contains preflight/
+source approval/owner selection/lifted+restored barrier, retained evidence proof,
+literal argv/full raw/receipt/incremental results/clocks/PM/count reconciliation,
+failure analysis/coverage/validation/checklist/precommit/metadata delta/commit/
+handoff and computed new-only manifest. All39 prior manifest/input-manifest digests
+preserved, no old artifact writes/bulk inventories. Only execution ledger/current
+standing and canonical **`01M6TYJATB44WZPJABX9GMBVS1`** append checkpointed with
+required coauthor; original ID/parent**`01M6SYJK4CJGHWKZC7MTP18GTA`**/creation time/
+entire80122-byte prior body preserved. Source/hash/whitespace/known-main ancestry/
+merge-tree/prefix/no-jobs checks accompany handoff. Clean **UNPUSHED**, no owned
+gate jobs. Ticket **implementing / runtime BLOCKED**,not ALLPASS/feature-complete/
+review-ready; no source/golden/schema/dependency edit/new ID/status save/push/PR/
+merge/close/native/main/other-worktree/real profile-key-context-draft/cleanup action.
