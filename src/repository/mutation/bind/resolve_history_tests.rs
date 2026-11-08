@@ -81,10 +81,13 @@ fn a_prepare_previews_only_an_unknown_absent_context() {
             item_id: item.into(),
         })
     };
-    let cases: [Case; 7] = [
+    let cases: [Case; 9] = [
         (
             "unknown row, absent",
-            |f| f.lose_history(false, Some("history_unknown")),
+            |f| {
+                f.lose_history(false, Some("history_unknown"));
+                f.batch(&[], 100);
+            },
             Publish,
             ResultCode::Ok,
             true,
@@ -92,11 +95,36 @@ fn a_prepare_previews_only_an_unknown_absent_context() {
         ),
         (
             "cache loss, no row, absent",
-            |f| f.lose_history(true, None),
+            |f| {
+                f.lose_history(true, None);
+                f.batch(&[], 100);
+            },
             Publish,
             ResultCode::Ok,
             true,
             sync(ITEM),
+        ),
+        (
+            "unknown row, absent, a tracking ref left by an earlier fetch",
+            |f| {
+                f.lose_history(false, Some("history_unknown"));
+                f.batch(&[], 100);
+                f.track();
+            },
+            Publish,
+            ResultCode::RemoteBranchDeleted,
+            false,
+            Some(HistoryWayOut::Republish {
+                item_id: ITEM.into(),
+            }),
+        ),
+        (
+            "unknown row, no current batch",
+            |f| f.lose_history(false, Some("history_unknown")),
+            Publish,
+            ResultCode::RecoveryRequired,
+            false,
+            Some(HistoryWayOut::RemoteHistory),
         ),
         (
             "release is never previewed",
@@ -189,6 +217,7 @@ fn a_prepare_previews_only_an_unknown_absent_context() {
 fn a_confirm_after_the_batch_changed_is_an_external_change() {
     let f = Fixture::new();
     f.lose_history(false, Some("history_unknown"));
+    f.batch(&[], 100);
     let confirmation = confirmation_of(&prepare(&f, ResolveHistoryChoice::Publish));
     // A newer fetch finds the branch on the remote.
     advertise_local(&f, 200);
@@ -235,6 +264,7 @@ fn a_publish_resolves_the_context_clears_the_flag_and_replays_its_result() {
     for (name, flag, row, marker, cleared, state) in cases {
         let f = Fixture::new();
         f.lose_history(flag, row);
+        f.batch(&[], 100);
         if marker {
             f.publish_marker();
         }

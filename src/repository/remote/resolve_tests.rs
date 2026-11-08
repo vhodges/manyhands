@@ -157,6 +157,15 @@ impl Fixture {
         self.batch(&[observation], observed_at);
     }
 
+    /// A remote-tracking ref for the ticket's branch, as an earlier fetch left.
+    pub(crate) fn track(&self) {
+        let target = Self::plan().context(AuthoringKind::Ticket, &item());
+        let head = self.observe().local_head.unwrap();
+        self.git()
+            .reference(target.tracking_ref(), head, true, "fixture fetch")
+            .unwrap();
+    }
+
     /// A complete fetch that advertises nothing.
     pub(crate) fn batch(&self, observations: &[RemoteRefObservation], observed_at: i64) {
         let plan = Self::plan();
@@ -308,6 +317,7 @@ fn resolving_writes_never_published_and_clears_the_flag_with_the_last_context() 
     for case in cases {
         let f = Fixture::new();
         f.lose_history(case.flag, case.row);
+        f.batch(&[], 100);
         if case.other {
             f.add_context();
         }

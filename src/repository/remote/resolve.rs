@@ -31,6 +31,9 @@ pub(crate) struct HistoryObservation {
     /// The OID the **current** batch advertises for the branch, or `None`
     /// when the batch lacks it.
     pub(crate) advertised: Option<Oid>,
+    /// Whether a current batch at the current generation exists: without
+    /// one, absence from it proves nothing.
+    pub(crate) batch_current: bool,
     pub(crate) generation: i64,
     /// The fetch evidence, not the push overlay: only a fetch resolves.
     pub(crate) evidence: RemotePublicationEvidence,
@@ -43,11 +46,14 @@ pub(crate) struct HistoryObservation {
 
 impl HistoryObservation {
     /// Whether the context may be resolved as never published: unknown, absent
-    /// from the current batch, and not published-then-deleted.
+    /// from a current batch, not published-then-deleted, and with no
+    /// remote-tracking ref (which proves a fetch once saw the branch here).
     pub(crate) fn resolvable(&self) -> bool {
         self.evidence == RemotePublicationEvidence::HistoryUnknown
+            && self.batch_current
             && self.advertised.is_none()
             && !self.remotely_deleted
+            && !self.tracking_ref_exists
     }
 }
 
@@ -126,6 +132,7 @@ fn observe_in(
         tracking_ref_exists: git.refname_to_id(target.tracking_ref()).is_ok(),
         branch,
         advertised,
+        batch_current: snapshot.has_current_batch(),
         generation,
         evidence: snapshot.fetch_publication_evidence_for(kind, item_id),
         remotely_deleted: snapshot.context_deletion_observed(kind, item_id),

@@ -47,20 +47,23 @@ struct Layout {
     local_on_remote: bool,
     /// The remote's tip isn't in the local object database (never fetched).
     advertised_missing: bool,
+    /// An earlier fetch left a tracking ref, though the remote lacks the branch now.
+    stale_tracking: bool,
 }
 
 struct Want {
     resolved: bool,
     relation: Option<RemoteHistoryRelation>,
     counts: Option<(usize, usize)>,
-    publish_and_release: bool,
+    publish: bool,
+    release: bool,
     disposition: Option<PollDisposition>,
 }
 
 #[test]
 fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
     use RemoteHistoryRelation::*;
-    let rows: [(&str, bool, Layout, Want); 8] = [
+    let rows: [(&str, bool, Layout, Want); 9] = [
         (
             "absent and unknown",
             false,
@@ -69,12 +72,33 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 advertised_extra: None,
                 local_on_remote: false,
                 advertised_missing: false,
+                stale_tracking: false,
             },
             Want {
                 resolved: false,
                 relation: None,
                 counts: None,
-                publish_and_release: true,
+                publish: true,
+                release: true,
+                disposition: None,
+            },
+        ),
+        (
+            "absent, unknown, a tracking ref left by an earlier fetch",
+            false,
+            Layout {
+                local_extra: 0,
+                advertised_extra: None,
+                local_on_remote: false,
+                advertised_missing: false,
+                stale_tracking: true,
+            },
+            Want {
+                resolved: false,
+                relation: None,
+                counts: None,
+                publish: false,
+                release: true,
                 disposition: None,
             },
         ),
@@ -86,12 +110,14 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 advertised_extra: Some(0),
                 local_on_remote: false,
                 advertised_missing: false,
+                stale_tracking: false,
             },
             Want {
                 resolved: true,
                 relation: Some(Same),
                 counts: Some((0, 0)),
-                publish_and_release: false,
+                publish: false,
+                release: false,
                 disposition: Some(PollDisposition::Current),
             },
         ),
@@ -103,12 +129,14 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 advertised_extra: Some(0),
                 local_on_remote: false,
                 advertised_missing: false,
+                stale_tracking: false,
             },
             Want {
                 resolved: true,
                 relation: Some(LocalAhead),
                 counts: Some((2, 0)),
-                publish_and_release: false,
+                publish: false,
+                release: false,
                 disposition: Some(PollDisposition::LocalAhead),
             },
         ),
@@ -120,12 +148,14 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 advertised_extra: Some(1),
                 local_on_remote: false,
                 advertised_missing: false,
+                stale_tracking: false,
             },
             Want {
                 resolved: true,
                 relation: Some(RemoteAhead),
                 counts: Some((0, 1)),
-                publish_and_release: false,
+                publish: false,
+                release: false,
                 disposition: Some(PollDisposition::Dirty),
             },
         ),
@@ -137,12 +167,14 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 advertised_extra: Some(1),
                 local_on_remote: false,
                 advertised_missing: false,
+                stale_tracking: false,
             },
             Want {
                 resolved: true,
                 relation: Some(Diverged),
                 counts: Some((1, 1)),
-                publish_and_release: false,
+                publish: false,
+                release: false,
                 disposition: Some(PollDisposition::Diverged),
             },
         ),
@@ -154,12 +186,14 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 advertised_extra: None,
                 local_on_remote: false,
                 advertised_missing: false,
+                stale_tracking: false,
             },
             Want {
                 resolved: false,
                 relation: None,
                 counts: None,
-                publish_and_release: true,
+                publish: true,
+                release: true,
                 disposition: None,
             },
         ),
@@ -171,12 +205,14 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 advertised_extra: Some(1),
                 local_on_remote: true,
                 advertised_missing: false,
+                stale_tracking: false,
             },
             Want {
                 resolved: true,
                 relation: Some(Same),
                 counts: Some((0, 0)),
-                publish_and_release: false,
+                publish: false,
+                release: false,
                 disposition: Some(PollDisposition::FastForwarded),
             },
         ),
@@ -188,12 +224,14 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 advertised_extra: Some(0),
                 local_on_remote: false,
                 advertised_missing: true,
+                stale_tracking: false,
             },
             Want {
                 resolved: true,
                 relation: None,
                 counts: None,
-                publish_and_release: false,
+                publish: false,
+                release: false,
                 disposition: Some(PollDisposition::NotReached),
             },
         ),
@@ -271,6 +309,11 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
         let before = snapshot(&service, root.path());
         let plan_now = if cache_loss { &origin } else { &upstream };
         let context = plan_now.context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+        if layout.stale_tracking {
+            repository
+                .reference(context.tracking_ref(), local, true, "earlier fetch")
+                .unwrap();
+        }
         let observations: Vec<_> = advertised
             .into_iter()
             .map(|oid| {
@@ -315,7 +358,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
         assert_eq!(entry.local_head, Some(local), "{name} local head");
         assert_eq!(
             entry.tracking_ref_exists,
-            advertised.is_some() && !layout.advertised_missing,
+            layout.stale_tracking || (advertised.is_some() && !layout.advertised_missing),
             "{name} tracking"
         );
         assert_eq!(entry.advertised, advertised, "{name} advertised");
@@ -330,8 +373,8 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
         assert_eq!(
             entry.choices,
             RemoteHistoryChoices {
-                publish: want.publish_and_release,
-                release: want.publish_and_release
+                publish: want.publish,
+                release: want.release
             },
             "{name} choices"
         );

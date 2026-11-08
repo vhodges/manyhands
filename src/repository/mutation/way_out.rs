@@ -101,6 +101,7 @@ pub fn resolve_history_way_out(
             Some(HistoryWayOut::ReleaseContext { item_id })
         }
         ResultCode::RemoteBranchDeleted => Some(HistoryWayOut::Republish { item_id }),
+        ResultCode::RecoveryRequired => Some(HistoryWayOut::RemoteHistory),
         ResultCode::Ok | ResultCode::AlreadyApplied => Some(HistoryWayOut::Sync { item_id }),
         _ => None,
     }

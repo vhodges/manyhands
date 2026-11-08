@@ -158,6 +158,7 @@ impl Observed {
             local_head,
             tracking_ref_exists,
             advertised,
+            batch_current,
             generation,
             evidence,
             remotely_deleted,
@@ -173,6 +174,7 @@ impl Observed {
         let observation = optional(observation, "local", local_head);
         let observation = observation.text("tracking_ref", flag(*tracking_ref_exists));
         let observation = optional(observation, "advertised", advertised)
+            .text("batch_current", flag(*batch_current))
             .text("generation", &generation.to_string())
             .text("evidence", evidence_name(*evidence))
             .text("remotely_deleted", flag(*remotely_deleted))
@@ -372,8 +374,18 @@ impl Confirmed for ItemResolveHistoryBinding {
         }
         // The remote has the branch, or the history is no longer unknown:
         // nothing is left to resolve.
-        if found.advertised.is_some() || !found.resolvable() {
+        if found.advertised.is_some() || found.evidence != RemotePublicationEvidence::HistoryUnknown
+        {
             return Err(Answer::stopped(ResultCode::AlreadyApplied));
+        }
+        // No current batch to read absence from: `remote history` first.
+        if !found.batch_current {
+            return Err(Answer::stopped(ResultCode::RecoveryRequired));
+        }
+        // A tracking ref says a fetch once saw the branch here, so it was
+        // published and is gone, whatever the evidence rows kept.
+        if found.tracking_ref_exists {
+            return Err(Answer::stopped(ResultCode::RemoteBranchDeleted));
         }
         Ok(Previewed {
             observation: observed.digest(self.choice).to_stored(),

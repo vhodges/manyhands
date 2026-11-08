@@ -33,7 +33,8 @@ pub enum RemoteHistoryRelation {
 }
 
 /// What the owner may do about an unresolved context. Both are offered only
-/// when the remote does not have the branch.
+/// when the remote does not have the branch; `publish` also needs that no
+/// remote-tracking ref says it was published once.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RemoteHistoryChoices {
     pub publish: bool,
@@ -296,7 +297,9 @@ impl RepositoryService {
                     .find(|target| target.kind() == Some(kind) && target.item_id() == Some(item_id))
                     .map(PollTargetReport::disposition),
                 choices: RemoteHistoryChoices {
-                    publish: offered,
+                    // A tracking ref means a fetch once saw the branch here:
+                    // republish, not first publication.
+                    publish: offered && !tracking_ref_exists,
                     release: offered,
                 },
             });

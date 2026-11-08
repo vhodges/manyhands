@@ -2167,6 +2167,9 @@ pub struct RemoteSnapshot {
     observations: Vec<RemoteRefObservation>,
     contexts: Vec<RemoteContextSnapshot>,
     history_unknown: bool,
+    /// Whether a current batch at the current generation was read (an empty
+    /// batch counts: it advertises nothing).
+    has_current_batch: bool,
 }
 
 impl RemoteSnapshot {
@@ -2191,6 +2194,7 @@ impl RemoteSnapshot {
             observations,
             contexts,
             history_unknown: false,
+            has_current_batch: false,
         }
     }
 
@@ -2231,6 +2235,11 @@ impl RemoteSnapshot {
     /// The repository-wide cache-loss flag.
     pub(in super::super) fn history_unknown(&self) -> bool {
         self.history_unknown
+    }
+
+    /// Whether the snapshot holds a current batch to read absence from.
+    pub(in super::super) fn has_current_batch(&self) -> bool {
+        self.has_current_batch
     }
 
     /// Missing rows never prove a deletion. After cache loss, they cannot prove
@@ -6504,6 +6513,7 @@ fn read_snapshot_rows(
         if current_count > 1 {
             return Err(recovery_required());
         }
+        snapshot.has_current_batch |= current && !dormant;
         let rows = connection.prepare("SELECT ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid FROM remote_ref_observations WHERE batch_id=?1 ORDER BY ordinal")
             .and_then(|mut statement| statement.query_map([batch_id],|row| Ok((row.get::<_,i64>(0)?,row.get::<_,Option<String>>(1)?,row.get::<_,Option<String>>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,Option<String>>(5)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
         for (ordinal, remote_ref, tracking_ref, classification, advertised, tracking) in rows {
