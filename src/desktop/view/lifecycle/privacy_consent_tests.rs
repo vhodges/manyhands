@@ -35,7 +35,7 @@ use crate::desktop::{
     model::{navigation::OpenTarget, operations::Operations},
     services::{
         conflicts::ConflictSource,
-        requests::{Intent, PathResolution, RequestState},
+        requests::{Intent, Lane, PathResolution, RequestState},
         resolutions::KeptSet,
     },
     test_support::fixtures::{Fixture, NoPassphrase, item_id},
@@ -262,6 +262,16 @@ async fn a17_a_stranded_close_is_not_resumed_without_consent(cx: &mut TestAppCon
     let main = commits(&root, "main");
     let shell = Shell::launch(fixture, |_| {}, cx);
     let operations = shell.operations(cx);
+    let wanted = root.clone();
+    shell
+        .until(cx, move |operations| {
+            operations.requests().iter().any(|request| {
+                request.lane == Lane::Background
+                    && matches!(&request.intent, Intent::IndexRefresh { root } if *root == wanted)
+                    && matches!(request.state, RequestState::Finished(..))
+            })
+        })
+        .await;
     assert_eq!(step(&shell, &root).as_deref(), Some("closing"));
 
     open(&shell, ticket(&root), cx);

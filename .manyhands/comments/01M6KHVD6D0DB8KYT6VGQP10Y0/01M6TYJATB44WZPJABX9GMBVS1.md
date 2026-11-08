@@ -971,3 +971,74 @@ real profile-key-context-draft action. Known gate processes exited; no jobs.
 **FIRSTFAIL barrier restored**, controller authorization required. Ticket
 **implementing / runtime BLOCKED**, not feature-complete/review-ready; final runtime
 reviews and owner handoff remain owed.
+
+## Follow-up — owner-directed exact A17 startup-ordering correction GREEN — 2026-11-08 UTC
+
+Owner's original wording:
+"Just run the one failing test, any fix there is not likely to cause a regression elsewhere".
+Controller authorized only this minimal test-only correction, one exact case and
+required statics. **No whole desktop repeat after this fix**; no waiver of other
+unrun gates. Historical b84 whole **1579/1**,2142.63s,exit101 remains immutable,
+with all five onboarding cases actually passing; new exact1/0 is not whole1580/0.
+
+Fresh preflight **2026-11-08T02:47:34.318923Z**: clean entry/postmerge
+**`68728b1a8effd55ca258fa936339274aa9f58b97`**; `git fetch origin` found no new main
+commits/files, `git merge origin/main` was already up to date at
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**, ancestry exit0. No conflict, incoming
+Rust/schema/build change, rebase, merge commit or main/other-worktree edit.
+
+Only source delta versus **`b84bb707228ea7231ea5f255ed3e24e48cea4f3d`**:
+`src/desktop/view/lifecycle/privacy_consent_tests.rs` imports `Lane` and uses
+existing `Shell::until` before the initial `step`, cloning the fixture root and
+requiring `.any` root-matched **Background IndexRefresh Finished of ANY outcome**.
+Empty history cannot pass. Every existing assertion/action/order remains verbatim,
+including initial/final closing, unconsented allowlist/sent history, Accepted
+request, main unchanged, navigation/quit/window closure; `step` and `until_idle`
+are unchanged. History is retained, so waiting cannot hide forbidden requests.
+Reversing only the import/wait restores the full b84 file byte-for-byte. All other
+source/build inputs are unchanged; production/library remains
+**`64a6c2495d999916823346b8e1fec5ce9e328e4c`**. Owned source SHA-256:
+**`79a4a4392c11e61292140e2876b3875b4415b849d7da7e810f186171cafa52be`**.
+
+Prior read-only six-launch audit found only this initial raw-oracle gap; other
+cases already join IDs/idle or inspect model/separate draft-store state. No new
+audit/probe/profiling. Source gap established, **historical panic callsite/origin
+unknown**: helper76 could mean old265 or289, cache versus SQL unknown. ANY Finished
+joins full library return/heartbeat drop, not refresh success. Not proof of consent
+breach/unauthorized resume, performance fix or infrastructure causation.
+
+Exactly once, default threads, rebuilt current binary:
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands desktop::view::lifecycle::privacy_consent_tests::a17_a_stranded_close_is_not_resumed_without_consent -- --exact
+```
+
+**Exit0;1 passed/0 failed/0 ignored/0 measured/1579 filtered;2.58s tests**,
+40.984544399s measured elapsed. Runner UTC envelope
+**2026-11-08T02:48:23.209280Z→02:49:04.936158Z**; Cargo rebuilt38.11s. Not zero tests.
+Binary SHA-256 **`b4585b77b158b4e12e66cd8480a2565e87e485432ded35d02129054c86800652`**;
+raw-log SHA-256 **`0e6027598db990dab7496aa057f8723df309efbb4a21bc774166f54f82e75784`**.
+Strict all-target/all-feature locked Clippy `-D warnings` **exit0,11.205811546s**;
+whole-tree fmt-check **exit0,19.877930249s**, each once. No other test/check command.
+Current library **1530/0/160,1865.59s** and check **exit0,4.165545239s** retained valid,
+NOT rerun. All clock/3s TTL/250ms cache/SQL/lease/consent/WAIT60s/GPUI15s-per-park/
+POLL10ms/default-thread contracts unchanged; no Busy suppression/retry/canned answer.
+
+Next: SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** THEN SAME QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** source review, pending after this return. After
+clearance, owner steering permits controller resumption of the unrun checks
+**without another whole desktop run**. CLI units/all27 integrations including whole
+mutation_replay384, selected local-sync160, ten SSH targets, both smokes and final
+runtime-evidence reviews/owner handoff remain owed; none ran here. Retained44/D5/D6/
+native limits stand. Ticket **implementing**, not full-pass/feature-complete/ready.
+
+New-only **`/tmp/opencode/task8-consent-order-20261108T024734Z/`** contains preflight,
+literal argv/raw/results/statics/input and binary hashes/source proof/patch/prior
+audit map/handoff/small manifest. Latest prior17-artifact manifest hash remains
+**`b71e9c2f8bda984f088f7c034ff342aa460c519f87f605cdf6f3d4be73197906`**,
+controller-verified zero mismatches; no old evidence overwritten. Only this cfg-test
+file plus owned ledger/current-standing and this append committed with coauthor,
+clean **unpushed**. Original ID/parent/time/entire body above preserved. All owned
+foreground commands returned; no jobs/other agents. No status save/new ticket/ID/
+push/PR/main merge/close/native/real profile-key-context-draft/cleanup. Owner STOP
+profiling/optimization remains in force.
