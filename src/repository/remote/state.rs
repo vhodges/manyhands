@@ -214,6 +214,7 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
         }
     }
     migrate_poll_attempt_times(transaction)?;
+    migrate_polling_defaults(transaction, history_unknown)?;
     migrate_poll_materializations(transaction)?;
     migrate_poll_dispositions(transaction)?;
     migrate_retired_contexts(transaction)?;
@@ -221,6 +222,57 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
     migrate_resolution_owners(transaction)?;
     migrate_history_per_context(transaction, history_unknown)?;
     Ok(())
+}
+
+/// A registry created while the cache-loss marker was on disk baked `DEFAULT 1`
+/// for `history_unknown` and `recovery_suspended` into `remote_polling_state`,
+/// so every repository registered after the marker was retired would start
+/// flagged and suspended. With the marker gone, the table is rebuilt from its
+/// own stored text with both defaults 0: every row, column, CHECK and the
+/// registration trigger are carried over exactly. The state (marker absent,
+/// defaults 1) is its own gate, so no migration marker is recorded.
+fn migrate_polling_defaults(tx: &Transaction<'_>, cache_lost: bool) -> Result<(), RepositoryError> {
+    if cache_lost {
+        return Ok(());
+    }
+    let stale: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('remote_polling_state') WHERE name IN ('history_unknown','recovery_suspended') AND dflt_value!='0')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if !stale {
+        return Ok(());
+    }
+    let sql_of = |kind: &str, name: &str| -> Result<String, RepositoryError> {
+        tx.query_row(
+            "SELECT sql FROM sqlite_master WHERE type=?1 AND name=?2",
+            [kind, name],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())
+    };
+    let table = sql_of("table", "remote_polling_state")?;
+    let trigger = sql_of("trigger", "remote_policy_on_registration")?;
+    let rebuilt = table
+        .replace(
+            "recovery_suspended INTEGER NOT NULL DEFAULT 1",
+            "recovery_suspended INTEGER NOT NULL DEFAULT 0",
+        )
+        .replace(
+            "history_unknown INTEGER NOT NULL DEFAULT 1",
+            "history_unknown INTEGER NOT NULL DEFAULT 0",
+        );
+    if rebuilt == table {
+        return Err(recovery_required());
+    }
+    let columns = tx
+        .prepare("SELECT name FROM pragma_table_info('remote_polling_state') ORDER BY cid")
+        .and_then(|mut q| {
+            q.query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?
+        .join(",");
+    // The trigger goes first so that dropping the table cannot touch it; the
+    // rows wait in a copy.
+    tx.execute_batch(&format!("DROP TRIGGER remote_policy_on_registration; CREATE TABLE remote_polling_state_before_defaults AS SELECT {columns} FROM remote_polling_state; DROP TABLE remote_polling_state; {rebuilt}; INSERT INTO remote_polling_state({columns}) SELECT {columns} FROM remote_polling_state_before_defaults; DROP TABLE remote_polling_state_before_defaults; {trigger};"))
+        .map_err(|_| recovery_required())
 }
 
 /// A registry stuck on the repository-wide `history_unknown` flag gains an

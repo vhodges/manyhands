@@ -4252,3 +4252,66 @@ fn a_forgetting_plan_fence_does_not_forget_again_at_the_next_endpoint_registrati
     })
     .unwrap();
 }
+
+/// A registry created while the cache-loss marker was on disk bakes `DEFAULT 1`
+/// into `remote_polling_state`. Once the marker is retired, reopening rebuilds
+/// the table with defaults 0, keeping every row and the registration trigger,
+/// so a repository registered afterwards starts clear and unsuspended.
+#[test]
+fn polling_defaults_are_rebuilt_once_the_marker_is_retired() {
+    let data = tempfile::tempdir().unwrap();
+    let marker = data.path().join("remote-history-recovery-required");
+    std::fs::write(&marker, b"manyhands remote history recovery required v1\n").unwrap();
+    drop(RepositoryService::open_at(data.path()).unwrap());
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let register = |db: &Connection, root: &str| {
+        db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)", [root]).unwrap();
+    };
+    let flags = |db: &Connection, id: i64| -> (i64, i64) {
+        db.query_row(
+            "SELECT history_unknown,recovery_suspended FROM remote_polling_state WHERE repository_id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    };
+    register(&db, "/first");
+    assert_eq!(flags(&db, 1), (1, 1), "defaults while the marker stands");
+    // Distinguishable values in every kind of column.
+    db.execute("UPDATE remote_polling_state SET paused=1,interval_seconds=600,automatic_backoff_seconds=120,remote_name='origin',primary_branch='main',endpoint_digest=zeroblob(32),known_remote_name='origin',known_primary_branch='main',known_endpoint_digest=zeroblob(32),latest_outcome='completed',latest_attempt_at=5,next_eligible_at=9,configuration_generation=3 WHERE repository_id=1", []).unwrap();
+    let dump = |db: &Connection| -> String {
+        db.query_row("SELECT quote(repository_id)||quote(enabled)||quote(paused)||quote(interval_seconds)||quote(automatic_backoff_seconds)||quote(recovery_suspended)||quote(history_unknown)||quote(configuration_generation)||quote(endpoint_digest)||quote(remote_name)||quote(primary_branch)||quote(latest_outcome)||quote(latest_attempt_at)||quote(next_eligible_at)||quote(known_remote_name)||quote(known_primary_branch)||quote(known_endpoint_digest) FROM remote_polling_state WHERE repository_id=1", [], |r| r.get(0)).unwrap()
+    };
+    let columns = |db: &Connection| -> Vec<String> {
+        db.prepare("SELECT name FROM pragma_table_info('remote_polling_state') ORDER BY cid")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    let (row, order) = (dump(&db), columns(&db));
+    drop(db);
+    // With the marker still on disk the table is left alone.
+    drop(RepositoryService::open_at(data.path()).unwrap());
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    register(&db, "/second");
+    assert_eq!(flags(&db, 2), (1, 1), "marker present: defaults stay");
+    drop(db);
+    std::fs::remove_file(&marker).unwrap();
+    for _ in 0..2 {
+        drop(RepositoryService::open_at(data.path()).unwrap());
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        register_if_missing(&db);
+        assert_eq!(dump(&db), row, "existing row exactly as it was");
+        assert_eq!(columns(&db), order, "column order");
+        assert_eq!(flags(&db, 2), (1, 1), "existing rows keep their values");
+        assert_eq!(flags(&db, 3), (0, 0), "a new repository starts clear");
+        let triggers: i64 = db.query_row("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name='remote_policy_on_registration'", [], |r| r.get(0)).unwrap();
+        assert_eq!(triggers, 1);
+    }
+
+    fn register_if_missing(db: &Connection) {
+        db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) SELECT '/third',123,'accessible',0 WHERE NOT EXISTS(SELECT 1 FROM repositories WHERE root_path='/third')", []).unwrap();
+    }
+}
