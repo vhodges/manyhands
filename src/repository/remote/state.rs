@@ -219,6 +219,50 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
     migrate_retired_contexts(transaction)?;
     migrate_context_publication_index(transaction)?;
     migrate_resolution_owners(transaction)?;
+    migrate_history_per_context(transaction, history_unknown)?;
+    Ok(())
+}
+
+/// A registry stuck on the repository-wide `history_unknown` flag gains an
+/// unknown row per active context, and the flag clears; one whose cache loss
+/// is still marked on disk keeps the flag. Every registry initializes the
+/// known identity from the configured one.
+fn migrate_history_per_context(
+    tx: &Transaction<'_>,
+    cache_lost: bool,
+) -> Result<(), RepositoryError> {
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);")
+        .map_err(|_| recovery_required())?;
+    let marked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='remote_history_per_context_v1')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if marked {
+        return Ok(());
+    }
+    if !cache_lost {
+        let stuck = tx.prepare("SELECT repository_id,remote_name,primary_branch FROM remote_polling_state WHERE history_unknown=1")
+            .and_then(|mut query| query.query_map([],|row| Ok((row.get::<_,i64>(0)?,row.get::<_,Option<String>>(1)?,row.get::<_,Option<String>>(2)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+        for (id, name, branch) in stuck {
+            // With no configured remote there is no plan to write rows under:
+            // the flag stays set, which reads fail-closed.
+            let (Some(name), Some(branch)) = (name, branch) else {
+                continue;
+            };
+            let plan = RemoteRefPlan::from_configuration(&name, &branch)
+                .map_err(|_| recovery_required())?;
+            insert_unknown_context_rows(tx, id, &plan)?;
+            tx.execute(
+                "UPDATE remote_polling_state SET history_unknown=0 WHERE repository_id=?1",
+                [id],
+            )
+            .map_err(|_| recovery_required())?;
+        }
+    }
+    tx.execute_batch("UPDATE remote_polling_state SET known_remote_name=remote_name WHERE known_remote_name IS NULL AND remote_name IS NOT NULL; UPDATE remote_polling_state SET known_primary_branch=primary_branch WHERE known_primary_branch IS NULL AND primary_branch IS NOT NULL; UPDATE remote_polling_state SET known_endpoint_digest=endpoint_digest WHERE known_endpoint_digest IS NULL AND endpoint_digest IS NOT NULL;")
+        .map_err(|_| recovery_required())?;
+    tx.execute(
+        "INSERT INTO registry_migrations(name) VALUES('remote_history_per_context_v1')",
+        [],
+    )
+    .map_err(|_| recovery_required())?;
     Ok(())
 }
 
@@ -2350,6 +2394,61 @@ fn forgets(
         || digest.is_some_and(|digest| known_digest.as_ref().is_some_and(|known| known != digest))
 }
 
+/// Whether every kept context row carries the refs `plan` gives it; with no
+/// plan the rows stay dormant, so they match.
+fn kept_rows_match(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    plan: Option<&RemoteRefPlan>,
+) -> Result<bool, RepositoryError> {
+    let Some(plan) = plan else {
+        return Ok(true);
+    };
+    let rows = transaction.prepare("SELECT kind,item_id,remote_ref,tracking_ref FROM remote_context_states WHERE repository_id=?1")
+        .and_then(|mut statement| statement.query_map([repository_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+    for (kind, id, remote_ref, tracking_ref) in rows {
+        let kind = match kind.as_str() {
+            "document" => AuthoringKind::Document,
+            "ticket" => AuthoringKind::Ticket,
+            _ => return Err(recovery_required()),
+        };
+        let id: ItemId = id.parse().map_err(|_| recovery_required())?;
+        let target = plan.context(kind, &id);
+        if target.remote_ref() != remote_ref || target.tracking_ref() != tracking_ref {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// An `('history_unknown','history_unknown')` row, under `plan`'s refs, for
+/// each active context that has no row yet.
+fn insert_unknown_context_rows(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    plan: &RemoteRefPlan,
+) -> Result<(), RepositoryError> {
+    let active = transaction.prepare("SELECT branch,item_id FROM contexts WHERE repository_id=?1 AND kind='active' ORDER BY branch")
+        .and_then(|mut statement| statement.query_map([repository_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+    let now = OffsetDateTime::now_utc().unix_timestamp().max(0);
+    for (branch, id) in active {
+        let (kind, item_id) =
+            crate::repository::stored_authoring_branch(&branch).ok_or_else(recovery_required)?;
+        if item_id.to_string() != id {
+            return Err(recovery_required());
+        }
+        let segment = crate::repository::authoring_kind_segment(&kind);
+        let present: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM remote_context_states WHERE repository_id=?1 AND kind=?2 AND item_id=?3)",params![repository_id,segment,id],|row|row.get(0)).map_err(|_| recovery_required())?;
+        if present {
+            continue;
+        }
+        let target = plan.context(kind, &item_id);
+        transaction.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(?1,?2,?3,?4,?5,'history_unknown','history_unknown',?6)",
+            params![repository_id,target.remote_ref(),target.tracking_ref(),segment,id,now]).map_err(|_| recovery_required())?;
+    }
+    Ok(())
+}
+
 fn configure_known(
     transaction: &Transaction<'_>,
     repository_id: i64,
@@ -2381,10 +2480,13 @@ fn configure_known(
     // generation: the batch and its observations are copied (a batch is only
     // carried to the plan it was observed under; an unavailable plan carries
     // it dormant) and the context rows are kept.
+    // Rows kept under refs of another plan (a registry with no known identity
+    // and no plan) would make every read fail, so they are forgotten instead.
     let carry = !forgets
         && previous.as_ref().is_none_or(|(_, name, branch)| {
             plan.is_none_or(|plan| plan.remote_name() == name && plan.primary_branch() == branch)
-        });
+        })
+        && kept_rows_match(transaction, repository_id, plan)?;
     let mut carried = None;
     if carry && let Some((old, _, _)) = previous {
         transaction.execute("INSERT INTO remote_observation_batches(repository_id,remote_name,primary_branch,configuration_generation,observed_at,is_current) SELECT repository_id,remote_name,primary_branch,?2,observed_at,1 FROM remote_observation_batches WHERE id=?1",params![old,generation]).map_err(|_| recovery_required())?;
@@ -2408,20 +2510,10 @@ fn configure_known(
                 [repository_id],
             )
             .map_err(|_| recovery_required())?;
+        // A forgetting fence is always given a plan; the arms of `forgets` that
+        // fire without one are unreachable here, so this is fail-closed only.
         let plan = plan.ok_or_else(recovery_required)?;
-        let active = transaction.prepare("SELECT branch,item_id FROM contexts WHERE repository_id=?1 AND kind='active' ORDER BY branch")
-            .and_then(|mut statement| statement.query_map([repository_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
-        let now = OffsetDateTime::now_utc().unix_timestamp().max(0);
-        for (branch, id) in active {
-            let (kind, item_id) = crate::repository::stored_authoring_branch(&branch)
-                .ok_or_else(recovery_required)?;
-            if item_id.to_string() != id {
-                return Err(recovery_required());
-            }
-            let target = plan.context(kind, &item_id);
-            transaction.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(?1,?2,?3,?4,?5,'history_unknown','history_unknown',?6)",
-                params![repository_id,target.remote_ref(),target.tracking_ref(),crate::repository::authoring_kind_segment(&kind),id,now]).map_err(|_| recovery_required())?;
-        }
+        insert_unknown_context_rows(transaction, repository_id, plan)?;
     }
     transaction.execute("UPDATE remote_polling_state SET configuration_generation=?2,remote_name=?3,primary_branch=?4,automatic_backoff_seconds=NULL,latest_outcome=NULL WHERE repository_id=?1",
         params![repository_id,generation,plan.map(RemoteRefPlan::remote_name),plan.map(RemoteRefPlan::primary_branch)]).map_err(|_| recovery_required())?;

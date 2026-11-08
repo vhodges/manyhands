@@ -3899,6 +3899,132 @@ fn null_known_columns_fall_back_to_the_current_plan() {
 }
 
 #[test]
+fn null_known_and_no_plan_rows_follow_the_new_plan() {
+    // (the remote configured afterwards, whether the kept rows are forgotten)
+    for (remote, forgets) in [("upstream", true), ("origin", false)] {
+        let (data, root, service) = fixture();
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        // No known identity and no plan, with a row under the old remote.
+        db.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,'/active',?2)", params![format!("manyhands/ticket/{ITEM}"), ITEM]).unwrap();
+        let target = plan().context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+        db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'never_published','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM]).unwrap();
+        apply_call(&service, root.path(), Call::Plan(remote, "main"));
+        let (evidence, remote_ref): (String, String) = db
+            .query_row(
+                "SELECT publication_evidence,remote_ref FROM remote_context_states",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let expected = RemoteRefPlan::from_configuration(remote, "main")
+            .unwrap()
+            .context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+        assert_eq!(remote_ref, expected.remote_ref(), "{remote} refs");
+        assert_eq!(
+            evidence,
+            if forgets {
+                "history_unknown"
+            } else {
+                "never_published"
+            },
+            "{remote} evidence"
+        );
+        read_snapshot(&db, 1).unwrap_or_else(|_| panic!("{remote} readable"));
+    }
+}
+
+#[test]
+fn history_per_context_migration() {
+    const OTHER: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+    // (flag, marker file, a row for the second context, migrations run)
+    for (n, (flag, marker, with_row, runs)) in [
+        (1, false, false, 1),
+        (1, true, false, 1),
+        (0, false, false, 1),
+        (1, false, true, 2),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (data, root, service) = fixture();
+        apply_call(&service, root.path(), Call::Plan("origin", "main"));
+        drop(service);
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        for id in [ITEM, OTHER] {
+            db.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,?2,?3)", params![format!("manyhands/ticket/{id}"), format!("/{id}"), id]).unwrap();
+        }
+        let target = plan().context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+        db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'history_unknown','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM]).unwrap();
+        if with_row {
+            let target = plan().context(AuthoringKind::Ticket, &OTHER.parse().unwrap());
+            db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'never_published','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),OTHER]).unwrap();
+        }
+        db.execute("UPDATE remote_polling_state SET history_unknown=?1,endpoint_digest=zeroblob(32),known_remote_name=NULL,known_primary_branch=NULL,known_endpoint_digest=NULL", [flag]).unwrap();
+        db.execute(
+            "DELETE FROM registry_migrations WHERE name='remote_history_per_context_v1'",
+            [],
+        )
+        .unwrap();
+        if marker {
+            std::fs::write(
+                data.path().join("remote-history-recovery-required"),
+                b"manyhands remote history recovery required v1\n",
+            )
+            .unwrap();
+        }
+        let unmigrated = |db: &Connection| -> Vec<(String, String)> {
+            db.prepare(
+                "SELECT item_id,publication_evidence FROM remote_context_states ORDER BY item_id",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+        };
+        let before = unmigrated(&db);
+        let mut after = Vec::new();
+        for _ in 0..runs {
+            drop(RepositoryService::open_at(data.path()).unwrap());
+            after = unmigrated(&db);
+        }
+        let migrates = flag == 1 && !marker;
+        let (unknown, name, branch, digest): (i64, Option<String>, Option<String>, Option<Vec<u8>>) = db
+            .query_row(
+                "SELECT history_unknown,known_remote_name,known_primary_branch,known_endpoint_digest FROM remote_polling_state",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(unknown, i64::from(flag == 1 && marker), "row {n} flag");
+        if migrates {
+            let mut want = vec![
+                (ITEM.to_owned(), "history_unknown".to_owned()),
+                (
+                    OTHER.to_owned(),
+                    if with_row {
+                        "never_published"
+                    } else {
+                        "history_unknown"
+                    }
+                    .to_owned(),
+                ),
+            ];
+            want.sort();
+            assert_eq!(after, want, "row {n} rows");
+        } else {
+            assert_eq!(after, before, "row {n} unchanged");
+        }
+        assert_eq!(name.as_deref(), Some("origin"), "row {n} known name");
+        assert_eq!(branch.as_deref(), Some("main"), "row {n} known branch");
+        assert_eq!(digest, Some(vec![0; 32]), "row {n} known digest");
+        read_snapshot(&db, 1).unwrap_or_else(|_| panic!("row {n} readable"));
+        let marked: i64 = db.query_row("SELECT count(*) FROM registry_migrations WHERE name='remote_history_per_context_v1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(marked, 1, "row {n} marker");
+    }
+}
+
+#[test]
 fn evidence_defaults_by_flag_and_rows() {
     let ticket = AuthoringKind::Ticket;
     let item: ItemId = ITEM.parse().unwrap();
