@@ -845,14 +845,21 @@ fn sync_unresolved_history_is_not_retried() {
             RecoveryActionKind::RemoteHistory,
             [("root", "/fixture/repo".into())],
         )]);
-    for record in [RecordState::Accepted, RecordState::Finished] {
-        assert_eq!(
-            sync(&history, ShareTarget::Item, record),
-            SyncOutcome::HistoryUnresolved
-        );
-        let offers = sync_offers(&history, ShareTarget::Item, record);
-        assert!(!offers.contains(&S::Retry), "{record:?}");
-        assert!(!offers.contains(&S::Republish), "{record:?}");
+    for target in [ShareTarget::Item, ShareTarget::Main] {
+        for (record, expected) in [
+            (RecordState::Accepted, vec![S::GiveUp]),
+            (RecordState::Finished, vec![]),
+        ] {
+            assert_eq!(
+                sync(&history, target, record),
+                SyncOutcome::HistoryUnresolved
+            );
+            assert_eq!(
+                sync_offers(&history, target, record),
+                expected,
+                "{target:?} {record:?}"
+            );
+        }
     }
     let plain = share(ResultCode::RecoveryRequired, nothing());
     assert!(matches!(

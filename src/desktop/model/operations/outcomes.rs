@@ -45,7 +45,7 @@ pub(crate) const HISTORY_UNRESOLVED_BLOCKER: &str =
     "Manyhands cannot confirm whether this item's shared copy was ever published to this remote.";
 pub(crate) const HISTORY_UNRESOLVED_GUIDANCE: &str = "Manyhands can't confirm whether this \
      item's shared copy was ever published to this remote. Check it and resolve it with \
-     `manyhands-cli remote history`; the app will get a repair sheet later.";
+     `manyhands-cli remote history`.";
 /// What the texts call the repository's primary branch while its name is
 /// not known: before navigation lists the repository, or when its
 /// configuration names none (R-35).
