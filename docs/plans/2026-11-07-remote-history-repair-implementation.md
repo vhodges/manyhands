@@ -1,7 +1,9 @@
 # Remote History Repair Implementation Plan
 
-> **For agentic workers:** Revision 1, 2026-11-07. **Draft, awaiting owner
-> approval**; no implementation before it. Work serially, task by task.
+> **For agentic workers:** Revision 1, 2026-11-07. **Approved by the owner
+> on 2026-11-07**; implementation is authorized. Subagent-driven and serial:
+> one Sonnet 5.5 implementer per task, then an independent reviewer. The
+> ledger is [the execution record](2026-11-07-remote-history-repair-execution.md).
 > Re-read the design before each task, and record every checkpoint on ticket
 > `01M66HFV44YXNQ7ANJVA16TQ1H` (vh-hyksw). Steps use checkbox (`- [ ]`)
 > syntax.
