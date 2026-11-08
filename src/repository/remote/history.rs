@@ -7,8 +7,8 @@ use git2::Oid;
 
 use super::{
     PollCompletion, PollDisposition, PollPublicationRemoteRequest, PollTargetReport,
-    RemotePollError, RemotePollInvocation, RemotePollOutcome, RemotePollResult,
-    RemotePublicationEvidence, RemoteSnapshot,
+    RemoteOutcomeCategory, RemotePollError, RemotePollInvocation, RemotePollOutcome,
+    RemotePollResult, RemotePublicationEvidence, RemoteSnapshot,
     poll::{PollRelation, classify_relation},
     state,
 };
@@ -17,6 +17,8 @@ use crate::{
     repository::{
         AuthoringKind, OperationId, RepositoryError, RepositoryService,
         keys::{SessionCredentialProvider, SessionCredentials},
+        mutation::{CancellationToken, RequestId},
+        promotion::lifecycle::CancellationProbe,
     },
 };
 
@@ -66,6 +68,71 @@ pub struct RemoteHistoryReport {
     pub generation: i64,
 }
 
+/// Why the repair read has no report.
+#[derive(Debug)]
+pub enum RemoteHistoryError {
+    /// The poll itself failed (transport, busy, conflict pending, repository).
+    Poll(Box<RemotePollError>),
+    /// The poll ended with a stopping category and refreshed nothing.
+    Stopped(RemoteOutcomeCategory),
+    Cancelled,
+    Interrupted,
+    /// An explicit poll is never asked for eligibility, and a finished one has
+    /// a category: neither answer should occur.
+    Internal,
+}
+impl std::fmt::Display for RemoteHistoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Poll(_) => "remote history poll failed",
+            Self::Stopped(_) => "remote history poll stopped",
+            Self::Cancelled => "remote history cancelled",
+            Self::Interrupted => "remote history interrupted",
+            Self::Internal => "remote history internal error",
+        })
+    }
+}
+impl std::error::Error for RemoteHistoryError {}
+impl From<RemotePollError> for RemoteHistoryError {
+    fn from(error: RemotePollError) -> Self {
+        Self::Poll(Box::new(error))
+    }
+}
+impl From<RepositoryError> for RemoteHistoryError {
+    fn from(error: RepositoryError) -> Self {
+        Self::Poll(Box::new(error.into()))
+    }
+}
+
+/// Fresh evidence needs a finished poll whose category is `Completed`; the
+/// other outcomes leave the stored evidence as it was. Mirrors the `poll once`
+/// binding's reading of a report.
+fn fresh(
+    completion: PollCompletion,
+    outcome: Option<RemoteOutcomeCategory>,
+) -> Result<(), RemoteHistoryError> {
+    match (completion, outcome) {
+        (PollCompletion::Cancelled, _) => Err(RemoteHistoryError::Cancelled),
+        (PollCompletion::Interrupted, _) => Err(RemoteHistoryError::Interrupted),
+        (PollCompletion::Completed, None) => Err(RemoteHistoryError::Internal),
+        (PollCompletion::Completed, Some(RemoteOutcomeCategory::Completed)) => Ok(()),
+        (PollCompletion::Completed, Some(category)) => Err(RemoteHistoryError::Stopped(category)),
+    }
+}
+
+/// The targets of a poll that refreshed the evidence.
+fn fresh_targets(result: RemotePollResult) -> Result<Vec<PollTargetReport>, RemoteHistoryError> {
+    let outcome = match result {
+        RemotePollResult::Complete(outcome) => outcome,
+        RemotePollResult::IndexPending(pending) => pending.authoritative,
+    };
+    let RemotePollOutcome::Polled(report) = outcome else {
+        return Err(RemoteHistoryError::Internal);
+    };
+    fresh(report.completion(), report.outcome())?;
+    Ok(report.targets().to_vec())
+}
+
 impl RepositoryService {
     /// Run the manual one-shot poll (what `poll once` runs: reserved, a real
     /// fetch of the publication remote, a complete batch persisted) and report
@@ -74,6 +141,11 @@ impl RepositoryService {
     /// strictly-behind context is fast-forwarded and unmaterialized remote
     /// contexts are materialized; each entry carries the poll's disposition.
     ///
+    /// `operation_id` names the poll's record, and `request` and `token` let
+    /// `request cancel` stop it, as for `poll once`. A replayed terminal
+    /// result performs no fetch, so `resolved` is then empty: use a fresh
+    /// operation id unless resuming one.
+    ///
     /// The resolved set is the difference between the fetch evidence in the
     /// snapshot read just before the poll and the one read after it. It isn't
     /// captured inside the persistence transaction; a concurrent poll that
@@ -81,42 +153,39 @@ impl RepositoryService {
     pub fn remote_history<P: SessionCredentialProvider>(
         &self,
         root: &Path,
+        operation_id: OperationId,
+        request: RequestId,
+        token: CancellationToken,
         session: &mut SessionCredentials<P>,
-    ) -> Result<RemoteHistoryReport, RemotePollError> {
+    ) -> Result<RemoteHistoryReport, RemoteHistoryError> {
         let before = self.remote_snapshot(root)?;
-        let result = self.poll_publication_remote(
+        let result = self.poll_publication_remote_observed(
             PollPublicationRemoteRequest {
                 root: root.to_path_buf(),
-                operation_id: OperationId::new(),
+                operation_id,
                 invocation: RemotePollInvocation::Explicit,
                 approval: None,
                 restart: false,
             },
             session,
+            CancellationProbe::new(token, request),
         )?;
-        let outcome = match result {
-            RemotePollResult::Complete(outcome) => outcome,
-            RemotePollResult::IndexPending(pending) => pending.authoritative,
-        };
-        let RemotePollOutcome::Polled(report) = outcome else {
-            return Err(RemotePollError::Interrupted);
-        };
-        if report.completion() != PollCompletion::Completed {
-            return Err(RemotePollError::Interrupted);
-        }
-        let after = self.remote_snapshot(root)?;
-        Ok(self.history_report(root, &before, &after, report.targets())?)
+        let targets = fresh_targets(result)?;
+        Ok(self.history_report(root, &before, &targets)?)
     }
 
-    /// The report from the snapshots either side of an observation.
+    /// The report from the snapshot before a poll and the registry after it.
+    /// The after-snapshot and the generation are read in one transaction.
     pub(super) fn history_report(
         &self,
         root: &Path,
         before: &RemoteSnapshot,
-        after: &RemoteSnapshot,
         dispositions: &[PollTargetReport],
     ) -> Result<RemoteHistoryReport, RepositoryError> {
-        let generation = state::with_transaction(self, root, |tx, id| state::generation(tx, id))?;
+        let (after, generation) = state::with_transaction(self, root, |tx, id| {
+            Ok((state::read_snapshot(tx, id)?, state::generation(tx, id)?))
+        })?;
+        let after = &after;
         let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
         let mut entries = Vec::new();
         for context in after.contexts() {

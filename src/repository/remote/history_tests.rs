@@ -45,6 +45,8 @@ struct Layout {
     advertised_extra: Option<usize>,
     /// The poll fast-forwarded the local branch onto the advertised tip.
     local_on_remote: bool,
+    /// The remote's tip isn't in the local object database (never fetched).
+    advertised_missing: bool,
 }
 
 struct Want {
@@ -66,6 +68,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 local_extra: 0,
                 advertised_extra: None,
                 local_on_remote: false,
+                advertised_missing: false,
             },
             Want {
                 resolved: false,
@@ -82,6 +85,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 local_extra: 0,
                 advertised_extra: Some(0),
                 local_on_remote: false,
+                advertised_missing: false,
             },
             Want {
                 resolved: true,
@@ -98,6 +102,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 local_extra: 2,
                 advertised_extra: Some(0),
                 local_on_remote: false,
+                advertised_missing: false,
             },
             Want {
                 resolved: true,
@@ -114,6 +119,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 local_extra: 0,
                 advertised_extra: Some(1),
                 local_on_remote: false,
+                advertised_missing: false,
             },
             Want {
                 resolved: true,
@@ -130,6 +136,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 local_extra: 1,
                 advertised_extra: Some(1),
                 local_on_remote: false,
+                advertised_missing: false,
             },
             Want {
                 resolved: true,
@@ -146,6 +153,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 local_extra: 0,
                 advertised_extra: None,
                 local_on_remote: false,
+                advertised_missing: false,
             },
             Want {
                 resolved: false,
@@ -162,6 +170,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 local_extra: 0,
                 advertised_extra: Some(1),
                 local_on_remote: true,
+                advertised_missing: false,
             },
             Want {
                 resolved: true,
@@ -172,19 +181,20 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
             },
         ),
         (
-            "remote ahead, local diverged so not fast-forwarded",
+            "advertised object missing locally",
             false,
             Layout {
-                local_extra: 2,
-                advertised_extra: Some(3),
+                local_extra: 1,
+                advertised_extra: Some(0),
                 local_on_remote: false,
+                advertised_missing: true,
             },
             Want {
                 resolved: true,
-                relation: Some(Diverged),
-                counts: Some((2, 3)),
+                relation: None,
+                counts: None,
                 publish_and_release: false,
-                disposition: Some(PollDisposition::Diverged),
+                disposition: Some(PollDisposition::NotReached),
             },
         ),
     ];
@@ -207,7 +217,11 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 commit(&repository, Some(parent), &format!("{tag}{n}"))
             })
         };
-        let advertised = layout.advertised_extra.map(|extra| chain("remote", extra));
+        let advertised = if layout.advertised_missing {
+            Some(Oid::from_str(&"ab".repeat(20)).unwrap())
+        } else {
+            layout.advertised_extra.map(|extra| chain("remote", extra))
+        };
         let local = if layout.local_on_remote {
             advertised.unwrap()
         } else {
@@ -261,14 +275,16 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
             .into_iter()
             .map(|oid| {
                 // A fetch installs the tracking ref before the batch records it.
-                repository
-                    .reference(context.tracking_ref(), oid, true, "fixture fetch")
-                    .unwrap();
+                if !layout.advertised_missing {
+                    repository
+                        .reference(context.tracking_ref(), oid, true, "fixture fetch")
+                        .unwrap();
+                }
                 RemoteRefObservation::from_advertisement(
                     plan_now,
                     context.remote_ref(),
                     oid,
-                    Some(oid),
+                    (!layout.advertised_missing).then_some(oid),
                 )
                 .unwrap()
             })
@@ -277,7 +293,6 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
             state::complete_batch(tx, id, plan_now, generation, &observations, 124)
         })
         .unwrap();
-        let after = snapshot(&service, root.path());
 
         let dispositions = [PollTargetReport {
             target: None,
@@ -288,7 +303,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
             after_oid: None,
         }];
         let report = service
-            .history_report(root.path(), &before, &after, &dispositions)
+            .history_report(root.path(), &before, &dispositions)
             .unwrap();
         assert_eq!(report.cache_loss, cache_loss, "{name} flag");
         assert_eq!(report.generation, generation, "{name} generation");
@@ -300,7 +315,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
         assert_eq!(entry.local_head, Some(local), "{name} local head");
         assert_eq!(
             entry.tracking_ref_exists,
-            advertised.is_some(),
+            advertised.is_some() && !layout.advertised_missing,
             "{name} tracking"
         );
         assert_eq!(entry.advertised, advertised, "{name} advertised");
@@ -320,5 +335,69 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
             },
             "{name} choices"
         );
+    }
+}
+
+#[test]
+fn a_poll_that_did_not_refresh_the_evidence_gives_no_report() {
+    use RemoteHistoryError as E;
+    use RemoteOutcomeCategory as C;
+    type Check = fn(&Result<(), E>) -> bool;
+    let mut rows: Vec<(&str, PollCompletion, Option<C>, Check)> = vec![
+        (
+            "completed",
+            PollCompletion::Completed,
+            Some(C::Completed),
+            |r| r.is_ok(),
+        ),
+        (
+            "cancelled",
+            PollCompletion::Cancelled,
+            Some(C::Cancelled),
+            |r| matches!(r, Err(E::Cancelled)),
+        ),
+        ("interrupted", PollCompletion::Interrupted, None, |r| {
+            matches!(r, Err(E::Interrupted))
+        }),
+        ("no category", PollCompletion::Completed, None, |r| {
+            matches!(r, Err(E::Internal))
+        }),
+    ];
+    for category in [
+        C::ConfigurationRequired,
+        C::SelectedKeyUnavailable,
+        C::UnlockRequired,
+        C::HostApprovalRequired,
+        C::TransportUnavailable,
+        C::ProtocolRejected,
+        C::Cancelled,
+        C::RepositoryUnavailable,
+    ] {
+        // The category is checked against the row's own below.
+        rows.push(("stopped", PollCompletion::Completed, Some(category), |r| {
+            matches!(r, Err(E::Stopped(_)))
+        }));
+    }
+    for (name, completion, category, expect) in rows {
+        let got = fresh(completion, category);
+        assert!(expect(&got), "{name} {category:?}: {got:?}");
+        if let (Err(E::Stopped(stopped)), Some(category)) = (&got, category) {
+            assert_eq!(*stopped, category, "{name} keeps its category");
+        }
+    }
+    // An explicit poll is never "not eligible", and the wrapper is unwrapped.
+    for result in [
+        RemotePollResult::Complete(RemotePollOutcome::NotEligible {
+            reason: crate::repository::PollIneligibility::Disabled,
+            next_eligible_at: None,
+        }),
+        RemotePollResult::IndexPending(crate::repository::IndexPending::new(
+            RemotePollOutcome::NotEligible {
+                reason: crate::repository::PollIneligibility::Disabled,
+                next_eligible_at: None,
+            },
+        )),
+    ] {
+        assert!(matches!(fresh_targets(result), Err(E::Internal)));
     }
 }

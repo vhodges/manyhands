@@ -10,7 +10,8 @@ pub use conflict_read::{
     ConflictReadNextAction, ConflictStage, ConflictState, ConflictTarget,
 };
 pub use history::{
-    RemoteHistoryChoices, RemoteHistoryEntry, RemoteHistoryRelation, RemoteHistoryReport,
+    RemoteHistoryChoices, RemoteHistoryEntry, RemoteHistoryError, RemoteHistoryRelation,
+    RemoteHistoryReport,
 };
 pub use merge::{
     ConfirmedCommitIdentity, ConflictEligibility, ConflictObservation, ConflictPathToken,
