@@ -2228,6 +2228,11 @@ impl RemoteSnapshot {
         &self.contexts
     }
 
+    /// The repository-wide cache-loss flag.
+    pub(in super::super) fn history_unknown(&self) -> bool {
+        self.history_unknown
+    }
+
     /// Missing rows never prove a deletion. After cache loss, they cannot prove
     /// first-publication eligibility either, except for an explicitly retired
     /// item (R1). A present state row always takes precedence over retirement.

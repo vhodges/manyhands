@@ -1,4 +1,5 @@
 pub(super) mod conflict_read;
+mod history;
 mod merge;
 pub(super) mod observation;
 mod poll;
@@ -7,6 +8,9 @@ pub(super) mod sync;
 pub use conflict_read::{
     ConflictDto, ConflictPathDto, ConflictPathKind, ConflictPathStructure, ConflictReadEligibility,
     ConflictReadNextAction, ConflictStage, ConflictState, ConflictTarget,
+};
+pub use history::{
+    RemoteHistoryChoices, RemoteHistoryEntry, RemoteHistoryRelation, RemoteHistoryReport,
 };
 pub use merge::{
     ConfirmedCommitIdentity, ConflictEligibility, ConflictObservation, ConflictPathToken,
