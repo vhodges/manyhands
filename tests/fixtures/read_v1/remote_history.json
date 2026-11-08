@@ -1,0 +1,68 @@
+{
+  "code": "ok",
+  "command": "remote history",
+  "data": {
+    "cache_loss": true,
+    "entries": [
+      {
+        "ahead": null,
+        "behind": null,
+        "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
+        "choices": {
+          "publish": true,
+          "release": true,
+          "republish": false
+        },
+        "disposition": "history_unknown",
+        "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+        "kind": "ticket",
+        "local_oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "relation": null,
+        "remote_oid": null,
+        "resolved": false,
+        "tracking_ref_exists": false
+      },
+      {
+        "ahead": 1,
+        "behind": 2,
+        "branch": "manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FD0",
+        "choices": {
+          "publish": false,
+          "release": false,
+          "republish": false
+        },
+        "disposition": "diverged",
+        "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FD0",
+        "kind": "document",
+        "local_oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "relation": "diverged",
+        "remote_oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "resolved": true,
+        "tracking_ref_exists": true
+      }
+    ],
+    "generation": 4
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

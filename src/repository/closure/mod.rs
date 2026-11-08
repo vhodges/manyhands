@@ -55,6 +55,8 @@ pub enum ClosureBlocker {
     PrimaryReopened,
     TicketInvalidAfterClosure,
     IdentityRequired,
+    /// Last, so the stored blocker masks keep their bits.
+    HistoryUnresolved,
 }
 
 /// The 32-byte consent digest of a ticket closure. Its `Debug` never shows

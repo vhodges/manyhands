@@ -835,6 +835,39 @@ fn sync_a_key_problem_needs_a_key() {
     }
 }
 
+/// `recovery_required` with a `remote.history` action is its own outcome
+/// and offers no Retry (it would refuse again); other recovery_required
+/// answers stay generic failures.
+#[test]
+fn sync_unresolved_history_is_not_retried() {
+    let history =
+        share(ResultCode::RecoveryRequired, nothing()).with_recovery(vec![RecoveryAction::new(
+            RecoveryActionKind::RemoteHistory,
+            [("root", "/fixture/repo".into())],
+        )]);
+    for target in [ShareTarget::Item, ShareTarget::Main] {
+        for (record, expected) in [
+            (RecordState::Accepted, vec![S::GiveUp]),
+            (RecordState::Finished, vec![]),
+        ] {
+            assert_eq!(
+                sync(&history, target, record),
+                SyncOutcome::HistoryUnresolved
+            );
+            assert_eq!(
+                sync_offers(&history, target, record),
+                expected,
+                "{target:?} {record:?}"
+            );
+        }
+    }
+    let plain = share(ResultCode::RecoveryRequired, nothing());
+    assert!(matches!(
+        sync(&plain, ShareTarget::Item, RecordState::Finished),
+        SyncOutcome::Failed { .. }
+    ));
+}
+
 #[test]
 fn sync_a_host_problem_needs_the_host_it_names() {
     for (code, kind) in [

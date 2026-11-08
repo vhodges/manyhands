@@ -138,6 +138,15 @@ contract_enum!(
     /// moves, and the next synchronization of the item integrates
     /// primary.
     ///
+    /// `history_resolved` is a context whose publication history was
+    /// unknown recorded as never published, so that the next
+    /// synchronization of the item may publish it. Nothing is pushed or
+    /// fetched, and no branch moves.
+    ///
+    /// `history_flag_cleared` is the repository-wide cache-loss flag cleared
+    /// once no context reads unknown (`remote resolve-history`), with the
+    /// marker file deleted after it.
+    ///
     /// `context_synchronized` to `branch_deleted` are a promotion's and a
     /// closure's, in order, each listed when the preview plans it:
     /// `context_synchronized` is the editing branch synchronized with the
@@ -173,6 +182,8 @@ contract_enum!(
         SourceWritten => "source_written",
         CheckpointCommitted => "checkpoint_committed",
         BranchRepublished => "branch_republished",
+        HistoryResolved => "history_resolved",
+        HistoryFlagCleared => "history_flag_cleared",
         ContextSynchronized => "context_synchronized",
         ClosureRecorded => "closure_recorded",
         PrimaryIntegrated => "primary_integrated",
@@ -240,6 +251,8 @@ pub enum PreviewDetailsDto {
     Host(HostPreviewDto),
     Repair(RepairPreviewDto),
     Republish(ItemRepublishPreviewDto),
+    ResolveHistory(ItemResolveHistoryPreviewDto),
+    ResolveCacheLoss(RemoteResolveHistoryPreviewDto),
     Lifecycle(Box<LifecyclePreviewDto>),
 }
 
@@ -351,6 +364,7 @@ contract_enum!(
         IntegrationConflict => "integration_conflict",
         RemoteContextDeleted => "remote_context_deleted",
         HistoryUnknown => "history_unknown",
+        HistoryUnresolved => "history_unresolved",
         AlreadyClosed => "already_closed",
         PrimaryReopened => "primary_reopened",
         DocumentInvalidAfterIntegration => "document_invalid_after_integration",
@@ -385,6 +399,165 @@ pub struct ItemRepublishPreviewDto {
     pub last_published_oid: Option<String>,
     /// The local commit the branch will be published at: its tip.
     pub local_oid: String,
+}
+
+/// What a preview of `item resolve-history` shows: the context whose
+/// publication history is unknown, and what the latest complete fetch says
+/// of it. It holds names and commits and no content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ItemResolveHistoryPreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    /// The branch, as its short name.
+    pub branch: String,
+    /// The local tip of the branch. Null when the branch has no local ref.
+    pub local_oid: Option<String>,
+    /// Whether the context's remote-tracking ref exists locally.
+    pub tracking_ref_exists: bool,
+    /// Whether the repository-wide cache-loss flag is set; the last
+    /// resolution clears it.
+    pub cache_loss: bool,
+}
+
+/// What a preview of `remote resolve-history` shows: the cache-loss flag is
+/// set and no context reads unknown, so it can be cleared.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteResolveHistoryPreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    /// Whether the marker file is there to be deleted after the commit.
+    pub marker_present: bool,
+}
+
+contract_enum!(
+    /// What became of the cache-loss marker file once a resolution cleared
+    /// the flag: `not_applicable` when the flag was not cleared, `removed`,
+    /// `absent` when there was no file, and `failed` when it could not be
+    /// deleted (the resolution stands).
+    HistoryMarkerState {
+        NotApplicable => "not_applicable",
+        Removed => "removed",
+        Absent => "absent",
+        Failed => "failed",
+    }
+);
+
+contract_enum!(
+    /// How a context's local head relates to the branch the remote advertises
+    /// in `remote history`. Absent when the remote lacks the branch, or when
+    /// either commit is not here to compare.
+    HistoryRelation {
+        Same => "same",
+        LocalAhead => "local_ahead",
+        RemoteAhead => "remote_ahead",
+        Diverged => "diverged",
+    }
+);
+
+/// What the owner may do about an unresolved context: both are offered only
+/// when the remote does not have the branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteHistoryChoicesDto {
+    pub publish: bool,
+    pub release: bool,
+    pub republish: bool,
+}
+
+/// One context `remote history` lists: unresolved, or resolved by the poll it
+/// ran. It holds names and commits and no content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteHistoryEntryDto {
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    /// The editing branch, as its short name.
+    pub branch: String,
+    /// The local tip of the branch. Null when it has no local ref.
+    pub local_oid: Option<String>,
+    pub tracking_ref_exists: bool,
+    /// The commit the remote advertises for the branch. Null when it lacks it.
+    pub remote_oid: Option<String>,
+    pub relation: Option<HistoryRelation>,
+    pub ahead: Option<u64>,
+    pub behind: Option<u64>,
+    /// The fetch recorded the context as published, so no choice is needed.
+    pub resolved: bool,
+    /// What the poll did with the context. Null when it reported no target.
+    pub disposition: Option<PollTargetDisposition>,
+    pub choices: RemoteHistoryChoicesDto,
+}
+
+/// What `remote history` reports after its fresh poll of the publication
+/// remote.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteHistoryDto {
+    /// The repository-wide cache-loss flag: set when the registry was lost.
+    pub cache_loss: bool,
+    pub generation: i64,
+    pub entries: Vec<RemoteHistoryEntryDto>,
+}
+
+impl From<&crate::repository::RemoteHistoryReport> for RemoteHistoryDto {
+    fn from(report: &crate::repository::RemoteHistoryReport) -> Self {
+        use crate::repository::{AuthoringKind, RemoteHistoryRelation as Domain};
+        Self {
+            cache_loss: report.cache_loss,
+            generation: report.generation,
+            entries: report
+                .entries
+                .iter()
+                .map(|entry| RemoteHistoryEntryDto {
+                    kind: match entry.kind {
+                        AuthoringKind::Document => ItemDtoKind::Document,
+                        AuthoringKind::Ticket => ItemDtoKind::Ticket,
+                    },
+                    item_id: entry.item_id.to_string(),
+                    branch: entry.branch.clone(),
+                    local_oid: entry.local_head.map(|oid| oid.to_string()),
+                    tracking_ref_exists: entry.tracking_ref_exists,
+                    remote_oid: entry.advertised.map(|oid| oid.to_string()),
+                    relation: entry.relation.map(|relation| match relation {
+                        Domain::Same => HistoryRelation::Same,
+                        Domain::LocalAhead => HistoryRelation::LocalAhead,
+                        Domain::RemoteAhead => HistoryRelation::RemoteAhead,
+                        Domain::Diverged => HistoryRelation::Diverged,
+                    }),
+                    ahead: entry.ahead.map(|count| count as u64),
+                    behind: entry.behind.map(|count| count as u64),
+                    resolved: entry.resolved,
+                    disposition: entry.disposition.map(super::bind::poll::dto_disposition),
+                    choices: RemoteHistoryChoicesDto {
+                        publish: entry.choices.publish,
+                        release: entry.choices.release,
+                        republish: entry.choices.republish,
+                    },
+                })
+                .collect(),
+        }
+    }
+}
+
+/// What `item resolve-history` reports: the context is recorded as never
+/// published, and whether that cleared the cache-loss flag. `item sync` is
+/// what publishes it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ItemResolveHistoryMutationDto {
+    pub cache_loss_cleared: bool,
+    pub marker: HistoryMarkerState,
+}
+
+impl ItemResolveHistoryMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let marker = stored.get("marker")?.as_str()?;
+        Some(Self {
+            cache_loss_cleared: stored.get("cache_loss_cleared")?.as_bool()?,
+            marker: HistoryMarkerState::ALL
+                .into_iter()
+                .find(|known| known.as_str() == marker)?,
+        })
+    }
 }
 
 /// What a preview of `document repair` or `ticket repair` shows: the
@@ -726,6 +899,7 @@ pub enum MutationDataDto {
     Lifecycle(Box<LifecycleMutationDto>),
     PollPolicy(PollPolicyMutationDto),
     Poll(PollMutationDto),
+    ResolveHistory(ItemResolveHistoryMutationDto),
 }
 
 contract_enum!(
@@ -1615,6 +1789,7 @@ contract_enum!(
         Malformed => "malformed",
         RemotelyDeleted => "remotely_deleted",
         HistoryUnknown => "history_unknown",
+        Unpublished => "unpublished",
         NotReached => "not_reached",
     }
 );
@@ -1639,6 +1814,7 @@ impl PollTargetDisposition {
             Self::Malformed => Domain::Malformed,
             Self::RemotelyDeleted => Domain::RemotelyDeleted,
             Self::HistoryUnknown => Domain::HistoryUnknown,
+            Self::Unpublished => Domain::Unpublished,
             Self::NotReached => Domain::NotReached,
         }
         .guidance()
@@ -1815,7 +1991,9 @@ impl MutationDataDto {
             | Self::PollPolicy(_)
             // A poll's report names no host; a host it stopped for is reported
             // as a synchronization's is.
-            | Self::Poll(_) => None,
+            | Self::Poll(_)
+            // A history resolution never reaches the host.
+            | Self::ResolveHistory(_) => None,
         }
     }
 
@@ -1906,6 +2084,9 @@ impl MutationDataDto {
                 } else {
                     SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
                 }
+            }
+            Command::ItemResolveHistory | Command::RemoteResolveHistory => {
+                ItemResolveHistoryMutationDto::from_stored(stored).map(Self::ResolveHistory)
             }
             // A resume reports data only of a synchronization it took
             // up: the host that synchronization stopped for, or the

@@ -662,6 +662,36 @@ fn an_unknown_remote_context_polls_once() {
     );
 }
 
+/// Unknown from evidence is the owner's repair, which a poll can't settle;
+/// next to blockers a poll reads, the poll still comes first.
+#[test]
+fn unresolved_history_resolves() {
+    use LifecycleBlocker::{
+        ContextMissing, HistoryUnknown, HistoryUnresolved, PrimaryAheadOfRemote, PrimaryDirty,
+        PrimaryMissing,
+    };
+    for (blockers, expected) in [
+        (vec![HistoryUnresolved], vec![ResolveHistory, Inspect]),
+        (
+            vec![ContextMissing, HistoryUnresolved],
+            vec![ResolveHistory, Inspect],
+        ),
+        (
+            vec![PrimaryMissing, HistoryUnresolved],
+            vec![PollOnce, ResolveHistory, Inspect],
+        ),
+        (
+            vec![PrimaryAheadOfRemote, HistoryUnresolved],
+            vec![PollOnce, SharePrimary, ResolveHistory, Inspect],
+        ),
+        // Unknown from push proof or a published branch: the poll as ever.
+        (vec![HistoryUnknown], vec![PollOnce, Inspect]),
+        (vec![HistoryUnresolved, PrimaryDirty], vec![Inspect]),
+    ] {
+        assert_eq!(ticket_prepare(blockers.clone()), expected, "{blockers:?}");
+    }
+}
+
 /// The first rule that applies wins, in the CLI's order: the poll before the
 /// save, the save only alone, the repair after both; at execute, a closure's
 /// refused merge before a child's conflict.
