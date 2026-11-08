@@ -148,10 +148,8 @@ pub use dto::{
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
 pub(crate) use observe::absent_token;
-/// For the closed-ticket guard's tests: the code a refused domain write
-/// reports.
-#[cfg(test)]
-pub(super) use outcome::repository_error_code;
+// The codes a refused domain write and a transport stop report: the closed-ticket
+// guard's tests read the first, and `remote history` answers with both.
 pub(crate) use outcome::{repository_error_code, ssh_transport_error_code};
 pub use progress::{CancellationToken, NoProgress, ProgressEvent, ProgressSink, ProgressStage};
 use records::RequestRecord;

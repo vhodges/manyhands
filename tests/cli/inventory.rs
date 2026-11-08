@@ -382,7 +382,7 @@ fn the_catalog_and_the_rfc_taxonomies_name_the_same_verbs() {
         extra.is_empty(),
         "in an RFC table, not catalogued: {extra:?}"
     );
-    assert_eq!(catalogued.len(), 77);
+    assert_eq!(catalogued.len(), 80);
 }
 
 #[test]
