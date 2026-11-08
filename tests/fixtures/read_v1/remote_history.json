@@ -10,7 +10,8 @@
         "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
         "choices": {
           "publish": true,
-          "release": true
+          "release": true,
+          "republish": false
         },
         "disposition": "history_unknown",
         "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
@@ -27,7 +28,8 @@
         "branch": "manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FD0",
         "choices": {
           "publish": false,
-          "release": false
+          "release": false,
+          "republish": false
         },
         "disposition": "diverged",
         "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FD0",

@@ -56,6 +56,14 @@ fn resolve_line(root: &str, item: &str) -> String {
     )
 }
 
+fn republish_line(root: &str, item: &str) -> String {
+    format!(
+        "manyhands-cli item republish --repo {} --id {} --prepare",
+        quoted(root),
+        field(item)
+    )
+}
+
 fn sync_line(root: &str, item: &str) -> String {
     format!(
         "manyhands-cli item sync --repo {} --id {}",
@@ -105,6 +113,9 @@ fn relation(entry: &RemoteHistoryEntryDto) -> String {
 /// The CLI can only publish; a release is the desktop's, so the listing says
 /// so beside it (the JSON keeps both choices).
 fn choices(entry: &RemoteHistoryEntryDto) -> String {
+    if entry.choices.republish {
+        return "  choices=republish (release: desktop only)".to_owned();
+    }
     match (entry.choices.publish, entry.choices.release) {
         (true, true) => "  choices=publish (release: desktop only)".to_owned(),
         (true, false) => "  choices=publish".to_owned(),
@@ -146,10 +157,15 @@ pub(crate) fn report(root: &str, data: &RemoteHistoryDto) -> render::Human {
     let offered: Vec<&RemoteHistoryEntryDto> = data
         .entries
         .iter()
-        .filter(|entry| !entry.resolved && entry.choices.publish)
+        .filter(|entry| !entry.resolved && (entry.choices.publish || entry.choices.republish))
         .collect();
     for entry in &offered {
-        stdout.push_str(&format!("next: {}\n", resolve_line(root, &entry.item_id)));
+        let line = if entry.choices.republish {
+            republish_line(root, &entry.item_id)
+        } else {
+            resolve_line(root, &entry.item_id)
+        };
+        stdout.push_str(&format!("next: {line}\n"));
     }
     if !offered.is_empty() {
         notes.push(RELEASE_NOTE.to_owned());

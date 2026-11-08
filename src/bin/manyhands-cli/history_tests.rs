@@ -30,6 +30,7 @@ fn entry(item: &str) -> RemoteHistoryEntryDto {
         choices: RemoteHistoryChoicesDto {
             publish: true,
             release: true,
+            republish: false,
         },
     }
 }
@@ -54,6 +55,7 @@ fn the_report_lists_each_context_and_the_commands_that_resolve_it() {
         choices: RemoteHistoryChoicesDto {
             publish: false,
             release: false,
+            republish: false,
         },
         ..entry(OTHER)
     };
@@ -72,6 +74,30 @@ fn the_report_lists_each_context_and_the_commands_that_resolve_it() {
                 ),
             ],
             vec!["remote resolve-history"],
+        ),
+        (
+            "absent, a tracking ref left by an earlier fetch",
+            data(
+                vec![RemoteHistoryEntryDto {
+                    tracking_ref_exists: true,
+                    choices: RemoteHistoryChoicesDto {
+                        publish: false,
+                        release: true,
+                        republish: true,
+                    },
+                    ..entry(ITEM)
+                }],
+                false,
+            ),
+            vec![
+                format!(
+                    "{ITEM}  ticket  manyhands/ticket/{ITEM}  absent  local-only  history_unknown  unresolved  choices=republish (release: desktop only)\n"
+                ),
+                format!(
+                    "next: manyhands-cli item republish --repo '{ROOT}' --id {ITEM} --prepare\n"
+                ),
+            ],
+            vec!["item resolve-history"],
         ),
         (
             "present and resolved",

@@ -2805,6 +2805,7 @@ fn remote_history_matches_its_schema_and_golden() {
                 choices: RemoteHistoryChoices {
                     publish: true,
                     release: true,
+                    republish: false,
                 },
             },
             RemoteHistoryEntry {

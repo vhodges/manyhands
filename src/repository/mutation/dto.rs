@@ -462,6 +462,7 @@ contract_enum!(
 pub struct RemoteHistoryChoicesDto {
     pub publish: bool,
     pub release: bool,
+    pub republish: bool,
 }
 
 /// One context `remote history` lists: unresolved, or resolved by the poll it
@@ -529,6 +530,7 @@ impl From<&crate::repository::RemoteHistoryReport> for RemoteHistoryDto {
                     choices: RemoteHistoryChoicesDto {
                         publish: entry.choices.publish,
                         release: entry.choices.release,
+                        republish: entry.choices.republish,
                     },
                 })
                 .collect(),

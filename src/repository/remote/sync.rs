@@ -7304,6 +7304,33 @@ impl RepositoryService {
                 deletion,
                 last_published: None,
             };
+            // History lost (a row, or the cache-loss flag) but a tracking ref
+            // says a fetch once saw the branch, and a current batch does not
+            // advertise it now: a deletion, last published at the tracking ref.
+            let lost_then_gone = if fetched
+                .as_ref()
+                .is_none_or(|(state, _)| state == "history_unknown")
+            {
+                let snapshot = state::read_snapshot(tx, id)?;
+                let target = plan.context(kind, item_id);
+                if snapshot.fetch_publication_evidence_for(kind, item_id)
+                    == RemotePublicationEvidence::HistoryUnknown
+                    && snapshot.has_current_batch()
+                    && !snapshot
+                        .observations()
+                        .iter()
+                        .any(|observation| observation.remote_ref() == Some(target.remote_ref()))
+                {
+                    git2::Repository::open(root)
+                        .map_err(|_| state::recovery_required())?
+                        .refname_to_id(target.tracking_ref())
+                        .ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             Ok(match (boundary, fetched) {
                 (Some(PushAbsenceBoundary::Ambiguous), _) => none(DeletionEvidence::Ambiguous),
                 (Some(PushAbsenceBoundary::Unknown), _) => none(DeletionEvidence::Unknown),
@@ -7325,6 +7352,10 @@ impl RepositoryService {
                 {
                     none(DeletionEvidence::None)
                 }
+                (None, _) if lost_then_gone.is_some() => RepublishEvidence {
+                    deletion: DeletionEvidence::Fetched,
+                    last_published: lost_then_gone,
+                },
                 (Some(PushAbsenceBoundary::Deleted), _) => RepublishEvidence {
                     deletion: DeletionEvidence::Pushed,
                     last_published: proven,

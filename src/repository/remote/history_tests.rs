@@ -57,6 +57,7 @@ struct Want {
     counts: Option<(usize, usize)>,
     publish: bool,
     release: bool,
+    republish: bool,
     disposition: Option<PollDisposition>,
 }
 
@@ -80,6 +81,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 counts: None,
                 publish: true,
                 release: true,
+                republish: false,
                 disposition: None,
             },
         ),
@@ -99,6 +101,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 counts: None,
                 publish: false,
                 release: true,
+                republish: true,
                 disposition: None,
             },
         ),
@@ -118,6 +121,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 counts: Some((0, 0)),
                 publish: false,
                 release: false,
+                republish: false,
                 disposition: Some(PollDisposition::Current),
             },
         ),
@@ -137,6 +141,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 counts: Some((2, 0)),
                 publish: false,
                 release: false,
+                republish: false,
                 disposition: Some(PollDisposition::LocalAhead),
             },
         ),
@@ -156,6 +161,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 counts: Some((0, 1)),
                 publish: false,
                 release: false,
+                republish: false,
                 disposition: Some(PollDisposition::Dirty),
             },
         ),
@@ -175,6 +181,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 counts: Some((1, 1)),
                 publish: false,
                 release: false,
+                republish: false,
                 disposition: Some(PollDisposition::Diverged),
             },
         ),
@@ -194,6 +201,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 counts: None,
                 publish: true,
                 release: true,
+                republish: false,
                 disposition: None,
             },
         ),
@@ -213,6 +221,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 counts: Some((0, 0)),
                 publish: false,
                 release: false,
+                republish: false,
                 disposition: Some(PollDisposition::FastForwarded),
             },
         ),
@@ -232,6 +241,7 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 counts: None,
                 publish: false,
                 release: false,
+                republish: false,
                 disposition: Some(PollDisposition::NotReached),
             },
         ),
@@ -374,7 +384,8 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
             entry.choices,
             RemoteHistoryChoices {
                 publish: want.publish,
-                release: want.release
+                release: want.release,
+                republish: want.republish
             },
             "{name} choices"
         );

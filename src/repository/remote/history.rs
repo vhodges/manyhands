@@ -39,6 +39,9 @@ pub enum RemoteHistoryRelation {
 pub struct RemoteHistoryChoices {
     pub publish: bool,
     pub release: bool,
+    /// Unknown, absent, and a tracking ref says it was published: `item
+    /// republish` follows, not a first publication.
+    pub republish: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -301,6 +304,7 @@ impl RepositoryService {
                     // republish, not first publication.
                     publish: offered && !tracking_ref_exists,
                     release: offered,
+                    republish: !resolved && advertised.is_none() && tracking_ref_exists,
                 },
             });
         }

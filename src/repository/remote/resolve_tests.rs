@@ -537,3 +537,78 @@ fn the_marker_outlives_a_repair_while_another_repository_is_flagged() {
         }
     }
 }
+
+/// A context whose history was lost and whose tracking ref says a fetch once
+/// saw it is a deletion for `item republish` once a current batch lacks it,
+/// last published at the tracking ref.
+#[test]
+fn republish_reads_lost_history_with_a_tracking_ref_and_a_current_batch_as_a_deletion() {
+    use super::sync::DeletionEvidence::{Fetched, None as NoDeletion};
+    // (case, flag, row, a current batch, a tracking ref, deleted)
+    let cases = [
+        (
+            "unknown row, batch, tracking ref",
+            false,
+            Some("history_unknown"),
+            true,
+            true,
+            true,
+        ),
+        (
+            "cache loss, batch, tracking ref",
+            true,
+            None,
+            true,
+            true,
+            true,
+        ),
+        (
+            "no current batch",
+            false,
+            Some("history_unknown"),
+            false,
+            true,
+            false,
+        ),
+        (
+            "no tracking ref",
+            false,
+            Some("history_unknown"),
+            true,
+            false,
+            false,
+        ),
+        ("history known", false, None, true, true, false),
+    ];
+    for (name, flag, row, batch, track, deleted) in cases {
+        let f = Fixture::new();
+        f.lose_history(flag, row);
+        if batch {
+            f.batch(&[], 100);
+        }
+        if track {
+            f.track();
+        }
+        let evidence = f
+            .service
+            .republish_evidence(f.root.path(), AuthoringKind::Ticket, &item())
+            .unwrap();
+        assert_eq!(evidence.deleted(), deleted, "{name}");
+        if deleted {
+            assert_eq!(evidence.deletion, Fetched, "{name}");
+            assert_eq!(
+                evidence.last_published,
+                f.git()
+                    .refname_to_id(
+                        Fixture::plan()
+                            .context(AuthoringKind::Ticket, &item())
+                            .tracking_ref()
+                    )
+                    .ok(),
+                "{name} last published"
+            );
+        } else {
+            assert_eq!(evidence.deletion, NoDeletion, "{name}");
+        }
+    }
+}

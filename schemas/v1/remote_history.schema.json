@@ -132,13 +132,18 @@
             "additionalProperties": false,
             "required": [
               "publish",
-              "release"
+              "release",
+              "republish"
             ],
             "properties": {
               "publish": {
                 "type": "boolean"
               },
               "release": {
+                "type": "boolean"
+              },
+              "republish": {
+                "description": "The remote lacks a branch a tracking ref says it once had: item republish, not a first publication.",
                 "type": "boolean"
               }
             }
