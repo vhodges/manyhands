@@ -23,6 +23,7 @@ pushes.
 | 5 | done | 21ac5032 | cf100915 | approved | migration `remote_history_per_context_v1`; carry requires kept rows' refs to match the new plan (Task 3 should-fix) |
 | 6 | done | ef45f239 | 946623a5 | approved on re-review | `remote_history` over the full manual poll; `RemoteHistoryError`; caller-supplied operation, request and token |
 | 7 | done | 8fe524c6 | da7c8118 | approved on re-review | `item resolve-history`, plus the repository-level `remote resolve-history`; `mutation_contract` red only on missing goldens (Task 9) |
+| 8 | done | 651774aa | f457e894 | approved on re-review | terminal `HistoryUnresolved`; `remote.history` recovery; `ResolveHistory` way out; refusal-blocker CHECK bounds widened, with rebuilds |
 
 ## Test Filters (Task 0)
 
@@ -267,3 +268,51 @@ All commands passed:
   - the "undeletable marker" test builds an *invalid* marker (a directory),
     so it should be renamed;
   - `target()` returns an empty string for the repository-wide verb.
+
+## Task 8 Results
+
+- Commits: `3fa4750a` (the change) and `f457e894` (review fixes).
+- Tests, all passed:
+  - `closure::`, `promotion::`, `mutation` and `remote::sync::tests`: 709;
+  - `--test read_contract` 72;
+  - `--test mutation_contract`: only the known missing golden fails;
+  - clippy, fmt and `check --tests` clean.
+- **What changed:**
+  - **Sync.** Evidence-based unknown is the terminal
+    `SynchronizationError::HistoryUnresolved`. `ended_if_unresolved` cancels
+    and acknowledges, as the `ExternalChange` and `PushRejected` arms do,
+    which ends the record and releases the reservation. It is skipped when a
+    push was intended, or for a lifecycle child owner. The answer is
+    `recovery_required` with recovery `[remote.history]` and no
+    `request.retry`. Push-proof unknown keeps `HistoryUnknown`: resumable,
+    with `poll once`.
+  - **Recovery kind.** New `RecoveryActionKind::RemoteHistory`
+    (`remote.history`, argument `root`), added to the schema.
+  - **Lifecycle.** New `PromotionBlocker`, `ClosureBlocker` and
+    `LifecycleBlocker::HistoryUnresolved`, appended last, plus
+    `LifecycleWayOut::ResolveHistory`. `ObservedPublished` with no deletion
+    seen stays `HistoryUnknown` and `PollOnce`.
+- **Review finding (blocking, fixed).** The stored refusal masks' CHECK
+  bounds rejected the new bits. They are widened to 131071 (promotion) and
+  4194303 (closure), with marker-gated table rebuilds
+  `promotion_refusal_blockers_v2` and `closure_refusal_blockers_v2`, each
+  with its own rebuild test.
+- **Named edits:**
+  - closure `blocker_mask_round_trips_all_21` became `…_all_22`;
+  - new promotion `…_all_17`;
+  - promotion `schema_rejects_…` now uses 131072;
+  - closure `history_unknown` and promotion `remote_history_unknown` now
+    expect `HistoryUnresolved`;
+  - closure `every_blocker_has_a_distinct_fixed_position`.
+  - The plan's `c5_lifecycle.rs:3235` doesn't exist.
+- **Known limit (accepted).** A replayed final result recomputes recovery
+  from the code and shows `repo.inspect`, not `remote.history`. Fixing it
+  would need a new stored field.
+- **Placeholders for Task 9 (CLI) and Task 10 (desktop):**
+  - `human_lifecycle.rs` renders `ResolveHistory` and replaces the
+    `UNKNOWN_NOTE` text;
+  - desktop `operations.rs` maps `RemoteHistory` to Inspect;
+  - lifecycle `outcome.rs` and `prepare.rs` have their own placeholders;
+  - `tests/comment_publication.rs` gained two match arms.
+- A record that looks Cancelled to other readers, while the request answers
+  `recovery_required`, matches the existing `ExternalChange` behaviour.
