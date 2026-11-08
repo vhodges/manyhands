@@ -140,7 +140,12 @@ fn retirement_batch_absence_preserves_retirement_and_publication_consumes_it_ato
 }
 
 #[test]
-fn retirement_does_not_weaken_unknown_never_published_row_invariant() {
+fn an_explicit_never_published_row_is_accepted_under_the_cache_loss_flag() {
+    // Named edit (item resolve-history): the old rule rejected a
+    // `never_published` row while the flag was set, which left no way to
+    // record an owner's resolution before the last one clears the flag. An
+    // explicit row is a creation or owner resolution and is safe; contexts
+    // with no row stay unknown under the flag.
     let (data, root, service) = fixture();
     with_transaction(&service, root.path(), |tx, id| {
         configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)
@@ -152,10 +157,15 @@ fn retirement_does_not_weaken_unknown_never_published_row_invariant() {
     seed_retirement(&db, AuthoringKind::Ticket, ITEM);
     let target = plan().context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
     db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'never_published','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM]).unwrap();
-    assert!(service.remote_snapshot(root.path()).is_err());
-    assert!(
-        matches!(RepositoryService::open_at(data.path()),Err(e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+    let item: ItemId = ITEM.parse().unwrap();
+    assert_eq!(
+        service
+            .remote_snapshot(root.path())
+            .unwrap()
+            .fetch_publication_evidence_for(AuthoringKind::Ticket, &item),
+        RemotePublicationEvidence::NeverPublished
     );
+    RepositoryService::open_at(data.path()).unwrap();
 }
 
 #[test]
@@ -4057,9 +4067,12 @@ fn evidence_defaults_by_flag_and_rows() {
                     seed_retirement(&db, ticket, ITEM);
                 }
                 let case = format!("flag={flag} row={row:?} retired={retired}");
-                let accepted = !(flag && row == Some("never_published"));
+                // A `never_published` row is the owner's or the creation's
+                // explicit resolution (`item resolve-history`), so it is
+                // accepted under the cache-loss flag too; only contexts with
+                // no row read unknown under the flag.
                 let snapshot = read_snapshot(&db, 1);
-                assert_eq!(snapshot.is_ok(), accepted, "{case} accepted");
+                assert!(snapshot.is_ok(), "{case} accepted");
                 if let Ok(snapshot) = snapshot {
                     let expected = match row {
                         Some("never_published") => RemotePublicationEvidence::NeverPublished,

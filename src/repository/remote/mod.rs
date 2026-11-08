@@ -4,6 +4,7 @@ mod merge;
 pub(super) mod observation;
 mod poll;
 mod refs;
+pub(super) mod resolve;
 pub(super) mod sync;
 pub use conflict_read::{
     ConflictDto, ConflictPathDto, ConflictPathKind, ConflictPathStructure, ConflictReadEligibility,
@@ -35,6 +36,8 @@ pub use sync::{
 #[cfg(test)]
 pub(crate) mod observation_tests;
 pub(super) mod reservation;
+#[cfg(test)]
+pub(crate) mod resolve_tests;
 pub(super) mod state;
 
 pub use reservation::{

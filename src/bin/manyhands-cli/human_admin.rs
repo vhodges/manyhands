@@ -105,6 +105,7 @@ pub fn preview(preview: &PreviewDto) -> String {
         PreviewDetailsDto::Host(d) => fields(d),
         PreviewDetailsDto::Repair(d) => fields(d),
         PreviewDetailsDto::Republish(d) => fields(d),
+        PreviewDetailsDto::ResolveHistory(d) => fields(d),
         PreviewDetailsDto::Lifecycle(d) => lifecycle_details(d),
     };
     let mut out = format!("Preview of {}\n{details}", field(&preview.command));
@@ -179,6 +180,7 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::SourceWritten => "write the corrected source",
         PreviewEffect::CheckpointCommitted => "commit the checkpoint",
         PreviewEffect::BranchRepublished => "push the deleted branch again at the local commit",
+        PreviewEffect::HistoryResolved => "record the context as never published",
         PreviewEffect::ContextSynchronized => "synchronize the editing branch with the remote",
         PreviewEffect::ClosureRecorded => "record the closure on the editing branch",
         PreviewEffect::PrimaryIntegrated => "merge the editing branch into primary",

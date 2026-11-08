@@ -138,6 +138,11 @@ contract_enum!(
     /// moves, and the next synchronization of the item integrates
     /// primary.
     ///
+    /// `history_resolved` is a context whose publication history was
+    /// unknown recorded as never published, so that the next
+    /// synchronization of the item may publish it. Nothing is pushed or
+    /// fetched, and no branch moves.
+    ///
     /// `context_synchronized` to `branch_deleted` are a promotion's and a
     /// closure's, in order, each listed when the preview plans it:
     /// `context_synchronized` is the editing branch synchronized with the
@@ -173,6 +178,7 @@ contract_enum!(
         SourceWritten => "source_written",
         CheckpointCommitted => "checkpoint_committed",
         BranchRepublished => "branch_republished",
+        HistoryResolved => "history_resolved",
         ContextSynchronized => "context_synchronized",
         ClosureRecorded => "closure_recorded",
         PrimaryIntegrated => "primary_integrated",
@@ -240,6 +246,7 @@ pub enum PreviewDetailsDto {
     Host(HostPreviewDto),
     Repair(RepairPreviewDto),
     Republish(ItemRepublishPreviewDto),
+    ResolveHistory(ItemResolveHistoryPreviewDto),
     Lifecycle(Box<LifecyclePreviewDto>),
 }
 
@@ -385,6 +392,61 @@ pub struct ItemRepublishPreviewDto {
     pub last_published_oid: Option<String>,
     /// The local commit the branch will be published at: its tip.
     pub local_oid: String,
+}
+
+/// What a preview of `item resolve-history` shows: the context whose
+/// publication history is unknown, and what the latest complete fetch says
+/// of it. It holds names and commits and no content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ItemResolveHistoryPreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    /// The branch, as its short name.
+    pub branch: String,
+    /// The local tip of the branch. Null when the branch has no local ref.
+    pub local_oid: Option<String>,
+    /// Whether the context's remote-tracking ref exists locally.
+    pub tracking_ref_exists: bool,
+    /// Whether the repository-wide cache-loss flag is set; the last
+    /// resolution clears it.
+    pub cache_loss: bool,
+}
+
+contract_enum!(
+    /// What became of the cache-loss marker file once a resolution cleared
+    /// the flag: `not_applicable` when the flag was not cleared, `removed`,
+    /// `absent` when there was no file, and `failed` when it could not be
+    /// deleted (the resolution stands).
+    HistoryMarkerState {
+        NotApplicable => "not_applicable",
+        Removed => "removed",
+        Absent => "absent",
+        Failed => "failed",
+    }
+);
+
+/// What `item resolve-history` reports: the context is recorded as never
+/// published, and whether that cleared the cache-loss flag. `item sync` is
+/// what publishes it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ItemResolveHistoryMutationDto {
+    pub cache_loss_cleared: bool,
+    pub marker: HistoryMarkerState,
+}
+
+impl ItemResolveHistoryMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let marker = stored.get("marker")?.as_str()?;
+        Some(Self {
+            cache_loss_cleared: stored.get("cache_loss_cleared")?.as_bool()?,
+            marker: HistoryMarkerState::ALL
+                .into_iter()
+                .find(|known| known.as_str() == marker)?,
+        })
+    }
 }
 
 /// What a preview of `document repair` or `ticket repair` shows: the
@@ -726,6 +788,7 @@ pub enum MutationDataDto {
     Lifecycle(Box<LifecycleMutationDto>),
     PollPolicy(PollPolicyMutationDto),
     Poll(PollMutationDto),
+    ResolveHistory(ItemResolveHistoryMutationDto),
 }
 
 contract_enum!(
@@ -1817,7 +1880,9 @@ impl MutationDataDto {
             | Self::PollPolicy(_)
             // A poll's report names no host; a host it stopped for is reported
             // as a synchronization's is.
-            | Self::Poll(_) => None,
+            | Self::Poll(_)
+            // A history resolution never reaches the host.
+            | Self::ResolveHistory(_) => None,
         }
     }
 
@@ -1908,6 +1973,9 @@ impl MutationDataDto {
                 } else {
                     SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
                 }
+            }
+            Command::ItemResolveHistory => {
+                ItemResolveHistoryMutationDto::from_stored(stored).map(Self::ResolveHistory)
             }
             // A resume reports data only of a synchronization it took
             // up: the host that synchronization stopped for, or the

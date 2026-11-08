@@ -702,6 +702,12 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
             put("Last published", republish.last_published_oid.clone());
             put("Local commit", Some(republish.local_oid.clone()));
         }
+        // No desktop path asks the boundary for this preview yet (the
+        // repair sheet is a follow-on ticket).
+        PreviewDetailsDto::ResolveHistory(resolve) => {
+            put("Branch", Some(resolve.branch.clone()));
+            put("Local commit", resolve.local_oid.clone());
+        }
         // No desktop path asks the boundary for this preview yet (D5, D6).
         PreviewDetailsDto::Lifecycle(lifecycle) => {
             put("Branch", Some(lifecycle.branch.clone()));

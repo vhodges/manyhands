@@ -54,6 +54,35 @@ pub enum LifecycleWayOut {
     Inspect,
 }
 
+/// The verb that follows an answer of `item resolve-history`. The values
+/// carry no text: each front end words them, as for [`LifecycleWayOut`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HistoryWayOut {
+    /// `context release` of the item: `release` is no choice of the verb
+    /// (Decision 2).
+    ReleaseContext { item_id: String },
+    /// `item republish` of the item, whose published branch the remote
+    /// deleted. Resolving never stands in for its consent.
+    Republish { item_id: String },
+    /// `item sync` of the item, which publishes it or integrates what the
+    /// remote has.
+    Sync { item_id: String },
+}
+
+/// The way out of an answer of `item resolve-history`, from its code alone:
+/// a refused `release`, a deleted branch, a context already resolved or
+/// present on the remote, and a resolution that was made. Nothing for any
+/// other code.
+pub fn resolve_history_way_out(code: ResultCode, item_id: &str) -> Option<HistoryWayOut> {
+    let item_id = item_id.to_owned();
+    match code {
+        ResultCode::InvalidInput => Some(HistoryWayOut::ReleaseContext { item_id }),
+        ResultCode::RemoteBranchDeleted => Some(HistoryWayOut::Republish { item_id }),
+        ResultCode::Ok | ResultCode::AlreadyApplied => Some(HistoryWayOut::Sync { item_id }),
+        _ => None,
+    }
+}
+
 /// The way out of a result of `document promote`, `ticket close` or an
 /// `operation resume` that continued one. Nothing for an answer with no
 /// lifecycle data.

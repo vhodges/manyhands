@@ -85,6 +85,7 @@ use bind::{
     repo_identity::RepoIdentityBinding,
     repo_remove::RepoRemoveBinding,
     republish::ItemRepublishBinding,
+    resolve_history::ItemResolveHistoryBinding,
     resume::OperationResumeBinding,
     sync::SyncBinding,
     ticket::{SlugAssignBinding, TicketBinding},
@@ -111,6 +112,7 @@ pub use bind::{
     repo_identity::RepoIdentitySetInput,
     repo_remove::RepoRemoveInput,
     republish::ItemRepublishInput,
+    resolve_history::{ItemResolveHistoryInput, ResolveHistoryChoice},
     resume::OperationResumeInput,
     sync::{ItemSyncInput, RepoSyncInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
@@ -120,22 +122,24 @@ pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
     CancelDto, CommentMutationDto, CommentMutationType, CommentPendingReason, ConflictNextAction,
     ConflictNextDto, ConflictResolutionMutationDto, ConflictResolutionMutationType,
-    ContextMutationDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
-    HostReplacementDto, IdentityMutationDto, IdentityPreviewDto, ItemRepublishPreviewDto,
-    KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState, KeyMutationDto,
-    LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupPendingReason, LifecycleCleanupState,
-    LifecycleIntegrationKind, LifecycleMadeReadyDto, LifecycleMadeReadyState, LifecycleMutationDto,
-    LifecycleMutationType, LifecyclePathChangeDto, LifecyclePathChangeKind,
-    LifecyclePlannedCleanupDto, LifecyclePlannedClosureDto, LifecyclePlannedIntegration,
-    LifecyclePlannedPublication, LifecyclePreviewDto, LifecyclePublicationPendingReason,
-    LifecyclePublicationState, LifecycleRecording, LocalIdentityDto, MutationDataDto,
-    OperationAbandonPreviewDto, OperationMutationDto, PollMutationCompletion, PollMutationDto,
-    PollPolicyMutationDto, PollTargetDisposition, PollTargetDto, PrepareDataDto, PreviewDetailsDto,
-    PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
-    RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto, RepairPreviewDto,
-    RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
-    RequestResultDto, RequestState, SynchronizationConflictMutationDto,
-    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
+    ContextMutationDto, DocumentMutationDto, HistoryMarkerState, HostMutationDto,
+    HostObservationDto, HostPreviewDto, HostReplacementDto, IdentityMutationDto,
+    IdentityPreviewDto, ItemRepublishPreviewDto, ItemResolveHistoryMutationDto,
+    ItemResolveHistoryPreviewDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
+    KeyMutationDto, LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupPendingReason,
+    LifecycleCleanupState, LifecycleIntegrationKind, LifecycleMadeReadyDto,
+    LifecycleMadeReadyState, LifecycleMutationDto, LifecycleMutationType, LifecyclePathChangeDto,
+    LifecyclePathChangeKind, LifecyclePlannedCleanupDto, LifecyclePlannedClosureDto,
+    LifecyclePlannedIntegration, LifecyclePlannedPublication, LifecyclePreviewDto,
+    LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
+    LocalIdentityDto, MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto,
+    PollMutationCompletion, PollMutationDto, PollPolicyMutationDto, PollTargetDisposition,
+    PollTargetDto, PrepareDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto,
+    PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto,
+    RepairMutationDto, RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto,
+    RequestDto, RequestOperationDto, RequestResultDto, RequestState,
+    SynchronizationConflictMutationDto, SynchronizationConflictType, SynchronizationMutationDto,
+    TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -148,7 +152,10 @@ pub use progress::{CancellationToken, NoProgress, ProgressEvent, ProgressSink, P
 use records::RequestRecord;
 pub(super) use records::migrate as migrate_request_tables;
 pub(super) use records::{operation_owner, release_operation_owner};
-pub use way_out::{LifecycleWayOut, lifecycle_prepare_way_out, lifecycle_way_out};
+pub use way_out::{
+    HistoryWayOut, LifecycleWayOut, lifecycle_prepare_way_out, lifecycle_way_out,
+    resolve_history_way_out,
+};
 
 /// What the service reads the time from when it times a record. Tests
 /// inject one to move time; everything else uses `SystemClock`.
@@ -435,6 +442,7 @@ pub enum Mutation {
     CommentAdd(CommentAddInput),
     ConflictResolve(ConflictResolveInput),
     ItemRepublish(ItemRepublishInput),
+    ItemResolveHistory(ItemResolveHistoryInput),
     DocumentCreate(DocumentCreateInput),
     DocumentSave(DocumentSaveInput),
     DocumentMove(DocumentMoveInput),
@@ -488,6 +496,7 @@ impl Mutation {
             Self::CommentAdd(_) => Command::CommentAdd,
             Self::ConflictResolve(_) => Command::ConflictResolve,
             Self::ItemRepublish(_) => Command::ItemRepublish,
+            Self::ItemResolveHistory(_) => Command::ItemResolveHistory,
             Self::DocumentCreate(_) => Command::DocumentCreate,
             Self::DocumentSave(_) => Command::DocumentSave,
             Self::DocumentMove(_) => Command::DocumentMove,
@@ -539,6 +548,9 @@ impl Mutation {
             | Self::CommentAdd(_)
             | Self::ConflictResolve(_) => None,
             Self::ItemRepublish(input) => Some(Box::new(ItemRepublishBinding::from(input.clone()))),
+            Self::ItemResolveHistory(input) => {
+                Some(Box::new(ItemResolveHistoryBinding::from(input.clone())))
+            }
             Self::RepoCreate(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
@@ -591,6 +603,7 @@ impl Mutation {
             Self::CommentAdd(input) => Box::new(CommentAddBinding::from(input)),
             Self::ConflictResolve(input) => Box::new(ConflictResolveBinding::from(input)),
             Self::ItemRepublish(input) => Box::new(ItemRepublishBinding::from(input)),
+            Self::ItemResolveHistory(input) => Box::new(ItemResolveHistoryBinding::from(input)),
             Self::DocumentCreate(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentSave(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentMove(input) => Box::new(DocumentBinding::from(input)),

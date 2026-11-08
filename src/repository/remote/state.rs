@@ -2454,6 +2454,71 @@ fn insert_unknown_context_rows(
     Ok(())
 }
 
+/// The owner's resolution of one context (`item resolve-history`): its row
+/// becomes `('never_published','history_unknown')` under `plan`'s refs. An
+/// explicit `never_published` row is a creation or owner resolution and is
+/// safe while the cache-loss flag is set; contexts with no row stay unknown
+/// under the flag. The registry's plan must be `plan`.
+pub(in super::super) fn record_context_resolved(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    plan: &RemoteRefPlan,
+    kind: AuthoringKind,
+    item_id: &ItemId,
+) -> Result<(), RepositoryError> {
+    if read_policy(transaction, repository_id)?.plan.as_ref() != Some(plan) {
+        return Err(recovery_required());
+    }
+    let target = plan.context(kind, item_id);
+    let now = OffsetDateTime::now_utc().unix_timestamp().max(0);
+    transaction.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(?1,?2,?3,?4,?5,'never_published','history_unknown',?6) ON CONFLICT(repository_id,remote_ref) DO UPDATE SET publication_evidence='never_published',state='history_unknown',last_advertised_oid=NULL,tracking_oid=NULL,observed_at=excluded.observed_at",
+        params![repository_id,target.remote_ref(),target.tracking_ref(),crate::repository::authoring_kind_segment(&kind),item_id.to_string(),now]).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+/// Clears the cache-loss flag when no context still reads unknown: no row
+/// says so, and no active context without a row is unknown under the flag.
+/// Returns whether the flag was set and is now clear.
+pub(in super::super) fn clear_cache_loss_when_resolved(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+) -> Result<bool, RepositoryError> {
+    let snapshot = read_snapshot(transaction, repository_id)?;
+    if !snapshot.history_unknown {
+        return Ok(false);
+    }
+    if snapshot.contexts.iter().any(|context| {
+        context.kind.is_some()
+            && context.publication_evidence == RemotePublicationEvidence::HistoryUnknown
+    }) {
+        return Ok(false);
+    }
+    let active = transaction
+        .prepare("SELECT branch FROM contexts WHERE repository_id=?1 AND kind='active'")
+        .and_then(|mut statement| {
+            statement
+                .query_map([repository_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
+    for branch in active {
+        let (kind, item_id) =
+            crate::repository::stored_authoring_branch(&branch).ok_or_else(recovery_required)?;
+        if snapshot.fetch_publication_evidence_for(kind, &item_id)
+            == RemotePublicationEvidence::HistoryUnknown
+        {
+            return Ok(false);
+        }
+    }
+    transaction
+        .execute(
+            "UPDATE remote_polling_state SET history_unknown=0 WHERE repository_id=?1",
+            [repository_id],
+        )
+        .map_err(|_| recovery_required())?;
+    Ok(true)
+}
+
 fn configure_known(
     transaction: &Transaction<'_>,
     repository_id: i64,
@@ -6510,7 +6575,6 @@ fn read_snapshot_rows(
         if (state != RemoteContextState::HistoryUnknown)
             != (evidence == RemotePublicationEvidence::ObservedPublished)
             || (evidence == RemotePublicationEvidence::ObservedPublished) != advertised.is_some()
-            || (snapshot.history_unknown && evidence == RemotePublicationEvidence::NeverPublished)
         {
             return Err(recovery_required());
         }
