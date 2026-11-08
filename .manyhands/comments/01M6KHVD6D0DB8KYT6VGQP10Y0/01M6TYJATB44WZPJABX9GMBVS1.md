@@ -906,3 +906,68 @@ CLI units/all27 integrations including whole mutation_replay384/local-sync160/
 ten SSH targets/both smokes/final runtime-evidence reviews and owner handoff still
 owed. No later gate auto-admitted. Ticket **implementing / runtime BLOCKED**, not
 feature-complete/review-ready; retained44/D5/D6/native/combinatorial limits stand.
+
+## Follow-up — reviewed onboarding family; whole desktop1579/1 FAILED at A17 Busy — 2026-11-08 UTC
+
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**,
+then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,zero findings,
+full84e..b84 plus bounded996..b84. Both reviewed oracle audit/root freshness/
+registration predicates/assertions and library/check reuse. Controller lifted this
+final sequence's barrier, **not final runtime acceptance**. Accepted unchanged-main/
+no-op preflight; no extra fetch/merge, agents or other-worktree/main update.
+
+Test freeze **`b84bb707228ea7231ea5f255ed3e24e48cea4f3d`**, unchanged production/library
+**`64a6c2495d999916823346b8e1fec5ce9e328e4c`**, main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Two cfg-test files only, hashes33982e85/
+1fd5cfba match current scope; all production/helper/assertion/budget contracts intact.
+Current library**1530/0/160 filtered,1865.59s**, check**exit0,4.165545239s** retained NOT rerun.
+Current b84 strict Clippy**exit0,11.048345194s**, fmt**exit0,19.123687616s** reused
+NOT rerun. Onboarding-order23 manifest/entries authenticated, prior settings25 linked.
+
+Exactly once/default threads/no flags/filters/retries:
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands
+```
+
+**Exit101;1579 passed/1 failed/0 ignored/0 filtered**,**2142.63s tests**, all1580
+completions. All five reviewed onboarding cases (current3 and earlier2) passed
+in this whole run, but the binary **FAILED**. Predicate still means exact-root
+Background IndexRefresh Finished ANY outcome, not successful-refresh proof.
+Prior keyboard1579/1 at84e,2110.61s stays a separate actual failure; equal counts
+are not relabeled, and exact3/0 is never combined into whole1580/0.
+
+Only failure:
+**`desktop::view::lifecycle::privacy_consent_tests::a17_a_stranded_close_is_not_resumed_without_consent`**,
+**`src/desktop/view/lifecycle/lock_tests.rs:76:49`**, unwrap of **ReadError code Busy,
+has_source:true**, temporary fixture repo scope. Completion receipt
+**2026-11-08T02:14:02.299433Z**,sequence1314. Full error retained. This is a Busy
+read failure, **not proof of unauthorized resume/consent-policy violation**.
+Origin/cause undiagnosed; no source inspection/probe/fix/retry/expectation or
+budget change, broader await sweep, infrastructure/performance explanation.
+
+UTC**2026-11-08T01:46:53.524041Z→02:22:36.830702Z**, REALTIME2143.306660619s,
+MONOTONIC2143.306646396s, BOOTTIME2143.306646030s; sub-microsecond boot-minus-mono.
+PM-only interval query zero matches/exit1/empty stderr, **no measured suspend**.
+Raw167084 bytes/separate1668 receipts cover all bytes and1580 completions; receipt
+clocks are not test starts/internal phases. No power changes/full journal/synthetic
+waits/progress polling. Source hashes frozen; no test/runtime budget changes.
+
+**NOT RUN:**current-production CLI units/all27 integrations including whole384
+mutation_replay, selected local-sync160, all10 SSH targets, both smokes and SAME
+whole final runtime-evidence SPEC→QUALITY/controller-owner handoff. No display/
+socket/profile/app/native action. Retained44 C/L/S/essential/M1/Q1/enum/D5/D6/
+native/combinatorial limits unwaived; no all-essential/performance/root-cause fix.
+WAIT60s/GPUI15s-per-park/POLL10ms/default threads/production safety unchanged; profiling/
+optimization remains stopped. Older failed/exact/diagnostic/baseline scopes intact.
+
+New-only **`/tmp/opencode/task8-onboarding-final-*`** holds reviews/lifted+restored
+barrier/reuse/scopes/literal argv/hashes/raw/receipt/results/power/failure/coverage/
+handoff/final manifest. All31 older manifest digests preserved, no old artifact
+writes/bulk input inventory. Only ledger/current standing/this append committed
+with coauthor; original ID/parent/time/full body preserved. No ID/extra build/
+status save/source-golden-schema-dependency edit/push/PR/main/close/other-worktree/
+real profile-key-context-draft action. Known gate processes exited; no jobs.
+**FIRSTFAIL barrier restored**, controller authorization required. Ticket
+**implementing / runtime BLOCKED**, not feature-complete/review-ready; final runtime
+reviews and owner handoff remain owed.

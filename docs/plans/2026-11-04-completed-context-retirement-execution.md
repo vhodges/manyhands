@@ -14,8 +14,10 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ### Current Onboarding-Oracle Correction Standing — 2026-11-08 UTC
 
-**Controller-authorized three-case TEST-ONLY correction: targeted GREEN; source
-re-review pending, runtime BLOCKED.** Clean entry/postmerge HEAD
+**Source-reviewed onboarding correction; actual whole desktop FAILED1579/1 at
+a17 Busy, runtime BLOCKED.** Frozen test source
+**`b84bb707228ea7231ea5f255ed3e24e48cea4f3d`**. Accepted corrective preflight only;
+its clean entry/postmerge HEAD was
 **`996b6734a02adf9f37259aabb51d20d0dda876d1`**, parent/reviewed test source
 **`84e5772d809b5d0051c321e917865b5fb8909290`**. Fresh fetch and no-op merge of
 **`d70142b63a952f5e1aade369e0cd654ca9a03617`** found no new main commits/files;
@@ -29,13 +31,20 @@ keyboard action/focus check remains verbatim/in order; previous two reviewed fix
 are untouched. No helper/API/framework/other-case/production/build/limit change.
 Production/library remains **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**.
 
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**,
+then SAME whole QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,
+**zero findings**, full84e..b84 plus bounded996..b84. Controller lifted the once-
+only final sequence's barrier; no final runtime acceptance. Both reviewed audit,
+root freshness/registration/predicates/assertions and current library/check reuse.
+
 | Current evidence | Actual standing |
 | --- | --- |
-| Three changed full names, one exact desktop command | **3 passed/0 failed/1577 filtered**,2.74s tests; exit0,40.990219306s elapsed. |
-| Fresh strict all-target/all-feature locked Clippy | **exit0**,11.048345194s elapsed/10.77s Cargo. |
-| Fresh whole-tree fmt-check | **exit0**,19.123687616s elapsed. |
+| Actual whole changed desktop, once | **1579 passed/1 failed/0 ignored/0 filtered**,2142.63s tests; **exit101**,2143.306646396s monotonic. All five reviewed onboarding cases passed, binary FAILED. |
+| Previous exact three, retained targeted scope | **3 passed/0 failed/1577 filtered**,2.74s tests; not rerun or combined into a whole pass. |
+| Current strict all-target/all-feature locked Clippy | **REUSED exit0**,11.048345194s elapsed/10.77s Cargo; not rerun. |
+| Current whole-tree fmt-check | **REUSED exit0**,19.123687616s elapsed; not rerun. |
 | Unchanged library and check, retained NOT rerun | **1530/0/160 filtered**,1865.59s tests; check exit0,4.165545239s. |
-| Latest whole desktop, still FAILED at84e | **1579/1/0 filtered**,2110.61s tests; targeted3/0 is not whole1580/0. |
+| Prior whole desktop, still FAILED at84e | **1579/1/0 filtered**,2110.61s tests; keyboard failure remains distinct from current a17 failure. |
 
 Source proves the missing foreground/follow-up ordering, **not the actual historical
 Busy origin** (coordination versus SQL remains unknown), performance/clock/load/
@@ -45,13 +54,21 @@ suppression, instrumentation or profiling. Source-only family audit found only
 these three remaining gaps; it does not promise no other desktop failures.
 The complete classified map is **`/tmp/opencode/task8-onboarding-order-audit.json`**.
 
-**Next barrier:** SAME whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` THEN SAME whole
-QUALITY `ses_e4c8be2f1ffegiPUEUuB0QgyBE` before changed whole desktop/remaining gates.
+Current sole failure:
+**`desktop::view::lifecycle::privacy_consent_tests::a17_a_stranded_close_is_not_resumed_without_consent`**,
+`src/desktop/view/lifecycle/lock_tests.rs:76:49`, unwrap of **ReadError code Busy,
+has_source:true**. This records a Busy read, not proof of unauthorized resumption
+or a consent-policy violation. Cause undiagnosed; no probe/fix/retry or waiver.
+No measured suspend. Source/test hashes remained frozen throughout the command.
+
+**FIRSTFAIL barrier restored:** no later gate admitted; controller must authorize
+further execution/fix. Current library/check/current-input statics remain valid.
 CLI units/all27 integrations including whole mutation_replay384, selected local-
 sync160, ten SSH targets, both smokes and final runtime reviews/owner handoff
-remain owed. No broader gate ran. New-only **`/tmp/opencode/task8-onboarding-order-*`**
-holds receipts/hashes/source map/full delta and small manifest;30 older manifest
-digests preserved without linked-input re-inventory. Known test/static jobs exited.
+remain owed. No later gate/probe ran. New-only **`/tmp/opencode/task8-onboarding-final-*`**
+holds the actual whole run/review/reuse/receipt/power/failure/handoff data;31 older
+manifest digests preserved, onboarding-order23 correction evidence immutable.
+Known owned gate processes exited; no jobs.
 All production safety budgets, WAIT60s/GPUI15s-per-park/POLL10ms/default threads and
 retained44/D5/D6/native limits remain unchanged. Ticket **implementing / runtime
 BLOCKED**, not feature-complete/review-ready.
@@ -9803,3 +9820,109 @@ including whole mutation_replay384/local-sync160/ten SSH targets/both smokes/fin
 runtime-evidence SPEC→QUALITY and owner handoff remain owed. Retained44/M1/Q1/enum/
 D5/D6/native/combinatorial limitations stand. Ticket **implementing / runtime
 BLOCKED**, not feature-complete/review-ready.
+
+## Task 8 — Reviewed Onboarding Family: Whole Desktop Failed At A17 Busy Read
+
+### Source Approval, Accepted Preflight And Reuse — 2026-11-08 UTC
+
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**,
+then SAME whole QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,
+**zero findings**, full84e..b84 plus bounded996..b84. Both checked the bounded
+oracle-family audit, exact-root/freshness/registration prerequisites, unchanged
+assertions and library/check reuse. Controller lifted the final sequence's barrier;
+these source reviews are not final runtime acceptance. Sole gate owner, no agents.
+
+Clean frozen test source **`b84bb707228ea7231ea5f255ed3e24e48cea4f3d`**, unchanged
+production/library **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**, main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Accepted corrective implementer's
+unchanged-main/no-op fetch+merge preflight; no new fetch/merge or main/worktree
+update while frozen. Only two cfg-test paths differ from64a. Current hashes:
+
+- `src/desktop/view/keyboard_tests/settings.rs`:
+  **`33982e85c03750bdc1bbcde1fd2527528225536e5995e68d036f6e65ab9a6e89`**
+- `src/desktop/view/settings/repositories_tests.rs`:
+  **`1fd5cfba0efbb27384cdaba3a1537361b5e96dfe945655a9d7a53c0127fa8881`**
+
+Authenticated **onboarding-order23** manifest
+**`292ff5fc4c006edae90b30459161c6949ddec6e227e4509c9ec50f8f8d1176f7`** and23 entries;
+linked immutable prior settings-final25 digest
+**`bb9ffc0c313d4f0e3f240fe231b0925f26947df40e89347a40af67e66dae55a3`**.
+Fifteen relevant source/build hashes verified,31 old manifest digests snapshotted,
+no huge linked-input inventories or old artifact writes.
+
+**Current valid greens retained/reused, NOT rerun:** library**1530/0/160 filtered,
+1865.59s** and check**exit0,4.165545239s** on unchanged64a production/non-cfg(test)
+inputs; current strict Clippy**exit0,11.048345194s/10.77s Cargo** from
+`task8-onboarding-order-clippy.log`; current fmt**exit0,19.123687616s** from
+`task8-onboarding-order-fmt.log`. Both changed modules remain cfg(test), so they
+do not invalidate library/normal-check inputs. Latest exact3/0,1577 filtered,2.74s
+is targeted correction evidence only, not a whole1580 pass. All older baseline,
+failed/diagnostic/exact scopes remain unchanged.
+
+### Exactly One Whole Desktop Gate And First Failure
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands
+```
+
+**Exit101;1579 passed/1 failed/0 ignored/0 measured/0 filtered**,**2142.63s tests**.
+All1580 named completions reconciled. Default threads, no filters/retries/skips/
+diagnostic/fault/golden flags, no budgets/limits/source changes. All five reviewed
+onboarding-family cases (new3 and previous2) actually passed in this whole run;
+this is not a whole-binary green or successful-background-refresh guarantee.
+The original root-specific predicate remains Finished ANY outcome, not success.
+
+Only failure:
+**`desktop::view::lifecycle::privacy_consent_tests::a17_a_stranded_close_is_not_resumed_without_consent`**,
+**`src/desktop/view/lifecycle/lock_tests.rs:76:49`**, unwrap of
+**`ReadError { code: Busy, ... recovery: [], has_source: true }`**, with temporary
+fixture repository scope. Failure completion received
+**2026-11-08T02:14:02.299433Z**, sequence1314. Full raw message/location/receipt
+clocks retained. This observed Busy read is **not proof of an unauthorized resume
+or consent-policy violation**. Underlying origin/cause remains undiagnosed; no
+source inspection/probe, helper/await sweep, expectation relaxation, fix, retry,
+clock/load/retirement/infrastructure explanation or profiling follows.
+
+Prior whole1579/1 keyboard failure at84e,2110.61s and new whole1579/1 a17 failure
+atb84,2142.63s are **distinct actual runs**, not the same result relabeled. No
+arithmetic combination of exact3 and earlier passes; no performance/root-cause fix
+claim. The audit's onboarding-family scope never promised no other desktop failures.
+
+### Clocks, Coverage Limits And Untouched Remainder
+
+UTC **2026-11-08T01:46:53.524041Z→02:22:36.830702Z**;
+REALTIME**2143.306660619s**, MONOTONIC**2143.306646396s**,
+BOOTTIME**2143.306646030s**; boot-minus-mono**−0.000000366s** sampling noise.
+Interval-only kernel PM entry/exit query returned **zero matches,exit1/no-match,
+empty stderr**: **no measured suspend**. No full/user journal, inhibitor/power
+policy, induced/prevented sleep, synthetic waits or progress polling. Foreground
+blocking runner waited for normal completion; final target not cut at interim15m.
+Verbatim raw**167084 bytes** and separate**1668 receipt rows** cover all bytes and
+1579/1 completions. Receipt clocks are not case starts or internal phase times.
+
+**`task8-onboarding-final-coverage.md`** records actual production64a/testb84 scope.
+Retained44 C/L/S/essential/M1/Q1/enum/D5/D6/native/combinatorial limitations remain;
+no current all-essential or performance claim. Library1530-case scope does not
+replace unrun CLI/current whole384 mutation_replay/read-contract/RowClock SSH
+gates. WAIT60s/GPUI15s-per-park/POLL10ms/default threads and production safety/
+clock/heartbeat/lease/cache/SQL/consent limits are unchanged. Owner-stopped
+profiling/optimization and existing performance tickets stay untouched.
+
+**NOT RUN:**current-production CLI units/all27 integrations; selected library
+local-sync160; all ten whole SSH targets; both isolated smokes; SAME whole SPEC
+then QUALITY final runtime-evidence reviews and controller/owner handoff. No
+display/socket/app/profile/native action. **FIRSTFAIL barrier restored**; further
+execution/fix needs controller authorization. Preserve library/check/current-input
+statics on unchanged inputs; no false whole-desktop green.
+
+New-only **`/tmp/opencode/task8-onboarding-final-*`** contains review/barrier/reuse/
+scope proof, literal argv/source/hashes/raw/receipt/results/power, failure analysis,
+coverage/handoff and computed manifest. All31 prior manifest digests preserved.
+Final source/hash/whitespace/known-main ancestry/merge-tree/comment-prefix/no-jobs
+checks and metadata HEAD accompany handoff. Only ledger/current standing plus
+canonical **`01M6TYJATB44WZPJABX9GMBVS1`** append committed with coauthor; original
+ID/parent **`01M6SYJK4CJGHWKZC7MTP18GTA`**/creation time/full previous body preserved.
+No new ID/extra build/status save/source-golden-schema-dependency edit/push/PR/
+main/close/other-worktree/real profile-key-context-draft action. Known gate processes
+exited; no jobs. Ticket **implementing / runtime BLOCKED**, not feature-complete/
+review-ready; final runtime reviews/owner handoff remain owed.
