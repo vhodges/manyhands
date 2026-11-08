@@ -14,8 +14,9 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ### Current Main-Integration Standing — 2026-11-08 UTC
 
-**Bounded compatibility integration local gates GREEN; controller SAME SPEC then
-QUALITY review remains owed before the retirement seam. Ticket implementing.**
+**Integration local gates remain recorded at `7447beb1`; SAME SPEC reported one
+P3 docs-only mismatch, no functional findings. RFC correction awaits SAME SPEC
+confirmation, then QUALITY. Ticket implementing; retirement seam unimplemented.**
 Entry `c48bc2cf2d9d9bbe68621278bb56fedd7276d94c`; accepted fresh main
 `8da9afd4ec82c145632988687cbd71bead046051`; merge base
 `d70142b63a952f5e1aade369e0cd654ca9a03617`. Reconfirmed clean refs/checkouts and
@@ -11418,3 +11419,57 @@ SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then SAME QUALITY
 **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, over **complete c48-to-returned-HEAD range**,
 before approved retirement-seam implementation. No further gate autorun. Ticket
 remains **implementing**, not full runtime-ready, complete, published or closed.
+
+## Task 8 — SAME SPEC P3 Documentation Correction, 2026-11-08 UTC
+
+Controller reports SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** found one P3
+docs-only mismatch in integration **`7447beb1b2028298add753ab8d40290753e2bc6d`**, no
+functional findings. Owner authorizes the necessary minimal correction without
+another question. No implementation, policy or retirement authority change.
+
+Static file evidence, not a runtime probe:
+
+- `docs/plans/2026-11-07-remote-history-repair-design.md:230–234`: resolving the
+  last unresolved context clears the repository cache-loss flag in the same
+  transaction; the flag-set/no-unresolved-contexts case has an explicit clearing
+  route; marker retirement follows commit.
+- `src/repository/remote/resolve.rs:253–258`: `record_context_resolved` precedes
+  `clear_cache_loss_when_resolved` in the transaction, which also checks whether
+  another repository remains flagged; marker retirement is outside that
+  transaction and guarded by `cache_loss_cleared && !others_flagged`.
+- `src/repository/remote/resolve.rs:178–197`: the explicit flag-clearing path
+  rejects a changed observation, an unset flag or unresolved contexts, clears
+  the repository flag transactionally, and retains the marker while another
+  repository is flagged.
+
+Only `docs/RFC/cli-contract.md:185`'s inherited claim that the flag stays until
+`remote resolve-history` is corrected: the last per-item resolution clears it;
+`remote resolve-history` clears the flag-set/no-unresolved-contexts case; marker
+retirement follows commit and retains the marker while another repository is
+flagged. All other RFC wording is retained. The other owned changes are this
+ledger's current standing/append and the canonical checkpoint append only.
+
+**No Cargo/static/test/probe commands, new fetch/merge, agents, remaining gates or
+seam implementation.** Prior29 exact cases (each1/0, exit0) and three final static
+gates (exit0) retain their **unchanged `7447beb1` source/evidence scopes**, not new
+measurements or expanded whole-suite passes. The earlier qualified historical
+results and upstream-reported-only scopes remain unchanged; manual
+characterization stays ignored/NOT MEASURED. Three retirement SSH fixtures remain
+UNFIXED, the approved seam UNIMPLEMENTED; remaining SSH/smokes/final runtime gates
+are still owed. No main/other-worktree, push, lifecycle, native or real operation.
+
+New-only evidence:
+`/tmp/opencode/task8-main-integration-spec-p3-20261108T210514Z/` records the clean
+entry, cited source excerpts, minimal diff, unchanged source/build trees, prefix
+preservation, Git whitespace/clean/unpushed checks, commit and no-owned-jobs
+handoff. Canonical comment **`01M6TYJATB44WZPJABX9GMBVS1`** retains its whole
+**109830-byte** prior prefix (SHA-256
+`89a3d798934bd40e35b9f6cd4ce475cf15c49a8847eb01e2256283bfea02a398`), original ID,
+parent **`01M6SYJK4CJGHWKZC7MTP18GTA`** and creation time. Commit with required
+coauthor; no status save/new IDs/publication or cleanup.
+
+Pending **SAME SPEC confirmation over complete
+`c48bc2cf2d9d9bbe68621278bb56fedd7276d94c` to returned HEAD**, then SAME QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, controller-owned before any retirement-seam
+implementation. This metadata correction is not review acceptance or runtime
+completion. Ticket remains **implementing**; no further gate autorun.

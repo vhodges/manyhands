@@ -1635,3 +1635,42 @@ main untouched and no owned jobs. Ticket remains **implementing / runtime gates
 owed**, not full runtime-ready, complete, published or closed. No reset/rebase/
 discard/force/main-checkout edit/status save/new ID/new doc/publication/push/PR/
 main closure/native CI/real profile/key/context/draft/cleanup action.
+
+## Follow-up — SAME SPEC P3 RFC Wording Correction — 2026-11-08 UTC
+
+Controller reports SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** found one P3
+docs-only mismatch at **`7447beb1b2028298add753ab8d40290753e2bc6d`**, no functional
+findings. Owner authorizes the minimal correction. **No implementation change.**
+
+Verified by static file inspection: approved history-repair design230–234 says
+the last unresolved per-item resolution clears the repository cache-loss flag
+in the same transaction, with an explicit clearing route if the flag is set and
+no context remains unresolved. `src/repository/remote/resolve.rs:253–258` records
+the resolution, clears the flag when resolved, checks other flagged repositories
+transactionally, then retires the marker only after commit and only if none
+remain flagged. Its178–197 explicit-clear path keeps the corresponding no-unresolved
+guard and marker retention. These are source observations, not runtime probes.
+
+Corrected only `docs/RFC/cli-contract.md:185`'s inherited flag-stays-until sentence
+to state last-resolution clearing, `remote resolve-history` for the flag-set/
+no-unresolved-contexts case, and after-commit marker retirement retaining the
+marker while another repository remains flagged. Updated the existing execution
+ledger's current standing/append and this canonical append; no other file change.
+
+Prior29 exact checks (each1/0 exit0) and three statics (exit0) remain recorded at
+their **unchanged7447 source/evidence scopes**, NOT rerun or broadened. No Cargo,
+static, test or probe command; no fetch/merge, agents, remaining gates or seam
+work. Historical qualified/upstream-reported-only scopes stay unchanged; manual
+characterization ignored/NOT MEASURED. Three SSH fixtures remain UNFIXED and the
+approved retirement seam UNIMPLEMENTED; remaining SSH/smokes/final runtime reviews
+are still owed. No main/other-worktree/push/lifecycle/native/real operation.
+
+Pending **SAME SPEC confirmation over complete c48-to-returned-HEAD**, then SAME
+QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, controller-owned before seam work.
+Ticket remains **implementing**, not accepted/complete. New-only evidence:
+`/tmp/opencode/task8-main-integration-spec-p3-20261108T210514Z/`; Git diff/source/
+prefix/commit/clean UNPUSHED/no-owned-jobs receipts, no test repeat. Entire
+**109830-byte** prior prefix (SHA-256
+`89a3d798934bd40e35b9f6cd4ce475cf15c49a8847eb01e2256283bfea02a398`), ID, parent
+**01M6SYJK4CJGHWKZC7MTP18GTA** and creation time preserved. Required coauthor;
+no new IDs/status save/publication/cleanup or further gate autorun.
