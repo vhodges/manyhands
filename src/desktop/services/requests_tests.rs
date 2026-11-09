@@ -227,10 +227,16 @@ fn every_intent(root: &Path) -> Vec<Intent> {
             kind: AuthoringKind::Ticket,
             id: ITEM.parse().unwrap(),
         },
-        Intent::PollOnce { root },
+        Intent::PollOnce { root: root.clone() },
+        Intent::PollConfigure {
+            root: root.clone(),
+            interval_seconds: 600,
+        },
+        Intent::PollPause { root: root.clone() },
+        Intent::PollResume { root },
     ];
     let listed: HashSet<usize> = intents.iter().map(variant).collect();
-    assert_eq!(listed.len(), 39, "one intent of every variant");
+    assert_eq!(listed.len(), 42, "one intent of every variant");
     intents
 }
 
@@ -275,6 +281,9 @@ fn variant(intent: &Intent) -> usize {
         Intent::LocalContextResolve { .. } => 36,
         Intent::ItemRepublish { .. } => 37,
         Intent::PollOnce { .. } => 38,
+        Intent::PollConfigure { .. } => 39,
+        Intent::PollPause { .. } => 40,
+        Intent::PollResume { .. } => 41,
     }
 }
 
@@ -409,8 +418,8 @@ fn changes_items_names_the_intents_that_can_change_items() {
             // the republish, and Check now (`PollOnce`).
             0 | 1 | 7 | 8 | 17..=38 => true,
             // RepoRemove closes the tabs instead; the rest change
-            // settings, keys or hosts, never an item.
-            2..=6 | 9..=16 => false,
+            // settings, keys, hosts or polling policy, never an item.
+            2..=6 | 9..=16 | 39..=41 => false,
             other => unreachable!("variant {other}"),
         };
         assert_eq!(intent.changes_items(), expected, "{}", intent.label());
@@ -494,8 +503,9 @@ fn syncs_comments_and_resume_stop_at_safe_points_and_saves_do_not() {
             // DocumentPromote, TicketClose, ConflictResolve,
             // LocalContextSync, LocalContextResolve, ItemRepublish, PollOnce.
             17 | 29..=38 => true,
-            // Every local command, the saves among them.
-            0..=16 | 18..=28 => false,
+            // Every local command, the saves among them, and the three
+            // poll policy verbs.
+            0..=16 | 18..=28 | 39..=41 => false,
             other => unreachable!("variant {other}"),
         };
         assert_eq!(

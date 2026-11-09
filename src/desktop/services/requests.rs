@@ -110,9 +110,26 @@ pub(crate) enum Intent {
     },
     /// Check now (D6 C1): `poll once` of the repository's publication
     /// remote, on the user lane. A resend of it under a request ID is what
-    /// Resume does for a Check now's row left active (L-4, U-15). Task 6
-    /// adds the policy verbs and Check now's controls.
+    /// Resume does for a Check now's row left active (L-4, U-15).
     PollOnce {
+        root: PathBuf,
+    },
+    /// The interval between a repository's automatic polls (D6 C1): a
+    /// policy verb, one write that reports `writing` and is never accepted
+    /// (Fact 2). Sent again, last commit wins (C5 decision 15).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
+    PollConfigure {
+        root: PathBuf,
+        interval_seconds: u64,
+    },
+    /// Pauses a repository's automatic polling (a policy verb).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
+    PollPause {
+        root: PathBuf,
+    },
+    /// Resumes a repository's automatic polling (a policy verb).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
+    PollResume {
         root: PathBuf,
     },
     /// Whether the key is protected, never the passphrase.
@@ -351,6 +368,9 @@ impl Intent {
             | Self::IndexRefresh { .. }
             | Self::IndexRebuild { .. }
             | Self::PollOnce { .. }
+            | Self::PollConfigure { .. }
+            | Self::PollPause { .. }
+            | Self::PollResume { .. }
             | Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -401,6 +421,9 @@ impl Intent {
             Self::IndexRefresh { .. } => "Refresh index",
             Self::IndexRebuild { .. } => "Rebuild index",
             Self::PollOnce { .. } => "Check now",
+            Self::PollConfigure { .. } => "Set check interval",
+            Self::PollPause { .. } => "Pause checking",
+            Self::PollResume { .. } => "Resume checking",
             Self::KeyGenerate { .. } => "Generate key",
             Self::KeyImport { .. } => "Import key",
             Self::KeySelect { .. } => "Select key",
@@ -446,6 +469,9 @@ impl Intent {
             | Self::IndexRefresh { root }
             | Self::IndexRebuild { root }
             | Self::PollOnce { root }
+            | Self::PollConfigure { root, .. }
+            | Self::PollPause { root }
+            | Self::PollResume { root }
             | Self::HostApprove { root, .. }
             | Self::HostReplace { root, .. }
             | Self::OperationResume { root, .. }
@@ -524,6 +550,9 @@ impl Intent {
             | Self::RemoteAdd { .. }
             | Self::RemoteRemove { .. }
             | Self::RemoteSelect { .. }
+            | Self::PollConfigure { .. }
+            | Self::PollPause { .. }
+            | Self::PollResume { .. }
             | Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -537,11 +566,11 @@ impl Intent {
 
     /// Whether the call's cancellation token is honoured after the library
     /// accepts the command, at a synchronization's safe points (fact 9): the
-    /// comment, the two syncs, a republish (P21), `operation resume`, a
-    /// promotion or closure, which stops between its steps (D5 fact 2), a
+    /// comment, the two syncs, a republish (P21), `operation resume`, Check
+    /// now (`poll once`), a promotion or closure, which stops between its steps (D5 fact 2), a
     /// local synchronization and its resolution, and a remote resolution.
-    /// Every other command, the saves among them, cannot be stopped once
-    /// accepted.
+    /// Every other command, the saves and the poll policy verbs among them
+    /// (one write, never accepted: Fact 2), cannot be stopped once accepted.
     ///
     /// This is not the library's `Command::stops_at_safe_points`
     /// (`R/mutation/command.rs:407-414`), which says whether `request
@@ -573,6 +602,9 @@ impl Intent {
             | Self::RemoteSelect { .. }
             | Self::IndexRefresh { .. }
             | Self::IndexRebuild { .. }
+            | Self::PollConfigure { .. }
+            | Self::PollPause { .. }
+            | Self::PollResume { .. }
             | Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -680,6 +712,9 @@ impl Intent {
             Self::IndexRefresh { .. } => JobKind::IndexRefresh,
             Self::IndexRebuild { .. } => JobKind::IndexRebuild,
             Self::PollOnce { .. } => JobKind::PollOnce,
+            Self::PollConfigure { .. } => JobKind::PollConfigure,
+            Self::PollPause { .. } => JobKind::PollPause,
+            Self::PollResume { .. } => JobKind::PollResume,
             Self::KeyGenerate { .. } => JobKind::KeyGenerate,
             Self::KeyImport { .. } => JobKind::KeyImport,
             Self::KeySelect { .. } => JobKind::KeySelect,
@@ -817,3 +852,11 @@ pub(crate) enum RequestState {
 #[cfg(test)]
 #[path = "requests_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "requests_poll_tests.rs"]
+mod poll_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "requests_poll_worker_tests.rs"]
+mod poll_worker_tests;

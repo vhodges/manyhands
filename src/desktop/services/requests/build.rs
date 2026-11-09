@@ -8,9 +8,10 @@ use manyhands::repository::{
     ItemRepublishInput, ItemSyncInput, KeyClearInput, KeyDeleteInput, KeyGenerateInput,
     KeyImportInput, KeyRemoveInput, KeySelectInput, LocalConflictResolutionInput,
     LocalContextResolveInput, LocalContextSyncInput, Mutation, OperationAbandonInput,
-    OperationResumeInput, PollOnceInput, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput,
-    RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, RepoSyncInput,
-    TicketCloseInput, TicketCreateInput, TicketDraft, TicketRepairInput, TicketSaveInput,
+    OperationResumeInput, PollConfigureInput, PollOnceInput, PollPauseInput, PollResumeInput,
+    RemoteAddInput, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
+    RepoIdentitySetInput, RepoRemoveInput, RepoSyncInput, TicketCloseInput, TicketCreateInput,
+    TicketDraft, TicketRepairInput, TicketSaveInput,
     keys::{KeyProtection, KeyStore, SecretPassphrase},
 };
 
@@ -107,6 +108,17 @@ impl Intent {
                 Mutation::IndexRebuild(IndexRebuildInput { root: root.clone() })
             }
             Self::PollOnce { root } => Mutation::PollOnce(PollOnceInput { root: root.clone() }),
+            Self::PollConfigure {
+                root,
+                interval_seconds,
+            } => Mutation::PollConfigure(PollConfigureInput {
+                root: root.clone(),
+                interval_seconds: *interval_seconds,
+            }),
+            Self::PollPause { root } => Mutation::PollPause(PollPauseInput { root: root.clone() }),
+            Self::PollResume { root } => {
+                Mutation::PollResume(PollResumeInput { root: root.clone() })
+            }
             Self::KeyGenerate { label, protected } => {
                 let protection = if *protected {
                     KeyProtection::Passphrase(secret.ok_or(NotBuilt::MissingSecret)?)

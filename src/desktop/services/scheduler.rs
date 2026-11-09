@@ -228,3 +228,7 @@ mod extra_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "scheduler_real_tests.rs"]
 mod real_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "scheduler_intent_tests.rs"]
+mod intent_tests;

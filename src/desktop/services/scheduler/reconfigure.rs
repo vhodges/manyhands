@@ -21,8 +21,8 @@
 //! - a key change names no repository: the selected key is the one key
 //!   every repository's SSH poll uses, so it reaches every listed one.
 //!
-//! An intent that only changes the stored policy (Check now now, the poll
-//! verbs of Task 6) reaches its repository's policy read and nothing else.
+//! An intent that only changes the stored policy (Check now, the poll
+//! verbs) reaches its repository's policy read and nothing else.
 
 use crate::desktop::{
     model::{
@@ -103,10 +103,14 @@ pub(in crate::desktop::services) fn scope_of(intent: &Intent, gone: bool) -> Opt
 }
 
 /// A request that moves a repository's stored polling state without
-/// reconfiguring it: Check now. Task 6 adds the poll verbs here.
+/// reconfiguring it: Check now (a deadline and a row) and the three policy
+/// verbs, whose answer is the policy itself (D6 C1).
 fn policy_of(intent: &Intent) -> Option<Root> {
     match intent {
-        Intent::PollOnce { .. } => root_of(intent),
+        Intent::PollOnce { .. }
+        | Intent::PollConfigure { .. }
+        | Intent::PollPause { .. }
+        | Intent::PollResume { .. } => root_of(intent),
         _ => None,
     }
 }

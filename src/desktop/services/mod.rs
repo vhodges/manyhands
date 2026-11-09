@@ -152,6 +152,10 @@ pub(crate) enum JobKind {
     IndexRebuild,
     /// Check now (D6): the person's own `poll once`, a mutation.
     PollOnce,
+    /// The policy verbs (D6): single writes that never report `accepted`.
+    PollConfigure,
+    PollPause,
+    PollResume,
     KeyGenerate,
     KeyImport,
     KeySelect,
