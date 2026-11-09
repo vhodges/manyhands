@@ -1121,3 +1121,147 @@ documents are not edited now; each is recorded here and flagged for the owner):
 - **Verify:** all four lines clean (implementer, reviewer, follow-up); both
   Boundary commands print nothing; `Cargo.lock` untouched; `origin/main` still
   `f4442618`.
+
+## Task 9 Design Checkpoint (2026-11-09, at `c2f97f2f`, before code)
+
+The implementer's read-only phase 1 (no edit, no commit, no build), reviewed and
+ruled on by the orchestrator. `origin/main` is `f4442618`, merged. Nothing
+blocks. The Kit's `DockAreaState`, `DockState`, `PanelState`, `PanelInfo` and
+`DockPlacement` all derive `Serialize` and `Deserialize` (`B/dock/state.rs:7-86`,
+`:123`), `DockAreaState` has no `deny_unknown_fields`, and `Pixels` serialises as
+a bare number. `Workspace::new` reaches `services.backend()`, so the store is
+available before `DockShell::build`.
+
+**1. Store** (`D/services/layout.rs`, R-17, R-19). `Backend::layout()` returns
+`Result<&LayoutStore, LayoutStoreError>` (no default, as `resolutions`);
+`LibraryBackend` takes the store as a fourth constructor argument and
+`library_services` opens it; `DelayingBackend` gets `with_layout(..)` (default
+`Err(Unavailable)`); `Fixture` gets a lazy `layout_opened()` and
+`layout_store()`, so every backend and every relaunch shares one store.
+`LayoutStore { shared: Arc<Shared> }` (`Clone`), opened with
+`Folder::open_named(data, "layout")`; the file is `layout.json`. `Shared` holds
+`Mutex<{folder, newest}>`, an `AtomicU64` generation counter and, under the
+test cfg, the `fail` flag and a queue of hold gates. API: `read()` (not found is
+`Ok(None)`), `begin()` allocating the generation and taking the next hold,
+`Write::run(bytes)` which **awaits the hold before the lock**, `write_now(bytes)`
+for the quit (next generation, caller's thread, takes no hold), and internal
+`write(generation, bytes)` (under the lock: older than `newest` returns
+`Landed::Stale`; set `newest`; the fail seam returns `Err(Io)`; else
+`folder.replace`). A failed attempt also fences older writes. Seams:
+`fail_writes_for_testing(bool)` and `hold_writes_for_testing() -> Sender<()>`.
+`LayoutStoreError` is `Copy` with fixed sentences and no path. A folder that cannot
+open makes `layout()` an `Err` (saving off, restore notice); a `layout.json`
+that is a directory makes `read` an `Err` while the store stays open (every
+write then fails and shows the save notice).
+
+**2. File and `restore`** (`D/model/layout/restore.rs`; `LAYOUT_VERSION = 1`
+moves there). JSON `{version, area, on: {panel: bool}, shown: {left, right,
+bottom}}`, `deny_unknown_fields`. Pure `restore(read) -> Restore { Saved(Box<Saved
+{layout, area}>), Default { notice } }`; `Ok(None)` is `Default{notice: false}`,
+`Err` or any reject `Default{notice: true}`; on success `area.version =
+Some(LAYOUT_VERSION)` (R-28) and `layout.sizes` come from each dock's `size`.
+Validation (all of Part G's rows): parse; version; the `on`/`shown` key sets
+exactly; each dock's placement against its slot; dock size at least 100 px and
+finite; node `info` against name (`Stack` is `StackPanel`, `Tabs` is `TabPanel`,
+`Panel` is a leaf); container contents; `sizes` count and each split size above
+0 and finite; the centre exactly `[ItemAreaPanel]`; no unknown leaf; no
+`ItemAreaPanel` in a dock; every panel present exactly once; a dock with no
+panels. Extra rows beyond Part G, because the Kit's dump never writes them:
+`Stack` `axis` outside 0 or 1, a non-finite size, an empty `TabPanel`, a bare leaf
+as a dock root, `Tabs` `active_index` at or past the child count. `layout.rs`
+(438 lines) and `layout_tests.rs` (504) are split: `layout.rs` gets `mod restore;`;
+`layout_tests.rs` keeps a 4-line `#[test] restore_restores_or_falls_back` and
+`#[path = "layout/restore_cases.rs"] mod restore_cases;`, so the plan's path
+`desktop::model::layout::tests::restore_restores_or_falls_back` is unchanged.
+
+**3. Launch** (`D/view/dock/restore.rs`; R-38). `Workspace::new` reads the store
+once, synchronously (a file of a few KB; the stores open synchronously too), then
+`DockShell::build`: build with `Layout::default()` and keep `default_state =
+dump`; for `Saved`, rebuild a state with each dock's open flag from
+`layout.is_open(side)`, `load` it, run `centre_is_item_area` once, and if it fails
+load `default_state`, use `Layout::default()` and show the restore notice;
+`reconcile` (applies `visible` and the active tabs; no dock toggles because the
+open flags already match); `accepted = dump` and
+`layout.set_arrangement(arrangement_from(&accepted))` in the same update, so the
+launch's queued events stop at step 1 (P37). First launch (`Ok(None)`) is the
+default with no notice and `saves == 0`.
+
+**4. Clamp** (`D/view/dock/clamp.rs`, R-37). Pure `clamp(width, height, L, R,
+bottom, open) -> [Option<f32>; 3]`: if the open side docks leave under 320 px,
+both are scaled by `(width - 320) / (L + R)` (floor 100); a bottom dock leaving
+under 200 px becomes `max(100, height - 200)`. Only changed docks are written
+through `set_dock_size`, which emits `LayoutChanged`, so the existing handler
+syncs sizes and requests the save. Hooks: (a) `Workspace::render` defers a check
+while the clamp has not run, reading `DockArea::bounds()`; zero bounds do nothing
+and the next render defers again; otherwise it runs once (not `on_next_frame`:
+tests never run it); (b) `settle` and the handler pass `reconcile`'s opened sides
+to `clamp_docks`, so a closed oversized dock is scaled when it opens. A closed dock
+is excluded from the sum in (a). R-37 governs (not Part C's "once at launch").
+
+**5. Saving** (`D/view/dock/save.rs`, R-19, R-31). `request_save(cx)` bumps the
+test counter `saves` (kept) and, with a store, sets `pending` and replaces a
+`timer` task (`LAYOUT_SAVE_DELAY` = 500 ms, `background_executor().timer`;
+replacing the task restarts the delay). When it fires, `Workspace::write_layout`
+takes the layout as it is, a **fresh `area.dump`** (guarded by
+`centre_is_item_area`, falling back to `accepted`) and `encode(..)`, calls
+`store.begin()` and runs the write on the background executor. Results: `Written`
+clears `pending` if no newer request exists and clears the save notice; `Stale`
+changes nothing; `Err` shows the save notice; a result older than the newest
+reported is ignored. **The quit's write is in `quit_now` only** (the first line,
+before `cx.quit()`): it is the single funnel (`finish_job` Idle, `quit_if_finished`,
+the `QuitNow` action; `request_quit` returns `true` only after `quit_now` ran), and
+a write at `request_quit`'s entry would miss `a_change_during_a_quit_wait_is_kept`.
+Part H's wording ("at `request_quit`'s entry") is stale since round 4.
+
+**6. Notices** (R-21; `D/view/workspace/layout_notices.rs`, called from
+`activity_region`, outside `view/operations*`). `Notices { restore, save }` in
+`DockShell`; two dedicated Dismiss focus handles made in `Workspace::new`. Ids
+`layout-restore-notice`, `layout-restore-dismiss`, `layout-save-notice`,
+`layout-save-dismiss`; exact copy as the design; Dismiss is Quit now's wrapper
+pattern (accessible name, Tab, ring). Never counted by `needs_attention`. With no
+store only the restore notice can show.
+
+**7. Tests.** `restore_restores_or_falls_back` (the one table, with the extra
+rows and the valid rows), and the eight `restore_tests` in
+`D/view/dock/restore_tests.rs` (included from `dock.rs`; paths
+`desktop::view::dock::restore_tests::<name>`): `a_valid_file_restores_the_layout`,
+`a_dock_too_large_for_the_window_is_clamped`,
+`a_file_that_cannot_be_read_restores_the_default_and_says_so`,
+`the_layout_survives_a_restart`,
+`a_change_just_before_a_quit_that_exits_at_once_is_kept`,
+`a_change_during_a_quit_wait_is_kept`, `a_stale_write_loses_to_the_quits`,
+`a_failed_write_shows_the_save_notice`. `Shell::relaunch(self, cx)`: remove the
+window, run until parked, `start(fixture, fresh: false, ..)` skipping
+`gpui_kit::init` and `bind_all_keys`, resizing nothing. Task 5's marked save checks
+and the relaunch in `a_panel_moved_into_a_tab_group_is_kept` are completed with a
+`file_layout` helper (advance the clock, `run`, `restore(store.read())`). **E-9**:
+`D/mod_tests.rs:193-198` also asserts `layout/` beside the service.
+
+**8. Rulings (orchestrator, 2026-11-09).**
+- **Quit write gating** accepted: `quit_now` writes only when a save was requested
+  and not yet confirmed written (`pending`), so a no-change session writes nothing
+  and a newer build's file is not clobbered at quit. This **deviates from the
+  literal design** ("writes at once"); a failed earlier write leaves `pending`
+  true, so the quit retries it.
+- **Fresh dump** at save time accepted (the accepted state can lag a divider nudge
+  by up to 0.5%, which would lose the last drag).
+- **Save notice** shows again after Dismiss if a new write fails; the restore notice
+  never returns in a session.
+- **Notice placement** accepted: a `v_flex` in `region(Operations)` with the notices
+  first, then `operation-area` at `flex_1().min_h_0()`, so the notices never scroll
+  away. At the default 150 px each takes about 36 px (decision 15 and K-13 accept).
+- **R-9 start focus**: Repositories if displayed, else the first F6 stop (Part C
+  Focus); `Workspace::new` focuses Repositories unconditionally today, so Task 9
+  adds this, with one assertion in `a_valid_file_restores_the_layout`.
+- **Extra validation rows** accepted (section 2).
+- **E-11 candidates, visibility only**: widen the `dock_tests/support.rs` helpers
+  from `pub(super)` to `pub(in crate::desktop::view)`, as Task 8 did for
+  `footer_tests`.
+- Risks the tests must settle: `Shell::relaunch` after `quit_now` (the test
+  platform's `quit` is a no-op; `remove_window` exists); a second
+  `gpui_kit::init` or `bind_all_keys` (skipped by `fresh: false`); existing tests
+  that shrink the window (E-10 sites, e.g. 640 + 150 px wide) and then open a dock
+  would now be clamped (R-37): grep for them and report; `harness.rs` is already
+  over the limit and gains about 25 lines.
+- **Document clarification to carry:** Part H's "written at `request_quit`'s entry"
+  becomes "written in `quit_now`".
