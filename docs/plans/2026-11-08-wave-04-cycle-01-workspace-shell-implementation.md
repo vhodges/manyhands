@@ -10,7 +10,8 @@ id: "01M6YVNFE6AB0RBGQK72CFJJ4X"
 
 # Wave 04 Cycle 01 Workspace Shell Implementation Plan
 
-> **For agentic workers:** Revision 2, 2026-11-08, after review round 1.
+> **For agentic workers:** Revision 3, 2026-11-08, after review rounds 1
+> and 2 and decision 16.
 > Not approved, and nothing here is authorized yet. Once the owner
 > approves and authorizes implementation, use `implementing-a-cycle` task
 > by task, re-read the design, repeat the ticket preflight, and record
@@ -68,11 +69,13 @@ command is `devenv shell -- cargo …` with `--locked`.
 - The task changes `src/desktop/` and its tests, plus the documents in the
   design's Document Amendments.
 - `src/drafts/` and `packaging/` are read, not changed.
-- After a task's commit, and after merging `origin/main`, the following
-  must print nothing:
+- After a task's commit, both of these must print nothing. They are two
+  commands because an exclude pathspec also hides the paths listed after
+  it.
 ```sh
-git diff --stat origin/main HEAD -- src ':!src/desktop' Cargo.toml Cargo.lock \
-  src/desktop/view/operations.rs src/desktop/view/operations src/desktop/model/operations.rs
+git diff --stat origin/main...HEAD -- src ':!src/desktop' Cargo.toml Cargo.lock
+git diff --stat origin/main...HEAD -- src/desktop/view/operations.rs \
+  src/desktop/view/operations src/desktop/model/operations.rs
 ```
 - A gap stops the task for the owner.
 
@@ -158,17 +161,20 @@ created in Task 0 and written only by the orchestrator.
 ## Review Focus
 
 1. **Hiding loses nothing.** A hidden panel keeps its state; a request
-   finishes while Activity is hidden; a dock put back keeps focus on a
-   Kit button elsewhere (P2, P28, P30; Task 5).
-2. **The shell's own edits are not undone** (R-6 guard), and a drop on
-   the item area is (P4, P8, P10; Task 5).
+   finishes while Activity is hidden; closing and opening a dock keeps
+   focus on a Kit button elsewhere (P2, P28, P30; Task 5).
+2. **The handler settles.** Every `LayoutChanged` is handled
+   idempotently. Moves and hides stay as made, a drop on the item area is
+   undone, and closed docks stay closed (P4, P8, P10; Task 5).
 3. **R-60.** Every new key and footer control is refused behind a sheet or
    dialog, with panels hidden (P18; Task 8, E-6).
 4. **Bold stays Bold.** Ctrl B in an editor is Bold (P17; Task 8).
 5. **Fallback.** Each bad file restores the default, with the notice
    where decision 5 says, and no other store changes (P24; Task 9).
 6. **The quit.** The override is never saved; layout operations are
-   refused while a quit waits (P26, P27, P31; Tasks 9, 10).
+   refused while a quit waits and allowed again on every return to
+   running; the quit's write is the newest (P26, P27, P31, P35; Tasks 9,
+   10).
 7. **Contents unchanged.** The Boundary diff is empty at every task.
 
 ## File Map And Dependency Order
@@ -199,9 +205,17 @@ New source files:
 - `D/view/dock.rs`, `D/view/dock/{panels,header}.rs`
 - `D/view/footer.rs`, `D/view/footer/menu.rs`
 
-Each has a `_tests.rs` beside it, included with `#[path]` as
-`D/assets.rs:85-87` does. Also add `D/view/keyboard_tests/shell.rs` and
-`D/view/dock/restore_tests.rs`.
+New test files, each included with `#[path = "…_tests.rs"] mod tests;` as
+`D/assets.rs:85-87` does:
+
+- `D/model/layout_tests.rs`, `D/model/attention_tests.rs`;
+- `D/view/shell/{tokens,title}_tests.rs`, `D/view/dock_tests.rs`,
+  `D/view/dock/restore_tests.rs`, `D/view/footer_tests.rs`;
+- `D/view/keyboard_tests/shell.rs`, a `mod shell;` in `keyboard_tests.rs`.
+
+`D/view/shell.rs`, `D/view/dock/{panels,header}.rs`,
+`D/view/footer/menu.rs` and `D/services/layout.rs` are tested through
+those files.
 
 Order: 0 → 1 → 2 → 3 → 4a → 4b → 4c → 5 → … → 12, one at a time.
 
@@ -224,13 +238,22 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   - If `Cargo.lock` moved `gpui-kit`, `gpui-base`, `gpui-component` or
     `zorite-editor`, stop for the owner: facts 1–19 rest on the locked
     versions.
-- [ ] **Step 3: Sweep the E-list.** Run:
+- [ ] **Step 3: Sweep the E-list.** Count the test sites only:
 ```sh
-git grep -c -e 'Region::Navigation' -e 'region-navigation' -- src/desktop
+git grep -c -e 'Region::Navigation' -e 'region-navigation' -- \
+  'src/desktop/*_tests.rs' 'src/desktop/view/keyboard_tests*'
 git grep -c -e 'pane-tickets' -e 'pane-documents' -e 'pane-showing' \
-  -e 'SHOWING_DOCUMENTS' -e 'SHOWING_TICKETS' -- src/desktop
+  -e 'SHOWING_DOCUMENTS' -e 'SHOWING_TICKETS' -- \
+  'src/desktop/*_tests.rs' 'src/desktop/view/keyboard_tests*'
 ```
-  Compare the counts with E-1 to E-3. A new site stops for the owner.
+  At `2b1dc4d5` the first command prints 8 files: `find_tests` 2,
+  `item/page_tests` 4, `keyboard_tests.rs` 12, `actions` 2, `editing` 8,
+  `frame` 2, `made_ready_tests` 1 and `workspace_tests` 3. The second prints
+  7 files: `create_tests` 7, `keyboard_tests.rs` 10, `editing` 2,
+  `made_ready_review_tests` 1, `operations_tests` 2, `tabs_tests` 1 and
+  `tickets_tests` 11. These counts include the label test's lines in
+  `tickets_tests` and the `pane-showing` checks, both E-3's. Any other
+  count is a new test site, and it stops for the owner.
 - [ ] **Step 4: Approval follow-ups.**
   - Confirm that the approval commit applied Document Amendments 1–9.
   - Make Amendment 10's `ticket.md` edit, commit it, and `ticket save`.
@@ -257,9 +280,9 @@ git grep -c -e 'pane-tickets' -e 'pane-documents' -e 'pane-showing' \
 - [ ] **Tests** (`D/model/layout_tests.rs`):
   - `the_default_is_1b` (P1).
   - `operations_follow_the_rules` is one table. Its columns are the start
-    state, the operation, then `on`, `shown`, on screen, open, and the
+    state, the operation, then `on`, `shown`, displayed, open, and the
     tab selected. Its rows cover P2–P9 and P13. They include an inactive
-    tab revealed, decision 6, the quit override (on screen but not
+    tab revealed, decision 6, the quit override (displayed but not
     saved) and operations refused while a quit waits.
   - `f6_stops_follow_the_arrangement` (P14), including a hidden panel, a
     hidden dock and a tabbed group.
@@ -317,7 +340,9 @@ before the dock.
     `FocusNavigation` focuses `Pane`'s list.
   - New ticket… and New document… pass their own kind. `NewItem` takes the
     kind from the focused list.
-  - Add `Shell::use_list(Pane, cx)` to `D/view/harness.rs` (E-2).
+  - Add `Shell::use_list(Pane, cx)` to `D/view/harness.rs` (E-2). It sets
+    the list used last and focuses that list's region. `show_pane` alone
+    focuses only from Navigation (fact 33).
 - [ ] **Edits:** E-1, E-2, E-3 and E-4, exactly as the design lists them.
   An appearance test the new column breaks is handled under E-8.
 - [ ] **Verify:** the new test and every edited test by exact name; the
@@ -353,10 +378,16 @@ before the dock.
   - the Workspace holds the area and the panels, and `render.rs`'s fixed
     row is replaced by the area, with the item area as its centre and
     Root's sheet layer still in the item area's body (fact 21);
-  - `cycle_region` uses `f6_stops`, and `focus_lost` skips regions that
-    are not on screen (R-9);
-  - the harness: `Shell::open` sets the bottom dock to 400 px after
-    launch, and `Shell::open_as_launched` does not (R-26).
+  - `cycle_region` uses `f6_stops`. `focus_lost` skips regions that are
+    not displayed and falls back to the item area (R-9);
+  - `ItemAreaPanel`'s body calls the content region's `note_focus`, and
+    the Activity body computes `finishing` and prunes after its sections
+    (R-33);
+  - the harness (R-26):
+    - the window becomes 1590 × 1720;
+    - `Shell::open` and `Shell::launch` set the bottom dock to 520 px
+      after launch;
+    - `Shell::open_as_launched` resizes nothing.
 - [ ] **Verify:** the two tests and the sheet test by exact name; the
   existing tests that use the region helpers in `workspace_tests.rs` and
   `keyboard_tests.rs` (`focused_region`, `ringed`), by exact name; the
@@ -367,16 +398,19 @@ before the dock.
 
 - [ ] **Test:** `desktop::view::dock::tests::clicking_a_tab_selects_its_panel`.
   Put Documents in Repositories' group with `move_panel` and
-  `InsertTarget::Tabs`, then click Documents' tab. Documents is the active
-  panel in the dump, and its region is drawn.
+  `InsertTarget::Tabs { activate: false }`, so Repositories stays active.
+  Then click `("panel-tab", "DocumentsPanel")`. Documents is now the
+  active panel in the dump, and its region is drawn.
 - [ ] **Code:** `PanelHeader`, per `02` and Part C:
   - icon, title and count (R-22);
-  - tabs with the amber line, and short labels when a group has more than
-    two tabs (R-32);
+  - tabs with the amber line, with ids `("panel-tab", kind name)` and short
+    labels when a group has more than two tabs (R-32);
   - drag sources and drop targets through `TabGroupContext`, with the
     app's own drag preview;
   - the drop indicator from the skin's group renderer;
-  - no tab bar for the item area.
+  - no tab bar for the item area;
+  - a collapsed group drawn as one tab per panel, with no active panel
+    drawn (R-35). Its tabs reveal in Task 5.
 
   Appearance gets no tests (Wave Testing). Dragging is checked on the
   checklist.
@@ -388,39 +422,55 @@ before the dock.
 The Workspace gains `toggle_panel(kind)`, `toggle_dock(side)`,
 `reveal(kind)` and `dock_panel(kind, side)`. Tasks 7, 8 and 10 call them.
 
-- [ ] **Tests** (`D/view/dock_tests.rs`):
-  - `hiding_a_panel_gives_its_space_to_its_dock` (P2): saved after the
-    delay.
-  - `hiding_the_last_panel_takes_its_dock_out` (P4). The guard means no
-    reload happens: node ids elsewhere are unchanged.
-  - `a_dock_toggled_back_keeps_its_panels_groups_and_sizes` (P5, P30).
-    Focus is on the item header's Edit button, a Kit button, while the
-    left dock is hidden and shown. The dumped trees and sizes are equal
-    within 1 px, and focus and the item area's tabs are unchanged.
+This task is test-first, with a design checkpoint: the Required Outcomes
+P2–P12, P30, P33, P34 and P36 are its contract. Before code, write in the
+ledger the reconcile step, the `LayoutChanged` handler's three steps
+(design Part C) and how each test reaches its state.
+
+- [ ] **Tests** (`D/view/dock_tests.rs`). Save checks are marked
+  `// Completed in Task 9.` until the store exists.
+  - `hiding_a_panel_gives_its_space_to_its_dock` (P2).
+  - `hiding_the_last_panel_closes_its_dock` (P4). Covers a side dock and
+    the bottom dock, which keeps its strip, and a drag that leaves only
+    panels that are off.
+  - `a_dock_closed_and_opened_keeps_its_panels_groups_and_sizes` (P5,
+    P30). Focus is on the item header's Edit button, a Kit button, while
+    the left dock closes and opens. The dumped trees are equal and the
+    sizes within 1 px. Focus, the item area's tabs and the centre's node
+    ids are unchanged.
   - `toggling_a_dock_with_every_panel_off_shows_them` (P6).
   - `a_side_with_no_panels_has_no_dock` (P7).
   - `each_panel_docks_to_each_side` (P8) is one table: 4 panels × 3 sides
-    through `dock_panel`. It covers an open dock, a hidden dock and a side
-    with no panels, and checks the arrangement, the panel on screen, and
-    no reload.
+    through `dock_panel`. It covers an open target, a closed target and a
+    side with no panels, from an open source and from a closed one. It
+    checks the arrangement, the panel displayed, and the source dock
+    removed or closed as P8 says.
   - `docking_a_panel_where_it_is_changes_nothing` (P9).
   - `a_drop_on_the_item_area_is_undone` (P10). `move_panel` with
     `InsertTarget::Tabs` on the centre's group is the edit a drop commits
-    (fact 10). Afterwards the joined dump equals the accepted state.
+    (fact 10). One row has no closed dock and one has the left dock
+    closed. Afterwards the dump equals the accepted state, and the closed
+    dock is still closed.
   - `a_panel_moved_into_a_tab_group_is_kept` (P11). `move_panel` puts
-    Tickets in Repositories' group. The arrangement follows, the save
-    holds it, and `Shell::relaunch` restores it (after Task 9; until then,
-    the save check is marked `// Completed in Task 9.`).
+    Tickets in Repositories' group. The arrangement follows and Tickets is
+    displayed. A save check and a `Shell::relaunch` follow in Task 9.
   - `revealing_an_inactive_tab_selects_it` (P3, P13).
-  - `focus_leaves_a_panel_that_is_hidden` (P12): its toggle, its dock, and
-    another tab selected.
+  - `hiding_the_active_tab_selects_the_next` (Part B).
+  - `the_closed_strip_reveals_its_panels` (P33).
+  - `opening_the_strip_by_its_edge_counts_as_its_toggle` (P34). The Kit's
+    `toggle_dock` on the closed bottom dock stands in for the edge drag.
+  - `a_dock_too_large_for_the_window_is_clamped` (P36).
+  - `focus_leaves_a_panel_that_is_not_displayed` (P12): by its toggle, by
+    its dock, and by another tab being selected.
   - `a_hidden_panel_keeps_its_state` (P2). Tickets, with a filter, Find
     text and a selection, is hidden and shown again.
   - `a_request_finishes_while_activity_is_hidden` (P28). Its entry shows
     when Activity does. No tab opened, closed or reloaded, and the worker
     received nothing from hiding or showing.
-- [ ] **Code:** R-3, R-5, R-6 (guard and joined check), R-9 and R-31 in
-  `D/view/dock.rs`, plus the four operations.
+- [ ] **Code** in `D/view/dock.rs`:
+  - R-3 reconcile, R-5, R-6's idempotent handler, R-9, R-31, R-35's
+    reveal, R-36 and R-37;
+  - the four operations.
 - [ ] **Verify:** each test by exact name; the four lines.
 - [ ] **Commit.**
 
@@ -447,7 +497,7 @@ The Workspace gains `toggle_panel(kind)`, `toggle_dock(side)`,
 
 - [ ] **Tests** (`D/view/footer_tests.rs`), one per kind of control:
   - `a_panel_toggle_hides_and_reveals_its_panel` (P2, P3). Its `label()`
-    and `checked()` follow on screen (R-4); an inactive tab reads off.
+    and `checked()` follow whether it is displayed (R-4); an inactive tab reads off.
   - `a_dock_toggle_reveals_its_hidden_panels` (P6).
   - `a_secondary_click_opens_the_dock_menu_with_its_side_checked` (P8,
     P9). Choose "Dock right": the toggle is now in the right group.
@@ -455,6 +505,9 @@ The Workspace gains `toggle_panel(kind)`, `toggle_dock(side)`,
     0, reads "1 needs attention", and a click reveals and focuses
     Activity.
   - `settings_opens_the_settings_page` (P21).
+  - `footer_controls_do_nothing_behind_a_dialog` (P18). With a dialog
+    open (dialogs keep their overlay, fact 33), clicking a panel toggle and
+    a dock toggle leaves the layout unchanged and the dialog open.
   - `toggle_names_follow_their_state`: the pure name function (R-24).
 - [ ] **Code:**
   - `D/view/footer.rs` and `D/view/footer/menu.rs` (R-4, R-11, R-13,
@@ -499,54 +552,60 @@ The Workspace gains `toggle_panel(kind)`, `toggle_dock(side)`,
 ## Task 9: Persistence (Part G)
 
 - [ ] **Tests:**
-  - `desktop::model::layout::tests::validate_restores_or_falls_back` is
-    **the one table-driven restore test** (Wave Testing; P24). It has one
-    row per case:
-    - no file;
-    - an unreadable file;
-    - not JSON;
-    - JSON of another shape;
+  - `desktop::model::layout::tests::restore_restores_or_falls_back` is
+    **the one table-driven restore test** (Wave Testing; P24). It calls
+    `restore` with one row per case of Part G's table:
+    - `Ok(None)` (no file), and an `Err` (cannot be read);
+    - not JSON, and JSON of another shape;
     - version 0 and version 2;
-    - an unknown leaf;
-    - a missing panel and a repeated panel;
-    - a panel in the centre;
-    - `ItemAreaPanel` in a dock;
-    - an unknown container;
-    - a dock with no panels;
+    - a dock whose `placement` differs from its slot;
+    - an unknown leaf, a missing panel, a repeated panel, a panel in the
+      centre, and `ItemAreaPanel` in a dock;
+    - an unknown container, a `StackPanel` holding a leaf, a `TabPanel`
+      holding a container, a size of 0, and a dock with no panels;
     - `on` and `shown` each missing a key;
-    - a valid file with a hidden dock, a moved panel, a tab group and
+    - a valid file with a closed dock, a moved panel, a tab group and
       changed sizes.
 
     Each row asserts the result and whether the notice shows.
   - `D/view/dock/restore_tests.rs`:
-    - `a_valid_file_restores_the_layout` (P23, P24): a seeded file, then
+    - `a_valid_file_restores_the_layout` (P23, P24). Seed a file, then
       `Shell::open_as_launched`. The dump, the on flags and the shown
-      docks match within 1 px.
-    - `an_unreadable_file_restores_the_default_and_says_so` (P24, P25).
-      The notice shows, and `footer-attention` is absent. Dismiss removes
-      the notice. Sentinel files in `drafts/` and `resolutions/`, and the
-      data directory's entry list, are unchanged. The repositories' refs
-      and status are unchanged.
+      docks match within 1 px, and no save follows the launch.
+    - `a_file_that_cannot_be_read_restores_the_default_and_says_so` (P24,
+      P25). `layout.json` is a directory, so the read fails on every
+      platform. The notice shows, and `footer-attention` is absent.
+      Dismiss removes the notice. The sentinel files in `drafts/` and
+      `resolutions/`, and the data directory's entry list, are unchanged,
+      and so are the repositories' refs and status.
     - `the_layout_survives_a_restart` (P23, A3, A4, A14). Hide Documents
-      (P2), hide the bottom dock, move Tickets left and `set_dock_size`
-      the left dock. Advance past `LAYOUT_SAVE_DELAY` and
-      `Shell::relaunch`. The file is at `<data>/layout/layout.json` and
+      (P2), close the bottom dock, move Tickets left and `set_dock_size`
+      the left dock. Advance past `LAYOUT_SAVE_DELAY`, then
+      `Shell::relaunch`. The file is at `<data>/layout/layout.json`, and
       the layout matches.
-    - `a_change_just_before_quitting_is_kept` (P31). Make a change, quit
-      at once with no clock advance, then relaunch.
-    - `a_failed_write_shows_the_save_notice` (P32). The store's
-      `fail_writes_for_testing` seam makes writes fail, and a later
-      successful write removes the notice.
-  - Complete Task 5's `a_panel_moved_into_a_tab_group_is_kept`.
+    - `a_change_just_before_a_quit_that_exits_at_once_is_kept` (P31). Make
+      a change, quit with no job running and no clock advance, then
+      relaunch.
+    - `a_stale_write_loses_to_the_quits` (P35). Hold a background write
+      with `hold_writes_for_testing`, make another change and quit, then
+      release the held write. The file holds the newer layout.
+    - `a_failed_write_shows_the_save_notice` (P32). With
+      `fail_writes_for_testing`, a write fails and the save notice shows;
+      a later successful write removes it.
+  - Complete Task 5's marked save checks, and the relaunch in
+    `a_panel_moved_into_a_tab_group_is_kept`.
 - [ ] **Edits:** E-9.
 - [ ] **Code:**
-  - `D/services/layout.rs` `LayoutStore`, reached through
+  - `D/services/layout.rs` `LayoutStore` (R-17), reached through
     `Backend::layout()`. `LibraryBackend` opens it; `DelayingBackend` and
-    the fixture open it lazily over the fixture's data directory (R-17).
-  - `validate` in `D/model/layout.rs` (R-18, R-28).
-  - Restore at launch, saving (R-19, R-31) and the two notices (R-21).
-  - `Shell::relaunch` in the harness.
-- [ ] **Verify:** each test by exact name, and Task 5's completed test;
+    the fixture open it lazily over the fixture's data directory.
+  - Generations, one write in flight, and the two test seams (R-19).
+  - `restore` in `D/model/layout.rs` (R-18, R-28).
+  - Restore at launch, with no save from the launch's own events.
+  - Saving (R-19, R-31), including the write at `request_quit`'s entry.
+  - The two notices (R-21).
+  - `Shell::relaunch` in the harness, which resizes nothing (R-26).
+- [ ] **Verify:** each test by exact name, and Task 5's completed tests;
   the four lines.
 - [ ] **Commit; merge main; ticket comment (persistence checkpoint).**
 
@@ -555,16 +614,24 @@ The Workspace gains `toggle_panel(kind)`, `toggle_dock(side)`,
 - [ ] **Tests** (`D/view/workspace_tests.rs`, beside the existing quit
   tests):
   - `a_waiting_quit_shows_activity_and_keeps_the_saved_layout` (P26). With
-    Activity off and a job running, quit. Activity is on screen and Quit
-    now is focused. `secondary-j` and Activity's toggle change nothing.
-    After the clock advances, the file still has Activity off.
-  - `drafts_not_saved_keeps_activity_on_screen` (P27), using the
-    `saving_drafts` failure recipe. The Drafts not saved dialog opens; on
-    Cancel, Content is focused as today, and Activity stays on screen with
-    the failure. The file never holds the override. Hiding Activity then
-    hides it.
-- [ ] **Code:** R-20 in `wait_to_quit`, `drafts_flushed` and the dialog's
-  choices (`D/view/workspace/lifecycle.rs`).
+    Activity off and a job running, quit. Activity is displayed and Quit
+    now is focused. `secondary-j`, `secondary-1` and Activity's toggle
+    change nothing and move no focus. After the clock advances, the file
+    still has Activity off.
+  - `drafts_not_saved_keeps_activity_displayed` (P27), using the
+    `saving_drafts` failure recipe. The Drafts not saved dialog opens. On
+    Cancel the failed draft's Retry is focused inside the displayed
+    Activity, as `a_draft_that_cannot_be_saved_asks_before_quitting`
+    already asserts (`workspace_tests.rs:476-524`). The area is unlocked.
+    After the clock advances, the file still has Activity off. Activity's
+    toggle then hides it.
+  - `edits_not_kept_unlocks_the_layout` (P27). Quit while an edit begin is
+    in flight; the begin lands and Edits not kept opens with the phase
+    `Running` (fact 27). On Cancel the item area is focused, the area is
+    unlocked, and a layout operation works again.
+- [ ] **Code:** R-20 in `set_quit` (the lock, the refusal and the save
+  stop follow the phase) and in `wait_to_quit` (the override), in
+  `D/view/workspace/lifecycle.rs`.
 - [ ] **Verify:** the two tests and the existing quit tests in
   `workspace_tests.rs`'s `saving_drafts` module, by exact name; the four
   lines.
@@ -577,7 +644,8 @@ The Workspace gains `toggle_panel(kind)`, `toggle_dock(side)`,
   - hide Documents from the footer;
   - move Tickets to the left dock with its dock menu;
   - hide and show the bottom dock with `secondary-j`;
-  - focus a hidden Activity with `secondary-4`;
+  - hide Activity from the footer, then focus it with `secondary-4`, which
+    reveals it;
   - relaunch, and find the same layout.
 
   The worker receives no request at any step (RFC 80-84; D5's A17
@@ -641,7 +709,7 @@ git merge-tree --write-tree HEAD origin/main
 | A1, P1 | 2, 4b |
 | A2, P2–P9, P19 | 2, 5, 7, 8, 11 |
 | A3 | 5 (P5), 9 (sizes restored); checklist (resizing) |
-| A4, P23, P31 | 9, 11 |
+| A4, P23, P31, P35 | 9, 11 |
 | A5, P24, P25 | 9 |
 | A6, P22 | 3, 6 |
 | A7, P26, P27 | 2, 10 |
@@ -658,12 +726,14 @@ git merge-tree --write-tree HEAD origin/main
 | A18 | 5 (P28), 11 |
 | A19, P32 | 9 |
 | A20, P11 | 4c, 5, 9 |
-| P10, P12 | 5 |
+| P10, P12, P33, P34, P36 | 5 |
 | P16 | 4a |
+| P18 | 7, 8 |
 | P21 | 7 |
 | R-1, R-26, R-27, R-33, R-34 | 4b |
 | R-2 | 4b, 4c |
-| R-3, R-5, R-6, R-31 | 5 |
+| R-35 | 4c, 5 |
+| R-3, R-5, R-6, R-31, R-36, R-37 | 5 |
 | R-4, R-11, R-12, R-13, R-24, R-30 | 7 |
 | R-7, R-8 | 4a |
 | R-9 | 4b, 5 |
@@ -693,3 +763,4 @@ git merge-tree --write-tree HEAD origin/main
 | Decision 12 | Global Constraints |
 | Decision 13 | 9 |
 | Decision 15 | 4b (R-26) |
+| Decision 16 | 4c, 5 (R-3, R-35) |

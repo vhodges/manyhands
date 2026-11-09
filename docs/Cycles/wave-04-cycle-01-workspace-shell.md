@@ -14,14 +14,15 @@ Ticket `01M6V8RK8B0SBCH0YZXFVSR9E3` (`vh-jge24`).
 [Design](../plans/2026-11-08-wave-04-cycle-01-workspace-shell-design.md) and
 [implementation plan](../plans/2026-11-08-wave-04-cycle-01-workspace-shell-implementation.md).
 
-Status: **draft revision 2, 2026-11-08.** Not approved.
+Status: **draft revision 3, 2026-11-08.** Not approved.
 
 - This document was drafted on the ticket branch at `cc2af8d0`, which
   merged origin/main `8da9afd4`. The design and plan were drafted at
   `2b1dc4d5`.
-- All three were reviewed independently at `bb9b3cc9` (round 1, Review
-  Record), then revised.
-- Revision 2 goes through a scoped re-review before the owner is asked to
+- All three were reviewed independently at `bb9b3cc9` (round 1) and at
+  `fbca53f4` (round 2: a scoped re-review and an adversarial review), and
+  revised after each (Review Record).
+- Revision 3 goes through a scoped re-review before the owner is asked to
   approve it.
 
 Approval of the documents does not authorize implementation, which needs
@@ -135,11 +136,15 @@ Whichever of these merges second merges main and adapts, per `AGENTS.md`.
 5. **Default layout** (Wave decision 1, decision 15): left dock 290 px
    with Repositories (0.6) stacked over Documents (1.4); right dock 440 px
    with Tickets; bottom dock 150 px with Activity, whose contents scroll.
-6. **Visibility rules** from `02`: showing a panel shows its dock; when
-   every panel in a dock is hidden the dock collapses and the item area
-   widens; a dock toggle hides or shows the dock without changing which
-   panels are on; a dock toggle on a dock whose panels are all hidden shows
-   them all (decision 6).
+6. **Visibility rules** from `02`:
+   - Showing a panel shows its dock, and selects its tab.
+   - When every panel in a dock is hidden, the dock collapses and the item
+     area widens. A hidden bottom dock keeps a 29 px strip naming its
+     panels (decision 16).
+   - A dock toggle hides or shows the dock without changing which panels
+     are on.
+   - A dock toggle on a dock whose panels are all hidden shows them all
+     (decision 6).
 7. **Footer** (Kit `StatusBar`, 28 px), per `02`, "Footer":
    - the left dock toggle, one toggle per left panel, a separator, the
      bottom dock toggle and one toggle per bottom panel;
@@ -178,7 +183,7 @@ Whichever of these merges second merges main and adapts, per `AGENTS.md`.
       (decision 4).
     - `secondary-n` is New ticket… in Tickets and New document… in
       Documents.
-    - F6 and Shift F6 cycle the panels on screen and the item area only, in
+    - F6 and Shift F6 cycle the displayed panels and the item area only, in
       the order of decision 9.
     - Every footer control is reachable by Tab, has an accessible name and
       shows focus. The title bar's window controls exist only with client
@@ -345,6 +350,15 @@ Answered by the owner after review round 1:
     acceptable. Nothing scrolls a focused control into view in this Cycle.
     Tests that need a control low in Activity open it taller.
 
+Answered by the owner after review round 2:
+
+16. **A hidden bottom dock keeps the Kit's strip, for now.** Docks open
+    and close through the Kit itself. The Kit cannot close the bottom dock
+    completely: it keeps a 29 px strip under the item area, which names
+    the dock's panels; activating one shows it. Left and right docks close
+    completely. Hiding the bottom dock completely is to be revisited later
+    (design Document Amendment 4 adds it to the Wave's Deferred Work).
+
 ## Known Limits
 
 These are visible to users; the design's Known Limits give the detail.
@@ -360,6 +374,9 @@ These are visible to users; the design's Known Limits give the detail.
 - A window resize alone is not saved (K-9).
 - A focused control low in Activity may need scrolling (K-13,
   decision 15).
+- A hidden bottom dock keeps a 29 px strip (K-15, decision 16).
+- A quit's layout write runs on the UI thread, so a hung file system
+  delays the quit (K-14).
 
 ## Open Questions
 
@@ -388,7 +405,7 @@ them; U-5 was settled in review.
 | Planning research | No "attention entries" exist in `model/operations.rs` | Owner decision | Decision 3. | Wave 244, 514; `services/requests.rs:782-793`. |
 | Planning research | Find sits above both lists in the Navigation pane | Owner decision | Decision 4. | `view/lists.rs:39`; `view/find.rs:44`. |
 | Planning research | D6's attention states live in its own polling model; its documents are uncommitted | Settled | Exclusions and decision 3: the second to merge wires them in. | D6 design (uncommitted), Phase and Reason; D6 worktree `git status`. |
-| Planning research | The Kit hides a panel only by `visible()`; a dock with every panel hidden keeps its width; a closed bottom dock keeps a 29 px strip | Ruling | Design R-3: a dock that is not open is taken out of the area. | gpui-base `dock/panel.rs:21-93`, `dock/dock_area.rs:1325-1354`, `:1702-1715`. |
+| Planning research | The Kit hides a panel only by `visible()`; a dock with every panel hidden keeps its width; a closed bottom dock keeps a 29 px strip | Ruling, then owner decision | Design R-3: a dock with nothing on closes through the Kit; the bottom keeps its strip (decision 16). | gpui-base `dock/panel.rs:21-93`, `dock/dock_area.rs:1325-1354`, `:1702-1715`. |
 | Planning research | The Kit's panel header always draws a menu with Zoom and Close | Ruling | Design R-2: own header renderer per `02`; panels not closable or zoomable. | gpui-component `dock/tab_panel.rs:269-351`. |
 | Planning research | `DockArea::load` ignores the version and keeps unknown panels as placeholders | Ruling | Design R-18, R-28: the file is validated before loading. | gpui-base `dock/dock_area.rs:716-760`; gpui-component `dock/dock.rs:83-93`. |
 | Planning research | The Kit's context menu opens on right click only | Owner decision (proposed, confirmed 2026-11-08) | Decision 8; design R-11. | gpui-component `menu/context_menu.rs:296-300`. |
@@ -400,3 +417,5 @@ them; U-5 was settled in review.
 | Review round 1 | A failed layout save was never shown | Owner decision | Decision 13 | RFC 52-53 |
 | Review round 1 | A failed pending read counted nothing | Owner decision | Decision 14 | Decision 3 |
 | Review round 1 | Activity at 150 px with no focus reveal | Owner decision | Decision 15 | Design fact 26 |
+| Review round 2 (scoped re-review and adversarial review, `fbca53f4`) | Re-review: 1 Blocking, 9 Important, 10 Minor. Adversarial: 4 Blocking, 9 Important, 5 Minor | — | Each verified against the source and applied in revision 3; detail in the design's Review Record | Reviewer reports, 2026-11-08 |
+| Review round 2 | Taking hidden docks out of the area and rebuilding them was the source of all five Blocking findings | Owner decision | Decision 16: the Kit's own dock closing, with its bottom strip for now | Design Review Record |
