@@ -4,12 +4,16 @@
 use super::{Region, Workspace};
 use crate::desktop::{
     keys::{
-        CloseTab, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
-        FocusRepositories, JumpToDiscussion, NewItem, NextRegion, NextTab, OpenDrafts,
-        OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh,
-        ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop,
+        CloseTab, DockPanel, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
+        FocusRepositories, JumpToDiscussion, NewItem, NextRegion, NextTab, OpenDockMenu,
+        OpenDrafts, OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow,
+        Rebuild, Refresh, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop,
+        ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
     },
-    model::{layout::PanelKind, stamp::SettingsPage},
+    model::{
+        layout::{PanelKind, Side},
+        stamp::SettingsPage,
+    },
     view::{
         dock::Slot,
         scroll::ContentScroll,
@@ -191,6 +195,8 @@ impl Render for Workspace {
             .min_h_0()
             .w_full()
             .child(self.dock_area().clone());
+        let footer = self.footer(window, cx);
+        let dock_menu = self.dock_menu_layer(window, cx);
         // Root's first child draws its dialog and notification layers.
         v_flex()
             .id("workspace")
@@ -284,11 +290,30 @@ impl Render for Workspace {
                     }
                 },
             ))
+            .on_action(unless_dialog(cx, |this, _: &ToggleLeftDock, window, cx| {
+                this.toggle_dock(Side::Left, window, cx)
+            }))
+            .on_action(unless_dialog(
+                cx,
+                |this, _: &ToggleRightDock, window, cx| this.toggle_dock(Side::Right, window, cx),
+            ))
+            .on_action(unless_dialog(
+                cx,
+                |this, _: &ToggleBottomDock, window, cx| this.toggle_dock(Side::Bottom, window, cx),
+            ))
+            .on_action(unless_dialog(cx, |this, _: &OpenDockMenu, window, cx| {
+                this.open_focused_dock_menu(window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, action: &DockPanel, window, cx| {
+                this.dock_chosen(action.panel, action.side, window, cx)
+            }))
             .relative()
             .size_full()
             .bg(cx.theme().background)
             .child(title_bar)
             .child(dock)
+            .child(footer)
+            .children(dock_menu)
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }

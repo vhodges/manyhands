@@ -5,6 +5,7 @@ mod content;
 mod docks;
 mod find;
 mod focus;
+mod footer;
 mod lifecycle;
 mod lists;
 mod render;
@@ -30,6 +31,7 @@ use super::{
     dock::DockShell,
     documents::DocumentsPane,
     drafts::{DraftsEvent, DraftsPage},
+    footer::Footer,
     item::{ChipField, ItemPane},
     passphrase::PassphraseDialog,
     settings::{SettingsEvent, SettingsHost},
@@ -90,6 +92,8 @@ pub(crate) struct Workspace {
     layout: Layout,
     /// The dock area, whose panels draw the regions.
     dock: DockShell,
+    /// The footer's focus handles and the open dock menu.
+    footer: Footer,
     navigation: Navigation,
     /// Replacing a read drops the previous task.
     list_read: Option<Task<()>>,
@@ -253,6 +257,7 @@ impl Workspace {
             regions,
             layout,
             dock,
+            footer: Footer::new(cx),
             navigation: Navigation::default(),
             list_read: None,
             resolve_read: None,

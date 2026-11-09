@@ -20,7 +20,6 @@ use crate::desktop::{
 /// - each unfinished operation the pending lists show;
 /// - one for each repository whose pending list failed to load (decision
 ///   14). A read that is loading or busy is not a failure.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
 pub(crate) fn needs_attention(operations: &Operations, drafts: &DraftRegistry) -> usize {
     let requests = operations
         .requests()

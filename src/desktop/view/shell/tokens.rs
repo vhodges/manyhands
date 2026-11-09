@@ -40,7 +40,6 @@ pub(crate) struct ChromeColors {
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub green: Hsla,
     /// Failure, blocked, conflict, attention.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub red: Hsla,
 }
 

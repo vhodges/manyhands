@@ -17,7 +17,6 @@ use crate::desktop::{
 
 impl Workspace {
     /// A panel toggle: a displayed panel goes off, any other is revealed.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub(in crate::desktop::view) fn toggle_panel(
         &mut self,
         kind: PanelKind,
@@ -28,7 +27,6 @@ impl Workspace {
     }
 
     /// A dock toggle.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
     pub(in crate::desktop::view) fn toggle_dock(
         &mut self,
         side: Side,
@@ -55,7 +53,6 @@ impl Workspace {
     /// from it, as it does after a drag, which reveals a panel whose side
     /// changed (R-36). `Layout::move_to` is the pure model of this move,
     /// and a test holds the two together.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub(in crate::desktop::view) fn dock_panel(
         &mut self,
         kind: PanelKind,

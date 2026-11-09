@@ -80,10 +80,9 @@ enum Geometry {
 }
 
 /// The window chrome that is not the item area, the dock sides or Activity:
-/// the title bar (38 px, Task 6). Task 7 adds the footer (28 px), so the item
-/// area stays 860 x 1140 at every task, and a window of 1590 x 1726 results
-/// (R-26).
-const SHELL_CHROME_HEIGHT: f32 = 38.;
+/// the title bar (38 px) and the footer (28 px). The item area stays
+/// 860 x 1140, and a window of 1590 x 1726 results (R-26).
+const SHELL_CHROME_HEIGHT: f32 = 66.;
 
 /// The harness window: the side docks (290 and 440 px) leave an item area of
 /// 860 px, and Activity (520 px) and the chrome leave it 1140.

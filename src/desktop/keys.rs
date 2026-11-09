@@ -3,6 +3,8 @@
 
 use gpui_kit::{App, KeyBinding, NoAction};
 
+use crate::desktop::model::layout::{PanelKind, Side};
+
 gpui_kit::actions!(
     manyhands,
     [
@@ -107,11 +109,29 @@ gpui_kit::actions!(
         ComposerToggleMode,
         /// Save resolution, in the resolve conflict sheet (D5 B3).
         SaveResolution,
+        /// Show or hide the left dock.
+        ToggleLeftDock,
+        /// Show or hide the right dock.
+        ToggleRightDock,
+        /// Show or hide the bottom dock.
+        ToggleBottomDock,
+        /// Open the dock menu of the focused panel toggle.
+        OpenDockMenu,
         /// Escape in the sheet's Result editor: back to its tab stop, the
         /// sheet left open (R-31).
         LeaveResult,
     ]
 );
+
+/// The dock menu's choice (R-12): `panel` moves to the end of `side`'s dock
+/// and is revealed. Data for the menu's items; no key and no keymap file
+/// name it, hence `no_json`.
+#[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
+#[action(namespace = manyhands, no_json)]
+pub(crate) struct DockPanel {
+    pub panel: PanelKind,
+    pub side: Side,
+}
 
 /// The key context of the Documents and Tickets regions (the tickets list
 /// with its find bar and filters): `secondary-n` opens the focused list's
