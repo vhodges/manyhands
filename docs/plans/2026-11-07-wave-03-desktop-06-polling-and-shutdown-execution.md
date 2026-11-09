@@ -33,6 +33,66 @@ retirement's pending row settles the observer (`reentry.rs:135`); if it does
 not, Task 12 stops for the owner. Record as a known limit at review-ready —
 cost if wrong: one inert-looking pending row until the retirement is resumed.
 
+Rulings made in Task 2 (the implementer's, reviewed; "decision — why — cost if wrong"):
+
+- Ruling: `next_wake(&Now)` and `clock_event(utc_delta, mono_delta)` take the
+  reading — the UTC-to-monotonic conversion needs one and the model must read no
+  clock — cost: a signature change.
+- Ruling: A4's "Err(Transport) key source, selection, endpoint or host trust
+  changed" row maps to Idle after re-reading policy, as A4 says, not to the
+  categories the library's crate-private `transport_category` gives them (key,
+  configuration, host). A4 is the specific row and R-11 backs it — cost: Task
+  3 maps by A4 with an **exhaustive match, no wildcard** over the 24
+  `SshTransportErrorKind`s (partition: unreachable 4, locked 3, key problem 5,
+  host 3, configuration 3, changed 4, unavailable 2). A persistent
+  `KeySourceChanged` or `HostTrustChanged` is retried each interval and never
+  escalates (a repeat-count escalation can be added later).
+- Ruling (changed by review, I-1): attention for a missing, unreadable or
+  rejected key is **one entry per key** with its repositories collected
+  (`Reason::KeyProblem(KeyId)`); a problem with no key id is per repository
+  (`Reason::NoKeySelected(Root)`). This follows Cycle decision 11 and Wave 04
+  W-1 ("once per locked or missing key") over A2's type sketch — cost: a
+  different grouping if the owner reads A2 literally.
+- Ruling: `HostUnidentified(Root)` for a host answer with no authority (A4: "per
+  repository if None"); `ConfigurationRequired(Root)` and `RecoveryHeld(Root)`
+  carry their root.
+- Ruling: `Why::Failed` for `Err(Repository)` other than `recovery_required`;
+  `Phase::Preempted` (A2), not `Waiting{Preempted}` as the A4 table wrote it.
+- Ruling: a `hold_until` field. A4's "Idle at the interval" rows (conflict
+  pending, registry or runtime unavailable, preempted three times) keep `Idle`
+  plus a monotonic hold that outlasts a stale stored deadline; otherwise a
+  policy re-read would restore the past deadline and loop (R-35) — cost: a
+  structural field.
+- Ruling: `Err(Repository)` waits carry no operation and resend with
+  `restart=false` (no row was recorded, Fact 32); Busy and Interrupted keep
+  their operation. Hand-off: the in-flight record's "ours" test (L-1, L-3) uses
+  `active_operation_id`, never `restart_of`.
+- Ruling: a `stale` flag. `after()` marks the policy stale when the model's
+  copy was wrong or the deadline unknown (paused, off, held, Changed,
+  reconfiguration and takeover cancels, missing deadline, every clock jump);
+  `due()` and `next_wake()` skip stale repositories until `set_policy`.
+  **Hand-off risk for Task 5:** re-read `stale()` roots immediately after
+  `after`, `clock_event` and `reconfigure`; `next_wake` is `None` while stale.
+  Added `abandon(root)` (queued or running to Idle, stale) for a dropped poll
+  so the global busy gate cannot silence polling (review I-2).
+- Ruling: `Ok(Polled{Interrupted})` and `Err(Interrupted)` are one `Answer`
+  (identical A4 rows); Task 3 maps both.
+- Ruling: `last` is replaced only by Completed, Transport and Interrupted, and
+  by a Cancelled attempt that brought something in or listed dispositions
+  (review M-1); only Completed moves `last_completed`.
+- Ruling: a retire candidate needs both an item id and a kind, else it is
+  listed; Closed and Promoted go to `retire` only from a Completed attempt.
+- Ruling: `due()` and `next_wake()` are empty while any poll is queued or
+  running, whatever the repository (one worker, R-7) — cost: change if
+  concurrent polls are ever allowed.
+- Ruling: tests are split over four files by `#[path]` to stay under ~500
+  lines, with two extra tests (`attempt_summary_counts`, `preempted_three_times`)
+  for decisions the planned eight do not cover.
+- Hand-offs (doc comments, no code): read `restart_of()` before `mark_queued`
+  (which discards `Waiting.op`); Resume checking must call
+  `clear_attention(RecoveryHeld(root))` and `set_policy`; `attention()` order is
+  first-root order, so sort in the UI if a stable order is needed.
+
 ## Existing-test edits
 
 E-1 to E-6 are named in the design's Testing section. Any further edit is
@@ -187,4 +247,28 @@ Approved as written by the owner on 2026-11-09 (Cycle, Status; ticket comment
   change.
 - Stopping wording the status may use: "waiting for Manyhands to reach a safe
   point", never a deadline. Part D's "Still stopping" text stands.
+| 2 | `135ba7d8` | `fd284033`, `d80b481d` (review fixes) | APPROVE WITH MINOR; I-1 (key grouping), I-2 (`abandon`), I-3 (row assertions) and M-1/2/3/6/8 applied, M-4/5/7 documented; fixes not re-reviewed | the 10 below, each singly with `--exact`, 1 test each, pass; fmt, check, both clippy pass |
+
+## Task 2: clock seam and schedule model (Part A)
+
+Files: `src/desktop/model/polling.rs` and `polling/{clock,attempt,state,table}.rs`,
+four test files (`polling_tests.rs`, `polling_schedule_tests.rs`,
+`polling_decisions_tests.rs`, `polling_attention_tests.rs`), `model/mod.rs`.
+No library, Cargo or other desktop file changed. `Instant::now` and
+`now_utc` appear only in `SystemClock`.
+
+Tests (full paths, all under `desktop::model::polling::tests::`):
+`after_attempt_table`, `schedule::attempt_summary_counts`,
+`schedule::restart_schedule`, `schedule::preempted_three_times`,
+`decisions::due_order_and_launch`, `decisions::next_wake_table`,
+`decisions::clock_event_once`, `attention::reconfiguration_table`,
+`attention::pause_versus_attention`, `attention::attention_keys`.
+
+## Part A checkpoint (Task 2)
+
+- Main: `origin/main` still `f4442618`, already an ancestor of HEAD; Cycle 01
+  (`01M6V8RK8B0SBCH0YZXFVSR9E3`) not on main.
+- Tests run: only the ten above, singly. Static gates (fmt, check, clippy
+  desktop and all-targets) pass at `d80b481d`. No whole suite, no other target.
+- No existing test edited (no E-n yet).
 
