@@ -21,12 +21,13 @@ mechanisms, rulings, named test edits and task order. It does not
 authorize implementation, pushes beyond the ticket branch, merging or
 closing.
 
-Revision 4, 2026-11-08, after review rounds 1 to 3 (Review Record) and
+Revision 5, 2026-11-08, after review rounds 1 to 4 (Review Record) and
 the owner's decisions 12–16. Decision 16 replaced the mechanism round 2
 attacked: docks now open and close through the Kit itself, which held in
 round 3. The quit override, which drew findings in every round, is gone:
 the owner revised decision 7 so a waiting quit changes no layout (Part H).
-Revision 4 has not been independently reviewed. It is grounded at the ticket branch `2b1dc4d5`,
+Round 4, a scoped re-review of revision 4, found nothing Blocking;
+revision 5's fixes for its findings have had no independent review. It is grounded at the ticket branch `2b1dc4d5`,
 which holds origin/main `8da9afd4`.
 
 Conventions:
@@ -474,7 +475,7 @@ and `.faint` are read from it, so one source holds them; the rest of
 | Dock toggle on an open dock | Not shown. Which panels are on does not change (`02`). |
 | Dock toggle on a dock that is not open | Shown; if none of its panels is on, all of them go on (decision 6). |
 | Dock toggle on a side with no panels | None: that side has no toggle (decision 6). |
-| Reveal (a toggle, a region key, Find, Needs attention, a strip tab) | The panel goes on, its dock is shown and its tab is selected. |
+| Reveal (a toggle, a region key, Find, Needs attention, a strip tab, the item view's "Show it" link) | The panel goes on, its dock is shown and its tab is selected. |
 | Dock menu: another side | The panel moves there (Part C) and is revealed (R-5). |
 | Dock menu: its current side | Nothing. |
 | A panel dragged to another side | Revealed (R-36). |
@@ -669,6 +670,9 @@ save follow from a launch. No flag is needed.
   another tab is selected), it moves to the item area. The strip's group
   frame tracks the active panel's handle (fact 8), so the check, not
   `focus_lost`, catches a closed bottom dock.
+- The same check runs when focus enters a region that is not displayed,
+  for example a click on the closed strip outside its tabs, whose frame
+  tracks the active panel's handle (`B/dock/tab_group.rs:675-711`).
 - A tab click is the exception: the Kit focuses the panel it selects, and
   focus stays there.
 - A refused operation moves no focus.
@@ -810,6 +814,9 @@ Existing actions (R-10):
 
 - `FocusRepositories`, `FocusNavigation` (`secondary-2`) and
   `FocusOperations` reveal their panel before focusing it.
+- `show_holder`, which the item view's "Show it" link reaches
+  (`D/view/workspace/requests.rs:225-247`), reveals Activity before it
+  focuses the entry or the region.
 - `Find` reveals Tickets before focusing Find.
 - `NextRegion` and `PreviousRegion` follow Part C's F6 order.
 - `FocusContent` is unchanged.
@@ -855,13 +862,22 @@ restore notice shows. At launch the shell:
 
 So the launch's own events schedule no save.
 
-**Clamp (R-37).** After the first frame, the dock area's bounds are known.
-If the open side docks together leave the item area less than 320 px
-wide, the shell scales both down in proportion until it has 320 px, and a
-too-tall bottom dock likewise until the item area has 200 px. This
-happens once per launch. It is a layout change and is saved: a size from
-a larger screen is reduced. The clamp never runs before the first frame,
-when the area's bounds are still zero (`B/dock/dock_area.rs:137`).
+**Clamp (R-37).** The Workspace's render reads `DockArea::bounds()`
+(`B/dock/dock_area.rs:177-180`, recorded in prepaint at `:1404-1405`).
+The first time they are non-zero it defers the clamp, and it does the
+same whenever reconcile opens a dock. The clamp works as follows:
+
+- If the side docks that are open, or about to open, leave the item area
+  less than 320 px wide, both are scaled down in proportion until it has
+  320 px.
+- A too-tall bottom dock is scaled likewise, until the item area has
+  200 px.
+- It is a layout change and is saved: a size from a larger screen is
+  reduced.
+- It never runs while the bounds are still zero.
+
+The hook does not use `on_next_frame`, which tests never run
+(`G/window.rs:2610-2647`).
 
 | Case | Result | Notice |
 | --- | --- | --- |
@@ -872,7 +888,7 @@ when the area's bounds are still zero (`B/dock/dock_area.rs:137`).
 | A dock whose `placement` differs from its slot | Default | Restore notice |
 | A leaf name other than the five; a panel missing or repeated; a panel in the centre; `ItemAreaPanel` outside it | Default | Restore notice |
 | A node whose `info` and name disagree (the Kit reads by `info`, `B/dock/state_convert.rs:126-185`): `Stack` must be `StackPanel`, `Tabs` must be `TabPanel`, `Panel` a leaf | Default | Restore notice |
-| A `StackPanel` holding a leaf; a `TabPanel` holding anything but leaves; a `sizes` count that differs from the children; a split size or a `DockState` size of 0 or less; a dock with no panels | Default | Restore notice |
+| A `StackPanel` holding a leaf; a `TabPanel` holding anything but leaves; a `sizes` count that differs from the children; a split size of 0 or less; a `DockState` size under 100 px, which the Kit's `load` does not floor and a person could not drag back (`B/dock/dock_area.rs:748-750`; `B/dock/dock_placement.rs:150-158`); a dock with no panels | Default | Restore notice |
 | `on` or `shown` missing a key or holding an unknown one | Default | Restore notice |
 | Valid | Restored with on flags, shown docks, groups, active tabs and sizes | None |
 
@@ -895,15 +911,21 @@ session and only the restore notice shows.
   `background_executor().timer` (fact 32). When it fires, it takes the
   layout as it is then.
 - **Generations.** The store hands out the generation when a write is
-  requested, from a counter it owns, so a relaunch or a second Workspace
-  never starts behind. It writes one save at a time, off the UI thread.
+  requested, from a counter it owns. The counter, the newest generation
+  written, the lock and both test seams sit behind one `Arc` that every
+  clone of the store shares, as `ResolutionStore` shares its folder
+  (`D/services/resolutions.rs:213-215`; `D/test_support/fixtures.rs:97-107`).
+  So a relaunch or a second Workspace never starts behind. It writes one save at a time, off the UI thread.
   Under its lock it skips any save older than the newest it has written,
   as the drafts registry keeps one write in flight
   (`D/services/drafts/flush.rs:192-215`).
-- **The quit's write.** At `request_quit`'s entry, while the phase is
-  still `Running`, the layout is written at once on the UI thread, with
-  the next generation. That covers the quit that exits at once (fact 27).
-  A background write still in flight is then skipped as stale.
+- **The quit's write.** `quit_now` (`D/view/workspace/lifecycle.rs:268`)
+  writes the layout at once on the UI thread, with the next generation,
+  before it calls `cx.quit()`. Every exit passes through it: a quit that
+  exits at once, Quit now, a job that finishes and a successful flush
+  (`:152-157`, `:213-215`, `:268-281`; `render.rs:149`). A change made
+  during a wait is therefore kept. A background write still in flight is
+  skipped as stale.
 - **Every write** uses `on` and `shown` from the model.
 
 ## Part H: Quit
@@ -931,7 +953,7 @@ Activity status, are recorded as later work (Document Amendment 4).
 
 | # | Situation | Required outcome |
 | --- | --- | --- |
-| P1 | First launch | Default layout (Part B); focus on Repositories; no notice; no save |
+| P1 | First launch | Default layout (Part B); focus on Repositories; no notice; no save unless the clamp (R-37) ran |
 | P2 | Panel toggle on a displayed panel | Off; the rest of its dock takes its space; its contents, filters, Find text and selection are kept; saved |
 | P3 | Panel toggle on a panel not displayed, including an inactive tab | Revealed: on, dock shown, tab selected |
 | P4 | The last panel that is on in a dock goes off, or a drag leaves only panels that are off | The dock closes: a side dock takes no space, the bottom dock keeps its strip; the dock toggle reads off |
@@ -961,7 +983,7 @@ Activity status, are recorded as later work (Document Amendment 4).
 | P28 | Hiding or moving any panel while a request runs | The request finishes and its entry is in Activity when shown; no tab opens, closes or reloads; nothing is sent |
 | P29 | Tab through the footer | Every control reached, with focus shown, its accessible name and toggled state |
 | P30 | A dock closed and opened (R-3) | Focus on a Kit button elsewhere (for example the item header's Edit) is kept; tabs unchanged; nothing in the area is rebuilt |
-| P31 | A change, then a quit that exits at once | The change is in the file at the next launch |
+| P31 | A change, then a quit that exits at once; a change made during a quit wait, then the job finishes | The change is in the file at the next launch |
 | P32 | A layout write fails | The save notice; nothing else changes; a later successful write removes it |
 | P33 | A tab on the closed bottom strip, including in a bottom dock split side by side and with every panel off | Every panel in the dock is named; activating one reveals it, opening the dock |
 | P34 | Dragging the closed bottom strip's edge | The dock opens, counted as its dock toggle |
@@ -1057,15 +1079,25 @@ Applied in the approval commit:
    default (decision 11).
 3. **Wave Cycle 01, Dock menu.** It also opens with Shift F10
    (decision 8).
-4. **Wave Deferred Work.** It now lists four items:
+4. **Wave Deferred Work.** It gains five items:
    - saving open tabs, the focused pane and the scope with the layout
      (`02`, "Persistence"; Cycle Exclusions);
    - hiding the bottom dock completely, without the Kit's 29 px strip
      (decision 16);
    - a footer line showing the latest Activity status, such as "Saving…"
      or "Syncing…" (owner, 2026-11-08);
-   - removing the Quit now and Quit anyway buttons, with a replacement way
-     out of a quit that hangs (owner, 2026-11-08).
+   - **quitting with work at risk** (owner, 2026-11-08). One blocking
+     dialog lists the unsaved or unsaveable work and offers going back or
+     discarding it and quitting. Save failures are handled per item
+     ("discard changes") rather than globally, and Activity's quit and
+     save-failure wording is revisited. This replaces Quit now and Quit
+     anyway;
+   - **a watchdog for pending operations** (owner, 2026-11-08). After a
+     time, the person chooses to keep waiting or to abandon the job,
+     offering only what the request can safely do: a stop at a safe point
+     or Give up where they exist, otherwise keep waiting, or quit and
+     Resume later. It is also the way out of a quit that hangs on a job.
+     D6's "still stopping" line after ten seconds is a first step;
 5. **Wave Cycle 01, Split line.** One Cycle (decision 1).
 6. **Handoff `08`.** The dock names are verified against 0.6.6 (fact 1):
    `DockLayout`, `DockSkin`, `DockAreaRenderer`, `TabGroupRenderer`; there
@@ -1084,13 +1116,20 @@ Applied in the approval commit:
 10. **Ticket.** The Scope Summary's "28 px rows" defers to decision 11.
     The D6 Coordination's "attention entries" becomes the new count
     function. This is a `ticket.md` edit, committed before `ticket save`.
-11. **Wave Cycle 01, Panels and Exit Evidence, and Risks row 513.** "Quit
-    feedback stays visible with Activity hidden" and "a quit that has to
-    wait shows its feedback with Activity hidden" now read: a quit that has
-    to wait proceeds with Activity hidden, and its entries are in Activity
-    when it is opened (decision 7). The ticket's D6 Coordination item
-    "Quit feedback stays visible" changes the same way (with Amendment
-    10).
+11. **Wave Cycle 01, Panels, Exit Evidence, and Risks row 513**
+    (decision 7):
+    - Panels: "Quit feedback stays visible with Activity hidden: the panel
+      is shown when a quit starts waiting, or the feedback is drawn outside
+      any panel" now reads: "A quit that has to wait changes no layout; its
+      feedback is in the Activity panel, visible when Activity is shown."
+    - Exit evidence: "a quit that has to wait shows its feedback with
+      Activity hidden" now reads: "a quit that has to wait proceeds with
+      Activity hidden, and its feedback is in Activity when opened."
+    - Risks row 513's control now reads: "Cycle 01 keeps the feedback in
+      the Activity panel and changes no layout when a quit waits; a
+      person who wonders why opens Activity."
+    - The ticket's D6 Coordination item "Quit feedback stays visible"
+      changes the same way (with Amendment 10).
 
 After approval, also comment on D6's ticket `01M4CC0VN3VPVVQ3RNWJKXWEVX`
 (decision 3, Amendment 7): whichever merges second adds D6's states to
@@ -1118,7 +1157,7 @@ After approval, also comment on D6's ticket `01M4CC0VN3VPVVQ3RNWJKXWEVX`
 | R-16 | The app icon is a small PNG made from `packaging/icons/manyhands-1024.png`, kept under `D/` and served by `DesktopAssets` at `brand/manyhands.png`; only the `activity` icon is added to `ItemIcons` (fact 34) | — |
 | R-17 | The layout lives at `<data>/layout/layout.json`, through `Folder::open_named`, reached by `Backend::layout()`; one layout per app | — |
 | R-18 | Part G's validation table, inside the pure `restore`; a launch whose loaded area fails R-6's check falls back to the default with the notice | A file a later build could partly use is replaced |
-| R-19 | One debounced save, 500 ms after the last change; one write at a time off the UI thread, with store-allocated generations so a stale write is skipped; at `request_quit`'s entry, at once on the UI thread | The UI thread waits on one small write at quit (K-14) |
+| R-19 | One debounced save, 500 ms after the last change; one write at a time off the UI thread, with generations from a counter every store clone shares, so a stale write is skipped; in `quit_now`, at once on the UI thread, before every exit | The UI thread waits on one small write at quit (K-14) |
 | R-20 | A waiting quit changes no layout; its entries live in Activity; Quit now and Retry take focus only when Activity is displayed (decision 7, revised) | A person with Activity hidden sees no sign of a waiting quit until they open Activity |
 | R-21 | The restore and save notices sit in the Activity panel above the operation area; dismissible, session only, not counted. With no store, saving is off and only the restore notice shows | — |
 | R-22 | Header counts: repositories listed, tickets listed under the current filters, documents listed. Activity has none, and there is no count until the list is loaded | — |
@@ -1136,7 +1175,7 @@ After approval, also comment on D6's ticket `01M4CC0VN3VPVVQ3RNWJKXWEVX`
 | R-34 | Registry builders look up panel handles by the loading area's entity id in an app-global map, inserted before the first `load` and removed when the Workspace is released | — |
 | R-35 | While the bottom dock is closed, every panel in it is marked visible, so the strip names each one; activating one reveals it. Strip tabs are not dragged or dropped on. A collapsed group draws no active panel | A strip in a bottom dock split top and bottom shows only its top group (K-17) |
 | R-36 | A panel whose side changes, by the menu or by a drag, is revealed; a Kit-opened dock counts as its dock toggle | — |
-| R-37 | Once per launch, after the first frame, side docks are scaled down together so the item area keeps 320 px, and the bottom dock so it keeps 200 px; the result is saved | A size from a larger screen is lost |
+| R-37 | When the dock area's bounds are first non-zero, and whenever a dock opens, side docks are scaled down together so the item area keeps 320 px, and the bottom dock so it keeps 200 px; the result is saved | A size from a larger screen is lost |
 | R-38 | The launch sets the accepted state and the arrangement from a dump in the same update that builds or loads the area, so its own events are absorbed by R-6's first step | — |
 | R-39 | Withdrawn (decision 7, revised) | — |
 
@@ -1178,6 +1217,8 @@ After approval, also comment on D6's ticket `01M4CC0VN3VPVVQ3RNWJKXWEVX`
   two.
 - **K-17.** A bottom dock split top and bottom by a drag shows only its top
   group's tabs in the closed strip (R-35).
+- **K-18.** With Activity hidden, a quit that has to wait shows nothing
+  until Activity is opened (decision 7, R-20).
 
 ## Unverified
 
@@ -1215,7 +1256,7 @@ U-5 was settled in review (fact 15).
 | Risk | Control |
 | --- | --- |
 | The 0.6.6 dock differs from the handoff's names and examples | Facts 1–11 read from the locked source; Task 4b opens with a design checkpoint |
-| The region change reaches most desktop tests, and with decision 12 an unlisted break shows only at Task 12's fast tier | E-1 to E-9; R-26 keeps today's click geometry; each task runs the existing tests it touches by name; an unlisted break stops for the owner |
+| The region change reaches most desktop tests, and with decision 12 an unlisted break shows only at Task 12's fast tier | E-1 to E-10; R-26 keeps today's click geometry; each task runs the existing tests it touches by name; an unlisted break stops for the owner |
 | Panel methods called inside Kit updates read a leased entity | R-1: `visible` and `focus_handle` read only the panel |
 | Reconcile and the handler chase each other | R-6 stops on an unchanged dump, and reconcile toggles only docks that differ; P4, P8 and P10 run with closed docks |
 | D6 changes the operation area and the quit path at the same time | No edit to `view/operations/` or `model/operations.rs`; the second to merge adapts (Cycle, In flight) |
@@ -1248,5 +1289,7 @@ U-5 was settled in review (fact 15).
 | Round 3 | Store generations per Workspace; the hold seam inside the lock | Ruling | R-19; Testing, Harness | `D/test_support/fixtures.rs:99-131` |
 | Round 3 | The strip skipped groups whose panels are all off | Ruling | R-35; K-17 | `B/dock/dock_area.rs:1238-1254` |
 | Round 3 | Ten test sites resize the window themselves (the re-review found nine; `settings/repositories_tests.rs:650` is the tenth) | Named edit | E-10 | `git grep simulate_resize -- src/desktop` |
-| Round 3 | Validation by name, not by `info`; `set_quit` has no window; focus on a closed strip; strip drops | Ruling, settled | Part G table; Part H lock sites; Part C focus check; R-35 | `B/dock/state_convert.rs:126-185`; `D/view/workspace/lifecycle.rs:141-147` |
+| Round 3 | Validation by name, not by `info`; `set_quit` has no window; focus on a closed strip; strip drops | Ruling, settled | Part G table; Part C focus check; R-35 (the lock was later withdrawn) | `B/dock/state_convert.rs:126-185`; `D/view/workspace/lifecycle.rs:141-147` |
 | Owner, after round 3 | "It doesn't matter if the panel is shown or not when quitting"; then "take option two: if it's visible the user will see it, if not they're waiting and if they wonder why they can open the activity panel" | Owner decision | Decision 7 revised: a waiting quit changes no layout; the quit override, the lock, its outcomes table and R-39 withdrawn, which also resolves round 3's quit findings; Amendment 11 | Owner, 2026-11-08 |
+| Review round 4 (scoped re-review, `d035d90b`) | 4 Important, 10 Minor, none Blocking | — | Verified and applied in revision 5, which had no independent review | Reviewer report, 2026-11-08 |
+| Round 4 | A change made during a quit wait was never written; "Show it" focused a hidden Activity; a strip click focused a hidden region; the clamp had no named hook and skipped closed docks; store clones; tiny dock sizes; amendment wording | Ruling, settled | R-19 (`quit_now`), Part F `show_holder`, Part C focus-in check, R-37, Part G | `D/view/workspace/lifecycle.rs:268-281`; `D/view/workspace/requests.rs:225-247` |

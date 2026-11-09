@@ -14,16 +14,16 @@ Ticket `01M6V8RK8B0SBCH0YZXFVSR9E3` (`vh-jge24`).
 [Design](../plans/2026-11-08-wave-04-cycle-01-workspace-shell-design.md) and
 [implementation plan](../plans/2026-11-08-wave-04-cycle-01-workspace-shell-implementation.md).
 
-Status: **draft revision 4, 2026-11-08.** Not approved.
+Status: **draft revision 5, 2026-11-08.** Not approved.
 
 - This document was drafted on the ticket branch at `cc2af8d0`, which
   merged origin/main `8da9afd4`. The design and plan were drafted at
   `2b1dc4d5`.
-- All three were reviewed independently at `bb9b3cc9` (round 1), at
-  `fbca53f4` (round 2) and at `32b82b9c` (round 3), each round with two
-  reviewers, and revised after each (Review Record).
-- Revision 4 goes through a scoped re-review before the owner is asked to
-  approve it.
+- All three were reviewed independently at `bb9b3cc9` (round 1),
+  `fbca53f4` (round 2) and `32b82b9c` (round 3), each with two reviewers,
+  and at `d035d90b` (round 4, a scoped re-review). They were revised after
+  each round (Review Record).
+- Revision 5's fixes after round 4 have had no independent review.
 
 Approval of the documents does not authorize implementation, which needs
 its own go-ahead.
@@ -222,8 +222,12 @@ Whichever of these merges second merges main and adapts, per `AGENTS.md`.
 - **Later work, from the owner (design Document Amendment 4):**
   - a footer line showing the latest Activity status, such as
     "Saving…" or "Syncing…";
-  - removing the Quit now and Quit anyway buttons, with a replacement
-    way out of a quit that hangs.
+  - quitting with work at risk: one blocking dialog that lists the
+    unsaved or unsaveable work and offers going back or discarding it and
+    quitting, with save failures handled per item and Activity's wording
+    revisited. It replaces Quit now and Quit anyway;
+  - a watchdog for pending operations: keep waiting, or abandon the job
+    as far as the request can safely be stopped.
 
 ## Required Contract
 
@@ -382,7 +386,7 @@ These are visible to users; the design's Known Limits give the detail.
   decision 15).
 - A hidden bottom dock keeps a 29 px strip (K-15, decision 16).
 - With Activity hidden, a quit that has to wait shows nothing until
-  Activity is opened (decision 7).
+  Activity is opened (K-18, decision 7).
 - A quit's layout write runs on the UI thread, so a hung file system
   delays the quit (K-14).
 
@@ -430,3 +434,5 @@ them; U-5 was settled in review.
 | Review round 3 (scoped re-review and adversarial, `32b82b9c`) | Re-review: 7 Important, 8 Minor. Adversarial: 1 Blocking, 6 Important, 8 Minor. The Kit-closing mechanism held | — | Each verified against the source and applied in revision 4; detail in the design's Review Record | Reviewer reports, 2026-11-08 |
 | Review round 3 | The quit override drew findings in every round, including round 3's Blocking (a tab click during a quit wait hid Quit now) | Owner decision | Decision 7 revised: a waiting quit changes no layout; the override is gone | Owner, 2026-11-08 |
 | Owner, 2026-11-08 | A footer status line; no Quit now or Quit anyway buttons | Owner direction | Later work (Exclusions; design Amendment 4) | Owner, 2026-11-08 |
+| Review round 4 (scoped re-review, `d035d90b`) | 4 Important, 10 Minor, none Blocking | — | Verified and applied in revision 5, which had no independent review | Reviewer report, 2026-11-08 |
+| Owner, 2026-11-08 | Quitting with work at risk as one blocking dialog; a watchdog for pending operations | Owner direction | Later work (Exclusions; design Amendment 4) | Owner, 2026-11-08 |

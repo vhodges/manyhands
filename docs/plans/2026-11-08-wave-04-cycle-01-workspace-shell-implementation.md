@@ -10,8 +10,8 @@ id: "01M6YVNFE6AB0RBGQK72CFJJ4X"
 
 # Wave 04 Cycle 01 Workspace Shell Implementation Plan
 
-> **For agentic workers:** Revision 4, 2026-11-08, after review rounds 1
-> to 3 and decision 16.
+> **For agentic workers:** Revision 5, 2026-11-08, after review rounds 1
+> to 4, decision 16 and decision 7 as revised.
 > Not approved, and nothing here is authorized yet. Once the owner
 > approves and authorizes implementation, use `implementing-a-cycle` task
 > by task, re-read the design, repeat the ticket preflight, and record
@@ -116,7 +116,7 @@ on adding its attention states to `needs_attention` (decision 3).
 - Between tasks, run only the tests the task wrote or changed, by exact
   name. That includes each named edit (E-n) a task applies.
 - No whole-suite run happens before Task 12's fast tier, which includes
-  `--bins`. A break found there in a test outside E-1 to E-9 stops for the
+  `--bins`. A break found there in a test outside E-1 to E-10 stops for the
   owner, or, if it is an appearance test, is deleted under E-8.
 - Any single command that runs past about 15 minutes is stopped. Narrow
   the filter and note it in the ticket.
@@ -138,7 +138,7 @@ removes it.
 **Test-first.** Each behaviour's test is written, and seen to fail,
 before its code.
 
-**Existing tests** change only as E-1 to E-9. Any other edit stops for the
+**Existing tests** change only as E-1 to E-10. Any other edit stops for the
 owner.
 
 **Commits.** One per task, conventional message, ending
@@ -397,7 +397,10 @@ before the dock.
       after launch;
     - `Shell::resize_keeping_content(width, height, cx)` is added;
     - `Shell::open_as_launched` resizes nothing.
-- [ ] **Edits:** E-10. Each of its ten sites by exact name afterwards.
+- [ ] **Edits:** E-10. Several sites are shared helpers (`frame_tests.rs`'s
+  `shell()`, `posting_tests/support.rs`, `keyboard_tests/discussion.rs`), so
+  run every test that reaches each site, by exact name, and list them in
+  the ledger.
 - [ ] **Verify:** the two tests and the sheet test by exact name; the
   existing tests that use the region helpers in `workspace_tests.rs` and
   `keyboard_tests.rs` (`focused_region`, `ringed`), by exact name; the
@@ -473,8 +476,9 @@ ledger the reconcile step, the `LayoutChanged` handler's three steps
   - `opening_the_strip_by_its_edge_counts_as_its_toggle` (P34). The Kit's
     `toggle_dock` on the closed bottom dock stands in for the edge drag.
   - `focus_leaves_a_panel_that_is_not_displayed` (P12). Cover its toggle,
-    its dock (the bottom one included), and another tab selected by
-    toggle. A tab click keeps focus on the panel it selects.
+    its dock (the bottom one included), another tab selected by toggle,
+    and a click on the closed strip outside its tabs. A tab click keeps
+    focus on the panel it selects.
   - `a_hidden_panel_keeps_its_state` (P2). Tickets, with a filter, Find
     text and a selection, is hidden and shown again.
   - `a_request_finishes_while_activity_is_hidden` (P28). Its entry shows
@@ -482,8 +486,13 @@ ledger the reconcile step, the `LayoutChanged` handler's three steps
     received nothing from hiding or showing.
 - [ ] **Code** in `D/view/dock.rs`:
   - R-3 reconcile (with R-35's visible flags while the bottom dock is
-    closed), R-5, R-6's idempotent handler, R-9's focus check, R-31,
-    R-35's reveal and R-36;
+    closed), R-5, R-6's idempotent handler, R-9's focus check (after
+    reconcile and on focus-in), R-31, R-35's reveal and R-36;
+  - R-38 for the default launch: the accepted state and arrangement are
+    set from a dump when the area is built. Task 9 adds the restored
+    launch;
+  - R-10's `show_holder` reveal, with the test
+    `show_it_reveals_a_hidden_activity`;
   - the four operations, each ending with reconcile, the focus check and
     a scheduled save.
 - [ ] **Verify:** each test by exact name; the four lines.
@@ -576,9 +585,13 @@ ledger the reconcile step, the `LayoutChanged` handler's three steps
     - a dock whose `placement` differs from its slot;
     - an unknown leaf, a missing panel, a repeated panel, a panel in the
       centre, and `ItemAreaPanel` in a dock;
+    - `info` and name disagreeing: `TabPanel` with `Panel` info, and a
+      leaf name with `Stack` info;
     - an unknown container, a `StackPanel` holding a leaf, a `TabPanel`
-      holding a container, a size of 0, and a dock with no panels;
-    - `on` and `shown` each missing a key;
+      holding a container, a `sizes` count different from the children,
+      a split size of 0, a negative split size, a `DockState` size of
+      99 px, and a dock with no panels;
+    - `on` and `shown` each missing a key, and each with an unknown one;
     - a valid file with a closed dock, a moved panel, a tab group and
       changed sizes.
 
@@ -588,12 +601,15 @@ ledger the reconcile step, the `LayoutChanged` handler's three steps
       then `Shell::open_as_launched`. The dump, the on flags and the shown
       docks match within 1 px, and after the clock advances no save has
       happened.
-    - `a_dock_too_large_for_the_window_is_clamped_once` (P36). Seed side
-      docks wider than the window. After the first frame both are scaled
-      so the item area has 320 px, and that is saved.
+    - `a_dock_too_large_for_the_window_is_clamped` (P36). Seed side
+      docks wider than the window. Once the area has bounds, both are
+      scaled so the item area has 320 px, and that is saved. A closed
+      oversized dock is scaled when it opens.
     - `a_file_that_cannot_be_read_restores_the_default_and_says_so` (P24,
       P25). `layout.json` is a directory, so the read fails on every
-      platform. The notice shows, and `footer-attention` is absent.
+      platform. Use `Shell::open_as_launched` and advance no clock, so no
+      save is attempted. Every later write would fail too, and show the
+      save notice. The notice shows, and `footer-attention` is absent.
       Dismiss removes the notice. The sentinel files in `drafts/` and
       `resolutions/`, and the data directory's entry list, are unchanged,
       and so are the repositories' refs and status.
@@ -605,6 +621,9 @@ ledger the reconcile step, the `LayoutChanged` handler's three steps
     - `a_change_just_before_a_quit_that_exits_at_once_is_kept` (P31). Make
       a change, quit with no job running and no clock advance, then
       relaunch.
+    - `a_change_during_a_quit_wait_is_kept` (P31). Start a job and quit;
+      while it waits, open Activity; release the job, then relaunch.
+      Activity is open.
     - `a_stale_write_loses_to_the_quits` (P35). Hold a background write
       with `hold_writes_for_testing`, make another change and quit, then
       release the held write. The file holds the newer layout.
@@ -618,11 +637,11 @@ ledger the reconcile step, the `LayoutChanged` handler's three steps
   - `D/services/layout.rs` `LayoutStore` (R-17), reached through
     `Backend::layout()`. `LibraryBackend` opens it; `DelayingBackend` and
     the fixture open it lazily over the fixture's data directory.
-  - Store-allocated generations, one write in flight, and the two test
-    seams (R-19). `hold_writes_for_testing` parks before the store's lock.
+  - Store-allocated generations behind one `Arc` that every clone
+    shares, one write in flight, and the two test seams (R-19). `hold_writes_for_testing` parks before the store's lock.
   - `restore` in `D/model/layout.rs` (R-18, R-28).
   - Restore at launch (Part G's four steps, R-38) and the clamp (R-37).
-  - Saving (R-19, R-31), including the write at `request_quit`'s entry.
+  - Saving (R-19, R-31), including the write in `quit_now`.
   - The two notices (R-21).
   - `Shell::relaunch` in the harness, which resizes nothing (R-26).
 - [ ] **Verify:** each test by exact name, and Task 5's completed tests;
@@ -641,8 +660,9 @@ ledger the reconcile step, the `LayoutChanged` handler's three steps
   - With Activity displayed, the existing
     `finishing_closes_the_dialog_and_focuses_quit_now`
     (`workspace_tests.rs:1064`) still covers Quit now's focus (P26).
-  - `drafts_not_saved_with_activity_hidden_focuses_the_item_area` (P27).
-    Use the `saving_drafts` failure recipe with Activity hidden. On
+  - `desktop::view::workspace::tests::saving_drafts::drafts_not_saved_with_activity_hidden_focuses_the_item_area`
+    (P27), `#[cfg(unix)]` like the recipe it uses. Use the `saving_drafts`
+    failure recipe with Activity hidden. On
     Cancel, the item area is focused and Needs attention counts the
     failure. With Activity displayed, the existing
     `a_draft_that_cannot_be_saved_asks_before_quitting` (`:476-524`) still
@@ -651,8 +671,9 @@ ledger the reconcile step, the `LayoutChanged` handler's three steps
   (`D/view/workspace/lifecycle.rs`): Quit now and Retry take focus only
   when Activity is displayed.
 - [ ] **Verify:** the new tests, `finishing_closes_the_dialog_and_focuses_quit_now`,
-  and the existing quit tests in `workspace_tests.rs`'s `saving_drafts`
-  module, by exact name; the four lines.
+  the existing quit tests in `workspace_tests.rs`'s `saving_drafts`
+  module, and the Edits not kept tests in `view/item/edit_quit_tests.rs`
+  (P27's other return), each by exact name; the four lines.
 - [ ] **Commit.**
 
 ## Task 11: Keyboard Journey And Checklist
@@ -700,7 +721,7 @@ git merge-tree --write-tree HEAD origin/main
 ```
   The fast tier above is AGENTS.md's at the time of writing; use main's
   AGENTS.md as it is at Task 12. The Boundary diff must print nothing. A
-  fast-tier failure outside E-1 to E-9 stops for the owner, unless it is an
+  fast-tier failure outside E-1 to E-10 stops for the owner, unless it is an
   appearance test deleted under E-8.
 - [ ] Whole-branch spec and quality reviews. Fill the Cycle's Acceptance
   Status column.
@@ -752,7 +773,7 @@ git merge-tree --write-tree HEAD origin/main
 | R-1, R-26, R-27, R-33, R-34 | 4b |
 | R-2 | 4b, 4c |
 | R-35 | 4c, 5 |
-| R-38 | 9 |
+| R-38 | 5, 9 |
 | R-3, R-5, R-6, R-31, R-36 | 5 |
 | R-37 | 9 |
 | R-4, R-11, R-12, R-13, R-24, R-30 | 7 |
