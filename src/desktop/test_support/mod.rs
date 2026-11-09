@@ -4,10 +4,13 @@
 //! builds its repositories through the library and keeps its data in
 //! temporary directories.
 
-/// Finite aggregate UI/worker wait for desktop tests on loaded machines.
-/// Owner-approved temporary accommodation (2026-11-07), not a performance fix.
-/// GPUI retains its independent fifteen-second uninterrupted-parking guard.
-pub(crate) const WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+/// A real-time ceiling for the harness's waits on the worker. Raised from
+/// 60 s to 180 s on 2026-11-09 (Wave 04 Cycle 01) because the shell makes
+/// frames costlier and a full parallel run starved one test; test
+/// performance is to be revisited. Owner-approved accommodation, not a
+/// performance fix. GPUI retains its independent fifteen-second
+/// uninterrupted-parking guard.
+pub(crate) const WAIT: std::time::Duration = std::time::Duration::from_secs(180);
 
 // Shared by every desktop test. Some of their helpers serve only the
 // tests that need `desktop-test-support`.
