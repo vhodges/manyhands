@@ -455,3 +455,87 @@ entry after submit; write as a non-holder; ignore the model's op; drop
 each caught, two (the lock guard and the write order) only after a stronger
 assertion was added.
 
+| 5 | (ledger commit) | `0a28c07a`, `1a21b7e6` (review fixes) | CHANGES REQUIRED then fixed: I1 (hot loop on a failing policy read), D2 (host scope), M1-M3, M5-M7 applied; M4 skipped; M8 and D1 handed off; the fixes were checked by the orchestrator (two new tests, boundary diff, clean tree), not re-reviewed | `desktop::services::scheduler::{entity_tests::{scheduler_shared_by_clones, polling_switch_off_in_tests, launch_polls_due_ssh_repos, timer_submits_one_at_a_time, result_marks_repository_changed}, real_tests::{reconfiguration_cancels_and_rearms, second_actor_busy, unfinished_operation_waits}, extra_tests::{own_polls_are_not_offered_resume, stale_answer_rereads_policy, activation_takes_the_lock_for_a_stale_poll, clock_event_reads_policies_and_remotes, quitting_starts_nothing, failing_read_waits_for_activation, host_change_reaches_repos_on_the_host}, registration::tests::authority_of_locations, reconfigure::tests::scopes_of_intents}`, `desktop::model::polling::tests::after_attempt_table`; each singly with `--exact`, 1 test, pass; fmt, check, both clippy pass |
+
+## Task 5: the scheduler entity in `Services`
+
+Files (all under `src/desktop/`): new `services/scheduler/{entity.rs, react.rs,
+reconfigure.rs, registration.rs}`, `services/{scheduler_entity_tests.rs,
+scheduler_extra_tests.rs, scheduler_real_tests.rs, scheduler_support.rs}`,
+`model/operations/polls.rs`; changed `services/{mod.rs, scheduler.rs,
+inflight.rs, poll.rs, worker.rs}`, `model/{operations.rs, polling*}`,
+`view/operations.rs`, `view/workspace/repositories.rs` (one call), `mod.rs`
+(`PollingOn` global; window-activation subscription in `root_over_workspace`),
+`test_support/{polling.rs, fixtures.rs}`. Nothing outside `src/desktop/`
+changed (empty diff over the library, `tests/` and Cargo files).
+No existing test edited (no E-n). Both real-service tests
+(`second_actor_busy`, `unfinished_operation_waits`) run over a real
+`RepositoryService`, a second actor's real reservation and a real stranded
+ticket save; no SSH.
+
+Rulings (implementer, accepted):
+- Only a repository with an SSH publication remote (`selected_for_publication
+  && publication_eligible`, via `list_remotes_redacted`) is in the schedule;
+  Task 7 infers "No shared copy" from absence.
+- `last_completed` is restored from `polling_status.latest_observed_at`.
+- Timer capped at 30 s, 1 s backstop when something is due but blocked.
+- R-11 scope: remote and registration intents reach the named repository; a
+  host intent reaches the named repository, every scheduled repository with
+  the same authority (parsed from the redacted fetch location), every one of
+  unknown authority and the `HostUnapproved`-held ones; key intents reach
+  every listed repository. This replaced a narrower first rule after review
+  (D2): the design says "every repository using that key, host or remote".
+- A merely queued poll is not cancelled by a reconfiguration; it answers and
+  the stale policy is re-read from that answer (one extra poll at worst).
+- "User lane empty" is approximated by "no request in flight", so a background
+  `IndexRefresh` also holds a preempted poll.
+- The submitted-retirement drop is `end_retiring` plus `TODO(Task 11b)`.
+- A policy read that fails is not retried until the next activation, clock
+  event or reconfiguration (`failed_reads`, review I1).
+- `NotEligible(NotDue)` with a deadline already past goes Idle, stale, held 5 s
+  (review M7).
+- A failed reconfiguring request still fires `Moment::Finished` (cancel,
+  attention cleared, re-read); the design says "when it finishes". Known
+  limit K-28: one wasted cancel.
+
+Handed to later tasks:
+- Task 7: consume `InflightStore::take_report` and show the unreadable-record
+  notice once in Activity (design line 735; review D1: the plan assigned it to
+  no task). Task 7 also owns the status reads (`Scheduler::schedule`,
+  `holding`).
+- Task 8: `Scheduler::clear_attention(&Reason, cx)` = `schedule.clear_attention`,
+  then `read_registrations`, then `tick` (both already `pub(super)`).
+- Task 10: `Scheduler::set_quitting(bool, cx)` exists; then
+  `worker.ask_poll_cancel(CancelCause::Quit)`. A queued poll dropped by
+  `quit()` sends only `Removed` and the drain forwards nothing for polls, so
+  Task 10 must `schedule.abandon(root)` for in-flight repositories (or add
+  `Scheduler::abandon_in_flight()`).
+- Task 6: `reconfigure.rs::policy_of(intent)` takes `PollConfigure`,
+  `PollPause`, `PollResume`.
+- Task 11b: the retirement-drop hook is the `end_retiring` call with a TODO.
+
+I-2 (Resume offered on a row the desktop cannot continue): fixed for the
+desktop's own automatic-poll rows (`resume_offer_among`, own set from the
+store and the model's restart op). Still offered on a row another process or
+the CLI left, a row whose record was set aside, and the U-9 retirement
+observer row (see the Task 0 ruling). Known limit K-29; reported to the owner
+at the Part B checkpoint.
+
+Review minors not done: M4 (the window-activation subscription and the view's
+use of `resume_offer_among` have no test of their own; `resume_offer_among`
+itself is tested), M6 in part (`World::quiet` keeps 20 x 10 ms real timers;
+`reconfiguration_cancels_and_rearms` takes about 17 s; `services/mod.rs` is
+968 lines).
+
+Process: the implementer's first version of the I1 guard also cleared
+`failed_reads` on three events; a mutation showed those clears were redundant
+and they were removed. Mutations caught: no `ssh_publication`, no timer, `tick`
+submits every due repository (after an in-flight assertion was added),
+`brought_in` never called (after a split of cases), no `index_pending`
+refresh, no cancel on reconfiguration, no `reconfigure` call, stale not
+re-read, `plan` ignores the model's op, `recovery_required` polls at the
+stored deadline, no acquire on activation, own polls not published,
+`quitting` ignored, clock event ignored (after an unscheduled plain repository
+was added), the `failed_reads` filter, the host scope, both halves of the SSH
+predicate, the M7 row. The launch barrier (`awaiting_launch`) survived and was
+deleted as dead.
