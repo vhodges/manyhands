@@ -135,3 +135,52 @@ No new test site, so no E-11 from the sweep.
   correct the labels.
 - **Review:** APPROVED, no findings. All 28 hex values checked against `07`.
 - **E-11 candidates:** none.
+
+## Task 2: Layout Model
+
+- **Commits** (range `80107470..500ffd72`): `0db81083` adds `model/layout.rs`
+  (443 lines), `model/layout_tests.rs` and the `mod layout;` line;
+  `500ffd72` is the review fix.
+- **API for later tasks** (all `pub(crate)`): `PanelKind` (`ALL`, `name`,
+  `from_name`, `label`, `short_label`, `icon`), `ITEM_AREA_NAME`, `Side`,
+  `Group`, `Arrangement`, `Stop`, `Layout` with queries (`is_on`, `is_shown`,
+  `is_open`, `is_displayed`, `has_panels`, `side_of`, `groups`,
+  `displayed_in`, `size`) and operations (`toggle_panel`, `toggle_dock`,
+  `reveal`, `move_to`, `set_arrangement`), `f6_stops`, `arrangement_from`,
+  `DEFAULT_LEFT_SPLIT = [0.6, 1.4]`. `set_arrangement` is the R-6/R-36 hook;
+  it reveals any panel whose side changed.
+- **Tests** (new, each run once by exact name, 1 test, passed):
+  `desktop::model::layout::tests::the_default_is_1b`,
+  `…::operations_follow_the_rules` (one table, 26 rows),
+  `…::f6_stops_follow_the_arrangement` (10 rows plus two `arrangement_from`
+  dumps). Red first: the target did not compile against the empty module.
+- **Review, round 1:** CHANGES REQUESTED. Important: the P7 and P9 rows
+  could not fail (deleting the `has_panels` or `side_of == Some(side)` guard
+  left them green). Minor: `arrangement_from`'s skip/remap behaviour was
+  unpinned; icon and short-label strings were asserted (appearance, AGENTS.md);
+  blanket dead-code labels. **Fix** `500ffd72`: P7 starts with the empty side
+  hidden; two P9 rows; a second `arrangement_from` dump (empty group, bare root
+  leaf, unknown leaf selected); icon/short-label assertions dropped. The
+  implementer showed by temporary mutation that each row fails without its
+  guard, and that the reviewer's suggested `MoveTo('A','b')` row does not
+  discriminate (replaced).
+- **Review, round 2:** APPROVED, nothing found.
+- **Removed assertions:** only the icon and short-label strings, which were
+  this task's own new assertions (never an existing test).
+- **Deviation:** `icon()` and `short_label()` carry plain
+  `#[allow(dead_code)] // Called from Task 4c.`; the `cfg_attr(not(test))`
+  form fails `--all-targets` clippy once the test no longer calls them. Task
+  4c removes both attributes.
+- **Interpretations accepted by the reviewer:** hiding the active tab selects
+  the next panel that is on, wrapping; "active" means the panel the group
+  displays (the Kit's fallback); a source dock left empty keeps its `shown`
+  flag (never visible; a later move reveals it); `arrangement_from` skips
+  non-panel leaves, drops empty groups and remaps the active index; `has_panels`
+  is the "no toggle" predicate.
+- **Carried to later tasks (observations):** no dock-size setter yet (Task 5's
+  `set_dock_size` and the R-37 clamp need one); Task 9's `restore` needs a
+  constructor from `on`, `shown`, sizes and arrangement, and an `on`/`shown`
+  snapshot; `layout.rs` and its tests are near 500 lines, so Task 9 should put
+  `restore` in a submodule such as `layout/restore.rs`; `move_to` mirrors the
+  Kit move in the pure model, so Task 5 must keep the two in agreement.
+- **E-11 candidates:** none. Boundary commands print nothing.
