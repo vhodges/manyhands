@@ -1914,3 +1914,63 @@ automatic readiness/waiver/complete/published/closed. Ticket **implementing**;
 full metadata HEAD/clean UNPUSHED/no-owned-jobs receipts in handoff. No new
 runtime command/source fix/probe/agent/push/PR/main close/native/real operation/
 other-worktree/cleanup authority.
+
+## Follow-up — Owner Accepts Desktop Limitation / Fresh Main Unchanged — 2026-11-09 UTC
+
+Controller authorizes metadata-only work at
+**`6e8e47a69ac33cef3547259ed363c6c367c86108`**. Final QUALITY completed while this
+checkpoint was still uncommitted; incorporate its qualified verdict here, with
+no repeated freshness/test/review loop. Owner explicitly says:
+
+> accept the unverified desktop window
+
+Desktop remains **PARTIAL**: owned-process startup verified and owned stop
+recorded; **mapped window UNVERIFIED**. Owner accepts this as a **nonblocking
+verification limitation**, discharging its desktop acceptance hold **only**.
+This is **not a window pass or a defect finding**. No observer retry/smoke rerun,
+new runtime evidence or inferred application diagnosis. Prior observer exit1/no
+valid client JSON and owned launcher SIGTERM/−15 retain their actual scope.
+
+Per controller, final SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** accepts the
+**qualified headless evidence**, with **no additional essential headless gap**.
+Controller now reports final SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**
+**qualified acceptance at6e8/runtime a424**, **0 new concrete findings/no
+additional essential headless obligation**. It independently verified the
+**34-entry manifest/23 hashes/198 cases/all5 full raw logs/616 receipts/final
+inputs**, retaining every qualification; this is reported review evidence, not
+this task's re-audit or execution. Final SPEC's desktop acceptance hold is resolved
+by the owner's explicit acceptance. Existing source clearance through frozen runtime
+**`a42460bb2d03bcba0db885657257d8ea0f62d66c`** carries **one owner-accepted deferred
+P2 marker issue**, valid and **UNFIXED**, not zero issues. Desktop acceptance does
+not fix/disprove that issue or verify a mapped window. Both marker P2 and desktop
+PARTIAL are accepted nonblocking limits, not ALLPASS/zero issues/fresh whole-suite
+success. Controller readiness/publication handoff remains separate; no push yet.
+
+Fresh inspection UTC **`2026-11-09T04:01:05.335945Z`**: `git fetch origin main`
+**exit0**; fetched main/FETCH_HEAD matched frozen
+**`8da9afd4ec82c145632988687cbd71bead046051`**, no incoming commits/paths.
+Main ancestry and `git merge-tree --write-tree HEAD origin/main` **exit0**, no
+conflicts. No actual merge/source change needed or performed. Registered main
+checkout clean, unchanged at **`c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`**.
+Ticket tracking was fetched read-only and stayed
+**`e0b62f7ec63f56210fda6411c9de9a90f95d48e5`**; entry6e8 comparison **285 local-only /
+0 remote-only**. No force/remote overwrite or publication; final handoff records
+post-metadata counts. **Freshness passes, not readiness.**
+
+Only existing ledger current standing/append and this canonical append change.
+Source/test/schema/build/workflow match a424; existing selected79/0,78/0,41/0,
+CLI exit0/desktop partial and prior exact/static/history scopes are retained,
+not rerun or broadened into fresh whole passes. No Cargo/Rust/build/tests/statics/
+runtime commands, observer, smoke retry, agents, new IDs/docs/status save/push/PR/
+close/native/real profile/key/context/draft/cleanup or main/other-worktree edits.
+Manual characterization ignored/NOT MEASURED and performance STOP unchanged.
+
+New-only **`/tmp/opencode/task8-desktop-acceptance-20261109T040102Z/`** holds fresh
+UTC/ref/exit/tracking/Git/source/prefix/metadata/commit/clean UNPUSHED/no-owned-jobs
+proof and manifest. Entire **128919-byte** prior prefix (SHA-256
+`3e0e9497300ba50668e446313a1f68b99905dcc33d5341076ae7e8e7491c1211`), ID, parent
+**01M6SYJK4CJGHWKZC7MTP18GTA** and creation time preserved; required coauthor.
+**Final SPEC and QUALITY qualified acceptance reported at6e8/runtime a424**;
+controller readiness/publication disposition remains separate. Owner discharged
+desktop acceptance hold only—not window verification, full readiness, publication
+or closure. Ticket implementing; no further command/gate/publication autorun.
