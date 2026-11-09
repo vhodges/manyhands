@@ -153,4 +153,38 @@ Approved as written by the owner on 2026-11-09 (Cycle, Status; ticket comment
 
 | Task | Base | Commits | Reviewer verdict | Tests run (exact names) |
 | --- | --- | --- | --- | --- |
-| 0 | `83fe181a` | (this commit) | — | static gates only (check, fmt, clippy: pass) |
+| 0 | `83fe181a` | `91cabbdb` | — | static gates only (check, fmt, clippy: pass) |
+| 1 | `d378aa1c` | `4222708c`, `79c9a981` (review fixes) | APPROVE WITH MINOR; all 8 minors applied (code points 4-7, note points 1-3, 8); fixes not re-reviewed (mechanical) | `remote_polling` `poll_cancel_during_handshake_stall`, `poll_cancel_during_connect_stall`, each singly with `--exact`, 1 case each, pass; clippy all-targets, fmt pass |
+
+## Task 1: Runtime readiness (decision 22, U-14)
+
+- Two SSH cases added to `tests/remote_polling.rs`; research note
+  `docs/research/wave-03-d6-transport-stall-cancellation.md`. No library file,
+  `tests/support/` file or Cargo file changed.
+- **Handshake stall** (server sleeps 45 s): the cancel, sent once the poll's
+  row is active and the server has accepted the socket, returned
+  `Ok(Polled{Cancelled})` after **about 30.0 to 30.1 s** (30 008, 30 095 and
+  30 100 ms on three runs). The cancel does not interrupt the blocked call;
+  it is honoured at the next safe point once libgit2's 30 s per-call timeout
+  expires. This is inside the documented 30 s bound plus teardown; no stop
+  condition. It is the figure behind K-1 and the stopping wording.
+- **Connect stall** (U-14): no existing fixture stalls a connect. The case uses
+  a `ConnectBlackhole`: a loopback listener with `libc::listen(fd, 0)`, never
+  accepted, one filler socket in the single queue slot; the case waits until
+  `/proc/net/tcp` shows the poll's socket in `SYN_SENT` to that port before
+  cancelling. Cancel-to-return was **about 10.05 s** (10 064, 10 048, 10 048,
+  10 040, 10 045 and 10 049 ms), the connect timeout. Stable on six runs; no
+  root; **Linux only** (the case is `cfg(target_os = "linux")`; macOS and
+  Windows connect-stall behaviour stays G1's, K-11).
+- Both cases assert `Cancelled` with no targets, no reservation left, no second
+  connection, no push, and an unchanged local snapshot. The bounds are 40 s
+  (handshake) and 20 s (connect).
+- Unmeasured, as decisions 22 and 24 record (K-20): DNS, authentication and
+  teardown or exec-acknowledgement stalls. A cancel at a held advertisement is
+  already covered by `poll_public_cancel_held_advertisement`.
+- `src/main.rs` still installs the panic hook, then calls
+  `initialize_git_transport_before_threads()`, then `desktop::run()`; read, no
+  change.
+- Stopping wording the status may use: "waiting for Manyhands to reach a safe
+  point", never a deadline. Part D's "Still stopping" text stands.
+
