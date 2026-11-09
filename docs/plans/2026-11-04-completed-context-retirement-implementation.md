@@ -794,6 +794,77 @@ exact checks/statics retain their unchanged scopes; no repeats or further gates
 are admitted by this metadata amendment. Remaining SSH/smokes/final runtime
 SPEC/QUALITY remain owed. The ledger/canonical append records the owner's words.
 
+### Approved Post-Prune Seam / Three Fixture Correction — 2026-11-09 UTC
+
+Owner says PROCEED. Controller carries SPEC CLEAR and reports SAME QUALITY
+`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE CLEAR through clean entry
+`5af8ed2bf15ccb2eeaf7f647a3f14e122083b458`, with **one owner-accepted deferred P2,
+zero blocking/new findings**, not zero issues. The registry-wide marker race and
+performance work stay deferred. Broad necessary TEST repair/expansion authority
+remains; an actual production bug or incoming production semantics/conflict must
+return to controller rather than become an automatic policy fix.
+
+1. Fresh fetch/merge from this ticket worktree: main remains
+   `8da9afd4ec82c145632988687cbd71bead046051`; incoming diff empty; actual
+   `git merge origin/main` exit0, Already up to date; ancestry/clean checks pass.
+   Main checkout untouched. Preserve prior runtime integration `7447beb1` and all
+   scoped historical approvals/results. This amendment precedes source changes.
+2. Own only `src/repository/context_retirement/run.rs` and
+   `tests/mutation_remote/context_retirement.rs`, plus these existing
+   design/plan/ledger/canonical checkpoints. Add cfg(test)-only declarations for
+   an operation/actual-owner-epoch keyed thread-local one-shot Rust fault with a
+   non-Send scoped consumption/drop guard. Start with its checker unwired/inert.
+   Use the existing outside-SQL worktree hook in a fixture helper to read the
+   actual durable owner epoch and arm it. No production field, public API,
+   runtime FailurePoint, dependency, arbitrary callback under SQL or schema edit.
+3. Replace only `resumed_gap`, `reentry_ignore_w_observation` and
+   `retirement_present_prune_receipt` trigger producers in
+   `reentry_resumed_gap_m`, `reentry_worktree_only`, `present_sql_gap(false)`.
+   Preserve every old assertion and branch=true D14 trigger semantics. Assert
+   intended CleanupPending/Observed/None before checking consumption, so an
+   unwired seam yields a meaningful compiled producer RED, not an unused-flag,
+   compile or zero-match failure. Strengthen actual prune absence, retained
+   unobserved worktree intent, no invented branch intent and legitimate reopen.
+4. Add one cheapest-layer unit case for exact operation/epoch matching, one-shot
+   consumption, drop cleanup and old-guard/new-arm separation. Observe its RED
+   and each amended SSH case's compiled RED before behavior wiring. Never rerun
+   the historical805/3 target to rediscover the known trigger problem.
+5. Implement only the matching fault checker and cfg(test) call immediately
+   before the worktree observation UPDATE in `prune_present`, after successful
+   `verified.prune` consumed uninvoked and set permit. Let the existing transaction
+   unwind: actual Git removal persists, SQL observation rolls back, live result
+   Observed/None, durable possible/unobserved intent remains. No SQLite RAISE or
+   historical payload attribution. Run the same exact unit/three SSH cases GREEN.
+6. New-only evidence under
+   `/tmp/opencode/task8-retirement-prune-gap-fix-20261109T013252Z/`: admitted literal
+   argv/input hashes, full raw logs, actual counts/exits/times, compiled RED versus
+   wired source proof, shipped-code exclusion, assertion/case-inventory preservation
+   and final manifest. All Rust through Devenv/default threads, per-command900s
+   cap. No waits/time aging/thread/timeout-budget changes; ordinary further TEST
+   repairs are authorized but production semantics require controller return.
+7. At the coherent tree run fresh all-tree check, strict Clippy and fmt-check.
+   No whole808/old805/library/fast/Desktop/old29 regression repeat, remaining SSH
+   targets, smokes, profiling or other gates. Append actual outcomes/current
+   standing and canonical checkpoint preserving the entire prefix/ID/parent/time;
+   commit bounded source/test/metadata with required coauthor, clean UNPUSHED.
+8. Return full entry/runtime-freeze/base/main and evidence to controller for SAME
+   SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`, then SAME QUALITY
+   `ses_e4c8be2f1ffegiPUEUuB0QgyBE`, before any remaining gate. Still owed:
+   `document_promotion`, `ticket_closure`, `comment_publication`, isolated smokes
+   and final runtime SPEC/QUALITY. No status save/new IDs/push/PR/main closure/
+   native/real profile/key/context/draft/cleanup action. Marker P2 remains
+   accepted/deferred, not fixed; manual characterization ignored/NOT MEASURED.
+
+Local checkpoint result: the one unit and three amended SSH cases each produced
+a compiled behavioral RED, then each passed exactly1/0, exit0, after the minimal
+cfg(test) wiring. An earlier Rust2024 closure-capture compile error was repaired
+with precise `use<>` captures and is **not RED**. Fresh check/strict Clippy/fmt
+pass; all GREEN/static input hashes match. Removing only the new cfg(test)
+additions reconstructs entry `run.rs` byte-for-byte; all19 old assertions in the
+three fixture functions, unchanged CASES/harness and branch=true D14 controls are
+preserved. Actual counts/times/source proof are in the execution ledger/new
+evidence. Return for SAME SPEC then QUALITY; no remaining gate admitted.
+
 ## Plan Self-Review
 
 | Contract/ruling | Tasks and proof |

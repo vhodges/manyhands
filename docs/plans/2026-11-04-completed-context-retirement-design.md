@@ -68,12 +68,14 @@ approvals and historical evidence remain scoped to their recorded sources.
   Pin/Z tests retain exact old-holder and rollback assertions and independently
   prove the carried copy survives; do not replace strict checks with loose totals.
 
-This bounded integration has controller-reported SPEC CLEAR; SAME QUALITY
-confirmation is pending with the owner-accepted deferred P2 below, not zero
-findings. The approved
-post-prune test fault seam is **not implemented in this integration**; the three
-historical mutation_remote failures, remaining SSH targets/smokes and final
-runtime reviews remain owed. No real profiles/keys/contexts/drafts, lifecycle,
+Controller now confirms integration SPEC CLEAR and SAME QUALITY/SOURCE CLEAR
+through `5af8ed2bf15ccb2eeaf7f647a3f14e122083b458`, **with one owner-accepted P2
+deferred, zero blocking/new findings**, not zero issues. Owner says PROCEED with
+the already-approved cfg(test) post-prune fault/three-fixture correction. Its four
+exact checks and fresh statics are GREEN; this increment's SPEC/QUALITY reviews
+are pending. Historical mutation_remote805/3 stays at its old partial scope, not
+a new whole-target pass. Remaining SSH targets/smokes and final runtime reviews
+remain owed. No real profiles/keys/contexts/drafts, lifecycle,
 native CI or performance work is authorized here.
 
 ### Owner-Accepted Deferred Known Issue — Registry-Wide Marker P2, 2026-11-08
@@ -89,6 +91,27 @@ normalization, exclusive-guard changes and new hooks are not authorized. Revisit
 when per-repository recovery boundaries or relevant concurrency work are
 undertaken, without creating a new ticket now. All other approved contracts and
 historical evidence scopes remain; QUALITY confirmation must carry this deferral.
+
+### Approved Post-Prune Test Fault Boundary — 2026-11-09 UTC
+
+The protected consumer catalog rejects the three fixtures' foreign triggers
+before pruning, so replace those invalid producers, not the audit. A private
+cfg(test)-only thread-local fault is keyed by the operation and **actual current
+owner epoch**, armed from the existing outside-SQL worktree hook after durable
+intent preparation. Its scoped, non-Send guard records consumption and disarms
+unconsumed state on drop. A matching fault is taken once; other operation/epoch
+pairs cannot consume it, and dropping an old guard cannot clear a newer arm.
+
+Only successful `verified.prune` may reach the fault: consume `uninvoked`, store
+the live `permit`, then return a Rust recovery error immediately before the
+worktree observation UPDATE. Existing unwinding leaves actual Git removal in
+place, durable unobserved intent and persisted possible state, while this call's
+live outcome remains Observed/None. This proves rollback after a **Rust abort**,
+not an engine-generated constraint error. No shipped/public failure point,
+arbitrary callback under SQL, authority/schema/default/marker change or new SSH
+case. Keep every existing resource/uncertainty/reopen/privacy assertion and the
+passing branch=true D14 SQL-trigger path. Compiled RED precedes wiring; only the
+three exact SSH cases, a cheap exact key/scope unit case and final statics run.
 
 **Integration re-grounding, 2026-11-07 UTC:** current incoming main is
 `1e5616af22630b08a84dc0fb42037135b385f81d`, including approved/closed D5,

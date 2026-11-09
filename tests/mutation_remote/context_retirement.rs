@@ -662,9 +662,57 @@ fn reentry_intact_stop(late: bool) -> Result<(), FixtureError> {
     assert!(RepositoryService::open_at(&w.data()).is_ok());
     w.privacy()
 }
+// The hook is outside SQL, after the producer committed its actual intent/epoch.
+// Only the keyed Rust fault (not an arbitrary callback) runs inside pruning's TX.
+fn post_prune_fault(
+    w: &World,
+    request: &RetireContextRequest,
+) -> impl FnOnce() -> Result<(), FixtureError> + use<> {
+    let armed = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let captured = armed.clone();
+    let registry = w.data().join(REGISTRY_FILE);
+    let hook_registry = registry.clone();
+    let operation = request.operation_id;
+    RepositoryService::set_retirement_worktree_hook_for_testing(move || {
+        let db = fixed(rusqlite::Connection::open(hook_registry)).expect("fixture registry opens");
+        let epoch = fixed(db.query_row(
+            "SELECT owner_epoch FROM context_retirement_records WHERE operation_ulid=?1",
+            [operation.to_string()],
+            |r| r.get::<_, i64>(0),
+        ))
+        .expect("fixture current owner exists");
+        let fault = RepositoryService::fail_retirement_after_prune_for_testing(operation, epoch);
+        assert!(captured.borrow_mut().replace((epoch, fault)).is_none());
+    });
+    move || {
+        let (epoch, fault) = armed
+            .borrow_mut()
+            .take()
+            .expect("actual intent producer must arm the fault");
+        assert!(
+            fault.consumed(),
+            "successful real prune must consume the exact keyed fault"
+        );
+        let db = fixed(rusqlite::Connection::open(&registry))?;
+        assert_eq!(fixed(db.query_row("SELECT phase,worktree_removal,branch_removal FROM context_retirement_records WHERE operation_ulid=?1 AND owner_epoch=?2", rusqlite::params![operation.to_string(),epoch], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))))?, ("worktree_removing".into(),"possible".into(),"none".into()));
+        assert_eq!(fixed(db.query_row("SELECT observation FROM context_retirement_effect_intents WHERE operation_ulid=?1 AND owner_epoch=?2 AND resource='worktree'", rusqlite::params![operation.to_string(),epoch], |r| r.get::<_,Option<String>>(0)))?, None, "Rust abort rolls back the SQL observation, not the real Git removal");
+        assert_eq!(fixed(db.query_row("SELECT count(*) FROM context_retirement_effect_intents WHERE operation_ulid=?1 AND owner_epoch=?2 AND resource='branch'", rusqlite::params![operation.to_string(),epoch], |r| r.get::<_,i64>(0)))?, 0);
+        drop(fault);
+        // A fresh arm/drop proves cleanup without leaving a fault for the retry.
+        let unused = RepositoryService::fail_retirement_after_prune_for_testing(operation, epoch);
+        assert!(!unused.consumed());
+        drop(unused);
+        assert!(
+            RepositoryService::open_at(registry.parent().expect("fixture registry parent")).is_ok(),
+            "the legitimate consumer catalog and unobserved intent must reopen"
+        );
+        Ok(())
+    }
+}
+
 fn reentry_resumed_gap_m() -> Result<(), FixtureError> {
     let w = setup()?;
-    add_present(&w)?;
+    let path = add_present(&w)?;
     history(&w, true)?;
     let request = request(&w);
     interrupted_worktree_intent(&w, &request, false);
@@ -682,12 +730,13 @@ fn reentry_resumed_gap_m() -> Result<(), FixtureError> {
         ContextRetirementOutcome::CleanupPending { .. }
     ));
     fixed(fs::write(marker, bytes))?;
-    fixed(w.db()?.execute_batch("CREATE TRIGGER resumed_gap BEFORE UPDATE OF observation ON context_retirement_effect_intents WHEN OLD.owner_epoch=3 AND OLD.resource='worktree' BEGIN SELECT RAISE(ABORT,'fixture'); END;"))?;
+    let fault = post_prune_fault(&w, &request);
     assert!(matches!(
         reentry_call(&w, request.clone(), 2)?,
         ContextRetirementOutcome::CleanupPending { .. }
     ));
-    fixed(w.db()?.execute_batch("DROP TRIGGER resumed_gap"))?;
+    fault()?;
+    assert!(!path.exists());
     fixed(
         w.repo()?
             .find_reference(CONTEXT)
@@ -1727,20 +1776,25 @@ fn reentry_all_absent() -> Result<(), FixtureError> {
 }
 fn reentry_worktree_only() -> Result<(), FixtureError> {
     let w = setup()?;
-    add_present(&w)?;
+    let path = add_present(&w)?;
     history(&w, true)?;
     let old = complete_materialization(&w)?;
     let request = request(&w);
-    fixed(w.db()?.execute_batch("CREATE TRIGGER reentry_ignore_w_observation BEFORE UPDATE OF observation ON context_retirement_effect_intents WHEN OLD.resource='worktree' BEGIN SELECT RAISE(ABORT,'fixture'); END;"))?;
-    let _ = fixed(w.service.retire_context_authenticated(
+    let fault = post_prune_fault(&w, &request);
+    let first = fixed(w.service.retire_context_authenticated(
         request.clone(),
         w.primary().approval,
         &mut SessionCredentials::new(Provider),
     ))?;
-    fixed(
-        w.db()?
-            .execute_batch("DROP TRIGGER reentry_ignore_w_observation"),
-    )?;
+    assert_eq!(
+        first,
+        ContextRetirementOutcome::CleanupPending {
+            worktree_removal: RetirementRemoval::Observed,
+            branch_removal: RetirementRemoval::None,
+        }
+    );
+    fault()?;
+    assert!(!path.exists());
     let resources = resource_image(&w.root);
     let commands = w.server.commands();
     assert_eq!(
@@ -3079,12 +3133,13 @@ fn present_sql_gap(branch: bool) -> Result<(), FixtureError> {
     let path = add_present(&w)?;
     history(&w, true)?;
     let tuple = complete_materialization(&w)?;
-    if branch {
-        fixed(w.db()?.execute_batch("CREATE TRIGGER retirement_present_ignore_d14 BEFORE DELETE ON remote_poll_materializations BEGIN SELECT RAISE(IGNORE); END;"))?;
-    } else {
-        fixed(w.db()?.execute_batch("CREATE TRIGGER retirement_present_prune_receipt BEFORE UPDATE OF observation ON context_retirement_effect_intents WHEN OLD.resource='worktree' BEGIN SELECT RAISE(ABORT,'fixture'); END;"))?;
-    }
     let request = request(&w);
+    let fault = if branch {
+        fixed(w.db()?.execute_batch("CREATE TRIGGER retirement_present_ignore_d14 BEFORE DELETE ON remote_poll_materializations BEGIN SELECT RAISE(IGNORE); END;"))?;
+        None
+    } else {
+        Some(post_prune_fault(&w, &request))
+    };
     let result = fixed(w.service.retire_context_authenticated(
         request.clone(),
         w.primary().approval,
@@ -3101,6 +3156,9 @@ fn present_sql_gap(branch: bool) -> Result<(), FixtureError> {
             }
         }
     );
+    if let Some(fault) = fault {
+        fault()?;
+    }
     assert!(!path.exists());
     assert_materialization(&w, &tuple)?;
     if branch {

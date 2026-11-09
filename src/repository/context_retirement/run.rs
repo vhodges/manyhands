@@ -42,6 +42,60 @@ type SyntheticAdvertisement = Result<Vec<(String, git2::Oid)>, SshTransportError
 #[cfg(test)]
 thread_local! {static ADVERTISEMENT:std::cell::RefCell<Option<SyntheticAdvertisement>>=const {std::cell::RefCell::new(None)};}
 #[cfg(test)]
+thread_local! {static POST_PRUNE_FAULT: std::cell::RefCell<Option<PostPruneFault>> = const {std::cell::RefCell::new(None)};}
+#[cfg(test)]
+struct PostPruneFault {
+    operation: crate::repository::OperationId,
+    owner_epoch: i64,
+    consumed: std::rc::Rc<std::cell::Cell<bool>>,
+}
+/// Thread-affine scope: a failed fixture cannot leave an armed fault behind.
+#[cfg(test)]
+pub(crate) struct PostPruneFaultGuard(std::rc::Rc<std::cell::Cell<bool>>);
+#[cfg(test)]
+impl PostPruneFaultGuard {
+    pub(crate) fn consumed(&self) -> bool {
+        self.0.get()
+    }
+}
+#[cfg(test)]
+impl Drop for PostPruneFaultGuard {
+    fn drop(&mut self) {
+        POST_PRUNE_FAULT.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot
+                .as_ref()
+                .is_some_and(|fault| std::rc::Rc::ptr_eq(&fault.consumed, &self.0))
+            {
+                *slot = None;
+            }
+        });
+    }
+}
+#[cfg(test)]
+fn post_prune_failure(
+    operation: crate::repository::OperationId,
+    owner_epoch: i64,
+) -> Result<(), RepositoryError> {
+    let fault = POST_PRUNE_FAULT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot
+            .as_ref()
+            .is_some_and(|fault| fault.operation == operation && fault.owner_epoch == owner_epoch)
+        {
+            slot.take()
+        } else {
+            None
+        }
+    });
+    if let Some(fault) = fault {
+        fault.consumed.set(true);
+        Err(recovery_required())
+    } else {
+        Ok(())
+    }
+}
+#[cfg(test)]
 pub(super) fn synthetic_advertisement(
     result: Result<Vec<(String, git2::Oid)>, SshTransportErrorKind>,
 ) {
@@ -104,6 +158,23 @@ impl UninvokedWorktree {
 }
 
 impl RepositoryService {
+    #[cfg(test)]
+    pub(crate) fn fail_retirement_after_prune_for_testing(
+        operation: crate::repository::OperationId,
+        owner_epoch: i64,
+    ) -> PostPruneFaultGuard {
+        let consumed = std::rc::Rc::new(std::cell::Cell::new(false));
+        POST_PRUNE_FAULT.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            assert!(slot.is_none(), "post-prune fault is already armed");
+            *slot = Some(PostPruneFault {
+                operation,
+                owner_epoch,
+                consumed: consumed.clone(),
+            });
+        });
+        PostPruneFaultGuard(consumed)
+    }
     #[cfg(test)]
     pub(crate) fn set_retirement_after_branch_hook_for_testing(f: impl FnOnce() + 'static) {
         AFTER_BRANCH_HOOK.with(|s| assert!(s.borrow_mut().replace(Box::new(f)).is_none()));
@@ -626,6 +697,8 @@ fn prune_present(
                 return Err(recovery_required());
             }
         }
+        #[cfg(test)]
+        post_prune_failure(request.operation_id, owner.retirement_execution()?.epoch())?;
         if tx.execute("UPDATE context_retirement_effect_intents SET observation='removed' WHERE operation_ulid=?1 AND owner_epoch=?2 AND resource='worktree' AND observation IS NULL",params![request.operation_id.to_string(),owner.retirement_execution()?.epoch()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
         if tx.execute("UPDATE context_retirement_records SET phase='worktree_removed',worktree_removal='observed' WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='worktree_removing'",params![request.operation_id.to_string(),owner.retirement_execution()?.epoch()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
         if tx.execute("UPDATE operation_records SET state='context_worktree_released',completed_step='context_worktree_released' WHERE operation_ulid=?1 AND state='created'",[request.operation_id.to_string()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
@@ -995,6 +1068,45 @@ fn transport_code(kind: &SshTransportErrorKind) -> ResultCode {
         RemoteUnavailable => ResultCode::RemoteUnavailable,
         PushRejected => ResultCode::PushRejected,
         RuntimeUninitialized | ProtocolFailure => ResultCode::InternalError,
+    }
+}
+
+#[cfg(test)]
+mod post_prune_fault_tests {
+    use super::*;
+    use crate::repository::OperationId;
+
+    #[test]
+    fn post_prune_fault_is_exact_one_shot_and_scoped() {
+        let operation = OperationId::new();
+        for (other, epoch) in [(OperationId::new(), 4), (operation, 3)] {
+            let fault = RepositoryService::fail_retirement_after_prune_for_testing(operation, 4);
+            assert!(post_prune_failure(other, epoch).is_ok());
+            assert!(
+                !fault.consumed(),
+                "a different operation or epoch cannot consume the fault"
+            );
+            assert!(post_prune_failure(operation, 4).is_err());
+            assert!(fault.consumed());
+            assert!(post_prune_failure(operation, 4).is_ok(), "one shot");
+        }
+        let unused = RepositoryService::fail_retirement_after_prune_for_testing(operation, 4);
+        drop(unused);
+        assert!(
+            post_prune_failure(operation, 4).is_ok(),
+            "drop disarms an unused fault"
+        );
+        let old = RepositoryService::fail_retirement_after_prune_for_testing(operation, 4);
+        assert!(post_prune_failure(operation, 4).is_err());
+        let new = RepositoryService::fail_retirement_after_prune_for_testing(operation, 5);
+        drop(old);
+        assert!(
+            post_prune_failure(operation, 5).is_err(),
+            "an old guard cannot clear a newer arm"
+        );
+        assert!(new.consumed());
+        drop(new);
+        assert!(POST_PRUNE_FAULT.with(|slot| slot.borrow().is_none()));
     }
 }
 

@@ -1725,3 +1725,90 @@ Entire **112425-byte** prior prefix (SHA-256
 `adaf26076753eb43575549307cd338f5657a31dd79924c9e774c5c3522d8c306`), original ID,
 parent **01M6SYJK4CJGHWKZC7MTP18GTA** and creation time preserved. Required coauthor;
 no publication/new ticket or closure.
+
+## Follow-up — Approved Post-Prune Fault / Three Fixtures GREEN — 2026-11-09 UTC
+
+Owner says PROCEED; broad necessary TEST fix/expansion authority remains.
+Controller carries integration SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** CLEAR
+and SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** QUALITY/SOURCE CLEAR through
+clean entry **`5af8ed2bf15ccb2eeaf7f647a3f14e122083b458`**, **with1 owner-accepted P2
+deferred,0 blocking/new findings**, not zero issues. New increment review remains
+pending. Registry-wide marker P2 is not fixed; performance/boundary work stays
+deferred, not authorized by TEST approval.
+
+Fresh ticket-worktree `git fetch origin` succeeded; main remained
+**`8da9afd4ec82c145632988687cbd71bead046051`**, incoming diff/log empty. Actual
+`git merge origin/main` **exit0, Already up to date**, ancestry/clean checks pass;
+HEAD stayed5af. Main checkout unchanged/clean; no rebase/reset/discard/agent.
+Existing design/implementation plan/ledger amended before code.
+
+Only code files: `src/repository/context_retirement/run.rs` and
+`tests/mutation_remote/context_retirement.rs`. Added private **cfg(test)-only**
+thread-local operation+actual-owner-epoch one-shot Rust fault, non-Send scoped
+consumption/drop guard, exact key/scope unit test and one call after successful
+`verified.prune` consumed uninvoked/stored permit, immediately before observation
+UPDATE. No public/shipped FailurePoint, field, dependency, callback under SQL,
+schema/audit/authority/default/marker behavior change. The same source-included
+SSH runner sees the seam; production does not.
+
+Replaced only three invalid trigger producers, using the existing outside-SQL
+worktree hook to read the actual committed owner epoch and arm its exact key.
+Checks prove reached/consumed fault, real worktree absence, durable possible/none
+record, NULL worktree observation, no branch intent, scope cleanup and legitimate
+audited reopen. Existing19 assertions across the three functions are all retained
+(5→6,7→9,7→7), including original uncertainty/Possible-vs-Observed/branchNone,
+resources/recreation/materialization/no-network/reopen/privacy. CASES/root runner/
+harness unchanged; branch=true D14 SQL-trigger semantics preserved. No new SSH
+case/target and no whole808 inventory execution claim.
+
+The new proof is **real Git removal followed by Rust-abort SQL rollback**, not an
+engine-raised constraint error or historical805/3 payload attribution. Checker
+initially inert/unwired: unit compiled RED0/1 exit101; three SSH compiled REDs
+each0/1 exit1 at the intended live-producer assertions (privacy-safe numeric
+locations734/1789/3148 source-correlated). Initial E0505 Rust2024 closure-capture
+compile failure executed0cases and is **NOT RED**; precise `use<>` fixed only the
+new helper. Initial source-count proof-script diagnostic likewise is not RED.
+Then checker/call wired; fixture hash unchanged from compiled RED.
+
+| Exact new/fixed case | Actual GREEN | Monotonic seconds |
+| --- | --- | ---: |
+| `repository::context_retirement::run::post_prune_fault_tests::post_prune_fault_is_exact_one_shot_and_scoped` | **1/0, exit0**,1723filtered | 13.952654278 |
+| `retirement_reentry_resumed_prune_sql_gap_owned_absence_preserves_all_old_uncertainty` | **1 SSH case passed,0failed, exit0** | 23.284226983 |
+| `retirement_reentry_worktree_intent_cannot_invent_branch_removal` | **1 SSH case passed,0failed, exit0** | 3.074921229 |
+| `retirement_present_prune_sql_gap_preserves_surviving_branch_on_retry` | **1 SSH case passed,0failed, exit0** | 2.772813887 |
+
+All exact commands through Devenv/default threads, full literal argv admitted
+before execution. No900s cap reached, real waits/aging/thread/timeout change,
+whole808/old805/library/fast/Desktop/old29 repeat or extra gate.
+
+Fresh coherent-tree Devenv statics each **exit0**: check all-features/locked
+**4.778151875s**; Clippy all-targets/all-features/locked `-D warnings`
+**20.797695549s**; fmt-check **19.876814424s**. All4 GREEN and3 static receipts
+match the same final source/build hashes, aggregate
+**`e157441f7f4c11f303360c4bd39400a7494fd0152120912e2fd32ee7e81e2290`**.
+Only metadata finalized afterward. Removing only the new cfg(test) blocks/call
+reconstructs entry run.rs **byte-for-byte**; all protected/runtime/build/harness
+inputs unchanged. No shipped production behavior change.
+
+Old29 integration exact/statics retain old scopes; cli_remote165(d87),805/3,
+poll80/4,desktop1579/1,enablement102/1 plus qualified follow-ups and old headless/
+library/local-sync/SSH scopes are not new combined whole passes. Upstream reported
+evidence not raw-log reauthentication. Manual characterization ignored/**NOT
+MEASURED**; marker P2 accepted/deferred, not fixed; performance STOP/perf-ticket/
+promotion-closure-materialization follow-up remains stopped.
+
+New-only **`/tmp/opencode/task8-retirement-prune-gap-fix-20261109T013252Z/`** holds
+preflight/argv/full raw/counts/exits/times/input hashes/compiled RED-vs-wired/
+no-shipped-change/assertion/catalog/source/final static/prefix/commit/handoff/
+manifest proof. Entire **115906-byte** prior prefix (SHA-256
+`b298eb3e6b01fd20a4dd9d408c0fc7f8dcd2b40c067e795d6db9498866cbbacb`), ID, parent
+**01M6SYJK4CJGHWKZC7MTP18GTA** and creation time preserved. Required coauthor;
+clean **UNPUSHED**, no owned jobs verified in final handoff.
+
+Return to controller for SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then SAME
+QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, complete c48-to-returned-HEAD plus
+bounded5af-to-HEAD, carrying the accepted P2, **before any remaining gate**.
+`document_promotion`, `ticket_closure`, `comment_publication`, isolated smokes and
+final runtime SPEC/QUALITY still owed; no autorun. Ticket **implementing**, not
+complete/full runtime-ready. No status save/new IDs/agents/push/PR/main closure/
+native/real profile/key/context/draft/other-worktree/cleanup action.

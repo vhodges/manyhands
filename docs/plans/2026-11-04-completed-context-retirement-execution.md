@@ -14,10 +14,11 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ### Current Main-Integration Standing — 2026-11-08 UTC
 
-**Integration SPEC CLEAR per controller. QUALITY's historical P2 is now
-owner-accepted/deferred, not fixed or disproven; SAME QUALITY confirmation is
-pending with that exception, not zero findings. Prior `7447beb1` runtime evidence
-is unchanged. Ticket implementing; retirement seam unimplemented.**
+**Approved cfg(test) post-prune seam/three-fixture correction locally GREEN:
+four exact checks and fresh statics pass. SAME SPEC then QUALITY review of this
+increment remains pending. Integration clearance through `5af8ed2b` carries one
+owner-accepted deferred P2, zero blocking/new findings, not zero issues. Ticket
+implementing; remaining runtime gates are still owed.**
 Entry `c48bc2cf2d9d9bbe68621278bb56fedd7276d94c`; accepted fresh main
 `8da9afd4ec82c145632988687cbd71bead046051`; merge base
 `d70142b63a952f5e1aade369e0cd654ca9a03617`. Reconfirmed clean refs/checkouts and
@@ -28,8 +29,10 @@ expansion authorization stands; no weakened assertion/catalog or new policy.
 
 Design/implementation-plan amendments above precede compatibility behavior edits.
 Merge's mechanical baseline and source-counted inventories are not runtime proof.
-The three retirement SSH invalid-trigger failures and the proposed post-prune
-seam remain UNFIXED/UNIMPLEMENTED. No remaining SSH target/smoke is admitted here.
+The historical805/3 retirement failures retain their old scope. The approved
+test-only seam and three invalid-trigger producer corrections now pass exact
+follow-ups, not a whole mutation_remote pass. No remaining SSH target/smoke is
+admitted here.
 
 Planned exact checks (each through `devenv shell -- cargo test --all-features
 --locked --lib <full-name> -- --exact`, names/argv recorded in new-only evidence
@@ -54,6 +57,49 @@ retained, no historical bulk audit. Prior d87/64a6/4cc and upstream-ledger green
 remain source-qualified, not current merged passes. SAME SPEC then QUALITY remain
 controller-owned; no performance/profiling, real profile/context/draft, push, PR,
 main close/native or cleanup authority. Ticket remains implementing.
+
+#### Post-Prune Correction Admission — 2026-11-09 UTC
+
+Clean entry `5af8ed2bf15ccb2eeaf7f647a3f14e122083b458`; runtime integration
+`7447beb1b2028298add753ab8d40290753e2bc6d`; fresh fetched main
+`8da9afd4ec82c145632988687cbd71bead046051`. Incoming diff empty. Actual
+`git merge origin/main` exit0, Already up to date; ancestry passes, clean ticket,
+main checkout untouched. Existing plan/design amended before code. Owner's broad
+necessary TEST repair/expansion authority applies; production semantic changes
+or conflicts stop for controller. No agents. The marker P2 remains accepted/
+deferred, not fixed, and performance/profiling remains stopped.
+
+Controller carries SAME SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` integration CLEAR
+and SAME QUALITY `ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE CLEAR through5af,
+**with1 owner-accepted P2 deferred,0 blocking/new findings**, not zero issues.
+This is admission to the approved fault/fixture correction, not final runtime
+acceptance or authorization for remaining gates. Old805/3 failures remain generic
+historical parent failures, not captured internal payloads or SQLite provenance.
+
+Planned exact commands, admitted literally before execution in new-only evidence:
+
+```sh
+devenv shell -- cargo test --all-features --locked --lib repository::context_retirement::run::post_prune_fault_tests::post_prune_fault_is_exact_one_shot_and_scoped -- --exact
+devenv shell -- cargo test --all-features --locked --test mutation_remote retirement_reentry_resumed_prune_sql_gap_owned_absence_preserves_all_old_uncertainty -- --exact
+devenv shell -- cargo test --all-features --locked --test mutation_remote retirement_reentry_worktree_intent_cannot_invent_branch_removal -- --exact
+devenv shell -- cargo test --all-features --locked --test mutation_remote retirement_present_prune_sql_gap_preserves_surviving_branch_on_retry -- --exact
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo fmt --check
+```
+
+One-shot declarations/amended fixtures must compile and fail the intended live
+producer expectation before the seam is wired. No compile/zero-match RED claim.
+Then only those exact changed cases run GREEN, default threads,900-second cap.
+Actual Git removal + Rust-abort SQL rollback is the new proof, not engine-raised
+constraint propagation. Keep all original uncertainty/resource/materialization/
+recreated-OID/no-network/reopen/privacy assertions and branch=true D14 path.
+New source/input/RED/GREEN/static/manifest evidence:
+`/tmp/opencode/task8-retirement-prune-gap-fix-20261109T013252Z/`.
+Prior29 exact/static and cli_remote165(d87),805/3,poll80/4,desktop1579/1,
+enablement102/1 and older headless/library/local-sync/SSH scopes remain qualified,
+not new whole combined-tree passes; upstream ledger results remain reported-only.
+Manual characterization stays ignored/NOT MEASURED. No further gate autorun.
 
 #### Integration Exact-Check Checkpoint / Remaining Selection
 
@@ -11552,3 +11598,136 @@ and three failed SSH-fixture fixes resume with focused checks. They remain
 in this checkpoint. `document_promotion`, `ticket_closure`, `comment_publication`,
 isolated smokes and final runtime SPEC/QUALITY remain owed. Ticket remains
 **implementing**, not full runtime-ready, complete, published or closed.
+
+## Task 8 — Approved Post-Prune Fault / Three Fixture Correction GREEN, 2026-11-09 UTC
+
+### Authority, Reviews And Fresh Main Preflight
+
+Owner says PROCEED; broad necessary further TEST repair/expansion authorization
+remains. Controller carries integration SPEC CLEAR from SAME SPEC
+**`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** and reports SAME QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** QUALITY/SOURCE CLEAR through entry
+**`5af8ed2bf15ccb2eeaf7f647a3f14e122083b458`**, **with1 owner-accepted P2 deferred,
+0 blocking/new findings**, not zero issues. These admit this correction, not its
+new source review or remaining runtime gates. The registry-wide marker race is
+still accepted/deferred, not fixed; no production race/default/guard/hook package
+or performance/boundary work is authorized by the TEST approval.
+
+Fresh `git fetch origin` succeeded from the clean ticket worktree. Main stayed
+**`8da9afd4ec82c145632988687cbd71bead046051`**; incoming log/diff empty. Actual
+`git merge origin/main` **exit0, Already up to date**, ancestry/clean checks pass;
+HEAD stayed5af. Main checkout stayed clean at recorded `c69789d9`; no main or other
+worktree edits, rebase/reset/discard/force or agent. Existing design/plan amended
+before source edits. Prior runtime integration freeze remains
+**`7447beb1b2028298add753ab8d40290753e2bc6d`**, not a newly rerun whole suite.
+
+### Bounded Source And Fixture Changes
+
+Only `src/repository/context_retirement/run.rs` and
+`tests/mutation_remote/context_retirement.rs` change code. Every `run.rs` addition
+is cfg(test): thread-local fault state keyed by operation + actual owner epoch,
+thread-affine Rc/Cell consumption guard, scoped drop cleanup, one checker/call,
+and one cheap cross-platform unit test. Matching takes the arm once; mismatched
+operation/epoch leaves it armed; dropping an old guard cannot clear a newer arm.
+No public/shipped FailurePoint, production field/dependency/schema/authority or
+default change. The source-included `mutation_remote` target compiles this same
+private test seam; no harness/privacy surface change.
+
+The checker runs **only after successful `verified.prune`**, after taking
+`uninvoked` and storing `permit`, immediately before the worktree observation
+UPDATE. It returns a **Rust recovery error**, not a callback or SQL RAISE. Existing
+transaction unwinding leaves real Git removal in place and durable unobserved
+worktree intent/possible SQL state, with live CleanupPending Observed/None. This
+proves rollback after Rust abort, **not engine-generated constraint propagation**.
+
+The fixture helper uses the existing **outside-SQL worktree hook** after durable
+intent to query the **actual current owner epoch**, then arms that exact key. It
+asserts consumption, unchanged possible/none SQL record, NULL worktree observation,
+zero branch intents, fresh arm/drop cleanup and legitimate audited reopen. The
+three fixtures remove only foreign trigger producers `resumed_gap`,
+`reentry_ignore_w_observation`, `retirement_present_prune_receipt`; no audit is
+weakened. Original19 assertion macros in the three functions are preserved
+(5→6,7→9,7→7), as are original uncertainty/final Possible-vs-Observed/branchNone,
+surviving resources, recreated-same-OID, materialization, no-network, reopen and
+privacy controls. `present_sql_gap(true)` retains its passing D14 SQL-trigger
+semantics. CASES/root runner/harness/other modules are unchanged: inherited808
+inventory preserved, **not** a current808-case pass. No new SSH case/target.
+
+### Meaningful Compiled RED → Exact GREEN
+
+The checker was initially inert and unwired. The unit failed its expected
+matching-key error assertion: **0passed/1failed, cargo exit101**. An initial SSH
+build failed with E0505 (Rust2024 opaque closure captures), **zero cases executed,
+NOT RED**; precise `+ use<>` captures repaired only the new owned helper. After
+compilation, all three SSH cases failed the intended live producer expectation,
+**0passed/1failed, cargo exit1 each**. Privacy-safe numeric panic observations
+734/1789/3148 correlate to those assertions in the captured unchanged fixture
+source, not internal historical error payloads. Then only the exact checker and
+cfg(test) call were wired; the fixture SHA stayed unchanged from compiled RED.
+
+All commands through Devenv, foreground/default threads,900-second cap; no cap
+reached, waits/real-time aging/thread/timeout-budget changes or unchanged-green
+repeat. Exact literal argv was saved before every launch and is listed in the
+admission above. Actual results:
+
+| Exact case | RED actual | GREEN actual | GREEN monotonic seconds |
+| --- | --- | --- | ---: |
+| `repository::context_retirement::run::post_prune_fault_tests::post_prune_fault_is_exact_one_shot_and_scoped` | 0/1, exit101 | **1/0, exit0**,1723filtered | 13.952654278 |
+| `retirement_reentry_resumed_prune_sql_gap_owned_absence_preserves_all_old_uncertainty` | 0/1, exit1 | **1/0, exit0**,SSH footer reconciled | 23.284226983 |
+| `retirement_reentry_worktree_intent_cannot_invent_branch_removal` | 0/1, exit1 | **1/0, exit0**,SSH footer reconciled | 3.074921229 |
+| `retirement_present_prune_sql_gap_preserves_surviving_branch_on_retry` | 0/1, exit1 | **1/0, exit0**,SSH footer reconciled | 2.772813887 |
+
+**Four unique exact GREEN cases**, not a whole library/mutation_remote pass.
+Historical805/3 remains generic/partial at d87, not measured historical payload,
+SQLite cause or a synthesized808/0. The initial preparation proof-script's
+hardcoded source-occurrence count was also corrected before any Cargo run;
+that assertion failure is not a test/RED. Receipts preserve both diagnostics.
+
+### Fresh Coherent-Tree Statics And Frozen Source
+
+| Actual Devenv command | Exit | Monotonic seconds | Raw SHA-256 |
+| --- | ---: | ---: | --- |
+| `cargo check --all-features --locked` | 0 | 4.778151875 | `7036314080fc6d82ff691ffed21cd868d234295907bf5e42a1962af23c675b7c` |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | 0 | 20.797695549 | `dbc34e9eea6589472d61a9e28cfb2548b6728d2d9ce2fcf82952078016450c55` |
+| `cargo fmt --check` | 0 | 19.876814424 | `1fbde21547a3c0e66f3082f7c794a351b5fa195df76eb4e86cfc783835f0f0d3` |
+
+All four GREEN receipts and three final static receipts match every final source/
+build input hash. Aggregate input SHA-256:
+**`e157441f7f4c11f303360c4bd39400a7494fd0152120912e2fd32ee7e81e2290`**.
+Only owned metadata finalizes afterward. Removing the exact new cfg(test)
+declarations/method/call/unit module reconstructs entry `run.rs` **byte-for-byte**;
+shipped code is unchanged. Protected schemas, retirement authority, instance/
+reentry logic, remote marker/default behavior, source-included runner, SSH privacy/
+harness, dependencies and workflow have zero entry diff. Source/assertion/catalog/
+branch=true proof is in `source-proof.json`; raw/log/count evidence in
+`compiled-red-source-proof.json` and `results.json`.
+
+### Evidence, Retained Scopes And Controller Return
+
+New-only **`/tmp/opencode/task8-retirement-prune-gap-fix-20261109T013252Z/`** holds
+fresh preflight/no-op merge, literal admitted argv/full raw logs/input hashes,
+compiled RED versus wired proof, diagnostics, actual counts/exits/times, final
+statics/source freeze, prefix/Git/commit/handoff and new manifest. Old evidence
+is not overwritten or bulk re-audited. Canonical comment
+**`01M6TYJATB44WZPJABX9GMBVS1`** appends after its entire **115906-byte** prior
+prefix (SHA-256 `b298eb3e6b01fd20a4dd9d408c0fc7f8dcd2b40c067e795d6db9498866cbbacb`),
+preserving original ID, parent **`01M6SYJK4CJGHWKZC7MTP18GTA`** and creation time.
+
+Prior29 integration exact/static scopes stay old; cli_remote165 at d87,
+mutation805/3, poll80/4, desktop1579/1, enablement102/1 plus qualified follow-ups
+and old headless/library/local-sync/SSH scopes are not new whole combined-tree
+passes. Upstream ledger evidence stays reported-only, not reauthenticated raw
+logs. Manual characterization is ignored/**NOT MEASURED**. Marker P2 stays owner-
+accepted/deferred, not fixed; performance/profiling/perf-ticket work and the
+promotion/closure/materialization follow-up remain stopped.
+
+Commit bounded source/test/owned metadata with required coauthor; final handoff
+verifies full HEAD/runtime freeze/task base/main, clean **UNPUSHED**, main untouched,
+ancestry/merge-tree, prefix and no owned jobs. Controller next requests SAME SPEC
+**`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then SAME QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, over complete c48-to-returned-HEAD (bounded
+new increment5af-to-returned-HEAD), carrying the accepted P2. **No remaining gate
+autorun**: `document_promotion`, `ticket_closure`, `comment_publication`, isolated
+smokes and final runtime SPEC/QUALITY remain owed. Ticket **implementing**, not
+full runtime-ready/complete/published/closed. No status save/new IDs/agents/push/PR/
+main closure/native/real profile/key/context/draft/other-worktree/cleanup action.
