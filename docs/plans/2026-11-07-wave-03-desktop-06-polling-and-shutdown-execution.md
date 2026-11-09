@@ -155,6 +155,83 @@ Hand-offs from Task 3 (review M-8 and the report):
   `cx.notify()` on `Operations`; Task 5 observes that or adds its own notify.
 - `#[allow(dead_code)]` on `Backend::cancel_poll` is removed by Task 4.
 
+Rulings made in Task 4 (reviewed; "decision — why — cost if wrong"):
+
+- Design checkpoint (owner, 2026-11-09): P-1 to P-7 and L-1 to L-6 approved as
+  written against U-13, U-15 and U-16 (all matched). Every row answered as
+  written; no ruling stop.
+- Ruling: `Intent::PollOnce{root}` is added now (every Fact 14 arm: not
+  confirmed, label "Check now", `changes_items` and `stops_at_safe_points`
+  true, `JobKind::PollOnce`, builds `Mutation::PollOnce`), not a seam, because
+  `resume_dead_check_now` must show a real request queued under the named
+  request id on the user lane. Task 6 still owns the policy verbs, the
+  `intent_poll_*` tests, the Check now controls and `PollOnce`'s stage text.
+- Ruling: new `Answer::OperationMismatch` / `Library::Mismatch`, handled like
+  `Repository{false}` but dropping the entry even when `active_operation_id`
+  still names it (L-3). The `classify` arm for the real kind is untested (a
+  `RepositoryError` cannot be built outside the library); reviewed as correct
+  against `reservation.rs` `mismatch()`.
+- Ruling: an entry is **terminal** on Completed, any live Transport, or a
+  Cancelled that carries `completed_at`; a desktop-made skip (Cancelled before
+  `poll_automatic`, no `completed_at`) keeps the entry; `Unread` drops nothing.
+  Otherwise an entry goes whenever `active_operation_id` is not its id.
+- Ruling: `active_operation_id` lists only reservation-holding phases, so an
+  `interrupted` row reads as `Nothing` and an Interrupted answer drops the
+  entry; the model's wait carries the same op for R-4's resend (verified
+  against `read/status.rs`). A killed process leaves an active row, so its entry
+  stays and is taken over.
+- Ruling: the cancel task watches via `PollWatch(Arc<Shared>)`, never a
+  `WorkerHandle` clone; first cancel immediate, then 50/100/250/500 ms, then
+  1 s repeating; it stops when the poll answers, on `shut_down`, or when the
+  worker thread ends (a `WorkerEnd` guard, panic included).
+- Ruling: firmness Quit > Reconfiguration > Takeover > Preemption; a second ask
+  sends no second event; `asked_cause` returns `Quit` once the queue is closed;
+  a Cancelled answer with no ask reads as `Takeover`.
+- Ruling: the record lives at `<data>/inflight/{record.json,instance.lock}`;
+  writes use `drafts::folder::Folder::replace` (temp, fsync, rename, folder
+  fsync); the lock is `OpenOptions` (0600 on unix) plus
+  `fs4::try_lock_exclusive`; an unreadable or newer-version record is renamed
+  `record.unreadable-<ulid>` and reported once; if the rename fails the record
+  is kept, not deleted, and work stays in memory.
+- Ruling (review I-1): the replayed-terminal ageing compares `completed_at`
+  with the launch time **truncated to whole seconds** (the library stores
+  seconds), so a fresh poll finishing in the launch second counts. A replay from
+  that same second also counts; accepted, the alternative loses a fresh poll.
+- Ruling: `Holding::Attention` (eligible but parked by the model) is not in the
+  L-2 table; Task 7 words it.
+- Ruling: the preemption table uses a background `IndexRefresh` as a stand-in
+  for a background `ContextRetire` (admit looks only at the lane).
+- **Ruling (review I-2): `resume_offer` offers Resume for any Remote `poll` row
+  with an operation id, no next action and a reservation-holding phase** — the
+  read model carries no request id or kind, so a Check now's row cannot be told
+  from other rows. What Resume answers: (a) an automatic poll's stale row, or a
+  live one in this process: `NotResumable` (`invalid_input`), a dead-end button;
+  (b) **a ContextRetire's observer row** (the Task 0 ruling): the retirement
+  request holds only the local operation, so Resume answers `invalid_input`;
+  this changes the owner's Task 0 picture from "an extra row with no actions"
+  to "an extra row whose Resume button fails"; Resume of the retirement's own
+  local row (Task 12) still settles it; (c) another process's live Check now:
+  `original_request_required` naming its request, and the resend takes that
+  request over (the same semantic lifecycle rows have). Task 5 removes (a) by
+  giving `Operations` the desktop's own automatic-poll operation ids and
+  returning `NotOffered` for them. (b) and (c) have no discriminator before
+  Task 7: **report to the owner at the Part B checkpoint**, and record as a
+  known limit.
+
+Requirements Task 4 hands to Task 5 (the scheduler entity must do all of
+these; the model cannot wedge if it forgets, but polling would be silent):
+- call `Backend::resolve` + `polling_status` after EVERY answer and pass
+  `active_operation_id` as `scheduler::ActiveRow` to `scheduler::apply`;
+- call `InflightStore::try_acquire()` at launch and again on window
+  activation; on `Acquired::Now` run L-1 from `store.polls()`;
+- supply `launched_at` to `apply`; call `set_policy` after an `abandon` or a
+  stale answer; use `abandon(root)` for a poll dropped by quit or `admit`;
+- own the exclusion of the desktop's own automatic-poll ids from `resume_offer`
+  (I-2 above) and remove the module-level `cfg_attr(not(test),
+  allow(dead_code))` on `inflight.rs` and `scheduler.rs`;
+- `Reconfiguration` is constructed by Task 5 (`ask_poll_cancel`), `Quit` by Task
+  10.
+
 ## Existing-test edits
 
 E-1 to E-6 are named in the design's Testing section. Any further edit is
@@ -167,6 +244,15 @@ reason.
   variant. No behaviour change. (Non-test: `model/operations.rs` `apply()` is
   also exhaustive and gained `Polled(..) => {}`; the drain removes a `Polled`
   before `apply`.)
+- **E-8 (Task 4, E-1 class).** `requests_tests.rs`: `every_intent` gains
+  `PollOnce` (variant count 38 to 39); the `changes_items` range `17..=37` to
+  `17..=38` and the `stops_at_safe_points` range `29..=37` to `29..=38`.
+  Reason: the new `Intent::PollOnce`. No assertion weakened. (The implementer
+  called these E-7 to E-9; renumbered here after Task 3's E-7.)
+- **E-9 (Task 4).** `worker_tests.rs` `seen()` gained a `PreemptPoll` arm
+  (`unreachable!`). Reason: the new `WorkerEvent` variant.
+- **E-10 (Task 4).** `poll_tests.rs` `next()` gained a `PreemptPoll` arm (heard
+  as "preempt"). Reason: the new variant (a Task 3 file).
 
 ## Task 0: Baseline, references and ledger
 
@@ -349,4 +435,23 @@ arm, markers, a doc comment). Nothing outside `src/desktop/` changed.
 Mutation checks run: a lane-blind provider fails `background_poll_never_prompts`;
 moving `HostTrustChanged` to `Unreachable`, an eager cancel-cause call, and
 `completed_at` only for `Completed` each fail `poll_attempt_conversion`.
+| 4 | `1294bcef` | `e2bbc831`, `c2f564eb` (review fixes) | APPROVE WITH MINOR; I-1 (second-truncated ageing), M-1/2/4/5/7 applied; I-2 deferred to Task 5 and reported to the owner; M-3/6/8/9 no change; fixes not re-reviewed | `desktop::services::preempt::tests::{preemption_table, the_drain_cancels_a_preempted_poll}`, `desktop::services::scheduler::tests::{restart_schedule_same_op, conflict_pending_waits, stale_rows_table}`, `desktop::services::inflight::tests::inflight_record`, `desktop::services::resends::tests::resume_dead_check_now`; each singly with `--exact`, 1 test, pass; also Tasks 2-3 tests re-run by the implementer; fmt, check, both clippy pass |
+
+## Task 4: preemption, restart, in-flight record, stale rows
+
+Files (all under `src/desktop/`): new `services/{preempt.rs, preempt_tests.rs,
+preempt_rows_tests.rs, inflight.rs, inflight_tests.rs, scheduler.rs,
+scheduler_tests.rs, scheduler_rows_tests.rs}`; changed `services/{worker.rs,
+mod.rs, poll.rs, poll_convert.rs, requests.rs, requests/build.rs, resends.rs}`,
+`model/{operations.rs, polling.rs, polling/attempt.rs, polling/table.rs}`,
+`test_support/polling.rs`. Nothing outside `src/desktop/` changed.
+Process lapse (recorded, not hidden): the implementer wrote the core code
+before the tests; the compensating evidence is a mutation check per row (drop
+the pre-poll flag check; end the cancel task on the first `Ok`; admit cancelling
+the wrong lanes; steal a row on any Busy; drop the mismatch rule; drop the
+old-replay rule; judge "not ours" by the code; drop the lock guard; write the
+entry after submit; write as a non-holder; ignore the model's op; drop
+`restart=true`; remove the second truncation; remove the shutdown check) —
+each caught, two (the lock guard and the write order) only after a stronger
+assertion was added.
 
