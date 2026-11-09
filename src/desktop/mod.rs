@@ -15,10 +15,10 @@ use std::{rc::Rc, sync::Arc};
 
 use gpui_kit::{
     App, AppContext, Bounds, ClickEvent, Context, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, Render, Styled, TestSupportExt, Window, WindowBounds, WindowHandle,
-    WindowOptions,
+    ParentElement, Render, Styled, TestSupportExt, Window, WindowBounds, WindowDecorations,
+    WindowHandle, WindowOptions,
     component::{
-        Root,
+        Root, TitleBar,
         button::{Button, ButtonVariants},
         h_flex, v_flex,
     },
@@ -84,6 +84,17 @@ fn window_options(cx: &App) -> WindowOptions {
     }
 }
 
+/// The main window draws its own title bar (Part D), so it takes the Kit's
+/// title bar options and asks for client decorations, which make Linux draw
+/// the Kit's window controls (R-15). The startup failure window keeps
+/// `window_options`.
+fn main_window_options(cx: &App) -> WindowOptions {
+    let mut options = TitleBar::window_options();
+    options.window_bounds = window_options(cx).window_bounds;
+    options.window_decorations = Some(WindowDecorations::Client);
+    options
+}
+
 /// Builds `Root` over a new workspace. `Root`'s entity is reserved before
 /// this runs, so the workspace's comes after it.
 fn root_over_workspace(services: Services, window: &mut Window, cx: &mut Context<Root>) -> Root {
@@ -106,7 +117,7 @@ fn library_services(service: RepositoryService, cx: &mut App) -> Services {
 }
 
 fn open_main_window(services: Services, cx: &mut App) -> WindowHandle<Root> {
-    cx.open_window(window_options(cx), |window, cx| {
+    cx.open_window(main_window_options(cx), |window, cx| {
         cx.new(|cx| root_over_workspace(services, window, cx))
     })
     .expect("failed to open the Manyhands window")

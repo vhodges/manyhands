@@ -13,6 +13,7 @@ use crate::desktop::{
     view::{
         dock::Slot,
         scroll::ContentScroll,
+        shell::{title::window_title, title_bar},
         sidebar::{self, RepositoryRow},
     },
 };
@@ -177,6 +178,14 @@ impl Render for Workspace {
         }
         self.repositories_pane
             .set(RepositoryRow::rows(&self.navigation), window, cx);
+        // The title bar draws the string the window is titled with, which is
+        // set only when it changes (R-14).
+        let title = window_title(self.navigation.selected_entry());
+        if title != self.window_title {
+            window.set_window_title(&title);
+            self.window_title.clone_from(&title);
+        }
+        let title_bar = title_bar(title.into(), cx.entity().downgrade(), cx);
         let dock = div()
             .flex_1()
             .min_h_0()
@@ -278,6 +287,7 @@ impl Render for Workspace {
             .relative()
             .size_full()
             .bg(cx.theme().background)
+            .child(title_bar)
             .child(dock)
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))

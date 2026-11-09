@@ -117,6 +117,9 @@ pub(crate) struct Workspace {
     _drafts_events: Subscription,
     /// Fallback when the control holding focus is no longer drawn.
     last_region: Option<Region>,
+    /// The title last given to the window, so it is set only when the
+    /// derived title changes (R-14). Empty until the first frame.
+    window_title: String,
     quit: QuitPhase,
     quit_focus: FocusHandle,
     /// The dialog layer owns the open passphrase dialog.
@@ -283,6 +286,7 @@ impl Workspace {
             _settings_events: settings_events,
             _drafts_events: drafts_events,
             last_region: Some(Region::Repositories),
+            window_title: String::new(),
             quit: QuitPhase::Running,
             quit_focus: cx.focus_handle().tab_stop(true),
             passphrase: None,

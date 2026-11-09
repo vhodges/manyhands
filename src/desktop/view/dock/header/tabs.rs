@@ -123,17 +123,14 @@ fn single(
     let colors = chrome_colors(cx);
     let handle = PanelHandle::of(panel);
     let kind = kind_of(panel, cx);
-    // `activity` is not served until Task 6 adds it to `ItemIcons`.
-    let icon = kind
-        .filter(|kind| *kind != PanelKind::Activity)
-        .map(|kind| {
-            Icon::default()
-                .path(icon_path(kind.icon()))
-                .w(px(ICON_SIZE))
-                .h(px(ICON_SIZE))
-                .flex_none()
-                .text_color(colors.secondary)
-        });
+    let icon = kind.map(|kind| {
+        Icon::default()
+            .path(icon_path(kind.icon()))
+            .w(px(ICON_SIZE))
+            .h(px(ICON_SIZE))
+            .flex_none()
+            .text_color(colors.secondary)
+    });
     let title = handle.map(|handle| handle.title(window, cx));
     let count = handle.and_then(|handle| handle.title_suffix(window, cx));
     let label = tab_label(panel, FULL_LABEL_TABS, cx);

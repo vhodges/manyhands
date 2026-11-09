@@ -2,10 +2,10 @@
 
 use gpui_kit::AssetSource;
 
-use super::{DesktopAssets, icon_path};
+use super::{APP_ICON_PATH, DesktopAssets, icon_path};
 
 /// The item view's Lucide icons (design R-52).
-const ICONS: [&str; 36] = [
+const ICONS: [&str; 37] = [
     "folder-git-2",
     "ticket",
     "file-text",
@@ -42,6 +42,7 @@ const ICONS: [&str; 36] = [
     "arrow-up",
     "arrow-down",
     "archive",
+    "activity",
 ];
 
 #[test]
@@ -64,4 +65,11 @@ fn the_kit_icons_still_load_and_an_unknown_path_is_not_an_icon() {
             .is_some()
     );
     assert!(DesktopAssets.load("icons/no-such-icon.svg").is_err());
+}
+
+#[test]
+fn the_app_icon_loads_as_a_small_png() {
+    let png = DesktopAssets.load(APP_ICON_PATH).unwrap().unwrap();
+    assert!(png.starts_with(b"\x89PNG"), "the app icon is not a PNG");
+    assert!(png.len() < 16 * 1024, "the app icon is not small");
 }

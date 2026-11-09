@@ -8,7 +8,6 @@ const PRODUCT: &str = "Manyhands";
 /// `Manyhands — {name}` for the selected repository, else
 /// `Manyhands`. The name is the root's directory name, or the root itself
 /// when it has none (`RepositoryEntry::name`).
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 6.
 pub(crate) fn window_title(selected: Option<&RepositoryEntry>) -> String {
     match selected {
         Some(repository) => format!("{PRODUCT} — {}", repository.name()),
