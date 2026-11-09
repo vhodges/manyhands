@@ -50,7 +50,8 @@ moves the operations area into the Activity panel unchanged.
 - Panels `RepositoriesPanel`, `TicketsPanel`, `DocumentsPanel` (today's
   Navigation pane split in two) and `ActivityPanel`, with the design's panel
   headers.
-- Default layout 1b without Projects and Teams, 28 px rows.
+- Default layout 1b without Projects and Teams. Rows stay as they are: 28 px
+  is Cycle 02's row default (Cycle decision 11).
 - Footer: panel and dock toggles, a dock menu per panel toggle (left, right,
   bottom), Needs attention and Settings.
 - Layout persisted in app data, versioned, with a reported fallback.
@@ -64,17 +65,18 @@ and will probably run alongside this Cycle. Its plan (revision 1, drafted
 2026-11-07) touches the operations area, the quit path and
 `view/workspace/repositories.rs`.
 
-- **Quit feedback stays visible.** The quit path's "Finishing {label}"
+- **Quit feedback stays in Activity.** The quit path's "Finishing {label}"
   section and Quit now render in the operations area today (`render.rs`),
-  and D6 adds "still stopping" there after ten seconds. Once that area is
-  the Activity panel, a hidden Activity must not hide them: show the
-  Activity panel when a quit starts waiting, or draw the finishing feedback
-  outside any panel. Decide in the plan and test it (quit with Activity
-  hidden).
-- **One source for Needs attention.** Derive the footer's count from the
-  operations model's attention entries (`model/operations.rs`), not a list
-  of this Cycle's own, so the entries D6 adds (key locked, host approval,
-  recovery hold) are counted in either merge order.
+  and D6 adds "still stopping" there after ten seconds. A quit that has to
+  wait changes no layout: its feedback is in the Activity panel, visible
+  when Activity is shown, and a person who wonders why opens Activity
+  (Cycle decision 7, revised). Tested: a waiting quit with Activity hidden.
+- **One source for Needs attention.** The footer's count comes from one
+  new read-only function, `needs_attention` in `model/attention.rs`, over
+  the operations and drafts models (`model/operations.rs` has no attention
+  entries and is not edited). The states D6 adds (key locked, host
+  approval, recovery hold) join that function in whichever of D6 and this
+  Cycle merges second (Cycle decision 3).
 - **Wrap, don't edit.** Move the operations area into `ActivityPanel` as it
   is, without changing `view/operations/` or `model/operations.rs`, so D6's
   edits there merge cleanly.
