@@ -11,12 +11,12 @@
 //! in a repository with a publication remote, offers Stop at a safe point
 //! (R-1, R-15), which reads Stopping… once pressed; a resume stops at safe
 //! points only when it takes up a remote synchronization listed pending,
-//! so any other resume reads Finishing. A running share or post reads its
-//! stage in words ("Sharing · …", "Posting · …"), and a finished share
-//! says its outcome in fixed words and offers the controls that outcome
-//! names in place of the envelope's recovery actions (`outcomes`): a
-//! stopped one says whether part of its work finished and offers Share, a
-//! new request. Stop trying to share gives a request up (decision 8); one
+//! so any other resume reads Finishing. A running share, post or Check now
+//! reads its stage in words ("Sharing · …", "Posting · …", "Checking · …"),
+//! and a finished share says its outcome in fixed words and offers the
+//! controls that outcome names in place of the envelope's recovery actions
+//! (`outcomes`): a stopped one says whether part of its work finished and
+//! offers Share, a new request. Stop trying to share gives a request up (decision 8); one
 //! whose record had already finished says "Already finished" above the
 //! stored answer it replayed, and the answer of a Give up never offers it
 //! again (P14). A draft store that did not open keeps an entry with its
@@ -295,10 +295,10 @@ impl Workspace {
             .clone()
     }
 
-    /// A request's state in words: a running share or post by its stage,
-    /// naming the publication remote `remote`, and a running lifecycle by
-    /// its latest stage (D5, A3), naming the primary branch `primary`; any
-    /// other as `state_label`.
+    /// A request's state in words: a running share, post or Check now by
+    /// its stage, naming the publication remote `remote`, and a running
+    /// lifecycle by its latest stage (D5, A3), naming the primary branch
+    /// `primary`; any other as `state_label`.
     fn entry_state(
         request: &DesktopRequest,
         remote: Option<&str>,
@@ -938,3 +938,7 @@ impl<E: Styled> FocusRing for E {
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "operations_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/check_tests.rs"]
+mod check_tests;

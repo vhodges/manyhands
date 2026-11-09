@@ -567,8 +567,9 @@ impl Intent {
     /// Whether the call's cancellation token is honoured after the library
     /// accepts the command, at a synchronization's safe points (fact 9): the
     /// comment, the two syncs, a republish (P21), `operation resume`, Check
-    /// now (`poll once`), a promotion or closure, which stops between its steps (D5 fact 2), a
-    /// local synchronization and its resolution, and a remote resolution.
+    /// now (`poll once`), a promotion or closure, which stops between its
+    /// steps (D5 fact 2), a local synchronization and its resolution, and a
+    /// remote resolution.
     /// Every other command, the saves and the poll policy verbs among them
     /// (one write, never accepted: Fact 2), cannot be stopped once accepted.
     ///

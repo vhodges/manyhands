@@ -747,3 +747,43 @@ async fn the_dialog_names_what_waits_and_says_not_now(cx: &mut TestAppContext) {
     held.release();
     shell.until_ended(id, cx).await;
 }
+
+/// A prompt raised while a Check now runs is not a share's: the dialog
+/// names no share and keeps the plain Cancel (Check now may prompt, and
+/// "Sharing a is waiting" would be wrong for it).
+#[gpui_kit::test]
+async fn a_prompt_for_a_check_now_names_no_share(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.publish_over_ssh(&root);
+    let shell = Shell::open(fixture, cx);
+
+    let held = shell.backend.hold_job(JobKind::PollOnce);
+    let id = shell.workspace.read_with(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::PollOnce { root: root.clone() },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    held.wait_reached();
+    shell
+        .until(cx, move |operations| {
+            operations
+                .request(id)
+                .is_some_and(|request| matches!(request.state, RequestState::Running { .. }))
+        })
+        .await;
+
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    assert!(!shell.present("passphrase-subtitle", cx));
+    assert!(!shell.present("passphrase-note", cx));
+    shell.click("passphrase-cancel", cx);
+    assert_eq!(asked.answered(), "cancelled");
+
+    held.release();
+    shell.until_ended(id, cx).await;
+}

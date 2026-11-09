@@ -660,19 +660,29 @@ pub(crate) enum StopOffer {
     NotOffered,
 }
 
-/// What a share or a post is, for the words of its stages.
+/// What a share, a post or a Check now is, for the words of its stages.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Progressing {
     Share,
     Post,
+    /// Check now (`poll once`, D6 Fact 14).
+    Check,
 }
 
 impl Progressing {
-    /// A share (`item sync`, `repo sync`) or a post (`comment add`).
+    /// A share (`item sync`, `repo sync`), a post (`comment add`) or a
+    /// Check now (`poll once`). The poll policy verbs have none: each is
+    /// one write that reports `writing` and nothing else (Fact 2), so its
+    /// entry reads like any other local command.
     pub(crate) fn of(intent: &Intent) -> Option<Self> {
         match intent {
             Intent::ItemSync { .. } | Intent::RepoSync { .. } => Some(Self::Share),
             Intent::CommentAdd { .. } => Some(Self::Post),
+            Intent::PollOnce { .. } => Some(Self::Check),
+            // The policy verbs: no stage words (Fact 2).
+            Intent::PollConfigure { .. } | Intent::PollPause { .. } | Intent::PollResume { .. } => {
+                None
+            }
             _ => None,
         }
     }
@@ -689,9 +699,9 @@ impl ShareTarget {
     }
 }
 
-/// A stage's words for a share or a post (design, Stage text), naming the
-/// publication remote `remote` while connecting. `None` for a stage the
-/// design gives no words: a share does not write. A lifecycle's merge and
+/// A stage's words for a share, a post or a Check now (design, Stage text),
+/// naming the publication remote `remote` while connecting. `None` for a
+/// stage the design gives no words: a share or a check does not write. A lifecycle's merge and
 /// sharing name the primary branch, `primary` when known (R-35).
 pub(crate) fn stage_text(
     kind: Progressing,
@@ -700,13 +710,14 @@ pub(crate) fn stage_text(
     primary: Option<&str>,
 ) -> Option<String> {
     let words = match (stage, kind) {
-        (ProgressStage::Accepted | ProgressStage::Observing, Progressing::Share) => {
-            "Getting ready…"
-        }
+        (
+            ProgressStage::Accepted | ProgressStage::Observing,
+            Progressing::Share | Progressing::Check,
+        ) => "Getting ready…",
         (ProgressStage::Accepted | ProgressStage::Observing, Progressing::Post) => {
             "Getting a private copy ready…"
         }
-        (ProgressStage::Writing, Progressing::Share) => return None,
+        (ProgressStage::Writing, Progressing::Share | Progressing::Check) => return None,
         (ProgressStage::Writing, Progressing::Post) => "Saving…",
         (ProgressStage::Connecting, _) => {
             return Some(match remote {
@@ -732,9 +743,9 @@ pub(crate) fn stage_text(
     Some(words.to_owned())
 }
 
-/// What a running share or post says: "Sharing · {stage}" or
-/// "Posting · {stage}". Before its first stage, or at one with no words,
-/// it says it is getting ready.
+/// What a running share, post or Check now says: "Sharing · {stage}",
+/// "Posting · {stage}" or "Checking · {stage}". Before its first stage, or
+/// at one with no words, it says it is getting ready.
 pub(crate) fn progress_words(
     kind: Progressing,
     stage: Option<ProgressStage>,
@@ -743,6 +754,7 @@ pub(crate) fn progress_words(
     let prefix = match kind {
         Progressing::Share => "Sharing",
         Progressing::Post => "Posting",
+        Progressing::Check => "Checking",
     };
     let words = stage
         .and_then(|stage| stage_text(kind, stage, remote, None))
