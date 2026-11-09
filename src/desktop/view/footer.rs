@@ -311,5 +311,5 @@ pub(in crate::desktop::view) fn separator(cx: &App) -> gpui_kit::Div {
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]
-#[path = "footer_tests.rs"]
+#[path = "footer_tests/mod.rs"]
 mod tests;

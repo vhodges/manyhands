@@ -34,10 +34,12 @@ pub(crate) struct ChromeColors {
     /// Brand amber: the focused tab line and the active tab icon.
     pub accent: Hsla,
     /// Links, the focus ring, in-progress.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
+    #[cfg_attr(not(test), allow(dead_code))]
+    // Cycle 03 (the update-check and to-share footer items).
     pub teal: Hsla,
     /// Success, ready, up to date.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
+    #[cfg_attr(not(test), allow(dead_code))]
+    // Cycle 03 (the update-check and to-share footer items).
     pub green: Hsla,
     /// Failure, blocked, conflict, attention.
     pub red: Hsla,

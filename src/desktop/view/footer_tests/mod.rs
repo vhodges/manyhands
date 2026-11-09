@@ -6,147 +6,27 @@
 //! A toggle's name and state are read as a screen reader reads them: the
 //! snapshot's `label()` and `checked()`.
 
-use std::path::PathBuf;
-
 use gpui_kit::{
-    TestAppContext,
-    component::{
-        WindowExt,
-        dock::{
-            DockPlacement::{Bottom, Left, Right},
-            InsertTarget,
-        },
-    },
+    InputEvent, Modifiers, MouseButton, MouseDownEvent, TestAppContext, component::WindowExt,
     test::TestWindowExt,
 };
-use manyhands::{
-    repository::RequestId,
-    results::{Envelope, Outcome, ResultCode, Scope},
-};
+use manyhands::results::Outcome;
 
 use super::{Control, attention_text, dock_toggle_name, menu, panel_toggle_name, plan};
 use crate::desktop::{
-    keys::OpenDockMenu,
-    model::layout::{Layout, PanelKind, Side},
-    model::stamp::SettingsPage,
-    services::{
-        requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
-        worker::WorkerEvent,
+    keys::{DockPanel, OpenDockMenu},
+    model::{
+        layout::{Layout, PanelKind, Side},
+        stamp::SettingsPage,
     },
     test_support::fixtures::Fixture,
     view::{harness::Shell, settings::Shown, workspace::Region},
 };
+
+mod support;
+
 use PanelKind::{Activity, Documents, Repositories, Tickets};
-
-/// A control as the screen reader reads it: its name and toggled state.
-fn read(
-    shell: &Shell,
-    control: Control,
-    cx: &mut TestAppContext,
-) -> Option<(String, Option<bool>)> {
-    shell.frame(cx, |window, _| {
-        window.try_find(control.id()).map(|element| {
-            (
-                element.label().unwrap_or_default().to_owned(),
-                element.checked(),
-            )
-        })
-    })
-}
-
-fn layout(shell: &Shell, cx: &mut TestAppContext) -> Layout {
-    shell
-        .workspace
-        .read_with(cx, |workspace, _| workspace.layout().clone())
-}
-
-fn saves(shell: &Shell, cx: &mut TestAppContext) -> usize {
-    shell
-        .workspace
-        .read_with(cx, |workspace, _| workspace.layout_saves())
-}
-
-fn focused(shell: &Shell, id: &'static str, cx: &mut TestAppContext) -> bool {
-    shell.frame(cx, |window, _| {
-        window.try_find(id).and_then(|element| element.focused()) == Some(true)
-    })
-}
-
-fn open(shell: &Shell, cx: &mut TestAppContext) -> bool {
-    shell.present("popup-menu", cx)
-}
-
-/// The Kit's own edit for `kind` dropped into `with`'s tab group, at the end,
-/// without selecting it: the only way to a panel that is on and behind
-/// another tab.
-fn put_behind(shell: &Shell, kind: PanelKind, with: PanelKind, cx: &mut TestAppContext) {
-    let area = shell
-        .workspace
-        .read_with(cx, |workspace, _| workspace.dock_area().clone());
-    let (id, node) = area.read_with(cx, |area, cx| {
-        let find = |wanted: PanelKind| {
-            [Left, Right, Bottom]
-                .into_iter()
-                .filter_map(|placement| area.layout(placement))
-                .find_map(|tree| {
-                    let id = tree.panels().find(|id| {
-                        area.panel(*id)
-                            .is_some_and(|panel| panel.panel_name(cx) == wanted.name())
-                    })?;
-                    Some((id, tree.find_panel_node(id)?))
-                })
-                .expect("the panel is in a dock")
-        };
-        (find(kind).0, find(with).1)
-    });
-    shell.frame(cx, |window, cx| {
-        area.update(cx, |area, cx| {
-            area.move_panel(
-                id,
-                InsertTarget::Tabs {
-                    node,
-                    ix: None,
-                    activate: false,
-                },
-                window,
-                cx,
-            )
-        })
-    });
-    shell.run(cx);
-}
-
-/// A request that finished with `outcome`, under a code that agrees with it.
-fn finish(shell: &Shell, id: u64, outcome: Outcome, cx: &mut TestAppContext) {
-    let operations = shell.operations(cx);
-    operations.update(cx, |operations, cx| {
-        operations.apply(WorkerEvent::Queued(DesktopRequest {
-            id: DesktopRequestId(id),
-            request_id: RequestId::new(),
-            intent: Intent::IndexRefresh {
-                root: PathBuf::from("/fixture/a"),
-            },
-            confirmation: None,
-            lane: Lane::User,
-            attempt: 1,
-            state: RequestState::Queued,
-        }));
-        operations.apply(WorkerEvent::Finished(
-            DesktopRequestId(id),
-            Box::new(Envelope::mutation(
-                "index refresh",
-                Scope::default(),
-                outcome,
-                match outcome {
-                    Outcome::Success => ResultCode::Ok,
-                    _ => ResultCode::Busy,
-                },
-            )),
-        ));
-        cx.notify();
-    });
-    shell.run(cx);
-}
+use support::*;
 
 /// A panel toggle reads on only when its panel is displayed, and a click
 /// hides it or reveals it, a panel behind another tab included (P2, P3, R-4).
@@ -330,6 +210,16 @@ fn a_secondary_click_opens_the_dock_menu_with_its_side_checked(cx: &mut TestAppC
         Some(("Hide Activity".to_owned(), Some(true)))
     );
     assert!(focused(&shell, activity.id(), cx), "focus stays on it");
+    // Drawn in the right group: after Tickets' toggle, before the dock's.
+    let x = |control: Control, cx: &mut TestAppContext| {
+        shell.frame(cx, |window, _| window.find(control.id()).bounds().origin.x)
+    };
+    let (tickets_x, activity_x, dock_x) = (
+        x(Control::Panel(Tickets), cx),
+        x(activity, cx),
+        x(Control::Dock(Side::Right), cx),
+    );
+    assert!(tickets_x < activity_x && activity_x < dock_x);
 
     // Under a focused toggle: focus in the menu; Escape gives it back to the
     // toggle. A secondary click leaves focus where it was.
@@ -349,7 +239,24 @@ fn a_secondary_click_opens_the_dock_menu_with_its_side_checked(cx: &mut TestAppC
     assert!(!open(&shell, cx));
     assert!(focused(&shell, tickets.id(), cx), "back on the toggle");
 
-    shell.frame(cx, |window, cx| window.right_click(activity.id(), cx));
+    // A secondary click on another toggle leaves focus on Tickets' toggle
+    // while the menu opens, before any draw gives the menu focus: nothing
+    // inside the control takes it (the Kit's button would, for any button
+    // but the primary).
+    let position = shell.frame(cx, |window, _| window.find(activity.id()).bounds().center());
+    let mut visual = shell.visual(cx);
+    let kept = visual.update(|window, cx| {
+        let down = MouseDownEvent {
+            button: MouseButton::Right,
+            position,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        };
+        window.dispatch_event(down.to_platform_input(), cx);
+        handle.is_focused(window)
+    });
+    assert!(kept, "a secondary click moves no focus");
     shell.run(cx);
     shell.frame(cx, |_, _| ());
     assert!(open(&shell, cx));
@@ -414,21 +321,14 @@ fn settings_opens_the_settings_page(cx: &mut TestAppContext) {
     );
 }
 
-/// With a dialog open, no footer control acts: the layout is unchanged and
-/// the dialog stays (P18, R-30). A click on the footer lands on the dialog's
-/// overlay, which does not close it; a control pressed any other way (Enter
-/// or Space on a focused one) reaches the Workspace, which refuses it.
+/// With a dialog or the sheet open, no footer control acts: the layout is
+/// unchanged and the modal stays (P18, R-30). A click on the footer lands
+/// on the overlay; a control pressed any other way (Enter or Space on a
+/// focused one) reaches the Workspace, which refuses it, as it refuses the
+/// dock actions.
 #[gpui_kit::test]
 fn footer_controls_do_nothing_behind_a_dialog(cx: &mut TestAppContext) {
-    let shell = Shell::open(Fixture::new(), cx);
-    // As the app's dialogs are: the overlay does not close them.
-    shell.frame(cx, |window, cx| {
-        window.open_dialog(cx, |dialog, _, _| {
-            dialog.title("Probe").overlay_closable(false)
-        })
-    });
-    shell.run(cx);
-    let (before, saved) = (layout(&shell, cx), saves(&shell, cx));
+    let shell = shell_with_a_ticket(cx);
     let controls = [
         Control::Panel(Tickets),
         Control::Dock(Side::Left),
@@ -436,32 +336,84 @@ fn footer_controls_do_nothing_behind_a_dialog(cx: &mut TestAppContext) {
         Control::Settings,
     ];
     finish(&shell, 1, Outcome::Error, cx);
+    let (before, saved) = (layout(&shell, cx), saves(&shell, cx));
 
-    for control in controls {
-        shell.click(control.id(), cx);
+    for sheet in [false, true] {
+        open_modal(&shell, sheet, cx);
+        for control in controls {
+            // A click on the footer closes the sheet (its overlay takes it,
+            // fact 33), so only the dialog is clicked.
+            if !sheet {
+                shell.click(control.id(), cx);
+            }
+            shell.frame(cx, |window, cx| {
+                shell.workspace.update(cx, |workspace, cx| {
+                    workspace.press(control, window, cx);
+                    if let Control::Panel(kind) = control {
+                        let at = gpui_kit::point(gpui_kit::px(10.), gpui_kit::px(10.));
+                        workspace.open_dock_menu(kind, menu::Placement::Pointer(at), window, cx);
+                    }
+                })
+            });
+            shell.run(cx);
+            assert_eq!(layout(&shell, cx), before, "{control:?}, sheet {sheet}");
+        }
+        // The actions, from where the modal holds focus: the menu key and a
+        // move of Tickets to the left.
         shell.frame(cx, |window, cx| {
-            shell.workspace.update(cx, |workspace, cx| {
-                workspace.press(control, window, cx);
-                if let Control::Panel(kind) = control {
-                    let placement = menu::Placement::Pointer(gpui_kit::point(
-                        gpui_kit::px(10.),
-                        gpui_kit::px(10.),
-                    ));
-                    workspace.open_dock_menu(kind, placement, window, cx);
-                }
-            })
+            window.dispatch_action(Box::new(OpenDockMenu), cx);
+            let move_it = DockPanel {
+                panel: Tickets,
+                side: Side::Left,
+            };
+            window.dispatch_action(Box::new(move_it), cx);
         });
         shell.run(cx);
-        assert_eq!(layout(&shell, cx), before, "{control:?}: the layout");
-        assert_eq!(saves(&shell, cx), saved, "{control:?}: no save");
-        assert!(!open(&shell, cx), "{control:?}: no menu");
-        let dialog = shell.frame(cx, |window, cx| window.has_active_dialog(cx));
-        assert!(dialog, "{control:?}: the dialog stays");
+        assert_eq!(layout(&shell, cx), before, "actions, sheet {sheet}");
+        assert_eq!(saves(&shell, cx), saved, "no save, sheet {sheet}");
+        assert!(!open(&shell, cx), "no menu, sheet {sheet}");
+        assert!(modal_open(&shell, cx), "the modal stays, sheet {sheet}");
+        shell.frame(cx, |window, cx| {
+            window.close_all_dialogs(cx);
+            window.close_sheet(cx);
+        });
+        shell.run(cx);
     }
     let shown = shell
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
     assert_eq!(shown, Shown::Tabs, "Settings did not open");
+}
+
+/// A dock menu opened by the pointer does not outlive a dialog or the sheet
+/// that opens over it: it goes without a choice, and the next draw does not
+/// take focus from the modal (P18).
+#[gpui_kit::test]
+fn a_dock_menu_closes_when_a_modal_opens_over_it(cx: &mut TestAppContext) {
+    let shell = shell_with_a_ticket(cx);
+    let before = layout(&shell, cx);
+    for sheet in [false, true] {
+        shell.frame(cx, |window, cx| {
+            window.right_click(Control::Panel(Activity).id(), cx)
+        });
+        shell.run(cx);
+        shell.frame(cx, |_, _| ());
+        assert!(open(&shell, cx), "sheet {sheet}: the menu is open");
+
+        open_modal(&shell, sheet, cx);
+        assert!(!open(&shell, cx), "sheet {sheet}: the menu is gone");
+        let toggles_focused = Control::ALL
+            .into_iter()
+            .filter(|control| focused(&shell, control.id(), cx))
+            .count();
+        assert_eq!(toggles_focused, 0, "sheet {sheet}: focus is not behind");
+        assert_eq!(layout(&shell, cx), before, "nothing was chosen");
+        shell.frame(cx, |window, cx| {
+            window.close_all_dialogs(cx);
+            window.close_sheet(cx);
+        });
+        shell.run(cx);
+    }
 }
 
 /// Names and tooltips follow the state (R-24); Needs attention's text is the

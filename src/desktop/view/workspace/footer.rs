@@ -235,12 +235,18 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The open menu's layer, drawn by the root.
+    /// The open menu's layer, drawn by the root. A dialog or the sheet that
+    /// opens over a menu closes it without a choice: its layer would take
+    /// focus back from the modal on every draw (P18).
     pub(in crate::desktop::view) fn dock_menu_layer(
-        &self,
+        &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if window.has_active_dialog(cx) || window.has_active_sheet(cx) {
+            self.footer.menu = None;
+            return None;
+        }
         self.footer.menu.as_ref().map(|menu| menu.layer(window, cx))
     }
 }
