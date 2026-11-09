@@ -607,7 +607,7 @@ reuse one.
 | --- | --- | --- |
 | `Ok(Polled{completion: Completed})` | `Idle`, due at the stored `next_eligible_at`; clears any attention for this repository | Checked just now · up to date / Brought in N changes |
 | `Err(Transport(e))`, transport unavailable, remote unavailable, protocol failure or push rejected | `Idle` at the stored backoff deadline | Can't reach {repo}. Your work is safe. |
-| `Err(Transport(e))`, unlock cancelled, provider unavailable or unlock failed | Attention `KeyLocked(id)` for `e.selected_key_id`; `KeyProblem(None, root)` if it is `None` | Needs unlocking |
+| `Err(Transport(e))`, unlock cancelled, provider unavailable or unlock failed | Attention `KeyLocked(id)` for `e.selected_key_id`; `NoKeySelected(root)` if it is `None` (owner ruling 2026-11-09: with no key named there is nothing to unlock) | Needs unlocking; Choose a key when no key is named |
 | `Err(Transport(e))`, no selected key, or a key missing, unreadable, invalid or rejected | Attention `KeyProblem(e.selected_key_id, root)` | Choose a key |
 | `Err(Transport(e))`, host approval or replacement required, or host verification unavailable | Attention `HostUnapproved(e.authority)`, or per repository if `None` | Needs host approval |
 | `Err(Transport(e))`, configuration invalid, username required or publication remote missing | Attention `ConfigurationRequired` | Can't check |
