@@ -348,8 +348,6 @@ impl Backend for LibraryBackend {
     }
 }
 
-/// The handle views hold. Cloning it shares the backend, the worker
-/// and the request model.
 /// Starts the cancel task of a poll the worker was asked to stop.
 struct Canceller {
     backend: Arc<dyn Backend>,
@@ -382,6 +380,8 @@ impl Canceller {
     }
 }
 
+/// The handle views hold. Cloning it shares the backend, the worker
+/// and the request model.
 #[derive(Clone)]
 pub(crate) struct Services {
     backend: Arc<dyn Backend>,

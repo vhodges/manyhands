@@ -331,12 +331,15 @@ pub(crate) struct PollWatch(Arc<Shared>);
 
 impl PollWatch {
     pub(crate) fn running(&self, op: OperationId) -> bool {
-        self.0
-            .lock()
-            .running
-            .as_ref()
-            .and_then(|running| running.poll.as_ref())
-            .is_some_and(|poll| poll.op == op)
+        let state = self.0.lock();
+        // A worker that is gone (shut down, or ended by a panic) answers no
+        // poll, so the cancel task must not wait for one.
+        !state.shut_down
+            && state
+                .running
+                .as_ref()
+                .and_then(|running| running.poll.as_ref())
+                .is_some_and(|poll| poll.op == op)
     }
 }
 
@@ -402,6 +405,19 @@ impl Shared {
     }
 }
 
+/// Marks the worker gone when its thread ends, a panic included: nothing is
+/// running then, and the cancel task of a poll (`PollWatch`) stops instead of
+/// resending for ever.
+struct WorkerEnd(Arc<Shared>);
+
+impl Drop for WorkerEnd {
+    fn drop(&mut self) {
+        let mut state = self.0.lock();
+        state.shut_down = true;
+        state.running = None;
+    }
+}
+
 /// Ends the worker when the last handle goes.
 struct Owner(Arc<Shared>);
 
@@ -436,7 +452,10 @@ impl WorkerHandle {
         let worker = shared.clone();
         thread::Builder::new()
             .name("manyhands-worker".to_owned())
-            .spawn(move || run(&worker, backend.as_ref()))
+            .spawn(move || {
+                let _ends = WorkerEnd(worker.clone());
+                run(&worker, backend.as_ref());
+            })
             .expect("failed to start the Manyhands worker thread");
         let handle = Self {
             owner: Arc::new(Owner(shared)),

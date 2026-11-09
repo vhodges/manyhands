@@ -96,7 +96,8 @@ impl World {
         let clock = TestClock::new();
         let mut schedule = PollSchedule::default();
         schedule.add(root.clone(), open_policy(), None);
-        let launched_at = clock.utc();
+        // Sub-second, as a real launch is; the library stores whole seconds.
+        let launched_at = clock.utc() + time::Duration::milliseconds(700);
         Self {
             _fixture: fixture,
             _data: data,

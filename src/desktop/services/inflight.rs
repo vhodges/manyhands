@@ -207,6 +207,8 @@ pub(crate) struct InflightStore {
     held: Option<File>,
     record: Record,
     report: Option<Report>,
+    /// The record on disk could not be set aside, so it is not replaced.
+    keep_record: bool,
 }
 
 impl InflightStore {
@@ -236,6 +238,7 @@ impl InflightStore {
                 ..Record::default()
             },
             report: None,
+            keep_record: false,
         }
     }
 
@@ -251,13 +254,11 @@ impl InflightStore {
         let Some(place) = &self.place else {
             return Acquired::Nowhere;
         };
-        let file = match OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(place.directory.join(LOCK))
-        {
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(false).read(true).write(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = match options.open(place.directory.join(LOCK)) {
             Ok(file) => file,
             Err(_) => return Acquired::Nowhere,
         };
@@ -311,8 +312,11 @@ impl InflightStore {
         if unreadable {
             let aside = format!("record.unreadable-{}", ulid::Ulid::new());
             let from = place.directory.join(RECORD);
+            // A record that cannot be set aside is left where it is, never
+            // deleted, and not written over: this instance keeps its work in
+            // memory.
             if fs::rename(&from, place.directory.join(aside)).is_err() {
-                let _ = fs::remove_file(&from);
+                self.keep_record = true;
             }
             self.report = Some(Report::Unreadable);
         }
@@ -325,7 +329,7 @@ impl InflightStore {
     /// Writes the record, atomically, when this instance holds the lock. A
     /// failure keeps the work in memory and is reported once.
     fn persist(&mut self) {
-        if self.held.is_none() {
+        if self.held.is_none() || self.keep_record {
             return;
         }
         let Some(place) = &mut self.place else {

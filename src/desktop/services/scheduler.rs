@@ -100,7 +100,8 @@ pub(crate) enum Holding {
     /// Held until recovery: Resume checking to finish it.
     Held,
     /// A key, host or configuration needs the person first; the repository's
-    /// attention row says which.
+    /// attention row says which. Not in the L-2 table: the repository is
+    /// eligible, and only the model parks it, so Task 7 words it.
     Attention,
     /// Not due: it finishes at the next check.
     NotDue,
@@ -148,10 +149,15 @@ pub(crate) fn holding(
 /// Whether `attempt` counts as an attempt at all: a replayed terminal answer
 /// whose time is older than this launch is the previous process's, not this
 /// one's, and has no status line and starts no loop (L-1).
+///
+/// The library stores `poll_completed_at` in whole unix seconds, so the
+/// launch time is compared to the second: a poll that finishes in the same
+/// wall second as the launch reads back as that second, not as older.
 fn counts(attempt: &PollAttempt, launched_at: OffsetDateTime) -> bool {
+    let launched = launched_at.replace_nanosecond(0).unwrap_or(launched_at);
     attempt
         .completed_at
-        .is_none_or(|completed| completed >= launched_at)
+        .is_none_or(|completed| completed >= launched)
 }
 
 /// Takes a poll's answer. `active` is `polling_status.active_operation_id`

@@ -245,7 +245,7 @@ use rows::{
 /// The required outcomes P-1 to P-7 (design B2).
 #[test]
 fn preemption_table() {
-    let rows: [(&str, fn()); 10] = [
+    let rows: [(&str, fn()); 11] = [
         ("P-1 submit", || user_job_preempts(Entry::Submit)),
         ("P-1 submit_with_request_id", || {
             user_job_preempts(Entry::SubmitWithRequestId)
@@ -267,6 +267,10 @@ fn preemption_table() {
         (
             "P-7 quit and reconfiguration",
             quit_and_reconfiguration_share_the_task,
+        ),
+        (
+            "the cancel task stops with the worker",
+            rows::cancel_task_stops_with_the_worker,
         ),
     ];
     for (name, row) in rows {

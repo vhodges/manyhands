@@ -75,6 +75,27 @@ pub(super) fn stale_rows() {
         assert_eq!(world.entry(), None);
     });
 
+    // L-1 and the library's whole-second times: a completion in the same
+    // wall second as the launch counts; one a full second earlier is a
+    // replay.
+    for (name, offset, counts) in [("same second", 0, true), ("a second earlier", -1, false)] {
+        row(&format!("L-1 {name}"), || {
+            let mut world = World::launch(Some(OperationId::new()));
+            let whole = world.launched_at.replace_nanosecond(0).unwrap();
+            assert_ne!(whole, world.launched_at, "the launch is sub-second");
+            world.backend.answer_poll(report(
+                PollCompletion::Completed,
+                whole + time::Duration::seconds(offset),
+            ));
+            let attempt = world.poll();
+            assert_eq!(
+                world.apply(&attempt, ActiveRow::Nothing).is_some(),
+                counts,
+                "{name}"
+            );
+        });
+    }
+
     // L-2: not eligible, no takeover; the row says why; the entry stays;
     // turning checking on takes it over at runtime.
     for (cause, expect) in [

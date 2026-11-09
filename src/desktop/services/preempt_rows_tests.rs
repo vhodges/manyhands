@@ -292,3 +292,18 @@ pub(super) fn quit_and_reconfiguration_share_the_task() {
     assert_eq!(attempt.answer, Answer::Cancelled(CancelCause::Takeover));
     assert_eq!(h.preempts(), 0);
 }
+
+/// A worker that is gone answers no poll: the watch says the poll is no
+/// longer running, so the cancel task ends instead of resending for ever.
+pub(super) fn cancel_task_stops_with_the_worker() {
+    let mut h = Harness::new();
+    let op = OperationId::new();
+    let gate = h.hold_poll(op, false);
+    let watch = h.worker.poll_watch();
+    assert!(watch.running(op));
+    // The last handle goes: the worker is shut down while the poll is held.
+    let Harness { worker, .. } = h;
+    drop(worker);
+    assert!(!watch.running(op));
+    drop(gate);
+}
