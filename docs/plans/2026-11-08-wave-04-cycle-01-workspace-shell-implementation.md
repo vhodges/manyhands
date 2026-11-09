@@ -11,8 +11,8 @@ id: "01M6YVNFE6AB0RBGQK72CFJJ4X"
 # Wave 04 Cycle 01 Workspace Shell Implementation Plan
 
 > **For agentic workers:** Revision 5, approved 2026-11-08, after review
-> rounds 1 to 4. Implementation is not yet authorized, and the execution
-> method is not yet chosen. Once the owner authorizes implementation, use `implementing-a-cycle` task
+> rounds 1 to 4. Implementation is authorized, subagent-driven and serial
+> (Cycle decisions 18 and 19). Use `implementing-a-cycle` task
 > by task, re-read the design, repeat the ticket preflight, and record
 > every checkpoint on ticket `01M6V8RK8B0SBCH0YZXFVSR9E3`. Steps use
 > checkbox (`- [ ]`) syntax.

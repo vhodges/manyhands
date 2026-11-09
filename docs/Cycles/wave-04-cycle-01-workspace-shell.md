@@ -14,7 +14,7 @@ Ticket `01M6V8RK8B0SBCH0YZXFVSR9E3` (`vh-jge24`).
 [Design](../plans/2026-11-08-wave-04-cycle-01-workspace-shell-design.md) and
 [implementation plan](../plans/2026-11-08-wave-04-cycle-01-workspace-shell-implementation.md).
 
-Status: **approved 2026-11-08** (revision 5). The owner wrote: "Docs are Approved, tests are approved. Note if testing scope need to add additional existing tests, that is pre-authorized" (decision 17). Implementation is not yet authorized, and the execution method is not yet chosen.
+Status: **approved 2026-11-08** (revision 5). The owner wrote: "Docs are Approved, tests are approved. Note if testing scope need to add additional existing tests, that is pre-authorized" (decision 17). Implementation was authorized the same day, subagent-driven and serial (decisions 18 and 19).
 
 - This document was drafted on the ticket branch at `cc2af8d0`, which
   merged origin/main `8da9afd4`. The design and plan were drafted at
@@ -383,6 +383,13 @@ Answered by the owner at approval:
     the ledger and in the review-ready summary. This supersedes decision
     12's "no standing approval"; decision 12's test runs stand.
 
+18. **Quit now and Quit anyway stay in this Cycle.** Removing them is the
+    deferred quit-dialog work (design Document Amendment 4).
+19. **Implementation is authorized, subagent-driven and serial.** One
+    implementer per task, then a fresh reviewer, one at a time. Not
+    authorized: pushes beyond the ticket branch, a PR, the merge, closing
+    the ticket, cleanup and native CI dispatch.
+
 ## Known Limits
 
 These are visible to users; the design's Known Limits give the detail.
@@ -451,3 +458,4 @@ them; U-5 was settled in review.
 | Review round 4 (scoped re-review, `d035d90b`) | 4 Important, 10 Minor, none Blocking | — | Verified and applied in revision 5, which had no independent review | Reviewer report, 2026-11-08 |
 | Owner, 2026-11-08 | Quitting with work at risk as one blocking dialog; a watchdog for pending operations | Owner direction | Later work (Exclusions; design Amendment 4) | Owner, 2026-11-08 |
 | Owner, 2026-11-08 | Approval of revision 5, the named test edits, and pre-authorized further test edits | Owner decision | Approved; decision 17; documents marked approved; amendments applied | Owner, 2026-11-08 |
+| Owner, 2026-11-08 | Execution method; implementation; the quit buttons | Owner decision | Decisions 18 and 19 | Owner, 2026-11-08 |
