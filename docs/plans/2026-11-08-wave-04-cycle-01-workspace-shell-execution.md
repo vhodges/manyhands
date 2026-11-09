@@ -1700,3 +1700,28 @@ interest of time" he "short circuited parts of the process".
 The fast tier's `--lib` stage stays red for main's 93 `context_retirement` tests,
 identical on `origin/main`. The Cycle is not closed, merged, cleaned up or sent to CI;
 none of that has been authorized.
+
+## Main's fixture fix merged (2026-11-09)
+
+The 93 `repository::context_retirement::*` lib failures were a fixture problem on main:
+four fixtures enabled a repository with no identity, and this machine has no global
+Git identity. It was fixed on ticket `01M70PYS3B3YWEFTY0QBJGCF6N` (`50fe563e`) and
+reached main as `d6789cb9`. The owner confirmed it.
+
+- `origin/main` merged into the ticket branch (merge, no rebase): tip `f519ea4b`.
+  `git merge-tree` was clean first. The merge brought in the fix and the other
+  ticket's `.manyhands/` records only; nothing under `src/desktop/`.
+- Both Boundary diffs print nothing.
+- Test run, on the merged tree:
+  `cargo test --all-features --locked --lib -- repository::context_retirement::`
+  gave 142 passed, 0 failed, in 191 s. This replaces the earlier "93 failed" result.
+- The fast tier was **not** re-run on this branch. The other ticket's run on main
+  (58 min, with `--no-fail-fast`) had four load-only failures, each green alone:
+  `closure::checkpoint::tests::remote_primary_advance_from_context_synchronized_is_primary_advanced`,
+  desktop `submissions::tests::{a_second_submit_while_posting_is_refused,retry_keeps_the_request_id}`
+  (10 s wall-clock wait) and `edit_the_mode_key_save_and_done_by_keyboard_alone`
+  (real-time harness wait; `WAIT` is 180 s on this branch). The desktop ones belong
+  with the test-performance work the owner put next.
+
+**Standing now.** The "fast tier `--lib` red" caveat above no longer holds. The Cycle
+is still not closed, merged, cleaned up or sent to CI; none of that is authorized.
