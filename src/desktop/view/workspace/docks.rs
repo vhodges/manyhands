@@ -131,13 +131,22 @@ impl Workspace {
         // resets focus and element state in the area (K-2).
         if !centre_is_item_area(&dump) {
             let accepted = self.dock.accepted().clone();
-            let _ = area.update(cx, |area, cx| area.load(accepted, window, cx));
+            // The Kit's `load` always answers `Ok` (fact 5). Were it ever to
+            // fail, the dropped panel would stay in the centre with no
+            // further event to put it back.
+            let loaded = area.update(cx, |area, cx| area.load(accepted, window, cx));
+            debug_assert!(loaded.is_ok(), "the accepted layout loads");
             return;
         }
         // 3. Accept it. A dock the Kit opened (an edge drag) counts as its
         // dock toggle. This is read before the arrangement, which can
         // change what the layout calls open, against the accepted state, so
-        // the shell's own toggles are not counted twice.
+        // the shell's own toggles are not counted twice. Each term is
+        // needed: a dock the layout closed is not opened by an edit
+        // elsewhere (the dump says open), and a dock the shell opens is not
+        // toggled again (the layout says open). Term 1 is defensive:
+        // reconcile keeps the accepted state's open flag equal to the
+        // layout's, so no state makes it the only term that fails.
         let kit_opened: Vec<Side> = Side::ALL
             .into_iter()
             .filter(|side| {

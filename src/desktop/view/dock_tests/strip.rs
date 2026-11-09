@@ -199,3 +199,59 @@ fn focus_leaves_a_panel_that_is_not_displayed(cx: &mut TestAppContext) {
     );
     assert_eq!(saves(&shell, cx), saved);
 }
+
+/// The terms of the rule that counts a dock the Kit opened as its toggle:
+/// a dock the layout closed stays closed through an edit elsewhere, and a
+/// dock the shell opens is not toggled again when the same flush moves the
+/// panel that was keeping it open.
+#[gpui_kit::test]
+fn a_kit_edit_elsewhere_does_not_open_a_closed_dock(cx: &mut TestAppContext) {
+    let shell = Shell::open(Fixture::new(), cx);
+    let left_open = |cx: &mut TestAppContext| {
+        area(&shell, cx).read_with(cx, |a, _| a.is_dock_open(DockPlacement::Left))
+    };
+
+    // Left holds Repositories, off, and Documents, on; the person closes it.
+    toggle_panel(&shell, Repositories, cx);
+    toggle_dock(&shell, Side::Left, cx);
+    assert!(!layout(&shell, cx).is_shown(Side::Left));
+
+    // A drag elsewhere: the Kit's dump says Left is closed, the accepted
+    // state says so, and the layout too.
+    put_in_group(&shell, Tickets, Activity, false, cx);
+    let after = layout(&shell, cx);
+    assert!(!after.is_shown(Side::Left), "the edit did not show Left");
+    assert!(!after.is_open(Side::Left) && !left_open(cx));
+    assert!(!after.is_on(Repositories));
+    assert_agreement(&shell, "an edit elsewhere", cx);
+
+    // The shell opens Left, and in the same flush a drag takes Documents
+    // out: Left is left holding only Repositories, off, so it closes, and
+    // the Kit's open flag is not taken for the person's toggle, which would
+    // turn Repositories on.
+    let area = area(&shell, cx);
+    let id = panel_id(&area, Documents, cx);
+    let node = group_of(&area, Activity, cx);
+    shell.frame(cx, |window, cx| {
+        shell
+            .workspace
+            .update(cx, |ws, cx| ws.toggle_dock(Side::Left, window, cx));
+        area.update(cx, |area, cx| {
+            area.move_panel(
+                id,
+                gpui_kit::component::dock::InsertTarget::Tabs {
+                    node,
+                    ix: None,
+                    activate: false,
+                },
+                window,
+                cx,
+            )
+        });
+    });
+    shell.run(cx);
+    let after = layout(&shell, cx);
+    assert!(!after.is_on(Repositories), "nothing turned it on");
+    assert!(!after.is_open(Side::Left) && !left_open(cx));
+    assert_agreement(&shell, "Left opened as its panel left", cx);
+}

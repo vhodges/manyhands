@@ -44,7 +44,7 @@ fn each_panel_docks_to_each_side(cx: &mut TestAppContext) {
     // Each step, what it must leave of the docks, and a dock size to check
     // (Activity is 520 px in the harness).
     type Step = (Do, &'static [(Side, Dock)], Option<(Side, f32)>);
-    let steps: [Step; 12] = [
+    let steps: [Step; 14] = [
         (Move(Documents, Right), &[(Left, Open), (Right, Open)], None),
         (
             Move(Documents, Bottom),
@@ -67,6 +67,13 @@ fn each_panel_docks_to_each_side(cx: &mut TestAppContext) {
         (
             Move(Tickets, Bottom),
             &[(Right, Gone), (Bottom, Open)],
+            None,
+        ),
+        // Out of a dock the person closed, which still holds a panel.
+        (Close(Bottom), &[(Bottom, Closed)], None),
+        (
+            Move(Activity, Left),
+            &[(Bottom, Closed), (Left, Open)],
             None,
         ),
     ];
