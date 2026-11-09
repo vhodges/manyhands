@@ -56,6 +56,10 @@ fn branch(f: &Fixture) -> String {
 }
 
 fn present(f: &Fixture) -> String {
+    present_with_publication_history(f, true)
+}
+
+fn present_with_publication_history(f: &Fixture, previously_published: bool) -> String {
     let branch = branch(f);
     let git = git2::Repository::open(f.root.path()).unwrap();
     let path = format!(".manyhands/tickets/{ITEM}/ticket.md");
@@ -98,6 +102,15 @@ fn present(f: &Fixture) -> String {
     crate::repository::remote::state::with_transaction(&f.service, f.root.path(), |tx, id| {
         use crate::repository::remote::state;
         state::configure_endpoints(tx, id, &plan, &config.endpoint_digest())?;
+        if !previously_published {
+            return state::record_context_resolved(
+                tx,
+                id,
+                &plan,
+                AuthoringKind::Ticket,
+                &ITEM.parse().unwrap(),
+            );
+        }
         let prior = RemoteRefObservation::from_advertisement(
             &plan,
             plan.context(AuthoringKind::Ticket, &ITEM.parse().unwrap())
@@ -2727,9 +2740,15 @@ fn retirement_batch_shared_source_ordinary_children_settle_before_next_admission
 
 #[test]
 fn retirement_batch_public_live_pass_retires_real_context_and_replays_without_transport() {
-    for lost in [false, true] {
+    const UNPUBLISHED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+    for (retiring, lost, unpublished) in [
+        (true, false, false),
+        (true, true, false),
+        (false, false, true),
+        (true, false, true),
+    ] {
         let f = Fixture::new();
-        let branch = present(&f);
+        let branch = present_with_publication_history(&f, retiring);
         let git = git2::Repository::open(f.root.path()).unwrap();
         let primary = git.head().unwrap().target().unwrap();
         git.reference(
@@ -2739,6 +2758,80 @@ fn retirement_batch_public_live_pass_retires_real_context_and_replays_without_tr
             "synthetic fetch",
         )
         .unwrap();
+        if retiring && unpublished {
+            let branch = format!("refs/heads/manyhands/ticket/{UNPUBLISHED}");
+            let reference = git
+                .reference(&branch, primary, false, "unpublished fixture")
+                .unwrap();
+            let path = f.root.path().join(".manyhands/worktrees").join(UNPUBLISHED);
+            git.worktree(
+                UNPUBLISHED,
+                &path,
+                Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
+            )
+            .unwrap();
+            let linked = git2::Repository::open(&path).unwrap();
+            let ticket = format!(".manyhands/tickets/{UNPUBLISHED}/ticket.md");
+            std::fs::create_dir_all(path.join(&ticket).parent().unwrap()).unwrap();
+            std::fs::write(path.join(&ticket),format!("---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {UNPUBLISHED}\ntitle: Unpublished fixture\ntype: task\nstatus: open\n---\nLocal-only content\n")).unwrap();
+            let mut index = linked.index().unwrap();
+            index.add_path(Path::new(&ticket)).unwrap();
+            index.write().unwrap();
+            let tree = linked.find_tree(index.write_tree().unwrap()).unwrap();
+            let parent = linked.head().unwrap().peel_to_commit().unwrap();
+            let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+            linked
+                .commit(
+                    Some("HEAD"),
+                    &sig,
+                    &sig,
+                    "unpublished fixture",
+                    &tree,
+                    &[&parent],
+                )
+                .unwrap();
+            let plan =
+                crate::repository::remote::observation::observation_plan(f.root.path()).unwrap();
+            // The upstream evidence producer, not a fabricated snapshot or SQL row.
+            crate::repository::remote::state::with_transaction(
+                &f.service,
+                f.root.path(),
+                |tx, id| {
+                    crate::repository::remote::state::record_context_resolved(
+                        tx,
+                        id,
+                        &plan,
+                        AuthoringKind::Ticket,
+                        &UNPUBLISHED.parse().unwrap(),
+                    )
+                },
+            )
+            .unwrap();
+        }
+        let unpublished_id = unpublished.then_some(if retiring { UNPUBLISHED } else { ITEM });
+        let unpublished_resources = unpublished_id.map(|item| {
+            assert_eq!(
+                f.service
+                    .remote_snapshot(f.root.path())
+                    .unwrap()
+                    .publication_evidence_for(AuthoringKind::Ticket, &item.parse().unwrap(),),
+                RemotePublicationEvidence::NeverPublished,
+            );
+            let branch = format!("refs/heads/manyhands/ticket/{item}");
+            let oid = git.refname_to_id(&branch).unwrap();
+            let path = f.root.path().join(".manyhands/worktrees").join(item);
+            let admin = git.commondir().join("worktrees").join(item);
+            let files = disk_image(&path);
+            let registration = disk_image(&admin);
+            (branch, oid, path, admin, files, registration)
+        });
+        let assert_unpublished_preserved = || {
+            if let Some((branch, oid, path, admin, files, registration)) = &unpublished_resources {
+                assert_eq!(git.refname_to_id(branch).unwrap(), *oid);
+                assert_eq!(files, &disk_image(path));
+                assert_eq!(registration, &disk_image(admin));
+            }
+        };
         let mutation = || {
             Mutation::PollOnceRetiring(PollOnceInput {
                 root: f.root.path().into(),
@@ -2754,10 +2847,28 @@ fn retirement_batch_public_live_pass_retires_real_context_and_replays_without_tr
         let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             execute(&f.service, id, mutation())
         }));
+        if let Some(item) = unpublished_id {
+            assert!(
+                f.service
+                    .remote_snapshot(f.root.path())
+                    .unwrap()
+                    .poll_dispositions()
+                    .iter()
+                    .any(|target| target.item_id() == Some(&item.parse().unwrap())
+                        && target.disposition() == PollDisposition::Unpublished),
+                "the real poll must classify the NeverPublished local target before freezing"
+            );
+            assert_unpublished_preserved();
+        }
         if lost {
             assert!(first.is_err());
         } else {
-            assert_eq!(first.unwrap().code, ResultCode::Ok);
+            let first = first.unwrap();
+            assert_eq!(
+                first.code,
+                ResultCode::Ok,
+                "retiring={retiring}, unpublished={unpublished}: original-live capture must complete: {first:?}"
+            );
         }
         // Replace the latest ordinary poll image before recovering the parent copy.
         // Its report comes from original owned capture, not today's projection.
@@ -2778,30 +2889,64 @@ fn retirement_batch_public_live_pass_retires_real_context_and_replays_without_tr
             "the opted public producer must not fall back to ordinary poll data"
         );
         assert_eq!(data["completion"], "completed");
-        assert_eq!(data["retirements"][0]["state"], "retired");
-        assert!(git.find_reference(&branch).is_err());
+        assert_eq!(
+            data["retirements"].as_array().unwrap().len(),
+            usize::from(retiring)
+        );
+        if retiring {
+            assert_eq!(data["retirements"][0]["state"], "retired");
+            assert!(git.find_reference(&branch).is_err());
+        }
+        if let Some(item) = unpublished_id {
+            assert!(
+                data["poll"]["targets"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|target| target["item_id"] == item
+                        && target["disposition"] == "unpublished")
+            );
+            assert_unpublished_preserved();
+        }
         assert_ne!(first.operation_id, later.operation_id);
         assert_eq!(
             data["poll"]["operation_id"],
             first.operation_id.as_deref().unwrap()
         );
         // Recreated same-OID resources and a later complete M are a NEW lifetime.
-        git.reference(&branch, primary, false, "new lifetime")
+        if retiring {
+            git.reference(&branch, primary, false, "new lifetime")
+                .unwrap();
+            let reference = git.find_reference(&branch).unwrap();
+            git.worktree(
+                ITEM,
+                &f.root.path().join(".manyhands/worktrees").join(ITEM),
+                Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
+            )
             .unwrap();
-        let reference = git.find_reference(&branch).unwrap();
-        git.worktree(
-            ITEM,
-            &f.root.path().join(".manyhands/worktrees").join(ITEM),
-            Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
-        )
-        .unwrap();
-        f.materialization("complete");
+            f.materialization("complete");
+        }
         let disk = disk_image(f.root.path());
         let materializations = row_image(&f.db(), "remote_poll_materializations");
+        let pass_tables = [
+            "remote_operation_records",
+            "retirement_advertisement_provenance",
+            "poll_retirement_passes",
+            "poll_retirement_targets",
+            "context_retirement_records",
+        ];
+        let pass_records = pass_tables.map(|table| row_image(&f.db(), table));
+        let reopened = RepositoryService::open_at(f.data.path()).unwrap();
         assert_eq!(
-            serde_json::to_value(execute(&f.service, id, mutation()).data).unwrap(),
+            serde_json::to_value(execute(&reopened, id, mutation()).data).unwrap(),
             data
         );
+        assert_eq!(
+            pass_records,
+            pass_tables.map(|table| row_image(&f.db(), table)),
+            "completed replay cannot fetch, construct another pass or restart a child loop"
+        );
+        assert_unpublished_preserved();
         assert_eq!(disk, disk_image(f.root.path()));
         assert_eq!(
             materializations,
@@ -2827,6 +2972,7 @@ fn retirement_batch_public_live_pass_retires_real_context_and_replays_without_tr
         assert_eq!(requests, row_image(&f.db(), "request_records"));
         assert_eq!(maps, row_image(&f.db(), "request_operations"));
         assert_eq!(disk, disk_image(f.root.path()));
+        assert_unpublished_preserved();
         assert!(
             !f.db()
                 .prepare("PRAGMA foreign_key_check")

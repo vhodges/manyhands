@@ -1310,6 +1310,7 @@ impl RemotePollReport {
                 PollDisposition::BlockedByLocalState,
                 PollDisposition::Malformed,
                 PollDisposition::RemotelyDeleted,
+                PollDisposition::Unpublished,
                 PollDisposition::Closed,
                 PollDisposition::Promoted,
                 PollDisposition::HistoryUnknown,

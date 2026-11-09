@@ -865,6 +865,73 @@ three fixture functions, unchanged CASES/harness and branch=true D14 controls ar
 preserved. Actual counts/times/source proof are in the execution ledger/new
 evidence. Return for SAME SPEC then QUALITY; no remaining gate admitted.
 
+### Approved P1 Review Fix — Frozen Unpublished Reports, 2026-11-09 UTC
+
+Owner returns an actionable P1 after published metadata HEAD
+`62f79eec9c7b4a22855cb360113f17913b0b6737`, prior runtime
+`a42460bb2d03bcba0db885657257d8ea0f62d66c`. **Review-ready is temporarily held**
+until the bounded fix and controller's SAME SPEC then QUALITY review. This is
+existing-contract compatibility, not a new policy or renewed implementation gate.
+This amendment is recorded before test/production edits; no new planning document.
+
+1. Fresh main `8da9afd4ec82c145632988687cbd71bead046051` is unchanged; actual
+   `git merge origin/main` exit0, Already up to date, on the existing ticket
+   branch. Current main `AGENTS.md` read; no rebase or main-checkout edit.
+2. `NeverPublished` evidence produces normal `PollDisposition::Unpublished`.
+   `FullPass::report` intentionally rejects only `NotReached` and
+   `MaterializationIncomplete`; opted-in freeze captures the full report even
+   with no candidates. Completion's record→handoff audit decodes that report
+   inside the transaction. Its missing `Unpublished` member causes rollback /
+   RecoveryRequired. Add **only `PollDisposition::Unpublished`** to the decoder
+   allowlist after a compiled behavioral RED. Preserve the closed image,
+   canonical encoding/schema audit, default poll shape and D15 report-only replay.
+3. Extend existing cheapest local case
+   `repository::context_retirement::execution_tests::mutation_tests::retirement_batch_public_live_pass_retires_real_context_and_replays_without_transport`.
+   Retain its original normal/lost-copy assertions, add unpublished-only empty
+   selection and mixed unpublished/real-retirement rows. Use the actual upstream
+   `record_context_resolved` publication-evidence producer for never-advertised
+   fixture contexts, not fabricated snapshot/authority rows. Assert the normal
+   `Unpublished` target, completed empty or mixed selection, preserved unpublished
+   branch/worktree/admin state, legitimate reopen and immutable no-fetch/no-new-
+   loop replay. Any necessary fixture extension remains in the existing test file.
+4. Literal RED/GREEN command, default threads, each capped at900s:
+   `devenv shell -- cargo test --all-features --locked --lib repository::context_retirement::execution_tests::mutation_tests::retirement_batch_public_live_pass_retires_real_context_and_replays_without_transport -- --exact`.
+   A compile failure or zero matches is not RED. Then fresh coherent-tree
+   `cargo check --all-features --locked`, strict locked all-target/all-feature
+   Clippy `-D warnings`, and `cargo fmt --check`, all through Devenv.
+5. No whole poll84/mutation808/library/fast/Desktop/CLI/old-green repetition,
+   SSH runtime or smoke: this decoder/capture/reopen regression is local, not a
+   transport change. New-only full argv/raw/count/exit/input/source/RED→GREEN
+   evidence: `/tmp/opencode/task8-unpublished-frozen-report-20261109T104659Z/`.
+6. Update only this plan, ledger current standing/append and existing canonical
+   comment append (preserve entire prefix/ID/parent/time), plus the one production
+   line and existing test file. Required coauthor; return clean **UNPUSHED** for
+   SAME SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`, then QUALITY
+   `ses_e4c8be2f1ffegiPUEUuB0QgyBE` after controller verification, before publishing.
+   Ticket remains implementing/review-fix-pending; no agents, PR/main close/native,
+   real operations or cleanup. Marker P2 stays accepted/deferred **UNFIXED**;
+   desktop PARTIAL/window-unverified accepted; manual benchmark **NOT MEASURED**,
+   performance/perf-ticket/promotion-closure-materialization follow-up **STOP**.
+
+Local P1 outcome, 2026-11-09 UTC: the unchanged-decoder exact test compiled and
+failed **0/1**, exit101, **29.602632690s** total /5.69s harness: after verifying
+the normal Unpublished target, unpublished-only original capture returned
+RecoveryRequired rather than Ok. The original lost-copy row's caught panic was
+expected. After the single enum addition, identical test bytes passed **1/0**,
+exit0, **19.027548225s** total /8.58s harness, all four table rows reached.
+Empty/mixed completion, unpublished resources, reopen and no-new-pass/no-fetch
+replay assertions pass. No compile failure/zero match was counted as RED.
+
+Fresh all-tree statics on the same1,723 source/build input hashes as GREEN:
+check **exit0/4.978976427s**, strict Clippy **exit0/25.700913590s**, fmt-check
+**exit0/17.939688986s**. The only RED→GREEN input change is `remote/poll.rs`;
+removing its one new decoder line reconstructs published production source
+byte-for-byte. No closed-image/schema audit, incomplete-disposition policy,
+default poll shape, D15 or other production code changes. Existing green records
+keep old scopes; this is not a new whole poll/library/SSH/desktop/CLI pass.
+Return the bounded commit clean **UNPUSHED**, review-fix pending SAME SPEC then
+QUALITY after controller evidence verification. Do not publish the fix yet.
+
 ## Plan Self-Review
 
 | Contract/ruling | Tasks and proof |

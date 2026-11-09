@@ -2052,3 +2052,90 @@ coauthor. No Rust/source/build/test/static/smoke/probe/review reruns, agents, re
 profile/key/context/draft operations or cleanup. Publication alone does not
 authorize PR/main merge/close/native/retirement/cleanup; **owner review remains
 required before closure**.
+
+## Follow-up — P1 Unpublished Frozen Report, Local RED→GREEN / Reviews Pending — 2026-11-09 UTC
+
+Owner returns an actionable P1 after published clean entry
+**`62f79eec9c7b4a22855cb360113f17913b0b6737`**, prior runtime source
+**`a42460bb2d03bcba0db885657257d8ea0f62d66c`**. **Prior qualified review-ready is
+temporarily held** until this bounded repair and controller SAME SPEC→QUALITY.
+Original implementation/test-fix authority persists; this is existing-contract
+compatibility, not new policy. Existing implementation plan and ledger admission
+were amended **before code**; no new planning doc/ticket/ID or status save.
+
+Fresh specific-ref preflight UTC **`2026-11-09T10:47:01.262946Z`**: main unchanged
+**`8da9afd4ec82c145632988687cbd71bead046051`**, fetched ticket tracking62f79eec,
+no incoming paths/commits; actual `git merge origin/main` **exit0**, Already up
+to date, HEAD unchanged/main ancestry passes. Fresh main AGENTS read; ticket
+clean at entry and registered main untouched. No rebase/expanded integration.
+
+Source chain verified: `NeverPublished` upstream evidence → absent tracking →
+normal **Unpublished** target. `FullPass::report` accepts it; opted freeze stores
+the full completed report even with no retirement candidates. Completion's
+record→handoff audit calls `decode_frozen` in the same transaction; its missing
+member rolls completion back with RecoveryRequired. Production repair is **one
+`PollDisposition::Unpublished` decoder line only**. `NotReached` and
+`MaterializationIncomplete` remain excluded; closed/canonical image/schema audit,
+default poll shape, full-pass gate and D15 authority/report-only replay unchanged.
+
+Extended only existing cheapest local case and necessary fixture in
+`src/repository/context_retirement/mutation_tests.rs`; original published normal/
+lost-copy assertions retained. Never-advertised contexts use the actual upstream
+`record_context_resolved` evidence producer, not fabricated SQL/snapshot authority.
+All19 original assertions survive (17 unchanged, stronger first-result diagnostic,
+replay through reopened service), now27 assertions; existing15 test names unchanged.
+Four table rows: original normal retirement, original lost-copy replay,
+**unpublished-only completed empty selection**, and **mixed real retirement /
+preserved unpublished context**. Assert actual normal Unpublished classification
+and DTO target, preserved branch OID/worktree bytes/admin registration, legitimate
+reopen, immutable data/cut/materialization/mapping/foreign-key checks and no new
+fetch/pass/child loop on replay. No Fetch input is supplied to replay; relevant
+operation/provenance/pass/target/child rows remain unchanged.
+
+Exact argv run once RED and once GREEN, Devenv/default threads:
+
+```sh
+devenv shell -- cargo test --all-features --locked --lib repository::context_retirement::execution_tests::mutation_tests::retirement_batch_public_live_pass_retires_real_context_and_replays_without_transport -- --exact
+```
+
+- **Compiled RED:**0 passed/1 failed/0 ignored/1723 filtered, **exit101**,
+  **29.602632690s** total /5.69s harness. Decoder unchanged; normal Unpublished
+  classification verified, then empty-selection original capture yielded
+  **RecoveryRequired instead of Ok**. Expected caught lost-copy panic is separate;
+  no compile failure/zero match counted as RED.
+- **GREEN:**1 passed/0 failed/0 ignored/1723 filtered, **exit0**, **19.027548225s**
+  total /8.58s harness, all four rows. Identical test bytes; the only RED→GREEN
+  source/build input difference is the one production decoder member.
+- **Fresh statics:** `devenv shell -- cargo check --all-features --locked`
+  **exit0/4.978976427s**; `devenv shell -- cargo clippy --all-targets --all-features
+  --locked -- -D warnings` **exit0/25.700913590s**;
+  `devenv shell -- cargo fmt --check` **exit0/17.939688986s**. All1,723 current
+  source/test/schema/build hashes match GREEN at admission. Removing the one
+  enum line reconstructs published production `poll.rs` byte-for-byte.
+
+New-only **`/tmp/opencode/task8-unpublished-frozen-report-20261109T104659Z/`** holds
+actual argv/full raw logs/counts/exits/clocks/input hashes/RED-vs-GREEN/source/
+prefix/Git/commit/handoff/manifest evidence; no old overwrite/bulk history audit.
+RED log SHA-256 **`ba70d4be25ab2e92cad850de8c0ba1b02001efa4b5abb0a1a2099a33b78af59e`**;
+GREEN **`bcecb6d55335a5528cfa05a6d4979bd5922bd2845267d6999bba53bae4ac9945`**.
+Every command finished within900s; no wait/thread/budget change. No whole poll84/
+mutation808/library/fast/Desktop/CLI/old-green, SSH runtime or smoke rerun; these
+local capture/decode/reopen checks do not claim transport coverage.
+
+Only the one production line, existing local test/necessary helper and existing
+implementation plan/ledger/canonical append change; no deps/harness/schema/other
+production cleanup. Entire **138387-byte** prior prefix, SHA-256
+**`c143cdba914b1c5fdfa85bec7b1a865ed76dff99ef2afde9c642a5c4433af8a5`**, original ID,
+parent **01M6SYJK4CJGHWKZC7MTP18GTA** and creation time **2026-11-07T12:08:39Z**
+preserved. Required coauthor; returned bounded commit is new source freeze,
+**clean UNPUSHED relative to this fix**, no owned jobs in final evidence.
+
+**P1 locally corrected; review-fix pending, DO NOT PUSH YET.** Controller evidence
+verification precedes SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then SAME
+QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, before publication/renewed readiness.
+Ticket **implementing**, owner review required before closure. Prior green/source
+scopes remain historical, not combined whole fresh/native passes or ALLPASS.
+Marker P2 stays valid owner-accepted/deferred **UNFIXED**, desktop PARTIAL/mapped
+window unverified owner-accepted. Manual benchmark **NOT MEASURED** and performance/
+perf-ticket/promotion-closure-materialization follow-up **STOP** remain. No agents,
+PR/main merge/close/native/real profile/key/context/draft operations or cleanup.

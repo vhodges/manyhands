@@ -12,22 +12,26 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current Qualified Owner-Review Handoff — 2026-11-09 UTC
+### Current P1 Review-Fix Standing — 2026-11-09 UTC
 
-**Controller declares QUALIFIED REVIEW-READY FOR OWNER REVIEW at frozen runtime
-`a42460bb2d03bcba0db885657257d8ea0f62d66c`. Final SPEC and QUALITY accept the scoped
-runtime evidence, carrying both owner-accepted nonblocking limits below. No
-further local gates or remedial work are owed under the approved selection.
-Owner review is required before closure. This is not ALLPASS, zero issues, a
-fresh whole-suite pass or native-platform proof. Ticket lifecycle status remains
-`implementing`; this ledger records the review-ready handoff, not closure.
-Authorized ticket-branch publication is PENDING the pre-push checks and push.**
+**REVIEW-READY TEMPORARILY HELD / P1 LOCALLY CORRECTED, REVIEWS PENDING: owner
+returned frozen-report rejection of normal upstream `Unpublished` at published HEAD
+`62f79eec9c7b4a22855cb360113f17913b0b6737` / prior runtime
+`a42460bb2d03bcba0db885657257d8ea0f62d66c`. Bounded compatibility repair adds one
+decoder member. The existing local regression produced compiled RED0/1→GREEN1/0
+over four table rows; fresh check/strict Clippy/fmt pass on identical GREEN inputs.
+Controller verification and SAME SPEC→QUALITY are required before fix publication.
+Ticket remains `implementing` / review-fix-pending. Prior qualified acceptance
+and publication retain their historical scope, not acceptance of this new fix.
+Owner review is still required before closure; no ALLPASS/whole-suite/native claim.**
 
 - Final SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then SAME QUALITY
   **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**: qualified runtime-evidence acceptance at
   metadata `6e8e47a69ac33cef3547259ed363c6c367c86108` / runtime a424, no additional
   essential headless obligation; QUALITY reports **0 new concrete findings**.
   Prior source scopes remain whole c48..a424 and bounded5af8..a424, WITH the P2.
+  The new actionable P1 requires bounded correction and same-reviewer re-review;
+  those prior qualified acceptances do not clear the as-yet-unreviewed fix.
 - **Desktop PARTIAL, mapped window UNVERIFIED**: owned-process startup/stop
   verified; owner explicitly said **“accept the unverified desktop window.”**
   This resolves its acceptance hold only, not window verification or a defect
@@ -35,31 +39,33 @@ Authorized ticket-branch publication is PENDING the pre-push checks and push.**
 - **Registry-wide marker P2 remains valid, owner-accepted/deferred and UNFIXED**.
   Resolution versus registration/rebuild/cache-recovery race is source-derived,
   unreproduced; likelihood unmeasured. Deferred production repairs remain deferred.
-- Latest scoped Devenv runtime evidence, **reused, not rerun**:
+- Prior a424 scoped Devenv runtime evidence, **reused, not rerun**:
   `document_promotion` **79/0, exit0,1525.790820775s**; `ticket_closure`
   **78/0, exit0,1365.691184547s**; `comment_publication`
   **41/0, exit0,409.800775539s**. Bare CLI help/catalog **exit0,36.214521579s**.
   Desktop owned startup/stop **123.625219776s**, launcher **−15** after owned
   SIGTERM; observer **exit1/no valid client JSON**. No mapped-window pass.
-- Latest a424 statics, **reused, not rerun**: locked all-feature check **exit0,
-  4.778151875s**; strict locked all-target/all-feature Clippy **exit0,
-  20.797695549s**; fmt-check **exit0,19.876814424s**. Four exact RED→GREEN
-  follow-ups and old29 integration exacts retain their recorded source scopes.
+- Current P1 exact regression: **compiled RED0/1, exit101,29.602632690s**;
+  **GREEN1/0, exit0,19.027548225s**. Same test bytes, only one production enum-line
+  change. Original normal/lost-copy rows plus unpublished-only empty and mixed
+  retirement rows; unpublished branch/worktree/admin preserved, reopen/replay safe.
+- Fresh P1 statics: locked all-feature check **exit0,4.978976427s**; strict locked
+  all-target/all-feature Clippy **exit0,25.700913590s**; fmt-check **exit0,
+  17.939688986s**. All1,723 source/build hashes match GREEN. Prior a424 statics,
+  four exact follow-ups and old29 integration exacts keep their recorded scopes.
   No synthetic whole808/84/Desktop/schema/library pass; manual characterization
   remains ignored/**NOT MEASURED** and performance **STOP** remains in force.
-- Last fresh inspection **2026-11-09T04:01:05.335945Z** found main unchanged at
-  **`8da9afd4ec82c145632988687cbd71bead046051`**, ancestry/merge-tree **exit0**.
-  Controller authenticated the prior27-entry metadata manifest, **0 mismatches**.
-  Publication still requires a **new specific-main-and-ticket-only fetch**, main
-  unchanged at8da9 and fetched ticket tracking an ancestor of local HEAD. Stop
-  publication on any failed condition; no force/rebase/reset/silent integration.
-- Only **`manyhands/ticket/01M6KHVD6D0DB8KYT6VGQP10Y0`** publication is authorized.
-  Actual fresh refs, push result, remote-OID equality and clean upstream **0/0**
-  will be recorded externally in
-  **`/tmp/opencode/task8-review-ready-publication-20261109T041611Z/`** after the
-  metadata commit. Publication is not claimed in advance; no extra unpublished
-  metadata commit is required afterward. No PR, main merge, closure, native CI,
-  real retirement or cleanup; no ticket CLI status save against stale main.
+- Fresh P1 preflight **2026-11-09T10:47:01.262946Z**: main unchanged at
+  **`8da9afd4ec82c145632988687cbd71bead046051`**, fetched ticket tracking equals
+  published62f79eec; actual `git merge origin/main` **exit0**, Already up to date;
+  ancestry passes. Main checkout untouched; no incoming production integration.
+- Prior ticket-only publication succeeded at62f79eec; external receipt remains
+  `/tmp/opencode/task8-review-ready-publication-20261109T041611Z/`. **Do not push
+  this fix yet.** New-only bounded evidence:
+  **`/tmp/opencode/task8-unpublished-frozen-report-20261109T104659Z/`**. No whole
+  target/old-green/SSH/smoke repetition; only the changed exact regression and
+  required fresh statics. No agents, PR/main merge/close/native/real operation/
+  cleanup/performance work or stale-main ticket CLI status save.
 
 #### Historical Main-Integration / Correction Record (Retained)
 
@@ -12162,3 +12168,126 @@ edit or Rust/test/static/smoke/probe command, remedial work, agent, new review
 loop, real domain operation, main-checkout edit or cleanup is part of this task.
 **Qualified owner-review-ready is not merged, closed, PR-created or native-tested;
 owner review remains required before closure.**
+
+## Task 8 — P1 Frozen Unpublished Report Compatibility Fix Admission, 2026-11-09 UTC
+
+Owner explicitly authorizes bounded repair after published clean entry
+**`62f79eec9c7b4a22855cb360113f17913b0b6737`**, prior runtime
+**`a42460bb2d03bcba0db885657257d8ea0f62d66c`**. Fresh specific-ref fetch finds main
+unchanged **`8da9afd4ec82c145632988687cbd71bead046051`**, ticket tracking62f79eec,
+no incoming paths/commits. Actual `git merge origin/main` **exit0**, Already up
+to date; HEAD unchanged, main ancestry passes. Fresh main AGENTS read, clean
+ticket worktree; registered main untouched. Receipt UTC
+**`2026-11-09T10:47:01.262946Z`**. No rebase or expanded integration.
+
+Root-cause inspection confirms: real `NeverPublished` fetch evidence flows via
+`absent_tracking_state` / `classify_local_target` to normal `Unpublished`.
+`FullPass::report` accepts it (intentionally rejects only `NotReached` and
+`MaterializationIncomplete`). An opted original-live pass freezes the full
+report, even with no retirement candidates; `finish_remote_operation_capturing`
+runs record→handoff audit in the completion transaction. `decode_frozen` omits
+`Unpublished`, returning RecoveryRequired and rolling completion back. This is
+existing-contract compatibility, not authority to weaken the closed-image audit
+or add the two intentionally incomplete dispositions.
+
+The existing implementation plan is amended **before code**: extend existing
+`repository::context_retirement::execution_tests::mutation_tests::retirement_batch_public_live_pass_retires_real_context_and_replays_without_transport`
+with unpublished-only empty selection and cheap mixed retirement rows, using
+production `record_context_resolved` for never-advertised local contexts. Retain
+all original normal/lost-copy assertions; prove normal Unpublished targets,
+completed capture, preserved unpublished branch/worktree/admin contents,
+legitimate reopen and immutable replay with no fetch/new loop. Run that exact
+case to a **compiled behavioral RED with the decoder unchanged**; only afterward
+add **one `PollDisposition::Unpublished` enum line** and run the exact GREEN.
+Compile errors/zero matches are not RED. Record literal argv before admission.
+
+All Rust through Devenv, default threads,900s interim cap. At coherent tree run
+fresh locked all-feature check, strict locked all-target/all-feature Clippy and
+fmt-check. No whole poll84/mutation808/library/fast/Desktop/CLI/old-green reruns,
+SSH or smokes absent a concrete doubt: capture/decode/reopen is local, not a
+transport change. Full raw/argv/counts/exits/clocks/input hashes/source proof and
+manifest go only in
+**`/tmp/opencode/task8-unpublished-frozen-report-20261109T104659Z/`**.
+
+**Prior review-ready handoff is held pending P1 fix and reviews.** Commit only
+owned one-line production/test/necessary helper changes and existing plan/ledger/
+canonical append with required coauthor. Preserve the canonical comment's entire current
+**138387-byte** prefix, SHA-256
+**`c143cdba914b1c5fdfa85bec7b1a865ed76dff99ef2afde9c642a5c4433af8a5`**, ID, parent
+**`01M6SYJK4CJGHWKZC7MTP18GTA`** and creation time. Return clean **UNPUSHED** after
+controller verification for SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then
+QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, before publication. No agents/PR/main
+merge/close/native/real operations/cleanup/performance work. Marker P2 remains
+known owner-accepted/deferred **UNFIXED** and desktop PARTIAL/window-unverified
+owner-accepted. Manual benchmark **NOT MEASURED**, performance/perf-ticket/
+promotion-closure-materialization follow-up **STOP**; all old source scopes remain.
+
+### P1 Local Outcome — Compiled Exact RED→GREEN And Fresh Statics
+
+Only production change: add `PollDisposition::Unpublished` to
+`RemotePollReport::decode_frozen`'s existing allowlist. Removing that line
+reconstructs entry `poll.rs` byte-for-byte; `NotReached` and
+`MaterializationIncomplete` remain excluded, and `FullPass`, closed/canonical
+image/schema audit, default poll output and D15 authority/replay remain unchanged.
+The only test edits are the existing `mutation_tests.rs` public original-live
+case and its necessary publication-history fixture extension. `present()` still
+uses its original published history; the new fixture path invokes the real
+upstream `record_context_resolved` producer for never-advertised contexts.
+Source proof retains all19 original assertions (17 unchanged, one stronger
+result diagnostic and one replay through a reopened service), now27 assertions;
+the file's15 existing test names are unchanged. Restoring only the selected test
+and necessary helper region reconstructs entry test source byte-for-byte.
+
+Exact literal argv, run once RED and once GREEN through Devenv/default threads:
+
+```sh
+devenv shell -- cargo test --all-features --locked --lib repository::context_retirement::execution_tests::mutation_tests::retirement_batch_public_live_pass_retires_real_context_and_replays_without_transport -- --exact
+```
+
+| Checkpoint | Actual count / exit | Monotonic total | Harness time |
+| --- | --- | ---: | ---: |
+| Unmodified decoder, extended test | **0 passed/1 failed/0 ignored,1723 filtered; exit101** | 29.602632690s | 5.69s |
+| Only one decoder member added, identical test bytes | **1 passed/0 failed/0 ignored,1723 filtered; exit0** | 19.027548225s | 8.58s |
+
+RED compiled successfully and failed at **unpublished-only original-live capture:
+RecoveryRequired instead of Ok**, after the real poll's Unpublished target and
+preserved local resources were asserted. Not a compile failure or zero-match
+filter. The original lost-copy row's caught panic is expected, not the P1 failure.
+GREEN completes four rows: original normal retirement, original lost-copy replay,
+unpublished-only **completed empty selection**, and mixed **one real retirement /
+one preserved unpublished context**. DTO target remains `unpublished`; worktree
+bytes/admin registration and branch OID are preserved through original pass,
+later ordinary poll, reopen/replay and deregistered replay. Replays receive no
+synthetic Fetch input; unchanged remote-operation/provenance/pass/target/child
+rows prove no new fetch/pass/child loop, with old cut/data/disks/materializations/
+request-operation mappings and foreign-key checks retained.
+
+| Fresh coherent-tree static argv | Actual exit | Monotonic total |
+| --- | ---: | ---: |
+| `devenv shell -- cargo check --all-features --locked` | **0** | 4.978976427s |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | **0** | 25.700913590s |
+| `devenv shell -- cargo fmt --check` | **0** | 17.939688986s |
+
+All **1,723 current source/test/schema/build inputs** match GREEN at each static
+admission; only `src/repository/remote/poll.rs` differs between RED/GREEN input
+maps. Formatting before RED touched only the owned test file; no later test/code
+change or extra test run. All commands naturally exited within900s; no waits,
+thread changes, SSH runtime, smoke, whole poll/mutation/library/fast/Desktop/CLI
+or old-green repetition. Source/input proof and full raw logs are new-only in
+`/tmp/opencode/task8-unpublished-frozen-report-20261109T104659Z/`. RED log SHA-256
+**`ba70d4be25ab2e92cad850de8c0ba1b02001efa4b5abb0a1a2099a33b78af59e`**;
+GREEN log SHA-256
+**`bcecb6d55335a5528cfa05a6d4979bd5922bd2845267d6999bba53bae4ac9945`**.
+
+The bounded returned commit is the new source freeze; prior runtime a424 and all
+earlier target/static/runtime evidence remain historical/source-qualified, not
+fresh combined whole passes or native proof. Commit only owned source/test/plan/
+ledger/canonical metadata, required coauthor; final prefix/diff/clean/unpushed/
+main ancestry/merge-tree/no-owned-jobs checks and manifest are returned externally.
+**P1 locally corrected, review-fix pending; do not push yet.** Controller verifies
+evidence then SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then SAME QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, before fix publication or renewed readiness.
+Ticket remains **implementing**, owner review required before closure; no
+agents/PR/main merge/close/native/real operations/cleanup. Accepted marker P2
+**UNFIXED**, desktop PARTIAL/window-unverified accepted, manual **NOT MEASURED**
+and all performance/perf-ticket/materialization follow-up **STOP** remain.
