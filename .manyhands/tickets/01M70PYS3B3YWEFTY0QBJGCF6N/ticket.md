@@ -3,7 +3,7 @@ slug: vh-tqmwh
 id: 01M70PYS3B3YWEFTY0QBJGCF6N
 title: 93 context_retirement lib tests fail on main
 type: defect
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
