@@ -30,6 +30,9 @@ merged into the ticket branch).
   always on (decision 16), and that every operation is per item, a
   repository operation being a loop over its items (decision 17).
   Retirement is therefore one request per reported item.
+- 2026-11-09: review round 1 (two reviewers at `d48bc4aa`) found 8 Blocking,
+  33 Important and 32 Minor issues across both lenses. Revision 4 applies
+  them; six owner questions became decisions 18–23. Round 2 follows.
 
 Approval of these documents does not authorize implementation, which needs
 the owner's separate authorization.
@@ -45,17 +48,19 @@ shares anything, and stops cleanly when the person quits.
 Authorities, in order:
 
 1. `AGENTS.md` on origin/main.
-2. [Wave 03](../Waves/wave-03-dogfooding.md): section D6 (line 1100), entry
-   gate items 3, 5, 6 and 7 (113–215), track rules (326–371), and C5's
+2. [Wave 03](../Waves/wave-03-dogfooding.md): section D6 (line 1111), entry
+   gate items 3, 5, 6 and 7 (from line 113), track rules (335–415), and C5's
    amendment to D6.
 3. RFCs: [application runtime and polling](../RFC/application-runtime-and-polling.md)
    (the whole document governs D6),
    [desktop information architecture and editor](../RFC/desktop-information-architecture-and-editor.md),
    [authentication and credential handling](../RFC/authentication-and-credential-handling.md),
    [Git workflow and conflict recovery](../RFC/git-workflow-and-conflict-recovery.md)
-   (334–340, safe points), [test and compatibility strategy](../RFC/test-and-compatibility-strategy.md)
-   (224–229).
-4. PRD [`docs/PRD/mvp.md`](../PRD/mvp.md): `MH-COLLAB-003/004`,
+   (safe points, around 414; polling and cleanup, 293–295),
+   [test and compatibility strategy](../RFC/test-and-compatibility-strategy.md)
+   (224–229), [CLI contract](../RFC/cli-contract.md) (completed-context
+   retirement).
+4. PRD [`docs/PRD/mvp.md`](../PRD/mvp.md): `MH-COLLAB-003/004/006`,
    `MH-INDEX-001`–`003`, `MH-CRED-001`, `MH-NFR-001/002/003/004/005/006/007/008`.
 5. The design handoff [`docs/design/05-sheets-and-dialogs.md`](../design/05-sheets-and-dialogs.md)
    ("Checking for updates", 61–68; "Unlock key", 121–131; "Needs attention"),
@@ -77,18 +82,18 @@ Authorities, in order:
 | D1–D5 merged (track rule 1) | All merged; D5 closed at `1bce92d9`. |
 | C5 merged (track rule 2, C5 decision 1) | Merged as `2d912d10` (2026-11-04). The four polling bindings are on main. |
 | Library ticket `01M6KHVD6D0DB8KYT6VGQP10Y0` | **Merged 2026-11-09** (`f4442618`, brought in by `9512080d`). Adds the `closed` and `promoted` dispositions, `context retire` (`Mutation::ContextRetire`) and the deliberate `poll once --retire-completed` (`Mutation::PollOnceRetiring`). Assigns the explicit desktop Retire action to D6 (Wave D6 section, amended 2026-11-06). Re-grounded (Re-grounding below). |
-| API audit refreshed (entry-gate item 3) | Library rows re-grounded at `9512080d` in the design's Baseline Facts and API Audit Refresh; Task 0 re-checks what moves after that (owner-accepted departure, as C4, C5 and D5 recorded theirs, proposed in decision 9). |
-| Runtime readiness (entry-gate item 5) | Partly present: the transport initializes before threads (`src/runtime.rs:25`, `src/main.rs:11`) and raw stalls are characterized (Wave 02 Cycle 03). Cancellation during a stall is **not** characterized. Task 1 closes that. |
-| Required checks at baseline (entry-gate item 7) | Not run during planning. Task 0 runs them. |
+| API audit refreshed (entry-gate item 3) | Library rows re-grounded at `9512080d` and checked again by review round 1, in the design's Baseline Facts and API Audit Refresh; Task 0 re-checks what moves after that. The timing departs from item 3 as C4, C5 and D5 did (proposed decision 9; Document Amendment 9). |
+| Runtime readiness (entry-gate item 5) | Partly present: the transport initializes before threads (`src/runtime.rs:25`, `src/main.rs:11`) and raw stalls are characterized (Wave 02 Cycle 03). Cancellation during a stall is **not** characterized. Task 1 measures it during a handshake stall and a connect stall; DNS stays unmeasured (decision 22, K-20). |
+| Required checks at baseline (entry-gate item 7) | Not run during planning. Task 0 runs the static gates only; the fast tier runs once, at review-ready, under AGENTS.md's Testing Strategy (2026-11-06; Document Amendment 9). |
 | Tester assignment (entry-gate item 6) | Linux (Wayland): the product owner. Windows and macOS: G1. |
 | Wave 04 Cycle 01 (`01M6V8RK8B0SBCH0YZXFVSR9E3`) | **Approved 2026-11-08 and in implementation** (Tasks 1 to 4b done by 2026-11-09). Not a dependency; expected to merge first. Coordination below. |
 
 **Dependency boundary.** D6 changes **no** file in `src/repository.rs`,
 `src/repository/`, `src/results.rs`, `src/canonical.rs`, `src/drafts/`,
 `src/runtime.rs` or `src/lib.rs` (decision 1: no library part, no track-rule-5
-exception). Its one change under `tests/` is a single case in
-`tests/remote_polling.rs` (Task 1). Any other library gap becomes its own
-ticket.
+exception). Its one change under `tests/` is two cases in
+`tests/remote_polling.rs` (Task 1, decision 22). Any other library gap
+becomes its own ticket.
 
 ## Wave 04 Cycle 01 Coordination
 
@@ -131,12 +136,13 @@ that merge for a design checkpoint with the owner (its note). If Cycle 01 has
 not merged when D6 reaches a step below, D6 records that and leaves the step
 to Cycle 01. The obligations:
 
-1. **Attention in the count (decision 11).** D6's five attention states (key
-   locked, host not approved, key missing, configuration required, recovery
-   hold) count toward Needs attention. Paused, Checking is off, Can't reach,
-   Checking soon, Waiting for a conflict and a Retire offer do not. A refused
-   or pending retirement is a finished request or a pending row, which Cycle
-   01 already counts. The polling model exposes its attention through one
+1. **Attention in the count (decision 11).** D6's attention counts toward
+   Needs attention once per locked or missing key, per unapproved host, and
+   per misconfigured or held repository. Paused, Checking is off, Can't reach,
+   Checking soon, Waiting for a conflict and a Retire offer do not. A refused,
+   preserved or pending retirement is a finished request or a pending row,
+   which Cycle 01 already counts; a background retirement answered before any
+   effect is dismissed, so nothing counts twice (design R-23). The polling model exposes its attention through one
    read-only query, which the second Cycle to merge passes to
    `needs_attention` as a third input; it also extends that function's test
    (design W-1; Task 8).
@@ -148,12 +154,14 @@ to Cycle 01. The obligations:
    with Activity hidden (design W-2; Task 10).
 3. **D6's rows fit Activity (decision 13).** Every row D6 adds to the
    operation area wraps so that its actions stay inside Activity at the
-   default window. The three existing rows K-19 names stay with Wave 04
-   Cycle 03 (design W-6).
+   default window; a test clicks each at its position. The three existing
+   rows Cycle 01's proposed K-19 names stay with Wave 04 Cycle 03 (design
+   W-6, Document Amendment 8).
 4. **A small footprint in shared files.** The scheduler is held by
    `Services`, not by `Workspace`. D6's only edit to the repository list is one
    call beside the launch refresh in `repositories_loaded`, wherever Cycle 01
-   has moved it. Expected textual conflicts: `D/view/workspace/repositories.rs`;
+   has moved it, plus one window-activation subscription in
+   `open_main_window`. Expected textual conflicts: `D/view/workspace/repositories.rs`;
    `D/view/workspace/lifecycle.rs` (`wait_to_quit`); the `Workspace` struct and
    constructor; `D/view/harness.rs` (window size, `Shell::use_list`); and the
    keyboard tests (`Region::Navigation` becomes `Region::Tickets` or
@@ -182,16 +190,18 @@ Whichever of those and D6 merges second adapts, per `AGENTS.md`.
    scheduler, held by `Services`, runs every automatic poll on the existing
    mutation worker's background lane. One worker and one credential session
    serve every window.
-2. **Launch poll.** Each enabled, unpaused repository with a publication
-   remote is polled once after launch, unless its stored deadline (an
-   outstanding failure backoff) says otherwise.
+2. **Launch poll.** Each enabled, unpaused repository with an SSH
+   publication remote is polled after launch when its stored deadline is due,
+   whether that deadline came from the interval or a failure backoff
+   (decision 23). A poll row this app left active is taken over first.
 3. **Existing policy.** Five-minute default, 60 s–3600 s interval, persisted
    pause, automatic failure backoff (60 s doubling to 900 s). D6 reads and
    follows it; the library owns the arithmetic.
 4. **Manual priority.** A user job submitted while a poll runs asks the poll
-   to stop at its next safe point and runs next (decision 3). A poll that
-   meets a held lease or yields is restarted on a bounded schedule, never in
-   a loop (C5 decision 24).
+   to stop at its next safe point and runs next (decision 3). A background
+   retirement is not preempted; a user job waits for the one that is running
+   (decision 20). A poll that meets a held lease or another operation's row
+   is restarted on a bounded schedule, never in a loop (C5 decision 24).
 5. **Poll now and policy controls.** A "Checking for updates" page in
    Settings: per repository, status line, interval, Check now (or Retry now)
    and an on/off switch. Check now is C5's `poll once`; the interval and the
@@ -200,7 +210,9 @@ Whichever of those and D6 merges second adapts, per `AGENTS.md`.
    persisted UTC deadlines across restarts; one poll per repository after a
    suspend or a clock jump, no catch-up loop; a future deadline is clamped by
    the library.
-7. **Worker and UI credential handoff.** An automatic poll never prompts. A
+7. **Worker and UI credential handoff.** No background job prompts, a poll
+   or a retirement, even in a fresh session (the desktop provider refuses on
+   the background lane). A
    locked key or an unapproved host is recorded as a needs-attention state
    for that key or host (distinct from the person's pause), shown with
    Unlock… or Approve…, and polling for the affected repositories resumes
@@ -215,20 +227,26 @@ Whichever of those and D6 merges second adapts, per `AGENTS.md`.
     next safe point, flushes drafts (D2), shows "still stopping" at ten
     seconds, and waits. It does not clear credentials in use or reclaim a
     live operation because ten seconds passed (decision 7).
-11. **Runtime readiness evidence (Task 1).** One SSH-harness case measures a
-    cancel during a stalled handshake, and a research note records the
-    stall and teardown behaviour that the stopping status is built on.
+11. **Runtime readiness evidence (Task 1).** Two SSH-harness cases measure a
+    cancel during a stalled handshake and during a stalled connect, and a
+    research note records the stall and teardown behaviour that the stopping
+    status is built on. DNS stays unmeasured (decision 22).
 12. **Retiring completed contexts (Wave D6 section, amended 2026-11-06;
     decisions 16 and 17).**
     - After every poll, automatic or Check now, each reported `closed`
-      ticket or `promoted` document is checked on its own. Unless it is
-      skipped, its drafts are flushed and it is retired by its own
-      `Mutation::ContextRetire` on the background lane, with no prompt.
-    - An unsaved tab holds back only its own item.
-    - **Retire…** (the same request, one item, user lane) shows only for
-      what the loop left: an item skipped, refused or preserved.
+      ticket or `promoted` document is checked on its own, one at a time.
+      Unless it is skipped, its tabs turn read-only, its drafts are flushed,
+      and it is retired by its own `Mutation::ContextRetire`, under a new
+      request ID, on the background lane, with no prompt.
+    - Unsaved tab text or a kept draft holds back only its own item
+      (decisions 15 and 18).
+    - A pending answer, or an unlock or host answer, stops that repository's
+      loop until the next attempt (decision 21).
+    - **Retire…** (the same mutation, a new request, one item, user lane)
+      shows for every reported item the loop did not retire.
     - Refusals are shown with the library's code, and pending cleanup with
-      the ordinary Resume and Abandon (decisions 14 to 17; design Part E).
+      the ordinary Resume, which resends the original request, and Abandon
+      (decisions 14 to 21; design Part E).
 
 ## Explicit Exclusions And Downstream Obligations
 
@@ -255,34 +273,41 @@ Whichever of those and D6 merges second adapts, per `AGENTS.md`.
   pending-operation watchdog and the footer status line: Wave 04 later work.
 - Clearing the recovery suspension automatically. D6 offers a deliberate
   "Resume checking" only (decision 10).
-- CLI-against-desktop scenarios: G1 (track rule 4). Windows and macOS native
-  evidence: G1.
+- CLI-against-desktop scenarios: G1 (track rule 4). D6 proves a second
+  process calling the library with a second library actor (A4). Windows and
+  macOS native evidence: G1.
+- Cancellation during a DNS stall (decision 22, K-20).
 - Known limits K-1 onward (design Known Limits).
 
 ## Required Contract
 
 1. **Read-only toward the shared copy.** An automatic poll fetches,
    fast-forwards clean refs and materializes new contexts, and nothing else.
-   The only work that may follow it is decision 16's per-item retirement,
+   The only work that may follow it is the index refresh it asks for
+   (design R-10), D2's draft flush, and decision 16's per-item retirement,
    which removes local copies the library proves completed. No push,
    checkpoint, merge or publication starts from either (RFC, Required
    evidence, as amended by decision 16).
 2. **Manual priority.** A user job is never kept waiting on a poll longer
    than the poll's next safe point, which for a blocked network call is the
-   transport's own timeout.
-3. **No background prompt.** A poll never opens a passphrase or host dialog.
-   Needs-attention states carry an action the person chooses.
+   transport's own timeout. It waits for at most one running background
+   retirement, never a whole loop (decision 20).
+3. **No background prompt.** No background job, poll or retirement, ever
+   opens a passphrase or host dialog. Needs-attention states carry an action
+   the person chooses.
 4. **Pause is not an unlock block.** Unlocking never clears the person's
    pause, and resuming never clears an unlock block. Each is shown.
 5. **Unsaved work is never overwritten.** A bring-in with an open unsaved
    edit or a kept draft for that item leaves the text and shows the
-   existing changed-item notice.
+   existing changed-item notice. An item being retired takes no edits
+   (decision 19).
 6. **Truthful status.** Status text comes from what the library stored or
    the worker did; it never claims a worker the process lacks (a CLI poll
    by another process is not shown as the desktop's).
 7. **One worker, no leftovers.** One scheduler per process whatever the
-   number of windows; after a graceful exit no worker thread, child process
-   or reservation remains that the exit did not release.
+   number of windows; after every graceful exit the worker thread is joined,
+   and no child process or reservation remains that the exit did not
+   release.
 8. **Honest shutdown.** "Still stopping" at ten seconds in the quit's entry,
    in Activity (decision 12); the UI stays responsive; nothing is called
    rolled back that was not.
@@ -292,38 +317,41 @@ Whichever of those and D6 merges second adapts, per `AGENTS.md`.
     operation entry, status line, log or error message.
 11. **Retirement loses nothing.** An item is retired only by its own
     request: after a poll that reported it as `closed` or `promoted`, or by a
-    person's Retire…. No item is retired while a tab of that item holds text
-    no draft keeps. A background retirement never prompts. Retirement never deletes a
-    draft: the item's drafts and its comments' drafts stay listed,
-    restorable and exportable on the Drafts page. Refusals and pending
-    cleanup are shown exactly as the library answers, with the ordinary
-    recovery.
+    person's Retire…. The loop never retires an item whose tab holds text no
+    draft keeps, or that has a kept draft (decision 18); a Retire… never
+    retires one with unkept text. An item's tabs take no edits while it is
+    retired. Retirement never deletes a draft: the item's drafts and its
+    comments' drafts stay listed and exportable on the Drafts page, and
+    restorable where D2's restore policy allows (a closed ticket's drafts and
+    comment drafts are export-only). Refusals and pending cleanup are shown
+    exactly as the library answers, with the ordinary recovery.
 
 ## Acceptance And Exit Evidence
 
 | # | Wave exit evidence / contract | Proof | Status |
 | --- | --- | --- | --- |
 | A1 | Real SSH background update and materialization journey | Native §2 against a real SSH remote (owner); library SSH tests `poll_materialize_*`; desktop tests over canned attempts (decision 9) | Pending |
-| A2 | Exceptional-context preservation (dirty, diverged, conflicted, deleted, blocked targets) | Desktop tests per disposition: state kept, marked, no mutation call; library tests exist | Pending |
+| A2 | Exceptional-context preservation (dirty, diverged, conflicted, deleted, blocked targets) | Desktop tests per disposition: state kept, marked, no mutation call (`Closed` and `Promoted` go to A19 instead); library tests exist | Pending |
 | A3 | Pause versus unlock state | Desktop tests: both shown; unlock keeps pause; resume keeps the block | Pending |
-| A4 | Concurrent explicit operation from a second process | Desktop test: `busy`/`interrupted` answers restart on schedule; library SSH yield tests; native §3 runs `manyhands-cli poll once` against the open app | Pending |
-| A5 | Stalled transport with responsive stopping status | Task 1 SSH case (cancel during a stalled handshake); desktop test with a held job and an injected clock shows "still stopping" at 10 s and stays interactive | Pending |
-| A6 | Configuration changes | Desktop tests: interval, pause, resume, remote and key change, registration removal, re-added remote not resuming a pause | Pending |
-| A7 | Shutdown and restart | Desktop tests: quit mid-poll, quit mid-backoff, relaunch resumes the stored deadline; worker thread joined | Pending |
-| A8 | No background push, checkpoint, merge or publication; background cleanup only as decision 16's per-item retirement | Test double records every service call an automatic poll makes: only eligibility, poll and status reads. A `ContextRetire` is submitted only for an item the attempt reported as `closed` or `promoted`, outside the refused set and with no unkept tab of its own; `PollOnceRetiring` never | Pending |
-| A9 | No remaining worker after graceful exit | Test joins the worker thread; native §6 checks the process list after quit | Pending |
-| A10 | Manual priority | Desktop test: a user job submitted during a poll cancels it and runs first; the poll is rescheduled with no failure backoff | Pending |
-| A11 | Launch poll respects backoff | Model test with an injected clock | Pending |
+| A4 | Concurrent explicit operation from a second process calling the library | Desktop test over a real service: a second library actor over the same registry holds the remote reservation; the automatic poll answers `busy` and restarts on schedule; a row this app left active is taken over at launch. Library SSH yield tests. The CLI-against-desktop run is G1's (track rule 4) | Pending |
+| A5 | Stalled transport with responsive stopping status | Task 1's two SSH cases (cancel during a stalled handshake and a stalled connect; DNS departs, decision 22); desktop test with a held poll and an injected clock shows "still stopping" at 10 s and stays interactive; native §3 | Pending |
+| A6 | Configuration changes | Desktop tests: interval, pause, resume, remote, key and host-trust change, registration add and removal, re-added remote not resuming a pause, queued retirements dropped | Pending |
+| A7 | Shutdown and restart | Desktop tests: quit mid-poll ends when the poll answers; quit mid-backoff; quit during a retirement leaves a pending row; relaunch keeps the stored deadline (decision 23); native §6 | Pending |
+| A8 | No background push, checkpoint, merge or publication; background cleanup only as decision 16's per-item retirement | A recording double lists B1's five calls for an automatic poll and nothing else. A `ContextRetire` is submitted only for an item the attempt reported as `closed` or `promoted`, outside the refused set, with no unkept tab and no kept draft; `PollOnceRetiring` never | Pending |
+| A9 | No remaining worker after graceful exit | Test joins the worker thread on both graceful paths (`Idle`, and a `Finishing` job that ends); native §6 checks the process list after quit | Pending |
+| A10 | Manual priority | Desktop test: a user job submitted during a poll cancels it, even before the poll has reserved its row, and runs first; the poll is rescheduled with no failure backoff; a background retirement is not cancelled (decision 20) | Pending |
+| A11 | Launch poll follows the stored deadline (decision 23) | Model test with an injected clock: an interval deadline and a backoff deadline both hold at launch | Pending |
 | A12 | Suspend and clock jump: one poll, no catch-up | Model test | Pending |
-| A13 | No background prompt | Desktop tests: a locked key yields needs-attention and no `Prompt` event, for an automatic poll and for a background retirement | Pending |
-| A14 | Unsaved edits survive a bring-in | Desktop test with an open dirty edit session and a kept draft | Pending |
+| A13 | No background prompt | Desktop tests through the real `DesktopProvider`, with a fresh session and a locked key: no `Prompt` event, and attention, for an automatic poll and for a background retirement; Unlock… after a cancelled first prompt prompts again | Pending |
+| A14 | Unsaved edits survive a bring-in | Desktop test over a real repository: the file changes on disk under an open dirty edit session, and under a kept draft | Pending |
 | A15 | Keyboard and focus (contract 9) | Keyboard tests; native §7 | Pending |
 | A16 | Privacy (contract 10) | Sentinel tests | Pending |
-| A17 | One scheduler whatever the windows | Test: the scheduler is owned by `Services`; a second `Services` clone starts none | Pending |
-| A18 | Wave 04 Cycle 01 coordination: D6's attention states in the Needs attention count; "still stopping" in the quit's Activity entry with no layout change; D6's rows fit Activity | With Cycle 01 on main: `needs_attention`'s test extended with each attention state and each state that does not count (E-4); D6's still-stopping test run with Activity hidden (E-5); D6's rows checked at the default window by the actions' keyboard reach. Otherwise recorded as Cycle 01's to wire | Pending |
-| A19 | Retirement journey: after a poll, automatic or Check now, each reported `closed` ticket or `promoted` document is retired by its own request; lists and an open tab then read primary; Retire… retires a left item by keyboard | Desktop tests over canned `context_retirement` answers (decision 9); library SSH case `retirement_cli_authenticated_live_pass`; native retire section on two clones | Pending |
-| A20 | Exact refusals and pending cleanup | Desktop table test over each state: `refused` and `preserved` shown with the library's code and added to the refused set; a failure before effects tried again next attempt; `pending` leaves a pending row whose Resume and Abandon (with the retirement details of the library ticket's D13) work by keyboard | Pending |
-| A21 | Open editors and drafts preserved | Desktop tests: of two reported items, the one with an unkept tab is skipped and the other retired; Retire… on the skipped one stops with Show tab; a kept item draft and a comment draft outlive retirement, listed, restorable and exportable on the Drafts page | Pending |
+| A17 | One scheduler whatever the windows | Test: a poll submitted through a `Services` clone is seen by the original's scheduler | Pending |
+| A18 | Wave 04 Cycle 01 coordination: D6's attention in the Needs attention count; "still stopping" in the quit's Activity entry with no layout change; D6's rows fit Activity | With Cycle 01 on main: `needs_attention`'s test extended with each kind of attention entry and each state that does not count (E-4); D6's still-stopping test run with Activity hidden (E-5). In any order: each D6 action clicked at its position at the default window. Otherwise recorded as Cycle 01's to wire | Pending |
+| A19 | Retirement journey: after a poll, automatic or Check now, each reported `closed` ticket or `promoted` document is retired by its own request, one at a time; lists and an open tab then read primary; Retire… retires a left item by keyboard | Desktop tests over canned `context_retirement` answers (decision 9), and over a real local repository for the end state; library SSH case `retirement_cli_authenticated_live_pass`; native §5 on two clones | Pending |
+| A20 | Exact refusals and pending cleanup | Desktop table test keyed on code: before-effect codes retried next attempt (unlock and host as attention); `refused` and `preserved` shown with the library's code and added to the refused set; `pending` stops the loop and leaves a pending row whose Resume resends the original request and whose Abandon shows the retirement details (library ticket D13), by keyboard | Pending |
+| A21 | Open editors and drafts preserved | Desktop tests: of two reported items, the one with an unkept tab, and one with a kept draft, are skipped and the other retired; the item's tabs are read-only while it is retired; Retire… stops at an unkept tab and warns about kept drafts; over a real local repository, a kept item draft and a comment draft outlive retirement, listed and exportable | Pending |
+| A22 | Replay and interruption (track rule 7) | Desktop tests: a Final retirement answer replayed under the same request removes nothing twice and adds no second entry; a quit during a held retirement leaves a pending row that Resume finishes after relaunch; a resent policy verb follows C5 decision 15 | Pending |
 
 Native evidence: Linux (Wayland), release build, against a real SSH remote,
 run by the product owner from the checklist written in the final task. The
@@ -370,13 +398,17 @@ Proposed by the planner, confirmed with the documents' approval:
     "Checking is held until recovery" and a Resume checking action that calls
     `resume_remote_polling_after_recovery`. Nothing clears it automatically.
 11. **What D6 adds to Needs attention** (2026-11-08, for Wave 04 Cycle 01).
-    The five attention states count, since each waits for the person to act.
+    Each attention entry counts once, since each waits for the person to act:
+    a locked key, a missing key, an unapproved host, a misconfigured
+    repository, a repository held for recovery. A key locked for three
+    repositories is one entry.
     Paused and Checking is off are the person's own choice; Can't reach and
     Checking soon retry by themselves; Waiting for a conflict points at a
     conflict that is already shown where it is resolved; a Retire… offer is
     an option, not a failure. None of those count. A retirement that
-    finished `Blocked` or with an error, or a pending one, is counted by
-    Cycle 01's own rules.
+    finished refused or preserved, or a pending one, is counted by Cycle
+    01's own rules; one answered before any effect is dismissed, since
+    attention or the next attempt covers it (design R-23).
 12. **Still stopping lives in Activity** (2026-11-09, after Wave 04 Cycle
     01's revised decision 7). With Activity hidden, a quit still waiting at
     ten seconds shows nothing until Activity is opened, as Cycle 01's own
@@ -386,21 +418,24 @@ Proposed by the planner, confirmed with the documents' approval:
     seconds" to "reports it in Activity" (K-13). The owner's later blocking
     quit dialog is where a report with Activity hidden belongs.
 13. **D6's rows fit Activity.** Each row D6 adds to the operation area wraps
-    so that its actions are inside Activity at the default window. The
-    three existing rows Cycle 01's proposed K-19 names stay with Wave 04
-    Cycle 03 (K-16).
-14. **How decisions 16 and 17 are carried out** (proposed).
+    so that its actions are inside Activity at the default window, and a
+    test clicks each at its position. The three existing rows Cycle 01's
+    proposed K-19 names stay with Wave 04 Cycle 03, which Wave 04 records
+    (K-16; design Document Amendment 8).
+14. **How decisions 16 to 21 are carried out** (proposed).
     - Every poll stays a recognizing poll. An automatic poll keeps its
       eligibility, backoff, priority and no prompt, and Check now stays
       `PollOnce`.
     - After the attempt, the scheduler loops over the reported `closed` and
-      `promoted` items, one at a time. It checks each alone and submits one
-      `ContextRetire` per item on the background lane.
-    - Background retirements never prompt and are not preempted by a user
-      job (K-17).
-    - An item refused or preserved is not tried again automatically this
-      session. Retire… (the same request, user lane) shows only for what
-      the loop left (K-14).
+      `promoted` items in the order reported. It checks each alone and
+      submits one `ContextRetire` per item on the background lane, the next
+      only when the previous has answered. Each is a new request.
+    - The answer is read by its code first: unlock, host, key, transport and
+      busy codes mean nothing was removed, and the next attempt tries again.
+    - An item refused or preserved for another reason is not tried again
+      automatically this session (K-14).
+    - Retire… (the same mutation, a new request, user lane) shows for every
+      reported item the loop did not retire.
     - The desktop does not use `PollOnceRetiring`, which handles every
       candidate as one pass and cannot leave out one item. The cost is one
       observation per retired item (K-15).
@@ -414,14 +449,17 @@ Proposed by the planner, confirmed with the documents' approval:
 Answered by the owner on 2026-11-09:
 
 16. **Polls retire completed contexts, always on.** Polls retire closed
-    tickets and promoted documents that still have a local branch and
-    worktree, with the outcome of the CLI's `poll once --retire-completed`.
-    There is no setting. Retire… shows only for what a poll did not
-    retire.
+    tickets and promoted documents that still have a local context (a
+    branch, with or without its worktree, as the library retires), with the
+    outcome of the CLI's `poll once --retire-completed`. There is no setting.
+    Retire… shows only for what a poll did not retire.
     - This lifts the "no background cleanup" rule for retirement only. It
-      amends PRD line 28, the RFC, the Wave D6 amendment and its exit
-      evidence, and the retirement Cycle's decision 5 (design Document
-      Amendment 7).
+      amends the PRD (a new 0.8 entry: the release scope, `MH-COLLAB-004`,
+      `MH-COLLAB-006`, `MH-INDEX-002`, `MH-NFR-007`), the runtime, Git
+      workflow and CLI RFCs, the Wave's track rule 5 amendment, capability
+      rows, Integration Gate bullet, D6 amendment and exit evidence, the
+      retirement Cycle's decisions 4, 7 and 8 and its contract 5, and the
+      ticket's Exit Evidence (design Document Amendment 7).
     - Background push, checkpoint, merge and publication stay
       prohibited.
 17. **Operations are per item.** The app shows a union view of a
@@ -430,14 +468,44 @@ Answered by the owner on 2026-11-09:
     operation is a loop over its items, both local ones and those a fetch
     will materialize. The CLI's retirement converged only once it was
     relaxed to per item. Decision 15 is narrowed to the reported items: an
-    unsaved tab holds back only its own item.
+    unsaved tab holds back only its own item. The poll itself stays one
+    fetch per repository with per-target dispositions; there is no per-item
+    poll.
+
+Answered by the owner after review round 1 (2026-11-09):
+
+18. **Kept drafts hold an item back.** The loop also skips an item with a
+    kept draft, of the item or of a comment on it, and offers Retire….
+    Retiring a closed ticket makes its drafts export-only (D2's restore
+    policy refuses a closed ticket), so the person decides. Retire… on such
+    an item says so and asks.
+19. **An item's tabs are read-only while it is retired.** From the loop's
+    check, or a Retire…, until the answer, the item's tab and comment
+    composer take no edits and show "Retiring…", as D5 decision 12 did for
+    close and promote.
+20. **A background retirement is not preempted.** A Save or Share submitted
+    meanwhile waits for the one retirement that is running, up to one
+    observation and its removal (K-17), the same limit D4 decision 12
+    accepted behind a share. Only an automatic poll is cancelled by a user
+    job.
+21. **A pending item stops its repository's loop.** As the CLI's
+    `--retire-completed` does: refusals go on, real cleanup or index debt
+    stops later items until the next attempt. An unlock or host answer stops
+    it too, since the next item would meet the same answer.
+22. **Entry gate 5: a connect stall too; DNS departs.** Task 1 measures a
+    cancel during a stalled connect as well as a stalled handshake. Cancel
+    during a DNS stall stays unmeasured, recorded as a departure and K-20.
+23. **The launch poll follows the stored deadline.** At launch a repository
+    is polled when it is due, whether the deadline came from the interval
+    or a failure backoff, so restarting the app adds no polls. The runtime
+    RFC's launch wording is amended (design Document Amendment 2).
 
 ## Open Questions
 
-None for the owner beyond confirming decisions 3–15 at approval (16 and
-17 are answered). U-1 to U-12
-(design) are settled in Task 0 by reading the source; an answer that
-differs stops for the owner.
+None for the owner beyond confirming decisions 3–15 at approval (16 to 23
+are answered). U-2, U-9, U-11, U-13 and U-14 (design Source Questions) are
+settled in Task 0 by reading the source; an answer that differs stops for the
+owner.
 
 ## Re-grounding
 
@@ -477,4 +545,7 @@ in.
 | Owner, 2026-11-09 | Cycle 01 is approved and in flight; its quit no longer changes the layout, and it proposes K-19 | Settled | Coordination rewritten; decisions 12 and 13 proposed; A18 revised; K-13 and K-16. | Cycle 01 Cycle (revision 5) decisions 3, 7 and 14, K-18; its note on this ticket (`01M6Z8A8AYDGTK4BWKZR3931ST`); its checkpoint comment `01M6ZXNJFRHZP9381NQQE3FH0F`. |
 | Owner, 2026-11-09 | Retire… should show only for what a poll did not retire; polls retire merged items, matching the CLI's `--retire-completed`, with no setting | Owner decision | Decision 16; decision 14 rewritten; decision 15 revised; Scope 12, contract 1 and 11, A8, A13, A19–A21; design Part E and Document Amendment 7. | Owner, 2026-11-09; `src/bin/manyhands-cli/polling.rs` (`retire-completed`); `R/mutation/bind/poll_retirement.rs`. |
 | Owner, 2026-11-09 | Operations are per item; the CLI's retirement converged only per item. Narrow decision 15 to the reported items | Owner decision | Decision 17; decisions 14 and 15 rewritten (a per-item `ContextRetire` loop, no `PollOnceRetiring`); A8, A19–A21; design Part E, K-15, K-17 to K-19. | Owner, 2026-11-09. |
+| Review round 1, source and feasibility (`d48bc4aa`) | 4 Blocking, 13 Important, 13 Minor | — | Revision 4. Blocking: a first automatic prompt (design B5, R-26); live failures are `Err(Transport)` (A4 rekeyed, R-29); a closed ticket's drafts are export-only (decision 18, contract 11); a killed process's row blocks every new poll (R-24). U-1, U-3–U-8, U-10, U-12 settled. | Design Review Record; Facts 4, 6, 25, 28–31. |
+| Review round 1, contract, consistency and completeness (`d48bc4aa`) | 4 Blocking, 20 Important, 19 Minor; 12 owner questions | — | Revision 4. Blocking: PRD and other amendments listed in full (design Document Amendment 7); second-process evidence by a second library actor (A4); entry gate 5 (decision 22); replay and interruption cases (A22). Questions 1, 3, 4, 6 and 11 became decisions 20, 21, 19, 22 and 23; the others are proposals confirmed at approval. | Design Review Record. |
+| Owner, after round 1 (2026-11-09) | Kept drafts, the edit race, preemption, a pending item, entry gate 5, launch timing | Owner decision | Decisions 18–23. | Owner, 2026-11-09. |
 | Drafting | Not yet reviewed | — | Review rounds follow. | — |

@@ -1161,8 +1161,7 @@ action (its design's Part E). The obligation stays owed until D6 merges.
   checkpoint, merge and publication stay prohibited.
 
 The text amendments are D6's Document Amendment 7, applied at D6's approval.
-Wave
-04 Cycle 01 (`01M6V8RK8B0SBCH0YZXFVSR9E3`, approved 2026-11-08) wraps D1's
+Wave 04 Cycle 01 (`01M6V8RK8B0SBCH0YZXFVSR9E3`, approved 2026-11-08) wraps D1's
 operation area as the Activity panel and adds the footer's Needs attention
 count; D6's Cycle document records how the two meet. Changes to this section
 that follow from D6's own decisions wait for D6's approval (D6 design,
