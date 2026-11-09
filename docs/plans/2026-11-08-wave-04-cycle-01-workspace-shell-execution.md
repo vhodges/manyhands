@@ -216,3 +216,90 @@ No new test site, so no E-11 from the sweep.
   - A `Busy` pending read shows a Retry in Activity and is not counted
     (R-13's documented trade-off).
 - **E-11 candidates:** none; no existing test edited.
+
+## Task 4a: Regions, The Navigation Split And Item Kinds
+
+- **Commit** `2c772231` (range `4c2e1a6b..2c772231`), 25 files, all under
+  `src/desktop/`.
+- **Product:** `Region` is `{Repositories, Documents, Content, Tickets,
+  Operations}` with `REGIONS` in decision 9's order and `regions:
+  [FocusHandle; 5]`. Ids `region-documents` and `region-tickets` (and rings);
+  both lists keep the "Navigation" key context. `navigation_pane` became
+  `tickets_body` (Find, New ticket…, filters, list, Why blocked) and
+  `documents_body`. The choice, `PANES`, `SHOWING_*`, `pane-showing` and
+  `show_pane` are gone. `Pane` is set by either list's region taking focus
+  (`focus_region`, and `Render` from the focused region). `FocusNavigation`
+  focuses `Region::of_pane(Pane)`. New ticket… and New document… pass their
+  own kind. `NewItem` takes the kind from the focused list and falls back to
+  `Pane` only if neither list is focused. `Shell::use_list(Pane, cx)` is in
+  the harness (E-2).
+- **Fixed-row stand-in until Task 4b:** left column 260 px, Repositories 30%
+  over Documents 70%; Tickets keeps the 320 px column between the left column
+  and Content; Content and the operation area unchanged.
+- **New test** (red first: `missing ElementId new-ticket-button`):
+  `desktop::view::create::tests::new_ticket_and_new_document_create_their_own_kind`
+  (1 test, passed). The reviewer judged it discriminating by reading the
+  Button source (a click does not move focus or `Pane` first); no mutant run.
+- **Named edits applied:**
+  - **E-1** (`Region::Navigation` to Tickets or Documents): `find_tests`,
+    `item/page_tests` (`region-documents`), `keyboard_tests.rs` helpers,
+    `keyboard_tests/actions`, `keyboard_tests/editing`, `keyboard_tests/frame`,
+    `lifecycle/made_ready_tests`.
+  - **E-2** (`pane-*` click to `Shell::use_list`): seven tests in
+    `create_tests`, `made_ready_review_tests` (1), `operations_tests` (2),
+    `tabs_tests` (1), `tickets_tests` (4).
+  - **E-3** (journeys by keys; removes assertions as approved): see the list
+    below.
+  - **E-4** (F6 order): `workspace_tests::f6_cycles_the_regions_and_secondary_digits_focus_each`,
+    `keyboard_tests/frame.rs`, `keyboard_tests/discussion.rs` (3 sites),
+    `keyboard_tests/editing.rs:189`.
+  - **E-8:** nothing deleted; no appearance test broke.
+- **Assertions removed (all approved E-3):**
+  1. `keyboard_tests::switch_panes`: the three `pane-showing` label
+     assertions (documents, tickets, documents).
+  2. `switch_panes`: `choose("pane-tickets")` / `choose("pane-documents")` and
+     their `selected(id)` and `on(id, Navigation)` checks. It now asserts that
+     `secondary-2` reaches Documents, `f6 f6` reaches Tickets, `secondary-1`
+     then `secondary-2` follow Tickets as the list used last, and Shift F6
+     back to Documents.
+  3. `change_the_filters`: `choose("pane-tickets")` and its `selected` check,
+     replaced by `f6 f6` and a Tickets-list focus check.
+  4. `editing::create_by_keyboard_alone` and
+     `editing::a_refused_create_by_key_leaves_focus_on_create`: `choose(pane…)`
+     and its checks, replaced by `region(...)` assertions.
+  5. `tickets_tests::every_choice_has_its_own_label_and_the_chosen_one_is_said_in_text`:
+     the ids `pane-documents` and `pane-tickets`, and both `pane-showing`
+     assertions. It still asserts that the six filter labels are unique and
+     that `filter-any-readiness` says `ANY_READINESS`.
+- **E-11 (pre-authorized, decision 17): `desktop::view::keyboard_tests::frame::the_strip_header_chips_and_page_run_in_tab_order`.**
+  Reason: Find now lives in the Tickets region, so using it makes Tickets the
+  list used last (R-8); the later `walk.open_document("Reading")` then sent
+  `secondary-2` to Tickets. Fix: `walk.keys("shift-f6")` and
+  `walk.region(Region::Documents)` before that call. Removes no assertion;
+  the reviewer judged it a faithful consequence of decision 4 and R-8, and
+  found no other test with the same hazard. One implicit dependency noted:
+  `Walk::open_a_ticket` relies on the preceding `change_the_filters` leaving
+  Tickets as the list used last.
+- **Process deviation (recorded).** The implementer ran module-prefix batches
+  (275 and 101 tests) and a 71-name batch, beyond AGENTS.md's exact-name rule
+  for between-steps runs. They passed, except one: the E-11 case above, fixed,
+  and `keyboard_tests::editing::edit_the_mode_key_save_and_done_by_keyboard_alone`,
+  which failed once with the harness's 10 s real-time wait under heavy
+  parallel load. It passed alone twice for the implementer and twice for the
+  reviewer (about 6 s each). Its only change is `region(Operations)` to
+  `region(Tickets)` after `f6`, which cannot add a wait; judged load
+  flakiness. The reviewer ran nine exact-name executions and no prefix runs.
+  The later briefs repeat the exact-name rule. Watch this test at Task 12.
+- **Review:** APPROVED. Blocking none, Important none. Minor (carried to the
+  next task that touches the files, or to the final quality review):
+  stale wording in `keys.rs:69` ("the shown list's"), `create_tests.rs:10-11`
+  and `:951` ("in the navigation region"; the test name
+  `secondary_n_opens_the_shown_lists_dialog` keeps the old wording),
+  `create.rs` `new_item` doc, `tickets_tests.rs:568-570` doc; the `NewItem`
+  fallback to `Pane` when neither list is focused is unreachable by key and
+  arguably contrary to P16's "nothing from the item area" (an early return
+  would be tighter); `Render` sets `navigation.pane` without a `notify`,
+  matching the `last_region` precedent.
+- **Verify:** all four lines clean; both Boundary commands print nothing;
+  the sweep for `Region::Navigation`, `region-navigation`, `pane-*` and
+  `SHOWING_*` finds only the unrelated `SHOWING_LAST_READ`.
