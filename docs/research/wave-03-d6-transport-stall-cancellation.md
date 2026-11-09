@@ -64,18 +64,22 @@ any run, because the cases cancel only once the row is active.
 
 | Stall | Uncancelled | Cancel to return | Result |
 | --- | --- | --- | --- |
-| Handshake (server sleeps 45 s) | about 30 s (`ssh_fixture` `handshake_timeout`, asserts 28 s to 40 s) | 30 008 ms, 30 095 ms | `Cancelled` |
-| Connect (SYN dropped) | 10 142 ms (one run, cancel disabled) | 10 064 ms, 10 048 ms, 10 048 ms | `Cancelled` |
+| Handshake (server sleeps 45 s) | about 30 s (`ssh_fixture` `handshake_timeout`, asserts 28 s to 40 s) | 30 008 ms, 30 095 ms, 30 100 ms | `Cancelled` |
+| Connect (SYN dropped) | about 10.1 s (a one-off local probe, cancel disabled; not committed) | 10 064 ms, 10 048 ms, 10 048 ms, 10 040 ms, 10 045 ms, 10 049 ms | `Cancelled` |
 
 Findings:
 
-1. A cancel never interrupts a blocked call. It is honoured at the next safe
-   point, after libgit2's own timeout has expired the call: 30 s for a stalled
-   handshake, 10 s for a stalled connect. The cancel is not lost: the poll
-   reports `Cancelled`, not a transport failure, though the call underneath
-   failed with a timeout.
-2. libgit2 honours the 10 s connect timeout on a stalled connect. The
-   cancelled and uncancelled connect runs differ by about 0.1 s.
+1. A cancel did not interrupt a blocked connect or handshake call in either
+   measured stall. It was honoured at the next safe point, after libgit2's own
+   timeout expired the call (inferred from the timing; neither case captures
+   the underlying error): 30 s for a stalled handshake, 10 s for a stalled
+   connect. A cancel mid-transfer is honoured through the progress callback
+   (design Fact 22), not measured here. The cancel is not lost: the poll
+   reports `Cancelled`, not a transport failure.
+2. libgit2 appears to honour the 10 s connect timeout on a stalled connect:
+   the one-off uncancelled probe took about 10.1 s from start to return, and
+   the cancelled runs took about 10.05 s from cancel to return. The two
+   figures measure different spans, so they agree only approximately.
 3. After the return no reservation remains and no further connection is made.
    Teardown time itself was not measured separately; it is inside the
    cancel-to-return figure.
@@ -91,7 +95,9 @@ Findings:
   The raw exec-acknowledgement stall is known to run past 40 s in
   `ssh_fixture` (its upper bound is 55 s), so a cancel during it could wait
   longer than 30 s. Not measured with a cancel.
-- Authentication and advertisement stalls with a cancel, and a transfer that
+- Authentication stalls with a cancel (a cancel at a held advertisement is
+  already covered by `poll_public_cancel_held_advertisement`, but that case
+  releases the hold and is not a timeout stall), and a transfer that
   progresses forever (the total transfer time is unbounded; a progressing
   transfer reaches the cancel at its progress callback).
 - Other platforms. The connect case runs on Linux only. Windows and macOS

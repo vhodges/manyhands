@@ -2522,15 +2522,14 @@ fn public_cancel() -> Result<(), FixtureError> {
     assert_eq!(snapshot(&p.b)?, before);
     p.finish()
 }
-/// How long a public cancel waits when the blocking transport call has not
-/// returned (D6 Task 1). `libgit2` gives each blocking SSH call 30 s.
-const STALL_CANCEL_BOUND: std::time::Duration = std::time::Duration::from_secs(40);
 /// Starts an automatic poll, waits for its row, cancels it through the same
-/// service and returns the measured cancel-to-return time. The caller has
-/// already made the stall.
+/// service and returns the measured cancel-to-return time, which must stay
+/// under `bound` (D6 Task 1: `libgit2` gives each blocking SSH call 30 s and a
+/// TCP connect 10 s). The caller has already made the stall.
 fn cancel_stalled_poll(
     p: &Pair,
     req: PollPublicationRemoteRequest,
+    bound: std::time::Duration,
     stalled: impl Fn() -> bool,
 ) -> Result<std::time::Duration, FixtureError> {
     let id = req.operation_id;
@@ -2558,12 +2557,11 @@ fn cancel_stalled_poll(
         assert!(!pending);
         assert_eq!(r.completion(), PollCompletion::Cancelled);
         assert!(
-            r.targets()
-                .iter()
-                .all(|t| t.disposition() == PollDisposition::NotReached)
+            r.targets().is_empty(),
+            "a cancel before any target is reached lists none"
         );
         p.redacted(&format!("{r:?}"))?;
-        assert!(elapsed < STALL_CANCEL_BOUND);
+        assert!(elapsed < bound, "cancel took {elapsed:?}, bound {bound:?}");
         Ok(elapsed)
     })
 }
@@ -2576,9 +2574,12 @@ fn cancel_during_handshake_stall() -> Result<(), FixtureError> {
         std::time::Duration::from_secs(45),
     );
     let sockets = p.server.accepted_sockets();
-    let elapsed = cancel_stalled_poll(&p, p.request(RemotePollInvocation::Automatic), || {
-        p.server.accepted_sockets() > sockets
-    })?;
+    let elapsed = cancel_stalled_poll(
+        &p,
+        p.request(RemotePollInvocation::Automatic),
+        std::time::Duration::from_secs(40),
+        || p.server.accepted_sockets() > sockets,
+    )?;
     ssh_harness::observation(&[elapsed.as_millis()]);
     // No reservation remains, no second connection follows, nothing changed.
     assert!(fixed(p.b.service.active_remote_operation(&p.b.root))?.is_none());
@@ -2618,12 +2619,17 @@ impl ConnectBlackhole {
             }
         }
         // The queue is full: a further connect must not complete.
+        let probe = std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            std::time::Duration::from_millis(500),
+        );
+        // Refused would mean the listener is gone; only a timeout is a stall.
         assert!(
-            std::net::TcpStream::connect_timeout(
-                &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-                std::time::Duration::from_millis(500),
-            )
-            .is_err()
+            matches!(
+                probe.as_ref().err().map(std::io::Error::kind),
+                Some(std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock)
+            ),
+            "the full accept queue must drop SYNs, got {probe:?}"
         );
         Ok(Self {
             port,
@@ -2631,8 +2637,7 @@ impl ConnectBlackhole {
             _fillers: fillers,
         })
     }
-    /// Whether this process has a connect to the port that was sent and not
-    /// answered (state SYN_SENT in /proc/net/tcp).
+    /// Whether any connection to this port has been sent and not answered (state SYN_SENT in /proc/net/tcp).
     fn connecting(&self) -> bool {
         let suffix = format!(":{:04X}", self.port);
         std::fs::read_to_string("/proc/net/tcp").is_ok_and(|table| {
@@ -2662,7 +2667,9 @@ fn cancel_during_connect_stall() -> Result<(), FixtureError> {
     if let Some(approval) = req.approval.as_mut() {
         approval.authority.port = hole.port;
     }
-    let elapsed = cancel_stalled_poll(&p, req, || hole.connecting())?;
+    let elapsed = cancel_stalled_poll(&p, req, std::time::Duration::from_secs(20), || {
+        hole.connecting()
+    })?;
     ssh_harness::observation(&[elapsed.as_millis()]);
     assert!(fixed(p.b.service.active_remote_operation(&p.b.root))?.is_none());
     assert_eq!(p.server.accepted_sockets(), sockets);
