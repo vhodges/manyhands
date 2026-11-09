@@ -1780,3 +1780,8 @@ Tests run (exact names, 59 in one run): everything under `model::layout::`,
 and `keys::`, plus the Ctrl B tests, `no_workspace_key_acts_behind_the_sheet` and the
 read-only guard tests: all green. fmt, check and both clippy lines pass; both Boundary
 diffs print nothing. No whole-suite or fast-tier run.
+
+**Owner's reply on findings 1, 2 and 3 (2026-11-09): "1,2 and 3 are fine."** They stay
+as designed: the quit with Activity hidden gives no sign (R-20), Needs attention counts
+both lists as decision 3 says, and a damaged `layout.json` shows its restore notice
+until the layout changes (R-38). No code or document changed.
