@@ -72,6 +72,7 @@ commands! {
     ItemRepublish => "item republish",
     ContextPrepare => "context prepare",
     ContextRelease => "context release",
+    ContextRetire => "context retire",
     DocumentPromote => "document promote",
     TicketClose => "ticket close",
     PollConfigure => "poll configure",
@@ -99,6 +100,7 @@ impl Command {
     /// a record any call of this build wrote.
     pub(crate) const fn has_operation(self) -> bool {
         match self {
+            Self::ContextRetire => true,
             // One row of the remote journal, reserved for the explicit poll.
             Self::PollOnce => true,
             Self::LocalContextSync => true,
@@ -195,6 +197,7 @@ impl Command {
     /// operation, and for one that has none.
     pub(crate) const fn was_accepted_without_operation(self) -> bool {
         match self {
+            Self::ContextRetire => false,
             Self::PollOnce => false,
             Self::LocalContextSync
             | Self::LocalContextResolve
@@ -247,6 +250,7 @@ impl Command {
     /// records and runs it.
     pub(crate) const fn restores_index(self) -> bool {
         match self {
+            Self::ContextRetire => false,
             Self::PollOnce => false,
             Self::LocalContextSync
             | Self::LocalContextResolve
@@ -300,6 +304,7 @@ impl Command {
     /// lacks is supplied with the request.
     pub(crate) const fn creates_its_repository(self) -> bool {
         match self {
+            Self::ContextRetire => false,
             Self::PollOnce => false,
             Self::LocalContextSync
             | Self::LocalContextResolve
@@ -359,6 +364,7 @@ impl Command {
     /// it.
     pub(crate) const fn stops_at_safe_points(self) -> bool {
         match self {
+            Self::ContextRetire => true,
             // A poll's own safe points, which its probe reaches.
             Self::PollOnce => true,
             Self::LocalContextSync | Self::LocalContextResolve => true,
@@ -434,6 +440,7 @@ impl Command {
     /// finished results of every other command offer nothing.
     pub(crate) const fn finishes_as_a_synchronization(self) -> bool {
         match self {
+            Self::ContextRetire => true,
             // How a replay reads a finished row: it keeps the pinned equality.
             Self::PollOnce => true,
             Self::LocalContextSync | Self::LocalContextResolve => true,
@@ -489,6 +496,7 @@ impl Command {
     /// call: what that call is about to do.
     pub(crate) const fn stage(self) -> ProgressStage {
         match self {
+            Self::ContextRetire => ProgressStage::Observing,
             // What a poll does first is connect, to fetch.
             Self::PollOnce => ProgressStage::Connecting,
             Self::LocalContextSync | Self::LocalContextResolve => ProgressStage::Observing,
@@ -557,6 +565,7 @@ impl Command {
     /// would find nothing to take up.
     pub(crate) const fn hands_off_to_any_refresh(self) -> bool {
         match self {
+            Self::ContextRetire => false,
             // A poll's hand-off is a refresh of the whole repository, and the
             // operation it finished owes nothing of it.
             Self::PollOnce => true,
@@ -616,6 +625,7 @@ impl Command {
     /// `not_confirmable`, and so is an `execute` that presents one.
     pub(crate) const fn needs_confirmation(self) -> bool {
         match self {
+            Self::ContextRetire => false,
             // One fetch and clean fast-forwards: nothing is lost, and what it
             // finds in the way it leaves.
             Self::PollOnce => false,
@@ -695,6 +705,17 @@ mod tests {
     use super::{Command, ProgressStage};
 
     #[test]
+    fn retirement_is_an_unconfirmed_local_operation_with_safe_points() {
+        let command = Command::parse("context retire").expect("ordinary retirement is bound");
+        assert!(command.has_operation());
+        assert!(command.stops_at_safe_points());
+        assert!(command.finishes_as_a_synchronization());
+        assert!(!command.needs_confirmation());
+        assert!(!command.hands_off_to_any_refresh());
+        assert_eq!(command.stage(), ProgressStage::Observing);
+    }
+
+    #[test]
     fn a_stored_name_is_read_back_as_its_command() {
         for command in Command::ALL {
             assert_eq!(Command::parse(command.name()), Some(command));
@@ -742,6 +763,7 @@ mod tests {
         assert_eq!(Command::PollPause.name(), "poll pause");
         assert_eq!(Command::PollResume.name(), "poll resume");
         assert_eq!(Command::PollOnce.name(), "poll once");
+        assert_eq!(Command::ContextRetire.name(), "context retire");
     }
 
     #[test]
@@ -770,7 +792,10 @@ mod tests {
                 || confirmed
                 || matches!(
                     command,
-                    Command::ItemSync | Command::RepoSync | Command::PollOnce
+                    Command::ItemSync
+                        | Command::RepoSync
+                        | Command::PollOnce
+                        | Command::ContextRetire
                 );
             assert_eq!(command.stops_at_safe_points(), stopping, "{command:?}");
             if stopping {
@@ -782,7 +807,7 @@ mod tests {
                 );
                 assert_eq!(
                     command.stage(),
-                    if local || lifecycle {
+                    if local || lifecycle || command == Command::ContextRetire {
                         ProgressStage::Observing
                     } else if comment {
                         ProgressStage::Writing

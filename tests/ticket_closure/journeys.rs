@@ -355,10 +355,7 @@ fn contained_closed(cache_loss: bool) -> Result<(), FixtureError> {
     let closed = p.close(&p.a)?;
     let primary = merged(&closed)?;
     let report = poll(&p, &p.b)?;
-    assert_eq!(
-        ticket_disposition(&report),
-        Some(PollDisposition::RemotelyDeleted)
-    );
+    assert_eq!(ticket_disposition(&report), Some(PollDisposition::Closed));
     assert!(p.b.worktree().exists());
     // The collaborator's kept context is still open while its primary is
     // closed. C5 refuses a new write there (the primary-tip arm) and nothing

@@ -400,11 +400,11 @@ impl JobGate {
     /// Blocks the test until the worker thread has reached this gate:
     /// for `hold_job` the job is running and not yet accepted; for
     /// `hold_at_stage` it is past acceptance, its stage already sent; for
-    /// `hold_job_return` its library call has returned. Panics after ten
-    /// seconds, inside the scheduler's fifteen.
+    /// `hold_job_return` its library call has returned. Panics after the
+    /// shared finite worker wait; GPUI's per-park limit is independent.
     pub(crate) fn wait_reached(&self) {
         assert!(
-            self.0.wait_reached(Duration::from_secs(10)),
+            self.0.wait_reached(super::WAIT),
             "the worker did not reach the held job"
         );
     }

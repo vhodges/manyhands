@@ -31,6 +31,12 @@
             "required": false,
             "summary": "Execute with a prepared confirmation ULID.",
             "value": "ULID"
+          },
+          {
+            "name": "--retire-completed",
+            "required": false,
+            "summary": "Explicitly retire proven-safe completed contexts in this live pass only.",
+            "value": null
           }
         ],
         "repository": "required",

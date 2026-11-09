@@ -322,3 +322,282 @@ fn a_stop_with_a_report_prints_its_targets_on_stderr() {
     assert!(stderr(&output).contains("disposition=malformed"));
     assert_eq!(output.status, 4);
 }
+
+#[test]
+fn retirement_report_distinguishes_as_of_cut_from_current_child_actions() {
+    use manyhands::repository::{
+        ContextRetirementMutationDto, ContextRetirementMutationType, ContextRetirementState,
+        PollRetirementCompletion, PollRetirementDebt, PollRetirementItemDto,
+        PollRetirementItemState, PollRetirementMutationDto, PollRetirementMutationType,
+        RetirementRemoval,
+    };
+    let mut e = poll_envelope(ResultCode::RecoveryRequired, vec![]);
+    const PARENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FP0";
+    const HISTORICAL_CHILD: &str = "01ARZ3NDEKTSV4RRFFQ69G5FK0";
+    const CURRENT_OPERATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX0";
+    const CURRENT_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR0";
+    const SCOPE_ROOT: &str = "/scope's\troot\n";
+    const ACTION_ROOT: &str = "/action's\troot\n";
+    e.operation_id = Some(PARENT.into());
+    e.scope.repository = Some(SCOPE_ROOT.into());
+    e.recovery = vec![
+        RecoveryAction::for_operation(RecoveryActionKind::OperationResume, CURRENT_OPERATION, []),
+        RecoveryAction::new(
+            RecoveryActionKind::RepoInspect,
+            [("root", serde_json::Value::from(SCOPE_ROOT))],
+        ),
+        RecoveryAction::for_operation(
+            RecoveryActionKind::OperationAbandon,
+            CURRENT_OPERATION,
+            [("root", serde_json::Value::from(ACTION_ROOT))],
+        ),
+        RecoveryAction::new(
+            RecoveryActionKind::RequestRetry,
+            [("request_id", serde_json::Value::from(CURRENT_REQUEST))],
+        ),
+    ];
+    let Some(MutationDataDto::Poll(poll)) = e.data.take() else {
+        unreachable!()
+    };
+    let poll = PollMutationDto {
+        operation_id: PARENT.into(),
+        ..poll
+    };
+    let states = [
+        PollRetirementItemState::Retired,
+        PollRetirementItemState::Refused,
+        PollRetirementItemState::Pending,
+        PollRetirementItemState::NotReached,
+    ];
+    e.data = Some(MutationDataDto::PollRetirement(PollRetirementMutationDto {
+        r#type: PollRetirementMutationType::PollRetirement,
+        poll,
+        completion: PollRetirementCompletion::Stopped,
+        stop_code: Some(ResultCode::RecoveryRequired),
+        retirements: states
+            .into_iter()
+            .enumerate()
+            .map(|(i, state)| PollRetirementItemDto {
+                kind: ItemDtoKind::Ticket,
+                item_id: format!("item-{i}\n"),
+                request_id: REQUEST.into(),
+                operation_id: Some(HISTORICAL_CHILD.into()),
+                state,
+                code: Some(ResultCode::RecoveryRequired),
+                debt: (state == PollRetirementItemState::Pending)
+                    .then_some(PollRetirementDebt::Discovery),
+                result: Some(ContextRetirementMutationDto {
+                    r#type: ContextRetirementMutationType::ContextRetirement,
+                    kind: ItemDtoKind::Ticket,
+                    item_id: format!("item-{i}"),
+                    operation_id: HISTORICAL_CHILD.into(),
+                    state: ContextRetirementState::Pending,
+                    code: ResultCode::DiscoveryPending,
+                    worktree_removal: RetirementRemoval::Observed,
+                    branch_removal: RetirementRemoval::Possible,
+                    materialization_settled: false,
+                }),
+            })
+            .collect(),
+    }));
+    let before = serde_json::to_value(&e).unwrap();
+    assert!(
+        !serde_json::to_string(&e.data)
+            .unwrap()
+            .contains(CURRENT_OPERATION),
+        "the current recovery target is absent from the historical report"
+    );
+    let out = once_output_in_mode(&e, false, ROOT, true);
+    assert!(out.stdout.is_empty());
+    let text = stderr(&out);
+    for state in ["retired", "refused", "pending", "not_reached"] {
+        assert!(text.contains(&format!("state={state}")), "{text}");
+    }
+    assert!(text.contains("as-of-pass"), "{text}");
+    assert!(text.contains("current child"), "{text}");
+    assert!(
+        text.contains(
+            "worktree_removal=observed branch_removal=possible materialization_settled=false"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("debt=discovery"), "{text}");
+    assert!(text.contains("never resumes the loop"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "next: manyhands-cli operation resume --repo {} --operation-id '{}'\n",
+            quoted(SCOPE_ROOT),
+            CURRENT_OPERATION
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "next: manyhands-cli operation abandon --repo {} --operation-id '{}' --prepare\n",
+            quoted(ACTION_ROOT),
+            CURRENT_OPERATION
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "next: request.retry request_id={CURRENT_REQUEST}\n"
+        )),
+        "{text}"
+    );
+    let expected = vec![
+        format!(
+            "next: manyhands-cli operation resume --repo {} --operation-id '{CURRENT_OPERATION}'",
+            quoted(SCOPE_ROOT)
+        ),
+        format!("next: repo.inspect root={}", field(SCOPE_ROOT)),
+        format!(
+            "next: manyhands-cli operation abandon --repo {} --operation-id '{CURRENT_OPERATION}' --prepare",
+            quoted(ACTION_ROOT)
+        ),
+        format!("next: request.retry request_id={CURRENT_REQUEST}"),
+    ];
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("next:"))
+            .collect::<Vec<_>>(),
+        expected,
+        "preserve the boundary's resume/inspect/abandon order, without grouping action kinds"
+    );
+    for line in text.lines().filter(|line| line.starts_with("next:")) {
+        assert!(
+            !line.contains(PARENT) && !line.contains(HISTORICAL_CHILD),
+            "{line}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(&e).unwrap(),
+        before,
+        "human formatting never changes JSON"
+    );
+    no_raw_control(text);
+
+    let mut leading_retry = e.clone();
+    leading_retry.recovery.rotate_right(1);
+    leading_retry.recovery.insert(
+        3,
+        RecoveryAction::new(
+            RecoveryActionKind::HostReplace,
+            [
+                ("authority", serde_json::Value::from("host\t:22\n")),
+                ("root", serde_json::Value::from(ACTION_ROOT)),
+            ],
+        ),
+    );
+    let before_retry = serde_json::to_value(&leading_retry).unwrap();
+    let out = once_output_in_mode(&leading_retry, false, ROOT, true);
+    let text = stderr(&out);
+    let mut expected_retry = expected.clone();
+    expected_retry.rotate_right(1);
+    expected_retry.insert(
+        3,
+        format!(
+            "next: host.replace authority={} root={}",
+            field("host\t:22\n"),
+            field(ACTION_ROOT)
+        ),
+    );
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("next:"))
+            .collect::<Vec<_>>(),
+        expected_retry,
+        "leading retry and intervening host guidance keep their original positions and arguments"
+    );
+    assert_eq!(serde_json::to_value(&leading_retry).unwrap(), before_retry);
+    no_raw_control(text);
+
+    // An opted-in refusal may precede a tagged report. The explicit mode still
+    // renders only the current action's target; the invocation root is not a
+    // substitute for a missing record/action root.
+    let mut no_report = e.clone();
+    no_report.data = None;
+    let out = once_output_in_mode(&no_report, false, "/not-the-record-root", true);
+    let text = stderr(&out);
+    assert!(
+        text.contains(&format!(
+            "next: manyhands-cli operation resume --repo {} --operation-id '{}'\n",
+            quoted(SCOPE_ROOT),
+            CURRENT_OPERATION
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("/not-the-record-root"));
+
+    let mut ordinary = poll_envelope(ResultCode::RecoveryRequired, vec![]);
+    ordinary.recovery = e.recovery.clone();
+    let ordinary = once_output(&ordinary, false, ROOT);
+    let text = stderr(&ordinary);
+    assert!(
+        text.contains("next: operation.resume\n"),
+        "ordinary output is unchanged: {text}"
+    );
+    assert!(text.contains(&format!(
+        "next: operation.abandon root={}\n",
+        field(ACTION_ROOT)
+    )));
+    assert!(!text.contains("next: manyhands-cli operation resume"));
+
+    // Completed mixed passes are exit 0, not a claim that every item retired.
+    // Empty, cancelled and index-pending reports retain their actual code/exit.
+    use manyhands::results::Outcome;
+    for (code, outcome, status, completion, empty) in [
+        (
+            ResultCode::Ok,
+            Outcome::Success,
+            0,
+            PollRetirementCompletion::Completed,
+            false,
+        ),
+        (
+            ResultCode::Ok,
+            Outcome::Success,
+            0,
+            PollRetirementCompletion::Completed,
+            true,
+        ),
+        (
+            ResultCode::DiscoveryPending,
+            Outcome::Partial,
+            4,
+            PollRetirementCompletion::Stopped,
+            false,
+        ),
+        (
+            ResultCode::Cancelled,
+            Outcome::Cancelled,
+            130,
+            PollRetirementCompletion::Stopped,
+            false,
+        ),
+    ] {
+        let mut row = e.clone();
+        row.code = code;
+        row.outcome = outcome;
+        row.message = code.message().into();
+        let Some(MutationDataDto::PollRetirement(data)) = &mut row.data else {
+            unreachable!()
+        };
+        data.completion = completion;
+        if empty {
+            data.retirements.clear();
+        } else if completion == PollRetirementCompletion::Completed {
+            data.retirements.truncate(2);
+        }
+        let out = once_output_in_mode(&row, false, ROOT, true);
+        assert_eq!(out.status, status);
+        let text = format!("{}{}", stdout(&out), stderr(&out));
+        assert!(text.contains("poll (original observation report):"));
+        if empty {
+            assert!(text.contains("retirements: none"));
+        } else {
+            assert!(text.contains("state=refused"));
+        }
+        assert!(!text.contains("all contexts retired"));
+    }
+}

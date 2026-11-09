@@ -2,7 +2,7 @@
 //! answer. The record is finished with the result, deleted so that the
 //! request ID is free again, or left accepted for a retry to continue.
 
-use crate::results::{Envelope, Outcome, ResultCode};
+use crate::results::{Envelope, Outcome};
 
 use super::{
     super::{
@@ -84,7 +84,7 @@ pub(super) fn stored_result(answer: &Answer) -> Option<RequestResult> {
     };
     Some(RequestResult {
         outcome: Outcome::of_mutation(
-            answer.code == ResultCode::Cancelled,
+            answer.cancelled_outcome(),
             answer.code,
             &answer.effects,
             answer.local_change,

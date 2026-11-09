@@ -511,10 +511,22 @@ pub(super) struct RecoveryRecord {
     pub(super) completed_step: Option<LocalStep>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct IndexOwner {
     pub(super) record_id: i64,
     pub(super) epoch: i64,
+    pub(super) retirement_request: Option<super::context_retirement::request_scope::RequestFence>,
+}
+
+impl IndexOwner {
+    fn validate(&self, db: &Connection, epoch: Option<i64>) -> Result<(), RepositoryError> {
+        super::context_retirement::request_scope::validate_index(
+            db,
+            self.record_id,
+            self.retirement_request,
+            epoch,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -766,7 +778,8 @@ fn begin_or_reconcile(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
     if action == "refresh"
-        && !super::local_sync::record::refresh_allowed(&transaction, &requested, root)?
+        && (!super::local_sync::record::refresh_allowed(&transaction, &requested, root)?
+            || !super::context_retirement::record::refresh_allowed(&transaction, &requested, root)?)
     {
         return Err(recovery_required(operation, root));
     }
@@ -981,6 +994,10 @@ local_steps! {
     /// and all the release still owes is its index hand-off. It commits
     /// nothing.
     ContextBranchReleased => "context_branch_released";
+    /// Retirement observed initial absence, not an owned removal or checkpoint.
+    ContextRetirementAbsent => "context_retirement_absent";
+    /// Confirmed preservation forbids further removal and owes local discovery.
+    ContextRetirementPreserved => "context_retirement_preserved";
     /// A comment's creation time is recorded and its file is about to be
     /// written.
     CommentDestinationPrepared => "comment_destination_prepared";
@@ -1056,6 +1073,8 @@ impl LocalStep {
             // A release removes what holds no work, and commits nothing.
             | Self::ContextWorktreeReleased
             | Self::ContextBranchReleased
+            | Self::ContextRetirementAbsent
+            | Self::ContextRetirementPreserved
             | Self::CommentDestinationPrepared
             | Self::AuthoringDestinationObserved
             | Self::DocumentDestinationObserved
@@ -1086,6 +1105,8 @@ impl LocalStep {
         (self.is_checkpoint() && self != Self::CommentCheckpointIntent)
             || self == Self::RemoteChanged
             || self == Self::ContextBranchReleased
+            || self == Self::ContextRetirementAbsent
+            || self == Self::ContextRetirementPreserved
     }
 
     /// The step as a call under the same ID is told it when the call
@@ -1110,7 +1131,9 @@ impl LocalStep {
             // A release goes on from the removal it recorded: to the
             // branch, or to the hand-off.
             | Self::ContextWorktreeReleased
-            | Self::ContextBranchReleased => Some(self),
+            | Self::ContextBranchReleased
+            | Self::ContextRetirementAbsent
+            | Self::ContextRetirementPreserved => Some(self),
             Self::BranchObserved
             | Self::LocalSyncPrepared
             | Self::WorktreeObserved
@@ -1525,7 +1548,13 @@ pub(super) fn require_refresh_can_begin(
 ) -> Result<(), RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let refresh = action_name(RepositoryOperation::RefreshRepository);
-    if !super::local_sync::record::refresh_allowed(connection, &operation_id.to_string(), root)? {
+    if !super::local_sync::record::refresh_allowed(connection, &operation_id.to_string(), root)?
+        || !super::context_retirement::record::refresh_allowed(
+            connection,
+            &operation_id.to_string(),
+            root,
+        )?
+    {
         return Err(recovery_required(operation, root));
     }
     super::promotion::record::validate_local_identity(
@@ -1981,6 +2010,9 @@ pub(super) fn claim_indexing(
     record_id: i64,
     stale_before: i64,
 ) -> Result<Option<IndexOwner>, RepositoryError> {
+    // Request-bound retirement uses its private, current-F2 claim, never this
+    // generic claim which can mint only an unscoped index owner.
+    super::context_retirement::request_scope::validate_index(connection, record_id, None, None)?;
     let claimed = connection
         .execute(
             "UPDATE operation_records SET state = 'indexing', index_owner_epoch = index_owner_epoch + 1, observed_at = ?2
@@ -2002,7 +2034,11 @@ pub(super) fn claim_indexing(
             |row| row.get(0),
         )
         .map_err(RepositoryError::sqlite)?;
-    Ok(Some(IndexOwner { record_id, epoch }))
+    Ok(Some(IndexOwner {
+        record_id,
+        epoch,
+        retirement_request: None,
+    }))
 }
 
 /// A committed promotion invalidates observations collected before its cleanup.
@@ -2040,6 +2076,12 @@ pub(super) fn reclaim_invalidated_indexing(
     owner: IndexOwner,
     root_key: &str,
 ) -> Result<Option<IndexOwner>, RepositoryError> {
+    if owner.retirement_request.is_some() {
+        // A new current F2 call claims request-bound indexing explicitly. Never
+        // inflate its index epoch from a stale executor's cached request fence.
+        owner.validate(connection, Some(owner.epoch))?;
+        return Ok(None);
+    }
     let fenced = owner
         .epoch
         .checked_add(1)
@@ -2047,12 +2089,22 @@ pub(super) fn reclaim_invalidated_indexing(
     let next = fenced
         .checked_add(1)
         .ok_or_else(super::remote::state::recovery_required)?;
+    // Domain-only reclaim is authorized by the exact invalidation tombstone in
+    // the UPDATE below, not by still owning the pre-invalidation live epoch.
+    // Keep envelope/handoff validation without changing that established CAS.
+    super::context_retirement::request_scope::validate_index(
+        connection,
+        owner.record_id,
+        owner.retirement_request,
+        None,
+    )?;
     let changed=connection.execute(&format!(
         "UPDATE operation_records SET state='indexing',index_owner_epoch=?4,observed_at=?5 WHERE id=?1 AND root_path=?2 AND state='index_invalidated' AND index_owner_epoch=?3 AND {NOT_ABANDONED}"
     ),params![owner.record_id,root_key,fenced,next,now()]).map_err(RepositoryError::sqlite)?;
     Ok((changed == 1).then_some(IndexOwner {
         record_id: owner.record_id,
         epoch: next,
+        retirement_request: owner.retirement_request,
     }))
 }
 
@@ -2062,6 +2114,7 @@ pub(super) fn transition_indexing(
     state: &str,
     context: Option<&Path>,
 ) -> Result<bool, RepositoryError> {
+    owner.validate(connection, Some(owner.epoch))?;
     Ok(connection
         .execute(
             "UPDATE operation_records SET state = ?2, context_path = ?3, observed_at = ?4
@@ -2082,6 +2135,7 @@ pub(super) fn touch_indexing(
     connection: &Connection,
     owner: IndexOwner,
 ) -> Result<bool, RepositoryError> {
+    owner.validate(connection, Some(owner.epoch))?;
     Ok(connection
         .execute(
             "UPDATE operation_records SET observed_at = ?2 WHERE id = ?1 AND state = 'indexing' AND index_owner_epoch = ?3",
@@ -2095,6 +2149,7 @@ pub(super) fn owns_indexing(
     connection: &Connection,
     owner: IndexOwner,
 ) -> Result<bool, RepositoryError> {
+    owner.validate(connection, Some(owner.epoch))?;
     connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM operation_records WHERE id = ?1 AND state = 'indexing' AND index_owner_epoch = ?2)",
@@ -2125,6 +2180,7 @@ pub(super) fn record_owned_persisted_context(
     owner: IndexOwner,
     context: &Path,
 ) -> Result<bool, RepositoryError> {
+    owner.validate(connection, Some(owner.epoch))?;
     Ok(connection
         .execute(
             "UPDATE operation_records
@@ -2197,6 +2253,7 @@ pub(super) fn action_name(operation: RepositoryOperation) -> &'static str {
         RepositoryOperation::RebuildRepository => "rebuild",
         RepositoryOperation::PrepareContext => "prepare_context",
         RepositoryOperation::ReleaseContext => "release_context",
+        RepositoryOperation::RetireContext => "retire_context",
         RepositoryOperation::SaveDocument => "save_document",
         RepositoryOperation::SaveTicket => "save_ticket",
         RepositoryOperation::SubmitComment => "submit_comment",
@@ -2608,6 +2665,8 @@ mod abandoned_row_tests {
                 "worktree_observed",
                 "context_worktree_released",
                 "context_branch_released",
+                "context_retirement_absent",
+                "context_retirement_preserved",
                 "comment_destination_prepared",
                 "comment_checkpoint_intent",
                 "comment_registration_pending",
@@ -2695,9 +2754,10 @@ mod abandoned_row_tests {
         let owner = IndexOwner {
             record_id: 1,
             epoch: 0,
+            retirement_request: None,
         };
-        assert!(!transition_indexing(&connection, owner, "completed", None).unwrap());
-        assert!(!touch_indexing(&connection, owner).unwrap());
+        assert!(!transition_indexing(&connection, owner.clone(), "completed", None).unwrap());
+        assert!(!touch_indexing(&connection, owner.clone()).unwrap());
         assert!(
             !record_owned_persisted_context(&connection, owner, Path::new("/context")).unwrap()
         );

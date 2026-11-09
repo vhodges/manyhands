@@ -417,6 +417,15 @@ fn poll_kind_legacy_migration_freezes_observe_identity_and_preserves_rows_on_reo
         ALTER TABLE remote_operation_records DROP COLUMN poll_kind;",
     )
     .unwrap();
+    // This historical envelope also predates the unpublished migration marker.
+    assert_eq!(
+        db.execute(
+            "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'",
+            []
+        )
+        .unwrap(),
+        1
+    );
     for _ in 0..2 {
         let reopened = RepositoryService::open_at(data.path()).unwrap();
         assert_eq!(poll_kind_row(&db), before);
@@ -542,8 +551,38 @@ fn review_disposition_metadata_loss_is_not_hidden_by_updated_at_fallback() {
 fn review_disposition_genuine_old_envelope_migrates_once_preserving_original_rows() {
     let (data, _, service, op) = review_completed_state();
     drop(service);
-    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let mut db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     db.execute_batch("DROP TABLE remote_poll_dispositions;DROP TRIGGER remote_poll_disposition_owner_immutable;ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at;ALTER TABLE remote_operation_records DROP COLUMN poll_next_eligible_at;").unwrap();
+    // The current fixture has a marker. Losing the entire envelope while that
+    // marker survives is evidence loss, not a genuine pre-envelope registry.
+    let original_version: i64 = db
+        .query_row("PRAGMA schema_version", [], |r| r.get(0))
+        .unwrap();
+    let tx = db.transaction().unwrap();
+    assert!(migrate_poll_dispositions(&tx).is_err());
+    assert_eq!(
+        tx.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        original_version,
+        "the marked form must be refused before DDL"
+    );
+    tx.rollback().unwrap();
+    assert!(
+        matches!(RepositoryService::open_at(data.path()), Err(e) if e.kind == crate::repository::RepositoryErrorKind::RecoveryRequired)
+    );
+    assert_eq!(
+        db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        original_version
+    );
+    assert_eq!(
+        db.execute(
+            "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'",
+            []
+        )
+        .unwrap(),
+        1
+    );
     let before = db
         .query_row(
             "SELECT phase,outcome,created_at,updated_at FROM remote_operation_records",
@@ -590,6 +629,324 @@ fn review_disposition_genuine_old_envelope_migrates_once_preserving_original_row
         db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
         version
+    );
+}
+
+// Frozen from the common pre-retirement/pre-unpublished catalog, not the current
+// builder. All four published profiles share this table/trigger shape; only the
+// independently named literal enum additions differ.
+const LEGACY_POLL_DISPOSITIONS: &str = r#"
+    CREATE TABLE remote_poll_dispositions (
+        repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        operation_ulid TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+        classification TEXT NOT NULL CHECK(classification IN ('primary','context','malformed')),
+        remote_ref TEXT,
+        kind TEXT CHECK(kind IN ('document','ticket')),
+        item_id TEXT,
+        disposition TEXT NOT NULL CHECK(disposition IN ('current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','not_reached')),
+        before_oid TEXT CHECK(length(before_oid)=40 AND before_oid NOT GLOB '*[^0-9a-f]*'),
+        after_oid TEXT CHECK(length(after_oid)=40 AND after_oid NOT GLOB '*[^0-9a-f]*'),
+        observed_at INTEGER NOT NULL CHECK(typeof(observed_at)='integer' AND observed_at BETWEEN 0 AND 253402300799),
+        PRIMARY KEY(repository_id,ordinal), UNIQUE(repository_id,remote_ref),
+        FOREIGN KEY(repository_id,operation_ulid) REFERENCES remote_operation_records(repository_id,operation_ulid) ON DELETE CASCADE,
+        CHECK((classification='context')=(kind IS NOT NULL)),
+        CHECK((kind IS NULL)=(item_id IS NULL)),
+        CHECK((classification='malformed')=(remote_ref IS NULL))
+    );
+    CREATE TRIGGER remote_poll_disposition_owner_immutable BEFORE UPDATE OF repository_id,operation_ulid,action,poll_kind ON remote_operation_records WHEN EXISTS(SELECT 1 FROM remote_poll_dispositions WHERE repository_id=OLD.repository_id AND operation_ulid=OLD.operation_ulid) BEGIN SELECT RAISE(ABORT,'immutable disposition owner'); END;
+"#;
+
+fn historical_disposition_schema(profile: u8) -> String {
+    assert!([15, 16, 17, 18].contains(&profile));
+    let mut schema = LEGACY_POLL_DISPOSITIONS.to_owned();
+    if matches!(profile, 17 | 18) {
+        schema = schema.replace(
+            "'remotely_deleted',",
+            "'remotely_deleted','closed','promoted',",
+        );
+    }
+    if matches!(profile, 16 | 18) {
+        schema = schema.replace("'history_unknown',", "'history_unknown','unpublished',");
+    }
+    schema
+}
+
+fn install_historical_dispositions(db: &Connection, profile: u8) {
+    db.execute_batch("DROP TRIGGER remote_poll_disposition_owner_immutable; ALTER TABLE remote_poll_dispositions RENAME TO old_dispositions;").unwrap();
+    db.execute_batch(&historical_disposition_schema(profile))
+        .unwrap();
+    db.execute_batch("INSERT INTO remote_poll_dispositions SELECT * FROM old_dispositions; DROP TABLE old_dispositions;").unwrap();
+    db.execute(
+        "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'",
+        [],
+    )
+    .unwrap();
+    if matches!(profile, 16 | 18) {
+        db.execute("INSERT INTO registry_migrations(name) VALUES('remote_poll_dispositions_unpublished_v1')", []).unwrap();
+    }
+}
+
+#[test]
+fn retirement_disposition_exact_old_enum_upgrade_preserves_evidence_and_owner() {
+    let legacy = [
+        "current",
+        "fast_forwarded",
+        "local_ahead",
+        "diverged",
+        "dirty",
+        "conflicted",
+        "inaccessible",
+        "materialized",
+        "nonconforming",
+        "blocked_by_local_state",
+        "materialization_incomplete",
+        "malformed",
+        "remotely_deleted",
+        "history_unknown",
+        "not_reached",
+    ];
+    for profile in [15, 16, 17, 18] {
+        let (data, _, service, op) = review_completed_state();
+        drop(service);
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let mut values = legacy.to_vec();
+        if matches!(profile, 17 | 18) {
+            values.extend(["closed", "promoted"]);
+        }
+        if matches!(profile, 16 | 18) {
+            values.push("unpublished");
+        }
+        for (ordinal, value) in values.iter().enumerate() {
+            db.execute("INSERT OR REPLACE INTO remote_poll_dispositions(repository_id,operation_ulid,ordinal,classification,disposition,before_oid,after_oid,observed_at) VALUES(1,?1,?2,'malformed',?3,?4,?4,124)",params![op.to_string(),ordinal as i64,value,ADVERTISED]).unwrap();
+        }
+        let rows_before = read_poll_dispositions(&db, 1).unwrap();
+        install_historical_dispositions(&db, profile);
+        let service = RepositoryService::open_at(data.path())
+            .unwrap_or_else(|_| panic!("valid historical profile {profile} must upgrade"));
+        validate_poll_disposition_schema(&db).unwrap();
+        assert_eq!(read_poll_dispositions(&db, 1).unwrap(), rows_before);
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM remote_poll_dispositions", [], |r| {
+                r.get::<_, usize>(0)
+            })
+            .unwrap(),
+            values.len()
+        );
+        assert_eq!(
+            poll_completion_metadata(&db, 1, op)
+                .unwrap()
+                .0
+                .unix_timestamp(),
+            124
+        );
+        assert!(
+            db.execute(
+                "UPDATE remote_operation_records SET operation_ulid=operation_ulid",
+                []
+            )
+            .is_err()
+        );
+        let version: i64 = db
+            .query_row("PRAGMA schema_version", [], |r| r.get(0))
+            .unwrap();
+        drop(service);
+        RepositoryService::open_at(data.path()).unwrap();
+        assert_eq!(
+            db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            version
+        );
+        for (ordinal, value) in ["closed", "promoted", "unpublished"].iter().enumerate() {
+            db.execute(
+                "UPDATE remote_poll_dispositions SET disposition=?1 WHERE ordinal=?2",
+                params![value, ordinal as i64],
+            )
+            .unwrap();
+        }
+        let rows = read_poll_dispositions(&db, 1).unwrap();
+        assert_eq!(
+            rows[0].disposition(),
+            super::super::poll::PollDisposition::Closed
+        );
+        assert_eq!(
+            rows[1].disposition(),
+            super::super::poll::PollDisposition::Promoted
+        );
+        assert_eq!(
+            rows[2].disposition(),
+            super::super::poll::PollDisposition::Unpublished
+        );
+        RepositoryService::open_at(data.path()).unwrap();
+        assert_eq!(read_poll_dispositions(&db, 1).unwrap(), rows);
+        assert_eq!(
+            db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            version
+        );
+    }
+}
+
+#[test]
+fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
+    let corruptions = [
+        "DROP TRIGGER remote_poll_disposition_owner_immutable",
+        "DROP TRIGGER remote_poll_disposition_owner_immutable; CREATE TRIGGER remote_poll_disposition_owner_immutable BEFORE UPDATE ON remote_operation_records BEGIN SELECT 1; END;",
+        "ALTER TABLE remote_poll_dispositions ADD COLUMN substituted TEXT",
+        "ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at",
+        "ALTER TABLE remote_operation_records DROP COLUMN poll_next_eligible_at",
+        "ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at; ALTER TABLE remote_operation_records ADD COLUMN poll_completed_at TEXT",
+        "PRAGMA writable_schema=ON; UPDATE sqlite_master SET sql=replace(sql,'''remotely_deleted''','''REMOTELY_DELETED''') WHERE name='remote_poll_dispositions'; PRAGMA writable_schema=OFF",
+        "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='closed'",
+        "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='promoted'",
+        "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='substituted'",
+    ];
+    let dependencies = [
+        "CREATE INDEX unknown_index ON \"REMOTE_POLL_DISPOSITIONS\"(disposition)",
+        "CREATE TRIGGER unknown_attached AFTER UPDATE ON [Remote_Poll_Dispositions] BEGIN SELECT 1; END",
+        "CREATE TRIGGER unknown_external AFTER INSERT ON retention_payload BEGIN SELECT count(*) FROM `REMOTE_POLL_DISPOSITIONS`; END",
+        "CREATE VIEW unknown_view AS SELECT * FROM \"Remote_Poll_Dispositions\"",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES remote_poll_dispositions(repository_id,ordinal) ON DELETE CASCADE)",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES \"REMOTE_POLL_DISPOSITIONS\"(repository_id,ordinal) ON DELETE CASCADE); INSERT INTO incoming_dispositions SELECT repository_id,ordinal,'retained cascade payload' FROM remote_poll_dispositions",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES [Remote_Poll_Dispositions](repository_id,ordinal) ON DELETE RESTRICT)",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES `Remote_Poll_Dispositions`(repository_id,ordinal) ON DELETE RESTRICT); INSERT INTO incoming_dispositions SELECT repository_id,ordinal,'retained restrict payload' FROM remote_poll_dispositions",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES 'REMOTE_POLL_DISPOSITIONS'(repository_id,ordinal) ON DELETE SET NULL); INSERT INTO incoming_dispositions SELECT repository_id,ordinal,'retained set-null payload' FROM remote_poll_dispositions",
+    ];
+    let cases = corruptions.into_iter().map(|change| (15, change))
+        .chain(dependencies.into_iter().flat_map(|change| [15,16,17,18].map(|profile| (profile,change))))
+        .chain([
+            (16, corruptions[7]),
+            (16, corruptions[8]),
+            (17, "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='unpublished'"),
+            (15, "INSERT INTO registry_migrations(name) VALUES('remote_poll_dispositions_unpublished_v1')"),
+            (17, "INSERT INTO registry_migrations(name) VALUES('remote_poll_dispositions_unpublished_v1')"),
+            (16, "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'"),
+            (18, "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'"),
+        ]);
+    let mut accepted = Vec::new();
+    for (profile, change) in cases {
+        let case = format!("profile={profile}: {change}");
+        let (data, _, service, _) = review_completed_state();
+        drop(service);
+        let mut db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        // Match the real service connection, including CASCADE effects. The
+        // unknown populated child must survive public open, not just our rollback.
+        db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        if profile != 18 {
+            install_historical_dispositions(&db, profile);
+        }
+        db.execute_batch("CREATE TABLE retention_payload(payload TEXT NOT NULL); INSERT INTO retention_payload(rowid,payload) VALUES(91,'retained independent payload')").unwrap();
+        db.execute_batch(change).unwrap();
+        // Match a newly opened registry connection: retain the corrupt row,
+        // but do not carry the fixture writer's CHECK bypass into migration.
+        db.execute_batch("PRAGMA ignore_check_constraints=OFF")
+            .unwrap();
+        let corrupt_enum = change.contains("ignore_check_constraints");
+        if corrupt_enum {
+            let integrity: String = db
+                .query_row(
+                    "PRAGMA integrity_check(remote_poll_dispositions)",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                integrity.contains("CHECK constraint failed"),
+                "{change}: {integrity}"
+            );
+        }
+        let values = |db: &Connection, sql: &str| {
+            let mut query = db.prepare(sql).unwrap();
+            let columns = query.column_count();
+            query
+                .query_map([], |r| {
+                    (0..columns)
+                        .map(|column| r.get::<_, rusqlite::types::Value>(column))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let image = |db: &Connection| {
+            let tables = db
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+                .unwrap()
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let mut image = vec![values(
+                db,
+                "SELECT type,name,tbl_name,rootpage,sql FROM sqlite_master ORDER BY name",
+            )];
+            for table in tables {
+                image.push(values(
+                    db,
+                    &format!(
+                        "SELECT rowid,* FROM \"{}\" ORDER BY rowid",
+                        table.replace('"', "\"\"")
+                    ),
+                ));
+            }
+            image
+        };
+        let before = image(&db);
+        assert!(!values(&db, "SELECT * FROM remote_poll_dispositions").is_empty());
+        let version: i64 = db
+            .query_row("PRAGMA schema_version", [], |r| r.get(0))
+            .unwrap();
+        let tx = db.transaction().unwrap();
+        let refused = migrate_poll_dispositions(&tx).is_err();
+        {
+            // The closure guard refuses BEFORE any DDL, not after a destructive
+            // rename/drop that happens to be hidden by the explicit rollback.
+            assert_eq!(image(&tx), before, "before rollback: {case}");
+            assert_eq!(
+                tx.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                version,
+                "before rollback: {case}"
+            );
+        }
+        tx.rollback().unwrap();
+        assert_eq!(image(&db), before, "{case}");
+        assert_eq!(
+            db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            version,
+            "{case}"
+        );
+        if corrupt_enum {
+            let owner_update = db.execute(
+                "UPDATE remote_operation_records SET operation_ulid=operation_ulid",
+                [],
+            );
+            assert!(
+                matches!(owner_update, Err(rusqlite::Error::SqliteFailure(_, Some(ref message))) if message == "immutable disposition owner"),
+                "{change}: {owner_update:?}"
+            );
+            assert_eq!(image(&db), before, "{case}");
+        }
+        if !refused {
+            accepted.push(case.clone());
+        }
+        let opened = RepositoryService::open_at(data.path()).map(|_| ());
+        assert!(
+            matches!(opened, Err(ref error) if error.kind == RepositoryErrorKind::RecoveryRequired),
+            "public open must refuse {case}: {opened:?}"
+        );
+        assert_eq!(image(&db), before, "public open: {case}");
+        assert_eq!(
+            db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            version,
+            "public open: {case}"
+        );
+    }
+    assert!(
+        accepted.is_empty(),
+        "old-schema corruption unexpectedly accepted: {accepted:?}"
     );
 }
 
@@ -1916,6 +2273,8 @@ fn cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication()
             [],
         )
         .unwrap();
+    // Reconstruct pre-disposition history, not marked loss of its whole envelope.
+    assert_eq!(connection.execute("DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'", []).unwrap(), 1);
     connection.execute_batch(CYCLE04_OPERATION_SCHEMA).unwrap();
     let cases = [
         ("completed", "after_batch_commit", Some("completed"), 0, 0),
@@ -4185,9 +4544,7 @@ fn poll_dispositions_unpublished_migration_preserves_rows_and_is_idempotent() {
     let (data, _, service, _) = review_completed_state();
     drop(service);
     let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-    let old = POLL_DISPOSITION_SCHEMA.replace("'unpublished',", "");
-    assert_ne!(old, POLL_DISPOSITION_SCHEMA);
-    db.execute_batch(&format!("DROP TRIGGER remote_poll_disposition_owner_immutable; ALTER TABLE remote_poll_dispositions RENAME TO saved; {old}; INSERT INTO remote_poll_dispositions SELECT * FROM saved; DROP TABLE saved; DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1';")).unwrap();
+    install_historical_dispositions(&db, 15);
     let insert = format!(
         "INSERT INTO remote_poll_dispositions SELECT repository_id,operation_ulid,1,'context','refs/heads/manyhands/ticket/{ITEM}','ticket','{ITEM}','unpublished',NULL,NULL,observed_at FROM remote_poll_dispositions WHERE ordinal=0"
     );

@@ -615,7 +615,7 @@ fn insert_request(
     Ok(InsertRequestOutcome::Inserted)
 }
 
-fn finish_request(
+pub(super) fn finish_request(
     transaction: &Transaction<'_>,
     request_id: RequestId,
     attempt: u64,
@@ -846,6 +846,19 @@ impl RepositoryService {
     /// accept.
     #[doc(hidden)]
     pub fn insert_request(&self, request: &NewRequest) -> Result<InsertRequestOutcome, ReadError> {
+        self.insert_request_admitted(request, |tx| {
+            super::super::context_retirement::pass::require_unreserved(tx, request.request_id)
+                .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))
+        })
+    }
+
+    /// The ordinary acceptance transaction, with a private association hook.
+    /// Confirmation acceptance/fault rollback is identical for every binding.
+    pub(super) fn insert_request_admitted(
+        &self,
+        request: &NewRequest,
+        admit: impl FnOnce(&Transaction<'_>) -> Result<(), ReadError>,
+    ) -> Result<InsertRequestOutcome, ReadError> {
         let now = self.record_time();
         let fails_after_confirmation = request.confirmation.is_some()
             && self
@@ -855,8 +868,12 @@ impl RepositoryService {
                     Path::new(request.scope.as_str()),
                 )
                 .unwrap_or(false);
-        self.write_records(|transaction| {
-            insert_request(transaction, request, now, fails_after_confirmation)
+        self.write_records(|tx| {
+            let inserted = insert_request(tx, request, now, fails_after_confirmation)?;
+            if inserted == InsertRequestOutcome::Inserted {
+                admit(tx)?;
+            }
+            Ok(inserted)
         })
     }
 
@@ -872,6 +889,11 @@ impl RepositoryService {
     ) -> Result<Option<T>, ReadError> {
         let now = self.record_time();
         self.write_records(|transaction| {
+            super::super::context_retirement::pass::require_unreserved(
+                transaction,
+                request.request_id,
+            )
+            .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
             match insert_request(transaction, request, now, false)? {
                 InsertRequestOutcome::Inserted => {}
                 InsertRequestOutcome::RequestExists => return Ok(None),

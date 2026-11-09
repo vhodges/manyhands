@@ -690,6 +690,8 @@ pub struct IdentityPreviewDto {
 /// leaves as it is. It holds names and paths and no content.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct OperationAbandonPreviewDto {
+    /// Required-nullable; an ordinary retirement retains its controlling request.
+    pub retirement: Option<crate::repository::RetirementAbandonMetadata>,
     /// The repository's root, as the operation's journal names it.
     pub root: String,
     /// The operation that will be closed.
@@ -896,10 +898,78 @@ pub enum MutationDataDto {
     Host(HostMutationDto),
     Repair(RepairMutationDto),
     Context(ContextMutationDto),
+    ContextRetirement(ContextRetirementMutationDto),
     Lifecycle(Box<LifecycleMutationDto>),
     PollPolicy(PollPolicyMutationDto),
     Poll(PollMutationDto),
+    PollRetirement(PollRetirementMutationDto),
     ResolveHistory(ItemResolveHistoryMutationDto),
+}
+
+contract_enum!(
+    /// The closed tag of an ordinary retirement result.
+    ContextRetirementMutationType { ContextRetirement => "context_retirement", }
+);
+contract_enum!(
+    /// Retirement state, distinct from observation's closed/promoted guidance.
+    ContextRetirementState {
+        Retired => "retired",
+        AlreadyAbsent => "already_absent",
+        Refused => "refused",
+        Pending => "pending",
+        Preserved => "preserved",
+    }
+);
+
+/// Metadata only: never source, title, endpoint, key or backend diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContextRetirementMutationDto {
+    pub r#type: ContextRetirementMutationType,
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    pub operation_id: String,
+    pub state: ContextRetirementState,
+    pub code: ResultCode,
+    pub worktree_removal: crate::repository::RetirementRemoval,
+    pub branch_removal: crate::repository::RetirementRemoval,
+    pub materialization_settled: bool,
+}
+
+impl ContextRetirementMutationDto {
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        fn known<T: Copy>(values: &[T], name: impl Fn(T) -> &'static str, text: &str) -> Option<T> {
+            values.iter().copied().find(|&value| name(value) == text)
+        }
+        // A closed root: a mixed legacy/new payload is not retirement evidence.
+        let object = stored.as_object()?;
+        if object.len() != 9 || stored.get("type")?.as_str()? != "context_retirement" {
+            return None;
+        }
+        Some(Self {
+            r#type: ContextRetirementMutationType::ContextRetirement,
+            kind: known(
+                &ItemDtoKind::ALL,
+                ItemDtoKind::as_str,
+                stored.get("kind")?.as_str()?,
+            )?,
+            item_id: stored.get("item_id")?.as_str()?.to_owned(),
+            operation_id: stored.get("operation_id")?.as_str()?.to_owned(),
+            state: known(
+                &ContextRetirementState::ALL,
+                ContextRetirementState::as_str,
+                stored.get("state")?.as_str()?,
+            )?,
+            code: known(
+                &ResultCode::ALL,
+                ResultCode::as_str,
+                stored.get("code")?.as_str()?,
+            )?,
+            worktree_removal: serde_json::from_value(stored.get("worktree_removal")?.clone())
+                .ok()?,
+            branch_removal: serde_json::from_value(stored.get("branch_removal")?.clone()).ok()?,
+            materialization_settled: stored.get("materialization_settled")?.as_bool()?,
+        })
+    }
 }
 
 contract_enum!(
@@ -1788,6 +1858,8 @@ contract_enum!(
         MaterializationIncomplete => "materialization_incomplete",
         Malformed => "malformed",
         RemotelyDeleted => "remotely_deleted",
+        Closed => "closed",
+        Promoted => "promoted",
         HistoryUnknown => "history_unknown",
         Unpublished => "unpublished",
         NotReached => "not_reached",
@@ -1813,6 +1885,8 @@ impl PollTargetDisposition {
             Self::MaterializationIncomplete => Domain::MaterializationIncomplete,
             Self::Malformed => Domain::Malformed,
             Self::RemotelyDeleted => Domain::RemotelyDeleted,
+            Self::Closed => Domain::Closed,
+            Self::Promoted => Domain::Promoted,
             Self::HistoryUnknown => Domain::HistoryUnknown,
             Self::Unpublished => Domain::Unpublished,
             Self::NotReached => Domain::NotReached,
@@ -1847,6 +1921,9 @@ pub struct PollMutationDto {
 impl PollMutationDto {
     /// The data as a finished record stored it.
     pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        if stored.as_object()?.len() != 5 {
+            return None;
+        }
         fn known<T: Copy>(all: &[T], name: fn(T) -> &'static str, text: &str) -> Option<T> {
             all.iter().copied().find(|known| name(*known) == text)
         }
@@ -1861,6 +1938,9 @@ impl PollMutationDto {
             .as_array()?
             .iter()
             .map(|target| {
+                if target.as_object()?.len() != 6 {
+                    return None;
+                }
                 Some(PollTargetDto {
                     target: optional(target, "target")?,
                     kind: match optional(target, "kind")? {
@@ -1890,6 +1970,217 @@ impl PollMutationDto {
             targets,
         })
     }
+}
+
+contract_enum!(PollRetirementMutationType { PollRetirement => "poll_retirement", });
+contract_enum!(PollRetirementCompletion { Completed => "completed", Stopped => "stopped", });
+contract_enum!(PollRetirementItemState {
+    Retired => "retired", AlreadyAbsent => "already_absent", Refused => "refused",
+    Pending => "pending", NotReached => "not_reached", Preserved => "preserved",
+});
+contract_enum!(PollRetirementDebt { Cleanup => "cleanup", Discovery => "discovery", Admission => "admission", });
+
+/// Immutable as-of-pass snapshot. Handles read CURRENT child state; independent
+/// child recovery never edits this historical report.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PollRetirementItemDto {
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    pub request_id: String,
+    pub operation_id: Option<String>,
+    pub state: PollRetirementItemState,
+    pub code: Option<ResultCode>,
+    pub debt: Option<PollRetirementDebt>,
+    pub result: Option<ContextRetirementMutationDto>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PollRetirementMutationDto {
+    pub r#type: PollRetirementMutationType,
+    pub poll: PollMutationDto,
+    pub completion: PollRetirementCompletion,
+    pub stop_code: Option<ResultCode>,
+    pub retirements: Vec<PollRetirementItemDto>,
+}
+impl PollRetirementMutationDto {
+    pub(crate) fn from_stored(v: &serde_json::Value) -> Option<Self> {
+        fn known<T: Copy>(
+            all: &[T],
+            name: fn(T) -> &'static str,
+            v: &serde_json::Value,
+        ) -> Option<T> {
+            all.iter().copied().find(|x| Some(name(*x)) == v.as_str())
+        }
+        fn text(v: &serde_json::Value) -> Option<Option<String>> {
+            if v.is_null() {
+                Some(None)
+            } else {
+                Some(Some(v.as_str()?.into()))
+            }
+        }
+        if v.as_object()?.len() != 5 || v.get("type")?.as_str()? != "poll_retirement" {
+            return None;
+        }
+        let report = Self {
+            r#type: PollRetirementMutationType::PollRetirement,
+            poll: PollMutationDto::from_stored(v.get("poll")?)?,
+            completion: known(
+                &PollRetirementCompletion::ALL,
+                PollRetirementCompletion::as_str,
+                v.get("completion")?,
+            )?,
+            stop_code: if v.get("stop_code")?.is_null() {
+                None
+            } else {
+                Some(known(
+                    &ResultCode::ALL,
+                    ResultCode::as_str,
+                    v.get("stop_code")?,
+                )?)
+            },
+            retirements: v
+                .get("retirements")?
+                .as_array()?
+                .iter()
+                .map(|r| {
+                    if r.as_object()?.len() != 8 {
+                        return None;
+                    }
+                    Some(PollRetirementItemDto {
+                        kind: known(&ItemDtoKind::ALL, ItemDtoKind::as_str, r.get("kind")?)?,
+                        item_id: r.get("item_id")?.as_str()?.into(),
+                        request_id: r.get("request_id")?.as_str()?.into(),
+                        operation_id: text(r.get("operation_id")?)?,
+                        state: known(
+                            &PollRetirementItemState::ALL,
+                            PollRetirementItemState::as_str,
+                            r.get("state")?,
+                        )?,
+                        code: if r.get("code")?.is_null() {
+                            None
+                        } else {
+                            Some(known(&ResultCode::ALL, ResultCode::as_str, r.get("code")?)?)
+                        },
+                        debt: if r.get("debt")?.is_null() {
+                            None
+                        } else {
+                            Some(known(
+                                &PollRetirementDebt::ALL,
+                                PollRetirementDebt::as_str,
+                                r.get("debt")?,
+                            )?)
+                        },
+                        result: if r.get("result")?.is_null() {
+                            None
+                        } else {
+                            Some(ContextRetirementMutationDto::from_stored(r.get("result")?)?)
+                        },
+                    })
+                })
+                .collect::<Option<_>>()?,
+        };
+        if (report.completion == PollRetirementCompletion::Completed) != report.stop_code.is_none()
+            || report
+                .stop_code
+                .is_some_and(|c| matches!(c, ResultCode::Ok | ResultCode::AlreadyApplied))
+        {
+            return None;
+        }
+        for row in &report.retirements {
+            if let Some(result) = &row.result {
+                if result.kind != row.kind
+                    || result.item_id != row.item_id
+                    || Some(result.operation_id.as_str()) != row.operation_id.as_deref()
+                    || Some(result.code) != row.code
+                {
+                    return None;
+                }
+                let state = match result.state {
+                    ContextRetirementState::Retired => PollRetirementItemState::Retired,
+                    ContextRetirementState::AlreadyAbsent => PollRetirementItemState::AlreadyAbsent,
+                    ContextRetirementState::Refused => PollRetirementItemState::Refused,
+                    ContextRetirementState::Pending => PollRetirementItemState::Pending,
+                    ContextRetirementState::Preserved => PollRetirementItemState::Preserved,
+                };
+                if state != row.state {
+                    return None;
+                }
+            }
+            match row.state {
+                PollRetirementItemState::NotReached => {
+                    if row.operation_id.is_some()
+                        || row.code.is_some()
+                        || row.debt.is_some()
+                        || row.result.is_some()
+                    {
+                        return None;
+                    }
+                }
+                PollRetirementItemState::Pending => {
+                    if row.operation_id.is_none()
+                        || row.code.is_none()
+                        || row.debt.is_none()
+                        || row.result.is_none()
+                    {
+                        return None;
+                    }
+                }
+                PollRetirementItemState::Refused => {
+                    if row.debt.is_some()
+                        || row.code.is_none()
+                        || row.operation_id.is_some() != row.result.is_some()
+                    {
+                        return None;
+                    }
+                }
+                _ => {
+                    if row.result.is_none() || row.operation_id.is_none() || row.debt.is_some() {
+                        return None;
+                    }
+                }
+            }
+        }
+        if report.completion == PollRetirementCompletion::Completed
+            && report.retirements.iter().any(|r| {
+                matches!(
+                    r.state,
+                    PollRetirementItemState::Pending | PollRetirementItemState::NotReached
+                )
+            })
+        {
+            return None;
+        }
+        Some(report)
+    }
+}
+
+#[test]
+fn poll_retirement_stored_contract_is_closed_and_cannot_complete_a_not_reached_prefix() {
+    let poll = serde_json::json!({"operation_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","completion":"completed","completed_at":"2026-11-06T00:00:00Z","next_eligible_at":null,"targets":[]});
+    assert!(matches!(
+        MutationDataDto::from_stored(Command::PollOnce, &poll),
+        Some(MutationDataDto::Poll(_))
+    ));
+    let valid = serde_json::json!({"type":"poll_retirement","poll":poll,"completion":"stopped","stop_code":"recovery_required","retirements":[{"kind":"ticket","item_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","request_id":"01ARZ3NDEKTSV4RRFFQ69G5FAW","operation_id":null,"state":"not_reached","code":null,"debt":null,"result":null}]});
+    assert!(PollRetirementMutationDto::from_stored(&valid).is_some());
+    let mut complete = valid.clone();
+    complete["completion"] = "completed".into();
+    complete["stop_code"] = serde_json::Value::Null;
+    assert!(
+        PollRetirementMutationDto::from_stored(&complete).is_none(),
+        "all selected, not just a settled prefix"
+    );
+    for key in valid.as_object().unwrap().keys() {
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(
+            PollRetirementMutationDto::from_stored(&missing).is_none(),
+            "required {key}"
+        );
+    }
+    let mut mixed = valid.clone();
+    mixed["operation_id"] = "ordinary root field".into();
+    assert!(PollRetirementMutationDto::from_stored(&mixed).is_none());
+    assert!(PollMutationDto::from_stored(&valid).is_none());
 }
 
 /// What `document create`, `document save` and `document move` report
@@ -1992,6 +2283,8 @@ impl MutationDataDto {
             // A poll's report names no host; a host it stopped for is reported
             // as a synchronization's is.
             | Self::Poll(_)
+            | Self::PollRetirement(_)
+            | Self::ContextRetirement(_)
             // A history resolution never reaches the host.
             | Self::ResolveHistory(_) => None,
         }
@@ -2069,6 +2362,9 @@ impl MutationDataDto {
                 SynchronizationConflictMutationDto::from_stored(stored)
                     .map(Self::SynchronizationConflict)
             }
+            Command::ContextRetire => {
+                ContextRetirementMutationDto::from_stored(stored).map(Self::ContextRetirement)
+            }
             Command::ContextPrepare => ContextMutationDto::from_stored(stored).map(Self::Context),
             Command::DocumentPromote | Command::TicketClose => {
                 LifecycleMutationDto::from_stored(stored)
@@ -2079,7 +2375,9 @@ impl MutationDataDto {
             }
             // A poll's report, or the host it stopped for on its first call.
             Command::PollOnce => {
-                if stored.get("completion").is_some() {
+                if stored.get("type").and_then(|t| t.as_str()) == Some("poll_retirement") {
+                    PollRetirementMutationDto::from_stored(stored).map(Self::PollRetirement)
+                } else if stored.get("completion").is_some() {
                     PollMutationDto::from_stored(stored).map(Self::Poll)
                 } else {
                     SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
@@ -2106,6 +2404,70 @@ impl MutationDataDto {
             | Command::RepoRemove
             | Command::FolderCreate
             | Command::ContextRelease => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod poll_retirement_recognition_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_retirement_stored_data_is_closed_and_typed() {
+        let valid = serde_json::json!({"type":"context_retirement","kind":"ticket","item_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","operation_id":"01ARZ3NDEKTSV4RRFFQ69G5FAW","state":"preserved","code":"external_change","worktree_removal":"observed","branch_removal":"possible","materialization_settled":false});
+        assert!(ContextRetirementMutationDto::from_stored(&valid).is_some());
+        for (key, bad) in [
+            ("type", "poll"),
+            ("kind", "unknown"),
+            ("state", "closed"),
+            ("code", "unknown"),
+            ("worktree_removal", "removed"),
+            ("branch_removal", "true"),
+        ] {
+            let mut changed = valid.clone();
+            changed[key] = bad.into();
+            assert!(
+                ContextRetirementMutationDto::from_stored(&changed).is_none(),
+                "{key}"
+            );
+        }
+        for key in valid.as_object().unwrap().keys() {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert!(
+                ContextRetirementMutationDto::from_stored(&missing).is_none(),
+                "{key}"
+            );
+        }
+        let mut extra = valid;
+        extra["source"] = "private".into();
+        assert!(ContextRetirementMutationDto::from_stored(&extra).is_none());
+    }
+
+    #[test]
+    fn ordinary_poll_stored_reports_keep_their_untagged_shape_and_all_old_values() {
+        let legacy = [
+            "current",
+            "fast_forwarded",
+            "local_ahead",
+            "diverged",
+            "dirty",
+            "conflicted",
+            "inaccessible",
+            "materialized",
+            "nonconforming",
+            "blocked_by_local_state",
+            "materialization_incomplete",
+            "malformed",
+            "remotely_deleted",
+            "history_unknown",
+            "not_reached",
+        ];
+        for disposition in legacy.into_iter().chain(["closed", "promoted"]) {
+            let stored = serde_json::json!({"operation_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","completion":"completed","completed_at":"2026-11-04T00:00:00Z","next_eligible_at":null,"targets":[{"target":null,"kind":null,"item_id":null,"disposition":disposition,"before_oid":null,"after_oid":null}]});
+            let decoded = PollMutationDto::from_stored(&stored).expect("old and new values decode");
+            assert_eq!(serde_json::to_value(decoded).unwrap(), stored);
+            assert_eq!(stored.as_object().unwrap().len(), 5);
         }
     }
 }

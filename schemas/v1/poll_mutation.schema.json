@@ -68,6 +68,8 @@
               "materialization_incomplete",
               "malformed",
               "remotely_deleted",
+              "closed",
+              "promoted",
               "history_unknown",
               "unpublished",
               "not_reached"

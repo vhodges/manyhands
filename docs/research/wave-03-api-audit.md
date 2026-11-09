@@ -22,6 +22,188 @@ id: "01M48VZ76MZ72AQY9C7R4ZAWQV"
 
 ## Authority, revision and limits
 
+### Completed-context retirement delivery (2026-11-06)
+
+**Integration re-grounding, 2026-11-07 UTC:** the retirement branch now
+integrates approved/closed D5 from incoming main
+`1e5616af22630b08a84dc0fb42037135b385f81d`. Its lifecycle-only way-out API,
+unfinished-parent resume listing and four progress stages are preserved beside
+retirement's separate data/recovery routes and required-nullable abandon
+metadata. The audit checkpoint below remains historical at its named SHA;
+merge-delta reviews and final gates are still owed, and D6's Retire action is
+not delivered by either this integration or the generic abandon display.
+
+**Current source audit at `76a852a7d5d4fcd757a95451601cdbb407b99bcc`**, ticket
+`01M6KHVD6D0DB8KYT6VGQP10Y0`, main `79c3931b` already merged by the controller.
+This supersedes proposed-API/undelivered-binding claims for this follow-up, not
+the historical C2–C5 tables or their test scopes below. Owner D1–D14 were
+approved on 2026-11-04, D15 on 2026-11-06. The governing
+[Cycle](../Cycles/wave-03-completed-context-retirement.md),
+[design](../plans/2026-11-04-completed-context-retirement-design.md),
+[CLI contract](../RFC/cli-contract.md#completed-context-retirement) and
+[execution ledger](../plans/2026-11-04-completed-context-retirement-execution.md)
+retain the contract and evidence. This is **branch delivery**, not a claim that
+the follow-up is merged, final-gated, accepted or available in another checkout.
+
+Bounded implementation approvals: Task 3 ordinary/preserving recovery through
+`989a5807`; Task 4 production live pass and corrections through `c514d160`;
+Tasks 5–6 CLI/acceptance SPEC `ses_e4d1d87e4ffeVpP18HBE3BO07B` through
+`1619e100`, QUALITY `ses_e4d03572cffevY6wt8W3WDb3nC` through `37b64d17`
+(including the assertion-strengthening delta at `4df41831`). These do not
+approve the whole feature or complete the retained 44-row safety register.
+
+#### Actual exports and mutation consumers
+
+Public names below are exported through `manyhands::repository`
+(`src/repository.rs`, `context_retirement/mod.rs`, `mutation/mod.rs`). The
+shipping front-end boundary remains `RepositoryService::execute(MutationCall,
+credentials, progress, cancel) -> Envelope<MutationDataDto>`, not public receipt
+construction, direct SQL, or a second front-end cleanup engine.
+
+| Delivered interface / source | Contract and consumer |
+| --- | --- |
+| `Mutation::ContextRetire(ContextRetireInput)`; `ContextRetireInput { root: PathBuf, kind: AuthoringKind, id: ItemId }`; [bind/retire.rs](../../src/repository/mutation/bind/retire.rs) | `Command::ContextRetire`, `context retire`; ordinary unconfirmed, noncheckpoint, stoppable local operation. Kind/target/root bind intent. Stable final refusal/success replay, not release's run-as-new. Uses the configured selected-key session for fresh read-only Fetch observation; no supplied receipt/input/force. |
+| `Mutation::PollOnceRetiring(PollOnceInput { root })`; [bind/poll_retirement.rs](../../src/repository/mutation/bind/poll_retirement.rs) | Same `Command::PollOnce` / `poll once`, adds only `retire_completed=true` to opted-in digest. Ordinary `PollOnceInput`, default digest, `PollPublicationRemoteRequest` and automatic/default behavior unchanged. Original live poll supplies sealed private `handoff::InitialInput` to ordinary children. No public receipt/capability API or durable resumed loop. |
+| `RetireContextRequest { root, kind, item_id, operation_id }`; `RepositoryService::retire_context_authenticated<P>(&self, request, approval: Option<HostApproval>, session: &mut SessionCredentials<P>) -> Result<ContextRetirementOutcome, RepositoryError>`; [run.rs](../../src/repository/context_retirement/run.rs) | Existing domain fresh authenticated executor. Present or branch-only cleanup uses guarded `ContextCleanup`; standalone observation transfers no objects/refs and does not update primary. Front ends use F2 above for request ownership, cancellation and replay. |
+| `ReenterContextRetirementRequest { retirement: RetireContextRequest, expected_owner_epoch: i64 }`; `RepositoryService::reenter_context_retirement_authenticated<P>(…, approval, session)` with the same outcome/error; [reentry.rs](../../src/repository/context_retirement/reentry.rs) | Expected-epoch domain reentry does not bypass a request-bound fence. Original present worktree may reacquire fresh O/proof with exact nonce; surviving branch-only/tokenless state cannot be deleted after restart (R-7). Authoritative absence/M/index paths do no new deletion. |
+| `RepositoryService::retire_context(&self, RetireContextRequest) -> Result<ContextRetirementOutcome, RepositoryError>`; [execution.rs](../../src/repository/context_retirement/execution.rs) | Local initial-absence/authoritative index settlement only; **not** a nonauthenticated present-context cleanup entrypoint. Initial absence is `already_absent`, no owned-removal claim or network. |
+| `ContextRetirementOutcome::{Final(ContextRetirementReport), IndexPending, CleanupPending { worktree_removal, branch_removal }}`; `ContextRetirementReport`, `RetirementDisposition`, `RetirementRemoval` | Domain report exposes `code`, `outcome`, both removal flags and `materialization_settled`; disposition `already_absent`, `retired`, `refused`, `preserved`; removal `none`, `possible`, `observed`. The private report version is audited, not a new CLI field. |
+| Existing `OperationResume` / [bind/resume.rs](../../src/repository/mutation/bind/resume.rs), `retire::resume_handoff` | Destructive work names the ordinary original request through `original_request_required`; I-only handoff takes up that item's current F2/index claim. Never advances the old parent or resumes a batch. |
+| Existing confirmed `OperationAbandon` / [bind/abandon.rs](../../src/repository/mutation/bind/abandon.rs), [preserve.rs](../../src/repository/context_retirement/preserve.rs) | Retirement-specific preserving/index escape, retaining old request identity and all residual resources. Metadata preview/display only in existing CLI/desktop confirmation. Atomic receipt/journal/old result/exact Z before blocker release. No generic release of retirement's request ID and no completed-child whole-pass handle. |
+
+Private `request_scope.rs`/`progress.rs` bind exact current request attempt F2
+to the sole ordinary local operation. Local executor, remote-source and index
+epochs are independent. Initial pass association is provenance/report metadata,
+not part of the child digest or permanent parent ownership; child recovery
+after parent Final does not require original process capture/current P ownership.
+Accepted-but-proved-never-claimed settlement is metadata-only. A durably selected
+original present worktree is distinct and retains ordinary fresh-O recovery
+where lifetime/proof allow; missing companions never prove never-claimed.
+
+#### DTOs, CLI, effects and recovery
+
+- [mutation/dto.rs](../../src/repository/mutation/dto.rs) exports
+  `ContextRetirementMutationDto`, `ContextRetirementMutationType`,
+  `ContextRetirementState`, `PollRetirementMutationDto`,
+  `PollRetirementMutationType`, `PollRetirementCompletion`,
+  `PollRetirementItemDto`, `PollRetirementItemState`, `PollRetirementDebt`.
+  Their `MutationDataDto` variants are `ContextRetirement` and `PollRetirement`.
+  Closed tags are `context_retirement` and `poll_retirement`; ordinary
+  `PollMutationDto` remains the **untagged five-field** root. The
+  [CLI field table](../RFC/cli-contract.md#closed-output-data) gives every
+  required/nullable field and enum, checked against actual structs/decoders and
+  `schemas/v1/{context_retirement_mutation,poll_retirement_mutation}.schema.json`.
+  Separate roots, no optional old fields, `oneOf` or schema-interpreter change.
+- `OperationAbandonPreviewDto.retirement: Option<RetirementAbandonMetadata>`
+  serializes as required-nullable `details.retirement`; null on old generic
+  previews. The closed object contains old ordinary `request_id`, phase,
+  local/index epochs, removal flags, conservative retained-resource booleans
+  and `index_pending`. `request_released` is not a retirement preview effect.
+- CLI [retirement.rs](../../src/bin/manyhands-cli/retirement.rs) and
+  [polling.rs](../../src/bin/manyhands-cli/polling.rs) use the ordinary driver,
+  session/transport and safe-point Ctrl-C window. `context retire --repo --kind
+  ticket|document --id ULID` takes no input or force; common prepare/confirm is
+  `not_confirmable`/2. Flag default false. Catalog/inventory: **78 total,
+  42 mutating, 24 input-taking**, both prepare/release exemptions unchanged.
+- Result/action registries in `src/results.rs` are unchanged. Detailed removals
+  are `none`/`possible`/`observed`; generic write/checkpoint/integration/publication/
+  cleanup remain `not_requested`, commit OID null, discovery independently true
+  to observed progress. Non-none removal sets `local_change`; failure is exit
+  **4**, cancellation **130**, stable before-effect recovery refusal **3**,
+  busy/yield/transport **5** before effects, ordinary input error **2**, unexpected
+  internal failure **1**, settled success/no-op **0**. `ContextBranchReleased`,
+  `ContextRetirementAbsent` and `ContextRetirementPreserved` are **noncheckpoint**.
+  Materialization settlement is not discovery freshness or proof of removal.
+- A live failed-host opted-in poll may keep the existing
+  `SynchronizationMutationDto` host root, precise live error and sanitized
+  Approve/Replace recovery. The original boundary answer is retained; only its
+  genuine loss permits the coarse stored-journal-category fallback. No implicit
+  host approval or raw remote diagnostic is persisted. Standalone without host
+  data uses explicit `host observe`/trust actions and a new request after Final.
+- Parent `data` is an immutable as-of-cut report. Ordinary current child actions
+  can change without rewriting it. Human output preserves actual boundary action
+  order and action-owned operation ID/root (not frozen P/K or invocation-root
+  guesses); preserving guidance prepares first. The
+  [Q1 numeric/recovery table](../RFC/cli-contract.md#request-finality-numeric-exits-and-current-recovery)
+  distinguishes standalone Final replay, retryable/Owed item debt, destructive
+  original-request routing, M/I-only resume, original P recovery and new-pass
+  remainder. Wire poll `completed` alone is not discovery success: durable
+  original P phase **and** successful outcome are required after cut/copy loss.
+
+#### Production provenance, report and migration boundaries
+
+Task 4 is delivered, not a proposed producer. `source.rs`, `handoff.rs`,
+`pass.rs`/`pass_report.rs` and the opted-in binding capture the original report,
+fixed candidate image and reserved child IDs during owned original P finalization.
+Only its original live successful handoff grants initial input. Each child uses
+ordinary acceptance before effects and settles its index before the next;
+settled refusals continue, real item cleanup/index/integration debt stops later
+items, no prior success rolls back. Every selected same-pass success/refusal
+settled plus all handoffs settled gives mixed-complete exit 0, never a prefix
+with not-reached items. The parent may be Final stopped while a child is Owed.
+
+Stop revokes live starts/effects and atomically persists an immutable cut with
+child result/debt and not-reached snapshots before parent Final. Old selected
+parent recovery copies/settles only; it cannot observe, reselect, accept another
+child or restart cleanup. First no-cut reconciliation uses then-durable states;
+all-selected lost-final-copy completion requires original eligible handoff and
+no prior stopped cut. A new explicit pass handles the remainder. Shared-token
+or durable parent cancellation is checked even after the last child/empty image;
+a child-only cancellation does not automatically cancel P. Missing/corrupt
+companions refuse, never fall through into new P or reconstructed authority.
+
+The current exact catalog is marked `context_retirement_consumers_v1` with
+`context_retirement_preserving_v2` and the retained `context_retirement_v1`,
+`context_retirement_v2`, `context_retirement_index_v1` history. One P/source-epoch
+provenance has separate exact consumer receipts, unique by repository/consumer
+kind/operation/local epoch, not provenance alone. Immutable
+`poll_retirement_child_sources` proves initial pass membership/R_i/K_i/receipt
+lineage. Ordinary O-source request equality remains; initial poll children use
+that exact different lineage. Per-holder pin/release Z checks neither release
+another child/pass obligation nor repin settled history.
+
+`record.rs`, `consumer_migration.rs`, `historical.rs` and `preserve.rs` implement
+strict versioned catalog recognition and the audited whole known dependency
+closure migration, preserving original receipt IDs, references and supported
+history in one transaction. Frozen historical catalogs include the supported
+pre-consumer `preserving_v2`, not current DDL relabeled as old. Reopen validates
+the exact current consumers/preserving envelope. Synthetic published v1/v2/index
+and exact installed-**empty** obsolete-gap upgrades preserve data or roll back;
+unknown incoming FKs/catalog objects, partial/substituted envelopes, nonempty
+obsolete-gap authority and unsupported **unpublished preserving-v1** refuse
+unchanged. No automatic profile repair, deletion or authority reconstruction.
+No real application profile was opened for this audit.
+
+#### Evidence and remaining consumers
+
+The ledger keeps Tasks 3/4 exact tables and the original **19 distinct** Tasks
+5–6 exact results at their source SHAs, plus only changed render/SSH assertion
+reruns. Latest single SSH E2E `retirement_cli_authenticated_live_pass` passed at
+`4df41831` (**1 case, 42.31 s total**), with strict Clippy and clean serialized
+fmt there. The no-GPUI check stays at its original CLI chunk scope. Local
+table-driven API/draft/M/fault rows use disposable registries/Git and injected
+advertisements; binary replay/index/preserving rows prove their persisted
+boundary, not live file-transport authentication. One new SSH case connects
+authentication/trust/Fetch to both entrypoints, default preservation, corrected
+reads/readiness after retirement, no push/privacy and replay. It compares default
+and two-child opted-in Fetch's two upload-pack cost and proves ONE authoritative
+provenance/no child O, **not one total wire command or connection**.
+
+Task 7 prose/inventory checks do not rerun or promote that evidence. Task 8
+whole-tree static/fast/changed-path SSH gates, whole-feature SPEC/QUALITY and
+classification of essential remaining retained-44 fault/platform permutations
+against actual coverage are still owed. No blanket completion or waiver of
+uncovered required behavior, broad new test matrix, native Windows/macOS runtime
+claim or real second-machine cleanup follows. Native CI is post-merge and
+separately authorized.
+
+D6 still owes explicit desktop Retire, keyboard/recovery/editor/draft journeys;
+only existing generic abandonment metadata display shipped here. Reads retain
+own-worktree precedence; latest-copy ticket `01M6K04YQM2JF6SBGPB1ZT6R8T` remains
+open/separate, as does remote-deletion gap `01M6K06B7H8V7347SRM3XGV7CB`.
+Existing promotion/closure materialization-intent cleanup omission is neither
+fixed nor filed in this scope. No D6/sibling ticket/worktree change is implied.
+
 ### Closure Recovery Library Amendment (2026-10-27)
 
 Source-audited at **`03a27cbb7252062429aabfed31ae6c35e2f143fb`** on ticket

@@ -14,6 +14,74 @@ pub(crate) struct ObservationConfiguration {
 }
 
 impl ObservationConfiguration {
+    /// Reobserve configuration under an existing owned transaction without
+    /// recursively taking the cache guard used by list_shared_keys().
+    pub(in super::super) fn matches_owned(
+        &self,
+        service: &RepositoryService,
+        db: &rusqlite::Connection,
+        root: &std::path::Path,
+        plan: &RemoteRefPlan,
+    ) -> Result<bool, RepositoryError> {
+        if observation_plan(root).ok().as_ref() != Some(plan) {
+            return Ok(false);
+        }
+        Ok(self == &Self::capture_owned(service, db, root, plan)?)
+    }
+
+    /// Capture under a caller-owned registry transaction. This never takes a
+    /// second cache guard; metadata-only retirement does not invoke it.
+    pub(in super::super) fn capture_owned(
+        service: &RepositoryService,
+        db: &rusqlite::Connection,
+        root: &std::path::Path,
+        plan: &RemoteRefPlan,
+    ) -> Result<Self, RepositoryError> {
+        Self::capture_owned_at(
+            db,
+            root,
+            plan,
+            service
+                .registry_path
+                .parent()
+                .ok_or_else(state::recovery_required)?,
+        )
+    }
+
+    fn capture_owned_at(
+        db: &rusqlite::Connection,
+        root: &std::path::Path,
+        plan: &RemoteRefPlan,
+        data: &std::path::Path,
+    ) -> Result<Self, RepositoryError> {
+        let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
+        let selected = crate::repository::keys::stored_shared_key_registrations(
+            db,
+            crate::repository::RepositoryOperation::RepositorySnapshot,
+            data,
+        )
+        .map_err(|_| state::recovery_required())?
+        .into_iter()
+        .find(|key| key.selected)
+        .map(|key| {
+            let source = KeySourceToken::observe(&key.private_key_path).ok();
+            (key.id, key.private_key_path, source)
+        });
+        Ok(Self {
+            plan: plan.clone(),
+            selected,
+            fetch: crate::repository::transport::endpoint::configured_remote_endpoint(
+                &repository,
+                plan.remote_name(),
+                SshDirection::Fetch,
+            ),
+            push: crate::repository::transport::endpoint::configured_remote_endpoint(
+                &repository,
+                plan.remote_name(),
+                SshDirection::Push,
+            ),
+        })
+    }
     /// Tracking refs describe Fetch history. A Push-only endpoint's observation
     /// must never be installed as if it had been fetched from another server.
     pub(in super::super) fn fetch_and_push_share_endpoint(&self) -> bool {
@@ -141,12 +209,25 @@ impl RepositoryService {
         request: ObservePublicationRemoteRequest,
         session: &mut SessionCredentials<P>,
     ) -> Result<RemoteObservationOutcome, RemoteObservationError> {
+        // Reserved private IDs must be rejected before either configuration
+        // branch can write/fence anything, including invalid configuration.
+        {
+            let db = crate::repository::discovery::open_registry(&self.registry_path, &mut |_| {})?;
+            crate::repository::context_retirement::record::require_foreign_id_available(
+                &db,
+                request.operation_id,
+            )?;
+        }
         let root = &request.root;
         let plan = match observation_plan(root) {
             Ok(plan) => plan,
             Err(error) => {
                 session.clear_cached_passphrase();
                 state::with_transaction(self, root, |tx, id| {
+                    crate::repository::context_retirement::record::require_foreign_id_available(
+                        tx,
+                        request.operation_id,
+                    )?;
                     state::configure(tx, id, None, state::ConfigurationChange::Unavailable)?;
                     state::record_outcome(
                         tx,
@@ -160,6 +241,10 @@ impl RepositoryService {
         };
         let configuration = self.observation_configuration(root, &plan)?;
         state::with_transaction(self, root, |tx, id| {
+            crate::repository::context_retirement::record::require_foreign_id_available(
+                tx,
+                request.operation_id,
+            )?;
             state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())
         })?;
         let target = RemoteOperationTarget::for_poll(&plan);
@@ -353,7 +438,9 @@ impl RepositoryService {
     }
 }
 
-pub(super) fn observation_plan(root: &std::path::Path) -> Result<RemoteRefPlan, SshTransportError> {
+pub(in super::super) fn observation_plan(
+    root: &std::path::Path,
+) -> Result<RemoteRefPlan, SshTransportError> {
     let mut error = SshTransportError {
         root: root.to_owned(),
         remote_name: String::new(),
@@ -374,7 +461,7 @@ pub(super) fn observation_plan(root: &std::path::Path) -> Result<RemoteRefPlan, 
     RemoteRefPlan::from_configuration(&remote, &config.primary_branch).map_err(|_| error)
 }
 
-pub(super) fn transport_category(kind: &SshTransportErrorKind) -> RemoteOutcomeCategory {
+pub(in super::super) fn transport_category(kind: &SshTransportErrorKind) -> RemoteOutcomeCategory {
     use SshTransportErrorKind::*;
     match kind {
         ConfigurationInvalid | PublicationRemoteMissing | UsernameRequired | EndpointChanged => {
