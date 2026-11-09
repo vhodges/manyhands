@@ -113,3 +113,25 @@ No new test site, so no E-11 from the sweep.
     against another ticket.
 
 **Step 5.** This ledger; commit and the ticket comment follow.
+
+## Task 1: Chrome Tokens
+
+- **Commit** `a9caf276` (range `98b810b1..a9caf276`): `shell.rs`,
+  `shell/tokens.rs` (`ChromeColors`, `colors(dark)`, `chrome_colors(cx)`),
+  `view/mod.rs`, `item/tokens.rs` (accent and faint read from the chrome
+  tokens), `item/tokens_tests.rs`.
+- **E-7** applied: `desktop::view::item::tokens::tests::header_colours_follow_dark_and_light_and_the_page_stays_white`
+  gains the accent/faint comparisons and two `chrome_colors(cx)` checks.
+  Purely additive, no assertion removed. Red first: compile failure
+  `unresolved import crate::desktop::view::shell`.
+- **Tests run:** that test, 1 run, 1 passed (implementer and reviewer).
+- **Verify:** fmt, check, both clippy lines clean. Both Boundary commands
+  print nothing; `Cargo.lock` untouched.
+- **Deviation:** a per-mode accessor `colors(dark)` beside `chrome_colors(cx)`,
+  as `item::tokens::colors` has, so the test compares without a `cx`. The
+  not-yet-used fields carry `Called from Task N` labels: 4c (`panel`, `muted`,
+  `selection`), 6 (`chrome`, `border`, `border_strong`, `hover`, `secondary`,
+  `text`, `chrome_colors`), 7 (`teal`, `green`, `red`). Later tasks may
+  correct the labels.
+- **Review:** APPROVED, no findings. All 28 hex values checked against `07`.
+- **E-11 candidates:** none.
