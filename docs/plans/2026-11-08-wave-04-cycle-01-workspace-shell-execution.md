@@ -594,3 +594,179 @@ for `D/mod.rs` and `C/dock/mod.rs` drifted a little; substance unchanged.
   review. `teal`, `green`, `red` are Task 7's.
 - **Verify:** all four lines clean (implementer; reviewer too). Both Boundary
   commands print nothing; `Cargo.lock` and `assets.rs` untouched.
+
+## Task 5 Design Checkpoint (2026-11-09, at `b4c01022`, before code)
+
+The implementer's read-only phase 1 (no edit, no commit, no build), reviewed
+and ruled on by the orchestrator. Cites: `B/`, `C/`, `G/` as in the design;
+`D/` is `src/desktop/`.
+
+**1. Workspace API.** `impl Workspace` goes in a new `D/view/workspace/docks.rs`
+(`layout`, `dock`, `regions` are private to `view::workspace`; Kit-side helpers
+are `impl DockShell` in `D/view/dock/{reconcile,moves,accepted}.rs`). Four
+methods, each `pub(in crate::desktop::view)` and taking `window, cx`:
+`toggle_panel(kind)`, `toggle_dock(side)`, `reveal(kind)`, `dock_panel(kind, side)`.
+Common tail: `let before = self.layout.clone()`, apply the edit, return if
+`self.layout == before` (a no-op such as P9 does no reconcile, no focus move and
+no save), then reconcile, `check_focus`, `schedule_layout_save`, `cx.notify()`.
+Callers: Task 5 (`show_holder` and the strip-tab click call `reveal`), Task 7
+(footer toggles, the `DockPanel` action, Needs attention), Task 8 (dock keys,
+region keys, Find). Dead-code labels `Called from Task 7` or `8` except `reveal`.
+The save is a stub until Task 9: a counter `DockShell.saves`, bumped by
+`schedule_layout_save`, with a `#[cfg(test)]` reader.
+
+**2. Reconcile** (`DockShell::reconcile(&mut self, layout, window, cx) -> Vec<Side>`,
+returning the docks it opened, which is Task 9's R-37 seam). In order:
+1. A side with `!has_panels` and a dock: `layout.set_size(side, area.dock_size)`
+   then `remove_dock` (new `Layout::set_size`).
+2. Visible flags: `visible = is_on(kind) || (side_of(kind) == Bottom && !is_open(Bottom))`
+   (R-35: while the bottom dock is closed every panel in it is visible so the strip
+   names each). Panels first, then the area.
+3. Active tabs: where the panel lists match and `active` differs from the
+   dump, `select_panel` (no focus move). This makes "hiding the active tab selects
+   the next that is on, wrapping" hold in the Kit, whose own fallback is the first
+   visible panel.
+4. Open flags: for each side with panels, `toggle_dock` only if
+   `is_dock_open != layout.is_open`.
+5. `cx.notify()` on the area, since a hidden panel's own notify cannot dirty it.
+Reconcile never adds a dock (only `dock_panel` does). P30: `toggle_dock` keeps
+the tree, `NodeId`s and element state (`B/dock/dock_area.rs:301-320`, `:971`,
+`:1020`); only `load` mints ids (`:724-729`), so `NodeId` stability is the test
+oracle. It settles because each Kit edit is issued only where Kit and model
+differ, and the handler refreshes `accepted` after reconcile.
+
+**3. `LayoutChanged` handler** (R-6), subscribed in `DockShell::build`
+(`cx.subscribe_in`, subscription stored in `DockShell`); events are delivered
+after the edit (`G/app/context.rs:762-776`), so the Workspace and the area are
+never both leased. `Workspace::layout_changed`:
+1. Dump. If `same_layout(accepted, dump)`, stop. `same_layout` is a pure function
+   in `dock/accepted.rs`, **not** strict `==` (clarification, below): same
+   version and centre; per dock the same presence, placement and open flag and
+   the size within 1 px; per tree the same names, children, Tabs `active_index`
+   and Stack axis; Stack sizes compared as shares (`size / sum`) within 0.5%.
+   Reason: `dump` reads measured sizes, falling back to the stored tree sizes
+   when the measured size is zero (`B/dock/dock_area.rs:827-848`), so the dump
+   before and after the first layout pass differ in pixels but not in shares
+   (`:1470-1481`); a divider drag must still count as a change (P23, K-9).
+2. If the centre is not exactly `["ItemAreaPanel"]`, a drop landed on the item
+   area: `load(accepted)` (a full dump with closed docks marked closed), no
+   accept, no reveal, no save (K-2: ids are re-minted, so focus and Kit button
+   state in the area reset). Its own queued event finds `dump == accepted`.
+3. Otherwise: compute `kit_opened(side) = !accepted.open(side) && dump.open(side)
+   && !layout.is_open(side)` **before** `set_arrangement`; then
+   `layout.set_arrangement(arrangement_from(&dump))` (reveals any panel whose side
+   changed, R-36); then `layout.toggle_dock(side)` for each `kit_opened` side still
+   not open (P34); sync sizes (`set_size`); reconcile; `accepted = dump` taken
+   **after** reconcile; `check_focus`; `schedule_layout_save`.
+
+**4. Moves** (`dock_panel`, R-5). Same side: return (P9). Target dock present
+and holding panels: `move_panel` with `InsertTarget::Split` beside the root
+(`Placement::Bottom` in a side dock, `Placement::Right` in the bottom dock);
+the target may be closed. Target side without a dock (or an empty one): remove
+an empty dock first, then `remove_panel` and `add_panel_view` at the side's last
+or default size (`Layout::size`). Then read the dump and
+`set_arrangement(arrangement_from(&dump))` (the panel is revealed as by a drag),
+then the common tail; reconcile removes a source dock left with no panels and
+closes one with none on. **The dump is authoritative; production never calls
+`Layout::move_to`** (ruling D1). `move_to` stays as the pure oracle: the P8 test
+applies it to a clone and compares groups, `is_on` and `is_shown` with the live
+layout, so drift between the model and the Kit fails a test.
+
+**5. Focus** (R-9). `check_focus` in `workspace/focus.rs`: if the focused region
+is not displayed, `focus_region(Content)`. Runs at the tail of every operation
+and at the end of handler step 3; a refused or no-op operation returns before
+it. Focus-in: `cx.on_focus_in(&regions[i], ..)` for the four panel regions runs
+the same check (a click on the closed strip outside its tabs focuses the group
+frame's tracked handle, `B/dock/tab_group.rs:675-680`, `:709`). A tab click is the
+exception: `select_tab` focuses the panel it selects (`:232-239`), and
+`ActiveChanged` reaches the handler first. **Strip-tab click (Task 4c's carried
+item, R-35, P33):** `ShellRenderer` and `PanelHeader` carry the weak Workspace;
+the strip tab's `on_click` calls `reveal(kind)` and then focuses that panel's
+region (ruling D2). `show_holder` (`workspace/requests.rs`) calls
+`reveal(Activity)` first (R-10); entry focus handles survive while Activity is
+hidden because pruning runs only in the Activity body.
+
+**6. Test plan** (merged into tables where variations only differ in rows; no
+P-outcome dropped; ruling D5). `dock_tests.rs` becomes `dock_tests/mod.rs`
+(`#[path = "dock_tests/mod.rs"] mod tests;`; the three earlier tests keep their
+paths) with children `support`, `accepted`, `toggles`, `moves`, `strip`, `state`,
+each under 450 lines. Tests (paths under `desktop::view::dock::tests::`):
+- `accepted::same_layout_tells_a_change_from_the_launch` (pure table: build dump
+  vs post-layout dump equal; a divider moved, a dock ±2 px, an open flag, an
+  active tab, a panel in the centre each differ; the `kit_opened` and
+  `centre_is_item_area` helpers).
+- `toggles::hiding_a_panel_gives_its_space_to_its_dock` (P2; see D6).
+- `toggles::panel_toggles_keep_the_area_and_the_layout_in_agreement` (P3, P4, P13
+  reveal, Part B; replaces the plan's `hiding_the_last_panel_closes_its_dock`,
+  `revealing_an_inactive_tab_selects_it`, `hiding_the_active_tab_selects_the_next`;
+  rows: hide to empty a dock; bottom dock with Activity's visible flag true,
+  R-35; a group [A,B,C] hiding the active; revealing an inactive tab; a drag
+  leaving only off panels).
+- `toggles::a_dock_closed_and_opened_keeps_its_panels_groups_and_sizes` (P5, P30;
+  focus on the item header's Edit button, a Kit button; `NodeId`s unchanged; Left
+  and Bottom).
+- `toggles::dock_toggles_follow_the_rules` (P6, P7; replaces
+  `toggling_a_dock_with_every_panel_off_shows_them` and
+  `a_side_with_no_panels_has_no_dock`).
+- `moves::each_panel_docks_to_each_side` (P8, P9; absorbs
+  `docking_a_panel_where_it_is_changes_nothing`; a cumulative walk on one shell,
+  because a second `Shell::open` on one `TestAppContext` is unverified).
+- `moves::a_drop_on_the_item_area_is_undone` (P10; rows via `move_panel` Tabs and
+  Split on the centre, with and without a closed dock, and one real `drag_to`).
+- `moves::a_panel_moved_into_a_tab_group_is_kept` (P11; the save and relaunch
+  checks are `// Completed in Task 9.`).
+- `moves::a_drop_past_the_last_tab_lands_after_it` (Task 4c's Important finding,
+  with a hidden panel in the group).
+- `strip::the_closed_strip_names_and_reveals_every_panel` (P33),
+  `strip::opening_the_strip_by_its_edge_counts_as_its_toggle` (P34, with the
+  false-positive row: a dock left with only off panels must not turn them on),
+  `strip::focus_leaves_a_panel_that_is_not_displayed` (P12).
+- `state::a_hidden_panel_keeps_its_state` (P2),
+  `state::a_request_finishes_while_activity_is_hidden` (P28),
+  `state::show_it_reveals_a_hidden_activity` (R-10).
+- The 4b test `the_default_layout_is_1b` is extended, additively, with the R-38
+  pin: `layout.groups(side)` equals the dump's arrangement, `same_layout(accepted,
+  dump)` holds, and `saves == 0` after the run (4b's carried note 2).
+Not covered by an automated test: the real dock-edge mouse drag and the drop
+indicator over the item area (K-2) — the on-screen checklist; pixel sizes (no
+tests); the debounce timing and file contents (Task 9); the R-37 clamp (Task 9).
+
+**7. Launch.** `Shell::open` sets the bottom dock to 520 px after the first draw;
+the handler accepts that as one layout change (`set_size(Bottom, 520)`, one
+save). Save-count tests use deltas or `Shell::open_as_launched`. The build's own
+events flush before the first draw, so the handler absorbs them at step 1; no flag.
+
+**8. Document clarifications to carry to the final doc pass** (the approved
+documents are not edited now; each is recorded here and flagged for the owner):
+1. Part C, handler step 3, "a Kit-opened dock the layout had closed" is not
+   safely implementable as worded: a drag that leaves a dock holding only off
+   panels, or a shell-initiated toggle, would be mistaken for a Kit-opened dock
+   (decision 6 would turn panels on and break P4). The three-term test
+   `!accepted.open && dump.open && !layout.is_open`, evaluated before
+   `set_arrangement`, fixes it.
+2. Handler step 1, "the dump equals the accepted state", is the `same_layout`
+   comparison above, not strict equality.
+3. The plan says the code is "in `D/view/dock.rs`"; the `impl Workspace` is in
+   `workspace/docks.rs` (field privacy).
+4. The plan's 16 test names are merged into tables (ruling D5).
+
+**9. Rulings (orchestrator, 2026-11-09).**
+- **D1** accepted: the dump is authoritative after a menu move; `move_to` is the
+  test oracle.
+- **D2** accepted: a strip-tab click reveals **and focuses** the revealed panel
+  (a tab click focuses what it selects, P12).
+- **D3** accepted: shares within 0.5% and dock sizes within 1 px, as in section 3.
+- **D4** accepted: the save stub is a counter.
+- **D5** accepted: the merged, renamed tests above.
+- **D6 rejected as proposed:** no pixel-geometry assertion (AGENTS.md: do not
+  test layout). `hiding_a_panel_gives_its_space_to_its_dock` asserts the panel's
+  region is absent, its `visible` flag false, the Kit's node visibility
+  (`is_node_visible`) and that the save was scheduled — the model facts that give
+  the space — not bounds.
+- **D7, D10, D11** accepted: `dock_tests/mod.rs`; `workspace/docks.rs`;
+  `Layout::set_size` and `#[cfg(test)]` accessors.
+- **D8** accepted: real `drag_to` rows where feasible (P10, the 4c test) and a
+  strip click row in P12; if a `drag_to` row cannot run in the test harness, fall
+  back to the `move_panel` row and report it. If the strip click does not move
+  focus to the hidden region in the harness, report it and degrade the row to
+  "focus is in no hidden region".
