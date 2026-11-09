@@ -401,8 +401,8 @@ async fn reconfiguration_cancels_and_rearms(cx: &mut TestAppContext) {
         // A removal that went through is the only one that drops a schedule.
         assert_eq!(kind == "removal", name == "RepoRemove", "{name}");
         if run.insert(kind) {
-            eprintln!("finished: {name} ({kind})");
-            finished(make, kind == "keys", cx).await;
+            // `b` is on the same host as `a`, so a host change reaches it.
+            finished(make, kind == "keys" || kind == "host", cx).await;
         }
     }
     assert_eq!(run.len(), 4);

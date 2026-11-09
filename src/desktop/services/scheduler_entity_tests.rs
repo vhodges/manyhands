@@ -97,7 +97,31 @@ async fn launch_polls_due_ssh_repos(cx: &mut TestAppContext) {
     let plain = world.plain_repo("plain");
     let paused = world.ssh_repo("paused");
     world.fixture.pause_polling(std::path::Path::new(&paused));
-    let roots = [first.clone(), second.clone(), plain.clone(), paused.clone()];
+    // A remote that is not SSH, and an SSH one not selected for publication,
+    // are no more polled than none (U-2): both halves of the gate.
+    let local = world.fixture.create_repository("local");
+    // (Selected while it was SSH, then pointed elsewhere: the library
+    // refuses to select a remote it cannot publish to.)
+    world.fixture.publish_over_ssh(&local);
+    world
+        .fixture
+        .set_remote_url(&local, "origin", "file:///srv/elsewhere.git");
+    let local = local.to_str().unwrap().to_owned();
+    let unselected = world.fixture.create_repository("unselected");
+    world.fixture.add_remote(
+        &unselected,
+        "origin",
+        "ssh://git@example.invalid/team/repo.git",
+    );
+    let unselected = unselected.to_str().unwrap().to_owned();
+    let roots = [
+        first.clone(),
+        second.clone(),
+        plain.clone(),
+        paused.clone(),
+        local.clone(),
+        unselected.clone(),
+    ];
 
     // One at a time: the first stays in flight until it is released.
     let gate = world.backend.hold_poll();
@@ -120,8 +144,10 @@ async fn launch_polls_due_ssh_repos(cx: &mut TestAppContext) {
     // The repository without a remote has no schedule at all, and the
     // paused one is scheduled but not polled.
     assert!(!world.scheduled(&plain, cx));
+    assert!(!world.scheduled(&local, cx));
+    assert!(!world.scheduled(&unselected, cx));
     assert!(world.scheduled(&paused, cx));
-    assert_eq!(world.backend.remote_reads(), 4);
+    assert_eq!(world.backend.remote_reads(), 6);
 
     // A remote added behind the desktop's back is seen on activation.
     world.fixture.publish_over_ssh(std::path::Path::new(&plain));
@@ -130,7 +156,7 @@ async fn launch_polls_due_ssh_repos(cx: &mut TestAppContext) {
         world.backend.polled_roots().contains(&plain)
     })
     .await;
-    assert_eq!(world.backend.remote_reads(), 8);
+    assert_eq!(world.backend.remote_reads(), 12);
     assert!(world.scheduled(&plain, cx));
 }
 
@@ -327,226 +353,4 @@ async fn result_marks_repository_changed(cx: &mut TestAppContext) {
     hear(answer(Vec::new(), true), cx);
     World::quiet(cx).await;
     assert_eq!(index_refreshes(cx), 1);
-}
-
-/// A pending row of a poll that holds the reservation.
-fn poll_row(operation: OperationId) -> manyhands::repository::OperationDto {
-    use manyhands::repository::{OperationAction, OperationDto, OperationFamily, OperationOwner};
-    OperationDto {
-        operation_id: Some(operation.to_string()),
-        family: OperationFamily::Remote,
-        owner: OperationOwner::Repository,
-        action: OperationAction::Poll,
-        state: "advertising".to_owned(),
-        completed_step: None,
-        next_action: None,
-        item_id: None,
-        key_id: None,
-        worktree: None,
-        updated_at: None,
-        failure_code: None,
-    }
-}
-
-/// The desktop's own automatic poll is not offered the Resume that can only
-/// fail; a row it does not know still is (Task 4 review I-2). The
-/// scheduler feeds the request model the operations of its record and its
-/// own sends.
-#[gpui_kit::test]
-async fn own_polls_are_not_offered_resume(cx: &mut TestAppContext) {
-    use crate::desktop::model::operations::{ResumeOffer, resume_offer_among};
-    let world = World::new(true, cx);
-    let root = world.ssh_repo("a");
-    let gate = world.backend.hold_poll();
-    world.backend.answer_poll(world.completed());
-    world.list(std::slice::from_ref(&root), cx);
-    World::settle(cx, "the poll to be in flight", |_| {
-        !world.backend.requests().is_empty()
-    })
-    .await;
-    let (own, _) = world.backend.requests()[0];
-    let known = |cx: &mut TestAppContext| {
-        world
-            .services
-            .operations()
-            .read_with(cx, |operations, _| operations.automatic_polls().clone())
-    };
-    World::settle(cx, "the request model to hear of it", |cx| {
-        known(cx).contains(&own)
-    })
-    .await;
-    let polls = known(cx);
-    assert_eq!(
-        resume_offer_among(&poll_row(own), &polls),
-        ResumeOffer::NotOffered
-    );
-    assert_eq!(
-        resume_offer_among(&poll_row(OperationId::new()), &polls),
-        ResumeOffer::Offered,
-        "a row the desktop did not send still offers Resume"
-    );
-    // Once it ends, the record forgets it.
-    drop(gate);
-    World::settle(cx, "the record to forget it", |cx| {
-        !known(cx).contains(&own)
-    })
-    .await;
-}
-
-/// An answer that left the model's policy wrong takes the policy read
-/// after it at once, not a read of its own later: the library says the
-/// repository is paused, and the model learns it from the answer's read
-/// (the Task 2 hand-off: `next_wake` is `None` while stale).
-#[gpui_kit::test]
-async fn stale_answer_rereads_policy(cx: &mut TestAppContext) {
-    let world = World::new(true, cx);
-    let root = world.ssh_repo("a");
-    world.backend.answer_poll(world.completed());
-    world.list(std::slice::from_ref(&root), cx);
-    World::settle(cx, "the launch poll", |cx| {
-        world.backend.polled_roots().len() == 1
-            && matches!(world.phase(&root, cx), Some(Phase::Idle))
-    })
-    .await;
-
-    // Paused behind the desktop's back; the next poll finds out.
-    world.fixture.pause_polling(std::path::Path::new(&root));
-    let reads = world.backend.remote_reads();
-    world.advance(secs(301));
-    world.tick(cx);
-    World::settle(cx, "the answer to be applied", |cx| {
-        world.services.scheduler().read_with(cx, |scheduler, _| {
-            scheduler
-                .schedule()
-                .repo(&root)
-                .is_some_and(|repo| repo.policy.paused)
-        })
-    })
-    .await;
-    World::quiet(cx).await;
-    let (stale, polled) = world.services.scheduler().read_with(cx, |scheduler, _| {
-        (
-            scheduler.schedule().stale(),
-            world.backend.polled_roots().len(),
-        )
-    });
-    assert!(stale.is_empty(), "{stale:?}");
-    // No poll was made (the library's policy said no), and no other read
-    // was needed.
-    assert_eq!(polled, 1);
-    assert_eq!(world.backend.remote_reads(), reads);
-}
-
-/// Window activation tries the in-flight lock again, and once it is held
-/// the previous holder's stale poll is the lock holder's to finish (L-1,
-/// L-2): its operation is known as ours and the row says why it waits.
-#[gpui_kit::test]
-async fn activation_takes_the_lock_for_a_stale_poll(cx: &mut TestAppContext) {
-    use crate::desktop::services::{
-        inflight::{Acquired, InflightStore},
-        scheduler::Holding,
-    };
-    let world = World::new(true, cx);
-    let root = world.ssh_repo("a");
-    world.fixture.pause_polling(std::path::Path::new(&root));
-    // Another instance holds the lock, and left a poll it did not finish.
-    let mut other = InflightStore::open(world.fixture.data_dir());
-    assert_eq!(other.try_acquire(), Acquired::Now);
-    let stale = OperationId::new();
-    other.poll_submitting(&root, stale);
-
-    world.list(std::slice::from_ref(&root), cx);
-    World::settle(cx, "the repository to be scheduled", |cx| {
-        world.scheduled(&root, cx)
-    })
-    .await;
-    let held = |cx: &mut TestAppContext| {
-        world.services.scheduler().read_with(cx, |scheduler, _| {
-            (
-                scheduler.store().holds_lock(),
-                scheduler.store().takeover_of(&root),
-                scheduler.holding(&root),
-            )
-        })
-    };
-    assert_eq!(
-        held(cx),
-        (false, None, None),
-        "a second instance takes nothing over"
-    );
-
-    drop(other);
-    world.activate(cx);
-    assert_eq!(held(cx), (true, Some(stale), Some(Holding::Paused)));
-    let own = world
-        .services
-        .operations()
-        .read_with(cx, |operations, _| operations.automatic_polls().clone());
-    assert!(own.contains(&stale));
-}
-
-/// A suspend or a jump (the two clocks disagree) reads every policy and
-/// remote again, once, so a remote added meanwhile to a repository that had
-/// none is seen too (A3, R-6).
-#[gpui_kit::test]
-async fn clock_event_reads_policies_and_remotes(cx: &mut TestAppContext) {
-    let world = World::new(true, cx);
-    let root = world.ssh_repo("a");
-    let plain = world.plain_repo("plain");
-    world.fixture.pause_polling(std::path::Path::new(&root));
-    world.list(&[root.clone(), plain.clone()], cx);
-    World::settle(cx, "the repositories to be read", |cx| {
-        world.scheduled(&root, cx) && world.backend.remote_reads() == 2
-    })
-    .await;
-    world.tick(cx);
-    assert!(!world.scheduled(&plain, cx));
-
-    // A remote is added to the one that had none. The wall clock jumps an
-    // hour; the monotonic clock a second.
-    world.fixture.publish_over_ssh(std::path::Path::new(&plain));
-    world.fixture.pause_polling(std::path::Path::new(&plain));
-    world.clock.skew(time::Duration::hours(1), secs(1));
-    world.tick(cx);
-    World::settle(cx, "the remotes to be read again", |cx| {
-        world.backend.remote_reads() == 4 && world.scheduled(&plain, cx)
-    })
-    .await;
-    world.tick(cx);
-    World::quiet(cx).await;
-    assert_eq!(world.backend.remote_reads(), 4, "one event, one read");
-}
-
-/// From the entry to quit the scheduler starts nothing and arms no timer;
-/// Cancel resumes it (R-33).
-#[gpui_kit::test]
-async fn quitting_starts_nothing(cx: &mut TestAppContext) {
-    let world = World::new(true, cx);
-    let root = world.ssh_repo("a");
-    world.backend.answer_poll(world.completed());
-    let quit = |quitting, cx: &mut TestAppContext| {
-        world
-            .services
-            .scheduler()
-            .update(cx, |scheduler, cx| scheduler.set_quitting(quitting, cx))
-    };
-    quit(true, cx);
-    world.list(std::slice::from_ref(&root), cx);
-    World::settle(cx, "the repository to be scheduled", |cx| {
-        world.scheduled(&root, cx)
-    })
-    .await;
-    World::quiet(cx).await;
-    assert!(world.backend.polled_roots().is_empty());
-    let armed = world
-        .services
-        .scheduler()
-        .read_with(cx, |scheduler, _| scheduler.armed_for());
-    assert_eq!(armed, None);
-
-    quit(false, cx);
-    World::settle(cx, "the poll to start", |_| {
-        !world.backend.polled_roots().is_empty()
-    })
-    .await;
 }

@@ -145,6 +145,18 @@ impl RepoSchedule {
             NotEligible::RecoverySuspended => self.policy.recovery_suspended = true,
             NotEligible::NotDue => {}
         }
+        // "Not due" for a deadline that has passed by our clock: the library's
+        // clock and ours differ. Without a floor the repository would be ready
+        // again at once and poll in a loop, so it waits a step and its policy
+        // is read again.
+        if reason == NotEligible::NotDue
+            && attempt.next_eligible_at.is_some_and(|next| next <= now.utc)
+        {
+            self.phase = Phase::Idle;
+            self.hold_until = Some(now.after(RESTART_DELAYS[0]));
+            self.stale = true;
+            return;
+        }
         if reason == NotEligible::NotDue
             && let Some(next) = attempt.next_eligible_at
         {

@@ -107,6 +107,15 @@ impl Scheduler {
             }
             Scope::Host { root, authority } => {
                 roots.insert(root.clone());
+                // Every scheduled repository reached at that host, and any
+                // whose host is not known (an over-approximation costs a
+                // cancel and a re-poll).
+                roots.extend(
+                    self.authorities
+                        .iter()
+                        .filter(|(_, held)| held.as_ref().is_none_or(|held| held == authority))
+                        .map(|(root, _)| root.clone()),
+                );
                 for entry in self.schedule.attention() {
                     if matches!(&entry.reason, Reason::HostUnapproved(held) if held == authority) {
                         roots.extend(entry.roots);

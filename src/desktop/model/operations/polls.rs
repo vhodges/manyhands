@@ -19,7 +19,7 @@ impl Operations {
     /// whatever the poll's end): every view of it reads again, its open
     /// tabs included, as after a finished request that changes items.
     pub(crate) fn brought_in(&mut self, root: RepoKey, cx: &mut Context<Self>) {
-        self.changed.insert(root, true);
+        self.mark_changed(root, true);
         cx.notify();
     }
 

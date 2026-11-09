@@ -48,7 +48,9 @@ use super::{
 use crate::desktop::{
     model::{
         operations::Operations,
-        polling::{Clock, ClockEvent, Now, PollAttempt, PollSchedule, Root, SystemClock},
+        polling::{
+            Authority, Clock, ClockEvent, Now, PollAttempt, PollSchedule, Root, SystemClock,
+        },
     },
     services::{
         Backend,
@@ -93,6 +95,15 @@ pub(crate) struct Scheduler {
     pub(super) quitting: bool,
     pub(super) timer: Option<Task<()>>,
     pub(super) armed_for: Option<Instant>,
+    /// Repositories whose last read failed. They keep their old policy and
+    /// are not read again by the tick, or a stale one would be read in a
+    /// loop. The next activation, clock event or reconfiguration asks for
+    /// its read itself, and that read's result replaces this entry.
+    pub(super) failed_reads: BTreeSet<Root>,
+    /// The host each scheduled repository's publication remote is reached
+    /// at, as the last read showed it (`None` when it did not say). Its
+    /// keys are the scheduled repositories.
+    pub(super) authorities: BTreeMap<Root, Option<Authority>>,
 }
 
 impl Scheduler {
@@ -123,6 +134,8 @@ impl Scheduler {
             quitting: false,
             timer: None,
             armed_for: None,
+            failed_reads: BTreeSet::new(),
+            authorities: BTreeMap::new(),
         }
     }
 
@@ -258,11 +271,18 @@ impl Scheduler {
                 continue;
             }
             self.reading.remove(&root);
+            if matches!(read, Read::Failed) {
+                self.failed_reads.insert(root.clone());
+            } else {
+                self.failed_reads.remove(&root);
+            }
             match read {
                 Read::Polled {
                     policy,
                     last_completed,
+                    authority,
                 } => {
+                    self.authorities.insert(root.clone(), authority);
                     if self.schedule.repo(&root).is_some() {
                         self.schedule.set_policy(&root, policy);
                     } else {
@@ -280,11 +300,13 @@ impl Scheduler {
     /// The repository leaves the list or the registry.
     pub(super) fn forget(&mut self, root: &Root) {
         self.reading.remove(root);
+        self.failed_reads.remove(root);
         self.forget_schedule(root);
     }
 
     fn forget_schedule(&mut self, root: &Root) {
         self.schedule.remove(root);
+        self.authorities.remove(root);
         if let Some(op) = self.store.poll_entry(root) {
             self.store.poll_withdrawn(root, op);
         }
@@ -310,7 +332,7 @@ impl Scheduler {
             .schedule
             .stale()
             .into_iter()
-            .filter(|root| !self.reading.contains_key(root))
+            .filter(|root| !self.reading.contains_key(root) && !self.failed_reads.contains(root))
             .collect();
         self.read_registrations(stale, cx);
         let free = !self.quitting && self.answers.is_empty() && !self.answering;

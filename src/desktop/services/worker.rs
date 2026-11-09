@@ -799,7 +799,6 @@ impl WorkerHandle {
     /// itself, with `Preemption`; quit (Task 10) asks with `Quit` and a
     /// reconfiguration (the scheduler) with `Reconfiguration`. True when a poll was
     /// running.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10.
     pub(crate) fn ask_poll_cancel(&self, cause: CancelCause) -> bool {
         let shared = self.shared();
         ask_poll_cancel(shared, &mut shared.lock(), cause)

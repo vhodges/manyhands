@@ -109,6 +109,8 @@ pub(crate) struct PollingBackend {
     /// (`publication_remotes`). Not a `PollCall`: it is the scheduler's
     /// call, not part of an automatic poll's own list (B4).
     remote_reads: Mutex<usize>,
+    /// The root of each of those reads, in order.
+    remote_read_roots: Mutex<Vec<String>>,
 }
 
 impl PollingBackend {
@@ -126,6 +128,7 @@ impl PollingBackend {
             requests: Mutex::default(),
             roots: Mutex::default(),
             remote_reads: Mutex::default(),
+            remote_read_roots: Mutex::default(),
         }
     }
 
@@ -187,6 +190,11 @@ impl PollingBackend {
     /// The root of every `poll_automatic` made so far, in order.
     pub(crate) fn polled_roots(&self) -> Vec<String> {
         self.roots.lock().unwrap().clone()
+    }
+
+    /// The root of every remotes read so far, in order.
+    pub(crate) fn remote_read_roots(&self) -> Vec<String> {
+        self.remote_read_roots.lock().unwrap().clone()
     }
 
     /// How many times the scheduler has read a repository's remotes.
@@ -279,6 +287,10 @@ impl Backend for PollingBackend {
 
     fn publication_remotes(&self, repo: &ResolvedRepository) -> Result<RemoteListDto, ReadError> {
         *self.remote_reads.lock().unwrap() += 1;
+        self.remote_read_roots
+            .lock()
+            .unwrap()
+            .push(repo.root().to_string_lossy().into_owned());
         self.inner.publication_remotes(repo)
     }
 

@@ -926,7 +926,12 @@ impl Fixture {
     /// `root` and selects it for publication through the library's
     /// `remote select`. Nothing is contacted.
     pub(crate) fn publish_over_ssh(&self, root: &Path) {
-        self.add_remote(root, "origin", "ssh://git@example.invalid/team/repo.git");
+        self.publish_at(root, "ssh://git@example.invalid/team/repo.git");
+    }
+
+    /// `publish_over_ssh`, the remote `origin` fetching from `url`.
+    pub(crate) fn publish_at(&self, root: &Path, url: &str) {
+        self.add_remote(root, "origin", url);
         let selected = self.execute(
             None,
             Mutation::RemoteSelect(RemoteSelectInput {

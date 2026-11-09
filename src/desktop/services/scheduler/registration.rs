@@ -11,7 +11,7 @@ use manyhands::repository::{OperationId, PollingStatusDto, RemoteListDto};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::desktop::{
-    model::polling::{Policy, Root},
+    model::polling::{Authority, Policy, Root},
     services::{Backend, inflight::ActiveRow, poll},
 };
 
@@ -21,6 +21,9 @@ pub(super) enum Read {
     Polled {
         policy: Policy,
         last_completed: Option<OffsetDateTime>,
+        /// The host the publication remote is reached at, when its location
+        /// says (a host intent reaches the repositories on that host).
+        authority: Option<Authority>,
     },
     /// It has none: it is never polled ("No shared copy, nothing to check").
     NotPolled,
@@ -37,6 +40,54 @@ pub(super) fn ssh_publication(remotes: &RemoteListDto) -> bool {
         .items
         .iter()
         .any(|remote| remote.selected_for_publication && remote.publication_eligible)
+}
+
+/// The host and port of the selected publication remote's redacted fetch
+/// location: `ssh://[user@]host[:port]/path`, or the scp-like
+/// `[user@]host:path` (port 22). `None` when it cannot be told.
+pub(super) fn authority_of(remotes: &RemoteListDto) -> Option<Authority> {
+    let remote = remotes
+        .items
+        .iter()
+        .find(|remote| remote.selected_for_publication && remote.publication_eligible)?;
+    let location = remote.fetch_location.as_str();
+    let (scheme, rest) = match location.split_once("://") {
+        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("ssh") => (true, rest),
+        Some(_) => return None,
+        None => (false, location),
+    };
+    let rest = if scheme {
+        rest.split('/').next()?
+    } else {
+        rest
+    };
+    let rest = rest.rsplit_once('@').map_or(rest, |(_, host)| host);
+    let (host, port) = if let Some(bracketed) = rest.strip_prefix('[') {
+        let (host, after) = bracketed.split_once(']')?;
+        let port = match after.strip_prefix(':') {
+            Some(port) if scheme => Some(port),
+            _ => None,
+        };
+        (host, port)
+    } else if scheme {
+        match rest.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (rest, None),
+        }
+    } else {
+        (rest.split_once(':')?.0, None)
+    };
+    if host.is_empty() {
+        return None;
+    }
+    let port = match port {
+        Some(port) => port.parse().ok()?,
+        None => 22,
+    };
+    Some(Authority {
+        host: host.to_owned(),
+        port,
+    })
 }
 
 /// `resolve` then `polling_status` of `root`: the policy the library
@@ -61,6 +112,7 @@ pub(super) fn read(backend: &dyn Backend, root: &Root) -> Read {
         return Read::Failed;
     };
     Read::Polled {
+        authority: authority_of(&remotes),
         policy: policy_of(&status),
         // When the remote's branches were last observed completely: the
         // last completion, for fairness (R-7). Restored at launch.
@@ -98,4 +150,57 @@ pub(super) fn active_of(status: Option<&PollingStatusDto>) -> ActiveRow {
 
 fn parsed(stored: Option<&str>) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(stored?, &Rfc3339).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use manyhands::repository::RemoteDto;
+
+    use super::*;
+
+    fn list(location: &str) -> RemoteListDto {
+        RemoteListDto {
+            items: vec![RemoteDto {
+                name: "origin".to_owned(),
+                fetch_location: location.to_owned(),
+                push_location: location.to_owned(),
+                publication_eligible: true,
+                selected_for_publication: true,
+            }],
+            complete: true,
+        }
+    }
+
+    /// The host a redacted SSH location names, in the forms the library
+    /// writes.
+    #[test]
+    fn authority_of_locations() {
+        let at = |host: &str, port| {
+            Some(Authority {
+                host: host.to_owned(),
+                port,
+            })
+        };
+        for (location, expected) in [
+            ("ssh://git@example.com/team/repo.git", at("example.com", 22)),
+            (
+                "ssh://git@example.com:2222/team/repo.git",
+                at("example.com", 2222),
+            ),
+            ("SSH://git@[::1]:2222/repo.git", at("::1", 2222)),
+            ("ssh://example.com/repo.git", at("example.com", 22)),
+            ("git@example.com:team/repo.git", at("example.com", 22)),
+            ("example.com:repo.git", at("example.com", 22)),
+            ("[::1]:repo.git", at("::1", 22)),
+            ("https://example.com/repo.git", None),
+            ("ssh://git@:22/repo.git", None),
+            ("ssh://git@example.com:notaport/repo.git", None),
+        ] {
+            assert_eq!(authority_of(&list(location)), expected, "{location}");
+        }
+        // Only the remote selected for publication says.
+        let mut other = list("ssh://git@example.com/repo.git");
+        other.items[0].selected_for_publication = false;
+        assert_eq!(authority_of(&other), None);
+    }
 }

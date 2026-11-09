@@ -15,8 +15,9 @@
 //! - a remote or registration change names its repository, and reaches
 //!   only that one;
 //! - a host approval or replacement reaches the repository it names and
-//!   every repository held back for that host (its attention reason
-//!   `HostUnapproved`), which are the ones the answer can unblock;
+//!   every scheduled repository whose publication remote is reached at that
+//!   host (read from the remote's redacted location), those whose host
+//!   cannot be told, and those held back for it (`HostUnapproved`);
 //! - a key change names no repository: the selected key is the one key
 //!   every repository's SSH poll uses, so it reaches every listed one.
 //!

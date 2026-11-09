@@ -222,5 +222,9 @@ mod support;
 mod entity_tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "scheduler_extra_tests.rs"]
+mod extra_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "scheduler_real_tests.rs"]
 mod real_tests;

@@ -364,6 +364,15 @@ fn after_attempt_table() {
             Want::NotDue,
         )
         .deadline(120),
+        // The library's clock and ours differ: a deadline that has passed
+        // for us, yet "not due" for it. No floor would poll again at once.
+        row(
+            "not eligible, not due, deadline already past",
+            eligible(NotEligible::NotDue),
+            Some(-10),
+            Want::Hold(5),
+        )
+        .stale(),
         row(
             "not eligible, not due, no deadline",
             eligible(NotEligible::NotDue),
