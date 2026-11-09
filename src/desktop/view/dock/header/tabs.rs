@@ -12,7 +12,7 @@ use std::sync::Arc;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Empty, FontWeight, InteractiveElement, IntoElement,
     ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled, TestSupportExt,
-    Window,
+    WeakEntity, Window,
     component::{
         ActiveTheme, Icon,
         dock::{BasePanelView, DragPanel, PanelHandle, TabGroupContext},
@@ -26,7 +26,10 @@ use gpui_kit::{
 use crate::desktop::{
     assets::icon_path,
     model::layout::PanelKind,
-    view::shell::tokens::{ChromeColors, chrome_colors},
+    view::{
+        shell::tokens::{ChromeColors, chrome_colors},
+        workspace::Workspace,
+    },
 };
 
 /// The header's height (`02`).
@@ -44,7 +47,12 @@ type Shown = Vec<(usize, Arc<dyn BasePanelView>)>;
 
 /// The header of `group`: nothing when no panel is drawn or when the only
 /// one draws its own chrome (the item area).
-pub(super) fn header(group: &TabGroupContext, window: &mut Window, cx: &mut App) -> AnyElement {
+pub(super) fn header(
+    group: &TabGroupContext,
+    workspace: &WeakEntity<Workspace>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
     let shown: Shown = group
         .panels()
         .iter()
@@ -56,7 +64,7 @@ pub(super) fn header(group: &TabGroupContext, window: &mut Window, cx: &mut App)
         return Empty.into_any_element();
     }
     if group.is_collapsed() {
-        return strip(group, &shown, cx);
+        return strip(group, workspace, &shown, cx);
     }
     match shown.as_slice() {
         [(_, only)] if PanelHandle::of(only).is_some_and(|handle| !handle.title_bar(cx)) => {
@@ -217,6 +225,7 @@ fn tabs(group: &TabGroupContext, shown: &Shown, cx: &mut App) -> AnyElement {
 fn past_the_last_tab(group: &TabGroupContext, tabs: usize) -> impl IntoElement {
     div()
         .id("panel-tabs-end")
+        .test_support()
         .h_full()
         .flex_1()
         .min_w(px(16.))
@@ -237,10 +246,16 @@ fn past_the_last_tab(group: &TabGroupContext, tabs: usize) -> impl IntoElement {
 }
 
 /// A closed bottom dock's strip: every panel named, one tab each, none
-/// active, and nothing to drag or drop on (R-35). A click is inert until
-/// Task 5 reveals the panel it names: selecting the tab here would move
-/// focus to a panel the collapsed group does not draw.
-fn strip(group: &TabGroupContext, shown: &Shown, cx: &mut App) -> AnyElement {
+/// active, and nothing to drag or drop on (R-35). A click reveals the panel
+/// it names, which opens the dock, and focuses it, as a tab click does;
+/// the Kit's own `select_tab` would focus a panel the collapsed group does
+/// not draw.
+fn strip(
+    group: &TabGroupContext,
+    workspace: &WeakEntity<Workspace>,
+    shown: &Shown,
+    cx: &mut App,
+) -> AnyElement {
     let colors = chrome_colors(cx);
     let count = shown.len();
     // The strip is as tall as the Kit leaves it, which is under 32 px.
@@ -261,9 +276,19 @@ fn strip(group: &TabGroupContext, shown: &Shown, cx: &mut App) -> AnyElement {
                 .whitespace_nowrap()
                 .text_color(colors.secondary)
                 .hover(|style| style.bg(colors.hover).text_color(colors.text))
+                .cursor_pointer()
+                .when_some(kind_of(panel, cx), |tab, kind| {
+                    let workspace = workspace.clone();
+                    tab.on_click(move |_, window, cx| {
+                        _ = workspace.update(cx, |workspace, cx| {
+                            workspace.reveal_and_focus(kind, window, cx)
+                        });
+                    })
+                })
                 .child(label)
         }))
         .id(("panel-strip", group.node().as_u64()))
+        .test_support()
         .into_any_element()
 }
 

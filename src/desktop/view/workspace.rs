@@ -2,6 +2,7 @@
 //! own its transitions; sibling views render through queries and named actions.
 
 mod content;
+mod docks;
 mod find;
 mod focus;
 mod lifecycle;
@@ -355,6 +356,23 @@ impl Workspace {
     }
     pub(super) fn quit_focus(&self) -> &FocusHandle {
         &self.quit_focus
+    }
+
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    /// The dump the shell last accepted as the layout (R-6, R-38).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn dock_accepted(&self) -> &gpui_kit::component::dock::DockAreaState {
+        self.dock.accepted()
+    }
+
+    /// How many saves the layout has asked for (R-31).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn layout_saves(&self) -> usize {
+        self.dock.saves()
     }
 
     #[cfg(all(test, feature = "desktop-test-support"))]

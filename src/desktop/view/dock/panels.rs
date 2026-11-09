@@ -98,7 +98,6 @@ impl RegionPanel {
 
     /// Turns the panel off or on; its slot gives its space to the rest of
     /// its dock while it is off (fact 8).
-    #[allow(dead_code)] // Called from Task 5.
     pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         if self.visible != visible {
             self.visible = visible;

@@ -115,6 +115,22 @@ impl Workspace {
         }
     }
 
+    /// Focus in a region that is not displayed goes to the item area
+    /// (R-9). It runs after every layout change and when focus enters a
+    /// region, so a click on a closed strip outside its tabs, whose frame
+    /// tracks the hidden panel's handle, does not leave focus there.
+    pub(in crate::desktop::view) fn check_focus(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(region) = self.focused_region(window, cx)
+            && !self.is_displayed(region)
+        {
+            self.focus_region(Region::Content, window, cx);
+        }
+    }
+
     pub(super) fn focused_region(&self, window: &Window, cx: &App) -> Option<Region> {
         REGIONS
             .into_iter()

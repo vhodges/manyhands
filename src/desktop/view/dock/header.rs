@@ -7,7 +7,7 @@ use std::{rc::Rc, sync::Arc};
 
 use gpui_kit::{
     AnyElement, AnyView, App, Axis, Div, Empty, InteractiveElement, IntoElement, ParentElement,
-    Stateful, Styled, Window,
+    Stateful, Styled, WeakEntity, Window,
     component::{
         ActiveTheme,
         dock::{
@@ -18,7 +18,7 @@ use gpui_kit::{
     div,
 };
 
-use crate::desktop::view::shell::tokens::chrome_colors;
+use crate::desktop::view::{shell::tokens::chrome_colors, workspace::Workspace};
 
 /// Hands the area's frames, dock chrome and placeholder to the Kit's skin,
 /// which keeps dock-edge resizing and the `LayoutChanged` that follows it
@@ -28,11 +28,13 @@ use crate::desktop::view::shell::tokens::chrome_colors;
 /// does, since the skin needs the area's own context.
 pub(super) struct ShellRenderer {
     skin: Rc<DockSkin>,
+    /// For the closed strip's tabs, which reveal their panel (R-35).
+    workspace: WeakEntity<Workspace>,
 }
 
 impl ShellRenderer {
-    pub(super) fn new(skin: Rc<DockSkin>) -> Self {
-        Self { skin }
+    pub(super) fn new(skin: Rc<DockSkin>, workspace: WeakEntity<Workspace>) -> Self {
+        Self { skin, workspace }
     }
 }
 
@@ -77,6 +79,7 @@ impl DockAreaRenderer for ShellRenderer {
     fn tab_group_renderer(&self) -> Rc<dyn TabGroupRenderer> {
         Rc::new(PanelHeader {
             skin: self.skin.tab_group_renderer(),
+            workspace: self.workspace.clone(),
         })
     }
 }
@@ -85,6 +88,7 @@ impl DockAreaRenderer for ShellRenderer {
 struct PanelHeader {
     /// The Kit's own group renderer, for the drop indicator it draws.
     skin: Rc<dyn TabGroupRenderer>,
+    workspace: WeakEntity<Workspace>,
 }
 
 impl TabGroupRenderer for PanelHeader {
@@ -110,7 +114,7 @@ impl TabGroupRenderer for PanelHeader {
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        tabs::header(group, window, cx)
+        tabs::header(group, &self.workspace, window, cx)
     }
 
     /// Uncached, so the panel sees the Workspace's changes (R-1); a collapsed

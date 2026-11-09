@@ -11,11 +11,19 @@ use gpui_kit::{
 };
 
 use crate::desktop::{
-    model::layout::{ITEM_AREA_NAME, PanelKind},
+    model::layout::{ITEM_AREA_NAME, PanelKind, Side, arrangement_from},
     test_support::fixtures::Fixture,
+    view::dock::accepted::same_layout,
     view::harness::Shell,
     view::workspace::{REGIONS, Region},
 };
+
+mod accepted;
+mod moves;
+mod state;
+mod strip;
+mod support;
+mod toggles;
 
 const OPERATION_AREA: &str = "operation-area";
 
@@ -149,6 +157,23 @@ fn the_default_layout_is_1b(cx: &mut TestAppContext) {
         (top - total * 0.3).abs() <= 1. && (bottom - total * 0.7).abs() <= 1.,
         "{top} over {bottom}"
     );
+
+    // R-38: the launch took the arrangement and the accepted state from a
+    // dump of the area it built, so its own events changed nothing: the
+    // layout agrees with the area, and no save was asked for.
+    let accepted = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.dock_accepted().clone());
+    let seen = arrangement_from(&state);
+    let launched = support::layout(&shell, cx);
+    for side in Side::ALL {
+        assert_eq!(launched.groups(side), seen.groups(side), "{side:?}");
+    }
+    assert!(
+        same_layout(&accepted, &state),
+        "the accepted state is the dump"
+    );
+    assert_eq!(support::saves(&shell, cx), 0, "the launch saved nothing");
 
     let focused: Vec<Region> = shell.frame(cx, |window, _| {
         REGIONS

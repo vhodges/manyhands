@@ -229,6 +229,11 @@ impl Layout {
         self.sizes[side.index()]
     }
 
+    /// Remembers the size of `side`'s dock, for a dock that is built again.
+    pub(crate) fn set_size(&mut self, side: Side, size: f32) {
+        self.sizes[side.index()] = size;
+    }
+
     pub(crate) fn groups(&self, side: Side) -> &[Group] {
         self.arrangement.groups(side)
     }
@@ -272,8 +277,6 @@ impl Layout {
     }
 }
 
-// Called from Task 5, except `set_arrangement`, which `DockShell::build` calls.
-#[cfg_attr(not(test), allow(dead_code))]
 impl Layout {
     /// A panel toggle: a displayed panel goes off, and the next that is on
     /// in its group becomes active; any other panel is revealed.
@@ -335,6 +338,9 @@ impl Layout {
 
     /// The dock menu: the panel moves to the end of `side` as a new group
     /// and is revealed (R-5). Its current side changes nothing.
+    // The pure model of a menu move: `dock_panel` reads the arrangement back
+    // from the area, and a test holds the two together (Task 5).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn move_to(&mut self, kind: PanelKind, side: Side) {
         if self.side_of(kind) == Some(side) {
             return;

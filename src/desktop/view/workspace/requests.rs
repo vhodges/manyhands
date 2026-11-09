@@ -3,6 +3,7 @@
 use super::{Region, Workspace};
 use crate::desktop::{
     model::{
+        layout::PanelKind,
         operations::RecoveryStep,
         stamp::{RepoKey, SettingsPage, ViewScope},
     },
@@ -229,6 +230,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Activity may be hidden, or behind another tab (R-10).
+        self.reveal(PanelKind::Activity, window, cx);
         let entry = request
             .map(|id| request_id(id, "entry"))
             .and_then(|entry| self.control_focus.get(&entry).cloned());

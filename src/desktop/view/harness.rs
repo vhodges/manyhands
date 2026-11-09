@@ -8,8 +8,8 @@ use std::{
 };
 
 use gpui_kit::{
-    App, ElementId, Entity, Focusable, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext,
-    VisualTestContext, Window, WindowHandle,
+    App, ElementId, Entity, Focusable, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
+    TestAppContext, VisualTestContext, Window, WindowHandle,
     component::{Root, dock::DockPlacement},
     px, size,
     test::TestWindowExt,
@@ -221,6 +221,19 @@ impl Shell {
         let id = id.into();
         self.frame(cx, |window, cx| window.click(id, cx));
         self.run(cx);
+    }
+
+    /// Clicks the element `id` with the mouse events dispatched one at a
+    /// time, so the events one causes (a tab group's, reaching the
+    /// Workspace) have been handled before the next frame, as in the
+    /// application. `click` dispatches both inside one update and draws
+    /// between them.
+    pub(crate) fn click_settled(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) {
+        let id = id.into();
+        let position = self.frame(cx, |window, _| window.find(id).bounds().center());
+        let mut visual = self.visual(cx);
+        visual.simulate_click(position, Modifiers::default());
+        visual.run_until_parked();
     }
 
     pub(crate) fn keys(&self, keystrokes: &str, cx: &mut TestAppContext) {
