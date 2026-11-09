@@ -142,14 +142,22 @@ fn arrange_the_workspace_by_keyboard_alone(cx: &mut TestAppContext) {
     reach(&walk, Control::Panel(Documents), cx);
     assert_eq!(
         read(&walk.shell, Control::Panel(Documents), cx),
-        Some(("Hide Documents".to_owned(), Some(true)))
+        Some(("Hide Documents".to_owned(), Some(true))),
+        "Documents' toggle starts on"
     );
     walk.shell.press("enter", cx);
-    assert!(!layout_of(&walk, cx).is_displayed(Documents));
-    assert!(!walk.shell.present(Region::Documents.id(), cx));
+    assert!(
+        !layout_of(&walk, cx).is_displayed(Documents),
+        "Enter hides Documents"
+    );
+    assert!(
+        !walk.shell.present(Region::Documents.id(), cx),
+        "Documents is no longer drawn"
+    );
     assert_eq!(
         read(&walk.shell, Control::Panel(Documents), cx),
-        Some(("Show Documents".to_owned(), Some(false)))
+        Some(("Show Documents".to_owned(), Some(false))),
+        "Documents' toggle reads off"
     );
     on_control(&walk, Control::Panel(Documents), cx);
     quiet(&walk, &before, "Documents hidden", cx);
@@ -168,17 +176,28 @@ fn arrange_the_workspace_by_keyboard_alone(cx: &mut TestAppContext) {
     walk.keys("down enter", cx);
     assert!(!walk.shell.present("popup-menu", cx), "a choice closes it");
     let moved = layout_of(&walk, cx);
-    assert_eq!(moved.side_of(Tickets), Some(Side::Left));
-    assert!(moved.is_displayed(Tickets));
-    assert!(walk.shell.present(Region::Tickets.id(), cx));
+    assert_eq!(moved.side_of(Tickets), Some(Side::Left), "Tickets is left");
+    assert!(moved.is_displayed(Tickets), "the move reveals Tickets");
+    assert!(
+        walk.shell.present(Region::Tickets.id(), cx),
+        "Tickets is drawn"
+    );
     on_control(&walk, Control::Panel(Tickets), cx);
     quiet(&walk, &before, "Tickets moved left", cx);
 
     // The bottom dock, hidden and shown.
     for open in [false, true] {
         walk.keys("secondary-j", cx);
-        assert_eq!(layout_of(&walk, cx).is_open(Side::Bottom), open);
-        assert_eq!(walk.shell.present(Region::Operations.id(), cx), open);
+        assert_eq!(
+            layout_of(&walk, cx).is_open(Side::Bottom),
+            open,
+            "secondary-j: the bottom dock's open flag"
+        );
+        assert_eq!(
+            walk.shell.present(Region::Operations.id(), cx),
+            open,
+            "secondary-j: Activity is drawn exactly when the dock is open"
+        );
         quiet(&walk, &before, "secondary-j", cx);
     }
 
@@ -186,11 +205,20 @@ fn arrange_the_workspace_by_keyboard_alone(cx: &mut TestAppContext) {
     // reveals it.
     reach(&walk, Control::Panel(Activity), cx);
     walk.shell.press("enter", cx);
-    assert!(!layout_of(&walk, cx).is_displayed(Activity));
-    assert!(!walk.shell.present(Region::Operations.id(), cx));
+    assert!(
+        !layout_of(&walk, cx).is_displayed(Activity),
+        "Enter hides Activity"
+    );
+    assert!(
+        !walk.shell.present(Region::Operations.id(), cx),
+        "Activity is no longer drawn"
+    );
     quiet(&walk, &before, "Activity hidden", cx);
     walk.keys("secondary-4", cx);
-    assert!(layout_of(&walk, cx).is_displayed(Activity));
+    assert!(
+        layout_of(&walk, cx).is_displayed(Activity),
+        "secondary-4 reveals Activity"
+    );
     ringed_on(&walk, Region::Operations, cx);
     quiet(&walk, &before, "secondary-4", cx);
 
@@ -208,15 +236,31 @@ fn arrange_the_workspace_by_keyboard_alone(cx: &mut TestAppContext) {
     // no save, and the launch sent what a launch sends.
     let walk = Walk::over(walk.shell.relaunch(cx), walk.a);
     same(&layout_of(&walk, cx), &arranged, "the restart");
-    assert!(!walk.shell.present("layout-restore-notice", cx));
-    assert!(!walk.shell.present("layout-save-notice", cx));
+    assert!(
+        !walk.shell.present("layout-restore-notice", cx),
+        "a readable file gives no restore notice"
+    );
+    assert!(
+        !walk.shell.present("layout-save-notice", cx),
+        "a restart writes nothing"
+    );
     assert_eq!(saves(&walk.shell, cx), 0, "the restart asked for no save");
     assert_eq!(
         read(&walk.shell, Control::Panel(Documents), cx),
-        Some(("Show Documents".to_owned(), Some(false)))
+        Some(("Show Documents".to_owned(), Some(false))),
+        "after the restart Documents' toggle reads off"
     );
-    assert!(!walk.shell.present(Region::Documents.id(), cx));
-    assert!(walk.shell.present(Region::Tickets.id(), cx));
-    assert!(walk.shell.present(Region::Operations.id(), cx));
+    assert!(
+        !walk.shell.present(Region::Documents.id(), cx),
+        "after the restart Documents is hidden"
+    );
+    assert!(
+        walk.shell.present(Region::Tickets.id(), cx),
+        "after the restart Tickets is drawn"
+    );
+    assert!(
+        walk.shell.present(Region::Operations.id(), cx),
+        "after the restart Activity is drawn"
+    );
     quiet(&walk, &at_launch, "the restart", cx);
 }
