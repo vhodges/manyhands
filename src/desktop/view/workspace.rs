@@ -222,6 +222,7 @@ impl Workspace {
             window,
             |this, _, event: &SettingsEvent, window, cx| match event {
                 SettingsEvent::Closed => this.focus_region(Region::Content, window, cx),
+                SettingsEvent::ShowActivity => this.focus_region(Region::Operations, window, cx),
             },
         );
         let drafts_page = {

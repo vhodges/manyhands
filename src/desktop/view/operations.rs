@@ -23,7 +23,8 @@
 //! fixed reason at the top, with no Dismiss; so does each session whose
 //! recovery copy could not be written, named by its item's title as read,
 //! with Retry, until a write lands. The launch's "Recovered drafts" entry
-//! (`recovered`) follows the store's, with Review and Dismiss.
+//! (`recovered`) follows the store's, with Review and Dismiss, and so does
+//! a problem with the in-flight record of unfinished checks (`record`).
 //!
 //! **Pending in repositories** lists the operations each listed
 //! repository reports with work outstanding: command, scope, operation ID
@@ -63,6 +64,7 @@ use manyhands::{
 };
 
 mod outcomes;
+mod record;
 mod recovered;
 pub(crate) mod republish;
 mod resume;
@@ -654,6 +656,7 @@ impl Workspace {
             .collect();
         let unavailable = self.services().drafts().read(cx).unavailable();
         let recovered = self.recovered_entry(cx);
+        let record = self.record_entries(cx);
         let mut section = v_flex()
             .id("session-section")
             .gap_1()
@@ -663,7 +666,8 @@ impl Workspace {
             .children(
                 unavailable.map(|reason| text("drafts-unavailable", drafts_unavailable(reason))),
             )
-            .children(recovered);
+            .children(recovered)
+            .children(record);
         let failures = self.services().drafts().read(cx).flush_failures();
         for (id, title, kind) in failures {
             // Until a later flush succeeds: no Dismiss.
@@ -942,3 +946,7 @@ mod tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "operations/check_tests.rs"]
 mod check_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/record_tests.rs"]
+mod record_tests;

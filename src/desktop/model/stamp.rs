@@ -21,6 +21,8 @@ pub(crate) enum SettingsPage {
     Remotes,
     Keys,
     Hosts,
+    /// "Checking for updates" (D6 C2).
+    Polling,
 }
 
 /// What asked for a result.

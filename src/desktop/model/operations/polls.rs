@@ -12,7 +12,7 @@ use gpui_kit::Context;
 use manyhands::repository::{OperationDto, OperationId};
 
 use super::{Operations, ResumeOffer, check_now_left_active, resume_offer};
-use crate::desktop::model::stamp::RepoKey;
+use crate::desktop::{model::stamp::RepoKey, services::inflight::Report};
 
 impl Operations {
     /// A poll brought items into `root` (fast-forwarded or materialized,
@@ -34,9 +34,42 @@ impl Operations {
         true
     }
 
+    /// The in-flight record's problem, for Activity to show (design B3,
+    /// R-31). The record hands it over once; the same one is not shown
+    /// twice. True when it was added.
+    pub(crate) fn note_record(&mut self, report: Report) -> bool {
+        if self.record_notes.contains(&report) {
+            return false;
+        }
+        self.record_notes.push(report);
+        true
+    }
+
+    /// The record problems Activity shows, oldest first.
+    pub(crate) fn record_notes(&self) -> &[Report] {
+        &self.record_notes
+    }
+
+    /// Hides a record problem, for the session.
+    pub(crate) fn dismiss_record_note(&mut self, report: Report) {
+        self.record_notes.retain(|shown| *shown != report);
+    }
+
     /// The operations of the desktop's own automatic polls.
     pub(crate) fn automatic_polls(&self) -> &HashSet<OperationId> {
         &self.automatic_polls
+    }
+}
+
+/// What Activity says of a problem with the in-flight record.
+pub(crate) fn record_note_words(report: Report) -> &'static str {
+    match report {
+        Report::Unreadable => {
+            "Unfinished checks from an earlier session could not be read, so they were set aside."
+        }
+        Report::NotSaved => {
+            "Unfinished checks could not be saved to disk. They are kept until you quit."
+        }
     }
 }
 

@@ -50,6 +50,7 @@ use crate::desktop::{
         operations::Operations,
         polling::{
             Authority, Clock, ClockEvent, Now, PollAttempt, PollSchedule, Root, SystemClock,
+            status::Unplaced,
         },
     },
     services::{
@@ -141,16 +142,43 @@ impl Scheduler {
 
     /// The schedule: what each polled repository's status and attention
     /// read (Tasks 7 and 8).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub(crate) fn schedule(&self) -> &PollSchedule {
         &self.schedule
     }
 
     /// Why `root`'s stale row is not taken over yet (L-2), for the status
-    /// text (Task 7).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
+    /// text.
     pub(crate) fn holding(&self, root: &Root) -> Option<Holding> {
         holding(&self.schedule, &self.store, root, &self.clock.now())
+    }
+
+    /// Why `root` has no schedule yet, when that is not because it has no
+    /// SSH publication remote: its remotes are not read yet, or the read
+    /// failed. `None` once placed or while polling is off (R-27), so a
+    /// repository without a schedule then is one with nothing to check.
+    pub(crate) fn unplaced(&self, root: &Root) -> Option<Unplaced> {
+        if !self.on() || self.schedule.repo(root).is_some() {
+            return None;
+        }
+        if self.reading.contains_key(root) || !self.known.contains(root) {
+            Some(Unplaced::Reading)
+        } else if self.failed_reads.contains(root) {
+            Some(Unplaced::Unreadable)
+        } else {
+            None
+        }
+    }
+
+    /// Whether `root`'s policy is about to change: it is being read again
+    /// or is known to be out of date, so a view of it should not trust what
+    /// it shows.
+    pub(crate) fn refreshing(&self, root: &Root) -> bool {
+        self.reading.contains_key(root) || self.schedule.repo(root).is_some_and(|repo| repo.stale)
+    }
+
+    /// The wall time by the scheduler's clock, for a status line's "ago".
+    pub(crate) fn utc(&self) -> OffsetDateTime {
+        self.clock.utc()
     }
 
     #[cfg(test)]
@@ -340,6 +368,8 @@ impl Scheduler {
             self.send(root, cx);
         }
         self.arm(&now, cx);
+        // The Settings page reads "Checked 5 minutes ago" from the clock.
+        cx.notify();
     }
 
     /// A suspend or a jump: the clocks disagree, so every policy and remote
@@ -439,10 +469,18 @@ impl Scheduler {
                 .iter()
                 .filter_map(|root| self.schedule.restart_of(root)),
         );
+        // The record's own problem is heard once, wherever it arose (R-31).
+        let report = self.store.take_report();
         let _ = self.operations.update(cx, |operations, cx| {
-            if operations.set_automatic_polls(own) {
+            let mut changed = operations.set_automatic_polls(own);
+            if let Some(report) = report {
+                changed |= operations.note_record(report);
+            }
+            if changed {
                 cx.notify();
             }
         });
+        // The Settings page reads the schedule this follows.
+        cx.notify();
     }
 }

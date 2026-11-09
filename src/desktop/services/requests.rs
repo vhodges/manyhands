@@ -117,18 +117,15 @@ pub(crate) enum Intent {
     /// The interval between a repository's automatic polls (D6 C1): a
     /// policy verb, one write that reports `writing` and is never accepted
     /// (Fact 2). Sent again, last commit wins (C5 decision 15).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     PollConfigure {
         root: PathBuf,
         interval_seconds: u64,
     },
     /// Pauses a repository's automatic polling (a policy verb).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     PollPause {
         root: PathBuf,
     },
     /// Resumes a repository's automatic polling (a policy verb).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     PollResume {
         root: PathBuf,
     },

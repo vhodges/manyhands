@@ -140,3 +140,74 @@ async fn check_a_host_by_keyboard(cx: &mut TestAppContext) {
     assert_ne!(code, ResultCode::Ok.as_str());
     walk.region(Region::Content, cx);
 }
+
+/// Checking for updates: the interval, Check now and the switch are each
+/// reached by Tab, show focus on screen, and are operated by the keyboard
+/// alone. The interval opens with Enter, Down moves and Enter picks; Check
+/// now is Enter; the switch is Space. Each sends its request on the user
+/// lane (D6 contract 9, E-2).
+#[gpui_kit::test]
+async fn checking_for_updates_by_keyboard(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.publish_over_ssh(&a);
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+    let services = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().clone());
+    let root = key(&a);
+    services.scheduler().update(cx, |scheduler, cx| {
+        scheduler.schedule_mut().add(
+            root,
+            crate::desktop::view::settings::polling_support::policy(),
+            None,
+        );
+        cx.notify();
+    });
+    let walk = Walk::over(shell, a.clone());
+    walk.select_a_repository(cx);
+    open_page(&walk, 4, cx);
+    walk.until_drawn(("polling-name", 0usize), cx).await;
+
+    let sent = |pick: fn(&Intent) -> bool, cx: &mut TestAppContext| {
+        walk.shell.requests(cx, |request| {
+            request.lane == Lane::User && pick(&request.intent)
+        })
+    };
+    // The interval: Enter opens it, Down moves to Every 10 minutes, Enter
+    // picks it.
+    walk.tab_to("tab", ("polling-interval", 0usize), cx);
+    walk.on(("polling-interval", 0usize), Region::Content, cx);
+    walk.enter(cx);
+    walk.keys("down", cx);
+    walk.enter(cx);
+    walk.until_drawn(("polling-interval", 0usize), cx).await;
+    let picked = sent(
+        |intent| {
+            matches!(
+                intent,
+                Intent::PollConfigure {
+                    interval_seconds: 600,
+                    ..
+                }
+            )
+        },
+        cx,
+    );
+    assert_eq!(picked.len(), 1, "Every 10 minutes");
+
+    // Check now: Enter.
+    walk.tab_to("tab", ("polling-check", 0usize), cx);
+    walk.on(("polling-check", 0usize), Region::Content, cx);
+    walk.enter(cx);
+    assert_eq!(sent(|i| matches!(i, Intent::PollOnce { .. }), cx).len(), 1);
+
+    // The switch: Space turns it off, which pauses.
+    walk.tab_to("tab", ("polling-switch", 0usize), cx);
+    walk.on(("polling-switch", 0usize), Region::Content, cx);
+    walk.shell.press("space", cx);
+    assert_eq!(sent(|i| matches!(i, Intent::PollPause { .. }), cx).len(), 1);
+    walk.region(Region::Content, cx);
+}

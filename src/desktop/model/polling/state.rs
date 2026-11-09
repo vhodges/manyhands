@@ -115,6 +115,10 @@ pub(crate) struct RepoSchedule {
     /// The policy may be out of date; it is read again before this
     /// repository is polled.
     pub stale: bool,
+    /// The last answer was `ConflictPending`: the poll waits for a conflict
+    /// to be resolved, and the row says so (A4). Nothing else of that answer
+    /// is kept, since it is not an attempt.
+    pub conflict_pending: bool,
 }
 
 impl RepoSchedule {
@@ -128,6 +132,7 @@ impl RepoSchedule {
             streak: 0,
             hold_until: None,
             stale: false,
+            conflict_pending: false,
         }
     }
 
@@ -164,5 +169,6 @@ impl RepoSchedule {
         self.phase = Phase::Idle;
         self.streak = 0;
         self.hold_until = None;
+        self.conflict_pending = false;
     }
 }

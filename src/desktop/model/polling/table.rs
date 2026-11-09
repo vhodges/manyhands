@@ -38,6 +38,7 @@ impl RepoSchedule {
             self.streak = 0;
         }
         self.hold_until = None;
+        self.conflict_pending = attempt.answer == Answer::ConflictPending;
 
         match &attempt.answer {
             Answer::Completed => {

@@ -12,6 +12,8 @@
 //! one that takes focus below the fold is brought into view (`scroll`).
 //!
 //! A page arrives by adding it to `PAGES`, a field and an arm in `page`.
+//! Checking for updates (`polling`) is the fifth, in a module of its own so
+//! Wave 04 Cycle 04 can fold it into the settings sheet.
 //! The host keeps the repository selected when the settings were last
 //! opened, for a page that works on one repository (Remotes).
 
@@ -19,13 +21,14 @@ use std::path::PathBuf;
 
 mod hosts;
 mod keys;
+mod polling;
 mod remotes;
 mod repositories;
 
 use gpui_kit::{
     AnyElement, AnyView, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
     InteractiveElement, IntoElement, ParentElement, Render, Role, StatefulInteractiveElement,
-    Styled, TestSupportExt, Window,
+    Styled, Subscription, TestSupportExt, Window,
     component::{ActiveTheme, button::Button, h_flex, v_flex},
     div,
 };
@@ -34,6 +37,7 @@ use manyhands::repository::transport::SshAuthority;
 
 pub(crate) use hosts::HostsPage;
 pub(crate) use keys::KeysPage;
+pub(crate) use polling::{PollingEvent, PollingPage};
 pub(crate) use remotes::RemotesPage;
 pub(crate) use repositories::RepositoriesPage;
 
@@ -47,11 +51,12 @@ pub(crate) const SETTINGS_HEADING: &str = "Settings";
 pub(crate) const BACK_TO_TABS: &str = "Back to tabs";
 
 /// The pages there are, in the order the page list shows them.
-pub(crate) const PAGES: [SettingsPage; 4] = [
+pub(crate) const PAGES: [SettingsPage; 5] = [
     SettingsPage::Repositories,
     SettingsPage::Remotes,
     SettingsPage::Keys,
     SettingsPage::Hosts,
+    SettingsPage::Polling,
 ];
 
 /// A page's name in the page list.
@@ -61,6 +66,7 @@ pub(crate) fn page_title(page: SettingsPage) -> &'static str {
         SettingsPage::Remotes => "Remotes",
         SettingsPage::Keys => "Shared SSH keys",
         SettingsPage::Hosts => "Hosts",
+        SettingsPage::Polling => "Checking for updates",
     }
 }
 
@@ -75,6 +81,9 @@ pub(crate) enum Shown {
 pub(crate) enum SettingsEvent {
     /// Back to tabs: the tabs are to be shown and focused.
     Closed,
+    /// A row of Checking for updates points at the pending operation that
+    /// holds it: the operation area, which lists it, takes focus.
+    ShowActivity,
 }
 
 pub(crate) struct SettingsHost {
@@ -89,6 +98,9 @@ pub(crate) struct SettingsHost {
     remotes: Option<Entity<RemotesPage>>,
     keys: Option<Entity<KeysPage>>,
     hosts: Option<Entity<HostsPage>>,
+    polling: Option<Entity<PollingPage>>,
+    /// What the Checking for updates page asks of the host.
+    _polling_events: Option<Subscription>,
     /// The repository selected when the settings were last opened: the
     /// one the Remotes page works on until another is chosen there, and
     /// the one the Hosts page works on.
@@ -112,6 +124,8 @@ impl SettingsHost {
             remotes: None,
             keys: None,
             hosts: None,
+            polling: None,
+            _polling_events: None,
             selection: None,
         }
     }
@@ -142,6 +156,10 @@ impl SettingsHost {
             let selection = self.selection.clone();
             self.hosts(window, cx)
                 .update(cx, |page, cx| page.opened(selection, cx));
+        }
+        if page == SettingsPage::Polling {
+            self.polling(window, cx)
+                .update(cx, |page, cx| page.opened(cx));
         }
         cx.notify();
     }
@@ -249,6 +267,41 @@ impl SettingsHost {
             .clone()
     }
 
+    /// The Checking for updates page, made the first time it is asked for.
+    pub(crate) fn polling(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<PollingPage> {
+        if self.polling.is_none() {
+            let (services, scroll) = (self.services.clone(), self.scroll.clone());
+            let page = cx.new(|cx| PollingPage::new(services, scroll, window, cx));
+            self._polling_events = Some(cx.subscribe_in(
+                &page,
+                window,
+                |this, _, event: &PollingEvent, window, cx| match event {
+                    PollingEvent::SetUpSharing(root) => {
+                        this.set_up_sharing(root.clone(), window, cx)
+                    }
+                    PollingEvent::ShowActivity => cx.emit(SettingsEvent::ShowActivity),
+                },
+            ));
+            self.polling = Some(page);
+        }
+        self.polling.clone().expect("the page was just made")
+    }
+
+    /// Set up sharing…: the Remotes page on `root`, with focus on the page
+    /// list as when the settings open, so the person is where a
+    /// publication remote is chosen.
+    fn set_up_sharing(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.selection = Some(root.clone());
+        self.open_remotes_on(root, window, cx);
+        if let Some(focus) = self.first_focus() {
+            window.focus(&focus, cx);
+        }
+    }
+
     /// The `host.approve` and `host.replace` recovery: the Hosts page on
     /// `root`, checking the host `authority`, with focus on Check host.
     pub(crate) fn check_host(
@@ -290,6 +343,7 @@ impl SettingsHost {
             SettingsPage::Remotes => Some(self.remotes(window, cx).into()),
             SettingsPage::Keys => Some(self.keys(window, cx).into()),
             SettingsPage::Hosts => Some(self.hosts(window, cx).into()),
+            SettingsPage::Polling => Some(self.polling(window, cx).into()),
         }
     }
 
@@ -443,3 +497,15 @@ pub(crate) fn wrapped(
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "mod_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "polling_support.rs"]
+pub(crate) mod polling_support;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "polling_tests.rs"]
+mod polling_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "polling_real_tests.rs"]
+mod polling_real_tests;

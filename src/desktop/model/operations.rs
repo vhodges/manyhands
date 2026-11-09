@@ -33,7 +33,7 @@ mod outcomes;
 mod polls;
 mod review;
 
-pub(crate) use polls::resume_offer_among;
+pub(crate) use polls::{record_note_words, resume_offer_among};
 pub(crate) use review::{Review, ReviewOf};
 
 #[cfg(test)]
@@ -57,6 +57,7 @@ use super::{
 };
 use crate::desktop::services::{
     DraftStoreUnavailable, ReadResult,
+    inflight::Report,
     prompts::PromptRequest,
     requests::{DesktopRequest, DesktopRequestId, Intent, Refusals, RequestState},
     worker::{RecordState, WorkerEvent},
@@ -152,6 +153,9 @@ pub(crate) struct Operations {
     /// The operations of this desktop's own automatic polls (D6 Task 5):
     /// their pending rows are not offered Resume (`polls`).
     automatic_polls: HashSet<OperationId>,
+    /// What the in-flight record reported of itself, until dismissed
+    /// (`polls`).
+    record_notes: Vec<Report>,
 }
 
 /// What finished requests may have changed since the views last read.

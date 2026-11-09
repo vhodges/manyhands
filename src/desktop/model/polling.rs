@@ -14,6 +14,7 @@
 mod attempt;
 mod clock;
 mod state;
+pub(crate) mod status;
 mod table;
 
 use std::{collections::BTreeMap, time::Duration};

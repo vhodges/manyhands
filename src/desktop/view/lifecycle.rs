@@ -102,6 +102,12 @@ pub(crate) const RETRY: &str = "Retry";
 pub(crate) const CONTINUE: &str = "Continue";
 pub(crate) const RESUME: &str = "Resume";
 pub(crate) const OPEN_FOLDER: &str = "Open folder";
+/// L1's `PollOnce`, as a button (D6 C2): Check now, for the item's
+/// repository.
+pub(crate) const CHECK_NOW: &str = "Check now";
+/// Check now was sent from a blocked prepare and is running.
+pub(crate) const CHECKING_ORIGIN: &str =
+    "Checking for others' changes. Prepare again once it has finished.";
 /// L1's `SharePrimary`: Share, naming the primary branch `primary`
 /// (R-35).
 pub(crate) fn share_main(primary: &str) -> String {
@@ -532,6 +538,10 @@ mod tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/save_first_tests.rs"]
 mod save_first_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/check_now_tests.rs"]
+mod check_now_tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/action_tests.rs"]

@@ -222,6 +222,19 @@ impl Shell {
         self.frame(cx, |window, _| window.try_find(id).is_some())
     }
 
+    /// Whether the element `id` says it is checked, a switch or a
+    /// checkbox; `None` when it says nothing or is not drawn.
+    pub(crate) fn checked(
+        &self,
+        id: impl Into<ElementId>,
+        cx: &mut TestAppContext,
+    ) -> Option<bool> {
+        let id = id.into();
+        self.frame(cx, |window, _| {
+            window.try_find(id).and_then(|element| element.checked())
+        })
+    }
+
     pub(crate) fn selected(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
         let id = id.into();
         self.frame(cx, |window, _| {

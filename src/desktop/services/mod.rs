@@ -785,7 +785,6 @@ impl Services {
     }
 
     /// The polling scheduler, shared by every clone (A17).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub(crate) fn scheduler(&self) -> &Entity<Scheduler> {
         &self.scheduler
     }

@@ -183,7 +183,7 @@ pub(crate) enum Acquired {
 }
 
 /// Something about the record the person should hear of once (Activity shows
-/// it later).
+/// it).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Report {
     /// The record could not be read. It was set aside, not deleted, and
@@ -345,7 +345,6 @@ impl InflightStore {
     }
 
     /// The problem with the record the person has not heard of yet, once.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub(crate) fn take_report(&mut self) -> Option<Report> {
         self.report.take()
     }

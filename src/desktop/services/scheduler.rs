@@ -94,9 +94,8 @@ pub(crate) fn start(
 }
 
 /// Why a repository's stale row is not taken over yet (L-2). The words are
-/// Task 7's.
+/// `model::polling::status`'s.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(not(test), allow(dead_code))] // Read from Task 7.
 pub(crate) enum Holding {
     /// Checking is off for the repository: it finishes once checking is on.
     Off,
