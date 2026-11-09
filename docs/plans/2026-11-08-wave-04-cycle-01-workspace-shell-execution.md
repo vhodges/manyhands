@@ -945,3 +945,102 @@ documents are not edited now; each is recorded here and flagged for the owner):
   repository name, and the macOS traffic-light position after merge.
 - **Verify:** all four lines clean (implementer, reviewer on the merged tree);
   both Boundary commands print nothing; `Cargo.lock` and `packaging/` untouched.
+
+## Task 7: Footer And Dock Menu By Mouse
+
+- **Commits** `b2ec5b65` (range `3532c4d3..b2ec5b65`, 12 files) and the review
+  follow-up `37caee64`. New: `view/footer.rs` (315 lines: the controls, the pure
+  `plan(layout, attention)`, the name functions `panel_toggle_name`,
+  `dock_toggle_name`, `attention_text`), `view/footer/menu.rs` (121),
+  `view/workspace/footer.rs` (254; the `impl Workspace` glue, an extra file the
+  plan did not list, because `Workspace`'s fields are private to
+  `view::workspace`), `view/footer_tests/mod.rs` (465) and `support.rs` (197).
+  Changed: `keys.rs` (actions `ToggleLeftDock`, `ToggleRightDock`,
+  `ToggleBottomDock`, `OpenDockMenu` and the data action `DockPanel { panel, side }`
+  with `#[action(no_json)]`, no bindings yet), `workspace.rs`, `workspace/render.rs`
+  (five `unless_dialog` handlers, the footer below the dock area, the menu layer),
+  `workspace/docks.rs`, `model/attention.rs` and `shell/tokens.rs` (labels removed),
+  `harness.rs` (`SHELL_CHROME_HEIGHT` 66 = 38 + 28; the item area is still
+  860 x 1140).
+- **As built:** nine footer controls, each a Workspace-owned focus wrapper
+  (role, `aria_label`, `aria_toggled`) around a Kit ghost button with
+  `tab_stop(false)`; handles keyed by control; a panel toggle reads on when its
+  panel is **displayed**; the footer groups follow `layout.groups(side)`; Needs
+  attention calls `reveal_and_focus(Activity)`; Settings calls
+  `open_settings(SettingsPage::Repositories)`. The dock menu is a Kit `PopupMenu`
+  drawn deferred and anchored from the Workspace root; `open_dock_menu(kind,
+  Placement::{Pointer, Toggle(bounds)})` is shared with Task 8's key path (the
+  `OpenDockMenu` handler opens at the focused toggle's last-drawn bounds; the
+  "PanelToggle" key context is already on the panel toggles). A secondary click is
+  taken in the capture phase with `prevent_default`.
+- **Tests** (new, 1 test each, passed): under `desktop::view::footer::tests::`
+  `a_panel_toggle_hides_and_reveals_its_panel`,
+  `a_dock_toggle_reveals_its_hidden_panels`,
+  `a_secondary_click_opens_the_dock_menu_with_its_side_checked`,
+  `needs_attention_counts_and_leads_to_activity`,
+  `settings_opens_the_settings_page`, `footer_controls_do_nothing_behind_a_dialog`,
+  `toggle_names_follow_their_state`, and (follow-up)
+  `a_dock_menu_closes_when_a_modal_opens_over_it`. No existing test was edited.
+  A risk run of 15 existing Tab-sensitive journeys passed, by exact name (the nine
+  new Tab stops did not break them): `keyboard_tests::every_core_action_works_by_keyboard_alone`,
+  `keyboard_tests::frame::{the_details_sheet_opens_by_enter_traps_focus_and_gives_it_back,
+  the_discussion_is_reached_by_its_key_walked_and_left,
+  the_read_view_selects_copies_and_lets_tab_move_on}`,
+  `keyboard_tests::discussion::tab_order_runs_header_share_chips_page_discussion_composer`,
+  `keyboard_tests::actions::{copy_by_keyboard, each_relationship_group_is_followed_by_keyboard,
+  resume_by_keyboard, cancel_a_queued_request_by_keyboard,
+  retry_an_unavailable_repository_by_keyboard, remove_an_unavailable_repository_by_keyboard}`,
+  `keyboard_tests::drafts::{the_drafts_page_works_by_keyboard_alone,
+  restore_compare_and_close_work_by_keyboard_alone}`,
+  `item::page_tests::{tab_moves_focus_out_of_the_read_editor,
+  tabbing_onto_a_read_editor_below_the_fold_reveals_its_caret}`. The
+  `tab_reaches` tests with small budgets (`item::discussion_tests`, `item::header_tests`,
+  `conflict_tests`, `conflict::external_tests`, `operations_tests` `tab_to`,
+  `find_tests` `tab_keys`) are left to Task 12's fast tier.
+- **Process lapse (recorded).** The tests were not written red-first: the
+  implementer wired the implementation first to find the Kit types, then wrote
+  the tests and checked them by mutation. The follow-up's new tests were
+  red-first. Mutation checks seen (reverted): removing the guard in `press` fails
+  the dialog test; `is_on` instead of `is_displayed` fails the toggle test;
+  `reveal` instead of `reveal_and_focus` fails the Needs attention test.
+- **Review:** APPROVED. Blocking none. Important, all fixed in `37caee64`:
+  - **I-1 (a real bug):** a dock menu opened by pointer stayed open when a dialog
+    or the sheet opened over it, and its layer took focus back from the modal on
+    every draw. `dock_menu_layer` now drops the menu without a choice when a
+    dialog or sheet is active. Test: `a_dock_menu_closes_when_a_modal_opens_over_it`
+    (a dialog and the real details sheet; red first).
+  - **I-2:** the implementer's claim that dropping the capture-phase
+    `prevent_default` failed the focus-restore assertion was **wrong**: the old
+    assertion passed either way. The test now dispatches a raw right mouse-down in
+    one update and asserts Tickets' toggle keeps focus; removing `prevent_default`
+    fails it (observed).
+  - **I-3:** the sheet branch of the guard and the actions `OpenDockMenu` and
+    `DockPanel` under a dialog now have rows. Removing
+    `|| window.has_active_sheet(cx)` (both guards, one combined mutation) fails the
+    test. The `OpenDockMenu` row is weak (`open_dock_menu` has its own guard); the
+    `DockPanel` row pins the `unless_dialog` guard. Under the sheet a footer click
+    lands on the sheet's overlay and closes it (fact 33), so those rows use `press`
+    and dispatched actions.
+  - Minor, fixed: P8's drawn x-positions (Tickets < Activity < the right dock
+    toggle); `teal` and `green` relabelled "Cycle 03 (the update-check and to-share
+    footer items)"; `footer_tests.rs` split (it passed 560 lines).
+- **Deviations to carry to the final document pass:**
+  1. The design says a toggle is "selected and toggled together". The inner Kit
+     button gets `.selected(on)` and the **wrapper** carries `aria_toggled`, so
+     assistive technology sees one toggle, not two. The reviewer judged this
+     acceptable; the Kit snapshot's `label()` and `checked()` read from the wrapper.
+  2. The dock menu opens **above** the toggle (bottom-left at the pointer or the
+     toggle's top-left, kept inside the window with an 8 px margin), not "under the
+     toggle" as Part E says, because the footer is at the window foot.
+  3. `Shell::click_settled` is used for menu items (a harness artefact, as in Task 5:
+     the Kit's `window.click` draws inside one update, between the focus change and
+     the effects).
+- **Carried:** `ChromeColors.selection` (no task uses it; resolve at the final
+  quality review). Task 8 must cover Enter and Space on a footer wrapper (P20 "by
+  click or by Enter"), Tab reach with names and states (P29), and the real `menu`
+  and `shift-f10` keys for `Placement::Toggle`.
+- **For the on-screen checklist:** a real right-click in an active Wayland window,
+  tooltips (they draw on hover only), the look of the 28 px bar, the menu's
+  position above the toggle, and Orca on a toggle.
+- **Verify:** all four lines clean (implementer, reviewer, follow-up); both
+  Boundary commands print nothing; `Cargo.lock` and `assets` untouched.
