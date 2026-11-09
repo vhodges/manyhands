@@ -1044,3 +1044,80 @@ documents are not edited now; each is recorded here and flagged for the owner):
   position above the toggle, and Orca on a toggle.
 - **Verify:** all four lines clean (implementer, reviewer, follow-up); both
   Boundary commands print nothing; `Cargo.lock` and `assets` untouched.
+
+## Task 8: Keyboard
+
+- **Commits** `bc2c7d5c` (range `b4899324..bc2c7d5c`, 11 files; the implementer's
+  Sonnet trailer was corrected to the Opus 5.5 trailer the brief requires by a
+  message-only amend of this unpushed commit, from `97eb2bba`) and the review
+  follow-up `07d80e98`.
+- **Bindings (`keys.rs`):** `secondary-b` `ToggleLeftDock`, `secondary-alt-b`
+  `ToggleRightDock`, `secondary-j` `ToggleBottomDock`, all in no context;
+  `menu` and `shift-f10` `OpenDockMenu` in "PanelToggle"; every handler through
+  `unless_dialog`. `PANEL_TOGGLE_CONTEXT` moved to `keys.rs`. `focus_region` calls
+  `reveal(kind)` first for any panel region, so `secondary-1`, `-2`, `-4` reveal
+  and focus (`secondary-2` still follows the list used last); `focus_find`
+  reveals Tickets first. A side effect, judged correct by the reviewer:
+  `open_ready_tickets` also reveals a hidden Tickets panel. The reviewer grepped
+  every `focus_region` and `focus_find` call site: none can resurrect a panel the
+  person hid (`check_focus` and `focus_lost` fall back to Content).
+- **E-5 applied:** `desktop::keys::tests::each_key_is_bound_to_its_action` grows
+  from 17 to 22 rows (the three dock keys, `menu` and `shift-f10`); failed first
+  at `secondary-b`; no row removed. **E-6 applied:**
+  `desktop::view::item::sheet_tests::no_workspace_key_acts_behind_the_sheet` now
+  starts with Documents off and the bottom dock closed (footer clicks before the
+  sheet opens, fact 33), adds the three dock keys, and asserts after every key that
+  the layout is unchanged; only a doc comment was reworded among the `-` lines, no
+  assertion removed.
+- **Tests** (new, `desktop::view::keyboard_tests::shell::`, 1 test each, passed):
+  `dock_keys_toggle_each_dock`, `ctrl_b_in_an_editor_is_bold` (D3 editor rules;
+  asserts `**two**` and the dock unchanged, then after Escape the dock key works),
+  `region_keys_and_find_reveal_hidden_panels` (now 11 rows), `f6_skips_hidden_panels`,
+  `a_panel_toggle_works_by_tab_and_enter` (Enter, Space, a dock toggle, Settings),
+  `each_side_is_reached_by_the_dock_menu_keys` (`menu` once, `shift-f10` twice,
+  arrows, Enter, Escape returns focus to the toggle), `needs_attention_works_by_enter`,
+  `footer_controls_are_reached_by_tab`. Red first: seven failed for the right reason
+  before the bindings; three exercised Task 7's wrapper and passed already
+  (`a_panel_toggle_works_by_tab_and_enter`, `footer_controls_are_reached_by_tab`,
+  the E-6 sheet test). Test helper `ringed_on` checks only the regions drawn
+  (`ringed()` and `Walk::region` assume all five are drawn).
+- **E-11 candidates (visibility-only, no assertion or behaviour changed):**
+  `footer_tests/support.rs` helpers `pub(super)` to `pub(in crate::desktop::view)`
+  with `mod support` and `footer::tests` widened; `keyboard_tests/editing.rs`
+  `EDITED`, `BODY`, `editable`, `text`, `edit_by_e`, `Walk::escape_to_done` made
+  `pub(super)` so `shell.rs` can reuse them. One doc comment in
+  `footer_tests/mod.rs` reworded.
+- **Review:** APPROVED. Blocking none.
+  - **Important I-1, fixed in `07d80e98`.** `secondary-b` has no context, and
+    zorite's Bold is in the "Editor" context; the reviewer verified in
+    `gpui-pre-0.3.6/src/keymap.rs:165-190` and `:246-252` that a no-context binding
+    has the same depth as the Editor binding, so they **tie and Bold wins only by
+    registering later**. The implementer's comment ("deeper") was wrong, and the
+    harness repeated the registration order, so a production reorder would not have
+    failed a test. Fix: one `bind_all_keys(cx)` in `desktop/mod.rs` (the desktop's
+    keys, then the editor's) used by `run()` and `Shell::start`; its doc comment says
+    the order is load-bearing for Ctrl B; the keys.rs comment is corrected. The
+    implementer swapped the order and showed `ctrl_b_in_an_editor_is_bold` fails
+    ("Bold marked the text"), reverted. Other tests that call `keys::bind` alone
+    (`workspace_tests.rs`, `mod_tests.rs`, `host_tests.rs`) were left alone.
+  - Minor, fixed: three more rows in the region-key table (`secondary-2` on an
+    inactive tab and with the left dock closed, `secondary-4` on an inactive tab;
+    the reveal mutation `!is_on` fails row 2); `assert_eq!` in two places; helpers
+    moved to `keyboard_tests/shell/support.rs` (`shell.rs` 419 lines).
+  - Minor, not changed: the context of `menu` and `shift-f10` is not pinned by a
+    test (the key table ignores context; the handler returns early off a toggle);
+    dock keys behind a **dialog** (as opposed to the sheet) have no key-level test
+    (the shared `unless_dialog` guard covers both); the expected names in
+    `footer_controls_are_reached_by_tab` come from production helpers (Task 7's
+    tests pin the strings literally); rows of the region-key table depend on state
+    left by earlier rows (guards make drift fail loudly).
+- **Carried to the checklist:** typing Ctrl B in the **Find input or another plain
+  input** toggles the left dock (those are Kit inputs, not zorite's Editor), which
+  is consistent with decision 2 (Bold in an *editor*); while a `$$` or `$…$` formula
+  is being edited zorite clears its key context, so Ctrl B toggles the dock there and
+  Bold would not apply anyway; the `menu` key name under Wayland (U-3) and the dock
+  keys in an active window (Cmd on macOS) — the tests send the strings through the
+  keystroke parser in an inactive test window.
+- **Verify:** all four lines clean (implementer, reviewer, follow-up); both
+  Boundary commands print nothing; `Cargo.lock` untouched; `origin/main` still
+  `f4442618`.
