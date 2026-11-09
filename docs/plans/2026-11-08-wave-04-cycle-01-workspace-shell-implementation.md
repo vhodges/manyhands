@@ -10,8 +10,8 @@ id: "01M6YVNFE6AB0RBGQK72CFJJ4X"
 
 # Wave 04 Cycle 01 Workspace Shell Implementation Plan
 
-> **For agentic workers:** Revision 3, 2026-11-08, after review rounds 1
-> and 2 and decision 16.
+> **For agentic workers:** Revision 4, 2026-11-08, after review rounds 1
+> to 3 and decision 16.
 > Not approved, and nothing here is authorized yet. Once the owner
 > approves and authorizes implementation, use `implementing-a-cycle` task
 > by task, re-read the design, repeat the ticket preflight, and record
@@ -70,10 +70,10 @@ command is `devenv shell -- cargo …` with `--locked`.
   design's Document Amendments.
 - `src/drafts/` and `packaging/` are read, not changed.
 - After a task's commit, both of these must print nothing. They are two
-  commands because an exclude pathspec also hides the paths listed after
-  it.
+  commands because an exclude applies to the whole pathspec set, so the
+  operation files need a command of their own.
 ```sh
-git diff --stat origin/main...HEAD -- src ':!src/desktop' Cargo.toml Cargo.lock
+git diff --stat origin/main...HEAD -- src ':!src/desktop' Cargo.toml Cargo.lock packaging
 git diff --stat origin/main...HEAD -- src/desktop/view/operations.rs \
   src/desktop/view/operations src/desktop/model/operations.rs
 ```
@@ -171,10 +171,9 @@ created in Task 0 and written only by the orchestrator.
 4. **Bold stays Bold.** Ctrl B in an editor is Bold (P17; Task 8).
 5. **Fallback.** Each bad file restores the default, with the notice
    where decision 5 says, and no other store changes (P24; Task 9).
-6. **The quit.** The override is never saved; layout operations are
-   refused while a quit waits and allowed again on every return to
-   running; the quit's write is the newest (P26, P27, P31, P35; Tasks 9,
-   10).
+6. **The quit.** A waiting quit changes no layout and never focuses a
+   control that is not displayed; the quit's write is the newest (P26,
+   P27, P31, P35; Tasks 9, 10).
 7. **Contents unchanged.** The Boundary diff is empty at every task.
 
 ## File Map And Dependency Order
@@ -209,8 +208,11 @@ New test files, each included with `#[path = "…_tests.rs"] mod tests;` as
 `D/assets.rs:85-87` does:
 
 - `D/model/layout_tests.rs`, `D/model/attention_tests.rs`;
-- `D/view/shell/{tokens,title}_tests.rs`, `D/view/dock_tests.rs`,
-  `D/view/dock/restore_tests.rs`, `D/view/footer_tests.rs`;
+- `D/view/shell/title_tests.rs`, `D/view/dock_tests.rs`,
+  `D/view/footer_tests.rs`;
+- `D/view/dock/restore_tests.rs`, included from `dock.rs` as
+  `#[path = "dock/restore_tests.rs"] mod restore_tests;`, so its tests
+  run as `desktop::view::dock::restore_tests::<name>`;
 - `D/view/keyboard_tests/shell.rs`, a `mod shell;` in `keyboard_tests.rs`.
 
 `D/view/shell.rs`, `D/view/dock/{panels,header}.rs`,
@@ -253,10 +255,15 @@ git grep -c -e 'pane-tickets' -e 'pane-documents' -e 'pane-showing' \
   `made_ready_review_tests` 1, `operations_tests` 2, `tabs_tests` 1 and
   `tickets_tests` 11. These counts include the label test's lines in
   `tickets_tests` and the `pane-showing` checks, both E-3's. Any other
-  count is a new test site, and it stops for the owner.
+  count is a new test site, and it stops for the owner. Also run
+  `git grep -n simulate_resize -- src/desktop`: at `2b1dc4d5` it prints the
+  harness (`harness.rs:119`) and E-10's ten sites. Any other site stops
+  for the owner.
 - [ ] **Step 4: Approval follow-ups.**
-  - Confirm that the approval commit applied Document Amendments 1–9.
-  - Make Amendment 10's `ticket.md` edit, commit it, and `ticket save`.
+  - Confirm that the approval commit applied Document Amendments 1–9
+    and 11.
+  - Make Amendments 10 and 11's `ticket.md` edits, commit them, and
+    `ticket save`.
   - Comment on D6's ticket `01M4CC0VN3VPVVQ3RNWJKXWEVX`: whichever of D6
     and this Cycle merges second adds D6's states to `needs_attention`
     (decision 3).
@@ -282,8 +289,7 @@ git grep -c -e 'pane-tickets' -e 'pane-documents' -e 'pane-showing' \
   - `operations_follow_the_rules` is one table. Its columns are the start
     state, the operation, then `on`, `shown`, displayed, open, and the
     tab selected. Its rows cover P2–P9 and P13. They include an inactive
-    tab revealed, decision 6, the quit override (displayed but not
-    saved) and operations refused while a quit waits.
+    tab revealed and decision 6.
   - `f6_stops_follow_the_arrangement` (P14), including a hidden panel, a
     hidden dock and a tabbed group.
 - [ ] **Code:** `D/model/layout.rs`. It holds:
@@ -383,11 +389,15 @@ before the dock.
   - `ItemAreaPanel`'s body calls the content region's `note_focus`, and
     the Activity body computes `finishing` and prunes after its sections
     (R-33);
+  - `ShellRenderer` built inside the area's constructor, as
+    `DockSkin::dock_area` does (R-2);
   - the harness (R-26):
-    - the window becomes 1590 × 1720;
+    - the window becomes 1590 × 1726;
     - `Shell::open` and `Shell::launch` set the bottom dock to 520 px
       after launch;
+    - `Shell::resize_keeping_content(width, height, cx)` is added;
     - `Shell::open_as_launched` resizes nothing.
+- [ ] **Edits:** E-10. Each of its ten sites by exact name afterwards.
 - [ ] **Verify:** the two tests and the sheet test by exact name; the
   existing tests that use the region helpers in `workspace_tests.rs` and
   `keyboard_tests.rs` (`focused_region`, `ringed`), by exact name; the
@@ -399,18 +409,19 @@ before the dock.
 - [ ] **Test:** `desktop::view::dock::tests::clicking_a_tab_selects_its_panel`.
   Put Documents in Repositories' group with `move_panel` and
   `InsertTarget::Tabs { activate: false }`, so Repositories stays active.
-  Then click `("panel-tab", "DocumentsPanel")`. Documents is now the
-  active panel in the dump, and its region is drawn.
+  Then click `panel-tab-documents`. Documents is now the active panel in
+  the dump, and its region is drawn.
 - [ ] **Code:** `PanelHeader`, per `02` and Part C:
   - icon, title and count (R-22);
-  - tabs with the amber line, with ids `("panel-tab", kind name)` and short
+  - tabs with the amber line, with string ids `panel-tab-{kind}` and short
     labels when a group has more than two tabs (R-32);
   - drag sources and drop targets through `TabGroupContext`, with the
     app's own drag preview;
   - the drop indicator from the skin's group renderer;
   - no tab bar for the item area;
   - a collapsed group drawn as one tab per panel, with no active panel
-    drawn (R-35). Its tabs reveal in Task 5.
+    drawn and no drag or drop on its tabs (R-35). Its tabs reveal in Task
+    5.
 
   Appearance gets no tests (Wave Testing). Dragging is checked on the
   checklist.
@@ -423,7 +434,7 @@ The Workspace gains `toggle_panel(kind)`, `toggle_dock(side)`,
 `reveal(kind)` and `dock_panel(kind, side)`. Tasks 7, 8 and 10 call them.
 
 This task is test-first, with a design checkpoint: the Required Outcomes
-P2–P12, P30, P33, P34 and P36 are its contract. Before code, write in the
+P2–P12, P30, P33 and P34 are its contract. Before code, write in the
 ledger the reconcile step, the `LayoutChanged` handler's three steps
 (design Part C) and how each test reaches its state.
 
@@ -456,21 +467,25 @@ ledger the reconcile step, the `LayoutChanged` handler's three steps
     displayed. A save check and a `Shell::relaunch` follow in Task 9.
   - `revealing_an_inactive_tab_selects_it` (P3, P13).
   - `hiding_the_active_tab_selects_the_next` (Part B).
-  - `the_closed_strip_reveals_its_panels` (P33).
+  - `the_closed_strip_names_and_reveals_every_panel` (P33). Cover a
+    single group, a bottom dock split side by side, and a dock with every
+    panel off.
   - `opening_the_strip_by_its_edge_counts_as_its_toggle` (P34). The Kit's
     `toggle_dock` on the closed bottom dock stands in for the edge drag.
-  - `a_dock_too_large_for_the_window_is_clamped` (P36).
-  - `focus_leaves_a_panel_that_is_not_displayed` (P12): by its toggle, by
-    its dock, and by another tab being selected.
+  - `focus_leaves_a_panel_that_is_not_displayed` (P12). Cover its toggle,
+    its dock (the bottom one included), and another tab selected by
+    toggle. A tab click keeps focus on the panel it selects.
   - `a_hidden_panel_keeps_its_state` (P2). Tickets, with a filter, Find
     text and a selection, is hidden and shown again.
   - `a_request_finishes_while_activity_is_hidden` (P28). Its entry shows
     when Activity does. No tab opened, closed or reloaded, and the worker
     received nothing from hiding or showing.
 - [ ] **Code** in `D/view/dock.rs`:
-  - R-3 reconcile, R-5, R-6's idempotent handler, R-9, R-31, R-35's
-    reveal, R-36 and R-37;
-  - the four operations.
+  - R-3 reconcile (with R-35's visible flags while the bottom dock is
+    closed), R-5, R-6's idempotent handler, R-9's focus check, R-31,
+    R-35's reveal and R-36;
+  - the four operations, each ending with reconcile, the focus check and
+    a scheduled save.
 - [ ] **Verify:** each test by exact name; the four lines.
 - [ ] **Commit.**
 
@@ -569,9 +584,13 @@ ledger the reconcile step, the `LayoutChanged` handler's three steps
 
     Each row asserts the result and whether the notice shows.
   - `D/view/dock/restore_tests.rs`:
-    - `a_valid_file_restores_the_layout` (P23, P24). Seed a file, then
-      `Shell::open_as_launched`. The dump, the on flags and the shown
-      docks match within 1 px, and no save follows the launch.
+    - `a_valid_file_restores_the_layout` (P23, P24, P37). Seed a file,
+      then `Shell::open_as_launched`. The dump, the on flags and the shown
+      docks match within 1 px, and after the clock advances no save has
+      happened.
+    - `a_dock_too_large_for_the_window_is_clamped_once` (P36). Seed side
+      docks wider than the window. After the first frame both are scaled
+      so the item area has 320 px, and that is saved.
     - `a_file_that_cannot_be_read_restores_the_default_and_says_so` (P24,
       P25). `layout.json` is a directory, so the read fails on every
       platform. The notice shows, and `footer-attention` is absent.
@@ -599,9 +618,10 @@ ledger the reconcile step, the `LayoutChanged` handler's three steps
   - `D/services/layout.rs` `LayoutStore` (R-17), reached through
     `Backend::layout()`. `LibraryBackend` opens it; `DelayingBackend` and
     the fixture open it lazily over the fixture's data directory.
-  - Generations, one write in flight, and the two test seams (R-19).
+  - Store-allocated generations, one write in flight, and the two test
+    seams (R-19). `hold_writes_for_testing` parks before the store's lock.
   - `restore` in `D/model/layout.rs` (R-18, R-28).
-  - Restore at launch, with no save from the launch's own events.
+  - Restore at launch (Part G's four steps, R-38) and the clamp (R-37).
   - Saving (R-19, R-31), including the write at `request_quit`'s entry.
   - The two notices (R-21).
   - `Shell::relaunch` in the harness, which resizes nothing (R-26).
@@ -612,29 +632,27 @@ ledger the reconcile step, the `LayoutChanged` handler's three steps
 ## Task 10: Quit (Part H)
 
 - [ ] **Tests** (`D/view/workspace_tests.rs`, beside the existing quit
-  tests):
-  - `a_waiting_quit_shows_activity_and_keeps_the_saved_layout` (P26). With
-    Activity off and a job running, quit. Activity is displayed and Quit
-    now is focused. `secondary-j`, `secondary-1` and Activity's toggle
-    change nothing and move no focus. After the clock advances, the file
-    still has Activity off.
-  - `drafts_not_saved_keeps_activity_displayed` (P27), using the
-    `saving_drafts` failure recipe. The Drafts not saved dialog opens. On
-    Cancel the failed draft's Retry is focused inside the displayed
-    Activity, as `a_draft_that_cannot_be_saved_asks_before_quitting`
-    already asserts (`workspace_tests.rs:476-524`). The area is unlocked.
-    After the clock advances, the file still has Activity off. Activity's
-    toggle then hides it.
-  - `edits_not_kept_unlocks_the_layout` (P27). Quit while an edit begin is
-    in flight; the begin lands and Edits not kept opens with the phase
-    `Running` (fact 27). On Cancel the item area is focused, the area is
-    unlocked, and a layout operation works again.
-- [ ] **Code:** R-20 in `set_quit` (the lock, the refusal and the save
-  stop follow the phase) and in `wait_to_quit` (the override), in
-  `D/view/workspace/lifecycle.rs`.
-- [ ] **Verify:** the two tests and the existing quit tests in
-  `workspace_tests.rs`'s `saving_drafts` module, by exact name; the four
-  lines.
+  tests), each written and seen to fail first:
+  - `a_waiting_quit_with_activity_hidden_changes_nothing` (P26). Hide
+    Activity, start a job, focus the item area, then quit.
+    - The layout is unchanged, and focus is still in the item area.
+    - `secondary-4` reveals Activity, which shows "Finishing {job}" and
+      Quit now.
+  - With Activity displayed, the existing
+    `finishing_closes_the_dialog_and_focuses_quit_now`
+    (`workspace_tests.rs:1064`) still covers Quit now's focus (P26).
+  - `drafts_not_saved_with_activity_hidden_focuses_the_item_area` (P27).
+    Use the `saving_drafts` failure recipe with Activity hidden. On
+    Cancel, the item area is focused and Needs attention counts the
+    failure. With Activity displayed, the existing
+    `a_draft_that_cannot_be_saved_asks_before_quitting` (`:476-524`) still
+    shows Retry focused.
+- [ ] **Code:** R-20 in `wait_to_quit` and `not_saved_chosen`
+  (`D/view/workspace/lifecycle.rs`): Quit now and Retry take focus only
+  when Activity is displayed.
+- [ ] **Verify:** the new tests, `finishing_closes_the_dialog_and_focuses_quit_now`,
+  and the existing quit tests in `workspace_tests.rs`'s `saving_drafts`
+  module, by exact name; the four lines.
 - [ ] **Commit.**
 
 ## Task 11: Keyboard Journey And Checklist
@@ -712,7 +730,7 @@ git merge-tree --write-tree HEAD origin/main
 | A4, P23, P31, P35 | 9, 11 |
 | A5, P24, P25 | 9 |
 | A6, P22 | 3, 6 |
-| A7, P26, P27 | 2, 10 |
+| A7, P26, P27 | 10 |
 | A8 | 4a (E-1 to E-4), 8 (E-5, E-6), 12 (fast tier) |
 | A9, P20 | 3, 7, 8 |
 | A10, P13, P14, P17 | 2, 5, 8 |
@@ -726,21 +744,24 @@ git merge-tree --write-tree HEAD origin/main
 | A18 | 5 (P28), 11 |
 | A19, P32 | 9 |
 | A20, P11 | 4c, 5, 9 |
-| P10, P12, P33, P34, P36 | 5 |
+| P10, P12, P33, P34 | 5 |
+| P36, P37 | 9 |
 | P16 | 4a |
 | P18 | 7, 8 |
 | P21 | 7 |
 | R-1, R-26, R-27, R-33, R-34 | 4b |
 | R-2 | 4b, 4c |
 | R-35 | 4c, 5 |
-| R-3, R-5, R-6, R-31, R-36, R-37 | 5 |
+| R-38 | 9 |
+| R-3, R-5, R-6, R-31, R-36 | 5 |
+| R-37 | 9 |
 | R-4, R-11, R-12, R-13, R-24, R-30 | 7 |
 | R-7, R-8 | 4a |
 | R-9 | 4b, 5 |
 | R-10 | 8 |
 | R-14–R-16, R-23 | 6 |
 | R-17–R-19, R-21, R-28 | 9 |
-| R-20 | 2, 10 |
+| R-20 | 10 |
 | R-22, R-32 | 4c |
 | R-29 | 4b, 7, 8 |
 | E-1–E-4 | 4a |
@@ -748,6 +769,7 @@ git merge-tree --write-tree HEAD origin/main
 | E-7 | 1 |
 | E-8 | any task from 4a; 12 |
 | E-9 | 9 |
+| E-10 | 4b |
 | U-3 | checklist |
 | U-4, U-6 | 4b |
 | Decisions 1, 11 | Scope |
@@ -756,7 +778,7 @@ git merge-tree --write-tree HEAD origin/main
 | Decision 4 | 4a, 8 |
 | Decision 5 | 9 |
 | Decision 6 | 2, 5, 7 |
-| Decision 7 | 2, 10 |
+| Decision 7 | 10 |
 | Decision 8 | 7, 8 |
 | Decision 9 | 2, 4a |
 | Decision 10 | 5 |

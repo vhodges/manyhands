@@ -14,15 +14,15 @@ Ticket `01M6V8RK8B0SBCH0YZXFVSR9E3` (`vh-jge24`).
 [Design](../plans/2026-11-08-wave-04-cycle-01-workspace-shell-design.md) and
 [implementation plan](../plans/2026-11-08-wave-04-cycle-01-workspace-shell-implementation.md).
 
-Status: **draft revision 3, 2026-11-08.** Not approved.
+Status: **draft revision 4, 2026-11-08.** Not approved.
 
 - This document was drafted on the ticket branch at `cc2af8d0`, which
   merged origin/main `8da9afd4`. The design and plan were drafted at
   `2b1dc4d5`.
-- All three were reviewed independently at `bb9b3cc9` (round 1) and at
-  `fbca53f4` (round 2: a scoped re-review and an adversarial review), and
-  revised after each (Review Record).
-- Revision 3 goes through a scoped re-review before the owner is asked to
+- All three were reviewed independently at `bb9b3cc9` (round 1), at
+  `fbca53f4` (round 2) and at `32b82b9c` (round 3), each round with two
+  reviewers, and revised after each (Review Record).
+- Revision 4 goes through a scoped re-review before the owner is asked to
   approve it.
 
 Approval of the documents does not authorize implementation, which needs
@@ -188,10 +188,10 @@ Whichever of these merges second merges main and adapts, per `AGENTS.md`.
     - Every footer control is reachable by Tab, has an accessible name and
       shows focus. The title bar's window controls exist only with client
       decorations, so they are checked natively.
-12. **Quit feedback.** A quit that has to wait shows the Activity panel,
-    its dock and its tab, so "Finishing …" and Quit now stay visible and
-    focused. Layout changes are refused while it waits, and the reveal is
-    never saved (decision 7).
+12. **Quit feedback.** A quit that has to wait changes no layout. Its
+    entries ("Finishing …", Quit now) appear in Activity as today. If
+    Activity is hidden, the quit simply waits, and the person can open
+    Activity to see why (decision 7).
 
 ## Explicit Exclusions And Downstream Obligations
 
@@ -219,6 +219,11 @@ Whichever of these merges second merges main and adapts, per `AGENTS.md`.
   D6 and this Cycle merges second adds them to the count (decision 3).
 - Native evidence on macOS and Windows: native CI after merge (Wave
   decision 4).
+- **Later work, from the owner (design Document Amendment 4):**
+  - a footer line showing the latest Activity status, such as
+    "Saving…" or "Syncing…";
+  - removing the Quit now and Quit anyway buttons, with a replacement
+    way out of a quit that hangs.
 
 ## Required Contract
 
@@ -229,8 +234,8 @@ Whichever of these merges second merges main and adapts, per `AGENTS.md`.
 2. **Hiding loses nothing.** Hiding a panel or a dock never cancels a
    request, discards a draft or dismisses an operation entry. An
    unresolved failure stays in Activity and in the Needs attention count
-   while Activity is hidden. A quit that has to wait is never hidden: while
-   it waits, layout changes are refused.
+   while Activity is hidden. Hiding Activity never stops or cancels a
+   quit; its entries stay in Activity.
 3. **Layout is app-local and never blocks.** The layout file lives only in
    the app data directory. A missing, unreadable or incompatible file never
    stops startup and never touches other app data (drafts, kept resolution
@@ -262,7 +267,7 @@ Outcomes.
 | A4 | Layout survives a restart, including a hidden dock and a moved panel | Relaunch over the same data directory, after the save delay and after an immediate quit (P23, P31) | Planned |
 | A5 | A corrupt or old layout file restores the default without losing anything else | One table-driven test of every case; a desktop test that the notice shows and the other stores are untouched (P24, P25) | Planned |
 | A6 | The window title follows the selected repository | Title derivation; the window's title through selection changes (P22) | Planned |
-| A7 | A quit that has to wait shows its feedback with Activity hidden | Desktop tests of a waiting quit and of drafts not saved (P26, P27) | Planned |
+| A7 | A quit that has to wait, with Activity hidden (decision 7 revised; design Amendment 11) | Desktop tests: the layout is unchanged and the quit's entries are in Activity when opened; drafts not saved focuses the item area (P26, P27) | Planned |
 | A8 | Every existing keyboard journey still passes | Existing keyboard tests with the design's named edits; the fast tier at review-ready | Planned |
 | A9 | Needs attention counts what decisions 3 and 14 list and leads to Activity | Model test of the count; the footer item by click and by Enter (P20) | Planned |
 | A10 | Dock keys, region keys and F6 | Key-binding table; region keys reveal, F6 skips, Ctrl B in an editor is Bold (P13, P14, P17) | Planned |
@@ -314,9 +319,10 @@ Proposed by the planner and confirmed by the owner:
 6. **A dock toggle on a dock whose panels are all hidden** shows every
    panel in that dock, so the toggle always does something visible. A dock
    with no panels at all has no toggle.
-7. **A quit that has to wait shows Activity.** The Activity panel and its
-   dock are shown when a quit starts waiting, and this is not saved into the
-   layout.
+7. **A quit that has to wait changes no layout** (revised by the owner
+   after review round 3; first proposed as "shows Activity, not saved").
+   Its entries are in Activity as today, visible if Activity is. Quit now
+   and Retry take focus only when Activity is displayed.
 8. **The dock menu by keyboard** opens with the context-menu key and with
    Shift F10 on a focused panel toggle, since the Kit's context menu opens
    on right click only.
@@ -375,6 +381,8 @@ These are visible to users; the design's Known Limits give the detail.
 - A focused control low in Activity may need scrolling (K-13,
   decision 15).
 - A hidden bottom dock keeps a 29 px strip (K-15, decision 16).
+- With Activity hidden, a quit that has to wait shows nothing until
+  Activity is opened (decision 7).
 - A quit's layout write runs on the UI thread, so a hung file system
   delays the quit (K-14).
 
@@ -419,3 +427,6 @@ them; U-5 was settled in review.
 | Review round 1 | Activity at 150 px with no focus reveal | Owner decision | Decision 15 | Design fact 26 |
 | Review round 2 (scoped re-review and adversarial review, `fbca53f4`) | Re-review: 1 Blocking, 9 Important, 10 Minor. Adversarial: 4 Blocking, 9 Important, 5 Minor | — | Each verified against the source and applied in revision 3; detail in the design's Review Record | Reviewer reports, 2026-11-08 |
 | Review round 2 | Taking hidden docks out of the area and rebuilding them was the source of all five Blocking findings | Owner decision | Decision 16: the Kit's own dock closing, with its bottom strip for now | Design Review Record |
+| Review round 3 (scoped re-review and adversarial, `32b82b9c`) | Re-review: 7 Important, 8 Minor. Adversarial: 1 Blocking, 6 Important, 8 Minor. The Kit-closing mechanism held | — | Each verified against the source and applied in revision 4; detail in the design's Review Record | Reviewer reports, 2026-11-08 |
+| Review round 3 | The quit override drew findings in every round, including round 3's Blocking (a tab click during a quit wait hid Quit now) | Owner decision | Decision 7 revised: a waiting quit changes no layout; the override is gone | Owner, 2026-11-08 |
+| Owner, 2026-11-08 | A footer status line; no Quit now or Quit anyway buttons | Owner direction | Later work (Exclusions; design Amendment 4) | Owner, 2026-11-08 |
