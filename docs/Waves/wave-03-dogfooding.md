@@ -1149,8 +1149,8 @@ edited or marked done by this amendment.
 action (its design's Part E). The obligation stays owed until D6 merges.
 **Owner decisions, 2026-11-09 (D6 decisions 16 and 17):**
 - The desktop's polls retire closed tickets and promoted documents that
-  still have a local branch and worktree, with the outcome of `poll once
-  --retire-completed`, always on and with no setting. Retire… shows only for
+  still have a local branch, with or without its worktree, with the outcome
+  of `poll once --retire-completed`, always on and with no setting. Retire… shows only for
   what a poll did not retire.
 - Operations are per item: a repository operation is a loop over its items,
   so each reported item is retired by its own `ContextRetire`, and an
