@@ -10,16 +10,16 @@ id: "01M6YCHWDYY8ZCFZ62VX0ES1JM"
 
 # Wave 04 Cycle 01: Workspace Shell
 
-Ticket `01M6V8RK8B0SBCH0YZXFVSR9E3` (`vh-jge24`). Design (to follow):
-`docs/plans/2026-11-08-wave-04-cycle-01-workspace-shell-design.md`. Plan (to
-follow): `docs/plans/2026-11-08-wave-04-cycle-01-workspace-shell-implementation.md`.
+Ticket `01M6V8RK8B0SBCH0YZXFVSR9E3` (`vh-jge24`).
+[Design](../plans/2026-11-08-wave-04-cycle-01-workspace-shell-design.md) and
+[implementation plan](../plans/2026-11-08-wave-04-cycle-01-workspace-shell-implementation.md).
 
-Status: **draft, 2026-11-08.** Not reviewed and not approved. Drafted on the
-ticket branch at `cc2af8d0`, which merged origin/main `8da9afd4`. The design
-and implementation plan follow this document, and all three go through
-independent review before the owner is asked to approve them. Approval of
-the documents does not authorize implementation, which needs its own
-go-ahead.
+Status: **draft, 2026-11-08.** Not reviewed and not approved. This
+document was drafted on the ticket branch at `cc2af8d0`, which merged
+origin/main `8da9afd4`. The design and plan were drafted at `2b1dc4d5`.
+All three go through independent review before the owner is asked to
+approve them. Approval of the documents does not authorize
+implementation, which needs its own go-ahead.
 
 ## Purpose And Authority
 
@@ -61,7 +61,7 @@ Authorities, in order:
 | Wave 04 approved, desktop IA RFC amended | Done 2026-11-07, main `846af679`. |
 | Cycle ticket before the plan (`AGENTS.md`) | `01M6V8RK8B0SBCH0YZXFVSR9E3`, open. |
 | Latest main merged into the ticket branch | origin/main `8da9afd4` merged as `cc2af8d0`, no conflicts. |
-| GPUI Kit 0.6.6 names verified (ticket Planning) | Read from the locked source during planning: `DockArea`, `DockAreaState`, `DockLayout`, `register_panel`, `TitleBar`, `StatusBar`, `PopupMenu`, `Popover`, `h_resizable`. Facts in the design's Baseline Facts. |
+| GPUI Kit 0.6.6 names verified (ticket Planning) | Read from the locked source during planning: `DockArea`, `DockAreaState`, `DockState`, `DockLayout`, `DockSkin`, `DockAreaRenderer`, `TabGroupRenderer`, `register_panel`, `TitleBar`, `StatusBar`, `PopupMenu`. The handoff's `DockItem`, `StackPanel` and `TabPanel` types are not in 0.6.6 (design, fact 1). Facts 1–19 in the design. |
 | Wave 03 D6 | Not required (ticket, Entry Gate). D6 is drafted, not reviewed and not merged. |
 | Required checks at baseline | Not run during planning. Task 0 runs them. |
 | Testers | Linux (Wayland): the product owner. macOS and Windows: native CI after merge (Wave decision 4). |
@@ -269,7 +269,7 @@ Answered by the owner during planning:
    and documents. `secondary-p` shows the Tickets panel if it is hidden and
    focuses Find.
 
-Proposed by the planner, to be confirmed with the documents' approval:
+Proposed by the planner and confirmed by the owner:
 
 5. **Fallback reporting.** A missing layout file (first launch) starts in
    the default layout without a notice. An unreadable or malformed file, one
@@ -297,19 +297,34 @@ Proposed by the planner, to be confirmed with the documents' approval:
     the default for the row anatomy Cycle 02 builds. Cycle 01 leaves rows
     as they are, since row rendering is out of its scope (line 272).
 
+The owner confirmed 5–11 on 2026-11-08 ("Proposals looks fine"), before
+the design and plan were written.
+
+Proposed with the design and plan, to be confirmed with approval:
+
+12. **Test runs.** AGENTS.md's rule holds: between tasks, only the tests a
+    task changed, and the fast tier once at review-ready. In addition,
+    the whole desktop bin suite runs once each at Tasks 4a, 4b and 9,
+    because the region split and the dock reach nearly every desktop test
+    (design, E-1 to E-8). Each run's time is recorded in the ledger.
+
 ## Open Questions
 
-None for the owner beyond confirming proposals 5–11. Three facts are
-unverified and are settled in Task 0 by reading or trying the source; an
-answer that changes a proposal stops for the owner:
+None for the owner beyond confirming decision 12. U-1 and U-2 were
+settled by reading the source:
 
-- U-1: whether the GPUI test platform records a window title the tests can
-  read (A6).
-- U-2: whether the dock area can refuse a drop onto the center, or the drop
-  has to be undone on the Kit's `DragDrop` event (proposal 10).
-- U-3: whether the keyboard's context-menu key reaches GPUI as `menu` under
-  Wayland (proposal 8). Shift F10 is the fallback; the native check
-  confirms.
+- **U-1, settled.** The test window records the title, and
+  `VisualTestContext::window_title()` reads it (design, fact 18).
+- **U-2, settled.** The Kit has no drop predicate, so a drop onto the item
+  area is undone after the fact (design, fact 10 and R-6).
+
+One fact is still unverified:
+
+- **U-3.** Whether the keyboard's context-menu key reaches GPUI as `menu`
+  under Wayland (decision 8). Shift F10 is the fallback, and the native
+  checklist confirms it.
+
+The design's U-4 to U-6 are checked in the tasks that first rely on them.
 
 ## Review Record
 
@@ -320,9 +335,11 @@ answer that changes a proposal stops for the owner:
 | Planning research | No "attention entries" exist in `model/operations.rs` | Owner decision | Decision 3. | Wave 244, 514; `services/requests.rs:782-793`. |
 | Planning research | Find sits above both lists in the Navigation pane | Owner decision | Decision 4. | `view/lists.rs:39`; `view/find.rs:44`. |
 | Planning research | D6's attention states live in its own polling model; its documents are uncommitted | Settled | Exclusions and decision 3: the second to merge wires them in. | D6 design (uncommitted), Phase and Reason; D6 worktree `git status`. |
-| Planning research | The Kit hides a panel only by `visible()`, and a dock with every panel hidden keeps its width | Ruling | The layout model closes a dock with no visible panel (design). | gpui-base `dock/panel.rs:25-30`, `dock/dock_area.rs:1325-1341`. |
-| Planning research | The Kit's panel header always draws a menu with Zoom and Close | Ruling | Own header renderer per `02`; panels not closable or zoomable (design). | gpui-component `dock/tab_panel.rs:326-338`. |
-| Planning research | `DockArea::load` ignores the version and keeps unknown panels as placeholders | Ruling | The layout file is validated before loading (design). | gpui-base `dock/dock_area.rs:716-722`; gpui-component `dock/dock.rs:80-86`. |
-| Planning research | The Kit's context menu opens on right click only | Proposal | Decision 8. | gpui-component `menu/context_menu.rs:294-300`. |
-| Planning research | The Wave reports a missing layout file | Proposal | Decision 5. | Wave 259–263. |
-| Planning research | The Wave puts 28 px rows in Cycle 01 and row rendering out of it | Proposal | Decision 11. | Wave 235–237, 272–273. |
+| Planning research | The Kit hides a panel only by `visible()`; a dock with every panel hidden keeps its width; a closed bottom dock keeps a 29 px strip | Ruling | Design R-3: a dock that is not open is taken out of the area. | gpui-base `dock/panel.rs:21-93`, `dock/dock_area.rs:1325-1354`, `:1702-1715`. |
+| Planning research | The Kit's panel header always draws a menu with Zoom and Close | Ruling | Design R-2: own header renderer per `02`; panels not closable or zoomable. | gpui-component `dock/tab_panel.rs:269-351`. |
+| Planning research | `DockArea::load` ignores the version and keeps unknown panels as placeholders | Ruling | Design R-18, R-28: the file is validated before loading. | gpui-base `dock/dock_area.rs:716-760`; gpui-component `dock/dock.rs:83-93`. |
+| Planning research | The Kit's context menu opens on right click only | Owner decision (proposed, confirmed 2026-11-08) | Decision 8; design R-11. | gpui-component `menu/context_menu.rs:296-300`. |
+| Planning research | The Wave reports a missing layout file, and its Risks row drops unknown panels | Owner decision (proposed, confirmed 2026-11-08) | Decision 5; design Document Amendment 1. | Wave 259–263; Risks And Controls. |
+| Planning research | The Wave puts 28 px rows in Cycle 01 and row rendering out of it | Owner decision (proposed, confirmed 2026-11-08) | Decision 11; design Document Amendment 2. | Wave 235–237, 272–273. |
+| Planning research | The test window records the title (U-1); no drop predicate exists (U-2) | Settled | Open Questions. | Design facts 10, 18. |
+| Planning research | The region split and dock reach nearly every desktop test | Owner decision (proposed) | Decision 12. | Design E-1 to E-8. |
