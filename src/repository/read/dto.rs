@@ -764,6 +764,7 @@ contract_enum!(
         Rebuild => "rebuild",
         PrepareContext => "prepare_context",
         ReleaseContext => "release_context",
+        RetireContext => "retire_context",
         SaveDocument => "save_document",
         SaveTicket => "save_ticket",
         SubmitComment => "submit_comment",

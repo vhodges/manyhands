@@ -8,7 +8,7 @@ use manyhands::results::{Outcome, ResultCode};
 
 use super::Walk;
 use crate::desktop::{
-    services::requests::Intent,
+    services::requests::{Intent, Lane, RequestState},
     test_support::fixtures::{Fixture, identity, remote_names},
     view::{
         harness::{Shell, key},
@@ -63,6 +63,16 @@ async fn add_an_existing_repository_by_keyboard(cx: &mut TestAppContext) {
         .ended(|intent| matches!(intent, Intent::RepoEnable { .. }), cx)
         .await;
     assert_eq!(ended, Some((Outcome::Success, ResultCode::Ok)));
+    let wanted = plain.clone();
+    walk.shell
+        .until(cx, move |operations| {
+            operations.requests().iter().any(|request| {
+                request.lane == Lane::Background
+                    && matches!(&request.intent, Intent::IndexRefresh { root } if *root == wanted)
+                    && matches!(request.state, RequestState::Finished(..))
+            })
+        })
+        .await;
     let listed = walk.shell.fixture.service().list_repositories().unwrap();
     assert!(listed.items.iter().any(|item| item.root == key(&plain)));
     walk.region(Region::Content, cx);

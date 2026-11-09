@@ -1,6 +1,7 @@
 //! `operation abandon`: a pending local operation is closed, so that it
 //! no longer refuses every other operation on its repository. It needs
-//! confirmation.
+//! confirmation. Retirement is a guarded preserving exception: its controlling
+//! request is retained and its discovery debt settles before the blocker closes.
 
 use crate::repository::mutation::confirm::{self, Row, Seen};
 use std::path::{Path, PathBuf};
@@ -36,7 +37,8 @@ pub struct OperationAbandonInput {
 }
 
 /// `operation abandon`: one pending row of the repository's local
-/// journal is closed, and the unfinished request that began it released.
+/// journal is closed, and the unfinished request that began it released (except
+/// retirement, whose identity stays bound and preserving index debt is finalized).
 /// It needs confirmation. No file under the root and nothing Git holds
 /// is touched, so no effect shows it: its data names the operation and
 /// what the operation left on disk, and the outcome says whether
@@ -64,6 +66,7 @@ pub(crate) struct OperationAbandonBinding {
     /// domain call is told to expect, so that a row that moved between
     /// the observation and the call is left alone.
     seen: Option<PendingStanding>,
+    retirement: Option<crate::repository::RetirementAbandonMetadata>,
 }
 
 impl From<OperationAbandonInput> for OperationAbandonBinding {
@@ -75,6 +78,7 @@ impl From<OperationAbandonInput> for OperationAbandonBinding {
             root,
             operation_id,
             seen: None,
+            retirement: None,
         }
     }
 }
@@ -111,7 +115,10 @@ impl OperationAbandonBinding {
     /// The digest of what was observed: what a confirmation stores, and
     /// what a later observation is compared with. It binds how the row
     /// stands, and for a pending row its state and step.
-    fn digest(found: &AbandonableOperation) -> ObservationDigest {
+    fn digest(
+        found: &AbandonableOperation,
+        retirement: Option<&crate::repository::RetirementAbandonMetadata>,
+    ) -> ObservationDigest {
         let command = Command::OperationAbandon.name();
         let observation = Observation::of(command);
         let observation = match found {
@@ -128,6 +135,14 @@ impl OperationAbandonBinding {
                     None => observation.absent("step"),
                 }
             }
+        };
+        let observation = if let Some(metadata) = retirement {
+            observation.text(
+                "retirement",
+                &serde_json::to_string(metadata).expect("closed metadata"),
+            )
+        } else {
+            observation
         };
         ObservationDigest::of_state(command, observation.finish())
     }
@@ -160,6 +175,71 @@ impl OperationAbandonBinding {
     /// The one domain call, and what it came to. An abandon is one
     /// transaction: it happened or it did not.
     fn call(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
+        if let Some(metadata) = &self.retirement {
+            let result = crate::repository::context_retirement::preserve::begin(
+                service,
+                &accepted.root(),
+                self.operation_id,
+                metadata,
+                accepted,
+            );
+            let complete = service
+                .retirement_mutation_state(&accepted.root(), self.operation_id)
+                .ok()
+                .flatten()
+                .is_some_and(|s| s.phase == "abandoned");
+            return match result {
+                Ok(_) if complete => Ran {
+                    answer: Answer {
+                        effects: crate::results::Effects {
+                            discovery: crate::results::DiscoveryEffect::Current,
+                            ..crate::results::Effects::not_requested()
+                        },
+                        ..Answer::stopped(ResultCode::Ok)
+                    }
+                    .with_data(MutationDataDto::Operation(
+                        OperationMutationDto {
+                            operation_id: self.operation_id.to_string(),
+                            action: Some(crate::repository::OperationAction::RetireContext),
+                            state: "completed".into(),
+                            step: Some("abandoned".into()),
+                            item_id: None,
+                            worktree: None,
+                            paths: Vec::new(),
+                            paths_complete: true,
+                            committed: false,
+                            released_request_id: None,
+                        },
+                    )),
+                    standing: Standing::Final,
+                },
+                Ok(_) => Ran {
+                    answer: Answer {
+                        recovery: vec![preserving_resume(self.operation_id)],
+                        effects: crate::results::Effects {
+                            discovery: crate::results::DiscoveryEffect::Pending,
+                            ..crate::results::Effects::not_requested()
+                        },
+                        ..Answer::stopped(ResultCode::DiscoveryPending)
+                    },
+                    standing: Standing::Owed,
+                },
+                Err(e) => Ran {
+                    answer: refused(e),
+                    standing: match crate::repository::context_retirement::preserve::owns(
+                        service,
+                        &accepted.root(),
+                        self.operation_id,
+                        accepted,
+                    ) {
+                        Ok(false) => Standing::Stopped {
+                            journal: Some(NO_ROW),
+                        },
+                        _ => Standing::Owed,
+                    },
+                },
+            };
+        }
         // The request was accepted, or entered again, on a row this
         // call saw pending. Without that there is nothing the domain
         // could be told to expect, and nothing is closed on that.
@@ -257,6 +337,7 @@ impl Binding for OperationAbandonBinding {
             operation_id: _,
             // What a call observed, and no part of the request.
             seen: _,
+            retirement: _,
         } = self;
         builder
     }
@@ -276,11 +357,16 @@ impl Binding for OperationAbandonBinding {
     /// a preview: no preview is given of one. It is refused here as the
     /// input it is.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
-        let (_, found) = self.observe(call.service)?;
+        let (scope, found) = self.observe(call.service)?;
         if found == AbandonableOperation::AnotherJournal {
             return Err(Answer::stopped(ResultCode::InvalidInput));
         }
-        let observation = Self::digest(&found).to_stored();
+        self.retirement = if matches!(found, AbandonableOperation::Pending(_)) {
+            retirement_metadata(call.service, &scope, self.operation_id)?
+        } else {
+            None
+        };
+        let observation = Self::digest(&found, self.retirement.as_ref()).to_stored();
         if let AbandonableOperation::Pending(remains) = found {
             self.seen = Some(remains.standing);
         }
@@ -333,7 +419,39 @@ impl Binding for OperationAbandonBinding {
 impl Confirmed for OperationAbandonBinding {
     /// No row is read for a request with no operation. Nothing is run
     /// or settled on one that is.
-    fn row(&mut self, _call: &CallContext<'_>, _accepted: &Accepted, journal: &JournalRow) -> Row {
+    fn row(&mut self, call: &CallContext<'_>, accepted: &Accepted, journal: &JournalRow) -> Row {
+        match crate::repository::context_retirement::preserve::owns(
+            call.service,
+            &accepted.root(),
+            self.operation_id,
+            accepted,
+        ) {
+            Ok(true) => {
+                self.retirement = match crate::repository::context_retirement::preserve::snapshot(
+                    call.service,
+                    &accepted.root(),
+                    self.operation_id,
+                )
+                .map_err(refused)
+                {
+                    Ok(metadata) => metadata,
+                    Err(answer) => {
+                        return Row::answers(Ran {
+                            answer,
+                            standing: Standing::Owed,
+                        });
+                    }
+                };
+                return Row::Unfinished;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                return Row::answers(Ran {
+                    answer: Answer::of_read(&error),
+                    standing: Standing::Owed,
+                });
+            }
+        }
         if *journal == NO_ROW {
             Row::Unrecorded
         } else {
@@ -347,8 +465,8 @@ impl Confirmed for OperationAbandonBinding {
         _accepted: &Accepted,
         _journal: &JournalRow,
     ) -> Result<Seen, Ran> {
-        let found = match self.observe(call.service) {
-            Ok((_, found)) => found,
+        let (scope, found) = match self.observe(call.service) {
+            Ok(observed) => observed,
             // Nothing is known of the row: the record is kept.
             Err(answer) => {
                 return Err(Ran {
@@ -369,8 +487,13 @@ impl Confirmed for OperationAbandonBinding {
                 // What the domain call is told the row was seen as. It
                 // is made only when the row is the one that was shown.
                 self.seen = Some(remains.standing.clone());
+                self.retirement = retirement_metadata(call.service, &scope, self.operation_id)
+                    .map_err(|answer| Ran {
+                        answer,
+                        standing: Standing::Owed,
+                    })?;
                 Ok(Seen::State {
-                    found: Self::digest(&found),
+                    found: Self::digest(&found, self.retirement.as_ref()),
                     own: None,
                 })
             }
@@ -392,7 +515,22 @@ impl Confirmed for OperationAbandonBinding {
     /// local operation that has ended, however it ended, is a no-op.
     fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
         let (scope, found) = self.observe(call.service)?;
-        let observation = Self::digest(&found).to_stored();
+        self.retirement = if matches!(found, AbandonableOperation::Pending(_)) {
+            retirement_metadata(call.service, &scope, self.operation_id)?
+        } else {
+            None
+        };
+        if self
+            .retirement
+            .as_ref()
+            .is_some_and(|s| s.phase == "preserving")
+        {
+            return Err(Answer {
+                recovery: vec![preserving_resume(self.operation_id)],
+                ..Answer::stopped(ResultCode::DiscoveryPending)
+            });
+        }
+        let observation = Self::digest(&found, self.retirement.as_ref()).to_stored();
         let remains = match found {
             AbandonableOperation::Pending(remains) => remains,
             AbandonableOperation::NotFound => {
@@ -424,13 +562,14 @@ impl Confirmed for OperationAbandonBinding {
             owner,
         } = remains;
         let mut effects = vec![PreviewEffect::OperationClosed];
-        if owner.is_some() {
+        if owner.is_some() && self.retirement.is_none() {
             effects.push(PreviewEffect::RequestReleased);
         }
         Ok(Previewed {
             observation,
             effects,
             details: PreviewDetailsDto::OperationAbandon(OperationAbandonPreviewDto {
+                retirement: self.retirement.clone(),
                 root: scope.as_str().to_owned(),
                 operation_id: self.operation_id.to_string(),
                 action: local_action(&action),
@@ -447,4 +586,28 @@ impl Confirmed for OperationAbandonBinding {
             }),
         })
     }
+}
+
+fn retirement_metadata(
+    service: &RepositoryService,
+    scope: &ScopeKey,
+    operation: OperationId,
+) -> Result<Option<crate::repository::RetirementAbandonMetadata>, Answer> {
+    service
+        .read_session(crate::repository::RepositoryOperation::Read, |db| {
+            crate::repository::context_retirement::preserve::metadata(
+                db,
+                Path::new(scope.as_str()),
+                operation,
+            )
+            .map_err(|_| crate::repository::ReadError::new(ResultCode::RecoveryRequired))
+        })
+        .map_err(|e| Answer::of_read(&e))
+}
+fn preserving_resume(operation: OperationId) -> crate::results::RecoveryAction {
+    crate::results::RecoveryAction::for_operation(
+        crate::results::RecoveryActionKind::OperationResume,
+        operation.to_string(),
+        [],
+    )
 }

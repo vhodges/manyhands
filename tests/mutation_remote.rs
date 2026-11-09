@@ -24,6 +24,8 @@ mod comment_domain;
 mod conflict_read;
 #[path = "support/conformance.rs"]
 mod conformance;
+#[path = "mutation_remote/context_retirement.rs"]
+mod context_retirement;
 #[path = "mutation_remote/d5_progress.rs"]
 mod d5_progress;
 #[allow(dead_code)]
@@ -73,6 +75,7 @@ fn main() {
         .chain(host::CASES)
         .chain(merging::CASES)
         .chain(comment_domain::CASES)
+        .chain(context_retirement::CASES)
         .chain(comment::CASES)
         .chain(conflict_read::CASES)
         .chain(resolution::CASES)

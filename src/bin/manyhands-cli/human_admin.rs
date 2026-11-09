@@ -100,7 +100,13 @@ pub fn preview(preview: &PreviewDto) -> String {
         PreviewDetailsDto::RemoteRemoval(d) => fields(d),
         PreviewDetailsDto::RepositoryRemoval(d) => fields(d),
         PreviewDetailsDto::KeyDeletion(d) => fields(d),
-        PreviewDetailsDto::OperationAbandon(d) => fields(d),
+        PreviewDetailsDto::OperationAbandon(d) => {
+            if d.retirement.is_some() {
+                fields(d)
+            } else {
+                fields_without(d, &["retirement"])
+            }
+        }
         PreviewDetailsDto::Identity(d) => fields(d),
         PreviewDetailsDto::Host(d) => fields(d),
         PreviewDetailsDto::Repair(d) => fields(d),

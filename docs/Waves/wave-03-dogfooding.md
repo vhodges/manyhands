@@ -43,7 +43,7 @@ identifiers and the Wave 02 entry dependency changed; see
 
 ## Authority And Traceability
 
-This Wave implements [PRD v0.6](../PRD/mvp.md), the
+This Wave implements [PRD v0.7](../PRD/mvp.md), the
 [MVP architecture RFC](../RFC/mvp-rfc.md), and these approved technical RFCs:
 
 - [Desktop information architecture and editor](../RFC/desktop-information-architecture-and-editor.md).
@@ -381,8 +381,19 @@ codes, use the earlier numbers.
    `remote select` index fixes of `01M5MK57JKCSQFXBNZ8DBE548K` and
    `01M669FJR27FRHCNPWAMD6VH4V` (decisions 2 and 10). They merge with C5 as
    one Cycle.
-   Amended 2026-11-04 by D5 (decision 2): the owner approved D5 as a third
-   exception, to this rule and rule 6. D5's branch carries the library part
+   Amended 2026-11-06: the owner approved ticket
+   `01M6KHVD6D0DB8KYT6VGQP10Y0` as a **shared-library-plus-CLI exception**,
+   not another numbered Cycle. Its [Cycle contract](../Cycles/wave-03-completed-context-retirement.md)
+   D1–D14 (2026-11-04) and D15 (2026-11-06) authorize completion recognition,
+   ordinary guarded `context retire` and explicit `poll once --retire-completed`,
+   with independent per-item recovery, live-only iteration and no background
+   cleanup. D6 consumes the shared binding after integration; it needs no CLI
+   verb or unmerged sibling code. Existing release/navigation/read precedence
+   and the separate remote-deletion gap remain outside this exception. The only
+   desktop change in this ticket is safety metadata in the **existing generic
+   operation-abandon confirmation** (D13), not a Retire action.
+   Amended 2026-11-04 by D5 (decision 2): the owner approved D5 as an
+   exception to this rule and rule 6. D5's branch carries the library part
    its design's Part 0 lists, limited to those files: the lifecycle way-out
    routing, which the CLI calls in place of its own copy, resume for
    unfinished lifecycle parents and four lifecycle progress stages. They
@@ -1115,6 +1126,23 @@ today (decision 24).
 **Purpose:** Keep discovery current inside the desktop process while preserving
 manual priority and unsaved work.
 
+**Completed-context retirement obligation, amended 2026-11-06:** owner D4/D6/D7/
+D13/D15 in [the follow-up contract](../Cycles/wave-03-completed-context-retirement.md)
+assign the **explicit desktop Retire action to D6**. This remains owed. The
+follow-up's shared library/CLI implementation has bounded SPEC/QUALITY approval
+through `37b64d17` (published metadata base `76a852a7`); Task 7 contract review,
+Task 8 whole-feature gates and integration are not implied. D6 must invoke
+`Mutation::ContextRetire(ContextRetireInput)` deliberately, expose exact item
+refusals/pending cleanup and ordinary child recovery, preserve open editors and
+exportable/recoverable item/comment drafts, and prove keyboard and recovery
+journeys. The existing generic abandonment metadata display is not this action.
+Automatic/default polling can show `closed`/`promoted` guidance but MUST NOT
+choose `PollOnceRetiring`; an optional deliberate action is never a schedule
+policy. Read precedence is unchanged until the separate latest-copy ticket
+`01M6K04YQM2JF6SBGPB1ZT6R8T`; an old own-worktree can mask primary closure
+until retirement and discovery settlement. No D6/sibling ticket or worktree is
+edited or marked done by this amendment.
+
 **In scope:** One application-owned worker across windows, launch poll, existing
 interval/pause/backoff state, explicit Poll now and policy controls, fair
 repository scheduling, suspend/clock recovery, worker/UI credential handoff,
@@ -1184,7 +1212,8 @@ a claim those public APIs exist.
 | Conflict inspection read | Local boundary: closure-recovery gate, exposed through the CLI by C5's `context` verbs (amended 2026-11-03 by C5, decision 3); remote boundary: C4 (amended 2026-10-30 by C4, decision 19), reaching a lifecycle's context child since C5 (decision 34) | Local observation/inspection/immutable-side DTOs are implemented and code-reviewed on the review-ready gate branch, awaiting authorized lifecycle delivery and merge. Remote: C4's `show_conflict` read and `conflict resolve` binding, through the CLI's `conflict show` and `conflict resolve`; D5 consumes them through D4. Front ends consume the shared boundaries and F1 redaction rules. |
 | One effective copy per item across worktrees | Defect ticket `01M4CKWWRA1DHFPMWKPNK7CQ1G`, before F1 | An item worktree contributes only its own item; every other item is read from primary. |
 | Promotion/close preflight and safe cleanup bindings | First of C5 or D5, as a shared-library change. Amended 2026-11-03 by C5 (decision 1): C5, on its own branch; D5 consumes them | Real effect preview and existing publication/cleanup ordering. |
-| Explicit one-shot polling | C5 | Existing Wave 02 one-shot operation; no resident worker. Amended 2026-11-03 by C5 (decisions 11 and 15): with the three policy bindings, each an atomic single-field update; D6 consumes them. |
+| Explicit one-shot polling | C5 | Existing Wave 02 one-shot operation; no resident worker. Amended 2026-11-03 by C5 (decisions 11 and 15): with the three policy bindings, each an atomic single-field update; D6 consumes them. Only the separately deliberate retirement variant below may clean up; automatic/default mode is unchanged. |
+| Peer-completed context recognition and deliberate local retirement | Follow-up `01M6KHVD6D0DB8KYT6VGQP10Y0` (library + CLI); D6 (explicit desktop action/journeys) | `closed`/`promoted` are not permission. Fresh complete Fetch-known absence + same-ID committed-primary completion/content proof + cleanliness/lifetime; ordinary item-owned recovery, immutable stopped-parent report and new explicit pass for remainder. No remote deletion/draft loss/read-ranking or release change. [Delivered API audit](../research/wave-03-api-audit.md#completed-context-retirement-delivery-2026-11-06). |
 | Protected draft store and base snapshots | D2 | Separate from canonical files/cache/journals; versioned recoverable local files. |
 | Rich/source integration and stale response handling | D3 | One compatible GPUI graph; editor does not own Git, credential or network policy. |
 | Background scheduling and process exit | D6 | Desktop lifetime, existing one-shot operation, truthful safe-point stopping. |
@@ -1208,6 +1237,9 @@ and all of the following hold:
 - No-op/mode-switch fidelity, unknown metadata, unsupported Markdown and stale
   draft preservation are proven; partial write/checkpoint/index/publication/
   cleanup outcomes remain distinguishable and retryable without duplication.
+  This includes D6's explicit peer-context retirement, its conservative refusals
+  and preserving recovery with open editors/drafts; shared library/CLI evidence
+  alone does not satisfy those desktop journeys.
 - Background work obeys its permitted fetch/clean-fast-forward/materialization
   boundary, manual priority, user pause and session unlock behavior. Shutdown
   reports ongoing work at ten seconds and reaches a safe stop without a false
@@ -1254,7 +1286,7 @@ claim these implementation checks.
 | Transport shutdown outlasts the desktop's feedback threshold | Responsive still-stopping state; retain live ownership/secrets until safe completion; test forced interruption separately. |
 | Beta tester machines do not cover every required native target, or sessions are delayed | Work on Linux first; Release Owner confirms Windows/macOS tester assignments, architectures and scheduling at each desktop Cycle and obtains missing evidence before G1 exit. Platform acceptance is not silently reduced. |
 | An intermediate desktop is mistaken for the complete product | Mark unavailable workflows; accumulate real evidence per Cycle and require the integrated final gate. |
-| Parallel tracks edit the same headless files and conflict, or one front end grows its own domain shortcut | Shared-library change rule: separate ticket, library-only scope, merged to main first; front-end branches leave `src/repository*` unchanged. |
+| Parallel tracks edit the same headless files and conflict, or one front end grows its own domain shortcut | Shared-library change rule: separate ticket, library-only scope unless a named owner-approved exception under rule 5, merged to main before dependent consumption; front ends do not invent domain shortcuts. |
 | The foundation's DTOs and confirmation model are fixed before any front end consumes them | F1/F2 publish schemas and prove them through library integration tests over real repositories; a mismatch found by C1 or D1 returns as a shared-library change, not a front-end workaround. |
 | A Wave 03 Cycle starts on a Wave 02 capability that is unmerged or still changing | Per-Cycle Wave 02 dependency table; in-flight branches never satisfy it; re-audit the owning rows when each Wave 02 Cycle merges. |
 | The tracks each pass alone but fail together | Each track proves external change with a second library-level actor; G1 owns the real CLI-against-desktop scenarios and cannot exit without them. |

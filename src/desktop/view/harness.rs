@@ -39,9 +39,9 @@ use crate::desktop::{
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
 };
 
-/// How long a test waits on the worker: long enough on a loaded machine,
-/// inside the scheduler's fifteen seconds of parking.
-pub(crate) const WAIT: Duration = Duration::from_secs(10);
+/// Shared aggregate UI/worker wait; the existing polling and GPUI's
+/// independent per-park guard remain unchanged.
+pub(crate) use crate::desktop::test_support::WAIT;
 
 /// How often a wait looks again while the worker runs.
 const POLL: Duration = Duration::from_millis(10);

@@ -683,13 +683,11 @@ fn schema_enum(file: &str, property: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every `enum` in a published schema, by file and property, with the Rust
-/// list it must equal.
 /// The actions the local store records: what a local operation that is
 /// abandoned can be. They are named, and not taken from `ALL` by
 /// position: an action added before them that is not local would then
 /// pass for one.
-const LOCAL_ACTIONS: [OperationAction; 15] = [
+const LOCAL_ACTIONS: [OperationAction; 16] = [
     OperationAction::CreateAndEnable,
     OperationAction::Enable,
     OperationAction::RemoveRegistration,
@@ -700,6 +698,7 @@ const LOCAL_ACTIONS: [OperationAction; 15] = [
     OperationAction::Rebuild,
     OperationAction::PrepareContext,
     OperationAction::ReleaseContext,
+    OperationAction::RetireContext,
     OperationAction::SaveDocument,
     OperationAction::SaveTicket,
     OperationAction::SubmitComment,
@@ -707,6 +706,8 @@ const LOCAL_ACTIONS: [OperationAction; 15] = [
     OperationAction::ContextSyncLocal,
 ];
 
+/// Every published string enumeration, pinned to Rust values or the explicitly
+/// documented retirement phase vocabulary, by file and property.
 fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
     let envelope = golden::ENVELOPE_SCHEMA;
     let effects = "effects.schema.json";
@@ -1339,6 +1340,191 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         "details.kind",
         ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
     ));
+    use manyhands::repository::{
+        ContextRetirementMutationType, ContextRetirementState, PollRetirementCompletion,
+        PollRetirementDebt, PollRetirementItemState, PollRetirementMutationType, RetirementRemoval,
+    };
+    let retirement = "context_retirement_mutation.schema.json";
+    let poll_retirement = "poll_retirement_mutation.schema.json";
+    let abandon = "operation_abandon_preview.schema.json";
+    // The ordinary retirement root intentionally publishes only these result
+    // codes, not every ResultCode. Keep the named subset independent of the
+    // schema so either a removed code or a broadened contract fails this pin.
+    let retirement_codes = [
+        ResultCode::Ok,
+        ResultCode::AlreadyApplied,
+        ResultCode::ExternalChange,
+        ResultCode::RecoveryRequired,
+        ResultCode::WorktreeNotClean,
+        ResultCode::Cancelled,
+        ResultCode::DiscoveryPending,
+        ResultCode::Busy,
+        ResultCode::PollYielding,
+        ResultCode::InternalError,
+        ResultCode::IndexUnavailable,
+        ResultCode::RepositoryInaccessible,
+        ResultCode::InvalidPath,
+        ResultCode::NotRepository,
+        ResultCode::NotRepositoryRoot,
+        ResultCode::BareRepository,
+        ResultCode::RepositoryNotRegistered,
+        ResultCode::RepositoryNotEnabled,
+        ResultCode::InvalidRemote,
+        ResultCode::InvalidConfiguration,
+        ResultCode::PublicationRemoteRequired,
+        ResultCode::NoSelectedKey,
+        ResultCode::KeyUnavailable,
+        ResultCode::KeyRejected,
+        ResultCode::UnlockRequired,
+        ResultCode::UnlockFailed,
+        ResultCode::HostApprovalRequired,
+        ResultCode::HostReplacementRequired,
+        ResultCode::TransportUnavailable,
+        ResultCode::RemoteUnavailable,
+        ResultCode::OccupiedPath,
+        ResultCode::WrongBranch,
+        ResultCode::WorktreeConflicted,
+        ResultCode::IdentityRequired,
+        ResultCode::ItemNotFound,
+        ResultCode::InvalidInput,
+        ResultCode::RequestMismatch,
+    ];
+    // RetirementRemoval has no ALL registry; pin its named variants, using the
+    // same wire names as the CLI rather than copying their schema literals.
+    let removals = [
+        RetirementRemoval::None,
+        RetirementRemoval::Possible,
+        RetirementRemoval::Observed,
+    ];
+    // RetirementAbandonMetadata.phase is a String, not a public Rust enum. This
+    // explicit published vocabulary is the phase CHECK of the audited
+    // context_retirement_records table (context_retirement/record.rs), which
+    // preserve::metadata copies unchanged; it is not a Rust-registry check.
+    let retirement_phases = [
+        "selected",
+        "worktree_removing",
+        "worktree_removed",
+        "branch_deleting",
+        "local_absent",
+        "index_pending",
+        "complete",
+        "refused",
+        "preserving",
+        "abandoned",
+    ];
+    enumerations.extend([
+        (
+            retirement,
+            "type",
+            ContextRetirementMutationType::ALL
+                .map(ContextRetirementMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            retirement,
+            "kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            retirement,
+            "state",
+            ContextRetirementState::ALL
+                .map(ContextRetirementState::as_str)
+                .to_vec(),
+        ),
+        (
+            retirement,
+            "code",
+            retirement_codes.map(ResultCode::as_str).to_vec(),
+        ),
+        (
+            retirement,
+            "worktree_removal",
+            removals.map(RetirementRemoval::as_str).to_vec(),
+        ),
+        (
+            retirement,
+            "branch_removal",
+            removals.map(RetirementRemoval::as_str).to_vec(),
+        ),
+        (
+            poll_retirement,
+            "type",
+            PollRetirementMutationType::ALL
+                .map(PollRetirementMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            poll_retirement,
+            "completion",
+            PollRetirementCompletion::ALL
+                .map(PollRetirementCompletion::as_str)
+                .to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.state",
+            PollRetirementItemState::ALL
+                .map(PollRetirementItemState::as_str)
+                .to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.debt",
+            PollRetirementDebt::ALL
+                .map(PollRetirementDebt::as_str)
+                .to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.result.type",
+            ContextRetirementMutationType::ALL
+                .map(ContextRetirementMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.result.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.result.state",
+            ContextRetirementState::ALL
+                .map(ContextRetirementState::as_str)
+                .to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.result.worktree_removal",
+            removals.map(RetirementRemoval::as_str).to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.result.branch_removal",
+            removals.map(RetirementRemoval::as_str).to_vec(),
+        ),
+        (
+            abandon,
+            "details.retirement.phase",
+            retirement_phases.to_vec(),
+        ),
+        (
+            abandon,
+            "details.retirement.worktree_removal",
+            removals.map(RetirementRemoval::as_str).to_vec(),
+        ),
+        (
+            abandon,
+            "details.retirement.branch_removal",
+            removals.map(RetirementRemoval::as_str).to_vec(),
+        ),
+    ]);
     enumerations
 }
 
@@ -1361,8 +1547,8 @@ fn published_enumerations_list_exactly_the_registered_values() {
         assert_eq!(&schema_enum(file, property), expected, "{file}: {property}");
     }
 
-    // No schema holds an enumeration this test does not tie to Rust. The
-    // one exception is the schema version, an integer.
+    // Every schema enumeration is pinned above, to Rust values or the explicit
+    // retirement phase vocabulary. Check the integer schema version separately.
     assert_eq!(
         read_json(&schema::schema_directory().join(golden::ENVELOPE_SCHEMA))["properties"]["schema_version"]
             ["enum"],

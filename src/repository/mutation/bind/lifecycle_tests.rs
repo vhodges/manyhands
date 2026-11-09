@@ -423,6 +423,19 @@ impl Session for Recorder {
         self.0.borrow_mut().push(event.stage);
     }
 
+    fn retire_context(
+        &self,
+        _: &RepositoryService,
+        _: crate::repository::RetireContextRequest,
+        _: &Accepted,
+        _: bool,
+        _: Option<crate::repository::context_retirement::handoff::InitialInput>,
+    ) -> Option<
+        Result<crate::repository::ContextRetirementOutcome, crate::repository::RepositoryError>,
+    > {
+        None
+    }
+
     fn synchronize(
         &self,
         _: &RepositoryService,
@@ -480,6 +493,23 @@ impl Session for Recorder {
         _: RequestId,
     ) -> Option<Result<crate::repository::RemotePollResult, crate::repository::RemotePollError>>
     {
+        None
+    }
+
+    fn poll_once_retiring(
+        &self,
+        _: &RepositoryService,
+        _: crate::repository::PollPublicationRemoteRequest,
+        _: &Accepted,
+    ) -> Option<
+        Result<
+            (
+                crate::repository::RemotePollResult,
+                Option<crate::repository::context_retirement::handoff::Live>,
+            ),
+            crate::repository::RemotePollError,
+        >,
+    > {
         None
     }
 

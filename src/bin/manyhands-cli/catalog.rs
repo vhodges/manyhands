@@ -1070,7 +1070,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary: "Poll a repository once.",
         availability: Availability::Available("C5"),
         repo: Some(Required),
-        options: MUTATION_NO_INPUT,
+        options: &[
+            REPO,
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+            option(
+                "--retire-completed",
+                None,
+                false,
+                "Explicitly retire proven-safe completed contexts in this live pass only.",
+            ),
+        ],
         kind: Kind::Mutation {
             confirmed: false,
             input: InputRule::Refused,
@@ -1107,6 +1118,30 @@ pub const COMMANDS: &[CommandSpec] = &[
         availability: Availability::Available("C5"),
         repo: Some(Required),
         options: MUTATION_NO_INPUT,
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "context",
+        verb: "retire",
+        summary: "Retire a proven-safe completed local context, after a fresh remote observation.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            option(
+                "--kind",
+                Some("ticket|document"),
+                true,
+                "Kind of the completed context.",
+            ),
+            ID,
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
         kind: Kind::Mutation {
             confirmed: false,
             input: InputRule::Refused,

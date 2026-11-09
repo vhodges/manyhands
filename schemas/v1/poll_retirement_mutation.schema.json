@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 original-live poll retirement report",
+  "description": "An immutable original poll and as-of-pass outcomes of independent ordinary child requests. Completed includes settled refusals. Stopped is non-success; debt belongs only to the named child, never to an aggregate operation. Handles inspect current state; replay never changes these snapshots.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "poll", "completion", "stop_code", "retirements"],
+  "properties": {
+    "type": {"type": "string", "enum": ["poll_retirement"]},
+    "poll": {"$ref": "poll_mutation.schema.json"},
+    "completion": {"type": "string", "enum": ["completed", "stopped"]},
+    "stop_code": {"type": ["string", "null"]},
+    "retirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "item_id", "request_id", "operation_id", "state", "code", "debt", "result"],
+        "properties": {
+          "kind": {"type": "string", "enum": ["document", "ticket"]},
+          "item_id": {"type": "string"},
+          "request_id": {"type": "string"},
+          "operation_id": {"type": ["string", "null"]},
+          "state": {"type": "string", "enum": ["retired", "already_absent", "refused", "pending", "not_reached", "preserved"]},
+          "code": {"type": ["string", "null"]},
+          "debt": {"type": ["string", "null"], "enum": ["cleanup", "discovery", "admission", null]},
+          "result": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["type", "kind", "item_id", "operation_id", "state", "code", "worktree_removal", "branch_removal", "materialization_settled"],
+            "properties": {
+              "type": {"type": "string", "enum": ["context_retirement"]},
+              "kind": {"type": "string", "enum": ["document", "ticket"]},
+              "item_id": {"type": "string"},
+              "operation_id": {"type": "string"},
+              "state": {"type": "string", "enum": ["retired", "already_absent", "refused", "pending", "preserved"]},
+              "code": {"type": "string"},
+              "worktree_removal": {"type": "string", "enum": ["none", "possible", "observed"]},
+              "branch_removal": {"type": "string", "enum": ["none", "possible", "observed"]},
+              "materialization_settled": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    }
+  }
+}
