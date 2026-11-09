@@ -79,17 +79,41 @@ fn attempt_summary_counts() {
             "{answer:?}: brought in marks the repository changed"
         );
         assert!(summary.index_pending);
-        assert_eq!(
-            fx.repo("r").last.is_some(),
-            summary.is_recorded(),
-            "{answer:?}: recorded"
-        );
+        assert!(fx.repo("r").last.is_some(), "{answer:?}: recorded");
         let completed = (answer == Answer::Completed).then(|| fx.at(0));
         assert_eq!(
             fx.repo("r").last_completed,
             completed,
             "{answer:?}: only a completion counts"
         );
+    }
+
+    // A cancel is an attempt only when it brought something in or listed
+    // something; a cancel that saw only up-to-date items is not.
+    let cancels = [
+        (vec![], false),
+        (vec![Current, LocalAhead], false),
+        (vec![Current, FastForwarded], true),
+        (vec![Dirty], true),
+    ];
+    for (dispositions, recorded) in cancels {
+        let mut fx = Fx::new();
+        fx.add("r", policy(None));
+        let attempt = PollAttempt {
+            root: root("r"),
+            operation: OperationId::new(),
+            answer: Answer::Cancelled(CancelCause::Preemption),
+            completed_at: None,
+            next_eligible_at: None,
+            targets: dispositions.iter().map(|&d| target(d)).collect(),
+            index_pending: false,
+        };
+        let summary = fx
+            .schedule
+            .after(&fx.now(), &attempt)
+            .expect("a repository");
+        assert_eq!(fx.repo("r").last.is_some(), recorded, "{dispositions:?}");
+        assert_eq!(summary.is_recorded(), recorded, "{dispositions:?}");
     }
 
     // An item the answer names no ID or kind for cannot be retired: listed.

@@ -53,9 +53,11 @@ pub(crate) enum Why {
 #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
 pub(crate) enum Reason {
     KeyLocked(KeyId),
-    /// No key selected (`None`), or one missing, unreadable, invalid or
-    /// rejected. Per repository, since Choose a key… is its setting.
-    KeyProblem(Option<KeyId>, Root),
+    /// A key missing, unreadable, invalid or rejected: one entry per key
+    /// (decision 11), naming every repository it holds back.
+    KeyProblem(KeyId),
+    /// No key selected, so there is no key to name: per repository.
+    NoKeySelected(Root),
     HostUnapproved(Authority),
     /// A host answer that names no host: per repository.
     HostUnidentified(Root),

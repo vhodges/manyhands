@@ -250,6 +250,16 @@ fn clock_event_once() {
         fx.schedule
             .set_policy(&root(name), policy(Some(fx.at(-10))));
     }
+    assert_eq!(
+        fx.phase("b"),
+        before,
+        "reading the policy leaves the wait alone"
+    );
+    assert_eq!(
+        fx.schedule.restart_of(&root("b")),
+        Some(operation),
+        "and the restart still resends its operation"
+    );
     let mut polled = Vec::new();
     while let Some(next) = fx.due().first().cloned() {
         assert_eq!(fx.due().len(), 4 - polled.len());

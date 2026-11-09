@@ -18,13 +18,16 @@ mod table;
 
 use std::{collections::BTreeMap, time::Duration};
 
-#[allow(unused_imports)] // Called from Task 3.
+#[cfg_attr(not(test), allow(unused_imports))] // Called from Task 3.
 pub(crate) use attempt::{
     Answer, AttemptSummary, AttemptTarget, Authority, CancelCause, Disposition, KeyId, NotEligible,
     PollAttempt, Root, TargetKind, TransportFailure,
 };
+#[cfg_attr(not(test), allow(unused_imports))] // Called from Task 5.
+pub(crate) use clock::{Clock, Now};
+// The tests use `TestClock`, so only the production clock is unused there.
 #[allow(unused_imports)] // Called from Task 5.
-pub(crate) use clock::{Clock, Now, SystemClock};
+pub(crate) use clock::SystemClock;
 use manyhands::repository::OperationId;
 use state::PREEMPTIONS_BEFORE_INTERVAL;
 pub(crate) use state::{Phase, Policy, Reason, RepoSchedule, Why};
@@ -99,7 +102,8 @@ impl PollSchedule {
     }
 
     /// The operation a restart resends (`restart=true`) when this repository
-    /// is polled next, or `None` for a new one (R-4).
+    /// is polled next, or `None` for a new one (R-4). Read it before
+    /// `mark_queued`, which discards the wait and its operation.
     pub fn restart_of(&self, root: &Root) -> Option<OperationId> {
         match self.repos.get(root)?.phase {
             Phase::Waiting { op, .. } => op,
@@ -154,7 +158,7 @@ impl PollSchedule {
     /// then due at most once, one at a time: no catch-up (R-6).
     pub fn clock_event(&mut self, utc_delta: time::Duration, mono_delta: Duration) -> ClockEvent {
         let drift = match time::Duration::try_from(mono_delta) {
-            Ok(mono) => (utc_delta - mono).abs(),
+            Ok(mono) => utc_delta.saturating_sub(mono).abs(),
             Err(_) => time::Duration::MAX,
         };
         if drift <= CLOCK_TOLERANCE {
@@ -183,6 +187,21 @@ impl PollSchedule {
     pub fn mark_queued(&mut self, root: &Root) {
         if let Some(repo) = self.repos.get_mut(root) {
             repo.phase = Phase::Queued;
+        }
+    }
+
+    /// A queued or running poll will not answer (it was dropped before it
+    /// ran, the worker panicked or its channel closed): the repository goes
+    /// back to `Idle` with its policy read again, so the one-at-a-time rule
+    /// cannot silence polling for good. Returns whether it was in flight.
+    pub fn abandon(&mut self, root: &Root) -> bool {
+        match self.repos.get_mut(root) {
+            Some(repo) if repo.in_flight() => {
+                repo.rearm();
+                repo.stale = true;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -231,7 +250,9 @@ impl PollSchedule {
 impl PollSchedule {
     /// One entry per key, host or repository, and nothing else (decision
     /// 11, W-1): a key locked for three repositories is one. Paused, off,
-    /// unreachable, waiting and not-due repositories are not here.
+    /// unreachable, waiting and not-due repositories are not here. The
+    /// entries come in the order of their first repository's root; sort in
+    /// the view if a different stable order is wanted.
     pub fn attention(&self) -> Vec<AttentionEntry> {
         let mut entries: Vec<AttentionEntry> = Vec::new();
         for (root, repo) in &self.repos {
@@ -250,7 +271,9 @@ impl PollSchedule {
     }
 
     /// The person acted: every repository held for this reason polls again.
-    /// Returns them. Pause is untouched (A3).
+    /// Returns them. Pause is untouched (A3). Resume checking must call this
+    /// with `RecoveryHeld(root)` and also `set_policy` with the policy read
+    /// again, since the hold is both attention and the policy's flag.
     pub fn clear_attention(&mut self, reason: &Reason) -> Vec<Root> {
         let mut cleared = Vec::new();
         for (root, repo) in &mut self.repos {

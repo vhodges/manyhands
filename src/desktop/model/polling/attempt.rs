@@ -212,12 +212,14 @@ impl AttemptSummary {
     }
 
     /// Whether an answer that ended an attempt replaces `last`: one that
-    /// reached the remote and said how it went. A busy or not-eligible
-    /// answer, a repository error and a cancel are not attempts.
+    /// reached the remote and said how it went, or a cancelled one that
+    /// brought something in or listed something. A busy or not-eligible
+    /// answer, a repository error and an empty cancel are not attempts.
     pub fn is_recorded(&self) -> bool {
-        matches!(
-            self.answer,
-            Answer::Completed | Answer::Transport(_) | Answer::Interrupted
-        )
+        match self.answer {
+            Answer::Completed | Answer::Transport(_) | Answer::Interrupted => true,
+            Answer::Cancelled(_) => self.brought_in > 0 || !self.listed.is_empty(),
+            _ => false,
+        }
     }
 }

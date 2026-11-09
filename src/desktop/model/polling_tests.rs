@@ -162,6 +162,25 @@ fn transport(failure: TransportFailure) -> Answer {
     Answer::Transport(failure)
 }
 
+/// The rows that replace `last`: an attempt that reached the remote and said
+/// how it went.
+const RECORDED: [&str; 14] = [
+    "completed",
+    "completed, no deadline named",
+    "unreachable, backoff deadline named",
+    "unreachable, stored deadline to read",
+    "key locked",
+    "key locked, no key named",
+    "key problem",
+    "no key selected",
+    "host unapproved",
+    "host unapproved, no host named",
+    "configuration required",
+    "key, host or endpoint changed",
+    "registry unavailable or runtime uninitialized",
+    "interrupted",
+];
+
 #[test]
 fn after_attempt_table() {
     let key = SharedKeyId::new();
@@ -205,19 +224,19 @@ fn after_attempt_table() {
             "key locked, no key named",
             transport(TransportFailure::KeyLocked { key: None }),
             None,
-            Want::Attention(Reason::KeyProblem(None, repo.clone())),
+            Want::Attention(Reason::NoKeySelected(repo.clone())),
         ),
         row(
             "key problem",
             transport(TransportFailure::KeyProblem { key: Some(key) }),
             None,
-            Want::Attention(Reason::KeyProblem(Some(key), repo.clone())),
+            Want::Attention(Reason::KeyProblem(key)),
         ),
         row(
             "no key selected",
             transport(TransportFailure::KeyProblem { key: None }),
             None,
-            Want::Attention(Reason::KeyProblem(None, repo.clone())),
+            Want::Attention(Reason::NoKeySelected(repo.clone())),
         ),
         row(
             "host unapproved",
@@ -295,7 +314,7 @@ fn after_attempt_table() {
             Answer::Repository {
                 recovery_required: true,
             },
-            Some(-100),
+            Some(-50),
             Want::Waiting(Why::Unfinished, 5, false),
         ),
         row(
@@ -303,7 +322,7 @@ fn after_attempt_table() {
             Answer::Repository {
                 recovery_required: false,
             },
-            Some(-100),
+            Some(-50),
             Want::Waiting(Why::Failed, 5, false),
         ),
         row(
@@ -357,6 +376,9 @@ fn after_attempt_table() {
     for row in rows {
         let mut fx = Fx::new();
         fx.add("r", policy(Some(fx.at(-100))));
+        // An earlier completed attempt, so a row that must not touch `last`
+        // can be told from one that replaces it.
+        fx.answer("r", Answer::Completed, Some(fx.at(-100)));
         let now = fx.now();
         let next = row.next.map(|seconds| fx.at(seconds));
         let (operation, _) = fx.answer("r", row.answer.clone(), next);
@@ -396,5 +418,16 @@ fn after_attempt_table() {
             "{name}: deadline"
         );
         assert!((row.policy)(&repo.policy), "{name}: policy");
+        let last = repo.last.as_ref().map(|last| &last.answer);
+        let want = if RECORDED.contains(&name) {
+            &row.answer
+        } else {
+            &Answer::Completed
+        };
+        assert_eq!(last, Some(want), "{name}: last");
+        let preempted = u8::from(matches!(row.want, Want::Preempted));
+        assert_eq!(repo.preempted, preempted, "{name}: preempted");
+        let streak = u8::from(matches!(row.want, Want::Waiting(..)));
+        assert_eq!(repo.streak, streak, "{name}: streak");
     }
 }

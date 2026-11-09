@@ -27,7 +27,11 @@ impl RepoSchedule {
             Answer::Busy | Answer::Interrupted | Answer::Repository { .. }
         );
         let preempted = attempt.answer == Answer::Cancelled(CancelCause::Preemption);
-        self.preempted = if preempted { self.preempted + 1 } else { 0 };
+        self.preempted = if preempted {
+            self.preempted.saturating_add(1)
+        } else {
+            0
+        };
         if !on_schedule {
             self.streak = 0;
         }
@@ -82,7 +86,7 @@ impl RepoSchedule {
     fn wait(&mut self, now: &Now, why: Why, op: Option<manyhands::repository::OperationId>) {
         self.phase = match RESTART_DELAYS.get(usize::from(self.streak)) {
             Some(delay) => {
-                self.streak += 1;
+                self.streak = self.streak.saturating_add(1);
                 Phase::Waiting {
                     until: now.after(*delay),
                     why,
@@ -116,8 +120,9 @@ impl RepoSchedule {
             }
             TransportFailure::Unavailable => return self.idle_for_interval(now),
             TransportFailure::KeyLocked { key: Some(key) } => Reason::KeyLocked(*key),
-            TransportFailure::KeyLocked { key: None } => Reason::KeyProblem(None, root.clone()),
-            TransportFailure::KeyProblem { key } => Reason::KeyProblem(*key, root.clone()),
+            TransportFailure::KeyLocked { key: None }
+            | TransportFailure::KeyProblem { key: None } => Reason::NoKeySelected(root.clone()),
+            TransportFailure::KeyProblem { key: Some(key) } => Reason::KeyProblem(*key),
             TransportFailure::HostUnapproved {
                 authority: Some(authority),
             } => Reason::HostUnapproved(authority.clone()),

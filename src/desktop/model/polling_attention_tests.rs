@@ -95,6 +95,34 @@ fn reconfiguration_table() {
         );
     }
 
+    // A poll that will never answer (dropped before it ran, a panicked
+    // worker) is given up, or the one-at-a-time rule silences polling.
+    for queued in [true, false] {
+        let mut fx = Fx::new();
+        fx.add("r", policy(Some(fx.at(-5))));
+        fx.add("other", policy(Some(fx.at(-5))));
+        let r = root("r");
+        if queued {
+            fx.schedule.mark_queued(&r);
+        } else {
+            fx.schedule.mark_running(&r, OperationId::new());
+        }
+        assert!(fx.due().is_empty(), "queued={queued}: one at a time");
+        assert!(fx.schedule.abandon(&r));
+        assert_eq!((fx.phase("r"), fx.repo("r").stale), (Phase::Idle, true));
+        assert!(
+            !fx.schedule.abandon(&r),
+            "queued={queued}: no longer in flight"
+        );
+        assert_eq!(
+            fx.due(),
+            vec![root("other")],
+            "queued={queued}: the rest poll"
+        );
+        fx.schedule.set_policy(&r, policy(Some(fx.at(-5))));
+        assert_eq!(fx.due().len(), 2, "queued={queued}: and r once it is read");
+    }
+
     // Cancel on Quit's ask resumes a stopped repository (R-33).
     let mut fx = Fx::new();
     fx.add("r", policy(None));
@@ -222,7 +250,7 @@ fn attention_keys() {
     };
     let transport = |failure| Answer::Transport(failure);
     let mut fx = Fx::new();
-    for name in ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"] {
+    for name in ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"] {
         fx.add(name, policy(None));
     }
     let attention = [
@@ -264,6 +292,8 @@ fn attention_keys() {
         ),
         ("i", transport(TransportFailure::ConfigurationRequired)),
         ("j", Answer::NotEligible(NotEligible::RecoverySuspended)),
+        ("k", transport(TransportFailure::KeyProblem { key: None })),
+        ("l", transport(TransportFailure::KeyLocked { key: None })),
     ];
     for (name, answer) in attention {
         fx.answer(name, answer, None);
@@ -281,12 +311,20 @@ fn attention_keys() {
             (Reason::KeyLocked(one), roots(&["a", "b", "c"])),
             (Reason::KeyLocked(two), roots(&["d"])),
             (Reason::HostUnapproved(host("x")), roots(&["e", "f"])),
-            (Reason::KeyProblem(Some(two), root("g")), roots(&["g"])),
-            (Reason::KeyProblem(Some(two), root("h")), roots(&["h"])),
+            // A missing key is one entry, however many repositories use it.
+            (Reason::KeyProblem(two), roots(&["g", "h"])),
             (Reason::ConfigurationRequired(root("i")), roots(&["i"])),
             (Reason::RecoveryHeld(root("j")), roots(&["j"])),
+            // No key selected has no key to group by: one entry each.
+            (Reason::NoKeySelected(root("k")), roots(&["k"])),
+            (Reason::NoKeySelected(root("l")), roots(&["l"])),
         ]
     );
+    assert_eq!(
+        fx.schedule.clear_attention(&Reason::KeyProblem(two)),
+        roots(&["g", "h"])
+    );
+    assert_eq!(fx.schedule.attention().len(), 7);
 
     // A completed poll of one repository clears its own and no one else's.
     fx.answer("b", Answer::Completed, Some(fx.at(300)));
