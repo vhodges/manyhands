@@ -10,24 +10,27 @@ id: "01M6V02CC0B7ZKMR3XYHHXMQQV"
 
 # Desktop Background Polling And Shutdown Implementation Plan
 
-> **For agentic workers:** Revision 2, 2026-11-08, draft and unreviewed
-> (revision 1, 2026-11-07; revision 2 adds the Wave 04 Cycle 01
-> coordination). Not
-> authorized for execution: it waits for ticket `01M6KHVD6D0DB8KYT6VGQP10Y0`
-> to land, for the Cycle's re-grounding, and for the owner's approval. Then use
+> **For agentic workers:** Revision 3, 2026-11-09, draft and unreviewed.
+> Revision 1 was 2026-11-07. Revision 2 added the Wave 04 Cycle 01
+> coordination. Revision 3 follows the landing of
+> `01M6KHVD6D0DB8KYT6VGQP10Y0`: it adds Part E (Retire, Tasks 11 and 12),
+> renumbers the evidence tasks to 13 and 14, and follows Cycle 01's approved
+> decisions. Not authorized for execution: it waits for the owner's approval
+> of the documents and a separate implementation authorization. Then use
 > `implementing-a-cycle` task by task, re-read the design, repeat the ticket
 > preflight, and record every checkpoint on ticket
 > `01M4CC0VN3VPVVQ3RNWJKXWEVX`. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Keep discovery current inside the desktop process with one
-application-owned scheduler, preserve manual priority and unsaved work, and
-stop cleanly on quit, with no change to the headless library.
+application-owned scheduler, preserve manual priority and unsaved work, stop
+cleanly on quit, and give the person a deliberate Retire for contexts
+completed elsewhere, with no change to the headless library.
 
 **Architecture:** Part A builds the clock-injected schedule model. Part B puts
 automatic polls on the existing worker's background lane with preemption and
 restart. Part C adds Poll now, the policy controls, the Settings page and the
-needs-attention states. Part D changes shutdown. Part E proves the journeys.
-All serial.
+needs-attention states. Part D changes shutdown. Part E adds the deliberate
+Retire. Part F proves the journeys. All serial.
 
 **Tech stack:** Rust 2024; `gpui-kit` through `gpui_kit::*` only; Devenv; no
 new package.
@@ -39,8 +42,10 @@ new package.
 
 ## Global Constraints
 
-**Precondition.** `01M6KHVD6D0DB8KYT6VGQP10Y0` is merged to main and the
-documents are re-grounded and approved. Task 0 does not start before.
+**Precondition.** `01M6KHVD6D0DB8KYT6VGQP10Y0` is merged (2026-11-09,
+`f4442618`) and the documents are re-grounded at `9512080d`. The documents
+must also be approved and implementation authorized. Task 0 does not start
+before.
 
 **Roles.** The **orchestrator** is the session executing this plan. It
 dispatches one implementer per task and a fresh reviewer after it, one at a
@@ -62,12 +67,15 @@ ticket.
 **Main.** Merge `origin/main` at Task 0, at each Part checkpoint and whenever
 main moves; never rebase.
 
-**Wave 04 Cycle 01** (`01M6V8RK8B0SBCH0YZXFVSR9E3`) is expected to merge
-before D6 (Cycle, Wave 04 Cycle 01 Coordination; design W-1 to W-5). At
-Task 0 and at every merge of main, note in the ledger whether it is on main.
-Tasks 5, 8, 10 and 11 each have a step that applies only when it is. If it
-merges mid-task, finish the task, merge main, then apply the steps the
-earlier tasks skipped before starting the next one.
+**Wave 04 Cycle 01** (`01M6V8RK8B0SBCH0YZXFVSR9E3`, approved 2026-11-08 and
+in implementation) is expected to merge before D6 (Cycle, Wave 04 Cycle 01
+Coordination; design W-1 to W-7). At Task 0 and at every merge of main, note
+in the ledger whether it is on main. Tasks 5, 8, 10 and 13 each have a step
+that applies only when it is. If it merges mid-task, finish the task, merge
+main, then apply the steps the earlier tasks skipped before starting the
+next one. Every row D6 adds to the operation area wraps inside Activity
+(decision 13, W-6). Check this by reaching each new action by keyboard from
+Activity, not by measuring layout.
 
 **GPUI** only through `gpui_kit::*`, never a glob import.
 
@@ -89,7 +97,7 @@ narrow at 15 minutes.
 - The one SSH case (Task 1):
   `devenv shell -- cargo test --all-features --locked --test remote_polling poll_cancel_during_handshake_stall -- --exact`.
 - The whole desktop bin suite at each Part checkpoint only. The AGENTS.md fast
-  tier runs once at review-ready (Task 12); the SSH tier is exactly
+  tier runs once at review-ready (Task 14); the SSH tier is exactly
   `remote_polling` (the one changed test file), run once.
 
 **Each task's last Verify lines.**
@@ -126,7 +134,8 @@ created in Task 0.
 ## Review Focus
 
 1. **Read-only toward the shared copy.** An automatic poll's call list is
-   exactly design B4 (Task 3, 11).
+   exactly design B4, with no `ContextRetire` or `PollOnceRetiring` (Tasks 3,
+   13).
 2. **Manual priority.** A user job cancels a running poll and runs first; the
    poll returns with no failure backoff (Task 4).
 3. **No background prompt.** A locked key gives attention and no `Prompt`
@@ -138,12 +147,17 @@ created in Task 0.
 7. **Shutdown** cancels the poll, shows "still stopping" at ten seconds
    without clearing anything, and joins the worker on `Idle` (Task 10).
 8. **One scheduler** whatever the number of `Services` clones (Task 5).
+9. **Retire is deliberate.** Offered only on `closed` and `promoted` targets,
+   one item per action, never from a schedule (Task 11).
+10. **Retire loses nothing.** Unkept text stops it; drafts are flushed first
+    and outlive it; refusals and pending cleanup are shown as the library
+    answers, with Resume and Abandon (Tasks 11, 12).
 
 ## File Map And Dependency Order
 
 | Task | Part | Summary |
 | --- | --- | --- |
-| 0 | Orchestrator | Merge main with the library ticket, baseline, U-1–U-8, ledger. |
+| 0 | Orchestrator | Merge main, re-check what moved since `9512080d`, baseline, U-1–U-11, ledger. |
 | 1 | Readiness | One SSH case: cancel during a stalled handshake; research note. |
 | 2 | A | Clock seam and schedule model (table-tested). |
 | 3 | B | `PollAttempt`, `Backend::poll_automatic`, `Work::Poll`, call list. |
@@ -154,10 +168,12 @@ created in Task 0.
 | 8 | C | Needs attention: key, host, recovery hold; no background prompt. |
 | 9 | C | Unsaved work across a bring-in; Part C checkpoint. |
 | 10 | D | Shutdown: cancel, still stopping, join. |
-| 11 | E | Privacy, consent and call-list evidence; keyboard journey. |
-| 12 | E | Checklist, gates, review-ready. |
+| 11 | E | Retire: intent, offer, unkept-text stop, draft flush, answers. |
+| 12 | E | Retire recovery and drafts after retirement; Part E checkpoint. |
+| 13 | F | Privacy, consent and call-list evidence; keyboard journey. |
+| 14 | F | Checklist, gates, review-ready. |
 
-Order: 0 → 1 → 2 → … → 12, one at a time.
+Order: 0 → 1 → 2 → … → 14, one at a time.
 
 ---
 
@@ -165,23 +181,24 @@ Order: 0 → 1 → 2 → … → 12, one at a time.
 
 **Files:** create the ledger.
 
-- [ ] Preflight: ticket worktree clean; `git fetch`; merge `origin/main`
-  (the library ticket must be on it); `git merge-tree --write-tree HEAD
-  origin/main` is clean.
-- [ ] Re-grounding: compare design Fact 5 and the API Audit Refresh against
-  main; add the library ticket's disposition and `Unpublished` to the design
-  and to the tasks' mapping; record it in the design's Re-grounding.
-- [ ] Wave 04 Cycle 01: if it is on main, check W-1 to W-5 against its code
-  (the Needs attention count function, where the launch refresh and
-  `finishing` now live, the panel names in tests) and record the answers in
-  the design's Re-grounding; a difference that changes a W item stops for the
+- [ ] Preflight: ticket worktree clean; `git fetch`; merge `origin/main`;
+  `git merge-tree --write-tree HEAD origin/main` is clean.
+- [ ] Re-grounding: the library re-grounding at `9512080d` is in the design
+  (2026-11-09). Compare only what moved on main since then against the
+  Baseline Facts and the API Audit Refresh, and record it in the design's
+  Re-grounding; a difference that changes a ruling stops for the owner.
+- [ ] Wave 04 Cycle 01: if it is on main, check W-1 to W-7 against its code
+  (`needs_attention`'s inputs, where the launch refresh and `finishing` now
+  live, the panel and region names in tests) and record the answers in the
+  design's Re-grounding; a difference that changes a W item stops for the
   owner. If it is not on main, record its ticket's state in the ledger.
 - [ ] Run the required static gates and the fast tier once at baseline
   (entry-gate item 7); record counts. Do not rerun them later on an unchanged
   tree.
-- [ ] Settle U-1 to U-8 by reading source; write each answer in the ledger. An
-  answer that differs from the design (U-1 in particular) stops for the owner.
-- [ ] Confirm decisions 3–11 are approved as written.
+- [ ] Settle U-1 to U-11 by reading source; write each answer in the ledger.
+  An answer that differs from the design (U-1 and U-11 in particular) stops
+  for the owner.
+- [ ] Confirm decisions 3–15 are approved as written.
 - [ ] Create the ledger; post a ticket comment.
 
 **Verify:** the ledger lists baseline counts and every U answer.
@@ -233,7 +250,7 @@ table), `D/model/polling_tests.rs`; edit `D/model/mod.rs`.
   No thread, no worker, no `Instant::now()` outside the production clock.
 - [ ] `PollAttempt`/summary types derive neither `Debug` nor `Display` where
   they could hold more than ids, kinds and counts (they hold no more; `Debug`
-  allowed, privacy test in Task 11).
+  allowed, privacy test in Task 13).
 
 **Verify:** `… polling` passes; no test sleeps.
 
@@ -249,10 +266,12 @@ table), `D/model/polling_tests.rs`; edit `D/model/mod.rs`.
 - [ ] Test first: a submitted `Work::Poll` runs on the background lane and the
   UI hears `Polled(root, PollAttempt)`; it never emits `Prompt` or progress;
   the recording backend's call list is exactly `automatic_poll_eligibility`,
-  `poll_publication_remote`, `remote_snapshot`, `polling_status` (O-8).
+  `poll_publication_remote`, `remote_snapshot`, `polling_status`, and never
+  `ContextRetire` or `PollOnceRetiring` (O-8, R-19).
 - [ ] Implement per design B1 with the `OperationId` source U-1 settled; the
   conversion maps each library result and error to a `PollAttempt` (A4's left
-  column) and each target to `(item_id, kind, disposition)`.
+  column) and each target to `(item_id, kind, disposition)`, including
+  `Closed`, `Promoted` and `Unpublished` (Fact 5).
 - [ ] `cancel_poll(root, op)` calls `cancel_remote_operation` (U-5, U-6 as
   settled).
 
@@ -359,14 +378,17 @@ event), `D/view/operations/`, `D/model/operations.rs`, tests.
   model test that it yields exactly the five reasons and nothing for Paused,
   Checking is off, Can't reach, Checking soon or Waiting for a conflict
   (decision 11, R-14).
-- [ ] **With Wave 04 Cycle 01 on main:** add `attention()`'s count as one
-  term of its Needs attention count function, and extend that function's
-  existing count test with a row per reason and per state that does not count
-  (E-4, A18). Do not change how it counts anything else. Without Cycle 01,
-  note in the ledger that its merge adds the term.
+- [ ] **With Wave 04 Cycle 01 on main:** make the polling model a third
+  input of `needs_attention(&Operations, &DraftRegistry)`
+  (`D/model/attention.rs`), add `attention()`'s count, update its callers,
+  and extend its existing test with a row per reason and per state that does
+  not count (E-4, A18). Do not change how it counts anything else. Without
+  Cycle 01, note in the ledger that its merge adds the term.
+- [ ] The attention entries wrap inside Activity (decision 13); each action
+  is reached by keyboard in the test above.
 
-**Verify:** `… attention`; with Cycle 01 on main, also its count test by
-exact name.
+**Verify:** `… attention`; with Cycle 01 on main, also `needs_attention`'s
+test by exact name.
 
 ## Task 9: Unsaved Work Across A Bring-In; Part C Checkpoint
 
@@ -380,8 +402,11 @@ unless a test fails.
   `ExternalChange` and keeps the edits. Each disposition in `PollAttempt`
   (`Dirty`, `Diverged`, `Conflicted`, `Inaccessible`, `BlockedByLocalState`,
   `MaterializationIncomplete`, `Nonconforming`, `Malformed`,
-  `RemotelyDeleted`, `HistoryUnknown`, the library ticket's closed one) is
-  listed with its `guidance()` and calls no mutation (A2), as one table test.
+  `RemotelyDeleted`, `HistoryUnknown`, `Unpublished`, `Closed`, `Promoted`)
+  is listed with its text and calls no mutation (A2), as one table test. The
+  text is `guidance()`, except where that names a CLI command: Share… for
+  `Unpublished`, and the Retire offer for `Closed` and `Promoted`, whose
+  action Task 11 wires (R-20).
 - [ ] If an existing path loses text, stop for the owner: it is a D2/D3 defect,
   not D6's to patch silently.
 - [ ] Part C checkpoint: merge main; the whole desktop bin suite once; ledger
@@ -411,43 +436,101 @@ unless a test fails.
   (R-15).
 - [ ] **With Wave 04 Cycle 01 on main:** hide the Activity panel, start a
   quit with a job held, advance the injected ten seconds, and assert that the
-  Activity panel is shown and `quit-finishing` carries the still-stopping text
-  (E-5, A18). Extend whichever of Cycle 01's quit-with-Activity-hidden test
-  and this task's test is narrower; leave the other alone.
+  layout is unchanged (Activity still hidden) and that `quit-finishing`
+  carries the still-stopping text (Cycle 01 decision 7, K-18; design
+  decision 12; E-5, A18). Extend whichever of Cycle 01's
+  quit-with-Activity-hidden test (its A7) and this task's test is narrower;
+  leave the other alone.
 
 **Verify:** `… quit_polling`; with Cycle 01 on main, also the extended test
 by exact name.
 
-# Part E: Evidence
+# Part E: Retire
 
-## Task 11: Privacy, Consent And The Call List; Keyboard Journey
+## Task 11: Retire: Intent, Offer, Stop, Flush, Answers
+
+**Files:** `D/services/requests.rs`, `D/services/requests/build.rs`,
+`D/services/mod.rs` (`JobKind`), `D/model/operations.rs` (label and stage
+arms only), `D/model/polling/` (the offer), `D/view/operations/` (the offer
+row), a Retire ask in `D/view/` beside the quit asks, tests.
+
+- [ ] Test first, over canned `context_retirement` answers (decision 9):
+  - only `Closed` and `Promoted` targets offer Retire…, with the desktop
+    words and short code of design E1, never a title;
+  - Retire… submits exactly `Intent::ContextRetire{root, kind, id}` on the
+    user lane, preempting a running automatic poll (R-3);
+  - with a tab of that item holding text no draft keeps, nothing is
+    submitted, and the ask offers Show tab (the default, showing the tab)
+    and Cancel, with no "Retire anyway" (decision 15, A21);
+  - otherwise the item's draft sessions are flushed before submission, and
+    a flush failure stops it with D2's entry;
+  - one table over design E3's states and codes: what is shown, whether
+    lists and tabs reload, that a refused or preserved answer submits
+    nothing more, that `pending` leaves the offer withdrawn (A19, A20; U-10
+    as settled).
+- [ ] Add `Intent::ContextRetire` with every arm of Fact 14 (E-1 where the
+  compiler requires). `changes_items` follows U-10.
+- [ ] The offer row and the ask wrap inside Activity (decision 13); each
+  action is reached by keyboard.
+
+**Verify:** `… retire_offer`; `… retire_answer`; `… retire_unkept`.
+
+## Task 12: Retire Recovery And Drafts; Part E Checkpoint
+
+**Files:** tests under `D/view/` and `D/services/`; source only where U-9 or
+U-11 finds a gap.
+
+- [ ] Test first (A20): a `pending` retirement leaves D5's pending row for
+  its record, with Resume (`OperationResume`, the original request) and
+  Abandon. Abandon opens the existing confirmation, which shows the
+  retirement's details (Fact 18). Both work by keyboard. Add only the label
+  or arm U-9 finds missing.
+- [ ] Test first (A21, O-11): after a `retired` answer, the item's kept
+  draft and a comment draft are still on the Drafts page and can be
+  restored and exported; an open tab of the item reads primary's copy
+  (U-11). If either loses a draft or cannot be exported, stop for the owner:
+  it is a D2 defect, not D6's to patch silently.
+- [ ] Privacy: a Retire offer, ask and answer carry no title, body or
+  comment (the sentinel test of Task 13 covers them too).
+- [ ] Part E checkpoint: merge main; the whole desktop bin suite once;
+  ledger and a ticket comment.
+
+**Verify:** `… retire_recovery`; `… retire_drafts`; then the full desktop bin
+suite.
+
+# Part F: Evidence
+
+## Task 13: Privacy, Consent And The Call List; Keyboard Journey
 
 **Files:** tests only.
 
 - [ ] Privacy sentinel (A16): a title, a body, a comment and a passphrase
-  sentinel never appear in any operation entry, status line, attention text or
-  error.
+  sentinel never appear in any operation entry, status line, attention text,
+  Retire offer or answer, or error.
 - [ ] Consent (A8): one test drives a full day of the scheduler (launch, due,
-  busy, preempt, attention, quit) and asserts the recording backend saw only
-  design B4's calls and the user's own intents.
+  busy, preempt, attention, a `closed` target, quit) and asserts the
+  recording backend saw only design B4's calls and the user's own intents:
+  no `ContextRetire` unless the person chose Retire…, and never
+  `PollOnceRetiring`.
 - [ ] One keyboard walk (A15): open Settings with `secondary-,` (it opens
   the page in both layouts, design W-4), move to the page, change the
-  interval, toggle the switch, Check now, then reach Unlock… in the operation
-  area (`secondary-4`, which Wave 04 Cycle 01 keeps for Activity), by
-  keystrokes alone, focus visible.
+  interval, toggle the switch, Check now, then reach Unlock… and a Retire…
+  in the operation area (`secondary-4`, which Wave 04 Cycle 01 keeps for
+  Activity), by keystrokes alone, focus visible.
 
 **Verify:** `… polling_privacy`; `… polling_consent`; `… polling_keyboard`.
 
-## Task 12: Checklist, Gates, Review-Ready
+## Task 14: Checklist, Gates, Review-Ready
 
 **Files:** `docs/plans/2026-11-07-wave-03-desktop-06-on-screen-checklist.md`,
 the ledger, the Cycle's Status and Acceptance table, ticket records.
 
 - [ ] Write the native checklist from the design's outline, in the D5
-  checklist's format: before you start (two scratch repositories, a stalled
-  server recipe), known limits, sections and a results table.
+  checklist's format: before you start (two scratch repositories, a second
+  clone for the retire section, a stalled server recipe), known limits,
+  sections and a results table.
 - [ ] Merge main; `git merge-tree --write-tree HEAD origin/main` is clean.
-  If Wave 04 Cycle 01 landed after Task 8 or Task 10 ran, apply their Cycle 01
+  If Wave 04 Cycle 01 landed after Task 8, 10 or 13 ran, apply their Cycle 01
   steps now and record them.
 - [ ] Run, once, the static gates across the tree, the AGENTS.md fast tier, and
   the SSH tier for the changed test file (`remote_polling`). Record counts.
@@ -461,16 +544,18 @@ the ledger, the Cycle's Status and Acceptance table, ticket records.
 
 ## Plan Self-Review
 
-- Every Acceptance row A1–A17 maps to a task: A1 native + Task 12; A2 Task 9;
-  A3 Tasks 2, 8; A4 Tasks 4, 12; A5 Tasks 1, 10; A6 Tasks 5, 6, 7; A7 Task 10;
-  A8 Tasks 3, 11; A9 Task 10; A10 Task 4; A11 Tasks 2, 5; A12 Task 2;
-  A13 Task 8; A14 Task 9; A15 Tasks 7, 11; A16 Task 11; A17 Task 5;
-  A18 Tasks 8, 10 (or Cycle 01, if D6 merges first).
+- Every Acceptance row A1–A21 maps to a task: A1 native + Task 14; A2 Task 9;
+  A3 Tasks 2, 8; A4 Tasks 4, 14; A5 Tasks 1, 10; A6 Tasks 5, 6, 7; A7 Task 10;
+  A8 Tasks 3, 13; A9 Task 10; A10 Task 4; A11 Tasks 2, 5; A12 Task 2;
+  A13 Task 8; A14 Task 9; A15 Tasks 7, 13; A16 Task 13; A17 Task 5;
+  A18 Tasks 8, 10 (or Cycle 01, if D6 merges first); A19 Tasks 11, 14;
+  A20 Tasks 11, 12; A21 Tasks 11, 12.
 - No task changes a library file; U-1 is the one place that could force it,
   and stops for the owner.
 - One SSH case, justified in Task 1; every other test is model, worker or
-  desktop-behaviour level, with an injected clock.
-- Existing-test edits are named: E-1 (exhaustive matches, Task 6), E-2 (Settings
+  desktop-behaviour level, with an injected clock. Retire adds no SSH case:
+  its transport is the library's `retirement_cli_authenticated_live_pass`.
+- Existing-test edits are named: E-1 (exhaustive matches, Tasks 6, 11), E-2 (Settings
   page list, Task 7), E-3 (`finishing_text`, Task 10), and, with Wave 04
   Cycle 01 on main, E-4 (its Needs attention count test, Task 8) and E-5 (quit
   with Activity hidden, Task 10).

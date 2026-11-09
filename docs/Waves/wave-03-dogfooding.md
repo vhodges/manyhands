@@ -1143,6 +1143,16 @@ policy. Read precedence is unchanged until the separate latest-copy ticket
 until retirement and discovery settlement. No D6/sibling ticket or worktree is
 edited or marked done by this amendment.
 
+**Status note, 2026-11-09 (D6 planning):** the follow-up merged to main on
+2026-11-09 (`f4442618`) and its ticket is closed, so D6 consumes
+`Mutation::ContextRetire` as merged. D6's draft documents plan the Retire
+action (its design's Part E). The obligation stays owed until D6 merges. Wave
+04 Cycle 01 (`01M6V8RK8B0SBCH0YZXFVSR9E3`, approved 2026-11-08) wraps D1's
+operation area as the Activity panel and adds the footer's Needs attention
+count; D6's Cycle document records how the two meet. Changes to this section
+that follow from D6's own decisions wait for D6's approval (D6 design,
+Document Amendments 1 and 5).
+
 **In scope:** One application-owned worker across windows, launch poll, existing
 interval/pause/backoff state, explicit Poll now and policy controls, fair
 repository scheduling, suspend/clock recovery, worker/UI credential handoff,
