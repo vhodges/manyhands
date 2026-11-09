@@ -303,3 +303,152 @@ No new test site, so no E-11 from the sweep.
 - **Verify:** all four lines clean; both Boundary commands print nothing;
   the sweep for `Region::Navigation`, `region-navigation`, `pane-*` and
   `SHOWING_*` finds only the unrelated `SHOWING_LAST_READ`.
+
+## Task 4b Design Checkpoint (2026-11-08, at `746d5b7d`, before code)
+
+The implementer's checkpoint (read-only phase 1, no source edit, no build),
+reviewed and ruled on by the orchestrator. `origin/main` is still `8da9afd4`.
+Cites use the design's abbreviations.
+
+**1. Panel entity (R-1).** One struct, `RegionPanel` in `D/view/dock/panels.rs`,
+with `Slot { Panel(PanelKind), ItemArea }`, in place of the design's five
+types (ruling Q1 below). Fields: `workspace: WeakEntity<Workspace>`, `slot`,
+`visible: bool`, `focus: FocusHandle` (a clone of `Workspace.regions[..]`:
+Repositories, Documents, Tickets, Activity to `Region::Operations`, ItemArea to
+`Region::Content`), and `_observe: Subscription`. Impls: `BasePanel`
+(`panel_name` from `PanelKind::name()` or `ITEM_AREA_NAME`; `visible` returns
+`self.visible`; `closable` and `zoomable` false; default `dump`), the component
+`Panel` (`title` static label in 4b; `title_suffix` `None`; `zoom_control`
+`None`; `title_bar` false for the item area; `tab_name` the short label),
+`Render`, `Focusable` (returns `self.focus.clone()`), `EventEmitter<PanelEvent>`.
+- `visible` and `focus_handle` read only the panel's own fields. The Kit calls
+  them while a `DockArea` or `TabGroup` update holds those entities
+  (`B/dock/panel.rs` blanket `PanelView` impl; `B/dock/tab_group.rs:~682`).
+  `set_visible` is `Called from Task 5`; every panel is visible in 4b.
+- `render` upgrades the weak Workspace (`Empty` if gone) and calls a new
+  `pub(in crate::desktop::view)` `Workspace::<slot>_region(window, cx)` in
+  `workspace/render.rs`, which wraps today's body method in `Workspace::region`
+  with `.size_full()`. A nested update is legal: `view.update` ends before the
+  child's layout (`G/view.rs:164-177`, `:422-445`), so the Workspace is not
+  leased while a panel renders.
+- Each panel observes the Workspace (`cx.observe(&workspace_entity, notify)`).
+  A `notify` during draw is dropped (`G/window.rs:167-192`), as today.
+
+**2. Builder map (R-34).** A `DockPanels(HashMap<EntityId, five handles>)`
+`Global` in `D/view/dock.rs`, keyed by the dock area's `EntityId`, each handle
+`panel_handle(entity)` (`C/dock/panel.rs:325`). The five names are registered
+once per App on first build (`register_panel`, `B/dock/registry.rs:111`; the
+builder closure captures nothing per window). The Workspace inserts its entry
+in `Workspace::new` right after creating the area, before any `load`, and
+removes it in an `on_release` (guarded by `has_global`) whose `Subscription`
+is kept in a Workspace field. The builder reads
+`ctx.dock_area().entity_id()` (a `WeakEntity`, no upgrade), so it never reads
+the area or the Workspace (fact 5) and two windows never swap panels.
+
+**3. Renderer (R-2).** Built inside the area's constructor, as
+`DockSkin::dock_area` does (`C/dock/mod.rs:132-151`):
+`cx.new(|acx| { let skin = DockSkin::new(acx); DockArea::new("workspace-dock",
+Some(LAYOUT_VERSION), window, acx).with_renderer(Rc::new(ShellRenderer::new(skin))) })`.
+`LAYOUT_VERSION = 1` for now. `ShellRenderer` forwards `frame` (id
+`dock-area`), `center_frame`, `split_frame`, `render_dock` (keeps the dock-edge
+handle and its resize `LayoutChanged`, `C/dock/dock.rs:55-77`, `:219-231`) and
+`build_placeholder` to the inner `DockSkin`. Its `tab_group_renderer` returns a
+`PanelHeader` wrapping the skin's group renderer. In 4b `PanelHeader` draws
+titles only: `frame` is its own `div().id(("panel-group", node))` (not the
+skin's, which carries Zoom and Close handlers, `C/dock/tab_panel.rs:634`);
+`render_tab_bar` is a title row for one visible panel whose `title_bar` is true,
+a plain row of titles for several, nothing for the item area;
+`render_active_panel` is uncached (nothing for a collapsed group, R-35);
+`render_drop_indicator` is forwarded to the skin's group renderer. Tabs, drag
+and drop are Task 4c.
+
+**4. Bookkeeping (R-33).**
+- Into `activity_region`: `finishing` (`D/view/quit.rs:87`),
+  `session_section`, `pending_section`, `prune_abandon_focus()` after both,
+  the `operation-area` container (id kept) in `region(Operations, ..)`.
+  Pruning does not run while Activity is not displayed.
+- Into `item_area_region`: `item_shown`, `selection`, the content region's
+  `note_focus` before `content_body`, the `content` scroll container, Root's
+  sheet layer (`Root::render_sheet_layer` in `deferred`, anchored at 0,0 and
+  not clipped, `B/sheet.rs:123`, `G/elements/deferred.rs:65`), and
+  `region(Content, ..)`.
+- Repositories, Documents and Tickets each get one body method.
+- Stays in `Workspace::render`: the pre-body hooks (`sync_tickets`,
+  `apply_review`, `open_deferred_republish`, `sync_sheet`), the
+  `focused_region` to `last_region` and `set_pane` tracking,
+  `repositories_pane.set` (every frame, so a hidden Repositories panel keeps
+  its list state), the root `id("workspace")` with key context "Workspace",
+  every `on_action` through `unless_dialog` plus the unguarded Quit and
+  QuitNow, the area child, and the dialog and notification layers. No title
+  bar or footer yet.
+
+**5. Default layout (R-38, fact 3).** In `Workspace::new`: `Layout::default()`
+becomes a Workspace field. For each side that `has_panels`, build a `DockLayout`
+from `layout.groups(side)`: one group is `DockLayout::tabs().panel_view(..)
+.active_index(..)`; several are `v_split()` (Left, Right) or `h_split()`
+(Bottom) with `.child(tabs, size)`, the left dock's two groups sized
+`px(600.)` and `px(1400.)` (rescaled in proportion, `B/dock/dock_area.rs:~1470`).
+In `area.update`: `set_center(item_area_handle)`, `set_dock(Left/Right/Bottom)`,
+`set_dock_size(.., px(290/440/150))` (floor 100 px). Then, in the same update,
+`dump`, `layout.set_arrangement(arrangement_from(&dump))` and
+`accepted = dump` (R-38; field `Called from Task 5`). No `LayoutChanged`
+subscription in 4b: the launch events have no listener, and Task 5 adds the
+idempotent handler. `cycle_region` steps `f6_stops(&self.layout)`;
+`focus_lost` falls back to a displayed region (R-9); with the default layout
+every region is displayed, so the 4b order equals `REGIONS`.
+
+**6. U-4 plan.** First test `desktop::view::dock::tests::each_panel_draws_its_region_inside_the_dock`
+(`D/view/dock_tests.rs`, included from `dock.rs`): for each of `region-*` and
+`operation-area`, `window.within("dock-area").try_find(id)` is `Some`, and each
+region sits within its own `("panel-group", node)` scope, Repositories and
+Documents in different groups. It fails first with `expected one scope
+"dock-area" … found 0`. It can only pass if every panel's `render` completed
+`workspace.update`; a leased Workspace would panic. **If it fails, stop for the
+owner.** Fallback to propose, not implement: a per-panel mailbox
+(`Rc<RefCell<Option<AnyElement>>>`) filled by `Workspace::render` and taken by
+the panel, at the cost of building hidden panels' bodies.
+
+**7. Harness (R-26).** `Shell::open` and `Shell::launch` set the bottom dock to
+520 px after launch (a `dock_area()` accessor and `set_dock_size`);
+`Shell::resize_keeping_content(width, height, cx)`; `Shell::open_as_launched`
+resizes nothing (the app's 1280 × 840 bounds). E-10's ten sites: `scroll_tests.rs:35`
+(1440 × 700, helper `tall()`), `settings/repositories_tests.rs:650` (640),
+`keyboard_tests/discussion.rs:69` (helper `discussed()`), `editing_privacy_tests.rs:779`,
+`item/posting_tests.rs:142`, `item/posting_tests/support.rs:96` (helper
+`posting_shell()`, about 66 call sites), `item/frame_tests.rs:51` (helper
+`shell(height, ..)`) and `:220`, `item/discussion_tests.rs:108` (shared
+`shell(height, ..)`), `drafts_tests.rs:317` (6000).
+
+**8. Source observations.** The group frame and `Workspace::region` both track
+the active panel's focus handle (`B/dock/tab_group.rs:682`); `focusable_node_ids`
+keeps the inner one (`G/key_dispatch.rs:223`), so focus checks should hold.
+Body methods in `workspace/content.rs` are not visible outside
+`view::workspace`, hence the wrappers in `render.rs`. Line cites in the design
+for `D/mod.rs` and `C/dock/mod.rs` drifted a little; substance unchanged.
+
+**9. Rulings (orchestrator, 2026-11-08).**
+- **Q1, one struct.** Accepted as an implementation detail: the five stable
+  names (`RepositoriesPanel` … `ItemAreaPanel`) are what persists and what
+  `panel_name` returns; a macro can give five types if a later task needs it.
+  Recorded as a deviation from "five thin entities" in Part C.
+- **Q2, harness height.** R-26's 1726 and +326 include the 38 px title bar and
+  28 px footer, which arrive in Tasks 6 and 7. A harness constant
+  `SHELL_CHROME_HEIGHT` is 0 in 4b: window height = 1660 + the constant, and
+  `resize_keeping_content` adds 260 + the constant to the height. Task 6 adds
+  38, Task 7 adds 28, so the final values are 1726 and +326 as R-26 says, and
+  the item area is 860 × 1140 at every task. Width stays 1590 and +150.
+- **Q3, R-38 in 4b.** Accepted: the `accepted` field and
+  `set_arrangement(arrangement_from(&dump))` are set at build.
+- **Q4, extra builder test.** Declined: not in the approved plan, and Task 9's
+  restore tests exercise `load` and the builders.
+- **Carried by this task:** the 4a Minor doc-comment tidy (`keys.rs:69`,
+  `create_tests.rs:10-11` and `:951`, `create.rs` `new_item`,
+  `tickets_tests.rs:568-570`), where the files are touched, and the `NewItem`
+  fallback to `Pane` stays as is unless a test needs otherwise.
+- **File sizes.** `dock.rs` about 300, `dock/panels.rs` about 200,
+  `dock/header.rs` about 200 (4c expects 450-500, so 4c puts tabs in
+  `dock/header/tabs.rs`); `dock_tests.rs` will pass 500 in Task 5, so Task 5
+  splits it into `dock_tests/` modules.
+- **Test runs.** E-10's shared helpers reach many tests; run each by exact name
+  and list them in the ledger, with `--test-threads` kept low (the Task 4a
+  flake appeared under heavy parallel load). No prefix runs.
