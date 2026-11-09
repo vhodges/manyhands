@@ -12,26 +12,24 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current P1 Review-Fix Standing — 2026-11-09 UTC
+### Current Qualified Owner-Review Handoff After P1 Clearance — 2026-11-09 UTC
 
-**REVIEW-READY TEMPORARILY HELD / P1 LOCALLY CORRECTED, REVIEWS PENDING: owner
-returned frozen-report rejection of normal upstream `Unpublished` at published HEAD
-`62f79eec9c7b4a22855cb360113f17913b0b6737` / prior runtime
-`a42460bb2d03bcba0db885657257d8ea0f62d66c`. Bounded compatibility repair adds one
-decoder member. The existing local regression produced compiled RED0/1→GREEN1/0
-over four table rows; fresh check/strict Clippy/fmt pass on identical GREEN inputs.
-Controller verification and SAME SPEC→QUALITY are required before fix publication.
-Ticket remains `implementing` / review-fix-pending. Prior qualified acceptance
-and publication retain their historical scope, not acceptance of this new fix.
-Owner review is still required before closure; no ALLPASS/whole-suite/native claim.**
+**P1 RESOLVED. Controller restores QUALIFIED REVIEW-READY FOR OWNER REVIEW at
+frozen runtime `ee3729cf0f84c25ef98436cc8a4f5dee9f0dd56c`, after SAME SPEC CLEAR
+then SAME QUALITY CLEAR,0 new findings on the bounded fix. Both carry prior
+qualified final-feature acceptance and the two owner-accepted nonblocking limits
+below. No further local gate is owed under the approved selection. Owner review
+is required before closure; ticket lifecycle status remains `implementing` pending
+owner review. This is not ALLPASS, zero issues, a fresh whole-suite pass or native
+proof. Authorized ticket-branch publication is PENDING fresh refs/checks/push.**
 
-- Final SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then SAME QUALITY
-  **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**: qualified runtime-evidence acceptance at
-  metadata `6e8e47a69ac33cef3547259ed363c6c367c86108` / runtime a424, no additional
-  essential headless obligation; QUALITY reports **0 new concrete findings**.
-  Prior source scopes remain whole c48..a424 and bounded5af8..a424, WITH the P2.
-  The new actionable P1 requires bounded correction and same-reviewer re-review;
-  those prior qualified acceptances do not clear the as-yet-unreviewed fix.
+- SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** CLEAR, then SAME QUALITY
+  **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** QUALITY CLEAR on bounded
+  **`62f79eec9c7b4a22855cb360113f17913b0b6737..ee3729cf0f84c25ef98436cc8a4f5dee9f0dd56c`**.
+  Controller reports independent verification of the one enum line,19 preserved
+  assertions,43-entry manifest,1,723 inputs, compiled RED→GREEN and statics. Prior
+  final evidence acceptance at6e8/a424 and whole c48..a424/bounded5af8..a424 source
+  scopes retain every qualification; no new whole-feature audit/run by this task.
 - **Desktop PARTIAL, mapped window UNVERIFIED**: owned-process startup/stop
   verified; owner explicitly said **“accept the unverified desktop window.”**
   This resolves its acceptance hold only, not window verification or a defect
@@ -45,27 +43,34 @@ Owner review is still required before closure; no ALLPASS/whole-suite/native cla
   **41/0, exit0,409.800775539s**. Bare CLI help/catalog **exit0,36.214521579s**.
   Desktop owned startup/stop **123.625219776s**, launcher **−15** after owned
   SIGTERM; observer **exit1/no valid client JSON**. No mapped-window pass.
-- Current P1 exact regression: **compiled RED0/1, exit101,29.602632690s**;
+- Reviewed P1 exact regression, **reused, not rerun**:
+  **compiled RED0/1, exit101,29.602632690s**;
   **GREEN1/0, exit0,19.027548225s**. Same test bytes, only one production enum-line
   change. Original normal/lost-copy rows plus unpublished-only empty and mixed
   retirement rows; unpublished branch/worktree/admin preserved, reopen/replay safe.
-- Fresh P1 statics: locked all-feature check **exit0,4.978976427s**; strict locked
+- Reviewed P1 statics, **reused, not rerun**: locked all-feature check
+  **exit0,4.978976427s**; strict locked
   all-target/all-feature Clippy **exit0,25.700913590s**; fmt-check **exit0,
   17.939688986s**. All1,723 source/build hashes match GREEN. Prior a424 statics,
   four exact follow-ups and old29 integration exacts keep their recorded scopes.
   No synthetic whole808/84/Desktop/schema/library pass; manual characterization
   remains ignored/**NOT MEASURED** and performance **STOP** remains in force.
-- Fresh P1 preflight **2026-11-09T10:47:01.262946Z**: main unchanged at
+- Prior P1 preflight **2026-11-09T10:47:01.262946Z**: main unchanged at
   **`8da9afd4ec82c145632988687cbd71bead046051`**, fetched ticket tracking equals
   published62f79eec; actual `git merge origin/main` **exit0**, Already up to date;
   ancestry passes. Main checkout untouched; no incoming production integration.
-- Prior ticket-only publication succeeded at62f79eec; external receipt remains
-  `/tmp/opencode/task8-review-ready-publication-20261109T041611Z/`. **Do not push
-  this fix yet.** New-only bounded evidence:
-  **`/tmp/opencode/task8-unpublished-frozen-report-20261109T104659Z/`**. No whole
-  target/old-green/SSH/smoke repetition; only the changed exact regression and
-  required fresh statics. No agents, PR/main merge/close/native/real operation/
-  cleanup/performance work or stale-main ticket CLI status save.
+- Controller authenticated the bounded fix's43-entry manifest, SHA-256
+  **`212212407cadf58de23e8da6aa4bbd50aa4a8927087b9e12425ab21d16e6f80c`**,0 mismatches,
+  and read the full source diff/all5 RED/GREEN/static raw logs. Prior review hold
+  is discharged. No gates, source/test/build/plan edits or review reruns here.
+- Publish only **`manyhands/ticket/01M6KHVD6D0DB8KYT6VGQP10Y0`**, after a new
+  specific-main-and-ticket fetch verifies main unchanged8da9, fetched ticket an
+  ancestor and merge-tree clean. Otherwise STOP/report, no force/rebase/discard/
+  integration. Actual refs/argv/exits/push/remote-OID/main/upstream0/0 proofs go
+  externally in **`/tmp/opencode/task8-unpublished-fix-publication-20261109T111859Z/`**;
+  publication is not claimed before push, and no extra unpublished metadata
+  commit follows it. No ticket status save/new IDs, agents, PR/main merge/close/
+  native/real retirement/cleanup/performance work. Owner review still required.
 
 #### Historical Main-Integration / Correction Record (Retained)
 
@@ -12291,3 +12296,124 @@ Ticket remains **implementing**, owner review required before closure; no
 agents/PR/main merge/close/native/real operations/cleanup. Accepted marker P2
 **UNFIXED**, desktop PARTIAL/window-unverified accepted, manual **NOT MEASURED**
 and all performance/perf-ticket/materialization follow-up **STOP** remain.
+
+## Task 8 — P1 Reviews Clear / Qualified Owner-Review Handoff Restored / Publication Pending, 2026-11-09 UTC
+
+### Controller Clearance And Scope
+
+At clean entry/source freeze **`ee3729cf0f84c25ef98436cc8a4f5dee9f0dd56c`**,
+controller clears the bounded P1 repair for handoff and ticket-branch publication.
+**P1 resolved; qualified review-ready for OWNER review restored.** No further
+local gate is owed under the approved selection. This supersedes the prior
+then-pending review hold without rewriting its historical record. Ticket status
+and ledger frontmatter remain **`implementing`**, pending owner review; no status
+save or lifecycle transition. **Owner review is required before closure.**
+
+- SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**: **CLEAR**, followed by
+  SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**: **QUALITY CLEAR**, **0 new
+  findings** on bounded source/evidence range
+  **`62f79eec9c7b4a22855cb360113f17913b0b6737..ee3729cf0f84c25ef98436cc8a4f5dee9f0dd56c`**.
+- Controller reports independent verification of the **one enum line**, all
+  **19 preserved original assertions**, **43 manifest entries/1,723 inputs**,
+  compiled exact RED→GREEN and statics. Controller separately read the full
+  source diff and all **five full RED/GREEN/check/Clippy/fmt raw logs**, and
+  authenticated the43-entry manifest SHA-256
+  **`212212407cadf58de23e8da6aa4bbd50aa4a8927087b9e12425ab21d16e6f80c`** with
+  **0 mismatches**. These are controller/reviewer findings, not another review,
+  runtime execution or bulk audit by this metadata-only publication task.
+- Both bounded reviews carry the prior **qualified final-feature acceptance** at
+  metadata **`6e8e47a69ac33cef3547259ed363c6c367c86108`** / runtime
+  **`a42460bb2d03bcba0db885657257d8ea0f62d66c`**, prior whole source scope
+  **`c48bc2cf2d9d9bbe68621278bb56fedd7276d94c..a42460bb2d03bcba0db885657257d8ea0f62d66c`**
+  and bounded correction
+  **`5af8ed2bf15ccb2eeaf7f647a3f14e122083b458..a42460bb2d03bcba0db885657257d8ea0f62d66c`**,
+  WITH all source/evidence qualifications and accepted exceptions. **0 new
+  findings is not zero issues, ALLPASS, a fresh whole-suite pass or native proof.**
+
+### Reviewed Regression And Static Evidence — Reused, Not Rerun
+
+Production remains exactly one `PollDisposition::Unpublished` decoder addition;
+`NotReached` and `MaterializationIncomplete` remain excluded. Closed-image/schema
+audit, full-pass gate, default poll shape and D15 are unchanged. The existing
+test uses the real upstream NeverPublished evidence producer, preserves all19
+old assertions (17 unchanged/two strengthened) and verifies original normal/lost-
+copy rows plus unpublished-only empty selection and mixed real retirement. It
+preserves the unpublished branch/worktree/admin contents and immutable reopened/
+deregistered report-only replay without new Fetch/pass/child rows.
+
+Reviewed literal regression argv, **not executed in this publication task**:
+
+```sh
+devenv shell -- cargo test --all-features --locked --lib repository::context_retirement::execution_tests::mutation_tests::retirement_batch_public_live_pass_retires_real_context_and_replays_without_transport -- --exact
+```
+
+| Recorded checkpoint | Actual count / exit | Monotonic total | Harness time |
+| --- | --- | ---: | ---: |
+| Unmodified decoder, extended test | **0 passed/1 failed/0 ignored,1723 filtered; exit101** | 29.602632690s | 5.69s |
+| One decoder member added, identical test bytes | **1 passed/0 failed/0 ignored,1723 filtered; exit0** | 19.027548225s | 8.58s |
+
+RED compiled and verified Unpublished classification, then empty-selection
+original capture returned RecoveryRequired rather than Ok. No compile failure/
+zero match counted as RED; the original lost-copy row's caught panic is expected
+and separate. GREEN reaches all four rows. Only the production enum member
+differs between RED/GREEN inputs. Recorded statics at the same GREEN inputs:
+
+| Recorded Devenv static argv | Exit | Monotonic total |
+| --- | ---: | ---: |
+| `devenv shell -- cargo check --all-features --locked` | **0** | 4.978976427s |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | **0** | 25.700913590s |
+| `devenv shell -- cargo fmt --check` | **0** | 17.939688986s |
+
+All1,723 input hashes matched GREEN at each static admission; input-map SHA-256
+**`31b8ddf6b6937e33d85df680545290e1d9f9c02cc743f00101da245ba0e6fdda`**. Full raw
+evidence remains unchanged under
+`/tmp/opencode/task8-unpublished-frozen-report-20261109T104659Z/`. No new Rust,
+test/static/build/smoke/probe/runtime command, source/test/build/plan change,
+agent or review loop is authorized or run by this metadata checkpoint.
+
+### Carried Qualifications And Publication Boundary
+
+**Marker P2 remains valid, owner-accepted/deferred and UNFIXED**: registry-wide
+resolution versus registration/rebuild/cache-recovery race, source-derived,
+unreproduced, likelihood unmeasured; not per-repository-isolated or attribution
+of old SSH failures. Production repair/default normalization/exclusive guards/
+new hooks stay deferred for relevant recovery/concurrency work, no new ticket.
+**Desktop remains PARTIAL**, owned-process startup/stop previously verified,
+**mapped window UNVERIFIED**, explicitly owner-accepted: “accept the unverified
+desktop window.” Acceptance removes its acceptance hold only, not window
+verification or a defect finding. No observer/smoke retry. Earlier79/0,78/0,41/0
+targets/CLI/desktop and all old29/exact/library/local-sync/SSH/static records keep
+their individual source scopes, not fresh ee3729 whole passes. Manual benchmark
+stays ignored/**NOT MEASURED**; performance/perf-ticket/promotion-closure-
+materialization follow-up **STOP** remains.
+
+**Ticket publication PENDING in this commit**, authorized only for
+**`manyhands/ticket/01M6KHVD6D0DB8KYT6VGQP10Y0`**. Before push, noninteractively
+fetch only origin main and this ticket branch; require main unchanged at
+**`8da9afd4ec82c145632988687cbd71bead046051`**, fetched ticket tracking an ancestor
+of local HEAD and clean merge-tree. Any main movement, nonancestor or failed
+check stops publication/report, without force, rebase, reset, discard or silent
+integration. Only authorized normal push:
+
+```sh
+git push origin HEAD:refs/heads/manyhands/ticket/01M6KHVD6D0DB8KYT6VGQP10Y0
+```
+
+Push failure means STOP, no force/retry/credential changes/private-payload output.
+After success verify `ls-remote` ticket OID equals HEAD, main unchanged, upstream
+**0/0**, source/build/read-only plans unchanged from runtime ee3729, diff-check,
+prefix, clean tree and no owned jobs. Actual UTC/argv/exits/ref/push/verification/
+manifest go only in new
+**`/tmp/opencode/task8-unpublished-fix-publication-20261109T111859Z/`**. External
+success receipt avoids an extra unpublished metadata commit; do not claim push
+success in advance. No old evidence overwrite or historical bulk inventory.
+
+Only this ledger current standing/append and canonical comment append change,
+with required coauthor. Entire current canonical **144332-byte** prefix remains
+intact, SHA-256 **`c3821630722ffe9334e86619477dfe71522e1e281cb818f588f42c57dff4da09`**,
+including ID **`01M6TYJATB44WZPJABX9GMBVS1`**, parent
+**`01M6SYJK4CJGHWKZC7MTP18GTA`**, creation time **`2026-11-07T12:08:39Z`**.
+No ticket status save/new IDs/plan edits, other branch push, PR, main merge,
+closure, native CI, real profile/key/context/draft/retirement operation, cleanup
+or performance work. **Qualified owner-review-ready, not closed or merged;
+owner review remains required before closure.**
