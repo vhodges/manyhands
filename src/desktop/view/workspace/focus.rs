@@ -85,7 +85,7 @@ impl Region {
         }
     }
 
-    fn of_stop(stop: Stop) -> Self {
+    pub(super) fn of_stop(stop: Stop) -> Self {
         match stop {
             Stop::Panel(PanelKind::Repositories) => Self::Repositories,
             Stop::Panel(PanelKind::Documents) => Self::Documents,

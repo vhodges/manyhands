@@ -80,23 +80,29 @@ impl Workspace {
         let session = self.session_section(window, cx);
         let pending = self.pending_section(window, cx);
         self.prune_abandon_focus();
+        // The layout file's notices sit above the operation area (R-21).
+        let notices = self.layout_notices(window, cx);
         self.region(
             Region::Operations,
             window,
             cx,
-            v_flex()
-                .id("operation-area")
-                .gap_2()
-                .size_full()
-                .overflow_y_scroll()
-                .children(finishing)
-                .child(
-                    h_flex()
-                        .gap_4()
-                        .items_start()
-                        .child(session.flex_1())
-                        .child(pending.flex_1()),
-                ),
+            v_flex().size_full().gap_2().children(notices).child(
+                v_flex()
+                    .id("operation-area")
+                    .gap_2()
+                    .w_full()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .children(finishing)
+                    .child(
+                        h_flex()
+                            .gap_4()
+                            .items_start()
+                            .child(session.flex_1())
+                            .child(pending.flex_1()),
+                    ),
+            ),
         )
         .size_full()
         .into_any_element()
@@ -173,6 +179,12 @@ impl Render for Workspace {
         self.apply_review(window, cx);
         self.open_deferred_republish(window, cx);
         self.sync_sheet(window, cx);
+        if !self.dock.clamped() {
+            // The area records its bounds as this frame is drawn, so the
+            // clamp runs after it (R-37). `on_next_frame` is no hook: tests
+            // never run it.
+            cx.defer_in(window, |this, window, cx| this.clamp_first(window, cx));
+        }
         if let Some(region) = self.focused_region(window, cx) {
             self.last_region = Some(region);
             // The list used last (R-8): a click or a key into a list.

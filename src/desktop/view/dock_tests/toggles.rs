@@ -5,6 +5,7 @@ use gpui_kit::{TestAppContext, component::dock::DockPlacement, test::TestWindowE
 use manyhands::repository::ItemDtoKind;
 
 use super::support::*;
+use crate::desktop::view::dock::restore_tests::{elapse, in_file, same};
 use crate::desktop::{
     model::{
         layout::{PanelKind, Side},
@@ -252,7 +253,13 @@ fn a_dock_closed_and_opened_keeps_its_panels_groups_and_sizes(cx: &mut TestAppCo
         assert!(focused(&shell, cx), "{side:?} opened: focus is kept");
         assert_eq!(nodes(cx), ids, "{side:?}: nothing in the area was rebuilt");
         assert!(saves(&shell, cx) > saved, "{side:?}: a save was scheduled");
-        // Completed in Task 9: the file holds the same layout.
+        // The file holds the same layout (Part G).
+        elapse(&shell, cx);
+        same(
+            &in_file(&shell),
+            &super::support::layout(&shell, cx),
+            &format!("{side:?}: the file"),
+        );
     }
 }
 

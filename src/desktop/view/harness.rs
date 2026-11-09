@@ -104,14 +104,29 @@ impl Shell {
     /// refreshed at launch, so a test that does not wait for the worker
     /// need not.
     pub(crate) fn open(fixture: Fixture, cx: &mut TestAppContext) -> Self {
-        Self::start(fixture, false, |_| {}, Geometry::Harness, cx)
+        Self::start(fixture, false, |_| {}, Geometry::Harness, true, cx)
     }
 
     /// Opens the main window as the application does, at the application's
     /// own size and layout: nothing is resized (R-26). For the tests of the
     /// default layout.
     pub(crate) fn open_as_launched(fixture: Fixture, cx: &mut TestAppContext) -> Self {
-        Self::start(fixture, false, |_| {}, Geometry::AsLaunched, cx)
+        Self::start(fixture, false, |_| {}, Geometry::AsLaunched, true, cx)
+    }
+
+    /// Closes the window and opens a new one over the same fixture, as a
+    /// restart does: the data directory, its stores and their seams are the
+    /// fixture's, and nothing is resized (R-26). The Kit and the keys are
+    /// already set up.
+    pub(crate) fn relaunch(self, cx: &mut TestAppContext) -> Self {
+        let Self {
+            window, fixture, ..
+        } = self;
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        VisualTestContext::from_window(window.into(), cx).run_until_parked();
+        Self::start(fixture, false, |_| {}, Geometry::AsLaunched, false, cx)
     }
 
     /// Opens the main window as the application does, refreshing every
@@ -123,7 +138,7 @@ impl Shell {
         before: impl FnOnce(&DelayingBackend),
         cx: &mut TestAppContext,
     ) -> Self {
-        Self::start(fixture, true, before, Geometry::Harness, cx)
+        Self::start(fixture, true, before, Geometry::Harness, true, cx)
     }
 
     fn start(
@@ -131,13 +146,16 @@ impl Shell {
         launch_refresh: bool,
         before: impl FnOnce(&DelayingBackend),
         geometry: Geometry,
+        first: bool,
         cx: &mut TestAppContext,
     ) -> Self {
-        cx.update(gpui_kit::init);
-        cx.update(crate::desktop::bind_all_keys);
-        // Dialogs open without their entrance animation, so a frame finds
-        // them where they rest.
-        cx.update(|cx| cx.set_reduce_motion(true));
+        if first {
+            cx.update(gpui_kit::init);
+            cx.update(crate::desktop::bind_all_keys);
+            // Dialogs open without their entrance animation, so a frame
+            // finds them where they rest.
+            cx.update(|cx| cx.set_reduce_motion(true));
+        }
         let backend = fixture.delaying_backend();
         before(&backend);
         let window = cx.update(|cx| open_test_window_over(backend.clone(), launch_refresh, cx));

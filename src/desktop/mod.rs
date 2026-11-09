@@ -30,7 +30,7 @@ use manyhands::{
 };
 
 use keys::Quit;
-use services::{LibraryBackend, Services, resolutions::ResolutionStore};
+use services::{LibraryBackend, Services, layout::LayoutStore, resolutions::ResolutionStore};
 use view::workspace::Workspace;
 
 /// Opens the service the desktop runs over. Production opens the default
@@ -110,16 +110,18 @@ fn root_over_workspace(services: Services, window: &mut Window, cx: &mut Context
     Root::new(workspace, window, cx)
 }
 
-/// The production services: the library, and the draft store and the
-/// kept resolution sets in the data directory the service opened, with
-/// no delays, and its worker. A store that cannot open leaves the
-/// desktop running without drafts, or without kept resolutions.
+/// The production services: the library, and the draft store, the kept
+/// resolution sets and the panel layout in the data directory the service
+/// opened, with no delays, and its worker. A store that cannot open leaves
+/// the desktop running without drafts, without kept resolutions, or
+/// without a saved layout.
 fn library_services(service: RepositoryService, cx: &mut App) -> Services {
     let data = service.data_directory().to_owned();
     let drafts = DraftStore::open_in(&data);
     let resolutions = ResolutionStore::open_in(&data);
+    let layout = LayoutStore::open_in(&data);
     Services::start(
-        Arc::new(LibraryBackend::new(service, drafts, resolutions)),
+        Arc::new(LibraryBackend::new(service, drafts, resolutions, layout)),
         cx,
     )
 }

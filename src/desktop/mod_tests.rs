@@ -197,6 +197,7 @@ mod view {
             data.join("resolutions").is_dir(),
             "resolutions beside the service"
         );
+        assert!(data.join("layout").is_dir(), "layout beside the service");
     }
 
     /// Two Retry presses before the window's root is replaced open the

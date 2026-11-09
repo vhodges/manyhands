@@ -9,6 +9,7 @@ use gpui_kit::{Context, Window, component::dock::DockEvent};
 use super::Workspace;
 use crate::desktop::{
     model::layout::{Layout, PanelKind, Side, arrangement_from},
+    services::layout::{Landed, LayoutStoreError},
     view::dock::{
         Slot,
         accepted::{centre_is_item_area, open_in, same_layout},
@@ -100,10 +101,41 @@ impl Workspace {
 
     /// The tail of every operation: reconcile, the focus check, a save.
     fn settle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.dock.reconcile(&mut self.layout, window, cx);
+        let opened = self.dock.reconcile(&mut self.layout, window, cx);
+        // A dock that opens is scaled to fit (R-37).
+        if !opened.is_empty() {
+            self.dock.clamp_docks(&self.layout, window, cx);
+        }
         self.check_focus(window, cx);
-        self.dock.request_save();
+        self.dock.request_save(cx);
         cx.notify();
+    }
+
+    /// The first frame has been drawn: the one clamp of the launch (R-37).
+    /// Deferred from `render`, so it runs once the area has recorded its
+    /// bounds.
+    pub(in crate::desktop::view) fn clamp_first(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dock.clamp_first(&self.layout, window, cx);
+    }
+
+    /// The save timer fired: the layout is written as it is now (R-19).
+    pub(in crate::desktop::view) fn write_layout(&mut self, cx: &mut Context<Self>) {
+        self.dock.write(&self.layout, cx);
+    }
+
+    /// A write answered (R-19, P32).
+    pub(in crate::desktop::view) fn layout_written(
+        &mut self,
+        generation: u64,
+        taken: usize,
+        result: Result<Landed, LayoutStoreError>,
+        cx: &mut Context<Self>,
+    ) {
+        self.dock.written(generation, taken, result, cx);
     }
 
     /// After each `LayoutChanged` (R-6). The same for every event, and
@@ -166,12 +198,15 @@ impl Workspace {
                 self.layout.set_size(side, size.as_f32());
             }
         }
-        self.dock.reconcile(&mut self.layout, window, cx);
+        let opened = self.dock.reconcile(&mut self.layout, window, cx);
+        if !opened.is_empty() {
+            self.dock.clamp_docks(&self.layout, window, cx);
+        }
         // After reconcile, so the events it caused stop at step 1.
         let settled = area.read(cx).dump(cx);
         self.dock.accept(settled);
         self.check_focus(window, cx);
-        self.dock.request_save();
+        self.dock.request_save(cx);
         cx.notify();
     }
 }

@@ -15,6 +15,12 @@
 
 use gpui_kit::component::dock::{DockAreaState, DockState, PanelState};
 
+mod restore;
+
+#[cfg(test)]
+pub(crate) use restore::state_for;
+pub(crate) use restore::{LAYOUT_VERSION, Restore, encode, restore};
+
 /// The stable name of the item area's panel.
 pub(crate) const ITEM_AREA_NAME: &str = "ItemAreaPanel";
 

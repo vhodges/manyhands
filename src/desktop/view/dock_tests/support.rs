@@ -21,7 +21,7 @@ use crate::desktop::{
     },
 };
 
-pub(super) const PLACEMENTS: [DockPlacement; 3] = [
+pub(in crate::desktop::view) const PLACEMENTS: [DockPlacement; 3] = [
     DockPlacement::Left,
     DockPlacement::Right,
     DockPlacement::Bottom,
@@ -29,9 +29,9 @@ pub(super) const PLACEMENTS: [DockPlacement; 3] = [
 
 /// A dock of a dump: whether it is open, and its groups with each one's
 /// panel names and active index.
-pub(super) type DockShape = Option<(bool, Vec<(Vec<String>, usize)>)>;
+pub(in crate::desktop::view) type DockShape = Option<(bool, Vec<(Vec<String>, usize)>)>;
 
-pub(super) fn shape(state: &DockAreaState) -> [DockShape; 3] {
+pub(in crate::desktop::view) fn shape(state: &DockAreaState) -> [DockShape; 3] {
     fn walk(node: &PanelState, out: &mut Vec<(Vec<String>, usize)>) {
         if node.panel_name == "TabPanel" {
             let names = node.children.iter().map(|c| c.panel_name.clone()).collect();
@@ -50,7 +50,7 @@ pub(super) fn shape(state: &DockAreaState) -> [DockShape; 3] {
 }
 
 /// Every pixel size of a dump, docks and splits in order.
-pub(super) fn sizes(state: &DockAreaState) -> Vec<f32> {
+pub(in crate::desktop::view) fn sizes(state: &DockAreaState) -> Vec<f32> {
     fn walk(node: &PanelState, out: &mut Vec<f32>) {
         if let Some(sizes) = node.info.sizes() {
             out.extend(sizes.iter().map(|size| size.as_f32()));
@@ -68,24 +68,24 @@ pub(super) fn sizes(state: &DockAreaState) -> Vec<f32> {
     out
 }
 
-pub(super) fn area(shell: &Shell, cx: &mut TestAppContext) -> Entity<DockArea> {
+pub(in crate::desktop::view) fn area(shell: &Shell, cx: &mut TestAppContext) -> Entity<DockArea> {
     shell
         .workspace
         .read_with(cx, |workspace, _| workspace.dock_area().clone())
 }
 
-pub(super) fn dump(shell: &Shell, cx: &mut TestAppContext) -> DockAreaState {
+pub(in crate::desktop::view) fn dump(shell: &Shell, cx: &mut TestAppContext) -> DockAreaState {
     area(shell, cx).read_with(cx, |area, cx| area.dump(cx))
 }
 
-pub(super) fn layout(shell: &Shell, cx: &mut TestAppContext) -> Layout {
+pub(in crate::desktop::view) fn layout(shell: &Shell, cx: &mut TestAppContext) -> Layout {
     shell
         .workspace
         .read_with(cx, |workspace, _| workspace.layout().clone())
 }
 
 /// How many saves the layout has asked for so far (R-31).
-pub(super) fn saves(shell: &Shell, cx: &mut TestAppContext) -> usize {
+pub(in crate::desktop::view) fn saves(shell: &Shell, cx: &mut TestAppContext) -> usize {
     shell
         .workspace
         .read_with(cx, |workspace, _| workspace.layout_saves())
@@ -93,7 +93,7 @@ pub(super) fn saves(shell: &Shell, cx: &mut TestAppContext) -> usize {
 
 /// Runs `f` on the Workspace in a drawn frame, as a key or a click does,
 /// and lets the events it causes settle.
-pub(super) fn act(
+pub(in crate::desktop::view) fn act(
     shell: &Shell,
     cx: &mut TestAppContext,
     f: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>),
@@ -106,24 +106,33 @@ pub(super) fn act(
     shell.run(cx);
 }
 
-pub(super) fn toggle_panel(shell: &Shell, kind: PanelKind, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn toggle_panel(
+    shell: &Shell,
+    kind: PanelKind,
+    cx: &mut TestAppContext,
+) {
     act(shell, cx, |ws, window, cx| {
         ws.toggle_panel(kind, window, cx)
     });
 }
 
-pub(super) fn toggle_dock(shell: &Shell, side: Side, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn toggle_dock(shell: &Shell, side: Side, cx: &mut TestAppContext) {
     act(shell, cx, |ws, window, cx| ws.toggle_dock(side, window, cx));
 }
 
-pub(super) fn dock_panel(shell: &Shell, kind: PanelKind, side: Side, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn dock_panel(
+    shell: &Shell,
+    kind: PanelKind,
+    side: Side,
+    cx: &mut TestAppContext,
+) {
     act(shell, cx, |ws, window, cx| {
         ws.dock_panel(kind, side, window, cx)
     });
 }
 
 /// Runs `f` on the area in a drawn frame: the edit a drag commits.
-pub(super) fn edit_area(
+pub(in crate::desktop::view) fn edit_area(
     shell: &Shell,
     cx: &mut TestAppContext,
     f: impl FnOnce(&mut DockArea, &mut Window, &mut Context<DockArea>),
@@ -135,7 +144,7 @@ pub(super) fn edit_area(
     shell.run(cx);
 }
 
-pub(super) fn panel_id(
+pub(in crate::desktop::view) fn panel_id(
     area: &Entity<DockArea>,
     kind: PanelKind,
     cx: &mut TestAppContext,
@@ -159,7 +168,7 @@ pub(super) fn panel_id(
 }
 
 /// The group holding `kind`.
-pub(super) fn group_of(
+pub(in crate::desktop::view) fn group_of(
     area: &Entity<DockArea>,
     kind: PanelKind,
     cx: &mut TestAppContext,
@@ -179,7 +188,7 @@ pub(super) fn group_of(
 }
 
 /// The Kit's own edit for a panel dropped into `with`'s group, at the end.
-pub(super) fn put_in_group(
+pub(in crate::desktop::view) fn put_in_group(
     shell: &Shell,
     kind: PanelKind,
     with: PanelKind,
@@ -203,7 +212,10 @@ pub(super) fn put_in_group(
 }
 
 /// The group holding the item area, in the centre.
-pub(super) fn item_area_group(area: &Entity<DockArea>, cx: &mut TestAppContext) -> NodeId {
+pub(in crate::desktop::view) fn item_area_group(
+    area: &Entity<DockArea>,
+    cx: &mut TestAppContext,
+) -> NodeId {
     area.read_with(cx, |area, cx| {
         let tree = area.layout(DockPlacement::Center).unwrap();
         let id = tree
@@ -218,7 +230,7 @@ pub(super) fn item_area_group(area: &Entity<DockArea>, cx: &mut TestAppContext) 
 }
 
 /// Counts the area's `LayoutChanged` events while the returned guard lives.
-pub(super) fn count_changes(
+pub(in crate::desktop::view) fn count_changes(
     area: &Entity<DockArea>,
     cx: &mut TestAppContext,
 ) -> (Rc<Cell<usize>>, Subscription) {
@@ -235,7 +247,11 @@ pub(super) fn count_changes(
 }
 
 /// Whether the panel is visible to the Kit.
-pub(super) fn visible(shell: &Shell, kind: PanelKind, cx: &mut TestAppContext) -> bool {
+pub(in crate::desktop::view) fn visible(
+    shell: &Shell,
+    kind: PanelKind,
+    cx: &mut TestAppContext,
+) -> bool {
     let area = area(shell, cx);
     let id = panel_id(&area, kind, cx);
     area.read_with(cx, |area, cx| area.panel(id).unwrap().visible(cx))
@@ -245,7 +261,11 @@ pub(super) fn visible(shell: &Shell, kind: PanelKind, cx: &mut TestAppContext) -
 /// with their active tabs, and each panel's visible flag (a panel is
 /// visible when it is on, and every panel of a closed bottom dock is, so
 /// its strip names them: R-35).
-pub(super) fn assert_agreement(shell: &Shell, what: &str, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn assert_agreement(
+    shell: &Shell,
+    what: &str,
+    cx: &mut TestAppContext,
+) {
     let layout = layout(shell, cx);
     let area = area(shell, cx);
     let state = area.read_with(cx, |area, cx| area.dump(cx));
@@ -281,7 +301,7 @@ pub(super) fn assert_agreement(shell: &Shell, what: &str, cx: &mut TestAppContex
 
 /// Which regions are drawn, in `PanelKind::ALL` order (Repositories,
 /// Tickets, Documents, Activity).
-pub(super) fn drawn(shell: &Shell, cx: &mut TestAppContext) -> [bool; 4] {
+pub(in crate::desktop::view) fn drawn(shell: &Shell, cx: &mut TestAppContext) -> [bool; 4] {
     [
         Region::Repositories,
         Region::Tickets,
@@ -292,7 +312,7 @@ pub(super) fn drawn(shell: &Shell, cx: &mut TestAppContext) -> [bool; 4] {
 }
 
 /// The region that holds focus, among those drawn.
-pub(super) fn focus(shell: &Shell, cx: &mut TestAppContext) -> Option<Region> {
+pub(in crate::desktop::view) fn focus(shell: &Shell, cx: &mut TestAppContext) -> Option<Region> {
     shell.frame(cx, |window, _| {
         REGIONS
             .into_iter()
@@ -300,7 +320,7 @@ pub(super) fn focus(shell: &Shell, cx: &mut TestAppContext) -> Option<Region> {
     })
 }
 
-pub(super) fn displayed(shell: &Shell, cx: &mut TestAppContext) -> [bool; 4] {
+pub(in crate::desktop::view) fn displayed(shell: &Shell, cx: &mut TestAppContext) -> [bool; 4] {
     let layout = layout(shell, cx);
     PanelKind::ALL.map(|kind| layout.is_displayed(kind))
 }

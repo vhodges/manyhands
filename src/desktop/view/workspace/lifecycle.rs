@@ -265,7 +265,10 @@ impl Workspace {
         }
     }
 
+    /// Every exit passes through here: the layout is written first, on this
+    /// thread, so a change made while the quit waited is kept (R-19, P31).
     pub(in crate::desktop::view) fn quit_now(&mut self, cx: &mut Context<Self>) {
+        self.dock.write_for_quit(&self.layout, cx);
         self.set_quit(QuitPhase::Quit, cx);
         self.prompts_held = false;
         self.prompt_unavailable_now(cx);

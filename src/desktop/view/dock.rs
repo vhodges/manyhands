@@ -2,10 +2,13 @@
 //! `DockArea` holding the five panels, built from the layout model.
 
 pub(super) mod accepted;
+mod clamp;
 mod header;
 mod moves;
 mod panels;
 mod reconcile;
+mod restore;
+mod save;
 
 use std::{collections::HashMap, rc::Rc, sync::Arc};
 
@@ -21,11 +24,15 @@ use gpui_kit::{
 
 use self::header::ShellRenderer;
 pub(crate) use self::panels::{RegionPanel, Slot};
+pub(super) use self::restore::Launch;
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use self::save::LAYOUT_SAVE_DELAY;
+use self::save::SaveState;
 use super::workspace::Workspace;
-use crate::desktop::model::layout::{DEFAULT_LEFT_SPLIT, Group, Layout, Side, arrangement_from};
-
-/// The version written into the area's dump (Part G).
-pub(crate) const LAYOUT_VERSION: usize = 1;
+use crate::desktop::{
+    model::layout::{DEFAULT_LEFT_SPLIT, Group, LAYOUT_VERSION, Layout, Side},
+    services::layout::LayoutStore,
+};
 
 /// The panels of every dock area, by the area's entity id (R-34).
 ///
@@ -75,10 +82,18 @@ pub(super) struct DockShell {
     panels: Vec<(Slot, Entity<RegionPanel>)>,
     /// The last dump the shell accepted as the layout (R-6, R-38).
     accepted: DockAreaState,
-    /// How many saves the layout has asked for. Task 9 turns each into a
-    /// restart of the debounce timer (R-19, R-31).
-    #[cfg_attr(not(test), allow(dead_code))] // Read by Task 9's save.
+    /// Where the layout is kept; `None` when the store did not open, which
+    /// turns saving off for the session (R-21).
+    store: Option<LayoutStore>,
+    /// The debounced save (R-19) and its writes.
+    save: SaveState,
+    /// How many saves the layout has asked for (R-31): tests read it.
+    #[cfg_attr(not(test), allow(dead_code))]
     saves: usize,
+    /// The restore and save notices in Activity (R-21).
+    notices: Notices,
+    /// Whether the clamp for the first non-zero bounds has run (R-37).
+    clamped: bool,
     _events: Subscription,
     _focus_in: Vec<Subscription>,
     _released: Subscription,
@@ -92,6 +107,7 @@ impl DockShell {
     pub(super) fn build(
         regions: &[FocusHandle; 5],
         layout: &mut Layout,
+        launch: Launch,
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) -> Self {
@@ -145,8 +161,7 @@ impl DockShell {
                 area.set_dock_size(placement(side), size, window, cx);
             }
         });
-        let accepted = area.read(cx).dump(cx);
-        layout.set_arrangement(arrangement_from(&accepted));
+        let default_state = area.read(cx).dump(cx);
         let events = cx.subscribe_in(&area, window, |this, _, event: &DockEvent, window, cx| {
             this.dock_event(event, window, cx)
         });
@@ -165,15 +180,21 @@ impl DockShell {
             })
             .collect();
 
-        Self {
+        let mut shell = Self {
             area,
             panels,
-            accepted,
+            accepted: default_state.clone(),
+            store: launch.store.clone(),
+            save: SaveState::default(),
             saves: 0,
+            notices: Notices::new(cx),
+            clamped: false,
             _events: events,
             _focus_in: focus_in,
             _released: released,
-        }
+        };
+        shell.apply_launch(launch, default_state, layout, window, cx);
+        shell
     }
 
     pub(super) fn area(&self) -> &Entity<DockArea> {
@@ -188,15 +209,39 @@ impl DockShell {
         self.accepted = state;
     }
 
-    /// Asks for the layout to be saved (R-31). The store comes in Task 9;
-    /// until then the request is counted.
-    pub(super) fn request_save(&mut self) {
-        self.saves += 1;
+    pub(super) fn notices(&self) -> &Notices {
+        &self.notices
+    }
+
+    pub(super) fn notices_mut(&mut self) -> &mut Notices {
+        &mut self.notices
     }
 
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(super) fn saves(&self) -> usize {
         self.saves
+    }
+}
+
+/// The two notices the layout file can leave in Activity (R-21), and the
+/// focus handles of their Dismiss buttons. Each lasts for the session.
+pub(in crate::desktop::view) struct Notices {
+    /// The saved layout could not be used, so the default is back.
+    pub(in crate::desktop::view) restore: bool,
+    /// The last write failed.
+    pub(in crate::desktop::view) save: bool,
+    pub(in crate::desktop::view) restore_focus: FocusHandle,
+    pub(in crate::desktop::view) save_focus: FocusHandle,
+}
+
+impl Notices {
+    fn new(cx: &mut Context<Workspace>) -> Self {
+        Self {
+            restore: false,
+            save: false,
+            restore_focus: cx.focus_handle().tab_stop(true),
+            save_focus: cx.focus_handle().tab_stop(true),
+        }
     }
 }
 
@@ -237,3 +282,7 @@ fn side_layout(
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "dock_tests/mod.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "dock/restore_tests.rs"]
+mod restore_tests;

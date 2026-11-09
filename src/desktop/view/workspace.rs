@@ -6,6 +6,7 @@ mod docks;
 mod find;
 mod focus;
 mod footer;
+mod layout_notices;
 mod lifecycle;
 mod lists;
 mod render;
@@ -28,7 +29,7 @@ use gpui_kit::{
 
 pub(crate) use super::quit::QuitPhase;
 use super::{
-    dock::DockShell,
+    dock::{DockShell, Launch},
     documents::DocumentsPane,
     drafts::{DraftsEvent, DraftsPage},
     footer::Footer,
@@ -43,7 +44,7 @@ use crate::desktop::{
     model::{
         documents::Documents,
         find::Find,
-        layout::Layout,
+        layout::{Layout, PanelKind, f6_stops},
         navigation::Navigation,
         stamp::{Generations, RepoKey},
         tickets::Tickets,
@@ -178,7 +179,6 @@ impl Workspace {
             cx.focus_handle(),
             cx.focus_handle(),
         ];
-        window.focus(&regions[Region::Repositories.index()], cx);
         let operations = cx.observe_in(services.operations(), window, |this, _, window, cx| {
             this.operations_changed(window, cx)
         });
@@ -251,7 +251,18 @@ impl Workspace {
             |this, _, event: &DraftsEvent, window, cx| this.drafts_event(event, window, cx),
         );
         let mut layout = Layout::default();
-        let dock = DockShell::build(&regions, &mut layout, window, cx);
+        let launch = Launch::read(services.backend().as_ref());
+        let dock = DockShell::build(&regions, &mut layout, launch, window, cx);
+        // Focus starts on Repositories if it is displayed, otherwise on the
+        // first F6 stop (R-9).
+        let start = if layout.is_displayed(PanelKind::Repositories) {
+            Region::Repositories
+        } else {
+            f6_stops(&layout)
+                .first()
+                .map_or(Region::Content, |stop| Region::of_stop(*stop))
+        };
+        window.focus(&regions[start.index()], cx);
         let mut workspace = Self {
             services,
             regions,
@@ -290,7 +301,7 @@ impl Workspace {
             },
             _settings_events: settings_events,
             _drafts_events: drafts_events,
-            last_region: Some(Region::Repositories),
+            last_region: Some(start),
             window_title: String::new(),
             quit: QuitPhase::Running,
             quit_focus: cx.focus_handle().tab_stop(true),

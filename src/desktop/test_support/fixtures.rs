@@ -32,7 +32,10 @@ use manyhands::{
 };
 
 use super::{delaying::DelayingBackend, git_home};
-use crate::desktop::services::resolutions::{ResolutionStore, ResolutionStoreError};
+use crate::desktop::services::{
+    layout::{LayoutStore, LayoutStoreError},
+    resolutions::{ResolutionStore, ResolutionStoreError},
+};
 
 /// The identity every fixture repository is created and committed as.
 pub(crate) fn identity() -> CommitIdentity {
@@ -65,6 +68,9 @@ pub(crate) struct Fixture {
     /// The kept resolution sets in the data directory, opened as the
     /// draft store is.
     resolutions: OnceLock<Result<ResolutionStore, ResolutionStoreError>>,
+    /// The panel layout store in the data directory, opened as the draft
+    /// store is.
+    layout: OnceLock<Result<LayoutStore, LayoutStoreError>>,
     data: tempfile::TempDir,
     home: tempfile::TempDir,
     repositories: tempfile::TempDir,
@@ -83,6 +89,7 @@ impl Fixture {
             service,
             drafts: OnceLock::new(),
             resolutions: OnceLock::new(),
+            layout: OnceLock::new(),
             data,
             home,
             repositories,
@@ -103,8 +110,25 @@ impl Fixture {
                 self.home().to_owned(),
                 self.drafts_opened(),
             )
-            .with_resolutions(self.resolutions_opened()),
+            .with_resolutions(self.resolutions_opened())
+            .with_layout(self.layout_opened()),
         )
+    }
+
+    /// `LayoutStore::open_in` of the data directory, the first time.
+    fn layout_opened(&self) -> Result<LayoutStore, LayoutStoreError> {
+        self.layout
+            .get_or_init(|| LayoutStore::open_in(self.data.path()))
+            .clone()
+    }
+
+    /// The layout store the desktop under test shares, for a test to seed
+    /// and to set its seams on. Panics if it did not open.
+    pub(crate) fn layout_store(&self) -> LayoutStore {
+        match self.layout_opened() {
+            Ok(store) => store,
+            Err(error) => panic!("the fixture's layout store must open: {error}"),
+        }
     }
 
     /// `ResolutionStore::open_in` of the data directory, the first time.

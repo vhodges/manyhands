@@ -22,7 +22,7 @@ mod accepted;
 mod moves;
 mod state;
 mod strip;
-mod support;
+pub(in crate::desktop::view) mod support;
 mod toggles;
 
 const OPERATION_AREA: &str = "operation-area";

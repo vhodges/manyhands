@@ -13,7 +13,11 @@ use crate::desktop::{
     model::layout::{ITEM_AREA_NAME, PanelKind, Side},
     test_support::fixtures::Fixture,
     view::{
-        dock::{accepted::centre_is_item_area, placement},
+        dock::{
+            accepted::centre_is_item_area,
+            placement,
+            restore_tests::{elapse, in_file, same},
+        },
         harness::Shell,
         workspace::Region,
     },
@@ -258,7 +262,15 @@ fn a_panel_moved_into_a_tab_group_is_kept(cx: &mut TestAppContext) {
     assert!(shell.present(Region::Tickets.id(), cx));
     assert!(saves(&shell, cx) > saved);
     assert_agreement(&shell, "Tickets in Repositories' group", cx);
-    // Completed in Task 9: the file holds it, and `Shell::relaunch` restores it.
+    // The file holds it, and a restart restores it (Part G).
+    elapse(&shell, cx);
+    same(&in_file(&shell), &layout, "the file");
+    let shell = shell.relaunch(cx);
+    let restored = super::support::layout(&shell, cx);
+    same(&restored, &layout, "the restart");
+    assert!(restored.is_displayed(Tickets) && !restored.is_displayed(Repositories));
+    assert!(shell.present(Region::Tickets.id(), cx));
+    assert_agreement(&shell, "Tickets in Repositories' group, restarted", cx);
 }
 
 /// A panel dropped past the last tab of a group that holds a hidden panel

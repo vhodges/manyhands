@@ -17,6 +17,9 @@ use super::{
     arrangement_from, f6_stops,
 };
 
+#[path = "layout/restore_cases.rs"]
+mod restore_cases;
+
 const PANELS: [(char, PanelKind); 4] = [
     ('R', PanelKind::Repositories),
     ('T', PanelKind::Tickets),
@@ -501,4 +504,10 @@ fn f6_stops_follow_the_arrangement() {
     let group = &from_unknown.groups(Side::Left)[0];
     assert_eq!(group.panels, [Repositories, Documents]);
     assert_eq!(group.active, 1);
+}
+
+/// Part G's table: `restore` over every case (P24).
+#[test]
+fn restore_restores_or_falls_back() {
+    restore_cases::run();
 }

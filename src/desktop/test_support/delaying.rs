@@ -33,6 +33,7 @@ use manyhands::{
 
 use crate::desktop::services::{
     Backend, DraftStoreUnavailable, JobKind, KeyStoreUnavailable, ReadGate, ReadKind,
+    layout::{LayoutStore, LayoutStoreError},
     resolutions::{ResolutionStore, ResolutionStoreError},
 };
 
@@ -56,6 +57,9 @@ pub(crate) struct DelayingBackend {
     /// The real resolutions store over the fixture's data directory, or
     /// why it did not open; unavailable until `with_resolutions`.
     resolutions: Result<ResolutionStore, ResolutionStoreError>,
+    /// The real layout store over the fixture's data directory, or why it
+    /// did not open; unavailable until `with_layout`.
+    layout: Result<LayoutStore, LayoutStoreError>,
     reads: Mutex<HashMap<ReadKind, VecDeque<ReadGate>>>,
     jobs: Mutex<HashMap<JobKind, VecDeque<Arc<Gate>>>>,
     /// Holds taken after a job's library call returns, each with the
@@ -90,6 +94,7 @@ impl DelayingBackend {
             home,
             drafts: drafts.map_err(DraftStoreUnavailable::from),
             resolutions: Err(ResolutionStoreError::Unavailable),
+            layout: Err(LayoutStoreError::Unavailable),
             reads: Mutex::default(),
             jobs: Mutex::default(),
             returned: Mutex::default(),
@@ -107,6 +112,12 @@ impl DelayingBackend {
         resolutions: Result<ResolutionStore, ResolutionStoreError>,
     ) -> Self {
         self.resolutions = resolutions;
+        self
+    }
+
+    /// The same backend over the layout store's open result.
+    pub(crate) fn with_layout(mut self, layout: Result<LayoutStore, LayoutStoreError>) -> Self {
+        self.layout = layout;
         self
     }
 
@@ -268,6 +279,10 @@ impl Backend for DelayingBackend {
 
     fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError> {
         self.resolutions.as_ref().map_err(|error| *error)
+    }
+
+    fn layout(&self) -> Result<&LayoutStore, LayoutStoreError> {
+        self.layout.as_ref().map_err(|error| *error)
     }
 
     fn read_gate(&self, kind: ReadKind) -> Option<ReadGate> {
