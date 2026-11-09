@@ -25,6 +25,9 @@ pub(crate) mod drafts;
     allow(dead_code, unused_imports)
 )]
 pub(crate) mod fixtures;
+// The recording double of the automatic poll's calls (D6 Task 3).
+#[cfg(test)]
+pub(crate) mod polling;
 // Real local conflicts, for the conflict model's and reads' tests.
 #[cfg(test)]
 pub(crate) mod local_conflict;

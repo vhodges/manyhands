@@ -332,6 +332,9 @@ impl Operations {
             // One worker asks one thing at a time: a prompt still kept
             // when the next comes is one its job no longer waits on.
             WorkerEvent::Prompt(prompt) => self.prompt = Some(prompt),
+            // A poll is not a request: the drain takes its attempt before
+            // `apply` and hands it to the poll inbox (D6 B1).
+            WorkerEvent::Polled(..) => {}
         }
     }
 

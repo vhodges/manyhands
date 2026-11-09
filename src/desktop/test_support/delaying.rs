@@ -352,14 +352,14 @@ struct GateState {
 }
 
 #[derive(Default)]
-struct Gate {
+pub(super) struct Gate {
     state: Mutex<GateState>,
     changed: Condvar,
 }
 
 impl Gate {
     /// The worker side: says it is here, then waits for the release.
-    fn wait(&self) {
+    pub(super) fn wait(&self) {
         let mut state = self.state.lock().unwrap();
         state.reached = true;
         self.changed.notify_all();
@@ -368,13 +368,13 @@ impl Gate {
         }
     }
 
-    fn release(&self) {
+    pub(super) fn release(&self) {
         self.state.lock().unwrap().released = true;
         self.changed.notify_all();
     }
 
     /// Blocks until the worker is at the gate, for at most `limit`.
-    fn wait_reached(&self, limit: Duration) -> bool {
+    pub(super) fn wait_reached(&self, limit: Duration) -> bool {
         let state = self.state.lock().unwrap();
         let (state, _) = self
             .changed
@@ -390,7 +390,7 @@ impl Gate {
 /// for `hold_job_return`, and once the named stage has been sent to the UI
 /// for `hold_at_stage`.
 #[must_use = "dropping the handle releases the hold"]
-pub(crate) struct JobGate(Arc<Gate>);
+pub(crate) struct JobGate(pub(super) Arc<Gate>);
 
 impl JobGate {
     pub(crate) fn release(&self) {

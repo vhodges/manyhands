@@ -168,6 +168,8 @@ fn seen(event: &WorkerEvent) -> Seen {
         WorkerEvent::Removed(id) => Seen::Removed(*id),
         WorkerEvent::NotSent(id, why) => Seen::NotSent(*id, *why),
         WorkerEvent::Prompt(_) => Seen::Prompt,
+        // These tests submit no poll (`poll_tests` hears them).
+        WorkerEvent::Polled(..) => unreachable!("no poll was submitted"),
     }
 }
 

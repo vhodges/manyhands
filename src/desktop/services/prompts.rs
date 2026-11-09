@@ -22,6 +22,15 @@
 //! against the request whose attempt asked for it, so Unlock… on that
 //! request's outcome clears its keys (`WorkerHandle::clear_declined_for`)
 //! without the outcome naming one (R-3, R-13, R-17).
+//!
+//! A background job never prompts (D6 B5, R-26): `automatic` polling does
+//! not stop a first prompt, so the provider refuses for the running job's
+//! lane. A passphrase request of a background job is answered
+//! `Unavailable` at once, with no `Prompt`, and its key is not marked
+//! declined: Not now is the person's answer, and none was asked. The key is
+//! recorded as refused against the running request, so a retirement's later
+//! `unlock_required` answer, which names no key, can find one to hold
+//! (`refused_for`).
 
 use std::{
     collections::{HashMap, HashSet},
@@ -40,7 +49,10 @@ use manyhands::repository::{
     },
 };
 
-use super::{requests::DesktopRequestId, worker::WorkerEvent};
+use super::{
+    requests::{DesktopRequestId, Lane},
+    worker::WorkerEvent,
+};
 
 /// A passphrase the library asks for while a job runs. The worker waits
 /// for `reply`; a dropped sender reads as `Unavailable`.
@@ -80,6 +92,11 @@ struct Declined {
     attempt: Option<DesktopRequestId>,
     /// The keys each request's last attempt was answered `Cancelled` for.
     by_request: HashMap<DesktopRequestId, HashSet<SharedKeyId>>,
+    /// Whether the job the worker is running is a background one (B5).
+    background: bool,
+    /// The keys a background job's last attempt was refused a prompt for,
+    /// which are not declined.
+    refused: HashMap<DesktopRequestId, HashSet<SharedKeyId>>,
 }
 
 impl DeclinedKeys {
@@ -108,15 +125,45 @@ impl DeclinedKeys {
         declined.record(key_id);
     }
 
-    /// The worker begins an attempt of `id`, or, with `None`, runs no
-    /// request's attempt: what a later answer is recorded against. An
+    /// The worker begins a job of `lane` that is the attempt of `id`, or,
+    /// with `None`, no request's attempt: what a later answer is recorded
+    /// against, and whether the provider may ask the person at all. An
     /// attempt begun forgets what the request's last one recorded.
-    pub(crate) fn attempting(&self, id: Option<DesktopRequestId>) {
+    pub(crate) fn attempting(&self, id: Option<DesktopRequestId>, lane: Lane) {
         let mut declined = self.lock();
         declined.attempt = id;
+        declined.background = lane == Lane::Background;
         if let Some(id) = id {
             declined.by_request.remove(&id);
+            declined.refused.remove(&id);
         }
+    }
+
+    /// Whether the running job is a background one and `key_id` is refused
+    /// a prompt: recorded against the running attempt's request, and not
+    /// declined.
+    fn refused(&self, key_id: SharedKeyId) -> bool {
+        let mut declined = self.lock();
+        if !declined.background {
+            return false;
+        }
+        if let Some(id) = declined.attempt {
+            declined.refused.entry(id).or_default().insert(key_id);
+        }
+        true
+    }
+
+    /// The keys the request `id`'s last attempt, a background one, was
+    /// refused a prompt for (B5): a retirement's `unlock_required` answer
+    /// names none, so these are the keys its attention is held under.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
+    pub(crate) fn refused_for(&self, id: DesktopRequestId) -> Vec<SharedKeyId> {
+        let declined = self.lock();
+        declined
+            .refused
+            .get(&id)
+            .map(|keys| keys.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     /// Clears `key_id`'s mark; true when it was declined. Unlock… clears
@@ -173,6 +220,10 @@ impl SessionCredentialProvider for DesktopProvider {
     /// Runs on the worker thread, which no executor uses: blocking it on
     /// the reply stalls nothing else.
     fn request_passphrase(&mut self, request: &UnlockRequest) -> PassphraseResponse {
+        // A background job never asks the person (B5, R-26).
+        if self.declined.refused(request.key_id) {
+            return PassphraseResponse::Unavailable;
+        }
         // Declined with Not now: not asked again until Unlock… (R-13).
         if self.declined.declined(request.key_id) {
             return PassphraseResponse::Cancelled;

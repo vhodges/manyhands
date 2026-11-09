@@ -42,15 +42,18 @@ use futures::channel::mpsc;
 use manyhands::{
     repository::{
         CancellationToken, ConfirmationId, HostObservationDto, MutationCall, MutationDataDto,
-        ProgressEvent, ProgressSink, RepositoryService, RequestId, RequestState as RecordDtoState,
+        OperationId, ProgressEvent, ProgressSink, RepositoryService, RequestId,
+        RequestState as RecordDtoState,
         keys::{SecretPassphrase, SessionCredentials},
         transport::SshAuthority,
     },
     results::{Envelope, ResultCode},
 };
 
+use crate::desktop::model::polling::{CancelCause, PollAttempt, Root};
+
 use super::{
-    BUSY_RETRY_DELAYS, Backend, JobKind,
+    BUSY_RETRY_DELAYS, Backend, JobKind, poll,
     prompts::{DeclinedKeys, DesktopProvider, PromptRequest},
     requests::{DesktopRequest, DesktopRequestId, Intent, Lane, Refusals, RequestState},
 };
@@ -78,6 +81,11 @@ pub(crate) enum WorkerEvent {
     /// The running job's library call asks for a passphrase, and the
     /// worker waits for the reply (`prompts`).
     Prompt(PromptRequest),
+    /// An automatic poll ended (D6 B1), with the desktop's account of its
+    /// answer. Sent after the worker clears its running job, as `Finished`
+    /// is, so a quit that hears it finds the worker idle. A poll sends no
+    /// `Queued`, `Started` or `Progress`: it is not a request.
+    Polled(Root, PollAttempt),
 }
 
 /// What cancelling a request did.
@@ -178,6 +186,15 @@ enum Work {
         root: PathBuf,
         authority: Option<SshAuthority>,
     },
+    /// An automatic poll of the repository at `root` (D6 B1). Not an
+    /// `Intent`: it does not go through the mutation boundary. `restart`
+    /// resends `operation` after `Busy`, an interruption or a launch
+    /// takeover (R-4); otherwise `operation` is new.
+    Poll {
+        root: Root,
+        operation: OperationId,
+        restart: bool,
+    },
 }
 
 struct Job {
@@ -195,7 +212,7 @@ impl Job {
     fn cancelled(&self) -> bool {
         match &self.work {
             Work::Execute { cancel, .. } | Work::GiveUp { cancel, .. } => cancel.is_cancelled(),
-            Work::ObserveHost { .. } => false,
+            Work::ObserveHost { .. } | Work::Poll { .. } => false,
         }
     }
 
@@ -601,7 +618,7 @@ impl WorkerHandle {
     /// from a plain thread through `provider`.
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn attempting_for_testing(&self, id: Option<DesktopRequestId>) {
-        self.shared().declined.attempting(id);
+        self.shared().declined.attempting(id, Lane::User);
     }
 
     /// The running job, if any.
@@ -675,6 +692,44 @@ impl WorkerHandle {
         let work = Work::ObserveHost { root, authority };
         admit(shared, &mut state, Job::new(id, work, Lane::User));
         id
+    }
+
+    /// The keys the background job `id`'s last attempt was refused a prompt
+    /// for (B5): not declined, and what a retirement's `unlock_required`
+    /// answer, which names no key, is held under.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
+    pub(crate) fn refused_keys(
+        &self,
+        id: DesktopRequestId,
+    ) -> Vec<manyhands::repository::SharedKeyId> {
+        self.shared().declined.refused_for(id)
+    }
+
+    /// Queues an automatic poll of the repository at `root` on the
+    /// background lane, under `operation` (D6 B1): a new ID from
+    /// `OperationId::new()`, or the stored one for a `restart`. The UI
+    /// hears `WorkerEvent::Polled` when it ends. `None` once quitting has
+    /// closed the queue: nothing is queued.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
+    pub(crate) fn submit_poll(
+        &self,
+        root: Root,
+        operation: OperationId,
+        restart: bool,
+    ) -> Option<DesktopRequestId> {
+        let shared = self.shared();
+        let mut state = shared.lock();
+        if state.closed {
+            return None;
+        }
+        let id = next_id(&mut state);
+        let work = Work::Poll {
+            root,
+            operation,
+            restart,
+        };
+        admit(shared, &mut state, Job::new(id, work, Lane::Background));
+        Some(id)
     }
 
     /// Whether quitting has begun: no job is admitted any more.
@@ -864,8 +919,14 @@ fn run(shared: &Shared, backend: &dyn Backend) {
         } = job;
         // A key the provider answers `Cancelled` is recorded against the
         // request whose attempt asked for it (R-13).
-        let attempt = matches!(work, Work::Execute { .. } | Work::GiveUp { .. }).then_some(id);
-        shared.declined.attempting(attempt);
+        let attempt = matches!(
+            work,
+            Work::Execute { .. } | Work::GiveUp { .. } | Work::Poll { .. }
+        )
+        .then_some(id);
+        // The provider learns the lane, so a background job never prompts
+        // (B5).
+        shared.declined.attempting(attempt, lane);
         match work {
             Work::Execute {
                 request_id,
@@ -911,6 +972,19 @@ fn run(shared: &Shared, backend: &dyn Backend) {
                         .observe_host(&root, authority.as_ref(), &mut session);
                 finish(shared);
                 shared.send(WorkerEvent::HostObserved(id, envelope));
+            }
+            Work::Poll {
+                root,
+                operation,
+                restart,
+            } => {
+                backend.before_job(JobKind::Poll);
+                let attempt = poll::run(backend, &mut session, &root, operation, restart, || {
+                    cancel_cause(shared)
+                });
+                // The job is over before the UI hears so (Fact 36).
+                finish(shared);
+                shared.send(WorkerEvent::Polled(root, attempt));
             }
         }
     }
@@ -1140,7 +1214,7 @@ fn take(shared: &Shared) -> Option<Job> {
                 Work::Execute { cancel, intent, .. } | Work::GiveUp { cancel, intent, .. } => {
                     (Some(cancel.clone()), intent.stops_at_safe_points())
                 }
-                Work::ObserveHost { .. } => (None, false),
+                Work::ObserveHost { .. } | Work::Poll { .. } => (None, false),
             };
             state.running = Some(Running {
                 id: job.id,
@@ -1173,6 +1247,17 @@ fn take(shared: &Shared) -> Option<Job> {
                 .wait(state)
                 .unwrap_or_else(PoisonError::into_inner),
         };
+    }
+}
+
+/// Why a poll that answered `Cancelled` was cancelled, as the worker knows
+/// it when the poll returns: quit closed the queue, or else a user job
+/// preempted it (R-3). Task 4 adds the reconfiguration and takeover causes.
+fn cancel_cause(shared: &Shared) -> CancelCause {
+    if shared.lock().closed {
+        CancelCause::Quit
+    } else {
+        CancelCause::Preemption
     }
 }
 

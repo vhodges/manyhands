@@ -13,6 +13,8 @@ pub(crate) mod edit_tabs;
 pub(crate) mod images;
 pub(crate) mod links;
 pub(crate) mod pending_conflicts;
+pub(crate) mod poll;
+mod poll_convert;
 pub(crate) mod prompts;
 mod reads;
 pub(crate) mod release;
@@ -22,15 +24,22 @@ pub(crate) mod resolutions;
 pub(crate) mod submissions;
 pub(crate) mod worker;
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use futures::StreamExt;
 use gpui_kit::{App, AppContext, Entity};
 use manyhands::{
     drafts::{DraftError, DraftStore},
     repository::{
-        ConflictDto, ContextPrepareIntent, Mutation, MutationDataDto, OperationId, PrepareDataDto,
-        ProgressStage, RepositoryService, keys::KeyStore,
+        AutomaticPollEligibility, ConflictDto, ContextPrepareIntent, Mutation, MutationDataDto,
+        OperationId, PollPublicationRemoteRequest, PollingStatusDto, PrepareDataDto, ProgressStage,
+        ReadError, RemotePollError, RemotePollResult, RemoteSnapshot, RepositoryError,
+        RepositoryService, ResolvedRepository,
+        keys::{KeyStore, SessionCredentials},
     },
     results::{Envelope, Outcome, PublicationEffect, RecoveryActionKind, ResultCode},
 };
@@ -39,10 +48,12 @@ use crate::desktop::model::{
     lifecycle_lock::{LockKey, LockState},
     list_state::ListState,
     operations::Operations,
+    polling::{PollAttempt, Root},
 };
 use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
 use edit_tabs::EditTabs;
+use prompts::DesktopProvider;
 use release::Releases;
 use resolutions::{ResolutionStore, ResolutionStoreError};
 use submissions::Submissions;
@@ -161,6 +172,8 @@ pub(crate) enum JobKind {
     LocalContextSync,
     LocalContextResolve,
     ObserveHost,
+    /// An automatic poll (D6): no intent, so no request.
+    Poll,
 }
 
 /// The key store could not be found. The Keys page shows
@@ -227,6 +240,58 @@ pub(crate) trait Backend: Send + Sync + 'static {
     ) -> Option<ConflictDto> {
         None
     }
+
+    // The automatic poll's calls (D6 B1, B4), one per library call so that a
+    // recording double can list them. The defaults are the library's own;
+    // a double records, then delegates.
+
+    /// The first call of an automatic poll: the repository at `root`, as
+    /// registered.
+    #[allow(clippy::result_large_err)] // The library's `ReadError`.
+    fn resolve(&self, root: &Path) -> Result<ResolvedRepository, ReadError> {
+        self.service().resolve_repository(root)
+    }
+
+    /// The repository's polling policy, stored deadline and active
+    /// operation.
+    #[allow(clippy::result_large_err)] // The library's `ReadError`.
+    fn polling_status(&self, repo: &ResolvedRepository) -> Result<PollingStatusDto, ReadError> {
+        self.service().polling_status(repo)
+    }
+
+    /// Whether the policy lets an automatic poll go ahead. Contacts
+    /// nothing.
+    fn poll_eligibility(&self, root: &Path) -> Result<AutomaticPollEligibility, RepositoryError> {
+        self.service().automatic_poll_eligibility(root)
+    }
+
+    /// The poll itself: `Automatic`, so no job prompt reaches `session`'s
+    /// provider (B5).
+    #[allow(clippy::result_large_err)] // The library's `RemotePollError`.
+    fn poll_automatic(
+        &self,
+        request: PollPublicationRemoteRequest,
+        session: &mut SessionCredentials<DesktopProvider>,
+    ) -> Result<RemotePollResult, RemotePollError> {
+        self.service().poll_publication_remote(request, session)
+    }
+
+    /// What the registry stores of the remote after the poll: its
+    /// deadline.
+    fn remote_snapshot(&self, root: &Path) -> Result<RemoteSnapshot, RepositoryError> {
+        self.service().remote_snapshot(root)
+    }
+
+    /// Asks the poll `op` of `root` to stop at its next safe point.
+    /// Called only by a preemption's cancel task and by quit (B2), never
+    /// by a poll itself; it answers `Ok` without effect on a row that is
+    /// not active (Fact 30).
+    // `cfg_attr(not(test))` would still warn in a test build, where no test
+    // calls it yet.
+    #[allow(dead_code)] // Called from Task 4.
+    fn cancel_poll(&self, root: &Path, op: OperationId) -> Result<(), RepositoryError> {
+        self.service().cancel_remote_operation(root, op)
+    }
 }
 
 /// The production backend: the library, with no delays.
@@ -271,6 +336,32 @@ impl Backend for LibraryBackend {
     }
 }
 
+/// The automatic polls that ended, as the drain heard them and in order
+/// (D6 B1): the scheduler (Task 5) takes them and applies them to its
+/// schedule. A poll is not a request, so the request model never sees one.
+#[derive(Clone, Default)]
+pub(crate) struct PollInbox(Arc<std::sync::Mutex<Vec<(Root, PollAttempt)>>>);
+
+impl PollInbox {
+    fn push(&self, root: Root, attempt: PollAttempt) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((root, attempt));
+    }
+
+    /// Every attempt heard since the last call, oldest first.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
+    pub(crate) fn take(&self) -> Vec<(Root, PollAttempt)> {
+        std::mem::take(
+            &mut *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+}
+
 /// The handle views hold. Cloning it shares the backend, the worker
 /// and the request model.
 #[derive(Clone)]
@@ -295,6 +386,8 @@ pub(crate) struct Services {
     followups: resolutions::Followups,
     /// What follows a lifecycle's resume or republish (D5 decision 10, A3).
     resends: resends::Resends,
+    /// The polls that ended and no one has taken yet.
+    polls: PollInbox,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -359,6 +452,8 @@ impl Services {
         let resending = worker.clone();
         let resends = resends::Resends::default();
         let resent = resends.clone();
+        let polls = PollInbox::default();
+        let polled = polls.clone();
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
                 let mut batch = vec![event];
@@ -371,6 +466,15 @@ impl Services {
                     let mut posted = Vec::new();
                     let mut settled = Vec::new();
                     for event in batch {
+                        // A poll's end is the scheduler's, not a request's
+                        // (D6 B1).
+                        let event = match event {
+                            WorkerEvent::Polled(root, attempt) => {
+                                polled.push(root, attempt);
+                                continue;
+                            }
+                            event => event,
+                        };
                         let ended = match &event {
                             WorkerEvent::Finished(id, _)
                             | WorkerEvent::Removed(id)
@@ -567,6 +671,7 @@ impl Services {
             submissions,
             followups,
             resends,
+            polls,
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
@@ -581,6 +686,12 @@ impl Services {
     pub(crate) fn without_launch_refresh(mut self) -> Self {
         self.launch_refresh = false;
         self
+    }
+
+    /// The automatic polls that ended since the last call.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
+    pub(crate) fn polls(&self) -> &PollInbox {
+        &self.polls
     }
 
     pub(crate) fn launch_refresh(&self) -> bool {
