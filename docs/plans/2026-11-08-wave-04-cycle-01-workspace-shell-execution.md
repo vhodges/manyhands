@@ -859,3 +859,89 @@ documents are not edited now; each is recorded here and flagged for the owner):
   `reconcile` returns the docks it opened for the R-37 clamp; save checks in the
   Task 5 tests are marked `// Completed in Task 9.`
 - **Main:** `origin/main` still `8da9afd4`; D6 not on main.
+
+## Main merge during Task 6 (2026-11-09)
+
+- `origin/main` moved from `8da9afd4` to `f4442618` ("Integrate closed ticket
+  `01M6KHVD6D0DB8KYT6VGQP10Y0`", completed-context retirement; 219 files, mostly
+  `src/repository/`, `tests/` and docs). **It is not Wave 03 D6**: D6's branch
+  (`b05c86c6`) is not an ancestor of `origin/main`, so the stop condition does
+  not apply.
+- Checks before merging: `Cargo.lock` has the same `gpui-kit`, `gpui-base`,
+  `gpui-component` (0.6.6) and `zorite-editor` (0.10.0); `AGENTS.md` unchanged;
+  `git merge-tree --write-tree HEAD origin/main` was clean. Under `src/desktop`
+  main changed only `view/confirm.rs` and `confirm_tests.rs`, `test_support/`,
+  `view/harness.rs` (6 lines), `keyboard_tests/settings.rs`,
+  `lifecycle/privacy_consent_tests.rs` and `settings/repositories_tests.rs`, as
+  the Cycle document predicted.
+- **Merge** `8ff2e239` (HEAD before `d4c68824`), no conflicts, `git merge`, no
+  rebase. `origin/main` is an ancestor of HEAD.
+- **Checks on the merged tree:** the test binary builds; the seven tests main
+  changed or added, run by exact name, all pass:
+  `desktop::view::confirm::tests::preserving_abandon_confirmation_names_retained_resources_and_request`,
+  `…::keyboard_tests::settings::add_an_existing_repository_by_keyboard`,
+  `…::lifecycle::privacy_consent_tests::a17_a_stranded_close_is_not_resumed_without_consent`,
+  and four in `…::settings::repositories::tests::` (`a_partial_create_is_completed_by_retry_under_the_same_request`,
+  `adding_a_repository_without_identity_asks_for_one_and_keeps_it`,
+  `create_in_an_empty_directory_previews_nothing_then_creates_and_refreshes`,
+  `pressing_confirm_twice_creates_one_repository`). The Task 6 reviewer then ran
+  the four Verify lines on the merged tree (clean) and eight tests (passed).
+
+## Task 6: Title Bar And Window Title
+
+- **Commit** `d4c68824` (range `253f206d..d4c68824`, 11 files).
+  - `mod.rs`: `main_window_options` = `TitleBar::window_options()` + the existing
+    1280 x 840 bounds + `WindowDecorations::Client`; `open_test_window_over` goes
+    through `open_main_window`; the startup-failure window keeps today's options.
+  - `view/shell.rs`: `title_bar(..)`, the Kit `TitleBar::new()` at 38 px with the
+    `chrome` background and `border`, an 18 px app icon and the title text;
+    `on_close_window` calls `request_quit`.
+  - `workspace.rs` and `workspace/render.rs`: `window_title` field; the title is
+    computed each render, `set_window_title` is called only when it changes, and
+    the bar draws the same string.
+  - `assets.rs`: `Activity` in `icon_assets!` (the Kit's own Lucide `activity.svg`
+    exists in `gpui-kit-assets`); `brand/manyhands.png` (64 x 64, 3789 bytes, from
+    `packaging/icons/manyhands-1024.png` with `magick … -resize 64x64 -strip`)
+    served by `DesktopAssets` through `include_bytes!`.
+  - `header/tabs.rs`: the Activity-icon stop-gap filter deleted (Task 4c's carry).
+  - `harness.rs`: `SHELL_CHROME_HEIGHT` 0 to 38; the item area is still
+    860 x 1140 (window 1698 high; `resize_keeping_content` adds 298, and Task 7's
+    28 makes E-10's 326).
+- **Tests** (1 test each, passed): new
+  `desktop::view::shell::title::tests::the_window_title_follows_the_selected_repository`
+  (red first: `None` against `Some("Manyhands")`; covers none, a, b, and the in-app
+  removal) and `desktop::assets::tests::the_app_icon_loads_as_a_small_png` (PNG
+  magic and a 16 KiB bound, so the 1024 px file cannot ship by accident; judged an
+  asset contract, not appearance). **E-11 (additive, no assertion removed):**
+  `desktop::assets::tests::every_item_view_icon_loads`, `ICONS` 36 to 37 with
+  `"activity"`. The implementer also ran the geometry tests
+  (`frame_tests::the_page_fills_the_region_and_the_discussion_starts_below_it`,
+  `dock::tests::the_default_layout_is_1b`, `dock::tests::each_panel_draws_its_region_inside_the_dock`,
+  `scroll::tests::the_page_and_end_keys_scroll_the_content_region`,
+  `sheet_tests::no_workspace_key_acts_behind_the_sheet`).
+- **Review:** APPROVED. Blocking none, Important none.
+  - **Second-actor removal:** when another process removes the registration, the
+    selection stays as an Unavailable entry, so the title keeps naming the
+    repository; only an in-app removal calls `navigation.forget` and resets the
+    title. The reviewer judged this **intended**: the title and the sidebar row
+    both use `RepositoryEntry::name()`, matching Scope 2 ("the name the
+    Repositories panel shows"). No owner decision needed; a later preference to
+    drop the name for an Unavailable selection would be a new decision.
+  - **Close control:** the test window reports server decorations, so the control
+    is never drawn; the `on_close_window` to `request_quit` route has no test and
+    is on the Wayland checklist (A16). `request_quit` calls `quit_now` itself when
+    it returns true, so there is no double quit.
+  - "Set only when it changes" cannot be observed by the test window (it records
+    the last title only); no test, known gap.
+  - Minor, carried: the title text has `whitespace_nowrap` but no truncation (a very
+    long repository name in a narrow window could run under the window controls);
+    the regeneration command for the 64 px PNG is recorded above; the PNG's alpha
+    (corners transparent or white) is unchecked; on macOS the Kit places the
+    traffic lights for a 34 px bar, so at 38 px they may sit slightly high (native
+    CI or the owner).
+- **For the on-screen checklist:** the title bar (drag, double-click, the three
+  controls by mouse and Tab, resize edges), closing with an unsaved draft (K-4),
+  the 64 px icon on the dark `chrome` background (white corners?), a long
+  repository name, and the macOS traffic-light position after merge.
+- **Verify:** all four lines clean (implementer, reviewer on the merged tree);
+  both Boundary commands print nothing; `Cargo.lock` and `packaging/` untouched.
