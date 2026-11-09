@@ -1974,3 +1974,81 @@ proof and manifest. Entire **128919-byte** prior prefix (SHA-256
 controller readiness/publication disposition remains separate. Owner discharged
 desktop acceptance hold only—not window verification, full readiness, publication
 or closure. Ticket implementing; no further command/gate/publication autorun.
+
+## Follow-up — Controller Qualified Owner-Review Handoff / Publication Pending — 2026-11-09 UTC
+
+At clean entry **`d0ff8e2eda33d804213f31711ad9fad00975e74c`**, controller declares
+**qualified review-ready for OWNER review** at frozen runtime source
+**`a42460bb2d03bcba0db885657257d8ea0f62d66c`**. Final SPEC and QUALITY accept the
+**scoped runtime evidence**; **no further local gates or remedial work are owed
+under the approved selection**, and no additional metadata runtime/review loop
+is needed. Controller authenticated prior27-entry metadata manifest SHA-256
+**`56b2d285819ba71d5effd0b0919fc501d9925c713278dd678b36e0021e948bbb`**, **0 mismatches**,
+and inspected HEAD/status/metadata diffstat. This disposition supersedes the
+then-pending controller handoff above, without changing historical evidence.
+
+Final SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** accepts qualified headless
+evidence, no additional essential headless gap; its desktop acceptance hold is
+resolved by the owner's explicit acceptance. Final SAME QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** reports **qualified acceptance at6e8/runtime a424,
+0 new concrete findings/no additional essential headless obligation**. Its reported
+independent verification covers **34 manifest entries/23 hashes/198 cases/all5
+full raw logs/616 receipts/final inputs**, all qualifications retained. Whole
+source scope **`c48bc2cf2d9d9bbe68621278bb56fedd7276d94c..a42460bb2d03bcba0db885657257d8ea0f62d66c`**
+and bounded **`5af8ed2bf15ccb2eeaf7f647a3f14e122083b458..a42460bb2d03bcba0db885657257d8ea0f62d66c`**
+retain integration7447/RFCe398/P2deferral5af8 qualifications. No re-audit/review here.
+
+Both accepted nonblocking limitations remain explicit:
+
+- **Desktop PARTIAL**, owned-process startup/stop verified, **mapped window
+  UNVERIFIED**. Owner explicitly said **“accept the unverified desktop window.”**
+  Acceptance discharges its hold only, not window verification or a defect
+  finding. Observer exit1/no valid client JSON; no observer retry/smoke rerun.
+- **Registry-wide marker P2 valid, owner-accepted/deferred and UNFIXED**.
+  Resolution versus registration/rebuild/cache-recovery race is source-derived,
+  unreproduced, likelihood unmeasured; not necessarily two processes/apps/syncs,
+  not per-repository-isolated or historical SSH-failure attribution. Production
+  repair/default normalization/exclusive-guard changes/new hooks remain deferred
+  for relevant per-repository recovery/concurrency work; no unsolicited ticket.
+
+Latest a424 statics **reused, not rerun**: locked all-feature check
+**exit0/4.778151875s**; strict locked all-target/all-feature Clippy `-D warnings`
+**exit0/20.797695549s**; fmt-check **exit0/19.876814424s**. Four compiled exact
+RED→GREEN follow-ups remain **1/0 each**, not a fresh whole mutation_remote pass.
+Final selected Devenv targets **document_promotion79/0, ticket_closure78/0,
+comment_publication41/0**, each exit0; bare CLI help/catalog exit0/no operation.
+Desktop owned PID3883770 started/stopped with SIGTERM, launcher−15, not natural
+exit0 or a Rust test failure. Runtime evidence remains in
+`/tmp/opencode/task8-final-three-smokes-20261109T021916Z/`, not rerun or broadened.
+Old29 integration/exacts/statics, cli_remote165(d87),805/3,poll80/4,desktop1579/1,
+enablement102/1 and older headless/library/local-sync/SSH evidence retain source
+qualifications; no synthetic whole passes. Manual characterization ignored/**NOT
+MEASURED**; performance/profiling/materialization follow-up **STOP** unchanged.
+
+**Owner review required before closure.** Canonical ticket lifecycle status and
+ledger frontmatter remain **implementing**; review-ready here is a ledger handoff,
+not a lifecycle status save. No ticket CLI status save against stale main, new
+ticket/ID/doc. This is **not ALLPASS, zero issues, a fresh whole-suite pass or
+native-platform proof**. No additional local runtime/gates/remedial work owed.
+
+**Ticket-branch publication PENDING in this commit**, separately authorized only
+for **`manyhands/ticket/01M6KHVD6D0DB8KYT6VGQP10Y0`**. Before push, noninteractively
+fetch only main and this ticket; require fresh main unchanged at
+**`8da9afd4ec82c145632988687cbd71bead046051`** and fetched ticket tracking an ancestor
+of local HEAD. Otherwise **STOP publication/report**, never force/rebase/reset/
+discard/silently integrate. Only normal explicit command authorized:
+`git push origin HEAD:refs/heads/manyhands/ticket/01M6KHVD6D0DB8KYT6VGQP10Y0`.
+Push failure means STOP, no retry/force/credential changes/private-payload output.
+After success verify `ls-remote` OID equals HEAD, upstream0/0, diff-check, unchanged
+source/build, prefix, clean tree, ancestry/merge-tree and no owned jobs.
+
+New-only **`/tmp/opencode/task8-review-ready-publication-20261109T041611Z/`** records
+actual UTC/argv/exits/refs/push/verification/manifest externally afterward; no
+extra unpublished metadata commit. Entire current **132913-byte prior prefix**,
+SHA-256 **`229dfaa8017b3c1d0494b5fca3f133c0b6037a65ed269cef40a8cc8ec81af37a`**, ID,
+parent **01M6SYJK4CJGHWKZC7MTP18GTA** and creation time **2026-11-07T12:08:39Z**
+preserved. Only ledger current standing/append and this append change, required
+coauthor. No Rust/source/build/test/static/smoke/probe/review reruns, agents, real
+profile/key/context/draft operations or cleanup. Publication alone does not
+authorize PR/main merge/close/native/retirement/cleanup; **owner review remains
+required before closure**.
