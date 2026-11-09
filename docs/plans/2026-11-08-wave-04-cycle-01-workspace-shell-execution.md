@@ -1725,3 +1725,34 @@ reached main as `d6789cb9`. The owner confirmed it.
 
 **Standing now.** The "fast tier `--lib` red" caveat above no longer holds. The Cycle
 is still not closed, merged, cleaned up or sent to CI; none of that is authorized.
+
+## Owner's code review: ten findings (2026-11-09)
+
+The owner pasted ten review leads (nothing had been run against the code). Each was
+checked against the source first. Commits `dae17983` (findings 3, 5 to 10) and
+`0a82eae4` (findings 1, 2, 4). Both Boundary diffs print nothing; fmt, check and both
+clippy lines pass.
+
+| # | Finding | Result |
+| --- | --- | --- |
+| 1, 4 | Ctrl B does nothing in read views; depends on binding order | Real. `ReadOnly` swallowed `Bold`, so the editor's binding beat the dock key and the dock never toggled. The suggested fix (a workspace context for the dock keys) would not work: a shallower context loses to the editor's. **Owner approved** the change to decision 2's reading: in a read-only editor Ctrl B now dispatches `ToggleLeftDock`; editable editors keep Bold. Test (red first): `desktop::view::tabs::tests::ctrl_b_in_the_read_view_toggles_the_left_dock`. |
+| 2 | Two title bars after a startup Retry | Real. **Owner chose option A:** the startup failure window takes `main_window_options` and draws the same Kit title bar (`title_bar_closing`; close quits). The `main_window_options` comment, which said the failure window keeps `window_options`, is updated. Test extended (red first, bar removed): `desktop::mod_tests::view::a_data_directory_that_cannot_open_shows_the_startup_failure` asserts `title-bar-title`; the title element gained `test_support()` so tests can find it. |
+| 3 | Shift+F6 from outside a region goes to the first stop | Real. Outside every region it now goes to the last stop; F6 still goes to the first. Test (red first): `keyboard_tests::shell::f6_from_outside_a_region_goes_to_the_first_stop_and_shift_f6_to_the_last`. |
+| 5 | Dock out of step if `toggle_dock` refuses | Not reachable today: the Kit refuses only a non-collapsible open dock; the default is collapsible and the shell never changes it. Comment added in `reconcile.rs`; no behaviour change, no test. |
+| 6 | `move_panel` doc wrong | Real; doc corrected (removing the active tab makes the tab that took its place active). |
+| 7 | Appearance tests | Real; removed `the_app_icon_loads_as_a_small_png` and the chrome-colour assertions added to `view/item/tokens_tests.rs` (file back to main's). **These remove assertions I had added in this Cycle; none existed on main.** The `activity` row in the icon-load table stays (it checks that the asset loads). |
+| 8 | Hand-copied `MIN_DOCK = 100.` | Real; `restore.rs` and `clamp.rs` use `gpui_kit::base::PANEL_MIN_SIZE` through a small `min_dock()` function (`Pixels::as_f32` is not `const`). |
+| 9 | Footer counts attention twice per render | Real; counted once and passed to `footer_control`. |
+| 10 | A deferred `clamp_first` per render | Real; `DockShell::queue_clamp` queues it once until it has run. |
+
+Tests run (exact names only): the three new tests above; `f6_skips_hidden_panels`,
+`f6_cycles_the_regions_and_secondary_digits_focus_each`, `needs_attention_works_by_enter`,
+`the_clamp_fits_the_docks_to_the_area`, `a_dock_too_large_for_the_window_is_clamped`,
+`a_dock_opened_by_its_edge_is_clamped`, `a_file_over_the_cap_restores_the_default_and_says_so`,
+`a_valid_file_restores_the_layout`, `restore_restores_or_falls_back`,
+`f6_stops_follow_the_arrangement`, `every_item_view_icon_loads`, `ctrl_b_in_an_editor_is_bold`,
+`the_tab_keys_work_from_inside_the_read_view`, `tab_and_shift_tab_move_focus_out`,
+`the_formatting_keys_and_undo_change_nothing`, the two other startup-failure tests and
+the two title tests: all green. No whole-suite run. (One command of mine ran with an empty
+test list for a moment, which would have meant every test; I stopped it at once and added
+a non-empty guard to the later commands.)
