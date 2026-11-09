@@ -2,6 +2,8 @@
 
 Verify every API name below against the **locked** `gpui-kit` version (0.6.6 at the time of writing) before planning. These names come from the v0.8.0 docs.
 
+Verified for the dock on 2026-11-08 (Wave 04 Cycle 01 design, fact 1). The dock types are reached as `gpui_kit::component::dock::*`, with `DockLayout`, `DockSkin`, `DockAreaRenderer` and `TabGroupRenderer`. There is no `DockItem`, and the `StackPanel` and `TabPanel` types survive only as names in a saved layout. Panel headers are replaced through `DockAreaRenderer::tab_group_renderer`.
+
 ## Component per element
 
 | Element | GPUI Kit |

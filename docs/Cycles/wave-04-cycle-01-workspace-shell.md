@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 01: Workspace Shell"
 date: 2026-11-08
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -14,7 +14,7 @@ Ticket `01M6V8RK8B0SBCH0YZXFVSR9E3` (`vh-jge24`).
 [Design](../plans/2026-11-08-wave-04-cycle-01-workspace-shell-design.md) and
 [implementation plan](../plans/2026-11-08-wave-04-cycle-01-workspace-shell-implementation.md).
 
-Status: **draft revision 5, 2026-11-08.** Not approved.
+Status: **approved 2026-11-08** (revision 5). The owner wrote: "Docs are Approved, tests are approved. Note if testing scope need to add additional existing tests, that is pre-authorized" (decision 17). Implementation is not yet authorized, and the execution method is not yet chosen.
 
 - This document was drafted on the ticket branch at `cc2af8d0`, which
   merged origin/main `8da9afd4`. The design and plan were drafted at
@@ -23,7 +23,11 @@ Status: **draft revision 5, 2026-11-08.** Not approved.
   `fbca53f4` (round 2) and `32b82b9c` (round 3), each with two reviewers,
   and at `d035d90b` (round 4, a scoped re-review). They were revised after
   each round (Review Record).
-- Revision 5's fixes after round 4 have had no independent review.
+- Revision 5's fixes after round 4 had no independent review before
+  approval.
+- The approval commit applied the design's Document Amendments 1–9 and 11
+  to the Wave and the handoff. Amendment 10 and 11's ticket edits, and the
+  note on D6's ticket, are Task 0's.
 
 Approval of the documents does not authorize implementation, which needs
 its own go-ahead.
@@ -369,6 +373,16 @@ Answered by the owner after review round 2:
     completely. Hiding the bottom dock completely is to be revisited later
     (design Document Amendment 4 adds it to the Wave's Deferred Work).
 
+Answered by the owner at approval:
+
+17. **Further edits to existing tests are pre-authorized.** The named
+    edits E-1 to E-10 are approved. Any other edit to an existing test that
+    this Cycle's changes need is pre-authorized. It is recorded as a named
+    edit (E-11 onward), with its reason, in the ledger, and the task's
+    reviewer checks it. An edit that removes an assertion is called out in
+    the ledger and in the review-ready summary. This supersedes decision
+    12's "no standing approval"; decision 12's test runs stand.
+
 ## Known Limits
 
 These are visible to users; the design's Known Limits give the detail.
@@ -436,3 +450,4 @@ them; U-5 was settled in review.
 | Owner, 2026-11-08 | A footer status line; no Quit now or Quit anyway buttons | Owner direction | Later work (Exclusions; design Amendment 4) | Owner, 2026-11-08 |
 | Review round 4 (scoped re-review, `d035d90b`) | 4 Important, 10 Minor, none Blocking | — | Verified and applied in revision 5, which had no independent review | Reviewer report, 2026-11-08 |
 | Owner, 2026-11-08 | Quitting with work at risk as one blocking dialog; a watchdog for pending operations | Owner direction | Later work (Exclusions; design Amendment 4) | Owner, 2026-11-08 |
+| Owner, 2026-11-08 | Approval of revision 5, the named test edits, and pre-authorized further test edits | Owner decision | Approved; decision 17; documents marked approved; amendments applied | Owner, 2026-11-08 |

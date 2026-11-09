@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 01 Workspace Shell Design"
 date: 2026-11-08
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -21,8 +21,9 @@ mechanisms, rulings, named test edits and task order. It does not
 authorize implementation, pushes beyond the ticket branch, merging or
 closing.
 
-Revision 5, 2026-11-08, after review rounds 1 to 4 (Review Record) and
-the owner's decisions 12–16. Decision 16 replaced the mechanism round 2
+**Approved 2026-11-08** by the owner, with the named edits E-1 to E-10 and
+decision 17 (further existing-test edits pre-authorized). Revision 5, after
+review rounds 1 to 4 (Review Record) and the owner's decisions 12–16. Decision 16 replaced the mechanism round 2
 attacked: docks now open and close through the Kit itself, which held in
 round 3. The quit override, which drew findings in every round, is gone:
 the owner revised decision 7 so a waiting quit changes no layout (Part H).

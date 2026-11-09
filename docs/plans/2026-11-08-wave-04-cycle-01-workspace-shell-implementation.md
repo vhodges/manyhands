@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 01 Workspace Shell Implementation Plan"
 date: 2026-11-08
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -10,10 +10,9 @@ id: "01M6YVNFE6AB0RBGQK72CFJJ4X"
 
 # Wave 04 Cycle 01 Workspace Shell Implementation Plan
 
-> **For agentic workers:** Revision 5, 2026-11-08, after review rounds 1
-> to 4, decision 16 and decision 7 as revised.
-> Not approved, and nothing here is authorized yet. Once the owner
-> approves and authorizes implementation, use `implementing-a-cycle` task
+> **For agentic workers:** Revision 5, approved 2026-11-08, after review
+> rounds 1 to 4. Implementation is not yet authorized, and the execution
+> method is not yet chosen. Once the owner authorizes implementation, use `implementing-a-cycle` task
 > by task, re-read the design, repeat the ticket preflight, and record
 > every checkpoint on ticket `01M6V8RK8B0SBCH0YZXFVSR9E3`. Steps use
 > checkbox (`- [ ]`) syntax.
@@ -116,8 +115,12 @@ on adding its attention states to `needs_attention` (decision 3).
 - Between tasks, run only the tests the task wrote or changed, by exact
   name. That includes each named edit (E-n) a task applies.
 - No whole-suite run happens before Task 12's fast tier, which includes
-  `--bins`. A break found there in a test outside E-1 to E-10 stops for the
-  owner, or, if it is an appearance test, is deleted under E-8.
+  `--bins`. A break found there in a test outside E-1 to E-10 is one of
+  three things:
+  - a product bug, which is fixed;
+  - an appearance test, which is deleted under E-8;
+  - a test the Cycle's changes require editing, which is a pre-authorized
+    edit, recorded as E-11 onward (decision 17).
 - Any single command that runs past about 15 minutes is stopped. Narrow
   the filter and note it in the ticket.
 - Never build while a test run is in progress. In D5, tests that re-run
@@ -138,8 +141,13 @@ removes it.
 **Test-first.** Each behaviour's test is written, and seen to fail,
 before its code.
 
-**Existing tests** change only as E-1 to E-10. Any other edit stops for the
-owner.
+**Existing tests** change as E-1 to E-10 (approved). Any other edit that
+the Cycle's changes need is pre-authorized (decision 17):
+
+- record it in the ledger as E-11 onward, with its reason;
+- the task's reviewer checks it;
+- an edit that removes an assertion is called out in the ledger and in
+  the review-ready summary.
 
 **Commits.** One per task, conventional message, ending
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -255,10 +263,11 @@ git grep -c -e 'pane-tickets' -e 'pane-documents' -e 'pane-showing' \
   `made_ready_review_tests` 1, `operations_tests` 2, `tabs_tests` 1 and
   `tickets_tests` 11. These counts include the label test's lines in
   `tickets_tests` and the `pane-showing` checks, both E-3's. Any other
-  count is a new test site, and it stops for the owner. Also run
+  count is a new test site: record it as a pre-authorized edit (decision
+  17). Also run
   `git grep -n simulate_resize -- src/desktop`: at `2b1dc4d5` it prints the
-  harness (`harness.rs:119`) and E-10's ten sites. Any other site stops
-  for the owner.
+  harness (`harness.rs:119`) and E-10's ten sites. Any other site is a
+  pre-authorized edit (decision 17).
 - [ ] **Step 4: Approval follow-ups.**
   - Confirm that the approval commit applied Document Amendments 1–9
     and 11.
@@ -721,8 +730,9 @@ git merge-tree --write-tree HEAD origin/main
 ```
   The fast tier above is AGENTS.md's at the time of writing; use main's
   AGENTS.md as it is at Task 12. The Boundary diff must print nothing. A
-  fast-tier failure outside E-1 to E-10 stops for the owner, unless it is an
-  appearance test deleted under E-8.
+  fast-tier failure outside E-1 to E-10 is handled as Test runs says: a
+  product fix, an E-8 deletion, or a pre-authorized edit recorded as E-11
+  onward (decision 17).
 - [ ] Whole-branch spec and quality reviews. Fill the Cycle's Acceptance
   Status column.
 - [ ] The owner runs the checklist, including AGENTS.md's desktop smoke run
