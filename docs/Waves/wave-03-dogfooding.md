@@ -1147,14 +1147,21 @@ edited or marked done by this amendment.
 2026-11-09 (`f4442618`) and its ticket is closed, so D6 consumes
 `Mutation::ContextRetire` as merged. D6's draft documents plan the Retire
 action (its design's Part E). The obligation stays owed until D6 merges.
-**Owner decision, 2026-11-09 (D6 decision 16):** the desktop's polls retire
-closed tickets and promoted documents that still have a local branch and
-worktree, as `poll once --retire-completed` does, always on and with no
-setting. Retire… shows only for what a poll did not retire. This lifts this
-section's "MUST NOT choose `PollOnceRetiring`" and the exit evidence's "no
-background cleanup" for retirement only. Background push, checkpoint, merge
-and publication stay prohibited. The text amendments are D6's Document
-Amendment 7, applied at D6's approval. Wave
+**Owner decisions, 2026-11-09 (D6 decisions 16 and 17):**
+- The desktop's polls retire closed tickets and promoted documents that
+  still have a local branch and worktree, with the outcome of `poll once
+  --retire-completed`, always on and with no setting. Retire… shows only for
+  what a poll did not retire.
+- Operations are per item: a repository operation is a loop over its items,
+  so each reported item is retired by its own `ContextRetire`, and an
+  unsaved tab holds back only its own item. D6 still never chooses
+  `PollOnceRetiring`.
+- This lifts this section's "never a schedule policy" and the exit
+  evidence's "no background cleanup" for retirement only. Background push,
+  checkpoint, merge and publication stay prohibited.
+
+The text amendments are D6's Document Amendment 7, applied at D6's approval.
+Wave
 04 Cycle 01 (`01M6V8RK8B0SBCH0YZXFVSR9E3`, approved 2026-11-08) wraps D1's
 operation area as the Activity panel and adds the footer's Needs attention
 count; D6's Cycle document records how the two meet. Changes to this section

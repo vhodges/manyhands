@@ -27,8 +27,10 @@ Revision 3, not reviewed.
   ticket `01M6KHVD6D0DB8KYT6VGQP10Y0` landed. It adds Part E (retiring
   completed contexts), Facts 24 to 28 and U-9 to U-12, and follows Wave 04
   Cycle 01's approved decisions 3 and 7 (W-1, W-2, W-6, W-7). The same day
-  the owner decided that polls retire, as the CLI's `--retire-completed`
-  does (decision 16).
+  the owner decided that polls retire, with the outcome of the CLI's
+  `--retire-completed` (decision 16), and that every operation is per item,
+  a repository operation being a loop over items (decision 17). So Part E
+  retires one reported item at a time.
 
 Library facts are at `9512080d`. Desktop facts are at `3364370c` unless
 marked. Unverified points are U-questions for Task 0.
@@ -304,7 +306,7 @@ Sources: `R/mutation/bind/retire.rs`, `R/mutation/dto.rs`,
 | Index retry | `Mutation::IndexRefresh` | Existing |
 | Retire one item | `Mutation::ContextRetire` | Library ticket binding (Fact 24) |
 | Retirement recovery | `Mutation::OperationResume` / `OperationAbandon` | Existing; the abandon preview shows the retirement's details (Facts 18, 26) |
-| Poll and retire in one pass | `Mutation::PollOnceRetiring` | Exists (Fact 1); Check now and the follow-up pass after an automatic poll (E1) |
+| Poll and retire in one pass | `Mutation::PollOnceRetiring` | Exists (Fact 1); D6 does not use it: one pass cannot leave out one item (decisions 14 and 17) |
 | New operation ID | unknown | U-1 |
 | "Has a publication remote" | a remote read | U-2 |
 
@@ -350,12 +352,9 @@ Sources: `R/mutation/bind/retire.rs`, `R/mutation/dto.rs`,
   (primary's copy)? How do a kept draft of the item and a comment draft
   classify (`TargetState`), and can each still be restored and exported? If
   either would lose a draft or could not be exported, stop for the owner.
-  For a retiring pass, which records does a stopped or interrupted pass
-  leave (the parent `poll once` and each item's own `context retire`), and
-  which of them do the pending rows show?
 - **U-12.** Can the desktop provider tell a background-lane request from a
   user-lane one when a passphrase or host request arrives (Fact 15 says the
-  lane is not consulted)? What does a retiring pass answer when that request
+  lane is not consulted)? What does `ContextRetire` answer when that request
   is refused without a prompt: `unlock_required`, or a host approval code?
   The answer must not mark the key declined for the session.
 
@@ -433,8 +432,8 @@ The summary's counts come from the attempt's targets:
   `MaterializationIncomplete`, `Nonconforming`, `Malformed`,
   `RemotelyDeleted`, `HistoryUnknown` and `Unpublished` are listed with their
   text under the operation area's entry.
-- `Closed` and `Promoted` are retired by Part E's retiring pass, or listed
-  with Retire… when the pass left them (E3, E4).
+- `Closed` and `Promoted` are retired one item at a time by Part E's loop,
+  or listed with Retire… when the loop left that item (E1, E4).
 
 None of them is an error. Where `guidance()` names a CLI command, the
 desktop shows its own words naming the desktop action instead (R-20):
@@ -488,17 +487,16 @@ The backend's automatic path calls exactly: `automatic_poll_eligibility`,
 `poll_publication_remote`, `remote_snapshot` and `polling_status` reads. A
 recording backend asserts it (A8). Nothing else, so nothing can push,
 checkpoint, merge, clean up or retire from a poll. The automatic poll itself
-never calls `ContextRetire` or `PollOnceRetiring`. A retiring pass is a
-separate request that the scheduler submits afterwards (E1, R-19).
+never calls `ContextRetire` or `PollOnceRetiring`. Each retirement is a
+separate per-item request that the scheduler submits afterwards (E1, R-19).
 
 ## Part C: Controls And Status
 
 ### C1: Intents (decision 5)
 
-`Intent::PollOnce`, `PollOnceRetiring`, `PollConfigure{interval_seconds}`,
-`PollPause`, `PollResume` through the boundary, user lane, with every
-exhaustive match of Fact 14. Check now submits `PollOnceRetiring`, or
-`PollOnce` when a tab in that repository holds unkept text (E1). `PollOnce` is `stops_at_safe_points: false` in the library's command
+`Intent::PollOnce`, `PollConfigure{interval_seconds}`, `PollPause`,
+`PollResume` through the boundary, user lane, with every exhaustive match of
+Fact 14. Check now submits `PollOnce`; its retirements are Part E's loop. `PollOnce` is `stops_at_safe_points: false` in the library's command
 table; the worker treats it as accepted-on-first-progress like any other
 (Fact 14), and the policy verbs as `writing`-only commands: the "not yet
 accepted" branch handles a command that is never accepted. `PollOnce` may
@@ -575,84 +573,86 @@ restarted or superseded per U-4.
 ## Part E: Retiring Completed Contexts
 
 The library ticket assigns the explicit desktop Retire action to D6 (Wave D6
-section, amended 2026-11-06). The owner decided on 2026-11-09 that the
-desktop's polls also retire, as the CLI's `poll once --retire-completed`
-does, always on and with no setting (decision 16). The library decides
-everything about safety. The desktop decides only when to ask for a
-retiring pass, what to keep first, and how to show the answer.
+section, amended 2026-11-06). On 2026-11-09 the owner made two decisions.
+Polls retire, with the outcome of the CLI's `poll once --retire-completed`,
+always on and with no setting (decision 16). Every operation is per item,
+and a repository operation is a loop over its items (decision 17). The
+library decides everything about safety. The desktop decides only which
+items to submit, what to keep first, and how to show the answer.
 
-### E1: Which pass runs (decisions 14 and 16, R-17)
+### E1: After every poll, a loop over the reported items (decisions 14, 16, 17; R-17)
 
-A repository's **retiring pass** is `Mutation::PollOnceRetiring(PollOnceInput
-{root})` (Fact 1): one authenticated observation that serves every
-candidate, as the CLI's flag does.
+Every attempt reports per-target dispositions: an automatic poll (A4), or
+Check now's `PollOnce` (`PollMutationDto.targets`). For each `Closed` or
+`Promoted` target, the scheduler decides **for that item alone**:
 
-- **Check now** submits a retiring pass on the user lane. If a tab in that
-  repository holds text no draft keeps, it submits a plain `PollOnce`
-  instead, and the closed and promoted targets get Retire… (E4).
-- **An automatic poll** stays the recognizing poll of Part B, with its
-  eligibility, backoff, Poll priority and no prompt. If it reports a
-  `Closed` or `Promoted` target that is not in the session's refused set
-  (R-21), and no tab in that repository holds unkept text, the scheduler
-  then submits one retiring pass for that repository on the background
-  lane. Otherwise it submits nothing more, and the targets get Retire….
-- Before any retiring pass, the repository's draft sessions are flushed
-  (D2), so every kept draft is on disk. A flush failure stops the pass, with
-  D2's entry.
+1. A retirement of the item is queued, running or pending: nothing new.
+2. The item is in the session's refused set (R-21): nothing. Retire… stays
+   offered (E4).
+3. A tab of the item, including its comment composer, holds text no draft
+   keeps (`EditTabs::unkept`, filtered to the item; Fact 28): skipped, and
+   Retire… is offered.
+4. Otherwise the item's draft sessions are flushed (D2's flush, for that
+   item). On success, one `Intent::ContextRetire{root, kind, id}` (Fact 24)
+   goes on the background lane. A flush failure skips the item, with D2's
+   entry.
 
-The "no unkept text in the repository" test is per repository, not per
-candidate, because a pass may find candidates that the earlier poll did
-not report. Text typed while the pass runs is kept by the existing
-changed-item path (Fact 17; A14), and the person can keep it as a draft
-(K-19).
+Items are submitted one at a time, in the order the attempt reported them.
+An item is retired only after its own check, and only if this attempt
+reported it, so an unsaved tab holds back nothing but its own item. Check
+now itself stays `PollOnce` on the user lane. Its retirements are the same
+background loop.
 
-### E2: A background pass never prompts (R-22)
+The desktop does not use `PollOnceRetiring`. One pass covers every candidate
+it finds and cannot leave out an item whose tab holds unkept text (decision
+14). The price is one observation per retired item instead of one per pass
+(K-15).
 
-`PollOnceRetiring` is `Explicit` (Fact 1), so it authenticates like a
-person's command. On the background lane the provider answers a passphrase
-or host request at once, without a `Prompt` event and without marking the
-key declined (U-12). The answer becomes that key's or host's attention
-state (C3). Check now's own pass is on the user lane and may prompt.
+### E2: A background retirement never prompts (R-22)
 
-A background pass is not preempted by a user job (R-3 cancels only an
-automatic poll), because stopping a pass part-way leaves items for the
-person to finish. A user job waits for the pass, up to one observation and
-the local removals (K-17).
+`ContextRetire` takes a fresh authenticated observation (Fact 24). On the
+background lane the provider answers a passphrase or host request at once,
+without a `Prompt` event and without marking the key declined (U-12). The
+answer becomes that key's or host's attention state (C3), and the loop's
+remaining items wait for the next attempt. Check now's own poll is on the
+user lane and may prompt first, so its loop usually finds the key unlocked.
+
+A background retirement is not preempted by a user job (R-3 cancels only an
+automatic poll), because stopping it part-way leaves the item pending. A
+user job waits for the one retirement that is running, up to one observation
+and its local removal (K-17). The rest of the loop is queued behind the user
+job.
 
 ### E3: The answer (U-10)
 
-`MutationDataDto::PollRetirement(PollRetirementMutationDto{poll, completion,
-stop_code, retirements})`. `poll` is the ordinary poll report that A4 reads.
-Each entry of `retirements` has `kind`, `item_id`, its own `request_id`,
-`state`, `code`, `debt` and `result` (`dto.rs:1986-2003`).
+`MutationDataDto::ContextRetirement(ContextRetirementMutationDto)`, one per
+item (Fact 25).
 
-| Item state | What the person sees | Then |
+| State (code) | What the person sees | Then |
 | --- | --- | --- |
-| `retired`, `already_absent` | "Retired {n} copies of work finished elsewhere." in the attempt's entry; no row per item | `Changed{root, items}`: lists reload, and an open tab reads primary's copy (U-11) |
-| `refused`, `preserved` | The item row, the desktop's existing text for its code, and Retire… (E4) | Added to the session's refused set (R-21). Counted by Cycle 01's rules when the pass finished `Blocked` or `Partial` |
-| `pending` (`debt`: cleanup, discovery, admission) | "Retiring {code} didn't finish." | D5's pending row for the item's own request offers Resume and Abandon; Abandon's preview shows the retirement's details (Fact 18). No Retire… while it is pending |
-| `not_reached` (the pass `stopped`, with `stop_code`) | The item row with Retire… | Not added to the refused set, so the next eligible poll tries again |
+| `retired`, `already_absent` | "Retired the copy of {code} on this computer." in the attempt's entry | `Changed{root, [id]}`: lists reload; an open tab reads primary's copy (U-11) |
+| `refused`, `preserved` | The desktop's existing text for that code, as for any refused request, and Retire… (E4) | Added to the session's refused set (R-21). A `Blocked` finish is counted by Cycle 01's rules |
+| `pending` (`recovery_required`, `cancelled`, `discovery_pending`) | "Retiring {code} didn't finish." For `discovery_pending`, also "The lists are still catching up." | D5's pending row offers Resume (`OperationResume`, the original request, which also settles a pending index) and Abandon (confirmed; the preview shows the retirement's details, Fact 18). No Retire… while it is pending |
+| Failed before any effect (`busy`, transport, unlock or host) | Nothing per item; an unlock or host answer becomes attention (E2) | Not in the refused set; the next attempt tries the item again |
 
 `{code}` is the short code the lists already read for that id, or the id.
 It is never a title. Rows wrap inside Activity (W-6).
 
 ### E4: Retire… for what is left (decision 15, R-18)
 
-Retire… shows only on a `Closed` or `Promoted` target that the last pass
-did not retire: one skipped for unkept text, refused, preserved or not
-reached. It submits `Intent::ContextRetire{root, kind, id}` (Fact 24) for
-that one item on the user lane. This is the explicit desktop action the
+Retire… shows only on a `Closed` or `Promoted` target that the loop did not
+retire: one skipped for unkept text or a flush failure, refused or
+preserved. It submits the same `Intent::ContextRetire` for that one item on
+the user lane, so it may prompt. This is the explicit desktop action the
 Wave requires.
 
-1. **Unkept text stops it.** If a tab of that item, including its comment
-   composer, holds text that no draft keeps (`EditTabs::unkept`, filtered to
-   the item; Fact 28), nothing is submitted. A dialog in `EditsNotKept`'s
-   style gives the count, with no title or text, and offers **Show tab**
-   (the default) and **Cancel**. There is no "Retire anyway".
+1. **Unkept text stops it.** If a tab of that item holds text that no draft
+   keeps, nothing is submitted. A dialog in `EditsNotKept`'s style gives the
+   count, with no title or text, and offers **Show tab** (the default) and
+   **Cancel**. There is no "Retire anyway".
 2. **Drafts are flushed** for the item first, as in E1.
-3. **The answer** follows E3's rows, read from
-   `ContextRetirementMutationDto.state` (Fact 25). A manual Retire removes
-   the item from the refused set.
+3. **The answer** follows E3's rows. A Retire… removes the item from the
+   refused set.
 
 ### E5: Drafts survive (contract 11)
 
@@ -664,17 +664,16 @@ its own. A test proves each survives, can be restored and can be exported.
 
 ### E6: Where retirement comes from (R-19)
 
-Retirement starts only from a retiring pass (E1) or a Retire… (E4). The
-automatic poll's own call list stays Part B4's. The scheduler submits a
-background retiring pass only after an attempt that reported a candidate,
-and never while a tab in that repository holds unkept text. There is no
-setting to turn it off (decision 16).
+Retirement starts only from E1's loop or from a Retire… (E4). The automatic
+poll's own call list stays Part B4's. The loop submits a retirement only for
+an item the attempt reported as `Closed` or `Promoted`. There is no setting
+to turn it off (decision 16).
 
 ### E7: Reads before retirement (K-12)
 
 Until a context is retired, the item's own worktree copy is what reads see
-(Fact 27). So a ticket closed elsewhere can still show as open until the
-pass after the poll that found it. D6 does not change read precedence.
+(Fact 27). So a ticket closed elsewhere can still show as open until its
+retirement after the poll that found it. D6 does not change read precedence.
 
 ## Wave 04 Coordination
 
@@ -754,10 +753,10 @@ carries the matching Wave 04 amendments, so D6 does not edit Wave 04.
 | O-7 | Quit mid-poll cancels, flushes drafts, shows "still stopping" in the quit's Activity entry at ten seconds and exits when the poll returns; no worker thread remains. |
 | O-8 | An automatic poll calls no service function beyond Part B4's. |
 | O-9 | Configuration changes (interval, pause, resume, remote, key, removal) take effect without a stale poll using the old configuration. |
-| O-10 | A poll that finds a `closed` or `promoted` context is followed by one retiring pass for that repository (Check now's is the pass itself), and the lists and an open tab then read primary. |
-| O-11 | Unkept tab text in the repository means no retiring pass and, for the item, no Retire… submission; kept item and comment drafts outlive retirement and can be restored and exported. |
-| O-12 | A refused, preserved or not-reached item offers Retire…; a refused one is not tried again automatically this session; a pending one leaves a pending row with Resume and Abandon. |
-| O-13 | A background retiring pass never opens a prompt; a locked key or unapproved host becomes an attention state. |
+| O-10 | After a poll, automatic or Check now, each reported `closed` or `promoted` item is retired by its own request, and the lists and an open tab then read primary. |
+| O-11 | Unkept text in an item's tab holds back that item only, and stops its Retire…; kept item and comment drafts outlive retirement and can be restored and exported. |
+| O-12 | A refused or preserved item offers Retire… and is not tried again automatically this session; a pending one leaves a pending row with Resume and Abandon. |
+| O-13 | A background retirement never opens a prompt; a locked key or unapproved host becomes an attention state. |
 
 ## Rulings
 
@@ -790,19 +789,20 @@ carries the matching Wave 04 amendments, so D6 does not edit Wave 04.
   Activity entry; D6 changes no layout for it (decision 12, W-2).
 - **R-16.** The scheduler is held by `Services`; D6 adds no `Workspace` field,
   and one call in `repositories_loaded` (W-3).
-- **R-17.** Check now is a retiring pass. An automatic poll that reports a
-  candidate is followed by one background retiring pass for that repository
-  (decisions 14 and 16, E1).
-- **R-18.** Unkept tab text in the repository means no retiring pass, and
-  unkept text in the item's tab stops Retire…; drafts are flushed first and
-  never removed (decision 15, E1, E4, E5).
-- **R-19.** Retirement starts only from a retiring pass (E1) or Retire…
-  (E4). The automatic poll's own call list stays B4's (E6).
+- **R-17.** After every attempt, each reported `Closed` or `Promoted` item is
+  checked alone and, unless E1 skips it, retired by its own background
+  `ContextRetire` (decisions 14, 16 and 17).
+- **R-18.** Unkept text in an item's tab skips that item's retirement and
+  stops its Retire…; drafts are flushed first and never removed (decision
+  15, E1, E4, E5).
+- **R-19.** Retirement starts only from E1's loop or a Retire… (E4). The
+  automatic poll's own call list stays B4's, and the desktop never builds
+  `PollOnceRetiring` (E6).
 - **R-20.** Where a disposition's `guidance()` names a CLI command, the
   desktop names its own action instead (A4).
-- **R-21.** An item a pass refused or preserved joins the session's refused
-  set. A background pass is not submitted for a repository whose candidates
-  are all in that set. Retire… removes the item from the set (E3, E4).
+- **R-21.** An item whose retirement was refused or preserved joins the
+  session's refused set, and the loop skips it. Retire… removes the item
+  from the set (E3, E4).
 - **R-22.** A background-lane job never prompts. Its passphrase or host
   request is answered at once, and the answer becomes an attention state
   (E2, U-12).
@@ -817,7 +817,7 @@ Default layer is a unit test. The cost of each layer is the point.
    offer Retire. Injected clock, no worker, no thread.
 2. **Worker tests** over a `Backend` double returning `PollAttempt`s and
    recording calls: preemption, quit mid-poll, no `Prompt` (including for a
-   background retiring pass, R-22), the B4 call list (with no `ContextRetire`
+   background retirement, R-22), the B4 call list (with no `ContextRetire`
    or `PollOnceRetiring` inside the automatic poll), one scheduler for cloned
    `Services`, thread join. The double uses the existing hold hooks, not
    sleeps.
@@ -826,11 +826,10 @@ Default layer is a unit test. The cost of each layer is the point.
      Check now, the switch and the interval;
    - attention actions, and bring-in preserving an edit;
    - still-stopping at the injected ten seconds with the UI interactive;
-   - retirement over canned `poll_retirement` and `context_retirement`
-     answers: which pass E1 submits and when (one table); one table over
-     E3's item states; the refused set; the unkept-text skip and stop; the
-     draft flush; drafts surviving (restore and export); and the pending
-     row's Resume and Abandon;
+   - retirement over canned `context_retirement` answers: E1's per-item
+     decision (one table); one table over E3's states; the refused set; the
+     unkept-text skip and stop; the draft flush; drafts surviving (restore
+     and export); and the pending row's Resume and Abandon;
    - one keyboard walk.
 
    Behaviour only: no tests for fonts, icons, layout or that a view
@@ -840,16 +839,16 @@ Default layer is a unit test. The cost of each layer is the point.
    behaviour is transport-dependent: how long a cancel waits when a blocking
    call has not returned. Its edge cases (preemption, reschedule) are model
    tests. It runs singly, by exact name. Retirement adds **no** SSH case: the
-   library's `retirement_cli_authenticated_live_pass` covers the retiring
-   pass over SSH, and the desktop's part is decided above the transport.
+   library's `retirement_cli_authenticated_live_pass` covers `context retire`
+   over SSH, and the desktop's part is decided above the transport.
 5. **Native** (Linux, owner): the real SSH journey, a second process, a stalled
    server, quit and restart, and a two-clone Retire.
 
 Existing tests change only as named edits E-1 to E-5; anything else stops for
 the owner:
 
-- **E-1.** Exhaustive matches that now include poll variants,
-  `PollOnceRetiring` and `ContextRetire` (Tasks 6 and 11).
+- **E-1.** Exhaustive matches that now include poll variants and
+  `ContextRetire` (Tasks 6 and 11).
 - **E-2.** The Settings page list (Task 7).
 - **E-3.** `finishing_text`'s test, for the new wording (Task 10).
 - **E-4.** With Wave 04 Cycle 01 on main: `needs_attention`'s test gains a
@@ -885,7 +884,8 @@ Written in Task 14 from the D5 checklist's shape. Sections:
   prompt and the ticket reads closed; with an unkept edit open, the poll
   leaves it and offers Retire…, which stops at the edit; after keeping a
   draft, Retire… retires it; the draft is on the Drafts page and exports;
-  Check now retires another in one pass;
+  with two closed in one poll and one of them unsaved, only the other is
+  retired; Check now retires another;
 - restart;
 - keyboard only;
 - results.
@@ -913,11 +913,11 @@ Proposed with approval:
      prohibited") and `MH-COLLAB-006`;
    - the application runtime and polling RFC's exclusion of background
      cleanup;
-   - the Wave D6 amendment ("MUST NOT choose `PollOnceRetiring`"; "never a
-     schedule policy") and its exit evidence ("No background
-     push/checkpoint/merge/cleanup");
+   - the Wave D6 amendment ("an optional deliberate action is never a
+     schedule policy"; D6 still never chooses `PollOnceRetiring`) and its
+     exit evidence ("No background push/checkpoint/merge/cleanup");
    - the retirement Cycle's decision 5. The library's automatic poll still
-     only recognizes; the desktop follows it with an explicit pass.
+     only recognizes; the desktop follows it with per-item requests.
 
    Background push, checkpoint, merge and publication stay prohibited.
 
@@ -953,21 +953,21 @@ Proposed with approval:
 - **K-14.** A Retire… offer comes from the last attempt and can be stale; the
   library proves everything again and refuses or answers `already_absent`
   (E4).
-- **K-15.** An automatic poll that finds a candidate costs a second
-  observation, the retiring pass. The library has no automatic retiring
-  pass, and D6 adds no library part (decision 1).
+- **K-15.** Each retired item costs its own observation, where the CLI's
+  `--retire-completed` pass shares one. Retirement is per item (decision
+  17), and D6 adds no library part (decision 1).
 - **K-16.** The three existing unwrapped operation-area rows of Cycle 01's
   proposed K-19 can still sit outside the visible Activity; D6's own rows
   wrap (decision 13).
-- **K-17.** A Save or Share submitted during a background retiring pass waits
-  for it, up to one observation and the local removals (E2).
-- **K-18.** Quitting during a retiring pass stops it at a safe point. An item
-  part-way through is left pending, and its pending row offers Resume at the
-  next launch.
-- **K-19.** One unsaved tab anywhere in a repository holds back that
-  repository's retiring passes until it is saved, kept or closed (E1). Text
-  typed in a tab while a pass runs is kept by the changed-item path, not
-  blocked.
+- **K-17.** A Save or Share submitted while an item's background retirement
+  runs waits for that one retirement, up to one observation and its local
+  removal (E2).
+- **K-18.** Quit drops the queued retirements; the next launch's poll finds
+  those items again. The running one stops at a safe point and may be left
+  pending, and its pending row offers Resume at the next launch.
+- **K-19.** An item's check (E1) comes just before its request. Text typed in
+  that item's tab between the check and the removal is kept by the
+  changed-item path (Fact 17, A14), not blocked.
 
 ## Alternatives Rejected
 
@@ -981,12 +981,15 @@ Proposed with approval:
   stale after a restart.
 - **Retire anyway, closing tabs with unkept text:** it would lose text the
   contract keeps (decision 15).
-- **Retiring from the background with one `ContextRetire` per item:** each
-  costs its own observation, and it would not match the CLI's
-  `--retire-completed` pass (decision 16).
-- **An automatic retiring pass in the library** (one observation instead of
-  two): a library part, which decision 1 excludes. It can be a follow-up
-  ticket if K-15's cost matters.
+- **A `PollOnceRetiring` pass, as the CLI's flag runs:** one observation
+  for every candidate, but it cannot leave out an item whose tab holds
+  unkept text, and it handles the repository as one unit (decisions 14 and
+  17).
+- **Holding back a whole repository when any tab in it is unsaved:** the
+  owner narrowed this to the reported items (decisions 15 and 17).
+- **A per-item automatic retirement in the library** (sharing the poll's
+  observation): a library part, which decision 1 excludes. It can be a
+  follow-up ticket if K-15's cost matters.
 - **A setting to turn retiring off:** the owner wants none (decision 16).
 - **Showing Activity when a quit waits:** the owner removed it from Cycle 01
   after its review round 3 (decision 12).
