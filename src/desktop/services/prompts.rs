@@ -16,7 +16,8 @@
 //!
 //! Not now (`Cancelled`) marks the key declined for the session (R-13):
 //! a later request for it answers `Cancelled` at once, with no prompt,
-//! until Unlock… clears the mark through `WorkerHandle::clear_declined`.
+//! until Unlock… clears the mark through `WorkerHandle::clear_declined`
+//! (a needs-attention entry's, by key) or `clear_declined_for` (a request's).
 //! The set is shared by the worker's provider and its handle. Each key the
 //! provider answers `Cancelled`, declined now or before, is also recorded
 //! against the request whose attempt asked for it, so Unlock… on that
@@ -180,9 +181,9 @@ impl DeclinedKeys {
             .unwrap_or_default()
     }
 
-    /// Clears `key_id`'s mark; true when it was declined. Unlock… clears
-    /// by request (`clear_for`); this per-key form serves the tests.
-    #[cfg(test)]
+    /// Clears `key_id`'s mark; true when it was declined. A retried request
+    /// clears by request (`clear_for`); a needs-attention entry names the
+    /// key and no request, so Unlock… clears by key (C3).
     pub(crate) fn clear(&self, key_id: SharedKeyId) -> bool {
         self.lock().keys.remove(&key_id)
     }

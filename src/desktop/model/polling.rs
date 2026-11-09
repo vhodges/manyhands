@@ -12,6 +12,7 @@
 //! changes a repository's policy, and pausing never clears attention (A2).
 
 mod attempt;
+pub(crate) mod attention;
 mod clock;
 mod state;
 pub(crate) mod status;
@@ -19,10 +20,8 @@ mod table;
 
 use std::{collections::BTreeMap, time::Duration};
 
-#[cfg_attr(not(test), allow(unused_imports))] // Called from Task 8.
-pub(crate) use attempt::KeyId;
 pub(crate) use attempt::{
-    Answer, AttemptSummary, AttemptTarget, Authority, CancelCause, Disposition, NotEligible,
+    Answer, AttemptSummary, AttemptTarget, Authority, CancelCause, Disposition, KeyId, NotEligible,
     PollAttempt, Root, TargetKind, TransportFailure,
 };
 #[cfg(test)]
@@ -41,7 +40,6 @@ const CLOCK_TOLERANCE: time::Duration = time::Duration::seconds(60);
 
 /// One reason and the repositories it holds back.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
 pub(crate) struct AttentionEntry {
     pub reason: Reason,
     pub roots: Vec<Root>,
@@ -87,6 +85,29 @@ impl PollSchedule {
         if let Some(repo) = self.repos.get_mut(root) {
             repo.policy = policy;
             repo.stale = false;
+        }
+    }
+
+    /// A policy just read says whether the library holds the repository
+    /// back until recovery. A repository that is not in flight and not held
+    /// for another reason then waits as `RecoveryHeld` attention, so it is
+    /// listed and counted like any other (decision 10, 11); one that is no
+    /// longer held (resumed through the CLI) polls again. Called after
+    /// `add` and `set_policy`, not by them: they leave the phase alone.
+    pub fn sync_recovery(&mut self, root: &Root) {
+        let Some(repo) = self.repos.get_mut(root) else {
+            return;
+        };
+        let held = Phase::Attention(Reason::RecoveryHeld(root.clone()));
+        if repo.policy.recovery_suspended {
+            if matches!(
+                repo.phase,
+                Phase::Idle | Phase::Waiting { .. } | Phase::Preempted | Phase::Stopped
+            ) {
+                repo.phase = held;
+            }
+        } else if repo.phase == held {
+            repo.rearm();
         }
     }
 
@@ -246,7 +267,6 @@ impl PollSchedule {
 }
 
 /// Attention, reconfiguration and the retirement loop.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
 impl PollSchedule {
     /// One entry per key, host or repository, and nothing else (decision
     /// 11, W-1): a key locked for three repositories is one. Paused, off,
@@ -305,6 +325,7 @@ impl PollSchedule {
 
     /// Part E's loop for this repository starts. No poll of it meanwhile
     /// (R-32). Returns false when it is not idle.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     pub fn begin_retiring(&mut self, root: &Root) -> bool {
         match self.repos.get_mut(root) {
             Some(repo) if repo.phase == Phase::Idle => {

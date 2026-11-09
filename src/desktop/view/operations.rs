@@ -26,6 +26,11 @@
 //! (`recovered`) follows the store's, with Review and Dismiss, and so does
 //! a problem with the in-flight record of unfinished checks (`record`).
 //!
+//! What waits for the person comes first in "This session": one entry per
+//! key, host or repository the polling scheduler holds back, with the
+//! repositories it holds back and the action its reason names (`attention`,
+//! D6 C3). The entry goes when the scheduler clears it; there is no Dismiss.
+//!
 //! **Pending in repositories** lists the operations each listed
 //! repository reports with work outstanding: command, scope, operation ID
 //! and what it waits for. A local operation, a remote item or repository
@@ -63,6 +68,7 @@ use manyhands::{
     results::{Effects, Outcome, RecoveryAction},
 };
 
+mod attention;
 mod outcomes;
 mod record;
 mod recovered;
@@ -655,12 +661,15 @@ impl Workspace {
             .map(|request| request.id)
             .collect();
         let unavailable = self.services().drafts().read(cx).unavailable();
+        let attention = self.attention_entries(cx);
         let recovered = self.recovered_entry(cx);
         let record = self.record_entries(cx);
         let mut section = v_flex()
             .id("session-section")
             .gap_1()
             .child(div().text_sm().child(THIS_SESSION))
+            // What waits for the person comes first (D6 C3).
+            .children(attention)
             // Persistent: the store stays closed for the session, so the
             // entry offers no Dismiss.
             .children(
@@ -950,3 +959,11 @@ mod check_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "operations/record_tests.rs"]
 mod record_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/attention_support.rs"]
+mod attention_support;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/attention_tests.rs"]
+mod attention_tests;

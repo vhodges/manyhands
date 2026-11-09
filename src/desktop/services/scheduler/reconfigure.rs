@@ -64,6 +64,10 @@ pub(crate) enum Heard {
     /// A request that only moved the stored policy of this repository
     /// finished: the policy is read again, nothing is cancelled.
     PolicyMoved(Root),
+    /// A Check now finished with success: a completed poll, which clears
+    /// the attention of its repository however the cause was fixed (C3),
+    /// and proves the key it used unlocked.
+    CheckedNow(Root),
 }
 
 fn root_of(intent: &Intent) -> Option<Root> {
@@ -129,7 +133,16 @@ pub(crate) fn heard(event: &WorkerEvent, operations: &Operations) -> Option<Hear
                 envelope.outcome == Outcome::Success || envelope.code == ResultCode::AlreadyApplied;
             match scope_of(intent, gone) {
                 Some(scope) => Some(Heard::Reconfiguration(Moment::Finished, scope)),
-                None => policy_of(intent).map(Heard::PolicyMoved),
+                None => {
+                    let root = policy_of(intent)?;
+                    let completed = matches!(intent, Intent::PollOnce { .. })
+                        && envelope.outcome == Outcome::Success;
+                    Some(if completed {
+                        Heard::CheckedNow(root)
+                    } else {
+                        Heard::PolicyMoved(root)
+                    })
+                }
             }
         }
         _ => None,

@@ -167,6 +167,10 @@ impl Workspace {
             this.operations_changed(window, cx)
         });
         let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
+        // What the scheduler holds back for the person is drawn in Activity
+        // (D6 C3): its entries change with its answers, not with a request.
+        cx.observe(services.scheduler(), |_, _, cx| cx.notify())
+            .detach();
         let focus_lost = cx.on_focus_lost(window, |this, window, cx| this.focus_lost(window, cx));
         let activation = cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {

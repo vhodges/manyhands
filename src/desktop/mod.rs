@@ -313,7 +313,7 @@ fn open_test_window_with(
 /// launch when `launch_refresh` is set.
 #[cfg(all(test, feature = "desktop-test-support"))]
 fn open_test_window_over(
-    backend: Arc<test_support::delaying::DelayingBackend>,
+    backend: Arc<dyn services::Backend>,
     launch_refresh: bool,
     cx: &mut App,
 ) -> WindowHandle<Root> {

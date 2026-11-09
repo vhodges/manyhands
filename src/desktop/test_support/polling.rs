@@ -22,6 +22,12 @@
 //!   as the transport would, with a public `UnlockRequest`, and answer the
 //!   library's locked-key failure when the session refuses. Nothing else
 //!   reaches the provider without SSH.
+//! - `ask_in_check_now` makes a Check now, the user lane's `poll once`, ask a
+//!   provider for a passphrase before its library call, as the transport
+//!   would: the worker's own provider, sharing its declined keys, so a
+//!   prompt reaches the UI and a declined key is answered at once.
+//! - `resume_polling` records each Resume checking and then makes the
+//!   library's own call.
 
 use std::{
     collections::VecDeque,
@@ -35,9 +41,12 @@ use manyhands::{
         AutomaticPollEligibility, ConflictDto, Mutation, MutationDataDto, OperationId,
         PollPublicationRemoteRequest, PollingStatusDto, PrepareDataDto, ProgressStage, ReadError,
         RemoteListDto, RemotePollError, RemotePollResult, RemoteSnapshot, RepositoryError,
-        RepositoryService, ResolvedRepository,
-        keys::{KeyStore, SessionCredentials, SessionUnlockFailure, UnlockRequest},
-        transport::{SshDirection, SshTransportError, SshTransportErrorKind},
+        RepositoryService, ResolvedRepository, SharedKeyId,
+        keys::{
+            KeySourceToken, KeyStore, PassphraseResponse, SessionCredentialProvider,
+            SessionCredentials, SessionUnlockFailure, UnlockReason, UnlockRequest,
+        },
+        transport::{SshAuthority, SshDirection, SshTransportError, SshTransportErrorKind},
     },
     results::Envelope,
 };
@@ -111,6 +120,20 @@ pub(crate) struct PollingBackend {
     remote_reads: Mutex<usize>,
     /// The root of each of those reads, in order.
     remote_read_roots: Mutex<Vec<String>>,
+    /// The provider and request a Check now asks before its library call.
+    check_asks: Mutex<Option<(DesktopProvider, UnlockRequest)>>,
+    /// What each of those asks was answered.
+    asked: Mutex<Vec<Asked>>,
+    /// The root of every `resume_polling` made, in order.
+    resumes: Mutex<Vec<String>>,
+}
+
+/// What a Check now's passphrase request was answered.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Asked {
+    Supplied,
+    Cancelled,
+    Unavailable,
 }
 
 impl PollingBackend {
@@ -129,12 +152,20 @@ impl PollingBackend {
             roots: Mutex::default(),
             remote_reads: Mutex::default(),
             remote_read_roots: Mutex::default(),
+            check_asks: Mutex::default(),
+            asked: Mutex::default(),
+            resumes: Mutex::default(),
         }
     }
 
     /// The fixture's delaying backend, for a test's other holds.
     pub(crate) fn inner(&self) -> &DelayingBackend {
         &self.inner
+    }
+
+    /// The same, shared.
+    pub(crate) fn inner_shared(&self) -> Arc<DelayingBackend> {
+        self.inner.clone()
     }
 
     /// The poll calls so far, in order.
@@ -208,13 +239,68 @@ impl PollingBackend {
         *self.unlock.lock().unwrap() = Some(request);
     }
 
+    /// Makes every Check now ask `provider` for `request`'s passphrase
+    /// before its library call, as the transport does for a protected key.
+    pub(crate) fn ask_in_check_now(&self, provider: DesktopProvider, request: UnlockRequest) {
+        *self.check_asks.lock().unwrap() = Some((provider, request));
+    }
+
+    /// What each of those requests was answered, in order.
+    pub(crate) fn asked(&self) -> Vec<Asked> {
+        self.asked.lock().unwrap().clone()
+    }
+
+    /// The root of every Resume checking made, in order.
+    pub(crate) fn resumed(&self) -> Vec<String> {
+        self.resumes.lock().unwrap().clone()
+    }
+
+    /// Polls stop asking the session for a passphrase.
+    pub(crate) fn stop_asking_unlock(&self) {
+        *self.unlock.lock().unwrap() = None;
+    }
+
     fn record(&self, call: PollCall) {
         self.calls.lock().unwrap().push(call);
     }
 }
 
+/// An unlock request for the key `key`, whose private file is written
+/// under `directory`.
+pub(crate) fn unlock_request(directory: &Path, key: SharedKeyId) -> UnlockRequest {
+    let path = directory.join(key.to_string());
+    std::fs::write(&path, b"opaque fixture bytes").unwrap();
+    UnlockRequest {
+        key_id: key,
+        label: "primary".to_owned(),
+        source: KeySourceToken::observe(&path).unwrap(),
+        reason: UnlockReason::ProtectedKey,
+    }
+}
+
+/// The transport's error of `kind` for the repository at `root`.
+pub(crate) fn transport_error(
+    root: &str,
+    kind: SshTransportErrorKind,
+    key: Option<SharedKeyId>,
+    authority: Option<&SshAuthority>,
+) -> RemotePollError {
+    RemotePollError::Transport(SshTransportError {
+        root: PathBuf::from(root),
+        remote_name: "origin".to_owned(),
+        direction: SshDirection::Fetch,
+        selected_key_id: key,
+        authority: authority.cloned(),
+        kind,
+    })
+}
+
 /// The transport's error for a refused unlock.
-fn locked(request: &UnlockRequest, failure: SessionUnlockFailure, root: &Path) -> RemotePollError {
+pub(crate) fn locked(
+    request: &UnlockRequest,
+    failure: SessionUnlockFailure,
+    root: &Path,
+) -> RemotePollError {
     let kind = match failure {
         SessionUnlockFailure::Cancelled => SshTransportErrorKind::UnlockCancelled,
         SessionUnlockFailure::ProviderUnavailable => SshTransportErrorKind::ProviderUnavailable,
@@ -252,6 +338,17 @@ impl Backend for PollingBackend {
     }
 
     fn before_job(&self, kind: JobKind) {
+        if kind == JobKind::PollOnce {
+            let mut asks = self.check_asks.lock().unwrap();
+            if let Some((provider, request)) = asks.as_mut() {
+                let answer = match provider.request_passphrase(request) {
+                    PassphraseResponse::Supplied(_) => Asked::Supplied,
+                    PassphraseResponse::Cancelled => Asked::Cancelled,
+                    PassphraseResponse::Unavailable => Asked::Unavailable,
+                };
+                self.asked.lock().unwrap().push(answer);
+            }
+        }
         self.inner.before_job(kind);
     }
 
@@ -344,6 +441,14 @@ impl Backend for PollingBackend {
 
     fn after_poll(&self, _operation: OperationId) -> Option<Library> {
         self.canned.lock().unwrap().pop_front()
+    }
+
+    fn resume_polling(&self, root: &Path) -> Result<(), RepositoryError> {
+        self.resumes
+            .lock()
+            .unwrap()
+            .push(root.to_string_lossy().into_owned());
+        self.inner.resume_polling(root)
     }
 
     fn cancel_poll(&self, root: &Path, op: OperationId) -> Result<(), RepositoryError> {

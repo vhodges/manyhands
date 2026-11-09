@@ -21,8 +21,10 @@
 //! scheduler does not hold yet is told apart from what it holds nothing for
 //! (`Scheduler::unplaced`).
 //!
-//! Attention rows' actions (Unlock…, Choose a key…, Approve host…, Open
-//! remote settings…, Resume checking) are Task 8's: their words are here.
+//! A needs-attention row carries the action its reason names (Unlock…,
+//! Choose a key…, Approve host…, Open remote settings…; Resume checking for
+//! a repository held until recovery), as the operation area's entry does
+//! (`attention`).
 //!
 //! Every control sits in a focus-tracking wrapper with a scroll marker, so
 //! a control that takes focus below the fold is brought into view. Every
@@ -83,11 +85,18 @@ type Interval = SelectState<SearchableVec<&'static str>>;
 pub(crate) enum PollingEvent {
     /// Set up sharing…: the Remotes page on this repository.
     SetUpSharing(PathBuf),
+    /// Choose a key…, Approve host… or Open remote settings…: the page that
+    /// fixes the cause (C3).
+    Attend(Attend),
     /// The status points at a pending operation: show Activity.
     ShowActivity,
 }
 
 impl EventEmitter<PollingEvent> for PollingPage {}
+
+#[path = "polling_attention.rs"]
+mod attention;
+pub(crate) use attention::Attend;
 
 pub(crate) struct PollingPage {
     services: Services,
@@ -402,6 +411,10 @@ impl PollingPage {
                     .text_color(muted)
                     .child(text(("polling-detail", ix), detail))
             }));
+        // What the row waits for the person to do (C3).
+        if let Some(reason) = self.held_for(root, &row.shape, cx) {
+            body = body.child(self.attention_action(ix, root, &reason, cx));
+        }
         match row.shape {
             Shape::Polling(controls) => {
                 if row.pending {

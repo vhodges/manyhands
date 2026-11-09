@@ -363,3 +363,42 @@ fn attention_keys() {
     }
     assert!(quiet.schedule.attention().is_empty());
 }
+
+/// Decision 10, 11: a policy that says the library holds the repository
+/// until recovery lists it as attention, so it is shown and counted like
+/// any other and is not polled; a policy that no longer says so (resumed
+/// through the CLI) lets it poll; a repository in flight is not moved.
+#[test]
+fn recovery_hold_follows_the_policy() {
+    let mut fx = Fx::new();
+    let held = |name: &str| Phase::Attention(Reason::RecoveryHeld(root(name)));
+    for name in ["held", "free", "running"] {
+        fx.add(name, policy(None));
+    }
+    let suspended = |name: &str, fx: &mut Fx, on: bool| {
+        let mut changed = policy(None);
+        changed.recovery_suspended = on;
+        fx.schedule.set_policy(&root(name), changed);
+        fx.schedule.sync_recovery(&root(name));
+    };
+    fx.schedule.mark_queued(&root("running"));
+    suspended("held", &mut fx, true);
+    suspended("free", &mut fx, false);
+    suspended("running", &mut fx, true);
+    assert_eq!(fx.phase("held"), held("held"));
+    assert_eq!(fx.phase("free"), Phase::Idle);
+    assert_eq!(fx.phase("running"), Phase::Queued, "its answer decides");
+    assert_eq!(
+        fx.schedule.attention(),
+        [AttentionEntry {
+            reason: Reason::RecoveryHeld(root("held")),
+            roots: vec![root("held")],
+        }]
+    );
+    // The hold goes with the flag, and the repository is due again (one
+    // poll at a time, so once the one in flight is out of the way).
+    suspended("held", &mut fx, false);
+    assert_eq!(fx.phase("held"), Phase::Idle);
+    fx.schedule.abandon(&root("running"));
+    assert!(fx.due().contains(&root("held")));
+}

@@ -22,6 +22,7 @@ use crate::desktop::{
     model::{drafts::create, navigation::OpenTarget, operations::Operations, tabs::TabKey},
     open_test_window_over,
     services::{
+        Backend,
         prompts::{PromptReply, PromptRequest},
         requests::{DesktopRequest, DesktopRequestId, Intent},
     },
@@ -93,15 +94,37 @@ impl Shell {
         before: impl FnOnce(&DelayingBackend),
         cx: &mut TestAppContext,
     ) -> Self {
+        let backend = fixture.delaying_backend();
+        before(&backend);
+        Self::over(fixture, backend.clone(), backend, launch_refresh, cx)
+    }
+
+    /// Opens the main window over `services_backend`, a double that wraps
+    /// the fixture's `backend` (a test of the poll's calls), with no launch
+    /// refresh.
+    pub(crate) fn over_double(
+        fixture: Fixture,
+        services_backend: Arc<dyn Backend>,
+        backend: Arc<DelayingBackend>,
+        cx: &mut TestAppContext,
+    ) -> Self {
+        Self::over(fixture, services_backend, backend, false, cx)
+    }
+
+    fn over(
+        fixture: Fixture,
+        services_backend: Arc<dyn Backend>,
+        backend: Arc<DelayingBackend>,
+        launch_refresh: bool,
+        cx: &mut TestAppContext,
+    ) -> Self {
         cx.update(gpui_kit::init);
         cx.update(keys::bind);
         cx.update(super::editor::keys::bind);
         // Dialogs open without their entrance animation, so a frame finds
         // them where they rest.
         cx.update(|cx| cx.set_reduce_motion(true));
-        let backend = fixture.delaying_backend();
-        before(&backend);
-        let window = cx.update(|cx| open_test_window_over(backend.clone(), launch_refresh, cx));
+        let window = cx.update(|cx| open_test_window_over(services_backend, launch_refresh, cx));
         let workspace = window
             .update(cx, |root, _, _| {
                 root.view().clone().downcast::<Workspace>().unwrap()

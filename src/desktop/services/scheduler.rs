@@ -15,6 +15,7 @@
 //!   (A4), except a replayed terminal answer older than this launch, which
 //!   counts as no attempt (L-1).
 
+mod attention;
 mod entity;
 mod react;
 mod reconfigure;
@@ -26,6 +27,8 @@ use time::OffsetDateTime;
 
 pub(crate) use entity::Scheduler;
 pub(crate) use reconfigure::heard;
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use reconfigure::{Heard, Moment, Scope};
 
 use super::{
     Services,
@@ -231,3 +234,7 @@ mod real_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "scheduler_intent_tests.rs"]
 mod intent_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "scheduler_attention_tests.rs"]
+mod attention_tests;

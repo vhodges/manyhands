@@ -105,6 +105,10 @@ pub(crate) struct Scheduler {
     /// at, as the last read showed it (`None` when it did not say). Its
     /// keys are the scheduled repositories.
     pub(super) authorities: BTreeMap<Root, Option<Authority>>,
+    /// Repositories whose Check now waits for the change the person was
+    /// sent to make (Choose a key…, Approve host…, Open remote settings…):
+    /// it is sent when a reconfiguration reaching them finishes (C3).
+    pub(super) check_after: BTreeSet<Root>,
 }
 
 impl Scheduler {
@@ -137,6 +141,7 @@ impl Scheduler {
             armed_for: None,
             failed_reads: BTreeSet::new(),
             authorities: BTreeMap::new(),
+            check_after: BTreeSet::new(),
         }
     }
 
@@ -318,8 +323,11 @@ impl Scheduler {
                     if self.schedule.repo(&root).is_some() {
                         self.schedule.set_policy(&root, policy);
                     } else {
-                        self.schedule.add(root, policy, last_completed);
+                        self.schedule.add(root.clone(), policy, last_completed);
                     }
+                    // A repository the library holds until recovery is
+                    // listed as attention, like any other (decision 10).
+                    self.schedule.sync_recovery(&root);
                 }
                 Read::NotPolled => self.forget_schedule(&root),
                 Read::Failed => {}
@@ -441,6 +449,7 @@ impl Scheduler {
                 }
                 Heard::Reconfiguration(Moment::Finished, scope) => self.reconfigured(scope, cx),
                 Heard::PolicyMoved(root) => self.read_registrations(vec![root], cx),
+                Heard::CheckedNow(root) => self.checked(&root, cx),
             }
         }
         self.answers.extend(self.inbox.take());

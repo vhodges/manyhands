@@ -19,6 +19,7 @@
 
 use std::path::PathBuf;
 
+mod attention;
 mod hosts;
 mod keys;
 mod polling;
@@ -283,6 +284,7 @@ impl SettingsHost {
                     PollingEvent::SetUpSharing(root) => {
                         this.set_up_sharing(root.clone(), window, cx)
                     }
+                    PollingEvent::Attend(attend) => this.attend(attend, window, cx),
                     PollingEvent::ShowActivity => cx.emit(SettingsEvent::ShowActivity),
                 },
             ));
@@ -509,3 +511,7 @@ mod polling_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "polling_real_tests.rs"]
 mod polling_real_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "attention_tests.rs"]
+mod attention_tests;

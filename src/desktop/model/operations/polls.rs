@@ -9,10 +9,13 @@
 use std::collections::HashSet;
 
 use gpui_kit::Context;
-use manyhands::repository::{OperationDto, OperationId};
+use manyhands::repository::{OperationDto, OperationFamily, OperationId};
 
 use super::{Operations, ResumeOffer, check_now_left_active, resume_offer};
-use crate::desktop::{model::stamp::RepoKey, services::inflight::Report};
+use crate::desktop::{
+    model::{list_state::ListState, stamp::RepoKey},
+    services::inflight::Report,
+};
 
 impl Operations {
     /// A poll brought items into `root` (fast-forwarded or materialized,
@@ -53,6 +56,20 @@ impl Operations {
     /// Hides a record problem, for the session.
     pub(crate) fn dismiss_record_note(&mut self, report: Report) {
         self.record_notes.retain(|shown| *shown != report);
+    }
+
+    /// Whether the last read of `root`'s pending operations lists a local
+    /// one: a poll there answers `recovery_required` before it
+    /// authenticates (Fact 32), so Unlock… has nothing to prove through it.
+    /// A read not yet made, or that failed, lists none.
+    pub(crate) fn has_pending_local(&self, root: &RepoKey) -> bool {
+        match self.pending.get(root) {
+            Some(ListState::Ready { rows, .. }) => rows
+                .items
+                .iter()
+                .any(|operation| operation.family == OperationFamily::Local),
+            _ => false,
+        }
     }
 
     /// The operations of the desktop's own automatic polls.

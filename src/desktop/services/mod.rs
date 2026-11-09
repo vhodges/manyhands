@@ -313,6 +313,13 @@ pub(crate) trait Backend: Send + Sync + 'static {
         None
     }
 
+    /// Resume checking (decision 10, C2): releases the repository's
+    /// recovery suspension, and nothing else. Called off the UI thread by
+    /// the scheduler.
+    fn resume_polling(&self, root: &Path) -> Result<(), RepositoryError> {
+        self.service().resume_remote_polling_after_recovery(root)
+    }
+
     /// Asks the poll `op` of `root` to stop at its next safe point.
     /// Called only by the cancel task (`preempt`: a user job, a
     /// reconfiguration and quit all go that way), never by a poll itself,

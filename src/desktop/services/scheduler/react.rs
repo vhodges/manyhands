@@ -164,6 +164,7 @@ impl Scheduler {
         if let Some(root) = &gone {
             self.forget(root);
         }
+        self.send_awaited_checks(&reached, gone.as_ref());
         let reread = reached
             .into_iter()
             .filter(|root| Some(root) != gone.as_ref())

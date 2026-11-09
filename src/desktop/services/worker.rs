@@ -547,10 +547,10 @@ impl WorkerHandle {
         self.shared().lock().submitted.get(&id)?.gave_up
     }
 
-    /// Unlock…: clears the Not now mark of `key_id`, so its next request
-    /// prompts again (R-3, R-13). True when it was declined. Unlock… uses
-    /// `clear_declined_for`; this per-key form serves the tests.
-    #[cfg(test)]
+    /// Unlock… on a needs-attention entry: clears the Not now mark of
+    /// `key_id`, so its next request prompts again (R-3, R-13, C3). The
+    /// entry names the key and no request, so this is the per-key form of
+    /// `clear_declined_for`. True when it was declined.
     pub(crate) fn clear_declined(&self, key_id: manyhands::repository::SharedKeyId) -> bool {
         self.shared().declined.clear(key_id)
     }
@@ -717,6 +717,13 @@ impl WorkerHandle {
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn attempting_for_testing(&self, id: Option<DesktopRequestId>) {
         self.shared().declined.attempting(id, Lane::User);
+    }
+
+    /// As `attempting_for_testing`, for a job of `lane`: a background job
+    /// is refused every prompt (B5).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn attempting_in_for_testing(&self, id: Option<DesktopRequestId>, lane: Lane) {
+        self.shared().declined.attempting(id, lane);
     }
 
     /// The running job, if any.
