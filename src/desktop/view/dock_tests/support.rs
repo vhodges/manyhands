@@ -15,6 +15,7 @@ use gpui_kit::{
 
 use crate::desktop::{
     model::layout::{ITEM_AREA_NAME, Layout, PanelKind, Side, arrangement_from},
+    view::dock::restore_tests::round_trips,
     view::{
         harness::Shell,
         workspace::{REGIONS, Region, Workspace},
@@ -266,6 +267,8 @@ pub(in crate::desktop::view) fn assert_agreement(
     what: &str,
     cx: &mut TestAppContext,
 ) {
+    // What the area holds is a file `restore` accepts, as the layout.
+    round_trips(shell, what, cx);
     let layout = layout(shell, cx);
     let area = area(shell, cx);
     let state = area.read_with(cx, |area, cx| area.dump(cx));

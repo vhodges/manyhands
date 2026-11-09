@@ -24,6 +24,9 @@ pub(crate) const LAYOUT_VERSION: usize = 1;
 /// `load` does not floor it (`B/dock/dock_area.rs:748-750`).
 const MIN_DOCK: f32 = 100.;
 
+/// No size a person could have made is over this: a bigger one is damage.
+const MAX_SIZE: f32 = 1_000_000.;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct File {
@@ -128,7 +131,7 @@ fn parse(bytes: &[u8]) -> Option<Saved> {
             continue;
         };
         let size = dock.size().as_f32();
-        if dock.placement() != placement || !size.is_finite() || size < MIN_DOCK {
+        if dock.placement() != placement || !(MIN_DOCK..=MAX_SIZE).contains(&size) {
             return None;
         }
         let mut names = Vec::new();
@@ -181,7 +184,7 @@ fn check_node<'a>(node: &'a PanelState, leaves: &mut Vec<&'a str>) -> Option<()>
             let sized = sizes.len() == node.children.len()
                 && sizes
                     .iter()
-                    .all(|s| s.as_f32().is_finite() && s.as_f32() > 0.);
+                    .all(|s| s.as_f32() > 0. && s.as_f32() <= MAX_SIZE);
             if node.panel_name != SPLIT || *axis > 1 || node.children.is_empty() || !sized {
                 return None;
             }

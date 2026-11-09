@@ -13,17 +13,29 @@ const MIN_ITEM_HEIGHT: f32 = 200.;
 /// No dock is made smaller than this (the Kit's floor).
 const MIN_DOCK: f32 = 100.;
 
+/// A change smaller than this is none: the Kit measures in fractions.
+const NO_CHANGE: f32 = 0.5;
+
 /// The sizes `sizes` (left, right, bottom) become in an area `width` by
 /// `height`, for the docks that are `open`: both side docks are scaled in
 /// proportion until the item area is 320 px wide, and the bottom dock is
-/// reduced until it is 200 px tall. A dock that fits is left as it is.
-pub(super) fn clamped(width: f32, height: f32, sizes: [f32; 3], open: [bool; 3]) -> [f32; 3] {
+/// reduced until it is 200 px tall. `None` for a dock that fits, that is
+/// closed, or that would change by under half a pixel.
+pub(super) fn clamped(
+    width: f32,
+    height: f32,
+    sizes: [f32; 3],
+    open: [bool; 3],
+) -> [Option<f32>; 3] {
     let mut out = sizes;
-    let sides = [open[0], open[1]].map(f32::from);
-    let total = sizes[0] * sides[0] + sizes[1] * sides[1];
+    let total = [0, 1]
+        .into_iter()
+        .filter(|side| open[*side])
+        .map(|side| sizes[side])
+        .sum::<f32>();
     if total > 0. && width - total < MIN_ITEM_WIDTH {
         let scale = (width - MIN_ITEM_WIDTH).max(0.) / total;
-        for side in 0..2 {
+        for side in [0, 1] {
             if open[side] {
                 out[side] = (sizes[side] * scale).max(MIN_DOCK);
             }
@@ -32,7 +44,9 @@ pub(super) fn clamped(width: f32, height: f32, sizes: [f32; 3], open: [bool; 3])
     if open[2] && height - sizes[2] < MIN_ITEM_HEIGHT {
         out[2] = (height - MIN_ITEM_HEIGHT).max(MIN_DOCK);
     }
-    out
+    [0, 1, 2].map(|side| {
+        (open[side] && (out[side] - sizes[side]).abs() > NO_CHANGE).then_some(out[side])
+    })
 }
 
 impl DockShell {
@@ -83,12 +97,15 @@ impl DockShell {
             open,
         );
         for side in Side::ALL {
-            let ix = side as usize;
-            if open[ix] && (to[ix] - sizes[ix]).abs() > 0.5 {
+            if let Some(size) = to[side as usize] {
                 self.area.update(cx, |area, cx| {
-                    area.set_dock_size(placement(side), px(to[ix]), window, cx)
+                    area.set_dock_size(placement(side), px(size), window, cx)
                 });
             }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "clamp_tests.rs"]
+mod tests;

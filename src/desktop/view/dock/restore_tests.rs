@@ -30,14 +30,14 @@ const RESTORE_NOTICE: &str =
 
 /// Writes `layout` into the fixture's layout file, as a first session
 /// would have left it.
-fn seed(fixture: &Fixture, layout: &Layout, sizes: [f32; 3]) -> Vec<u8> {
+pub(super) fn seed(fixture: &Fixture, layout: &Layout, sizes: [f32; 3]) -> Vec<u8> {
     let bytes = encode(layout, &state_for(layout, sizes));
     fixture.layout_store().write_now(&bytes).unwrap();
     bytes
 }
 
 /// The file's bytes, if there is one.
-fn file(shell: &Shell) -> Option<Vec<u8>> {
+pub(super) fn file(shell: &Shell) -> Option<Vec<u8>> {
     shell.fixture.layout_store().read().unwrap()
 }
 
@@ -53,6 +53,37 @@ pub(super) fn in_file(shell: &Shell) -> Layout {
     match restore(shell.fixture.layout_store().read()) {
         Restore::Saved(saved) => saved.layout,
         other => panic!("the file holds a layout: {other:?}"),
+    }
+}
+
+/// The area's dump is a file `restore` reads back as the live layout, whatever
+/// the person has done to the area: a refusal here would show the restore
+/// notice after a normal session. Sizes are left out: a dock with no panels
+/// is gone from the file and keeps its last size in the layout.
+pub(super) fn round_trips(shell: &Shell, what: &str, cx: &mut TestAppContext) {
+    let live = layout(shell, cx);
+    let bytes = encode(&live, &dump(shell, cx));
+    let Restore::Saved(saved) = restore(Ok(Some(bytes))) else {
+        panic!("{what}: the area wrote a state that restore refuses");
+    };
+    for kind in PanelKind::ALL {
+        assert_eq!(
+            saved.layout.is_on(kind),
+            live.is_on(kind),
+            "{what}: {kind:?}"
+        );
+    }
+    for side in Side::ALL {
+        assert_eq!(
+            saved.layout.groups(side),
+            live.groups(side),
+            "{what}: {side:?}"
+        );
+        assert_eq!(
+            saved.layout.is_shown(side),
+            live.is_shown(side),
+            "{what}: {side:?}"
+        );
     }
 }
 

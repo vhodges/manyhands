@@ -185,10 +185,18 @@ impl Workspace {
             })
             .collect();
         self.layout.set_arrangement(arrangement_from(&dump));
+        let mut opening = false;
         for side in kit_opened {
             if !self.layout.is_open(side) {
                 self.layout.toggle_dock(side);
             }
+            opening = true;
+        }
+        let opened = self.dock.reconcile(&mut self.layout, window, cx);
+        // A dock that opens, by the shell or by the Kit's edge drag, is
+        // scaled to fit (R-37).
+        if opening || !opened.is_empty() {
+            self.dock.clamp_docks(&self.layout, window, cx);
         }
         for side in Side::ALL {
             let size = area
@@ -197,10 +205,6 @@ impl Workspace {
             if let Some(size) = size {
                 self.layout.set_size(side, size.as_f32());
             }
-        }
-        let opened = self.dock.reconcile(&mut self.layout, window, cx);
-        if !opened.is_empty() {
-            self.dock.clamp_docks(&self.layout, window, cx);
         }
         // After reconcile, so the events it caused stop at step 1.
         let settled = area.read(cx).dump(cx);

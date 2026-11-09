@@ -25,7 +25,8 @@ impl DockShell {
     /// 3. a group's active tab is the one the layout says;
     /// 4. a dock is open when the layout says it is.
     ///
-    /// Returns the docks it opened, for Task 9's clamp (R-37).
+    /// Returns the docks it opened, which the caller scales to fit the
+    /// area (R-37).
     pub(in crate::desktop::view) fn reconcile(
         &self,
         layout: &mut Layout,

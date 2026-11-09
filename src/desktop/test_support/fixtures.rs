@@ -71,6 +71,9 @@ pub(crate) struct Fixture {
     /// The panel layout store in the data directory, opened as the draft
     /// store is.
     layout: OnceLock<Result<LayoutStore, LayoutStoreError>>,
+    /// The backend is given no layout store, as when its folder cannot be
+    /// opened.
+    layout_unavailable: bool,
     data: tempfile::TempDir,
     home: tempfile::TempDir,
     repositories: tempfile::TempDir,
@@ -90,6 +93,7 @@ impl Fixture {
             drafts: OnceLock::new(),
             resolutions: OnceLock::new(),
             layout: OnceLock::new(),
+            layout_unavailable: false,
             data,
             home,
             repositories,
@@ -111,8 +115,19 @@ impl Fixture {
                 self.drafts_opened(),
             )
             .with_resolutions(self.resolutions_opened())
-            .with_layout(self.layout_opened()),
+            .with_layout(if self.layout_unavailable {
+                Err(LayoutStoreError::Unavailable)
+            } else {
+                self.layout_opened()
+            }),
         )
+    }
+
+    /// The same fixture, whose backends have no layout store: the layout
+    /// folder is never made.
+    pub(crate) fn without_layout_store(mut self) -> Self {
+        self.layout_unavailable = true;
+        self
     }
 
     /// `LayoutStore::open_in` of the data directory, the first time.

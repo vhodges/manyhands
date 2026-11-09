@@ -34,6 +34,10 @@ const LAYOUT: &str = "layout";
 /// The file in that folder.
 const FILE: &str = "layout.json";
 
+/// The largest file read. A layout is a few kilobytes; a bigger file is not
+/// one, and is treated as unreadable.
+pub(crate) const MAX_FILE_BYTES: usize = 1 << 20;
+
 /// Why the layout store failed. It carries no path and no text.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum LayoutStoreError {
@@ -143,9 +147,10 @@ impl LayoutStore {
 
     /// The file's bytes, or `None` when there is none (a first launch).
     /// Anything else that stops it reading, such as a directory of that
-    /// name, is an error.
+    /// name or a file over `MAX_FILE_BYTES`, is an error.
     pub(crate) fn read(&self) -> Result<Option<Vec<u8>>, LayoutStoreError> {
         match self.state().folder.read(FILE) {
+            Ok(bytes) if bytes.len() > MAX_FILE_BYTES => Err(LayoutStoreError::Io),
             Ok(bytes) => Ok(Some(bytes)),
             Err(error) if error.kind == DraftErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),

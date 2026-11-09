@@ -4,7 +4,7 @@
 
 use serde_json::{Value, json};
 
-use super::{Layout, layout};
+use super::{Layout, Side, layout};
 use crate::desktop::{
     model::layout::{LAYOUT_VERSION, Restore, encode, restore, restore::Saved, state_for},
     services::layout::LayoutStoreError,
@@ -172,6 +172,20 @@ pub(super) fn run() {
         edited("shown with an unknown key", |v| {
             v["shown"]["top"] = json!(true)
         }),
+        // Each rule alone: the name check on a split, a leaf's children,
+        // and the largest size a person could have made.
+        edited("a StackPanel named TabPanel, keeping Stack info", |v| {
+            v["area"]["left_dock"]["panel"]["panel_name"] = json!("TabPanel")
+        }),
+        edited("a leaf carrying children", |v| {
+            v["area"]["right_dock"]["panel"]["children"][0]["children"] = json!([leaf("Nope")])
+        }),
+        edited("a dock of 10 million px", |v| {
+            v["area"]["right_dock"]["size"] = json!(1.0e7)
+        }),
+        edited("a split of 10 million px", |v| {
+            v["area"]["left_dock"]["panel"]["info"]["stack"]["sizes"][0] = json!(1.0e7)
+        }),
     ];
     for (case, value) in rows {
         assert_eq!(
@@ -216,6 +230,53 @@ pub(super) fn run() {
                 assert_eq!(area.version, Some(LAYOUT_VERSION), "{case}");
             }
             got => panic!("{case}: {got:?}"),
+        }
+    }
+    // The edges of what is accepted: a split nested in a split, which the
+    // Kit writes after a drop beside a root, and the smallest and largest
+    // docks.
+    let accepted: [(&str, Edit, Layout); 4] = [
+        (
+            "a split nested in a split",
+            |v| {
+                let tab = v["area"]["left_dock"]["panel"]["children"][0].clone();
+                v["area"]["left_dock"]["panel"]["children"][0] = json!({
+                    "panel_name": "StackPanel", "children": [tab],
+                    "info": {"stack": {"sizes": [100.0], "axis": 0}}});
+            },
+            default(),
+        ),
+        (
+            "a dock of exactly 100 px",
+            |v| v["area"]["right_dock"]["size"] = json!(100.0),
+            {
+                let mut l = default();
+                l.sizes[Side::Right.index()] = 100.;
+                l
+            },
+        ),
+        (
+            "a dock of exactly 1,000,000 px",
+            |v| v["area"]["right_dock"]["size"] = json!(1.0e6),
+            {
+                let mut l = default();
+                l.sizes[Side::Right.index()] = 1.0e6;
+                l
+            },
+        ),
+        (
+            "a split of the smallest positive size",
+            |v| {
+                v["area"]["left_dock"]["panel"]["info"]["stack"]["sizes"][0] = json!(0.5);
+            },
+            default(),
+        ),
+    ];
+    for (case, edit, want) in accepted {
+        let (_, value) = edited(case, edit);
+        match restore(Ok(Some(bytes(&value)))) {
+            Restore::Saved(saved) => assert_eq!(saved.layout, want, "{case}"),
+            got => panic!("{case} is a state the Kit writes: {got:?}"),
         }
     }
     // A file whose area carries another version is read at the file's.

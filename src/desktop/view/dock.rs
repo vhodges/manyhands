@@ -87,8 +87,8 @@ pub(super) struct DockShell {
     store: Option<LayoutStore>,
     /// The debounced save (R-19) and its writes.
     save: SaveState,
-    /// How many saves the layout has asked for (R-31): tests read it.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// How many saves the layout has asked for (R-31); it says which of
+    /// them a write has since covered.
     saves: usize,
     /// The restore and save notices in Activity (R-21).
     notices: Notices,
@@ -285,4 +285,8 @@ mod tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "dock/restore_tests.rs"]
-mod restore_tests;
+pub(in crate::desktop::view) mod restore_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "dock/save_tests.rs"]
+mod save_tests;
