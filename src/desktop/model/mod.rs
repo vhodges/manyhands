@@ -16,6 +16,7 @@ pub(crate) mod list_state;
 pub(crate) mod markdown_edit;
 pub(crate) mod names;
 pub(crate) mod navigation;
+pub(crate) mod polling;
 pub(crate) mod publication;
 pub(crate) mod read_state;
 pub(crate) mod relations_edit;
