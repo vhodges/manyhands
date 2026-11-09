@@ -27,17 +27,13 @@ use gpui_kit::{
 use self::menu::DockMenu;
 use crate::desktop::{
     assets::icon_path,
-    keys::{OpenSettings, ToggleBottomDock, ToggleLeftDock, ToggleRightDock},
+    keys::{OpenSettings, PANEL_TOGGLE_CONTEXT, ToggleBottomDock, ToggleLeftDock, ToggleRightDock},
     model::layout::{Layout, PanelKind, Side},
     view::{shell::tokens::chrome_colors, workspace::Workspace},
 };
 
 /// The footer's height (`02`).
 pub(in crate::desktop::view) const FOOTER_HEIGHT: f32 = 28.;
-
-/// The key context of a panel toggle, where `menu` and `shift-f10` open the
-/// dock menu (Part F).
-pub(in crate::desktop::view) const PANEL_TOGGLE_CONTEXT: &str = "PanelToggle";
 
 pub(in crate::desktop::view) const SETTINGS: &str = "Settings";
 
@@ -312,4 +308,4 @@ pub(in crate::desktop::view) fn separator(cx: &App) -> gpui_kit::Div {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "footer_tests/mod.rs"]
-mod tests;
+pub(in crate::desktop::view) mod tests;

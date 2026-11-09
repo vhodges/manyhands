@@ -638,3 +638,4 @@ mod frame;
 mod lifecycle;
 mod passphrase;
 mod settings;
+mod shell;

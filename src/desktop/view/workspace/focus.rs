@@ -143,6 +143,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A panel that is hidden, in a closed dock or behind another tab is
+        // revealed first (R-10); a displayed one is left as it is.
+        if let Stop::Panel(kind) = region.stop() {
+            self.reveal(kind, window, cx);
+        }
         // The list used last (R-8).
         if let Some(pane) = region.pane() {
             self.navigation.set_pane(pane);

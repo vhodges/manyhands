@@ -4,14 +4,15 @@ use gpui_kit::{Action, Keystroke, TestAppContext};
 
 use super::{
     CloseInspect, CloseTab, Find, FocusContent, FocusNavigation, FocusOperations,
-    FocusRepositories, NextRegion, NextTab, OpenDrafts, OpenSelected, OpenSettings, PreviousRegion,
-    PreviousTab, Quit, QuitNow, Rebuild, Refresh, bind,
+    FocusRepositories, NextRegion, NextTab, OpenDockMenu, OpenDrafts, OpenSelected, OpenSettings,
+    PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, ToggleBottomDock, ToggleLeftDock,
+    ToggleRightDock, bind,
 };
 
 #[gpui_kit::test]
 fn each_key_is_bound_to_its_action(cx: &mut TestAppContext) {
     cx.update(bind);
-    let table: [(&str, Box<dyn Action>); 17] = [
+    let table: [(&str, Box<dyn Action>); 22] = [
         ("f6", Box::new(NextRegion)),
         ("shift-f6", Box::new(PreviousRegion)),
         ("secondary-1", Box::new(FocusRepositories)),
@@ -31,6 +32,13 @@ fn each_key_is_bound_to_its_action(cx: &mut TestAppContext) {
         ("enter", Box::new(OpenSelected)),
         // In the Drafts page's Inspect panel.
         ("escape", Box::new(CloseInspect)),
+        // The dock keys, in no context (Bold wins in an editor, decision 2).
+        ("secondary-b", Box::new(ToggleLeftDock)),
+        ("secondary-alt-b", Box::new(ToggleRightDock)),
+        ("secondary-j", Box::new(ToggleBottomDock)),
+        // On a focused panel toggle ("PanelToggle"): the dock menu.
+        ("menu", Box::new(OpenDockMenu)),
+        ("shift-f10", Box::new(OpenDockMenu)),
     ];
     cx.update(|cx| {
         for (keys, action) in &table {

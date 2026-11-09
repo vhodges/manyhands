@@ -39,7 +39,7 @@ use crate::desktop::{
 const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FS0";
 
 /// A control as the screen reader reads it: its name and toggled state.
-pub(super) fn read(
+pub(in crate::desktop::view) fn read(
     shell: &Shell,
     control: Control,
     cx: &mut TestAppContext,
@@ -54,32 +54,41 @@ pub(super) fn read(
     })
 }
 
-pub(super) fn layout(shell: &Shell, cx: &mut TestAppContext) -> Layout {
+pub(in crate::desktop::view) fn layout(shell: &Shell, cx: &mut TestAppContext) -> Layout {
     shell
         .workspace
         .read_with(cx, |workspace, _| workspace.layout().clone())
 }
 
-pub(super) fn saves(shell: &Shell, cx: &mut TestAppContext) -> usize {
+pub(in crate::desktop::view) fn saves(shell: &Shell, cx: &mut TestAppContext) -> usize {
     shell
         .workspace
         .read_with(cx, |workspace, _| workspace.layout_saves())
 }
 
-pub(super) fn focused(shell: &Shell, id: &'static str, cx: &mut TestAppContext) -> bool {
+pub(in crate::desktop::view) fn focused(
+    shell: &Shell,
+    id: &'static str,
+    cx: &mut TestAppContext,
+) -> bool {
     shell.frame(cx, |window, _| {
         window.try_find(id).and_then(|element| element.focused()) == Some(true)
     })
 }
 
-pub(super) fn open(shell: &Shell, cx: &mut TestAppContext) -> bool {
+pub(in crate::desktop::view) fn open(shell: &Shell, cx: &mut TestAppContext) -> bool {
     shell.present("popup-menu", cx)
 }
 
 /// The Kit's own edit for `kind` dropped into `with`'s tab group, at the end,
 /// without selecting it: the only way to a panel that is on and behind
 /// another tab.
-pub(super) fn put_behind(shell: &Shell, kind: PanelKind, with: PanelKind, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn put_behind(
+    shell: &Shell,
+    kind: PanelKind,
+    with: PanelKind,
+    cx: &mut TestAppContext,
+) {
     let area = shell
         .workspace
         .read_with(cx, |workspace, _| workspace.dock_area().clone());
@@ -117,7 +126,12 @@ pub(super) fn put_behind(shell: &Shell, kind: PanelKind, with: PanelKind, cx: &m
 }
 
 /// A request that finished with `outcome`, under a code that agrees with it.
-pub(super) fn finish(shell: &Shell, id: u64, outcome: Outcome, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn finish(
+    shell: &Shell,
+    id: u64,
+    outcome: Outcome,
+    cx: &mut TestAppContext,
+) {
     let operations = shell.operations(cx);
     operations.update(cx, |operations, cx| {
         operations.apply(WorkerEvent::Queued(DesktopRequest {
@@ -149,7 +163,7 @@ pub(super) fn finish(shell: &Shell, id: u64, outcome: Outcome, cx: &mut TestAppC
 }
 /// A window with one ticket open in a tab, whose chips open the details
 /// sheet.
-pub(super) fn shell_with_a_ticket(cx: &mut TestAppContext) -> Shell {
+pub(in crate::desktop::view) fn shell_with_a_ticket(cx: &mut TestAppContext) -> Shell {
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
     fixture.commit_ticket(&root, TICKET, "Ticket", "");
@@ -170,7 +184,7 @@ pub(super) fn shell_with_a_ticket(cx: &mut TestAppContext) -> Shell {
 
 /// Opens a dialog, as the app's are (the overlay does not close it), or the
 /// ticket's details sheet, as its chip asks.
-pub(super) fn open_modal(shell: &Shell, sheet: bool, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn open_modal(shell: &Shell, sheet: bool, cx: &mut TestAppContext) {
     if sheet {
         let pane = shell
             .workspace
@@ -190,7 +204,7 @@ pub(super) fn open_modal(shell: &Shell, sheet: bool, cx: &mut TestAppContext) {
     assert!(modal_open(shell, cx), "the modal is open (sheet {sheet})");
 }
 
-pub(super) fn modal_open(shell: &Shell, cx: &mut TestAppContext) -> bool {
+pub(in crate::desktop::view) fn modal_open(shell: &Shell, cx: &mut TestAppContext) -> bool {
     shell.frame(cx, |window: &mut Window, cx: &mut App| {
         window.has_active_dialog(cx) || window.has_active_sheet(cx)
     })

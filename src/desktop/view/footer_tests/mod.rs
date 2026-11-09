@@ -23,7 +23,7 @@ use crate::desktop::{
     view::{harness::Shell, settings::Shown, workspace::Region},
 };
 
-mod support;
+pub(in crate::desktop::view) mod support;
 
 use PanelKind::{Activity, Documents, Repositories, Tickets};
 use support::*;
@@ -136,8 +136,8 @@ fn a_dock_toggle_reveals_its_hidden_panels(cx: &mut TestAppContext) {
 /// A secondary click on a panel toggle opens the dock menu with the panel's
 /// side checked. Choosing another side moves the panel there and its toggle
 /// to that side's group, with focus on it; choosing the current side changes
-/// nothing (P8, P9). The same menu opens under a focused toggle (Task 8
-/// binds its key) and Escape gives focus back to the toggle (P19).
+/// nothing (P8, P9). The same menu opens under a focused toggle (its keys are
+/// tested in `keyboard_tests::shell`) and Escape gives focus back to the toggle (P19).
 #[gpui_kit::test]
 fn a_secondary_click_opens_the_dock_menu_with_its_side_checked(cx: &mut TestAppContext) {
     // The checked item is the one for the panel's side.

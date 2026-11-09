@@ -138,6 +138,10 @@ pub(crate) struct DockPanel {
 /// New document… or New ticket… there, and nowhere else.
 pub(crate) const NAVIGATION_CONTEXT: &str = "Navigation";
 
+/// The key context of a footer panel toggle (`view::footer`): `menu` and
+/// `shift-f10` open its dock menu there, and nowhere else.
+pub(crate) const PANEL_TOGGLE_CONTEXT: &str = "PanelToggle";
+
 /// The key context of the document tree's wrapper, where `enter` opens
 /// the selected row.
 pub(crate) const DOCUMENTS_CONTEXT: &str = "Documents";
@@ -238,6 +242,14 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-shift-d", OpenDrafts, None),
         KeyBinding::new("secondary-q", Quit, None),
+        // The dock keys, in no context: an editor's own `ctrl-b` (Bold) is
+        // bound in its deeper "Editor" context and wins there (decision 2).
+        KeyBinding::new("secondary-b", ToggleLeftDock, None),
+        KeyBinding::new("secondary-alt-b", ToggleRightDock, None),
+        KeyBinding::new("secondary-j", ToggleBottomDock, None),
+        // On a focused panel toggle: its dock menu.
+        KeyBinding::new("menu", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
+        KeyBinding::new("shift-f10", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
         // New document… or New ticket…, the focused list's, in either
         // list's region (both carry this context) and nowhere else.

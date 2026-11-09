@@ -36,12 +36,12 @@ use crate::desktop::{
     },
 };
 
-const EDITED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX0";
+pub(super) const EDITED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX0";
 const STARTED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX1";
 
 /// The edited ticket's body: "two" on its first line is what the inline
 /// controls format, and its list's second item is what Tab indents.
-const BODY: &str = "One two three\nFour five\n\n- one\n- two\n";
+pub(super) const BODY: &str = "One two three\nFour five\n\n- one\n- two\n";
 const ADDRESS: &str = "https://example.test";
 
 /// A ticket's source with `body` in place of the fixture's own.
@@ -51,7 +51,7 @@ fn ticket_with_body(id: &str, title: &str, body: &str) -> String {
 
 /// A window over `a` holding the tickets `ids`, each titled by its place
 /// and with `BODY`.
-fn editable(ids: &[&str], cx: &mut TestAppContext) -> Walk {
+pub(super) fn editable(ids: &[&str], cx: &mut TestAppContext) -> Walk {
     let fixture = Fixture::new();
     let a = fixture.create_repository("a");
     for (ix, id) in ids.iter().enumerate() {
@@ -80,7 +80,7 @@ impl Walk {
     }
 
     /// Escape, from an editor: focus moves to the header's Done.
-    fn escape_to_done(&self, cx: &mut TestAppContext) {
+    pub(super) fn escape_to_done(&self, cx: &mut TestAppContext) {
         self.step("escape", "item-done", Region::Content, cx);
     }
 
@@ -99,7 +99,7 @@ impl Walk {
     }
 }
 
-fn text(host: &Entity<EditorHost>, cx: &mut TestAppContext) -> String {
+pub(super) fn text(host: &Entity<EditorHost>, cx: &mut TestAppContext) -> String {
     host.read_with(cx, |host, cx| host.text(cx))
 }
 
@@ -211,7 +211,11 @@ async fn edit_the_mode_key_save_and_done_by_keyboard_alone(cx: &mut TestAppConte
 
 /// `e` on the read view of the ticket `id`, found by Find and reached by
 /// Tab: the edit editor opens, focused, and the letter is not typed.
-async fn edit_by_e(walk: &Walk, id: &str, cx: &mut TestAppContext) -> Entity<EditorHost> {
+pub(super) async fn edit_by_e(
+    walk: &Walk,
+    id: &str,
+    cx: &mut TestAppContext,
+) -> Entity<EditorHost> {
     walk.find(id, cx);
     walk.keys("secondary-3", cx);
     walk.tab_to("tab", "item-page", cx);
