@@ -93,13 +93,80 @@ Rulings made in Task 2 (the implementer's, reviewed; "decision — why — cost 
   `clear_attention(RecoveryHeld(root))` and `set_policy`; `attention()` order is
   first-root order, so sort in the UI if a stable order is needed.
 
+Rulings made in Task 3 (reviewed; "decision — why — cost if wrong"):
+
+- Ruling: when `poll_eligibility` answers `NotEligible`, the worker skips
+  `poll_automatic` and `remote_snapshot` and builds `Answer::NotEligible`
+  directly. The call list is then resolve, polling_status, poll_eligibility; an
+  eligible poll makes exactly B4's five calls. B4/A8 are an upper bound, so a
+  strict subset is within them (the plan's "exactly" reads "at most these, in
+  this order"). `automatic_poll_eligibility` already writes the clamped deadline
+  in its own transaction, so nothing is lost. Cost: the library replays a
+  terminal row under the same operation id before its eligibility check, so a
+  same-id restart of a terminal row on a now-ineligible repository gets
+  `NotEligible` from the desktop but the stored result from the library;
+  acceptable (L-2: no takeover while not eligible).
+- Ruling: the Backend poll methods are trait methods with default bodies calling
+  `self.service()` (no `LibraryBackend` impl in `poll.rs`); `resolve` calls
+  `resolve_repository`, `poll_eligibility` calls `automatic_poll_eligibility`.
+- Ruling: deadline precedence is the answer's, else the post-poll
+  `remote_snapshot` deadline, else the pre-poll `polling_status` deadline
+  (RFC 3339). The model ignores it for Busy, Interrupted, ConflictPending and
+  Repository answers (Task 2 `hold_until`).
+- Ruling: a read failure before the poll becomes `Answer::Repository` with no
+  operation; `recovery_required` only for `ResultCode::RecoveryRequired` or
+  kind `RecoveryRequired`.
+- Ruling: the cancel cause is asked lazily, by a closure evaluated only when
+  the answer is `Cancelled` (review I-1). The worker's closure returns `Quit`
+  when the queue is closed, else `Preemption`; Task 4 adds reconfiguration and
+  takeover (`CancelCause::{Reconfiguration, Takeover}` are constructed there).
+- Ruling: `PollYielding` maps to `Busy` (an automatic poll never answers it).
+- Ruling: `Completed` with a replayed category maps by category to the nearest
+  `TransportFailure` with no key or authority (unlock -> `KeyLocked{None}`,
+  key unavailable -> `KeyProblem` none, host -> `HostUnapproved{None}`,
+  configuration, repository unavailable -> `Unavailable`, transport/protocol ->
+  `Unreachable`). Cost: a replayed Changed kind is treated as a problem.
+- Ruling (review I-2): every report-sourced answer carries `completed_at`,
+  including a replayed failure, so Task 4's L-1 can age it against the launch;
+  live transport errors and `NotEligible` carry none. The model moves
+  `last_completed` only for `Answer::Completed`.
+- Ruling: `RuntimeUninitialized` maps to `Unavailable` (A4), not the library's
+  `TransportUnavailable`.
+- Ruling: the refused-key record is its own map in `DeclinedKeys` (so Unlock…'s
+  `clear_for` does not clear a mark the person set), and the background check
+  runs before the declined check. A poll keeps one entry (`polling(id)` evicts
+  the previous poll's). `refused_for`/`refused_keys` are read by Task 11a.
+- Ruling: a `Work::Poll` job calls `before_job(JobKind::Poll)`, sends no
+  Queued/Started/Progress, takes a `DesktopRequestId` but is not entered in
+  `submitted`.
+- Ruling: `classify(result) -> Library` / `attempt_of(Library, ..)` with
+  `ReportParts`/`TargetParts`, because the library builds `RemotePollReport` and
+  `RepositoryError` only internally; every match is exhaustive with no wildcard
+  (24 transport kinds, 18 dispositions, 9 outcome categories, 6 poll errors).
+
+Hand-offs from Task 3 (review M-8 and the report):
+- `Work::Poll` has no `CancellationToken`: `WorkerHandle::quit()` does **not**
+  stop a running poll. Task 4 builds the cancel task and Task 10 calls
+  `cancel_poll` on quit.
+- `submit_poll` checks only `closed`; "one poll per repository" is the
+  scheduler's (Task 5). A queued poll dropped by `quit()` or `admit` sends only
+  `Removed(id)`, never `Polled`, so Task 5/10 must use `abandon(root)` (Task 2).
+- `PollInbox` is a `Mutex<Vec>` with no wake-up beyond the drain's end-of-batch
+  `cx.notify()` on `Operations`; Task 5 observes that or adds its own notify.
+- `#[allow(dead_code)]` on `Backend::cancel_poll` is removed by Task 4.
+
 ## Existing-test edits
 
 E-1 to E-6 are named in the design's Testing section. Any further edit is
 pre-approved (owner, 2026-11-09) and is recorded here as E-7 onward, with its
 reason.
 
-(none yet)
+- **E-7 (Task 3, E-1 class).** `src/desktop/services/worker_tests.rs` `seen()`
+  is an exhaustive match on `WorkerEvent`; it gained
+  `Polled(..) => unreachable!("no poll was submitted")`. Reason: the new
+  variant. No behaviour change. (Non-test: `model/operations.rs` `apply()` is
+  also exhaustive and gained `Polled(..) => {}`; the drain removes a `Polled`
+  before `apply`.)
 
 ## Task 0: Baseline, references and ledger
 
@@ -271,4 +338,15 @@ Tests (full paths, all under `desktop::model::polling::tests::`):
 - Tests run: only the ten above, singly. Static gates (fmt, check, clippy
   desktop and all-targets) pass at `d80b481d`. No whole suite, no other target.
 - No existing test edited (no E-n yet).
+| 3 | `7437d26f` | `cc56515a`, `5a9d1c13` (review fixes) | APPROVE WITH MINOR; I-1 (lazy cancel cause), I-2 (replayed `completed_at`), M-1 to M-7 applied; M-8 handed off; fixes not re-reviewed | `desktop::services::poll_convert::tests::poll_attempt_conversion`, `desktop::services::poll::tests::{worker_poll_background, poll_call_list, background_poll_never_prompts, the_drain_hands_a_poll_to_the_inbox}` (extra), the 10 Task 2 model tests; each singly with `--exact`, 1 test, pass; fmt, check, both clippy pass |
+
+## Task 3: automatic poll on the background lane
+
+Files: `src/desktop/services/{poll.rs,poll_convert.rs,poll_convert_tests.rs,poll_tests.rs,mod.rs,worker.rs,prompts.rs}`,
+`src/desktop/test_support/{polling.rs,fixtures.rs,delaying.rs,mod.rs}`,
+`src/desktop/model/{operations.rs,polling.rs,polling/attempt.rs}` (one match
+arm, markers, a doc comment). Nothing outside `src/desktop/` changed.
+Mutation checks run: a lane-blind provider fails `background_poll_never_prompts`;
+moving `HostTrustChanged` to `Unreachable`, an eager cancel-cause call, and
+`completed_at` only for `Completed` each fail `poll_attempt_conversion`.
 
