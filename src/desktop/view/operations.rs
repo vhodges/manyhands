@@ -78,7 +78,7 @@ use crate::desktop::{
         operations::{
             NOT_AVAILABLE_YET, NOT_SENT_AGAIN, Progressing, RecoveryControl, ResumeOffer,
             StopOffer, abandon_offered, draft_flush_failed, drafts_unavailable, progress_words,
-            recovery_control, resume_offer,
+            recovery_control, resume_offer_among,
         },
         stamp::RepoKey,
     },
@@ -710,6 +710,14 @@ impl Workspace {
             .iter()
             .map(|(root, state)| (root.clone(), state.clone()))
             .collect();
+        // The desktop's own automatic polls are finished by its in-flight
+        // record, not by Resume (D6 L-1).
+        let own = self
+            .services()
+            .operations()
+            .read(cx)
+            .automatic_polls()
+            .clone();
         let mut section = v_flex()
             .id("pending-section")
             .gap_1()
@@ -802,7 +810,7 @@ impl Workspace {
                             ),
                     );
                 let mut controls = h_flex().gap_2();
-                match resume_offer(&operation) {
+                match resume_offer_among(&operation, &own) {
                     ResumeOffer::Offered => {
                         let focus = self.control_focus_for(
                             format!(

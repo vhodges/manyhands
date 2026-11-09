@@ -31,9 +31,6 @@
 //!
 //! Nothing in the record is a title, a body, a comment or key material.
 
-// Called from Task 5 (the scheduler entity), Task 11a and Task 12: until then only the tests use it.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::{
     fs::{self, File, OpenOptions},
     io,
@@ -85,6 +82,7 @@ pub(crate) struct RetirementEntry {
     operation: Option<String>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
 impl RetirementEntry {
     /// A retirement of `item` of `root` about to be submitted under
     /// `request`.
@@ -145,6 +143,7 @@ pub(crate) enum ActiveRow {
 
 /// How a retirement request ended, for the rule that removes its entry.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
 pub(crate) enum RetirementEnd {
     /// The worker's record of the request is finished: its answer is stored.
     Finished,
@@ -158,6 +157,7 @@ pub(crate) enum RetirementEnd {
     Unknown,
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
 impl From<RecordState> for RetirementEnd {
     fn from(state: RecordState) -> Self {
         match state {
@@ -224,7 +224,8 @@ impl InflightStore {
     }
 
     /// A store with nowhere to keep a record: in memory only, never the lock
-    /// holder.
+    /// holder. For tests.
+    #[cfg(test)]
     pub(crate) fn in_memory() -> Self {
         Self::over(None)
     }
@@ -344,6 +345,7 @@ impl InflightStore {
     }
 
     /// The problem with the record the person has not heard of yet, once.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub(crate) fn take_report(&mut self) -> Option<Report> {
         self.report.take()
     }
@@ -440,6 +442,7 @@ impl InflightStore {
     }
 
     /// A retirement is about to be submitted: its entry is written first.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
     pub(crate) fn retirement_submitting(&mut self, entry: RetirementEntry) {
         self.record
             .retirements
@@ -450,6 +453,7 @@ impl InflightStore {
 
     /// The request's first progress event named `op`. Only the first is
     /// kept: a request sent again names the same row.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
     pub(crate) fn retirement_operation(&mut self, request: RequestId, op: OperationId) {
         let request = request.to_string();
         let Some(entry) = self
@@ -469,6 +473,7 @@ impl InflightStore {
     /// The request ended as `end` says. Only a finished record, a request
     /// removed from the queue and one never sent end its entry; an Owed
     /// (accepted) request keeps it, since Resume needs the item.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
     pub(crate) fn retirement_ended(&mut self, request: RequestId, end: RetirementEnd) {
         if !matches!(
             end,
@@ -488,12 +493,14 @@ impl InflightStore {
 
     /// The retirements this instance sent, or its predecessor left, that have
     /// not ended.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
     pub(crate) fn retirements(&self) -> &[RetirementEntry] {
         &self.record.retirements
     }
 
     /// Whether this instance may run a retirement loop: only the lock holder
     /// does (L-6, K-25).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     pub(crate) fn runs_retirement_loop(&self) -> bool {
         self.holds_lock()
     }

@@ -49,7 +49,7 @@ use super::{
 use crate::desktop::model::polling::{Answer, CancelCause, PollAttempt, Root};
 
 /// The automatic polls that ended, as the drain heard them and in order
-/// (D6 B1): the scheduler (Task 5) takes them and applies them to its
+/// (D6 B1): the scheduler takes them and applies them to its
 /// schedule. A poll is not a request, so the request model never sees one.
 #[derive(Clone, Default)]
 pub(crate) struct PollInbox(Arc<Mutex<Vec<(Root, PollAttempt)>>>);
@@ -63,7 +63,6 @@ impl PollInbox {
     }
 
     /// Every attempt heard since the last call, oldest first.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
     pub(crate) fn take(&self) -> Vec<(Root, PollAttempt)> {
         std::mem::take(&mut *self.0.lock().unwrap_or_else(PoisonError::into_inner))
     }
@@ -71,7 +70,7 @@ impl PollInbox {
 
 impl Services {
     /// The automatic polls that ended since the last call.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
+    #[cfg(test)]
     pub(crate) fn polls(&self) -> &PollInbox {
         &self.polls
     }
@@ -164,7 +163,7 @@ fn is_recovery_required(error: &RepositoryError) -> bool {
 }
 
 /// The deadline stored before the poll, when there is one.
-fn stored_deadline(status: &PollingStatusDto) -> Option<OffsetDateTime> {
+pub(super) fn stored_deadline(status: &PollingStatusDto) -> Option<OffsetDateTime> {
     status
         .next_eligible_at
         .as_deref()

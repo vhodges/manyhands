@@ -1,10 +1,6 @@
-//! What the scheduler sends and how it takes an answer, as pure decisions
-//! over the model and the in-flight record (D6 design B3: R-4, R-31, L-1 to
-//! L-6).
-//!
-//! Task 4 holds only these. The scheduler entity, which owns a
-//! [`PollSchedule`], an [`InflightStore`] and the timers and calls these
-//! functions, is Task 5's, in this file.
+//! The polling scheduler (D6 design B3 and B6): the entity `Services`
+//! holds ([`Scheduler`], in `entity`) and the pure decisions it takes over
+//! the model and the in-flight record (R-4, R-31, L-1 to L-6).
 //!
 //! - [`plan`] picks the operation a due repository's poll is sent under:
 //!   the in-flight record's, for the lock holder (L-1, the takeover of a
@@ -19,19 +15,27 @@
 //!   (A4), except a replayed terminal answer older than this launch, which
 //!   counts as no attempt (L-1).
 
-// Called from Task 5: until then only the tests use it.
-#![cfg_attr(not(test), allow(dead_code))]
+mod entity;
+mod react;
+mod reconfigure;
+mod registration;
 
+use gpui_kit::App;
 use manyhands::repository::OperationId;
 use time::OffsetDateTime;
 
+pub(crate) use entity::Scheduler;
+pub(crate) use reconfigure::heard;
+
 use super::{
+    Services,
     inflight::{ActiveRow, InflightStore},
     requests::DesktopRequestId,
 };
 use crate::desktop::model::polling::{
     AttemptSummary, Now, Phase, PollAttempt, PollSchedule, Reason, Root,
 };
+use crate::desktop::model::stamp::RepoKey;
 
 /// The operation a poll is sent under, and whether it resends one.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -92,6 +96,7 @@ pub(crate) fn start(
 /// Why a repository's stale row is not taken over yet (L-2). The words are
 /// Task 7's.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(not(test), allow(dead_code))] // Read from Task 7.
 pub(crate) enum Holding {
     /// Checking is off for the repository: it finishes once checking is on.
     Off,
@@ -182,6 +187,40 @@ pub(crate) fn apply(
     schedule.after(now, attempt)
 }
 
+/// What views and the window tell the scheduler. Each does nothing until
+/// polling is switched on (`Services::with_polling`, R-27).
+impl Services {
+    /// The repository list loaded or changed. The first call is the launch
+    /// poll (B6): the one call beside the launch refresh.
+    pub(crate) fn repositories_listed(&self, roots: &[RepoKey], cx: &mut App) {
+        if self.polling() {
+            self.scheduler
+                .update(cx, |scheduler, cx| scheduler.listed(roots, cx));
+        }
+    }
+
+    /// The window became active: policies and remotes are read again and
+    /// the in-flight lock is tried again. Nothing is polled by this.
+    pub(crate) fn window_activated(&self, cx: &mut App) {
+        if self.polling() {
+            self.scheduler
+                .update(cx, |scheduler, cx| scheduler.activated(cx));
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "scheduler_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "scheduler_support.rs"]
+mod support;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "scheduler_entity_tests.rs"]
+mod entity_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "scheduler_real_tests.rs"]
+mod real_tests;

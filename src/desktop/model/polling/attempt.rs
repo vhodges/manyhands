@@ -55,7 +55,6 @@ pub(crate) enum CancelCause {
     /// Quit.
     Quit,
     /// A configuration change (R-11).
-    #[cfg_attr(not(test), allow(dead_code))] // Constructed from Task 5.
     Reconfiguration,
     /// A launch takeover's stored cancel (L-1).
     Takeover,
@@ -176,7 +175,6 @@ pub(crate) struct AttemptSummary {
 impl AttemptSummary {
     /// The repository changed: something was brought in, even by a
     /// cancelled or interrupted attempt.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
     pub fn changed(&self) -> bool {
         self.brought_in > 0
     }

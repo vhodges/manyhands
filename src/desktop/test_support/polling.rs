@@ -34,8 +34,8 @@ use manyhands::{
     repository::{
         AutomaticPollEligibility, ConflictDto, Mutation, MutationDataDto, OperationId,
         PollPublicationRemoteRequest, PollingStatusDto, PrepareDataDto, ProgressStage, ReadError,
-        RemotePollError, RemotePollResult, RemoteSnapshot, RepositoryError, RepositoryService,
-        ResolvedRepository,
+        RemoteListDto, RemotePollError, RemotePollResult, RemoteSnapshot, RepositoryError,
+        RepositoryService, ResolvedRepository,
         keys::{KeyStore, SessionCredentials, SessionUnlockFailure, UnlockRequest},
         transport::{SshDirection, SshTransportError, SshTransportErrorKind},
     },
@@ -103,6 +103,12 @@ pub(crate) struct PollingBackend {
     cancels: Mutex<Vec<CancelSeen>>,
     /// Each `poll_automatic` request's operation and `restart`.
     requests: Mutex<Vec<(OperationId, bool)>>,
+    /// The root of each `poll_automatic` request, in the same order.
+    roots: Mutex<Vec<String>>,
+    /// How many times the scheduler read a repository's remotes
+    /// (`publication_remotes`). Not a `PollCall`: it is the scheduler's
+    /// call, not part of an automatic poll's own list (B4).
+    remote_reads: Mutex<usize>,
 }
 
 impl PollingBackend {
@@ -118,6 +124,8 @@ impl PollingBackend {
             cancel_script: Mutex::default(),
             cancels: Mutex::default(),
             requests: Mutex::default(),
+            roots: Mutex::default(),
+            remote_reads: Mutex::default(),
         }
     }
 
@@ -174,6 +182,16 @@ impl PollingBackend {
     /// The operation and `restart` of every `poll_automatic` made so far.
     pub(crate) fn requests(&self) -> Vec<(OperationId, bool)> {
         self.requests.lock().unwrap().clone()
+    }
+
+    /// The root of every `poll_automatic` made so far, in order.
+    pub(crate) fn polled_roots(&self) -> Vec<String> {
+        self.roots.lock().unwrap().clone()
+    }
+
+    /// How many times the scheduler has read a repository's remotes.
+    pub(crate) fn remote_reads(&self) -> usize {
+        *self.remote_reads.lock().unwrap()
     }
 
     /// Makes every `poll_automatic` ask the session for `request`'s
@@ -259,6 +277,11 @@ impl Backend for PollingBackend {
         self.inner.polling_status(repo)
     }
 
+    fn publication_remotes(&self, repo: &ResolvedRepository) -> Result<RemoteListDto, ReadError> {
+        *self.remote_reads.lock().unwrap() += 1;
+        self.inner.publication_remotes(repo)
+    }
+
     fn poll_eligibility(&self, root: &Path) -> Result<AutomaticPollEligibility, RepositoryError> {
         self.record(PollCall::PollEligibility);
         self.inner.poll_eligibility(root)
@@ -274,6 +297,10 @@ impl Backend for PollingBackend {
             .lock()
             .unwrap()
             .push((request.operation_id, request.restart));
+        self.roots
+            .lock()
+            .unwrap()
+            .push(request.root.to_string_lossy().into_owned());
         let hold = self.holds.lock().unwrap().pop_front();
         if let Some(hold) = hold {
             *self.parked.lock().unwrap() = Some(hold.clone());

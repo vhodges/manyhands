@@ -51,6 +51,7 @@ pub(crate) fn run() {
             #[cfg(target_os = "linux")]
             fonts::register(cx);
             gpui_kit::init(cx);
+            cx.set_global(PollingOn);
             keys::bind(cx);
             view::editor::keys::bind(cx);
             let opener: Opener = Rc::new(RepositoryService::open_default);
@@ -87,6 +88,16 @@ fn window_options(cx: &App) -> WindowOptions {
 /// Builds `Root` over a new workspace. `Root`'s entity is reserved before
 /// this runs, so the workspace's comes after it.
 fn root_over_workspace(services: Services, window: &mut Window, cx: &mut Context<Root>) -> Root {
+    // The window becoming active reads the policies and remotes again and
+    // tries the in-flight lock again (D6 B6, R-31): the one subscription,
+    // here so that the window a Retry replaces the root of has it too.
+    let activated = services.clone();
+    cx.observe_window_activation(window, move |_, window, cx| {
+        if window.is_window_active() {
+            activated.window_activated(cx);
+        }
+    })
+    .detach();
     let workspace = cx.new(|cx| Workspace::new(services, window, cx));
     Root::new(workspace, window, cx)
 }
@@ -99,11 +110,23 @@ fn library_services(service: RepositoryService, cx: &mut App) -> Services {
     let data = service.data_directory().to_owned();
     let drafts = DraftStore::open_in(&data);
     let resolutions = ResolutionStore::open_in(&data);
-    Services::start(
+    let services = Services::start(
         Arc::new(LibraryBackend::new(service, drafts, resolutions)),
         cx,
-    )
+    );
+    // Only the application polls (R-27): `run()` marks itself, so the tests
+    // that start the application through `start` do not.
+    if cx.has_global::<PollingOn>() {
+        services.with_polling()
+    } else {
+        services
+    }
 }
+
+/// Set by `run()`: this process is the application, so its services poll.
+struct PollingOn;
+
+impl gpui_kit::Global for PollingOn {}
 
 fn open_main_window(services: Services, cx: &mut App) -> WindowHandle<Root> {
     cx.open_window(window_options(cx), |window, cx| {

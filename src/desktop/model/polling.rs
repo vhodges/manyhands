@@ -3,7 +3,7 @@
 //! thread.
 //!
 //! The model holds one [`RepoSchedule`] per repository. Whoever drives it
-//! (the scheduler, Task 5) reads a [`Clock`] and passes the reading in; the
+//! (the scheduler) reads a [`Clock`] and passes the reading in; the
 //! model never reads a clock, starts a thread or does I/O. It decides what is
 //! due and when to wake ([`PollSchedule::due`], [`PollSchedule::next_wake`]),
 //! moves a repository's phase from an attempt ([`PollSchedule::after`], the
@@ -26,10 +26,8 @@ pub(crate) use attempt::{
 };
 #[cfg(test)]
 pub(crate) use clock::TestClock;
-#[cfg_attr(not(test), allow(unused_imports))] // Called from Task 5.
 pub(crate) use clock::{Clock, Now};
 // The tests use `TestClock`, so only the production clock is unused there.
-#[allow(unused_imports)] // Called from Task 5.
 pub(crate) use clock::SystemClock;
 use manyhands::repository::OperationId;
 use state::PREEMPTIONS_BEFORE_INTERVAL;
@@ -50,7 +48,6 @@ pub(crate) struct AttentionEntry {
 
 /// What a clock event came to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
 pub(crate) enum ClockEvent {
     /// The clocks agree: nothing changes.
     Steady,
@@ -60,13 +57,11 @@ pub(crate) enum ClockEvent {
 }
 
 #[derive(Debug, Default)]
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
 pub(crate) struct PollSchedule {
     repos: BTreeMap<Root, RepoSchedule>,
 }
 
 /// Registration and reads.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
 impl PollSchedule {
     /// A repository, with the policy just read and its last completion
     /// (restored from `remote_snapshot` at launch). Replaces any schedule it
@@ -116,7 +111,6 @@ impl PollSchedule {
 }
 
 /// What to poll and when (A3).
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
 impl PollSchedule {
     fn busy(&self) -> bool {
         self.repos.values().any(RepoSchedule::in_flight)
@@ -184,7 +178,6 @@ impl PollSchedule {
 }
 
 /// A poll's life.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
 impl PollSchedule {
     /// The scheduler submitted a poll.
     pub fn mark_queued(&mut self, root: &Root) {
@@ -208,7 +201,10 @@ impl PollSchedule {
         }
     }
 
-    /// The worker started the poll under this operation.
+    /// The worker started the poll under this operation. Nothing calls it:
+    /// the worker sends no `Started` for a poll (Task 3), so `Queued` stands
+    /// for queued and running alike, and `in_flight` covers both.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn mark_running(&mut self, root: &Root, op: OperationId) {
         if let Some(repo) = self.repos.get_mut(root) {
             repo.phase = Phase::Running { op };

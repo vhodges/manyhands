@@ -11,7 +11,6 @@ use time::OffsetDateTime;
 
 /// The two clocks the schedule uses: wall time (UTC) for the deadlines the
 /// library stores, and the monotonic clock for waits inside the process.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
 pub(crate) trait Clock {
     fn utc(&self) -> OffsetDateTime;
     fn mono(&self) -> Instant;
@@ -57,7 +56,6 @@ impl Now {
 
 /// The production clock: the only code in the model that reads the process
 /// clocks.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
 pub(crate) struct SystemClock;
 
 impl Clock for SystemClock {
@@ -83,6 +81,14 @@ impl TestClock {
         let start = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("a valid time");
         Self {
             readings: std::sync::Mutex::new((start, SystemClock.mono())),
+        }
+    }
+
+    /// A clock that starts at `utc`: for a test over a real service, whose
+    /// stored deadlines are in real time.
+    pub fn at(utc: OffsetDateTime) -> Self {
+        Self {
+            readings: std::sync::Mutex::new((utc, SystemClock.mono())),
         }
     }
 

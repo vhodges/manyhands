@@ -30,8 +30,10 @@ use manyhands::{
 };
 
 mod outcomes;
+mod polls;
 mod review;
 
+pub(crate) use polls::resume_offer_among;
 pub(crate) use review::{Review, ReviewOf};
 
 #[cfg(test)]
@@ -147,6 +149,9 @@ pub(crate) struct Operations {
     /// The operation each finished request's last answer stopped on with a
     /// conflict, whose sheet its entry offers (D5 B5, `review`).
     reviews: HashMap<DesktopRequestId, Review>,
+    /// The operations of this desktop's own automatic polls (D6 Task 5):
+    /// their pending rows are not offered Resume (`polls`).
+    automatic_polls: HashSet<OperationId>,
 }
 
 /// What finished requests may have changed since the views last read.

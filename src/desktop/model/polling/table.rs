@@ -14,7 +14,6 @@ impl RepoSchedule {
     /// set at once; the policy is also marked stale wherever the model's
     /// copy was wrong, so it is read again before the next poll and the
     /// scheduler cannot loop on a wrong copy.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
     pub(super) fn apply(
         &mut self,
         root: &Root,

@@ -29,7 +29,10 @@ pub(crate) mod worker;
 
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -40,8 +43,8 @@ use manyhands::{
     repository::{
         AutomaticPollEligibility, ConflictDto, ContextPrepareIntent, Mutation, MutationDataDto,
         OperationId, PollPublicationRemoteRequest, PollingStatusDto, PrepareDataDto, ProgressStage,
-        ReadError, RemotePollError, RemotePollResult, RemoteSnapshot, RepositoryError,
-        RepositoryService, ResolvedRepository,
+        ReadError, RemoteListDto, RemotePollError, RemotePollResult, RemoteSnapshot,
+        RepositoryError, RepositoryService, ResolvedRepository,
         keys::{KeyStore, SessionCredentials},
     },
     results::{Envelope, Outcome, PublicationEffect, RecoveryActionKind, ResultCode},
@@ -60,6 +63,7 @@ use poll::PollInbox;
 use prompts::DesktopProvider;
 use release::Releases;
 use resolutions::{ResolutionStore, ResolutionStoreError};
+use scheduler::Scheduler;
 use submissions::Submissions;
 use worker::{WorkerEvent, WorkerHandle};
 
@@ -265,6 +269,15 @@ pub(crate) trait Backend: Send + Sync + 'static {
         self.service().polling_status(repo)
     }
 
+    /// The repository's remotes, redacted: whether one is selected for
+    /// publication over SSH decides whether the scheduler polls it at all
+    /// (R-27, U-2). A scheduler call, not part of an automatic poll's own
+    /// call list (B4); the read contacts nothing.
+    #[allow(clippy::result_large_err)] // The library's `ReadError`.
+    fn publication_remotes(&self, repo: &ResolvedRepository) -> Result<RemoteListDto, ReadError> {
+        self.service().list_remotes_redacted(repo)
+    }
+
     /// Whether the policy lets an automatic poll go ahead. Contacts
     /// nothing.
     fn poll_eligibility(&self, root: &Path) -> Result<AutomaticPollEligibility, RepositoryError> {
@@ -404,8 +417,17 @@ pub(crate) struct Services {
     followups: resolutions::Followups,
     /// What follows a lifecycle's resume or republish (D5 decision 10, A3).
     resends: resends::Resends,
-    /// The polls that ended and no one has taken yet.
+    /// The polls that ended and no one has taken yet. The scheduler takes
+    /// them from its own handle on the same inbox; tests read them here.
+    #[cfg_attr(not(test), allow(dead_code))]
     polls: PollInbox,
+    /// The polling scheduler (D6 B6): one entity, so every clone and window
+    /// shares it (A17). `Workspace` holds none (R-16).
+    scheduler: Entity<Scheduler>,
+    /// The polling switch (R-27): off unless `with_polling`, shared by every
+    /// clone and by the drain. Apart from `launch_refresh`, which is on by
+    /// default.
+    polling: Arc<AtomicBool>,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -472,6 +494,18 @@ impl Services {
         let resent = resends.clone();
         let polls = PollInbox::default();
         let polled = polls.clone();
+        let polling = Arc::new(AtomicBool::new(false));
+        let scheduler = cx.new(|_| {
+            Scheduler::new(
+                backend.clone(),
+                worker.clone(),
+                operations.downgrade(),
+                polls.clone(),
+                polling.clone(),
+            )
+        });
+        let scheduling = scheduler.downgrade();
+        let switch = polling.clone();
         // The cancel task of a poll the worker was asked to stop (B2) runs
         // on a background executor: the library's cancel is a write.
         let canceller = Canceller {
@@ -490,6 +524,7 @@ impl Services {
                     let mut prepared = Vec::new();
                     let mut posted = Vec::new();
                     let mut settled = Vec::new();
+                    let mut scheduled = Vec::new();
                     for event in batch {
                         // A poll's end is the scheduler's, not a request's
                         // (D6 B1).
@@ -504,6 +539,8 @@ impl Services {
                             }
                             event => event,
                         };
+                        // A request that reconfigures polling (R-11).
+                        scheduled.extend(scheduler::heard(&event, operations));
                         let ended = match &event {
                             WorkerEvent::Finished(id, _)
                             | WorkerEvent::Removed(id)
@@ -618,11 +655,17 @@ impl Services {
                         operations.apply(event);
                     }
                     cx.notify();
-                    (finished, prepared, posted, settled)
+                    (finished, prepared, posted, settled, scheduled)
                 });
-                let Ok((finished, prepared, posted, settled)) = applied else {
+                let Ok((finished, prepared, posted, settled, scheduled)) = applied else {
                     break;
                 };
+                // Every batch pokes the scheduler: a poll may have ended and
+                // the user lane may have emptied. It does nothing while
+                // polling is off (R-27).
+                if switch.load(Ordering::Relaxed) {
+                    let _ = scheduling.update(cx, |scheduler, cx| scheduler.heard(scheduled, cx));
+                }
                 if !settled.is_empty() {
                     resolutions::settle_finished(&settling, &settled_followups, settled, cx);
                 }
@@ -701,6 +744,8 @@ impl Services {
             followups,
             resends,
             polls,
+            scheduler,
+            polling,
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
@@ -719,6 +764,35 @@ impl Services {
 
     pub(crate) fn launch_refresh(&self) -> bool {
         self.launch_refresh
+    }
+
+    /// The same services, with polling switched on (R-27): the repository
+    /// list starts the launch poll and the scheduler polls what is due. Off
+    /// unless this is called; production `run()` calls it. The switch is
+    /// shared with every clone.
+    pub(crate) fn with_polling(self) -> Self {
+        self.polling.store(true, Ordering::Relaxed);
+        self
+    }
+
+    /// Whether polling is switched on.
+    pub(crate) fn polling(&self) -> bool {
+        self.polling.load(Ordering::Relaxed)
+    }
+
+    /// The polling scheduler, shared by every clone (A17).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
+    pub(crate) fn scheduler(&self) -> &Entity<Scheduler> {
+        &self.scheduler
+    }
+
+    /// The same services with the scheduler reading `clock`, for a test
+    /// that moves the time by hand.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn with_clock(self, clock: Arc<dyn model_polling::Clock>, cx: &mut App) -> Self {
+        self.scheduler
+            .update(cx, |scheduler, _| scheduler.use_clock(clock));
+        self
     }
 
     /// The key store a key command is built with.

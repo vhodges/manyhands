@@ -797,9 +797,9 @@ impl WorkerHandle {
     /// flag and, the first time, sends `PreemptPoll` for the drain's cancel
     /// task (P-1, P-7). A user job admitted while a poll runs does this by
     /// itself, with `Preemption`; quit (Task 10) asks with `Quit` and a
-    /// reconfiguration (Task 5) with `Reconfiguration`. True when a poll was
+    /// reconfiguration (the scheduler) with `Reconfiguration`. True when a poll was
     /// running.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Tasks 5 and 10.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10.
     pub(crate) fn ask_poll_cancel(&self, cause: CancelCause) -> bool {
         let shared = self.shared();
         ask_poll_cancel(shared, &mut shared.lock(), cause)
@@ -826,7 +826,6 @@ impl WorkerHandle {
     /// `OperationId::new()`, or the stored one for a `restart`. The UI
     /// hears `WorkerEvent::Polled` when it ends. `None` once quitting has
     /// closed the queue: nothing is queued.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
     pub(crate) fn submit_poll(
         &self,
         root: Root,

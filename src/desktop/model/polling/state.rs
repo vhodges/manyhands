@@ -13,7 +13,6 @@ use super::{
 /// The last `polling_status` read. The library owns the arithmetic; the
 /// model only follows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
 pub(crate) struct Policy {
     pub enabled: bool,
     pub paused: bool,
@@ -35,7 +34,6 @@ impl Policy {
 
 /// Why a repository is waiting on the monotonic clock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
 pub(crate) enum Why {
     Busy,
     Interrupted,
@@ -66,10 +64,11 @@ pub(crate) enum Reason {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
 pub(crate) enum Phase {
     Idle,
     Queued,
+    /// Never entered while `mark_running` is uncalled (see there).
+    #[cfg_attr(not(test), allow(dead_code))]
     Running {
         op: OperationId,
     },
@@ -99,7 +98,6 @@ pub(super) const RESTART_DELAYS: [Duration; 3] = [
 pub(super) const PREEMPTIONS_BEFORE_INTERVAL: u8 = 3;
 
 #[derive(Clone, Debug)]
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
 pub(crate) struct RepoSchedule {
     pub policy: Policy,
     pub phase: Phase,
