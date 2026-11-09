@@ -105,6 +105,15 @@ four `context` verbs. No verb is cataloged as planned; see
 [Exit statuses](#exit-statuses-and-partial-completion) for
 `command_unavailable`.
 
+Amended 2026-11-06 by the [completed-context retirement follow-up](../Cycles/wave-03-completed-context-retirement.md)
+(D1–D14 approved 2026-11-04; D15, 2026-11-06): `context retire` and the
+explicit `poll once --retire-completed` option are delivered on that ticket
+branch. The catalog has **78 verbs, 42 mutating**, with **24 input-taking**
+verbs. Both existing CLI exemptions, library `context prepare` and `context
+release`, remain exempt; retirement adds no input schema or exemption. The
+[retirement contract](#completed-context-retirement) below records actual
+interfaces and recovery, not whole-feature/final-gate approval.
+
 Amended 2026-10-24 by C3: the C3 taxonomy rows below specify selectors and
 input fields. Every C3 verb requires `--repo`; only the four ID-selected
 mutations declare `--id`. No C3 mutation accepts `--context`. Input fields
@@ -173,17 +182,22 @@ and `context release` are the desktop's and stay out of the CLI catalog
 | `document promote`, `ticket close` | Exact item effect preview and confirmed integration/publication/cleanup. CLI callers save drafts first; final domain checkpoint still handles required lifecycle metadata. Amended 2026-11-03 by C5 (decisions 6, 8, 9 and 33; R-2, R-3, R-4; the C5 design's verb sections): required `--id`, no input (R-2). `--prepare` returns the preview: kind, item, slug for a ticket that has one, branch, primary, remote, the context and primary commits, the whole branch's path changes, the planned integration, publication and cleanup and, for a closure, the planned `closed_by` and whether it is `record` or `existing`; no title, body or content. A blocked prepare names every blocker in `data.blockers`: `identity_required` alone with `repo.identity_set`, `ticket_closed` for an already closed ticket, else `recovery_required` with `repo.inspect`. Amended 2026-11-07 by vh-hyksw: the new blocker `history_unresolved` names `remote history` in human output, and `item resolve-history` is its way out. While an unfinished parent that a new request cannot supersede holds the item, a prepare is `recovery_required`, naming the holder's `request.retry`, or `operation.resume` when no record holds it (decision 33). `--confirm` executes what was consented to, as Wave 02 Cycle 09's D6 binds it: with a remote, the item's change set and the D2 relation, not the moving OIDs. Consent expires ten minutes after creation, and once accepted stands for that request. Both use the repository's configured identity only, and no `closed_by` input (decision 6). The result's data is the lifecycle DTO: `recording`, checkpoint, integration, publication and cleanup with their pending reasons, `blockers`, and for a closure `made_ready` (`{id, slug}` entries) with `made_ready_state` (`current`, `index_pending`, `index_unavailable_final`, `not_computed`, `not_applicable`), as the [relationships RFC](ticket-relationships-and-short-codes.md#queries) defines it. With no publication remote both exit 0 with publication pending, and a later `repo sync` publishes. Sending the same request again continues an unfinished operation under its operation ID, also after `cancelled` (decision 8), and repeats no merge, checkpoint or push already done. See [C5 evidence and known limits](#c5-evidence-and-known-limits). |
 | `index status` | Inspect cache freshness; no mutation input. |
 | `index refresh`, `index rebuild` | Required `--repo`; no `--input` or `--id`. Explicit local scan/rebuild, with `--request-id` for JSON/noninteractive execution. Never fetch or rewrite canonical state. Rebuild supports explicit root after cache loss. |
-| `item resolve-history` | Amended 2026-11-07 by vh-hyksw (the remote history repair). `--id` selects the item and `--as publish` records its context as never published, so that `item sync` publishes it; `--as release` is refused (`invalid_input`) and names the desktop's context release. Confirmed. A context the remote has is a no-op (`already_applied`); one published and then seen gone is `remote_branch_deleted`, naming `item republish`. The choice is the owner's: it is recorded as an explicit never-published row, and the repository-wide flag stays until `remote resolve-history`. |
-| `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. Amended 2026-11-03 by C5 (decisions 5, 11, 15, 24 and 28; R-16, R-17, R-18): the four mutations are unconfirmed. `poll once` is one explicit fetch, clean fast-forward, materialization and index pass, which runs while paused or disabled and never pushes, checkpoints, merges or cleans up; a completed poll is `ok`, exit 0, with each target's `{target, kind, item_id, disposition, before_oid, after_oid}` in its data (no slug, R-17), dirty, diverged, malformed and deleted targets preserved and marked there (R-16). Amended 2026-11-07 by vh-hyksw: a context that was never published, and is absent from the remote, reports the disposition `unpublished` (`item sync` publishes it); `history_unknown` is kept for a context whose history the evidence says is unknown. A poll's transport, key, unlock or host stop is final, and a new request polls again (R-18); a fetch meeting a held repository lease answers `busy`, and the same request polls (decision 24). No publication remote is `publication_remote_required` with nothing written. `poll configure` sets the interval, `poll pause` sets the pause, and `poll resume` clears it and any stored deadline so an eligible poll is due (decision 11), leaving the stored backoff value and the recovery suspension, which no CLI verb clears (decision 5). Each writes one field in its request's own transaction: a committed request replays, and one that never committed is a new write when resent (last commit wins, decision 15). Already so is `already_applied`, exit 0. |
+| `item resolve-history` | Amended 2026-11-07 by vh-hyksw (the remote history repair). `--id` selects the item and `--as publish` records its context as never published, so that `item sync` publishes it; `--as release` is refused (`invalid_input`) and names the desktop's context release. Confirmed. A context the remote has is a no-op (`already_applied`); one published and then seen gone is `remote_branch_deleted`, naming `item republish`. The choice is the owner's: it is recorded as an explicit never-published row; resolving the last unresolved context clears the repository-wide cache-loss flag in the same transaction. If the flag is set but no contexts are unresolved, `remote resolve-history` clears it. Marker retirement follows the commit; the marker is retained while another repository remains flagged. |
+| `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. Amended 2026-11-03 by C5 (decisions 5, 11, 15, 24 and 28; R-16, R-17, R-18): the four mutations are unconfirmed. Default `poll once` is one explicit fetch, clean fast-forward, materialization and index pass, which runs while paused or disabled and never pushes, checkpoints, merges or cleans up; a completed poll is `ok`, exit 0, with each target's `{target, kind, item_id, disposition, before_oid, after_oid}` in its data (no slug, R-17), dirty, diverged, malformed and deleted targets preserved and marked there (R-16). Amended 2026-11-06: **only** explicit `--retire-completed` adds guarded local retirement under the contract below; default/automatic mode remains non-destructive. Amended 2026-11-07 by vh-hyksw: a context that was never published, and is absent from the remote, reports the disposition `unpublished` (`item sync` publishes it); `history_unknown` is kept for a context whose history the evidence says is unknown. A poll's transport, key, unlock or host stop is final, and a new request polls again (R-18); a fetch meeting a held repository lease answers `busy`, and the same request polls (decision 24). No publication remote is `publication_remote_required` with nothing written. `poll configure` sets the interval, `poll pause` sets the pause, and `poll resume` clears it and any stored deadline so an eligible poll is due (decision 11), leaving the stored backoff value and the recovery suspension, which no CLI verb clears (decision 5). Each writes one field in its request's own transaction: a committed request replays, and one that never committed is a new write when resent (last commit wins, decision 15). Already so is `already_applied`, exit 0. |
 | `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. Resume takes no input. It publishes a comment's pending publication, by the comment's operation ID or its synchronization's, without writing it again. Amended 2026-10-30 by C4 (Task 4b's ruling): a fenced comment publication, such as one held for a key whose selection then changed, answers `external_change` by either ID, as a fenced synchronization does, and the `comment add` request's own next call settles it. Resume publishes a resolution or an accepted outside repair, and passes a local-context sync to the gate's routing. `request cancel` does not reach it; Ctrl-C does. Amended 2026-11-03 by C5 (decision 19; R-30 to R-36): an unfinished `document promote` or `ticket close` that an accepted request holds answers `original_request_required`, naming that request, which continues it; with no record holding it, resume continues it with the record's consent, and its data is the lifecycle DTO, made-ready included. A stop it cannot get past offers `operation.resume` and `repo.inspect`, after letting a child with nothing to lose go (decision 19). A complete parent is `already_applied`; an ended or superseded one is `invalid_input`. A `poll once` an accepted request holds names that request. `request cancel` of a resume is `requested: false` (R-34). Amended 2026-11-04 by D5 (decision 10; its library part L2): `operation list`, and `repo status` with it, lists every unfinished, non-refused promotion or closure parent, held or not, with `next_action: resume`; refused and finished parents list none. |
-| `operation abandon` | F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. No input. A remote operation's ID is `invalid_input`, and a pending remote conflict cannot be abandoned (`01M4H33R34Z7C7EEKTY1ZCT950`). A local-context sync goes to the gate's guarded abandonment. |
+| `operation abandon` | F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. No input. A remote operation's ID is `invalid_input`, and a pending remote conflict cannot be abandoned (`01M4H33R34Z7C7EEKTY1ZCT950`). A local-context sync goes to the gate's guarded abandonment. Amended 2026-11-06: a retirement-owned pending local operation instead uses the confirmed preserving/index settlement below, retains the old request identity and every residual resource, and releases its blocker only after atomic finalization. No completed-child whole-pass abandon handle. |
 | `request show`, `request cancel` | Required `--request-id`, refuse `--repo`; inspect the request's state/result or request safe-point cancellation. Accepted local C2 requests report `requested: false`; this does not interrupt their process. |
 | `conflict show`, `conflict resolve` | Select a remote synchronization's operation ID, a comment's operation, or a `document promote` or `ticket close` operation, which names its context child (amended 2026-11-03 by C5, decision 34); a local-context sync's is `invalid_input`. Show is a read: no request ID, `--prepare` refused. It reports the state, next step, observation and each path's token, kind, structure and, for an item's path the library reads as UTF-8 text, base/local/incoming sides, as `content_available` says. Resolve takes input `observation` and `resolutions`, one `{token, source}` per conflicted path, then publishes under the same request. See [Conflict and cancellation behavior](#conflict-and-cancellation-behavior). |
 | `context observe-local` | Required `--id`. Read the observation a local synchronization of the item's existing context takes: the context and committed **local** primary, with no fetch. It creates no context: an item with none is refused, and human output names `ticket save` or `document save`. No mutation options. Amended 2026-11-03 by C5 (decision 3). |
+| `context retire` | C5 follow-up, approved 2026-11-04 and amended by D15 on 2026-11-06. Required `--repo`, `--kind ticket\|document`, `--id`; no `--input` or force. Uses the ordinary unconfirmed mutation driver; common `--prepare` / `--confirm` answer `not_confirmable`. Explicit guarded local retirement after a fresh authenticated observation; ordinary child request/operation recovery only. `poll once --retire-completed` explicitly opts into the live-only loop; the default poll and its untagged data stay unchanged. |
 | `context sync-local` | Required `--id`, `--input` with `observation` from `context observe-local`. Unconfirmed. Brings committed local primary into the item's context through the closure-recovery gate's operation: no network, no primary change, no implicit context, frozen parents. A conflict stops `recovery_required` and names its operation, which `context show-local` and `context resolve-local` take. Amended 2026-11-03 by C5 (decision 3). |
 | `context show-local` | Required `--operation-id`, optional `--token`. Read a local-context synchronization: state, next step, observation and each conflicted path's token. With `--token` and `--json` only, return that path's `base`, `local`, `incoming` and `historical` (R-15); human mode refuses `--token` as a usage error. A remote synchronization's ID is `invalid_input`, naming `conflict show`. No mutation options. Amended 2026-11-03 by C5 (decision 3). |
 | `context resolve-local` | Required `--operation-id`, `--input` with `observation` and `resolutions`, one `{token, source}` per conflicted path, from `context show-local`. Unconfirmed. Writes complete sources against issued tokens and finishes the synchronization under the same request; a partial accepted resolution is finished by resending its original request with the same sources. An external-only conflict is refused before anything is written. Amended 2026-11-03 by C5 (decision 3, decision 30). |
 | `id new` | Generate and return a canonical ULID for caller-owned requests/items/comments; no repository mutation. |
+
+The C5 `poll once` row's no-cleanup rule describes the default mode. The only
+exception is the explicit `--retire-completed` mode specified below; neither
+background polling nor an ordinary invocation inherits that consent.
 
 ### Authoring reads
 
@@ -439,7 +453,8 @@ flags and every other mutation value arrives in `--input`, as for C2–C4:
 | Verbs | Required | Optional | Refused |
 | --- | --- | --- | --- |
 | `document promote`, `ticket close` | `--repo`, `--id` | `--request-id`, `--prepare`, `--confirm` | `--input` |
-| `poll once`, `poll pause`, `poll resume` | `--repo` | `--request-id`, `--prepare`, `--confirm` | `--input` |
+| `poll once` | `--repo` | `--retire-completed` (default false), `--request-id`, `--prepare`, `--confirm` | `--input` |
+| `poll pause`, `poll resume` | `--repo` | `--request-id`, `--prepare`, `--confirm` | `--input` |
 | `poll configure` | `--repo`, `--input` | `--request-id`, `--prepare`, `--confirm` | — |
 | `context observe-local` | `--repo`, `--id` | — | `--input`, `--request-id`, `--prepare`, `--confirm` |
 | `context show-local` | `--repo`, `--operation-id` | `--token` (with `--json` only) | `--input`, `--request-id`, `--prepare`, `--confirm` |
@@ -471,6 +486,232 @@ holds a source or a token. Every other verb takes no input: the inventory
 test lists them, and holds each input-taking verb to exactly one closed
 schema and one example that it accepts.
 
+## Completed-context retirement
+
+**Delivered contract amendment, 2026-11-06.** Authority is the existing
+[Cycle](../Cycles/wave-03-completed-context-retirement.md) D1–D14 (2026-11-04)
+and D15 (2026-11-06), not a new design approval. Source audit base
+`76a852a7d5d4fcd757a95451601cdbb407b99bcc`: ordinary binding/preserving recovery
+approved through `989a5807`, live producer through `c514d160`, CLI/acceptance
+through `37b64d17`. Task 8 final gates/whole-feature review are still owed.
+
+### Invocation and proof boundary
+
+```text
+manyhands-cli context retire --repo <root> --kind <ticket|document> --id <ULID>
+    [--request-id <ULID>] [--json] [--non-interactive]
+manyhands-cli poll once --repo <root> --retire-completed
+    [--request-id <ULID>] [--json] [--non-interactive]
+```
+
+`context retire` requires the explicit kind and canonical full item ID, not a
+slug, path or inferred current item. No `--input`, force, context selector,
+source, observation token or caller-supplied receipt is accepted. Common
+mutation `--prepare` and `--confirm` are declared but answer `not_confirmable`,
+exit **2**, not a usage error (ordinary flag/ID/mode validation still applies).
+Execution is the new deliberate consent; JSON/noninteractive execution requires
+`--request-id`. Interactive execution may allocate and print it as usual. The
+selected-key session, transport initialization, ordinary mutation driver,
+bounded-retry rule and safe-point Ctrl-C window apply; no implicit host approval
+or identity prompt is added.
+
+For a present/branch-only context, retirement requires fresh authenticated
+complete Fetch evidence of a previously Fetch-known remote context now absent,
+valid same-ID completion on **committed local primary**, positive content proof,
+and independent cleanliness/identity/lifetime checks. Standalone observation is
+read-only, adds a round trip even after a poll, and does not fetch objects or
+update primary. `closed`/`promoted` are evidence labels, not force permission.
+The [Git workflow](git-workflow-and-conflict-recovery.md#explicit-peer-context-retirement)
+owns ancestry/folded proof, the narrow open-ticket closure-field exception,
+cleanliness, nonce and current-observation/configuration guards. Unknown history,
+mere document presence, closure alone, unmatched work or ambiguous state cannot
+authorize removal. No remote ref deletion, push, checkpoint, implicit merge,
+canonical source or draft change is allowed. `context release` and its existing
+desktop navigation/discard consumers are unchanged.
+
+The optional poll flag defaults to **false**. The library uses
+`Mutation::PollOnceRetiring(PollOnceInput { root })` under the same `poll once`
+command with an added `retire_completed=true` digest field; ordinary
+`Mutation::PollOnce`, its root-only input/digest and domain
+`PollPublicationRemoteRequest` are unchanged. Changing mode under an already
+bound request is `request_mismatch`, normally exit **2**, never renewed consent.
+Only the original uninterrupted eligible live opted-in pass supplies the private
+initial Fetch input to its children. One authoritative provenance is shared,
+with **no per-child observation O** on this route. This does not mean one total
+SSH connection: current Fetch authentication/reconnect costs two upload-pack
+commands for default polling and for the measured two-child opted-in pass.
+
+### Closed output data
+
+All fields listed below are **required**, including nullable fields; each object
+is closed (`additionalProperties: false`). IDs/OIDs/timestamps are strings.
+Schemas are separate roots, not `oneOf`, optional old fields or an extension of
+the test schema interpreter. Ordinary stored untagged poll results stay valid.
+
+| Delivered Rust DTO / schema under `schemas/v1/` | Complete serialized fields |
+| --- | --- |
+| `ContextRetirementMutationDto` / [context_retirement_mutation](../../schemas/v1/context_retirement_mutation.schema.json) | `type: "context_retirement"`; `kind: document\|ticket`; strings `item_id`, `operation_id`; `state: retired\|already_absent\|refused\|pending\|preserved`; registered `code`; `worktree_removal`, `branch_removal`: `none\|possible\|observed`; boolean `materialization_settled`. |
+| Existing `PollMutationDto` / [poll_mutation](../../schemas/v1/poll_mutation.schema.json) | **Untagged, unchanged five fields:** string `operation_id`; `completion: completed\|interrupted\|cancelled`; string `completed_at`; nullable string `next_eligible_at`; `targets` array. Each target has five **required-nullable** fields (`target`, `kind`, `item_id`, `before_oid`, `after_oid`) plus the **required, non-null** `disposition` enum (existing values plus `closed`, `promoted`). |
+| `PollRetirementMutationDto` / [poll_retirement_mutation](../../schemas/v1/poll_retirement_mutation.schema.json) | `type: "poll_retirement"`; `poll`: the complete ordinary untagged DTO above; `completion: completed\|stopped`; nullable registered `stop_code`; `retirements` array. |
+| `PollRetirementItemDto` (closed object in that root) | `kind`; strings `item_id`, `request_id`; nullable string `operation_id`; `state: retired\|already_absent\|refused\|pending\|not_reached\|preserved`; nullable registered `code`; nullable `debt: cleanup\|discovery\|admission`; nullable complete `result`: the `context_retirement` DTO above. |
+
+A completed retirement report has null `stop_code` and no pending/not-reached
+entry. A not-reached entry retains its reserved request ID, but operation, code,
+debt and result are null: reservation is not acceptance. A pre-acceptance settled
+refusal may have a code without an operation/result; an accepted pending entry
+has its exact ordinary request/operation, code, debt and result. Nested results
+must agree with their outer target/operation/state/code. Missing, mixed, unknown
+or contradictory stored shapes are not permission to reconstruct authority.
+
+Preselection failures may have null data. A live host-stopped opted-in poll may
+instead return the existing [synchronization_mutation](../../schemas/v1/synchronization_mutation.schema.json)
+host root (`SynchronizationMutationDto`); that is valid `poll once` output, not
+a fabricated `poll_retirement` shape. The live error retains its precise code
+and sanitized `host.approve`/`host.replace` route, including fingerprint data
+where supplied, and replay preserves that original answer. Coarse remote-journal
+categories are only a fallback when the original boundary answer was genuinely
+lost, not a replacement for an available precise live result. No host is approved
+by retirement itself. If standalone output has no host details, `host observe`
+provides the explicit trust workflow; correcting a Final stop requires a new
+retirement request.
+
+`none` means no owned removal is established, not that a resource is present.
+`possible` means the effect boundary may have run; `observed` records the proven
+owned removal. Neither `already_absent` nor fresh branch-only execution invents
+a worktree removal. `materialization_settled` describes exact old intent/absence
+bookkeeping, not discovery freshness: it may be true while discovery is pending,
+or false in a preserved result whose discovery has settled. Consume only the
+captured completed old intent M, never a new/foreign one or current tracking/
+observation state.
+
+For retirement results the generic write, checkpoint, integration, publication
+and cleanup effects remain `not_requested`, and `commit_oid` null. The detailed
+removal flags carry cleanup evidence; non-`none` removal sets the boundary's
+`local_change`, so subsequent failure is partial/exit 4. Discovery alone is
+`current`, `pending` or `not_requested` as actually established. In particular,
+nested `poll.completion=completed` can describe a failed terminal poll; deriving
+discovery `current` after a lost boundary copy requires the exact original P's
+durable successful phase **and** outcome, not that wire field alone.
+`ContextBranchReleased`, `ContextRetirementAbsent` and
+`ContextRetirementPreserved` are noncheckpoint authoritative local steps; the
+last two distinguish an initial absence and preserving-only authority from an
+owned branch release.
+
+### Request finality, numeric exits and current recovery
+
+`R_s/S` denotes a standalone request/local operation; `R/P` the pass request/
+ordinary remote poll; `R_i/K_i` each independent ordinary `context retire`
+request/local operation. **Final** is an immutable settled request, not a claim
+that every resource was removed. **Owed** retains that item's actual unfinished
+work. Current request-attempt F2, local executor epoch, index epoch and source
+remote P/epoch are distinct fences; no matching item ID or parent receipt can
+substitute for them. No new result code, exit class or recovery-action kind is
+introduced.
+
+| Delivered phase/result | Code and numeric exit | Request standing / permitted way on |
+| --- | --- | --- |
+| Invalid flags, kind, ID, input or changed bound mode/target | `usage_error`, `invalid_id`, `invalid_input`, `not_confirmable`, `request_mismatch`: **2** before effects | No new removal authority; preserve an existing bound request. Generic partial/cancel precedence still applies. |
+| Settled before-effect proof/identity/dirty/history refusal | `external_change`, `worktree_not_clean` or `recovery_required`: **3** | Final R_s/R_i; stable refused replay, inspect/repair and use a **new** explicit request. Closure labels do not override refusal. |
+| No-effect configuration/key/unlock/host stop | `publication_remote_required`, `no_selected_key`, `key_unavailable`, `key_rejected`, `unlock_required`, `unlock_failed`, `host_approval_required`, `host_replacement_required`: **3**; `invalid_remote`: **2** | Settled Final retirement or failed P; close/fence the owned no-effect observer, correct the prerequisite and make a new request. Use supplied sanitized trust route, not implicit approval. |
+| No-effect network stop / unexpected error | `transport_unavailable`, `remote_unavailable`: **5**; `internal_error`: **1** | A settled Final stop replays; correction needs a new request. A read/storage failure that prevents settlement retains the actual obligation and current recovery instead of asserting Final. |
+| Retryable live exclusion before ordinary local claim | `busy`, `poll_yielding`: **5** | Where Accepted/Owed, retry the **same exact bound input/request**; no new target/configuration or old-pass loop authority. |
+| Standalone or child cancellation before removal | `cancelled`: **130** | Settle owned no-effect work as Final; new request for new retirement. |
+| Owned retirement and discovery settled | `ok`: **0**, state `retired` | Final ordinary request; completed replay never observes, selects or deletes a recreated context. |
+| Initial B/W/admin all absent and discovery settled | `already_applied`: **0**, state `already_absent` | Final; both removal flags `none`, no network needed, no invented owned deletion. |
+| Possible/observed partial cleanup, changed authority after removal | `recovery_required` or other failure after removal: **4**; cancellation: **130** | Owed R_s/R_i only. Original-request retry may continue only with ordinary proof/lifetime authority; otherwise inspect then confirmed preserving abandon of **S/K_i**. No rollback or surviving tokenless branch deletion across restart. |
+| All owned removal/absence M settled, discovery pending | `discovery_pending`: **4** | Owed ordinary item; same request or `operation.resume S/K_i` finishes index only, with no observation/deletion/new intent consumption. |
+| Destructive `operation resume S/K_i` | `original_request_required`: **3** | `request.retry` names **R_s/R_i**, never pass R; resume does not reconstruct destructive input. |
+| Original poll interrupted before any capture/selection | `recovery_required`: **3**, or **4** if ordinary P has durable local change; `busy`/`poll_yielding`: **5** where applicable | Existing ordinary P request recovery only. It may restart/refetch **before selection**, but a repaired/replayed P cannot mint the original live retirement capability. |
+| Original poll refresh pending, or unconfirmed original handoff after crash | `discovery_pending`: **4** | Final no-retirement report once metadata settles; later index repair cannot enable the old loop. New explicit pass required. |
+| Live target fully settled refusal | Child's own refusal code/non-success; parent can continue | R_i Final; preserve the durable row. Refusal is not batch-wide failure or a reason to roll back earlier successes. |
+| Current child owes cleanup or discovery; or A settled but B/C not reached | Parent `recovery_required`: **3** without retirement removals, **4** with possible/observed removals; `completion=stopped`, `stop_code=recovery_required`. An index-owed child has nested `code=discovery_pending`, `state=pending`, `debt=discovery`; this does **not** change the top-level parent code, while `effects.discovery=pending`. | R may be Final stopped while R_i/K_i stays Owed. Child-only current actions; not-reached IDs cannot be accepted by old R. New explicit pass for remainder. |
+| Parent cancellation at safe boundary, including after last child or empty image | `cancelled`: **130** | Stopped immutable report; completed children stay settled and real child debt remains independently Owed. Shared caller token **and** durable parent flag are honored; child-only cancellation does not automatically cancel R. |
+| Every selected same-pass success/refusal durable and handoffs settled | Parent `ok`: **0**, `completion=completed` | Completed mixed report, not all-success. Also applies when only final report-copy was lost. A settled prefix with not-reached remainder never qualifies. |
+| Confirmed preserving abandonment still indexing/finalizing | `discovery_pending`: **4** | Abandon request remains Owed, preserving-only; retry it or index-only `operation.resume K_i`, never original deletion. |
+| Preserving abandonment settled | Abandon request `ok`: **0**; old R_s/R_i `external_change`: **3** with no removal, **4** with possible/observed removal | Old identity retained; stable `preserved` partial/resource receipt, local blocker released only after atomic settlement. Parent report unchanged; later retirement is a new request with fresh proof. |
+
+The general [exit classification](#exit-statuses-and-partial-completion) remains
+authoritative: cancellation 130 precedes partial 4, which precedes a code's own
+class. Storage/access/root failures keep existing codes and actual standing;
+evidence loss is not a fresh selection. Initial absence and M/I-only continuation
+never inspect a newly recreated context for deletion. Original standalone Final
+replay never reobserves or uses release's run-as-new path.
+
+### Frozen reports, independent children and preserving escape
+
+The live loop settles each ordinary child and its index handoff before starting
+the next. Genuine item cleanup/index/integration debt stops it for repository
+exclusion; a settled refusal does not. No aggregate local journal, aggregate
+refresh debt, rollback, resumed cursor or completed-child `K_last` abandon handle
+exists. Ordinary P remains a poll operation in list/show, not a new cleanup owner.
+
+Before a stopped parent becomes Final, the common lease and one transaction
+revoke live starts/effects and persist one immutable cut with exact child
+result/debt snapshots and not-reached membership. Replaying a selected/cut parent
+only settles/copies that report; it NEVER observes again, reselects, accepts a
+reserved child, resumes cleanup or advances another item. If no cut survived,
+first metadata reconciliation creates one from states durably known **then**,
+not an invented crash-time snapshot. Only all-selected same-pass settled
+outcomes with original eligible handoff and no prior stopped cut may complete
+after loss of just the final copy. An existing stopped cut is never upgraded
+because a child recovered later. Missing/corrupt pass companions fail closed,
+not into a new ordinary P execution.
+
+A reserved but unaccepted R_i is not reached. An accepted R_i **provably never
+locally claimed** may settle metadata only, retaining identity, never reconstruct
+initial input or select current resources. Missing evidence is not that proof.
+That metadata-only settlement is not a legitimately attempted completed-pass
+refusal; it does not turn an interrupted pass into mixed success.
+A **durably selected original present worktree**, even before Git effects, may
+reenter only as ordinary R_i with fresh O/proof and exact original nonce/lifetime
+where permitted. Owned all-absence continues exact M/index work; authoritative
+I-only work requires no new advertisement. A surviving branch without lifetime
+proof refuses across restart (R-7). These routes finish **one item**, never R's
+next target. The old report's handles inspect current child state without
+rewriting historical data.
+
+For real pending retirement debt, `operation abandon --prepare` uses the existing
+confirmation workflow with required-nullable
+`OperationAbandonPreviewDto.retirement` (wire `data.details.retirement` in
+[operation_abandon_preview](../../schemas/v1/operation_abandon_preview.schema.json)).
+It is **null for ordinary old abandonment**. For retirement it is a closed
+metadata object requiring: nullable `request_id`; `phase`; integer `owner_epoch`
+(≥1), `index_owner_epoch` (≥0); both removal flags; booleans `worktree_retained`,
+`branch_retained`, `index_pending`. Retained means present **or not safely known
+absent**, not removal authority. The preview names the existing operation/target
+and binds the current state/epochs/resources; changed preview is
+`external_change`. It includes no file bodies and promises no `request_released`
+effect for retirement.
+
+Confirmation fences the old executor and its exact bound read-only observer,
+preserves every remaining resource and retains the old R_s/R_i mapping. Only
+local discovery settlement follows; receipt, abandoned journal, old request's
+`external_change` result and exact holder release Z finalize atomically **before
+unblocking**. Index/finalizer failure stays Owed and preserving-only. Live index
+owners, held effects or unrelated reservations refuse/busy rather than being
+stolen. No further deletion or new remote/generation rebinding is allowed.
+CLI and the existing generic desktop abandonment confirmation display this
+metadata; it is **not** a desktop Retire action or navigation change.
+
+Human retirement output names per-target state, removal evidence and exact
+request/operation handles. It labels the poll report `as-of-pass` separately from
+current recovery. Follow the envelope's **actual ordered actions**, including
+retry/inspection before a later preserving escape when supplied. Operation lines
+use each action's `operation_id` and established action/scope root, not frozen
+parent/child IDs or an invocation-root guess. Abandon guidance starts with
+`--prepare`, not an unconfirmed deletion command. JSON is the unchanged single
+boundary envelope. The [index-pending fixture](../../tests/fixtures/cli_v1/context_retire_index_pending.json)
+pins `[operation.resume, repo.inspect, operation.abandon]`; the
+[stopped report](../../tests/fixtures/cli_v1/poll_once_retirement_stopped_text.txt)
+pins a Final no-key stop without an invented parent resume/abandon.
+
+The [execution ledger](../plans/2026-11-04-completed-context-retirement-execution.md)
+retains exact local/CLI and one new authenticated SSH case evidence at actual
+SHAs. No final tiers, whole-feature approval, native Windows/macOS execution,
+real-profile repair or real-context retirement is claimed by this amendment.
+D6's explicit desktop/editor/draft/keyboard/recovery journeys, latest-copy read
+precedence and the separate remote-branch-deletion gap remain downstream.
+
 ## Observations, request identity and retries
 
 Show/inspect returns an opaque observation token representing the exact source,
@@ -479,6 +720,9 @@ precondition, not authentication. Writes require it for existing resources;
 creation explicitly expects absence. Stale observations produce
 `external_change`, preserving input and canonical state. There is no `--force`
 override. Caller-provided source/body never enters operation diagnostics.
+Explicit retirement is not a caller-token write: its guarded service obtains
+the fresh observation/proof itself, or consumes only the original live pass's
+sealed initial input as specified above.
 
 Every mutating execution has a request ULID. JSON/noninteractive mutation
 requires caller-supplied `--request-id`; human interactive mode may allocate one
@@ -1132,6 +1376,14 @@ as its taxonomy row says.
 Amended 2026-11-03 by C5 (decision 4; R-10; the C5 design's Recovery
 Tables). These tables say, for each family of verbs, what to run next after
 a recoverable answer. Help and its schema do not change (decision 4).
+
+The historical C2–C5 golden-parsed families below retain their original scope;
+the Polling family describes default `poll once`. The new `context retire` and
+explicit opted-in pass use the separate delivered
+[numeric/finality/recovery table](#request-finality-numeric-exits-and-current-recovery)
+above. It includes success, non-success, item-only resume and preserving escape
+without changing the six-family parser or pretending new fault rows have binary
+goldens. Its linked index-pending/stopped fixtures are existing Tasks 5–6 evidence.
 
 A **recoverable** code is one whose answer has a way on: its class is
 blocked (exit 3), transient (5), incomplete (4) or cancelled (130), or the

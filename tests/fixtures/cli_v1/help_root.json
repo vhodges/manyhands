@@ -2157,6 +2157,12 @@
             "required": false,
             "summary": "Execute with a prepared confirmation ULID.",
             "value": "ULID"
+          },
+          {
+            "name": "--retire-completed",
+            "required": false,
+            "summary": "Explicitly retire proven-safe completed contexts in this live pass only.",
+            "value": null
           }
         ],
         "repository": "required",
@@ -2266,6 +2272,51 @@
         ],
         "repository": "required",
         "summary": "Resume polling."
+      },
+      {
+        "available": true,
+        "command": "context retire",
+        "delivered_by": "C5",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--kind",
+            "required": true,
+            "summary": "Kind of the completed context.",
+            "value": "ticket|document"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "Retire a proven-safe completed local context, after a fresh remote observation."
       },
       {
         "available": true,

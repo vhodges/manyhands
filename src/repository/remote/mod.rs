@@ -3,6 +3,9 @@ mod history;
 mod merge;
 pub(super) mod observation;
 mod poll;
+pub(super) use poll::OriginalWrapper;
+#[cfg(test)]
+pub(crate) use poll::{synthetic_fetch, synthetic_fetch_error};
 mod refs;
 pub(super) mod resolve;
 pub(super) mod sync;
@@ -38,6 +41,8 @@ pub(crate) mod observation_tests;
 pub(super) mod reservation;
 #[cfg(test)]
 pub(crate) mod resolve_tests;
+#[cfg(test)]
+pub(super) mod retirement_batch_test_support;
 pub(super) mod state;
 
 pub use reservation::{

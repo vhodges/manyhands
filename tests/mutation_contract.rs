@@ -38,6 +38,98 @@ const PROGRESS_SCHEMA: &str = "progress_event.schema.json";
 const TICKET_SCHEMA: &str = "ticket_mutation.schema.json";
 const DOCUMENT_SCHEMA: &str = "document_mutation.schema.json";
 
+#[test]
+fn an_opted_poll_matches_its_distinct_closed_schema_and_golden() {
+    let world = World::new();
+    add_origin(&world);
+    assert_eq!(
+        world
+            .execute(REQUEST_2, remote_select(&world, Some("origin")))
+            .code,
+        ResultCode::Ok
+    );
+    let mutation = || {
+        Mutation::PollOnceRetiring(manyhands::repository::PollOnceInput {
+            root: world.root.clone(),
+        })
+    };
+    let envelope = world.execute(REQUEST_1, mutation());
+    assert_eq!(
+        envelope.code,
+        ResultCode::InternalError,
+        "the deliberately uninitialized transport's live RuntimeUninitialized error must not become its coarse TransportUnavailable category: {envelope:?}"
+    );
+    assert_eq!(
+        envelope.effects.discovery,
+        manyhands::results::DiscoveryEffect::NotRequested,
+        "failed original poll must not claim discovery success"
+    );
+    let data = serde_json::to_value(envelope.data.as_ref().unwrap()).unwrap();
+    schema::check_published("poll_retirement_mutation.schema.json", &data).unwrap();
+    for key in data.as_object().unwrap().keys() {
+        let mut v = data.clone();
+        v.as_object_mut().unwrap().remove(key);
+        assert!(
+            schema::check_published("poll_retirement_mutation.schema.json", &v).is_err(),
+            "required {key}"
+        );
+    }
+    let mut mixed = data.clone();
+    mixed["operation_id"] = "mixed".into();
+    assert!(schema::check_published("poll_retirement_mutation.schema.json", &mixed).is_err());
+    assert!(schema::check_published("poll_mutation.schema.json", &data).is_err());
+    let op = envelope.operation_id.as_deref().unwrap();
+    let completed = data["poll"]["completed_at"].as_str().unwrap();
+    mutation::assert_contract(
+        &ContractCase {
+            name: "poll_retirement",
+            data_schema: Some("poll_retirement_mutation.schema.json"),
+            placeholders: &[
+                (world.root.to_str().unwrap(), "<root>"),
+                (op, "<operation>"),
+                (completed, "<completed-at>"),
+            ],
+            sentinels: &SENTINELS,
+        },
+        &envelope,
+    );
+    assert_eq!(envelope, world.execute(REQUEST_1, mutation()));
+}
+
+#[test]
+fn a_context_retirement_matches_its_closed_schema_and_golden() {
+    let world = World::new();
+    let mutation = || {
+        Mutation::ContextRetire(manyhands::repository::ContextRetireInput {
+            root: world.root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: TICKET_NEW.parse().unwrap(),
+        })
+    };
+    let envelope = world.execute(REQUEST_1, mutation());
+    assert_eq!(envelope.code, ResultCode::AlreadyApplied);
+    assert_data_contract(
+        "context_retirement",
+        "context_retirement_mutation.schema.json",
+        &world,
+        &envelope,
+    );
+    let data = serde_json::to_value(envelope.data.as_ref().unwrap()).unwrap();
+    for key in data.as_object().unwrap().keys() {
+        let mut missing = data.clone();
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(
+            schema::check_published("context_retirement_mutation.schema.json", &missing).is_err(),
+            "missing {key}"
+        );
+    }
+    let mut mixed = data.clone();
+    mixed["completion"] = "completed".into();
+    assert!(schema::check_published("context_retirement_mutation.schema.json", &mixed).is_err());
+    assert!(schema::check_published("poll_mutation.schema.json", &data).is_err());
+    assert_eq!(envelope, world.execute(REQUEST_1, mutation()));
+}
+
 /// Checks a ticket envelope against its fixture, with what differs from
 /// run to run replaced: the repository's path, the commit and the
 /// operation ID the boundary allocated.
@@ -1508,7 +1600,7 @@ fn every_bound_command_has_a_golden() {
 /// The schemas that describe the `data` of an answer: a read's, a
 /// command's, a preview's. With the envelope and the progress event they are
 /// the roots the contract publishes; every other schema is a part of one.
-const DATA_ROOTS: [&str; 65] = [
+const DATA_ROOTS: [&str; 67] = [
     "local_context_sync_mutation.schema.json",
     "local_context_sync_inspection.schema.json",
     "local_context_conflict_content.schema.json",
@@ -1521,6 +1613,7 @@ const DATA_ROOTS: [&str; 65] = [
     "conflict.schema.json",
     "conflict_resolution_mutation.schema.json",
     "context_mutation.schema.json",
+    "context_retirement_mutation.schema.json",
     "cycle_list.schema.json",
     "dependency_tree.schema.json",
     "document_folder_list.schema.json",
@@ -1555,6 +1648,7 @@ const DATA_ROOTS: [&str; 65] = [
     "path_observation.schema.json",
     "plan.schema.json",
     "poll_mutation.schema.json",
+    "poll_retirement_mutation.schema.json",
     "poll_policy_mutation.schema.json",
     "polling_status.schema.json",
     "preview.schema.json",

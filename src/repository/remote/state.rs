@@ -428,7 +428,11 @@ fn read_retired_contexts(
         .collect()
 }
 
-const POLL_DISPOSITION_SCHEMA: &str = r#"
+// These historical catalogs have the same frozen table/owner shape. Keep each
+// source enum literal independent of the current enum: an upgrade must never
+// legitimize a row its actual source CHECK forbade.
+macro_rules! poll_disposition_catalog {
+    ($values:literal) => { concat!(r#"
     CREATE TABLE remote_poll_dispositions (
         repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
         operation_ulid TEXT NOT NULL,
@@ -437,7 +441,7 @@ const POLL_DISPOSITION_SCHEMA: &str = r#"
         remote_ref TEXT,
         kind TEXT CHECK(kind IN ('document','ticket')),
         item_id TEXT,
-        disposition TEXT NOT NULL CHECK(disposition IN ('current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','unpublished','not_reached')),
+        disposition TEXT NOT NULL CHECK(disposition IN ("#, $values, r#")),
         before_oid TEXT CHECK(length(before_oid)=40 AND before_oid NOT GLOB '*[^0-9a-f]*'),
         after_oid TEXT CHECK(length(after_oid)=40 AND after_oid NOT GLOB '*[^0-9a-f]*'),
         observed_at INTEGER NOT NULL CHECK(typeof(observed_at)='integer' AND observed_at BETWEEN 0 AND 253402300799),
@@ -448,21 +452,119 @@ const POLL_DISPOSITION_SCHEMA: &str = r#"
         CHECK((classification='malformed')=(remote_ref IS NULL))
     );
     CREATE TRIGGER remote_poll_disposition_owner_immutable BEFORE UPDATE OF repository_id,operation_ulid,action,poll_kind ON remote_operation_records WHEN EXISTS(SELECT 1 FROM remote_poll_dispositions WHERE repository_id=OLD.repository_id AND operation_ulid=OLD.operation_ulid) BEGIN SELECT RAISE(ABORT,'immutable disposition owner'); END;
-"#;
+"#) };
+}
+const POLL_DISPOSITION_SCHEMA_15: &str = poll_disposition_catalog!(
+    "'current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','not_reached'"
+);
+const POLL_DISPOSITION_SCHEMA_16: &str = poll_disposition_catalog!(
+    "'current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','unpublished','not_reached'"
+);
+const POLL_DISPOSITION_SCHEMA_17: &str = poll_disposition_catalog!(
+    "'current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','closed','promoted','history_unknown','not_reached'"
+);
+const POLL_DISPOSITION_SCHEMA: &str = poll_disposition_catalog!(
+    "'current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','closed','promoted','history_unknown','unpublished','not_reached'"
+);
 const POLL_DISPOSITION_OBJECTS: &[(&str, &str)] = &[
     ("TABLE", "remote_poll_dispositions"),
     ("TRIGGER", "remote_poll_disposition_owner_immutable"),
 ];
 fn validate_poll_disposition_schema(db: &Connection) -> Result<(), RepositoryError> {
+    validate_poll_disposition_envelope(db, POLL_DISPOSITION_SCHEMA)
+}
+fn validate_poll_disposition_envelope(
+    db: &Connection,
+    schema: &str,
+) -> Result<(), RepositoryError> {
     for &(kind, name) in POLL_DISPOSITION_OBJECTS {
-        validate_schema_object(
-            db,
-            kind,
-            name,
-            schema_object_sql(POLL_DISPOSITION_SCHEMA, kind, name).ok_or_else(recovery_required)?,
-        )?;
+        let actual: String = db
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type=?1 AND name=?2",
+                params![kind.to_ascii_lowercase(), name],
+                |r| r.get(0),
+            )
+            .map_err(|_| recovery_required())?;
+        let expected = schema_object_sql(schema, kind, name).ok_or_else(recovery_required)?;
+        if normalized_poll_schema_sql(&actual)
+            != normalized_poll_schema_sql(expected.trim_end_matches(';'))
+        {
+            return Err(recovery_required());
+        }
+    }
+    validate_poll_disposition_dependencies(db)
+}
+
+fn validate_poll_disposition_dependencies(db: &Connection) -> Result<(), RepositoryError> {
+    const TABLE: &str = "remote_poll_dispositions";
+    let mut query = db
+        .prepare("SELECT type,name,tbl_name,sql FROM sqlite_master")
+        .map_err(|_| recovery_required())?;
+    let objects = query
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|_| recovery_required())?;
+    for object in objects {
+        let (kind, name, table, sql) = object.map_err(|_| recovery_required())?;
+        // The exact table DDL above accounts for its two implicit constraint
+        // indexes. The only supported external reference is the exact immutable
+        // owner trigger, also checked above; never silently discard attachments.
+        let implicit = kind == "index"
+            && sql.is_none()
+            && matches!(
+                name.as_str(),
+                "sqlite_autoindex_remote_poll_dispositions_1"
+                    | "sqlite_autoindex_remote_poll_dispositions_2"
+            );
+        let owner = kind == "trigger" && name == "remote_poll_disposition_owner_immutable";
+        if !implicit
+            && !owner
+            && ((matches!(kind.as_str(), "index" | "trigger")
+                && table.eq_ignore_ascii_case(TABLE))
+                // Conservative reference detection handles SQLite's ASCII case
+                // and all identifier quoting without interpreting unknown SQL.
+                || (matches!(kind.as_str(), "trigger" | "view")
+                    && sql.is_some_and(|sql| sql.to_ascii_lowercase().contains(TABLE))))
+        {
+            return Err(recovery_required());
+        }
+    }
+    // Scan definitions, not child rows: even an empty incoming FK would be
+    // retargeted by RENAME. A populated CASCADE could lose evidence on DROP.
+    let incoming: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) fk WHERE m.type='table' AND fk.\"table\"=?1 COLLATE NOCASE)",
+        [TABLE], |row| row.get(0),
+    ).map_err(|_| recovery_required())?;
+    if incoming {
+        return Err(recovery_required());
     }
     Ok(())
+}
+
+fn normalized_poll_schema_sql(sql: &str) -> String {
+    // SQL keywords/spacing may vary, but CHECK/trigger string literals must
+    // match exactly. Folding literal case would accept a different enum.
+    let mut quoted = false;
+    sql.chars()
+        .filter_map(|character| {
+            if character == '\'' {
+                quoted = !quoted;
+            }
+            if quoted || character == '\'' {
+                Some(character)
+            } else if character.is_whitespace() {
+                None
+            } else {
+                Some(character.to_ascii_lowercase())
+            }
+        })
+        .collect()
 }
 fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
     let objects:i64=tx.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('remote_poll_dispositions','remote_poll_disposition_owner_immutable')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
@@ -483,7 +585,18 @@ fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError
     if !((objects == 0 && columns == 0) || (objects == 2 && columns == 2)) {
         return Err(recovery_required());
     }
+    let marked = if super::super::recovery::has_table(tx, "registry_migrations")
+        .map_err(|_| recovery_required())?
+    {
+        tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1')", [], |r| r.get::<_,bool>(0)).map_err(|_| recovery_required())?
+    } else {
+        false
+    };
     if objects == 0 {
+        if marked {
+            return Err(recovery_required());
+        }
+        validate_poll_disposition_dependencies(tx)?;
         tx.execute_batch(POLL_DISPOSITION_SCHEMA)
             .map_err(|_| recovery_required())?;
         for name in names {
@@ -493,19 +606,86 @@ fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError
         // completion fallback. Freeze it once during migration; its original
         // retry deadline is unknown and remains NULL. New rows never infer it.
         tx.execute("UPDATE remote_operation_records SET poll_completed_at=updated_at WHERE action='poll' AND poll_kind='update' AND phase IN ('completed','cancelled','failed','interrupted')",[]).map_err(|_|recovery_required())?;
+    } else {
+        validate_poll_time_columns(tx)?;
+        let (source, source_marked) = [
+            (POLL_DISPOSITION_SCHEMA, true),
+            (POLL_DISPOSITION_SCHEMA_15, false),
+            (POLL_DISPOSITION_SCHEMA_16, true),
+            (POLL_DISPOSITION_SCHEMA_17, false),
+        ]
+        .into_iter()
+        .find(|(schema, _)| validate_poll_disposition_envelope(tx, schema).is_ok())
+        .ok_or_else(recovery_required)?;
+        if marked != source_marked {
+            return Err(recovery_required());
+        }
+        // Only trusted frozen catalog text supplies this IN list. Match source
+        // membership before any DDL, including marked upstream16 -> combined18.
+        let values = source
+            .split_once("disposition IN (")
+            .and_then(|(_, rest)| rest.split_once("))").map(|(values, _)| values))
+            .ok_or_else(recovery_required)?;
+        let invalid: bool = tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM remote_poll_dispositions WHERE disposition IS NULL OR disposition NOT IN ({values}))"), [], |r| r.get(0)).map_err(|_| recovery_required())?;
+        if invalid {
+            return Err(recovery_required());
+        }
+        if source != POLL_DISPOSITION_SCHEMA {
+            tx.execute_batch("DROP TRIGGER remote_poll_disposition_owner_immutable; ALTER TABLE remote_poll_dispositions RENAME TO remote_poll_dispositions_old;").map_err(|_|recovery_required())?;
+            tx.execute_batch(POLL_DISPOSITION_SCHEMA)
+                .map_err(|_| recovery_required())?;
+            tx.execute_batch("INSERT INTO remote_poll_dispositions SELECT * FROM remote_poll_dispositions_old; DROP TABLE remote_poll_dispositions_old;").map_err(|_|recovery_required())?;
+        }
     }
     tx.execute_batch("CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);")
         .map_err(|_| recovery_required())?;
-    let marked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
     if !marked {
-        // The CHECK gained `unpublished`; rebuild a table that predates it. The
-        // owner trigger is dropped first so the rename cannot rewrite its body.
-        if objects == 2 {
-            tx.execute_batch(&format!("DROP TRIGGER remote_poll_disposition_owner_immutable; ALTER TABLE remote_poll_dispositions RENAME TO remote_poll_dispositions_before_unpublished; {POLL_DISPOSITION_SCHEMA}; INSERT INTO remote_poll_dispositions SELECT * FROM remote_poll_dispositions_before_unpublished; DROP TABLE remote_poll_dispositions_before_unpublished;")).map_err(|_|recovery_required())?;
-        }
         tx.execute("INSERT INTO registry_migrations(name) VALUES('remote_poll_dispositions_unpublished_v1')",[]).map_err(|_|recovery_required())?;
     }
     validate_poll_disposition_schema(tx)?;
+    Ok(())
+}
+
+fn validate_poll_time_columns(db: &Connection) -> Result<(), RepositoryError> {
+    let sql: String = db
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='remote_operation_records'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    let sql = normalized_poll_schema_sql(&sql);
+    let definitions = sql
+        .split_once('(')
+        .and_then(|(_, body)| body.strip_suffix(')'))
+        .ok_or_else(recovery_required)?;
+    // Split only top-level column definitions, respecting SQL string literals
+    // and nested CHECK expressions. A name alone is not the paired envelope.
+    let mut depth = 0;
+    let mut quoted = false;
+    let mut start = 0;
+    let mut columns = Vec::new();
+    for (at, byte) in definitions.bytes().enumerate() {
+        match byte {
+            b'\'' => quoted = !quoted,
+            b'(' if !quoted => depth += 1,
+            b')' if !quoted => depth -= 1,
+            b',' if !quoted && depth == 0 => {
+                columns.push(&definitions[start..at]);
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    columns.push(&definitions[start..]);
+    for name in ["poll_completed_at", "poll_next_eligible_at"] {
+        let expected = format!(
+            "{name}integercheck({name}isnullor(typeof({name})='integer'and{name}between0and253402300799))"
+        );
+        if !columns.contains(&expected.as_str()) {
+            return Err(recovery_required());
+        }
+    }
     Ok(())
 }
 
@@ -519,12 +699,56 @@ pub(super) fn record_poll_completion(
     tx.execute("UPDATE remote_operation_records SET poll_completed_at=?3,poll_next_eligible_at=(SELECT next_eligible_at FROM remote_polling_state WHERE repository_id=?1) WHERE repository_id=?1 AND operation_ulid=?2 AND poll_kind='update'",params![id,op.to_string(),at]).map_err(|_|recovery_required())?;
     Ok(())
 }
+#[cfg(test)]
+type DispositionInsertHook = Box<dyn FnOnce(&Transaction<'_>, i64) -> Result<(), RepositoryError>>;
+#[cfg(test)]
+thread_local! {
+    static DISPOSITION_INSERT_HOOKS: std::cell::RefCell<std::collections::BTreeMap<(String, usize), DispositionInsertHook>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+#[cfg(test)]
+pub(super) fn set_disposition_insert_hook(
+    operation: crate::repository::OperationId,
+    ordinal: usize,
+    hook: impl FnOnce(&Transaction<'_>, i64) -> Result<(), RepositoryError> + 'static,
+) {
+    assert!(
+        DISPOSITION_INSERT_HOOKS
+            .with(|hooks| hooks
+                .borrow_mut()
+                .insert((operation.to_string(), ordinal), Box::new(hook)))
+            .is_none()
+    );
+}
+#[cfg(test)]
+pub(super) fn disposition_insert_hook_pending(
+    operation: crate::repository::OperationId,
+    ordinal: usize,
+) -> bool {
+    DISPOSITION_INSERT_HOOKS.with(|hooks| {
+        hooks
+            .borrow()
+            .contains_key(&(operation.to_string(), ordinal))
+    })
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn replace_poll_dispositions(
     tx: &Transaction<'_>,
     id: i64,
     op: crate::repository::OperationId,
     rows: &[super::poll::PollTargetReport],
     at: i64,
+) -> Result<(), RepositoryError> {
+    replace_poll_dispositions_with_insert_check(tx, id, op, rows, at, || Ok(()))
+}
+
+pub(super) fn replace_poll_dispositions_with_insert_check(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: crate::repository::OperationId,
+    rows: &[super::poll::PollTargetReport],
+    at: i64,
+    mut before_first_insert: impl FnMut() -> Result<(), RepositoryError>,
 ) -> Result<(), RepositoryError> {
     tx.execute(
         "DELETE FROM remote_poll_dispositions WHERE repository_id=?1",
@@ -539,6 +763,15 @@ pub(super) fn replace_poll_dispositions(
         } else {
             "malformed"
         };
+        #[cfg(test)]
+        if let Some(hook) = DISPOSITION_INSERT_HOOKS
+            .with(|hooks| hooks.borrow_mut().remove(&(op.to_string(), ordinal)))
+        {
+            hook(tx, id)?;
+        }
+        if ordinal == 0 {
+            before_first_insert()?;
+        }
         tx.execute("INSERT INTO remote_poll_dispositions(repository_id,operation_ulid,ordinal,classification,remote_ref,kind,item_id,disposition,before_oid,after_oid,observed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![id,op.to_string(),ordinal as i64,classification,row.target.as_ref().map(RemoteRefTarget::remote_ref),row.kind.map(|k|crate::repository::authoring_kind_segment(&k)),row.item_id.as_ref().map(ToString::to_string),disposition_name(row.disposition),row.before_oid.map(|o|o.to_string()),row.after_oid.map(|o|o.to_string()),at]).map_err(|_|recovery_required())?;
     }
     Ok(())
@@ -569,6 +802,8 @@ fn disposition_name(d: super::poll::PollDisposition) -> &'static str {
         MaterializationIncomplete => "materialization_incomplete",
         Malformed => "malformed",
         RemotelyDeleted => "remotely_deleted",
+        Closed => "closed",
+        Promoted => "promoted",
         HistoryUnknown => "history_unknown",
         Unpublished => "unpublished",
         NotReached => "not_reached",
@@ -590,6 +825,8 @@ fn disposition(value: &str) -> Result<super::poll::PollDisposition, RepositoryEr
         "materialization_incomplete" => MaterializationIncomplete,
         "malformed" => Malformed,
         "remotely_deleted" => RemotelyDeleted,
+        "closed" => Closed,
+        "promoted" => Promoted,
         "history_unknown" => HistoryUnknown,
         "unpublished" => Unpublished,
         "not_reached" => NotReached,
@@ -1371,7 +1608,7 @@ fn merge_schema_object_sql(kind: &str, name: &str) -> Option<&'static str> {
     schema_object_sql(MERGE_EVIDENCE_SCHEMA, kind, name)
 }
 
-fn schema_object_sql(schema: &'static str, kind: &str, name: &str) -> Option<&'static str> {
+fn schema_object_sql<'a>(schema: &'a str, kind: &str, name: &str) -> Option<&'a str> {
     let prefix = format!("CREATE {kind} {name}");
     let start = schema.find(&prefix)?;
     let statement = &schema[start..];
@@ -1569,11 +1806,39 @@ fn migrate_synchronization(tx: &Transaction<'_>) -> Result<(), RepositoryError> 
     if count != 0 {
         return Err(recovery_required());
     }
-    // Rebuild CHECK constraints and the active index in this same migration transaction.
-    tx.execute_batch("DROP TRIGGER IF EXISTS remote_operation_target_immutable; DROP INDEX IF EXISTS remote_active_reservation; DROP INDEX IF EXISTS remote_operations_repository; ALTER TABLE remote_operation_records RENAME TO remote_operation_records_cycle04;")
+    // New retirement authority cannot legitimately predate this remote schema.
+    // Do not cascade or reconstruct it if an obsolete parent was substituted.
+    for table in [
+        "context_retirement_records",
+        "context_retirement_attempts",
+        "retirement_advertisement_provenance",
+    ] {
+        if super::super::recovery::has_table(tx, table).map_err(|_| recovery_required())?
+            && tx
+                .query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table})"), [], |r| {
+                    r.get::<_, bool>(0)
+                })
+                .map_err(|_| recovery_required())?
+        {
+            return Err(recovery_required());
+        }
+    }
+    // Rebuild without RENAMING THE OLD PARENT: SQLite would rewrite the FKs
+    // of the empty additive retirement envelope to the old temporary name.
+    // Copy into the replacement first, drop the old parent, then name the new
+    // parent. Genuine old registries keep all rows/IDs and no inferred authority.
+    let partial: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='remote_operation_records_cycle04_upgrade')", [], |r| r.get(0)).map_err(|_| recovery_required())?;
+    if partial {
+        return Err(recovery_required());
+    }
+    tx.execute_batch("DROP TRIGGER IF EXISTS remote_operation_target_immutable; DROP INDEX IF EXISTS remote_active_reservation; DROP INDEX IF EXISTS remote_operations_repository;")
         .map_err(|_| recovery_required())?;
-    tx.execute_batch(REMOTE_OPERATION_SCHEMA)
-        .map_err(|_| recovery_required())?;
+    tx.execute_batch(&REMOTE_OPERATION_SCHEMA.replacen(
+        "CREATE TABLE IF NOT EXISTS remote_operation_records",
+        "CREATE TABLE remote_operation_records_cycle04_upgrade",
+        1,
+    ))
+    .map_err(|_| recovery_required())?;
     for (name, definition) in [
         (
             "yield_requested",
@@ -1589,12 +1854,12 @@ fn migrate_synchronization(tx: &Transaction<'_>) -> Result<(), RepositoryError> 
         ),
     ] {
         tx.execute_batch(&format!(
-            "ALTER TABLE remote_operation_records ADD COLUMN {name} {definition}"
+            "ALTER TABLE remote_operation_records_cycle04_upgrade ADD COLUMN {name} {definition}"
         ))
         .map_err(|_| recovery_required())?;
     }
     let list = columns.join(",");
-    tx.execute_batch(&format!("INSERT INTO remote_operation_records({list}) SELECT {list} FROM remote_operation_records_cycle04; DROP TABLE remote_operation_records_cycle04;"))
+    tx.execute_batch(&format!("INSERT INTO remote_operation_records_cycle04_upgrade({list}) SELECT {list} FROM remote_operation_records; DROP TABLE remote_operation_records; ALTER TABLE remote_operation_records_cycle04_upgrade RENAME TO remote_operation_records;"))
         .map_err(|_| recovery_required())?;
     Ok(())
 }
@@ -2659,7 +2924,7 @@ fn configure_known(
     transaction.execute("UPDATE remote_operation_records SET poll_completed_at=?2,poll_next_eligible_at=(SELECT next_eligible_at FROM remote_polling_state WHERE repository_id=?1) WHERE repository_id=?1 AND poll_kind='update' AND phase IN ('reserved','advertising','persisting','local_prepared')",params![repository_id,OffsetDateTime::now_utc().unix_timestamp().max(0)]).map_err(|_|recovery_required())?;
     transaction.execute("UPDATE remote_operation_records SET phase='interrupted',outcome='configuration_required' WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')",[repository_id]).map_err(|_| recovery_required())?;
     // The mutable current snapshot is invalidated, but a pass referenced by an
-    // immutable window is retained as historical intent. It is never made
+    // immutable window or retirement pin is retained as historical intent. It is never made
     // current again: a fence that forgets nothing carries a copy of the
     // current batch to the new generation (below), and that copy is
     // re-validated on every read like any other batch.
@@ -2683,10 +2948,22 @@ fn configure_known(
         transaction.execute("INSERT INTO remote_ref_observations(batch_id,ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid) SELECT ?2,ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid FROM remote_ref_observations WHERE batch_id=?1",params![old,new]).map_err(|_| recovery_required())?;
         carried = Some(new);
     }
-    transaction.execute("DELETE FROM remote_ref_observations WHERE batch_id IN (SELECT batch.id FROM remote_observation_batches batch WHERE batch.repository_id=?1 AND batch.id IS NOT ?2 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=batch.id))",params![repository_id,carried]).map_err(|_| recovery_required())?;
+    // Older remote-only migrations may precede the retirement envelope. Once
+    // installed, use the same exact holders for parent AND child collection.
+    let retirement_hold = if super::super::recovery::has_table(
+        transaction,
+        "retirement_observation_pins",
+    )
+    .map_err(|_| recovery_required())?
+    {
+        " AND NOT EXISTS(SELECT 1 FROM retirement_observation_pins pin WHERE pin.repository_id=batch.repository_id AND pin.observation_batch_id=batch.id)"
+    } else {
+        ""
+    };
+    transaction.execute(&format!("DELETE FROM remote_ref_observations WHERE batch_id IN (SELECT batch.id FROM remote_observation_batches batch WHERE batch.repository_id=?1 AND batch.id IS NOT ?2 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=batch.id){retirement_hold})"),params![repository_id,carried]).map_err(|_| recovery_required())?;
     transaction
         .execute(
-            "DELETE FROM remote_observation_batches WHERE repository_id=?1 AND id IS NOT ?2 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=remote_observation_batches.id)",
+            &format!("DELETE FROM remote_observation_batches AS batch WHERE repository_id=?1 AND id IS NOT ?2 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=batch.id){retirement_hold}"),
             params![repository_id, carried],
         )
         .map_err(|_| recovery_required())?;
@@ -6442,6 +6719,7 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
     crate::repository::closure::record::audit(&transaction)?;
     audit_poll_materializations(&transaction)?;
     validate_poll_disposition_schema(&transaction)?;
+    validate_poll_time_columns(&transaction)?;
     validate_schema_object(
         &transaction,
         "TABLE",
@@ -6583,7 +6861,13 @@ fn read_snapshot_rows(
             } else {
                 false
             };
-            if !historical_pass {
+            let retirement_pass = audit_history && !current
+                && super::super::recovery::has_table(connection, "retirement_observation_pins").map_err(|_| recovery_required())?
+                && connection.query_row("SELECT EXISTS(SELECT 1 FROM retirement_observation_pins pin JOIN retirement_advertisement_provenance p ON p.id=pin.provenance_id
+                  WHERE pin.repository_id=?1 AND pin.observation_batch_id=?2 AND p.repository_id=?1 AND p.observation_batch_id=?2
+                    AND p.configuration_generation=?3 AND p.remote_name=?4 AND p.primary_branch=?5 AND p.observed_at=?6)",
+                  params![repository_id,batch_id,generation,remote,primary,observed_at], |r| r.get::<_, bool>(0)).map_err(|_| recovery_required())?;
+            if !historical_pass && !retirement_pass {
                 return Err(recovery_required());
             }
         }

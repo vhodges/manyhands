@@ -4,6 +4,11 @@
 //! builds its repositories through the library and keeps its data in
 //! temporary directories.
 
+/// Finite aggregate UI/worker wait for desktop tests on loaded machines.
+/// Owner-approved temporary accommodation (2026-11-07), not a performance fix.
+/// GPUI retains its independent fifteen-second uninterrupted-parking guard.
+pub(crate) const WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 // Shared by every desktop test. Some of their helpers serve only the
 // tests that need `desktop-test-support`.
 #[cfg_attr(

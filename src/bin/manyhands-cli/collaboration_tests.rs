@@ -98,6 +98,18 @@ fn the_window_covers_exactly_the_stoppable_verbs() {
             true,
         ),
         (
+            Mutation::PollOnceRetiring(PollOnceInput { root: root.clone() }),
+            true,
+        ),
+        (
+            Mutation::ContextRetire(manyhands::repository::ContextRetireInput {
+                root: root.clone(),
+                kind,
+                id: item(),
+            }),
+            true,
+        ),
+        (
             Mutation::LocalContextSync(LocalContextSyncInput {
                 root: root.clone(),
                 kind: AuthoringKind::Ticket,

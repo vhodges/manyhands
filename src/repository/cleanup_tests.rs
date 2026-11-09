@@ -65,6 +65,39 @@ fn files(root: &Path) -> BTreeMap<PathBuf, Option<[u8; 32]>> {
     walk(root, root, &mut out);
     out
 }
+
+#[test]
+fn cleanup_retirement_branch_guard_runs_under_ref_lock_before_delete() {
+    for kind in [AuthoringKind::Ticket, AuthoringKind::Document] {
+        let f = Fixture::new(kind);
+        let cleanup = f.cleanup();
+        assert_eq!(f.remove(&cleanup), WorktreeRemoval::Removed);
+        let before = files(f.root.path());
+        let called = std::cell::Cell::new(false);
+        assert_eq!(
+            cleanup.delete_retirement_branch(kind, &ID.parse().unwrap(), f.oid, || {
+                assert!(
+                    f.repo
+                        .commondir()
+                        .join(format!("{}.lock", f.branch()))
+                        .is_file()
+                );
+                assert_eq!(f.repo.refname_to_id(&f.branch()).unwrap(), f.oid);
+                called.set(true);
+                false
+            }),
+            BranchDeletion::Changed
+        );
+        assert!(called.get());
+        assert!(files(f.root.path()) == before);
+        // Default lifecycle cleanup still uses its original guards, not the
+        // retirement-only authorization or any context-retirement policy.
+        assert_eq!(
+            cleanup.delete_context_branch(kind, &ID.parse().unwrap(), f.oid),
+            BranchDeletion::Deleted
+        );
+    }
+}
 impl Fixture {
     fn new(kind: AuthoringKind) -> Self {
         let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();

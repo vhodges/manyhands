@@ -656,20 +656,56 @@ fn a_resume_runs_the_hand_off_a_remote_that_was_added_owes() {
 
 #[test]
 fn a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it() {
-    let (world, _token, owed) = save_owing_its_hand_off();
+    const HEARTBEAT: i64 = 1_700_000_000;
+    let (mut world, _token, owed) = save_owing_its_hand_off();
     let operation_id = operation_of(&owed);
-    // An index owner claimed the hand-off a moment ago and is at work.
-    let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    set_state(&world, &operation_id, "indexing", now);
+    // Freeze admission after the ordinary save setup: an owner is live even
+    // when its heartbeat equals the three-second stale cutoff.
+    let clock = mutation::TestClock::at(HEARTBEAT);
+    world.service = mutation::service_with_clock(world.data.path(), &clock);
+    set_state(&world, &operation_id, "indexing", HEARTBEAT);
     let before = stored(&world, &operation_id);
 
-    let busy = world.execute(REQUEST_2, resume(&world, &operation_id));
-    assert_refused(&world, REQUEST_2, &busy, Outcome::Error, ResultCode::Busy);
-    assert_eq!(busy.failure_class(), Some(FailureClass::Transient));
-    // The same resume is what to send again.
-    assert_eq!(recovery_actions(&busy), ["request.retry"]);
-    assert_eq!(busy.recovery[0].arguments["request_id"], REQUEST_2);
-    assert_eq!(stored(&world, &operation_id), before);
+    for now in [HEARTBEAT, HEARTBEAT + 3] {
+        clock.set(now);
+        let busy = world.execute(REQUEST_2, resume(&world, &operation_id));
+        assert_refused(&world, REQUEST_2, &busy, Outcome::Error, ResultCode::Busy);
+        assert_eq!(busy.failure_class(), Some(FailureClass::Transient));
+        // The same resume is what to send again.
+        assert_eq!(recovery_actions(&busy), ["request.retry"]);
+        assert_eq!(busy.recovery[0].arguments["request_id"], REQUEST_2);
+        assert_eq!(stored(&world, &operation_id), before);
+    }
+
+    // Only a strictly older heartbeat can be reclaimed by that same request.
+    clock.set(HEARTBEAT + 4);
+    let resumed = world.execute(REQUEST_2, resume(&world, &operation_id));
+    assert_eq!(
+        (resumed.outcome, resumed.code, resumed.failure_class()),
+        (Outcome::Success, ResultCode::Ok, None)
+    );
+    assert_eq!(resumed.effects, current());
+    assert_eq!(resumed.request_id.as_deref(), Some(REQUEST_2));
+    assert_eq!(resumed.operation_id, None);
+    assert_eq!(resumed.data, None);
+    assert!(resumed.recovery.is_empty());
+    let after = stored(&world, &operation_id);
+    assert_eq!(after.0, "completed");
+    assert_eq!(after.1, before.1);
+    assert_eq!(after.3, before.3 + 1);
+    assert_eq!(
+        world.journal_row(&operation_id),
+        JournalRow::Final {
+            kind: FinalKind::Completed,
+            owes_work: false,
+            checkpointed: true,
+        }
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+    let record = world.record(REQUEST_2).expect("the resume's record");
+    assert_eq!(record.state, RequestState::Finished);
+    assert_eq!(record.target, operation_id);
+    assert!(record.operations.is_empty());
 }
 
 #[test]
