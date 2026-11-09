@@ -541,3 +541,56 @@ for `D/mod.rs` and `C/dock/mod.rs` drifted a little; substance unchanged.
 - **Main:** `git fetch origin`: `origin/main` is `8da9afd4`, unchanged; the
   Task 4b merge is a no-op.
 - **Boundary:** both commands print nothing; `Cargo.lock` untouched.
+
+## Task 4c: Panel Header
+
+- **Commits** `76080801` (range `e24d8ce9..76080801`) and the review fix `61bd28d1`.
+  New `view/dock/header/tabs.rs` (349 lines); `header.rs` 144; `panels.rs` 201;
+  `dock_tests.rs` 229; `model/documents.rs` gains `document_count`.
+- **Header:** a single panel shows icon, title and count in a 32 px `chrome` row;
+  a tabbed group shows one tab per visible panel (ids `panel-tab-{kind}`, active
+  tab `panel` background with a 2 px `accent` line, short labels when a group has
+  more than two tabs, R-32); tabs, titles and the space past the last tab are
+  drag sources and drop targets through `TabGroupContext` with the app's own
+  `DragPreview`; the drop indicator still comes from the skin; the item area has
+  no header; a collapsed group draws one tab per visible panel, no active panel,
+  no drag or drop. Counts (R-22) are read in `title_suffix` through the weak
+  Workspace in the render path only, and only when the list is `Ready`:
+  repositories `navigation().repositories().rows()`, tickets
+  `tickets().state().rows()` (under the filters), documents `document_count`
+  (documents, never folders), Activity none.
+- **Test** (red first: `panel-tab-documents` not drawn; 1 test, passed, implementer,
+  reviewer and again after the fix): `desktop::view::dock::tests::clicking_a_tab_selects_its_panel`.
+  Reviewer: discriminating (wrong id, a click that does nothing and a missing
+  `select_tab` each fail). No appearance test added. A temporary strip test was
+  run (a prefix run of `dock::tests::`, 4 tests, a third slight breach of the
+  exact-name rule) and not committed.
+- **Review:** APPROVED. Blocking none; **Important 1, fixed in `61bd28d1`:**
+  `past_the_last_tab` was given the number of drawn tabs, but the Kit's drop slot
+  addresses the group's full panel list, so with `[A, hidden, B]` a drop past the
+  last tab landed before B. It now passes `group.panels().len()`. The group with
+  a hidden panel exists only from Task 5, which should test it. Minor, fixed in
+  `61bd28d1`: stale attributes on `panel`, `muted` and `border_strong` removed;
+  the hand-rolled `WhenDroppable` replaced by `FluentBuilder::when`. The reviewer
+  ran the four Verify lines (clean) and four exact-name tests (passed).
+- **Deviations and decisions:**
+  - Strip-tab clicks are **inert** in 4c, because the Kit's `select_tab` focuses
+    the active panel, which a collapsed group does not draw (R-35). **Task 5 must
+    add the strip tab's `on_click` with the reveal.** The reviewer judged this
+    acceptable and non-conflicting with Task 5.
+  - The single-panel Activity title draws no icon: `activity` is not served by
+    `ItemIcons` and `Assets` errors on an unknown path. `single()` filters
+    `PanelKind::Activity` out, with a `// Task 6` comment. **Task 6 adds
+    `Activity` to `ItemIcons` (`icon_assets!`, the `ICONS` list in
+    `assets_tests.rs`) and must delete that filter.**
+  - `PanelHeader::frame` gives panels the `panel` background and the item area the
+    theme background. If the owner wants one, it changes in `PanelHeader::frame`.
+  - The Kit's host-owned `AnyDrag` drops (`drop_item`) are not wired; nothing in
+    the app uses them.
+  - The 4a doc tidy was done (comments only): `keys.rs`, `create_tests.rs` (two
+    places), `create.rs` `new_item`, `tickets_tests.rs` lines 34 and 252.
+- **Carried:** `ChromeColors.selection` still carries `Called from Task 4c` and no
+  task in the plan uses it; relabel it or remove the field at the final quality
+  review. `teal`, `green`, `red` are Task 7's.
+- **Verify:** all four lines clean (implementer; reviewer too). Both Boundary
+  commands print nothing; `Cargo.lock` and `assets.rs` untouched.
