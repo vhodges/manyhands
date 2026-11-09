@@ -12,13 +12,52 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current Main-Integration Standing — 2026-11-08 UTC
+### Current Main-Integration / Verification Standing — 2026-11-09 UTC
 
-**Approved cfg(test) post-prune seam/three-fixture correction locally GREEN:
-four exact checks and fresh statics pass. SAME SPEC then QUALITY review of this
-increment remains pending. Integration clearance through `5af8ed2b` carries one
-owner-accepted deferred P2, zero blocking/new findings, not zero issues. Ticket
-implementing; remaining runtime gates are still owed.**
+**SAME SPEC then SAME QUALITY SOURCE CLEAR through frozen runtime
+`a42460bb2d03bcba0db885657257d8ea0f62d66c`: 0 new / 0 blocking source findings
+WITH 1 owner-accepted deferred P2 marker issue, known and UNFIXED—not zero issues.
+The final three selected SSH targets passed, 79/0, 78/0 and 41/0; bare CLI startup
+exited0. Desktop startup is PARTIAL: an owned process started and was stopped,
+but no mapped window was verified. Ticket remains implementing; this is a
+qualified verification candidate only, pending final SAME SPEC→QUALITY runtime-
+evidence reviews and controller readiness disposition, not ALLPASS/ready/complete.**
+
+- Clean entry/runtime freeze **`a42460bb2d03bcba0db885657257d8ea0f62d66c`**;
+  integrated main **`8da9afd4ec82c145632988687cbd71bead046051`**. Accepted the
+  implementer's fresh unchanged-main/no-op preflight; no fetch/merge during gates.
+- SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then SAME QUALITY
+  **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, clear the whole c48..a424 source scope and
+  bounded5af8..a424 correction with the accepted P2. Those are source/evidence
+  clearances, not the still-pending final runtime acceptance.
+- Once-only, serial Devenv final targets: `document_promotion` **79/0, exit0,
+  1525.790820775s**; `ticket_closure` **78/0, exit0,1365.691184547s**;
+  `comment_publication` **41/0, exit0,409.800775539s**. All198 current child-case
+  completions reconcile with nonzero custom parent footers and Cargo exits.
+- Bare CLI help/catalog: **exit0,36.214521579s**, new empty isolated profile,
+  no repository operation. Desktop: owned `manyhands` PID **3883770** observed;
+  read-only `hyprctl -j clients` **exit1/no valid client JSON**, **no mapped window
+  verified**. Exact-owned SIGTERM stop, actual launcher exit **−15**,
+  **123.625219776s**; not a natural exit0 or a Rust test failure. Both separate
+  scratch profiles remain empty; no owned gate/smoke jobs remain in saved checks.
+- Current a424 check/strict Clippy/fmt and four exact follow-ups are **reused,
+  not rerun**, authenticated against the74-entry prune manifest and matching
+  final input maps. Old greens/29 integration exacts retain their individual
+  recorded source scopes; no synthetic whole808/84/Desktop/schema/library pass.
+  Manual `read_characterization` remains ignored/**NOT MEASURED**.
+- All five authorized runtime commands have been attempted; no command remains
+  unrun. The **desktop mapped-window verification limitation** and final SAME
+  SPEC→QUALITY runtime-evidence reviews/controller disposition remain unresolved.
+  No retry, source fix, probe, profiling, publication, lifecycle/native action or
+  real profile/key/context/draft operation is authorized by this checkpoint.
+- New-only evidence: **`/tmp/opencode/task8-final-three-smokes-20261109T021916Z/`**;
+  actual command envelope **2026-11-09T02:21:25.832481Z→03:26:19.962029Z**.
+  Full argv/raw/receipt/input/clock/PM/window-limit evidence and final metadata
+  handoff/manifest are retained there. All prior limitations and performance STOP
+  remain in force; no automatic readiness, waiver, publication or closure.
+
+#### Historical Main-Integration / Correction Record (Retained)
+
 Entry `c48bc2cf2d9d9bbe68621278bb56fedd7276d94c`; accepted fresh main
 `8da9afd4ec82c145632988687cbd71bead046051`; merge base
 `d70142b63a952f5e1aade369e0cd654ca9a03617`. Reconfirmed clean refs/checkouts and
@@ -11731,3 +11770,165 @@ autorun**: `document_promotion`, `ticket_closure`, `comment_publication`, isolat
 smokes and final runtime SPEC/QUALITY remain owed. Ticket **implementing**, not
 full runtime-ready/complete/published/closed. No status save/new IDs/agents/push/PR/
 main closure/native/real profile/key/context/draft/other-worktree/cleanup action.
+
+## Task 8 — Final Three SSH Gates / Isolated Startup Evidence — 2026-11-09 UTC
+
+### Accepted Source Reviews, Frozen Entry And Bounded Admission
+
+The controller accepts SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** SOURCE CLEAR,
+then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** QUALITY/SOURCE CLEAR through
+**`a42460bb2d03bcba0db885657257d8ea0f62d66c`**: **0 new / 0 blocking findings WITH
+1 owner-accepted deferred P2**, not zero issues. Whole source review scope:
+`c48bc2cf2d9d9bbe68621278bb56fedd7276d94c..a42460bb2d03bcba0db885657257d8ea0f62d66c`;
+bounded correction:
+`5af8ed2bf15ccb2eeaf7f647a3f14e122083b458..a42460bb2d03bcba0db885657257d8ea0f62d66c`.
+These carry integration c48..5af8, runtime integration
+**`7447beb1b2028298add753ab8d40290753e2bc6d`**, historical profile migration/config
+carry with pin-retention composition and both DTO command families, RFC docs e398,
+and owner marker-risk acceptance5af8. Source clearance lifted only the remaining-
+gate admission barrier; it is not final runtime acceptance or zero issues.
+
+Clean entry/runtime freeze **a424**; integrated main
+**`8da9afd4ec82c145632988687cbd71bead046051`**. Accepted the implementer's latest
+fresh fetch/unchanged-main/no-op merge; **no fetch or merge repeated** during
+frozen verification. One sole gate owner, existing ticket worktree/branch only,
+default test threads, no agents. Admission was once, serially, the three first-
+time final targets below; only after all three passed, the standard isolated
+smokes. These were authorized final gates, not interim whole-target reruns.
+
+The metadata-only ref check separately observed local `main` at
+**`c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`**. Local main was not baselined in
+entry evidence and is not the frozen integrated `origin/main`8da9. No local-main
+operation/fetch/merge was performed; ancestry/merge-tree checks use the authorized
+frozen `origin/main`, not a claim of fresh remote-main knowledge. An over-strict
+private metadata-checker assumption equating those refs was corrected from these
+facts; it was not a Rust gate/smoke failure or a runtime retry.
+
+The registry-wide marker-unlink race across resolution versus registration/
+rebuild/cache recovery remains **owner-accepted, deferred and UNFIXED**. It is
+source-derived, unreproduced and likelihood-unmeasured; not necessarily two apps,
+processes or concurrent syncs, and not per-repository isolated today. It neither
+explains the old SSH failures nor authorizes a repair, concurrency hook, new
+ticket, marker normalization or performance work. The desktop observation limit
+below is separate from this accepted source issue.
+
+### Actual Commands, Counts, Exits And Elapsed Times
+
+| Literal argv, each executed once | Actual result | Actual exit | Monotonic seconds |
+| --- | --- | ---: | ---: |
+| `devenv shell -- cargo test --all-features --locked --test document_promotion` | **79 passed / 0 failed / 0 ignored** | 0 | 1525.790820775 |
+| `devenv shell -- cargo test --all-features --locked --test ticket_closure` | **78 passed / 0 failed / 0 ignored** | 0 | 1365.691184547 |
+| `devenv shell -- cargo test --all-features --locked --test comment_publication` | **41 passed / 0 failed / 0 ignored** | 0 | 409.800775539 |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | **Bare help/catalog, no repository operation** | 0 | 36.214521579 |
+| `devenv shell -- cargo run --locked --features desktop --bin manyhands` | **PARTIAL: owned process started/stopped; mapped window not verified** | −15, deliberate SIGTERM | 123.625219776 |
+
+| Command receipt envelope, UTC on 2026-11-09 | Start | Finish |
+| --- | --- | --- |
+| `document_promotion` | 02:21:25.832481Z | 02:46:51.623299Z |
+| `ticket_closure` | 02:46:51.925442Z | 03:09:37.616634Z |
+| `comment_publication` | 03:09:37.677059Z | 03:16:27.477844Z |
+| Bare CLI | 03:16:39.932103Z | 03:17:16.146639Z |
+| Desktop | 03:24:16.336800Z | 03:26:19.962029Z |
+
+All **198 unique current SSH case completions** are `ok`, with no failure,
+ignored or duplicate completion. Each custom parent footer reports its actual
+nonzero79/78/41 case count; all reconcile with saved child completion lines and
+Cargo exit0. Individual child-process exit codes were not directly observed by
+the outer capture; this is parent-reported case completion plus Cargo-exit proof,
+not invented child exit telemetry. Across all five commands, **29,214 raw bytes /
+616 receipt rows** reconcile byte-for-byte to the complete saved raw logs.
+
+Clocks include realtime, monotonic and boottime. Command/stdout receipt clocks
+are completion/observation boundaries, **not case starts or internal phases**.
+All five saved interval-only kernel PM queries have **0 matches, exit1/no-match,
+empty stderr**; no measured suspend. This does not establish per-case timing,
+internal work attribution, performance conclusions or general power history.
+
+### Isolated Startup Facts And Explicit Desktop Limitation
+
+Bare CLI used new empty **`cli-smoke-data`** beneath the new evidence directory,
+printed `Usage: manyhands-cli [OPTIONS] [COMMAND]` and the command catalog, and
+exited0. No registered root or domain operation was supplied. Desktop used a
+different new empty **`desktop-smoke-data`** under that same directory.
+
+Saved read-only capability inspection found active **DISPLAY=:1**,
+**WAYLAND_DISPLAY=wayland-1**, **XDG_RUNTIME_DIR=/run/user/1000**; both configured
+local display sockets existed and were accessible. The standard command started
+an owned **`manyhands` PID3883770**, observed in its owned session. The existing
+read-only **`hyprctl -j clients`** was used once; retained output was filtered to
+that owned PID. It returned **exit1 without valid client JSON**. Therefore **no
+mapped application window was verified**; process liveness, Cargo's `Running`
+line and silence are not a window pass. No alternate observer, retry, environment
+diagnosis/change, screenshot, user-window automation, installation or Xvfb.
+
+Only the exact owned PID3883770 received **SIGTERM**. Actual launcher return
+**−15** records that deliberate stop, not natural exit0 or a Rust test failure.
+The owned session was empty after stop; known gate/smoke runner and launcher PIDs
+were absent in saved checks. Both scratch profile directories remain **separate
+and empty**, retained without cleanup. No real default profile/key/context/draft
+operation, registration, user-window payload retention or user application stop.
+
+### Current Reuse Proof And Retained Source Qualifications
+
+The prune correction's **74-entry** manifest was authenticated, **0 mismatches**:
+`/tmp/opencode/task8-retirement-prune-gap-fix-20261109T013252Z/evidence.sha256`,
+SHA-256 **`04c09622fb708b6972ae16eedea54dc87cacbdc65a4cb0f17fff10db16898e72`**.
+All seven GREEN/static input maps match final a424 inputs, aggregate
+**`e157441f7f4c11f303360c4bd39400a7494fd0152120912e2fd32ee7e81e2290`**.
+The three current statics are **reused, not rerun**: check exit0 **4.778151875s**;
+strict all-target/all-feature locked Clippy `-D warnings` exit0 **20.797695549s**;
+fmt-check exit0 **19.876814424s**. Likewise the one scoped one-shot unit and three
+corrected mutation SSH exact cases remain **1/0 each**, respectively
+**13.952654278s / 23.284226983s / 3.074921229s / 2.772813887s**, reused, not rerun.
+
+That approved cfg(test) seam is exact operation+actual-epoch, one-shot and scoped;
+all19 original fixture assertions, case inventory, privacy and harness are
+retained. Its proof is **real Git removal followed by Rust-abort SQL rollback**,
+**not engine-generated constraint-error provenance**; the seam does not change
+shipped behavior. No production marker repair or new source change in this phase.
+
+Main integration changed production. Old `cli_remote`165 at d87, old headless/
+library/local-sync/SSH greens and the29 integration exact/static results retain
+their **individual recorded source images**. Upstream results are reported,
+**not reauthenticated as combined a424 passes**. Historical mutation805/3 plus
+three exact greens is **not fresh808/0**; poll80/4 plus four exact greens is **not
+fresh84/0**; desktop1579/1 and schema/enablement102/1 plus selected corrections
+are **not fresh whole passes**; library1530+160 is **not a fresh unfiltered run**.
+No completed target/static/exact follow-up was repeated. Manual
+`read_characterization` is intentionally ignored/**NOT MEASURED**, not enabled.
+
+All five current command receipts match the frozen source/build input map,
+including23 selected hashes and Git source subtrees:
+`src=d74f51514ddb12bb6eb39ece76d9dbf437e79752`,
+`tests=e13b7785ee7fb2796bf7296c283e5fb2b708f54f`,
+`schemas=2802223455c918bc801a609a38639395595dd7e9`.
+Design/implementation-plan hashes are protected. Forty-five known older manifest/
+input digests are preserved without bulk historical inventory or old combined
+source/pass reauthentication. All prior C/L/S/D6/M1/Q1/enum/D5/native/combinatorial
+limits and owner performance/profiling/optimization/perf-ticket/promotion-closure-
+materialization-follow-up STOP remain in force.
+
+### Evidence-Only Checkpoint And Controller Handoff
+
+New-only **`/tmp/opencode/task8-final-three-smokes-20261109T021916Z/`** contains
+preflight/current reuse proofs, literal argv/full raw/receipt/clock/PM/input
+evidence, qualified smoke observation/summary, results/checklist/coverage,
+metadata-diff/prefix/source/ancestry/known-main merge-tree/owned-job checks,
+commit/handoff and a computed new-only manifest. Older artifacts remain intact.
+Only this ledger's current standing/append and canonical comment append belong
+in the metadata commit, with required coauthor. The comment's full **121791-byte**
+prefix (SHA-256 **`f5167ae9479ec34abe88a52c4225ade8aa688b9c4fd7da077fe6a16cb4bf7086`**),
+ID **`01M6TYJATB44WZPJABX9GMBVS1`**, parent **`01M6SYJK4CJGHWKZC7MTP18GTA`**,
+frontmatter and creation time **2026-11-07T12:08:39Z** are preserved.
+
+**No authorized runtime command remains unattempted. Desktop mapped-window
+verification remains an explicit unresolved limitation for controller/final-
+review disposition.** Final runtime-evidence review goes to SAME SPEC
+**`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then SAME QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, carrying the unfixed owner-accepted P2 and
+all scoped evidence/limits. No automatic acceptance, waiver, retry or readiness.
+Ticket remains **implementing**; selected evidence is a **qualified verification
+candidate only**, not ALLPASS/full runtime-ready/complete/published/closed.
+No status save/new ID/source fix/probe/agent/push/PR/main close/native/real domain
+operation/other-worktree/cleanup action. Full metadata HEAD and clean UNPUSHED/
+no-owned-gate-or-smoke-jobs checks are returned in the final evidence handoff.

@@ -1812,3 +1812,105 @@ bounded5af-to-HEAD, carrying the accepted P2, **before any remaining gate**.
 final runtime SPEC/QUALITY still owed; no autorun. Ticket **implementing**, not
 complete/full runtime-ready. No status save/new IDs/agents/push/PR/main closure/
 native/real profile/key/context/draft/other-worktree/cleanup action.
+
+## Follow-up — Final Three SSH Gates / Qualified Startup Evidence — 2026-11-09 UTC
+
+Controller accepts SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** SOURCE CLEAR,
+then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** QUALITY/SOURCE CLEAR through
+clean entry/runtime **`a42460bb2d03bcba0db885657257d8ea0f62d66c`**: **0 new / 0
+blocking findings WITH 1 owner-accepted deferred P2**, not zero issues/not fixed.
+Whole source range c48bc2cf..a424; bounded5af8ed2b..a424, carrying integration
+c48..5af8 (historical profile migration/config carry, pin-retention composition,
+both DTO command families, RFC docs e398 and risk acceptance5af8). Integrated
+main **`8da9afd4ec82c145632988687cbd71bead046051`**, runtime integration7447beb1.
+Accepted the implementer's fresh unchanged-main/no-op preflight; no fetch/merge
+repeated during frozen gates. Source clearance lifted only bounded gate admission,
+not final runtime acceptance. Sole owner/existing ticket worktree/default threads.
+
+Metadata-only ref check observed local `main`
+**`c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`**, unbaselined at entry and distinct
+from frozen integrated `origin/main`8da9. No main operation/fetch/merge; authorized
+ancestry/merge-tree checks concern frozen origin/main, not fresh remote-main
+knowledge. Corrected only the private metadata checker's over-strict local-ref
+equality assumption; not a Rust gate/smoke failure or runtime retry.
+
+Once-only serial actual commands/results, all through Devenv:
+
+| Literal argv | Actual result / exit | Monotonic seconds |
+| --- | --- | ---: |
+| `devenv shell -- cargo test --all-features --locked --test document_promotion` | **79/0,0ignored; exit0** | 1525.790820775 |
+| `devenv shell -- cargo test --all-features --locked --test ticket_closure` | **78/0,0ignored; exit0** | 1365.691184547 |
+| `devenv shell -- cargo test --all-features --locked --test comment_publication` | **41/0,0ignored; exit0** | 409.800775539 |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | **Bare help/catalog, exit0; no operation** | 36.214521579 |
+| `devenv shell -- cargo run --locked --features desktop --bin manyhands` | **PARTIAL: process started/stopped, window unverified; actual exit−15, owned SIGTERM** | 123.625219776 |
+
+Actual UTC envelope **2026-11-09T02:21:25.832481Z→03:26:19.962029Z**; per-command
+boundaries in ledger/results. All198 unique SSH `ok` completions reconcile with
+nonzero79/78/41 custom parent footers and Cargo exit0, no failed/ignored/duplicate
+case. The outer capture did not directly measure each child's exit code.
+All29,214 raw bytes/616 receipt rows reconcile. Realtime/monotonic/boottime clocks
+are command/receipt/observation boundaries, not case starts/internal phases.
+Five interval-only PM queries: **0 matches, exit1/no-match, empty stderr**; no
+measured suspend, no performance/internal timing attribution.
+
+After all3 passed, bare CLI used new empty isolated `cli-smoke-data`, printed
+Usage/help/catalog and exited0. Desktop used separate new empty
+`desktop-smoke-data`; no registered roots/domain operations supplied. Active
+DISPLAY=:1, WAYLAND_DISPLAY=wayland-1, XDG_RUNTIME_DIR=/run/user/1000 and both
+configured accessible sockets were recorded. Owned **`manyhands` PID3883770**
+started. Installed read-only **`hyprctl -j clients`**, retained only for owned
+PID, returned **exit1/no valid client JSON**: **no mapped window verified**.
+Silence/liveness is not a window pass. Only PID3883770 received SIGTERM; actual
+launcher **−15** is deliberate stop, not natural exit0 or Rust test failure.
+Saved owned-session/PID checks find no gate/smoke jobs. Both scratch profiles
+remain separate/empty and retained. No observer retry/alternate, environment
+diagnosis/change, screenshot/user-window automation/install/Xvfb/unowned payload/
+real profile-key-context-draft operation or cleanup.
+
+Registry-wide marker-unlink race across resolution versus registration/rebuild/
+cache recovery remains **owner-accepted deferred P2, UNFIXED**, source-derived,
+unreproduced, likelihood unmeasured; not necessarily two apps/processes/syncs or
+per-repository isolated. Not historical SSH-failure attribution or repair authority.
+Desktop window-verification limitation is separate from this accepted source P2.
+
+Current statics **reused, not rerun**: check exit0/4.778151875s; strict all-target/
+all-feature locked Clippy `-D warnings` exit0/20.797695549s; fmt exit0/19.876814424s.
+Scoped one-shot unit and3 corrected mutation SSH exacts reused **1/0 each**,
+13.952654278/23.284226983/3.074921229/2.772813887s. Authenticated prune manifest:
+**74 entries,0 mismatches**, SHA-256
+**`04c09622fb708b6972ae16eedea54dc87cacbdc65a4cb0f17fff10db16898e72`**; all7 GREEN/
+static input maps final, aggregate
+**`e157441f7f4c11f303360c4bd39400a7494fd0152120912e2fd32ee7e81e2290`**.
+All five runtime receipts match a424 source/input/subtree freeze (23 hashes).
+Approved exact-operation/actual-epoch cfg(test) seam/all19 old assertions/inventory/
+privacy/harness retained; real Git removal+Rust-abort rollback, **not engine-
+generated constraint proof**; no shipped behavior change or new source edits.
+
+Main integration changed production. Old cli_remote165(d87), headless/library/
+local-sync/SSH greens and29 integration exact/statics retain individual source
+images; upstream results reported, not combined a424 raw-log reauthentication.
+805/3+3exact **not fresh808/0**;80/4+4exact **not fresh84/0**;desktop1579/1/schema-
+enablement102/1 plus follow-ups **not fresh whole passes**;1530+160 **not fresh
+unfiltered library**. No repeat of completed targets/statics/exacts. Manual
+`read_characterization` ignored/**NOT MEASURED**; all prior coverage limits and
+performance/profiling/perf-ticket/promotion-closure-materialization STOP retained.
+
+New-only **`/tmp/opencode/task8-final-three-smokes-20261109T021916Z/`** holds full
+argv/raw/counts/exits/clocks/input/reuse/PM/window-limit/results/checklist/coverage,
+metadata/prefix/Git/known-owned-job/commit/handoff/new manifest evidence. Forty-five
+old manifest/input digests preserved, no historical bulk inventory. Entire
+**121791-byte** prior prefix (SHA-256
+**`f5167ae9479ec34abe88a52c4225ade8aa688b9c4fd7da077fe6a16cb4bf7086`**), original
+ID/frontmatter, parent **01M6SYJK4CJGHWKZC7MTP18GTA** and creation time
+**2026-11-07T12:08:39Z** preserved. Only ledger current standing/append and this
+comment append committed, required coauthor; no status save/publication/closure.
+
+**No authorized runtime command remains unattempted; desktop mapped-window
+verification remains unresolved for controller/final-review disposition.**
+Final runtime-evidence reviews remain SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**
+then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, carrying the accepted unfixed
+P2 and scoped limits. **Qualified verification candidate ONLY**, not ALLPASS/
+automatic readiness/waiver/complete/published/closed. Ticket **implementing**;
+full metadata HEAD/clean UNPUSHED/no-owned-jobs receipts in handoff. No new
+runtime command/source fix/probe/agent/push/PR/main close/native/real operation/
+other-worktree/cleanup authority.
