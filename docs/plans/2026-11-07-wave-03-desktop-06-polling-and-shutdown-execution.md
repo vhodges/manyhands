@@ -539,7 +539,7 @@ stored deadline, no acquire on activation, own polls not published,
 was added), the `failed_reads` filter, the host scope, both halves of the SSH
 predicate, the M7 row. The launch barrier (`awaiting_launch`) survived and was
 deleted as dead.
-| 6 | (ledger commit) | `35691ba6`, `6106fa5b` (review fixes) | APPROVE WITH MINOR; the Important finding (Check now stage text) applied after the orchestrator read Fact 14 (no owner decision needed); minors 2 and 5 applied; 3 and 4 recorded below; fixes checked by the orchestrator (tree, boundary, stage-words test), not re-reviewed | `desktop::services::requests::poll_tests::intent_poll_build`, `desktop::services::requests::poll_worker_tests::{intent_poll_stoppable, policy_verb_never_accepted, policy_verb_resent}`, `desktop::services::scheduler::intent_tests::poll_once_rereads_status`, `desktop::view::operations::check_tests::a_running_check_now_reads_its_stage_words`, `desktop::view::passphrase::tests::{a_prompt_for_a_check_now_names_no_share, the_dialog_names_what_waits_and_says_not_now}`; each singly with `--exact`, 1 test, pass; fmt, check, clippy pass |
+| 6 | `7d9cd01a` | `35691ba6`, `6106fa5b` (review fixes) | APPROVE WITH MINOR; the Important finding (Check now stage text) applied after the orchestrator read Fact 14 (no owner decision needed); minors 2 and 5 applied; 3 and 4 recorded below; fixes checked by the orchestrator (tree, boundary, stage-words test), not re-reviewed | `desktop::services::requests::poll_tests::intent_poll_build`, `desktop::services::requests::poll_worker_tests::{intent_poll_stoppable, policy_verb_never_accepted, policy_verb_resent}`, `desktop::services::scheduler::intent_tests::poll_once_rereads_status`, `desktop::view::operations::check_tests::a_running_check_now_reads_its_stage_words`, `desktop::view::passphrase::tests::{a_prompt_for_a_check_now_names_no_share, the_dialog_names_what_waits_and_says_not_now}`; each singly with `--exact`, 1 test, pass; fmt, check, clippy pass |
 
 ## Task 6: poll intents through the boundary
 
@@ -590,3 +590,83 @@ variants did not exist); the mutation runs carry the evidence that they bite
 reason; the passphrase test was written after the variant (its guard was the
 fix). The table version of `poll_once_rereads_status` was a modification of an
 existing test and has no separate red run.
+| 7 | (ledger commit) | `667aaf9b`, `9eee8b82` (review fixes) | APPROVE WITH MINOR; D-1 stopped for the owner and ruled (below); Important (conflict flag clearing unpinned), minor 2 (Check now disabled rule unpinned), 2b (stale allow), 4 (select after a failed re-read) applied; 5, 6, 7, 8 recorded; the fix commit's own report did not arrive, so the orchestrator ran its three changed tests and the gates (below) and did not see its mutation results | `desktop::model::polling::status::tests::{status_text_table, status_detail_for_an_interrupted_check}`, `desktop::view::settings::polling_tests::{settings_polling_rows, settings_polling_controls, settings_polling_states, settings_polling_pending_link}`, `desktop::view::settings::polling_real_tests::{settings_polling_real_paused, settings_polling_unplaced, settings_polling_failed_reread}`, `desktop::view::lifecycle::check_now_tests::way_out_check_now`, `desktop::view::keyboard_tests::settings::checking_for_updates_by_keyboard`, `desktop::view::operations::record_tests::an_unreadable_record_is_reported_once_in_activity`; each singly with `--exact`, 1 test, pass; fmt, check, clippy pass |
+
+## Task 7: Checking for updates page, status text, Check now way-out
+
+Files (all under `src/desktop/`): new `view/settings/{polling.rs, polling_support.rs,
+polling_tests.rs, polling_real_tests.rs}`, `model/polling/{status.rs, status_tests.rs}`,
+`view/operations/{record.rs, record_tests.rs}`, `view/lifecycle/check_now_tests.rs`;
+changed `view/settings/mod.rs` (`PAGES` now 5, `SettingsEvent::ShowActivity`),
+`model/{stamp.rs (SettingsPage::Polling), operations.rs, operations/polls.rs,
+polling/{state.rs, table.rs}}`, `services/scheduler/entity.rs` (`unplaced`,
+`refreshing`, `utc`, `cx.notify()` in `publish` and `tick`, `take_report`
+consumed in `publish`), `view/{lifecycle.rs, lifecycle/prepare.rs, workspace.rs,
+harness.rs, operations.rs, keyboard_tests/settings.rs}`. Nothing outside
+`src/desktop/` changed. Every `Called from Task 7` allow is gone.
+No existing test edited (E-2 needed none: the page walks iterate `PAGES`).
+
+**Owner ruling, 2026-11-09 (D-1):** A4 row 3 (unlock cancelled, provider
+unavailable or unlock failed, with no key named) said `KeyProblem(None, root)`
+and "Needs unlocking". The code, since Task 2, maps it to `NoKeySelected` and
+the page says "Choose a key", and `status_text_table` pinned the code. The
+reviewer flagged it; I stopped for the owner, who chose to keep the code and
+amend A4. A4 row 3 now reads `NoKeySelected(root)` and "Needs unlocking;
+Choose a key when no key is named" (design commit `7daf9609`). Cost if wrong:
+Task 2's table and `status.rs` would split `KeyLocked{None}` from
+`KeyProblem{None}`.
+
+Rulings (implementer, accepted):
+- `RepoSchedule.conflict_pending` is a Task 2 addition (A4's "Waiting for the
+  conflict to be resolved" is not derivable from phase or `last`): set exactly
+  on a ConflictPending answer, cleared by any later answer and by `rearm()`.
+  `after_attempt_table` is unchanged. Not a table edit.
+- Status-line precedence: no schedule, off, held, own Check now, paused,
+  phase. Paused plus attention reads "Paused · Needs unlocking" (A3).
+- Wording the docs do not give: "Not checked yet", "Removing finished
+  copies…", "Reading the remotes", "Can't check" (unreadable remote read),
+  "Checked N ago · up to date", the fifth L-2 sentence "It finishes once what
+  needs your attention is dealt with", "Show in Activity" for A4's link.
+- Interval labels "Every 1 minute" … "Every 60 minutes"; a stored interval
+  outside the six shows as a placeholder.
+- Switch and interval stay enabled while a verb is in flight (C5 decision 15).
+- A repository with no schedule is told apart: "Reading the remotes", "Can't
+  check" or "No shared copy".
+- The unreadable-record notice is two fixed sentences with Dismiss, in "This
+  session", one entry per report, consumed from `take_report` in
+  `Scheduler::publish`.
+- Way-out Check now shows only for `LifecycleWayOut::PollOnce`.
+
+Known limits recorded at review, not fixed:
+- K-30: `Report::NotSaved` is re-armed by every failed `persist()`, so Dismiss
+  hides it only until the next failed write (only `Unreadable` is once).
+- K-31: a paused repository whose phase is Waiting{Unfinished} still offers
+  "Show in Activity", and one whose phase is Queued or Running reads "Paused"
+  while a poll runs (a poll started before the pause).
+- K-32: the way-out Check now submits `PollOnce` without consulting the
+  schedule; for a repository with no SSH remote the library's refusal shows
+  as an ordinary request outcome in Activity.
+- `view/settings/mod.rs` is 511 lines.
+
+Handed to Task 8:
+- The attention actions (Unlock…, Choose a key…, Approve host…, Open remote
+  settings…) and Resume checking are not built. Plug-in points: `PollingPage::row()`
+  in `view/settings/polling.rs` (next to the status and detail, before the
+  controls; `Shape::Held` is where Resume checking goes), new `PollingEvent`
+  variants handled in the `SettingsHost::polling()` subscription in
+  `view/settings/mod.rs`, the reason in `repo.phase == Phase::Attention(reason)`
+  with `status::attention(reason)` for the words, and `Scheduler::clear_attention`
+  (still to add).
+- The plan names no file under `view/settings/` for these actions and says
+  "Activity" for the entries. Task 8 decides the surface (Settings row,
+  Activity, or both) and records it.
+- The needs-attention count and Activity wrapping of attention entries are
+  Task 8's; the count only once Wave 04 Cycle 01 is on main.
+
+Process: `rows` and the notice test were seen red against a stub before the
+code; `controls`, `states`, `real_paused` and the keyboard test were written
+first but seen failing only after a stub page was swapped back in;
+`status_detail`, `unplaced` and `pending_link` rest on mutation. Mutation
+survivors at the first commit: removing only the `disabled` flag or only the
+handler guard (fixed in `9eee8b82` by asserting the button is unreachable by
+Tab while its own check runs).
