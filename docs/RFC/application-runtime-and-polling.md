@@ -54,6 +54,12 @@ an ordinary save, refresh, startup or recovered journal into authorization to
 publish or clean up. Restart displays pending manual operations for deliberate
 resume. Actual Git/filesystem observations override stale records.
 
+Amended 2026-11-09 by Wave 03 D6 (decision 16): the desktop's polls retire
+closed tickets and promoted documents per item, each through its own ordinary
+`context retire` request after a completed poll, held back by any edit or draft
+of the item. That retirement is the one cleanup a desktop poll may lead to; it
+never publishes, checkpoints or merges.
+
 ## Desktop background worker
 
 Desktop launch starts one application-owned scheduling worker for enabled
@@ -108,6 +114,13 @@ remote or shared key invalidates queued observations; an active operation must
 stop/reconcile at a safe point before new configuration is used. Re-adding a
 remote never silently resumes a user-paused policy. An index-only rebuild does
 not fetch, start a poll or alter Git.
+
+Amended 2026-11-09 by Wave 03 D6: the launch poll follows the library's stored
+deadline, whether it came from the interval or a failure backoff, so a restart
+adds no polls (decision 23). A user job cancels a running automatic poll at its
+next safe point, because the desktop worker is one thread (decision 3), and a
+busy or interrupted poll restarts after 5 s, 15 s and 60 s, then the interval
+(decision 4). No background job prompts (D6 design B5).
 
 ## Credential and host interaction
 
@@ -171,6 +184,13 @@ do not establish a total operation deadline; cancellation may wait for a
 blocking call to return. This safe-wait contract was clarified by the product
 owner during Wave planning on 2026-10-05. A separate helper service is not an
 assumed fallback, and live-operation ownership must be retained while waiting.
+
+Amended 2026-11-09 by Wave 03 D6 (decisions 12, 22, 24 and 28): "still
+stopping" is shown in the quit's entry in the desktop's Activity panel, so with
+Activity hidden it is seen when Activity is opened. Cancellation is
+characterized for handshake and connect stalls; DNS and teardown stalls stay
+unmeasured, a recorded departure. A graceful quit lets a running per-item
+retirement finish instead of cancelling it.
 
 ## Alternatives and risks
 

@@ -43,3 +43,7 @@ concurrent explicit operation from a second process calling the library,
 stalled transport with responsive stopping status, configuration changes and
 shutdown/restart. No background push/checkpoint/merge/cleanup; no remaining
 worker after graceful process exit.
+
+Amended 2026-11-09 by D6's approval (decisions 12 and 16): background cleanup
+only as per-item retirement of contexts the library proves completed; the
+ten-second stopping report is in the quit's Activity entry.

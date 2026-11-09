@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D6 Desktop Background Polling And Shutdown Implementation Plan"
 date: 2026-11-07
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -10,20 +10,14 @@ id: "01M6V02CC0B7ZKMR3XYHHXMQQV"
 
 # Desktop Background Polling And Shutdown Implementation Plan
 
-> **For agentic workers:** Revision 6, 2026-11-09, draft; review rounds 1
-> to 3 applied. Revision 6 applies round 3: preemption, stale rows and the
-> retirement loop are stated as required outcomes (design P-1 to P-7, L-1
-> to L-6, RT-1 to RT-11), and Tasks 4 and 11b are test-first after a design
-> checkpoint. Revision 6's edits had no independent review. Revision 1 was 2026-11-07; revision 2 added the
-> Wave 04 Cycle 01 coordination; revision 3 followed the landing of
-> `01M6KHVD6D0DB8KYT6VGQP10Y0` and owner decisions 16 and 17. Revision 4
-> applies review round 1 and owner decisions 18–23: Task 11 splits into 11a
-> and 11b, and test runs follow AGENTS.md. Not authorized for execution: it
-> waits for the owner's approval of the documents and a separate
-> implementation authorization. Then use `implementing-a-cycle` task by task,
-> re-read the design, repeat the ticket preflight, and record every
-> checkpoint on ticket `01M4CC0VN3VPVVQ3RNWJKXWEVX`. Steps use checkbox
-> (`- [ ]`) syntax.
+> **For agentic workers:** Revision 6, **approved 2026-11-09**, with
+> implementation authorized, subagent-driven and serial. Review rounds 1 to 3
+> are applied. Preemption, stale rows and the retirement loop are stated as
+> required outcomes (design P-1 to P-7, L-1 to L-6, RT-1 to RT-11), and Tasks
+> 4 and 11b are test-first after a design checkpoint. Revision 6's edits had
+> no independent review. Use `implementing-a-cycle` task by task, re-read the
+> design, repeat the ticket preflight, and record every checkpoint on ticket
+> `01M4CC0VN3VPVVQ3RNWJKXWEVX`. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Keep discovery current inside the desktop process with one
 application-owned scheduler, preserve manual priority and unsaved work, stop
@@ -125,12 +119,14 @@ removes it.
 
 **Test-first.** Each behaviour's test is written before its code.
 
-**Existing tests** change only as E-1 to E-6 (design Testing); anything else
-stops for the owner. The polling switch (R-27) keeps launch polls out of
+**Existing tests** change as E-1 to E-6 (design Testing). Any further edit to
+an existing test that execution finds necessary is pre-approved (owner,
+2026-11-09): record it in the ledger as E-7 onward, with its reason, and
+report it at the next checkpoint. The polling switch (R-27) keeps launch polls out of
 existing tests.
 
-**Commits.** One per task, conventional message, ending
-`Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
+**Commits.** One per task, conventional message, ending with the executing
+session's own `Co-Authored-By` trailer.
 
 **Ticket records.** A comment after each Part checkpoint (Tasks 2, 5, 9, 10,
 12 and 14) with `manyhands-cli comment add` against the up-to-date main

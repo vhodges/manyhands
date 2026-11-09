@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D6: Desktop Background Polling And Shutdown"
 date: 2026-11-07
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -15,9 +15,23 @@ Ticket `01M4CC0VN3VPVVQ3RNWJKXWEVX`. Design:
 Plan:
 [2026-11-07-wave-03-desktop-06-polling-and-shutdown-implementation.md](../plans/2026-11-07-wave-03-desktop-06-polling-and-shutdown-implementation.md).
 
-Status: **draft, 2026-11-07; amended 2026-11-08 and 2026-11-09.** Not
-reviewed and not approved. Planned at `3364370c` (origin/main `1e5616af`
-merged into the ticket branch).
+Status: **approved, 2026-11-09.** The owner approved the documents at
+`04e1623f` (revision 6). The owner wrote: "The docs are approved. Named test edits approved (if during execution it's discovered that more tests would need to be edited, that's approved as well). Subagent driven development. Implementation is approved as well. File the two tickets."
+
+- The approval covers decisions 3–15 and 28 at their written proposals, the
+  rulings R-1 to R-38, and named test edits E-1 to E-6. Any further edit to an
+  existing test that execution finds necessary is pre-approved; each is
+  recorded in the ledger as E-7 onward, with its reason.
+- Implementation is authorized, subagent-driven and serial. Pushes beyond the
+  ticket branch, a PR, the merge, closure, native CI and cleanup stay
+  separately gated.
+- The approval commit applied the design's Document Amendments 1–5 and 7–10.
+  Amendment 6 waits for D6's merge.
+- The follow-up library tickets are filed: `01M70CF14M3YC6SR8T9JJ6XQBG`
+  (`vh-ype2f`, a per-key passphrase cache) and `01M70CF1VBHJAX6MK39FY5W2RY`
+  (`vh-xmhsj`, ending a dead poll's row whatever the eligibility).
+
+Planned at `3364370c` (origin/main `1e5616af` merged into the ticket branch).
 
 - 2026-11-08: origin/main `8da9afd4` was merged as `1869cf14`, and
   coordination with Wave 04 Cycle 01 was added.
@@ -390,7 +404,7 @@ Answered by the owner during planning:
 2. **Same worker, background lane.** Automatic polls are background jobs on
    the one mutation worker, which owns the process's only credential session.
 
-Proposed by the planner, confirmed with the documents' approval:
+Proposed by the planner; approved with the documents on 2026-11-09:
 
 3. **A user job cancels a running poll.** The worker is one thread, so a
    user job queued behind a poll cannot start the library's own yield; the
@@ -444,7 +458,7 @@ Proposed by the planner, confirmed with the documents' approval:
     test clicks each at its position. The three existing rows Cycle 01's
     proposed K-19 names stay with Wave 04 Cycle 03, which Wave 04 records
     (K-16; design Document Amendment 8).
-14. **How decisions 16 to 21 are carried out** (proposed).
+14. **How decisions 16 to 21 are carried out.**
     - Every poll stays a recognizing poll. An automatic poll keeps its
       eligibility, backoff, priority and no prompt, and Check now stays
       `PollOnce`.
@@ -548,7 +562,7 @@ Answered by the owner after review round 2 (2026-11-09):
     L-2). The desktop says why and what finishes it (K-22). A follow-up
     library ticket can add a takeover that does not need eligibility.
 
-Proposed after review round 3, to confirm at approval:
+Proposed after review round 3; approved with the documents on 2026-11-09:
 
 28. **A graceful quit lets a running retirement finish.** Quit does not
     cancel a running background `ContextRetire`. Cancelling it part-way
@@ -560,8 +574,8 @@ Proposed after review round 3, to confirm at approval:
 
 ## Open Questions
 
-None for the owner beyond confirming decisions 3–15 and 28 at approval (16
-to 27 are answered). U-2, U-9 (rest), U-11 (rest), U-15 and U-16 (design
+None for the owner: decisions 3–15 and 28 were approved on 2026-11-09, and
+16 to 27 are the owner's. U-2, U-9 (rest), U-11 (rest), U-15 and U-16 (design
 Source Questions) are settled in Task 0 by reading the source, and U-14 by an
 experiment in Task 1; an answer that differs stops for the owner.
 
@@ -610,5 +624,6 @@ in.
 | Review round 2, adversarial (`4d22c393`) | 4 Blocking, 10 Important, 10 Minor | — | Revision 5. Blocking: a polling hot loop on `recovery_required` (R-35); stale rows (L-1 to L-6, decision 27); Resume after a relaunch (in-flight record, R-31); "kept draft" defined and edits skipped (R-18). Lane of the resend, passphrase cache (decision 25), quit freeze (R-33), one loop (R-32), transient refusals, dedupe (R-23), entry points (R-3), read-only clearing, R-11 timing. | Design Review Record. |
 | Owner, after round 2 (2026-11-09) | Teardown, the passphrase cache, the second process, a stale row in a not-eligible repository | Owner decision | Decisions 24–27. | Owner, 2026-11-09. |
 | Review round 3, scoped re-review (`c35719c2`) | 0 Blocking, 6 Important, 14 Minor | — | Revision 6: the lost cancel during a restart (P-1, P-2); the quit freeze from `request_quit` (R-33); decision 27 carried through at runtime (L-1, L-2); fences and `OperationMismatch` (L-3, U-13); L-4 given a task; the answer's reading order made consistent. | Design Review Record. |
+| Owner, 2026-11-09 | Approval | Owner decision | Documents approved at `04e1623f`; decisions 3–15 and 28; named edits E-1 to E-6, and further test edits pre-approved; implementation authorized, subagent-driven; the two follow-up tickets filed. | Owner, 2026-11-09. |
 | Review round 3, adversarial (`c35719c2`) | 3 Blocking, 9 Important, 10 Minor | — | Revision 6. Blocking: the lost cancel (P-1, P-2); runtime takeover (L-1); an unknown draft listing (RT-5, RT-6). Important: in-flight entry lifecycle (R-31); `Accepted` answers (E3); Resume clearing declined keys; Unlock… target; loop ends (RT-8 to RT-10); read-only per request (E1); transport codes stop the loop (R-37); a running retirement on quit (proposed decision 28); the lock retried on activation. Preemption, stale rows and the loop's rules became required outcomes; no round 4. | Design Review Record. |
 | Drafting | Not yet reviewed | — | Review rounds follow. | — |

@@ -43,7 +43,7 @@ identifiers and the Wave 02 entry dependency changed; see
 
 ## Authority And Traceability
 
-This Wave implements [PRD v0.7](../PRD/mvp.md), the
+This Wave implements [PRD v0.8](../PRD/mvp.md), the
 [MVP architecture RFC](../RFC/mvp-rfc.md), and these approved technical RFCs:
 
 - [Desktop information architecture and editor](../RFC/desktop-information-architecture-and-editor.md).
@@ -410,6 +410,10 @@ codes, use the earlier numbers.
    rule 5's exception.
 7. **Mutation evidence.** Every mutating Cycle must include a named failure
    or interruption case and replay evidence in its detailed plan.
+
+   Amended 2026-11-09 by D6 (decision 16): the desktop's polls also retire
+   completed contexts per item, as background work. No other background
+   cleanup.
 
 Readiness deadlines apply to their named Cycles. Windows/macOS access does not
 block Linux implementation.
@@ -1160,12 +1164,25 @@ action (its design's Part E). The obligation stays owed until D6 merges.
   evidence's "no background cleanup" for retirement only. Background push,
   checkpoint, merge and publication stay prohibited.
 
-The text amendments are D6's Document Amendment 7, applied at D6's approval.
 Wave 04 Cycle 01 (`01M6V8RK8B0SBCH0YZXFVSR9E3`, approved 2026-11-08) wraps D1's
 operation area as the Activity panel and adds the footer's Needs attention
-count; D6's Cycle document records how the two meet. Changes to this section
-that follow from D6's own decisions wait for D6's approval (D6 design,
-Document Amendments 1 and 5).
+count; D6's Cycle document records how the two meet.
+
+**Amended 2026-11-09 by D6's approval:**
+- D6 calls the library's public automatic poll directly, on the desktop
+  worker's background lane, with no mutation-boundary binding (D6 decisions 1
+  and 2).
+- It retires completed contexts per item after each completed poll (decisions
+  16 to 21). For that retirement only, this lifts this section's "an optional
+  deliberate action is never a schedule policy" and the exit evidence's "No
+  background … cleanup". D6 still never chooses `PollOnceRetiring`. The
+  explicit desktop Retire action is planned as D6's design Part E.
+- The ten-second shutdown report is in the quit's Activity entry (decision 12).
+- Departures: entry gate item 3's timing (decision 9); item 5's DNS and
+  teardown stalls (decisions 22 and 24); item 7's baseline runs the static
+  gates only, under `AGENTS.md`'s Testing Strategy; track rule 4's separate
+  process for the second actor runs in the same process, with the
+  cross-process run in G1 (decision 26).
 
 **In scope:** One application-owned worker across windows, launch poll, existing
 interval/pause/backoff state, explicit Poll now and policy controls, fair
@@ -1186,6 +1203,10 @@ concurrent explicit operation from a second process calling the library,
 stalled transport with responsive stopping status, configuration changes and
 shutdown/restart. No background push/checkpoint/merge/cleanup; no remaining
 worker after graceful process exit.
+
+Amended 2026-11-09 by D6 (decisions 12 and 16): background cleanup is allowed
+only as per-item retirement of contexts the library proves completed, and the
+ten-second stopping report is in the quit's Activity entry.
 
 ## Convergence
 
@@ -1236,8 +1257,8 @@ a claim those public APIs exist.
 | Conflict inspection read | Local boundary: closure-recovery gate, exposed through the CLI by C5's `context` verbs (amended 2026-11-03 by C5, decision 3); remote boundary: C4 (amended 2026-10-30 by C4, decision 19), reaching a lifecycle's context child since C5 (decision 34) | Local observation/inspection/immutable-side DTOs are implemented and code-reviewed on the review-ready gate branch, awaiting authorized lifecycle delivery and merge. Remote: C4's `show_conflict` read and `conflict resolve` binding, through the CLI's `conflict show` and `conflict resolve`; D5 consumes them through D4. Front ends consume the shared boundaries and F1 redaction rules. |
 | One effective copy per item across worktrees | Defect ticket `01M4CKWWRA1DHFPMWKPNK7CQ1G`, before F1 | An item worktree contributes only its own item; every other item is read from primary. |
 | Promotion/close preflight and safe cleanup bindings | First of C5 or D5, as a shared-library change. Amended 2026-11-03 by C5 (decision 1): C5, on its own branch; D5 consumes them | Real effect preview and existing publication/cleanup ordering. |
-| Explicit one-shot polling | C5 | Existing Wave 02 one-shot operation; no resident worker. Amended 2026-11-03 by C5 (decisions 11 and 15): with the three policy bindings, each an atomic single-field update; D6 consumes them. Only the separately deliberate retirement variant below may clean up; automatic/default mode is unchanged. |
-| Peer-completed context recognition and deliberate local retirement | Follow-up `01M6KHVD6D0DB8KYT6VGQP10Y0` (library + CLI); D6 (explicit desktop action/journeys) | `closed`/`promoted` are not permission. Fresh complete Fetch-known absence + same-ID committed-primary completion/content proof + cleanliness/lifetime; ordinary item-owned recovery, immutable stopped-parent report and new explicit pass for remainder. No remote deletion/draft loss/read-ranking or release change. [Delivered API audit](../research/wave-03-api-audit.md#completed-context-retirement-delivery-2026-11-06). |
+| Explicit one-shot polling | C5 | Existing Wave 02 one-shot operation; no resident worker. Amended 2026-11-03 by C5 (decisions 11 and 15): with the three policy bindings, each an atomic single-field update; D6 consumes them. Only the separately deliberate retirement variant below may clean up; automatic/default mode is unchanged. Amended 2026-11-09 by D6 (decision 16): the desktop follows each completed poll with per-item `context retire`. |
+| Peer-completed context recognition and deliberate local retirement | Follow-up `01M6KHVD6D0DB8KYT6VGQP10Y0` (library + CLI); D6 (explicit desktop action/journeys) | `closed`/`promoted` are not permission. Amended 2026-11-09 by D6 (decision 16): the desktop retires per item after each completed poll. Fresh complete Fetch-known absence + same-ID committed-primary completion/content proof + cleanliness/lifetime; ordinary item-owned recovery, immutable stopped-parent report and new explicit pass for remainder. No remote deletion/draft loss/read-ranking or release change. [Delivered API audit](../research/wave-03-api-audit.md#completed-context-retirement-delivery-2026-11-06). |
 | Protected draft store and base snapshots | D2 | Separate from canonical files/cache/journals; versioned recoverable local files. |
 | Rich/source integration and stale response handling | D3 | One compatible GPUI graph; editor does not own Git, credential or network policy. |
 | Background scheduling and process exit | D6 | Desktop lifetime, existing one-shot operation, truthful safe-point stopping. |
@@ -1267,7 +1288,7 @@ and all of the following hold:
 - Background work obeys its permitted fetch/clean-fast-forward/materialization
   boundary, manual priority, user pause and session unlock behavior. Shutdown
   reports ongoing work at ten seconds and reaches a safe stop without a false
-  hard-deadline or rollback claim.
+  hard-deadline or rollback claim; on the desktop that boundary includes per-item retirement of completed contexts (D6 decision 16).
 - All six real-repository/SSH desktop journeys and explicit CLI counterparts
   have evidence, including local-only and injected-failure variants. Two trusted
   collaborators complete shared-item edit/conflict/discussion from separate clones.

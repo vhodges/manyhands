@@ -341,6 +341,11 @@ D1 has no polling worker; D6 owns the shutdown contract. GPUI gives
   (`src/runtime.rs`). "Finishing" can therefore last indefinitely there;
   Quit now is always available.
 
+Amended 2026-11-09 by Wave 03 D6 (design Part D): after ten seconds the
+waiting text becomes "Still stopping — waiting for Manyhands to reach a safe
+point. Your work is saved."; an automatic poll's wait reads "Finishing a check
+for updates"; a graceful exit joins the worker thread.
+
 ## View Models
 
 All GPUI-free and unit-tested without a window.

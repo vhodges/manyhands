@@ -297,6 +297,11 @@ A dirty, divergent, conflicted,
 malformed, inaccessible, renamed, unrecognized, unmaterialized, or remotely
 deleted context otherwise remains locally preserved and visible with recovery guidance.
 
+Amended 2026-11-09 by Wave 03 D6 (decision 16): the desktop also follows each
+completed poll with one ordinary `context retire` per reported `closed` or
+`promoted` item, held back by any edit or draft of that item. No other
+background cleanup.
+
 ### Explicit Peer-Context Retirement
 
 **Amendment, 2026-11-06:** the owner-approved

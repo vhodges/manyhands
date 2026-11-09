@@ -12,6 +12,13 @@ id: "01M6M3B4TF7MQM8QCZAVSZWA6Y"
 
 ## Status
 
+**2026-11-09 amendment (Wave 03 D6, decision 16):** the desktop retires
+completed contexts after each completed poll, one ordinary `context retire` per
+reported item, held back by any edit or draft of the item. For the desktop only,
+this amends owner decisions 4 ("never background cleanup"), 7 and 8, Required
+Contract 5, the Explicit Exclusions, the last Scope bullet and A9. The CLI's
+explicit entrypoints, this ticket's binding and the default poll are unchanged.
+
 **2026-11-06 amendment: D15's live-pass-only contract is owner-approved;
 independent source/feasibility and contract re-reviews passed through `08aa5465`,
 with no remaining findings.** Original approvals and limited implementation reviews

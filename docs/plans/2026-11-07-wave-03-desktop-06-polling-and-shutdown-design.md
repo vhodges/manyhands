@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D6 Desktop Background Polling And Shutdown Design"
 date: 2026-11-07
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -19,8 +19,10 @@ and their evidence. Approval covers the mechanisms, rulings and task order.
 It does not authorize implementation (which needs the owner's separate
 authorization), pushing beyond the ticket branch, merging or closing.
 
-Revision 6, after review round 3. Revision 6's edits had no independent
-review (the planning procedure stops at round 3).
+Revision 6, **approved 2026-11-09** with the Cycle and the plan. Revision 6's
+edits had no independent review (the planning procedure stops at round 3);
+Tasks 4 and 11b prove its required-outcome tables test-first after a design
+checkpoint.
 
 - Revision 1 was drafted at `3364370c` on 2026-11-07.
 - Revision 2 (2026-11-08) added the Wave 04 Cycle 01 coordination.
@@ -1483,8 +1485,11 @@ changed, by exact name. The static gates, the fast tier and the SSH tier for
    SSH, and the desktop's part is decided above the transport.
 6. **Native** (Linux, owner): the sections below.
 
-Existing tests change only as named edits E-1 to E-6; anything else stops for
-the owner. The polling switch (B6) keeps launch polls out of existing tests.
+Existing tests change as named edits E-1 to E-6. On 2026-11-09 the owner also
+pre-approved any further edit to an existing test that execution finds
+necessary: each is recorded in the ledger as E-7 onward, with its reason, and
+reported at the next checkpoint. The polling switch (B6) keeps launch polls out
+of existing tests.
 
 - **E-1.** Exhaustive matches that now include poll variants and
   `ContextRetire` (Tasks 6 and 11a).
@@ -1545,8 +1550,8 @@ CLI-against-desktop run belongs to G1 (track rule 4).
 
 ## Document Amendments
 
-Proposed with approval. Each is applied by the approval commit after its
-line references are checked again.
+Applied by the approval commit on 2026-11-09, after their line references were
+checked again: 1 to 5 and 7 to 10. Amendment 6 waits for D6's merge.
 
 1. Wave D6 section: note the decisions 1 and 2 (no library part; background
    lane) and that automatic polls need no boundary binding.
@@ -1606,10 +1611,10 @@ line references are checked again.
    only, under AGENTS.md's Testing Strategy; track rule 4's separate process
    for the second actor departs to the same process, with the cross-process
    run in G1 (decision 26).
-10. Follow-up library tickets, to be filed with the owner's go-ahead: a
-    per-key passphrase cache (decision 25, K-23), and a poll takeover that
-    does not need eligibility, or reclaiming a dead owner's row (decision 27,
-    K-22).
+10. Follow-up library tickets, filed 2026-11-09: `01M70CF14M3YC6SR8T9JJ6XQBG`
+    (`vh-ype2f`), a per-key passphrase cache (decision 25, K-23), and
+    `01M70CF1VBHJAX6MK39FY5W2RY` (`vh-xmhsj`), ending a dead poll's row
+    whatever the eligibility (decision 27, K-22).
 
 ## Known Limits
 
@@ -1668,12 +1673,12 @@ line references are checked again.
   eligible, keeps its row until the repository is eligible again, or a key
   or remote change fences it (decision 27; L-2, L-3). The row says why and
   what finishes it. Until then other remote work on that repository answers
-  busy or yielding. A follow-up library ticket can remove this
-  (Amendment 10).
+  busy or yielding. Follow-up ticket `01M70CF1VBHJAX6MK39FY5W2RY`
+  (`vh-xmhsj`) can remove this.
 - **K-23.** The library caches one passphrase. With two protected keys, a
   job using one key evicts the other's, whose attention returns at its next
-  poll (decision 25, Fact 35). A follow-up library ticket can add a per-key
-  cache (Amendment 10).
+  poll (decision 25, Fact 35). Follow-up ticket `01M70CF14M3YC6SR8T9JJ6XQBG`
+  (`vh-ype2f`) can add a per-key cache.
 - **K-24.** The second-process evidence runs in the same test process
   (decision 26); the cross-process run is G1's.
 - **K-25.** A second instance of the app never takes over stale rows, writes
