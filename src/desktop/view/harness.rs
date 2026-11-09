@@ -24,7 +24,6 @@ use super::{
     workspace::{Region, Workspace},
 };
 use crate::desktop::{
-    keys,
     model::{
         drafts::create,
         navigation::{OpenTarget, Pane},
@@ -135,8 +134,7 @@ impl Shell {
         cx: &mut TestAppContext,
     ) -> Self {
         cx.update(gpui_kit::init);
-        cx.update(keys::bind);
-        cx.update(super::editor::keys::bind);
+        cx.update(crate::desktop::bind_all_keys);
         // Dialogs open without their entrance animation, so a frame finds
         // them where they rest.
         cx.update(|cx| cx.set_reduce_motion(true));

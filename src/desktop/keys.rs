@@ -242,8 +242,9 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-shift-d", OpenDrafts, None),
         KeyBinding::new("secondary-q", Quit, None),
-        // The dock keys, in no context: an editor's own `ctrl-b` (Bold) is
-        // bound in its deeper "Editor" context and wins there (decision 2).
+        // The dock keys, in no context. An editor's own `ctrl-b` (Bold) is
+        // bound in its "Editor" context at the same depth as these, and wins
+        // there because it is registered later (`bind_all_keys`, decision 2).
         KeyBinding::new("secondary-b", ToggleLeftDock, None),
         KeyBinding::new("secondary-alt-b", ToggleRightDock, None),
         KeyBinding::new("secondary-j", ToggleBottomDock, None),

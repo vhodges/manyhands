@@ -11,9 +11,7 @@
 //! any name, so these tests send `menu` as written, and the real name under
 //! Wayland is on the on-screen checklist.
 
-use std::path::PathBuf;
-
-use gpui_kit::{Focusable, TestAppContext, test::TestWindowExt};
+use gpui_kit::{Focusable, TestAppContext};
 use manyhands::results::Outcome;
 
 use super::{
@@ -23,107 +21,24 @@ use super::{
 use crate::desktop::{
     model::{
         editor_text::load,
-        layout::{Layout, PanelKind, Side},
+        layout::{PanelKind, Side},
         navigation::Pane,
         stamp::SettingsPage,
     },
-    test_support::fixtures::Fixture,
     view::{
         footer::{
-            Control, attention_text, dock_toggle_name, panel_toggle_name, plan,
-            tests::support::{finish, focused, layout, put_behind, read, saves},
+            Control, plan,
+            tests::support::{finish, focused, put_behind, read, saves},
         },
-        harness::Shell,
         settings::Shown,
-        workspace::{REGIONS, Region},
+        workspace::Region,
     },
 };
 
+mod support;
+
 use PanelKind::{Activity, Documents, Repositories, Tickets};
-
-/// A window over no repository: the default layout, focus on Repositories.
-fn plain(cx: &mut TestAppContext) -> Walk {
-    Walk::over(Shell::open(Fixture::new(), cx), PathBuf::new())
-}
-
-fn layout_of(walk: &Walk, cx: &mut TestAppContext) -> Layout {
-    layout(&walk.shell, cx)
-}
-
-/// The region of the panel `kind`.
-fn region_of(kind: PanelKind) -> Region {
-    match kind {
-        Repositories => Region::Repositories,
-        Documents => Region::Documents,
-        Tickets => Region::Tickets,
-        Activity => Region::Operations,
-    }
-}
-
-/// The region that holds focus now, if one does.
-fn focused_region(walk: &Walk, cx: &mut TestAppContext) -> Option<Region> {
-    walk.shell.frame(cx, |window, _| {
-        REGIONS.into_iter().find(|region| {
-            window.try_find(region.id()).and_then(|each| each.focused()) == Some(true)
-        })
-    })
-}
-
-/// Exactly `region` holds focus among the regions drawn (a hidden panel has
-/// none), and it alone draws its ring, which is visible.
-fn ringed_on(walk: &Walk, region: Region, cx: &mut TestAppContext) {
-    walk.shell.frame(cx, |window, _| {
-        for each in REGIONS {
-            let focused = window.try_find(each.id()).and_then(|r| r.focused());
-            assert_eq!(
-                focused == Some(true),
-                each == region,
-                "{each:?} holds focus"
-            );
-            let ring = window.try_find(each.ring_id());
-            assert_eq!(ring.is_some(), each == region, "{each:?} draws a ring");
-        }
-        assert!(
-            window.find(region.ring_id()).visible(),
-            "the ring is visible"
-        );
-    });
-}
-
-/// The footer control `control` holds focus and draws its ring, which is
-/// visible.
-fn on_control(walk: &Walk, control: Control, cx: &mut TestAppContext) {
-    walk.shell.frame(cx, |window, _| {
-        let id = control.id();
-        assert_eq!(window.find(id).focused(), Some(true), "{id} holds focus");
-        let ring = window.try_find((id, 1usize));
-        assert!(ring.is_some_and(|ring| ring.visible()), "{id} draws a ring");
-    });
-}
-
-/// Tab, from the item area, to `control`.
-fn reach(walk: &Walk, control: Control, cx: &mut TestAppContext) {
-    walk.keys("secondary-3", cx);
-    walk.tab_to("tab", control.id(), cx);
-    on_control(walk, control, cx);
-}
-
-/// What the screen reader says of `control` while `layout` is shown: its
-/// name and toggled state.
-fn said(control: Control, layout: &Layout, attention: usize) -> (String, Option<bool>) {
-    match control {
-        Control::Dock(side) => {
-            let open = layout.is_open(side);
-            (dock_toggle_name(side, open), Some(open))
-        }
-        Control::Panel(kind) => {
-            let displayed = layout.is_displayed(kind);
-            (panel_toggle_name(kind, displayed), Some(displayed))
-        }
-        Control::Attention => (attention_text(attention).unwrap_or_default(), None),
-        Control::Settings => ("Settings".to_owned(), None),
-    }
-}
+use support::*;
 
 /// The three dock keys toggle their docks, each way, and nothing else (P17).
 #[gpui_kit::test]
@@ -179,7 +94,7 @@ async fn ctrl_b_in_an_editor_is_bold(cx: &mut TestAppContext) {
     assert!(text(&host, cx).contains("**two**"), "Bold marked the text");
     assert_eq!(layout_of(&walk, cx), before, "the left dock is unchanged");
     walk.keys("secondary-b", cx);
-    assert!(text(&host, cx) == load(BODY), "Bold again");
+    assert_eq!(text(&host, cx), load(BODY), "Bold again");
     assert_eq!(layout_of(&walk, cx), before);
 
     // Escape first: focus is on Done, outside the editor, and the key is
@@ -190,7 +105,7 @@ async fn ctrl_b_in_an_editor_is_bold(cx: &mut TestAppContext) {
         !layout_of(&walk, cx).is_open(Side::Left),
         "the dock toggles"
     );
-    assert!(text(&host, cx) == load(BODY), "text untouched");
+    assert_eq!(text(&host, cx), load(BODY), "text untouched");
 }
 
 /// How a panel is kept off the screen before its key.
@@ -198,8 +113,8 @@ async fn ctrl_b_in_an_editor_is_bold(cx: &mut TestAppContext) {
 enum Away {
     /// Its footer toggle is clicked.
     Off,
-    /// The bottom dock is closed by its key.
-    DockClosed,
+    /// Its dock is closed by the key given.
+    DockClosed(&'static str),
     /// The hidden panel is dropped behind `anchor`'s tab by the Kit's own
     /// edit: it stays on, and is not the active tab.
     Behind(PanelKind),
@@ -218,10 +133,30 @@ fn region_keys_and_find_reveal_hidden_panels(cx: &mut TestAppContext) {
     let rows = [
         (None, Away::Off, Repositories, "secondary-1"),
         (None, Away::Off, Documents, "secondary-2"),
+        // Documents behind Repositories' tab: `secondary-2` must select it
+        // (a reveal that only turned panels on would leave it unseen).
+        (None, Away::Behind(Repositories), Documents, "secondary-2"),
+        // The left dock closed: `secondary-2` must open it (a reveal that
+        // left the dock shut would focus a panel nobody sees).
+        (
+            None,
+            Away::DockClosed("secondary-b"),
+            Documents,
+            "secondary-2",
+        ),
+        // From here the list used last is Tickets.
         (Some(Pane::Tickets), Away::Off, Tickets, "secondary-2"),
         (None, Away::Off, Activity, "secondary-4"),
-        (None, Away::DockClosed, Activity, "secondary-4"),
+        (
+            None,
+            Away::DockClosed("secondary-j"),
+            Activity,
+            "secondary-4",
+        ),
         (None, Away::Behind(Documents), Repositories, "secondary-1"),
+        // Activity behind Repositories' tab in the bottom dock:
+        // `secondary-4` must select Activity's tab.
+        (None, Away::Covered(Repositories), Activity, "secondary-4"),
         (None, Away::Off, Tickets, "secondary-p"),
         (None, Away::Covered(Documents), Tickets, "secondary-p"),
     ];
@@ -232,7 +167,7 @@ fn region_keys_and_find_reveal_hidden_panels(cx: &mut TestAppContext) {
         }
         match away {
             Away::Off => walk.shell.click(Control::Panel(hidden).id(), cx),
-            Away::DockClosed => walk.keys("secondary-j", cx),
+            Away::DockClosed(keys) => walk.keys(keys, cx),
             Away::Behind(anchor) => put_behind(&walk.shell, hidden, anchor, cx),
             Away::Covered(by) => put_behind(&walk.shell, by, hidden, cx),
         }
@@ -261,22 +196,6 @@ fn region_keys_and_find_reveal_hidden_panels(cx: &mut TestAppContext) {
             );
         }
     }
-}
-
-/// The regions F6 and Shift F6 visit, from the item area round to it.
-fn tour(walk: &Walk, key: &str, cx: &mut TestAppContext) -> Vec<Region> {
-    walk.keys("secondary-3", cx);
-    ringed_on(walk, Region::Content, cx);
-    let mut seen = Vec::new();
-    for _ in 0..REGIONS.len() {
-        walk.keys(key, cx);
-        match focused_region(walk, cx) {
-            Some(Region::Content) => return seen,
-            Some(region) => seen.push(region),
-            None => panic!("{key} left every region"),
-        }
-    }
-    panic!("{key} never came back to the item area: {seen:?}");
 }
 
 /// F6 and Shift F6 stop at the panels displayed only: not at a panel that is
@@ -443,9 +362,12 @@ fn needs_attention_works_by_enter(cx: &mut TestAppContext) {
         read(&walk.shell, Control::Attention, cx),
         Some(("1 needs attention".to_owned(), None))
     );
-    for (row, away) in [Away::Off, Away::DockClosed].into_iter().enumerate() {
+    for (row, away) in [Away::Off, Away::DockClosed("secondary-j")]
+        .into_iter()
+        .enumerate()
+    {
         match away {
-            Away::DockClosed => walk.keys("secondary-j", cx),
+            Away::DockClosed(keys) => walk.keys(keys, cx),
             _ => walk.shell.click(Control::Panel(Activity).id(), cx),
         }
         assert!(!layout_of(&walk, cx).is_displayed(Activity), "row {row}");
