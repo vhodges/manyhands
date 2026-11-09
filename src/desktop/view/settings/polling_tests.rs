@@ -28,6 +28,9 @@ use crate::desktop::{
     },
 };
 
+/// Tab presses enough to go round the whole window.
+const TABS: usize = 40;
+
 /// What the page says first (C2), word for word.
 const INTRO: &str = "Manyhands checks your shared copies for other people's changes and brings them in when it's safe. It never shares anything. It also removes this computer's copies of tickets closed and documents promoted elsewhere, unless you have unsaved or kept work in them.";
 
@@ -117,7 +120,7 @@ fn polled_once(root: &std::path::Path) -> impl Fn(&Intent) -> bool + '_ {
 
 /// Opens the interval select of row `ix` and picks the option `presses`
 /// below the one shown, as the arrow key goes (the list wraps).
-fn choose_interval(rig: &Rig, ix: usize, presses: usize, cx: &mut TestAppContext) {
+pub(super) fn choose_interval(rig: &Rig, ix: usize, presses: usize, cx: &mut TestAppContext) {
     let select = ("polling-interval-select", ix);
     rig.shell
         .frame(cx, |window, cx| window.within(select).click("input", cx));
@@ -130,7 +133,7 @@ fn choose_interval(rig: &Rig, ix: usize, presses: usize, cx: &mut TestAppContext
 }
 
 /// What the select of row `ix` shows.
-fn shown_interval(rig: &Rig, ix: usize, cx: &mut TestAppContext) -> Option<String> {
+pub(super) fn shown_interval(rig: &Rig, ix: usize, cx: &mut TestAppContext) -> Option<String> {
     rig.shell.frame(cx, |window, _| {
         window
             .find(("polling-interval-select", ix))
@@ -194,6 +197,10 @@ async fn settings_polling_controls(cx: &mut TestAppContext) {
 
     // Check now while an automatic poll runs: a user job, so the worker
     // cancels that poll and runs it (B2, Task 4).
+    assert!(
+        rig.shell.tab_reaches(("polling-check", c), TABS, cx),
+        "an automatic poll does not disable it"
+    );
     let gate = rig.shell.backend.hold_job(JobKind::PollOnce);
     rig.shell.click(("polling-check", c), cx);
     let sent = rig.sent(cx, polled_once(&rig.roots[2]));
@@ -202,13 +209,20 @@ async fn settings_polling_controls(cx: &mut TestAppContext) {
     gate.wait_reached();
     // Its own Check now is running: disabled, so pressing it again sends
     // nothing. Another repository's is not.
+    // The Kit's disabled button takes no focus, so Tab passes it by; the
+    // others' buttons, and Check now of `c` before and after, are reached.
+    assert!(!rig.shell.tab_reaches(("polling-check", c), TABS, cx));
+    assert!(rig.shell.tab_reaches(("polling-check", a), TABS, cx));
+    assert!(rig.shell.tab_reaches(("polling-check", b), TABS, cx));
     rig.shell.click(("polling-check", c), cx);
     assert_eq!(rig.sent(cx, polled_once(&rig.roots[2])).len(), 1);
     rig.shell.click(("polling-check", a), cx);
     assert_eq!(rig.sent(cx, polled_once(&rig.roots[0])).len(), 1);
     gate.release();
     rig.shell.until_ended(sent[0].id, cx).await;
-    // It ended: pressed again, it sends.
+    // It ended: Tab reaches it again, and pressed it sends.
+    rig.shell.run(cx);
+    assert!(rig.shell.tab_reaches(("polling-check", c), TABS, cx));
     rig.shell.click(("polling-check", c), cx);
     assert_eq!(rig.sent(cx, polled_once(&rig.roots[2])).len(), 2);
 

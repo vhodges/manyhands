@@ -171,9 +171,13 @@ impl Scheduler {
 
     /// Whether `root`'s policy is about to change: it is being read again
     /// or is known to be out of date, so a view of it should not trust what
-    /// it shows.
+    /// it shows. Not when its last read failed: nothing is on the way, and
+    /// a view follows the last policy it knows until a later activation or
+    /// clock event reads again.
     pub(crate) fn refreshing(&self, root: &Root) -> bool {
-        self.reading.contains_key(root) || self.schedule.repo(root).is_some_and(|repo| repo.stale)
+        self.reading.contains_key(root)
+            || (!self.failed_reads.contains(root)
+                && self.schedule.repo(root).is_some_and(|repo| repo.stale))
     }
 
     /// The wall time by the scheduler's clock, for a status line's "ago".

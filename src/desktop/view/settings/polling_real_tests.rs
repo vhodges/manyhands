@@ -8,7 +8,10 @@ use std::{cell::Cell, rc::Rc};
 use gpui_kit::TestAppContext;
 use manyhands::repository::{AutomaticPollEligibility, PollIneligibility};
 
-use super::polling_support::Rig;
+use super::{
+    polling_support::Rig,
+    polling_tests::{choose_interval, shown_interval},
+};
 use crate::desktop::services::JobKind;
 
 /// The library says a paused repository is `NotEligible(Paused)`; the
@@ -149,4 +152,58 @@ async fn settings_polling_unplaced(cx: &mut TestAppContext) {
     assert!(scheduled(rig.key(0), cx));
     assert!(!scheduled(rig.key(1), cx));
     assert!(!scheduled(missing, cx));
+}
+
+/// A pick whose request finished while the policy cannot be read again is
+/// not kept: the library holds the old interval, and the select follows
+/// the schedule's last known policy instead of a "refreshing" that never
+/// ends. The repository's folder is gone, so the verb fails and the read
+/// after it fails; the schedule is stale, as a clock event leaves it.
+#[gpui_kit::test]
+async fn settings_polling_failed_reread(cx: &mut TestAppContext) {
+    let rig = Rig::new(&[("a", true)], cx);
+    rig.schedule(0, cx);
+    let root = rig.roots[0].clone();
+    rig.open(1, cx).await;
+    assert_eq!(
+        shown_interval(&rig, 0, cx).as_deref(),
+        Some("Every 5 minutes")
+    );
+
+    std::fs::remove_dir_all(&root).unwrap();
+    let services = rig.services.clone().with_polling();
+    let roots = vec![rig.key(0)];
+    cx.update(|cx| services.repositories_listed(&roots, cx));
+    let failed = {
+        let (services, key) = (services.clone(), rig.key(0));
+        move |cx: &mut TestAppContext| {
+            services.scheduler().read_with(cx, |scheduler, _| {
+                scheduler.unplaced(&key).is_none() && !scheduler.refreshing(&key)
+            })
+        }
+    };
+    rig.shell
+        .until_drawn(cx, "the first read to fail", move |_, cx| failed(cx))
+        .await;
+    let key = rig.key(0);
+    services.scheduler().update(cx, |scheduler, cx| {
+        scheduler.schedule_mut().reconfigure(&key);
+        cx.notify();
+    });
+
+    choose_interval(&rig, 0, 1, cx);
+    let sent = rig.sent(cx, |intent| {
+        matches!(
+            intent,
+            crate::desktop::services::requests::Intent::PollConfigure { .. }
+        )
+    });
+    assert_eq!(sent.len(), 1, "the pick was sent");
+    rig.shell.until_ended(sent[0].id, cx).await;
+    rig.shell.run(cx);
+    assert_eq!(
+        shown_interval(&rig, 0, cx).as_deref(),
+        Some("Every 5 minutes"),
+        "the library kept the old interval"
+    );
 }

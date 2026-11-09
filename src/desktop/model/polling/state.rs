@@ -48,7 +48,6 @@ pub(crate) enum Why {
 /// or per repository (R-8, decision 11): a locked key or an unapproved host
 /// names every repository it holds back; the rest are one repository's.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
 pub(crate) enum Reason {
     KeyLocked(KeyId),
     /// A key missing, unreadable, invalid or rejected: one entry per key

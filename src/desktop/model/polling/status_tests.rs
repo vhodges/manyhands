@@ -246,6 +246,36 @@ fn status_text_table() {
             false,
         ),
         (
+            "conflict pending, then completed: the flag clears",
+            {
+                let mut fx = plain(Answer::ConflictPending);
+                fx.answer("r", Answer::Completed, None);
+                fx
+            },
+            "Checked just now \u{b7} up to date".to_owned(),
+            false,
+        ),
+        (
+            "conflict pending, then a failure: the flag clears",
+            {
+                let mut fx = plain(Answer::ConflictPending);
+                fx.answer("r", transport(TransportFailure::Unreachable), None);
+                fx
+            },
+            unreachable.to_owned(),
+            true,
+        ),
+        (
+            "conflict pending, then busy: the flag clears",
+            {
+                let mut fx = plain(Answer::ConflictPending);
+                fx.answer("r", Answer::Busy, None);
+                fx
+            },
+            "Checking soon".to_owned(),
+            false,
+        ),
+        (
             "not eligible, paused",
             plain(Answer::NotEligible(NotEligible::Paused)),
             "Paused".to_owned(),
