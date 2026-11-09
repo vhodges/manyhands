@@ -1785,3 +1785,18 @@ diffs print nothing. No whole-suite or fast-tier run.
 as designed: the quit with Activity hidden gives no sign (R-20), Needs attention counts
 both lists as decision 3 says, and a damaged `layout.json` shows its restore notice
 until the layout changes (R-38). No code or document changed.
+
+## Fast tier, green (2026-11-09)
+
+AGENTS.md's fast tier, with `--no-fail-fast`, run once on branch tip `4c3968cc` (after
+main's fixture fix, both code reviews' fixes and the `WAIT` raise to 180 s): **exit 0,
+0 failed.** 5733 passed and 1 ignored across 79 test binaries, in 3459 s (58 min).
+
+- `--lib`: 1564 passed (the 93 `context_retirement` tests included), 1037 s.
+- Desktop bin `manyhands`: 1647 passed, 1131 s. The flaky
+  `edit_the_mode_key_save_and_done_by_keyboard_alone` passed in this run.
+- `manyhands-cli`: 317 passed. The 27 listed integration targets all passed.
+
+This replaces the Task 12 result (lib red, desktop bin 1645/1). Not run: the SSH tier
+(nothing under its paths changed; the Boundary diff is `src/desktop/` only) and native
+CI (not authorized). The Cycle document's A8 row still carries the old Task 12 text.
