@@ -1426,3 +1426,67 @@ and the relaunch in `a_panel_moved_into_a_tab_group_is_kept` are completed with 
 - **E-11:** none; no existing test edited.
 - **Verify:** all four lines clean (implementer and reviewer); both Boundary commands
   print nothing; `Cargo.lock` untouched. `origin/main` unchanged.
+
+## Task 11: Keyboard Journey And Checklist
+
+- **Commits** `140a2b31` (range `674eecfa..140a2b31`) and the review follow-up
+  `53e2689c`. New: `view/keyboard_tests/shell/journey.rs` (266 lines after the
+  follow-up), `docs/plans/2026-11-08-wave-04-cycle-01-on-screen-checklist.md`
+  (384 lines, 105 rows, W-1 to W-12), a `mod journey;` line in
+  `keyboard_tests/shell.rs`, and three helpers in `dock/restore_tests.rs` widened to
+  `pub(in crate::desktop::view)` (`elapse`, `in_file`, `same`; visibility only, E-11).
+- **Journey test**, 1 test, passed: `desktop::view::keyboard_tests::shell::journey::arrange_the_workspace_by_keyboard_alone`
+  (the plan's path was `shell::arrange_…`; the new module adds `journey::`). With
+  no clicks and no `Workspace::` calls: the restore notice dismissed by keyboard
+  (Tab, ring, name `DISMISS`, Enter), Documents hidden from the footer by Tab and
+  Enter, the save notice dismissed by Space, Tickets moved left by `menu`, `down`,
+  `enter`, the bottom dock hidden and shown with `secondary-j`, Activity hidden from
+  the footer and revealed by `secondary-4`, the clock advanced, `Shell::relaunch` finds
+  the same layout (flags, groups, shown flags, sizes within 1 px), no notices, and
+  `saves == 0`. After every step it compares a `sent()` snapshot (`jobs_seen`,
+  `reads_in_order`, all requests, tab titles) — a superset of D5's A17 pattern and of
+  Task 5's snapshot — so a reload or request caused by hiding or moving a panel would
+  show. Non-key actions, all honest: the fixture setup, `elapse` (the fake clock), a
+  `fs::remove_dir` of the bad `layout.json` directory (it stands for the person
+  deleting the bad file; afterwards the next debounced write goes to a real file and
+  the relaunch restores it), and `relaunch`. Failed first at compile time (the three
+  helpers were private); checked by mutation (the notice Dismiss ignoring keyboard
+  presses; dropping the `remove_dir`); the "worker received no request" assertions
+  were not mutated. The Tab position of Dismiss is not asserted (`tab_to` presses Tab
+  until the element holds focus, up to a limit), so it is not brittle.
+- **Review (checklist):** the journey APPROVED as it stood; the reviewer requested
+  changes to the checklist, all made in `53e2689c`:
+  - **Important 1, safety.** The checklist moved the owner's real `layout.json`
+    aside, deleted it, broke it, made many real changes, asked for a read-only data
+    directory, and added scratch repositories to the real registry. It now runs
+    against a scratch data directory from the first step: the implementer found that
+    the **desktop does not read `MANYHANDS_DATA_DIR`** (only `manyhands-cli` does,
+    `src/bin/manyhands-cli.rs:90`); it opens its data through
+    `RepositoryService::open_default` (`src/desktop/mod.rs:64`), which uses
+    `directories::ProjectDirs::from("com", "manyhands", "Manyhands")`
+    (`src/repository.rs:7440-7445`), that is `$XDG_DATA_HOME/manyhands` on Linux when
+    `XDG_DATA_HOME` is an absolute path, else `~/.local/share/manyhands`. The
+    checklist launches with `devenv shell -- env XDG_DATA_HOME="$SCRATCH" cargo run
+    …` after `SCRATCH=$(mktemp -d)`, has a check that the variable took
+    (`ls "$SCRATCH/manyhands"`), and ends with `find ~/.local/share/manyhands -newer
+    "$SCRATCH/.start"` printing nothing. The one real-path exception is shared SSH
+    keys under `~/.ssh/manyhands`; the checklist says not to use them. It was also
+    wrong that "crash recovery off" is a Settings toggle (it is the draft store failing
+    to open); W-2.10, W-9.5 and W-10.1 now make `drafts` a file or read-only in the
+    scratch directory.
+  - **Important 2.** W-8.15's `jq` printed to stdout and never wrote the file; now
+    `jq … > layout.new && mv layout.new layout.json` with a `python3 -c` equivalent,
+    both docks required, and the expected result (the clamp, not the restore notice).
+  - **Important 3.** W-3.13: a footer click while the details sheet is open lands on
+    the sheet's overlay and closes it (fact 33); only a dialog makes the footer inert.
+    Rewritten: a dialog case, and a keys-only sheet case.
+  - **Minor, done:** the Orca strip-tab row (W-12.5) and the R-9 start focus (W-1.2,
+    W-8.5); W-4.8's example; W-7.2 and W-7.3 sizes; K-8, K-10 and K-14 in the Known
+    limits; a **Minimum pass** block at the top mapping the Acceptance rows to rows
+    (optional rows listed); messages on every bare assert in the journey.
+  - The checklist's result cells are all **empty**. Claude records only what the
+    owner reports.
+- **Missing items found by the reviewer, resolved:** Orca on the strip tabs; the R-9
+  start focus. The macOS traffic-light position is left to native CI.
+- **Verify:** all four lines clean (implementer, reviewer, follow-up); both Boundary
+  commands print nothing; `Cargo.lock` untouched; `origin/main` unchanged.
