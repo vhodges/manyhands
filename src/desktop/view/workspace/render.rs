@@ -179,7 +179,7 @@ impl Render for Workspace {
         self.apply_review(window, cx);
         self.open_deferred_republish(window, cx);
         self.sync_sheet(window, cx);
-        if !self.dock.clamped() {
+        if self.dock.queue_clamp() {
             // The area records its bounds as this frame is drawn, so the
             // clamp runs after it (R-37). `on_next_frame` is no hook: tests
             // never run it.

@@ -11,7 +11,9 @@ const MIN_ITEM_WIDTH: f32 = 320.;
 /// The shortest item area the bottom dock may leave.
 const MIN_ITEM_HEIGHT: f32 = 200.;
 /// No dock is made smaller than this (the Kit's floor).
-const MIN_DOCK: f32 = 100.;
+fn min_dock() -> f32 {
+    gpui_kit::base::PANEL_MIN_SIZE.as_f32()
+}
 
 /// A change smaller than this is none: the Kit measures in fractions.
 const NO_CHANGE: f32 = 0.5;
@@ -37,12 +39,12 @@ pub(super) fn clamped(
         let scale = (width - MIN_ITEM_WIDTH).max(0.) / total;
         for side in [0, 1] {
             if open[side] {
-                out[side] = (sizes[side] * scale).max(MIN_DOCK);
+                out[side] = (sizes[side] * scale).max(min_dock());
             }
         }
     }
     if open[2] && height - sizes[2] < MIN_ITEM_HEIGHT {
-        out[2] = (height - MIN_ITEM_HEIGHT).max(MIN_DOCK);
+        out[2] = (height - MIN_ITEM_HEIGHT).max(min_dock());
     }
     [0, 1, 2].map(|side| {
         (open[side] && (out[side] - sizes[side]).abs() > NO_CHANGE).then_some(out[side])
@@ -56,8 +58,12 @@ impl DockShell {
         bounds.size.width > px(0.) && bounds.size.height > px(0.)
     }
 
-    pub(in crate::desktop::view) fn clamped(&self) -> bool {
-        self.clamped
+    /// Whether `render` should queue the launch clamp now: not once it
+    /// has run, nor while one is queued already.
+    pub(in crate::desktop::view) fn queue_clamp(&mut self) -> bool {
+        let queue = !self.clamped && !self.clamp_queued;
+        self.clamp_queued |= queue;
+        queue
     }
 
     /// The first time the area has bounds: the one clamp of the launch.
@@ -67,6 +73,7 @@ impl DockShell {
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.clamp_queued = false;
         if self.clamped || !self.has_bounds(cx) {
             return;
         }

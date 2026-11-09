@@ -216,6 +216,8 @@ impl Workspace {
             .and_then(|region| stops.iter().position(|stop| *stop == region))
         {
             Some(at) => stops[(at as isize + step).rem_euclid(stops.len() as isize) as usize],
+            // Outside every region: the first stop, or backwards the last.
+            None if step < 0 => stops[stops.len() - 1],
             None => stops[0],
         };
         self.focus_region(next, window, cx);

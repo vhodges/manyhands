@@ -22,7 +22,9 @@ pub(crate) const LAYOUT_VERSION: usize = 1;
 
 /// A dock under this many pixels could not be dragged back out: the Kit's
 /// `load` does not floor it (`B/dock/dock_area.rs:748-750`).
-const MIN_DOCK: f32 = 100.;
+fn min_dock() -> f32 {
+    gpui_kit::base::PANEL_MIN_SIZE.as_f32()
+}
 
 /// No size a person could have made is over this: a bigger one is damage.
 const MAX_SIZE: f32 = 1_000_000.;
@@ -131,7 +133,7 @@ fn parse(bytes: &[u8]) -> Option<Saved> {
             continue;
         };
         let size = dock.size().as_f32();
-        if dock.placement() != placement || !(MIN_DOCK..=MAX_SIZE).contains(&size) {
+        if dock.placement() != placement || !(min_dock()..=MAX_SIZE).contains(&size) {
             return None;
         }
         let mut names = Vec::new();

@@ -42,7 +42,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let colors = chrome_colors(cx);
-        let plan = plan(&self.layout, self.attention(cx));
+        let attention = self.attention(cx);
+        let plan = plan(&self.layout, attention);
         let mut bar = StatusBar::new()
             .h(px(FOOTER_HEIGHT))
             .w_full()
@@ -55,7 +56,7 @@ impl Workspace {
                 bar = bar.left(separator(cx));
             }
             for control in group {
-                bar = bar.left(self.footer_control(*control, window, cx));
+                bar = bar.left(self.footer_control(*control, attention, window, cx));
             }
         }
         for (ix, group) in plan.right.iter().enumerate() {
@@ -63,7 +64,7 @@ impl Workspace {
                 bar = bar.right(separator(cx));
             }
             for control in group {
-                bar = bar.right(self.footer_control(*control, window, cx));
+                bar = bar.right(self.footer_control(*control, attention, window, cx));
             }
         }
         bar
@@ -72,6 +73,7 @@ impl Workspace {
     fn footer_control(
         &mut self,
         which: Control,
+        attention: usize,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -96,7 +98,7 @@ impl Workspace {
                 }
             }
             Control::Attention => {
-                let text = attention_text(self.attention(cx)).unwrap_or_default();
+                let text = attention_text(attention).unwrap_or_default();
                 Face {
                     control: which,
                     name: text.clone(),

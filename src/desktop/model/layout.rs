@@ -159,8 +159,9 @@ impl Arrangement {
         Some((side, group))
     }
 
-    /// Takes `kind` out of its group, which keeps the same panel active,
-    /// and puts it at the end of `side` as a new group (R-5).
+    /// Takes `kind` out of its group and puts it at the end of `side` as a
+    /// new group (R-5). The group keeps the same panel active, unless `kind`
+    /// was the active one: then the tab that took its place is.
     fn move_panel(&mut self, kind: PanelKind, side: Side) {
         if let Some((from, _)) = self.group_of_mut(kind) {
             let groups = &mut self.sides[from.index()];

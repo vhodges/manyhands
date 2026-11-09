@@ -70,6 +70,9 @@ impl DockShell {
             let at = placement(side);
             if layout.has_panels(side) && area.read(cx).has_dock(at) {
                 let open = layout.is_open(side);
+                // The Kit refuses to close a dock that is not collapsible. Every
+                // dock here is (its default; the shell never changes it), so the
+                // toggle always flips it.
                 if area.read(cx).is_dock_open(at) != open {
                     area.update(cx, |area, cx| area.toggle_dock(at, window, cx));
                     if open {

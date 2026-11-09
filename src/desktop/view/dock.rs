@@ -94,6 +94,8 @@ pub(super) struct DockShell {
     notices: Notices,
     /// Whether the clamp for the first non-zero bounds has run (R-37).
     clamped: bool,
+    /// A `clamp_first` is queued and has not run yet.
+    clamp_queued: bool,
     _events: Subscription,
     _focus_in: Vec<Subscription>,
     _released: Subscription,
@@ -189,6 +191,7 @@ impl DockShell {
             saves: 0,
             notices: Notices::new(cx),
             clamped: false,
+            clamp_queued: false,
             _events: events,
             _focus_in: focus_in,
             _released: released,

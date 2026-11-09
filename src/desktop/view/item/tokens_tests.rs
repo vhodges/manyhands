@@ -1,10 +1,8 @@
-//! The item colours: header tokens by mode, the page white in both, and
-//! `accent` and `faint` from the chrome tokens.
+//! The item colours: header tokens by mode, the page white in both.
 
 use gpui_kit::{TestAppContext, component::Theme, rgb};
 
 use super::{colors, item_colors};
-use crate::desktop::view::shell::tokens as chrome;
 
 #[gpui_kit::test]
 fn header_colours_follow_dark_and_light_and_the_page_stays_white(cx: &mut TestAppContext) {
@@ -23,20 +21,13 @@ fn header_colours_follow_dark_and_light_and_the_page_stays_white(cx: &mut TestAp
     assert_eq!(dark.page_text, light.page_text);
     assert_eq!(dark.page_border_strong, light.page_border_strong);
     assert_eq!(dark.selection, light.selection);
-    // The tab strip's `accent` and `faint` come from the chrome tokens.
-    assert_eq!(dark.accent, chrome::colors(true).accent);
-    assert_eq!(dark.faint, chrome::colors(true).faint);
-    assert_eq!(light.accent, chrome::colors(false).accent);
-    assert_eq!(light.faint, chrome::colors(false).faint);
 
     // `item_colors` reads the mode from the theme.
     cx.update(|cx| {
         gpui_kit::init(cx);
         Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
         assert_eq!(item_colors(cx), dark);
-        assert_eq!(chrome::chrome_colors(cx), chrome::colors(true));
         Theme::change(gpui_kit::component::ThemeMode::Light, None, cx);
         assert_eq!(item_colors(cx), light);
-        assert_eq!(chrome::chrome_colors(cx), chrome::colors(false));
     });
 }

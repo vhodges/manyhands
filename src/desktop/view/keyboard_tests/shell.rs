@@ -231,6 +231,23 @@ fn f6_skips_hidden_panels(cx: &mut TestAppContext) {
     expect(&walk, &[T, O, D], "Repositories behind Documents' tab", cx);
 }
 
+/// From outside every region (here a footer control), F6 goes to the first
+/// stop and Shift F6 to the last (P14).
+#[gpui_kit::test]
+fn f6_from_outside_a_region_goes_to_the_first_stop_and_shift_f6_to_the_last(
+    cx: &mut TestAppContext,
+) {
+    let walk = plain(cx);
+    for (key, expected) in [
+        ("f6", Region::Repositories),
+        ("shift-f6", Region::Operations),
+    ] {
+        reach(&walk, Control::Settings, cx);
+        walk.keys(key, cx);
+        assert_eq!(focused_region(&walk, cx), Some(expected), "{key}");
+    }
+}
+
 /// Tab reaches a panel toggle; Enter hides its panel, Space shows it, and
 /// focus stays on the toggle. A dock toggle takes Enter, and so does
 /// Settings (A2).
