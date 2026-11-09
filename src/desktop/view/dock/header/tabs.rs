@@ -18,7 +18,9 @@ use gpui_kit::{
         dock::{BasePanelView, DragPanel, PanelHandle, TabGroupContext},
         h_flex,
     },
-    div, px,
+    div,
+    prelude::FluentBuilder,
+    px,
 };
 
 use crate::desktop::{
@@ -144,7 +146,7 @@ fn single(
         )
         .children(count);
     drag_source(element, group, ix, label, cx)
-        .when_droppable(group, |element| {
+        .when(group.is_droppable(), |element| {
             element
                 .drag_over::<DragPanel>(|style, _, _, cx| style.bg(cx.theme().tokens.drop_target))
                 .on_drop({
@@ -186,7 +188,7 @@ fn tabs(group: &TabGroupContext, shown: &Shown, cx: &mut App) -> AnyElement {
                 move |_, window, cx| group.select_tab(ix, window, cx)
             })
             .child(label.clone());
-        let tab = drag_source(tab, group, *ix, label, cx).when_droppable(group, |tab| {
+        let tab = drag_source(tab, group, *ix, label, cx).when(group.is_droppable(), |tab| {
             tab.drag_over::<DragPanel>(|style, _, _, cx| {
                 style
                     .rounded_l_none()
@@ -204,7 +206,10 @@ fn tabs(group: &TabGroupContext, shown: &Shown, cx: &mut App) -> AnyElement {
         });
         bar.child(tab)
     });
-    bar.child(past_the_last_tab(group, count))
+    // The slot a drop addresses indexes the group's full panel list, hidden
+    // panels included, not the tabs drawn: with [A, hidden, B], a panel
+    // dropped past the last tab must land after B.
+    bar.child(past_the_last_tab(group, group.panels().len()))
         .into_any_element()
 }
 
@@ -215,7 +220,7 @@ fn past_the_last_tab(group: &TabGroupContext, tabs: usize) -> impl IntoElement {
         .h_full()
         .flex_1()
         .min_w(px(16.))
-        .when_droppable(group, |end| {
+        .when(group.is_droppable(), |end| {
             end.drag_over::<DragPanel>(|style, _, _, cx| style.bg(cx.theme().tokens.drop_target))
                 .on_drop({
                     let group = group.clone();
@@ -306,19 +311,6 @@ trait TabStyle: Styled + Sized {
 }
 
 impl<E: Styled + Sized> TabStyle for E {}
-
-/// Applies `style` only when the group takes drops.
-trait WhenDroppable: Sized {
-    fn when_droppable(self, group: &TabGroupContext, style: impl FnOnce(Self) -> Self) -> Self {
-        if group.is_droppable() {
-            style(self)
-        } else {
-            self
-        }
-    }
-}
-
-impl<E> WhenDroppable for E {}
 
 /// What follows the cursor while a panel is dragged: its name in a small
 /// box.

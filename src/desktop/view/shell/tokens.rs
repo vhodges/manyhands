@@ -13,19 +13,16 @@ pub(crate) struct ChromeColors {
     /// Title bar, panel headers, tab strip, footer.
     pub chrome: Hsla,
     /// Dock panel bodies, the active panel tab, chips.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 4c.
     pub panel: Hsla,
     /// Every 1 px divider.
     pub border: Hsla,
     /// Button and input borders.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 6.
     pub border_strong: Hsla,
     /// Hover, secondary buttons, toggles on.
     pub hover: Hsla,
     /// Hidden-dock icons and the unfocused tab line.
     pub faint: Hsla,
     /// Counts, ages, placeholder text.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 4c.
     pub muted: Hsla,
     /// Secondary text and icons.
     pub secondary: Hsla,
