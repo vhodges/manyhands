@@ -455,7 +455,7 @@ entry after submit; write as a non-holder; ignore the model's op; drop
 each caught, two (the lock guard and the write order) only after a stronger
 assertion was added.
 
-| 5 | (ledger commit) | `0a28c07a`, `1a21b7e6` (review fixes) | CHANGES REQUIRED then fixed: I1 (hot loop on a failing policy read), D2 (host scope), M1-M3, M5-M7 applied; M4 skipped; M8 and D1 handed off; the fixes were checked by the orchestrator (two new tests, boundary diff, clean tree), not re-reviewed | `desktop::services::scheduler::{entity_tests::{scheduler_shared_by_clones, polling_switch_off_in_tests, launch_polls_due_ssh_repos, timer_submits_one_at_a_time, result_marks_repository_changed}, real_tests::{reconfiguration_cancels_and_rearms, second_actor_busy, unfinished_operation_waits}, extra_tests::{own_polls_are_not_offered_resume, stale_answer_rereads_policy, activation_takes_the_lock_for_a_stale_poll, clock_event_reads_policies_and_remotes, quitting_starts_nothing, failing_read_waits_for_activation, host_change_reaches_repos_on_the_host}, registration::tests::authority_of_locations, reconfigure::tests::scopes_of_intents}`, `desktop::model::polling::tests::after_attempt_table`; each singly with `--exact`, 1 test, pass; fmt, check, both clippy pass |
+| 5 | `9b1a9809` | `0a28c07a`, `1a21b7e6` (review fixes) | CHANGES REQUIRED then fixed: I1 (hot loop on a failing policy read), D2 (host scope), M1-M3, M5-M7 applied; M4 skipped; M8 and D1 handed off; the fixes were checked by the orchestrator (two new tests, boundary diff, clean tree), not re-reviewed | `desktop::services::scheduler::{entity_tests::{scheduler_shared_by_clones, polling_switch_off_in_tests, launch_polls_due_ssh_repos, timer_submits_one_at_a_time, result_marks_repository_changed}, real_tests::{reconfiguration_cancels_and_rearms, second_actor_busy, unfinished_operation_waits}, extra_tests::{own_polls_are_not_offered_resume, stale_answer_rereads_policy, activation_takes_the_lock_for_a_stale_poll, clock_event_reads_policies_and_remotes, quitting_starts_nothing, failing_read_waits_for_activation, host_change_reaches_repos_on_the_host}, registration::tests::authority_of_locations, reconfigure::tests::scopes_of_intents}`, `desktop::model::polling::tests::after_attempt_table`; each singly with `--exact`, 1 test, pass; fmt, check, both clippy pass |
 
 ## Task 5: the scheduler entity in `Services`
 
@@ -539,3 +539,54 @@ stored deadline, no acquire on activation, own polls not published,
 was added), the `failed_reads` filter, the host scope, both halves of the SSH
 predicate, the M7 row. The launch barrier (`awaiting_launch`) survived and was
 deleted as dead.
+| 6 | (ledger commit) | `35691ba6`, `6106fa5b` (review fixes) | APPROVE WITH MINOR; the Important finding (Check now stage text) applied after the orchestrator read Fact 14 (no owner decision needed); minors 2 and 5 applied; 3 and 4 recorded below; fixes checked by the orchestrator (tree, boundary, stage-words test), not re-reviewed | `desktop::services::requests::poll_tests::intent_poll_build`, `desktop::services::requests::poll_worker_tests::{intent_poll_stoppable, policy_verb_never_accepted, policy_verb_resent}`, `desktop::services::scheduler::intent_tests::poll_once_rereads_status`, `desktop::view::operations::check_tests::a_running_check_now_reads_its_stage_words`, `desktop::view::passphrase::tests::{a_prompt_for_a_check_now_names_no_share, the_dialog_names_what_waits_and_says_not_now}`; each singly with `--exact`, 1 test, pass; fmt, check, clippy pass |
+
+## Task 6: poll intents through the boundary
+
+Files (all under `src/desktop/`): `services/{requests.rs, requests/build.rs,
+mod.rs (JobKind), scheduler.rs, scheduler/reconfigure.rs}`,
+`model/operations.rs` (`Progressing::Check`, `stage_text`, `progress_words`),
+`view/{operations.rs, passphrase.rs}`; new tests `services/{requests_poll_tests.rs,
+requests_poll_worker_tests.rs, scheduler_intent_tests.rs}`,
+`view/operations/check_tests.rs`; `view/passphrase_tests.rs` (appended). Nothing
+outside `src/desktop/` changed.
+
+Existing-test edit **E-11** (`services/requests_tests.rs`, compiler-forced and
+helper-count): `variant()` arms 39–41; `every_intent()` gains the three verbs
+(39 → 42); `39..=41` joins the false arm of
+`changes_items_names_the_intents_that_can_change_items` and of
+`syncs_comments_and_resume_stop_at_safe_points_and_saves_do_not`. No assertion
+weakened.
+
+Rulings:
+- Labels: "Check now", "Set check interval", "Pause checking", "Resume checking".
+- Policy verbs: `changes_items` false, `stops_at_safe_points` false (matches the
+  library's command table), no stage words (never accepted, Fact 2).
+- Deviation from the plan's test line "takes the answer's `PollPolicy`": the
+  scheduler re-reads `polling_status` after a policy verb (and after `PollOnce`)
+  and does not parse the answer's `PollPolicy`. The design only says the answer
+  carries the policy; the re-read also picks up `recovery_suspended` and
+  `backoff_seconds`. Task 7 must not look for a parse.
+- `Heard::PolicyMoved` fires on any `Finished`, including a failed or
+  cancelled verb (one cheap local read; no hot loop, since a read result
+  produces no `Finished`).
+- Check now stage words: a running Check now reads `Checking · {words}`;
+  Accepted/Observing "Getting ready…", Connecting "Connecting to origin…"
+  (names the remote), Fetching "Bringing in changes…", UpdatingLocal "Merging
+  changes…", Indexing "Updating the list…", Stopping "Stopping at a safe
+  point…", Writing falls back to "Getting ready…". Cost if wrong: string edits
+  in `stage_text`/`progress_words` and the expected values in `check_tests.rs`.
+- `view/passphrase.rs::waiting_share` now accepts only `Share` and `Post`; with
+  the new `Progressing::Check` a Check now's prompt would otherwise have been
+  titled as a share (caught while adding the variant; own test).
+
+Handed to Task 7: the three verbs carry item-level `Called from Task 7` allows;
+`worker.in_flight(|i| matches!(i, Intent::PollOnce{root: r} if *r == root))`
+gives "my own Check now is queued or running".
+
+Process: the five planned tests could only fail by compile error first (the
+variants did not exist); the mutation runs carry the evidence that they bite
+(all caught). The stage-words test was written first and failed for the right
+reason; the passphrase test was written after the variant (its guard was the
+fix). The table version of `poll_once_rereads_status` was a modification of an
+existing test and has no separate red run.
