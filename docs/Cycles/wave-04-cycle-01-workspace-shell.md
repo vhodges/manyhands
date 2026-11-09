@@ -295,6 +295,12 @@ design's Required Outcomes.
 The on-screen checklist follows D5's format, run by the owner on a release
 build under Wayland. Claude records only what the owner reports.
 
+**Owner decision, 2026-11-09.** The formal on-screen checklist
+([`docs/plans/2026-11-08-wave-04-cycle-01-on-screen-checklist.md`](../plans/2026-11-08-wave-04-cycle-01-on-screen-checklist.md))
+is not being run now. The owner tests and verifies as the work lands, and
+the checklist is kept for later. The "on screen (owner to run)" entries in
+the Status column therefore stay open, and no on-screen result is recorded.
+
 ## Product-Owner Decisions (2026-11-08)
 
 Wave 04 decisions 1–10 (2026-11-07) govern and are not repeated.
@@ -392,6 +398,18 @@ Answered by the owner at approval:
     authorized: pushes beyond the ticket branch, a PR, the merge, closing
     the ticket, cleanup and native CI dispatch.
 
+Answered by the owner at review-ready (2026-11-09):
+
+20. **Amendments approved; limits accepted.** The design amendments listed
+    in the ledger's Task 12 section (where the built code differs from the
+    approved text) are approved and applied to the design. Known Limit K-19
+    is accepted ("it should be okay, contents will probably get revisited").
+    The test harness's real-time wait is raised from 60 s to 180 s for now;
+    performance is to be revisited once the current waves land.
+    `ChromeColors.selection` stays in for now (the light and dark palette).
+    The formal on-screen checklist is not run now (see the note under
+    Acceptance And Exit Evidence).
+
 ## Known Limits
 
 These are visible to users; the design's Known Limits give the detail.
@@ -412,6 +430,18 @@ These are visible to users; the design's Known Limits give the detail.
   Activity is opened (K-18, decision 7).
 - A quit's layout write runs on the UI thread, so a hung file system
   delays the quit (K-14).
+- Activity is as wide as the item area, about 550 px at the default 1280 px
+  window. Three unwrapped rows in `operations.rs` (the draft-flush entry's
+  Retry, a pending repository row's Retry, and the pending controls row's
+  later controls such as Abandon) can sit outside the visible Activity,
+  which scrolls vertically only. Fixed where `operations.rs` is rebuilt
+  (Cycle 03, or D6). Accepted by the owner 2026-11-09 (K-19; added
+  2026-11-09).
+- The app being killed or terminated by the operating system bypasses the
+  quit's layout write, so a change made after the last debounced save and
+  before the kill is lost (K-20; added 2026-11-09).
+- The layout file's 1 MiB cap is checked after the file is read, so it does
+  not bound that one read's memory (K-21; added 2026-11-09).
 
 ## Open Questions
 
@@ -461,3 +491,4 @@ them; U-5 was settled in review.
 | Owner, 2026-11-08 | Quitting with work at risk as one blocking dialog; a watchdog for pending operations | Owner direction | Later work (Exclusions; design Amendment 4) | Owner, 2026-11-08 |
 | Owner, 2026-11-08 | Approval of revision 5, the named test edits, and pre-authorized further test edits | Owner decision | Approved; decision 17; documents marked approved; amendments applied | Owner, 2026-11-08 |
 | Owner, 2026-11-08 | Execution method; implementation; the quit buttons | Owner decision | Decisions 18 and 19 | Owner, 2026-11-08 |
+| Owner, 2026-11-09 | Design amendments for where the built code differs; K-19 accepted, K-20 and K-21 added; on-screen checklist not run now | Owner decision | Decision 20; applied 2026-11-09 with owner approval | Owner, 2026-11-09; execution ledger, Task 12 |
