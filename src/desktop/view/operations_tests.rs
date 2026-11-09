@@ -20,7 +20,10 @@ use manyhands::{
 
 use super::{DISMISS, NOTHING_PENDING, outcome_label, recovery_id, request_id};
 use crate::desktop::{
-    model::{navigation::OpenTarget, operations::Operations},
+    model::{
+        navigation::{OpenTarget, Pane},
+        operations::Operations,
+    },
     services::{
         JobKind, ReadKind,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
@@ -227,7 +230,7 @@ fn with_an_unindexed_ticket(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     );
     let shell = Shell::open(fixture, cx);
     shell.select(&root, cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.click("filter-all", cx);
     (shell, root)
 }
@@ -408,7 +411,7 @@ async fn a_delayed_refresh_leaves_the_user_going_on_and_the_list_updates_on_rele
     fixture.refresh(&b);
     fixture.commit_ticket(&b, SECOND, "New in b", "");
     let shell = Shell::open(fixture, cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.select(&b, cx);
     shell.click("filter-all", cx);
     assert!(tickets(&shell, cx).is_empty());

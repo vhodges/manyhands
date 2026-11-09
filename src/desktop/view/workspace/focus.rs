@@ -1,4 +1,4 @@
-//! The four focus groups, cycling, fallback and region decoration.
+//! The five focus groups, cycling, fallback and region decoration.
 
 use super::Workspace;
 use crate::desktop::model::navigation::Pane;
@@ -11,15 +11,18 @@ use gpui_kit::{
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Region {
     Repositories,
-    Navigation,
+    Documents,
     Content,
+    Tickets,
     Operations,
 }
 
-pub(crate) const REGIONS: [Region; 4] = [
+/// In F6's order (decision 9).
+pub(crate) const REGIONS: [Region; 5] = [
     Region::Repositories,
-    Region::Navigation,
+    Region::Documents,
     Region::Content,
+    Region::Tickets,
     Region::Operations,
 ];
 
@@ -34,8 +37,9 @@ impl Region {
     pub(crate) fn id(self) -> &'static str {
         match self {
             Self::Repositories => "region-repositories",
-            Self::Navigation => "region-navigation",
+            Self::Documents => "region-documents",
             Self::Content => "region-content",
+            Self::Tickets => "region-tickets",
             Self::Operations => "region-operations",
         }
     }
@@ -43,16 +47,34 @@ impl Region {
     pub(crate) fn ring_id(self) -> &'static str {
         match self {
             Self::Repositories => "region-repositories-focus-ring",
-            Self::Navigation => "region-navigation-focus-ring",
+            Self::Documents => "region-documents-focus-ring",
             Self::Content => "region-content-focus-ring",
+            Self::Tickets => "region-tickets-focus-ring",
             Self::Operations => "region-operations-focus-ring",
+        }
+    }
+
+    /// The region of the list `pane`.
+    pub(in crate::desktop::view) fn of_pane(pane: Pane) -> Self {
+        match pane {
+            Pane::Documents => Self::Documents,
+            Pane::Tickets => Self::Tickets,
+        }
+    }
+
+    /// The list this region holds, when it holds one.
+    pub(in crate::desktop::view) fn pane(self) -> Option<Pane> {
+        match self {
+            Self::Documents => Some(Pane::Documents),
+            Self::Tickets => Some(Pane::Tickets),
+            Self::Repositories | Self::Content | Self::Operations => None,
         }
     }
 
     fn key_context(self) -> &'static str {
         match self {
             Self::Repositories => "Repositories",
-            Self::Navigation => crate::desktop::keys::NAVIGATION_CONTEXT,
+            Self::Documents | Self::Tickets => crate::desktop::keys::NAVIGATION_CONTEXT,
             Self::Content => crate::desktop::keys::CONTENT_CONTEXT,
             Self::Operations => "Operations",
         }
@@ -60,19 +82,6 @@ impl Region {
 }
 
 impl Workspace {
-    pub(in crate::desktop::view) fn show_pane(
-        &mut self,
-        pane: Pane,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.navigation.set_pane(pane);
-        if self.focused_region(window, cx) == Some(Region::Navigation) {
-            self.focus_region(Region::Navigation, window, cx);
-        }
-        cx.notify();
-    }
-
     pub(super) fn focused_region(&self, window: &Window, cx: &App) -> Option<Region> {
         REGIONS
             .into_iter()
@@ -85,8 +94,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match (region, self.navigation.pane()) {
-            (Region::Repositories, _)
+        // The list used last (R-8).
+        if let Some(pane) = region.pane() {
+            self.navigation.set_pane(pane);
+        }
+        match region {
+            Region::Repositories
                 if self
                     .navigation
                     .repositories()
@@ -95,13 +108,11 @@ impl Workspace {
             {
                 self.repositories_pane.focus(window, cx)
             }
-            (Region::Navigation, Pane::Documents) if self.documents.repo().is_some() => {
+            Region::Documents if self.documents.repo().is_some() => {
                 self.documents_pane.focus(window, cx)
             }
-            (Region::Navigation, Pane::Tickets) if self.tickets.repo().is_some() => {
-                self.tickets_pane.focus(window, cx)
-            }
-            (Region::Content, _) => self.focus_content(window, cx),
+            Region::Tickets if self.tickets.repo().is_some() => self.tickets_pane.focus(window, cx),
+            Region::Content => self.focus_content(window, cx),
             _ => window.focus(&self.regions[region.index()], cx),
         }
         self.last_region = Some(region);

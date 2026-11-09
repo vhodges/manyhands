@@ -173,9 +173,9 @@ impl Walk {
     /// Focus stays in the tree.
     pub(super) fn open_document(&self, label: &str, cx: &mut TestAppContext) {
         self.keys("secondary-2", cx);
-        self.region(Region::Navigation, cx);
+        self.region(Region::Documents, cx);
         self.open_tree_row(label, cx);
-        self.region(Region::Navigation, cx);
+        self.region(Region::Documents, cx);
     }
 }
 
@@ -225,7 +225,11 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
         walk.step("shift-tab", id, Region::Content, cx);
     }
 
-    // A document: Status, Author, Date, Updated and All details.
+    // A document: Status, Author, Date, Updated and All details. Find, in
+    // the Tickets region, made Tickets the list used last, so Shift F6 goes
+    // to Documents first.
+    walk.keys("shift-f6", cx);
+    walk.region(Region::Documents, cx);
     walk.open_document("Reading", cx);
     walk.keys("secondary-3", cx);
     let shown = walk.shown_tab(cx);
@@ -401,7 +405,7 @@ fn the_discussion_is_reached_by_its_key_walked_and_left(cx: &mut TestAppContext)
 
     // Focus leaves the discussion by F6, and comes back by `secondary-3`.
     walk.keys("f6", cx);
-    walk.region(Region::Operations, cx);
+    walk.region(Region::Tickets, cx);
     walk.keys("secondary-3", cx);
     walk.on(("tab", 0usize), Region::Content, cx);
 

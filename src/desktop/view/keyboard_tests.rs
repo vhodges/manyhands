@@ -19,7 +19,6 @@ use manyhands::{
 use super::{
     find::FIND_MATCHES,
     harness::{Shell, key},
-    lists::{SHOWING_DOCUMENTS, SHOWING_TICKETS},
     quit::QuitPhase,
     settings::{PAGES, Shown},
     tickets::{LIFECYCLE_CLOSED, READINESS_FILTERS},
@@ -261,41 +260,39 @@ impl Walk {
         );
     }
 
-    /// From the navigation region's list, shift-Tab back to the choice
-    /// `id` and press it.
+    /// From the Tickets list, shift-Tab back to the choice `id` and press it.
     fn choose(&self, id: &'static str, cx: &mut TestAppContext) {
         self.tab_to("shift-tab", id, cx);
-        self.on(id, Region::Navigation, cx);
+        self.on(id, Region::Tickets, cx);
         self.enter(cx);
         assert!(self.shell.selected(id, cx), "{id} is chosen");
     }
 
-    /// The Documents and Tickets panes: `secondary-2`, then shift-Tab to
-    /// each pane's choice and Enter. The pane shown says so in text, and
-    /// its list takes focus.
+    /// The Documents and Tickets lists: `secondary-2` focuses the list used
+    /// last, Documents at first; F6 reaches Tickets through Content, which
+    /// makes it the list used last, and `secondary-2` follows it, then
+    /// follows Documents back.
     fn switch_panes(&self, cx: &mut TestAppContext) {
         self.keys("secondary-2", cx);
-        self.region(Region::Navigation, cx);
-        assert_eq!(
-            self.shell.label("pane-showing", cx).as_deref(),
-            Some(SHOWING_DOCUMENTS)
-        );
-        self.choose("pane-tickets", cx);
-        assert_eq!(
-            self.shell.label("pane-showing", cx).as_deref(),
-            Some(SHOWING_TICKETS)
-        );
+        self.region(Region::Documents, cx);
+        self.keys("f6 f6", cx);
         self.list_focused(
             |workspace, cx| workspace.tickets_list_focus(cx),
-            Region::Navigation,
+            Region::Tickets,
             cx,
         );
-        self.choose("pane-documents", cx);
-        assert_eq!(
-            self.shell.label("pane-showing", cx).as_deref(),
-            Some(SHOWING_DOCUMENTS)
+        self.keys("secondary-1", cx);
+        self.keys("secondary-2", cx);
+        self.list_focused(
+            |workspace, cx| workspace.tickets_list_focus(cx),
+            Region::Tickets,
+            cx,
         );
-        self.region(Region::Navigation, cx);
+        self.keys("shift-f6 shift-f6", cx);
+        self.region(Region::Documents, cx);
+        self.keys("secondary-1", cx);
+        self.keys("secondary-2", cx);
+        self.region(Region::Documents, cx);
     }
 
     /// The document tree: the arrows move to the document and Enter opens
@@ -322,7 +319,7 @@ impl Walk {
             })
         );
         assert_eq!(self.tab_count(cx), 1);
-        self.region(Region::Navigation, cx);
+        self.region(Region::Documents, cx);
     }
 
     /// In the focused document tree, the arrows move down to the row
@@ -346,7 +343,13 @@ impl Walk {
     /// from the ticket list. Each says what it shows in text; the rows
     /// change with it. Back to Open and any readiness at the end.
     fn change_the_filters(&self, cx: &mut TestAppContext) {
-        self.choose("pane-tickets", cx);
+        // F6 from the document tree, through Content, to the ticket list.
+        self.keys("f6 f6", cx);
+        self.list_focused(
+            |workspace, cx| workspace.tickets_list_focus(cx),
+            Region::Tickets,
+            cx,
+        );
         let rows = |cx: &mut TestAppContext| self.shell.rows("ticket-row", cx);
         assert!(!rows(cx).contains(&"Closed one".to_owned()));
 
@@ -356,7 +359,7 @@ impl Walk {
             Some("Showing closed tickets")
         );
         assert_eq!(rows(cx), ["Closed one"]);
-        self.on("filter-closed", Region::Navigation, cx);
+        self.on("filter-closed", Region::Tickets, cx);
 
         self.tab_to("shift-tab", "filter-open", cx);
         self.enter(cx);
@@ -375,7 +378,7 @@ impl Walk {
         );
         assert_eq!(rows(cx), ["Waits"]);
         assert!(self.shell.present("why-blocked", cx));
-        self.on("filter-blocked", Region::Navigation, cx);
+        self.on("filter-blocked", Region::Tickets, cx);
 
         self.tab_to("shift-tab", "filter-any-readiness", cx);
         self.enter(cx);
@@ -389,7 +392,7 @@ impl Walk {
         self.keys("secondary-2", cx);
         self.list_focused(
             |workspace, cx| workspace.tickets_list_focus(cx),
-            Region::Navigation,
+            Region::Tickets,
             cx,
         );
         let at = self
@@ -431,7 +434,7 @@ impl Walk {
             .workspace
             .read_with(cx, |workspace, _| workspace.find_input().clone());
         let focus = input.read_with(cx, gpui_kit::Focusable::focus_handle);
-        self.on_handle(&focus, Region::Navigation, cx);
+        self.on_handle(&focus, Region::Tickets, cx);
         self.keys("secondary-a backspace", cx);
         self.type_text(text, cx);
         assert_eq!(
@@ -439,7 +442,7 @@ impl Walk {
             text
         );
         self.keys("enter", cx);
-        self.on_handle(&focus, Region::Navigation, cx);
+        self.on_handle(&focus, Region::Tickets, cx);
     }
 
     /// Find by short code lists both sharers; Tab reaches each Open and
@@ -452,9 +455,9 @@ impl Walk {
         );
         assert_eq!(self.shell.rows("find-match", cx).len(), 2);
         self.keys("tab", cx);
-        self.on(("find-match-open", 0usize), Region::Navigation, cx);
+        self.on(("find-match-open", 0usize), Region::Tickets, cx);
         self.keys("tab", cx);
-        self.on(("find-match-open", 1usize), Region::Navigation, cx);
+        self.on(("find-match-open", 1usize), Region::Tickets, cx);
         let second = self.shell.label(("find-match-id", 1usize), cx).unwrap();
         self.enter(cx);
         assert_eq!(self.opened(cx), Some(self.ticket(&second)));

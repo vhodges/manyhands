@@ -33,7 +33,7 @@ use super::{CreateDialog, Inputs, OpenedDialog};
 use crate::desktop::{
     model::{
         edit::{Phase, fields::Field},
-        navigation::OpenTarget,
+        navigation::{OpenTarget, Pane},
         stamp::SettingsPage,
     },
     services::{
@@ -612,7 +612,7 @@ async fn new_ticket_creates_with_its_fields_and_dependency(cx: &mut TestAppConte
         fixture.create_ticket(root, DEPENDENCY, "Dependency ticket", "open");
         fixture.create_ticket(root, PARENT, "Parent ticket", "open");
     });
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.keys("secondary-2", cx);
     shell.keys("secondary-n", cx);
     assert!(dialog_open(&shell, cx), "secondary-n opens New ticket…");
@@ -732,7 +732,7 @@ async fn new_ticket_creates_with_its_fields_and_dependency(cx: &mut TestAppConte
 async fn the_new_tab_opens_editing_with_its_header_from_the_draft(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |_, _| {});
     let prepare = shell.backend.hold_job(JobKind::ContextPrepare);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.click("new-ticket-button", cx);
     shell.visual(cx).simulate_input("Header title");
     shell.run(cx);
@@ -885,7 +885,7 @@ async fn an_occupied_path_at_save_keeps_the_draft(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 async fn initials_required_points_to_settings(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |_, root| set_initials(root, "toolong"));
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.click("new-ticket-button", cx);
     shell.visual(cx).simulate_input("Needs initials");
     shell.run(cx);
@@ -976,7 +976,7 @@ async fn secondary_n_opens_the_shown_lists_dialog(cx: &mut TestAppContext) {
     assert!(!dialog_open(&shell, cx), "one dialog, closed by Escape");
     assert_eq!(focused(&shell, cx), Some(tree), "focus goes back");
 
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.keys("secondary-2", cx);
     let list = focused(&shell, cx).expect("the ticket list holds focus");
     shell.keys("secondary-n", cx);
@@ -1011,6 +1011,29 @@ async fn secondary_n_opens_the_shown_lists_dialog(cx: &mut TestAppContext) {
     assert!(!dialog_open(&shell, cx), "nothing from the sheet");
 }
 
+/// P16: each list's button creates its own kind, whichever list was used
+/// last. Both lists are drawn, so New ticket… is reached from Documents and
+/// New document… from Tickets.
+#[gpui_kit::test]
+async fn new_ticket_and_new_document_create_their_own_kind(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(cx, |_, _| {});
+    let kind = |shell: &Shell, cx: &mut TestAppContext| {
+        dialog(shell, cx).read_with(cx, |dialog, _| dialog.kind())
+    };
+
+    shell.use_list(Pane::Documents, cx);
+    shell.click("new-ticket-button", cx);
+    assert!(dialog_open(&shell, cx), "New ticket… opens its dialog");
+    assert_eq!(kind(&shell, cx), ItemDtoKind::Ticket);
+    shell.keys("escape", cx);
+    assert!(!dialog_open(&shell, cx));
+
+    shell.use_list(Pane::Tickets, cx);
+    shell.click("new-document-button", cx);
+    assert!(dialog_open(&shell, cx), "New document… opens its dialog");
+    assert_eq!(kind(&shell, cx), ItemDtoKind::Document);
+}
+
 /// R-46, obligation 1: with no draft store, Create writes nothing and
 /// provisions nothing; the dialog stays open, in Task 22's words.
 #[cfg(unix)]
@@ -1024,7 +1047,7 @@ async fn create_without_a_draft_store_says_why_and_stays_open(cx: &mut TestAppCo
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
     shell.select(&root, cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.click("new-ticket-button", cx);
     shell.visual(cx).simulate_input("No store");
     shell.run(cx);
@@ -1111,7 +1134,7 @@ async fn a_dialog_above_the_create_dialog_stays_open_when_it_creates(cx: &mut Te
 
     let (shell, _root) = shell(cx, |_, _| {});
     let prepare = shell.backend.hold_job(JobKind::ContextPrepare);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.click("new-ticket-button", cx);
     shell.visual(cx).simulate_input("Under another");
     shell.run(cx);
@@ -1293,7 +1316,7 @@ async fn a_drafts_page_discard_while_the_create_prepares_closes_the_tab_and_rele
 ) {
     let (shell, root) = shell(cx, |_, _| {});
     let prepare = shell.backend.hold_job(JobKind::ContextPrepare);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.click("new-ticket-button", cx);
     shell.visual(cx).simulate_input("Discarded early");
     shell.run(cx);

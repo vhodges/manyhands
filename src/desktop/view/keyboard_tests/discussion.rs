@@ -356,7 +356,7 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     assert!(indented != listed, "Tab indented: {indented:?}");
     assert!(walk.editor_focused(&reply, cx), "Tab stayed in the editor");
     walk.keys("f6", cx);
-    walk.region(Region::Operations, cx);
+    walk.region(Region::Tickets, cx);
 
     // The order with it open: the thread's last Reply, its toolbar's stop,
     // its editor; and back from Write a comment… into its editor.
@@ -371,7 +371,7 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     walk.step("tab", "composer-bold", Region::Content, cx);
     walk.step_into("tab", &reply, "the reply's editor", cx);
     walk.keys("f6", cx);
-    walk.region(Region::Operations, cx);
+    walk.region(Region::Tickets, cx);
     walk.keys("secondary-3", cx);
     walk.on(("tab", 0usize), Region::Content, cx);
     walk.tab_to("shift-tab", SHARE_MAIN, cx);
@@ -402,7 +402,7 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     assert!(indented != listed, "Tab indented: {indented:?}");
     assert!(walk.editor_focused(&editor, cx), "Tab stayed in the editor");
     walk.keys("f6", cx);
-    walk.region(Region::Operations, cx);
+    walk.region(Region::Tickets, cx);
     assert!(
         !walk.shell.present("new-comment-start", cx),
         "open: it holds text"

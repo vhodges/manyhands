@@ -16,10 +16,18 @@ use manyhands::{
     repository::{ItemDtoKind, SharedKeyId, keys::UnlockReason},
 };
 
-use super::{editor::host::EditorHost, workspace::Workspace};
+use super::{
+    editor::host::EditorHost,
+    workspace::{Region, Workspace},
+};
 use crate::desktop::{
     keys,
-    model::{drafts::create, navigation::OpenTarget, operations::Operations, tabs::TabKey},
+    model::{
+        drafts::create,
+        navigation::{OpenTarget, Pane},
+        operations::Operations,
+        tabs::TabKey,
+    },
     open_test_window_over,
     services::{
         prompts::{PromptReply, PromptRequest},
@@ -241,6 +249,17 @@ impl Shell {
     pub(crate) fn select(&self, root: &Path, cx: &mut TestAppContext) {
         self.workspace.update(cx, |workspace, cx| {
             workspace.select_repository(key(root), cx)
+        });
+        self.run(cx);
+    }
+
+    /// Uses the list `pane` last and focuses its region, as clicking its
+    /// choice did (E-2).
+    pub(crate) fn use_list(&self, pane: Pane, cx: &mut TestAppContext) {
+        self.frame(cx, |window, cx| {
+            self.workspace.update(cx, |workspace, cx| {
+                workspace.focus_region(Region::of_pane(pane), window, cx)
+            })
         });
         self.run(cx);
     }

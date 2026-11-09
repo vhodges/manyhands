@@ -81,7 +81,7 @@ struct ContentArea {
 pub(crate) struct Workspace {
     services: Services,
     /// One handle per region, in `REGIONS` order.
-    regions: [FocusHandle; 4],
+    regions: [FocusHandle; 5],
     navigation: Navigation,
     /// Replacing a read drops the previous task.
     list_read: Option<Task<()>>,
@@ -157,6 +157,7 @@ pub(crate) struct Workspace {
 impl Workspace {
     pub(crate) fn new(services: Services, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let regions = [
+            cx.focus_handle(),
             cx.focus_handle(),
             cx.focus_handle(),
             cx.focus_handle(),

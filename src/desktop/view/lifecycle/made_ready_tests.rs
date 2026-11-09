@@ -350,8 +350,8 @@ async fn index_unavailable_final_offers_open_ready_tickets(cx: &mut TestAppConte
     assert!(shell.selected("filter-open", cx));
     assert!(shell.selected("filter-ready", cx));
     assert!(
-        shell.present(Region::Navigation.ring_id(), cx),
-        "the navigation has focus"
+        shell.present(Region::Tickets.ring_id(), cx),
+        "the Tickets region has focus"
     );
 }
 

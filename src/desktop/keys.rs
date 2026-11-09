@@ -112,9 +112,9 @@ gpui_kit::actions!(
     ]
 );
 
-/// The key context of the navigation region, the documents and tickets
-/// lists with their find bar and choices: `secondary-n` opens the shown
-/// list's New document… or New ticket… there, and nowhere else.
+/// The key context of the Documents and Tickets regions (the tickets list
+/// with its find bar and filters): `secondary-n` opens the focused list's
+/// New document… or New ticket… there, and nowhere else.
 pub(crate) const NAVIGATION_CONTEXT: &str = "Navigation";
 
 /// The key context of the document tree's wrapper, where `enter` opens
@@ -218,8 +218,8 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("secondary-shift-d", OpenDrafts, None),
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
-        // New document… or New ticket…, the shown list's, in the navigation
-        // region only.
+        // New document… or New ticket…, the focused list's, in either
+        // list's region (both carry this context) and nowhere else.
         KeyBinding::new("secondary-n", NewItem, Some(NAVIGATION_CONTEXT)),
         KeyBinding::new("pageup", ScrollPageUp, Some(CONTENT_CONTEXT)),
         KeyBinding::new("pagedown", ScrollPageDown, Some(CONTENT_CONTEXT)),

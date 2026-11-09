@@ -898,9 +898,11 @@ fn f6_cycles_the_regions_and_secondary_digits_focus_each(cx: &mut TestAppContext
     let shell = Shell::new(cx);
     assert_eq!(focused_region(&shell, cx), Region::Repositories);
 
+    // Decision 9's order: Documents and Tickets sit either side of Content.
     for expected in [
-        Region::Navigation,
+        Region::Documents,
         Region::Content,
+        Region::Tickets,
         Region::Operations,
         Region::Repositories,
     ] {
@@ -909,18 +911,25 @@ fn f6_cycles_the_regions_and_secondary_digits_focus_each(cx: &mut TestAppContext
     }
     for expected in [
         Region::Operations,
+        Region::Tickets,
         Region::Content,
-        Region::Navigation,
+        Region::Documents,
         Region::Repositories,
     ] {
         shell.keys("shift-f6", cx);
         assert_eq!(focused_region(&shell, cx), expected);
     }
+    // `secondary-2` focuses the list used last: Documents, then Tickets once
+    // F6 has taken focus there.
     for (keystroke, expected) in [
         ("secondary-3", Region::Content),
         ("secondary-1", Region::Repositories),
         ("secondary-4", Region::Operations),
-        ("secondary-2", Region::Navigation),
+        ("secondary-2", Region::Documents),
+        ("f6", Region::Content),
+        ("f6", Region::Tickets),
+        ("secondary-1", Region::Repositories),
+        ("secondary-2", Region::Tickets),
     ] {
         shell.keys(keystroke, cx);
         assert_eq!(focused_region(&shell, cx), expected, "{keystroke}");

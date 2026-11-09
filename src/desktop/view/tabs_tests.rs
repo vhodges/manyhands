@@ -14,7 +14,10 @@ use zorite_editor::EditorState;
 
 use super::{TabInfo, active_line, tab_info, tooltip_text};
 use crate::desktop::{
-    model::{navigation::OpenTarget, tabs::TabKey},
+    model::{
+        navigation::{OpenTarget, Pane},
+        tabs::TabKey,
+    },
     services::{
         JobKind, ReadKind,
         drafts::DraftRegistry,
@@ -240,7 +243,7 @@ async fn a_refresh_reloads_every_open_tab_of_the_repository_in_place(cx: &mut Te
 async fn a_job_for_a_while_b_is_selected_reloads_only_as_tab(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let Two { shell, a, b } = two(cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.select(&b, cx);
     open(&shell, ticket(&a, ONE), cx);
     open(&shell, ticket(&b, ONE), cx);

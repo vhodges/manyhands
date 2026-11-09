@@ -18,7 +18,7 @@ use gpui_kit::{
     App, Context, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{ActiveTheme, Root, WindowExt, h_flex, v_flex},
-    deferred, div, px,
+    deferred, div, px, relative,
 };
 
 impl Workspace {
@@ -52,6 +52,10 @@ impl Render for Workspace {
         self.sync_sheet(window, cx);
         if let Some(region) = self.focused_region(window, cx) {
             self.last_region = Some(region);
+            // The list used last (R-8): a click or a key into a list.
+            if let Some(pane) = region.pane() {
+                self.navigation.set_pane(pane);
+            }
         }
         let finishing = self.finishing(window, cx);
         self.repositories_pane
@@ -70,7 +74,8 @@ impl Render for Workspace {
             )
             .into_any_element()
         });
-        let navigation = self.navigation_pane(window, cx);
+        let documents = self.documents_body(cx);
+        let tickets = self.tickets_body(window, cx);
         self.content_scroll()
             .note_focus(window.focused(cx).as_ref());
         let content = v_flex()
@@ -105,12 +110,23 @@ impl Render for Workspace {
             .min_h_0()
             .w_full()
             .child(
-                self.region(Region::Repositories, window, cx, repositories)
+                v_flex()
                     .w(px(260.))
-                    .h_full(),
+                    .h_full()
+                    .child(
+                        self.region(Region::Repositories, window, cx, repositories)
+                            .w_full()
+                            .h(relative(0.3)),
+                    )
+                    .child(
+                        self.region(Region::Documents, window, cx, documents)
+                            .w_full()
+                            .flex_1()
+                            .min_h_0(),
+                    ),
             )
             .child(
-                self.region(Region::Navigation, window, cx, navigation)
+                self.region(Region::Tickets, window, cx, tickets)
                     .w(px(320.))
                     .h_full(),
             )
@@ -147,10 +163,14 @@ impl Render for Workspace {
                 this.request_quit(window, cx);
             }))
             .on_action(cx.listener(|this, _: &QuitNow, _, cx| this.quit_now(cx)))
-            // New document… or New ticket…, bound in the navigation region
-            // only.
+            // New document… or New ticket…, bound in the list regions only:
+            // the focused list's kind.
             .on_action(unless_dialog(cx, |this, _: &NewItem, window, cx| {
-                this.new_item(window, cx)
+                let list = this
+                    .focused_region(window, cx)
+                    .and_then(Region::pane)
+                    .unwrap_or_else(|| this.navigation.pane());
+                this.new_item(list, window, cx)
             }))
             .on_action(unless_dialog(cx, |this, _: &OpenSelected, _, cx| {
                 this.open_selected_document(cx)
@@ -176,7 +196,9 @@ impl Render for Workspace {
             .on_action(unless_dialog(
                 cx,
                 |this, _: &FocusNavigation, window, cx| {
-                    this.focus_region(Region::Navigation, window, cx)
+                    // The list used last.
+                    let region = Region::of_pane(this.navigation.pane());
+                    this.focus_region(region, window, cx)
                 },
             ))
             .on_action(unless_dialog(cx, |this, _: &FocusContent, window, cx| {

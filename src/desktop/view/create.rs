@@ -1,6 +1,6 @@
 //! The create dialogs (design, Create (decision 3); R-20, R-21, R-22, R-46):
 //! New document… and New ticket…, opened on the selected repository from
-//! the shown list's button, or by `secondary-n` in the navigation region.
+//! its list's button, or by `secondary-n` in either list's region.
 //!
 //! - **The fields.** Both take a Title. A ticket also takes a Type, `task`
 //!   until changed; it is made with the status `open` and no initials,
@@ -176,19 +176,20 @@ pub(crate) struct OpenedDialog(pub(crate) gpui_kit::WeakEntity<CreateDialog>);
 impl gpui_kit::Global for OpenedDialog {}
 
 impl Workspace {
-    /// New document… or New ticket…, the shown list's, on the selected
-    /// repository: from its button, or `secondary-n` in the navigation
-    /// region. Nothing opens with no repository shown, nor in front of a
-    /// dialog or the sheet. The dialog's new item opens in its tab.
+    /// New document… (`Pane::Documents`) or New ticket…, on the selected
+    /// repository: each list's button passes its own kind. Nothing opens
+    /// with no repository shown, nor in front of a dialog or the sheet. The
+    /// dialog's new item opens in its tab.
     pub(in crate::desktop::view) fn new_item(
         &mut self,
+        list: Pane,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if window.has_active_dialog(cx) || window.has_active_sheet(cx) {
             return;
         }
-        let (kind, root) = match self.navigation().pane() {
+        let (kind, root) = match list {
             Pane::Documents => (ItemDtoKind::Document, self.documents().repo()),
             Pane::Tickets => (ItemDtoKind::Ticket, self.tickets().repo()),
         };
