@@ -4,9 +4,12 @@
 //! in both modes, since the page is white in both. Chrome colours (chips,
 //! buttons) come from the current Kit theme. `accent` and `faint` are the
 //! workspace handoff's chrome tokens for the tab strip's amber and its
-//! unfocused line, which the closed Kit theme does not carry.
+//! unfocused line, which the closed Kit theme does not carry; they are read
+//! from the shell's `ChromeColors`, so one source holds them.
 
 use gpui_kit::{App, Hsla, component::ActiveTheme, rgb};
+
+use crate::desktop::view::shell::tokens as chrome;
 
 /// The item view's colours for one mode.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,17 +47,18 @@ fn hex(value: u32) -> Hsla {
 
 /// The colours for dark (`true`) or light (`false`) mode.
 pub(crate) fn colors(dark: bool) -> ItemColors {
-    let (header_block, header_border, header_title, accent, faint) = if dark {
-        (0x262a30, 0x353a41, 0xeef0f2, 0xe9ad36, 0x4a5059)
+    let (header_block, header_border, header_title) = if dark {
+        (0x262a30, 0x353a41, 0xeef0f2)
     } else {
-        (0xebe8e3, 0xe2dfda, 0x15181c, 0xa86f00, 0xb5b0a8)
+        (0xebe8e3, 0xe2dfda, 0x15181c)
     };
+    let shared = chrome::colors(dark);
     ItemColors {
         header_block: hex(header_block),
         header_border: hex(header_border),
         header_title: hex(header_title),
-        accent: hex(accent),
-        faint: hex(faint),
+        accent: shared.accent,
+        faint: shared.faint,
         page: hex(0xffffff),
         page_text: hex(0x1f2328),
         page_text_secondary: hex(0x575c64),

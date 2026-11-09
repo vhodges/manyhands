@@ -26,6 +26,7 @@ pub(crate) mod quit;
 pub(crate) mod relationships;
 pub(crate) mod scroll;
 pub(crate) mod settings;
+pub(crate) mod shell;
 pub(crate) mod sidebar;
 pub(crate) mod tabs;
 pub(crate) mod tickets;
