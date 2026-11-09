@@ -1378,3 +1378,51 @@ and the relaunch in `a_panel_moved_into_a_tab_group_is_kept` are completed with 
   start focus.
 - **Verify:** all four lines clean (implementer, reviewer, follow-up); both
   Boundary commands print nothing; `Cargo.lock` untouched.
+
+## Task 10: Quit With Activity Hidden
+
+- **Commit** `d9d6385d` (range `1cd7d817..d9d6385d`, two files: `view/workspace/lifecycle.rs`
+  and `view/workspace_tests.rs`, +147 test lines, none deleted).
+- **Code (R-20):** `wait_to_quit` focuses Quit now and sets `last_region = Operations`
+  only when `layout.is_displayed(Activity)`; otherwise focus stays where closing the
+  dialogs and the sheet left it, and nothing reveals Activity or changes a layout.
+  `not_saved_chosen`, Cancel: Activity displayed keeps Retry focused as today;
+  Activity not displayed focuses the item area (`focus_region(Content)`, which also
+  sets `last_region = Content`, so nothing dangles). Edits not kept already focused
+  the item area. The reviewer checked every caller of `wait_to_quit` (SavingDrafts,
+  Finishing, `unkept_asks_first`, `save_drafts`, `finish_job`) and every focus of
+  `quit_focus` or Retry: no path remains that focuses an undrawn control.
+- **Tests** (new, 1 test each, passed): `desktop::view::workspace::tests::a_waiting_quit_with_activity_hidden_changes_nothing`
+  (P26: the layout and `layout_saves` unchanged, Quit now not drawn, focus and
+  `last_region` unmoved, `secondary-4` reveals Activity showing "Finishing {label}"
+  and Quit now, releasing the job reaches `QuitPhase::Quit`) and
+  `desktop::view::workspace::tests::saving_drafts::drafts_not_saved_with_activity_hidden_focuses_the_item_area`
+  (P27, `#[cfg(unix)]`, ran on this Linux machine: Cancel focuses the item area,
+  `last_region` is Content, the layout is unchanged, `footer-attention` reads "1 needs
+  attention", the phase is Running). Existing `finishing_closes_the_dialog_and_focuses_quit_now`
+  and `saving_drafts::a_draft_that_cannot_be_saved_asks_before_quitting` still cover
+  Activity displayed, unchanged. The implementer ran 26 existing quit-adjacent
+  tests by exact name in one run, plus the 10 `edit_tests::quit::*`; all passed.
+- **Test strength.** Written as plain end-state checks, both tests PASSED on the old
+  code, because `focus_lost` and render restore focus and `last_region` at the next
+  draw. They were changed to read focus and `last_region` inside the same update that
+  triggers the quit or Cancel, before any frame draws; only then did they go red
+  ("focus is not moved to a control not drawn"; the item-area read `Some(false)`).
+  The reviewer copied the tree to the scratchpad and mutated it: both guards removed
+  fails both tests; only the focus guard removed fails test 1; only the `last_region`
+  guard removed fails test 1; replacing `not_saved_chosen`'s Content branch with
+  nothing, or with always-Retry, fails test 2. The guards are independently pinned,
+  and the same-update read does not depend on draw timing (`Shell::frame` renders
+  one frame, then runs the closure in a single update). Test 2's final end-state
+  asserts alone would pass on the old code; only the transient read protects P27.
+- **Review:** APPROVED. Blocking none, Important none. Not stuck in the wait: `reveal`
+  and the footer paths check no `QuitPhase`, `wait_to_quit` closes every dialog, the
+  `QuitNow` action is unguarded, and there is no key for Quit now, so Activity must be
+  opened to reach it (decision 7 accepts that). Minor, not changed: test 1 does not
+  press Quit now after revealing Activity (covered by the unguarded action and the
+  existing Enter-on-Quit-now test); P27's Edits-not-kept return with Activity hidden
+  has no explicit test (the code does not depend on Activity; Task 12's fast tier runs
+  `edit_quit_tests`); test 1 duplicates helpers from `footer::tests::support`.
+- **E-11:** none; no existing test edited.
+- **Verify:** all four lines clean (implementer and reviewer); both Boundary commands
+  print nothing; `Cargo.lock` untouched. `origin/main` unchanged.
