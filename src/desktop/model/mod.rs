@@ -10,6 +10,7 @@ pub(crate) mod edit;
 pub(crate) mod editor_text;
 pub(crate) mod find;
 pub(crate) mod item;
+pub(crate) mod layout;
 pub(crate) mod lifecycle_lock;
 pub(crate) mod links;
 pub(crate) mod list_state;
