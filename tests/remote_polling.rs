@@ -174,6 +174,15 @@ const CASES: &[ssh_harness::Case] = &[
     ("poll_cancel_before_local_mutation", cancel_before_local),
     ("poll_cancel_before_discovery", cancel_before_discovery),
     ("poll_public_cancel_held_advertisement", public_cancel),
+    (
+        "poll_cancel_during_handshake_stall",
+        cancel_during_handshake_stall,
+    ),
+    #[cfg(target_os = "linux")]
+    (
+        "poll_cancel_during_connect_stall",
+        cancel_during_connect_stall,
+    ),
     ("poll_partial_batch_yield_report_and_restart", partial_batch),
     (
         "poll_disconnect_download_next_poll_finishes",
@@ -2509,6 +2518,154 @@ fn public_cancel() -> Result<(), FixtureError> {
         p.redacted(&format!("{r:?}"))?;
         Ok(())
     })?;
+    p.no_push_since(n)?;
+    assert_eq!(snapshot(&p.b)?, before);
+    p.finish()
+}
+/// How long a public cancel waits when the blocking transport call has not
+/// returned (D6 Task 1). `libgit2` gives each blocking SSH call 30 s.
+const STALL_CANCEL_BOUND: std::time::Duration = std::time::Duration::from_secs(40);
+/// Starts an automatic poll, waits for its row, cancels it through the same
+/// service and returns the measured cancel-to-return time. The caller has
+/// already made the stall.
+fn cancel_stalled_poll(
+    p: &Pair,
+    req: PollPublicationRemoteRequest,
+    stalled: impl Fn() -> bool,
+) -> Result<std::time::Duration, FixtureError> {
+    let id = req.operation_id;
+    std::thread::scope(|scope| -> Result<std::time::Duration, FixtureError> {
+        let worker = scope.spawn(|| p.b.service.poll_publication_remote(req, &mut session()));
+        let started = std::time::Instant::now();
+        // Wait for the row and for the connection to be stuck, never for a
+        // fixed time: cancelling a row that does not exist answers
+        // recovery_required, and a cancel of one not yet active has no effect.
+        while !(stalled()
+            && fixed(p.b.service.active_remote_operation(&p.b.root))?
+                .is_some_and(|op| op.operation_id() == id))
+        {
+            assert!(started.elapsed() < std::time::Duration::from_secs(20));
+            assert!(!worker.is_finished());
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let cancelled = std::time::Instant::now();
+        fixed(p.b.service.cancel_remote_operation(&p.b.root, id))?;
+        let joined = fixed(worker.join())?;
+        let elapsed = cancelled.elapsed();
+        eprintln!("cancel to return {elapsed:?}");
+        // A timeout error here means the cancel was lost.
+        let (r, pending) = report(fixed(joined)?)?;
+        assert!(!pending);
+        assert_eq!(r.completion(), PollCompletion::Cancelled);
+        assert!(
+            r.targets()
+                .iter()
+                .all(|t| t.disposition() == PollDisposition::NotReached)
+        );
+        p.redacted(&format!("{r:?}"))?;
+        assert!(elapsed < STALL_CANCEL_BOUND);
+        Ok(elapsed)
+    })
+}
+fn cancel_during_handshake_stall() -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let before = snapshot(&p.b)?;
+    let n = p.no_push_baseline()?;
+    p.server.stall_at(
+        FixtureBoundary::Handshake,
+        std::time::Duration::from_secs(45),
+    );
+    let sockets = p.server.accepted_sockets();
+    let elapsed = cancel_stalled_poll(&p, p.request(RemotePollInvocation::Automatic), || {
+        p.server.accepted_sockets() > sockets
+    })?;
+    ssh_harness::observation(&[elapsed.as_millis()]);
+    // No reservation remains, no second connection follows, nothing changed.
+    assert!(fixed(p.b.service.active_remote_operation(&p.b.root))?.is_none());
+    assert_eq!(p.server.accepted_sockets(), sockets + 1);
+    p.server.clear_fault();
+    p.no_push_since(n)?;
+    assert_eq!(snapshot(&p.b)?, before);
+    p.finish()
+}
+/// A loopback port whose TCP connect never completes: a listener that never
+/// accepts, with a backlog of zero and its one queue slot taken by a held
+/// connection, so Linux drops every further SYN and the client retransmits
+/// until its own timeout. The sockets stay open as long as this value lives.
+#[cfg(target_os = "linux")]
+struct ConnectBlackhole {
+    port: u16,
+    _listener: std::net::TcpListener,
+    _fillers: Vec<std::net::TcpStream>,
+}
+#[cfg(target_os = "linux")]
+impl ConnectBlackhole {
+    fn new() -> Result<Self, FixtureError> {
+        use std::os::fd::AsRawFd;
+        let listener = fixed(std::net::TcpListener::bind("127.0.0.1:0"))?;
+        let port = fixed(listener.local_addr())?.port();
+        // SAFETY: listen(2) on a socket this function owns, with plain integers.
+        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 0) }, 0);
+        let mut fillers = Vec::new();
+        for _ in 0..2 {
+            // The accept queue holds backlog + 1 completed connections; the
+            // second filler is dropped at the SYN and may stay unconnected.
+            if let Ok(stream) = std::net::TcpStream::connect_timeout(
+                &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+                std::time::Duration::from_millis(300),
+            ) {
+                fillers.push(stream);
+            }
+        }
+        // The queue is full: a further connect must not complete.
+        assert!(
+            std::net::TcpStream::connect_timeout(
+                &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+                std::time::Duration::from_millis(500),
+            )
+            .is_err()
+        );
+        Ok(Self {
+            port,
+            _listener: listener,
+            _fillers: fillers,
+        })
+    }
+    /// Whether this process has a connect to the port that was sent and not
+    /// answered (state SYN_SENT in /proc/net/tcp).
+    fn connecting(&self) -> bool {
+        let suffix = format!(":{:04X}", self.port);
+        std::fs::read_to_string("/proc/net/tcp").is_ok_and(|table| {
+            table.lines().skip(1).any(|line| {
+                let mut fields = line.split_whitespace().skip(2);
+                fields
+                    .next()
+                    .is_some_and(|remote| remote.ends_with(&suffix))
+                    && fields.next() == Some("02")
+            })
+        })
+    }
+}
+#[cfg(target_os = "linux")]
+fn cancel_during_connect_stall() -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let hole = ConnectBlackhole::new()?;
+    // Aim the publication remote and the approved host at the black hole.
+    fixed(p.b.repo()?.remote_set_url(
+        "origin",
+        &format!("ssh://fixture@127.0.0.1:{}/fixture.git", hole.port),
+    ))?;
+    let before = snapshot(&p.b)?;
+    let n = p.no_push_baseline()?;
+    let sockets = p.server.accepted_sockets();
+    let mut req = p.request(RemotePollInvocation::Automatic);
+    if let Some(approval) = req.approval.as_mut() {
+        approval.authority.port = hole.port;
+    }
+    let elapsed = cancel_stalled_poll(&p, req, || hole.connecting())?;
+    ssh_harness::observation(&[elapsed.as_millis()]);
+    assert!(fixed(p.b.service.active_remote_operation(&p.b.root))?.is_none());
+    assert_eq!(p.server.accepted_sockets(), sockets);
     p.no_push_since(n)?;
     assert_eq!(snapshot(&p.b)?, before);
     p.finish()
