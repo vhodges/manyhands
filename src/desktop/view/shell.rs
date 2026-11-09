@@ -5,7 +5,7 @@ pub(crate) mod tokens;
 
 use gpui_kit::{
     App, ClickEvent, FontWeight, InteractiveElement, ParentElement, SharedString, Styled,
-    WeakEntity, Window,
+    TestSupportExt, WeakEntity, Window,
     component::{TitleBar, h_flex},
     div, img, px,
 };
@@ -28,19 +28,34 @@ pub(crate) fn title_bar(
     workspace: WeakEntity<Workspace>,
     cx: &App,
 ) -> TitleBar {
+    title_bar_closing(
+        title,
+        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+            let _ = workspace.update(cx, |workspace, cx| {
+                workspace.request_quit(window, cx);
+            });
+        },
+        cx,
+    )
+}
+
+/// The same bar for a window with no workspace (the startup failure
+/// window), whose close control does `on_close`.
+pub(crate) fn title_bar_closing(
+    title: SharedString,
+    on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> TitleBar {
     let colors = chrome_colors(cx);
     TitleBar::new()
         .h(px(TITLE_BAR_HEIGHT))
         .bg(colors.chrome)
         .border_color(colors.border)
-        .on_close_window(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-            let _ = workspace.update(cx, |workspace, cx| {
-                workspace.request_quit(window, cx);
-            });
-        })
+        .on_close_window(on_close)
         .child(
             h_flex()
                 .id("title-bar-title")
+                .test_support()
                 .gap_2()
                 .items_center()
                 .child(

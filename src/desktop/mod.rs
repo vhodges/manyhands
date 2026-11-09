@@ -31,7 +31,10 @@ use manyhands::{
 
 use keys::Quit;
 use services::{LibraryBackend, Services, layout::LayoutStore, resolutions::ResolutionStore};
-use view::workspace::Workspace;
+use view::{
+    shell::{title::window_title, title_bar_closing},
+    workspace::Workspace,
+};
 
 /// Opens the service the desktop runs over. Production opens the default
 /// data directory; tests open a temporary one.
@@ -94,8 +97,9 @@ fn window_options(cx: &App) -> WindowOptions {
 
 /// The main window draws its own title bar (Part D), so it takes the Kit's
 /// title bar options and asks for client decorations, which make Linux draw
-/// the Kit's window controls (R-15). The startup failure window keeps
-/// `window_options`.
+/// the Kit's window controls (R-15). The startup failure window takes them
+/// too and draws the same bar: a successful Retry puts the workspace, with
+/// its own bar, into that window.
 fn main_window_options(cx: &App) -> WindowOptions {
     let mut options = TitleBar::window_options();
     options.window_bounds = window_options(cx).window_bounds;
@@ -138,7 +142,7 @@ fn open_startup_failure_window(
     opener: Opener,
     cx: &mut App,
 ) -> WindowHandle<Root> {
-    cx.open_window(window_options(cx), |window, cx| {
+    cx.open_window(main_window_options(cx), |window, cx| {
         cx.new(|cx| {
             let view = cx.new(|cx| {
                 let focus = cx.focus_handle();
@@ -235,39 +239,51 @@ impl StartupFailureView {
 
 impl Render for StartupFailureView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The window's own bar, as the workspace's (the window takes the
+        // main window's options); its close control quits.
+        let title_bar = title_bar_closing(
+            window_title(None).into(),
+            cx.listener(|this, _: &ClickEvent, _, cx| this.quit(cx)),
+            cx,
+        );
         v_flex()
             .id("startup-failure")
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &Quit, _, cx| this.quit(cx)))
             .size_full()
-            .items_center()
-            .justify_center()
-            .gap_4()
+            .child(title_bar)
             .child(
-                div()
-                    .id("startup-failure-message")
-                    .test_support()
-                    .child(self.failure.message()),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
+                v_flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .gap_4()
                     .child(
-                        div().id("startup-retry").test_support().child(
-                            Button::new("startup-retry-button")
-                                .primary()
-                                .label("Retry")
-                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.retry(window, cx)
-                                })),
-                        ),
+                        div()
+                            .id("startup-failure-message")
+                            .test_support()
+                            .child(self.failure.message()),
                     )
                     .child(
-                        div().id("startup-quit").test_support().child(
-                            Button::new("startup-quit-button")
-                                .label("Quit")
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.quit(cx))),
-                        ),
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                div().id("startup-retry").test_support().child(
+                                    Button::new("startup-retry-button")
+                                        .primary()
+                                        .label("Retry")
+                                        .on_click(cx.listener(
+                                            |this, _: &ClickEvent, window, cx| {
+                                                this.retry(window, cx)
+                                            },
+                                        )),
+                                ),
+                            )
+                            .child(div().id("startup-quit").test_support().child(
+                                Button::new("startup-quit-button").label("Quit").on_click(
+                                    cx.listener(|this, _: &ClickEvent, _, cx| this.quit(cx)),
+                                ),
+                            )),
                     ),
             )
     }
