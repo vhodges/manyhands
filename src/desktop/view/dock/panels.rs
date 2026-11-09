@@ -9,15 +9,25 @@
 //! own updates (facts 2 and 5), where reading the Workspace could panic.
 
 use gpui_kit::{
-    App, AppContext as _, Context, Div, Empty, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, Render, SharedString, Subscription, WeakEntity, Window,
+    App, AppContext as _, Context, Empty, Entity, EventEmitter, FocusHandle, Focusable,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, WeakEntity, Window,
     component::dock::{BasePanel, Panel, PanelControl, PanelEvent},
+    div, px,
 };
 
 use crate::desktop::{
-    model::layout::{ITEM_AREA_NAME, PanelKind},
-    view::workspace::{Region, Workspace},
+    model::{
+        documents::document_count,
+        layout::{ITEM_AREA_NAME, PanelKind},
+    },
+    view::{
+        shell::tokens::chrome_colors,
+        workspace::{Region, Workspace},
+    },
 };
+
+/// Size of a header's count (`02`).
+const COUNT_SIZE: f32 = 11.;
 
 /// What a panel draws.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -130,8 +140,18 @@ impl Panel for RegionPanel {
         }
     }
 
-    fn title_suffix(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<impl IntoElement> {
-        None::<Div>
+    /// The count the header shows beside the title (R-22).
+    fn title_suffix(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let Slot::Panel(kind) = self.slot else {
+            return None;
+        };
+        let count = listed(self.workspace.upgrade()?.read(cx), kind)?;
+        Some(
+            div()
+                .text_size(px(COUNT_SIZE))
+                .text_color(chrome_colors(cx).muted)
+                .child(count.to_string()),
+        )
     }
 
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
@@ -141,6 +161,22 @@ impl Panel for RegionPanel {
     /// The item area draws its own tab strip.
     fn title_bar(&self, _: &App) -> bool {
         self.slot != Slot::ItemArea
+    }
+}
+
+/// How many rows the panel's list has, once it is loaded: repositories
+/// listed, tickets listed under the current filters, documents listed.
+/// Activity has none (R-22).
+fn listed(workspace: &Workspace, kind: PanelKind) -> Option<usize> {
+    match kind {
+        PanelKind::Repositories => workspace.navigation().repositories().rows().map(Vec::len),
+        PanelKind::Tickets => workspace.tickets().state().rows().map(Vec::len),
+        PanelKind::Documents => workspace
+            .documents()
+            .state()
+            .rows()
+            .map(|rows| document_count(rows)),
+        PanelKind::Activity => None,
     }
 }
 

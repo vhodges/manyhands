@@ -66,7 +66,8 @@ gpui_kit::actions!(
         /// Make the edit editor's selection a link: the toolbar asks for
         /// the address.
         InsertLink,
-        /// New document or New ticket, the shown list's.
+        /// New document or New ticket, the focused list's: Documents or
+        /// Tickets.
         NewItem,
         /// Focus the edit toolbar's next control.
         ToolbarNext,

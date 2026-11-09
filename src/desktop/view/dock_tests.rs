@@ -3,7 +3,9 @@
 
 use gpui_kit::{
     TestAppContext,
-    component::dock::{DockAreaState, DockPlacement, DockState, PanelState},
+    component::dock::{
+        DockArea, DockAreaState, DockPlacement, DockState, InsertTarget, PanelState,
+    },
     px,
     test::TestWindowExt,
 };
@@ -155,4 +157,73 @@ fn the_default_layout_is_1b(cx: &mut TestAppContext) {
             .collect()
     });
     assert_eq!(focused, vec![Region::Repositories]);
+}
+
+/// The active index of the group holding both `a` and `b`, in a dump's dock.
+fn active_tab(dock: &Option<DockState>, a: &str, b: &str) -> Option<(Vec<String>, usize)> {
+    fn walk(node: &PanelState, a: &str, b: &str) -> Option<(Vec<String>, usize)> {
+        let names: Vec<String> = node.children.iter().map(|c| c.panel_name.clone()).collect();
+        if node.panel_name == "TabPanel"
+            && names.iter().any(|n| n == a)
+            && names.iter().any(|n| n == b)
+        {
+            return Some((names, node.info.active_index()?));
+        }
+        node.children.iter().find_map(|child| walk(child, a, b))
+    }
+    walk(dock.as_ref()?.panel(), a, b)
+}
+
+/// A tab click displays its panel: Documents joins Repositories' group in
+/// the background, and a click on its tab brings its region up.
+#[gpui_kit::test]
+fn clicking_a_tab_selects_its_panel(cx: &mut TestAppContext) {
+    let shell = Shell::open(Fixture::new(), cx);
+    let area = shell
+        .workspace
+        .read_with(cx, |ws, _| ws.dock_area().clone());
+    let (repositories, documents) = (PanelKind::Repositories.name(), PanelKind::Documents.name());
+    let find = |name: &str, cx: &mut TestAppContext| {
+        area.read_with(cx, |area, cx| {
+            let tree = area.layout(DockPlacement::Left).expect("the left dock");
+            tree.panels()
+                .find(|id| area.panel(*id).is_some_and(|p| p.panel_name(cx) == name))
+                .map(|id| (id, tree.find_panel_node(id).expect("in a group")))
+                .unwrap_or_else(|| panic!("{name} is in the left dock"))
+        })
+    };
+    let (documents_id, _) = find(documents, cx);
+    let (_, group) = find(repositories, cx);
+    shell.frame(cx, |window, cx| {
+        area.update(cx, |area: &mut DockArea, cx| {
+            area.move_panel(
+                documents_id,
+                InsertTarget::Tabs {
+                    node: group,
+                    ix: None,
+                    activate: false,
+                },
+                window,
+                cx,
+            )
+        })
+    });
+    shell.run(cx);
+    let active = |cx: &mut TestAppContext| {
+        let state = area.read_with(cx, |area, cx| area.dump(cx));
+        active_tab(&state.left_dock, repositories, documents).expect("one group holds both")
+    };
+    let (names, active_ix) = active(cx);
+    assert_eq!(names[active_ix], repositories, "Repositories stays active");
+    assert!(shell.present("panel-tab-documents", cx), "the tab is drawn");
+    assert!(!shell.present(Region::Documents.id(), cx));
+
+    shell.click("panel-tab-documents", cx);
+
+    let (names, active_ix) = active(cx);
+    assert_eq!(names[active_ix], documents, "the click selected Documents");
+    assert!(
+        shell.present(Region::Documents.id(), cx),
+        "its region is drawn"
+    );
 }

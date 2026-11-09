@@ -11,19 +11,16 @@ use gpui_kit::{App, Hsla, component::ActiveTheme, rgb};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ChromeColors {
     /// Title bar, panel headers, tab strip, footer.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 6.
     pub chrome: Hsla,
     /// Dock panel bodies, the active panel tab, chips.
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 4c.
     pub panel: Hsla,
     /// Every 1 px divider.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 6.
     pub border: Hsla,
     /// Button and input borders.
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 6.
     pub border_strong: Hsla,
     /// Hover, secondary buttons, toggles on.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 6.
     pub hover: Hsla,
     /// Hidden-dock icons and the unfocused tab line.
     pub faint: Hsla,
@@ -31,10 +28,8 @@ pub(crate) struct ChromeColors {
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 4c.
     pub muted: Hsla,
     /// Secondary text and icons.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 6.
     pub secondary: Hsla,
     /// Primary text.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 6.
     pub text: Hsla,
     /// The selected list row.
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 4c.
@@ -78,7 +73,6 @@ pub(crate) fn colors(dark: bool) -> ChromeColors {
 }
 
 /// The colours for the current theme's mode.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 6.
 pub(crate) fn chrome_colors(cx: &App) -> ChromeColors {
     colors(cx.theme().is_dark())
 }

@@ -31,7 +31,7 @@ const BROKEN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC3";
 /// An open ticket whose status is `closed`, a lifecycle-closed ticket, a
 /// plain open ticket and a nonconforming file under `.manyhands/tickets/`,
 /// then a library refresh. The repository is selected and the Tickets
-/// pane shown.
+/// list shown.
 fn four_tickets(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
@@ -249,7 +249,7 @@ const AFTER_DONE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD7";
 
 /// A ticket waiting for an open one, one waiting for a ticket no context
 /// holds, two waiting for each other, one whose only dependency is closed,
-/// and a nonconforming entry. The Tickets pane is shown.
+/// and a nonconforming entry. The Tickets list is shown.
 fn related(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");

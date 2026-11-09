@@ -34,6 +34,17 @@ pub(crate) enum TreeNode {
     Document(ItemDto),
 }
 
+/// How many documents a tree lists, in every folder.
+pub(crate) fn document_count(nodes: &[TreeNode]) -> usize {
+    nodes
+        .iter()
+        .map(|node| match node {
+            TreeNode::Folder { children, .. } => document_count(children),
+            TreeNode::Document(_) => 1,
+        })
+        .sum()
+}
+
 /// The folder a path is directly in: everything before its last `/`.
 fn parent(path: &str) -> Option<&str> {
     path.rsplit_once('/').map(|(parent, _)| parent)

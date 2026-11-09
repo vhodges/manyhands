@@ -7,8 +7,8 @@
 //! as an ordinary edit session; a new ticket is created with its fields and
 //! the dependency and parent its sheet chose; the new tab's header is the
 //! draft's; a file at the path at Save keeps the draft; a repository with
-//! no initials points to Settings; `secondary-n` opens the shown list's
-//! dialog, in the navigation region only.
+//! no initials points to Settings; `secondary-n` opens the focused list's
+//! dialog, in the Documents and Tickets regions only.
 //!
 //! Draft types derive no `Debug`; they are read through `match` and
 //! `assert!`. Every test waits on the worker, so it allows parking. Typing
@@ -948,7 +948,7 @@ async fn initials_required_points_to_settings(cx: &mut TestAppContext) {
     );
 }
 
-/// Obligation 5: `secondary-n` in the navigation region opens the shown
+/// Obligation 5: `secondary-n` in a list region opens the focused
 /// list's dialog, New document… on Documents and New ticket… on Tickets,
 /// with focus in its Title; Escape closes it and focus goes back where it
 /// was. It opens nothing in front of a dialog, from the content region, or

@@ -177,9 +177,10 @@ impl gpui_kit::Global for OpenedDialog {}
 
 impl Workspace {
     /// New document… (`Pane::Documents`) or New ticket…, on the selected
-    /// repository: each list's button passes its own kind. Nothing opens
-    /// with no repository shown, nor in front of a dialog or the sheet. The
-    /// dialog's new item opens in its tab.
+    /// repository: each list's button passes its own kind, and the key the
+    /// focused list region's. Nothing opens with no repository shown, nor in
+    /// front of a dialog or the sheet. The dialog's new item opens in its
+    /// tab.
     pub(in crate::desktop::view) fn new_item(
         &mut self,
         list: Pane,

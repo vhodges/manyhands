@@ -1,20 +1,24 @@
 //! The renderer of the dock area (R-2): everything the Kit's skin draws
 //! except the group header, which is the shell's own.
 
+mod tabs;
+
 use std::{rc::Rc, sync::Arc};
 
 use gpui_kit::{
     AnyElement, AnyView, App, Axis, Div, Empty, InteractiveElement, IntoElement, ParentElement,
     Stateful, Styled, Window,
     component::{
+        ActiveTheme,
         dock::{
             BasePanelView, DockAreaRenderer, DockContext, DockSkin, DropIndicator, NodeId,
             PanelHandle, PanelState, TabGroupContext, TabGroupRenderer,
         },
-        h_flex,
     },
     div,
 };
+
+use crate::desktop::view::shell::tokens::chrome_colors;
 
 /// Hands the area's frames, dock chrome and placeholder to the Kit's skin,
 /// which keeps dock-edge resizing and the `LayoutChanged` that follows it
@@ -77,8 +81,7 @@ impl DockAreaRenderer for ShellRenderer {
     }
 }
 
-/// A group's header and body. In Task 4b it draws titles only; Task 4c adds
-/// the tabs, dragging and the collapsed strip.
+/// A group's header and body: the header is `tabs::header`.
 struct PanelHeader {
     /// The Kit's own group renderer, for the drop indicator it draws.
     skin: Rc<dyn TabGroupRenderer>,
@@ -86,8 +89,19 @@ struct PanelHeader {
 
 impl TabGroupRenderer for PanelHeader {
     /// Without the skin's frame, whose zoom and close actions do not apply.
-    fn frame(&self, group: &TabGroupContext, _: &mut Window, _: &mut App) -> Stateful<Div> {
-        div().id(("panel-group", group.node().as_u64()))
+    /// The panels' bodies sit on `panel`; the item area keeps the theme's
+    /// background.
+    fn frame(&self, group: &TabGroupContext, _: &mut Window, cx: &mut App) -> Stateful<Div> {
+        let own_chrome = group
+            .active_panel()
+            .and_then(PanelHandle::of)
+            .is_some_and(|handle| !handle.title_bar(cx));
+        let frame = div().id(("panel-group", group.node().as_u64()));
+        if own_chrome {
+            frame.bg(cx.theme().tokens.background)
+        } else {
+            frame.bg(chrome_colors(cx).panel)
+        }
     }
 
     fn render_tab_bar(
@@ -96,24 +110,7 @@ impl TabGroupRenderer for PanelHeader {
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        let shown: Vec<PanelHandle> = group
-            .panels()
-            .iter()
-            .filter(|panel| panel.visible(cx))
-            .filter_map(|panel| PanelHandle::of(panel).cloned())
-            .collect();
-        match shown.as_slice() {
-            [] => Empty.into_any_element(),
-            // The item area draws its own tab strip.
-            [only] if !only.title_bar(cx) => Empty.into_any_element(),
-            titles => h_flex()
-                .gap_2()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .children(titles.iter().map(|panel| panel.title(window, cx)))
-                .into_any_element(),
-        }
+        tabs::header(group, window, cx)
     }
 
     /// Uncached, so the panel sees the Workspace's changes (R-1); a collapsed

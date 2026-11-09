@@ -66,7 +66,6 @@ impl PanelKind {
     }
 
     /// For a group of more than two tabs (R-32).
-    #[allow(dead_code)] // Called from Task 4c.
     pub(crate) fn short_label(self) -> &'static str {
         match self {
             Self::Repositories => "Repos",
@@ -77,7 +76,6 @@ impl PanelKind {
     }
 
     /// The icon's name (R-23).
-    #[allow(dead_code)] // Called from Task 4c.
     pub(crate) fn icon(self) -> &'static str {
         match self {
             Self::Repositories => "folder-git-2",
@@ -274,7 +272,8 @@ impl Layout {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
+// Called from Task 5, except `set_arrangement`, which `DockShell::build` calls.
+#[cfg_attr(not(test), allow(dead_code))]
 impl Layout {
     /// A panel toggle: a displayed panel goes off, and the next that is on
     /// in its group becomes active; any other panel is revealed.
@@ -385,7 +384,6 @@ pub(crate) fn f6_stops(layout: &Layout) -> Vec<Stop> {
 /// Reads each dock's groups from a dumped dock area: the leaf panels'
 /// names in order, with each group's active index. Anything that is not
 /// one of the four panels is left out.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
 pub(crate) fn arrangement_from(state: &DockAreaState) -> Arrangement {
     let mut arrangement = Arrangement::default();
     let docks = [
