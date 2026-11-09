@@ -18,8 +18,7 @@ use std::{
 };
 
 use gpui_kit::{
-    ClipboardItem, ElementId, Entity, Focusable, Pixels, TestAppContext, px, size,
-    test::TestWindowExt,
+    ClipboardItem, ElementId, Entity, Focusable, Pixels, TestAppContext, px, test::TestWindowExt,
 };
 use manyhands::{
     drafts::{CommentTarget, DraftFields, Entry, Held},
@@ -103,9 +102,7 @@ pub(super) fn shell(
     build(&fixture, &root);
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
-    shell
-        .visual(cx)
-        .simulate_resize(size(px(1440.), px(height)));
+    shell.resize_keeping_content(1440., height, cx);
     shell.run(cx);
     let target = OpenTarget::Item {
         repo: key(&root),

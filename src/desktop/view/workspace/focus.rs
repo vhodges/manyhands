@@ -1,7 +1,10 @@
 //! The five focus groups, cycling, fallback and region decoration.
 
 use super::Workspace;
-use crate::desktop::model::navigation::Pane;
+use crate::desktop::model::{
+    layout::{PanelKind, Stop, f6_stops},
+    navigation::Pane,
+};
 use gpui_kit::{
     App, Context, InteractiveElement, IntoElement, ParentElement, Styled, TestSupportExt, Window,
     component::{ActiveTheme, WindowExt},
@@ -71,6 +74,27 @@ impl Region {
         }
     }
 
+    /// The F6 stop the region is.
+    fn stop(self) -> Stop {
+        match self {
+            Self::Repositories => Stop::Panel(PanelKind::Repositories),
+            Self::Documents => Stop::Panel(PanelKind::Documents),
+            Self::Tickets => Stop::Panel(PanelKind::Tickets),
+            Self::Operations => Stop::Panel(PanelKind::Activity),
+            Self::Content => Stop::ItemArea,
+        }
+    }
+
+    fn of_stop(stop: Stop) -> Self {
+        match stop {
+            Stop::Panel(PanelKind::Repositories) => Self::Repositories,
+            Stop::Panel(PanelKind::Documents) => Self::Documents,
+            Stop::Panel(PanelKind::Tickets) => Self::Tickets,
+            Stop::Panel(PanelKind::Activity) => Self::Operations,
+            Stop::ItemArea => Self::Content,
+        }
+    }
+
     fn key_context(self) -> &'static str {
         match self {
             Self::Repositories => "Repositories",
@@ -82,6 +106,15 @@ impl Region {
 }
 
 impl Workspace {
+    /// Whether the region is on screen: the item area always is; a panel is
+    /// when the layout displays it (R-9).
+    fn is_displayed(&self, region: Region) -> bool {
+        match region.stop() {
+            Stop::ItemArea => true,
+            Stop::Panel(kind) => self.layout.is_displayed(kind),
+        }
+    }
+
     pub(super) fn focused_region(&self, window: &Window, cx: &App) -> Option<Region> {
         REGIONS
             .into_iter()
@@ -133,16 +166,18 @@ impl Workspace {
             }
             return;
         }
+        // A region that is not displayed cannot take focus: the last
+        // region, else the item area (R-9).
         let region = target
             .and_then(|target| {
                 REGIONS
                     .into_iter()
+                    .filter(|region| self.is_displayed(*region))
                     .find(|region| self.regions[region.index()].contains(&target, window))
             })
-            .or(self.last_region);
-        if let Some(region) = region {
-            self.focus_region(region, window, cx);
-        }
+            .or(self.last_region.filter(|region| self.is_displayed(*region)))
+            .unwrap_or(Region::Content);
+        self.focus_region(region, window, cx);
     }
 
     pub(super) fn cycle_region(
@@ -151,12 +186,16 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let next = match self.focused_region(window, cx) {
-            Some(region) => {
-                let count = REGIONS.len() as isize;
-                REGIONS[(region.index() as isize + step).rem_euclid(count) as usize]
-            }
-            None => Region::Repositories,
+        let stops: Vec<Region> = f6_stops(&self.layout)
+            .into_iter()
+            .map(Region::of_stop)
+            .collect();
+        let next = match self
+            .focused_region(window, cx)
+            .and_then(|region| stops.iter().position(|stop| *stop == region))
+        {
+            Some(at) => stops[(at as isize + step).rem_euclid(stops.len() as isize) as usize],
+            None => stops[0],
         };
         self.focus_region(next, window, cx);
     }

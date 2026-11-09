@@ -18,6 +18,7 @@ use std::{
 use gpui_kit::{
     AppContext, Context, Entity, FocusHandle, Subscription, Task, WeakEntity, Window,
     component::{
+        dock::DockArea,
         input::{InputEvent, InputState},
         list::ListEvent,
     },
@@ -25,6 +26,7 @@ use gpui_kit::{
 
 pub(crate) use super::quit::QuitPhase;
 use super::{
+    dock::DockShell,
     documents::DocumentsPane,
     drafts::{DraftsEvent, DraftsPage},
     item::{ChipField, ItemPane},
@@ -38,6 +40,7 @@ use crate::desktop::{
     model::{
         documents::Documents,
         find::Find,
+        layout::Layout,
         navigation::Navigation,
         stamp::{Generations, RepoKey},
         tickets::Tickets,
@@ -82,6 +85,10 @@ pub(crate) struct Workspace {
     services: Services,
     /// One handle per region, in `REGIONS` order.
     regions: [FocusHandle; 5],
+    /// The panels the person sees and how they are arranged.
+    layout: Layout,
+    /// The dock area, whose panels draw the regions.
+    dock: DockShell,
     navigation: Navigation,
     /// Replacing a read drops the previous task.
     list_read: Option<Task<()>>,
@@ -235,9 +242,13 @@ impl Workspace {
             window,
             |this, _, event: &DraftsEvent, window, cx| this.drafts_event(event, window, cx),
         );
+        let mut layout = Layout::default();
+        let dock = DockShell::build(&regions, &mut layout, window, cx);
         let mut workspace = Self {
             services,
             regions,
+            layout,
+            dock,
             navigation: Navigation::default(),
             list_read: None,
             resolve_read: None,
@@ -334,6 +345,10 @@ impl Workspace {
     }
     pub(super) fn choice_focus(&self, id: &str) -> Option<&FocusHandle> {
         self.choice_focus.get(id)
+    }
+    /// The dock area, whose panels draw the regions.
+    pub(crate) fn dock_area(&self) -> &Entity<DockArea> {
+        self.dock.area()
     }
     pub(crate) fn quit_phase(&self) -> QuitPhase {
         self.quit

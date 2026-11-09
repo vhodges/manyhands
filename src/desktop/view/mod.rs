@@ -4,6 +4,7 @@ pub(crate) mod close_draft;
 pub(crate) mod confirm;
 pub(crate) mod conflict;
 pub(crate) mod create;
+pub(crate) mod dock;
 pub(crate) mod documents;
 pub(crate) mod draft_comparison;
 pub(crate) mod drafts;

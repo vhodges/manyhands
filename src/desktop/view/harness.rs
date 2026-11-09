@@ -9,7 +9,10 @@ use std::{
 
 use gpui_kit::{
     App, ElementId, Entity, Focusable, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext,
-    VisualTestContext, Window, WindowHandle, component::Root, px, size, test::TestWindowExt,
+    VisualTestContext, Window, WindowHandle,
+    component::{Root, dock::DockPlacement},
+    px, size,
+    test::TestWindowExt,
 };
 use manyhands::{
     drafts::{DraftBase, DraftFields, DraftId, DraftTarget, ItemKind},
@@ -67,6 +70,29 @@ pub(crate) async fn wait_until<T: 'static>(
     }
 }
 
+/// What `Shell::start` does to the window after opening it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Geometry {
+    /// The harness window and an Activity dock tall enough to click in.
+    Harness,
+    /// Nothing: the window and layout of a launch.
+    AsLaunched,
+}
+
+/// The window chrome that is not the item area, the dock sides or Activity:
+/// 0 until the title bar (38 px, Task 6) and the footer (28 px, Task 7) are
+/// drawn. Those tasks raise it, so the item area stays 860 x 1140 at every
+/// task, and a window of 1590 x 1726 results (R-26).
+const SHELL_CHROME_HEIGHT: f32 = 0.;
+
+/// The harness window: the side docks (290 and 440 px) leave an item area of
+/// 860 px, and Activity (520 px) and the chrome leave it 1140.
+const WINDOW_WIDTH: f32 = 1590.;
+const WINDOW_HEIGHT: f32 = 1140. + ACTIVITY_HEIGHT + SHELL_CHROME_HEIGHT;
+
+/// Activity's height in the harness: twice today's operation area (R-26).
+const ACTIVITY_HEIGHT: f32 = 520.;
+
 pub(crate) struct Shell {
     pub window: WindowHandle<Root>,
     pub workspace: Entity<Workspace>,
@@ -80,7 +106,14 @@ impl Shell {
     /// refreshed at launch, so a test that does not wait for the worker
     /// need not.
     pub(crate) fn open(fixture: Fixture, cx: &mut TestAppContext) -> Self {
-        Self::start(fixture, false, |_| {}, cx)
+        Self::start(fixture, false, |_| {}, Geometry::Harness, cx)
+    }
+
+    /// Opens the main window as the application does, at the application's
+    /// own size and layout: nothing is resized (R-26). For the tests of the
+    /// default layout.
+    pub(crate) fn open_as_launched(fixture: Fixture, cx: &mut TestAppContext) -> Self {
+        Self::start(fixture, false, |_| {}, Geometry::AsLaunched, cx)
     }
 
     /// Opens the main window as the application does, refreshing every
@@ -92,13 +125,14 @@ impl Shell {
         before: impl FnOnce(&DelayingBackend),
         cx: &mut TestAppContext,
     ) -> Self {
-        Self::start(fixture, true, before, cx)
+        Self::start(fixture, true, before, Geometry::Harness, cx)
     }
 
     fn start(
         fixture: Fixture,
         launch_refresh: bool,
         before: impl FnOnce(&DelayingBackend),
+        geometry: Geometry,
         cx: &mut TestAppContext,
     ) -> Self {
         cx.update(gpui_kit::init);
@@ -121,12 +155,43 @@ impl Shell {
             backend,
             fixture,
         };
-        // Tall enough that an item, its later actions and a few expanded
-        // entries of the operation area are all on screen, where a click
-        // reaches them.
-        shell.visual(cx).simulate_resize(size(px(1440.), px(1400.)));
+        if geometry == Geometry::Harness {
+            // Big enough that an item, its later actions and a few expanded
+            // entries of Activity are all on screen, where a click reaches
+            // them (R-26).
+            shell
+                .visual(cx)
+                .simulate_resize(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)));
+            shell.run(cx);
+            shell.set_activity_height(ACTIVITY_HEIGHT, cx);
+        }
         shell.run(cx);
         shell
+    }
+
+    /// Sets the bottom dock's height, as a person dragging its edge would.
+    fn set_activity_height(&self, height: f32, cx: &mut TestAppContext) {
+        let area = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.dock_area().clone());
+        self.frame(cx, |window, cx| {
+            area.update(cx, |area, cx| {
+                area.set_dock_size(DockPlacement::Bottom, px(height), window, cx)
+            })
+        });
+        self.run(cx);
+    }
+
+    /// Resizes the window to the size a test asks for, grown by the docks
+    /// and Activity so that the item area keeps the size the test chose
+    /// (E-10): 150 px wider (the side docks are 290 + 440 px, the old
+    /// columns 260 + 320) and the 520 px Activity dock and the chrome
+    /// taller, less the old 260 px operation area.
+    pub(crate) fn resize_keeping_content(&self, width: f32, height: f32, cx: &mut TestAppContext) {
+        let taller = ACTIVITY_HEIGHT - 260. + SHELL_CHROME_HEIGHT;
+        self.visual(cx)
+            .simulate_resize(size(px(width + 150.), px(height + taller)));
+        self.run(cx);
     }
 
     pub(crate) fn visual(&self, cx: &TestAppContext) -> VisualTestContext {

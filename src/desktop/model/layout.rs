@@ -16,11 +16,9 @@
 use gpui_kit::component::dock::{DockAreaState, DockState, PanelState};
 
 /// The stable name of the item area's panel.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 pub(crate) const ITEM_AREA_NAME: &str = "ItemAreaPanel";
 
 /// The left dock's two groups, Repositories over Documents.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 pub(crate) const DEFAULT_LEFT_SPLIT: [f32; 2] = [0.6, 1.4];
 
 /// The Kit's names for a dock's containers, as written in a dump.
@@ -28,7 +26,6 @@ const TAB_GROUP: &str = "TabPanel";
 const SPLIT: &str = "StackPanel";
 
 /// The panels the shell docks.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum PanelKind {
     Repositories,
@@ -37,7 +34,6 @@ pub(crate) enum PanelKind {
     Activity,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 impl PanelKind {
     pub(crate) const ALL: [PanelKind; 4] = [
         PanelKind::Repositories,
@@ -97,7 +93,6 @@ impl PanelKind {
 }
 
 /// Where a dock sits.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Side {
     Left,
@@ -105,7 +100,6 @@ pub(crate) enum Side {
     Bottom,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 impl Side {
     pub(crate) const ALL: [Side; 3] = [Side::Left, Side::Right, Side::Bottom];
 
@@ -115,14 +109,12 @@ impl Side {
 }
 
 /// A tab group: its panels in order and the active one's index.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct Group {
     pub(crate) panels: Vec<PanelKind>,
     pub(crate) active: usize,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 impl Group {
     /// The selected tab, whether or not it is on.
     pub(crate) fn active_panel(&self) -> Option<PanelKind> {
@@ -132,13 +124,11 @@ impl Group {
 
 /// Each side's groups in order: top to bottom in a side dock, left to
 /// right in the bottom dock.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub(crate) struct Arrangement {
     sides: [Vec<Group>; 3],
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 impl Arrangement {
     pub(crate) fn groups(&self, side: Side) -> &[Group] {
         &self.sides[side.index()]
@@ -191,7 +181,6 @@ impl Arrangement {
 }
 
 /// An F6 stop.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Stop {
     Panel(PanelKind),
@@ -199,7 +188,6 @@ pub(crate) enum Stop {
 }
 
 /// The layout the person sees.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct Layout {
     on: [bool; 4],
@@ -230,7 +218,6 @@ impl Default for Layout {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 impl Layout {
     pub(crate) fn is_on(&self, kind: PanelKind) -> bool {
         self.on[kind.index()]
@@ -378,7 +365,6 @@ impl Layout {
 /// F6's stops (decision 9): the left dock's displayed panels top to
 /// bottom, the item area, the right dock's, then the bottom dock's from
 /// left to right. Only a tabbed group's displayed tab is a stop.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 pub(crate) fn f6_stops(layout: &Layout) -> Vec<Stop> {
     let displayed = |side: Side| {
         layout

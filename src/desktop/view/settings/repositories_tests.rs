@@ -10,8 +10,7 @@ use std::{
 };
 
 use gpui_kit::{
-    Entity, FocusHandle, TestAppContext, component::input::InputState, px, size,
-    test::TestWindowExt,
+    Entity, FocusHandle, TestAppContext, component::input::InputState, px, test::TestWindowExt,
 };
 use manyhands::{
     canonical::CONFIG_PATH,
@@ -647,7 +646,7 @@ pub(super) fn control_focus(shell: &Shell, id: &str, cx: &mut TestAppContext) ->
 #[gpui_kit::test]
 fn a_form_control_below_the_fold_is_scrolled_into_view(cx: &mut TestAppContext) {
     let shell = settings(Fixture::new(), cx);
-    shell.visual(cx).simulate_resize(size(px(1440.), px(640.)));
+    shell.resize_keeping_content(1440., 640., cx);
     shell.run(cx);
     let bounds = |shell: &Shell, cx: &mut TestAppContext| {
         shell.frame(cx, |window, _| {

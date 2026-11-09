@@ -1,4 +1,5 @@
-//! Shell layout, action wiring and content scroll commands.
+//! Shell layout, action wiring and content scroll commands, and the bodies
+//! of the dock's panels.
 
 use super::{Region, Workspace};
 use crate::desktop::{
@@ -8,17 +9,18 @@ use crate::desktop::{
         OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh,
         ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop,
     },
-    model::stamp::SettingsPage,
+    model::{layout::PanelKind, stamp::SettingsPage},
     view::{
+        dock::Slot,
         scroll::ContentScroll,
         sidebar::{self, RepositoryRow},
     },
 };
 use gpui_kit::{
-    App, Context, InteractiveElement, IntoElement, ParentElement, Render,
+    AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{ActiveTheme, Root, WindowExt, h_flex, v_flex},
-    deferred, div, px, relative,
+    deferred, div,
 };
 
 impl Workspace {
@@ -27,6 +29,122 @@ impl Workspace {
     fn scroll_content(&mut self, scroll: impl Fn(&ContentScroll) -> bool, cx: &mut Context<Self>) {
         if scroll(&self.scroll_target(cx)) {
             cx.notify();
+        }
+    }
+
+    /// The body of the panel that draws `slot`, built when the panel
+    /// renders (R-1): the same bodies as the fixed row drew, each inside its
+    /// region.
+    pub(in crate::desktop::view) fn region_body(
+        &mut self,
+        slot: Slot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match slot {
+            Slot::Panel(PanelKind::Repositories) => self.repositories_region(window, cx),
+            Slot::Panel(PanelKind::Documents) => {
+                let documents = self.documents_body(cx);
+                self.region(Region::Documents, window, cx, documents)
+                    .size_full()
+                    .into_any_element()
+            }
+            Slot::Panel(PanelKind::Tickets) => {
+                let tickets = self.tickets_body(window, cx);
+                self.region(Region::Tickets, window, cx, tickets)
+                    .size_full()
+                    .into_any_element()
+            }
+            Slot::Panel(PanelKind::Activity) => self.activity_region(window, cx),
+            Slot::ItemArea => self.item_area_region(window, cx),
+        }
+    }
+
+    fn repositories_region(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let repositories = sidebar::repositories(&self.navigation, &self.repositories_pane, cx);
+        self.region(Region::Repositories, window, cx, repositories)
+            .size_full()
+            .into_any_element()
+    }
+
+    /// Quit now, the session and the pending sections. Their bookkeeping
+    /// goes with them (R-33): while Activity is not displayed, no handle is
+    /// pruned.
+    fn activity_region(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let finishing = self.finishing(window, cx);
+        let session = self.session_section(window, cx);
+        let pending = self.pending_section(window, cx);
+        self.prune_abandon_focus();
+        self.region(
+            Region::Operations,
+            window,
+            cx,
+            v_flex()
+                .id("operation-area")
+                .gap_2()
+                .size_full()
+                .overflow_y_scroll()
+                .children(finishing)
+                .child(
+                    h_flex()
+                        .gap_4()
+                        .items_start()
+                        .child(session.flex_1())
+                        .child(pending.flex_1()),
+                ),
+        )
+        .size_full()
+        .into_any_element()
+    }
+
+    /// The content region with its tab strip, item view, Settings and Drafts
+    /// pages and Root's sheet layer.
+    fn item_area_region(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let item_shown = self.shown_item(cx).is_some();
+        // An item tab draws the selection at the end of its own scroll
+        // region instead.
+        let selection = (!item_shown).then(|| {
+            sidebar::selection(
+                &self.navigation,
+                &self.remove_focus,
+                &self.retry_focus,
+                self.content_scroll(),
+                cx,
+            )
+            .into_any_element()
+        });
+        // The region's per-frame focus note, which its scroll-into-view
+        // needs (R-33).
+        self.content_scroll()
+            .note_focus(window.focused(cx).as_ref());
+        let content = v_flex()
+            .id("content")
+            .test_support()
+            .gap_3()
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(self.content_scroll().handle());
+        // Root's sheet layer is drawn inside the content region, whose item
+        // tab opens the sheet: its focus then counts as the region's, and
+        // its keys pass the region's context before the workspace's, where
+        // R-60 refuses them. The sheet places itself over the whole window
+        // (fact 61); deferred, it is painted above the rest of the window
+        // and below dialogs, popups and tooltips, which are deferred higher.
+        let sheet = Root::render_sheet_layer(window, cx)
+            .map(|layer| div().absolute().child(deferred(layer)));
+        let content = content
+            .children(self.content_body(selection, window, cx))
+            .children(sheet);
+        let content = self
+            .region(Region::Content, window, cx, content)
+            .size_full();
+        // An item tab lies flush with the region's border (owner,
+        // 2026-10-30). Settings, the Drafts page and the empty pane keep
+        // the regions' padding.
+        if item_shown {
+            content.p_0().into_any_element()
+        } else {
+            content.into_any_element()
         }
     }
 }
@@ -57,104 +175,13 @@ impl Render for Workspace {
                 self.navigation.set_pane(pane);
             }
         }
-        let finishing = self.finishing(window, cx);
         self.repositories_pane
             .set(RepositoryRow::rows(&self.navigation), window, cx);
-        let repositories = sidebar::repositories(&self.navigation, &self.repositories_pane, cx);
-        let item_shown = self.shown_item(cx).is_some();
-        // An item tab draws the selection at the end of its own scroll
-        // region instead.
-        let selection = (!item_shown).then(|| {
-            sidebar::selection(
-                &self.navigation,
-                &self.remove_focus,
-                &self.retry_focus,
-                self.content_scroll(),
-                cx,
-            )
-            .into_any_element()
-        });
-        let documents = self.documents_body(cx);
-        let tickets = self.tickets_body(window, cx);
-        self.content_scroll()
-            .note_focus(window.focused(cx).as_ref());
-        let content = v_flex()
-            .id("content")
-            .test_support()
-            .gap_3()
-            .size_full()
-            .overflow_y_scroll()
-            .track_scroll(self.content_scroll().handle());
-        // Root's sheet layer is drawn inside the content region, whose item
-        // tab opens the sheet: its focus then counts as the region's, and
-        // its keys pass the region's context before the workspace's, where
-        // R-60 refuses them. The sheet places itself over the whole window
-        // (fact 61); deferred, it is painted above the rest of the window
-        // and below dialogs, popups and tooltips, which are deferred higher.
-        let sheet = Root::render_sheet_layer(window, cx)
-            .map(|layer| div().absolute().child(deferred(layer)));
-        let content = content
-            .children(self.content_body(selection, window, cx))
-            .children(sheet);
-        let content = self
-            .region(Region::Content, window, cx, content)
-            .flex_1()
-            .min_w_0()
-            .h_full();
-        // An item tab lies flush with the region's border (owner,
-        // 2026-10-30). Settings, the Drafts page and the empty pane keep
-        // the regions' padding.
-        let content = if item_shown { content.p_0() } else { content };
-        let top = h_flex()
+        let dock = div()
             .flex_1()
             .min_h_0()
             .w_full()
-            .child(
-                v_flex()
-                    .w(px(260.))
-                    .h_full()
-                    .child(
-                        self.region(Region::Repositories, window, cx, repositories)
-                            .w_full()
-                            .h(relative(0.3)),
-                    )
-                    .child(
-                        self.region(Region::Documents, window, cx, documents)
-                            .w_full()
-                            .flex_1()
-                            .min_h_0(),
-                    ),
-            )
-            .child(
-                self.region(Region::Tickets, window, cx, tickets)
-                    .w(px(320.))
-                    .h_full(),
-            )
-            .child(content);
-        let session = self.session_section(window, cx);
-        let pending = self.pending_section(window, cx);
-        self.prune_abandon_focus();
-        let operations = self
-            .region(
-                Region::Operations,
-                window,
-                cx,
-                v_flex()
-                    .id("operation-area")
-                    .gap_2()
-                    .size_full()
-                    .overflow_y_scroll()
-                    .children(finishing)
-                    .child(
-                        h_flex()
-                            .gap_4()
-                            .items_start()
-                            .child(session.flex_1())
-                            .child(pending.flex_1()),
-                    ),
-            )
-            .w_full()
-            .h(px(260.));
+            .child(self.dock_area().clone());
         // Root's first child draws its dialog and notification layers.
         v_flex()
             .id("workspace")
@@ -251,8 +278,7 @@ impl Render for Workspace {
             .relative()
             .size_full()
             .bg(cx.theme().background)
-            .child(top)
-            .child(operations)
+            .child(dock)
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }

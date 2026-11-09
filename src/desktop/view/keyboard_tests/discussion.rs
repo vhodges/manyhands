@@ -17,7 +17,7 @@
 
 use std::{fs, path::Path};
 
-use gpui_kit::{ElementId, Entity, TestAppContext, px, size};
+use gpui_kit::{ElementId, Entity, TestAppContext};
 use zorite_editor::EditorState;
 
 use super::Walk;
@@ -66,7 +66,7 @@ fn discussed(comments: &[(&str, Option<&str>)], cx: &mut TestAppContext) -> Walk
     }
     fixture.refresh(&a);
     let shell = Shell::open(fixture, cx);
-    shell.visual(cx).simulate_resize(size(px(1440.), px(1400.)));
+    shell.resize_keeping_content(1440., 1400., cx);
     shell.run(cx);
     Walk::over(shell, a)
 }
