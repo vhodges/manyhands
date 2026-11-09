@@ -70,6 +70,7 @@ impl PanelKind {
     }
 
     /// For a group of more than two tabs (R-32).
+    #[allow(dead_code)] // Called from Task 4c.
     pub(crate) fn short_label(self) -> &'static str {
         match self {
             Self::Repositories => "Repos",
@@ -80,6 +81,7 @@ impl PanelKind {
     }
 
     /// The icon's name (R-23).
+    #[allow(dead_code)] // Called from Task 4c.
     pub(crate) fn icon(self) -> &'static str {
         match self {
             Self::Repositories => "folder-git-2",
@@ -228,7 +230,7 @@ impl Default for Layout {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
+#[cfg_attr(not(test), allow(dead_code))] // Called from Task 4b.
 impl Layout {
     pub(crate) fn is_on(&self, kind: PanelKind) -> bool {
         self.on[kind.index()]
@@ -283,7 +285,10 @@ impl Layout {
                     .any(|g| self.displayed_in(g) == Some(kind))
         })
     }
+}
 
+#[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
+impl Layout {
     /// A panel toggle: a displayed panel goes off, and the next that is on
     /// in its group becomes active; any other panel is revealed.
     pub(crate) fn toggle_panel(&mut self, kind: PanelKind) {

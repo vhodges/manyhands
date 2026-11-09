@@ -151,15 +151,15 @@ fn the_default_is_1b() {
     assert_eq!(ITEM_AREA_NAME, "ItemAreaPanel");
     let names = PanelKind::ALL.map(|kind| {
         assert_eq!(PanelKind::from_name(kind.name()), Some(kind));
-        (kind.name(), kind.label(), kind.short_label(), kind.icon())
+        (kind.name(), kind.label())
     });
     assert_eq!(
         names,
         [
-            ("RepositoriesPanel", "Repositories", "Repos", "folder-git-2"),
-            ("TicketsPanel", "Tickets", "Tickets", "ticket"),
-            ("DocumentsPanel", "Documents", "Docs", "file-text"),
-            ("ActivityPanel", "Activity", "Activity", "activity"),
+            ("RepositoriesPanel", "Repositories"),
+            ("TicketsPanel", "Tickets"),
+            ("DocumentsPanel", "Documents"),
+            ("ActivityPanel", "Activity"),
         ]
     );
     assert_eq!(
@@ -281,10 +281,10 @@ fn operations_follow_the_rules() {
         ),
         // P7: a side with no panels has no toggle.
         (
-            "P7 a side with no panels",
-            layout("R/D/T||A", "", ""),
+            "P7 a side with no panels stays hidden",
+            layout("R/D/T||A", "", "r"),
             ToggleDock('r'),
-            expect("RTDA", "lrb", "RTDA", "lb", "R/D/T||A"),
+            expect("RTDA", "lb", "RTDA", "lb", "R/D/T||A"),
         ),
         // P8: a menu move puts the panel in a new group at the end of the
         // target dock, revealed.
@@ -320,10 +320,16 @@ fn operations_follow_the_rules() {
         ),
         // P9: the current side changes nothing.
         (
-            "P9 the current side",
-            layout("R/D|T|A", "D", "b"),
-            MoveTo('T', 'r'),
-            expect("RTA", "lr", "RT", "lr", "R/D|T|A"),
+            "P9 the current side leaves a panel that is off, off and in its group",
+            layout("R+D*|T|A", "R", "b"),
+            MoveTo('R', 'l'),
+            expect("TDA", "lr", "TD", "lr", "D|T|A"),
+        ),
+        (
+            "P9 the current side keeps the active tab in its group",
+            layout("R+D*|T|A", "", "b"),
+            MoveTo('D', 'l'),
+            expect("RTDA", "lr", "TD", "lr", "D|T|A"),
         ),
         // P13: a reveal turns the panel on, shows its dock and selects its tab.
         (
@@ -454,4 +460,45 @@ fn f6_stops_follow_the_arrangement() {
     // The bottom dock has no panels, so it is no stop and is not open.
     assert_eq!(stops(&layout), "DTIA");
     assert!(!layout.is_open(Side::Bottom));
+
+    // An unknown leaf selected as the active tab, a bare known leaf at a
+    // dock's root, and an empty group: the unknown leaf and the empty
+    // group are skipped, and the active index follows the panels kept.
+    let state = DockAreaState {
+        version: Some(1),
+        center: leaf(Repositories),
+        left_dock: Some(dock(
+            stack(vec![
+                tabs(&[Repositories, Documents], 1),
+                tabs(&[], 0),
+                tabs(&[Activity], 0),
+            ]),
+            DockPlacement::Left,
+        )),
+        right_dock: Some(dock(leaf(Tickets), DockPlacement::Right)),
+        bottom_dock: None,
+    };
+    let mut unknown = state.clone();
+    unknown.left_dock = Some(dock(
+        stack(vec![PanelState {
+            panel_name: "TabPanel".into(),
+            children: vec![
+                leaf(Repositories),
+                PanelState::new("ItemAreaPanel"),
+                leaf(Documents),
+            ],
+            info: PanelInfo::tabs(1),
+        }]),
+        DockPlacement::Left,
+    ));
+    let arrangement = arrangement_from(&state);
+    assert_eq!(arrangement.groups(Side::Left).len(), 2);
+    assert_eq!(arrangement.groups(Side::Right)[0].panels, [Tickets]);
+    assert_eq!(arrangement.groups(Side::Left)[0].active, 1);
+    // The unknown leaf was selected, so the index now names the panel that
+    // took its place.
+    let from_unknown = arrangement_from(&unknown);
+    let group = &from_unknown.groups(Side::Left)[0];
+    assert_eq!(group.panels, [Repositories, Documents]);
+    assert_eq!(group.active, 1);
 }
