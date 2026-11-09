@@ -35,8 +35,14 @@ merged into the ticket branch).
   them; six owner questions became decisions 18–23.
 - 2026-11-09: review round 2 (a scoped re-review and an adversarial review at
   `4d22c393`) found 5 Blocking, 18 Important and 30 Minor issues. Revision 5
-  applies them; four owner questions became decisions 24–27. Round 3
-  follows.
+  applies them; four owner questions became decisions 24–27.
+- 2026-11-09: review round 3 (a scoped re-review and an adversarial review at
+  `c35719c2`) found 3 Blocking, 15 Important and 24 Minor issues. Three
+  mechanisms drew blockers for the third time: preemption, stale rows and the
+  retirement loop's rules. As the planning procedure asks, revision 6 states
+  each as required outcomes (design P-1 to P-7, L-1 to L-6, RT-1 to RT-11),
+  with a test-first task and a design checkpoint, and no fourth round runs.
+  **Revision 6's edits had no independent review.**
 
 Approval of these documents does not authorize implementation, which needs
 the owner's separate authorization.
@@ -224,14 +230,17 @@ Whichever of those and D6 merges second adapts, per `AGENTS.md`.
    Unlock… or Approve…, and polling for the affected repositories resumes
    when the person acts (decision 6).
 8. **Truthful status.** Checking, Checked N ago, Can't reach, Paused, Needs
-   unlocking, Needs host approval, Waiting for a conflict, Stopping. Never a
+   unlocking, Choose a key, Needs host approval, Waiting for a conflict,
+   Waiting for an unfinished operation, Waiting for another operation to
+   finish, An interrupted check is holding this repository, Stopping. Never a
    state the process cannot know.
 9. **Brought in changes.** A fast-forward or materialization refreshes the
    lists and any open tab. An item with unsaved edits or a kept draft keeps
    them (the existing changed-item path, proven by D6 tests).
-10. **Shutdown.** Quit stops admitting work, cancels the running poll at its
-    next safe point, flushes drafts (D2), shows "still stopping" at ten
-    seconds, and waits. It does not clear credentials in use or reclaim a
+10. **Shutdown.** Quit stops admitting work from the moment it is asked,
+    cancels the running poll at its next safe point, lets a running
+    retirement finish (proposed decision 28), flushes drafts (D2), shows
+    "still stopping" at ten seconds, and waits. It does not clear credentials in use or reclaim a
     live operation because ten seconds passed (decision 7).
 11. **Runtime readiness evidence (Task 1).** Two SSH-harness cases measure a
     cancel during a stalled handshake and during a stalled connect, and a
@@ -347,10 +356,10 @@ Whichever of those and D6 merges second adapts, per `AGENTS.md`.
 | A4 | Concurrent explicit operation from a second process calling the library | Desktop test over a real service: a second library actor over the same registry, in the same process (decision 26), holds the remote reservation; the automatic poll answers `busy` and restarts on schedule. Library SSH yield tests. The CLI-against-desktop run is G1's (track rule 4) | Pending |
 | A5 | Stalled transport with responsive stopping status | Task 1's two SSH cases (cancel during a stalled handshake and a stalled connect; DNS and teardown depart, decisions 22 and 24); desktop test with a held poll and an injected clock shows "still stopping" at 10 s and stays interactive; native §3 | Pending |
 | A6 | Configuration changes | Desktop tests: interval, pause, resume, remote, key and host-trust change, registration add and removal, re-added remote not resuming a pause, queued retirements dropped | Pending |
-| A7 | Shutdown and restart | Desktop tests: nothing new starts while the quit asks or flushes; quit mid-poll ends when the poll answers; quit mid-backoff; quit during a retirement leaves a pending row; relaunch keeps the stored deadline (decision 23); native §6 | Pending |
+| A7 | Shutdown and restart | Desktop tests: nothing new starts from the entry to `request_quit`, through the unkept ask and the flush; quit mid-poll ends when the poll answers; quit mid-backoff; a graceful quit lets a running retirement finish (decision 28), and Quit now leaves it pending; relaunch keeps the stored deadline (decision 23); native §6 | Pending |
 | A8 | No background push, checkpoint, merge or publication; background cleanup only as decision 16's per-item retirement | A recording double lists B1's five calls for an automatic poll and nothing else. A `ContextRetire` is submitted only for an item the attempt reported as `closed` or `promoted`, outside the refused set, with no unkept tab and no kept draft; `PollOnceRetiring` never | Pending |
 | A9 | No remaining worker after graceful exit | Test joins the worker thread on both graceful paths (`Idle`, and a `Finishing` job that ends); native §6 checks the process list after quit | Pending |
-| A10 | Manual priority | Desktop test: a user job submitted during a poll cancels it, even before the poll has reserved its row, and runs first; the poll is rescheduled with no failure backoff; a background retirement is not cancelled (decision 20) | Pending |
+| A10 | Manual priority | Design P-1 to P-7 as one table (Task 4, test-first after a design checkpoint): a user job from any entry point cancels a running poll, even before its row exists and between a same-ID restart's attempts, and runs first; the poll is rescheduled with no failure backoff; a background retirement is not cancelled (decision 20) | Pending |
 | A11 | Launch poll follows the stored deadline (decision 23) | Model test with an injected clock: an interval deadline and a backoff deadline both hold at launch | Pending |
 | A12 | Suspend and clock jump: one poll, no catch-up | Model test | Pending |
 | A13 | No background prompt | Desktop tests through the real `DesktopProvider`, with a fresh session and a locked key: no `Prompt` event, and attention, for an automatic poll and for a background retirement; Unlock… after a cancelled first prompt prompts again; two protected keys evict each other as K-23 says (decision 25) | Pending |
@@ -358,12 +367,12 @@ Whichever of those and D6 merges second adapts, per `AGENTS.md`.
 | A15 | Keyboard and focus (contract 9) | Keyboard tests; native §7 | Pending |
 | A16 | Privacy (contract 10) | Sentinel tests | Pending |
 | A17 | One scheduler whatever the windows | Test: a poll submitted through a `Services` clone is seen by the original's scheduler | Pending |
-| A18 | Wave 04 Cycle 01 coordination: D6's attention in the Needs attention count; "still stopping" in the quit's Activity entry with no layout change; D6's rows fit Activity | With Cycle 01 on main: `needs_attention`'s test extended with each kind of attention entry and each state that does not count (E-4); D6's still-stopping test run with Activity hidden (E-5). In any order: each D6 action clicked at its position at the default window. Otherwise recorded as Cycle 01's to wire | Pending |
+| A18 | Wave 04 Cycle 01 coordination: D6's attention in the Needs attention count; "still stopping" in the quit's Activity entry with no layout change; D6's rows fit Activity | With Cycle 01 on main: `needs_attention`'s test extended with each kind of attention entry and each state that does not count (E-4); D6's still-stopping test run with Activity hidden (E-5). In any order: each D6 action clicked at its position at the default window. The three R-23 dedupe rules are in E-4. Otherwise recorded as Cycle 01's to wire | Pending |
 | A19 | Retirement journey: after a poll, automatic or Check now, each reported `closed` ticket or `promoted` document is retired by its own request, one at a time; lists and an open tab then read primary; Retire… retires a left item by keyboard | Desktop tests over canned `context_retirement` answers (decision 9), and over a real local repository for the end state; library SSH case `retirement_cli_authenticated_live_pass`; native §5 on two clones | Pending |
-| A20 | Exact refusals and pending cleanup | Desktop table test keyed on code: before-effect codes retried next attempt (unlock and host as attention); `refused` and `preserved` shown with the library's code and added to the refused set; `pending` stops the loop and leaves a pending row whose Resume resends the original request and whose Abandon shows the retirement details (library ticket D13), by keyboard | Pending |
+| A20 | Exact refusals and pending cleanup | Desktop table test, record state then state then code: before-effect codes retried next attempt (unlock, key, host and configuration codes as attention); `refused` and `preserved` shown with the library's code and added to the refused set; `pending` stops the loop and leaves a pending row whose Resume resends the original request and whose Abandon shows the retirement details (library ticket D13), by keyboard | Pending |
 | A21 | Open editors and drafts preserved | Desktop tests: of two reported items, the one with an unkept tab, and one with a kept draft, are skipped and the other retired; the item's tabs are read-only while it is retired; Retire… stops at an unkept tab and warns about kept drafts; over a real local repository, a kept item draft and a comment draft outlive retirement, listed and exportable | Pending |
 | A22 | Replay and interruption (track rule 7) | Desktop tests: a Final retirement answer replayed under the same request removes nothing twice and adds no second entry; a quit during a held retirement leaves a pending row that Resume finishes after relaunch, from the in-flight record; a resent policy verb follows C5 decision 15 | Pending |
-| A23 | Stale rows and unfinished operations | Design L-1 to L-6 as one table (Task 4, test-first, after a design checkpoint): a recorded poll is taken over at launch only; a not-eligible one shows "An interrupted check is holding this repository" (decision 27); a dead Check now is resumed from its pending row; nothing is taken over on `Busy`; a pending local operation makes polls wait on the bounded schedule, never in a loop; native §6 | Pending |
+| A23 | Stale rows and unfinished operations | Design L-1 to L-6 as one table (Task 4, test-first, after a design checkpoint): a recorded poll is taken over at launch, or when its repository is next due; a not-eligible one says why and what finishes it, and is taken over once eligible (decision 27); a fenced or mismatched row is dropped; a dead Check now is resumed from its pending row; nothing is taken over on `Busy`; a pending local operation makes polls wait on the bounded schedule, never in a loop; native §6 | Pending |
 
 Native evidence: Linux (Wayland), release build, against a real SSH remote,
 run by the product owner from the checklist written in the final task. The
@@ -418,9 +427,10 @@ Proposed by the planner, confirmed with the documents' approval:
     Checking soon retry by themselves; Waiting for a conflict points at a
     conflict that is already shown where it is resolved; a Retire… offer is
     an option, not a failure. None of those count. A retirement that
-    finished refused or preserved, or a pending one, is counted by Cycle
-    01's own rules; one answered before any effect is dismissed, since
-    attention or the next attempt covers it (design R-23).
+    finished refused or preserved with a refusal code, or a pending one, is
+    counted by Cycle 01's own rules, once per operation; one answered with an
+    attention or retry code is dismissed, since attention or the next attempt
+    covers it (design R-23).
 12. **Still stopping lives in Activity** (2026-11-09, after Wave 04 Cycle
     01's revised decision 7). With Activity hidden, a quit still waiting at
     ten seconds shows nothing until Activity is opened, as Cycle 01's own
@@ -442,8 +452,13 @@ Proposed by the planner, confirmed with the documents' approval:
       `promoted` items in the order reported. It checks each alone and
       submits one `ContextRetire` per item on the background lane, the next
       only when the previous has answered. Each is a new request.
-    - The answer is read by its code first: unlock, host, key, transport and
-      busy codes mean nothing was removed, and the next attempt tries again.
+    - The answer is read by its record state, then its state, then its
+      code. A `pending` or `Accepted` answer leaves the pending row. A
+      `refused` answer with an unlock, key, host or configuration code gives
+      attention; with a transport, remote, index, external-change,
+      cancelled or pre-claim `recovery_required` code it means nothing was
+      removed, and the next attempt tries again. Attention, pending, transport
+      and remote-unavailable answers stop the repository's loop.
     - An item refused or preserved for another reason is not tried again
       automatically this session (design R-21).
     - Retire… (the same mutation, a new request, user lane) shows for every
@@ -528,16 +543,27 @@ Answered by the owner after review round 2 (2026-11-09):
     G1's CLI-against-desktop scenario.
 27. **A stale poll row in a not-eligible repository is a known limit.** A
     poll killed by Quit now or a crash, whose repository is paused,
-    disabled, held or not due at relaunch, keeps its row until checking is
-    turned on once. The desktop says so (K-22). A follow-up library ticket
-    can add a takeover that does not need eligibility.
+    disabled, held or not due at relaunch, keeps its row until the
+    repository is eligible again; then the desktop takes it over (design
+    L-2). The desktop says why and what finishes it (K-22). A follow-up
+    library ticket can add a takeover that does not need eligibility.
+
+Proposed after review round 3, to confirm at approval:
+
+28. **A graceful quit lets a running retirement finish.** Quit does not
+    cancel a running background `ContextRetire`. Cancelling it part-way
+    would leave the item pending, and the pending local operation would hold
+    the repository's polls at the next launch. The quit waits for it, as for
+    any finishing job, with "still stopping" at ten seconds and Quit now
+    available. Cost: a quit can wait up to one observation and its removal
+    (design R-38).
 
 ## Open Questions
 
-None for the owner beyond confirming decisions 3–15 at approval (16 to 27
-are answered). U-2, U-9 (rest), U-11, U-13, U-14, U-15 and U-16 (design
-Source Questions) are settled in Task 0 by reading the source; an answer that
-differs stops for the owner.
+None for the owner beyond confirming decisions 3–15 and 28 at approval (16
+to 27 are answered). U-2, U-9 (rest), U-11 (rest), U-15 and U-16 (design
+Source Questions) are settled in Task 0 by reading the source, and U-14 by an
+experiment in Task 1; an answer that differs stops for the owner.
 
 ## Re-grounding
 
@@ -583,4 +609,6 @@ in.
 | Review round 2, scoped re-review (`4d22c393`) | 1 Blocking, 8 Important, 20 Minor | — | Revision 5. Blocking: R-24 could steal a live row (now launch-only from an in-flight record, L-1 to L-6). Retirement codes corrected; attention keying for a retirement (B5); a dead Check now's row (L-4); `Ok(Polled{Interrupted})`; who runs the cancel (B2); teardown (decision 24); same-process actor (decision 26). | Design Review Record. |
 | Review round 2, adversarial (`4d22c393`) | 4 Blocking, 10 Important, 10 Minor | — | Revision 5. Blocking: a polling hot loop on `recovery_required` (R-35); stale rows (L-1 to L-6, decision 27); Resume after a relaunch (in-flight record, R-31); "kept draft" defined and edits skipped (R-18). Lane of the resend, passphrase cache (decision 25), quit freeze (R-33), one loop (R-32), transient refusals, dedupe (R-23), entry points (R-3), read-only clearing, R-11 timing. | Design Review Record. |
 | Owner, after round 2 (2026-11-09) | Teardown, the passphrase cache, the second process, a stale row in a not-eligible repository | Owner decision | Decisions 24–27. | Owner, 2026-11-09. |
+| Review round 3, scoped re-review (`c35719c2`) | 0 Blocking, 6 Important, 14 Minor | — | Revision 6: the lost cancel during a restart (P-1, P-2); the quit freeze from `request_quit` (R-33); decision 27 carried through at runtime (L-1, L-2); fences and `OperationMismatch` (L-3, U-13); L-4 given a task; the answer's reading order made consistent. | Design Review Record. |
+| Review round 3, adversarial (`c35719c2`) | 3 Blocking, 9 Important, 10 Minor | — | Revision 6. Blocking: the lost cancel (P-1, P-2); runtime takeover (L-1); an unknown draft listing (RT-5, RT-6). Important: in-flight entry lifecycle (R-31); `Accepted` answers (E3); Resume clearing declined keys; Unlock… target; loop ends (RT-8 to RT-10); read-only per request (E1); transport codes stop the loop (R-37); a running retirement on quit (proposed decision 28); the lock retried on activation. Preemption, stale rows and the loop's rules became required outcomes; no round 4. | Design Review Record. |
 | Drafting | Not yet reviewed | — | Review rounds follow. | — |

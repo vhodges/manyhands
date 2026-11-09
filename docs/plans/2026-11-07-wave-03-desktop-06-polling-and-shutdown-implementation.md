@@ -10,10 +10,11 @@ id: "01M6V02CC0B7ZKMR3XYHHXMQQV"
 
 # Desktop Background Polling And Shutdown Implementation Plan
 
-> **For agentic workers:** Revision 5, 2026-11-09, draft; review rounds 1
-> and 2 applied, round 3 pending. Revision 5 applies round 2 and owner
-> decisions 24–27: Task 4 gains the in-flight record and the stale-row
-> outcomes L-1 to L-6 with a design checkpoint. Revision 1 was 2026-11-07; revision 2 added the
+> **For agentic workers:** Revision 6, 2026-11-09, draft; review rounds 1
+> to 3 applied. Revision 6 applies round 3: preemption, stale rows and the
+> retirement loop are stated as required outcomes (design P-1 to P-7, L-1
+> to L-6, RT-1 to RT-11), and Tasks 4 and 11b are test-first after a design
+> checkpoint. Revision 6's edits had no independent review. Revision 1 was 2026-11-07; revision 2 added the
 > Wave 04 Cycle 01 coordination; revision 3 followed the landing of
 > `01M6KHVD6D0DB8KYT6VGQP10Y0` and owner decisions 16 and 17. Revision 4
 > applies review round 1 and owner decisions 18–23: Task 11 splits into 11a
@@ -124,7 +125,7 @@ removes it.
 
 **Test-first.** Each behaviour's test is written before its code.
 
-**Existing tests** change only as E-1 to E-5 (design Testing); anything else
+**Existing tests** change only as E-1 to E-6 (design Testing); anything else
 stops for the owner. The polling switch (R-27) keeps launch polls out of
 existing tests.
 
@@ -150,7 +151,7 @@ created in Task 0. Each ruling made during execution is recorded there as
    exactly design B4's five calls, with no `ContextRetire` or
    `PollOnceRetiring` (Tasks 3, 13).
 2. **Manual priority.** A user job cancels a running poll, even one not yet
-   reserved, and runs first; the poll returns with no failure backoff; a
+   reserved or between a same-ID restart's attempts, and runs first; the poll returns with no failure backoff; a
    background retirement is not cancelled (Tasks 4, 11b).
 3. **No background prompt.** Through the real provider with a fresh session,
    a locked key gives attention and no `Prompt`, for a poll and for a
@@ -162,8 +163,9 @@ created in Task 0. Each ruling made during execution is recorded there as
 7. **The clock.** No test sleeps; one poll per repository after a jump; the
    launch deadline holds (Task 2).
 8. **Stale rows.** Only a row the in-flight record names is taken over, only
-   at launch, only by the lock holder; `Busy` only waits; a pending local
-   operation never makes polls loop (Tasks 4, 5).
+   by the lock holder, at launch or when its repository is next due; `Busy`
+   for another operation only waits; a pending local operation never makes
+   polls loop (Tasks 4, 5).
 9. **Shutdown** cancels the poll, sees it end, shows "still stopping" at ten
    seconds without clearing anything, and joins the worker on every
    graceful exit (Task 10).
@@ -190,7 +192,7 @@ created in Task 0. Each ruling made during execution is recorded there as
 | 9 | C | Unsaved work across a bring-in over a real repository; dispositions; Part C checkpoint. |
 | 10 | D | Shutdown: cancel, the poll's end seen, still stopping, join; Part D checkpoint. |
 | 11a | E | `Intent::ContextRetire`, answer classification by code, row dismissals. |
-| 11b | E | The per-item loop after a poll, read-only tabs, the refused set. |
+| 11b | E | The per-item loop after a poll (RT-1 to RT-11, design checkpoint), read-only tabs, the refused set. |
 | 12 | E | Retire…, Resume's resend, drafts and end state over a real repository, replay and interruption; Part E checkpoint. |
 | 13 | F | Privacy, consent and call-list evidence; keyboard journey. |
 | 14 | F | Checklist, gates, review-ready, gated closure. |
@@ -279,7 +281,8 @@ table), `D/model/polling_tests.rs`; edit `D/model/mod.rs`.
     23, A11);
   - `next_wake_table`;
   - `clock_event_once`: a 60 s difference gives one poll per repository,
-    staggered, no catch-up (A12);
+    staggered, no catch-up, and a bounded restart keeps its operation and
+    its place in R-4's schedule (A12, R-6);
   - `restart_schedule`: 5/15/60 s, then the interval;
   - `reconfiguration_table`: clearing attention and re-reading policy; a
     re-added remote leaves a stored pause alone;
@@ -335,43 +338,56 @@ impl), `D/test_support/` (a recording double with a gate), tests.
 
 ## Task 4: Preemption, Restart, The In-Flight Record, Stale Rows
 
-**Files:** `D/services/worker.rs` (preemption in the shared admission step,
-`WorkerEvent::PreemptPoll`), `D/services/mod.rs` (the drain spawns the cancel
-task), `D/services/inflight.rs` (the in-flight record and instance lock),
-`D/services/poll.rs`, `D/services/scheduler.rs`, tests.
+**Files:** `D/services/worker.rs` (the preempt flag in the shared admission
+step, the check before every `poll_automatic`, `WorkerEvent::PreemptPoll`),
+`D/services/mod.rs` (the drain spawns the cancel task), `D/services/inflight.rs`
+(the in-flight record and the instance lock), `D/services/poll.rs`,
+`D/services/scheduler.rs`, `D/model/operations.rs` (L-4's Resume offer for a
+Check now's row), `D/services/resends.rs` (L-4's `PollOnce` resend), tests.
 
+Preemption and stale rows each drew review blockers three times, so this
+task is test-first against design B2's P-1 to P-7 and B3's L-1 to L-6, after
+a design checkpoint.
+
+- [ ] **Design checkpoint.** The orchestrator and the owner check U-13, U-15
+  and U-16's answers against P-1 to P-7 and L-1 to L-6. A difference stops
+  here.
 - [ ] Test first:
-  - `preempt_from_every_entry`: a user job entering by `submit`,
-    `submit_with_request_id`, `requeue` or `observe_host` during a held
-    `Work::Poll` sets the preempt flag and sends `PreemptPoll`. The drain
-    spawns a background-executor task (never the UI thread) that calls
-    `cancel_poll` and sends it again until the first `Ok` or until the poll
-    answers, including when the first cancel errors because the row does not
-    exist yet and when one answers `RepositoryBusy`. The user job runs after
-    the poll's `Cancelled`, and the poll is rescheduled with no failure
-    backoff (O-2, A10, R-3, R-25);
-  - `preempt_bound`: a poll preempted three times in a row waits for the
-    interval (R-34);
-  - `background_job_does_not_preempt`;
+  - `preemption_table`: one table over P-1 to P-7. It includes each of the
+    four user-lane entry points; a cancel sent before the row exists; an
+    `Ok` that changed nothing because the row was between a same-ID
+    restart's attempts, which must not end the task; the flag checked before
+    a restart; three preemptions in a row; a background job and a background
+    retirement, which cancel nothing; quit and a reconfiguration using the
+    same task (O-2, A10, R-3, R-25, R-34);
   - `restart_schedule_same_op`: `Err(Busy)`, `Err(Interrupted)` and
     `Ok(Polled{completion: Interrupted})` resend the same operation with
     `restart=true` at 5/15/60 s under the injected clock, then the interval
-    with a new ID; `Busy` never triggers a takeover (O-5, L-5);
+    with a new ID (O-5, L-5);
   - `conflict_pending_waits`: `ConflictPending` waits at the interval;
-  - `inflight_record`: an automatic poll's entry is written before it is
-    submitted and removed on its terminal answer; only the instance lock's
-    holder writes; a second instance writes nothing (R-31, L-6).
-- [ ] **Design checkpoint** before the stale-row code: the orchestrator and
-  the owner check U-13, U-15 and U-16's answers against L-1 to L-6. A
-  difference stops here.
-- [ ] Test first, then implement: `stale_rows_table`, one table over L-1 to
-  L-6 with canned library answers and a seeded in-flight record (A23). The
-  library's own takeover is proved by its tests.
-- [ ] Implement preemption in the shared admission step, the drain's cancel
-  task, the restart resends through the model's wake, the in-flight record
-  and the instance lock, and L-1 to L-6.
+  - `inflight_record`: the record's rules in design B3. At most one poll
+    entry per repository, written before submission, replaced with a new ID,
+    removed once `active_operation_id` is no longer its ID or on a terminal
+    answer. A retirement entry is removed only when the request is
+    `Finished`, `Removed` or `NotSent`, and keeps the operation ID from the
+    first progress event. Writes are atomic, and an unreadable record is set
+    aside and reported once. Only the lock holder writes, and the lock is
+    tried again on window activation (R-31, L-6);
+  - `stale_rows_table`: one table over L-1 to L-6 with canned library answers
+    and a seeded in-flight record (A23). It includes L-2 followed by turning
+    checking on, which takes the row over at runtime; a fenced row
+    (`recovery_required` with another `active_operation_id`) and an
+    `OperationMismatch`, both dropped (L-3); and a replayed terminal answer
+    older than the launch, which counts as no attempt (L-1). The library's
+    own takeover is proved by its tests;
+  - `resume_dead_check_now`: a Check now's row left active offers Resume on
+    its pending row; Resume answering `original_request_required` resends
+    `PollOnce{root}` under the named request on the user lane (L-4, U-15).
+- [ ] Implement the preempt flag and its check, the drain's cancel task, the
+  restart resends through the model's wake, the in-flight record and the
+  instance lock, and L-1 to L-6.
 
-**Verify:** the seven tests by exact name.
+**Verify:** the six tests by exact name.
 
 ## Task 5: The Scheduler In `Services`; Part B Checkpoint
 
@@ -565,9 +581,14 @@ unless a test fails.
 tests.
 
 - [ ] Test first:
-  - `quit_freezes_scheduler`: once `QuitPhase` leaves `Running`, while the
-    unkept ask is open or drafts are flushing, no timer fires a poll and no
-    loop item is submitted; Cancel resumes the scheduler (R-33);
+  - `quit_freezes_scheduler`: from the entry to `request_quit`, while the
+    unkept ask is open (with `QuitPhase` still `Running`) and while drafts
+    are flushing, no timer fires a poll and no loop item is submitted;
+    Cancel on either ask resumes the scheduler (R-33);
+  - `quit_lets_retirement_finish`: a graceful quit does not cancel a running
+    background `ContextRetire`; the quit waits for its answer, shows "still
+    stopping" at ten seconds, and Quit now leaves it pending (proposed
+    decision 28, R-38);
   - `quit_cancels_poll`: `quit()` cancels a running `Work::Poll` through the
     off-thread cancel, started once per operation however often
     `quit_if_finished` calls `quit()`; queued retirements are dropped;
@@ -598,7 +619,7 @@ tests.
   A18). Cycle 01's own quit test is left alone.
 - [ ] Part D checkpoint: ledger and a ticket comment.
 
-**Verify:** the seven tests by exact name.
+**Verify:** the eight tests by exact name.
 
 # Part E: Retiring Completed Contexts
 
@@ -613,68 +634,78 @@ tests.
   - `intent_context_retire`: `Intent::ContextRetire{root, kind, id}` builds
     `Mutation::ContextRetire`, with `stops_at_safe_points: true` and
     `changes_items: true` (Fact 14, U-10);
-  - `retire_answer_table`: one table over design E3's rows, state first,
-    then code: `pending` leaves the pending row whatever its code; `refused`
-    with an unlock, key, host or configuration code gives attention keyed as
-    E3 says and no refused-set entry; `refused` with a transport, remote,
-    index, external-change, busy, yielding or internal code, or
-    `recovery_required` with no removal, is retried at the next completed
-    attempt; other `refused` and `preserved` answers join the refused set;
-    an answer with no `ContextRetirement` data is retried; `retired` and
-    `already_absent` mark the repository changed (A20);
+  - `retire_answer_table`: one table over design E3's rows, record state,
+    then state, then code. `pending`, or a request left `Accepted` whatever
+    its answer, leaves the pending row and keeps the entry, and an unlock,
+    key or host code also raises that attention. `refused` with an unlock,
+    key, host or configuration code gives attention keyed as E3 says, by the
+    recorded key or the repository's selected key, and no refused-set entry.
+    `refused` with a transport, remote, index, external-change, cancelled or
+    internal code, or `recovery_required` with no removal, is retried at the
+    next completed attempt; three `recovery_required` refusals in a session
+    join the refused set. Other `refused` and `preserved` answers join the
+    refused set. `retired` and `already_absent` mark the repository changed
+    (A20);
   - `retire_rows_dismissed`: a request answered in an attention or retry row,
     or retired, is dismissed, user-lane ones included; refused and preserved
     ones stay and count; a pending one counts once with its pending row; the
     worker's running operation is not in the pending lists (R-23, E-6);
   - `retire_inflight_entry`: a retirement request's entry (request ID, root,
-    kind, id) is written before it is submitted and removed on a terminal
-    answer (R-31);
+    kind, id, and the operation ID from its first progress event) is written
+    before it is submitted, kept while the request is `Accepted`, and removed
+    on `Finished`, `Removed` or `NotSent` (R-31);
+  - `retire_request_twin`: two `ContextRetire` requests under one request ID
+    are one; the in-flight twin check covers `ContextRetire` (Fact 36);
   - `background_retire_never_prompts`: through the real provider with a
     fresh session and a locked key, a background `ContextRetire` emits no
     `Prompt` and answers `unlock_required`, which becomes attention (B5,
     A13; U-12).
 - [ ] Add `Intent::ContextRetire` with every arm of Fact 14 (E-1).
 
-**Verify:** the five tests by exact name.
+**Verify:** the six tests by exact name.
 
 ## Task 11b: The Per-Item Loop After A Poll
 
 **Files:** `D/services/scheduler.rs` (the loop), `D/model/polling/` (the
-per-item decision and the refused set), `D/view/item/` (the read-only
-"Retiring…" state and the composer's unkept source), `D/view/operations/`
-(the retirement rows), tests.
+per-item decision and the refused set), `D/services/drafts/` (a fresh
+listing read off the UI thread), `D/view/item/` (the read-only "Retiring…"
+state and the composer's unkept source), `D/view/operations/` (the
+retirement rows), tests.
 
+The loop's rules drew review blockers three times, so this task is
+test-first against design E1's RT-1 to RT-11, after a design checkpoint.
+
+- [ ] **Design checkpoint.** The orchestrator and the owner check RT-1 to
+  RT-11 against D2's draft listing and the worker's request states as they
+  stand at this point. A difference stops here.
 - [ ] Test first:
-  - `retire_loop_decision`: one table for design E1's per-item decision.
-    After a completed attempt, automatic or Check now, each reported `Closed`
-    or `Promoted` item gets exactly one background `ContextRetire` under a new
-    request ID, unless it already has one queued, running or pending, is in
-    the refused set, is being edited (an open edit session, dirty or clean, a
-    begin in flight, comment composer text, or repair text in its Inspect
-    tab), or has any stored draft of the item or a comment, a live session's
-    included. Of three reported items where one is being edited and one has
-    a draft, only the third is submitted. Nothing is submitted for an item
-    the attempt did not report, and a cancelled or interrupted attempt starts
-    no loop (A8, A19, A21; decisions 15, 17, 18);
-  - `retire_loop_sequence`: an `IndexPending` attempt's `IndexRefresh` runs
-    first; the next item is submitted only when the previous has answered,
-    in the attempt's order; the loop goes on past refused, preserved and
-    retry answers, and stops for that repository on `pending` and on an
-    attention answer (decision 21, R-22);
-  - `one_loop_per_repository`: no automatic poll of a repository starts
-    while its loop runs; a Check now's attempt replaces the loop's remaining
-    items (R-32);
+  - `retire_loop_table`: one table over RT-1 to RT-11. After a completed
+    attempt, automatic or Check now, each reported `Closed` or `Promoted`
+    item is checked alone and gets exactly one background `ContextRetire`
+    under a new request ID, unless a rule skips it. Of four reported items,
+    where one is being edited, one has a draft and one arrives while the
+    listing is unknown, only the fourth is submitted. The loop goes on and
+    stops as RT-7 to RT-10 say, and a Check now replaces it (RT-11). Nothing
+    is submitted for an item the attempt did not report, by a cancelled or
+    interrupted attempt, or by a second instance (A8, A19, A21; decisions
+    15, 17, 18, 21; R-32, R-36, R-37);
+  - `retire_listing_not_landed`: a launch poll that completes before the
+    draft listing lands retires nothing, and the items get Retire… (RT-5);
+  - `retire_relist_before_submit`: a draft stored between the check and the
+    fresh listing stops the item (RT-6);
   - `retire_tabs_read_only`: the "Retiring…" state is keyed by (root, kind,
-    id), set in the same update as the check, covers a tab opened during the
-    retirement and Restore from the Drafts page, and clears on `Finished`,
-    `Removed`, `NotSent` and a dropped loop (decision 19);
+    id) and counted per request. It applies to a loop item, a Retire…, a
+    Resume resend and an Unlock… resend, and while the item's retirement is
+    pending, after a relaunch too. It covers a tab opened during the
+    retirement and Restore from the Drafts page. Two requests for one item do
+    not clear each other's share (decision 19);
   - `user_job_waits_for_retirement`: a user job submitted while a background
     retirement runs waits for it, does not cancel it, and runs before the
     rest of the loop (decision 20, K-17);
   - `retire_rows_hit`: the retirement rows wrap inside Activity; each action
     is clicked at its position at the default window (decision 13).
-- [ ] Implement the loop, the refused set (R-21), the read-only state, and
-  the composer's unkept source.
+- [ ] Implement the loop, the refused set (R-21), the read-only state, the
+  fresh listing, and the composer's unkept source.
 
 **Verify:** the six tests by exact name.
 
@@ -699,23 +730,29 @@ tests; other source only where U-9 or U-11 finds a gap.
     that its drafts stay restorable but comment drafts can only be exported;
     it offers Retire and Cancel (the default) (decision 18);
   - `retire_resume_resends_original`: a `pending` item's pending row offers
-    Resume and Abandon. Resume answering `original_request_required` rebuilds
+    Resume and Abandon. Resume first clears the request's declined keys.
+    Resume answering `original_request_required` rebuilds
     `Intent::ContextRetire{root, kind, id}` under the named request ID and
     sends it as a new user-lane request, including after a relaunch, with
-    the kind and id from the in-flight record (R-31). Without an entry,
-    Resume is not offered and Abandon is (K-27). Abandon opens the existing
+    the kind and id from the in-flight record, matched by its operation ID
+    (R-31). Without an entry, Resume is offered only for a retirement that
+    owes its index hand-off alone; otherwise only Abandon is (K-27). Abandon opens the existing
     confirmation, which shows the retirement's details (Fact 18). Both work
     by keyboard (A20);
-  - `unlock_resends_pending_retirement`: Unlock… for a key that holds back a
-    pending retirement resends that retirement on the user lane instead of
-    Check now (C3);
+  - `unlock_picks_reachable`: Unlock… resends a pending retirement of one of
+    the key's repositories, from the in-flight record, on the user lane; with
+    none, it submits Check now in a repository with no pending local
+    operation and no hold; with neither, it is disabled and points at the
+    pending rows. A user-lane retirement that got past its observation
+    clears the key's attention everywhere (C3);
   - `retire_end_state_real` (over a real local repository): with primary
     holding the closed ticket and the item's branch and worktree removed,
     the item's open tab reads primary's copy, and a kept item draft and a
     comment draft are listed on the Drafts page and export (A21, U-11). If
     Export fails, stop for the owner: it is a D2 defect;
   - `retire_open_ticket_refused_real` (over a real service): `ContextRetire`
-    on an open ticket is refused and removes nothing;
+    on an open ticket is refused with the open-ticket refusal code, not an
+    observation failure, and removes nothing;
   - `retire_replay_final`: a Final answer replayed under the same request
     removes nothing a second time and adds no second entry (A22);
   - `quit_during_retirement_pending`: a quit while a retirement is held
@@ -789,10 +826,10 @@ the ledger, the Cycle's Status and Acceptance table, the ticket.
   A20 Tasks 11a, 12; A21 Tasks 11b, 12; A22 Tasks 6, 12; A23 Tasks 4, 5.
 - Rulings map to tasks: R-1, R-2, R-26, R-29, R-30 Task 3; R-3, R-4, R-24,
   R-25 Task 4; R-5 to R-7 Task 2; R-8, R-14 Tasks 2, 8; R-9 Task 7; R-10,
-  R-11, R-16, R-27 Task 5; R-12, R-15 Task 10; R-13 Tasks 6, 7; R-17, R-21,
+  R-11, R-16, R-27 Task 5; R-12, R-15 Task 10; R-13 Tasks 6, 7, 8; R-17, R-21,
   R-22 Task 11b; R-18 Tasks 11b, 12; R-19 Tasks 3, 13; R-20 Task 9; R-23 Task
   11a; R-28 Tasks 11b, 12; R-31 Tasks 4, 11a, 12; R-32 Task 11b; R-33 Task 10;
-  R-34 Task 4; R-35 Tasks 2, 5.
+  R-34 Task 4; R-35 Tasks 2, 5; R-36, R-37 Task 11b; R-38 Task 10.
 - No task changes a library file; a library gap stops for the owner.
 - Two SSH cases, justified in Task 1 (decision 22); every other test is
   model, worker or desktop-behaviour level, with an injected clock, or over
