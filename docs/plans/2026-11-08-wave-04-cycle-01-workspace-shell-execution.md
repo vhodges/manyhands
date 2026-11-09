@@ -1490,3 +1490,152 @@ and the relaunch in `a_panel_moved_into_a_tab_group_is_kept` are completed with 
   start focus. The macOS traffic-light position is left to native CI.
 - **Verify:** all four lines clean (implementer, reviewer, follow-up); both Boundary
   commands print nothing; `Cargo.lock` untouched; `origin/main` unchanged.
+
+## Task 12: Gates, Whole-Branch Reviews, Review-Ready Status
+
+**Status: implementation complete; the fast tier is NOT green; the Cycle is not
+called review-ready.** The owner decides how to treat the red lib stage (below).
+Nothing was closed, merged, cleaned up or dispatched to CI; the only push is the
+ticket branch, by the CLI's comment checkpoints.
+
+**Base.** `origin/main` is `f4442618` (merged at `8ff2e239`); it is an ancestor of
+HEAD. `AGENTS.md` is identical to main's. D6 is not on main. `git merge-tree
+--write-tree HEAD origin/main` is clean. Both Boundary commands print nothing:
+no change outside `src/desktop/`, none to `Cargo.toml`, `Cargo.lock` or
+`packaging/`, none to `view/operations*` or `model/operations.rs`. The branch is 59
+commits ahead of main.
+
+**Gates**, run once on the final Rust tree (HEAD before the doc commits):
+
+| Gate | Result |
+| --- | --- |
+| `cargo check --all-features --locked` | pass |
+| `cargo fmt --check` | pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | pass (replayed from a cached clean run of the same tree) |
+| Fast tier, `--lib` | **FAIL: 1471 passed, 93 failed**, 160 filtered, 885 s |
+| Fast tier, `--bins` (desktop `manyhands`) | **1645 passed, 1 failed**, 1087.5 s |
+| `manyhands-cli` bin | 317 passed |
+| The 27 integration targets of AGENTS.md's list | all pass (canonical_foundation 65, cli 477, discovery_rebuild 79, drafts 48, journal_rejection 26, key_material 39, key_storage 2, local_authoring 142, mutation_bridges 166, mutation_confirmation 184, mutation_contract 47, mutation_relationships 27, mutation_replay 384, read_boundary 20, read_characterization 0 passed and 1 ignored, read_comments 23, read_contract 73, read_credentials 25, read_items 82, read_relationships 17, read_repository 33, read_status 28, recovery_foundation_gate 52, remote_reservation 13, repository_enablement 103, session_credentials 11, shared_key_registry 39) |
+| `scripts/check-cli-no-gpui.sh` | pass |
+| `cargo run --locked --bin manyhands-cli` (smoke) | pass |
+| `git merge-tree --write-tree HEAD origin/main` | clean |
+| Boundary diffs | empty |
+
+**How the fast tier was run.** AGENTS.md's literal command has no `--no-fail-fast`,
+so cargo stops after the failing `--lib` target and the desktop bin and every
+integration target would never run (the retirement ticket recorded the same, "Cargo
+stopped before both bins and every integration"). The literal command was run once
+(lib failed, exit 101, 16.5 minutes). The rest of the same target list was then run
+once more, without `--lib`, with `--no-fail-fast` (about 39 minutes). The result is
+the table above.
+
+**The 93 lib failures.**
+- **All 93 are in `repository::context_retirement::*`** (59 `execution_tests`, 25
+  `record`, 8 `instance`, 1 `run`): the module main's closed ticket
+  `01M6KHVD6D0DB8KYT6VGQP10Y0` (completed-context retirement) added. No other lib
+  test fails. The list is in the session scratchpad (`t12-lib-failures.txt`).
+- **Not caused by this Cycle:** `git diff origin/main...HEAD -- src/repository
+  src/lib.rs` and `Cargo.lock` are empty, so the library code and its dependencies
+  here are byte-identical to `origin/main`'s, and the library does not depend on
+  the desktop (`check-cli-no-gpui` passes). **Not verified on a pristine
+  origin/main build:** a lib baseline was not built (it would take about 15
+  minutes of tests); the inference rests on that identity.
+- **Cause not determined.** A failing test run alone (the built lib binary, one
+  test) fails deterministically in 0.15 s, so it is not load: for example
+  `retirement_live_inventory_invalid_fresh_authenticated_request_replays_refusal`
+  panics at `src/repository/context_retirement/run.rs:1211` (an assertion on a
+  refusal outcome), and the retirement ticket's own recorded green test
+  `execution_tests::mutation_tests::retirement_batch_public_live_pass_retires_real_context_and_replays_without_transport`
+  fails here with `Os { code: 2, kind: NotFound }` at `mutation_tests.rs:45`, reading
+  a fixture's `.manyhands/config.toml`. This points to an environment or fixture
+  difference, not to the Cycle, but it is a hypothesis.
+- **The retirement ticket's own records show lib failures at its gates:**
+  lib 1,495 passed and 2 failed, then 1,494 and 3 failed, and it closed "qualified
+  owner-review-ready" on 2026-11-09 with "no fresh whole-suite/native success is
+  asserted". Its numbers (2 or 3 failures) are far fewer than the 93 seen here.
+- **Not fixed here:** the files are outside the Boundary and this Cycle's remit. The
+  brief's stop condition applies. It needs the owner: follow-on work against main
+  (a separate session, as AGENTS.md says of native failures), or a decision to
+  accept a red lib stage for this Cycle's local gate.
+
+**The desktop bin's one failure.**
+`desktop::view::keyboard_tests::editing::edit_the_mode_key_save_and_done_by_keyboard_alone`
+failed once, at `src/desktop/view/harness.rs:427`, "the edit editor opened did not
+happen": the harness's real-time wait of 10 s for the edit editor, under the full
+parallel run (1646 tests, 1087 s). It passed alone, twice, at 9.09 s each
+(`--test-threads=1`). Task 4a saw the same failure once under load.
+- **Slower than before this Cycle: measured.** The same test alone on a plain
+  `git archive` of `origin/main` (no extra worktree), built in a scratch copy under the
+  session scratchpad and since deleted, ran in **4.97 s and 5.09 s**. On the branch it takes about
+  9.09 s alone. This Cycle made that test about 80% slower: the shell (a 1590 x 1698
+  window, the dock area, panel headers, footer, title bar) draws more per frame, and
+  the test waits in real time for the worker.
+- **Risk:** other tests that wait in real time have less margin under load; this is the
+  only one that failed in the full run. The harness limit is shared. Options for the
+  owner: raise the harness wait (a test-infrastructure edit, E-11-class, not an
+  assertion removal), find why frames are costlier, or accept the flake. No change
+  was made. Treat this as a measured regression, not as noise.
+
+**Whole-branch reviews** (two fresh read-only reviewers, no builds):
+- **Spec review: READY for owner review, no Blocking.** Important 1: proposed K-19
+  (Activity clips three unwrapped `operations.rs` rows at about 550 px, the default
+  1280 px window) is user-visible and recorded only in this ledger and in the
+  checklist, not in the Cycle's Known Limits. Important 2: the approved documents
+  differ from the code in recorded ways and need amending (list below). Important 3:
+  P22 is partly proved (the title bar's drawn text is not asserted; one string feeds
+  both). It produced the P1 to P37 traceability table (all proved except: P22 partly,
+  P34 and P36 partly, P7's "no footer toggle" asserted on the pure `plan()` only) and
+  the Acceptance texts now in the Cycle document. It found **no removed or weakened
+  assertion beyond E-3's**, and no unlisted test edit.
+- **Quality review: APPROVED, no Blocking or Important.** No risky production
+  `unwrap`/`expect` (the `DockPanels` builder `.expect` cannot fire because
+  `restore` validates names before `load`); no real waits in the new tests; all Cycle
+  commits carry the Opus 5.5 trailer. Minor, left (to avoid a Rust edit after the
+  gate run; each is cheap and could be taken before merge): `ChromeColors.selection`
+  has no user and a wrong "Called from Task 4c" label (delete the field, or relabel);
+  `model/layout.rs` comment "(Task 5)" on `move_to` and "(Task 4c's review)" in
+  `dock_tests/moves.rs` narrate history; `placement(side)` inline and `side as usize`
+  in `clamp.rs` (style); `move_panel` finds the group twice; duplicated test helpers
+  (`layout`, `saves`) and seven new `use support::*` globs in test files (a new
+  convention); `item/tokens_tests.rs` accent/faint assertions are tautological;
+  `Render` sets `navigation.pane` without a notify; the `NewItem` fallback to `Pane`
+  when no list is focused (arguably contrary to P16); `Services::backend()` lost its
+  `#[cfg(test)]` gate (a narrower `layout_store()` accessor would keep the surface
+  tight); `harness.rs` (697 lines), `fixtures.rs` (985), `workspace_tests.rs` (1287)
+  were already over the size guideline and grew; only `model/layout_tests.rs` (513) is
+  a new file over it.
+
+**Approved documents that now differ from the code** (the documents were not edited;
+each needs the owner's amendment): Part H and R-19 (the layout is written in
+`quit_now`, gated on a pending save, not at `request_quit`'s entry; an unchanged
+session writes nothing); Part C ("clamped once at launch", superseded by R-37); Part G
+(a 1 MiB file cap, sizes over 1e6 px rejected, extra rows for `axis`, an empty
+`TabPanel`, a bare-leaf dock root and an out-of-range `active_index`); handler
+step 1 (`same_layout`, not equality) and step 3 (the three-term Kit-opened test);
+one `RegionPanel` struct for the five panels; `impl Workspace` in `workspace/docks.rs`
+and `workspace/footer.rs`; the plan's test names merged into tables; Part E (the dock
+menu opens above the toggle; `.selected` on the inner button with `aria_toggled` on the
+wrapper); and proposed K-19, K-20 (OS termination bypasses `quit_now`) and K-21.
+
+**Process lapses** (all recorded where they happened): the D6 `comment add`
+published D6's ticket branch (Task 0); prefix-style test runs in Tasks 4a, 4b, 4c, and
+a sweep of all 1635 desktop tests in Task 9 against the brief's "no whole-suite run
+before Task 12"; Tasks 7 and 9's tests were mostly not written red-first (mutation
+checks instead); the implementers' Task 8 commit used the wrong trailer and was
+amended before it was pushed.
+
+**Test edits** (E-list, as recorded per task): E-1 to E-10 applied; E-3's approved
+assertion removals are the only removals; E-11 entries: Task 4a
+`keyboard_tests::frame::the_strip_header_chips_and_page_run_in_tab_order` (`shift-f6`
+and a region check), Task 4b `keyboard_tests::drafts::quit::a_draft_not_saved_on_quit_by_keyboard`
+(window 400 px wider, owner-approved), Task 6 `assets_tests::every_item_view_icon_loads`
+(`"activity"`), and visibility-only widenings in Tasks 8, 9 and 11.
+
+**Awaiting the owner.** (1) How to treat the 93 red lib tests in main's
+`context_retirement` module. (2) The measured slowdown of
+`edit_the_mode_key_save_and_done_by_keyboard_alone` and its flake. (3) K-19 and
+the document amendments above. (4) The on-screen checklist
+`docs/plans/2026-11-08-wave-04-cycle-01-on-screen-checklist.md`, run against a
+scratch data directory (`XDG_DATA_HOME`); Claude records only what the owner reports.
+(5) Whether to take the Minor cleanups before merge. Not authorized and not done:
+a PR, the merge, `ticket close`, worktree cleanup, and native CI.
