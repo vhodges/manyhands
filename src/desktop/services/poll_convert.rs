@@ -99,7 +99,11 @@ pub(crate) enum Library {
     PollYielding,
     Interrupted,
     ConflictPending,
-    Repository(RepositoryErrorKind),
+    /// `Err(Repository(e))`, or a read that failed before the poll.
+    /// `recovery_required` is a local operation still pending (Fact 32).
+    Repository {
+        recovery_required: bool,
+    },
 }
 
 /// Reads `result` into [`Library`].
@@ -118,7 +122,11 @@ pub(crate) fn classify(result: &Result<RemotePollResult, RemotePollError>) -> Li
         Err(RemotePollError::PollYielding) => return Library::PollYielding,
         Err(RemotePollError::Interrupted) => return Library::Interrupted,
         Err(RemotePollError::ConflictPending) => return Library::ConflictPending,
-        Err(RemotePollError::Repository(error)) => return Library::Repository(error.kind),
+        Err(RemotePollError::Repository(error)) => {
+            return Library::Repository {
+                recovery_required: error.kind == RepositoryErrorKind::RecoveryRequired,
+            };
+        }
     };
     match outcome {
         RemotePollOutcome::NotEligible {
@@ -138,15 +146,16 @@ pub(crate) fn classify(result: &Result<RemotePollResult, RemotePollError>) -> Li
 
 /// The attempt for `result`: [`classify`] then [`attempt_of`].
 ///
-/// `cancel` is why the poll was cancelled, if it answers `Cancelled`. The
-/// answer does not say: the caller does, from its own flags (a user job
-/// that preempted, quit, a configuration change, a launch takeover). It is
-/// read only for that answer.
+/// `cancel` says why the poll was cancelled. The answer does not: the
+/// caller does, from its own flags (a user job that preempted, quit, a
+/// configuration change, a launch takeover). It is called lazily, only for
+/// an answer that is `Cancelled` and at most once, so a closure may consume
+/// the flags.
 pub(crate) fn poll_attempt(
     root: &Root,
     operation: OperationId,
     result: &Result<RemotePollResult, RemotePollError>,
-    cancel: CancelCause,
+    cancel: impl FnOnce() -> CancelCause,
 ) -> PollAttempt {
     attempt_of(root, operation, classify(result), cancel)
 }
@@ -158,12 +167,8 @@ pub(crate) fn repository_failed(
     operation: OperationId,
     recovery_required: bool,
 ) -> PollAttempt {
-    let library = Library::Repository(if recovery_required {
-        RepositoryErrorKind::RecoveryRequired
-    } else {
-        RepositoryErrorKind::InvalidPath
-    });
-    attempt_of(root, operation, library, CancelCause::Preemption)
+    let library = Library::Repository { recovery_required };
+    attempt_of(root, operation, library, || CancelCause::Preemption)
 }
 
 /// A4's row for `library`. The attempt names the deadline its answer names
@@ -173,7 +178,7 @@ pub(crate) fn attempt_of(
     root: &Root,
     operation: OperationId,
     library: Library,
-    cancel: CancelCause,
+    cancel: impl FnOnce() -> CancelCause,
 ) -> PollAttempt {
     let mut attempt = PollAttempt {
         root: root.clone(),
@@ -190,10 +195,17 @@ pub(crate) fn attempt_of(
             index_pending,
         } => {
             attempt.answer = polled_answer(&parts, cancel);
-            // Only a completion has a time (`PollAttempt::completed_at`).
-            if attempt.answer == Answer::Completed {
-                attempt.completed_at = Some(parts.completed_at);
-            }
+            // Every answer a report gave has its time, a replayed failure's
+            // too, so L-1 can age a replayed terminal row. The model moves
+            // `last_completed` only for `Answer::Completed`.
+            //
+            // The library replays a terminal row under the same operation
+            // ID before its eligibility check (`poll_probed`), so a same-ID
+            // restart of a terminal row on a repository that is now
+            // ineligible gets `NotEligible` from the desktop's own
+            // eligibility skip, not the stored result. That is acceptable:
+            // no takeover while not eligible (L-2).
+            attempt.completed_at = Some(parts.completed_at);
             attempt.next_eligible_at = parts.next_eligible_at;
             attempt.targets = parts.targets.iter().map(target).collect();
             attempt.index_pending = index_pending;
@@ -223,10 +235,8 @@ pub(crate) fn attempt_of(
         Library::Busy | Library::PollYielding => attempt.answer = Answer::Busy,
         Library::Interrupted => attempt.answer = Answer::Interrupted,
         Library::ConflictPending => attempt.answer = Answer::ConflictPending,
-        Library::Repository(kind) => {
-            attempt.answer = Answer::Repository {
-                recovery_required: kind == RepositoryErrorKind::RecoveryRequired,
-            };
+        Library::Repository { recovery_required } => {
+            attempt.answer = Answer::Repository { recovery_required };
         }
     }
     attempt
@@ -234,11 +244,11 @@ pub(crate) fn attempt_of(
 
 /// A report's answer: its completion, and for `Completed` the category a
 /// replayed terminal row carries.
-fn polled_answer(parts: &ReportParts, cancel: CancelCause) -> Answer {
+fn polled_answer(parts: &ReportParts, cancel: impl FnOnce() -> CancelCause) -> Answer {
     match parts.completion {
         // `Ok(Polled{Interrupted})` and `Err(Interrupted)` are one row (A4).
         PollCompletion::Interrupted => Answer::Interrupted,
-        PollCompletion::Cancelled => Answer::Cancelled(cancel),
+        PollCompletion::Cancelled => Answer::Cancelled(cancel()),
         PollCompletion::Completed => match parts.outcome {
             None | Some(RemoteOutcomeCategory::Completed) => Answer::Completed,
             Some(category) => category_answer(category, cancel),
@@ -252,12 +262,15 @@ fn polled_answer(parts: &ReportParts, cancel: CancelCause) -> Answer {
 /// selection, endpoint or host trust change was sorted by the library into
 /// the key, configuration or host category, so a replay shows it as one
 /// (the live answer was `Changed`).
-fn category_answer(category: RemoteOutcomeCategory, cancel: CancelCause) -> Answer {
+fn category_answer(
+    category: RemoteOutcomeCategory,
+    cancel: impl FnOnce() -> CancelCause,
+) -> Answer {
     use RemoteOutcomeCategory::*;
     Answer::Transport(match category {
         // Not a failure: the caller took it above.
         Completed => return Answer::Completed,
-        Cancelled => return Answer::Cancelled(cancel),
+        Cancelled => return Answer::Cancelled(cancel()),
         // Transport unavailable, protocol rejected: retry at the backoff.
         TransportUnavailable | ProtocolRejected => TransportFailure::Unreachable,
         // Unlock cancelled, provider unavailable or unlock failed.

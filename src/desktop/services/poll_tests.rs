@@ -23,13 +23,11 @@ use crate::desktop::{
         worker::{WorkerEvent, WorkerHandle},
     },
     test_support::{
+        WAIT,
         fixtures::Fixture,
         polling::{PollCall, PollingBackend},
     },
 };
-
-/// Long enough for a poll of a fixture on a loaded machine.
-const WAIT: Duration = Duration::from_secs(10);
 
 struct Harness {
     fixture: Fixture,
@@ -171,7 +169,6 @@ fn worker_poll_background() {
         harness.backend.inner().jobs_seen(),
         [JobKind::IndexRefresh, JobKind::IndexRefresh, JobKind::Poll]
     );
-    let _ = &harness.fixture;
 }
 
 /// The automatic path makes exactly five calls, in order; `cancel_poll`
@@ -208,6 +205,9 @@ fn poll_call_list() {
     harness.poll(OperationId::new());
     let (_, attempt) = harness.until_polled();
     assert_eq!(attempt.answer, Answer::NotEligible(NotEligible::Paused));
+    // The deadline the failed poll stored, read from `polling_status`
+    // (RFC 3339) when the eligibility answer names none.
+    assert!(attempt.next_eligible_at.is_some());
     assert_eq!(
         harness.backend.calls(),
         [
@@ -216,6 +216,28 @@ fn poll_call_list() {
             PollCall::PollEligibility,
         ]
     );
+
+    // A root the library does not know fails at the first read: nothing is
+    // reserved or stored, so it is a repository failure to wait out, with
+    // no operation to resume.
+    let nowhere = harness.fixture.empty_directory("nowhere");
+    harness.backend.clear_calls();
+    harness
+        .worker
+        .submit_poll(
+            nowhere.to_str().unwrap().to_owned(),
+            OperationId::new(),
+            false,
+        )
+        .expect("the queue is open");
+    let (_, attempt) = harness.until_polled();
+    assert_eq!(
+        attempt.answer,
+        Answer::Repository {
+            recovery_required: false
+        }
+    );
+    assert_eq!(harness.backend.calls(), [PollCall::Resolve]);
 }
 
 /// A background poll asks nobody for a passphrase: no prompt, the key is

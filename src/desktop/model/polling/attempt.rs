@@ -26,7 +26,6 @@ pub(crate) struct Authority {
 /// What an `Err(Transport)` answer comes to (A4's rows; Task 3 sorts the
 /// library's `SshTransportErrorKind` into them). Every kind lands in
 /// exactly one.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 3.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TransportFailure {
     /// Transport unavailable, remote unavailable, protocol failure or push
@@ -49,7 +48,6 @@ pub(crate) enum TransportFailure {
 }
 
 /// Why a poll answered `Cancelled`.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CancelCause {
     /// A user job asked for the worker (R-3).
@@ -57,14 +55,15 @@ pub(crate) enum CancelCause {
     /// Quit.
     Quit,
     /// A configuration change (R-11).
+    #[cfg_attr(not(test), allow(dead_code))] // Constructed from Task 4.
     Reconfiguration,
     /// A launch takeover's stored cancel (L-1).
+    #[cfg_attr(not(test), allow(dead_code))] // Constructed from Task 4.
     Takeover,
 }
 
 /// Why the library would not poll (`PollIneligibility`), with the deadline
 /// it names.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NotEligible {
     Paused,
@@ -74,7 +73,6 @@ pub(crate) enum NotEligible {
 }
 
 /// The answer, classified into A4's rows.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 3.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Answer {
     /// `Ok(Polled{Completed})`, or a replayed terminal row's category
@@ -98,7 +96,6 @@ pub(crate) enum Answer {
 }
 
 /// What a poll saw of one item (`PollDisposition`).
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Disposition {
     Current,
@@ -122,7 +119,6 @@ pub(crate) enum Disposition {
 }
 
 /// A ticket or a document.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TargetKind {
     Ticket,
@@ -143,7 +139,9 @@ pub(crate) struct PollAttempt {
     pub root: Root,
     pub operation: OperationId,
     pub answer: Answer,
-    /// The library's `completed_at`; only a `Completed` answer has one.
+    /// The library's `completed_at`, for every answer that came from a report,
+    /// a replayed terminal row's included (L-1 ages it). The model moves
+    /// `last_completed` only for `Answer::Completed`.
     pub completed_at: Option<OffsetDateTime>,
     /// The deadline the answer names or the stored one, when it is known.
     pub next_eligible_at: Option<OffsetDateTime>,

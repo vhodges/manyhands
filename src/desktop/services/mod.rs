@@ -48,11 +48,11 @@ use crate::desktop::model::{
     lifecycle_lock::{LockKey, LockState},
     list_state::ListState,
     operations::Operations,
-    polling::{PollAttempt, Root},
 };
 use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
 use edit_tabs::EditTabs;
+use poll::PollInbox;
 use prompts::DesktopProvider;
 use release::Releases;
 use resolutions::{ResolutionStore, ResolutionStoreError};
@@ -333,32 +333,6 @@ impl Backend for LibraryBackend {
 
     fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError> {
         self.resolutions.as_ref().map_err(|error| *error)
-    }
-}
-
-/// The automatic polls that ended, as the drain heard them and in order
-/// (D6 B1): the scheduler (Task 5) takes them and applies them to its
-/// schedule. A poll is not a request, so the request model never sees one.
-#[derive(Clone, Default)]
-pub(crate) struct PollInbox(Arc<std::sync::Mutex<Vec<(Root, PollAttempt)>>>);
-
-impl PollInbox {
-    fn push(&self, root: Root, attempt: PollAttempt) {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((root, attempt));
-    }
-
-    /// Every attempt heard since the last call, oldest first.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
-    pub(crate) fn take(&self) -> Vec<(Root, PollAttempt)> {
-        std::mem::take(
-            &mut *self
-                .0
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
     }
 }
 
@@ -686,12 +660,6 @@ impl Services {
     pub(crate) fn without_launch_refresh(mut self) -> Self {
         self.launch_refresh = false;
         self
-    }
-
-    /// The automatic polls that ended since the last call.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
-    pub(crate) fn polls(&self) -> &PollInbox {
-        &self.polls
     }
 
     pub(crate) fn launch_refresh(&self) -> bool {

@@ -23,7 +23,10 @@
 //! `cancel_poll` is not here: only a preemption's cancel task and quit call
 //! it (B2).
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, PoisonError},
+};
 
 use manyhands::{
     repository::{
@@ -35,16 +38,46 @@ use manyhands::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::{
-    Backend,
+    Backend, Services,
     poll_convert::{Library, attempt_of, poll_attempt, repository_failed},
     prompts::DesktopProvider,
 };
 use crate::desktop::model::polling::{CancelCause, PollAttempt, Root};
 
+/// The automatic polls that ended, as the drain heard them and in order
+/// (D6 B1): the scheduler (Task 5) takes them and applies them to its
+/// schedule. A poll is not a request, so the request model never sees one.
+#[derive(Clone, Default)]
+pub(crate) struct PollInbox(Arc<Mutex<Vec<(Root, PollAttempt)>>>);
+
+impl PollInbox {
+    pub(super) fn push(&self, root: Root, attempt: PollAttempt) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((root, attempt));
+    }
+
+    /// Every attempt heard since the last call, oldest first.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
+    pub(crate) fn take(&self) -> Vec<(Root, PollAttempt)> {
+        std::mem::take(&mut *self.0.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+impl Services {
+    /// The automatic polls that ended since the last call.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5.
+    pub(crate) fn polls(&self) -> &PollInbox {
+        &self.polls
+    }
+}
+
 /// Runs the automatic poll of the repository at `root` under `operation`
 /// (`restart` resends it) and gives the desktop's account of it.
 ///
-/// `cancel` says why the poll was cancelled, asked only if it answers
+/// `cancel` says why the poll was cancelled, called lazily and at most once,
+/// only if it answers
 /// `Cancelled`: the answer does not say, the worker's flags do (R-3).
 pub(super) fn run(
     backend: &dyn Backend,
@@ -77,7 +110,7 @@ pub(super) fn run(
                 next_eligible_at,
                 index_pending: false,
             };
-            let mut attempt = attempt_of(root, operation, library, CancelCause::Preemption);
+            let mut attempt = attempt_of(root, operation, library, || CancelCause::Preemption);
             attempt.next_eligible_at = attempt.next_eligible_at.or(stored);
             return attempt;
         }
@@ -91,7 +124,7 @@ pub(super) fn run(
         restart,
     };
     let result = backend.poll_automatic(request, session);
-    let mut attempt = poll_attempt(root, operation, &result, cancel());
+    let mut attempt = poll_attempt(root, operation, &result, cancel);
     // The deadline the poll stored: a failure's backoff, or the interval
     // after a completion. A snapshot that cannot be read leaves the one
     // read before the poll.

@@ -4,10 +4,11 @@
 //! so those rows are built as `Library` values (decision 9); every other
 //! answer is the library's own type.
 
+use std::cell::Cell;
+
 use manyhands::repository::{
     AuthoringKind, IndexPending, OperationId, PollCompletion, PollDisposition, PollIneligibility,
-    RemoteOutcomeCategory, RemotePollError, RemotePollOutcome, RemotePollResult,
-    RepositoryErrorKind, SharedKeyId,
+    RemoteOutcomeCategory, RemotePollError, RemotePollOutcome, RemotePollResult, SharedKeyId,
     transport::{
         HostKeyIdentity, SshAuthority, SshDirection, SshTransportError, SshTransportErrorKind,
     },
@@ -75,12 +76,9 @@ fn polled(parts: ReportParts, index_pending: bool) -> Library {
 }
 
 fn answer_of(library: Library) -> Answer {
-    attempt_of(
-        &root(),
-        OperationId::new(),
-        library,
-        CancelCause::Preemption,
-    )
+    attempt_of(&root(), OperationId::new(), library, || {
+        CancelCause::Preemption
+    })
     .answer
 }
 
@@ -97,8 +95,18 @@ fn poll_attempt_conversion() {
         host: "example.test".to_owned(),
         port: 2222,
     };
+    // The cause is asked for only by a `Cancelled` answer, and once, so
+    // Task 4's closure may consume its flags.
+    let asked = Cell::new(0);
+    let cause = |named: CancelCause| {
+        let asked = &asked;
+        move || {
+            asked.set(asked.get() + 1);
+            named
+        }
+    };
     let convert = |result: &Result<RemotePollResult, RemotePollError>| {
-        poll_attempt(&root(), operation, result, CancelCause::Quit)
+        poll_attempt(&root(), operation, result, cause(CancelCause::Quit))
     };
 
     // Err(Transport(e)): every one of the 24 kinds, keyed by
@@ -158,6 +166,7 @@ fn poll_attempt_conversion() {
         assert_eq!(attempt.root, root());
         assert_eq!(attempt.operation, operation);
         assert_eq!(attempt.completed_at, None);
+        assert_eq!(attempt.next_eligible_at, None);
         assert!(attempt.targets.is_empty());
     }
     // No key and no host: the row is per repository (A4).
@@ -185,15 +194,10 @@ fn poll_attempt_conversion() {
         assert_eq!(convert(&result).answer, expected);
     }
     // Err(Repository(_)): recovery_required against any other code.
-    for (kind, recovery_required) in [
-        (RepositoryErrorKind::RecoveryRequired, true),
-        (RepositoryErrorKind::IndexUnavailable, false),
-        (RepositoryErrorKind::NotRepository, false),
-    ] {
+    for recovery_required in [true, false] {
         assert_eq!(
-            answer_of(Library::Repository(kind)),
+            answer_of(Library::Repository { recovery_required }),
             Answer::Repository { recovery_required },
-            "{kind:?}"
         );
     }
 
@@ -222,7 +226,11 @@ fn poll_attempt_conversion() {
         assert!(pending.index_pending);
     }
 
+    // Nothing so far was cancelled: the cause was never asked for.
+    assert_eq!(asked.get(), 0);
+
     // A report: its completion, with the cancel cause the caller names.
+    // Every report answer carries the library's time.
     for (completion, expected) in [
         (PollCompletion::Completed, Answer::Completed),
         (PollCompletion::Interrupted, Answer::Interrupted),
@@ -231,6 +239,7 @@ fn poll_attempt_conversion() {
             Answer::Cancelled(CancelCause::Preemption),
         ),
     ] {
+        let before = asked.get();
         let attempt = attempt_of(
             &root(),
             operation,
@@ -238,20 +247,20 @@ fn poll_attempt_conversion() {
                 parts(completion, Some(RemoteOutcomeCategory::Completed)),
                 false,
             ),
-            CancelCause::Preemption,
+            cause(CancelCause::Preemption),
         );
         assert_eq!(attempt.answer, expected);
         assert_eq!(attempt.next_eligible_at, Some(at(400)));
-        // Only a completion has a time.
-        let completed = expected == Answer::Completed;
-        assert_eq!(attempt.completed_at, completed.then_some(at(100)));
+        assert_eq!(attempt.completed_at, Some(at(100)));
+        let cancelled = matches!(expected, Answer::Cancelled(_));
+        assert_eq!(asked.get() - before, usize::from(cancelled));
     }
     assert_eq!(
         attempt_of(
             &root(),
             operation,
             polled(parts(PollCompletion::Cancelled, None), true),
-            CancelCause::Takeover,
+            || CancelCause::Takeover,
         )
         .answer,
         Answer::Cancelled(CancelCause::Takeover)
@@ -261,7 +270,7 @@ fn poll_attempt_conversion() {
         &root(),
         operation,
         polled(parts(PollCompletion::Completed, None), true),
-        CancelCause::Quit,
+        || CancelCause::Quit,
     );
     assert_eq!(
         (attempt.answer, attempt.index_pending),
@@ -300,14 +309,11 @@ fn poll_attempt_conversion() {
             &root(),
             operation,
             polled(parts(PollCompletion::Completed, Some(category)), false),
-            CancelCause::Reconfiguration,
+            || CancelCause::Reconfiguration,
         );
         assert_eq!(attempt.answer, expected, "{category:?}");
-        assert_eq!(
-            attempt.completed_at.is_some(),
-            expected == Answer::Completed,
-            "{category:?}"
-        );
+        // A replayed failure keeps its time, so L-1 can age it.
+        assert_eq!(attempt.completed_at, Some(at(100)), "{category:?}");
     }
 
     // Targets: all 18 dispositions, with the item and kind when given.
@@ -334,20 +340,22 @@ fn poll_attempt_conversion() {
         (P::NotReached, D::NotReached),
     ];
     assert_eq!(all.len(), 18);
-    let mut report = parts(PollCompletion::Completed, Some(C::Completed));
-    for (at, (disposition, _)) in all.iter().enumerate() {
-        let (item, kind) = match at % 3 {
-            0 => (Some(TICKET), Some(AuthoringKind::Ticket)),
-            1 => (Some(DOCUMENT), Some(AuthoringKind::Document)),
-            _ => (None, None),
-        };
-        report.targets.push(TargetParts {
-            item_id: item.map(item_id),
-            kind,
-            disposition: *disposition,
-        });
-    }
-    let attempt = attempt_of(&root(), operation, polled(report, false), CancelCause::Quit);
+    let report = |completion| {
+        let mut report = parts(completion, Some(C::Completed));
+        for (at, (disposition, _)) in all.iter().enumerate() {
+            let (item, kind) = match at % 3 {
+                0 => (Some(TICKET), Some(AuthoringKind::Ticket)),
+                1 => (Some(DOCUMENT), Some(AuthoringKind::Document)),
+                _ => (None, None),
+            };
+            report.targets.push(TargetParts {
+                item_id: item.map(item_id),
+                kind,
+                disposition: *disposition,
+            });
+        }
+        report
+    };
     let expected: Vec<AttemptTarget> = all
         .iter()
         .enumerate()
@@ -365,5 +373,19 @@ fn poll_attempt_conversion() {
             disposition: *disposition,
         })
         .collect();
-    assert_eq!(attempt.targets, expected);
+    // A cancelled or interrupted attempt reports what it brought in too
+    // (A4).
+    for completion in [
+        PollCompletion::Completed,
+        PollCompletion::Interrupted,
+        PollCompletion::Cancelled,
+    ] {
+        let attempt = attempt_of(
+            &root(),
+            operation,
+            polled(report(completion), false),
+            || CancelCause::Quit,
+        );
+        assert_eq!(attempt.targets, expected, "{completion:?}");
+    }
 }

@@ -18,9 +18,10 @@ mod table;
 
 use std::{collections::BTreeMap, time::Duration};
 
-#[cfg_attr(not(test), allow(unused_imports))] // Called from Task 3.
+#[cfg_attr(not(test), allow(unused_imports))] // Called from Task 8.
+pub(crate) use attempt::KeyId;
 pub(crate) use attempt::{
-    Answer, AttemptSummary, AttemptTarget, Authority, CancelCause, Disposition, KeyId, NotEligible,
+    Answer, AttemptSummary, AttemptTarget, Authority, CancelCause, Disposition, NotEligible,
     PollAttempt, Root, TargetKind, TransportFailure,
 };
 #[cfg_attr(not(test), allow(unused_imports))] // Called from Task 5.

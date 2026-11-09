@@ -97,6 +97,10 @@ struct Declined {
     /// The keys a background job's last attempt was refused a prompt for,
     /// which are not declined.
     refused: HashMap<DesktopRequestId, HashSet<SharedKeyId>>,
+    /// The last poll job begun, whose refused keys the next poll's begin
+    /// forgets: only a retirement's record is read (Task 11a), so polls
+    /// must not grow `refused` without end.
+    last_poll: Option<DesktopRequestId>,
 }
 
 impl DeclinedKeys {
@@ -136,6 +140,16 @@ impl DeclinedKeys {
         if let Some(id) = id {
             declined.by_request.remove(&id);
             declined.refused.remove(&id);
+        }
+    }
+
+    /// The worker begins the poll job `id` (after `attempting`): the keys
+    /// the previous poll was refused a prompt for are forgotten, so a poll
+    /// a minute leaves one record, not one each.
+    pub(crate) fn polling(&self, id: DesktopRequestId) {
+        let mut declined = self.lock();
+        if let Some(previous) = declined.last_poll.replace(id) {
+            declined.refused.remove(&previous);
         }
     }
 

@@ -254,7 +254,9 @@ pub(crate) struct SendMark(u64);
 /// The job the worker is running.
 struct Running {
     id: DesktopRequestId,
-    /// `None` for a host observation, which cannot be cancelled.
+    /// `None` for a host observation, which cannot be cancelled, and for a
+    /// poll, which has no token: `quit()` does not stop a running poll, so
+    /// Task 10 must call `Backend::cancel_poll` for it.
     cancel: Option<CancellationToken>,
     accepted: bool,
     /// Whether its command honours the token after acceptance (R-1).
@@ -927,6 +929,9 @@ fn run(shared: &Shared, backend: &dyn Backend) {
         // The provider learns the lane, so a background job never prompts
         // (B5).
         shared.declined.attempting(attempt, lane);
+        if matches!(work, Work::Poll { .. }) {
+            shared.declined.polling(id);
+        }
         match work {
             Work::Execute {
                 request_id,
