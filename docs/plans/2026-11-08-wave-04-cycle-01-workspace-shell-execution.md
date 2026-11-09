@@ -1265,3 +1265,116 @@ and the relaunch in `a_panel_moved_into_a_tab_group_is_kept` are completed with 
   over the limit and gains about 25 lines.
 - **Document clarification to carry:** Part H's "written at `request_quit`'s entry"
   becomes "written in `quit_now`".
+
+## Task 9: Persistence
+
+- **Commits** `d98231c0` (range `6543351c..d98231c0`, 26 files, about 1900 lines)
+  and the review follow-up `b2523219` (12 files). `origin/main` is unchanged at
+  `f4442618`, already merged; the Task 9 merge was a no-op. D6 is not on main.
+- **As built** (the checkpoint's mechanism and rulings): `services/layout.rs`
+  (`LayoutStore`, `Backend::layout()`, generations and both test seams behind one
+  shared `Arc`; a file over 1 MiB is an error), `model/layout/restore.rs` (the pure
+  `restore` and `encode`; `LAYOUT_VERSION` moved here), `view/dock/restore.rs`
+  (launch), `view/dock/save.rs` (500 ms debounce, fresh dump, `pending`),
+  `view/dock/clamp.rs` (R-37), `view/workspace/layout_notices.rs` (the restore and
+  save notices), the quit's write at the first line of `quit_now` gated on
+  `pending`, the R-9 start focus, `Shell::relaunch`. `operation-area` is now
+  `w_full + flex_1 + min_h_0` inside a `size_full` wrapper holding the notices (id
+  and vertical scrolling kept). `Services::backend()` lost its `#[cfg(test)]` gate
+  (a reviewer's Minor: it widens the production surface; a narrower accessor would
+  be tidier).
+- **Tests**, each 1 test, all passed (implementer, reviewer, follow-up):
+  - `desktop::model::layout::tests::restore_restores_or_falls_back` (one table;
+    now with the extra rows: a `TabPanel`-named stack, a leaf with children, a dock
+    and a split over 1e6 px, and valid boundary rows: exactly 100 px, exactly
+    1,000,000 px, 0.5 px split, a nested split).
+  - `desktop::view::dock::restore_tests::{a_valid_file_restores_the_layout,
+    a_dock_too_large_for_the_window_is_clamped,
+    a_file_that_cannot_be_read_restores_the_default_and_says_so,
+    the_layout_survives_a_restart,
+    a_change_just_before_a_quit_that_exits_at_once_is_kept,
+    a_change_during_a_quit_wait_is_kept, a_stale_write_loses_to_the_quits,
+    a_failed_write_shows_the_save_notice}`.
+  - Follow-up, `desktop::view::dock::save_tests::{a_launch_that_changes_nothing_writes_nothing_even_at_quit,
+    a_failed_write_is_tried_again_at_quit, a_dock_nudged_under_the_tolerance_is_saved,
+    a_drop_on_the_item_area_is_not_written, a_dock_opened_by_its_edge_is_clamped,
+    a_file_over_the_cap_restores_the_default_and_says_so,
+    a_store_that_did_not_open_restores_the_default_and_saves_nothing}` and
+    `desktop::view::dock::clamp::tests::the_clamp_fits_the_docks_to_the_area` (14
+    rows). The round trip `restore(Ok(Some(encode(layout, &dump))))` is now inside
+    `assert_agreement`, so every dock test that checks agreement also checks that
+    live Kit dumps are accepted by `restore`: **no Kit-written state was refused**.
+  - **E-9** applied: `desktop::mod_tests::view::a_data_directory_that_cannot_open_shows_the_startup_failure`
+    also asserts `layout/` beside the service (red first: "layout beside the
+    service"). **Task 5 completions** (additive, no assertion removed):
+    `dock::tests::toggles::a_dock_closed_and_opened_keeps_its_panels_groups_and_sizes`
+    checks the file per side after the save delay; `dock::tests::moves::a_panel_moved_into_a_tab_group_is_kept`
+    checks the file, then `Shell::relaunch`, then the restored groups, the revealed
+    Tickets and agreement. **E-11, visibility only:** `dock_tests/support.rs`
+    helpers `pub(super)` to `pub(in crate::desktop::view)` (plus rustfmt re-wrapping),
+    `dock_tests/mod.rs` `mod support`, `restore_tests` made `pub(in crate::desktop::view)`.
+- **Test-first, honestly.** The Task 9 tests were mostly written together with the
+  implementation and **not** seen red first; the implementer proved each
+  discriminating by temporary mutation afterwards (dropping the active-index check,
+  removing the stale skip, forcing the `pending` gate off, ignoring `Restore::Saved`,
+  never setting the notice, disabling the first-frame and the open clamp). The one
+  test that passed with the quit write disabled
+  (`a_change_during_a_quit_wait_is_kept`, because the fake clock auto-advanced past
+  the save delay) was fixed with `elapse` and a `hold_writes_for_testing` hold. The
+  follow-up's new tests are mostly guards of existing behaviour, proven by
+  mutation (one table of mutations was reported: gate off, `Err` arm clearing
+  `pending`, `encode(&self.accepted)`, the centre-check guard, `opening ||` dropped,
+  the over-cap arm, `Launch::read`'s `Err` arm, `.max(0.)` for the clamp floor,
+  `MAX_SIZE` as `f32::MAX`, and so on).
+- **Process breach, recorded.** To find any test the clamp broke, the implementer
+  ran **all 1635 desktop `--bin` tests in four commands** (all passed, each under
+  six minutes). The owner's brief says no whole-suite run before Task 12. My own
+  instruction to report any clamp-broken test by name invited it, and I should have
+  told the implementer to reason from the clamp's thresholds instead. The
+  reviewer checked: the clamp fires only below 320 px of item width or 200 px of
+  item height, the harness windows (1590 wide, 1140 or more tall) and the as-launched
+  1280 x 840 are above both, the quit write needs `pending`, and the wrapper is
+  geometrically equivalent with no notice; the sites that shrink the window keep
+  446 px or more under the 520 px bottom dock and open no dock afterwards. No
+  existing test could be named at risk. Task 12 still runs the fast tier.
+- **Review:** APPROVED. Blocking none. Four Important, all **test gaps** (not code
+  defects), fixed in `b2523219`: I-1 nothing asserted that a no-change quit writes
+  nothing, or that a quit retries after a failed write; I-2 nothing distinguished the
+  fresh dump from the accepted state; I-3 `clamped()` had no unit test; I-4 restore
+  table rows that did not isolate their rule, and no round trip of live dumps.
+  Minor fixed: sizes over 1e6 px are rejected; the file read is capped at 1 MiB
+  (limitation: `Folder::read` has no size query and `src/drafts` is outside the
+  Boundary, so the file is read in full and then checked; the cap sends an
+  oversized file to the default with the notice, but does not bound that one read's
+  memory); a dock opened by the Kit's edge drag is now clamped too (R-37 "whenever a
+  dock opens"); `clamp::clamped` owns the 0.5 px no-change rule and returns
+  `[Option<f32>; 3]`; stale comments and a stale `cfg_attr` removed; two missing
+  tests added (launch with no file saves nothing; the store-did-not-open path).
+  Minor not changed: `encode` could write NaN or inf as `null` that `restore` then
+  rejects (unlikely); `axis` is not tied to the slot (a left dock with side-by-side
+  groups loads, no crash); a clamp change under the 0.5% share tolerance stops at
+  handler step 1 and is saved only with the next real save (ruled D3); a failed
+  restore with no change leaves the bad file in place and the next launch shows the
+  notice again (ruled); Windows behaviour of creating sentinel entries inside the
+  folders the store holds open is unverified (native CI after merge); the keyboard
+  Dismiss path (Tab, Enter, Space, ring, accessible name) is untested (the tests
+  click the id) — **Task 11's journey should cover it**.
+- **Decisions to carry to the final document pass:** Part H's "written at
+  `request_quit`'s entry" becomes "written in `quit_now`, gated on a pending save";
+  Part C's "clamped once at launch" is superseded by R-37; the 1 MiB file cap and the
+  1e6 px size bound are additions to Part G's table.
+- **Known limits to add to the design (K-20, K-21):** the quit's write runs on the UI
+  thread and, when a background write is mid-`replace`, waits for it (K-14, already
+  there); OS-initiated termination bypasses `quit_now`, so a change made after the
+  last debounce and before a kill is lost.
+- **For the on-screen checklist:** the clamp after the first real frame on a small
+  window and on opening a closed oversized dock (the hook relies on the deferred
+  closure running after the first draw's prepaint; the harness draws dirty windows
+  after each update); the notices at the default 150 px Activity (two notices plus
+  the scroller), the Dismiss ring, Tab and Enter; a restart after dragging a
+  divider or a dock edge (K-9); the quit with a pending change; a corrupt
+  `layout.json` and a directory named `layout.json`; a layout restored with
+  Repositories hidden (focus on the first stop); an active-window run of the R-9
+  start focus.
+- **Verify:** all four lines clean (implementer, reviewer, follow-up); both
+  Boundary commands print nothing; `Cargo.lock` untouched.
