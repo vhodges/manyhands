@@ -1,0 +1,115 @@
+# Wave 04 Cycle 01 Execution Ledger
+
+The orchestrator's record for
+[the plan](2026-11-08-wave-04-cycle-01-workspace-shell-implementation.md):
+task state, commit ranges, decisions, review findings and verification. It
+is written only by the orchestrator. Implementers never edit it.
+
+## Authorization
+
+- **Documents approved 2026-11-08.** The owner wrote: "Docs are Approved,
+  tests are approved. Note if testing scope need to add additional existing
+  tests, that is pre-authorized." The approval commit is `8b9cebd5`.
+  - Named test edits E-1 to E-10 are approved.
+  - Decision 17: any further edit to an existing test that this Cycle needs
+    is pre-authorized. Each is recorded here as E-11 onward, with its
+    reason, and checked by the task's reviewer. An edit that removes an
+    assertion is called out here and in the review-ready summary.
+- **Implementation authorized 2026-11-08,** recorded at `f307a05d`:
+  "subagent-driven, implementation authorized, keep the quit buttons."
+  Decisions 18 and 19: serial, one implementer per task, then a fresh
+  reviewer, one at a time.
+- **Execution brief 2026-11-08** (owner): the orchestrator writes this
+  ledger and the ticket comments and pushes the ticket branch only.
+  Implementers never edit the ticket, comment or ledger files and never
+  dispatch subagents.
+- **Still gated:** any push other than the ticket branch, a PR, the merge,
+  closing the ticket, cleanup and native CI dispatch. Each needs the owner's
+  own go-ahead.
+- **Stop conditions** (brief): a contract, behaviour or scope question the
+  documents do not settle; a test failing because product behaviour would
+  have to change beyond the design; U-4 failing in Task 4b; a move of the
+  `gpui-kit`, `gpui-base`, `gpui-component` or `zorite-editor` versions in
+  `Cargo.lock`; D6 merging on main; anything needing a file outside the
+  Boundary.
+
+## Named edits (E-list)
+
+E-1 to E-10 are the design's table. Edits beyond them are recorded here.
+
+| E | Task | Test | Reason | Assertion removed? | Reviewer |
+| --- | --- | --- | --- | --- | --- |
+| E-1 to E-10 | see the design | approved | approved | E-3 removes assertions (approved) | per task |
+
+## Follow-ups
+
+- **Push by `comment add` (Task 0, disclosed).** See Task 0, Step 4.
+
+## Base
+
+- **Main.** `origin/main` is `8da9afd4`. It was merged into the ticket
+  branch as `cc2af8d0` during planning.
+- **Task 0 merge.** `git fetch origin` and `git merge origin/main` on
+  2026-11-08: already up to date, `8da9afd4` is an ancestor of HEAD.
+  HEAD before and after: `737c4669`. No conflicts.
+- **Local main** has no unpushed commits (`git log origin/main..main`
+  printed nothing).
+- **Wave 03 D6** (`01M4CC0VN3VPVVQ3RNWJKXWEVX`) is not on `origin/main`
+  (`c3586ac0` is not an ancestor).
+
+## Task 0: Baseline, References, Ledger And Follow-Ups
+
+**Step 1, baseline.** The run started at `737c4669`; the tree differed
+only in documentation.
+
+| Check | Result |
+| --- | --- |
+| `cargo check --all-features --locked` | pass (50 s) |
+| `cargo fmt --check` | pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | pass (59 s) |
+
+No test was run: the plan runs none at Task 0.
+
+**Step 2, facts.** `git diff --stat 2b1dc4d5 HEAD -- src/desktop docs/Waves
+docs/RFC docs/design Cargo.lock` shows only `docs/Waves/wave-04-workspace-design.md`,
+`docs/design/02-layout-and-docking.md` and `docs/design/08-gpui-kit-mapping.md`,
+which are the approval commit's Amendments. Nothing in `src/desktop` or
+`Cargo.lock` moved, so facts 1–34 stand and the Kit versions are unchanged.
+
+**Step 3, sweep.** Every count matches the plan.
+
+| Command | Result |
+| --- | --- |
+| `Region::Navigation` / `region-navigation` | 8 files: `find_tests` 2, `item/page_tests` 4, `keyboard_tests.rs` 12, `actions` 2, `editing` 8, `frame` 2, `made_ready_tests` 1, `workspace_tests` 3 |
+| `pane-tickets` / `pane-documents` / `pane-showing` / `SHOWING_*` | 7 files: `create_tests` 7, `keyboard_tests.rs` 10, `editing` 2, `made_ready_review_tests` 1, `operations_tests` 2, `tabs_tests` 1, `tickets_tests` 11 |
+| `simulate_resize` in `src/desktop` | `harness.rs:119` and E-10's ten sites |
+
+No new test site, so no E-11 from the sweep.
+
+**Step 4, approval follow-ups.**
+
+- **Amendments 1–9 and 11** are in the Wave and the handoff (checked
+  against `git diff 2b1dc4d5 HEAD -- docs/Waves docs/design`).
+- **Amendments 10 and 11, ticket edits.** Committed as `85f1d37c`: the
+  Scope Summary's rows line defers to decision 11; the D6 Coordination's
+  "attention entries" becomes the `needs_attention` function; "Quit feedback
+  stays visible" becomes "Quit feedback stays in Activity" (decision 7,
+  revised). `ticket save` (request `01M6Z89CF549ATSHEQJH6YYM7Y`) answered
+  `noop`, `already_applied`: the committed `ticket.md` was already the
+  canonical state, and `ticket show` reads both edits.
+- **Note on D6's ticket.** D6's worktree was clean at HEAD `c3586ac0`, so
+  the note went in with `comment add` (comment `01M6Z8A8AYDGTK4BWKZR3931ST`,
+  request `01M6Z8A8CJ4DTYPZ95TG3QEKC8`), checkpoint `b05c86c6`. It records
+  the `needs_attention` rule, the unchanged operation files, the quit
+  feedback, and the files where a textual conflict is expected.
+  - **Disclosure.** The result reported `publication: published`: the CLI
+    fast-forwarded D6's ticket branch on `origin` from `c3586ac0` to
+    `b05c86c6`. That commit adds only the comment file. The brief
+    authorizes pushing this Cycle's ticket branch only, and the file-ticket
+    skill says a request authorizes the CLI's local checkpoint, not
+    publication. The push was a side effect of the command Task 0 Step 4
+    names, not a separate push, and nothing was forced. It is not undone.
+    The owner is told in the Task 0 report. No further command will run
+    against another ticket.
+
+**Step 5.** This ledger; commit and the ticket comment follow.
