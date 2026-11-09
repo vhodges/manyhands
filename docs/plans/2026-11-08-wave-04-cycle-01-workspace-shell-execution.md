@@ -184,3 +184,35 @@ No new test site, so no E-11 from the sweep.
   `restore` in a submodule such as `layout/restore.rs`; `move_to` mirrors the
   Kit move in the pure model, so Task 5 must keep the two in agreement.
 - **E-11 candidates:** none. Boundary commands print nothing.
+
+## Task 3: Needs Attention Count And Window Title
+
+- **Commit** `1820d575` (range `30c5a86d..1820d575`): `model/attention.rs`,
+  `model/attention_tests.rs`, `view/shell/title.rs`, `view/shell/title_tests.rs`
+  and the two `mod` lines.
+- **Tests** (new, 1 test run each, passed, implementer and reviewer):
+  `desktop::model::attention::tests::counts_what_awaits_the_person` (one
+  table, 24 rows, sum row 6) and
+  `desktop::view::shell::title::tests::title_names_the_selected_repository`.
+  The attention test was seen to fail first (0 against 1, "finished: partial").
+  The title test was not seen to fail on its stub; the reviewer checked by
+  mutation (bare title, full path, hyphen, en dash, no none case) that it
+  would.
+- **Verify:** all four lines clean; both Boundary commands print nothing.
+- **Review:** APPROVED, no Blocking, Important or Minor findings.
+- **Facts confirmed against source:** `NotSent` means never sent to the
+  library (`SecretRequired`, `KeyStoreUnavailable`); `Dismissed` and `Removed`
+  are separate states; pending `Ready` counts rows, `Failed` counts 1, `Loading`
+  and `Busy` count 0. `DraftRegistry` is `services::drafts::DraftRegistry`.
+- **Notes for the owner (no change needed):**
+  - A pending read that fails with one of `UNAVAILABLE_CODES` removes that
+    repository's entry (`apply_pending`), so it counts nothing and Activity
+    shows no row for it either. The repository shows as Unavailable in the
+    sidebar. Whether an unavailable repository should also count in Needs
+    attention is a scope decision for Cycle 03 or D6, not a bug here.
+  - A Finished request that offers Abandon, whose operation is also a listed
+    pending row, counts 1 + 1: the design counts each source. The count can
+    overstate distinct problems by one in that case.
+  - A `Busy` pending read shows a Retry in Activity and is not counted
+    (R-13's documented trade-off).
+- **E-11 candidates:** none; no existing test edited.
