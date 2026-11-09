@@ -88,10 +88,5 @@ pub(in crate::desktop::view) fn centre_is_item_area(state: &DockAreaState) -> bo
 
 /// Whether `state` has a dock on `side` and it is open.
 pub(in crate::desktop::view) fn open_in(state: &DockAreaState, side: Side) -> bool {
-    let dock = match side {
-        Side::Left => &state.left_dock,
-        Side::Right => &state.right_dock,
-        Side::Bottom => &state.bottom_dock,
-    };
-    dock.as_ref().is_some_and(DockState::open)
+    side.dock(state).as_ref().is_some_and(DockState::open)
 }

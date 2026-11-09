@@ -199,9 +199,7 @@ impl Workspace {
             self.dock.clamp_docks(&self.layout, window, cx);
         }
         for side in Side::ALL {
-            let size = area
-                .read(cx)
-                .dock_size(crate::desktop::view::dock::placement(side));
+            let size = area.read(cx).dock_size(side.placement());
             if let Some(size) = size {
                 self.layout.set_size(side, size.as_f32());
             }

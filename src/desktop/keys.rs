@@ -242,12 +242,13 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-shift-d", OpenDrafts, None),
         KeyBinding::new("secondary-q", Quit, None),
-        // The dock keys, in no context. An editor's own `ctrl-b` (Bold) is
-        // bound in its "Editor" context at the same depth as these, and wins
-        // there because it is registered later (`bind_all_keys`, decision 2).
-        KeyBinding::new("secondary-b", ToggleLeftDock, None),
-        KeyBinding::new("secondary-alt-b", ToggleRightDock, None),
-        KeyBinding::new("secondary-j", ToggleBottomDock, None),
+        // The dock keys, in the workspace. An editor's own `ctrl-b` (Bold) is
+        // bound in its "Editor" context, which lies deeper, so it wins in an
+        // editable editor whichever is registered first; a read-only editor
+        // has it unbound (`editor::keys`, decision 2).
+        KeyBinding::new("secondary-b", ToggleLeftDock, Some("Workspace")),
+        KeyBinding::new("secondary-alt-b", ToggleRightDock, Some("Workspace")),
+        KeyBinding::new("secondary-j", ToggleBottomDock, Some("Workspace")),
         // On a focused panel toggle: its dock menu.
         KeyBinding::new("menu", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
         KeyBinding::new("shift-f10", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),

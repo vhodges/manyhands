@@ -3,17 +3,13 @@
 
 use gpui_kit::{App, Window, px};
 
-use super::{DockShell, placement};
-use crate::desktop::model::layout::{Layout, Side};
+use super::DockShell;
+use crate::desktop::model::layout::{Layout, Side, min_dock};
 
 /// The narrowest item area the side docks may leave.
 const MIN_ITEM_WIDTH: f32 = 320.;
 /// The shortest item area the bottom dock may leave.
 const MIN_ITEM_HEIGHT: f32 = 200.;
-/// No dock is made smaller than this (the Kit's floor).
-fn min_dock() -> f32 {
-    gpui_kit::base::PANEL_MIN_SIZE.as_f32()
-}
 
 /// A change smaller than this is none: the Kit measures in fractions.
 const NO_CHANGE: f32 = 0.5;
@@ -94,7 +90,7 @@ impl DockShell {
             return;
         }
         let bounds = self.area.read(cx).bounds();
-        let current = Side::ALL.map(|side| self.area.read(cx).dock_size(placement(side)));
+        let current = Side::ALL.map(|side| self.area.read(cx).dock_size(side.placement()));
         let open = Side::ALL.map(|side| current[side as usize].is_some() && layout.is_open(side));
         let sizes = current.map(|size| size.map_or(0., |size| size.as_f32()));
         let to = clamped(
@@ -106,7 +102,7 @@ impl DockShell {
         for side in Side::ALL {
             if let Some(size) = to[side as usize] {
                 self.area.update(cx, |area, cx| {
-                    area.set_dock_size(placement(side), px(size), window, cx)
+                    area.set_dock_size(side.placement(), px(size), window, cx)
                 });
             }
         }

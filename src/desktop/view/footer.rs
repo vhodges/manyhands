@@ -99,12 +99,7 @@ pub(crate) fn panel_toggle_name(kind: PanelKind, displayed: bool) -> String {
 
 /// "Hide left dock" when the dock is open, else "Show left dock" (R-24).
 pub(crate) fn dock_toggle_name(side: Side, open: bool) -> String {
-    let side = match side {
-        Side::Left => "left",
-        Side::Right => "right",
-        Side::Bottom => "bottom",
-    };
-    format!("{} {side} dock", verb(open))
+    format!("{} {} dock", verb(open), side.name())
 }
 
 fn verb(on: bool) -> &'static str {

@@ -40,11 +40,8 @@ impl Launch {
 /// is written and ignored (Part G).
 fn opened_as(area: DockAreaState, layout: &Layout) -> DockAreaState {
     let mut area = area;
-    for (side, dock) in [
-        (Side::Left, &mut area.left_dock),
-        (Side::Right, &mut area.right_dock),
-        (Side::Bottom, &mut area.bottom_dock),
-    ] {
+    for side in Side::ALL {
+        let dock = side.dock_mut(&mut area);
         if let Some(state) = dock {
             *dock = Some(DockState::new(
                 state.panel().clone(),

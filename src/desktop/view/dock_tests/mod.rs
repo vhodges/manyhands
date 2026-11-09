@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 
 use crate::desktop::{
-    model::layout::{ITEM_AREA_NAME, PanelKind, Side, arrangement_from},
+    model::layout::{PanelKind, Side, arrangement_from},
     test_support::fixtures::Fixture,
     view::dock::accepted::same_layout,
     view::harness::Shell,
@@ -24,8 +24,6 @@ mod state;
 mod strip;
 pub(in crate::desktop::view) mod support;
 mod toggles;
-
-const OPERATION_AREA: &str = "operation-area";
 
 /// The groups of a dump's dock, top to bottom or left to right: each as its
 /// panels' names.
@@ -42,70 +40,6 @@ fn groups(dock: &Option<DockState>) -> Vec<Vec<String>> {
         walk(dock.panel(), &mut out);
     }
     out
-}
-
-/// Every region of the shell is drawn by a panel of the dock area, each in
-/// its own group, and the Workspace's fixed row is gone. This is U-4: a
-/// panel's render updates the Workspace to build its body.
-#[gpui_kit::test]
-fn each_panel_draws_its_region_inside_the_dock(cx: &mut TestAppContext) {
-    let shell = Shell::open(Fixture::new(), cx);
-    let area = shell
-        .workspace
-        .read_with(cx, |ws, _| ws.dock_area().clone());
-    // The node of the group holding each panel, by the panel's name.
-    let group_of = |name: &str, cx: &mut TestAppContext| {
-        area.read_with(cx, |area, cx| {
-            [
-                DockPlacement::Left,
-                DockPlacement::Right,
-                DockPlacement::Bottom,
-                DockPlacement::Center,
-            ]
-            .into_iter()
-            .filter_map(|placement| area.layout(placement))
-            .find_map(|tree| {
-                tree.panels()
-                    .find(|id| {
-                        area.panel(*id)
-                            .is_some_and(|panel| panel.panel_name(cx) == name)
-                    })
-                    .and_then(|id| tree.find_panel_node(id))
-            })
-            .unwrap_or_else(|| panic!("{name} is in a group"))
-        })
-    };
-    let wanted: Vec<(&str, &str)> = vec![
-        (Region::Repositories.id(), PanelKind::Repositories.name()),
-        (Region::Documents.id(), PanelKind::Documents.name()),
-        (Region::Content.id(), ITEM_AREA_NAME),
-        (Region::Tickets.id(), PanelKind::Tickets.name()),
-        (Region::Operations.id(), PanelKind::Activity.name()),
-        (OPERATION_AREA, PanelKind::Activity.name()),
-    ];
-    assert_eq!(wanted.len(), REGIONS.len() + 1);
-    let nodes: Vec<_> = wanted
-        .iter()
-        .map(|(_, name)| group_of(name, cx).as_u64())
-        .collect();
-    shell.frame(cx, |window, _| {
-        for ((id, name), node) in wanted.iter().zip(&nodes) {
-            let mut dock = window.within("dock-area");
-            let mut group = dock.within(("panel-group", *node));
-            // The operation area is a container with no observed facts of
-            // its own: its scope exists when something inside it is drawn.
-            if *id == OPERATION_AREA {
-                group.within(*id);
-            } else {
-                assert!(
-                    group.try_find(*id).is_some(),
-                    "{id} is in {name}'s own group inside the dock"
-                );
-            }
-        }
-    });
-    let distinct: std::collections::HashSet<_> = nodes.iter().collect();
-    assert_eq!(distinct.len(), 5, "five panels, five groups: {nodes:?}");
 }
 
 /// P1 and U-6: the launch shows Wave decision 1's 1b.

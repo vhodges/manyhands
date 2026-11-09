@@ -38,9 +38,8 @@ use zorite_editor::{
     WordLeft, WordRight,
 };
 
-use super::{clicked_link, entered_by_pointer, open_editor, step_over_blocks};
+use super::{clicked_link, entered_by_pointer, keys::READ_ONLY, open_editor, step_over_blocks};
 use crate::desktop::{
-    keys::ToggleLeftDock,
     model::{editor_text::crlf_to_lf, links::LinkTarget},
     services::images::TabImages,
 };
@@ -189,6 +188,7 @@ impl Render for ReadOnly {
         }
         div()
             .track_focus(&self.focus)
+            .key_context(READ_ONLY)
             .capture_action(stop::<Backspace>)
             .capture_action(stop::<Delete>)
             .capture_action(stop::<Newline>)
@@ -197,12 +197,7 @@ impl Render for ReadOnly {
             .capture_action(stop::<ShowCharacterPalette>)
             .capture_action(stop::<Undo>)
             .capture_action(stop::<Redo>)
-            // There is no Bold to apply here, so Ctrl B is the dock's: the
-            // editor's binding wins over the dock key in an editor (decision 2).
-            .capture_action(|_: &Bold, window, cx| {
-                cx.stop_propagation();
-                window.dispatch_action(ToggleLeftDock.boxed_clone(), cx);
-            })
+            .capture_action(stop::<Bold>)
             .capture_action(stop::<Italic>)
             .capture_action(stop::<Underline>)
             .capture_action(stop::<Strike>)

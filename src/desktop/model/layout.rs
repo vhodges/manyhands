@@ -13,7 +13,7 @@
 //!   its group's displayed panel: the group's active one, or, when that
 //!   is off, the group's first panel that is on (the Kit's own fallback).
 
-use gpui_kit::component::dock::{DockAreaState, DockState, PanelState};
+use gpui_kit::component::dock::{DockAreaState, DockPlacement, DockState, PanelState};
 
 mod restore;
 
@@ -110,6 +110,48 @@ impl Side {
     fn index(self) -> usize {
         self as usize
     }
+
+    /// The word for the dock: the file's keys and the toggles' names.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Side::Left => "left",
+            Side::Right => "right",
+            Side::Bottom => "bottom",
+        }
+    }
+
+    /// The Kit's placement of the dock.
+    pub(crate) fn placement(self) -> DockPlacement {
+        match self {
+            Side::Left => DockPlacement::Left,
+            Side::Right => DockPlacement::Right,
+            Side::Bottom => DockPlacement::Bottom,
+        }
+    }
+
+    /// The dock in a dumped area.
+    pub(crate) fn dock(self, state: &DockAreaState) -> &Option<DockState> {
+        match self {
+            Side::Left => &state.left_dock,
+            Side::Right => &state.right_dock,
+            Side::Bottom => &state.bottom_dock,
+        }
+    }
+
+    /// The same, to change.
+    pub(crate) fn dock_mut(self, state: &mut DockAreaState) -> &mut Option<DockState> {
+        match self {
+            Side::Left => &mut state.left_dock,
+            Side::Right => &mut state.right_dock,
+            Side::Bottom => &mut state.bottom_dock,
+        }
+    }
+}
+
+/// No dock is made smaller than this: the Kit's floor, under which a dock
+/// could not be dragged back out (`B/dock/dock_area.rs:748-750`).
+pub(crate) fn min_dock() -> f32 {
+    gpui_kit::base::PANEL_MIN_SIZE.as_f32()
 }
 
 /// A tab group: its panels in order and the active one's index.
@@ -145,32 +187,31 @@ impl Arrangement {
         }
     }
 
-    fn side_of(&self, kind: PanelKind) -> Option<Side> {
-        Side::ALL
-            .into_iter()
-            .find(|side| self.groups(*side).iter().any(|g| g.panels.contains(&kind)))
+    /// Where `kind` is: its side, its group's place on that side and its
+    /// tab's place in the group.
+    fn locate(&self, kind: PanelKind) -> Option<(Side, usize, usize)> {
+        Side::ALL.into_iter().find_map(|side| {
+            self.groups(side).iter().enumerate().find_map(|(at, g)| {
+                g.panels
+                    .iter()
+                    .position(|p| *p == kind)
+                    .map(|tab| (side, at, tab))
+            })
+        })
     }
 
-    fn group_of_mut(&mut self, kind: PanelKind) -> Option<(Side, &mut Group)> {
-        let side = self.side_of(kind)?;
-        let group = self.sides[side.index()]
-            .iter_mut()
-            .find(|g| g.panels.contains(&kind))?;
-        Some((side, group))
+    fn side_of(&self, kind: PanelKind) -> Option<Side> {
+        self.locate(kind).map(|(side, ..)| side)
     }
 
     /// Takes `kind` out of its group and puts it at the end of `side` as a
     /// new group (R-5). The group keeps the same panel active, unless `kind`
     /// was the active one: then the tab that took its place is.
+    #[cfg(test)]
     fn move_panel(&mut self, kind: PanelKind, side: Side) {
-        if let Some((from, _)) = self.group_of_mut(kind) {
+        if let Some((from, at, tab)) = self.locate(kind) {
             let groups = &mut self.sides[from.index()];
-            let at = groups
-                .iter()
-                .position(|g| g.panels.contains(&kind))
-                .expect("the group was just found");
             let group = &mut groups[at];
-            let tab = group.panels.iter().position(|p| *p == kind).unwrap();
             group.panels.remove(tab);
             if group.panels.is_empty() {
                 groups.remove(at);
@@ -292,16 +333,13 @@ impl Layout {
             return self.reveal(kind);
         }
         let on = self.on;
-        let displayed = self
-            .groups(self.side_of(kind).unwrap())
-            .iter()
-            .position(|g| self.displayed_in(g) == Some(kind))
-            .unwrap();
+        let (side, at, from) = self
+            .arrangement
+            .locate(kind)
+            .expect("a displayed panel is placed");
         self.on[kind.index()] = false;
-        let (side, _) = self.arrangement.group_of_mut(kind).unwrap();
-        let group = &mut self.arrangement.sides[side.index()][displayed];
+        let group = &mut self.arrangement.sides[side.index()][at];
         let len = group.panels.len();
-        let from = group.panels.iter().position(|p| *p == kind).unwrap();
         if let Some(next) = (1..len)
             .map(|step| (from + step) % len)
             .find(|ix| on[group.panels[*ix].index()])
@@ -337,8 +375,8 @@ impl Layout {
     /// The panel goes on, its dock is shown and its tab is selected.
     pub(crate) fn reveal(&mut self, kind: PanelKind) {
         self.on[kind.index()] = true;
-        if let Some((side, group)) = self.arrangement.group_of_mut(kind) {
-            group.active = group.panels.iter().position(|p| *p == kind).unwrap();
+        if let Some((side, at, tab)) = self.arrangement.locate(kind) {
+            self.arrangement.sides[side.index()][at].active = tab;
             self.shown[side.index()] = true;
         }
     }
@@ -347,7 +385,7 @@ impl Layout {
     /// and is revealed (R-5). Its current side changes nothing.
     // The pure model of a menu move: `dock_panel` reads the arrangement back
     // from the area, and a test holds the two together (Task 5).
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn move_to(&mut self, kind: PanelKind, side: Side) {
         if self.side_of(kind) == Some(side) {
             return;
@@ -399,13 +437,8 @@ pub(crate) fn f6_stops(layout: &Layout) -> Vec<Stop> {
 /// one of the four panels is left out.
 pub(crate) fn arrangement_from(state: &DockAreaState) -> Arrangement {
     let mut arrangement = Arrangement::default();
-    let docks = [
-        (Side::Left, &state.left_dock),
-        (Side::Right, &state.right_dock),
-        (Side::Bottom, &state.bottom_dock),
-    ];
-    for (side, dock) in docks {
-        if let Some(dock) = dock {
+    for side in Side::ALL {
+        if let Some(dock) = side.dock(state) {
             read_node(&mut arrangement, side, DockState::panel(dock));
         }
     }

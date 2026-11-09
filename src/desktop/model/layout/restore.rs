@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use gpui_kit::component::dock::{DockAreaState, DockPlacement, PanelInfo, PanelState};
+use gpui_kit::component::dock::{DockAreaState, PanelInfo, PanelState};
 use serde::{Deserialize, Serialize};
 
 use super::{ITEM_AREA_NAME, Layout, PanelKind, SPLIT, Side, TAB_GROUP, arrangement_from};
@@ -19,12 +19,6 @@ use crate::desktop::services::layout::LayoutStoreError;
 /// The version written into the file and the area's dump. The file's own
 /// `version` decides; the area's is set to it and not trusted (R-28).
 pub(crate) const LAYOUT_VERSION: usize = 1;
-
-/// A dock under this many pixels could not be dragged back out: the Kit's
-/// `load` does not floor it (`B/dock/dock_area.rs:748-750`).
-fn min_dock() -> f32 {
-    gpui_kit::base::PANEL_MIN_SIZE.as_f32()
-}
 
 /// No size a person could have made is over this: a bigger one is damage.
 const MAX_SIZE: f32 = 1_000_000.;
@@ -65,14 +59,6 @@ pub(crate) enum Restore {
     },
 }
 
-fn side_key(side: Side) -> &'static str {
-    match side {
-        Side::Left => "left",
-        Side::Right => "right",
-        Side::Bottom => "bottom",
-    }
-}
-
 /// The bytes of the file for `layout` and the area's dump.
 pub(crate) fn encode(layout: &Layout, area: &DockAreaState) -> Vec<u8> {
     let file = FileRef {
@@ -84,7 +70,7 @@ pub(crate) fn encode(layout: &Layout, area: &DockAreaState) -> Vec<u8> {
             .collect(),
         shown: Side::ALL
             .into_iter()
-            .map(|side| (side_key(side), layout.is_shown(side)))
+            .map(|side| (Side::name(side), layout.is_shown(side)))
             .collect(),
     };
     serde_json::to_vec(&file).expect("plain data serializes")
@@ -109,7 +95,7 @@ fn parse(bytes: &[u8]) -> Option<Saved> {
         return None;
     }
     let on = flags(&file.on, PanelKind::ALL.map(PanelKind::name))?;
-    let shown = flags(&file.shown, Side::ALL.map(side_key))?;
+    let shown = flags(&file.shown, Side::ALL.map(Side::name))?;
     let mut area = file.area;
 
     // The centre holds the item area and nothing else.
@@ -123,17 +109,12 @@ fn parse(bytes: &[u8]) -> Option<Saved> {
     // its own slot, large enough to drag.
     let mut sizes = Layout::default().sizes;
     let mut seen: Vec<PanelKind> = Vec::new();
-    let docks = [
-        (Side::Left, DockPlacement::Left, &area.left_dock),
-        (Side::Right, DockPlacement::Right, &area.right_dock),
-        (Side::Bottom, DockPlacement::Bottom, &area.bottom_dock),
-    ];
-    for (side, placement, dock) in docks {
-        let Some(dock) = dock else {
+    for side in Side::ALL {
+        let Some(dock) = side.dock(&area) else {
             continue;
         };
         let size = dock.size().as_f32();
-        if dock.placement() != placement || !(min_dock()..=MAX_SIZE).contains(&size) {
+        if dock.placement() != side.placement() || !(super::min_dock()..=MAX_SIZE).contains(&size) {
             return None;
         }
         let mut names = Vec::new();
@@ -233,7 +214,7 @@ pub(crate) fn state_for(layout: &Layout, sizes: [f32; 3]) -> DockAreaState {
             .collect(),
         info: PanelInfo::tabs(group.active),
     };
-    let dock = |side: Side, placement: DockPlacement| {
+    let dock = |side: Side| {
         let groups = layout.groups(side);
         let root = match groups {
             [] => return None,
@@ -260,7 +241,7 @@ pub(crate) fn state_for(layout: &Layout, sizes: [f32; 3]) -> DockAreaState {
         };
         Some(DockState::new(
             root,
-            placement,
+            side.placement(),
             px(sizes[side.index()]),
             layout.is_open(side),
         ))
@@ -276,8 +257,8 @@ pub(crate) fn state_for(layout: &Layout, sizes: [f32; 3]) -> DockAreaState {
                 info: PanelInfo::tabs(0),
             }],
         },
-        left_dock: dock(Side::Left, DockPlacement::Left),
-        right_dock: dock(Side::Right, DockPlacement::Right),
-        bottom_dock: dock(Side::Bottom, DockPlacement::Bottom),
+        left_dock: dock(Side::Left),
+        right_dock: dock(Side::Right),
+        bottom_dock: dock(Side::Bottom),
     }
 }

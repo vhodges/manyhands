@@ -46,9 +46,7 @@ pub(crate) const STARTUP_FAILURE_INDEX: &str = "Manyhands could not open its rep
 pub(crate) const STARTUP_FAILURE_OTHER: &str = "Manyhands could not start.";
 
 /// Binds the desktop's keys and the editor's, for the application and the
-/// test harness alike. The order is load-bearing for Ctrl B: the dock key
-/// (no context) and the editor's Bold (the "Editor" context) tie on depth,
-/// and the later binding wins, so the editor's goes second (decision 2).
+/// test harness alike. The order does not matter for Ctrl B (decision 2).
 pub(crate) fn bind_all_keys(cx: &mut App) {
     keys::bind(cx);
     view::editor::keys::bind(cx);

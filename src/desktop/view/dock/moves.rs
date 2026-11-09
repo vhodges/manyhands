@@ -6,7 +6,7 @@ use gpui_kit::{
     px,
 };
 
-use super::{DockPanels, DockShell, Slot, placement};
+use super::{DockPanels, DockShell, Slot};
 use crate::desktop::model::layout::{Layout, PanelKind, Side};
 
 impl DockShell {
@@ -26,7 +26,7 @@ impl DockShell {
         let Some(id) = self.panel_id(kind) else {
             return;
         };
-        let at = placement(side);
+        let at = side.placement();
         let area = &self.area;
         let root = area
             .read(cx)

@@ -15,7 +15,6 @@ use crate::desktop::{
     view::{
         dock::{
             accepted::centre_is_item_area,
-            placement,
             restore_tests::{elapse, in_file, same},
         },
         harness::Shell,
@@ -113,7 +112,7 @@ fn each_panel_docks_to_each_side(cx: &mut TestAppContext) {
             Off(kind) => toggle_panel(&shell, kind, cx),
         }
         for (side, dock) in docks {
-            let at = placement(*side);
+            let at = side.placement();
             let (has, open) = area.read_with(cx, |a, _| (a.has_dock(at), a.is_dock_open(at)));
             let seen = match (has, open) {
                 (false, _) => Gone,
@@ -127,7 +126,7 @@ fn each_panel_docks_to_each_side(cx: &mut TestAppContext) {
             );
         }
         if let Some((side, wanted)) = size {
-            let size = area.read_with(cx, |a, _| a.dock_size(placement(side)).unwrap());
+            let size = area.read_with(cx, |a, _| a.dock_size(side.placement()).unwrap());
             assert!(
                 (size.as_f32() - wanted).abs() <= 1.,
                 "{what}: {side:?} is {size:?}, its last size"

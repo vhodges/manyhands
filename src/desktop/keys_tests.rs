@@ -32,7 +32,7 @@ fn each_key_is_bound_to_its_action(cx: &mut TestAppContext) {
         ("enter", Box::new(OpenSelected)),
         // In the Drafts page's Inspect panel.
         ("escape", Box::new(CloseInspect)),
-        // The dock keys, in no context (Bold wins in an editor, decision 2).
+        // The dock keys, in the workspace (Bold wins in an editable editor, decision 2).
         ("secondary-b", Box::new(ToggleLeftDock)),
         ("secondary-alt-b", Box::new(ToggleRightDock)),
         ("secondary-j", Box::new(ToggleBottomDock)),
@@ -61,4 +61,63 @@ fn each_key_is_bound_to_its_action(cx: &mut TestAppContext) {
                 .is_none()
         );
     });
+}
+
+/// Ctrl B (Cmd B on macOS) is Bold in an editable editor and the left dock's
+/// everywhere else, a read-only editor included, whichever of the two sets
+/// of bindings is registered first (decision 2).
+#[gpui_kit::test]
+fn ctrl_b_is_bold_in_an_editable_editor_only_in_either_binding_order(cx: &mut TestAppContext) {
+    use gpui_kit::KeyContext;
+    use zorite_editor::Bold;
+
+    let keystroke = Keystroke::parse(if cfg!(target_os = "macos") {
+        "cmd-b"
+    } else {
+        "ctrl-b"
+    })
+    .unwrap();
+    let stack = |contexts: &[&str]| -> Vec<KeyContext> {
+        contexts
+            .iter()
+            .map(|context| KeyContext::parse(context).unwrap())
+            .collect()
+    };
+    let editable = stack(&["Root", "Workspace", "Content", "Editor"]);
+    let read_only = stack(&["Root", "Workspace", "Content", "ReadOnly", "Editor"]);
+    let page = stack(&["Root", "Workspace", "Content"]);
+
+    for editors_first in [false, true] {
+        cx.update(|cx| {
+            cx.clear_key_bindings();
+            if editors_first {
+                crate::desktop::view::editor::keys::bind(cx);
+                bind(cx);
+            } else {
+                bind(cx);
+                crate::desktop::view::editor::keys::bind(cx);
+            }
+            let first = |stack: &[KeyContext]| -> Box<dyn Action> {
+                let keymap = cx.key_bindings();
+                let (bindings, _) = keymap
+                    .borrow()
+                    .bindings_for_input(std::slice::from_ref(&keystroke), stack);
+                bindings
+                    .first()
+                    .expect("Ctrl B is bound")
+                    .action()
+                    .boxed_clone()
+            };
+            let why = format!("editors registered first: {editors_first}");
+            assert!(first(&editable).partial_eq(&Bold), "editable: Bold; {why}");
+            assert!(
+                first(&read_only).partial_eq(&ToggleLeftDock),
+                "read-only: the dock; {why}"
+            );
+            assert!(
+                first(&page).partial_eq(&ToggleLeftDock),
+                "elsewhere: the dock; {why}"
+            );
+        });
+    }
 }

@@ -16,8 +16,8 @@ use gpui_kit::{
     App, AppContext as _, Context, Entity, EntityId, FocusHandle, Global, Pixels, Subscription,
     Window,
     component::dock::{
-        BasePanelView, DockArea, DockAreaState, DockEvent, DockLayout, DockPlacement, DockSkin,
-        panel_handle, register_panel,
+        BasePanelView, DockArea, DockAreaState, DockEvent, DockLayout, DockSkin, panel_handle,
+        register_panel,
     },
     px,
 };
@@ -64,14 +64,6 @@ fn register_builders(cx: &mut App) {
                 .cloned()
                 .expect("a dock area loads only the panels of its own window")
         });
-    }
-}
-
-pub(super) fn placement(side: Side) -> DockPlacement {
-    match side {
-        Side::Left => DockPlacement::Left,
-        Side::Right => DockPlacement::Right,
-        Side::Bottom => DockPlacement::Bottom,
     }
 }
 
@@ -157,10 +149,10 @@ impl DockShell {
         area.update(cx, |area, cx| {
             area.set_center(center, window, cx);
             for (side, dock) in docks {
-                area.set_dock(placement(side), dock, window, cx);
+                area.set_dock(side.placement(), dock, window, cx);
             }
             for (side, size) in sizes {
-                area.set_dock_size(placement(side), size, window, cx);
+                area.set_dock_size(side.placement(), size, window, cx);
             }
         });
         let default_state = area.read(cx).dump(cx);

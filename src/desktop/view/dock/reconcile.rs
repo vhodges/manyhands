@@ -2,7 +2,7 @@
 
 use gpui_kit::{App, Window, component::dock::PanelId};
 
-use super::{DockShell, Slot, placement};
+use super::{DockShell, Slot};
 use crate::desktop::model::layout::{Layout, PanelKind, Side, arrangement_from};
 
 impl DockShell {
@@ -35,7 +35,7 @@ impl DockShell {
     ) -> Vec<Side> {
         let area = &self.area;
         for side in Side::ALL {
-            let at = placement(side);
+            let at = side.placement();
             if !layout.has_panels(side) && area.read(cx).has_dock(at) {
                 if let Some(size) = area.read(cx).dock_size(at) {
                     layout.set_size(side, size.as_f32());
@@ -67,7 +67,7 @@ impl DockShell {
 
         let mut opened = Vec::new();
         for side in Side::ALL {
-            let at = placement(side);
+            let at = side.placement();
             if layout.has_panels(side) && area.read(cx).has_dock(at) {
                 let open = layout.is_open(side);
                 // The Kit refuses to close a dock that is not collapsible. Every
