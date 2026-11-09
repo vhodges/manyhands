@@ -42,14 +42,14 @@ pub(super) fn file(shell: &Shell) -> Option<Vec<u8>> {
 }
 
 /// Lets the debounce elapse and its write land.
-pub(super) fn elapse(shell: &Shell, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn elapse(shell: &Shell, cx: &mut TestAppContext) {
     cx.executor()
         .advance_clock(LAYOUT_SAVE_DELAY + Duration::from_millis(1));
     shell.run(cx);
 }
 
 /// The layout the file holds.
-pub(super) fn in_file(shell: &Shell) -> Layout {
+pub(in crate::desktop::view) fn in_file(shell: &Shell) -> Layout {
     match restore(shell.fixture.layout_store().read()) {
         Restore::Saved(saved) => saved.layout,
         other => panic!("the file holds a layout: {other:?}"),
@@ -88,7 +88,7 @@ pub(super) fn round_trips(shell: &Shell, what: &str, cx: &mut TestAppContext) {
 }
 
 /// The same groups, on flags, shown flags and sizes within 1 px.
-pub(super) fn same(a: &Layout, b: &Layout, what: &str) {
+pub(in crate::desktop::view) fn same(a: &Layout, b: &Layout, what: &str) {
     for kind in PanelKind::ALL {
         assert_eq!(a.is_on(kind), b.is_on(kind), "{what}: {kind:?} on");
     }

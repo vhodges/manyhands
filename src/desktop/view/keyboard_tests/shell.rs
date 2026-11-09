@@ -35,6 +35,7 @@ use crate::desktop::{
     },
 };
 
+mod journey;
 mod support;
 
 use PanelKind::{Activity, Documents, Repositories, Tickets};
