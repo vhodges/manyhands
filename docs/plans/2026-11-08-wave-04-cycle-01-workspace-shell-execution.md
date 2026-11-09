@@ -1639,3 +1639,64 @@ the document amendments above. (4) The on-screen checklist
 scratch data directory (`XDG_DATA_HOME`); Claude records only what the owner reports.
 (5) Whether to take the Minor cleanups before merge. Not authorized and not done:
 a PR, the merge, `ticket close`, worktree cleanup, and native CI.
+
+## Owner replies to the Task 12 report (2026-11-09) and follow-up
+
+The owner replied to the six items. In his words, the implementer of main's
+retirement ticket "had a great deal of problems getting this done", and "in the
+interest of time" he "short circuited parts of the process".
+
+1. **Do those tests pass on main? No.** Run on a plain `git archive` of
+   `origin/main` (`f4442618`) extracted in the session scratchpad, outside any git
+   worktree and with its own target directory (deleted afterwards), `cargo test
+   --all-features --locked --lib -- repository::context_retirement::` gave **49
+   passed, 93 failed** in 35.8 s. **The 93 failures are the identical set** to this
+   branch's (`diff` of the sorted lists is empty), with the same `Os { code: 2,
+   kind: NotFound }` panic at `src/repository/context_retirement/mutation_tests.rs`
+   (reading a fixture's `.manyhands/config.toml`). So the red lib stage is main's, not
+   this Cycle's, and it does not depend on the worktree. Not checked: the registered
+   main checkout itself (its local `main` is behind `origin/main`, and it was left
+   alone). Follow-up work on main, in a separate session; not done here.
+2. **Time allowance: raised.** Correction to earlier reports: the harness's real-time
+   wait `WAIT` was already **60 s** (`src/desktop/test_support/mod.rs`), not the "10 s"
+   the Task 4a implementer and the Task 12 report said; the flaky test failed after 60 s
+   of real time under the full parallel run. It is now **180 s** (commit `42440a0d`, a
+   constant and its comment only, no test or expectation changed). The implementer
+   listed every user of `WAIT` (`wait_until`, `Shell::wait_for`, the draft-continue
+   loop, `JobGate::wait_reached`, about 15 polling loops and about 15 `recv_timeout`
+   holds) and found **no test that relies on a wait expiring** (no `should_panic`, no
+   `catch_unwind`): a passing run returns as soon as its condition holds, and a
+   genuine hang now takes 180 s instead of 60 s to report. Run by exact name, 7 tests
+   (including the flaky one and `harness::tests::a_wait_on_the_worker_outlasts_three_seconds`)
+   passed; the four Verify lines are clean; the Boundary is empty. Left alone, noted:
+   six test files declare their own local 10 s `WAIT`; three comments
+   (`conflict_tests.rs:164`, `privacy_tests.rs:273`, `resolutions_tests.rs:117`) say
+   their `until_long` helpers wait "past the harness's `WAIT`", and the `RESOLVING`
+   constant (90 s) no longer exceeds it. The tests pass; the wording is stale. Test
+   performance is, in the owner's words, to be "at the top of our list" once the
+   current waves land; the slowdown of
+   `edit_the_mode_key_save_and_done_by_keyboard_alone` (about 5 s before this Cycle,
+   about 9 s now) is a known input to that work. The full parallel run was **not**
+   repeated after the change.
+3. **K-19 accepted** ("It should be okay, contents will probably get revisited").
+4. **The document amendments are approved** and applied in `746e347d` to the design
+   and the Cycle document: the quit write in `quit_now` gated on a pending save, R-37
+   replacing "clamped once at launch", Part G's additions (1 MiB cap, sizes over 1e6
+   px, extra shapes), handler steps 1 and 3 (`same_layout`; the three-term Kit-opened
+   test), one `RegionPanel` for the five panels, the dock menu opening above the toggle
+   and `aria_toggled` on the wrapper, an "Amendments during implementation" note listing
+   the E-11 entries, Known Limits K-19 to K-21, and Cycle decision 20. The approval
+   status lines, earlier decisions and the Acceptance Status texts were not changed.
+5. **The formal on-screen checklist is not being run now.** The owner tests and
+   verifies as the work lands, and the checklist
+   (`docs/plans/2026-11-08-wave-04-cycle-01-on-screen-checklist.md`) is kept for later.
+   The "on screen (owner to run)" entries in the Cycle's Acceptance Status column
+   therefore stay open; **no on-screen result is recorded.** (The Cycle document
+   carries this as a note under the Acceptance table.)
+6. **`ChromeColors.selection` stays in** (the light and dark palette). The quality
+   reviewer's other Minor cleanups were not asked for and are not done.
+
+**Standing after these changes.** Nothing in the Cycle's own code is known to be red.
+The fast tier's `--lib` stage stays red for main's 93 `context_retirement` tests,
+identical on `origin/main`. The Cycle is not closed, merged, cleaned up or sent to CI;
+none of that has been authorized.
