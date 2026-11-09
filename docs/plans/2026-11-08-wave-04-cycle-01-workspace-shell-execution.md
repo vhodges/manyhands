@@ -770,3 +770,92 @@ documents are not edited now; each is recorded here and flagged for the owner):
   back to the `move_panel` row and report it. If the strip click does not move
   focus to the hidden region in the harness, report it and degrade the row to
   "focus is in no hidden region".
+
+## Task 5: Layout Operations
+
+- **Commits** `bee6c917` (range `d8fee762..bee6c917`, 20 files) and the review
+  follow-up `e6138fcb`. New code: `view/workspace/docks.rs` (180 lines; the four
+  operations, `reveal_and_focus`, the handler `dock_event`, `settle`),
+  `dock/reconcile.rs` (83), `dock/moves.rs` (76), `dock/accepted.rs` (97:
+  `same_layout`, `centre_is_item_area`, `open_in`); edited `dock.rs` (239),
+  `header.rs`, `header/tabs.rs` (366), `panels.rs`, `workspace.rs`,
+  `workspace/focus.rs` (`check_focus`), `workspace/requests.rs` (`show_holder`
+  reveals Activity first, R-10), `model/layout.rs` (`Layout::set_size`),
+  `harness.rs` (`Shell::click_settled`, now 682 lines, already over before).
+  `dock_tests.rs` became `dock_tests/mod.rs` (the three earlier tests keep their
+  paths and bodies) with children `accepted`, `moves`, `state`, `strip`,
+  `support`, `toggles`, each under 450 lines.
+- **Mechanism as the checkpoint:** reconcile, the three-step handler with the
+  `same_layout` comparison, dump-authoritative moves (production never calls
+  `Layout::move_to`; the P8 walk holds it to the Kit result at every step),
+  `check_focus` after every operation and on focus-in, the strip-tab click that
+  reveals and focuses, the counter save stub `DockShell.saves` (Task 9 replaces
+  its body). `load` is called only in handler step 2.
+- **Tests** (new, all 1 test each, passed): under `desktop::view::dock::tests::`
+  `accepted::same_layout_tells_a_change_from_the_launch` (11 rows),
+  `accepted::the_centre_and_the_open_flags_are_read_from_a_dump`,
+  `toggles::hiding_a_panel_gives_its_space_to_its_dock`,
+  `toggles::panel_toggles_keep_the_area_and_the_layout_in_agreement`,
+  `toggles::a_dock_closed_and_opened_keeps_its_panels_groups_and_sizes`,
+  `toggles::dock_toggles_follow_the_rules`, `moves::each_panel_docks_to_each_side`
+  (now 14 steps and the P9 row), `moves::a_drop_on_the_item_area_is_undone`
+  (including a real `drag_to`), `moves::a_panel_moved_into_a_tab_group_is_kept`,
+  `moves::a_drop_past_the_last_tab_lands_after_it` (4c's finding, with a real
+  drag), `strip::the_closed_strip_names_and_reveals_every_panel`,
+  `strip::opening_the_strip_by_its_edge_counts_as_its_toggle`,
+  `strip::a_kit_edit_elsewhere_does_not_open_a_closed_dock` (added by the
+  follow-up), `strip::focus_leaves_a_panel_that_is_not_displayed`,
+  `state::a_hidden_panel_keeps_its_state`,
+  `state::a_request_finishes_while_activity_is_hidden`,
+  `state::show_it_reveals_a_hidden_activity`. The 4b/4c dock tests still pass,
+  and the sheet test and F6 test were run. The reviewer ran 17 exact-name tests
+  in one command (3.7 s wall); the follow-up ran 3. No prefix runs.
+- **Mutation checks by the implementer (each reverted):** removing step 2's
+  `load` fails P10; the active-tab `select_panel` fails the panel-toggle walk;
+  the Kit-opened guard evaluated after `set_arrangement` fails P34 and the walk;
+  the 4c drop slot counting drawn tabs fails the drop test; removing guard term
+  2 fails `a_kit_edit_elsewhere_does_not_open_a_closed_dock` row (a), term 3 row
+  (b). **Term 1** (`!accepted.open`) is defensive: reconcile keeps the accepted
+  open flag equal to the layout's, so no state makes it the only failing term; a
+  comment next to the guard says so.
+- **Deviations and findings:**
+  - D6 followed: no pixel-geometry assertion. `hiding_a_panel_gives_its_space_to_its_dock`
+    asserts the region absent, the `visible` flag, the dock still open, a save
+    scheduled, and `DockArea::is_empty(Left)` (`is_node_visible` is private).
+  - `Shell::click_settled` (harness): the Kit's `window.click` dispatches
+    mouse-down, mouse-up and a draw inside one update, so focus listeners ran
+    before the tab group's events reached the Workspace. The reviewer inspected the
+    ordering and judged it a **harness artefact**: in the app each mouse event is
+    its own update and effects flush before the next draw. Test windows are
+    inactive, so focus-in hooks are dormant in them; the strip and tab-click rows
+    call `window.activate_window()`. `.test_support()` was added to
+    `panel-tabs-end` and `("panel-strip", node)` (production-neutral).
+  - The P8 walk checks Activity at 520 px (the harness opens the bottom dock at
+    520), not the default 150.
+- **E-11:** none beyond the additive R-38 pin added to my own earlier test
+  `the_default_layout_is_1b` (4b's; not a pre-existing test); no assertion
+  removed anywhere in this task.
+- **Review:** APPROVED. Blocking none. Important 1 (a test gap, not a code
+  defect): no row failed when a single term of the Kit-opened guard was removed;
+  **fixed in `e6138fcb`** as above. Minor, fixed in `e6138fcb`: the P8 doc claimed
+  a source dock "open or closed" but no step moved out of a closed dock (a step
+  was added, Activity out of a dock closed by the person); `let _ =` swallowing
+  `load`'s result is now a `debug_assert!`. Minor, not changed: the 0.5% share
+  tolerance means a divider nudge of a few px is not accepted or saved until the
+  next real event (ruled D3); each Kit-caused operation requests a save twice
+  (once in `settle`, once in the handler), harmless with Task 9's debounce
+  (tests use deltas); `check_focus` has no explicit modal guard, unlike
+  `focus_lost`, but a dialog or sheet holds focus outside every region handle, so
+  it is inert (not reachable as a defect today).
+- **Verify:** all four lines clean (implementer, reviewer, follow-up); both
+  Boundary commands print nothing; `Cargo.lock` untouched.
+- **For the on-screen checklist:** the real dock-edge drag on the closed bottom
+  strip (P34 is tested through the Kit's `toggle_dock`); the drop indicator over
+  the item area before a refused drop and K-2's focus reset after it; a click on
+  the closed strip outside its tabs in a real active window; dragging a tab past
+  the last tab in a mixed group; the share of space a new group gets after a menu
+  move (added with `size: None`, as a drag does); Orca on the strip tabs.
+- **Pending for Task 9:** `DockShell.saves` becomes the debounced save;
+  `reconcile` returns the docks it opened for the R-37 clamp; save checks in the
+  Task 5 tests are marked `// Completed in Task 9.`
+- **Main:** `origin/main` still `8da9afd4`; D6 not on main.
