@@ -86,6 +86,14 @@ pub(crate) enum WorkerEvent {
     /// is, so a quit that hears it finds the worker idle. A poll sends no
     /// `Queued`, `Started` or `Progress`: it is not a request.
     Polled(Root, PollAttempt),
+    /// A user job was admitted while this poll runs, or quit or a
+    /// reconfiguration asked to stop it (D6 B2, P-1, P-7). The drain starts
+    /// the task that calls `cancel_poll` until the poll answers. Sent once
+    /// per running poll, however many asks follow.
+    PreemptPoll {
+        root: Root,
+        op: OperationId,
+    },
 }
 
 /// What cancelling a request did.
@@ -255,12 +263,81 @@ pub(crate) struct SendMark(u64);
 struct Running {
     id: DesktopRequestId,
     /// `None` for a host observation, which cannot be cancelled, and for a
-    /// poll, which has no token: `quit()` does not stop a running poll, so
-    /// Task 10 must call `Backend::cancel_poll` for it.
+    /// poll, which has no token: `quit()` does not stop a running poll. A
+    /// poll is stopped through `cancel_poll` by the cancel task (P-1) that
+    /// `ask_poll_cancel` starts; Task 10 asks it for quit.
     cancel: Option<CancellationToken>,
     accepted: bool,
     /// Whether its command honours the token after acceptance (R-1).
     stops_at_safe_points: bool,
+    /// The poll this is, and whether a stop was asked of it (P-1, P-2).
+    poll: Option<PollRun>,
+}
+
+/// A running automatic poll, and the stop asked of it. The flag is the
+/// worker's: the library's cancel can be lost (Fact 30), so the worker also
+/// checks this before every `poll_automatic` (P-2).
+struct PollRun {
+    root: Root,
+    op: OperationId,
+    asked: Option<CancelCause>,
+}
+
+/// How firmly a cause ends a poll: quit, then a configuration change, then a
+/// takeover's stored cancel, then a user job's preemption. The strongest ask
+/// names the answer.
+fn firmness(cause: CancelCause) -> u8 {
+    match cause {
+        CancelCause::Quit => 3,
+        CancelCause::Reconfiguration => 2,
+        CancelCause::Takeover => 1,
+        CancelCause::Preemption => 0,
+    }
+}
+
+/// Asks the running poll, if there is one, to stop for `cause`. The first ask
+/// of a poll sends `PreemptPoll`; later asks only name a firmer cause, so
+/// quit, a reconfiguration and any number of user jobs share one cancel task
+/// (P-7). False when no poll is running.
+fn ask_poll_cancel(shared: &Shared, state: &mut State, cause: CancelCause) -> bool {
+    let Some(poll) = state
+        .running
+        .as_mut()
+        .and_then(|running| running.poll.as_mut())
+    else {
+        return false;
+    };
+    let first = poll.asked.is_none();
+    if poll
+        .asked
+        .is_none_or(|asked| firmness(cause) > firmness(asked))
+    {
+        poll.asked = Some(cause);
+    }
+    if first {
+        shared.send(WorkerEvent::PreemptPoll {
+            root: poll.root.clone(),
+            op: poll.op,
+        });
+    }
+    true
+}
+
+/// Whether the poll `op` is the job the worker is running now: the cancel
+/// task's reason to go on (P-1). It holds the shared state, not a
+/// `WorkerHandle`, so it never ends the worker by being the last to let go.
+#[derive(Clone)]
+pub(crate) struct PollWatch(Arc<Shared>);
+
+impl PollWatch {
+    pub(crate) fn running(&self, op: OperationId) -> bool {
+        self.0
+            .lock()
+            .running
+            .as_ref()
+            .and_then(|running| running.poll.as_ref())
+            .is_some_and(|poll| poll.op == op)
+    }
 }
 
 #[derive(Default)]
@@ -672,6 +749,7 @@ impl WorkerHandle {
                 cancel: Some(cancel),
                 accepted,
                 stops_at_safe_points,
+                ..
             }) if *running == id && (!accepted || *stops_at_safe_points) => {
                 cancel.cancel();
                 CancelResult::Signalled
@@ -694,6 +772,23 @@ impl WorkerHandle {
         let work = Work::ObserveHost { root, authority };
         admit(shared, &mut state, Job::new(id, work, Lane::User));
         id
+    }
+
+    /// Asks the running automatic poll, if any, to stop for `cause`: sets its
+    /// flag and, the first time, sends `PreemptPoll` for the drain's cancel
+    /// task (P-1, P-7). A user job admitted while a poll runs does this by
+    /// itself, with `Preemption`; quit (Task 10) asks with `Quit` and a
+    /// reconfiguration (Task 5) with `Reconfiguration`. True when a poll was
+    /// running.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Tasks 5 and 10.
+    pub(crate) fn ask_poll_cancel(&self, cause: CancelCause) -> bool {
+        let shared = self.shared();
+        ask_poll_cancel(shared, &mut shared.lock(), cause)
+    }
+
+    /// What the cancel task asks whether its poll is still running.
+    pub(crate) fn poll_watch(&self) -> PollWatch {
+        PollWatch(self.owner.0.clone())
     }
 
     /// The keys the background job `id`'s last attempt was refused a prompt
@@ -881,6 +976,13 @@ fn admit(shared: &Shared, state: &mut State, job: Job) {
         shared.send(WorkerEvent::Removed(job.id));
         return;
     }
+    // Every way a user job enters the worker comes through here (`submit`,
+    // `submit_with_request_id`, `requeue`, `observe_host`; Fact 36), so a
+    // running poll hears of it once, whichever it was (P-1). A background
+    // job, a retirement among them, asks nothing (P-5, P-6).
+    if job.lane == Lane::User {
+        ask_poll_cancel(shared, state, CancelCause::Preemption);
+    }
     match job.lane {
         Lane::User => state.user.push_back(job),
         Lane::Background => state.background.push_back(job),
@@ -985,7 +1087,7 @@ fn run(shared: &Shared, backend: &dyn Backend) {
             } => {
                 backend.before_job(JobKind::Poll);
                 let attempt = poll::run(backend, &mut session, &root, operation, restart, || {
-                    cancel_cause(shared)
+                    asked_cause(shared)
                 });
                 // The job is over before the UI hears so (Fact 36).
                 finish(shared);
@@ -1221,11 +1323,22 @@ fn take(shared: &Shared) -> Option<Job> {
                 }
                 Work::ObserveHost { .. } | Work::Poll { .. } => (None, false),
             };
+            let poll = match &job.work {
+                Work::Poll {
+                    root, operation, ..
+                } => Some(PollRun {
+                    root: root.clone(),
+                    op: *operation,
+                    asked: None,
+                }),
+                _ => None,
+            };
             state.running = Some(Running {
                 id: job.id,
                 cancel,
                 accepted: false,
                 stops_at_safe_points,
+                poll,
             });
             return Some(job);
         }
@@ -1255,15 +1368,16 @@ fn take(shared: &Shared) -> Option<Job> {
     }
 }
 
-/// Why a poll that answered `Cancelled` was cancelled, as the worker knows
-/// it when the poll returns: quit closed the queue, or else a user job
-/// preempted it (R-3). Task 4 adds the reconfiguration and takeover causes.
-fn cancel_cause(shared: &Shared) -> CancelCause {
-    if shared.lock().closed {
-        CancelCause::Quit
-    } else {
-        CancelCause::Preemption
+/// Why the running poll was asked to stop, if it was: quit closed the queue,
+/// or a user job, a reconfiguration or quit asked (`ask_poll_cancel`). The
+/// poll reads it before every `poll_automatic` (P-2) and, for a `Cancelled`
+/// answer, to name the cause (R-3).
+fn asked_cause(shared: &Shared) -> Option<CancelCause> {
+    let state = shared.lock();
+    if state.closed {
+        return Some(CancelCause::Quit);
     }
+    state.running.as_ref()?.poll.as_ref()?.asked
 }
 
 fn finish(shared: &Shared) {

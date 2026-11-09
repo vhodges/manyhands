@@ -108,6 +108,13 @@ pub(crate) enum Intent {
     IndexRebuild {
         root: PathBuf,
     },
+    /// Check now (D6 C1): `poll once` of the repository's publication
+    /// remote, on the user lane. A resend of it under a request ID is what
+    /// Resume does for a Check now's row left active (L-4, U-15). Task 6
+    /// adds the policy verbs and Check now's controls.
+    PollOnce {
+        root: PathBuf,
+    },
     /// Whether the key is protected, never the passphrase.
     KeyGenerate {
         label: String,
@@ -343,6 +350,7 @@ impl Intent {
             | Self::RemoteSelect { .. }
             | Self::IndexRefresh { .. }
             | Self::IndexRebuild { .. }
+            | Self::PollOnce { .. }
             | Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -392,6 +400,7 @@ impl Intent {
             Self::RemoteSelect { .. } => "Select remote",
             Self::IndexRefresh { .. } => "Refresh index",
             Self::IndexRebuild { .. } => "Rebuild index",
+            Self::PollOnce { .. } => "Check now",
             Self::KeyGenerate { .. } => "Generate key",
             Self::KeyImport { .. } => "Import key",
             Self::KeySelect { .. } => "Select key",
@@ -436,6 +445,7 @@ impl Intent {
             | Self::RemoteSelect { root, .. }
             | Self::IndexRefresh { root }
             | Self::IndexRebuild { root }
+            | Self::PollOnce { root }
             | Self::HostApprove { root, .. }
             | Self::HostReplace { root, .. }
             | Self::OperationResume { root, .. }
@@ -485,6 +495,7 @@ impl Intent {
         match self {
             Self::IndexRefresh { .. }
             | Self::IndexRebuild { .. }
+            | Self::PollOnce { .. }
             | Self::OperationResume { .. }
             | Self::OperationAbandon { .. }
             | Self::RepoCreate { .. }
@@ -543,6 +554,7 @@ impl Intent {
     pub(crate) fn stops_at_safe_points(&self) -> bool {
         match self {
             Self::OperationResume { .. }
+            | Self::PollOnce { .. }
             | Self::CommentAdd { .. }
             | Self::ItemSync { .. }
             | Self::RepoSync { .. }
@@ -667,6 +679,7 @@ impl Intent {
             Self::RemoteSelect { .. } => JobKind::RemoteSelect,
             Self::IndexRefresh { .. } => JobKind::IndexRefresh,
             Self::IndexRebuild { .. } => JobKind::IndexRebuild,
+            Self::PollOnce { .. } => JobKind::PollOnce,
             Self::KeyGenerate { .. } => JobKind::KeyGenerate,
             Self::KeyImport { .. } => JobKind::KeyImport,
             Self::KeySelect { .. } => JobKind::KeySelect,

@@ -24,6 +24,8 @@ pub(crate) use attempt::{
     Answer, AttemptSummary, AttemptTarget, Authority, CancelCause, Disposition, NotEligible,
     PollAttempt, Root, TargetKind, TransportFailure,
 };
+#[cfg(test)]
+pub(crate) use clock::TestClock;
 #[cfg_attr(not(test), allow(unused_imports))] // Called from Task 5.
 pub(crate) use clock::{Clock, Now};
 // The tests use `TestClock`, so only the production clock is unused there.

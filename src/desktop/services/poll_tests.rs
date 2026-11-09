@@ -87,6 +87,7 @@ impl Harness {
                         }
                         WorkerEvent::Prompt(_) => (Heard::Prompt, None),
                         WorkerEvent::Polled(root, attempt) => (Heard::Polled(root), Some(attempt)),
+                        WorkerEvent::PreemptPoll { .. } => (Heard::Request("preempt", None), None),
                     };
                 }
                 Err(TryRecvError::Closed) => panic!("the worker hung up"),

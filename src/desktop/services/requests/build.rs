@@ -8,9 +8,9 @@ use manyhands::repository::{
     ItemRepublishInput, ItemSyncInput, KeyClearInput, KeyDeleteInput, KeyGenerateInput,
     KeyImportInput, KeyRemoveInput, KeySelectInput, LocalConflictResolutionInput,
     LocalContextResolveInput, LocalContextSyncInput, Mutation, OperationAbandonInput,
-    OperationResumeInput, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput,
-    RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, RepoSyncInput, TicketCloseInput,
-    TicketCreateInput, TicketDraft, TicketRepairInput, TicketSaveInput,
+    OperationResumeInput, PollOnceInput, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput,
+    RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, RepoSyncInput,
+    TicketCloseInput, TicketCreateInput, TicketDraft, TicketRepairInput, TicketSaveInput,
     keys::{KeyProtection, KeyStore, SecretPassphrase},
 };
 
@@ -106,6 +106,7 @@ impl Intent {
             Self::IndexRebuild { root } => {
                 Mutation::IndexRebuild(IndexRebuildInput { root: root.clone() })
             }
+            Self::PollOnce { root } => Mutation::PollOnce(PollOnceInput { root: root.clone() }),
             Self::KeyGenerate { label, protected } => {
                 let protection = if *protected {
                     KeyProtection::Passphrase(secret.ok_or(NotBuilt::MissingSecret)?)

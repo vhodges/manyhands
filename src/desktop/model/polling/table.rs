@@ -24,7 +24,10 @@ impl RepoSchedule {
         let summary = AttemptSummary::of(attempt);
         let on_schedule = matches!(
             attempt.answer,
-            Answer::Busy | Answer::Interrupted | Answer::Repository { .. }
+            Answer::Busy
+                | Answer::Interrupted
+                | Answer::Repository { .. }
+                | Answer::OperationMismatch
         );
         let preempted = attempt.answer == Answer::Cancelled(CancelCause::Preemption);
         self.preempted = if preempted {
@@ -54,7 +57,9 @@ impl RepoSchedule {
             Answer::Repository {
                 recovery_required: true,
             } => self.wait(now, Why::Unfinished, None),
-            Answer::Repository { .. } => self.wait(now, Why::Failed, None),
+            Answer::Repository { .. } | Answer::OperationMismatch => {
+                self.wait(now, Why::Failed, None)
+            }
             Answer::ConflictPending => self.idle_for_interval(now),
             Answer::NotEligible(reason) => self.not_eligible(root, now, attempt, *reason),
         }

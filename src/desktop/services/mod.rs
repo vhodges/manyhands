@@ -11,16 +11,19 @@ pub(crate) mod created_contexts;
 pub(crate) mod drafts;
 pub(crate) mod edit_tabs;
 pub(crate) mod images;
+pub(crate) mod inflight;
 pub(crate) mod links;
 pub(crate) mod pending_conflicts;
 pub(crate) mod poll;
-mod poll_convert;
+pub(crate) mod poll_convert;
+pub(crate) mod preempt;
 pub(crate) mod prompts;
 mod reads;
 pub(crate) mod release;
 pub(crate) mod requests;
 pub(crate) mod resends;
 pub(crate) mod resolutions;
+pub(crate) mod scheduler;
 pub(crate) mod submissions;
 pub(crate) mod worker;
 
@@ -48,6 +51,7 @@ use crate::desktop::model::{
     lifecycle_lock::{LockKey, LockState},
     list_state::ListState,
     operations::Operations,
+    polling as model_polling,
 };
 use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
@@ -142,6 +146,8 @@ pub(crate) enum JobKind {
     RemoteSelect,
     IndexRefresh,
     IndexRebuild,
+    /// Check now (D6): the person's own `poll once`, a mutation.
+    PollOnce,
     KeyGenerate,
     KeyImport,
     KeySelect,
@@ -282,13 +288,19 @@ pub(crate) trait Backend: Send + Sync + 'static {
         self.service().remote_snapshot(root)
     }
 
+    /// A test may put a constructed answer in place of `poll_automatic`'s,
+    /// as `after_job` does for a job: the library builds its poll report
+    /// only inside itself, so a test that needs a `Cancelled` or an
+    /// `Interrupted` report cannot make one. The call itself still runs.
+    fn after_poll(&self, _operation: OperationId) -> Option<poll_convert::Library> {
+        None
+    }
+
     /// Asks the poll `op` of `root` to stop at its next safe point.
-    /// Called only by a preemption's cancel task and by quit (B2), never
-    /// by a poll itself; it answers `Ok` without effect on a row that is
-    /// not active (Fact 30).
-    // `cfg_attr(not(test))` would still warn in a test build, where no test
-    // calls it yet.
-    #[allow(dead_code)] // Called from Task 4.
+    /// Called only by the cancel task (`preempt`: a user job, a
+    /// reconfiguration and quit all go that way), never by a poll itself,
+    /// and again until the poll answers (B2). It answers `Ok` without
+    /// effect on a row that is not active (Fact 30).
     fn cancel_poll(&self, root: &Path, op: OperationId) -> Result<(), RepositoryError> {
         self.service().cancel_remote_operation(root, op)
     }
@@ -338,6 +350,38 @@ impl Backend for LibraryBackend {
 
 /// The handle views hold. Cloning it shares the backend, the worker
 /// and the request model.
+/// Starts the cancel task of a poll the worker was asked to stop.
+struct Canceller {
+    backend: Arc<dyn Backend>,
+    watch: worker::PollWatch,
+    executor: gpui_kit::BackgroundExecutor,
+}
+
+impl Canceller {
+    /// Spawns `preempt::cancel_until_answered` for the poll `op` of `root`
+    /// on the background executor, never the UI thread (P-1).
+    fn start(&self, root: model_polling::Root, op: OperationId) {
+        let (backend, watch, executor) = (
+            self.backend.clone(),
+            self.watch.clone(),
+            self.executor.clone(),
+        );
+        self.executor
+            .spawn(async move {
+                preempt::cancel_until_answered(
+                    backend.as_ref(),
+                    &watch,
+                    &root,
+                    op,
+                    &preempt::RESEND_DELAYS,
+                    |delay| executor.timer(delay),
+                )
+                .await;
+            })
+            .detach();
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Services {
     backend: Arc<dyn Backend>,
@@ -428,6 +472,13 @@ impl Services {
         let resent = resends.clone();
         let polls = PollInbox::default();
         let polled = polls.clone();
+        // The cancel task of a poll the worker was asked to stop (B2) runs
+        // on a background executor: the library's cancel is a write.
+        let canceller = Canceller {
+            backend: backend.clone(),
+            watch: worker.poll_watch(),
+            executor: cx.background_executor().clone(),
+        };
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
                 let mut batch = vec![event];
@@ -445,6 +496,10 @@ impl Services {
                         let event = match event {
                             WorkerEvent::Polled(root, attempt) => {
                                 polled.push(root, attempt);
+                                continue;
+                            }
+                            WorkerEvent::PreemptPoll { root, op } => {
+                                canceller.start(root, op);
                                 continue;
                             }
                             event => event,

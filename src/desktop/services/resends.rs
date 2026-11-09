@@ -11,6 +11,13 @@
 //!   resume follows the run sent (`resent`). The resume from a row, from
 //!   the lifecycle dialog and the one an applied lifecycle child's
 //!   resolution sends (R-10) all go this way.
+//! - **Resume, then resend a Check now** (D6 L-4, U-15). A Check now left
+//!   active by Quit now or a crash is a Manual remote row held by a request
+//!   that was accepted. Its pending row offers Resume; the resume is
+//!   answered `original_request_required` naming that request, and
+//!   `PollOnce{root}` is sent under it, on the user lane, whose `rerun`
+//!   restarts the row. Whether a pending row is a poll's is read from the
+//!   rows, as a lifecycle's item is.
 //! - **Republish, then resend.** A republish confirmed from a lifecycle's
 //!   way out (A3's Stop and republish…, L1's Republish…) sends that
 //!   lifecycle on once it is answered with success: its request again, or
@@ -36,7 +43,9 @@ use std::{
 
 use manyhands::{
     canonical::ItemId,
-    repository::{ItemDtoKind, MutationDataDto, OperationId, RequestId},
+    repository::{
+        ItemDtoKind, MutationDataDto, OperationAction, OperationFamily, OperationId, RequestId,
+    },
     results::{Envelope, Outcome, RecoveryActionKind, ResultCode},
 };
 
@@ -323,7 +332,25 @@ fn lifecycle_operation(
     })
 }
 
-/// The close or merge of the lifecycle `operation_id` of `root`, sent again
+/// Whether the row of `operation_id` in the pending rows last read for
+/// `root` is a poll's: a remote row of action `poll`.
+fn is_poll_row(root: &str, operation_id: OperationId, operations: &Operations) -> bool {
+    let wanted = operation_id.to_string();
+    operations
+        .pending()
+        .get(root)
+        .and_then(|rows| rows.rows())
+        .is_some_and(|rows| {
+            rows.items.iter().any(|row| {
+                row.operation_id.as_deref() == Some(wanted.as_str())
+                    && row.family == OperationFamily::Remote
+                    && row.action == OperationAction::Poll
+            })
+        })
+}
+
+/// The close or merge of the lifecycle `operation_id` of `root`, or the poll
+/// once of a Check now's row, sent again
 /// under the request `envelope` names: this session's request of it when
 /// it holds one (left running when it runs), else a new desktop request.
 /// `None` when the answer names no request, the rows name no item for the
@@ -342,20 +369,31 @@ fn resend(
         .filter(|action| action.action == RecoveryActionKind::RequestRetry)
         .find_map(|action| action.arguments.get("request_id")?.as_str())
         .and_then(|named| RequestId::parse(named).ok())?;
-    let (kind, item) = operations
-        .locks()
-        .item_of(root.to_str()?, &operation_id.to_string())?;
-    let id: ItemId = item.parse().ok()?;
-    let root = root.to_path_buf();
-    let intent = match kind {
-        ItemDtoKind::Ticket => Intent::TicketClose { root, id },
-        ItemDtoKind::Document => Intent::DocumentPromote { root, id },
+    let root_text = root.to_str()?;
+    let intent = if is_poll_row(root_text, operation_id, operations) {
+        // A Check now's row (L-4): the poll once of the repository, which
+        // restarts the row under the request that holds it.
+        Intent::PollOnce {
+            root: root.to_path_buf(),
+        }
+    } else {
+        let (kind, item) = operations
+            .locks()
+            .item_of(root_text, &operation_id.to_string())?;
+        let id: ItemId = item.parse().ok()?;
+        let root = root.to_path_buf();
+        match kind {
+            ItemDtoKind::Ticket => Intent::TicketClose { root, id },
+            ItemDtoKind::Document => Intent::DocumentPromote { root, id },
+        }
     };
     let held = operations.requests().iter().find(|request| {
         request.request_id == named
             && matches!(
                 request.intent,
-                Intent::TicketClose { .. } | Intent::DocumentPromote { .. }
+                Intent::TicketClose { .. }
+                    | Intent::DocumentPromote { .. }
+                    | Intent::PollOnce { .. }
             )
     });
     // Never a second desktop request under the same request ID (review M1).

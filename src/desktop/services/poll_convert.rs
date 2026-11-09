@@ -104,6 +104,9 @@ pub(crate) enum Library {
     Repository {
         recovery_required: bool,
     },
+    /// `Err(Repository(e))` of kind `OperationMismatch` (U-13): the row under
+    /// the operation is another target's, priority's or kind's.
+    Mismatch,
 }
 
 /// Reads `result` into [`Library`].
@@ -123,8 +126,11 @@ pub(crate) fn classify(result: &Result<RemotePollResult, RemotePollError>) -> Li
         Err(RemotePollError::Interrupted) => return Library::Interrupted,
         Err(RemotePollError::ConflictPending) => return Library::ConflictPending,
         Err(RemotePollError::Repository(error)) => {
-            return Library::Repository {
-                recovery_required: error.kind == RepositoryErrorKind::RecoveryRequired,
+            return match error.kind {
+                RepositoryErrorKind::OperationMismatch => Library::Mismatch,
+                kind => Library::Repository {
+                    recovery_required: kind == RepositoryErrorKind::RecoveryRequired,
+                },
             };
         }
     };
@@ -238,6 +244,7 @@ pub(crate) fn attempt_of(
         Library::Repository { recovery_required } => {
             attempt.answer = Answer::Repository { recovery_required };
         }
+        Library::Mismatch => attempt.answer = Answer::OperationMismatch,
     }
     attempt
 }

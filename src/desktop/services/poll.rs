@@ -20,8 +20,12 @@
 //!
 //! The answer is converted by `poll_convert`. A background poll never
 //! prompts: `DesktopProvider` refuses for the running job's lane (B5).
-//! `cancel_poll` is not here: only a preemption's cancel task and quit call
-//! it (B2).
+//! `cancel_poll` is not here: only the cancel task (`preempt`) calls it, for
+//! a user job, a reconfiguration and quit alike (B2).
+//!
+//! A stop asked of the worker is checked before `poll_automatic` (P-2): the
+//! library's cancel can be lost on a row that is not active (Fact 30), so a
+//! poll that was asked to stop never starts, whatever the cancel did.
 
 use std::{
     path::{Path, PathBuf},
@@ -42,7 +46,7 @@ use super::{
     poll_convert::{Library, attempt_of, poll_attempt, repository_failed},
     prompts::DesktopProvider,
 };
-use crate::desktop::model::polling::{CancelCause, PollAttempt, Root};
+use crate::desktop::model::polling::{Answer, CancelCause, PollAttempt, Root};
 
 /// The automatic polls that ended, as the drain heard them and in order
 /// (D6 B1): the scheduler (Task 5) takes them and applies them to its
@@ -76,16 +80,19 @@ impl Services {
 /// Runs the automatic poll of the repository at `root` under `operation`
 /// (`restart` resends it) and gives the desktop's account of it.
 ///
-/// `cancel` says why the poll was cancelled, called lazily and at most once,
-/// only if it answers
-/// `Cancelled`: the answer does not say, the worker's flags do (R-3).
+/// `asked` says whether the worker was asked to stop this poll, and why: a
+/// user job, a reconfiguration or quit. It is read before `poll_automatic`
+/// (P-2), where a stop asked means the poll is not made and answers
+/// `Cancelled`; and for an answer of `Cancelled`, whose cause the library's
+/// answer does not give (R-3). Nobody having asked, a `Cancelled` answer is a
+/// launch takeover's stored cancel.
 pub(super) fn run(
     backend: &dyn Backend,
     session: &mut SessionCredentials<DesktopProvider>,
     root: &Root,
     operation: OperationId,
     restart: bool,
-    cancel: impl FnOnce() -> CancelCause,
+    asked: impl Fn() -> Option<CancelCause>,
 ) -> PollAttempt {
     let path = Path::new(root);
     // A call that fails before the poll reserved anything stores no row:
@@ -116,6 +123,18 @@ pub(super) fn run(
         }
         Err(error) => return refused(is_recovery_required(&error)),
     }
+    // The check before every `poll_automatic` (P-2).
+    if let Some(cause) = asked() {
+        return PollAttempt {
+            root: root.clone(),
+            operation,
+            answer: Answer::Cancelled(cause),
+            completed_at: None,
+            next_eligible_at: stored,
+            targets: Vec::new(),
+            index_pending: false,
+        };
+    }
     let request = PollPublicationRemoteRequest {
         root: PathBuf::from(root),
         operation_id: operation,
@@ -124,7 +143,11 @@ pub(super) fn run(
         restart,
     };
     let result = backend.poll_automatic(request, session);
-    let mut attempt = poll_attempt(root, operation, &result, cancel);
+    let cancel = || asked().unwrap_or(CancelCause::Takeover);
+    let mut attempt = match backend.after_poll(operation) {
+        Some(library) => attempt_of(root, operation, library, cancel),
+        None => poll_attempt(root, operation, &result, cancel),
+    };
     // The deadline the poll stored: a failure's backoff, or the interval
     // after a completion. A snapshot that cannot be read leaves the one
     // read before the poll.

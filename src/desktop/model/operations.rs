@@ -333,8 +333,9 @@ impl Operations {
             // when the next comes is one its job no longer waits on.
             WorkerEvent::Prompt(prompt) => self.prompt = Some(prompt),
             // A poll is not a request: the drain takes its attempt before
-            // `apply` and hands it to the poll inbox (D6 B1).
-            WorkerEvent::Polled(..) => {}
+            // `apply` and hands it to the poll inbox (D6 B1), and starts the
+            // cancel task of one the worker was asked to stop (B2).
+            WorkerEvent::Polled(..) | WorkerEvent::PreemptPoll { .. } => {}
         }
     }
 
@@ -1040,6 +1041,36 @@ fn local_synchronization(operation: &OperationDto) -> bool {
         )
 }
 
+/// Whether a pending row is a poll's remote row that still holds the
+/// repository's reservation: what a Check now left active by Quit now or a
+/// crash looks like at launch (D6 L-4, Fact 34). The library lists such a
+/// row with no next action, since its store does not say whether anything
+/// still runs it, and offers it no Resume of its own. Resume sends
+/// `operation resume`, which the library answers `original_request_required`
+/// naming the request that holds a Check now's row; an automatic poll's row,
+/// which no request holds, is answered `not_resumable`, and the in-flight
+/// record's entry is what finishes that one (L-1).
+fn check_now_left_active(operation: &OperationDto) -> bool {
+    operation.family == OperationFamily::Remote
+        && operation.action == OperationAction::Poll
+        && operation.operation_id.is_some()
+        && operation.next_action.is_none()
+        && matches!(
+            operation.state.as_str(),
+            "reserved"
+                | "advertising"
+                | "persisting"
+                | "fetch_prepared"
+                | "fetch_observed"
+                | "local_prepared"
+                | "local_fast_forwarded"
+                | "push_prepared"
+                | "push_returned"
+                | "push_verified"
+                | "reconciling"
+        )
+}
+
 /// What a pending row offers for Resume.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ResumeOffer {
@@ -1050,7 +1081,8 @@ pub(crate) enum ResumeOffer {
     NotOffered,
 }
 
-/// Resume is offered when the row waits to be resumed and is a local
+/// Resume is offered for a Check now's row left active (D6 L-4), and
+/// otherwise when the row waits to be resumed and is a local
 /// command (a comment's incomplete `submit_comment` and a `context
 /// sync-local` among them), a remote item or repository synchronization,
 /// or a local-context or primary synchronization with no remote (D5 B6,
@@ -1061,6 +1093,9 @@ pub(crate) enum ResumeOffer {
 /// offered here, but by its own row, whose resume opens the lifecycle
 /// dialog (D5 Part C, `view/operations/resume.rs`).
 pub(crate) fn resume_offer(operation: &OperationDto) -> ResumeOffer {
+    if check_now_left_active(operation) {
+        return ResumeOffer::Offered;
+    }
     if operation.next_action != Some(OperationNextAction::Resume) {
         return ResumeOffer::NotOffered;
     }

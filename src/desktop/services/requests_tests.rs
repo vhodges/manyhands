@@ -223,13 +223,14 @@ fn every_intent(root: &Path) -> Vec<Intent> {
             resolutions: vec![resolution("token", "source")],
         },
         Intent::ItemRepublish {
-            root,
+            root: root.clone(),
             kind: AuthoringKind::Ticket,
             id: ITEM.parse().unwrap(),
         },
+        Intent::PollOnce { root },
     ];
     let listed: HashSet<usize> = intents.iter().map(variant).collect();
-    assert_eq!(listed.len(), 38, "one intent of every variant");
+    assert_eq!(listed.len(), 39, "one intent of every variant");
     intents
 }
 
@@ -273,6 +274,7 @@ fn variant(intent: &Intent) -> usize {
         Intent::LocalContextSync { .. } => 35,
         Intent::LocalContextResolve { .. } => 36,
         Intent::ItemRepublish { .. } => 37,
+        Intent::PollOnce { .. } => 38,
     }
 }
 
@@ -404,8 +406,8 @@ fn changes_items_names_the_intents_that_can_change_items() {
             // OperationResume, OperationAbandon, DocumentSave, TicketSave,
             // the eight Part C commands, the comment and the two syncs, the
             // two lifecycles, the resolutions and local synchronization, and
-            // the republish.
-            0 | 1 | 7 | 8 | 17..=37 => true,
+            // the republish, and Check now (`PollOnce`).
+            0 | 1 | 7 | 8 | 17..=38 => true,
             // RepoRemove closes the tabs instead; the rest change
             // settings, keys or hosts, never an item.
             2..=6 | 9..=16 => false,
@@ -490,8 +492,8 @@ fn syncs_comments_and_resume_stop_at_safe_points_and_saves_do_not() {
         let expected = match variant(&intent) {
             // OperationResume, CommentAdd, ItemSync, RepoSync,
             // DocumentPromote, TicketClose, ConflictResolve,
-            // LocalContextSync, LocalContextResolve, ItemRepublish.
-            17 | 29..=37 => true,
+            // LocalContextSync, LocalContextResolve, ItemRepublish, PollOnce.
+            17 | 29..=38 => true,
             // Every local command, the saves among them.
             0..=16 | 18..=28 => false,
             other => unreachable!("variant {other}"),

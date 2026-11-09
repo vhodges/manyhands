@@ -55,10 +55,9 @@ pub(crate) enum CancelCause {
     /// Quit.
     Quit,
     /// A configuration change (R-11).
-    #[cfg_attr(not(test), allow(dead_code))] // Constructed from Task 4.
+    #[cfg_attr(not(test), allow(dead_code))] // Constructed from Task 5.
     Reconfiguration,
     /// A launch takeover's stored cancel (L-1).
-    #[cfg_attr(not(test), allow(dead_code))] // Constructed from Task 4.
     Takeover,
 }
 
@@ -89,6 +88,11 @@ pub(crate) enum Answer {
     /// `Err(Repository(_))`; `recovery_required` is a local operation still
     /// pending (Fact 32).
     Repository { recovery_required: bool },
+    /// `Err(Repository(OperationMismatch))`: the row under this operation is
+    /// of another target, priority or kind (U-13). The schedule treats it as
+    /// any other repository failure; the in-flight record drops its entry
+    /// (L-3).
+    OperationMismatch,
     /// `Err(ConflictPending)`.
     ConflictPending,
     /// `Complete(NotEligible{reason, _})`.
