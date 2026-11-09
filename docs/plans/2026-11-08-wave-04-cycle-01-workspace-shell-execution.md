@@ -1756,3 +1756,27 @@ Tests run (exact names only): the three new tests above; `f6_skips_hidden_panels
 the two title tests: all green. No whole-suite run. (One command of mine ran with an empty
 test list for a moment, which would have meant every test; I stopped it at once and added
 a non-empty guard to the later commands.)
+
+## Owner's second code review: ten findings (2026-11-09)
+
+A whole-branch review (72 commits) gave ten leads, again unchecked. Each was checked
+against the source. Fixed in `9c2a848c`; three need the owner's decision.
+
+| # | Finding | Result |
+| --- | --- | --- |
+| 1 | Quitting with Activity hidden gives no sign | Follows design R-20, which the design lists as a known cost ("A person with Activity hidden sees no sign of a waiting quit until they open Activity"). **Not changed; owner's call.** |
+| 2 | One failed operation counts twice (request finished `Partial` and the same operation in the pending list) | Cycle decision 3 counts both lists as written; whether one operation can be in both was not checked. **Not changed; owner's call.** |
+| 3 | A damaged `layout.json` shows the restore notice on every launch | Real by construction: R-38 saves nothing at launch, so the file stays until the layout changes. Writing the default at launch would contradict R-38. **Not changed; owner's call.** |
+| 4 | Ctrl B fix is a workaround that depends on binding order | Real, and fixed properly. The read-only wrapper has the key context `ReadOnly`; `editor::keys` unbinds `zorite_editor::Bold` for `ReadOnly > Editor`; the dock keys are bound in the `Workspace` context, which lies shallower than `Editor`, so Bold wins in an editable editor whichever set is registered first. The workaround in `read_only.rs` (a `Bold` handler that dispatched `ToggleLeftDock`) is gone. Test (red first): `desktop::keys::tests::ctrl_b_is_bold_in_an_editable_editor_only_in_either_binding_order` resolves Ctrl B for an editable, a read-only and a plain stack under both registration orders. `ctrl_b_in_the_read_view_toggles_the_left_dock` and `ctrl_b_in_an_editor_is_bold` still pass. The `each_key_is_bound_to_its_action` test is unchanged (it ignores context). |
+| 5 | `each_panel_draws_its_region_inside_the_dock` tests where things are drawn | **Removed** (with its `OPERATION_AREA` constant and import). It was the Task 3 proof of U-4; the other dock and keyboard tests drive every region through the dock, so U-4 stays covered. This removes assertions added in this Cycle. |
+| 6 | Test-only code in production | `Layout::move_to` and `Arrangement::move_panel` are now `#[cfg(test)]`. `ChromeColors.selection` stays by the owner's earlier reply; `teal` and `green` are the same palette and were left with it (they carry `allow(dead_code)`). |
+| 7 | Repeated definitions | `Side` gained `name`, `placement`, `dock` and `dock_mut`; the four side-to-dock tables, `side_key` and the match in `dock_toggle_name` use them; `view::dock::placement` is gone. `min_dock()` is defined once in `model/layout.rs`. |
+| 8 | Repeated group lookups | `Arrangement::locate` returns side, group and tab once; `toggle_panel`, `move_panel` and `reveal` use it and lose their `unwrap`s. |
+| 9 | Several dumps per layout change; Documents header recounts | **Not changed.** Each dump follows an edit (the one in `reconcile` reads state the earlier steps just changed), so sharing them risks stale reads; the count is one walk of the tree per render, cheaper than drawing the tree. Nothing was measured. Left for the performance work the owner put next. |
+| 10 | The 1 MiB cap does not bound the read | Known limit K-21, owner-approved. A bounded read needs a change in `Folder::read`, outside the Boundary. **Not changed.** |
+
+Tests run (exact names, 59 in one run): everything under `model::layout::`,
+`view::dock::`, `view::dock_tests::`, `view::footer*`, `view::keyboard_tests::shell::`
+and `keys::`, plus the Ctrl B tests, `no_workspace_key_acts_behind_the_sheet` and the
+read-only guard tests: all green. fmt, check and both clippy lines pass; both Boundary
+diffs print nothing. No whole-suite or fast-tier run.
