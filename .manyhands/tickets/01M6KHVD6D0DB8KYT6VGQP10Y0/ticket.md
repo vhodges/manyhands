@@ -3,7 +3,9 @@ slug: vh-8hc7g
 id: 01M6KHVD6D0DB8KYT6VGQP10Y0
 title: Recognize and retire remotely deleted contexts of closed tickets
 type: gap
-status: implementing
+status: done
+closed_at: 2026-11-09T11:47:11Z
+closed_by: Vince Hodges <vince@imbas.ca>
 project: manyhands
 team: core
 manyhands_managed: true

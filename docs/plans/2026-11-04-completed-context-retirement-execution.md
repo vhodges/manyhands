@@ -1,7 +1,7 @@
 ---
 title: "Completed-Context Retirement Execution Ledger"
 date: 2026-11-04
-status: "implementing"
+status: "done"
 author: "GPT-6.1 Sol"
 manyhands_managed: true
 manyhands_kind: document
@@ -11,6 +11,29 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 # Completed-Context Retirement Execution Ledger
 
 ## Authority, Scope And Current Standing
+
+### Owner-Approved Manual Closure — 2026-11-09T11:47:11Z
+
+The owner approved closure and integration after review. Ticket status is `done`
+with closure identity Vince Hodges <vince@imbas.ca>. Manual closure is expressly
+authorized because current main cannot open the live registry's newer poll
+schema. Commit, local main integration, normal main push, and removal of this
+ticket's local/remote branches and worktree are authorized; publication and
+cleanup receipts will be verified operationally after this checkpoint.
+
+Runtime remains frozen at `ee3729cf0f84c25ef98436cc8a4f5dee9f0dd56c`;
+this closure changes metadata only. Prior qualified verification stands without
+another broad rerun. The registry-wide marker race remains an accepted, deferred,
+UNFIXED P2; desktop smoke remains PARTIAL (startup verified, mapped window
+unverified). No fresh whole-suite or native pass is claimed.
+
+The additional submodule gitlink finding in `context_retirement/proof.rs:132–135`
+is deferred with owner approval, not fixed here. After rebuilding integrated
+main, file a P2 defect through normal CLI creation: compare gitlinks as opaque
+path/mode/OID entries without requiring their commits in the superproject ODB,
+retain blob/tree validation and separate cleanup safeguards, and extend an
+existing proof test. No submodule implementation is authorized in this closure.
+The historical handoff below is retained as evidence, not current lifecycle state.
 
 ### Current Qualified Owner-Review Handoff After P1 Clearance — 2026-11-09 UTC
 

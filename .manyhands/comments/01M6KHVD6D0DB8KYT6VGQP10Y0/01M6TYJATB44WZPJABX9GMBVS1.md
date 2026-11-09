@@ -2220,3 +2220,22 @@ Entire **144332-byte** prior prefix SHA-256
 No ticket status save/new IDs/other branch push/agents/PR/main merge/close/native/
 real retirement/profile/key/context/draft operation/cleanup/performance work.
 **Qualified owner-review-ready, not closed/merged; owner review before closure.**
+
+## Owner-approved manual closure — 2026-11-09T11:47:11Z
+
+Owner approved marking this ticket done, recording closure fields by hand,
+committing, merging locally into main, pushing main, and removing this ticket's
+local/remote branches and worktree. Manual procedure is an explicit exception:
+main cannot open the newer live poll schema. Read-only diagnosis found SQLite
+integrity OK and no foreign-key violations; isolated copies establish the schema
+mismatch. No live refresh, rebuild, reset, downgrade or manual schema repair.
+
+Closure metadata only; runtime freeze and qualified retained verification remain
+unchanged. Marker retirement race is an accepted deferred UNFIXED P2. Desktop
+smoke remains PARTIAL: process startup verified, mapped window unverified. No
+fresh whole-suite/native success is asserted and native CI is not authorized.
+
+Additional P2 submodule gitlink finding at proof.rs:132–135 is owner-approved
+deferred work. Rebuild integrated main and file through normal CLI creation,
+linking this ticket; do not implement submodule fixes now. Main publication and
+cleanup are the next operational steps, not claimed complete in this commit.
