@@ -47,7 +47,7 @@ use super::{
 };
 use crate::desktop::{
     model::{
-        operations::Operations,
+        operations::{Entered, Operations},
         polling::{
             Authority, Clock, ClockEvent, Now, PollAttempt, PollSchedule, Root, SystemClock,
             retire_loop::RetireLoops, status::Unplaced,
@@ -479,6 +479,17 @@ impl Scheduler {
                     self.reconfigured(scope, moment == Moment::Succeeded, cx)
                 }
                 Heard::PolicyMoved(root) => self.read_registrations(vec![root], cx),
+                Heard::ResendRetirement {
+                    request,
+                    root,
+                    kind,
+                    item,
+                } => self.resend_resumed(request, &root, kind, &item, cx),
+                Heard::PendingEnded {
+                    root,
+                    operation,
+                    retired,
+                } => self.pending_ended(&root, operation, retired, cx),
                 Heard::CheckedNow(root, attempt) => self.checked_now(root, attempt, cx),
                 Heard::CheckFailed {
                     root,
@@ -545,7 +556,13 @@ impl Scheduler {
             .iter()
             .filter_map(|entry| {
                 let (kind, item) = entry.item()?;
-                Some(super::retire_loop::key_of(entry.root(), kind, &item))
+                Some(Entered {
+                    root: entry.root().clone(),
+                    kind,
+                    item,
+                    request: entry.request(),
+                    operation: entry.operation(),
+                })
             })
             .collect();
         // The record's own problem is heard once, wherever it arose (R-31).

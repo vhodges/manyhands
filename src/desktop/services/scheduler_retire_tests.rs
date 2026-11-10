@@ -25,13 +25,13 @@ use crate::desktop::{
     model::polling::{Phase, Reason, TargetKind, retire::Verdict},
     services::{
         JobKind,
-        inflight::{Acquired, InflightStore, RetirementEnd},
-        requests::{DesktopRequestId, Lane, RequestState},
+        inflight::{Acquired, InflightStore, RetirementEnd, RetirementEntry},
+        requests::{DesktopRequestId, Intent, Lane, RequestState},
         worker::{CancelResult, RecordState},
     },
     test_support::{
         polling::{Asked, unlock_request},
-        retire::{ITEM, answer},
+        retire::{ITEM, OPERATION, answer},
     },
 };
 
@@ -521,4 +521,235 @@ fn retire_record_state_reaches_the_answer() {
             assert_eq!(seen, None, "{what}");
         }
     }
+}
+
+/// Seeds the pending row of `OPERATION` in `root` into the request model, as
+/// a read of the repository's pending operations would list it.
+fn list_pending(world: &World, root: &str, cx: &mut TestAppContext) {
+    use crate::desktop::{services::ReadResult, test_support::retire::pending_row};
+    world.services.operations().update(cx, |operations, cx| {
+        let stamp = operations.load_pending(root.to_owned());
+        operations.apply_pending(
+            stamp,
+            ReadResult::Ok(manyhands::repository::OperationListDto {
+                items: vec![pending_row(OPERATION, "created", None)],
+                complete: true,
+            }),
+        );
+        cx.notify();
+    });
+}
+
+/// The retirements sent, as `(lane, library request ID, desktop ID)`,
+/// oldest first.
+fn retirements_sent(
+    world: &World,
+    cx: &mut TestAppContext,
+) -> Vec<(Lane, RequestId, DesktopRequestId)> {
+    world.services.operations().read_with(cx, |operations, _| {
+        let mut sent: Vec<_> = operations
+            .requests()
+            .iter()
+            .filter(|request| matches!(request.intent, Intent::ContextRetire { .. }))
+            .map(|request| (request.lane, request.request_id, request.id))
+            .collect();
+        sent.reverse();
+        sent
+    })
+}
+
+/// Fact 26, A20, R-31, E4: a retirement left pending offers Resume (its
+/// entry names the operation) and Abandon. Resume first clears the declined
+/// keys of the request's last attempt, so the resend can prompt; the
+/// library answers `original_request_required`, and the desktop rebuilds
+/// `Intent::ContextRetire` from the entry under the request ID the answer
+/// names and sends it as a new user-lane request. The finished resend ends
+/// the entry. A resend taken from the queue before it ran leaves the entry
+/// (review I-3). An operation no entry names is not resent as a retirement.
+#[gpui_kit::test]
+async fn retire_resume_resends_original(cx: &mut TestAppContext) {
+    use crate::desktop::{
+        model::operations::{ResumeOffer, abandon_offered, resume_offer_among},
+        services::prompts::PromptReply,
+        test_support::retire::original_request,
+    };
+    let (world, root) = polled(cx).await;
+    let directory = tempfile::tempdir().unwrap();
+    let key = unlock_request(directory.path(), SharedKeyId::new());
+    world
+        .backend
+        .ask_in_check_now(world.services.worker().provider(), key.clone());
+
+    // The person's own retirement: the prompt is answered Not now (the key
+    // is declined), and the library has the retirement pending.
+    let owed = answer(State::Pending, Code::UnlockRequired, Removal::None);
+    world
+        .backend
+        .inner()
+        .answer_job(JobKind::ContextRetire, owed);
+    let first = retire(&world, &root, Lane::User, cx);
+    super::attention_tests::prompt(&world, cx)
+        .await
+        .answer(PromptReply::Cancelled);
+    ended(&world, first, cx).await;
+    let original = entered(&world, cx);
+    assert_eq!(original.len(), 1, "Owed keeps its entry");
+    let operation = OperationId::parse(OPERATION).unwrap();
+    list_pending(&world, &root, cx);
+
+    // Resume and Abandon are both offered.
+    let row = world.services.operations().read_with(cx, |operations, _| {
+        let own = operations.automatic_polls().clone();
+        let rows = operations.pending_shown();
+        let row = rows
+            .iter()
+            .find_map(|(shown, state)| (*shown == root).then_some(state.rows()?.items[0].clone()))
+            .expect("the pending row");
+        assert_eq!(
+            resume_offer_among(&row, &own, &operations.entered_operations()),
+            ResumeOffer::Offered
+        );
+        row
+    });
+    assert!(abandon_offered(&row));
+
+    // Resume: the declined key is cleared, and the resume is answered
+    // `original_request_required` naming the entry's request.
+    world
+        .backend
+        .inner()
+        .answer_job(JobKind::OperationResume, original_request(original[0]));
+    world.backend.inner().answer_job(
+        JobKind::ContextRetire,
+        answer(State::Retired, Code::Ok, Removal::Observed),
+    );
+    cx.update(|cx| world.services.resume(&root, &operation.to_string(), cx));
+    // The resend asks for the key again: cleared, it prompts, not declined.
+    super::attention_tests::prompt(&world, cx)
+        .await
+        .answer(PromptReply::Cancelled);
+    World::settle(cx, "the resend", |cx| {
+        retirements_sent(&world, cx).len() == 2
+    })
+    .await;
+    World::settle(cx, "the resend to end", |cx| entered(&world, cx).is_empty()).await;
+    let sent = retirements_sent(&world, cx);
+    assert_eq!(sent[1].0, Lane::User);
+    assert_eq!(sent[1].1, original[0], "under the named request ID");
+    assert_ne!(sent[1].2, sent[0].2, "a new desktop request");
+    world.services.operations().read_with(cx, |operations, _| {
+        match &operations.request(sent[1].2).expect("the resend").intent {
+            Intent::ContextRetire {
+                root: sent,
+                kind,
+                id,
+            } => {
+                assert_eq!(sent.to_str(), Some(root.as_str()));
+                assert_eq!(*kind, manyhands::repository::AuthoringKind::Ticket);
+                assert_eq!(*id, item());
+            }
+            _ => panic!("the resend is not a retirement"),
+        }
+    });
+}
+
+/// C3, E4: Unlock… picks the first of the key's repositories whose next step
+/// reaches authentication. A pending retirement in the in-flight record comes
+/// first, since a poll there would answer `recovery_required` before it
+/// authenticates (Fact 32): it is resent from the record, on the user lane,
+/// under its own request ID; the retirement that got past its observation
+/// clears the key's attention for every repository. With none, the first
+/// repository with no pending local operation and no hold gets a Check now.
+/// With neither, Unlock… is disabled.
+#[gpui_kit::test]
+async fn unlock_picks_reachable(cx: &mut TestAppContext) {
+    use crate::desktop::services::scheduler::attention::UnlockTarget;
+    let world = World::new(true, cx);
+    let directory = tempfile::tempdir().unwrap();
+    let key = unlock_request(directory.path(), SharedKeyId::new());
+    let (a, b) = (world.ssh_repo("a"), world.ssh_repo("b"));
+    // The previous launch left a retirement of `b` pending.
+    let request = RequestId::new();
+    let operation = OperationId::new();
+    {
+        let mut previous = InflightStore::open(world.fixture.data_dir());
+        assert_eq!(previous.try_acquire(), Acquired::Now);
+        previous.retirement_submitting(RetirementEntry::new(
+            request,
+            &b,
+            TargetKind::Ticket,
+            &item(),
+        ));
+        previous.retirement_operation(request, operation);
+        previous.retirement_ended(request, RetirementEnd::Accepted);
+    }
+    super::attention_tests::locked_pair(&world, &key, &[a.clone(), b.clone()], cx).await;
+    let held = vec![(Reason::KeyLocked(key.key_id), {
+        let mut roots = vec![a.clone(), b.clone()];
+        roots.sort();
+        roots
+    })];
+    let target = |world: &World, cx: &mut TestAppContext| {
+        world.services.scheduler().read_with(cx, |scheduler, cx| {
+            world.services.operations().read_with(cx, |operations, _| {
+                scheduler.unlock_target(key.key_id, operations)
+            })
+        })
+    };
+
+    // The retirement is picked, though `a` is reachable and first.
+    assert!(a < b);
+    assert_eq!(
+        target(&world, cx),
+        Some(UnlockTarget::Retirement {
+            root: b.clone(),
+            request,
+            kind: TargetKind::Ticket,
+            item: item(),
+        })
+    );
+    // Unlock… resends it on the user lane under its own request ID; it got
+    // past its observation, so the key's attention clears everywhere.
+    world.backend.stop_asking_unlock();
+    world.backend.inner().answer_job(
+        JobKind::ContextRetire,
+        answer(State::Retired, Code::Ok, Removal::Observed),
+    );
+    assert_eq!(entries(&world, cx), held);
+    assert!(super::attention_tests::unlock(&world, key.key_id, cx));
+    World::settle(cx, "the attention to clear", |cx| {
+        entries(&world, cx).is_empty()
+    })
+    .await;
+    World::quiet(cx).await;
+    let sent = retirements_sent(&world, cx);
+    assert_eq!(sent.len(), 1);
+    assert_eq!((sent[0].0, sent[0].1), (Lane::User, request));
+    assert!(
+        super::attention_tests::checks(&world, cx).is_empty(),
+        "no Check now was needed"
+    );
+    assert!(entered(&world, cx).is_empty(), "it finished");
+
+    // No retirement left: the first repository with no pending local
+    // operation and no hold gets a Check now.
+    for root in [&a, &b] {
+        world.services.scheduler().update(cx, |scheduler, cx| {
+            scheduler
+                .schedule_mut()
+                .raise(root, Reason::KeyLocked(key.key_id));
+            cx.notify();
+        });
+    }
+    assert_eq!(entries(&world, cx), held);
+    assert_eq!(target(&world, cx), Some(UnlockTarget::CheckNow(a.clone())));
+    list_pending(&world, &a, cx);
+    assert_eq!(target(&world, cx), Some(UnlockTarget::CheckNow(b.clone())));
+
+    // Neither: both wait on a pending operation. Disabled, and nothing sent.
+    list_pending(&world, &b, cx);
+    assert_eq!(target(&world, cx), None);
+    assert!(!super::attention_tests::unlock(&world, key.key_id, cx));
+    assert!(super::attention_tests::checks(&world, cx).is_empty());
+    assert_eq!(retirements_sent(&world, cx).len(), 1);
 }

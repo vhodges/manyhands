@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 
 use gpui_kit::Context;
-use manyhands::repository::{OperationDto, OperationFamily, OperationId};
+use manyhands::repository::{OperationAction, OperationDto, OperationFamily, OperationId};
 
 use super::{Operations, ResumeOffer, check_now_left_active, resume_offer};
 use crate::desktop::{
@@ -90,24 +90,59 @@ pub(crate) fn record_note_words(report: Report) -> &'static str {
     }
 }
 
-/// [`resume_offer`], except that a poll row of `own` is not offered Resume.
+/// [`resume_offer`], except that a poll row of `own` is not offered Resume,
+/// and a retirement row is offered it only when it can be resumed.
 ///
 /// A Check now's row left active offers it (L-4); an automatic poll's row,
 /// which no request holds, answers `not_resumable`, and the in-flight record
-/// finishes it (L-1), so a button there is a dead end. A row of an unknown,
-/// foreign or retirement-observer operation still offers it: the read model
-/// carries no request or kind to tell them apart (a recorded known limit).
+/// finishes it (L-1), so a button there is a dead end. A row of an unknown
+/// or foreign operation still offers it: the read model carries no request
+/// to tell them apart (a recorded known limit).
+///
+/// A pending retirement is resumed from the in-flight record's entry, which
+/// names the operation (`entries`, R-31, E4): the library answers
+/// `original_request_required` and the desktop sends the original again.
+/// Without an entry (a retirement a second instance submitted, or one the
+/// record lost) Resume is offered only when all the row owes is its index
+/// hand-off, which needs no original request; otherwise only Abandon is
+/// (K-27, Fact 26).
 pub(crate) fn resume_offer_among(
     operation: &OperationDto,
     own: &HashSet<OperationId>,
+    entries: &HashSet<OperationId>,
 ) -> ResumeOffer {
-    let ours = operation
+    let id = operation
         .operation_id
         .as_deref()
-        .and_then(|id| OperationId::parse(id).ok())
-        .is_some_and(|id| own.contains(&id));
-    if ours && check_now_left_active(operation) {
+        .and_then(|id| OperationId::parse(id).ok());
+    if id.is_some_and(|id| own.contains(&id)) && check_now_left_active(operation) {
         return ResumeOffer::NotOffered;
     }
-    resume_offer(operation)
+    let offer = resume_offer(operation);
+    if offer == ResumeOffer::Offered
+        && operation.action == OperationAction::RetireContext
+        && !id.is_some_and(|id| entries.contains(&id))
+        && !owes_only_hand_off(operation)
+    {
+        return ResumeOffer::NotOffered;
+    }
+    offer
+}
+
+/// Whether a retirement's row owes nothing but its index hand-off: its work
+/// is recorded as done and it has handed off to indexing, as the library
+/// judges it (`LocalRow::owes_only_its_hand_off`). A resume of such a row
+/// needs no original request.
+fn owes_only_hand_off(operation: &OperationDto) -> bool {
+    matches!(
+        operation.completed_step.as_deref(),
+        Some(
+            "context_branch_released"
+                | "context_retirement_absent"
+                | "context_retirement_preserved"
+        )
+    ) && matches!(
+        operation.state.as_str(),
+        "authoritative_observed" | "indexing" | "index_invalidated" | "failed" | "retry"
+    )
 }

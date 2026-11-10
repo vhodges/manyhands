@@ -349,6 +349,17 @@ fn is_poll_row(root: &str, operation_id: OperationId, operations: &Operations) -
         })
 }
 
+/// The request an `original_request_required` answer names: the one that
+/// holds the operation, to be sent again.
+pub(crate) fn named_request(envelope: &Envelope<MutationDataDto>) -> Option<RequestId> {
+    envelope
+        .recovery
+        .iter()
+        .filter(|action| action.action == RecoveryActionKind::RequestRetry)
+        .find_map(|action| action.arguments.get("request_id")?.as_str())
+        .and_then(|named| RequestId::parse(named).ok())
+}
+
 /// The close or merge of the lifecycle `operation_id` of `root`, or the poll
 /// once of a Check now's row, sent again
 /// under the request `envelope` names: this session's request of it when
@@ -363,12 +374,7 @@ fn resend(
     operations: &Operations,
     worker: &WorkerHandle,
 ) -> Option<DesktopRequestId> {
-    let named = envelope
-        .recovery
-        .iter()
-        .filter(|action| action.action == RecoveryActionKind::RequestRetry)
-        .find_map(|action| action.arguments.get("request_id")?.as_str())
-        .and_then(|named| RequestId::parse(named).ok())?;
+    let named = named_request(envelope)?;
     let root_text = root.to_str()?;
     let intent = if is_poll_row(root_text, operation_id, operations) {
         // A Check now's row (L-4): the poll once of the repository, which

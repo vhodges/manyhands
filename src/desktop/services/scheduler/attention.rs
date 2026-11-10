@@ -20,13 +20,28 @@ use manyhands::{repository::transport::SshAuthority, results::ResultCode};
 use crate::desktop::{
     model::{
         operations::Operations,
-        polling::{Answer, Authority, KeyId, Phase, Reason, Root, TransportFailure},
+        polling::{Answer, Authority, KeyId, Phase, Reason, Root, TargetKind, TransportFailure},
     },
     services::{
         poll_convert::check_now_failure,
         requests::{DesktopRequestId, Intent, Lane},
     },
 };
+
+/// What Unlock… sends (C3, E4).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum UnlockTarget {
+    /// The pending retirement of `item` the in-flight record holds, resent
+    /// under its own `request` ID.
+    Retirement {
+        root: Root,
+        request: manyhands::repository::RequestId,
+        kind: TargetKind,
+        item: manyhands::canonical::ItemId,
+    },
+    /// A Check now of the repository.
+    CheckNow(Root),
+}
 
 impl Scheduler {
     /// The person acted: every repository held for `reason` polls again, at
@@ -120,32 +135,71 @@ impl Scheduler {
         });
     }
 
-    /// The repository Unlock… sends its Check now through for `key`: the
-    /// first of the key's repositories whose next step reaches
-    /// authentication, that is, one that is on, not held and has no local
-    /// operation pending (a poll there answers `recovery_required` first,
-    /// Fact 32). `None` leaves Unlock… disabled, and the entry pointing at
-    /// the pending rows.
-    pub(crate) fn unlock_target(&self, key: KeyId, operations: &Operations) -> Option<Root> {
+    /// What Unlock… sends for `key` (C3): the first of the key's
+    /// repositories whose next step reaches authentication.
+    ///
+    /// - A pending retirement in the in-flight record comes first, in the
+    ///   entry's repository order: a poll there would answer
+    ///   `recovery_required` before it authenticates (Fact 32), but the
+    ///   retirement authenticates. It is resent on the user lane (E4). An
+    ///   item whose retirement is queued or running already is not.
+    /// - Otherwise the first repository that is on, not held and has no
+    ///   local operation pending gets a Check now.
+    ///
+    /// `None` leaves Unlock… disabled, and the entry pointing at the
+    /// pending rows.
+    pub(crate) fn unlock_target(
+        &self,
+        key: KeyId,
+        operations: &Operations,
+    ) -> Option<UnlockTarget> {
         let held = Reason::KeyLocked(key);
         let entry = self
             .schedule
             .attention()
             .into_iter()
             .find(|entry| entry.reason == held)?;
-        entry.roots.into_iter().find(|root| {
-            self.schedule
-                .repo(root)
-                .is_some_and(|repo| repo.policy.enabled && !repo.policy.recovery_suspended)
-                && !operations.has_pending_local(root)
+        let retirement = entry.roots.iter().find_map(|root| {
+            self.store.retirements().iter().find_map(|entered| {
+                let (kind, item) = entered.item()?;
+                let out = self.worker.in_flight(|intent| match intent {
+                    Intent::ContextRetire { root, id, .. } => {
+                        root.to_str() == Some(entered.root()) && *id == item
+                    }
+                    _ => false,
+                });
+                if entered.root() != root || out {
+                    return None;
+                }
+                Some(UnlockTarget::Retirement {
+                    root: root.clone(),
+                    request: entered.request()?,
+                    kind,
+                    item,
+                })
+            })
+        });
+        retirement.or_else(|| {
+            entry
+                .roots
+                .into_iter()
+                .find(|root| {
+                    self.schedule
+                        .repo(root)
+                        .is_some_and(|repo| repo.policy.enabled && !repo.policy.recovery_suspended)
+                        && !operations.has_pending_local(root)
+                })
+                .map(UnlockTarget::CheckNow)
         })
     }
 
     /// Unlock…: clears the key's declined mark, so the prompt can come, and
-    /// submits a user-lane Check now through the key's first reachable
-    /// repository, which prompts through the existing modal (C3). True when
-    /// the Check now was sent; false when no repository reaches
-    /// authentication, or that repository's own Check now is still out.
+    /// sends a user-lane request through the key's first reachable
+    /// repository, which prompts through the existing modal (C3): the
+    /// pending retirement the in-flight record holds, resent under its own
+    /// request ID, else a Check now. True when it was sent; false when no
+    /// repository reaches authentication, or that repository's own Check
+    /// now is still out.
     pub(crate) fn unlock(&mut self, key: KeyId, cx: &mut Context<Self>) -> bool {
         // Nothing starts once quitting is asked (R-33).
         if self.quitting {
@@ -156,8 +210,21 @@ impl Scheduler {
             .read_with(cx, |operations, _| self.unlock_target(key, operations))
             .ok()
             .flatten();
-        let Some(root) = target else {
-            return false;
+        let root = match target {
+            Some(UnlockTarget::Retirement {
+                root,
+                request,
+                kind,
+                item,
+            }) => {
+                self.worker.clear_declined(key);
+                self.resend_retirement(request, &root, kind, &item, Lane::User);
+                self.publish(cx);
+                cx.notify();
+                return true;
+            }
+            Some(UnlockTarget::CheckNow(root)) => root,
+            None => return false,
         };
         let path = PathBuf::from(&root);
         let out = self

@@ -62,3 +62,47 @@ pub(crate) fn answer_of(
 pub(crate) fn no_data(code: ResultCode) -> Envelope<MutationDataDto> {
     Envelope::failure("context retire", Scope::default(), code, vec![])
 }
+
+/// `operation resume` answered `original_request_required`, naming the
+/// request that holds the operation (Fact 26): the one a pending
+/// retirement's Resume gets.
+pub(crate) fn original_request(
+    named: manyhands::repository::RequestId,
+) -> Envelope<MutationDataDto> {
+    use manyhands::results::{RecoveryAction, RecoveryActionKind};
+    Envelope::failure(
+        "operation resume",
+        Scope::default(),
+        ResultCode::OriginalRequestRequired,
+        vec![RecoveryAction::new(
+            RecoveryActionKind::RequestRetry,
+            [("request_id", named.to_string().into())],
+        )],
+    )
+}
+
+/// The pending row the library lists for an Owed retirement (Fact 26): a
+/// local `retire_context` operation waiting to be resumed, at `step`.
+pub(crate) fn pending_row(
+    operation: &str,
+    state: &str,
+    step: Option<&str>,
+) -> manyhands::repository::OperationDto {
+    use manyhands::repository::{
+        OperationAction, OperationDto, OperationFamily, OperationNextAction, OperationOwner,
+    };
+    OperationDto {
+        operation_id: Some(operation.to_owned()),
+        family: OperationFamily::Local,
+        owner: OperationOwner::Repository,
+        action: OperationAction::RetireContext,
+        state: state.to_owned(),
+        completed_step: step.map(str::to_owned),
+        next_action: Some(OperationNextAction::Resume),
+        item_id: None,
+        key_id: None,
+        worktree: None,
+        updated_at: None,
+        failure_code: None,
+    }
+}

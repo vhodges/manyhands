@@ -64,6 +64,9 @@ pub(crate) struct PollSchedule {
     repos: BTreeMap<Root, RepoSchedule>,
     /// The items the loop skips for the session (R-21).
     refused: retire::RefusedSet,
+    /// The kind of each item in the refused set, which Retire… needs to
+    /// send its retirement (E4).
+    refused_kinds: BTreeMap<(Root, ItemId), TargetKind>,
 }
 
 /// Registration and reads.
@@ -401,8 +404,18 @@ impl PollSchedule {
 
     /// Records the answer to a retirement of `item`: a refusal the table
     /// does not retry joins the session's refused set (R-21).
-    pub fn retirement_answered(&mut self, root: &Root, item: &ItemId, verdict: &retire::Verdict) {
+    pub fn retirement_answered(
+        &mut self,
+        root: &Root,
+        kind: TargetKind,
+        item: &ItemId,
+        verdict: &retire::Verdict,
+    ) {
         self.refused.answered(root, item, verdict);
+        if self.refused.contains(root, item) {
+            self.refused_kinds
+                .insert((root.clone(), item.clone()), kind);
+        }
     }
 
     /// A retirement of `item` was submitted: its entry says "Retiring…".
@@ -469,9 +482,48 @@ impl PollSchedule {
     }
 
     /// Retire… was chosen for the item: it leaves the refused set (A19).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
     pub fn retire_chosen(&mut self, root: &Root, item: &ItemId) {
         self.refused.forget(root, item);
+        self.refused_kinds.remove(&(root.clone(), item.clone()));
+    }
+
+    /// The items Retire… is offered for in `root` (E4): every `Closed` or
+    /// `Promoted` item its latest completed attempt reported that has no
+    /// retirement queued, running, pending or done since, in the poll's
+    /// order, then the items in the refused set that attempt no longer
+    /// reports. Skipped, refused, preserved, failed before any effect and
+    /// not reached all land here. The worker and the in-flight record hold
+    /// the state a line cannot (a retirement sent before a relaunch): the
+    /// caller leaves those out.
+    #[allow(dead_code)] // Used by the Retire… row.
+    pub fn retire_offers(&self, root: &Root) -> Vec<entry::RetireOffer> {
+        let Some(repo) = self.repos.get(root) else {
+            return Vec::new();
+        };
+        let reported = repo
+            .last
+            .iter()
+            .flat_map(|last| &last.retire)
+            .filter_map(|target| Some((target.kind?, target.item_id.clone()?)));
+        let refused = self
+            .refused_kinds
+            .iter()
+            .filter(|((held, _), _)| held == root)
+            .map(|((_, item), kind)| (*kind, item.clone()));
+        let mut offers: Vec<entry::RetireOffer> = Vec::new();
+        for (kind, item) in reported.chain(refused) {
+            let begun = repo
+                .retirements
+                .iter()
+                .any(|line| line.kind == kind && line.item == item);
+            let listed = offers
+                .iter()
+                .any(|offer| offer.kind == kind && offer.item == item);
+            if !begun && !listed {
+                offers.push(entry::RetireOffer { kind, item });
+            }
+        }
+        offers
     }
 
     pub fn end_retiring(&mut self, root: &Root) {

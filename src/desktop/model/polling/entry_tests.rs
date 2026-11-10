@@ -141,3 +141,38 @@ fn closed_and_promoted_are_left_to_part_e() {
         }
     }
 }
+
+/// E4, E3: an item Retire… is offered for is named by its short code, in
+/// words that name no title, and an attempt with nothing else to say has an
+/// entry once there is such an item.
+#[test]
+fn retire_offers_make_an_entry() {
+    let item: ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FA1".parse().unwrap();
+    let offer = |kind| RetireOffer {
+        kind,
+        item: item.clone(),
+    };
+    assert_eq!(
+        offer(TargetKind::Ticket).text(),
+        "Q69G5FA1 is closed. Its copy on this computer was not retired."
+    );
+    assert_eq!(
+        offer(TargetKind::Document).text(),
+        "Q69G5FA1 was promoted. Its copy on this computer was not retired."
+    );
+    assert_eq!(RETIRE, "Retire\u{2026}");
+
+    let quiet = attempt(Answer::Completed, &[]);
+    assert_eq!(attempt_entry(&quiet, &[]), None);
+    assert_eq!(AttemptEntry::with_offers(None, Vec::new()), None);
+    let offers = vec![offer(TargetKind::Ticket)];
+    let entry = AttemptEntry::with_offers(attempt_entry(&quiet, &[]), offers.clone())
+        .expect("an item to retire is something to say");
+    assert_eq!((entry.offers, entry.lines.len()), (offers.clone(), 0));
+
+    // The offers join what the attempt listed.
+    let summary = attempt(Answer::Completed, &[Disposition::Dirty]);
+    let entry =
+        AttemptEntry::with_offers(attempt_entry(&summary, &[]), offers.clone()).expect("an entry");
+    assert_eq!((entry.offers, entry.lines.len()), (offers, 1));
+}

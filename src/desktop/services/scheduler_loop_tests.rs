@@ -899,6 +899,7 @@ async fn a_pending_retirement_survives_a_relaunch(cx: &mut TestAppContext) {
     let root = world.ssh_repo("a");
     // The previous launch: an entry it kept, and gone.
     let request = manyhands::repository::RequestId::new();
+    let operation = manyhands::repository::OperationId::new();
     {
         let mut previous = InflightStore::open(world.fixture.data_dir());
         assert_eq!(previous.try_acquire(), Acquired::Now);
@@ -908,6 +909,7 @@ async fn a_pending_retirement_survives_a_relaunch(cx: &mut TestAppContext) {
             TargetKind::Ticket,
             &IDS[0].parse().unwrap(),
         ));
+        previous.retirement_operation(request, operation);
         previous.retirement_ended(request, RetirementEnd::Accepted);
     }
     for _ in 0..2 {
@@ -929,18 +931,128 @@ async fn a_pending_retirement_survives_a_relaunch(cx: &mut TestAppContext) {
     assert!(retiring(&world, &root, 0, cx), "held by the record");
     assert!(!retiring(&world, &root, 1, cx));
 
-    // The record lets it go (Abandon, or Resume finishing it).
+    // A resend of it taken from the queue leaves it pending (review I-3,
+    // E-28: this used to let it go).
+    let mut gone = |end| {
+        world.services.scheduler().update(cx, |scheduler, cx| {
+            scheduler.heard(
+                vec![Heard::Retirement(Retiring::Gone {
+                    id: crate::desktop::services::requests::DesktopRequestId(9_999),
+                    request,
+                    end,
+                })],
+                cx,
+            )
+        })
+    };
+    gone(RetirementEnd::Removed);
+    gone(RetirementEnd::NotSent);
+    assert!(retiring(&world, &root, 0, cx), "still pending");
+
+    // The record lets it go when the row is settled (an Abandon, or a Resume
+    // finishing it).
     world.services.scheduler().update(cx, |scheduler, cx| {
         scheduler.heard(
-            vec![Heard::Retirement(Retiring::Gone {
-                id: crate::desktop::services::requests::DesktopRequestId(9_999),
-                request,
-                end: RetirementEnd::Removed,
-            })],
+            vec![Heard::PendingEnded {
+                root: root.clone(),
+                operation,
+                retired: false,
+            }],
             cx,
         )
     });
     assert!(!retiring(&world, &root, 0, cx), "and then it is not");
+}
+
+/// R-11, review I-3: a reconfiguration that is submitted takes queued
+/// retirements from the queue, user lane included (RT-10). A queued resend
+/// of a retirement the library already holds pending (Resume's, Unlock…'s)
+/// is answered `Removed`, and that must not end its entry: the item keeps
+/// its "Retiring…" hold, its Resume, and a line in the attempt's entry that
+/// says it did not finish. One that never reached the library does end.
+#[gpui_kit::test]
+async fn retire_removed_resend_keeps_the_hold(cx: &mut TestAppContext) {
+    use crate::desktop::services::{
+        inflight::{Acquired, InflightStore, RetirementEntry},
+        requests::Lane,
+    };
+    let world = World::new(true, cx);
+    let root = world.ssh_repo("a");
+    let (pending, fresh) = (
+        manyhands::repository::RequestId::new(),
+        manyhands::repository::RequestId::new(),
+    );
+    {
+        let mut previous = InflightStore::open(world.fixture.data_dir());
+        assert_eq!(previous.try_acquire(), Acquired::Now);
+        previous.retirement_submitting(RetirementEntry::new(
+            pending,
+            &root,
+            TargetKind::Ticket,
+            &IDS[0].parse().unwrap(),
+        ));
+        previous.retirement_operation(pending, manyhands::repository::OperationId::new());
+    }
+    world.backend.answer_poll(world.completed());
+    world.list(std::slice::from_ref(&root), cx);
+    World::settle(cx, "the launch poll", |_| {
+        world.backend.polled_roots().len() == 1
+    })
+    .await;
+    World::quiet(cx).await;
+
+    // A user job holds the worker, so both resends wait in the queue.
+    let running = world.backend.inner().hold_job(JobKind::IndexRefresh);
+    world.services.worker().submit(
+        Intent::IndexRefresh {
+            root: std::path::PathBuf::from(&root),
+        },
+        Lane::User,
+        None,
+        None,
+    );
+    running.wait_reached();
+    world.services.scheduler().update(cx, |scheduler, _| {
+        for (request, n) in [(pending, 0), (fresh, 1)] {
+            scheduler.resend_retirement(
+                request,
+                &root,
+                TargetKind::Ticket,
+                &IDS[n].parse().unwrap(),
+                Lane::User,
+            );
+        }
+    });
+    assert_eq!(
+        entry_lines(&world, cx),
+        [RetireState::Retiring; 2],
+        "both queued"
+    );
+    // A change of the repository's remote is submitted.
+    world.heard(
+        vec![Heard::Reconfiguration(
+            Moment::Submitted,
+            Scope::Repository {
+                root: root.clone(),
+                gone: false,
+            },
+        )],
+        cx,
+    );
+    World::settle(cx, "both to be taken from the queue", |cx| {
+        entry_lines(&world, cx) != [RetireState::Retiring; 2]
+    })
+    .await;
+    running.release();
+    World::quiet(cx).await;
+    // The pending one is still held, and says it did not finish; the one the
+    // library never saw is gone.
+    assert!(retiring(&world, &root, 0, cx), "the pending one is held");
+    assert!(!retiring(&world, &root, 1, cx), "the unsent one is not");
+    assert_eq!(
+        entry_lines(&world, cx),
+        [RetireState::Unfinished { catching_up: false }]
+    );
 }
 
 /// Decision 20, K-17: a user job sent while a background retirement runs

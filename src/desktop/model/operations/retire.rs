@@ -12,7 +12,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use manyhands::{
-    repository::{ItemDtoKind, OperationDto, OperationId, OperationListDto, ProgressEvent},
+    canonical::ItemId,
+    repository::{
+        ItemDtoKind, OperationDto, OperationId, OperationListDto, ProgressEvent, RequestId,
+    },
     results::{Envelope, RecoveryActionKind},
 };
 
@@ -20,7 +23,10 @@ use super::Operations;
 use crate::desktop::{
     model::{
         list_state::ListState,
-        polling::retire::{Retirement, classify},
+        polling::{
+            TargetKind,
+            retire::{Retirement, classify},
+        },
         stamp::RepoKey,
     },
     services::{
@@ -33,6 +39,29 @@ use crate::desktop::{
 /// (decision 19): the "Retiring…" state is keyed by all three.
 pub(crate) type RetiringKey = (RepoKey, ItemDtoKind, String);
 
+/// A retirement the in-flight record holds: the item, the library's request
+/// ID and the operation of its journal row, once a progress event named it.
+/// Resume and Unlock… resend the retirement from it (E4), after a relaunch
+/// too.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Entered {
+    pub root: RepoKey,
+    pub kind: TargetKind,
+    pub item: ItemId,
+    pub request: Option<RequestId>,
+    pub operation: Option<OperationId>,
+}
+
+impl Entered {
+    fn key(&self) -> RetiringKey {
+        let kind = match self.kind {
+            TargetKind::Ticket => ItemDtoKind::Ticket,
+            TargetKind::Document => ItemDtoKind::Document,
+        };
+        (self.root.clone(), kind, self.item.to_string())
+    }
+}
+
 /// The retirement answers and running operations, by request.
 #[derive(Default)]
 pub(super) struct Retirements {
@@ -43,7 +72,7 @@ pub(super) struct Retirements {
     next_mark: u64,
     /// The items of the in-flight record's retirement entries, one per
     /// entry: a retirement left pending stays "Retiring…" after a relaunch.
-    entries: Vec<RetiringKey>,
+    entries: Vec<Entered>,
     /// Where the worker's record of a request stood when its last attempt
     /// finished, kept for the `Finished` event that follows (E3).
     records: HashMap<DesktopRequestId, RecordState>,
@@ -124,7 +153,7 @@ impl Operations {
 
     /// The items of the retirement entries the in-flight record holds,
     /// which the scheduler sets whenever they change. True when they did.
-    pub(crate) fn set_retirement_entries(&mut self, entries: Vec<RetiringKey>) -> bool {
+    pub(crate) fn set_retirement_entries(&mut self, entries: Vec<Entered>) -> bool {
         if self.retirements.entries == entries {
             return false;
         }
@@ -143,7 +172,32 @@ impl Operations {
     /// (`Services::retiring`).
     pub(crate) fn is_retiring(&self, root: &str, kind: ItemDtoKind, id: &str) -> bool {
         let held = |key: &RetiringKey| key.0 == root && key.1 == kind && key.2 == id;
-        self.retirements.marks.values().any(held) || self.retirements.entries.iter().any(held)
+        self.retirements.marks.values().any(held)
+            || self
+                .retirements
+                .entries
+                .iter()
+                .any(|entry| held(&entry.key()))
+    }
+
+    /// The pending retirement whose journal row is `operation` in `root`,
+    /// from the in-flight record's entries: the item the read side does not
+    /// name (Fact 33), and the request that holds it (E4).
+    pub(crate) fn retirement_of(&self, root: &str, operation: OperationId) -> Option<&Entered> {
+        self.retirements
+            .entries
+            .iter()
+            .find(|entry| entry.root == root && entry.operation == Some(operation))
+    }
+
+    /// The operations of the retirements the record holds, which a pending
+    /// row of a retirement is offered Resume for (K-27).
+    pub(crate) fn entered_operations(&self) -> HashSet<OperationId> {
+        self.retirements
+            .entries
+            .iter()
+            .filter_map(|entry| entry.operation)
+            .collect()
     }
 
     /// The operations of the automatic polls now queued or running, which

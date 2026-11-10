@@ -33,7 +33,7 @@ mod outcomes;
 mod polls;
 mod quit_wait;
 mod retire;
-pub(crate) use retire::RetiringKey;
+pub(crate) use retire::{Entered, RetiringKey};
 mod review;
 
 pub(crate) use polls::{record_note_words, resume_offer_among};

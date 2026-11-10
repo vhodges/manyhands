@@ -954,3 +954,78 @@ fn what_settles_a_conflict_clears_its_review() {
         );
     }
 }
+
+/// K-27, Fact 26, E4: a pending retirement is offered Resume when the
+/// in-flight record's entry names its operation, and, with no entry, only
+/// when all it owes is its index hand-off; otherwise only Abandon is. An
+/// automatic poll's row of the desktop's own is still not offered it.
+#[test]
+fn retirement_resume_needs_an_entry_or_only_a_hand_off() {
+    use crate::desktop::{
+        model::operations::resume_offer_among, test_support::retire::pending_row,
+    };
+    use std::collections::HashSet;
+
+    let operation = OperationId::new();
+    let id = operation.to_string();
+    let none = HashSet::new();
+    let entered = HashSet::from([operation]);
+    let (own, other) = (HashSet::from([OperationId::new()]), HashSet::new());
+
+    // The work is not recorded as done: an original request is needed.
+    for (state, step) in [
+        ("created", None),
+        ("created", Some("worktree_observed")),
+        (
+            "context_worktree_released",
+            Some("context_worktree_released"),
+        ),
+        // Recorded as done, but not handed off to indexing yet.
+        ("created", Some("context_branch_released")),
+    ] {
+        let row = pending_row(&id, state, step);
+        assert_eq!(
+            resume_offer_among(&row, &own, &entered),
+            ResumeOffer::Offered,
+            "{state} {step:?}: with an entry"
+        );
+        assert_eq!(
+            resume_offer_among(&row, &own, &none),
+            ResumeOffer::NotOffered,
+            "{state} {step:?}: with no entry"
+        );
+        assert!(abandon_offered(&row), "{state} {step:?}: Abandon stays");
+    }
+
+    // All the row owes is its hand-off: Resume needs no original.
+    for step in [
+        "context_branch_released",
+        "context_retirement_absent",
+        "context_retirement_preserved",
+    ] {
+        for state in [
+            "authoritative_observed",
+            "indexing",
+            "index_invalidated",
+            "failed",
+            "retry",
+        ] {
+            let row = pending_row(&id, state, Some(step));
+            for entries in [&none, &entered] {
+                assert_eq!(
+                    resume_offer_among(&row, &other, entries),
+                    ResumeOffer::Offered,
+                    "{state} {step}"
+                );
+            }
+        }
+    }
+
+    // A row Resume does not take up stays unoffered with an entry too.
+    let mut waiting = pending_row(&id, "created", None);
+    waiting.next_action = None;
+    assert_eq!(
+        resume_offer_among(&waiting, &other, &entered),
+        ResumeOffer::NotOffered
+    );
+}

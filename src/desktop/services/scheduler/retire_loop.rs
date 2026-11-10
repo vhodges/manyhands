@@ -61,6 +61,32 @@ pub(super) fn key_of(root: &Root, kind: TargetKind, item: &ItemId) -> RetiringKe
     (root.clone(), dto_kind(kind), item.to_string())
 }
 
+/// RT-1: whether a retirement of the item is queued or running in the worker
+/// or held by the in-flight record, pending included.
+pub(super) fn retirement_out(
+    worker: &WorkerHandle,
+    store: &InflightStore,
+    root: &Root,
+    kind: TargetKind,
+    item: &ItemId,
+) -> bool {
+    let path = PathBuf::from(root);
+    let queued = worker.in_flight(|intent| {
+        matches!(
+            intent,
+            Intent::ContextRetire { root: asked, kind: asked_kind, id }
+                if *asked == path && *asked_kind == authoring_kind(kind) && id == item
+        )
+    });
+    let entered = store.retirements().iter().any(|entry| {
+        entry.root() == root
+            && entry
+                .item()
+                .is_some_and(|(of, id)| of == kind && id == *item)
+    });
+    queued || entered
+}
+
 /// What the loop reads of one item. Borrowed field by field from the
 /// scheduler, so the loop itself can be borrowed mutably beside it.
 struct Probe<'a> {
@@ -76,28 +102,15 @@ impl Probe<'_> {
     /// draft registry that cannot be read is not known to be free: it
     /// counts as busy, and as an unknown listing.
     fn facts(&self, root: &Root, candidate: &Candidate, cx: &App) -> Facts {
-        let path = PathBuf::from(root);
         let (kind, item) = (candidate.kind, &candidate.item);
-        let queued = self.worker.in_flight(|intent| {
-            matches!(
-                intent,
-                Intent::ContextRetire { root: asked, kind: asked_kind, id }
-                    if *asked == path && *asked_kind == authoring_kind(kind) && id == item
-            )
-        });
-        let entered = self.store.retirements().iter().any(|entry| {
-            entry.root() == root
-                && entry
-                    .item()
-                    .is_some_and(|(of, id)| of == kind && id == *item)
-        });
+        let in_flight = retirement_out(self.worker, self.store, root, kind, item);
         let tab = TabKey::Item {
             repo: root.clone(),
             kind: dto_kind(kind),
             id: item.to_string(),
         };
         Facts {
-            in_flight: queued || entered,
+            in_flight,
             refused: self.schedule.retirement_refused(root, item),
             busy: self
                 .tabs

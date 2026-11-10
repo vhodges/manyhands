@@ -62,11 +62,11 @@ async fn own_polls_are_not_offered_resume(cx: &mut TestAppContext) {
     .await;
     let polls = known(cx);
     assert_eq!(
-        resume_offer_among(&poll_row(own), &polls),
+        resume_offer_among(&poll_row(own), &polls, &Default::default()),
         ResumeOffer::NotOffered
     );
     assert_eq!(
-        resume_offer_among(&poll_row(OperationId::new()), &polls),
+        resume_offer_among(&poll_row(OperationId::new()), &polls, &Default::default()),
         ResumeOffer::Offered,
         "a row the desktop did not send still offers Resume"
     );

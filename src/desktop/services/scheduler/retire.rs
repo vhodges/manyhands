@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use gpui_kit::Context;
 use manyhands::{
     canonical::ItemId,
-    repository::{AuthoringKind, RequestId},
+    repository::{AuthoringKind, OperationId, RequestId},
 };
 
 use super::{begin_retirement, entity::Scheduler, reconfigure::Retiring};
@@ -66,7 +66,6 @@ impl Scheduler {
     /// on the user lane. A queue that quitting closed answers it `Removed`,
     /// which ends the entry. Nothing is sent once quitting is asked (R-33):
     /// `None`.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12 (Retire…).
     pub(crate) fn retire(
         &mut self,
         root: &Root,
@@ -75,6 +74,29 @@ impl Scheduler {
         lane: Lane,
     ) -> Option<DesktopRequestId> {
         self.retire_new(root, kind, item, lane).map(|(_, id)| id)
+    }
+
+    /// Retire… on a reported item the loop left alone (E4): a retirement of
+    /// it on the user lane, so it may prompt, under a new request ID, and
+    /// the item leaves the refused set (A19). RT-1 is checked again here:
+    /// `None`, and nothing sent, when one is queued, running or pending, and
+    /// once quitting is asked (R-33).
+    #[allow(dead_code)] // Used by the Retire… row.
+    pub(crate) fn retire_chosen(
+        &mut self,
+        root: &Root,
+        kind: TargetKind,
+        item: &ItemId,
+        cx: &mut Context<Self>,
+    ) -> Option<DesktopRequestId> {
+        if super::retire_loop::retirement_out(&self.worker, &self.store, root, kind, item) {
+            return None;
+        }
+        let sent = self.retire(root, kind, item, Lane::User)?;
+        self.schedule.retire_chosen(root, item);
+        self.publish(cx);
+        cx.notify();
+        Some(sent)
     }
 
     /// [`Self::retire`], and the library's request ID it was sent under.
@@ -122,6 +144,57 @@ impl Scheduler {
         })
     }
 
+    /// A Resume of a pending retirement was answered
+    /// `original_request_required`: the original is sent again, under the
+    /// request ID the answer names, as a new user-lane request (E4, Fact
+    /// 26). Nothing is sent once quitting is asked (R-33).
+    pub(super) fn resend_resumed(
+        &mut self,
+        request: RequestId,
+        root: &Root,
+        kind: TargetKind,
+        item: &ItemId,
+        cx: &mut Context<Self>,
+    ) {
+        if self.quitting {
+            return;
+        }
+        self.resend_retirement(request, root, kind, item, Lane::User);
+        self.publish(cx);
+    }
+
+    /// An Abandon or a Resume settled the pending retirement whose journal
+    /// row is `operation`: the entry ends, so the item is no longer held
+    /// "Retiring…", and its line in the attempt's entry says so (E3).
+    pub(super) fn pending_ended(
+        &mut self,
+        root: &Root,
+        operation: OperationId,
+        retired: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let held = self.store.retirements().iter().find_map(|entry| {
+            let (kind, item) = entry.item()?;
+            (entry.root() == root && entry.operation() == Some(operation))
+                .then(|| (entry.request(), kind, item))
+        });
+        let Some((request, kind, item)) = held else {
+            return;
+        };
+        if let Some(request) = request {
+            self.store
+                .retirement_ended(request, RetirementEnd::Finished);
+        }
+        let verdict = if retired {
+            Verdict::Retired
+        } else {
+            Verdict::Failed
+        };
+        self.schedule.retire_settled(root, kind, &item, &verdict);
+        self.publish(cx);
+        self.tick(cx);
+    }
+
     /// A retirement request's progress, answer or end (the drain, E3).
     pub(super) fn retiring(&mut self, event: Retiring, cx: &mut Context<Self>) {
         match event {
@@ -129,9 +202,11 @@ impl Scheduler {
                 self.store.retirement_operation(request, operation);
             }
             Retiring::Gone { id, request, end } => {
-                self.store.retirement_ended(request, end);
-                // It never ran: its line goes (E3).
-                self.retirement_gone(id, cx);
+                // A retirement the library already holds pending stays so:
+                // its entry, and with it the hold and Resume, outlive a
+                // resend taken from the queue (review I-3).
+                let ended = self.store.retirement_ended(request, end);
+                self.retirement_gone(id, ended, cx);
                 // Removed or never sent: the loop that waited on it stops
                 // (RT-9).
                 self.loop_gone(id, request, cx);
@@ -143,8 +218,10 @@ impl Scheduler {
     }
 
     /// The retirement `id` was removed from the queue or never sent: the
-    /// attempt's entry no longer says "Retiring…" of its item (E3).
-    fn retirement_gone(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) {
+    /// attempt's entry no longer says "Retiring…" of its item (E3), unless
+    /// the retirement is still pending (`ended` is false), when it says
+    /// that it did not finish.
+    fn retirement_gone(&mut self, id: DesktopRequestId, ended: bool, cx: &mut Context<Self>) {
         let item = self
             .operations
             .read_with(cx, |operations, _| {
@@ -161,8 +238,15 @@ impl Scheduler {
             .ok()
             .flatten();
         if let Some((root, kind, item)) = item {
-            self.schedule
-                .retire_settled(&root, kind, &item, &Verdict::Failed);
+            let verdict = if ended {
+                Verdict::Failed
+            } else {
+                Verdict::Owed {
+                    attention: None,
+                    catching_up: false,
+                }
+            };
+            self.schedule.retire_settled(&root, kind, &item, &verdict);
         }
     }
 
@@ -197,6 +281,16 @@ impl Scheduler {
             // No answer to read: a loop waiting on it stops (R-37).
             return self.loop_lost(id, cx);
         };
+        // The answer names the journal row too: an entry whose request was
+        // answered before a progress event named it still gets its
+        // operation, which Resume matches the pending row by (E4).
+        if let Some(operation) = answer
+            .operation
+            .as_deref()
+            .and_then(|operation| OperationId::parse(operation).ok())
+        {
+            self.store.retirement_operation(request, operation);
+        }
         // The entry ends with the worker's record of the request (R-31). It
         // stays while the request is Owed: Resume needs the item.
         let record = self
@@ -210,7 +304,7 @@ impl Scheduler {
         };
         self.store.retirement_ended(request, end);
         self.schedule
-            .retirement_answered(&root, &item, &answer.verdict);
+            .retirement_answered(&root, kind, &item, &answer.verdict);
         // The attempt's entry says what came of it (E3).
         self.schedule
             .retire_settled(&root, kind, &item, &answer.verdict);

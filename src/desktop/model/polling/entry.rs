@@ -78,6 +78,45 @@ pub(crate) struct RetireLine {
     pub state: RetireState,
 }
 
+/// A reported `Closed` or `Promoted` item the loop did not retire, which
+/// Retire… (E4) takes up: skipped, refused, preserved, failed before any
+/// effect, or not reached. Its ID and kind, never a title.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RetireOffer {
+    pub kind: TargetKind,
+    pub item: ItemId,
+}
+
+/// The item by its short code: the last eight characters of its ULID (E3).
+pub(crate) fn short_code(item: &ItemId) -> String {
+    let id = item.to_string();
+    id.get(id.len().saturating_sub(8)..)
+        .unwrap_or(&id)
+        .to_owned()
+}
+
+/// What the entry says of an item whose retirement it offers: the item by
+/// its short code, never a title.
+#[allow(dead_code)] // Used by the Retire… row.
+pub(crate) fn offer_text(kind: TargetKind, item: &str) -> String {
+    let what = match kind {
+        TargetKind::Ticket => "is closed",
+        TargetKind::Document => "was promoted",
+    };
+    format!("{item} {what}. Its copy on this computer was not retired.")
+}
+
+/// "Retire…", the action of such an item.
+#[allow(dead_code)] // Used by the Retire… row.
+pub(crate) const RETIRE: &str = "Retire\u{2026}";
+
+impl RetireOffer {
+    #[allow(dead_code)] // Used by the Retire… row.
+    pub(crate) fn text(&self) -> String {
+        offer_text(self.kind, &short_code(&self.item))
+    }
+}
+
 /// "Retiring {item}…".
 pub(crate) fn retiring_text(item: &str) -> String {
     format!("Retiring {item}\u{2026}")
@@ -103,12 +142,11 @@ impl RetireLine {
     /// What the line says: the item by its short ID, the last eight
     /// characters of its ULID.
     pub(crate) fn text(&self) -> String {
-        let id = self.item.to_string();
-        let item = id.get(id.len().saturating_sub(8)..).unwrap_or(&id);
+        let item = short_code(&self.item);
         match self.state {
-            RetireState::Retiring => retiring_text(item),
-            RetireState::Retired => retired_text(item),
-            RetireState::Unfinished { catching_up } => unfinished_text(item, catching_up),
+            RetireState::Retiring => retiring_text(&item),
+            RetireState::Retired => retired_text(&item),
+            RetireState::Unfinished { catching_up } => unfinished_text(&item, catching_up),
         }
     }
 }
@@ -121,6 +159,27 @@ pub(crate) struct AttemptEntry {
     pub lines: Vec<EntryLine>,
     /// The retirements since the attempt, in the order they began (E3).
     pub retirements: Vec<RetireLine>,
+    /// The items Retire… is offered for (E4), in the poll's order.
+    pub offers: Vec<RetireOffer>,
+}
+
+impl AttemptEntry {
+    /// The entry with `offers` added. An attempt that had nothing else to
+    /// say still has an entry once there is an item to retire.
+    #[allow(dead_code)] // Used by the Retire… row.
+    pub(crate) fn with_offers(entry: Option<Self>, offers: Vec<RetireOffer>) -> Option<Self> {
+        if offers.is_empty() {
+            return entry;
+        }
+        let mut entry = entry.unwrap_or(Self {
+            brought_in: None,
+            lines: Vec::new(),
+            retirements: Vec::new(),
+            offers: Vec::new(),
+        });
+        entry.offers = offers;
+        Some(entry)
+    }
 }
 
 /// The library's words for `disposition`; `None` for the ones this entry
@@ -175,6 +234,7 @@ pub(crate) fn attempt_entry(
         brought_in,
         lines,
         retirements: retirements.to_vec(),
+        offers: Vec::new(),
     })
 }
 

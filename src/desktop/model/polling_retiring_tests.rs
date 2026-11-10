@@ -240,3 +240,92 @@ fn retirement_lines_follow_the_requests() {
         .retire_started(&root("x"), TargetKind::Ticket, &item);
     assert!(fx.schedule.repo(&root("x")).is_none());
 }
+
+/// E4, A19: Retire… is offered for every reported `Closed` or `Promoted`
+/// item that the loop did not retire (skipped, refused, preserved, failed
+/// before any effect, not reached), in the poll's order, and for an item in
+/// the refused set that the latest attempt no longer reports. Not for one
+/// that is retiring, pending or retired. Choosing it removes the item from
+/// the refused set; the attempt still reports it, so it stays offered.
+#[test]
+fn retire_offers_follow_the_attempt_and_the_refused_set() {
+    use super::entry::RetireOffer;
+    use super::retire::Verdict;
+
+    let ids: Vec<ItemId> = (1..=7)
+        .map(|n| format!("01ARZ3NDEKTSV4RRFFQ69G5FB{n}").parse().unwrap())
+        .collect();
+    let (retired, refused, skipped, pending, retiring, promoted, gone) = (
+        &ids[0], &ids[1], &ids[2], &ids[3], &ids[4], &ids[5], &ids[6],
+    );
+    let mut fx = Fx::new();
+    fx.add("r", policy(None));
+    let r = root("r");
+    let target = |item: &ItemId, kind, disposition| AttemptTarget {
+        item_id: Some(item.clone()),
+        kind: Some(kind),
+        disposition,
+    };
+    let attempt = PollAttempt {
+        targets: vec![
+            target(retired, TargetKind::Ticket, Disposition::Closed),
+            target(refused, TargetKind::Ticket, Disposition::Closed),
+            target(skipped, TargetKind::Ticket, Disposition::Closed),
+            target(pending, TargetKind::Ticket, Disposition::Closed),
+            target(retiring, TargetKind::Ticket, Disposition::Closed),
+            target(promoted, TargetKind::Document, Disposition::Promoted),
+        ],
+        ..closed(&fx, "r")
+    };
+    fx.schedule.checked_now(&fx.now(), &attempt);
+    let owed = Verdict::Owed {
+        attention: None,
+        catching_up: false,
+    };
+    for item in [retired, pending, retiring] {
+        fx.schedule.retire_started(&r, TargetKind::Ticket, item);
+    }
+    fx.schedule
+        .retire_settled(&r, TargetKind::Ticket, retired, &Verdict::Retired);
+    fx.schedule
+        .retire_settled(&r, TargetKind::Ticket, pending, &owed);
+    fx.schedule
+        .retirement_answered(&r, TargetKind::Ticket, refused, &Verdict::Refused);
+    // A refused item the latest attempt does not report any more.
+    fx.schedule
+        .retirement_answered(&r, TargetKind::Document, gone, &Verdict::Refused);
+    // A retry is not the refused set.
+    fx.schedule.retirement_answered(
+        &r,
+        TargetKind::Ticket,
+        skipped,
+        &Verdict::Retry {
+            recovery_required: false,
+        },
+    );
+
+    let offer = |kind, item: &ItemId| RetireOffer {
+        kind,
+        item: item.clone(),
+    };
+    let expected = vec![
+        offer(TargetKind::Ticket, refused),
+        offer(TargetKind::Ticket, skipped),
+        offer(TargetKind::Document, promoted),
+        offer(TargetKind::Document, gone),
+    ];
+    assert_eq!(fx.schedule.retire_offers(&r), expected);
+    assert!(fx.schedule.retirement_refused(&r, refused));
+
+    // Choosing Retire… forgets the refusal; the item is still reported, the
+    // one the attempt no longer reports is not offered again.
+    fx.schedule.retire_chosen(&r, refused);
+    fx.schedule.retire_chosen(&r, gone);
+    assert!(!fx.schedule.retirement_refused(&r, refused));
+    assert_eq!(fx.schedule.retire_offers(&r), expected[..3]);
+
+    // Another repository, and one the schedule does not hold, offer none.
+    fx.add("s", policy(None));
+    assert!(fx.schedule.retire_offers(&root("s")).is_empty());
+    assert!(fx.schedule.retire_offers(&root("x")).is_empty());
+}

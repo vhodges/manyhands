@@ -80,6 +80,11 @@ pub(crate) struct RetirementEntry {
     kind: Kind,
     item: String,
     operation: Option<String>,
+    /// The request was left `Accepted`: the library holds it pending. An
+    /// entry written before this field existed is not owed, and keeps the
+    /// operation it learned.
+    #[serde(default)]
+    owed: bool,
 }
 
 impl RetirementEntry {
@@ -95,7 +100,15 @@ impl RetirementEntry {
             },
             item: item.to_string(),
             operation: None,
+            owed: false,
         }
+    }
+
+    /// Whether the library holds a row for the request: it named an
+    /// operation, or the request was left Owed. A request that was never
+    /// sent has neither, and nothing waits for it.
+    fn held_by_library(&self) -> bool {
+        self.owed || self.operation.is_some()
     }
 
     pub(crate) fn request(&self) -> Option<RequestId> {
@@ -116,7 +129,6 @@ impl RetirementEntry {
 
     /// The operation of the request's journal row, once a progress event
     /// named it.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12 (Resume).
     pub(crate) fn operation(&self) -> Option<OperationId> {
         OperationId::parse(self.operation.as_deref()?).ok()
     }
@@ -467,22 +479,39 @@ impl InflightStore {
 
     /// The request ended as `end` says. Only a finished record, a request
     /// removed from the queue and one never sent end its entry; an Owed
-    /// (accepted) request keeps it, since Resume needs the item.
-    pub(crate) fn retirement_ended(&mut self, request: RequestId, end: RetirementEnd) {
-        if !matches!(
-            end,
-            RetirementEnd::Finished | RetirementEnd::Removed | RetirementEnd::NotSent
-        ) {
-            return;
-        }
+    /// (accepted) request keeps it, since Resume needs the item. A request
+    /// removed or not sent ends its entry only if the library holds no row
+    /// for it: a resend of a pending retirement that a reconfiguration or a
+    /// quit took from the queue leaves the retirement pending (review I-3).
+    /// True when the entry ended.
+    pub(crate) fn retirement_ended(&mut self, request: RequestId, end: RetirementEnd) -> bool {
         let request = request.to_string();
-        let before = self.record.retirements.len();
-        self.record
+        let Some(at) = self
+            .record
             .retirements
-            .retain(|entry| entry.request != request);
-        if self.record.retirements.len() != before {
+            .iter()
+            .position(|entry| entry.request == request)
+        else {
+            return false;
+        };
+        let held = self.record.retirements[at].held_by_library();
+        let ended = match end {
+            RetirementEnd::Finished => true,
+            RetirementEnd::Removed | RetirementEnd::NotSent => !held,
+            RetirementEnd::Accepted => {
+                if !self.record.retirements[at].owed {
+                    self.record.retirements[at].owed = true;
+                    self.persist();
+                }
+                false
+            }
+            RetirementEnd::Unknown => false,
+        };
+        if ended {
+            self.record.retirements.remove(at);
             self.persist();
         }
+        ended
     }
 
     /// The retirements this instance sent, or its predecessor left, that have

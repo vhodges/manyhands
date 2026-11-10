@@ -916,6 +916,44 @@ impl Services {
         LockState::Locked(model_lock::LockSource::Retiring)
     }
 
+    /// Resume of the pending operation `operation_id` of `root`: its
+    /// `operation resume`, on the user lane. A pending retirement's Resume
+    /// first clears the Not now marks of the keys its request's last attempt
+    /// was answered `Cancelled` for, so the resend it leads to can prompt
+    /// (E4, Fact 15). The record's entry ties the row to its request.
+    pub(crate) fn resume(&self, root: &str, operation_id: &str, cx: &App) {
+        let Ok(operation_id) = OperationId::parse(operation_id) else {
+            return;
+        };
+        let held: Vec<requests::DesktopRequestId> = {
+            let operations = self.operations.read(cx);
+            let request = operations
+                .retirement_of(root, operation_id)
+                .and_then(|entry| entry.request);
+            operations
+                .requests()
+                .iter()
+                .filter(|held| {
+                    Some(held.request_id) == request
+                        && matches!(held.intent, requests::Intent::ContextRetire { .. })
+                })
+                .map(|held| held.id)
+                .collect()
+        };
+        for id in held {
+            self.worker.clear_declined_for(id);
+        }
+        self.worker.submit(
+            requests::Intent::OperationResume {
+                root: std::path::PathBuf::from(root),
+                operation_id,
+            },
+            requests::Lane::User,
+            None,
+            None,
+        );
+    }
+
     /// Whether a republish of the item `id` of `root` is queued or running.
     pub(crate) fn republish_running(
         &self,

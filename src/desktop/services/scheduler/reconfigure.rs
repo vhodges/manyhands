@@ -27,16 +27,18 @@
 use crate::desktop::{
     model::{
         operations::Operations,
-        polling::{Authority, PollAttempt, Root},
+        polling::{Authority, PollAttempt, Root, TargetKind},
     },
     services::{
         inflight::RetirementEnd,
         poll_convert::check_now_attempt,
         requests::{DesktopRequestId, Intent},
+        resends::named_request,
         worker::WorkerEvent,
     },
 };
 use manyhands::{
+    canonical::ItemId,
     repository::{MutationDataDto, OperationId, RequestId},
     results::{Envelope, Outcome, ResultCode},
 };
@@ -103,6 +105,26 @@ pub(crate) enum Heard {
     /// attempt, when it completed and said what it saw, is the repository's
     /// latest and may start or replace a retirement loop (E1).
     CheckedNow(Root, Option<PollAttempt>),
+    /// The Resume of a pending retirement's row was answered
+    /// `original_request_required`, naming `request` (Fact 26): the
+    /// retirement of the item the in-flight record's entry names is sent
+    /// again under it, on the user lane (E4, R-31).
+    ResendRetirement {
+        request: RequestId,
+        root: Root,
+        kind: TargetKind,
+        item: ItemId,
+    },
+    /// An Abandon, or a Resume that finished the row itself (the index
+    /// hand-off), settled the pending retirement whose journal row is
+    /// `operation`: its entry in the in-flight record ends, since no request
+    /// of it is left to end it. `retired`: the copy is gone (a Resume), not
+    /// abandoned.
+    PendingEnded {
+        root: Root,
+        operation: OperationId,
+        retired: bool,
+    },
     /// A Check now finished with a failure: the request's answer, read as a
     /// poll's would be (C3, A4). The request names the keys its attempt
     /// asked for.
@@ -211,6 +233,41 @@ fn retiring(event: &WorkerEvent, operations: &Operations) -> Option<Retiring> {
     }
 }
 
+/// A resume or abandon of the operation `operation_id` of `root`. A resume
+/// answered `original_request_required`: when the in-flight record's entry names the
+/// operation, the retirement is to be sent again under the request the
+/// answer names. Any other resume is not the scheduler's.
+///
+/// A resume or an abandon that settled the row itself ends the entry: the
+/// retirement is over, and no request is left to end it.
+fn settled_retirement(
+    root: &std::path::Path,
+    operation_id: OperationId,
+    resume: bool,
+    envelope: &Envelope<MutationDataDto>,
+    operations: &Operations,
+) -> Option<Heard> {
+    let root = root.to_str()?;
+    let entry = operations.retirement_of(root, operation_id)?;
+    if envelope.code == ResultCode::OriginalRequestRequired {
+        if !resume {
+            return None;
+        }
+        return Some(Heard::ResendRetirement {
+            request: named_request(envelope)?,
+            root: entry.root.clone(),
+            kind: entry.kind,
+            item: entry.item.clone(),
+        });
+    }
+    let settled = matches!(envelope.outcome, Outcome::Success | Outcome::Noop);
+    settled.then(|| Heard::PendingEnded {
+        root: entry.root.clone(),
+        operation: operation_id,
+        retired: resume,
+    })
+}
+
 /// What `event` means to the scheduler, if anything. Called by the drain
 /// for each event before the request model applies it, so a finished
 /// request is still there to read.
@@ -224,6 +281,12 @@ pub(crate) fn heard(event: &WorkerEvent, operations: &Operations) -> Option<Hear
             .map(|scope| Heard::Reconfiguration(Moment::Submitted, scope)),
         WorkerEvent::Finished(id, envelope) => {
             let intent = &operations.request(*id)?.intent;
+            if let Intent::OperationResume { root, operation_id }
+            | Intent::OperationAbandon { root, operation_id } = intent
+            {
+                let resume = matches!(intent, Intent::OperationResume { .. });
+                return settled_retirement(root, *operation_id, resume, envelope, operations);
+            }
             let gone =
                 envelope.outcome == Outcome::Success || envelope.code == ResultCode::AlreadyApplied;
             match scope_of(intent, gone) {
@@ -271,8 +334,102 @@ pub(crate) fn heard(event: &WorkerEvent, operations: &Operations) -> Option<Hear
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop::services::requests::DesktopRequestId;
     use manyhands::repository::{SharedKeyId, transport::SshAuthority};
     use std::path::PathBuf;
+
+    /// Fact 26, E4, R-31: a resume of a pending retirement's row, answered
+    /// `original_request_required`, resends the retirement of the item the
+    /// in-flight record's entry names, under the request ID the answer
+    /// names. A resume or an abandon that settled the row ends the entry. A
+    /// row no entry names, another code and a failed abandon are not the
+    /// scheduler's.
+    #[test]
+    fn resumed_and_abandoned_retirements_are_heard() {
+        use crate::desktop::{
+            model::operations::Entered,
+            services::requests::{DesktopRequest, Lane, RequestState},
+            test_support::retire::original_request,
+        };
+        use manyhands::results::Scope;
+
+        let item: ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FG0".parse().unwrap();
+        let (operation, other) = (OperationId::new(), OperationId::new());
+        let named = RequestId::new();
+        let mut operations = Operations::default();
+        operations.set_retirement_entries(vec![Entered {
+            root: "/r".to_owned(),
+            kind: TargetKind::Ticket,
+            item: item.clone(),
+            request: Some(named),
+            operation: Some(operation),
+        }]);
+        let mut n = 0;
+        let mut finished = |intent: Intent, answer: Envelope<MutationDataDto>| {
+            n += 1;
+            let id = DesktopRequestId(n);
+            operations.apply(WorkerEvent::Queued(DesktopRequest {
+                id,
+                request_id: RequestId::new(),
+                intent,
+                confirmation: None,
+                lane: Lane::User,
+                attempt: 1,
+                state: RequestState::Queued,
+            }));
+            heard(&WorkerEvent::Finished(id, Box::new(answer)), &operations)
+        };
+        let resume = |operation_id| Intent::OperationResume {
+            root: "/r".into(),
+            operation_id,
+        };
+        let abandon = |operation_id| Intent::OperationAbandon {
+            root: "/r".into(),
+            operation_id,
+        };
+        let done = || {
+            Envelope::mutation(
+                "operation",
+                Scope::default(),
+                Outcome::Success,
+                ResultCode::Ok,
+            )
+        };
+        let refused = || {
+            Envelope::<MutationDataDto>::failure(
+                "operation",
+                Scope::default(),
+                ResultCode::RecoveryRequired,
+                vec![],
+            )
+        };
+        let ended = |retired| {
+            Some(Heard::PendingEnded {
+                root: "/r".to_owned(),
+                operation,
+                retired,
+            })
+        };
+
+        assert_eq!(
+            finished(resume(operation), original_request(named)),
+            Some(Heard::ResendRetirement {
+                request: named,
+                root: "/r".to_owned(),
+                kind: TargetKind::Ticket,
+                item,
+            })
+        );
+        assert_eq!(finished(resume(operation), done()), ended(true));
+        assert_eq!(finished(abandon(operation), done()), ended(false));
+        // Not a retirement's row, another code, a failed abandon, and an
+        // abandon answered with a request to send again.
+        assert_eq!(finished(resume(other), original_request(named)), None);
+        assert_eq!(finished(resume(other), done()), None);
+        assert_eq!(finished(resume(operation), refused()), None);
+        assert_eq!(finished(abandon(operation), refused()), None);
+        assert_eq!(finished(abandon(operation), original_request(named)), None);
+    }
 
     /// R-11's list, and what each reaches.
     #[test]

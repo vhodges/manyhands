@@ -723,13 +723,15 @@ impl Workspace {
         let pending: Vec<(RepoKey, ListState<manyhands::repository::OperationListDto>)> =
             self.services().operations().read(cx).pending_shown();
         // The desktop's own automatic polls are finished by its in-flight
-        // record, not by Resume (D6 L-1).
-        let own = self
-            .services()
-            .operations()
-            .read(cx)
-            .automatic_polls()
-            .clone();
+        // record, not by Resume (D6 L-1); a pending retirement is resumed
+        // from the record's entry (E4, K-27).
+        let (own, entries) = {
+            let operations = self.services().operations().read(cx);
+            (
+                operations.automatic_polls().clone(),
+                operations.entered_operations(),
+            )
+        };
         let mut section = v_flex()
             .id("pending-section")
             .gap_1()
@@ -822,7 +824,7 @@ impl Workspace {
                             ),
                     );
                 let mut controls = h_flex().gap_2();
-                match resume_offer_among(&operation, &own) {
+                match resume_offer_among(&operation, &own, &entries) {
                     ResumeOffer::Offered => {
                         let focus = self.control_focus_for(
                             format!(
