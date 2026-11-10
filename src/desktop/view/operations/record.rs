@@ -21,9 +21,13 @@ impl Workspace {
         let mut entries = Vec::with_capacity(notes.len());
         for (ix, report) in notes.into_iter().enumerate() {
             let focus = self.control_focus_for(format!("record-note-dismiss-{ix}"), cx);
+            // One row that wraps: Dismiss stays inside the area (W-6), as the
+            // attention entries' action does.
             entries.push(
                 h_flex()
                     .gap_2()
+                    .flex_wrap()
+                    .items_center()
                     .child(text(("record-note", ix), record_note_words(report)))
                     .child(button(
                         ("record-note-dismiss", ix),
