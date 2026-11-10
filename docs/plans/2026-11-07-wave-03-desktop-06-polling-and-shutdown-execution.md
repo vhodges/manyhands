@@ -1484,3 +1484,135 @@ request, pending_row}`; `Rig::over(fixture, roots, cx)`; `Operations::{
 retirement_of, entered_operations}`; `Heard::{ResendRetirement, PendingEnded}`;
 `DraftRegistry::{kept_of, flush_item}`; `Backend::{instead_of_job,
 pending_operations}`. Real-repository tests were not run in 12a.
+
+## Task 12b: end state, replay, quit during a pending retirement
+
+| 12b | `902d51b0` | `4ade0fd6`, `ec6960e7`, `6a034e39` (final review fixes) | APPROVE (no Critical; the final Task 12 review also covered the 12a fix round and `reconcile.rs`); the review-fix commit was checked by the orchestrator (four new tests, gates, boundary), not re-reviewed | `desktop::view::operations::retire_real_tests::{retire_end_state_real, retire_replay_final, quit_during_retirement_pending}`, `desktop::services::scheduler::retire_tests::{retire_activation_reconciles_a_lock_already_held, retire_entry_the_worker_holds_is_kept_before_the_model_shows_it}`, `desktop::services::inflight::tests::an_entry_with_the_removed_owed_field_still_loads`, `desktop::services::scheduler::reconcile::tests::the_default_pending_read_is_complete_for_a_registered_root_only`; each singly with `--exact`, 1 test, pass (the orchestrator re-ran `quit_during_retirement_pending`, `relaunch_keeps_deadline`, `retire_end_state_real`, `retire_replay_final` and three of the fix tests); fmt, check --all-features, clippy -D warnings pass |
+
+**Owner decision (AskUserQuestion, 2026-11-10): accept the gap.** The
+implementer stopped on two of the four planned tests, under the brief's "a
+library gap" rule. A standalone `ContextRetire` observes the remote over SSH
+before it proves the closure from primary; the library's own tests get past
+that with a `cfg(test)` thread-local (`run::synthetic_advertisement`) that the
+desktop bin does not link, and the git transport cannot be initialised inside
+the multi-threaded GPUI test process. Without SSH an open ticket answers
+`recovery_required` (an observation failure), so the open-ticket refusal is
+reachable only after a successful SSH observation. The owner chose the canned
+route:
+- `retire_open_ticket_refused_real` is **not written**; the open-ticket refusal
+  stays covered by the canned E3 table (`retire_answer_table`, the
+  `refused external_change` row).
+- `quit_during_retirement_pending` is written with canned answers through the
+  real quit and relaunch path (A22, K-18).
+- **U-9's observer row and K-29 are UNVERIFIED in code.** The observer row
+  (an active Manual observer row beside the retirement's `retire_context`
+  row) exists only if a process dies mid-observation, and no in-process hook
+  produces it (the library's cancel hooks are `cfg(test)`; a faked SQL state
+  would fail the library's own `audit_connection`). A reading of
+  `reentry.rs` (not a run) says the explicit re-entry fences the old observer
+  row to `interrupted` and settles it, consistent with the ruling. **Put on the
+  native checklist: "quit during a retirement, relaunch, Resume" on the real
+  app.** A library follow-up candidate (a feature-gated synthetic advertisement
+  or a way to leave an observer row) is noted for the owner alongside K-33; no
+  ticket was created.
+
+What it delivers (all under `src/desktop/`; library-boundary diff empty):
+- `retire_end_state_real` (a real local repository, the real service): the
+  open tab reads the item's own copy ("Own copy of the item"), stays so after
+  the branch and worktree are removed with real git2 until the retirement
+  answers, then reads primary's copy ("Closed on primary"); a kept item draft
+  and a kept comment draft are listed on the Drafts page ("The ticket is
+  closed"), offer export and not restore, and Export… writes each draft's text.
+  **U-11 settled: Export works** for a closed ticket's item and comment drafts
+  (no D2 defect). Deviation: the removal is done by git2 and the real
+  `ContextRetire` answers `already_absent`, so the library's
+  removal-then-answer path is not covered at the desktop layer (**K-58**).
+- `retire_replay_final`: the same request ID sent twice through
+  `resend_retirement` (a branch and worktree restored before the second send)
+  leaves exactly one `Retired` line, no entry and no Activity row, and the
+  context still present. It cannot see a "removed twice" by itself (a fresh run
+  on a present context refuses without SSH and removes nothing either): it pins
+  the same request ID reaching the library and the desktop adding no second
+  entry, line or row.
+- `quit_during_retirement_pending`: a held retirement (canned `pending`), a
+  graceful quit that leaves the token alone (decision 28) and finishes the
+  held job, a relaunch over the same app-data store with the first instance
+  and its lock dropped, then (a) the pending row with Resume (from the entry)
+  and Abandon, (b) the entry kept with its request and operation and the item
+  "Retiring…", (c) Resume resends `ContextRetire{root, kind, id}` once under
+  the named request ID on the user lane, a canned `retired` ends the entry and
+  the item is no longer "Retiring…", (d) one `OperationResume` and one
+  `ContextRetire` after the relaunch. The pending row and the reconcile list
+  are canned; a negative control shows Resume is not offered without an entry
+  for a row not owing only its hand-off. Test-harness seam
+  `Shell::relaunch_over` (`view/harness.rs`), `relaunch` unchanged.
+
+Final review (the whole of Task 12's last part): **no way found for
+`reconcile.rs` to end a live entry**: epoch bumps cover every entry-changing
+path, a resend's worker hold covers the gap before its `Queued` event, a
+resend under the same request ID cannot create another operation
+(`request_scope.rs:105`), the second instance (L-6) returns early, a partial or
+failed list is `None` (the default `pending_operations` reads the real library
+list inside one `read_session` and reports complete only on success). Fix
+commit `6a034e39`: one reconcile read on activation (`acquire` returns whether
+it took the lock); `retire_end_state_real` also asserts the tab still reads OWN
+before the answer and that the line is Retired; an old record with
+`"owed": true` loads; the worker-hold check in `reconciled` is pinned (its
+mutation is now caught); the default `pending_operations` is unit-tested (a
+registered root is a complete list, an unregistered one is `None`); the quit
+test's doc comment says the row and list are canned and gained the negative
+control. E-n edits: none in 12b.
+
+Known limits (recorded, not fixed):
+- K-58: tests 1 and 3 show `already_absent`, not `retired` with a removal
+  outcome (see above).
+- **K-59 (the final review's I-1):** an in-flight entry that never learned its
+  operation (a hard crash between submit and the first progress event, or a
+  request left Accepted with no data) has no exit: reconciliation skips it and
+  Resume/Abandon match on the operation. The item stays "Retiring…" and
+  read-only across relaunches. Rare. Ending such entries at launch would risk
+  dropping the hold on a row the library created but we have not seen, so it is
+  left alone; the pending list could be matched by `item_id` (`OperationDto`
+  has it, Fact 33 says unused): a follow-up candidate.
+- **K-60 (I-2):** no test shows the real library lists a live pending
+  retirement under the entry's operation ID (every reconcile test uses a
+  canned list). If the first progress event named a different row (the U-9
+  observer row), every pending entry would lose its hold at the next
+  activation. **Native checklist item**, beside U-9 and K-29.
+- K-61: a discarded reconcile read is retried only at the next window
+  activation; nothing reloads after a reconcile end (an open tab can show the
+  old worktree copy until the next reload); a stale `Asking` blocks a new
+  Retire… press while some other dialog is open in the same window.
+- The 180 s `World::settle`/`title_becomes`/`held.wait_reached()` waits remain on
+  failure in the new real tests (K-55 class).
+
+## Part E checkpoint (Tasks 11a, 11b, 12), 2026-11-10
+
+- Main: `origin/main` is `eb0798a2`, already merged at `6af92f91`;
+  `git log HEAD..origin/main` is empty and
+  `git merge-tree --write-tree HEAD origin/main` printed one line (a tree id):
+  clean, nothing to merge (checked in full).
+- Branch HEAD at the end of Task 12: `6a034e39` (code) plus the docs commits.
+- Tests run, only by exact path, 1 test each, never a whole module, suite or
+  SSH target: the tests named in the 11a, 11b, 12a and 12b rows, plus nine
+  Activity-layout-sensitive existing tests (11b) and the existing
+  `relaunch_keeps_deadline` after the harness seam (12b). Static gates (fmt,
+  check --all-features, clippy -D warnings) pass at `6a034e39`. No whole suite
+  yet: the fast tier and the `remote_polling` SSH tier run once at Task 14.
+- Owner decisions this Part: Task 11b design checkpoint (four rulings,
+  Document Amendment 11), the 12b gap (accept; U-9 observer row and K-29
+  unverified, native checklist). Orchestrator rulings: I-3 entry kept on
+  `Removed` (Amendment 12), the I-C reconciliation, Cancel/quit/reconfiguration
+  loop rules.
+- **Task 14 documentation to-do** (collected): reword K-27 (E4 offers Resume
+  for a hand-off-only row); update K-16 and Amendment 8 for the Activity
+  columns' `min_w_0`; reword "Cycle 01's proposed K-19" to "accepted K-19";
+  record Amendment 12 (entry exits) and the plan's R-23 owner line ("Task 9
+  (minimal), Task 11a (retirement rows)"); put on the native checklist: U-9
+  observer row / K-29 / K-60 (quit during a retirement, relaunch, Resume),
+  the retirement loop and Retire… on a real closed ticket, K-17 (a quit during
+  a retirement waits one observation), and an unreadable draft file blocking
+  auto-retirement.
+- Known limits to report at review-ready: K-28..K-61 (K-33 library-shaped; no
+  ticket created; ask the owner about follow-up tickets for K-33, the
+  `owes_only_its_hand_off` flag, the retirement test hook and K-59).
