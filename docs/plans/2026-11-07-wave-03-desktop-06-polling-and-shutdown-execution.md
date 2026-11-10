@@ -1356,3 +1356,131 @@ Hand-offs to Task 12:
   panics).
 - Pending state reaches the lock through `Scheduler::publish`, which runs only
   with polling on (R-27: always, in production).
+
+## Task 12a: Retire…, the two asks, Resume/Abandon, Unlock…
+
+| 12a | `50a1823b` | `71951ebb`, `728e4c9d`, `9881c8a0` (review fixes) | APPROVE AFTER FIXES; Important I-A, I-B, I-D, I-E, I-F and the minors applied, I-C fixed by an orchestrator ruling; the fix commit was checked by the orchestrator (five new tests, gates, boundary), not re-reviewed: **the final Task 12 review covers `services/scheduler/reconcile.rs` too** | `desktop::view::operations::retire_tests::{retire_left_offer, retire_left_unkept_ask, retire_left_kept_draft_ask, retire_pending_row_by_keyboard, retire_flush_failure_submits_nothing, retire_after_a_quit_closed_its_question, retire_unkept_text_is_asked_before_drafts}`, `desktop::services::scheduler::retire_tests::{retire_resume_resends_original, unlock_picks_reachable, retire_chosen_checks_rt1_again, retire_entry_ends_when_its_row_was_settled_elsewhere, retire_entries_reconcile_only_from_a_complete_list, retire_entry_the_worker_holds_is_not_reconciled, retire_pending_ended_says_only_what_happened}`, `desktop::services::scheduler::reconcile::tests::a_row_is_gone_only_from_a_complete_list_without_it`, `desktop::services::scheduler::loop_tests::{retire_removed_resend_keeps_the_hold, retire_offers_leave_out_the_loops_items, the_loop_skips_an_item_already_retired}`, `desktop::view::item::edit_tests::a_retirement_ends_a_clean_edit_session`, and the model and service unit tests named in the commits; each singly with `--exact`, 1 test, pass (the orchestrator re-ran `retire_left_offer`, `retire_left_unkept_ask`, `retire_resume_resends_original`, `unlock_picks_reachable`, `a_retirement_ends_a_clean_edit_session` and five of the fix tests); fmt, check --all-features, clippy -D warnings pass |
+
+Files (all under `src/desktop/`; library-boundary diff empty): new
+`view/operations/retire.rs`, `view/retire_asks.rs`,
+`view/operations/retire_tests.rs`, `services/scheduler/reconcile.rs`; changed
+the model (`operations*`, `polling*`, `polling/entry.rs`), services (`mod.rs`,
+`resends.rs`, `inflight.rs`, `edit_tabs.rs`, `drafts*`, `scheduler*`), the
+views (`operations*`, `workspace*`, `item/lock.rs`, `settings/polling_support.rs`).
+No `Called from Task 12` allow remains.
+
+What it does: **Retire…** on every reported Closed/Promoted item the loop did
+not retire (source: the attempt's `summary.retire` plus the refused set, which
+now remembers each item's kind, minus items with a retiring, retired or
+pending line, and minus the running loop's unreached items); the unkept ask
+(Show tab default, Cancel, no "Retire anyway") and the kept-draft ask (Retire,
+Cancel default; document wording; "may have kept drafts" for an unknown
+listing); mark at commit (not at press) with a `RetireStep::{Working, Asking}`
+guard, RT-1 re-checked at the view and in `Scheduler::retire_chosen`, kept
+drafts flushed first, a failed flush submits nothing; user lane, new request
+ID, refused-set removal (A19). **Resume/Abandon** on a pending retirement:
+Resume clears the declined keys, answers `original_request_required` by
+rebuilding `ContextRetire{root, kind, id}` under the named request ID from the
+entry (matched by operation, after a relaunch too) and dismisses the blocked
+Resume row; Resume is offered when an entry names the row's operation or the
+library's hand-off-only shape holds (`owes_only_hand_off`, a desktop copy of
+`LocalRow::owes_only_its_hand_off`; the reviewer checked the sets are equal
+today). **Unlock…** resends a pending retirement of one of the key's
+repositories from the entry, else Check now where nothing is pending or held,
+else it is disabled (`UnlockTarget::{Retirement, CheckNow}`).
+
+Existing-test edits (none weakened): **E-27** `scheduler_extra_tests.rs::
+own_polls_are_not_offered_resume` (`resume_offer_among` takes a third
+argument); **E-28** `scheduler_loop_tests::a_pending_retirement_survives_a_
+relaunch` (an Owed entry is kept on `Removed`/`NotSent` and released by
+`Heard::PendingEnded`); **E-29** `scheduler_retire_tests::retire_inflight_entry`
+(its last step keeps an Owed entry, then `Finished` ends it; a never-sent
+request is still covered by the `Removed` step and the new inflight unit
+test); **E-30..E-32** `a_pending_retirement_survives_a_relaunch`,
+`retire_removed_resend_keeps_the_hold`, `unlock_picks_reachable` gain a canned
+pending list naming the fabricated row (launch reconciliation correctly ends
+the entry otherwise); **E-33** `a_removed_resend_keeps_a_pending_entry` (an
+Owed entry without an operation ends on `Removed`/`NotSent`); **E-34**
+`retire_loop_tests.rs` (`Facts.retired`, two table rows).
+
+Rulings (the implementer's eleven were judged by the reviewer: sound, design-
+silent or conservative; none contradicts a design row; costs):
+1. (I-3) A `Removed`/`NotSent` answer to a resend keeps the entry when the
+   library holds the retirement (it names the journal operation). Also closes
+   K-41. Cost if wrong: an entry outliving a retirement the library does not
+   hold leaves the item "Retiring…" until reconciliation, Abandon or Resume.
+2. A new `Heard::PendingEnded` ends an entry on a successful Abandon or Resume
+   of its operation. 3. A retirement's answer records the journal operation in
+   its entry. 4. Retire… marks at commit, not at press (marking at press would
+   make the tab read-only under an open "Show tab" ask). 5. "Unkept" for
+   Retire… is `TabEditing.unkept` only; composer text and live-session drafts
+   are flushed (a failed flush stops it). 6. An unknown draft count asks "may
+   have kept drafts". 7. A retirement ends a CLEAN edit session of the tab and
+   keeps a dirty one (`ItemPane::lock_changed` reacts to `retiring`; the
+   reviewer walked every path: no text or draft is lost). 8. The refused set
+   remembers each item's kind. 9. Resume rule as above (the drift risk is a
+   library follow-up candidate, **not created; ask the owner at review-ready**,
+   with K-33). 10. `authenticated` stays Retired/AlreadyAbsent/Preserved
+   (conservative; departs from C3's literal "or a refusal that is not an
+   unlock, key or host code"): an Unlock… resend answered, say,
+   `refused external_change` leaves the key's attention until the next
+   completed poll. **K-51.** 11. Offer words "{short} is closed. Its copy on
+   this computer was not retired." (short code = the last 8 characters of the
+   ULID, K-46); no title, body, comment or path.
+
+Orchestrator ruling on review item I-C (no owner stop; an acknowledgement is
+Document Amendment 12): entries are reconciled against a complete, freshly
+landed pending-operations list at launch (lock held) and on window activation
+(`services/scheduler/reconcile.rs`, a new defaulted `Backend::pending_operations`);
+an entry whose operation is absent is ended only if the worker and the request
+model hold nothing for it and no retirement entry changed since the read began
+(`entry_epoch`); the `owed` field was removed and an entry is "held by the
+library" only when its operation is known. Cost if wrong: an unneeded end of
+an entry, so the item stops being "Retiring…" until the next attempt shows the
+row again.
+
+Review fixes (`9881c8a0`): **I-A** quit's `close_all_dialogs` left Retire…
+ignored after a quit Cancel (the guard is now `Working`/`Asking`, a stale
+`Asking` with no dialog is cleared); **I-B** the Resume request row is
+dismissed when its resend is sent; **I-D** offers leave out a running loop's
+unreached items and the loop skips an item already retired (`Skip::Retired`);
+**I-E** a test that the unkept ask comes first; **I-F** `retire_resume_
+resends_original` asserts the declined key directly; minors: a Resume that
+finished the row says "Finished retiring {item}." (`RetireState::Finished`),
+Abandon and a Noop say nothing; the second-press test folded in; a click hit
+test of the pending row's Resume and Abandon; stale comments; the forgotten
+repository's refusals cleared. Mutations: 32 in the first round (31 caught, one
+survivor: the first unkept check in `Workspace::retire_chosen`, which the
+reviewer showed was NOT equivalent: now pinned by
+`retire_unkept_text_is_asked_before_drafts`) and 20 in the fix round (18 caught,
+one botched and redone, one survivor: the worker-holds check in `reconciled` is
+covered by the model's queued/running check in every test; kept as defence in
+depth).
+
+Process: the compile-red tests were red first; the model and service code was
+written before its unit tests and every fix-round test was written after its
+fix (green first; mutation evidence).
+
+Known limits (recorded, not fixed):
+- K-51: see ruling 10. K-52: a press on Retire… while a relist hangs waits for
+  it (K-47); fixing it needs a timeout in the draft read.
+- K-53: Resume of a row owing only its hand-off cannot be told apart from a
+  full retirement by the entry (it keeps no step); the line says "Finished
+  retiring {item}." for both, never "Retired the copy".
+- K-54: a refused item stays offered as "closed" for the whole session even if
+  it was reopened or retired elsewhere (bounded by the refused set).
+- K-55: `retire_removed_resend_keeps_the_hold`'s `running.wait_reached()` can
+  still wait the 180 s `World::settle` budget on failure.
+- K-56: the Retire… press with `retire_chosen` returning `None` (RT-1 or
+  quitting) gives no feedback.
+- K-57: a composer with text and no draft yet is not asked about (it stays,
+  locked, with its text; Fact 28's "unkept excludes composer", as for quit).
+- Task 14 documentation: reword K-27 (E4 offers Resume for a hand-off-only
+  row), and record Amendment 12.
+
+Hand-offs to Task 12b: `Scheduler::hold_retirement` (test-only) puts a pending
+retirement in the record and publishes it; `test_support::retire::{original_
+request, pending_row}`; `Rig::over(fixture, roots, cx)`; `Operations::{
+retirement_of, entered_operations}`; `Heard::{ResendRetirement, PendingEnded}`;
+`DraftRegistry::{kept_of, flush_item}`; `Backend::{instead_of_job,
+pending_operations}`. Real-repository tests were not run in 12a.

@@ -1639,6 +1639,23 @@ checked again: 1 to 5 and 7 to 10. Amendment 6 waits for D6's merge.
     duplicate targets in one report are checked once; E1's "due again at once"
     after a settled pending row follows R-35 (the normal schedule), which E1's
     sentence contradicts.
+12. Task 12a: the in-flight retirement entry's exits (B3, R-31), design-silent
+    gap fixes found in implementation and review; for the owner's
+    acknowledgement:
+    - A `Removed` or `NotSent` answer ends the entry only when the library
+      cannot hold the retirement; when the entry names a journal operation
+      (the library row exists and is pending) it is kept, so a quit or a
+      reconfiguration that drops a queued resend leaves the item "Retiring…"
+      with its Resume (this also closes K-41).
+    - A successful Abandon or Resume of the entry's operation ends it
+      (`Heard::PendingEnded`).
+    - An entry whose operation is absent from a complete, freshly read pending
+      list is ended once the worker and the request model hold nothing for it
+      (launch, after the lock is held, and window activation), so a row
+      settled outside this process (the CLI, a second instance) does not leave
+      an item read-only for good.
+    - K-27's wording ("not Resume") follows E4: Resume is still offered for a
+      retirement that owes only its index hand-off.
 
 ## Known Limits
 
