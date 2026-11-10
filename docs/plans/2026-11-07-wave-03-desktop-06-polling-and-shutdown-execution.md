@@ -1218,3 +1218,141 @@ Known: a poll of another repository can sit between loop items on the
 background lane, and `tick`'s `user_lane_empty` waits until no job is in
 flight, so a preempted poll of another repository waits for a running loop.
 Recorded as K-44 (accepted; the loop is bounded by its items).
+
+## Task 11b: the per-item loop after a poll
+
+| 11b | `af839b20` | `6c91a8e3`, `f97e8793`, `9c5cfdb8`, `7c8e8f13` (review fixes) | APPROVE AFTER FIXES; Important I-1, I-2, I-4 (a, b, c) and the minors (expect, comments, world-test trim) applied; the fix commit was checked by the orchestrator (four new tests, gates, boundary), not re-reviewed | `desktop::model::polling::retire_loop::tests::retire_loop_table`, `desktop::services::scheduler::loop_tests::{retire_loop_world, retire_loop_exits, retire_listing_not_landed, retire_relist_before_submit, retire_relist_overtaken, a_second_instance_runs_no_loop, user_job_waits_for_retirement, a_pending_retirement_survives_a_relaunch, check_now_is_heard_with_its_attention, a_failed_check_now_ends_the_loop, retire_loop_leaves_what_the_worker_and_the_refused_set_hold}`, `desktop::view::lifecycle::retiring_tests::retire_tabs_read_only`, `desktop::view::item::retiring_tests::{a_composer_begins_no_draft_while_retiring, a_composer_holds_its_item_back_from_the_loop}`, `desktop::view::operations::retiring_tests::retire_rows_hit`, `desktop::services::worker::retire_tests::{cancel_queued_never_signals_a_running_one, quit_spares_a_retirement_token}`, plus the unit tests named in the commits; each singly with `--exact`, 1 test, pass (the orchestrator re-ran `retire_loop_table`, `retire_relist_before_submit`, `retire_tabs_read_only`, `retire_rows_hit`, `quit_spares_a_retirement_token` and the four fix tests); nine Activity-layout-sensitive existing tests pass singly (quit, keyboard and operations tests); fmt, check --all-features, clippy -D warnings pass |
+
+Owner rulings made at the design checkpoint (2026-11-10) are in the section
+above and Document Amendment 11. All four are built: decision 28 covers any
+running `ContextRetire` (E-19); an unreadable draft entry is unknown; a
+no-data answer stops the loop (E-20); a successful Check now is the latest
+attempt and may start or replace a loop.
+
+What it builds (all under `src/desktop/`; the library-boundary diff is empty):
+- **Loop** (`model/polling/retire_loop.rs`, `services/scheduler/retire_loop.rs`):
+  one per repository, started from `Scheduler::answered` after R-10's
+  IndexRefresh and from Check now; RT-1..RT-11 decided by a pure `Facts` table;
+  the "Retiring…" mark is set before the relist and cleared only after the
+  worker queue holds the job; the recheck and submit run in one UI-thread turn
+  against sessions, pane state (`EditTabs::item_busy`: editing, unkept,
+  composing) and the new tri-state `DraftRegistry::held_by` (live sessions
+  first; unavailable store, listing not landed or not Ready, or any unreadable
+  entry is Unknown). Every exit ends the loop and its marks (`end_loop`).
+- **Check now as an attempt** (`poll_convert.rs::check_now_attempt`,
+  `checked_now`): targets in report order; `checked()` before the loop starts;
+  `discovery_pending` is heard as `CheckedNow` with `index_pending`.
+- **Read-only "Retiring…"** (decision 19): marks (in `Operations`) union the
+  worker's in-flight `ContextRetire` union the in-flight record, as a
+  `LockState` source through `Services::lock`; covers a tab in a second window,
+  Restore from the Drafts page, Share… and the composer guard (new comment
+  drafts).
+- **Worker**: `cancel_queued` (never signals a running job); `Running.retirement`
+  is lane-independent.
+- **Attempt entry** gains retirement lines ("Retiring {item}…", "Retired the
+  copy of {item}…", "Retiring {item} didn't finish.").
+- **Test seam** `Backend::instead_of_job` (production trait method, default
+  `None`, like `before_job`/`after_job`) lets a world test skip the real library
+  call.
+
+Existing-test edits: **E-19** `worker/retire_tests::quit_spares_a_retirement_token`
+(user-lane retirement now not cancelled, plus a user-lane refresh row still
+cancelled); **E-20** `retire::tests::retire_answer_table` (`goes_on`, the two
+no-data rows now stop); **E-21** `scheduler_retire_tests` helper `retire()`
+expects `Some` (the call refuses while quitting); **E-22** `Retiring::Gone`
+gains `id`; **E-23** `entry_tests.rs` (eight calls take `&[]` retirement
+lines); **E-24** `held_tests::relist_reads_the_store_behind_its_gate` (asserts
+`Fresh::{Landed, Overtaken}`); **E-25** `retire_loop_exits` passes
+`Fresh::Failed`; **E-26** `retire_loop_table` uses `begin` plus `get_mut`. No
+assertion weakened.
+
+Review fixes (`7c8e8f13`): **I-1** a failing Check now ended no loop and left
+the marks (the phase was overwritten): `check_failed` now ends the loop first;
+`loops_consistent` also asserts marks belong to loops and match the request
+model's. **I-2** an overtaken fresh listing ended the whole loop: now only a
+failed listing does, an overtaken one skips the item (RT-6). **I-4** three
+surviving mutations now caught (RT-1 worker half, RT-2 wiring, RT-3 composer).
+`RetireLoops::begin` returns the replaced loop (no `expect`).
+`retire_loop_world` is 3 rows, 14.2 s (was 37.9 s); `retire_loop_exits` is
+about 71 s (not merged). Nine reported mutations, all caught.
+
+Rulings by the implementer (judged by the reviewer to match or be design-silent;
+none needed an owner ruling):
+1. A Check now that is not `Completed` records no attempt and starts no loop.
+2. A Check now while a poll is queued or running records `last` and
+   `last_completed` and starts no loop (R-32: a loop and a poll cannot
+   coexist); its items wait for the poll's own attempt or a Retire…. **K-45.**
+3. `discovery_pending` from Check now is `CheckedNow` with `index_pending`.
+4. A failed listing ends the loop; an overtaken one only skips the item.
+5. An answer of any retirement of the repository that hits a wall stops its
+   loop. 6. A user Stop of a loop item stops the loop (RT-9 analogue).
+7. A quit asked drops every loop at once.
+8. `{item}` in the new rows is the **last 8 characters of the ULID**, not the
+   ticket slug E3 names (`RetireLine` has no slug); no privacy issue (no
+   title or path). **K-46.**
+9. A reconfiguration at Submitted removes queued `ContextRetire` for the
+   reached repositories, user lane included (R-11 literally); see Task 12 below.
+10. Lock precedence: a lifecycle lock wins over Retiring…; Retiring is not in
+    `run_locks`, so a clean edit session is not ended by a retirement lock (the
+    loop never retires an item with a session; Task 12's Retire… must flush a
+    clean session itself, E4 step 4).
+11. A settled retirement line keeps the place it began in.
+
+Process: the model table was written before the model; every world test and
+the composer/worker/refused-set tests were written after the code and were
+green first run (mutation evidence; 42 mutations in the first round, 9 in the
+fix round, recorded in the commit messages only). `retire_rows_hit` was red
+first (caught a 624 px row in a 532 px area). `a_failed_check_now_ends_the_loop`
+and `retire_relist_overtaken` were red first.
+
+Activity layout change (deliberate, outside the brief): `min_w_0` on the
+session and pending columns (`view/workspace/render.rs`) so a long row shrinks
+inside its column instead of widening the area, plus `.test_support()` on the
+`operation-area` div. It affects the three existing unwrapped rows Cycle 01
+left to Wave 04 Cycle 03 (design K-16, Amendment 8): they now clip or overflow
+inside their column instead of widening it. **Task 14 must update K-16 and
+Amendment 8's wording.**
+
+Known limits (recorded, not fixed):
+- K-44 (checkpoint): a poll of another repository can sit between loop items;
+  `tick`'s `user_lane_empty` waits until nothing is in flight.
+- K-45: see ruling 2. K-46: see ruling 8.
+- K-47: the relist has no timeout: a hung draft read parks the repository's
+  polls and holds the item read-only until a Check now, a reconfiguration or a
+  quit.
+- K-48: the composer's `locked` flag is applied at the next paint while the
+  edit paths read the lock live; a keystroke between the submit and the next
+  frame could begin a comment draft on an item being retired. The draft
+  survives (E5); no text is lost.
+- K-49: `begin_retiring` accepts Preempted and Waiting, but both are
+  unreachable (`apply` has already moved the phase to Idle).
+- K-50: the kind converters are duplicated five or six times (`dto_kind`,
+  `authoring_kind`, `target_kind`, `retire_kind`, inline maps) and the `Probe`
+  construction is copy-pasted in `drive` and `relisted`; `RetireLine::text`
+  re-implements `view/lifecycle::short_id`.
+- A lifecycle dialog (Close…) open on an item a peer closed does not hold the
+  loop back; no text is lost but the dialog's run will fail.
+- `retire_loop_exits` (about 71 s) still builds ten worlds (K-43 class).
+
+Hand-offs to Task 12:
+- **I-3 (decide in Task 12):** `drop_queued_retirements` removes queued
+  user-lane `ContextRetire` too. A queued Resume resend of an Accepted
+  (pending) retirement that is removed answers `Gone(Removed)` and
+  `retirement_ended(.., Removed)` deletes its in-flight entry, so the pending
+  item loses its "Retiring…" hold and its Resume. Option: a `Removed` resend
+  must not end an entry already Accepted.
+- Retire…: `Operations::mark_retiring(key)`, then `Scheduler::retire(root,
+  kind, item, Lane::User)` (returns `None` while quitting), then
+  `unmark_retiring(mark)`; `Services::lock`/`Services::retiring` hold the item
+  read-only; E4's list is the attempt's `summary.retire` minus the
+  `RetireState::Retired` lines (`skipped()` is test-only: do not source from
+  it); `PollSchedule::retire_chosen` and the refused set are Task 12's.
+- Resume/Unlock… resends: `Scheduler::resend_retirement` already marks the
+  entry's "Retiring…" line; `Retiring::Gone` carries `id`.
+- Reuse `EditTabs::item_busy`, `DraftRegistry::held_by`/`relist`,
+  `Composer::set_locked`/`locked_text`.
+- A pane-driven Retire… must do its `item_busy` check at the view level (a
+  `scheduler.update(..)` that reads a pane from inside that pane's update
+  panics).
+- Pending state reaches the lock through `Scheduler::publish`, which runs only
+  with polling on (R-27: always, in production).
