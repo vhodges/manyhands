@@ -1521,3 +1521,7 @@ mod sheet_fields;
 /// A ticket's dependencies and parent in the details sheet (Task 21).
 #[path = "relations_edit_tests.rs"]
 mod relations_edit;
+
+/// Unsaved work across a bring-in (D6 Task 9, A14).
+#[path = "edit_bring_in_tests.rs"]
+mod bring_in;
