@@ -983,3 +983,7 @@ mod retiring_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "operations/retire_tests.rs"]
 mod retire_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/retire_real_tests.rs"]
+mod retire_real_tests;
