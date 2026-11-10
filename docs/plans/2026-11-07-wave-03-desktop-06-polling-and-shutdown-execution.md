@@ -670,7 +670,7 @@ first but seen failing only after a stub page was swapped back in;
 survivors at the first commit: removing only the `disabled` flag or only the
 handler guard (fixed in `9eee8b82` by asserting the button is unreachable by
 Tab while its own check runs).
-| 8 | (ledger commit) | `fb2f728a`, `6585fe44` (review fixes) | APPROVE WITH MINOR; I-1 (a failed Check now becomes attention; the design's C3 "the poll's answer becomes attention" settled it) and I-2 (the fifth action unreachable; W-6 settled it) fixed, M-1 and M-2 applied; M-3 to M-7 recorded; fixes checked by the orchestrator (three tests, gates, boundary), not re-reviewed | `desktop::services::scheduler::attention_tests::{attention_pause_independent, unlock_after_cancelled_prompt, unlock_clears_for_all_repos, attention_cleared_by_change, two_keys_evict}`, `desktop::services::scheduler::attention_answer_tests::{check_now_failure_becomes_attention, awaited_check_only_after_success}`, `desktop::services::prompts::tests::unlocking_one_key_leaves_another_declined`, `desktop::view::operations::attention_tests::{attention_locked_key, attention_host, attention_actions_by_reason, attention_recovery_held, attention_actions_hit, attention_actions_by_keyboard}`, `desktop::view::settings::attention_tests::settings_polling_attention_actions`, `desktop::model::polling::tests::attention::recovery_hold_follows_the_policy`; each singly with `--exact`, 1 test, pass; fmt, check, both clippy pass |
+| 8 | `74afe9c0` | `fb2f728a`, `6585fe44` (review fixes) | APPROVE WITH MINOR; I-1 (a failed Check now becomes attention; the design's C3 "the poll's answer becomes attention" settled it) and I-2 (the fifth action unreachable; W-6 settled it) fixed, M-1 and M-2 applied; M-3 to M-7 recorded; fixes checked by the orchestrator (three tests, gates, boundary), not re-reviewed | `desktop::services::scheduler::attention_tests::{attention_pause_independent, unlock_after_cancelled_prompt, unlock_clears_for_all_repos, attention_cleared_by_change, two_keys_evict}`, `desktop::services::scheduler::attention_answer_tests::{check_now_failure_becomes_attention, awaited_check_only_after_success}`, `desktop::services::prompts::tests::unlocking_one_key_leaves_another_declined`, `desktop::view::operations::attention_tests::{attention_locked_key, attention_host, attention_actions_by_reason, attention_recovery_held, attention_actions_hit, attention_actions_by_keyboard}`, `desktop::view::settings::attention_tests::settings_polling_attention_actions`, `desktop::model::polling::tests::attention::recovery_hold_follows_the_policy`; each singly with `--exact`, 1 test, pass; fmt, check, both clippy pass |
 
 ## Task 8: needs attention
 
@@ -758,3 +758,69 @@ behaviour Tasks 3 and 5 built, `attention_host`'s UI half was red) and
 mutation only). Reviewer mutations: disabling the background refusal fails
 `attention_locked_key` and `two_keys_evict` (by timeout). Survivor: N6c, the
 explicit removal in `forget_schedule` is redundant with the prune on `tick`.
+| 9 | (ledger commit) | `7ab7674c`, `197b60f2`, `20e337ad` (review fixes) | APPROVE WITH MINOR; Important (the attempt entry's Share… skipped the lifecycle lock) and two minors applied; the rest recorded; the fixes were checked by the orchestrator (three tests, gates, boundary), not re-reviewed | `desktop::view::item::edit_tests::bring_in::{bring_in_keeps_dirty_session, bring_in_kept_draft_banner}`, `desktop::model::polling::entry::tests::{dispositions_listed, a_quiet_attempt_has_no_entry, closed_and_promoted_are_left_to_part_e}`, `desktop::view::operations::attempts_tests::{dispositions_listed, attempt_entry_actions_hit, attempt_entry_share_waits_for_the_lock, attempt_entry_ids_follow_the_repository}`; each singly with `--exact`, 1 test, pass; fmt, check, clippy pass |
+
+## Task 9: unsaved work across a bring-in; dispositions
+
+Files (all under `src/desktop/`): new `view/item/edit_bring_in_tests.rs`,
+`model/polling/{entry.rs, entry_tests.rs}`, `view/operations/{attempts.rs,
+attempts_tests.rs}`; changed `view/item/edit_tests.rs` (E-12, a 4-line
+`mod bring_in` mount, nothing else), `model/polling.rs`
+(`PollSchedule::attempts()`), `model/polling/status.rs` (`changes` made
+`pub(super)`), `view/operations.rs` (mount and one `.children(attempts)`).
+Nothing outside `src/desktop/` changed. No path lost editor or draft text
+across a bring-in (reviewer and implementer both drove it).
+
+**Plan gap (recorded, ruled by the orchestrator, not a contract question).**
+A2/R-20 say the twelve dispositions are "listed with their text under the
+repository's attempt entry" and R-23 defines that entry, but no task built
+it: the plan maps R-20 to Task 9 and R-23 to Task 11a, and 11a's tests cover
+only the dismissal rules. The implementer stopped; the orchestrator ruled
+that Task 9 builds a minimal entry. The plan's R-23 owner line should read
+"Task 9 (minimal), Task 11a (retirement rows)".
+
+The minimal entry (`model/polling/entry.rs`, `view/operations/attempts.rs`):
+- At most one entry per repository, built from the repository's last
+  recorded attempt (so the next replaces it), right after the attention
+  entries in "This session". Shown only when it has something to say:
+  "Brought in N changes" (N > 0) and one line per listed item (item id, then
+  its text).
+- Text is `PollDisposition::guidance()`, except `Unpublished` ("This item is
+  not shared yet. Share… publishes it to the shared copy."), which carries
+  Share… (R-20). `Current` and `LocalAhead` add no line and no entry.
+  `Closed` and `Promoted` are skipped (Part E); a test pins the skip.
+- Share… sends `Intent::ItemSync{root, kind, id}` on the user lane, as the
+  item header's Share does, and waits for the lifecycle lock (review):
+  while `lifecycle_lock(..).blocks()` it shows "Share… (Closing…)" or
+  "(Merging…)" with no button. Element ids carry the repository key, and each
+  action has the Task 8 scroll marker.
+- No mutation is called by a disposition.
+
+Rulings: the item shows as a bare 26-character ULID (the short-code lookup
+comes with Part E; cost: one lookup in `attempt_line`); the entry has no
+Dismiss (R-23 says only "replaced by the next").
+
+Known limits (recorded, not fixed):
+- K-37: a transport failure or an Interrupted attempt replaces `last` and
+  makes the entry vanish, so a listed Dirty item is not shown until the next
+  completed attempt. An Interrupted blip (a Check now interrupting an
+  automatic poll) hides it for the 5 s restart. It matches the literal
+  wording of R-23 and A2; whether a failed attempt should keep the previous
+  listing is a Task 12 design call (the failure slot).
+- **For Tasks 11a/11b/12:** Part E must not source Retire… from `last` alone,
+  because a failed or interrupted attempt replaces it and drops `retire`.
+  Content plugs into `attempt_entry` (`model/polling/entry.rs`), rows into
+  `Workspace::attempt_entries` (`view/operations/attempts.rs`).
+- Mutation survivors: the `sharing()` guard inside `share_unpublished` is a
+  redundant duplicate of the render guard; removing only the session's dirty
+  guard in `late_read_landed` is an equivalent mutant (the live-draft guard
+  covers it). No true positional-id mutant was built (weaker evidence).
+- The new bring-in tests overlap four existing ones (`a_late_read_*`,
+  `a_refresh_*_change_banner*`, `an_external_change_*`), all of which start
+  from `pane.reload`; the new tests' unique value is the `brought_in` start.
+
+Process: `bring_in_keeps_dirty_session` was first red on a wrong fixture
+(a primary-only commit; fixed to write to the context's branch);
+`bring_in_kept_draft_banner` was green on first run (mutation evidence);
+`attempt_entry_share_waits_for_the_lock` was red only because its ids did not
+yet exist, and the "no lock check" mutation is its real evidence.
