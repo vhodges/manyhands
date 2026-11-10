@@ -32,6 +32,7 @@ pub(crate) use clock::TestClock;
 pub(crate) use clock::{Clock, Now};
 // The tests use `TestClock`, so only the production clock is unused there.
 pub(crate) use clock::SystemClock;
+use entry::{RetireLine, RetireState};
 use manyhands::{canonical::ItemId, repository::OperationId};
 use state::PREEMPTIONS_BEFORE_INTERVAL;
 pub(crate) use state::{Phase, Policy, Reason, RepoSchedule, Why};
@@ -84,12 +85,13 @@ impl PollSchedule {
         self.repos.get(root)
     }
 
-    /// Each repository's last recorded attempt, in the order of the roots:
-    /// what the attempt entries of the operation area are made from (R-23).
-    pub fn attempts(&self) -> impl Iterator<Item = (&Root, &AttemptSummary)> {
-        self.repos
-            .iter()
-            .filter_map(|(root, repo)| Some((root, repo.last.as_ref()?)))
+    /// Each repository's last recorded attempt and the retirements since,
+    /// in the order of the roots: what the attempt entries of the operation
+    /// area are made from (R-23, E3).
+    pub fn attempts(&self) -> impl Iterator<Item = (&Root, &AttemptSummary, &[RetireLine])> {
+        self.repos.iter().filter_map(|(root, repo)| {
+            Some((root, repo.last.as_ref()?, repo.retirements.as_slice()))
+        })
     }
 
     /// A policy just read. The phase, attention and waits are untouched:
@@ -266,6 +268,7 @@ impl PollSchedule {
         repo.last_completed = Some(attempt.completed_at.unwrap_or(now.utc));
         if summary.is_recorded() {
             repo.last = Some(summary.clone());
+            repo.retirements.clear();
         }
         Some(summary)
     }
@@ -395,6 +398,64 @@ impl PollSchedule {
     /// does not retry joins the session's refused set (R-21).
     pub fn retirement_answered(&mut self, root: &Root, item: &ItemId, verdict: &retire::Verdict) {
         self.refused.answered(root, item, verdict);
+    }
+
+    /// A retirement of `item` was submitted: its entry says "Retiring…".
+    pub fn retire_started(&mut self, root: &Root, kind: TargetKind, item: &ItemId) {
+        self.set_retire_line(root, kind, item, Some(RetireState::Retiring), true);
+    }
+
+    /// The retirement of `item` answered with `verdict`: its entry says
+    /// what came of it (E3), or nothing when the answer is attention, a
+    /// retry or a refusal, which have their own rows.
+    pub fn retire_settled(
+        &mut self,
+        root: &Root,
+        kind: TargetKind,
+        item: &ItemId,
+        verdict: &retire::Verdict,
+    ) {
+        let state = match verdict {
+            retire::Verdict::Retired => Some(RetireState::Retired),
+            retire::Verdict::Owed { catching_up, .. } => Some(RetireState::Unfinished {
+                catching_up: *catching_up,
+            }),
+            _ => None,
+        };
+        self.set_retire_line(root, kind, item, state, false);
+    }
+
+    /// The item's line is `state`, or gone, with `None`. A retirement that
+    /// begins puts its line last; its answer keeps the place it began in.
+    fn set_retire_line(
+        &mut self,
+        root: &Root,
+        kind: TargetKind,
+        item: &ItemId,
+        state: Option<RetireState>,
+        begins: bool,
+    ) {
+        let Some(repo) = self.repos.get_mut(root) else {
+            return;
+        };
+        let held = repo
+            .retirements
+            .iter()
+            .position(|line| line.kind == kind && line.item == *item);
+        let line = state.map(|state| RetireLine {
+            kind,
+            item: item.clone(),
+            state,
+        });
+        match (held, line) {
+            (Some(at), Some(line)) if !begins => repo.retirements[at] = line,
+            (held, line) => {
+                if let Some(at) = held {
+                    repo.retirements.remove(at);
+                }
+                repo.retirements.extend(line);
+            }
+        }
     }
 
     /// Whether the loop skips the item (R-21).

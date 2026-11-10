@@ -118,6 +118,9 @@ pub(crate) struct RepoSchedule {
     /// to be resolved, and the row says so (A4). Nothing else of that answer
     /// is kept, since it is not an attempt.
     pub conflict_pending: bool,
+    /// The retirements since the latest attempt, for its entry (E3). A
+    /// newer recorded attempt replaces them with itself.
+    pub retirements: Vec<super::entry::RetireLine>,
 }
 
 impl RepoSchedule {
@@ -132,6 +135,7 @@ impl RepoSchedule {
             hold_until: None,
             stale: false,
             conflict_pending: false,
+            retirements: Vec::new(),
         }
     }
 

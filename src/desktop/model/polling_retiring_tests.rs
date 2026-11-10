@@ -108,3 +108,135 @@ fn a_check_now_is_the_latest_attempt() {
             .is_none()
     );
 }
+
+/// The attempt entry's retirement lines (E3, "what the person sees"): a
+/// retirement that is sent says "Retiring…", one that retired says so, one
+/// left pending says it did not finish; any other answer is attention, a
+/// retry or a refusal, which have their own rows, so the line goes. The
+/// next recorded attempt replaces them; an answer that is no attempt does
+/// not.
+#[test]
+fn retirement_lines_follow_the_requests() {
+    use super::retire::Verdict;
+    use crate::desktop::model::polling::entry::{RetireLine, RetireState, attempt_entry};
+
+    let other: ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FA2".parse().unwrap();
+    let item: ItemId = ITEM.parse().unwrap();
+    let lines = |fx: &Fx| -> Vec<(ItemId, RetireState)> {
+        fx.schedule
+            .attempts()
+            .find(|(attempted, ..)| **attempted == root("r"))
+            .map(|(_, _, lines)| {
+                lines
+                    .iter()
+                    .map(|line| (line.item.clone(), line.state))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut fx = Fx::new();
+    fx.add("r", policy(None));
+    let attempt = closed(&fx, "r");
+    fx.schedule.checked_now(&fx.now(), &attempt);
+
+    // Sent: Retiring…, in the order they began; sending again replaces.
+    let r = root("r");
+    fx.schedule.retire_started(&r, TargetKind::Ticket, &item);
+    fx.schedule.retire_started(&r, TargetKind::Ticket, &other);
+    fx.schedule.retire_started(&r, TargetKind::Ticket, &item);
+    assert_eq!(
+        lines(&fx),
+        [
+            (other.clone(), RetireState::Retiring),
+            (item.clone(), RetireState::Retiring)
+        ]
+    );
+
+    // Answered.
+    let owed = |catching_up| Verdict::Owed {
+        attention: None,
+        catching_up,
+    };
+    let cases: Vec<(&str, Verdict, Option<RetireState>)> = vec![
+        ("retired", Verdict::Retired, Some(RetireState::Retired)),
+        (
+            "pending",
+            owed(false),
+            Some(RetireState::Unfinished { catching_up: false }),
+        ),
+        (
+            "pending, the index behind",
+            owed(true),
+            Some(RetireState::Unfinished { catching_up: true }),
+        ),
+        (
+            "attention",
+            Verdict::Attention(super::retire::Need::Host),
+            None,
+        ),
+        ("unreachable", Verdict::Unreachable, None),
+        (
+            "a retry",
+            Verdict::Retry {
+                recovery_required: false,
+            },
+            None,
+        ),
+        ("a refusal", Verdict::Refused, None),
+        ("no data", Verdict::Failed, None),
+    ];
+    for (what, verdict, line) in cases {
+        fx.schedule.retire_started(&r, TargetKind::Ticket, &item);
+        fx.schedule
+            .retire_settled(&r, TargetKind::Ticket, &item, &verdict);
+        let expected: Vec<_> = [Some((other.clone(), RetireState::Retiring))]
+            .into_iter()
+            .chain([line.map(|state| (item.clone(), state))])
+            .flatten()
+            .collect();
+        assert_eq!(lines(&fx), expected, "{what}");
+    }
+
+    // The entry shows them though the attempt itself had nothing to say.
+    fx.schedule
+        .retire_settled(&r, TargetKind::Ticket, &item, &Verdict::Retired);
+    let (_, summary, shown) = fx.schedule.attempts().next().unwrap();
+    assert_eq!(
+        attempt_entry(summary, &[]),
+        None,
+        "a retirement alone was nothing to say"
+    );
+    let entry = attempt_entry(summary, shown).expect("with its retirements");
+    assert_eq!(
+        entry.retirements,
+        vec![
+            RetireLine {
+                kind: TargetKind::Ticket,
+                item: other.clone(),
+                state: RetireState::Retiring
+            },
+            RetireLine {
+                kind: TargetKind::Ticket,
+                item: item.clone(),
+                state: RetireState::Retired
+            },
+        ]
+    );
+
+    // An answer that is no attempt leaves them; the next attempt replaces.
+    fx.schedule.mark_queued(&r);
+    let busy = PollAttempt {
+        answer: Answer::Busy,
+        ..closed(&fx, "r")
+    };
+    fx.schedule.after(&fx.now(), &busy);
+    assert_eq!(lines(&fx).len(), 2, "busy is not an attempt");
+    let attempt = closed(&fx, "r");
+    fx.schedule.checked_now(&fx.now(), &attempt);
+    assert!(lines(&fx).is_empty(), "the next attempt replaces them");
+
+    // A repository that is not scheduled has none.
+    fx.schedule
+        .retire_started(&root("x"), TargetKind::Ticket, &item);
+    assert!(fx.schedule.repo(&root("x")).is_none());
+}

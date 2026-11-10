@@ -11,8 +11,8 @@
 //! names a CLI command: the desktop names its own action instead (R-20).
 //! `Unpublished` says so and offers Share…. `Closed` and `Promoted` are
 //! Part E's (Retire…): they are left out here until that part lists them.
-//! The retirement summary, the failure and the attention slots of the entry
-//! are Tasks 11a, 12 and 8's.
+//! The retirement lines of the entry (E3) are Task 11b's; the failure and the
+//! attention slots are Tasks 12 and 8's.
 //!
 //! Nothing here names a title, a body or a comment: only an item's ID and
 //! the library's fixed words.
@@ -54,12 +54,73 @@ pub(crate) struct EntryLine {
     pub action: Option<LineAction>,
 }
 
+/// Where a retirement of one item stands (E3, "what the person sees").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetireState {
+    /// The retirement is queued or running.
+    Retiring,
+    /// `retired` or `already_absent`: the copy is gone.
+    Retired,
+    /// `pending`, or left `Accepted`: it did not finish. The pending row
+    /// offers Resume and Abandon (Task 12).
+    Unfinished {
+        /// `discovery_pending`: the lists are still catching up.
+        catching_up: bool,
+    },
+}
+
+/// One item's retirement in the attempt's entry. It is the item's ID and
+/// the library's fixed words, never a title.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RetireLine {
+    pub kind: TargetKind,
+    pub item: ItemId,
+    pub state: RetireState,
+}
+
+/// "Retiring {item}…".
+pub(crate) fn retiring_text(item: &str) -> String {
+    format!("Retiring {item}\u{2026}")
+}
+
+/// "Retired the copy of {item} on this computer."
+pub(crate) fn retired_text(item: &str) -> String {
+    format!("Retired the copy of {item} on this computer.")
+}
+
+/// "Retiring {item} didn't finish.", and, when the index is behind, "The
+/// lists are still catching up.".
+pub(crate) fn unfinished_text(item: &str, catching_up: bool) -> String {
+    let said = format!("Retiring {item} didn't finish.");
+    if catching_up {
+        format!("{said} The lists are still catching up.")
+    } else {
+        said
+    }
+}
+
+impl RetireLine {
+    /// What the line says: the item by its short ID, the last eight
+    /// characters of its ULID.
+    pub(crate) fn text(&self) -> String {
+        let id = self.item.to_string();
+        let item = id.get(id.len().saturating_sub(8)..).unwrap_or(&id);
+        match self.state {
+            RetireState::Retiring => retiring_text(item),
+            RetireState::Retired => retired_text(item),
+            RetireState::Unfinished { catching_up } => unfinished_text(item, catching_up),
+        }
+    }
+}
+
 /// A repository's attempt entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AttemptEntry {
     /// "Brought in N changes", when something was.
     pub brought_in: Option<String>,
     pub lines: Vec<EntryLine>,
+    /// The retirements since the attempt, in the order they began (E3).
+    pub retirements: Vec<RetireLine>,
 }
 
 /// The library's words for `disposition`; `None` for the ones this entry
@@ -88,7 +149,10 @@ fn text_of(disposition: Disposition) -> Option<&'static str> {
 /// in, and a line for each item the poll left alone, in the poll's order.
 /// The retirement summary and the failure slots join the entry in Tasks 11a
 /// and 12, each adding to what makes it worth showing.
-pub(crate) fn attempt_entry(summary: &AttemptSummary) -> Option<AttemptEntry> {
+pub(crate) fn attempt_entry(
+    summary: &AttemptSummary,
+    retirements: &[RetireLine],
+) -> Option<AttemptEntry> {
     let brought_in = (summary.brought_in > 0).then(|| changes(summary.brought_in));
     let lines: Vec<EntryLine> = summary
         .listed
@@ -107,7 +171,11 @@ pub(crate) fn attempt_entry(summary: &AttemptSummary) -> Option<AttemptEntry> {
             })
         })
         .collect();
-    (brought_in.is_some() || !lines.is_empty()).then_some(AttemptEntry { brought_in, lines })
+    (brought_in.is_some() || !lines.is_empty() || !retirements.is_empty()).then(|| AttemptEntry {
+        brought_in,
+        lines,
+        retirements: retirements.to_vec(),
+    })
 }
 
 #[cfg(test)]

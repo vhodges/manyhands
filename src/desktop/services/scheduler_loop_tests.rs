@@ -22,7 +22,9 @@ use super::{
 };
 use crate::desktop::{
     model::{
-        polling::{AttemptTarget, Clock as _, Disposition, Phase, Root, TargetKind},
+        polling::{
+            AttemptTarget, Clock as _, Disposition, Phase, Root, TargetKind, entry::RetireState,
+        },
         tabs::TabKey,
     },
     services::{
@@ -114,6 +116,18 @@ fn all_ended(world: &World, cx: &mut TestAppContext) -> bool {
     })
 }
 
+/// What the attempt's entry says of each retirement, in the order they
+/// began (E3).
+fn entry_lines(world: &World, cx: &mut TestAppContext) -> Vec<RetireState> {
+    world.services.scheduler().read_with(cx, |scheduler, _| {
+        scheduler
+            .schedule()
+            .attempts()
+            .flat_map(|(_, _, lines)| lines.iter().map(|line| line.state))
+            .collect()
+    })
+}
+
 fn consistent(world: &World, cx: &mut TestAppContext) -> bool {
     world
         .services
@@ -173,6 +187,9 @@ struct Row {
     completion: PollCompletion,
     answers: Vec<Envelope<MutationDataDto>>,
     submitted: Vec<usize>,
+    /// What the attempt's entry says of each retirement afterwards, in the
+    /// order they began (E3); `None` where the row does not check it.
+    lines: Option<Vec<RetireState>>,
 }
 
 fn row(
@@ -189,6 +206,7 @@ fn row(
         completion: PollCompletion::Completed,
         answers,
         submitted: submitted.to_vec(),
+        lines: None,
     }
 }
 
@@ -214,16 +232,15 @@ async fn polled(row: &Row, cx: &mut TestAppContext) -> (World, Root) {
     }
     let report = world.report(row.completion, closed(&row.reported), false);
     world.backend.answer_poll(report);
-    // An answer that got past authentication reads the policy again, which
-    // makes the repository due: the polls after the first report nothing.
-    for _ in 0..3 {
-        world.backend.answer_poll(world.completed());
-    }
     world.list(std::slice::from_ref(&root), cx);
     World::settle(cx, "the launch poll", |_| {
         world.backend.polled_roots().len() == 1
     })
     .await;
+    // Paused, so the policy an answer reads again does not make the
+    // repository due: the fake poll stores no deadline, and the next
+    // attempt would replace the entry's lines.
+    world.fixture.pause_polling(std::path::Path::new(&root));
     (world, root)
 }
 
@@ -245,12 +262,15 @@ async fn finished(world: &World, root: &str, cx: &mut TestAppContext) {
 #[gpui_kit::test]
 async fn retire_loop_world(cx: &mut TestAppContext) {
     let rows = vec![
-        row(
-            "every item retired, in report order",
-            &[2, 0, 1],
-            vec![retired(), retired(), retired()],
-            &[2, 0, 1],
-        ),
+        Row {
+            lines: Some(vec![RetireState::Retired; 3]),
+            ..row(
+                "every item retired, in report order",
+                &[2, 0, 1],
+                vec![retired(), retired(), retired()],
+                &[2, 0, 1],
+            )
+        },
         Row {
             edited: vec![0],
             drafted: vec![1],
@@ -267,12 +287,15 @@ async fn retire_loop_world(cx: &mut TestAppContext) {
             vec![refused(), retired()],
             &[0, 1],
         ),
-        row(
-            "RT-8: a pending answer stops the loop",
-            &[0, 1, 2],
-            vec![pending(), retired()],
-            &[0],
-        ),
+        Row {
+            lines: Some(vec![RetireState::Unfinished { catching_up: false }]),
+            ..row(
+                "RT-8: a pending answer stops the loop",
+                &[0, 1, 2],
+                vec![pending(), retired()],
+                &[0],
+            )
+        },
         row(
             "R-37: a request with no retirement data stops the loop",
             &[0, 1, 2],
@@ -312,6 +335,14 @@ async fn retire_loop_world(cx: &mut TestAppContext) {
             "{}: a loop and its phase agree",
             row.what
         );
+        if let Some(expected) = &row.lines {
+            let seen = entry_lines(&world, cx);
+            assert_eq!(
+                &seen, expected,
+                "{}: the entry's retirement lines",
+                row.what
+            );
+        }
         if !row.submitted.is_empty() {
             assert_ne!(
                 world.phase(&root, cx),
@@ -597,6 +628,11 @@ async fn retire_loop_exits(cx: &mut TestAppContext) {
         );
         world.heard(vec![checked(&world, &root, &[0, 1])], cx);
         running_item(&world, cx).await;
+        assert_eq!(
+            entry_lines(&world, cx),
+            [RetireState::Retiring],
+            "the entry says it is being retired"
+        );
         let (id, ..) = retire_requests(&world, cx)[0];
         world
             .services
@@ -646,6 +682,8 @@ async fn retire_loop_exits(cx: &mut TestAppContext) {
             None,
         );
         clearing.wait_reached();
+        // The drain has heard the change queued before the loop could start.
+        World::quiet(cx).await;
         world.heard(vec![checked(&world, &root, &[0, 1])], cx);
         World::quiet(cx).await;
         assert!(sent(&world, cx).is_empty(), "no loop beside a key change");
@@ -942,4 +980,61 @@ async fn a_pending_retirement_survives_a_relaunch(cx: &mut TestAppContext) {
         )
     });
     assert!(!retiring(&world, &root, 0, cx), "and then it is not");
+}
+
+/// Decision 20, K-17: a user job sent while a background retirement runs
+/// waits for it, does not cancel it, and runs before the rest of the loop;
+/// the loop's next item is queued behind it.
+#[gpui_kit::test]
+async fn user_job_waits_for_retirement(cx: &mut TestAppContext) {
+    let (world, root) = idle(cx).await;
+    let running = world.backend.inner().hold_job(JobKind::ContextRetire);
+    for _ in 0..3 {
+        world
+            .backend
+            .inner()
+            .answer_job(JobKind::ContextRetire, retired());
+    }
+    world.heard(vec![checked(&world, &root, &[0, 1, 2])], cx);
+    running_item(&world, cx).await;
+    let before = world.backend.inner().jobs_seen().len();
+
+    // The person's job, on the user lane, while the first item runs.
+    let user = world.services.worker().submit(
+        Intent::IndexRefresh {
+            root: std::path::PathBuf::from(&root),
+        },
+        crate::desktop::services::requests::Lane::User,
+        None,
+        None,
+    );
+    World::quiet(cx).await;
+    let job = world
+        .services
+        .worker()
+        .running_job()
+        .expect("still running");
+    assert!(!job.cancelled, "the retirement is not cancelled");
+    assert_ne!(job.id, user, "the user job waits for it");
+    assert_eq!(
+        world.backend.inner().jobs_seen().len(),
+        before,
+        "nothing else ran"
+    );
+
+    running.release();
+    finished(&world, &root, cx).await;
+    let seen = world.backend.inner().jobs_seen();
+    let order: Vec<JobKind> = seen[before - 1..].to_vec();
+    assert_eq!(
+        order,
+        [
+            JobKind::ContextRetire,
+            JobKind::IndexRefresh,
+            JobKind::ContextRetire,
+            JobKind::ContextRetire
+        ],
+        "the user job runs before the rest of the loop"
+    );
+    assert_eq!(sent(&world, cx), [0, 1, 2]);
 }

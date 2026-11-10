@@ -54,7 +54,7 @@ fn dispositions_listed() {
     for (disposition, expected) in table {
         for answer in [Answer::Completed, Answer::Interrupted] {
             let summary = attempt(answer.clone(), &[disposition]);
-            let entry = attempt_entry(&summary)
+            let entry = attempt_entry(&summary, &[])
                 .unwrap_or_else(|| panic!("{disposition:?} in {answer:?}: no entry"));
             assert_eq!(entry.brought_in, None, "{disposition:?}");
             assert_eq!(entry.lines.len(), 1, "{disposition:?}");
@@ -75,7 +75,7 @@ fn dispositions_listed() {
     // One line per item, in the poll's order, and only for the ones left
     // alone.
     let summary = attempt(Answer::Completed, &[Dirty, Current, Unpublished, Dirty]);
-    let entry = attempt_entry(&summary).expect("an entry");
+    let entry = attempt_entry(&summary, &[]).expect("an entry");
     let texts: Vec<_> = entry.lines.iter().map(|line| line.text).collect();
     assert_eq!(
         texts,
@@ -95,11 +95,11 @@ fn a_quiet_attempt_has_no_entry() {
     use Disposition::*;
     for quiet in [&[][..], &[Current], &[LocalAhead, Current, LocalAhead]] {
         let summary = attempt(Answer::Completed, quiet);
-        assert_eq!(attempt_entry(&summary), None, "{quiet:?}");
+        assert_eq!(attempt_entry(&summary, &[]), None, "{quiet:?}");
     }
 
     let summary = attempt(Answer::Completed, &[Current, LocalAhead, FastForwarded]);
-    let entry = attempt_entry(&summary).expect("brought in is something to say");
+    let entry = attempt_entry(&summary, &[]).expect("brought in is something to say");
     assert_eq!(entry.brought_in.as_deref(), Some("Brought in 1 change"));
     assert!(entry.lines.is_empty());
 
@@ -107,14 +107,14 @@ fn a_quiet_attempt_has_no_entry() {
         Answer::Completed,
         &[Materialized, FastForwarded, LocalAhead, Dirty],
     );
-    let entry = attempt_entry(&summary).expect("an entry");
+    let entry = attempt_entry(&summary, &[]).expect("an entry");
     assert_eq!(entry.brought_in.as_deref(), Some("Brought in 2 changes"));
     assert_eq!(entry.lines.len(), 1, "LocalAhead adds no line");
 
     // An item without an ID or a kind cannot be shared.
     let mut summary = attempt(Answer::Completed, &[Unpublished]);
     summary.listed[0].item_id = None;
-    let entry = attempt_entry(&summary).expect("an entry");
+    let entry = attempt_entry(&summary, &[]).expect("an entry");
     assert_eq!(entry.lines[0].action, None);
 }
 
@@ -130,13 +130,13 @@ fn closed_and_promoted_are_left_to_part_e() {
         for disposition in [Closed, Promoted] {
             let summary = attempt(answer.clone(), &[disposition]);
             assert_eq!(
-                attempt_entry(&summary),
+                attempt_entry(&summary, &[]),
                 None,
                 "{disposition:?} in {answer:?}"
             );
             // And they hide nothing else.
             let summary = attempt(answer.clone(), &[disposition, Disposition::Dirty]);
-            let entry = attempt_entry(&summary).expect("the dirty one is listed");
+            let entry = attempt_entry(&summary, &[]).expect("the dirty one is listed");
             assert_eq!(entry.lines.len(), 1, "{disposition:?} in {answer:?}");
         }
     }

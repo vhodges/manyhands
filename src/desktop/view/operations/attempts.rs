@@ -52,7 +52,9 @@ impl Workspace {
             .read(cx)
             .schedule()
             .attempts()
-            .filter_map(|(root, summary)| Some((root.clone(), attempt_entry(summary)?)))
+            .filter_map(|(root, summary, retirements)| {
+                Some((root.clone(), attempt_entry(summary, retirements)?))
+            })
             .collect();
         let muted = cx.theme().muted_foreground;
         let mut shown = Vec::with_capacity(entries.len());
@@ -70,6 +72,12 @@ impl Workspace {
             }
             for (i, line) in entry.lines.iter().enumerate() {
                 rows = rows.child(self.attempt_line(i, &root, line, cx));
+            }
+            // What came of the retirements since (E3): one row each, as
+            // wide as the entry, so a long one wraps inside it (W-6).
+            for (i, line) in entry.retirements.iter().enumerate() {
+                rows = rows
+                    .child(text(format!("attempt-{root}-retirement-{i}"), line.text()).w_full());
             }
             shown.push(rows.into_any_element());
         }

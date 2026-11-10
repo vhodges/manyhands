@@ -31,6 +31,14 @@ use crate::desktop::{
     },
 };
 
+/// The kind of item a retirement names, as the schedule knows it.
+fn target_kind(kind: AuthoringKind) -> TargetKind {
+    match kind {
+        AuthoringKind::Ticket => TargetKind::Ticket,
+        AuthoringKind::Document => TargetKind::Document,
+    }
+}
+
 /// Tells the request model where the worker's record of a retirement stood
 /// when its last attempt finished, before `Finished` is applied: the event
 /// carries none, and the answer is read by it first (E3). `record_of` is the
@@ -107,6 +115,8 @@ impl Scheduler {
             id: item.clone(),
         };
         let worker = self.worker.clone();
+        // The attempt's entry says "Retiring…" (E3).
+        self.schedule.retire_started(root, kind, item);
         begin_retirement(&mut self.store, request, root, kind, item, || {
             worker.submit_with_request_id(intent, lane, request)
         })
@@ -120,6 +130,8 @@ impl Scheduler {
             }
             Retiring::Gone { id, request, end } => {
                 self.store.retirement_ended(request, end);
+                // It never ran: its line goes (E3).
+                self.retirement_gone(id, cx);
                 // Removed or never sent: the loop that waited on it stops
                 // (RT-9).
                 self.loop_gone(id, request, cx);
@@ -128,6 +140,30 @@ impl Scheduler {
         }
         // The record's entries are what a relaunch finds "Retiring…" (R-31).
         self.publish(cx);
+    }
+
+    /// The retirement `id` was removed from the queue or never sent: the
+    /// attempt's entry no longer says "Retiring…" of its item (E3).
+    fn retirement_gone(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) {
+        let item = self
+            .operations
+            .read_with(cx, |operations, _| {
+                let Intent::ContextRetire {
+                    root,
+                    kind,
+                    id: item,
+                } = &operations.request(id)?.intent
+                else {
+                    return None;
+                };
+                Some((root.to_str()?.to_owned(), target_kind(*kind), item.clone()))
+            })
+            .ok()
+            .flatten();
+        if let Some((root, kind, item)) = item {
+            self.schedule
+                .retire_settled(&root, kind, &item, &Verdict::Failed);
+        }
     }
 
     /// The retirement `id` was answered: its entry ends unless it is Owed
@@ -139,19 +175,25 @@ impl Scheduler {
             .operations
             .read_with(cx, |operations, _| {
                 let request = operations.request(id)?;
-                let Intent::ContextRetire { root, id: item, .. } = &request.intent else {
+                let Intent::ContextRetire {
+                    root,
+                    kind,
+                    id: item,
+                } = &request.intent
+                else {
                     return None;
                 };
                 Some((
                     request.request_id,
                     root.to_str()?.to_owned(),
+                    target_kind(*kind),
                     item.clone(),
                     operations.retirement(id)?.clone(),
                 ))
             })
             .ok()
             .flatten();
-        let Some((request, root, item, answer)) = seen else {
+        let Some((request, root, kind, item, answer)) = seen else {
             // No answer to read: a loop waiting on it stops (R-37).
             return self.loop_lost(id, cx);
         };
@@ -169,6 +211,9 @@ impl Scheduler {
         self.store.retirement_ended(request, end);
         self.schedule
             .retirement_answered(&root, &item, &answer.verdict);
+        // The attempt's entry says what came of it (E3).
+        self.schedule
+            .retire_settled(&root, kind, &item, &answer.verdict);
         if answer.authenticated() {
             self.checked(&root, cx);
         }

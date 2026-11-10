@@ -65,6 +65,8 @@ impl RepoSchedule {
         }
         if summary.is_recorded() {
             self.last = Some(summary.clone());
+            // The entry is the latest attempt's alone (R-23, E3).
+            self.retirements.clear();
         }
         summary
     }

@@ -970,3 +970,7 @@ mod attention_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "operations/attempts_tests.rs"]
 mod attempts_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/retiring_tests.rs"]
+mod retiring_tests;
