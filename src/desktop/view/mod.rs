@@ -24,6 +24,10 @@ pub(crate) mod move_document;
 pub(crate) mod new_folder;
 pub(crate) mod operations;
 pub(crate) mod passphrase;
+#[cfg(all(test, feature = "desktop-test-support"))]
+mod polling_privacy_tests;
+#[cfg(all(test, feature = "desktop-test-support"))]
+mod polling_window;
 pub(crate) mod quit;
 pub(crate) mod relationships;
 pub(crate) mod retire_asks;

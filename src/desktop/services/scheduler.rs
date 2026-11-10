@@ -285,3 +285,7 @@ mod retire_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "scheduler_loop_tests.rs"]
 mod loop_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "scheduler_consent_tests.rs"]
+mod consent_tests;

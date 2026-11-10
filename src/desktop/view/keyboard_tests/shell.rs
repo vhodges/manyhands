@@ -36,6 +36,7 @@ use crate::desktop::{
 };
 
 mod journey;
+mod polling_journey;
 mod support;
 
 use PanelKind::{Activity, Documents, Repositories, Tickets};

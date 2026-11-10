@@ -246,7 +246,7 @@ impl Shell {
     }
 
     /// Sets the bottom dock's height, as a person dragging its edge would.
-    fn set_activity_height(&self, height: f32, cx: &mut TestAppContext) {
+    pub(crate) fn set_activity_height(&self, height: f32, cx: &mut TestAppContext) {
         let area = self
             .workspace
             .read_with(cx, |workspace, _| workspace.dock_area().clone());
