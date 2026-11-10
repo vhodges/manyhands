@@ -79,8 +79,8 @@ fn run(items: &[Reported]) -> (Vec<usize>, Vec<(usize, Skip)>, Ended) {
     };
     let mut loops = RetireLoops::default();
     let all: Vec<Candidate> = (0..items.len()).map(candidate).collect();
-    let (lp, replaced) = loops.begin(&root(), all);
-    assert!(replaced.is_none());
+    assert!(loops.begin(&root(), all).is_none());
+    let lp = loops.get_mut(&root()).unwrap();
     let mut submitted = Vec::new();
     let ended = loop {
         let next = lp.next(|candidate| items[at(candidate)].first);
@@ -390,7 +390,8 @@ fn late_answers() {
     // A loop running its first item.
     let first = RequestId::new();
     {
-        let (lp, _) = loops.begin(&root(), vec![candidate(0), candidate(1)]);
+        loops.begin(&root(), vec![candidate(0), candidate(1)]);
+        let lp = loops.get_mut(&root()).unwrap();
         assert!(matches!(lp.next(|_| clear()), Next::Check(_)));
         assert!(matches!(lp.recheck(clear()), Rechecked::Submit(_)));
         lp.submitted(first);
@@ -398,14 +399,16 @@ fn late_answers() {
     let old = loops.get(&root()).unwrap().generation();
     // RT-11: a Check now's attempt replaces the loop's remaining items.
     let second = RequestId::new();
-    let replaced = {
-        let (lp, replaced) = loops.begin(&root(), vec![candidate(2), candidate(3)]);
+    let replaced = loops
+        .begin(&root(), vec![candidate(2), candidate(3)])
+        .expect("the loop it replaced");
+    {
+        let lp = loops.get_mut(&root()).unwrap();
         assert_ne!(lp.generation(), old, "another loop");
         assert!(matches!(lp.next(|_| clear()), Next::Check(_)));
         assert!(matches!(lp.recheck(clear()), Rechecked::Submit(_)));
         lp.submitted(second);
-        replaced.expect("the loop it replaced")
-    };
+    }
     assert_eq!(replaced.running(), Some(first), "its running item goes on");
     let lp = loops.get_mut(&root()).unwrap();
     // The replaced loop's item answers, retired: the new loop is not

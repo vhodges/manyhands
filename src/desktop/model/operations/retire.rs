@@ -132,6 +132,12 @@ impl Operations {
         true
     }
 
+    /// How many marks are held, for a test of the loop's bookkeeping.
+    #[cfg(test)]
+    pub(crate) fn marks_held(&self) -> usize {
+        self.retirements.marks.len()
+    }
+
     /// Whether a mark or an in-flight entry holds the item "Retiring…". The
     /// worker's own queued or running retirement is asked of the worker
     /// (`Services::retiring`).

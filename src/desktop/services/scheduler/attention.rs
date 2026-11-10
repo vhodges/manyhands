@@ -97,6 +97,10 @@ impl Scheduler {
                 Answer::Transport(TransportFailure::Unreachable | TransportFailure::Unavailable)
             );
             if !(held.is_some() && unreachable) {
+                // The attempt sets the phase, so a retirement loop of the
+                // repository ends first, with its mark: it must not go on
+                // into a repository that waits (R-32).
+                self.end_loop(root, cx);
                 let now = self.clock.now();
                 self.schedule.after(&now, &attempt);
             }

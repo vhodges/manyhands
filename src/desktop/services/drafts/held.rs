@@ -19,6 +19,18 @@ use crate::desktop::{
     services::ReadKind,
 };
 
+/// How a fresh listing ended (RT-6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Fresh {
+    /// It landed as the registry's current listing and is ready.
+    Landed,
+    /// A newer listing was asked for meanwhile and took its place, so the
+    /// registry's listing is not known to be fresh. Not a failure.
+    Overtaken,
+    /// The store is unavailable or could not be listed.
+    Failed,
+}
+
 impl DraftRegistry {
     /// Whether the store holds a draft of the item `id` of `kind` in `repo`,
     /// or of a comment on it, whoever holds it. A live session counts too:
@@ -66,27 +78,30 @@ impl DraftRegistry {
     }
 
     /// Lists the store again, off the UI thread and behind the `Drafts`
-    /// gate, and resolves, once the listing is applied, to whether it
-    /// landed as the registry's current one and is ready (RT-6). A listing
-    /// that a newer one overtook, or that failed, is `false`.
-    pub(crate) fn relist(&mut self, cx: &mut Context<Self>) -> Task<bool> {
+    /// gate, and resolves, once the listing is applied, to how it ended
+    /// (RT-6): landed as the registry's current one, overtaken by a newer
+    /// listing, or failed.
+    pub(crate) fn relist(&mut self, cx: &mut Context<Self>) -> Task<Fresh> {
         let stamp = self.generations.next(ViewScope::Drafts);
         if self.unavailable.is_some() {
             self.listing_read = None;
-            return Task::ready(false);
+            return Task::ready(Fresh::Failed);
         }
         let list = off_thread(&self.backend, ReadKind::Drafts, DraftStore::list, cx);
         cx.spawn(async move |registry, cx| {
             let result = list.await;
             registry
                 .update(cx, |registry, cx| {
-                    let landed = registry.apply_listing(stamp, result);
-                    if landed {
-                        cx.notify();
+                    if !registry.apply_listing(stamp, result) {
+                        return Fresh::Overtaken;
                     }
-                    landed && matches!(registry.listing, ListState::Ready { .. })
+                    cx.notify();
+                    match registry.listing {
+                        ListState::Ready { .. } => Fresh::Landed,
+                        _ => Fresh::Failed,
+                    }
                 })
-                .unwrap_or(false)
+                .unwrap_or(Fresh::Failed)
         })
     }
 }

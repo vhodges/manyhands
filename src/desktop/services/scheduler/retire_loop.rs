@@ -33,7 +33,7 @@ use crate::desktop::{
         tabs::TabKey,
     },
     services::{
-        drafts::DraftRegistry,
+        drafts::{DraftRegistry, Fresh},
         edit_tabs::EditTabs,
         inflight::InflightStore,
         requests::{DesktopRequestId, Intent, Lane},
@@ -216,12 +216,12 @@ impl Scheduler {
             .update(cx, |registry, cx| registry.relist(cx))
             .ok();
         cx.spawn(async move |this, cx| {
-            let landed = match listing {
+            let fresh = match listing {
                 Some(listing) => listing.await,
-                None => false,
+                None => Fresh::Failed,
             };
             let _ = this.update(cx, |scheduler, cx| {
-                scheduler.relisted(root, generation, landed, cx)
+                scheduler.relisted(root, generation, fresh, cx)
             });
         })
         .detach();
@@ -229,13 +229,15 @@ impl Scheduler {
 
     /// The fresh listing is in (or failed): the item's rules are checked
     /// again on the UI thread in the turn it is submitted. A listing that
-    /// did not land ends the loop; a rule that now holds the item back
-    /// clears its mark and goes on to the next.
+    /// failed ends the loop. One a newer listing overtook is not known to
+    /// be fresh, so the item is skipped as unknown, not retired on a
+    /// possibly old listing. A rule that holds the item back clears its mark
+    /// and goes on to the next.
     pub(super) fn relisted(
         &mut self,
         root: Root,
         generation: u64,
-        landed: bool,
+        fresh: Fresh,
         cx: &mut Context<Self>,
     ) {
         // The loop went meanwhile (a quit, a reconfiguration, a newer
@@ -243,7 +245,7 @@ impl Scheduler {
         if self.loops.get(&root).map(|lp| lp.generation()) != Some(generation) {
             return;
         }
-        if !landed {
+        if fresh == Fresh::Failed {
             self.end_loop(&root, cx);
             return self.tick(cx);
         }
@@ -260,7 +262,10 @@ impl Scheduler {
         let Some(candidate) = lp.checking().cloned() else {
             return;
         };
-        let facts = probe.facts(&root, &candidate, cx);
+        let mut facts = probe.facts(&root, &candidate, cx);
+        if fresh == Fresh::Overtaken {
+            facts.drafts = Held::Unknown;
+        }
         match lp.recheck(facts) {
             Rechecked::Nothing => {}
             Rechecked::Skipped(_) => {
@@ -369,18 +374,28 @@ impl Scheduler {
 
     /// Whether every repository in `Phase::Retiring` has a loop and every
     /// loop's repository is in it: a repository left in the phase would
-    /// never be polled again.
+    /// never be polled again; the marks of the items being checked belong
+    /// to loops, and the request model holds exactly those marks.
     #[cfg(test)]
-    pub(crate) fn loops_consistent(&self) -> bool {
+    pub(crate) fn loops_consistent(&self, cx: &App) -> bool {
         use crate::desktop::model::polling::Phase;
         let retiring = |root: &Root| {
             self.schedule
                 .repo(root)
                 .is_some_and(|repo| repo.phase == Phase::Retiring)
         };
+        let marks = self
+            .operations
+            .read_with(cx, |operations, _| operations.marks_held())
+            .unwrap_or_default();
         self.known
             .iter()
             .all(|root| retiring(root) == self.loops.get(root).is_some())
             && self.loops.roots().iter().all(retiring)
+            && self
+                .marked
+                .keys()
+                .all(|root| self.loops.get(root).is_some())
+            && marks == self.marked.len()
     }
 }

@@ -12,7 +12,7 @@ use manyhands::{
     repository::ItemDtoKind,
 };
 
-use super::DraftRegistry;
+use super::{DraftRegistry, Fresh};
 use crate::desktop::{
     model::polling::retire_loop::Held,
     services::{Backend, ReadKind, worker::WorkerHandle},
@@ -259,7 +259,7 @@ async fn relist_reads_the_store_behind_its_gate(cx: &mut TestAppContext) {
         "the cached listing is old until the fresh one lands"
     );
     release.send(()).unwrap();
-    assert!(task.await, "the fresh listing landed");
+    assert_eq!(task.await, Fresh::Landed, "the fresh listing landed");
     assert_eq!(held(&registry, ItemDtoKind::Ticket, ITEM, cx), Held::Yes);
 
     // A newer listing asked meanwhile overtakes it.
@@ -271,5 +271,9 @@ async fn relist_reads_the_store_behind_its_gate(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     let _ = release.send(());
-    assert!(!overtaken.await, "overtaken by a newer listing");
+    assert_eq!(
+        overtaken.await,
+        Fresh::Overtaken,
+        "overtaken by a newer listing"
+    );
 }

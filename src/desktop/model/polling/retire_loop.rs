@@ -192,7 +192,11 @@ impl RetireLoop {
     }
 
     /// The items the loop left, with why, in the order it reached them.
-    #[cfg_attr(not(test), allow(dead_code))] // Read by the tests.
+    /// Only the tests read it: the scheduler keeps its loop in the map and
+    /// drops it when it ends, so Task 12's Retire… cannot source its items
+    /// from here (it works from the attempt's `retire` list and the entry's
+    /// lines).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn skipped(&self) -> &[(Candidate, Skip)] {
         &self.skipped
     }
@@ -268,17 +272,12 @@ pub(crate) struct RetireLoops {
 }
 
 impl RetireLoops {
-    /// A loop over `items` for `root`, replacing the one it had (RT-11).
-    /// The replaced loop is given back, so its mark can be cleared.
-    pub(crate) fn begin(
-        &mut self,
-        root: &Root,
-        items: Vec<Candidate>,
-    ) -> (&mut RetireLoop, Option<RetireLoop>) {
+    /// A loop over `items` for `root`, replacing the one it had (RT-11),
+    /// which is given back. Reach the new one with [`Self::get_mut`].
+    pub(crate) fn begin(&mut self, root: &Root, items: Vec<Candidate>) -> Option<RetireLoop> {
         self.next += 1;
-        let fresh = RetireLoop::new(self.next, items);
-        let old = self.loops.insert(root.clone(), fresh);
-        (self.loops.get_mut(root).expect("just inserted"), old)
+        self.loops
+            .insert(root.clone(), RetireLoop::new(self.next, items))
     }
 
     /// The repository whose loop waits on `request`, if any.

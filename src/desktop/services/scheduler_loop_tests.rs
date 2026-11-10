@@ -29,11 +29,12 @@ use crate::desktop::{
     },
     services::{
         JobKind, ReadKind,
+        drafts::Fresh,
         edit_tabs::TabEditing,
         poll_convert::TargetParts,
         requests::{Intent, RequestState},
     },
-    test_support::retire::{answer, no_data},
+    test_support::retire::answer,
 };
 
 const IDS: [&str; 4] = [
@@ -45,11 +46,6 @@ const IDS: [&str; 4] = [
 
 fn retired() -> Envelope<MutationDataDto> {
     answer(State::Retired, Code::Ok, Removal::Observed)
-}
-
-/// `pending`: the retirement is Owed (RT-8).
-fn pending() -> Envelope<MutationDataDto> {
-    answer(State::Pending, Code::RecoveryRequired, Removal::None)
 }
 
 /// A refusal the loop goes on after (RT-7).
@@ -132,7 +128,7 @@ fn consistent(world: &World, cx: &mut TestAppContext) -> bool {
     world
         .services
         .scheduler()
-        .read_with(cx, |scheduler, _| scheduler.loops_consistent())
+        .read_with(cx, |scheduler, cx| scheduler.loops_consistent(cx))
 }
 
 /// Stores a draft of the ticket `n` of `root`, claimed by no one.
@@ -254,11 +250,12 @@ async fn finished(world: &World, root: &str, cx: &mut TestAppContext) {
     World::quiet(cx).await;
 }
 
-/// RT-1 to RT-9 and the rulings of 2026-11-10, through the scheduler: the
-/// loop reads the open tabs and the draft store, submits in report order
-/// under a new request each, goes on or stops by the answer, and ends in
-/// the phase that lets the repository be polled again. A cancelled or
-/// interrupted attempt starts none.
+/// The wiring of the loop through the scheduler: it reads the open tabs and
+/// the draft store, submits in report order under a new request each, says
+/// what came of each in the attempt's entry, and ends in the phase that lets
+/// the repository be polled again; a cancelled attempt starts none. The
+/// rules (RT-7 to RT-9, R-37, duplicates, an interrupted attempt) are
+/// `retire_loop_table`'s, `retire_answer_table`'s and the model's.
 #[gpui_kit::test]
 async fn retire_loop_world(cx: &mut TestAppContext) {
     let rows = vec![
@@ -281,45 +278,9 @@ async fn retire_loop_world(cx: &mut TestAppContext) {
                 &[2],
             )
         },
-        row(
-            "RT-7: a refusal goes on",
-            &[0, 1],
-            vec![refused(), retired()],
-            &[0, 1],
-        ),
-        Row {
-            lines: Some(vec![RetireState::Unfinished { catching_up: false }]),
-            ..row(
-                "RT-8: a pending answer stops the loop",
-                &[0, 1, 2],
-                vec![pending(), retired()],
-                &[0],
-            )
-        },
-        row(
-            "R-37: a request with no retirement data stops the loop",
-            &[0, 1, 2],
-            vec![no_data(Code::InvalidInput), retired()],
-            &[0],
-        ),
-        row(
-            "a duplicate target is checked once",
-            &[1, 1, 0],
-            vec![retired(), retired()],
-            &[1, 0],
-        ),
         Row {
             completion: PollCompletion::Cancelled,
             ..row("a cancelled attempt starts no loop", &[0, 1], vec![], &[])
-        },
-        Row {
-            completion: PollCompletion::Interrupted,
-            ..row(
-                "an interrupted attempt starts no loop",
-                &[0, 1],
-                vec![],
-                &[],
-            )
         },
     ];
     for row in rows {
@@ -750,7 +711,7 @@ async fn retire_loop_exits(cx: &mut TestAppContext) {
         .await;
         world.services.scheduler().update(cx, |scheduler, cx| {
             let generation = scheduler.loops.get(&root).unwrap().generation();
-            scheduler.relisted(root.clone(), generation, false, cx);
+            scheduler.relisted(root.clone(), generation, Fresh::Failed, cx);
         });
         assert!(!retiring(&world, &root, 0, cx), "no longer marked");
         assert_eq!(world.phase(&root, cx), Some(Phase::Idle));
@@ -1037,4 +998,159 @@ async fn user_job_waits_for_retirement(cx: &mut TestAppContext) {
         "the user job runs before the rest of the loop"
     );
     assert_eq!(sent(&world, cx), [0, 1, 2]);
+}
+
+/// R-32: a Check now that fails while a loop runs is an attempt that sets the
+/// repository's phase, so the loop ends first, with its mark: it must not go
+/// on submitting into a repository that waits for the person.
+#[gpui_kit::test]
+async fn a_failed_check_now_ends_the_loop(cx: &mut TestAppContext) {
+    let (world, root) = idle(cx).await;
+    // The first item is marked and waits at the fresh listing.
+    let gate = world.backend.inner().hold_read(ReadKind::Drafts);
+    world.heard(vec![checked(&world, &root, &[0, 1])], cx);
+    World::settle(cx, "the item to be marked", |cx| {
+        retiring(&world, &root, 0, cx)
+    })
+    .await;
+    assert_eq!(world.phase(&root, cx), Some(Phase::Retiring));
+    assert!(consistent(&world, cx));
+
+    world.heard(
+        vec![Heard::CheckFailed {
+            root: root.clone(),
+            request: crate::desktop::services::requests::DesktopRequestId(9_000),
+            code: Code::UnlockRequired,
+            authority: None,
+        }],
+        cx,
+    );
+    assert!(
+        matches!(world.phase(&root, cx), Some(Phase::Attention(_))),
+        "{:?}",
+        world.phase(&root, cx)
+    );
+    assert!(!retiring(&world, &root, 0, cx), "its mark is cleared");
+    assert!(
+        consistent(&world, cx),
+        "no loop, no mark, no Retiring phase"
+    );
+    let _ = gate.send(());
+    World::quiet(cx).await;
+    assert!(sent(&world, cx).is_empty(), "nothing is submitted after it");
+    assert!(matches!(world.phase(&root, cx), Some(Phase::Attention(_))));
+}
+
+/// RT-6: a fresh listing that a newer one overtook (any draft begun,
+/// discarded or restored elsewhere asks for one) is not a failure. The item
+/// it was for is skipped, its mark cleared, and the loop goes on: a draft
+/// stored meanwhile is not lost to it.
+#[gpui_kit::test]
+async fn retire_relist_overtaken(cx: &mut TestAppContext) {
+    let (world, root) = idle(cx).await;
+    for _ in 0..2 {
+        world
+            .backend
+            .inner()
+            .answer_job(JobKind::ContextRetire, retired());
+    }
+    let gate = world.backend.inner().hold_read(ReadKind::Drafts);
+    world.heard(vec![checked(&world, &root, &[0, 1])], cx);
+    World::settle(cx, "the first item to be marked", |cx| {
+        retiring(&world, &root, 0, cx)
+    })
+    .await;
+    // A draft of that item is stored, and another listing is asked for and
+    // lands first, so the held one is overtaken.
+    store_draft(&world, &root, 0);
+    world.services.drafts().update(cx, |registry, cx| {
+        registry.reload_listing(cx);
+    });
+    World::quiet(cx).await;
+    let _ = gate.send(());
+    finished(&world, &root, cx).await;
+    assert_eq!(
+        sent(&world, cx),
+        [1],
+        "the drafted item is skipped and the loop goes on to the next"
+    );
+    assert!(!retiring(&world, &root, 0, cx), "its mark is cleared");
+    assert!(consistent(&world, cx));
+}
+
+/// RT-1 and RT-2 as the scheduler reads them. An attempt that reports an
+/// item whose retirement the worker already holds, running or queued, with
+/// no entry in the in-flight record, submits nothing for it (RT-1); an item
+/// whose retirement was refused joins the refused set, and the next attempt
+/// does not submit it again (RT-2).
+#[gpui_kit::test]
+async fn retire_loop_leaves_what_the_worker_and_the_refused_set_hold(cx: &mut TestAppContext) {
+    use crate::desktop::services::requests::Lane;
+    let direct = |world: &World, n: usize, root: &str| {
+        world.services.worker().submit(
+            Intent::ContextRetire {
+                root: std::path::PathBuf::from(root),
+                kind: AuthoringKind::Ticket,
+                id: IDS[n].parse().unwrap(),
+            },
+            Lane::Background,
+            None,
+            None,
+        )
+    };
+    let (world, root) = idle(cx).await;
+    for _ in 0..4 {
+        world
+            .backend
+            .inner()
+            .answer_job(JobKind::ContextRetire, retired());
+    }
+
+    // Running in the worker.
+    let running = world.backend.inner().hold_job(JobKind::ContextRetire);
+    direct(&world, 0, &root);
+    running_item(&world, cx).await;
+    world.heard(vec![checked(&world, &root, &[0, 1])], cx);
+    World::quiet(cx).await;
+    running.release();
+    finished(&world, &root, cx).await;
+    assert_eq!(sent(&world, cx), [0, 1], "RT-1: not 0 again while it runs");
+
+    // Queued in the worker, behind a job that is held.
+    let refreshing = world.backend.inner().hold_job(JobKind::IndexRefresh);
+    world.services.worker().submit(
+        Intent::IndexRefresh {
+            root: std::path::PathBuf::from(&root),
+        },
+        Lane::Background,
+        None,
+        None,
+    );
+    refreshing.wait_reached();
+    direct(&world, 2, &root);
+    world.heard(vec![checked(&world, &root, &[2, 3])], cx);
+    World::quiet(cx).await;
+    refreshing.release();
+    finished(&world, &root, cx).await;
+    assert_eq!(
+        sent(&world, cx),
+        [0, 1, 2, 3],
+        "RT-1: not 2 again while it waits"
+    );
+
+    // Refused: joins the set; the next attempt leaves it.
+    world
+        .backend
+        .inner()
+        .answer_job(JobKind::ContextRetire, refused());
+    world.heard(vec![checked(&world, &root, &[0])], cx);
+    finished(&world, &root, cx).await;
+    world.heard(vec![checked(&world, &root, &[0, 1])], cx);
+    finished(&world, &root, cx).await;
+    assert_eq!(
+        sent(&world, cx),
+        [0, 1, 2, 3, 0, 1],
+        "RT-2: the refused item is not submitted again"
+    );
+    assert!(consistent(&world, cx));
 }

@@ -359,9 +359,14 @@ impl PollSchedule {
     /// Part E's loop for this repository starts, or, where one runs, starts
     /// again over a newer attempt's items (RT-11). No poll of it meanwhile
     /// (R-32). Returns false when the repository is not scheduled, when a
-    /// poll of it is queued or running, or when it waits for the person or
-    /// for a quit's Cancel. A wait on R-4's schedule or a preempted poll
-    /// gives way: the attempt that began the loop settled it.
+    /// poll of it is queued or running, or when it waits for the person
+    /// (attention) or for a quit's Cancel (`Stopped`). A wait on R-4's
+    /// schedule or a preempted poll would give way, but the callers reach
+    /// this after the attempt that began the loop has been applied, which
+    /// leaves the repository `Idle` (or, for a Check now beside a running
+    /// loop, `Retiring`): in practice only those two are seen. The wider
+    /// match is the owner's ruling for a Check now to start or replace a
+    /// loop from any such phase.
     pub fn begin_retiring(&mut self, root: &Root) -> bool {
         match self.repos.get_mut(root) {
             Some(repo)
