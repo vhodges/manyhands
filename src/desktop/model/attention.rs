@@ -6,7 +6,7 @@
 use manyhands::results::Outcome;
 
 use crate::desktop::{
-    model::{list_state::ListState, operations::Operations},
+    model::{list_state::ListState, operations::Operations, polling::PollSchedule},
     services::{drafts::DraftRegistry, requests::RequestState},
 };
 
@@ -19,8 +19,16 @@ use crate::desktop::{
 /// - one when the draft store is unavailable;
 /// - each unfinished operation the pending lists show;
 /// - one for each repository whose pending list failed to load (decision
-///   14). A read that is loading or busy is not a failure.
-pub(crate) fn needs_attention(operations: &Operations, drafts: &DraftRegistry) -> usize {
+///   14). A read that is loading or busy is not a failure;
+/// - one for each entry the polling model lists (decision 11, R-14): a key,
+///   a host or a repository that holds checking back, however many
+///   repositories it holds back. Paused, off, unreachable and waiting
+///   repositories are not listed.
+pub(crate) fn needs_attention(
+    operations: &Operations,
+    drafts: &DraftRegistry,
+    polling: &PollSchedule,
+) -> usize {
     let requests = operations
         .requests()
         .iter()
@@ -40,7 +48,11 @@ pub(crate) fn needs_attention(operations: &Operations, drafts: &DraftRegistry) -
             ListState::Loading | ListState::Busy => 0,
         })
         .sum();
-    requests + drafts.flush_failures().len() + usize::from(drafts.unavailable().is_some()) + pending
+    requests
+        + drafts.flush_failures().len()
+        + usize::from(drafts.unavailable().is_some())
+        + pending
+        + polling.attention().len()
 }
 
 #[cfg(test)]

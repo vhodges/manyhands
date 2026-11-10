@@ -16,8 +16,13 @@ use manyhands::{
 };
 
 use super::needs_attention;
+#[path = "attention_polling_tests.rs"]
+mod polling_rows;
 use crate::desktop::{
-    model::operations::Operations,
+    model::{
+        operations::Operations,
+        polling::{Answer, KeyId, NotEligible, PollSchedule},
+    },
     services::{
         ReadFailure, ReadResult, Services,
         drafts::DraftRegistry,
@@ -159,7 +164,8 @@ fn unavailable(cx: &mut TestAppContext) -> (Fixture, Entity<DraftRegistry>) {
 
 /// Decisions 3 and 14: what awaits the person is counted from the models
 /// as they are; what is dismissed, cancelled, never sent or still being
-/// read is not.
+/// read is not. The polling model adds its attention entries, one each
+/// (decision 11, R-14), and nothing it holds that waits for itself.
 #[gpui_kit::test]
 async fn counts_what_awaits_the_person(cx: &mut TestAppContext) {
     let (_healthy_fixture, healthy) = failing(0, cx).await;
@@ -177,6 +183,7 @@ async fn counts_what_awaits_the_person(cx: &mut TestAppContext) {
         what: &'static str,
         operations: Operations,
         drafts: Entity<DraftRegistry>,
+        polling: PollSchedule,
         expected: usize,
     }
     let mut cases = Vec::new();
@@ -188,6 +195,7 @@ async fn counts_what_awaits_the_person(cx: &mut TestAppContext) {
                 what,
                 operations,
                 drafts: drafts.clone(),
+                polling: PollSchedule::default(),
                 expected,
             });
         };
@@ -257,9 +265,46 @@ async fn counts_what_awaits_the_person(cx: &mut TestAppContext) {
         pending(operations, "/fixture/c", ReadResult::Busy);
     });
 
+    // The polling model adds one for each entry it lists and nothing else
+    // (decision 11, R-14); its rows are in `attention_polling_tests`.
+    for (what, expected, polling) in polling_rows::rows() {
+        cases.push(Case {
+            what,
+            operations: Operations::default(),
+            drafts: healthy.clone(),
+            polling,
+            expected,
+        });
+    }
+    // The polling term adds to the others and changes none of them.
+    let key = KeyId::new();
+    let mut operations = Operations::default();
+    finished(&mut operations, 1, Outcome::Error);
+    finished(&mut operations, 2, Outcome::Success);
+    pending(&mut operations, "/fixture/a", rows(2));
+    pending(&mut operations, "/fixture/b", failed());
+    pending(&mut operations, "/fixture/c", ReadResult::Busy);
+    cases.push(Case {
+        what: "polling: the sum",
+        operations,
+        drafts: failures.clone(),
+        polling: polling_rows::polled(&[
+            ("a", polling_rows::locked(key)),
+            ("b", polling_rows::locked(key)),
+            ("c", polling_rows::unconfigured()),
+            ("d", Answer::NotEligible(NotEligible::Paused)),
+        ]),
+        // 1 request + 2 flush failures + 2 pending rows + 1 failed read,
+        // and a key locked for two repositories + a configuration.
+        expected: 1 + 2 + 2 + 1 + 2,
+    });
+    // R-23's rules (a request and a pending row of one operation count
+    // once; the worker's running operation is never listed as pending) are
+    // Task 11a's. Their rows go in here with them.
+
     for case in cases {
         let counted = case.drafts.read_with(cx, |registry, _| {
-            needs_attention(&case.operations, registry)
+            needs_attention(&case.operations, registry, &case.polling)
         });
         assert_eq!(counted, case.expected, "{}", case.what);
     }
