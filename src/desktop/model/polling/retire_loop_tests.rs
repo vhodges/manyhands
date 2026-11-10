@@ -26,6 +26,7 @@ fn candidate(n: usize) -> Candidate {
 
 fn clear() -> Facts {
     Facts {
+        retired: false,
         in_flight: false,
         refused: false,
         busy: false,
@@ -166,6 +167,25 @@ fn rules() {
             },
             Some(Skip::Unknown),
         ),
+        (
+            "an earlier loop or a Retire… already retired it",
+            Facts {
+                retired: true,
+                ..clear()
+            },
+            Some(Skip::Retired),
+        ),
+        (
+            "retired before RT-1: not asked twice",
+            Facts {
+                retired: true,
+                in_flight: true,
+                refused: true,
+                busy: true,
+                drafts: Held::Yes,
+            },
+            Some(Skip::Retired),
+        ),
         ("none of them", clear(), None),
         (
             "RT-1 before RT-2",
@@ -174,6 +194,7 @@ fn rules() {
                 refused: true,
                 busy: true,
                 drafts: Held::Yes,
+                ..clear()
             },
             Some(Skip::InFlight),
         ),

@@ -22,7 +22,9 @@
 
 use gpui_kit::{
     AnyElement, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Styled,
-    Window, component::h_flex, div,
+    Window,
+    component::{WindowExt, h_flex},
+    div,
 };
 use manyhands::{canonical::ItemId, drafts::DraftErrorKind, repository::ItemDtoKind};
 
@@ -48,6 +50,18 @@ fn dto_kind(kind: TargetKind) -> ItemDtoKind {
         TargetKind::Ticket => ItemDtoKind::Ticket,
         TargetKind::Document => ItemDtoKind::Document,
     }
+}
+
+/// Where a Retire… press stands while it is in progress.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::desktop::view) enum RetireStep {
+    /// Listing the draft store, or flushing the item's drafts: nothing the
+    /// person can answer.
+    Working,
+    /// A question is open. If no dialog is open any more, something closed
+    /// it without an answer (quitting closes every dialog), and the press
+    /// is over.
+    Asking,
 }
 
 /// The item a Retire… is for, in the shape the tabs and the lock know it.
@@ -120,10 +134,18 @@ impl Workspace {
         let dto = dto_kind(subject.kind);
         if self.services().worker().quitting()
             || self.services().retiring(&subject.root, dto, &key.1, cx)
-            || !self.retire_asked.insert(key)
         {
             return;
         }
+        // A question that was closed without an answer leaves no press.
+        if self.retire_asked.get(&key) == Some(&RetireStep::Asking) && !window.has_active_dialog(cx)
+        {
+            self.retire_asked.remove(&key);
+        }
+        if self.retire_asked.contains_key(&key) {
+            return;
+        }
+        self.retire_asked.insert(key, RetireStep::Working);
         // Unkept text stops it: read at the view, across the windows' tabs.
         let unkept = self
             .services()
@@ -154,6 +176,14 @@ impl Workspace {
             .remove(&(subject.root.clone(), subject.item.to_string()));
     }
 
+    /// A question is about to open for the press.
+    fn retire_asking(&mut self, subject: &Subject) {
+        self.retire_asked.insert(
+            (subject.root.clone(), subject.item.to_string()),
+            RetireStep::Asking,
+        );
+    }
+
     /// Step 2: the dialog for text no draft keeps.
     fn retire_unkept(
         &mut self,
@@ -162,14 +192,15 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.retire_done(&subject);
+        self.retire_asking(&subject);
         let workspace = cx.entity().downgrade();
         ask_unkept(count, window, cx, move |choice, window, cx| {
-            if choice == RetireChoice::ShowTab {
-                let _ = workspace.update(cx, |workspace, cx| {
+            let _ = workspace.update(cx, |workspace, cx| {
+                workspace.retire_done(&subject);
+                if choice == RetireChoice::ShowTab {
                     workspace.show_item_tab(&subject, window, cx)
-                });
-            }
+                }
+            });
         });
     }
 
@@ -211,6 +242,7 @@ impl Workspace {
         if kept == Some(0) {
             return self.retire_commit(subject, window, cx);
         }
+        self.retire_asking(&subject);
         let workspace = cx.entity().downgrade();
         let asked = subject.clone();
         ask_kept(subject.kind, kept, window, cx, move |choice, window, cx| {
@@ -231,6 +263,10 @@ impl Workspace {
         if self.services().retiring(&subject.root, dto, &id, cx) {
             return self.retire_done(&subject);
         }
+        self.retire_asked.insert(
+            (subject.root.clone(), subject.item.to_string()),
+            RetireStep::Working,
+        );
         let unkept = self
             .services()
             .edit_tabs()

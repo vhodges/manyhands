@@ -78,6 +78,8 @@ mod resume;
 mod retire;
 mod review;
 
+pub(in crate::desktop::view) use retire::RetireStep;
+
 use outcomes::{ALREADY_FINISHED, already_finished};
 pub(crate) use outcomes::{share_result, share_words};
 

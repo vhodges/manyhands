@@ -31,7 +31,7 @@ use crate::desktop::{
     },
     test_support::{
         polling::{Asked, unlock_request},
-        retire::{ITEM, OPERATION, answer},
+        retire::{ITEM, OPERATION, answer, empty_list, pending_list},
     },
 };
 
@@ -527,6 +527,34 @@ fn retire_record_state_reaches_the_answer() {
     }
 }
 
+/// Lets the world run, answering Not now to any prompt, until `done` holds
+/// or a bounded time has passed (a failure then shows as the caller's
+/// assertion, not a long wait).
+async fn answering_prompts(
+    world: &World,
+    cx: &mut TestAppContext,
+    done: impl Fn(&mut TestAppContext) -> bool,
+) {
+    use crate::desktop::services::prompts::PromptReply;
+    for _ in 0..600 {
+        cx.run_until_parked();
+        if done(cx) {
+            return;
+        }
+        let prompt = world
+            .services
+            .operations()
+            .update(cx, |operations, _| operations.take_prompt());
+        if let Some(prompt) = prompt {
+            prompt.answer(PromptReply::Cancelled);
+        }
+        cx.executor()
+            .timer(std::time::Duration::from_millis(10))
+            .await;
+    }
+    assert!(done(cx), "the world did not settle");
+}
+
 /// Seeds the pending row of `OPERATION` in `root` into the request model, as
 /// a read of the repository's pending operations would list it.
 fn list_pending(world: &World, root: &str, cx: &mut TestAppContext) {
@@ -627,19 +655,48 @@ async fn retire_resume_resends_original(cx: &mut TestAppContext) {
         JobKind::ContextRetire,
         answer(State::Retired, Code::Ok, Removal::Observed),
     );
+    assert!(
+        world.services.worker().is_declined(key.key_id),
+        "Not now declined the key"
+    );
     cx.update(|cx| world.services.resume(&root, &operation.to_string(), cx));
-    // The resend asks for the key again: cleared, it prompts, not declined.
-    super::attention_tests::prompt(&world, cx)
-        .await
-        .answer(PromptReply::Cancelled);
-    World::settle(cx, "the resend", |cx| {
-        retirements_sent(&world, cx).len() == 2
+    // Resume itself cleared the mark, before anything was sent.
+    assert!(
+        !world.services.worker().is_declined(key.key_id),
+        "Resume clears the request's declined keys"
+    );
+    // The resend asks for the key again, and may prompt; the wait is bounded.
+    answering_prompts(&world, cx, |cx| {
+        retirements_sent(&world, cx).len() == 2 && entered(&world, cx).is_empty()
     })
     .await;
-    World::settle(cx, "the resend to end", |cx| entered(&world, cx).is_empty()).await;
     let sent = retirements_sent(&world, cx);
     assert_eq!(sent[1].0, Lane::User);
     assert_eq!(sent[1].1, original[0], "under the named request ID");
+    // I-B: the Resume that was answered `original_request_required` is
+    // dismissed, so it does not count as needing attention: only the pending
+    // row we listed does.
+    let resumes = world.services.operations().read_with(cx, |operations, _| {
+        operations
+            .requests()
+            .iter()
+            .filter(|request| matches!(request.intent, Intent::OperationResume { .. }))
+            .map(|request| matches!(request.state, RequestState::Dismissed))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(resumes, [true], "the Resume is dismissed");
+    let counted = world.services.scheduler().read_with(cx, |scheduler, cx| {
+        world.services.operations().read_with(cx, |operations, cx| {
+            world.services.drafts().read_with(cx, |drafts, _| {
+                crate::desktop::model::attention::needs_attention(
+                    operations,
+                    drafts,
+                    scheduler.schedule(),
+                )
+            })
+        })
+    });
+    assert_eq!(counted, 1, "the listed row alone");
     assert_ne!(sent[1].2, sent[0].2, "a new desktop request");
     world.services.operations().read_with(cx, |operations, _| {
         match &operations.request(sent[1].2).expect("the resend").intent {
@@ -687,6 +744,11 @@ async fn unlock_picks_reachable(cx: &mut TestAppContext) {
         previous.retirement_operation(request, operation);
         previous.retirement_ended(request, RetirementEnd::Accepted);
     }
+    // E-32: the library still lists the pending retirement's row.
+    world
+        .backend
+        .inner()
+        .answer_pending(Some(pending_list(&operation.to_string())));
     super::attention_tests::locked_pair(&world, &key, &[a.clone(), b.clone()], cx).await;
     let held = vec![(Reason::KeyLocked(key.key_id), {
         let mut roots = vec![a.clone(), b.clone()];
@@ -720,7 +782,15 @@ async fn unlock_picks_reachable(cx: &mut TestAppContext) {
         answer(State::Retired, Code::Ok, Removal::Observed),
     );
     assert_eq!(entries(&world, cx), held);
+    // Not now had declined the key; Unlock… clears the mark before it
+    // resends.
+    world.services.worker().decline_for_testing(key.key_id);
+    assert!(world.services.worker().is_declined(key.key_id));
     assert!(super::attention_tests::unlock(&world, key.key_id, cx));
+    assert!(
+        !world.services.worker().is_declined(key.key_id),
+        "Unlock… clears the key's declined mark"
+    );
     World::settle(cx, "the attention to clear", |cx| {
         entries(&world, cx).is_empty()
     })
@@ -813,4 +883,218 @@ async fn retire_chosen_checks_rt1_again(cx: &mut TestAppContext) {
         .scheduler()
         .update(cx, |scheduler, cx| scheduler.set_quitting(true, cx));
     assert_eq!(choose(&world, &other, cx), None);
+}
+
+/// The previous launch left a retirement of the ticket pending (`request`,
+/// journal row `operation`), in repository `a`; a launch poll has landed.
+async fn left_pending(
+    cx: &mut TestAppContext,
+    list: Option<manyhands::repository::OperationListDto>,
+) -> (World, String, RequestId, OperationId) {
+    let world = World::new(true, cx);
+    let root = world.ssh_repo("a");
+    let (request, operation) = (RequestId::new(), OperationId::new());
+    {
+        let mut previous = InflightStore::open(world.fixture.data_dir());
+        assert_eq!(previous.try_acquire(), Acquired::Now);
+        previous.retirement_submitting(RetirementEntry::new(
+            request,
+            &root,
+            TargetKind::Ticket,
+            &item(),
+        ));
+        previous.retirement_operation(request, operation);
+        previous.retirement_ended(request, RetirementEnd::Accepted);
+    }
+    world.backend.inner().answer_pending(list);
+    world.backend.answer_poll(world.completed());
+    world.list(std::slice::from_ref(&root), cx);
+    World::settle(cx, "the launch poll", |_| {
+        world.backend.polled_roots().len() == 1
+    })
+    .await;
+    World::quiet(cx).await;
+    (world, root, request, operation)
+}
+
+fn retiring_now(world: &World, root: &str, cx: &mut TestAppContext) -> bool {
+    world.services.operations().read_with(cx, |operations, _| {
+        operations.is_retiring(root, manyhands::repository::ItemDtoKind::Ticket, ITEM)
+    })
+}
+
+/// R-31, review I-C: a pending retirement whose row was settled outside this
+/// process (the CLI, a second instance) no longer holds its item "Retiring…"
+/// and read-only: at launch the entry is ended against a complete, fresh
+/// pending list that does not name its row, and the item is offered Retire…
+/// and taken up by the loop again.
+#[gpui_kit::test]
+async fn retire_entry_ends_when_its_row_was_settled_elsewhere(cx: &mut TestAppContext) {
+    let (world, root, _, _) = left_pending(cx, Some(empty_list())).await;
+    assert!(entered(&world, cx).is_empty(), "the entry ended");
+    assert!(!retiring_now(&world, &root, cx), "no longer Retiring…");
+
+    // Offered Retire… again, and taken up by the loop at the next attempt.
+    world.backend.inner().answer_job(
+        JobKind::ContextRetire,
+        answer(State::Refused, Code::WorktreeNotClean, Removal::None),
+    );
+    world.heard(
+        vec![Heard::CheckedNow(
+            root.clone(),
+            Some(crate::desktop::model::polling::PollAttempt {
+                root: root.clone(),
+                operation: OperationId::new(),
+                answer: crate::desktop::model::polling::Answer::Completed,
+                completed_at: Some(crate::desktop::model::polling::Clock::utc(&*world.clock)),
+                next_eligible_at: Some(
+                    crate::desktop::model::polling::Clock::utc(&*world.clock)
+                        + time::Duration::seconds(300),
+                ),
+                targets: vec![crate::desktop::model::polling::AttemptTarget {
+                    item_id: Some(item()),
+                    kind: Some(TargetKind::Ticket),
+                    disposition: crate::desktop::model::polling::Disposition::Closed,
+                }],
+                index_pending: false,
+            }),
+        )],
+        cx,
+    );
+    World::settle(cx, "the loop to take it up", |cx| {
+        retirements_sent(&world, cx).len() == 1
+    })
+    .await;
+    World::quiet(cx).await;
+    world.services.scheduler().read_with(cx, |scheduler, _| {
+        let offers = scheduler.retire_offers(&root);
+        assert_eq!(offers.len(), 1, "refused: offered Retire…");
+        assert_eq!(offers[0].item, item());
+    });
+}
+
+/// Review I-C: only a complete list that was read ends an entry. One that
+/// failed, one that is not complete and one that names the row end nothing.
+#[gpui_kit::test]
+async fn retire_entries_reconcile_only_from_a_complete_list(cx: &mut TestAppContext) {
+    use manyhands::repository::OperationListDto;
+    let (world, root, _, operation) = left_pending(cx, None).await;
+    assert_eq!(entered(&world, cx).len(), 1, "a failed read ends nothing");
+    let reconcile = |world: &World, list: Option<OperationListDto>, cx: &mut TestAppContext| {
+        world.backend.inner().answer_pending(list);
+        world
+            .services
+            .scheduler()
+            .update(cx, |scheduler, cx| scheduler.reconcile_entries(cx));
+    };
+    let incomplete = OperationListDto {
+        items: Vec::new(),
+        complete: false,
+    };
+    for (what, list) in [
+        ("an incomplete list", Some(incomplete)),
+        (
+            "a list that names the row",
+            Some(pending_list(&operation.to_string())),
+        ),
+    ] {
+        reconcile(&world, list, cx);
+        World::quiet(cx).await;
+        assert_eq!(entered(&world, cx).len(), 1, "{what} ends nothing");
+        assert!(retiring_now(&world, &root, cx), "{what}");
+    }
+    // A list read before the entries last changed may predate the change.
+    let stale = world
+        .services
+        .scheduler()
+        .read_with(cx, |scheduler, _| scheduler.entry_epoch + 1);
+    world.services.scheduler().update(cx, |scheduler, cx| {
+        scheduler.reconciled(&root, stale, Some(empty_list()), cx)
+    });
+    assert_eq!(entered(&world, cx).len(), 1, "a stale read ends nothing");
+    reconcile(&world, Some(empty_list()), cx);
+    World::settle(cx, "the entry to end", |cx| entered(&world, cx).is_empty()).await;
+    assert!(!retiring_now(&world, &root, cx));
+}
+
+/// Review I-C: an entry whose retirement the worker holds is never
+/// reconciled, whatever the list says: the resend running now will answer.
+#[gpui_kit::test]
+async fn retire_entry_the_worker_holds_is_not_reconciled(cx: &mut TestAppContext) {
+    // The row is listed at launch, so the entry stays.
+    let (world, root, request, operation) = left_pending(cx, None).await;
+    world
+        .backend
+        .inner()
+        .answer_pending(Some(pending_list(&operation.to_string())));
+    // A resend of it is running.
+    let running = world.backend.inner().hold_job(JobKind::ContextRetire);
+    world.backend.inner().answer_job(
+        JobKind::ContextRetire,
+        answer(State::Retired, Code::Ok, Removal::Observed),
+    );
+    world.services.scheduler().update(cx, |scheduler, _| {
+        scheduler.resend_retirement(request, &root, TargetKind::Ticket, &item(), Lane::User);
+    });
+    running.wait_reached();
+    // The list no longer names its row, but the worker holds the request.
+    world.backend.inner().answer_pending(Some(empty_list()));
+    world
+        .services
+        .scheduler()
+        .update(cx, |scheduler, cx| scheduler.reconcile_entries(cx));
+    World::quiet(cx).await;
+    assert_eq!(entered(&world, cx), [request], "held by the worker");
+    running.release();
+    World::settle(cx, "the resend to end", |cx| entered(&world, cx).is_empty()).await;
+}
+
+/// Review minor 1: what the attempt's entry says when a pending retirement's
+/// row is settled by an Abandon or a Resume. A Resume that finished the row
+/// says "Finished retiring {item}."; nothing is claimed otherwise, and never
+/// "Retired the copy…", which only a retirement that removed it says.
+#[gpui_kit::test]
+async fn retire_pending_ended_says_only_what_happened(cx: &mut TestAppContext) {
+    use crate::desktop::model::polling::entry::{
+        RetireLine, RetireState, finished_text, short_code,
+    };
+    let (world, root, request, operation) =
+        left_pending(cx, Some(pending_list(&OperationId::new().to_string()))).await;
+    let lines = |world: &World, cx: &mut TestAppContext| -> Vec<RetireLine> {
+        world.services.scheduler().read_with(cx, |scheduler, _| {
+            scheduler
+                .schedule()
+                .attempts()
+                .flat_map(|(_, _, lines)| lines.to_vec())
+                .collect()
+        })
+    };
+    let owed = Verdict::Owed {
+        attention: None,
+        catching_up: false,
+    };
+    for (finished, expected) in [(true, vec![RetireState::Finished]), (false, vec![])] {
+        // Pending again, with its line saying it did not finish.
+        world.services.scheduler().update(cx, |scheduler, cx| {
+            scheduler.hold_retirement(request, &root, TargetKind::Ticket, &item(), operation, cx);
+            let schedule = scheduler.schedule_mut();
+            schedule.retire_started(&root, TargetKind::Ticket, &item());
+            schedule.retire_settled(&root, TargetKind::Ticket, &item(), &owed);
+        });
+        world.heard(
+            vec![Heard::PendingEnded {
+                root: root.clone(),
+                operation,
+                finished,
+            }],
+            cx,
+        );
+        let said: Vec<RetireState> = lines(&world, cx).iter().map(|line| line.state).collect();
+        assert_eq!(said, expected, "finished: {finished}");
+        assert!(entered(&world, cx).is_empty());
+        for line in lines(&world, cx) {
+            assert_eq!(line.text(), finished_text(&short_code(&item())));
+            assert!(!line.text().contains("Retired the copy"));
+        }
+    }
 }

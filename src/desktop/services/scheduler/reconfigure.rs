@@ -110,6 +110,9 @@ pub(crate) enum Heard {
     /// retirement of the item the in-flight record's entry names is sent
     /// again under it, on the user lane (E4, R-31).
     ResendRetirement {
+        /// The Resume request that was answered: it has done its work, and
+        /// is dismissed once the resend is sent.
+        resume: DesktopRequestId,
         request: RequestId,
         root: Root,
         kind: TargetKind,
@@ -118,12 +121,12 @@ pub(crate) enum Heard {
     /// An Abandon, or a Resume that finished the row itself (the index
     /// hand-off), settled the pending retirement whose journal row is
     /// `operation`: its entry in the in-flight record ends, since no request
-    /// of it is left to end it. `retired`: the copy is gone (a Resume), not
-    /// abandoned.
+    /// of it is left to end it. `finished`: a Resume completed the row (the
+    /// attempt's entry says so); otherwise nothing is claimed.
     PendingEnded {
         root: Root,
         operation: OperationId,
-        retired: bool,
+        finished: bool,
     },
     /// A Check now finished with a failure: the request's answer, read as a
     /// poll's would be (C3, A4). The request names the keys its attempt
@@ -241,6 +244,7 @@ fn retiring(event: &WorkerEvent, operations: &Operations) -> Option<Retiring> {
 /// A resume or an abandon that settled the row itself ends the entry: the
 /// retirement is over, and no request is left to end it.
 fn settled_retirement(
+    id: DesktopRequestId,
     root: &std::path::Path,
     operation_id: OperationId,
     resume: bool,
@@ -254,6 +258,7 @@ fn settled_retirement(
             return None;
         }
         return Some(Heard::ResendRetirement {
+            resume: id,
             request: named_request(envelope)?,
             root: entry.root.clone(),
             kind: entry.kind,
@@ -264,7 +269,8 @@ fn settled_retirement(
     settled.then(|| Heard::PendingEnded {
         root: entry.root.clone(),
         operation: operation_id,
-        retired: resume,
+        // A row settled elsewhere (a no-op) is not this Resume's doing.
+        finished: resume && envelope.outcome == Outcome::Success,
     })
 }
 
@@ -285,7 +291,7 @@ pub(crate) fn heard(event: &WorkerEvent, operations: &Operations) -> Option<Hear
             | Intent::OperationAbandon { root, operation_id } = intent
             {
                 let resume = matches!(intent, Intent::OperationResume { .. });
-                return settled_retirement(root, *operation_id, resume, envelope, operations);
+                return settled_retirement(*id, root, *operation_id, resume, envelope, operations);
             }
             let gone =
                 envelope.outcome == Outcome::Success || envelope.code == ResultCode::AlreadyApplied;
@@ -403,17 +409,18 @@ mod tests {
                 vec![],
             )
         };
-        let ended = |retired| {
+        let ended = |finished| {
             Some(Heard::PendingEnded {
                 root: "/r".to_owned(),
                 operation,
-                retired,
+                finished,
             })
         };
 
         assert_eq!(
             finished(resume(operation), original_request(named)),
             Some(Heard::ResendRetirement {
+                resume: DesktopRequestId(1),
                 request: named,
                 root: "/r".to_owned(),
                 kind: TargetKind::Ticket,
@@ -421,6 +428,14 @@ mod tests {
             })
         );
         assert_eq!(finished(resume(operation), done()), ended(true));
+        // Settled elsewhere (a no-op): the entry ends, and nothing is claimed.
+        let noop = Envelope::mutation(
+            "operation",
+            Scope::default(),
+            Outcome::Noop,
+            ResultCode::AlreadyApplied,
+        );
+        assert_eq!(finished(resume(operation), noop), ended(false));
         assert_eq!(finished(abandon(operation), done()), ended(false));
         // Not a retirement's row, another code, a failed abandon, and an
         // abandon answered with a request to send again.

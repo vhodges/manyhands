@@ -82,6 +82,8 @@ impl PollSchedule {
     /// Removal drops the schedule (R-11).
     pub fn remove(&mut self, root: &Root) {
         self.repos.remove(root);
+        self.refused.forget_root(root);
+        self.refused_kinds.retain(|(held, _), _| held != root);
     }
 
     pub fn repo(&self, root: &Root) -> Option<&RepoSchedule> {
@@ -441,6 +443,24 @@ impl PollSchedule {
             _ => None,
         };
         self.set_retire_line(root, kind, item, state, false);
+    }
+
+    /// The pending retirement of `item` was settled by an Abandon or a
+    /// Resume (E4): after a Resume that finished the row the entry says it
+    /// finished retiring; after an Abandon, or a row settled elsewhere, it
+    /// says nothing, as it claims nothing was removed.
+    pub fn retire_ended(&mut self, root: &Root, kind: TargetKind, item: &ItemId, finished: bool) {
+        let state = finished.then_some(RetireState::Finished);
+        self.set_retire_line(root, kind, item, state, false);
+    }
+
+    /// Whether the attempt's entry says `item` was retired since the attempt.
+    pub fn retire_line_retired(&self, root: &Root, kind: TargetKind, item: &ItemId) -> bool {
+        self.repos.get(root).is_some_and(|repo| {
+            repo.retirements.iter().any(|line| {
+                line.kind == kind && line.item == *item && line.state == RetireState::Retired
+            })
+        })
     }
 
     /// The item's line is `state`, or gone, with `None`. A retirement that

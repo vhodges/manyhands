@@ -80,11 +80,6 @@ pub(crate) struct RetirementEntry {
     kind: Kind,
     item: String,
     operation: Option<String>,
-    /// The request was left `Accepted`: the library holds it pending. An
-    /// entry written before this field existed is not owed, and keeps the
-    /// operation it learned.
-    #[serde(default)]
-    owed: bool,
 }
 
 impl RetirementEntry {
@@ -100,15 +95,7 @@ impl RetirementEntry {
             },
             item: item.to_string(),
             operation: None,
-            owed: false,
         }
-    }
-
-    /// Whether the library holds a row for the request: it named an
-    /// operation, or the request was left Owed. A request that was never
-    /// sent has neither, and nothing waits for it.
-    fn held_by_library(&self) -> bool {
-        self.owed || self.operation.is_some()
     }
 
     pub(crate) fn request(&self) -> Option<RequestId> {
@@ -481,9 +468,9 @@ impl InflightStore {
     /// removed from the queue and one never sent end its entry; an Owed
     /// (accepted) request keeps it, since Resume needs the item. A request
     /// removed or not sent ends its entry only if the library holds no row
-    /// for it: a resend of a pending retirement that a reconfiguration or a
-    /// quit took from the queue leaves the retirement pending (review I-3).
-    /// True when the entry ended.
+    /// for it, that is, no operation is known: a resend of a pending
+    /// retirement that a reconfiguration or a quit took from the queue leaves
+    /// the retirement pending (review I-3). True when the entry ended.
     pub(crate) fn retirement_ended(&mut self, request: RequestId, end: RetirementEnd) -> bool {
         let request = request.to_string();
         let Some(at) = self
@@ -494,18 +481,11 @@ impl InflightStore {
         else {
             return false;
         };
-        let held = self.record.retirements[at].held_by_library();
+        let held = self.record.retirements[at].operation.is_some();
         let ended = match end {
             RetirementEnd::Finished => true,
             RetirementEnd::Removed | RetirementEnd::NotSent => !held,
-            RetirementEnd::Accepted => {
-                if !self.record.retirements[at].owed {
-                    self.record.retirements[at].owed = true;
-                    self.persist();
-                }
-                false
-            }
-            RetirementEnd::Unknown => false,
+            RetirementEnd::Accepted | RetirementEnd::Unknown => false,
         };
         if ended {
             self.record.retirements.remove(at);

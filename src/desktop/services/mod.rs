@@ -241,6 +241,19 @@ pub(crate) trait Backend: Send + Sync + 'static {
         None
     }
 
+    /// The pending operations of the repository at `root`, read off the UI
+    /// thread, for the scheduler to match its in-flight entries against
+    /// (D6 review I-C). `None`: the read failed, so nothing is concluded. A
+    /// test may stand in for the library's list.
+    fn pending_operations(
+        &self,
+        root: &std::path::Path,
+    ) -> Option<manyhands::repository::OperationListDto> {
+        let service = self.service();
+        let repo = service.resolve_repository(root).ok()?;
+        service.list_operations(&repo).ok()
+    }
+
     /// Called on the worker thread after a job's library call returns,
     /// before the worker decides what follows it. An answer it gives
     /// stands in place of the library's: a test's constructed answer.

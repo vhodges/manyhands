@@ -18,6 +18,7 @@
 mod attention;
 mod entity;
 mod react;
+mod reconcile;
 mod reconfigure;
 mod registration;
 mod retire;

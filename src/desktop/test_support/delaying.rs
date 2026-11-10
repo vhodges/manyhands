@@ -25,8 +25,8 @@ use futures::channel::oneshot;
 use manyhands::{
     drafts::{DraftError, DraftStore},
     repository::{
-        ConflictDto, Mutation, MutationDataDto, OperationId, PrepareDataDto, ProgressStage,
-        RepositoryService, keys::KeyStore,
+        ConflictDto, Mutation, MutationDataDto, OperationId, OperationListDto, PrepareDataDto,
+        ProgressStage, RepositoryService, keys::KeyStore,
     },
     results::Envelope,
 };
@@ -81,6 +81,9 @@ pub(crate) struct DelayingBackend {
     /// Canned conflicts, each standing in place of the next conflict read
     /// of its own operation ID.
     conflicts: Mutex<Vec<ConflictDto>>,
+    /// A list that stands in place of the library's pending operations of
+    /// every repository (`Some(None)`: the read fails).
+    pending: Mutex<Option<Option<OperationListDto>>>,
 }
 
 impl DelayingBackend {
@@ -107,6 +110,7 @@ impl DelayingBackend {
             stages: Mutex::default(),
             prepares: Mutex::default(),
             conflicts: Mutex::default(),
+            pending: Mutex::default(),
         }
     }
 
@@ -171,6 +175,13 @@ impl DelayingBackend {
         answer: Envelope<MutationDataDto>,
     ) -> JobGate {
         self.hold_return(kind, Some(answer))
+    }
+
+    /// Makes every repository's pending operations read answer `list` in
+    /// place of the library's (`None`: the read fails), as the scheduler
+    /// matches its in-flight entries against it.
+    pub(crate) fn answer_pending(&self, list: Option<OperationListDto>) {
+        *self.pending.lock().unwrap() = Some(list);
     }
 
     /// Answers the next job of `kind` with `answer` and makes no library
@@ -326,6 +337,17 @@ impl Backend for DelayingBackend {
             .unwrap()
             .get_mut(&kind)
             .and_then(VecDeque::pop_front)
+    }
+
+    fn pending_operations(&self, root: &std::path::Path) -> Option<OperationListDto> {
+        let canned = self.pending.lock().unwrap().clone();
+        match canned {
+            Some(list) => list,
+            None => {
+                let repo = self.service().resolve_repository(root).ok()?;
+                self.service().list_operations(&repo).ok()
+            }
+        }
     }
 
     fn after_job(&self, kind: JobKind) -> Option<Envelope<MutationDataDto>> {

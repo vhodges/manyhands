@@ -125,6 +125,10 @@ pub(crate) struct Scheduler {
     /// The retirement requests the loops sent and have not heard end, by
     /// repository.
     pub(super) sent: BTreeMap<DesktopRequestId, Root>,
+    /// Moves whenever a retirement's entry begins, answers or settles: a
+    /// pending-operations read that began before the last move may predate
+    /// it (`reconcile`).
+    pub(super) entry_epoch: u64,
 }
 
 impl Scheduler {
@@ -165,6 +169,7 @@ impl Scheduler {
             loops: RetireLoops::default(),
             marked: BTreeMap::new(),
             sent: BTreeMap::new(),
+            entry_epoch: 0,
         }
     }
 
@@ -279,6 +284,8 @@ impl Scheduler {
             return;
         }
         self.acquire(cx);
+        // A row settled while the window was away ends its entry.
+        self.reconcile_entries(cx);
         let roots = self.known.iter().cloned().collect();
         self.read_registrations(roots, cx);
         self.tick(cx);
@@ -290,6 +297,7 @@ impl Scheduler {
             // `plan` takes them over when each repository is due (L-1), and
             // their rows are not offered Resume.
             self.publish(cx);
+            self.reconcile_entries(cx);
         }
     }
 
@@ -480,16 +488,17 @@ impl Scheduler {
                 }
                 Heard::PolicyMoved(root) => self.read_registrations(vec![root], cx),
                 Heard::ResendRetirement {
+                    resume,
                     request,
                     root,
                     kind,
                     item,
-                } => self.resend_resumed(request, &root, kind, &item, cx),
+                } => self.resend_resumed(resume, request, &root, kind, &item, cx),
                 Heard::PendingEnded {
                     root,
                     operation,
-                    retired,
-                } => self.pending_ended(&root, operation, retired, cx),
+                    finished,
+                } => self.pending_ended(&root, operation, finished, cx),
                 Heard::CheckedNow(root, attempt) => self.checked_now(root, attempt, cx),
                 Heard::CheckFailed {
                     root,

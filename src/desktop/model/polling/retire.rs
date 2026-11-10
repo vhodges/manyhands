@@ -274,6 +274,12 @@ impl RefusedSet {
         self.refused.contains(&(root.clone(), item.clone()))
     }
 
+    /// The repository is forgotten: so is everything held for it.
+    pub(crate) fn forget_root(&mut self, root: &Root) {
+        self.refused.retain(|(held, _)| held != root);
+        self.recovery.retain(|(held, _), _| held != root);
+    }
+
     /// Retire… was chosen for the item: it and its count start over (A19).
     pub(crate) fn forget(&mut self, root: &Root, item: &ItemId) {
         let key = (root.clone(), item.clone());

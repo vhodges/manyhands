@@ -27,6 +27,7 @@ use crate::desktop::{
         operations::RetiringKey,
         polling::{
             AttemptTarget, PollSchedule, Root, TargetKind,
+            entry::RetireOffer,
             retire::Verdict,
             retire_loop::{Candidate, Facts, Held, Next, Rechecked, Settled},
         },
@@ -70,14 +71,7 @@ pub(super) fn retirement_out(
     kind: TargetKind,
     item: &ItemId,
 ) -> bool {
-    let path = PathBuf::from(root);
-    let queued = worker.in_flight(|intent| {
-        matches!(
-            intent,
-            Intent::ContextRetire { root: asked, kind: asked_kind, id }
-                if *asked == path && *asked_kind == authoring_kind(kind) && id == item
-        )
-    });
+    let queued = retirement_out_in_worker(worker, root, kind, item);
     let entered = store.retirements().iter().any(|entry| {
         entry.root() == root
             && entry
@@ -85,6 +79,24 @@ pub(super) fn retirement_out(
                 .is_some_and(|(of, id)| of == kind && id == *item)
     });
     queued || entered
+}
+
+/// Whether a retirement of the item is queued, running or waiting out `busy`
+/// in the worker.
+pub(super) fn retirement_out_in_worker(
+    worker: &WorkerHandle,
+    root: &Root,
+    kind: TargetKind,
+    item: &ItemId,
+) -> bool {
+    let path = PathBuf::from(root);
+    worker.in_flight(|intent| {
+        matches!(
+            intent,
+            Intent::ContextRetire { root: asked, kind: asked_kind, id }
+                if *asked == path && *asked_kind == authoring_kind(kind) && id == item
+        )
+    })
 }
 
 /// What the loop reads of one item. Borrowed field by field from the
@@ -110,6 +122,7 @@ impl Probe<'_> {
             id: item.to_string(),
         };
         Facts {
+            retired: self.schedule.retire_line_retired(root, kind, item),
             in_flight,
             refused: self.schedule.retirement_refused(root, item),
             busy: self
@@ -125,6 +138,25 @@ impl Probe<'_> {
 }
 
 impl Scheduler {
+    /// The items Retire… is offered for in `root` (E4): the schedule's, less
+    /// the ones a loop that is running will still take up.
+    pub(crate) fn retire_offers(&self, root: &Root) -> Vec<RetireOffer> {
+        let coming = self
+            .loops
+            .get(root)
+            .map(|lp| lp.remaining())
+            .unwrap_or_default();
+        self.schedule
+            .retire_offers(root)
+            .into_iter()
+            .filter(|offer| {
+                !coming
+                    .iter()
+                    .any(|next| next.kind == offer.kind && next.item == offer.item)
+            })
+            .collect()
+    }
+
     /// A Check now completed (E1): attention is cleared first, then its
     /// attempt is the repository's latest, the index is refreshed if it
     /// was behind (R-10), and its items replace whatever the loop had left

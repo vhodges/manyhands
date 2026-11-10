@@ -106,3 +106,20 @@ pub(crate) fn pending_row(
         failure_code: None,
     }
 }
+
+/// The library's complete list of pending operations naming the retirement
+/// row `operation`, as the scheduler's reconciliation reads it.
+pub(crate) fn pending_list(operation: &str) -> manyhands::repository::OperationListDto {
+    manyhands::repository::OperationListDto {
+        items: vec![pending_row(operation, "created", None)],
+        complete: true,
+    }
+}
+
+/// A complete list that names no pending operation.
+pub(crate) fn empty_list() -> manyhands::repository::OperationListDto {
+    manyhands::repository::OperationListDto {
+        items: Vec::new(),
+        complete: true,
+    }
+}

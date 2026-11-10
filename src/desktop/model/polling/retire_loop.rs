@@ -68,6 +68,10 @@ pub(crate) enum Held {
 /// What the scheduler could read of one item when the loop reached it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Facts {
+    /// The attempt's entry already says the item was retired: an earlier
+    /// loop, or a Retire…, did it. Asked again, the library would answer
+    /// `already_absent` and the loop would count it twice.
+    pub retired: bool,
     /// A retirement of the item is queued, running or pending (RT-1).
     pub in_flight: bool,
     /// The item is in the session's refused set (RT-2, R-21).
@@ -80,6 +84,7 @@ pub(crate) struct Facts {
 /// Why an item is not retired by the loop. The item gets Retire… (E4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Skip {
+    Retired,
     InFlight,
     Refused,
     Busy,
@@ -90,7 +95,9 @@ pub(crate) enum Skip {
 impl Facts {
     /// The first rule that holds the item back, in RT order.
     pub(crate) fn skip(&self) -> Option<Skip> {
-        if self.in_flight {
+        if self.retired {
+            Some(Skip::Retired)
+        } else if self.in_flight {
             Some(Skip::InFlight)
         } else if self.refused {
             Some(Skip::Refused)
@@ -183,6 +190,16 @@ impl RetireLoop {
         }
     }
 
+    /// The items the loop has not yet reached, and the one it is checking:
+    /// the loop will take them up, so Retire… is not offered for them.
+    pub(crate) fn remaining(&self) -> Vec<Candidate> {
+        self.checking()
+            .into_iter()
+            .chain(self.queue.iter())
+            .cloned()
+            .collect()
+    }
+
     /// The request the loop is waiting on, if any.
     pub(crate) fn running(&self) -> Option<RequestId> {
         match &self.step {
@@ -193,9 +210,9 @@ impl RetireLoop {
 
     /// The items the loop left, with why, in the order it reached them.
     /// Only the tests read it: the scheduler keeps its loop in the map and
-    /// drops it when it ends, so Task 12's Retire… cannot source its items
-    /// from here (it works from the attempt's `retire` list and the entry's
-    /// lines).
+    /// drops it when it ends, so Retire… does not source its items from
+    /// here (it works from the attempt's `retire` list, the refused set and
+    /// the entry's lines, less `remaining`).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn skipped(&self) -> &[(Candidate, Skip)] {
         &self.skipped

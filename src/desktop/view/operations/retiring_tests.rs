@@ -2,7 +2,7 @@
 //! decision 13): what the attempt's entry says of each retirement, and the
 //! request row of one that stayed, at the default window. The rows wrap
 //! inside Activity, and the action of a row is where a click reaches it.
-//! Retire… and Resume are Task 12's.
+//! Retire… and Resume are `retire_tests`'s.
 
 use gpui_kit::{TestAppContext, px, size, test::TestWindowExt};
 use manyhands::{

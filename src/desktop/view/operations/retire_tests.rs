@@ -17,14 +17,14 @@ use crate::desktop::{
     model::{
         operations::Entered,
         polling::{
-            Answer, AttemptTarget, Clock, Disposition, PollAttempt, TargetKind,
+            Answer, AttemptTarget, Clock, Disposition, Policy, PollAttempt, TargetKind,
             entry::{RetireOffer, offer_text, short_code},
             retire::Verdict,
         },
         tabs::TabKey,
     },
     services::{
-        JobKind, ReadResult,
+        JobKind, ReadKind, ReadResult,
         edit_tabs::TabEditing,
         requests::{DesktopRequest, Intent, Lane},
     },
@@ -61,9 +61,18 @@ fn rig(cx: &mut TestAppContext) -> Rig {
     fixture.publish_over_ssh(&root);
     fixture.commit_ticket(&root, TICKET, "Closed elsewhere", "");
     fixture.refresh(&root);
+    // Paused, so no poll replaces the attempt a test reports.
+    fixture.pause_polling(&root);
     let rig = Rig::over(fixture, vec![root], cx);
     let _ = rig.services.clone().with_polling();
-    rig.schedule(0, cx);
+    rig.policy(
+        0,
+        Policy {
+            paused: true,
+            ..crate::desktop::view::settings::polling_support::policy()
+        },
+        cx,
+    );
     rig.shell
         .visual(cx)
         .simulate_resize(size(px(1280.), px(840.)));
@@ -206,6 +215,8 @@ async fn retire_left_offer(cx: &mut TestAppContext) {
         bounds.left() >= area.left() && bounds.right() <= area.right(),
         "Retire… wraps inside the area: {bounds:?} in {area:?}"
     );
+    // The new retirement's entry is in the record before the library answers.
+    let in_library = rig.shell.backend.hold_job(JobKind::ContextRetire);
     rig.shell
         .backend
         .answer_job(JobKind::ContextRetire, retired());
@@ -218,8 +229,25 @@ async fn retire_left_offer(cx: &mut TestAppContext) {
                 .any(|request| matches!(request.intent, Intent::ContextRetire { .. }))
         })
         .await;
+    in_library.wait_reached();
     let sent = retirements(&rig, cx);
     assert_eq!(sent.len(), 1, "one retirement");
+    let recorded = |rig: &Rig, cx: &mut TestAppContext| {
+        rig.services.scheduler().read_with(cx, |scheduler, _| {
+            scheduler
+                .store()
+                .retirements()
+                .iter()
+                .filter_map(|entry| entry.request())
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        recorded(&rig, cx),
+        [sent[0].request_id],
+        "its entry is written before the library answers"
+    );
+    in_library.release();
     assert_eq!(sent[0].lane, Lane::User);
     match &sent[0].intent {
         Intent::ContextRetire {
@@ -246,6 +274,19 @@ async fn retire_left_offer(cx: &mut TestAppContext) {
     rig.shell.frame(cx, |_, _| ());
     assert!(!rig.shell.present(action(&rig, &refused), cx));
     assert!(rig.shell.present(action(&rig, &skipped), cx));
+
+    // A second Retire… is a new request again, not the first one's ID.
+    let in_library = rig.shell.backend.hold_job(JobKind::ContextRetire);
+    rig.shell
+        .backend
+        .answer_job(JobKind::ContextRetire, retired());
+    rig.shell.click(action(&rig, &skipped), cx);
+    in_library.wait_reached();
+    let both = retirements(&rig, cx);
+    assert_eq!(both.len(), 2);
+    assert_ne!(both[0].request_id, both[1].request_id, "a new request ID");
+    assert_eq!(recorded(&rig, cx), [both[1].request_id]);
+    in_library.release();
 }
 
 /// Registers an item tab that holds unsaved text no draft keeps.
@@ -442,7 +483,16 @@ async fn retire_left_kept_draft_ask(cx: &mut TestAppContext) {
          be exported."
     );
 
+    // A second press while the fresh listing is awaited starts nothing.
+    let listing = rig.shell.backend.hold_read(ReadKind::Drafts);
     rig.shell.click(button.clone(), cx);
+    rig.shell.click(button.clone(), cx);
+    assert!(
+        !rig.shell.present("retire-kept-dialog", cx),
+        "still listing"
+    );
+    assert_eq!(asked(&rig, cx), 1);
+    listing.send(()).unwrap();
     rig.shell
         .until_drawn(cx, "the question", |shell, cx| {
             shell.present("retire-kept-dialog", cx)
@@ -465,7 +515,14 @@ async fn retire_left_kept_draft_ask(cx: &mut TestAppContext) {
 
     // Enter is Cancel: nothing is submitted, and the press is over.
     rig.shell.press("enter", cx);
-    assert!(!rig.shell.present("retire-kept-dialog", cx));
+    // Enter closes the one question; no second one follows the first press.
+    for _ in 0..20 {
+        rig.shell.run(cx);
+        cx.executor()
+            .timer(std::time::Duration::from_millis(10))
+            .await;
+    }
+    assert!(!rig.shell.present("retire-kept-dialog", cx), "one question");
     assert!(retirements(&rig, cx).is_empty());
     assert_eq!(asked(&rig, cx), 0, "the press is over");
 
@@ -553,6 +610,45 @@ async fn retire_pending_row_by_keyboard(cx: &mut TestAppContext) {
     assert!(rig.shell.present(("pending-abandon", 0usize), cx));
     assert!(!rig.shell.present(("pending-resume", 1usize), cx));
     assert!(rig.shell.present(("pending-abandon", 1usize), cx));
+
+    // W-6: both actions are inside the area at the default window, and a
+    // click reaches them. Resume's click is held in the library, so the
+    // request stays a request.
+    let area = rig
+        .shell
+        .frame(cx, |window, _| window.find("operation-area").bounds());
+    for id in [
+        ("pending-resume", 0usize),
+        ("pending-abandon", 0usize),
+        ("pending-abandon", 1usize),
+    ] {
+        assert!(rig.shell.tab_reaches(id, TABS, cx));
+        let bounds = rig.shell.frame(cx, |window, _| window.find(id).bounds());
+        assert!(
+            bounds.left() >= area.left() && bounds.right() <= area.right(),
+            "{id:?} is inside the area: {bounds:?} in {area:?}"
+        );
+    }
+    rig.shell.click(("pending-abandon", 1usize), cx);
+    assert!(rig.shell.present("confirm-dialog", cx), "a click opens it");
+    rig.shell.keys("escape", cx);
+    // The abandon's preview read the repository's rows again: they are as
+    // the library would still list them.
+    seed(cx);
+    rig.shell.run(cx);
+    let held = rig.shell.backend.hold_job(JobKind::OperationResume);
+    rig.shell.click(("pending-resume", 0usize), cx);
+    held.wait_reached();
+    let resumes = rig.shell.requests(cx, |request| {
+        matches!(request.intent, Intent::OperationResume { .. })
+    });
+    assert_eq!(resumes.len(), 1, "a click sends the Resume");
+    held.release();
+    rig.shell.until_ended(resumes[0], cx).await;
+    // What those read of the repository's rows again is as the library
+    // would still list them.
+    seed(cx);
+    rig.shell.run(cx);
 
     // Abandon, by keyboard, on the row no entry names.
     rig.shell.keys("secondary-4", cx);
@@ -662,31 +758,20 @@ async fn retire_flush_failure_submits_nothing(cx: &mut TestAppContext) {
     assert!(!retiring, "the mark is cleared");
 }
 
-/// E4: a second press of Retire… while the first waits for the fresh draft
-/// listing starts nothing: one question, and once it is answered no other
-/// follows.
+/// Review I-E: with text no draft keeps AND a kept draft, the person is asked
+/// about the text first, and nothing else is asked or listed: the draft store
+/// is not read again for a retirement that cannot go on.
 #[gpui_kit::test]
-async fn retire_second_press_waits(cx: &mut TestAppContext) {
+async fn retire_unkept_text_is_asked_before_drafts(cx: &mut TestAppContext) {
     use crate::desktop::services::ReadKind;
     let rig = rig(cx);
     report(&rig, vec![(ticket(), TargetKind::Ticket)], cx);
     keep_drafts(&rig);
+    unkept_tab(&rig, cx);
     rig.shell.frame(cx, |_, _| ());
-    let release = rig.shell.backend.hold_read(ReadKind::Drafts);
-    let button = action(&rig, &ticket());
-    rig.shell.click(button.clone(), cx);
-    rig.shell.click(button, cx);
-    assert!(
-        !rig.shell.present("retire-kept-dialog", cx),
-        "still listing"
-    );
-    release.send(()).unwrap();
-    rig.shell
-        .until_drawn(cx, "the question", |shell, cx| {
-            shell.present("retire-kept-dialog", cx)
-        })
-        .await;
-    rig.shell.press("enter", cx);
+    let listed = rig.shell.backend.reads_seen(ReadKind::Drafts);
+
+    rig.shell.click(action(&rig, &ticket()), cx);
     for _ in 0..20 {
         rig.shell.run(cx);
         cx.executor()
@@ -694,8 +779,107 @@ async fn retire_second_press_waits(cx: &mut TestAppContext) {
             .await;
     }
     assert!(
+        rig.shell.present("retire-unkept-dialog", cx),
+        "the text first"
+    );
+    assert!(
         !rig.shell.present("retire-kept-dialog", cx),
-        "one question, not two"
+        "no draft question"
+    );
+    assert_eq!(
+        rig.shell.backend.reads_seen(ReadKind::Drafts),
+        listed,
+        "the store was not listed"
     );
     assert!(retirements(&rig, cx).is_empty());
+}
+
+/// Whether the element `id` is drawn within a bounded wait, so a failure
+/// is an assertion and not a long timeout.
+async fn shows(rig: &Rig, id: &'static str, cx: &mut TestAppContext) -> bool {
+    for _ in 0..300 {
+        rig.shell.run(cx);
+        if rig.shell.present(id, cx) {
+            return true;
+        }
+        cx.executor()
+            .timer(std::time::Duration::from_millis(10))
+            .await;
+    }
+    false
+}
+
+/// Review I-A: a question closed without an answer leaves no press behind.
+/// Quitting closes every dialog (no callback runs), and Cancel on the quit
+/// ask stays: Retire… must open its question again, not be ignored until
+/// the app is relaunched.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn retire_after_a_quit_closed_its_question(cx: &mut TestAppContext) {
+    if superuser() {
+        return;
+    }
+    let rig = rig(cx);
+    report(&rig, vec![(ticket(), TargetKind::Ticket)], cx);
+    // A comment being written whose newest text cannot be written, so
+    // quitting asks (and closes every dialog first).
+    let drafts = rig.services.drafts().clone();
+    let target = DraftTarget {
+        repository: rig.key(0),
+        item_kind: ItemKind::Ticket,
+        item_id: ticket(),
+        comment: Some(CommentTarget {
+            comment_id: COMMENT.parse().unwrap(),
+            parent_id: None,
+        }),
+    };
+    let begun = drafts.update(cx, |registry, cx| {
+        registry.begin(
+            target,
+            None,
+            DraftFields::Comment {
+                body: "Begun".to_owned(),
+            },
+            cx,
+        )
+    });
+    let live = begun.await.expect("a session");
+    drafts.update(cx, |registry, cx| {
+        registry.edit(
+            live,
+            DraftFields::Comment {
+                body: "Newer".to_owned(),
+            },
+            cx,
+        )
+    });
+    let _read_only = FolderMode::set(&rig.shell.fixture.data_dir().join("drafts"), 0o500);
+    let button = action(&rig, &ticket());
+    rig.shell.frame(cx, |_, _| ());
+    rig.shell.click(button.clone(), cx);
+    assert!(shows(&rig, "retire-kept-dialog", cx).await, "the question");
+
+    // Quitting closes it with no answer, and asks about the draft that
+    // cannot be saved.
+    let quit = rig.shell.frame(cx, |window, cx| {
+        rig.shell
+            .workspace
+            .update(cx, |workspace, cx| workspace.request_quit(window, cx))
+    });
+    assert!(!quit);
+    assert!(
+        shows(&rig, "drafts-not-saved-dialog", cx).await,
+        "quit asks"
+    );
+    assert!(!rig.shell.present("retire-kept-dialog", cx), "closed");
+    rig.shell.click("drafts-not-saved-cancel", cx);
+    assert!(!rig.shell.present("drafts-not-saved-dialog", cx));
+
+    // Retire… asks again.
+    rig.shell.frame(cx, |_, _| ());
+    rig.shell.click(button, cx);
+    assert!(
+        shows(&rig, "retire-kept-dialog", cx).await,
+        "Retire… is not ignored"
+    );
 }

@@ -59,7 +59,6 @@ impl Workspace {
                 let offers = services
                     .scheduler()
                     .read(cx)
-                    .schedule()
                     .retire_offers(root)
                     .into_iter()
                     .filter(|offer| {

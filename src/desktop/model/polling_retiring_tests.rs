@@ -329,3 +329,27 @@ fn retire_offers_follow_the_attempt_and_the_refused_set() {
     assert!(fx.schedule.retire_offers(&root("s")).is_empty());
     assert!(fx.schedule.retire_offers(&root("x")).is_empty());
 }
+
+/// Review minor 4: a forgotten repository leaves nothing in the refused
+/// set: Retire… would otherwise be offered for an item of a repository that
+/// is gone, and a repository added again would start with old refusals.
+#[test]
+fn a_removed_repository_forgets_its_refusals() {
+    use super::retire::Verdict;
+    let item: ItemId = ITEM.parse().unwrap();
+    let mut fx = Fx::new();
+    fx.add("r", policy(None));
+    fx.add("s", policy(None));
+    for name in ["r", "s"] {
+        fx.schedule
+            .retirement_answered(&root(name), TargetKind::Ticket, &item, &Verdict::Refused);
+    }
+    fx.schedule.remove(&root("r"));
+    assert!(!fx.schedule.retirement_refused(&root("r"), &item));
+    assert!(
+        fx.schedule.retirement_refused(&root("s"), &item),
+        "another's stays"
+    );
+    fx.add("r", policy(None));
+    assert!(fx.schedule.retire_offers(&root("r")).is_empty());
+}

@@ -305,11 +305,13 @@ fn retirement_entries_end_only_when_they_ended() {
     assert_eq!(again.retirements()[0].operation(), Some(first));
 }
 
-/// R-31, review I-3: a request that was never sent to the library ends its
-/// entry when it is removed or not sent, but a resend of a retirement the
-/// library already holds pending (its entry learned an operation, or was
-/// left Owed) must not: the item keeps its "Retiring…" hold and its Resume.
-/// The rule holds across a relaunch.
+/// R-31, review I-3 and I-C: a request that never reached the library ends
+/// its entry when it is removed or not sent, but a resend of a retirement
+/// the library already holds pending (its entry learned the journal row's
+/// operation) must not: the item keeps its "Retiring…" hold and its Resume.
+/// An entry left Owed that never learned an operation could never be matched
+/// to a row, so a removal ends it as before (E-33: it used to be kept). The
+/// rule holds across a relaunch.
 #[test]
 fn a_removed_resend_keeps_a_pending_entry() {
     let data = tempfile::tempdir().unwrap();
@@ -319,36 +321,33 @@ fn a_removed_resend_keeps_a_pending_entry() {
         store.retirement_submitting(retirement(request));
     }
     // One learned its operation (the library has a row); one was left Owed
-    // with no progress event; one never reached the library.
+    // with no operation known; one never reached the library.
     store.retirement_operation(named, OperationId::new());
     assert!(!store.retirement_ended(owed, RetirementEnd::Accepted));
     for end in [RetirementEnd::Removed, RetirementEnd::NotSent] {
         assert!(!store.retirement_ended(named, end), "{end:?}: kept");
-        assert!(!store.retirement_ended(owed, end), "{end:?}: kept");
     }
     assert_eq!(store.retirements().len(), 3);
     assert!(store.retirement_ended(fresh, RetirementEnd::Removed));
-    assert_eq!(store.retirements().len(), 2);
+    assert!(
+        store.retirement_ended(owed, RetirementEnd::NotSent),
+        "owed, with no operation: no row to match"
+    );
+    assert_eq!(store.retirements().len(), 1);
     let never = RequestId::new();
     store.retirement_submitting(retirement(never));
     assert!(
         store.retirement_ended(never, RetirementEnd::NotSent),
         "unsent"
     );
-    assert_eq!(store.retirements().len(), 2);
 
-    // Kept on disk, owed flag and all.
+    // Kept on disk with its operation.
     drop(store);
     let mut again = holder(&data);
-    assert_eq!(again.retirements().len(), 2);
-    assert!(
-        !again.retirement_ended(owed, RetirementEnd::NotSent),
-        "owed"
-    );
-    // A finished record ends either.
-    for request in [named, owed] {
-        assert!(again.retirement_ended(request, RetirementEnd::Finished));
-    }
+    assert_eq!(again.retirements().len(), 1);
+    assert!(!again.retirement_ended(named, RetirementEnd::NotSent));
+    // A finished record ends it.
+    assert!(again.retirement_ended(named, RetirementEnd::Finished));
     assert!(again.retirements().is_empty());
 }
 

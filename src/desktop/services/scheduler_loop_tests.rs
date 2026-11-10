@@ -34,7 +34,7 @@ use crate::desktop::{
         poll_convert::TargetParts,
         requests::{Intent, RequestState},
     },
-    test_support::retire::answer,
+    test_support::retire::{answer, pending_list},
 };
 
 const IDS: [&str; 4] = [
@@ -918,6 +918,12 @@ async fn a_pending_retirement_survives_a_relaunch(cx: &mut TestAppContext) {
             .inner()
             .answer_job(JobKind::ContextRetire, retired());
     }
+    // E-30: the library still lists the row, as it does while the
+    // retirement is pending; one it no longer lists is reconciled away.
+    world
+        .backend
+        .inner()
+        .answer_pending(Some(pending_list(&operation.to_string())));
     world
         .backend
         .answer_poll(world.report(PollCompletion::Completed, closed(&[0, 1]), false));
@@ -956,7 +962,7 @@ async fn a_pending_retirement_survives_a_relaunch(cx: &mut TestAppContext) {
             vec![Heard::PendingEnded {
                 root: root.clone(),
                 operation,
-                retired: false,
+                finished: false,
             }],
             cx,
         )
@@ -982,6 +988,7 @@ async fn retire_removed_resend_keeps_the_hold(cx: &mut TestAppContext) {
         manyhands::repository::RequestId::new(),
         manyhands::repository::RequestId::new(),
     );
+    let previous_operation = manyhands::repository::OperationId::new();
     {
         let mut previous = InflightStore::open(world.fixture.data_dir());
         assert_eq!(previous.try_acquire(), Acquired::Now);
@@ -991,8 +998,13 @@ async fn retire_removed_resend_keeps_the_hold(cx: &mut TestAppContext) {
             TargetKind::Ticket,
             &IDS[0].parse().unwrap(),
         ));
-        previous.retirement_operation(pending, manyhands::repository::OperationId::new());
+        previous.retirement_operation(pending, previous_operation);
     }
+    // E-31: the library still lists the pending one's row.
+    world
+        .backend
+        .inner()
+        .answer_pending(Some(pending_list(&previous_operation.to_string())));
     world.backend.answer_poll(world.completed());
     world.list(std::slice::from_ref(&root), cx);
     World::settle(cx, "the launch poll", |_| {
@@ -1039,10 +1051,21 @@ async fn retire_removed_resend_keeps_the_hold(cx: &mut TestAppContext) {
         )],
         cx,
     );
-    World::settle(cx, "both to be taken from the queue", |cx| {
-        entry_lines(&world, cx) != [RetireState::Retiring; 2]
-    })
-    .await;
+    // Bounded: a failure is the assertion below, not a long timeout.
+    for _ in 0..300 {
+        cx.run_until_parked();
+        if entry_lines(&world, cx) != [RetireState::Retiring; 2] {
+            break;
+        }
+        cx.executor()
+            .timer(std::time::Duration::from_millis(10))
+            .await;
+    }
+    assert_ne!(
+        entry_lines(&world, cx),
+        [RetireState::Retiring; 2],
+        "both were taken from the queue"
+    );
     running.release();
     World::quiet(cx).await;
     // The pending one is still held, and says it did not finish; the one the
@@ -1053,6 +1076,82 @@ async fn retire_removed_resend_keeps_the_hold(cx: &mut TestAppContext) {
         entry_lines(&world, cx),
         [RetireState::Unfinished { catching_up: false }]
     );
+}
+
+/// E4, review I-D: while a loop runs, the items it has not reached are not
+/// offered Retire… (it will take them up), and once it ends the ones it did
+/// not retire are.
+#[gpui_kit::test]
+async fn retire_offers_leave_out_the_loops_items(cx: &mut TestAppContext) {
+    use crate::desktop::model::polling::entry::RetireOffer;
+    let (world, root) = idle(cx).await;
+    let running = world.backend.inner().hold_job(JobKind::ContextRetire);
+    for _ in 0..3 {
+        world
+            .backend
+            .inner()
+            .answer_job(JobKind::ContextRetire, refused());
+    }
+    world.heard(vec![checked(&world, &root, &[0, 1, 2])], cx);
+    running_item(&world, cx).await;
+    let offers = |world: &World, cx: &mut TestAppContext| -> Vec<RetireOffer> {
+        world
+            .services
+            .scheduler()
+            .read_with(cx, |scheduler, _| scheduler.retire_offers(&root))
+    };
+    let schedule_offers = world
+        .services
+        .scheduler()
+        .read_with(cx, |scheduler, _| scheduler.schedule().retire_offers(&root));
+    assert_eq!(
+        schedule_offers.len(),
+        2,
+        "the schedule alone would offer them"
+    );
+    assert!(offers(&world, cx).is_empty(), "the loop has them");
+
+    running.release();
+    finished(&world, &root, cx).await;
+    let after: Vec<usize> = offers(&world, cx)
+        .iter()
+        .map(|offer| index(&offer.item.to_string()))
+        .collect();
+    assert_eq!(after, [0, 1, 2], "refused: left for Retire…");
+}
+
+/// Review I-D: a loop does not retire an item the attempt's entry already
+/// says was retired (a Retire… got there first): the library would answer
+/// `already_absent`, and the loop would count it twice.
+#[gpui_kit::test]
+async fn the_loop_skips_an_item_already_retired(cx: &mut TestAppContext) {
+    let (world, root) = idle(cx).await;
+    for _ in 0..3 {
+        world
+            .backend
+            .inner()
+            .answer_job(JobKind::ContextRetire, retired());
+    }
+    // The loop's first item waits at the fresh draft listing.
+    let gate = world.backend.inner().hold_read(ReadKind::Drafts);
+    world.heard(vec![checked(&world, &root, &[0, 1])], cx);
+    World::settle(cx, "the first item to be marked", |cx| {
+        retiring(&world, &root, 0, cx)
+    })
+    .await;
+    // Meanwhile the person retires the second item, and it is done.
+    let item: manyhands::canonical::ItemId = IDS[1].parse().unwrap();
+    let chosen = world.services.scheduler().update(cx, |scheduler, cx| {
+        scheduler.retire_chosen(&root, TargetKind::Ticket, &item, cx)
+    });
+    assert!(chosen.is_some());
+    World::settle(cx, "the second item to be retired", |cx| {
+        entry_lines(&world, cx) == [RetireState::Retired]
+    })
+    .await;
+    gate.send(()).unwrap();
+    finished(&world, &root, cx).await;
+    assert_eq!(sent(&world, cx), [1, 0], "each once, not [1, 0, 1]");
 }
 
 /// Decision 20, K-17: a user job sent while a background retirement runs

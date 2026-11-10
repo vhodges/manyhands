@@ -63,6 +63,10 @@ pub(crate) enum RetireState {
     Retiring,
     /// `retired` or `already_absent`: the copy is gone.
     Retired,
+    /// A Resume finished the row the retirement left (its index hand-off):
+    /// it is over, and nothing says the copy was removed by the person's
+    /// request.
+    Finished,
     /// `pending`, or left `Accepted`: it did not finish. The pending row
     /// offers Resume and Abandon (E4).
     Unfinished {
@@ -121,6 +125,11 @@ pub(crate) fn retiring_text(item: &str) -> String {
     format!("Retiring {item}\u{2026}")
 }
 
+/// "Finished retiring {item}.", for a row a Resume finished.
+pub(crate) fn finished_text(item: &str) -> String {
+    format!("Finished retiring {item}.")
+}
+
 /// "Retired the copy of {item} on this computer."
 pub(crate) fn retired_text(item: &str) -> String {
     format!("Retired the copy of {item} on this computer.")
@@ -145,6 +154,7 @@ impl RetireLine {
         match self.state {
             RetireState::Retiring => retiring_text(&item),
             RetireState::Retired => retired_text(&item),
+            RetireState::Finished => finished_text(&item),
             RetireState::Unfinished { catching_up } => unfinished_text(&item, catching_up),
         }
     }

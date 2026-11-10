@@ -3,8 +3,9 @@
 //! and ended when the request ends, and the answer's attention, refused set
 //! and proof of authentication.
 //!
-//! The loop that chooses the items (`retire_loop`) and the Retire… action
-//! (Task 12) submit through [`Scheduler::retire`]. A retirement's answer
+//! The loop that chooses the items (`retire_loop`) and the Retire… row
+//! (`retire_chosen`) submit through [`Scheduler::retire`]; a Resume or an
+//! Unlock… resends a pending one (`resend_retirement`). A retirement's answer
 //! reaches [`Scheduler::retiring`] from the drain.
 
 use std::path::PathBuf;
@@ -136,6 +137,7 @@ impl Scheduler {
             id: item.clone(),
         };
         let worker = self.worker.clone();
+        self.entry_epoch += 1;
         // The attempt's entry says "Retiring…" (E3).
         self.schedule.retire_started(root, kind, item);
         begin_retirement(&mut self.store, request, root, kind, item, || {
@@ -149,6 +151,7 @@ impl Scheduler {
     /// 26). Nothing is sent once quitting is asked (R-33).
     pub(super) fn resend_resumed(
         &mut self,
+        resume: DesktopRequestId,
         request: RequestId,
         root: &Root,
         kind: TargetKind,
@@ -159,6 +162,12 @@ impl Scheduler {
             return;
         }
         self.resend_retirement(request, root, kind, item, Lane::User);
+        // The Resume has done its work: the resend answers in its place, and
+        // its blocked answer is not left to count as needing attention.
+        let _ = self.operations.update(cx, |operations, cx| {
+            operations.dismiss(resume);
+            cx.notify();
+        });
         self.publish(cx);
     }
 
@@ -169,7 +178,7 @@ impl Scheduler {
         &mut self,
         root: &Root,
         operation: OperationId,
-        retired: bool,
+        finished: bool,
         cx: &mut Context<Self>,
     ) {
         let held = self.store.retirements().iter().find_map(|entry| {
@@ -180,16 +189,12 @@ impl Scheduler {
         let Some((request, kind, item)) = held else {
             return;
         };
+        self.entry_epoch += 1;
         if let Some(request) = request {
             self.store
                 .retirement_ended(request, RetirementEnd::Finished);
         }
-        let verdict = if retired {
-            Verdict::Retired
-        } else {
-            Verdict::Failed
-        };
-        self.schedule.retire_settled(root, kind, &item, &verdict);
+        self.schedule.retire_ended(root, kind, &item, finished);
         self.publish(cx);
         self.tick(cx);
     }
@@ -219,6 +224,7 @@ impl Scheduler {
 
     /// A retirement request's progress, answer or end (the drain, E3).
     pub(super) fn retiring(&mut self, event: Retiring, cx: &mut Context<Self>) {
+        self.entry_epoch += 1;
         match event {
             Retiring::Operation { request, operation } => {
                 self.store.retirement_operation(request, operation);

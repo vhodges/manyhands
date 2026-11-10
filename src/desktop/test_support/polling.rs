@@ -376,6 +376,10 @@ impl Backend for PollingBackend {
         self.inner.after_job(kind)
     }
 
+    fn pending_operations(&self, root: &Path) -> Option<manyhands::repository::OperationListDto> {
+        self.inner.pending_operations(root)
+    }
+
     fn on_progress(&self, kind: JobKind, stage: ProgressStage) {
         self.inner.on_progress(kind, stage);
     }

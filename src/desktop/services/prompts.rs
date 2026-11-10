@@ -126,6 +126,18 @@ impl DeclinedKeys {
         true
     }
 
+    /// Whether `key_id` is declined now, without answering anything.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn is_declined(&self, key_id: SharedKeyId) -> bool {
+        self.lock().keys.contains(&key_id)
+    }
+
+    /// Declines `key_id` as a Not now would (a test).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn decline_for_testing(&self, key_id: SharedKeyId) {
+        self.decline(key_id);
+    }
+
     /// Not now: `key_id` is declined, and recorded against the running
     /// attempt's request.
     fn decline(&self, key_id: SharedKeyId) {

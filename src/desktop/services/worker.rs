@@ -763,6 +763,18 @@ impl WorkerHandle {
         self.shared().declined.attempting(id, Lane::User);
     }
 
+    /// Whether `key_id` is declined now (a test).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn is_declined(&self, key_id: manyhands::repository::SharedKeyId) -> bool {
+        self.shared().declined.is_declined(key_id)
+    }
+
+    /// Declines `key_id` as the person's Not now would (a test).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn decline_for_testing(&self, key_id: manyhands::repository::SharedKeyId) {
+        self.shared().declined.decline_for_testing(key_id);
+    }
+
     /// As `attempting_for_testing`, for a job of `lane`: a background job
     /// is refused every prompt (B5).
     #[cfg(all(test, feature = "desktop-test-support"))]
