@@ -14,6 +14,7 @@
 mod attempt;
 pub(crate) mod attention;
 mod clock;
+pub(crate) mod entry;
 mod state;
 pub(crate) mod status;
 mod table;
@@ -77,6 +78,14 @@ impl PollSchedule {
 
     pub fn repo(&self, root: &Root) -> Option<&RepoSchedule> {
         self.repos.get(root)
+    }
+
+    /// Each repository's last recorded attempt, in the order of the roots:
+    /// what the attempt entries of the operation area are made from (R-23).
+    pub fn attempts(&self) -> impl Iterator<Item = (&Root, &AttemptSummary)> {
+        self.repos
+            .iter()
+            .filter_map(|(root, repo)| Some((root, repo.last.as_ref()?)))
     }
 
     /// A policy just read. The phase, attention and waits are untouched:

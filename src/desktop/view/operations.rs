@@ -68,6 +68,7 @@ use manyhands::{
     results::{Effects, Outcome, RecoveryAction},
 };
 
+mod attempts;
 mod attention;
 mod outcomes;
 mod record;
@@ -662,6 +663,7 @@ impl Workspace {
             .collect();
         let unavailable = self.services().drafts().read(cx).unavailable();
         let attention = self.attention_entries(cx);
+        let attempts = self.attempt_entries(cx);
         let recovered = self.recovered_entry(cx);
         let record = self.record_entries(cx);
         let mut section = v_flex()
@@ -670,6 +672,8 @@ impl Workspace {
             .child(div().text_sm().child(THIS_SESSION))
             // What waits for the person comes first (D6 C3).
             .children(attention)
+            // Then what the latest checks brought in and left alone (D6 A4).
+            .children(attempts)
             // Persistent: the store stays closed for the session, so the
             // entry offers no Dismiss.
             .children(
@@ -967,3 +971,7 @@ mod attention_support;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "operations/attention_tests.rs"]
 mod attention_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/attempts_tests.rs"]
+mod attempts_tests;

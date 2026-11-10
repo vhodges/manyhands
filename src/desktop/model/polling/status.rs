@@ -142,7 +142,7 @@ fn ago(then: OffsetDateTime, now: OffsetDateTime) -> String {
     format!("{count} {unit}{} ago", if count == 1 { "" } else { "s" })
 }
 
-fn changes(count: u32) -> String {
+pub(super) fn changes(count: u32) -> String {
     format!(
         "Brought in {count} change{}",
         if count == 1 { "" } else { "s" }
