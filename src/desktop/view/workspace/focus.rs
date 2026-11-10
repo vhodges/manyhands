@@ -1,7 +1,10 @@
-//! The four focus groups, cycling, fallback and region decoration.
+//! The five focus groups, cycling, fallback and region decoration.
 
 use super::Workspace;
-use crate::desktop::model::navigation::Pane;
+use crate::desktop::model::{
+    layout::{PanelKind, Stop, f6_stops},
+    navigation::Pane,
+};
 use gpui_kit::{
     App, Context, InteractiveElement, IntoElement, ParentElement, Styled, TestSupportExt, Window,
     component::{ActiveTheme, WindowExt},
@@ -11,15 +14,18 @@ use gpui_kit::{
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Region {
     Repositories,
-    Navigation,
+    Documents,
     Content,
+    Tickets,
     Operations,
 }
 
-pub(crate) const REGIONS: [Region; 4] = [
+/// In F6's order (decision 9).
+pub(crate) const REGIONS: [Region; 5] = [
     Region::Repositories,
-    Region::Navigation,
+    Region::Documents,
     Region::Content,
+    Region::Tickets,
     Region::Operations,
 ];
 
@@ -34,8 +40,9 @@ impl Region {
     pub(crate) fn id(self) -> &'static str {
         match self {
             Self::Repositories => "region-repositories",
-            Self::Navigation => "region-navigation",
+            Self::Documents => "region-documents",
             Self::Content => "region-content",
+            Self::Tickets => "region-tickets",
             Self::Operations => "region-operations",
         }
     }
@@ -43,16 +50,55 @@ impl Region {
     pub(crate) fn ring_id(self) -> &'static str {
         match self {
             Self::Repositories => "region-repositories-focus-ring",
-            Self::Navigation => "region-navigation-focus-ring",
+            Self::Documents => "region-documents-focus-ring",
             Self::Content => "region-content-focus-ring",
+            Self::Tickets => "region-tickets-focus-ring",
             Self::Operations => "region-operations-focus-ring",
+        }
+    }
+
+    /// The region of the list `pane`.
+    pub(in crate::desktop::view) fn of_pane(pane: Pane) -> Self {
+        match pane {
+            Pane::Documents => Self::Documents,
+            Pane::Tickets => Self::Tickets,
+        }
+    }
+
+    /// The list this region holds, when it holds one.
+    pub(in crate::desktop::view) fn pane(self) -> Option<Pane> {
+        match self {
+            Self::Documents => Some(Pane::Documents),
+            Self::Tickets => Some(Pane::Tickets),
+            Self::Repositories | Self::Content | Self::Operations => None,
+        }
+    }
+
+    /// The F6 stop the region is.
+    fn stop(self) -> Stop {
+        match self {
+            Self::Repositories => Stop::Panel(PanelKind::Repositories),
+            Self::Documents => Stop::Panel(PanelKind::Documents),
+            Self::Tickets => Stop::Panel(PanelKind::Tickets),
+            Self::Operations => Stop::Panel(PanelKind::Activity),
+            Self::Content => Stop::ItemArea,
+        }
+    }
+
+    pub(super) fn of_stop(stop: Stop) -> Self {
+        match stop {
+            Stop::Panel(PanelKind::Repositories) => Self::Repositories,
+            Stop::Panel(PanelKind::Documents) => Self::Documents,
+            Stop::Panel(PanelKind::Tickets) => Self::Tickets,
+            Stop::Panel(PanelKind::Activity) => Self::Operations,
+            Stop::ItemArea => Self::Content,
         }
     }
 
     fn key_context(self) -> &'static str {
         match self {
             Self::Repositories => "Repositories",
-            Self::Navigation => crate::desktop::keys::NAVIGATION_CONTEXT,
+            Self::Documents | Self::Tickets => crate::desktop::keys::NAVIGATION_CONTEXT,
             Self::Content => crate::desktop::keys::CONTENT_CONTEXT,
             Self::Operations => "Operations",
         }
@@ -60,17 +106,29 @@ impl Region {
 }
 
 impl Workspace {
-    pub(in crate::desktop::view) fn show_pane(
+    /// Whether the region is on screen: the item area always is; a panel is
+    /// when the layout displays it (R-9).
+    fn is_displayed(&self, region: Region) -> bool {
+        match region.stop() {
+            Stop::ItemArea => true,
+            Stop::Panel(kind) => self.layout.is_displayed(kind),
+        }
+    }
+
+    /// Focus in a region that is not displayed goes to the item area
+    /// (R-9). It runs after every layout change and when focus enters a
+    /// region, so a click on a closed strip outside its tabs, whose frame
+    /// tracks the hidden panel's handle, does not leave focus there.
+    pub(in crate::desktop::view) fn check_focus(
         &mut self,
-        pane: Pane,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.navigation.set_pane(pane);
-        if self.focused_region(window, cx) == Some(Region::Navigation) {
-            self.focus_region(Region::Navigation, window, cx);
+        if let Some(region) = self.focused_region(window, cx)
+            && !self.is_displayed(region)
+        {
+            self.focus_region(Region::Content, window, cx);
         }
-        cx.notify();
     }
 
     pub(super) fn focused_region(&self, window: &Window, cx: &App) -> Option<Region> {
@@ -85,8 +143,17 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match (region, self.navigation.pane()) {
-            (Region::Repositories, _)
+        // A panel that is hidden, in a closed dock or behind another tab is
+        // revealed first (R-10); a displayed one is left as it is.
+        if let Stop::Panel(kind) = region.stop() {
+            self.reveal(kind, window, cx);
+        }
+        // The list used last (R-8).
+        if let Some(pane) = region.pane() {
+            self.navigation.set_pane(pane);
+        }
+        match region {
+            Region::Repositories
                 if self
                     .navigation
                     .repositories()
@@ -95,13 +162,11 @@ impl Workspace {
             {
                 self.repositories_pane.focus(window, cx)
             }
-            (Region::Navigation, Pane::Documents) if self.documents.repo().is_some() => {
+            Region::Documents if self.documents.repo().is_some() => {
                 self.documents_pane.focus(window, cx)
             }
-            (Region::Navigation, Pane::Tickets) if self.tickets.repo().is_some() => {
-                self.tickets_pane.focus(window, cx)
-            }
-            (Region::Content, _) => self.focus_content(window, cx),
+            Region::Tickets if self.tickets.repo().is_some() => self.tickets_pane.focus(window, cx),
+            Region::Content => self.focus_content(window, cx),
             _ => window.focus(&self.regions[region.index()], cx),
         }
         self.last_region = Some(region);
@@ -122,16 +187,18 @@ impl Workspace {
             }
             return;
         }
+        // A region that is not displayed cannot take focus: the last
+        // region, else the item area (R-9).
         let region = target
             .and_then(|target| {
                 REGIONS
                     .into_iter()
+                    .filter(|region| self.is_displayed(*region))
                     .find(|region| self.regions[region.index()].contains(&target, window))
             })
-            .or(self.last_region);
-        if let Some(region) = region {
-            self.focus_region(region, window, cx);
-        }
+            .or(self.last_region.filter(|region| self.is_displayed(*region)))
+            .unwrap_or(Region::Content);
+        self.focus_region(region, window, cx);
     }
 
     pub(super) fn cycle_region(
@@ -140,12 +207,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let next = match self.focused_region(window, cx) {
-            Some(region) => {
-                let count = REGIONS.len() as isize;
-                REGIONS[(region.index() as isize + step).rem_euclid(count) as usize]
-            }
-            None => Region::Repositories,
+        let stops: Vec<Region> = f6_stops(&self.layout)
+            .into_iter()
+            .map(Region::of_stop)
+            .collect();
+        let next = match self
+            .focused_region(window, cx)
+            .and_then(|region| stops.iter().position(|stop| *stop == region))
+        {
+            Some(at) => stops[(at as isize + step).rem_euclid(stops.len() as isize) as usize],
+            // Outside every region: the first stop, or backwards the last.
+            None if step < 0 => stops[stops.len() - 1],
+            None => stops[0],
         };
         self.focus_region(next, window, cx);
     }

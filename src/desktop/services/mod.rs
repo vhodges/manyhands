@@ -12,6 +12,7 @@ pub(crate) mod drafts;
 pub(crate) mod edit_tabs;
 pub(crate) mod images;
 pub(crate) mod inflight;
+pub(crate) mod layout;
 pub(crate) mod links;
 pub(crate) mod pending_conflicts;
 pub(crate) mod poll;
@@ -59,6 +60,7 @@ use crate::desktop::model::{
 use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
 use edit_tabs::EditTabs;
+use layout::{LayoutStore, LayoutStoreError};
 use poll::PollInbox;
 use prompts::DesktopProvider;
 use release::Releases;
@@ -215,6 +217,12 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// production, the fixture's in tests; otherwise why it did not open.
     fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError>;
 
+    /// The saved panel layout (Wave 04 Cycle 01, Part G), in `layout`
+    /// beside the draft store's folder: the application data directory's
+    /// in production, the fixture's in tests; otherwise why it did not
+    /// open.
+    fn layout(&self) -> Result<&LayoutStore, LayoutStoreError>;
+
     /// Awaited inside the read's future, before the blocking library call.
     fn read_gate(&self, _kind: ReadKind) -> Option<ReadGate> {
         None
@@ -335,21 +343,24 @@ pub(crate) struct LibraryBackend {
     service: RepositoryService,
     drafts: Result<DraftStore, DraftStoreUnavailable>,
     resolutions: Result<ResolutionStore, ResolutionStoreError>,
+    layout: Result<LayoutStore, LayoutStoreError>,
 }
 
 impl LibraryBackend {
-    /// A backend over `service` and the open results of the draft store
-    /// and the resolutions store: the desktop starts whether or not they
-    /// opened.
+    /// A backend over `service` and the open results of the draft store,
+    /// the resolutions store and the layout store: the desktop starts
+    /// whether or not they opened.
     pub(crate) fn new(
         service: RepositoryService,
         drafts: Result<DraftStore, DraftError>,
         resolutions: Result<ResolutionStore, ResolutionStoreError>,
+        layout: Result<LayoutStore, LayoutStoreError>,
     ) -> Self {
         Self {
             service,
             drafts: drafts.map_err(DraftStoreUnavailable::from),
             resolutions,
+            layout,
         }
     }
 }
@@ -369,6 +380,10 @@ impl Backend for LibraryBackend {
 
     fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError> {
         self.resolutions.as_ref().map_err(|error| *error)
+    }
+
+    fn layout(&self) -> Result<&LayoutStore, LayoutStoreError> {
+        self.layout.as_ref().map_err(|error| *error)
     }
 }
 
@@ -894,7 +909,6 @@ impl Services {
         &self.resends
     }
 
-    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
     }

@@ -15,7 +15,7 @@ use super::{
 };
 use crate::desktop::{
     model::{
-        navigation::OpenTarget,
+        navigation::{OpenTarget, Pane},
         tickets::{TicketQuery, blocked_reasons},
     },
     services::ReadKind,
@@ -31,7 +31,7 @@ const BROKEN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC3";
 /// An open ticket whose status is `closed`, a lifecycle-closed ticket, a
 /// plain open ticket and a nonconforming file under `.manyhands/tickets/`,
 /// then a library refresh. The repository is selected and the Tickets
-/// pane shown.
+/// list shown.
 fn four_tickets(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
@@ -42,7 +42,7 @@ fn four_tickets(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
     shell.click(("repo-row", 0usize), cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     (shell, root)
 }
 
@@ -249,7 +249,7 @@ const AFTER_DONE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD7";
 
 /// A ticket waiting for an open one, one waiting for a ticket no context
 /// holds, two waiting for each other, one whose only dependency is closed,
-/// and a nonconforming entry. The Tickets pane is shown.
+/// and a nonconforming entry. The Tickets list is shown.
 fn related(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
@@ -264,7 +264,7 @@ fn related(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
     shell.click(("repo-row", 0usize), cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     (shell, root)
 }
 
@@ -546,7 +546,7 @@ fn the_panel_says_incomplete_where_the_library_does(cx: &mut TestAppContext) {
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
     shell.click(("repo-row", 0usize), cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.click("filter-blocked", cx);
 
     let list = blocked_list(&shell, &root);
@@ -565,15 +565,13 @@ fn the_panel_says_incomplete_where_the_library_does(cx: &mut TestAppContext) {
     );
 }
 
-/// No two choices of the navigation region share a label, so a screen
+/// No two choices of the Tickets region share a label, so a screen
 /// reader tells them apart, and each row of choices says in text which
-/// is chosen: the pane, the closure and the readiness.
+/// is chosen: the closure and the readiness.
 #[gpui_kit::test]
 fn every_choice_has_its_own_label_and_the_chosen_one_is_said_in_text(cx: &mut TestAppContext) {
     let (shell, _) = four_tickets(cx);
     let ids = [
-        "pane-documents",
-        "pane-tickets",
         "filter-open",
         "filter-closed",
         "filter-all",
@@ -592,16 +590,6 @@ fn every_choice_has_its_own_label_and_the_chosen_one_is_said_in_text(cx: &mut Te
     assert_eq!(
         shell.label("filter-any-readiness", cx).as_deref(),
         Some(super::ANY_READINESS)
-    );
-
-    assert_eq!(
-        shell.label("pane-showing", cx).as_deref(),
-        Some(super::super::lists::SHOWING_TICKETS)
-    );
-    shell.click("pane-documents", cx);
-    assert_eq!(
-        shell.label("pane-showing", cx).as_deref(),
-        Some(super::super::lists::SHOWING_DOCUMENTS)
     );
 }
 
@@ -628,7 +616,7 @@ fn a_long_why_blocked_panel_scrolls_by_keyboard(cx: &mut TestAppContext) {
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
     shell.click(("repo-row", 0usize), cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.click("filter-blocked", cx);
     shell.keys("secondary-2 down", cx);
     let reasons = panel(&shell, cx);

@@ -8,18 +8,28 @@ use std::{
 };
 
 use gpui_kit::{
-    App, ElementId, Entity, Focusable, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext,
-    VisualTestContext, Window, WindowHandle, component::Root, px, size, test::TestWindowExt,
+    App, ElementId, Entity, Focusable, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
+    TestAppContext, VisualTestContext, Window, WindowHandle,
+    component::{Root, dock::DockPlacement},
+    px, size,
+    test::TestWindowExt,
 };
 use manyhands::{
     drafts::{DraftBase, DraftFields, DraftId, DraftTarget, ItemKind},
     repository::{ItemDtoKind, SharedKeyId, keys::UnlockReason},
 };
 
-use super::{editor::host::EditorHost, workspace::Workspace};
+use super::{
+    editor::host::EditorHost,
+    workspace::{Region, Workspace},
+};
 use crate::desktop::{
-    keys,
-    model::{drafts::create, navigation::OpenTarget, operations::Operations, tabs::TabKey},
+    model::{
+        drafts::create,
+        navigation::{OpenTarget, Pane},
+        operations::Operations,
+        tabs::TabKey,
+    },
     open_test_window_over,
     services::{
         Backend,
@@ -60,6 +70,28 @@ pub(crate) async fn wait_until<T: 'static>(
     }
 }
 
+/// What `Shell::start` does to the window after opening it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Geometry {
+    /// The harness window and an Activity dock tall enough to click in.
+    Harness,
+    /// Nothing: the window and layout of a launch.
+    AsLaunched,
+}
+
+/// The window chrome that is not the item area, the dock sides or Activity:
+/// the title bar (38 px) and the footer (28 px). The item area stays
+/// 860 x 1140, and a window of 1590 x 1726 results (R-26).
+const SHELL_CHROME_HEIGHT: f32 = 66.;
+
+/// The harness window: the side docks (290 and 440 px) leave an item area of
+/// 860 px, and Activity (520 px) and the chrome leave it 1140.
+const WINDOW_WIDTH: f32 = 1590.;
+const WINDOW_HEIGHT: f32 = 1140. + ACTIVITY_HEIGHT + SHELL_CHROME_HEIGHT;
+
+/// Activity's height in the harness: twice today's operation area (R-26).
+const ACTIVITY_HEIGHT: f32 = 520.;
+
 pub(crate) struct Shell {
     pub window: WindowHandle<Root>,
     pub workspace: Entity<Workspace>,
@@ -73,7 +105,29 @@ impl Shell {
     /// refreshed at launch, so a test that does not wait for the worker
     /// need not.
     pub(crate) fn open(fixture: Fixture, cx: &mut TestAppContext) -> Self {
-        Self::start(fixture, false, |_| {}, cx)
+        Self::start(fixture, false, |_| {}, Geometry::Harness, true, cx)
+    }
+
+    /// Opens the main window as the application does, at the application's
+    /// own size and layout: nothing is resized (R-26). For the tests of the
+    /// default layout.
+    pub(crate) fn open_as_launched(fixture: Fixture, cx: &mut TestAppContext) -> Self {
+        Self::start(fixture, false, |_| {}, Geometry::AsLaunched, true, cx)
+    }
+
+    /// Closes the window and opens a new one over the same fixture, as a
+    /// restart does: the data directory, its stores and their seams are the
+    /// fixture's, and nothing is resized (R-26). The Kit and the keys are
+    /// already set up.
+    pub(crate) fn relaunch(self, cx: &mut TestAppContext) -> Self {
+        let Self {
+            window, fixture, ..
+        } = self;
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        VisualTestContext::from_window(window.into(), cx).run_until_parked();
+        Self::start(fixture, false, |_| {}, Geometry::AsLaunched, false, cx)
     }
 
     /// Opens the main window as the application does, refreshing every
@@ -85,18 +139,28 @@ impl Shell {
         before: impl FnOnce(&DelayingBackend),
         cx: &mut TestAppContext,
     ) -> Self {
-        Self::start(fixture, true, before, cx)
+        Self::start(fixture, true, before, Geometry::Harness, true, cx)
     }
 
     fn start(
         fixture: Fixture,
         launch_refresh: bool,
         before: impl FnOnce(&DelayingBackend),
+        geometry: Geometry,
+        first: bool,
         cx: &mut TestAppContext,
     ) -> Self {
         let backend = fixture.delaying_backend();
         before(&backend);
-        Self::over(fixture, backend.clone(), backend, launch_refresh, cx)
+        Self::over(
+            fixture,
+            backend.clone(),
+            backend,
+            launch_refresh,
+            geometry,
+            first,
+            cx,
+        )
     }
 
     /// Opens the main window over `services_backend`, a double that wraps
@@ -108,7 +172,15 @@ impl Shell {
         backend: Arc<DelayingBackend>,
         cx: &mut TestAppContext,
     ) -> Self {
-        Self::over(fixture, services_backend, backend, false, cx)
+        Self::over(
+            fixture,
+            services_backend,
+            backend,
+            false,
+            Geometry::Harness,
+            true,
+            cx,
+        )
     }
 
     fn over(
@@ -116,14 +188,17 @@ impl Shell {
         services_backend: Arc<dyn Backend>,
         backend: Arc<DelayingBackend>,
         launch_refresh: bool,
+        geometry: Geometry,
+        first: bool,
         cx: &mut TestAppContext,
     ) -> Self {
-        cx.update(gpui_kit::init);
-        cx.update(keys::bind);
-        cx.update(super::editor::keys::bind);
-        // Dialogs open without their entrance animation, so a frame finds
-        // them where they rest.
-        cx.update(|cx| cx.set_reduce_motion(true));
+        if first {
+            cx.update(gpui_kit::init);
+            cx.update(crate::desktop::bind_all_keys);
+            // Dialogs open without their entrance animation, so a frame
+            // finds them where they rest.
+            cx.update(|cx| cx.set_reduce_motion(true));
+        }
         let window = cx.update(|cx| open_test_window_over(services_backend, launch_refresh, cx));
         let workspace = window
             .update(cx, |root, _, _| {
@@ -136,12 +211,43 @@ impl Shell {
             backend,
             fixture,
         };
-        // Tall enough that an item, its later actions and a few expanded
-        // entries of the operation area are all on screen, where a click
-        // reaches them.
-        shell.visual(cx).simulate_resize(size(px(1440.), px(1400.)));
+        if geometry == Geometry::Harness {
+            // Big enough that an item, its later actions and a few expanded
+            // entries of Activity are all on screen, where a click reaches
+            // them (R-26).
+            shell
+                .visual(cx)
+                .simulate_resize(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)));
+            shell.run(cx);
+            shell.set_activity_height(ACTIVITY_HEIGHT, cx);
+        }
         shell.run(cx);
         shell
+    }
+
+    /// Sets the bottom dock's height, as a person dragging its edge would.
+    fn set_activity_height(&self, height: f32, cx: &mut TestAppContext) {
+        let area = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.dock_area().clone());
+        self.frame(cx, |window, cx| {
+            area.update(cx, |area, cx| {
+                area.set_dock_size(DockPlacement::Bottom, px(height), window, cx)
+            })
+        });
+        self.run(cx);
+    }
+
+    /// Resizes the window to the size a test asks for, grown by the docks
+    /// and Activity so that the item area keeps the size the test chose
+    /// (E-10): 150 px wider (the side docks are 290 + 440 px, the old
+    /// columns 260 + 320) and the 520 px Activity dock and the chrome
+    /// taller, less the old 260 px operation area.
+    pub(crate) fn resize_keeping_content(&self, width: f32, height: f32, cx: &mut TestAppContext) {
+        let taller = ACTIVITY_HEIGHT - 260. + SHELL_CHROME_HEIGHT;
+        self.visual(cx)
+            .simulate_resize(size(px(width + 150.), px(height + taller)));
+        self.run(cx);
     }
 
     pub(crate) fn visual(&self, cx: &TestAppContext) -> VisualTestContext {
@@ -171,6 +277,19 @@ impl Shell {
         let id = id.into();
         self.frame(cx, |window, cx| window.click(id, cx));
         self.run(cx);
+    }
+
+    /// Clicks the element `id` with the mouse events dispatched one at a
+    /// time, so the events one causes (a tab group's, reaching the
+    /// Workspace) have been handled before the next frame, as in the
+    /// application. `click` dispatches both inside one update and draws
+    /// between them.
+    pub(crate) fn click_settled(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) {
+        let id = id.into();
+        let position = self.frame(cx, |window, _| window.find(id).bounds().center());
+        let mut visual = self.visual(cx);
+        visual.simulate_click(position, Modifiers::default());
+        visual.run_until_parked();
     }
 
     pub(crate) fn keys(&self, keystrokes: &str, cx: &mut TestAppContext) {
@@ -277,6 +396,17 @@ impl Shell {
     pub(crate) fn select(&self, root: &Path, cx: &mut TestAppContext) {
         self.workspace.update(cx, |workspace, cx| {
             workspace.select_repository(key(root), cx)
+        });
+        self.run(cx);
+    }
+
+    /// Uses the list `pane` last and focuses its region, as clicking its
+    /// choice did (E-2).
+    pub(crate) fn use_list(&self, pane: Pane, cx: &mut TestAppContext) {
+        self.frame(cx, |window, cx| {
+            self.workspace.update(cx, |workspace, cx| {
+                workspace.focus_region(Region::of_pane(pane), window, cx)
+            })
         });
         self.run(cx);
     }

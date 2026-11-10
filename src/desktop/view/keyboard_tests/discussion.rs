@@ -17,7 +17,7 @@
 
 use std::{fs, path::Path};
 
-use gpui_kit::{ElementId, Entity, TestAppContext, px, size};
+use gpui_kit::{ElementId, Entity, TestAppContext};
 use zorite_editor::EditorState;
 
 use super::Walk;
@@ -66,7 +66,7 @@ fn discussed(comments: &[(&str, Option<&str>)], cx: &mut TestAppContext) -> Walk
     }
     fixture.refresh(&a);
     let shell = Shell::open(fixture, cx);
-    shell.visual(cx).simulate_resize(size(px(1440.), px(1400.)));
+    shell.resize_keeping_content(1440., 1400., cx);
     shell.run(cx);
     Walk::over(shell, a)
 }
@@ -356,7 +356,7 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     assert!(indented != listed, "Tab indented: {indented:?}");
     assert!(walk.editor_focused(&reply, cx), "Tab stayed in the editor");
     walk.keys("f6", cx);
-    walk.region(Region::Operations, cx);
+    walk.region(Region::Tickets, cx);
 
     // The order with it open: the thread's last Reply, its toolbar's stop,
     // its editor; and back from Write a comment… into its editor.
@@ -371,7 +371,7 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     walk.step("tab", "composer-bold", Region::Content, cx);
     walk.step_into("tab", &reply, "the reply's editor", cx);
     walk.keys("f6", cx);
-    walk.region(Region::Operations, cx);
+    walk.region(Region::Tickets, cx);
     walk.keys("secondary-3", cx);
     walk.on(("tab", 0usize), Region::Content, cx);
     walk.tab_to("shift-tab", SHARE_MAIN, cx);
@@ -402,7 +402,7 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     assert!(indented != listed, "Tab indented: {indented:?}");
     assert!(walk.editor_focused(&editor, cx), "Tab stayed in the editor");
     walk.keys("f6", cx);
-    walk.region(Region::Operations, cx);
+    walk.region(Region::Tickets, cx);
     assert!(
         !walk.shell.present("new-comment-start", cx),
         "open: it holds text"

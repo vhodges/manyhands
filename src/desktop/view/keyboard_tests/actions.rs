@@ -227,7 +227,7 @@ fn a_nonconforming_entry_opens_by_keyboard(cx: &mut TestAppContext) {
     });
     walk.select_a_repository(cx);
     walk.keys("secondary-2", cx);
-    walk.region(Region::Navigation, cx);
+    walk.region(Region::Documents, cx);
     let nodes = walk.shell.rows("doc-node", cx);
     let at = nodes
         .iter()
@@ -245,5 +245,5 @@ fn a_nonconforming_entry_opens_by_keyboard(cx: &mut TestAppContext) {
     };
     assert_eq!((repo, path.as_str()), (key(&walk.a), MARKER));
     assert_eq!(walk.shell.label("item-path", cx).as_deref(), Some(MARKER));
-    walk.region(Region::Navigation, cx);
+    walk.region(Region::Documents, cx);
 }

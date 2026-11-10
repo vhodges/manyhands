@@ -2,7 +2,10 @@
 
 use super::Workspace;
 use crate::desktop::{
-    model::find::{FindQuery, FindResult, FindState},
+    model::{
+        find::{FindQuery, FindResult, FindState},
+        layout::PanelKind,
+    },
     services::ReadKind,
 };
 use gpui_kit::{Context, Entity, FocusHandle, Window, component::input::InputState};
@@ -19,6 +22,8 @@ impl Workspace {
     }
 
     pub(super) fn focus_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Find is in the Tickets panel, which may be hidden (R-10).
+        self.reveal(PanelKind::Tickets, window, cx);
         self.find_input
             .update(cx, |input, cx| input.focus(window, cx));
         cx.notify();

@@ -23,7 +23,11 @@ use gpui_kit::{
 };
 
 use super::{create::NEW_DOCUMENT, workspace::Workspace};
-use crate::desktop::model::{documents::TreeNode, navigation::OpenTarget, stamp::RepoKey};
+use crate::desktop::model::{
+    documents::TreeNode,
+    navigation::{OpenTarget, Pane},
+    stamp::RepoKey,
+};
 
 pub(crate) const NONCONFORMING: &str = "Nonconforming";
 pub(crate) const EMPTY_FOLDER: &str = "Empty folder";
@@ -223,7 +227,9 @@ impl DocumentsPane {
             Button::new("new-document-button")
                 .label(NEW_DOCUMENT)
                 .on_click(move |_: &ClickEvent, window, cx| {
-                    let _ = opener.update(cx, |workspace, cx| workspace.new_item(window, cx));
+                    let _ = opener.update(cx, |workspace, cx| {
+                        workspace.new_item(Pane::Documents, window, cx)
+                    });
                 }),
         );
         let new_folder = div().id("new-folder").test_support().child(

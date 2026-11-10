@@ -227,42 +227,55 @@ today's region contents unchanged inside the new frame.
 - **Panels**, registered by stable name: `RepositoriesPanel` (today's
   sidebar), `TicketsPanel` and `DocumentsPanel` (today's Navigation pane,
   split in two, each with its current contents), `ActivityPanel` (today's
-  Operations area, wrapped as it is). Quit feedback stays visible with
-  Activity hidden: the panel is shown when a quit starts waiting, or the
-  feedback is drawn outside any panel. Panel headers follow `02`, "Panel header": single panel
+  Operations area, wrapped as it is). A quit that has to wait changes no
+  layout; its feedback is in the Activity panel, visible when Activity is
+  shown (amended 2026-11-08, Cycle 01 decision 7). Panel headers follow `02`, "Panel header": single panel
   with icon, title and count; tabbed group with the amber active line.
   Toolbars stay as they are until 02 and 03.
 - **Default layout** (decision 1): left dock 290 px with Repositories (0.6)
   stacked over Documents (1.4); right dock 440 px with Tickets; bottom dock
-  150 px with Activity. Rows are 28 px (decision 7).
+  150 px with Activity. Rows are 28 px (decision 7), as the default of the
+  row anatomy Cycle 02 builds; Cycle 01 leaves rows as they are (amended
+  2026-11-08, Cycle 01 decision 11).
 - **Resizing** of docks and of stacked groups, with the toolkit's handles.
 - **Footer** (Kit `StatusBar`, 28 px), per `02`, "Footer": the left dock
   toggle and one toggle per left panel; the bottom dock toggle and one per
   bottom panel; one toggle per right panel and the right dock toggle. On and
   off states, tooltips "Show Tickets" and "Hide Tickets". Also, per `02`:
   the **Needs attention** item (`circle-alert` + "N need attention", red,
-  hidden at 0, counting the attention entries in the operations model
-  (`model/operations.rs`), so that states Wave 03 D6 adds there are counted
-  too; until Cycle 03 it shows and focuses the Activity panel),
+  hidden at 0, counting what awaits the person: unresolved request
+  failures, draft save failures, drafts unavailable, pending operations and
+  failed pending reads. `model/operations.rs` has no attention entries, so a
+  new read-only function counts them from the existing models, and D6's
+  states join it when the second of D6 and Cycle 01 merges (amended
+  2026-11-08, Cycle 01 decisions 3 and 14); until Cycle 03 it shows and
+  focuses the Activity panel),
   and after a separator the **Settings** button (`settings`, tooltip
   "Settings (Ctrl ,)") opening today's Settings page. The other status
   items are Cycle 03's.
-- **Dock menu** on every panel toggle (secondary click and the keyboard's
-  context-menu key, as in Zed): "Dock left", "Dock right", "Dock bottom",
+- **Dock menu** on every panel toggle (secondary click, and the keyboard's
+  context-menu key as in Zed, or Shift F10; amended 2026-11-08, Cycle 01
+  decision 8): "Dock left", "Dock right", "Dock bottom",
   current placement checked.
   Moving a panel carries its footer button to that side.
 - **Behavior** from `02`: showing a panel shows its dock; hiding every panel
-  in a dock collapses it and the center widens; a dock toggle hides or shows
-  the dock without changing which panels are on; dragging a panel to
+  in a dock collapses it and the center widens (a hidden bottom dock keeps
+  the toolkit's 29 px strip naming its panels, for now); a dock toggle hides
+  or shows the dock without changing which panels are on, and on a dock
+  whose panels are all hidden it shows them all (amended 2026-11-08, Cycle
+  01 decisions 6 and 16); dragging a panel to
   another dock or into a tabbed group is the toolkit's and is persisted like
   any other change.
 - **Persistence.** Save the dumped `DockAreaState` and the visible-panel set
   to a versioned layout file in the app data directory, debounced on
-  `LayoutChanged`. Restore at launch. Fall back to the default layout, and
-  report it in Activity, when the file is missing, unreadable or of another
-  version. Never write layout into a repository.
+  `LayoutChanged`. Restore at launch. Fall back to the default layout when
+  the file is missing, unreadable, of another version or names panels other
+  than the known ones. A missing file (first launch) falls back quietly; the
+  others are reported in Activity (amended 2026-11-08, Cycle 01 decision 5).
+  Never write layout into a repository.
 - **Keyboard.** Dock toggles Ctrl B (left), Ctrl Alt B (right), Ctrl J
-  (bottom), as in Zed. No per-panel toggle keys (decision 3). The region
+  (bottom), as in Zed; while an editor has focus Ctrl B stays Bold
+  (amended 2026-11-08, Cycle 01 decision 2). No per-panel toggle keys (decision 3). The region
   actions keep working: `secondary-1` focuses Repositories, `secondary-2`
   the last used of Tickets and Documents, `secondary-3` the item area,
   `secondary-4` Activity, and F6 cycles only visible panels. Focusing a
@@ -279,8 +292,8 @@ hidden, shown and moved to every offered dock from the footer, by mouse and
 by keyboard; docks and groups resize; the layout, including a hidden dock and
 a moved panel, survives a restart; a corrupt or old layout file restores the
 default without losing anything else; the window title follows the selected
-repository; a quit that has to wait shows its feedback with Activity
-hidden; every existing keyboard journey still passes. Model tests cover
+repository; a quit that has to wait proceeds with Activity hidden, its
+feedback in Activity when opened (amended 2026-11-08, Cycle 01 decision 7); every existing keyboard journey still passes. Model tests cover
 the visibility rules, menu moves, restore fallback and title derivation.
 Native check of the title bar on Linux Wayland, with macOS and Windows after
 merge (decision 4).
@@ -288,7 +301,8 @@ merge (decision 4).
 **Split line:** if the plan does not fit one reviewable Cycle, split it into
 01a (tokens, title bar, dock area with the four panels, persistence, and a
 footer with only Needs attention and Settings) and 01b (footer toggles, dock
-menus, keyboard toggles), and update this Wave.
+menus, keyboard toggles), and update this Wave. (Cycle 01 planned it as one
+Cycle, Cycle 01 decision 1, 2026-11-08.)
 
 ### Cycle 02: Tickets And Documents Panels
 
@@ -514,10 +528,10 @@ Wave 04 is complete when its Cycles have approved exit evidence and:
 | --- | --- |
 | Moving regions into `DockArea` breaks focus, R-60 sheet refusal or key contexts | Cycle 01 keeps the sheet layer in the center and the region actions mapped to panels; the existing keyboard and dialog tests are the regression net. |
 | Client-side title bar behaves differently per platform (drag, double-click, controls, Wayland decorations) | Use Kit `TitleBar` and its window options; check Linux locally, macOS and Windows in native CI after merge (decision 4). |
-| A layout file from an older build, or a removed panel, breaks startup | Versioned file, fallback default reported in Activity, unknown panels dropped; one table-driven test. |
+| A layout file from an older build, or a removed panel, breaks startup | Versioned file; a file naming any panel other than the known ones, or missing one, restores the default, reported in Activity; one table-driven test (amended 2026-11-08, Cycle 01 decision 5). |
 | D6 lands while Cycles 01 and 03 move and rework the operations area | Cycle 01 wraps the area as the Activity panel without editing `view/operations/` or `model/operations.rs`; 03 bases its plan on whatever D6 has merged and leaves the polling states out until then. Whichever merges second merges main and adapts, per `AGENTS.md`. |
-| Quit feedback ("Finishing …", Quit now, and D6's "still stopping") renders in the operations area, so a hidden Activity panel would hide it | Cycle 01 shows the Activity panel when a quit starts waiting, or draws that feedback outside any panel, and tests a quit with Activity hidden. |
-| Needs attention misses the attention states D6 adds (key locked, host approval, recovery hold) | The footer count reads the operations model's attention entries, the one store D6 adds to. |
+| Quit feedback ("Finishing …", Quit now, and D6's "still stopping") renders in the operations area, so a hidden Activity panel would hide it | Cycle 01 keeps the feedback in the Activity panel and changes no layout when a quit waits; a person who wonders why opens Activity (amended 2026-11-08, Cycle 01 decision 7). |
+| Needs attention misses the attention states D6 adds (key locked, host approval, recovery hold) | The footer count is one read-only function over the existing models; whichever of D6 and Cycle 01 merges second adds D6's states to it (amended 2026-11-08, Cycle 01 decision 3). |
 | Cycle 01 or 05 grows too large to review | The split line in each. |
 | Restyling the lifecycle dialog and the resolve conflict sheet regresses D5 behavior (stale confirmations, retry reusing the operation, safe-point stop, no automatic winner) | Cycle 05 changes layout and copy only; D5's existing tests stay and must pass unchanged in what they assert about behavior. |
 | The design's list specs drop a Wave 03 behavior (Ready and Blocked, duplicate short codes, inaccessible entries) | Cycle 02's exit evidence names them; decision 5 places Ready and Blocked. |
@@ -564,6 +578,17 @@ Owner item 6 and the excluded design parts, to be planned later:
 - Item-area splits and the focused-pane treatment.
 - Search and the command palette; Projects and Teams panels and scopes;
   title-bar menus.
+- Added 2026-11-08 by Cycle 01 (its design, Document Amendment 4):
+  - saving open tabs, the focused pane and the scope with the layout;
+  - hiding the bottom dock completely, without the toolkit's 29 px strip;
+  - a footer line showing the latest Activity status ("Saving…",
+    "Syncing…");
+  - quitting with work at risk: one blocking dialog that lists unsaved or
+    unsaveable work and offers going back or discarding it and quitting,
+    with save failures handled per item and Activity's wording revisited,
+    replacing Quit now and Quit anyway;
+  - a watchdog for pending operations: keep waiting, or abandon the job as
+    far as the request can safely be stopped.
 
 ## Approval And Remaining Readiness
 

@@ -60,7 +60,7 @@ async fn open_ready_tickets_on_the_shown_repository(cx: &mut TestAppContext) {
         saved_ticket(fixture, root, "Closing", "");
     });
     shell.select(&root, cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.workspace.update(cx, |workspace, cx| {
         workspace.set_closure(ClosureFilter::Closed, cx);
         workspace.set_readiness(Some(ReadinessFilter::Blocked), cx);

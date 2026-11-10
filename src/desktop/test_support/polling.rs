@@ -54,6 +54,7 @@ use manyhands::{
 use super::delaying::{DelayingBackend, Gate, JobGate};
 use crate::desktop::services::{
     Backend, DraftStoreUnavailable, JobKind, KeyStoreUnavailable, ReadGate, ReadKind,
+    layout::{LayoutStore, LayoutStoreError},
     poll_convert::Library,
     prompts::DesktopProvider,
     resolutions::{ResolutionStore, ResolutionStoreError},
@@ -331,6 +332,10 @@ impl Backend for PollingBackend {
 
     fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError> {
         self.inner.resolutions()
+    }
+
+    fn layout(&self) -> Result<&LayoutStore, LayoutStoreError> {
+        self.inner.layout()
     }
 
     fn read_gate(&self, kind: ReadKind) -> Option<ReadGate> {
