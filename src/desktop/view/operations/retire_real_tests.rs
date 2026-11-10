@@ -346,3 +346,290 @@ async fn retire_replay_final(cx: &mut TestAppContext) {
         "nothing removed a second time"
     );
 }
+
+/// A22, O-14, K-18, decision 28, R-31, E4: a graceful quit while a
+/// retirement runs lets it finish and leaves the library's `pending` answer
+/// Owed. The relaunch over the same app-data store finds the in-flight
+/// entry (request ID and operation), holds the item "Retiring…" and
+/// read-only, offers Resume and Abandon for the pending row, and Resume
+/// finishes it: the library answers `original_request_required` naming the
+/// entry's request, the retirement is sent again once, under that request
+/// ID, on the user lane, and its `retired` answer ends the entry, the row
+/// and the hold. Nothing is sent twice.
+///
+/// Every answer is canned, so this does NOT exercise the U-9 observer row
+/// (an active Manual observer row the library leaves beside the
+/// retirement's row when the process dies inside the observation) or K-29
+/// (Resume offered on that row and answered `invalid_input`): both need a
+/// real kill mid-observation, which no desktop test can make (ledger, Task
+/// 12b). Nor does it clear a declined key at Resume: the relaunched worker
+/// has declined none (`retire_resume_resends_original` covers that).
+#[gpui_kit::test]
+async fn quit_during_retirement_pending(cx: &mut TestAppContext) {
+    use std::{cell::RefCell, sync::Arc};
+
+    use crate::desktop::{
+        model::{
+            lifecycle_lock::{LockSource, LockState},
+            operations::{ResumeOffer, abandon_offered, resume_offer_among},
+            polling::TestClock,
+        },
+        services::{
+            JobKind,
+            poll_convert::{Library, ReportParts},
+        },
+        test_support::{
+            polling::PollingBackend,
+            retire::{ITEM, OPERATION, answer, original_request, pending_list},
+        },
+        view::{
+            harness::wait_until,
+            quit::{QuitPhase, support::Rig as QuitRig},
+        },
+    };
+    use manyhands::repository::{
+        ContextRetirementState as State, PollCompletion, RetirementRemoval as Removal,
+    };
+    use manyhands::results::ResultCode as Code;
+
+    let canned_item: ItemId = ITEM.parse().unwrap();
+    let operation = OperationId::parse(OPERATION).unwrap();
+    // The in-flight record's retirement entries: request, operation, item.
+    let entries = |services: &crate::desktop::services::Services, cx: &mut TestAppContext| {
+        services.scheduler().read_with(cx, |scheduler, _| {
+            scheduler
+                .store()
+                .retirements()
+                .iter()
+                .map(|entry| (entry.request(), entry.operation(), entry.item()))
+                .collect::<Vec<_>>()
+        })
+    };
+    let quiet = |cx: &mut TestAppContext| {
+        let cx = cx.clone();
+        async move {
+            for _ in 0..20 {
+                cx.run_until_parked();
+                cx.executor()
+                    .timer(std::time::Duration::from_millis(10))
+                    .await;
+            }
+        }
+    };
+
+    // The first launch: a retirement runs, the library will answer it
+    // `pending` (Owed), and the person quits.
+    let rig = QuitRig::new(&["a"], cx);
+    let root = rig.roots[0].clone();
+    rig.backend.answer_poll(rig.completed());
+    rig.list(cx);
+    rig.until_applied(&root, cx).await;
+    let held = rig.shell.backend.hold_job(JobKind::ContextRetire);
+    rig.shell.backend.answer_job(
+        JobKind::ContextRetire,
+        answer(State::Pending, Code::RecoveryRequired, Removal::None),
+    );
+    let request = RequestId::new();
+    let job = rig.services.scheduler().update(cx, |scheduler, _| {
+        scheduler.resend_retirement(
+            request,
+            &root,
+            TargetKind::Ticket,
+            &canned_item,
+            Lane::Background,
+        )
+    });
+    held.wait_reached();
+
+    assert!(!rig.request_quit(cx), "it waits for the retirement");
+    assert_eq!(rig.phase(cx), QuitPhase::Finishing(job));
+    let running = rig.worker().running_job().expect("the retirement runs");
+    assert!(!running.cancelled, "decision 28: its token is left alone");
+    held.release();
+    wait_until(
+        &rig.shell.visual(cx),
+        &rig.shell.workspace,
+        |workspace, _| workspace.quit_phase() == QuitPhase::Quit,
+    )
+    .await;
+    assert!(rig.worker().ended());
+    quiet(cx).await;
+    let kept = vec![(
+        Some(request),
+        Some(operation),
+        Some((TargetKind::Ticket, canned_item.clone())),
+    )];
+    assert_eq!(entries(&rig.services, cx), kept, "Owed keeps its entry");
+    let first_sent = rig.shell.backend.jobs_seen();
+    assert_eq!(
+        first_sent
+            .iter()
+            .filter(|kind| **kind == JobKind::ContextRetire)
+            .count(),
+        1
+    );
+
+    // The relaunch: a new window, services, worker and scheduler over the
+    // same data directory. The first launch's are gone, and with them its
+    // hold on the in-flight lock.
+    let QuitRig {
+        shell,
+        services,
+        backend,
+        clock,
+        ..
+    } = rig;
+    drop((services, backend, clock));
+    let polling = RefCell::new(None::<Arc<PollingBackend>>);
+    let shell = shell.relaunch_over(
+        |delaying| {
+            let double = Arc::new(PollingBackend::new(delaying));
+            *polling.borrow_mut() = Some(double.clone());
+            double
+        },
+        cx,
+    );
+    let polling = polling.into_inner().expect("the new double");
+    let clock = Arc::new(TestClock::at(time::OffsetDateTime::now_utc()));
+    let services = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().clone());
+    let services = cx.update(|cx| services.with_clock(clock.clone(), cx).with_polling());
+    polling.answer_poll(Library::Polled {
+        parts: ReportParts {
+            completion: PollCompletion::Completed,
+            completed_at: clock.utc(),
+            next_eligible_at: Some(clock.utc() + time::Duration::seconds(300)),
+            targets: Vec::new(),
+            outcome: None,
+        },
+        index_pending: false,
+    });
+    // The library still lists the row, as it does while the retirement is
+    // pending (a complete list that names it keeps the entry).
+    shell.backend.answer_pending(Some(pending_list(OPERATION)));
+    let listed = vec![root.clone()];
+    cx.update(|cx| services.repositories_listed(&listed, cx));
+    shell.run(cx);
+    quiet(cx).await;
+
+    // (b) The entry is kept, with its request and operation, and the item
+    // is "Retiring…" and read-only.
+    assert!(
+        services
+            .scheduler()
+            .read_with(cx, |scheduler, _| scheduler.store().holds_lock()),
+        "the lock of the first launch was let go"
+    );
+    assert_eq!(entries(&services, cx), kept);
+    let locked = cx.update(|cx| services.lock(&root, ItemDtoKind::Ticket, ITEM, cx));
+    assert!(matches!(locked, LockState::Locked(LockSource::Retiring)));
+
+    // (a) The library's pending row is listed, with Resume and Abandon.
+    services.operations().update(cx, |operations, cx| {
+        let stamp = operations.load_pending(root.clone());
+        operations.apply_pending(
+            stamp,
+            crate::desktop::services::ReadResult::Ok(pending_list(OPERATION)),
+        );
+        cx.notify();
+    });
+    let row = services.operations().read_with(cx, |operations, _| {
+        let own = operations.automatic_polls().clone();
+        let rows = operations.pending_shown();
+        let row = rows
+            .iter()
+            .find_map(|(shown, state)| (*shown == root).then_some(state.rows()?.items[0].clone()))
+            .expect("the pending row");
+        assert_eq!(
+            resume_offer_among(&row, &own, &operations.entered_operations()),
+            ResumeOffer::Offered
+        );
+        row
+    });
+    assert!(abandon_offered(&row));
+
+    // (c) Resume: `original_request_required` names the entry's request,
+    // the retirement is sent again under it, and its `retired` answer
+    // finishes everything.
+    shell
+        .backend
+        .answer_job(JobKind::OperationResume, original_request(request));
+    shell.backend.answer_job(
+        JobKind::ContextRetire,
+        answer(State::Retired, Code::Ok, Removal::Observed),
+    );
+    cx.update(|cx| services.resume(&root, OPERATION, cx));
+    shell
+        .until(cx, |operations| {
+            operations.requests().iter().any(|request| {
+                matches!(request.intent, Intent::ContextRetire { .. })
+                    && matches!(
+                        request.state,
+                        RequestState::Finished(..) | RequestState::Dismissed
+                    )
+            })
+        })
+        .await;
+    quiet(cx).await;
+    assert!(
+        entries(&services, cx).is_empty(),
+        "its answer ends the entry"
+    );
+    let sent = services.operations().read_with(cx, |operations, _| {
+        operations
+            .requests()
+            .iter()
+            .filter(|request| matches!(request.intent, Intent::ContextRetire { .. }))
+            .map(|request| (request.lane, request.request_id, request.intent.clone()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(sent.len(), 1, "the retirement is sent once");
+    assert_eq!(sent[0].0, Lane::User);
+    assert_eq!(sent[0].1, request, "under the NAMED request ID");
+    match &sent[0].2 {
+        Intent::ContextRetire {
+            root: asked,
+            kind,
+            id,
+        } => {
+            assert_eq!(asked.to_str(), Some(root.as_str()));
+            assert_eq!(*kind, manyhands::repository::AuthoringKind::Ticket);
+            assert_eq!(*id, canned_item);
+        }
+        _ => unreachable!(),
+    }
+    // The row is gone (the library lists none once the operation is
+    // finished), and the item is not "Retiring…".
+    services.operations().update(cx, |operations, cx| {
+        let stamp = operations.load_pending(root.clone());
+        operations.apply_pending(
+            stamp,
+            crate::desktop::services::ReadResult::Ok(
+                crate::desktop::test_support::retire::empty_list(),
+            ),
+        );
+        cx.notify();
+    });
+    let rows = services.operations().read_with(cx, |operations, _| {
+        operations
+            .pending_shown()
+            .iter()
+            .filter(|(shown, _)| *shown == root)
+            .map(|(_, state)| state.rows().map_or(0, |rows| rows.items.len()))
+            .sum::<usize>()
+    });
+    assert_eq!(rows, 0, "no pending row");
+    let locked = cx.update(|cx| services.lock(&root, ItemDtoKind::Ticket, ITEM, cx));
+    assert!(!matches!(locked, LockState::Locked(LockSource::Retiring)));
+
+    // (d) Nothing was sent twice: one Resume and one retirement reached the
+    // library after the relaunch, one retirement before it.
+    let after: Vec<JobKind> = shell
+        .backend
+        .jobs_seen()
+        .into_iter()
+        .filter(|kind| *kind != JobKind::Poll)
+        .collect();
+    assert_eq!(after, [JobKind::OperationResume, JobKind::ContextRetire]);
+}

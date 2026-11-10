@@ -120,6 +120,17 @@ impl Shell {
     /// fixture's, and nothing is resized (R-26). The Kit and the keys are
     /// already set up.
     pub(crate) fn relaunch(self, cx: &mut TestAppContext) -> Self {
+        self.relaunch_over(|backend| backend, cx)
+    }
+
+    /// [`Self::relaunch`], the new window's services over the double
+    /// `wrap` makes of the new delaying backend (a test of the polling
+    /// calls, as `over_double` is).
+    pub(crate) fn relaunch_over(
+        self,
+        wrap: impl FnOnce(Arc<DelayingBackend>) -> Arc<dyn Backend>,
+        cx: &mut TestAppContext,
+    ) -> Self {
         let Self {
             window, fixture, ..
         } = self;
@@ -127,7 +138,16 @@ impl Shell {
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();
         VisualTestContext::from_window(window.into(), cx).run_until_parked();
-        Self::start(fixture, false, |_| {}, Geometry::AsLaunched, false, cx)
+        let backend = fixture.delaying_backend();
+        Self::over(
+            fixture,
+            wrap(backend.clone()),
+            backend,
+            false,
+            Geometry::AsLaunched,
+            false,
+            cx,
+        )
     }
 
     /// Opens the main window as the application does, refreshing every
