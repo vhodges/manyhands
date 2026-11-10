@@ -132,7 +132,13 @@ mod tests {
     use manyhands::repository::{OperationId, OperationListDto};
 
     use super::row_gone;
-    use crate::desktop::test_support::retire::{empty_list, pending_list};
+    use crate::desktop::{
+        services::{Backend, LibraryBackend},
+        test_support::{
+            fixtures::Fixture,
+            retire::{empty_list, pending_list},
+        },
+    };
 
     /// Only a list that was read, is complete and does not name the row says
     /// it is gone.
@@ -154,5 +160,28 @@ mod tests {
             Some(&pending_list(&operation.to_string())),
             operation
         ));
+    }
+
+    /// Review I-2, the default `Backend::pending_operations` the desktop
+    /// runs with: a registered repository gives a complete list, here with
+    /// nothing pending, and a root the library does not know gives `None`,
+    /// from which nothing is concluded.
+    #[test]
+    fn the_default_pending_read_is_complete_for_a_registered_root_only() {
+        let fixture = Fixture::new();
+        let root = fixture.create_repository("a");
+        let elsewhere = fixture.empty_directory("elsewhere");
+        let backend = LibraryBackend::new(
+            manyhands::repository::RepositoryService::open_at(fixture.data_dir()).unwrap(),
+            Ok(fixture.draft_store()),
+            Ok(fixture.resolution_store()),
+            Ok(fixture.layout_store()),
+        );
+        let list = backend
+            .pending_operations(&root)
+            .expect("a registered root");
+        assert!(list.complete);
+        assert!(list.items.is_empty());
+        assert!(backend.pending_operations(&elsewhere).is_none());
     }
 }

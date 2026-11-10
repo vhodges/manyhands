@@ -283,22 +283,29 @@ impl Scheduler {
         if !self.on() {
             return;
         }
-        self.acquire(cx);
-        // A row settled while the window was away ends its entry.
-        self.reconcile_entries(cx);
+        // A row settled while the window was away ends its entry: taking the
+        // lock reads the list itself, so only a lock already held reads it
+        // here.
+        if !self.acquire(cx) {
+            self.reconcile_entries(cx);
+        }
         let roots = self.known.iter().cloned().collect();
         self.read_registrations(roots, cx);
         self.tick(cx);
     }
 
-    fn acquire(&mut self, cx: &mut Context<Self>) {
+    /// Tries the in-flight lock. True when it was taken now, which also
+    /// reconciles the entries (it reads their lists).
+    fn acquire(&mut self, cx: &mut Context<Self>) -> bool {
         if self.store.try_acquire() == Acquired::Now {
             // The entries the previous holder left are now ours to finish:
             // `plan` takes them over when each repository is due (L-1), and
             // their rows are not offered Resume.
             self.publish(cx);
             self.reconcile_entries(cx);
+            return true;
         }
+        false
     }
 
     /// Reads `roots`: policy and remotes, together, off the UI thread.

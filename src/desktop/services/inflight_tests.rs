@@ -441,3 +441,37 @@ impl InflightStore {
         self.report.is_none()
     }
 }
+
+/// Review M-5: a record written before the `owed` field was removed from an
+/// entry still loads. The field is ignored, not reported as an unreadable
+/// record, and the entry keeps its request, item and operation (a Resume
+/// after the upgrade still finds them).
+#[test]
+fn an_entry_with_the_removed_owed_field_still_loads() {
+    let data = tempfile::tempdir().unwrap();
+    let (request, operation) = (RequestId::new(), OperationId::new());
+    {
+        let mut store = holder(&data);
+        store.retirement_submitting(retirement(request));
+        store.retirement_operation(request, operation);
+    }
+    let mut disk = on_disk(&data);
+    let entry = &mut disk["retirements"][0];
+    assert!(entry.get("owed").is_none(), "no longer written");
+    entry["owed"] = serde_json::Value::Bool(true);
+    fs::write(record_path(&data), serde_json::to_vec(&disk).unwrap()).unwrap();
+
+    let mut store = InflightStore::open(data.path());
+    assert_eq!(store.try_acquire(), Acquired::Now);
+    assert_eq!(store.take_report(), None, "not an unreadable record");
+    let entries = store.retirements();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].request(), Some(request));
+    assert_eq!(entries[0].operation(), Some(operation));
+    assert!(
+        names(&data.path().join("inflight"))
+            .iter()
+            .all(|name| !name.starts_with("record.unreadable")),
+        "nothing was set aside"
+    );
+}

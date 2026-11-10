@@ -1049,6 +1049,59 @@ async fn retire_entry_the_worker_holds_is_not_reconciled(cx: &mut TestAppContext
     World::settle(cx, "the resend to end", |cx| entered(&world, cx).is_empty()).await;
 }
 
+/// Review M-1: window activation reads the pending list for a lock the
+/// scheduler already held (taking the lock reads it itself, once): a row
+/// settled while the window was away ends its entry then.
+#[gpui_kit::test]
+async fn retire_activation_reconciles_a_lock_already_held(cx: &mut TestAppContext) {
+    // The launch read fails, so the entry stays.
+    let (world, root, request, _) = left_pending(cx, None).await;
+    assert_eq!(entered(&world, cx), [request]);
+    assert!(retiring_now(&world, &root, cx));
+    // Away from the window, the row was settled elsewhere.
+    world.backend.inner().answer_pending(Some(empty_list()));
+    world.activate(cx);
+    World::settle(cx, "the entry to end", |cx| entered(&world, cx).is_empty()).await;
+    assert!(!retiring_now(&world, &root, cx));
+}
+
+/// Review M-6: the worker's own hold on the item is a check of its own, not
+/// only the request model's. A resend has just been submitted, so the worker
+/// holds the item, and the drain has not yet told the request model it is
+/// queued (no request of that ID shows as queued or running); the list lacks
+/// the row. The entry stays.
+#[gpui_kit::test]
+async fn retire_entry_the_worker_holds_is_kept_before_the_model_shows_it(cx: &mut TestAppContext) {
+    // The launch read fails, so the entry (with its operation) stays.
+    let (world, root, request, _) = left_pending(cx, None).await;
+    assert_eq!(entered(&world, cx), [request]);
+    // Held, so that the worker still has the request when the list is read.
+    let running = world.backend.inner().hold_job(JobKind::ContextRetire);
+    world.backend.inner().answer_job(
+        JobKind::ContextRetire,
+        answer(State::Retired, Code::Ok, Removal::Observed),
+    );
+    let operations = world.services.operations().clone();
+    world.services.scheduler().update(cx, |scheduler, cx| {
+        scheduler.resend_retirement(request, &root, TargetKind::Ticket, &item(), Lane::User);
+        // One synchronous turn: the model has heard nothing of the resend.
+        assert!(
+            operations
+                .read(cx)
+                .requests()
+                .iter()
+                .all(|held| held.request_id != request),
+            "the request model does not show the resend yet"
+        );
+        let epoch = scheduler.entry_epoch;
+        // The list was read after the resend and is complete without the row.
+        scheduler.reconciled(&root, epoch, Some(empty_list()), cx);
+    });
+    assert_eq!(entered(&world, cx), [request], "held by the worker");
+    running.release();
+    World::settle(cx, "the resend to end", |cx| entered(&world, cx).is_empty()).await;
+}
+
 /// Review minor 1: what the attempt's entry says when a pending retirement's
 /// row is settled by an Abandon or a Resume. A Resume that finished the row
 /// says "Finished retiring {item}."; nothing is claimed otherwise, and never

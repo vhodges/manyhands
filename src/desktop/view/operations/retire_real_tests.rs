@@ -230,6 +230,7 @@ async fn retire_end_state_real(cx: &mut TestAppContext) {
     );
     let comment = store_comment_draft(&fixture, &root, "Kept comment words");
     let rig = rig_over(fixture, &root, cx);
+    reported_closed(&rig, cx);
     let shell = &rig.shell;
 
     // Before: the tab reads the item's own copy.
@@ -239,10 +240,15 @@ async fn retire_end_state_real(cx: &mut TestAppContext) {
 
     remove_context(&root);
     assert_eq!(has_context(&root), (false, false));
+    // Nothing reads again by itself: the removal alone changes no tab, so
+    // the reload below comes from the retirement's answer.
+    shell.run(cx);
+    assert_eq!(shell.label("item-title", cx).as_deref(), Some(OWN));
     let sent = retire_under(&rig, RequestId::new(), cx);
-    shell.until_ended(sent, cx).await;
-    // The library answered `already_absent`, a retirement (E3), and the
-    // lists and tabs read again: the tab reads primary's copy (U-11).
+    // The library answered `already_absent`, which the attempt's entry says
+    // as retired: one line, no entry and no row.
+    settled(&rig, sent, cx).await;
+    // The lists and tabs read again: the tab reads primary's copy (U-11).
     title_becomes(shell, PRIMARY, cx).await;
 
     // The drafts outlive it, listed, with Export… and without Restore.
@@ -548,6 +554,16 @@ async fn quit_during_retirement_pending(cx: &mut TestAppContext) {
         row
     });
     assert!(abandon_offered(&row));
+    // Negative control: the same row with no entry for it and not owing only
+    // its hand-off is not offered Resume (K-27), so the offer above comes
+    // from the entry.
+    services.operations().read_with(cx, |operations, _| {
+        let none = std::collections::HashSet::new();
+        assert_eq!(
+            resume_offer_among(&row, operations.automatic_polls(), &none),
+            ResumeOffer::NotOffered
+        );
+    });
 
     // (c) Resume: `original_request_required` names the entry's request,
     // the retirement is sent again under it, and its `retired` answer
