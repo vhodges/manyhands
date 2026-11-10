@@ -146,7 +146,7 @@ ticket (comment `01M6Z8A8AYDGTK4BWKZR3931ST`):
 - **Settings stays a page in the item area**, opened by `secondary-,`, the
   sidebar entry and the new footer button, until Wave 04 Cycle 04 moves it
   into a sheet.
-- Its proposed **K-19**: at the default 1280 px window, Activity is about
+- Its **K-19** (proposed there, accepted by the owner on 2026-11-09): at the default 1280 px window, Activity is about
   550 px wide. Three unwrapped operation-area rows (the draft-flush Retry,
   the pending repository Retry, and pending controls such as Abandon) can sit
   outside the visible part. It names Cycle 03's Activity rebuild or D6.
@@ -181,7 +181,7 @@ to Cycle 01. The obligations:
 3. **D6's rows fit Activity (decision 13).** Every row D6 adds to the
    operation area wraps so that its actions stay inside Activity at the
    default window; a test clicks each at its position. The three existing
-   rows Cycle 01's proposed K-19 names stay with Wave 04 Cycle 03 (design
+   rows Cycle 01's accepted K-19 names stay with Wave 04 Cycle 03 (design
    W-6, Document Amendment 8).
 4. **A small footprint in shared files.** The scheduler is held by
    `Services`, not by `Workspace`. D6's only edit to the repository list is one
@@ -298,7 +298,7 @@ Whichever of those and D6 merges second adapts, per `AGENTS.md`.
   operation area (D4 decision 2), which Cycle 01 shows as the Activity panel,
   and on the Settings page. Moving that page into the Settings sheet: Wave 04
   Cycle 04. A global "pause all" switch (decision 8).
-- Rewrapping the three existing operation-area rows of Cycle 01's proposed
+- Rewrapping the three existing operation-area rows of Cycle 01's accepted
   K-19: Wave 04 Cycle 03 (decision 13). The blocking quit dialog, the
   pending-operation watchdog and the footer status line: Wave 04 later work.
 - Clearing the recovery suspension automatically. D6 offers a deliberate
@@ -456,7 +456,7 @@ Proposed by the planner; approved with the documents on 2026-11-09:
 13. **D6's rows fit Activity.** Each row D6 adds to the operation area wraps
     so that its actions are inside Activity at the default window, and a
     test clicks each at its position. The three existing rows Cycle 01's
-    proposed K-19 names stay with Wave 04 Cycle 03, which Wave 04 records
+    accepted K-19 names stay with Wave 04 Cycle 03, which Wave 04 records
     (K-16; design Document Amendment 8).
 14. **How decisions 16 to 21 are carried out.**
     - Every poll stays a recognizing poll. An automatic poll keeps its

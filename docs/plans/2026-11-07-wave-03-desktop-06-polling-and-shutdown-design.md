@@ -1178,7 +1178,8 @@ Wave 04 Cycle 01 (`01M6V8RK8B0SBCH0YZXFVSR9E3`) was approved on 2026-11-08
 adapt. Each item says what D6 does in either order. Sources: Cycle 01's
 approved Cycle document (scope 4, 7 and 12; decisions 3, 7 and 14; K-18), its
 note on this ticket (comment `01M6Z8A8AYDGTK4BWKZR3931ST`) and its checkpoint
-comment `01M6ZXNJFRHZP9381NQQE3FH0F` (proposed K-19). Cycle 01's branch also
+comment `01M6ZXNJFRHZP9381NQQE3FH0F` (proposed K-19, accepted by the owner on
+2026-11-09). Cycle 01's branch also
 carries the matching Wave 04 amendments, so D6 edits Wave 04 only at its own
 approval (Document Amendment 8). At `e24d8ce9` Cycle 01's branch had not yet
 changed `lifecycle.rs`; W-2's focus rule and its A7 test exist in its plan
@@ -1237,7 +1238,7 @@ only, so Task 0 re-checks them.
   them instead of deriving its own. Check all can submit Check now
   (`PollOnce`) per repository; D6 adds no separate action for it.
 - **W-6. Rows that fit Activity** (decision 13). At the default 1280 px
-  window, Activity is about 550 px wide (Cycle 01's proposed K-19). Each row
+  window, Activity is about 550 px wide (Cycle 01's accepted K-19). Each row
   D6 adds to the operation area wraps so its actions stay inside it: the
   attention entries, the attempt entries with their dispositions, the Retire
   offers, and Resume checking. The three existing unwrapped rows of K-19 stay
@@ -1604,7 +1605,7 @@ checked again: 1 to 5 and 7 to 10. Amendment 6 waits for D6's merge.
      evidence ("No background push/checkpoint/merge/cleanup");
    - **The D6 ticket**'s Exit Evidence.
 8. Wave 04: the Cycle 03 section records that it owns the three unwrapped
-   operation-area rows of Cycle 01's proposed K-19 (decision 13), and that
+   operation-area rows of Cycle 01's accepted K-19 (decision 13), and that
    "Check all for updates now" submits Check now per repository (W-5).
    Applied after checking Cycle 01's own Wave 04 edits, to avoid a conflict.
 9. Wave entry gate and track rules: D6's API audit timing departs from item
@@ -1693,8 +1694,10 @@ checked again: 1 to 5 and 7 to 10. Amendment 6 waits for D6's merge.
   `--retire-completed` pass shares one. Retirement is per item (decision
   17), and D6 adds no library part (decision 1).
 - **K-16.** The three existing unwrapped operation-area rows of Cycle 01's
-  proposed K-19 can still sit outside the visible Activity; D6's own rows
-  wrap (decision 13).
+  accepted K-19 can still sit outside the visible Activity, now clipped or
+  overflowing inside their own column, because D6 gave the Activity columns
+  `min_w_0` (`view/workspace/render.rs`) so a long row no longer widens the
+  area; D6's own rows wrap (decision 13).
 - **K-17.** A Save or Share submitted while an item's background retirement
   runs waits for that one retirement, up to one observation and its local
   removal (decision 20, E2).
@@ -1729,7 +1732,8 @@ checked again: 1 to 5 and 7 to 10. Amendment 6 waits for D6's merge.
 - **K-26.** Unlock… through a repository that cannot be reached does not
   cache the passphrase, so the key's attention stays (C3).
 - **K-27.** A pending retirement with no in-flight entry, such as one a
-  second instance submitted, offers Abandon but not Resume (E4).
+  second instance submitted, offers Abandon but not Resume, unless it owes
+  only its index hand-off, which keeps Resume (E4, Amendment 12).
 
 ## Alternatives Rejected
 

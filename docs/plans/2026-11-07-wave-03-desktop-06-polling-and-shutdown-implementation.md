@@ -824,7 +824,7 @@ the ledger, the Cycle's Status and Acceptance table, the ticket.
   R-25 Task 4; R-5 to R-7 Task 2; R-8, R-14 Tasks 2, 8; R-9 Task 7; R-10,
   R-11, R-16, R-27 Task 5; R-12, R-15 Task 10; R-13 Tasks 6, 7, 8; R-17, R-21,
   R-22 Task 11b; R-18 Tasks 11b, 12; R-19 Tasks 3, 13; R-20 Task 9; R-23 Task
-  11a; R-28 Tasks 11b, 12; R-31 Tasks 4, 11a, 12; R-32 Task 11b; R-33 Task 10;
+  9 (minimal), Task 11a (retirement rows); R-28 Tasks 11b, 12; R-31 Tasks 4, 11a, 12; R-32 Task 11b; R-33 Task 10;
   R-34 Task 4; R-35 Tasks 2, 5; R-36, R-37 Task 11b; R-38 Task 10.
 - No task changes a library file; a library gap stops for the owner.
 - Two SSH cases, justified in Task 1 (decision 22); every other test is
