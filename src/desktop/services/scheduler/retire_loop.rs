@@ -361,10 +361,11 @@ impl Scheduler {
     }
 
     /// The retirement `id`, request `request`, of `root` answered with
-    /// `verdict`. `stopped`: the person pressed Stop on it (RT-9). The loop
-    /// goes on to its next item when the answer is the loop's own and lets
-    /// it (RT-7); an answer that hits a wall stops it, the loop's own or
-    /// not (RT-8, R-37); any other answer is none of its business.
+    /// `verdict`. `stopped`: the person pressed Stop on it, which ends the
+    /// loop only when the request is the loop's own (RT-9). The loop goes on
+    /// to its next item when the answer is the loop's own and lets it
+    /// (RT-7); an answer that hits a wall stops it, the loop's own or not
+    /// (RT-8, R-37); any other answer is none of its business.
     pub(super) fn loop_answered(
         &mut self,
         id: DesktopRequestId,
@@ -378,7 +379,11 @@ impl Scheduler {
         let Some(lp) = self.loops.get_mut(root) else {
             return;
         };
-        match lp.answered(request, verdict.goes_on() && !stopped) {
+        // Stop ends the loop that sent the request, not another request's
+        // (RT-9): the person's own Retire… of another item, stopped, is
+        // none of the loop's business. A wall ends it either way (RT-8).
+        let own = lp.running() == Some(request);
+        match lp.answered(request, verdict.goes_on() && !(own && stopped)) {
             Settled::Next => self.drive(root, cx),
             Settled::Stop => self.end_loop(root, cx),
             Settled::Unrelated => {}

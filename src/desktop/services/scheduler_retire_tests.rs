@@ -1030,6 +1030,44 @@ async fn retire_entries_reconcile_only_from_a_complete_list(cx: &mut TestAppCont
     assert!(!retiring_now(&world, &root, cx));
 }
 
+/// Review 1 (Task 12a): the reads of every repository's pending operations,
+/// taken at one activation, are all applied. The first read that ends an
+/// entry must not discard the others'. Two repositories each left a pending
+/// retirement whose row was settled elsewhere; one launch ends both.
+#[gpui_kit::test]
+async fn retire_one_activation_ends_the_stuck_entries_of_every_repository(cx: &mut TestAppContext) {
+    let world = World::new(true, cx);
+    let roots = [world.ssh_repo("a"), world.ssh_repo("b")];
+    {
+        let mut previous = InflightStore::open(world.fixture.data_dir());
+        assert_eq!(previous.try_acquire(), Acquired::Now);
+        for root in &roots {
+            let request = RequestId::new();
+            previous.retirement_submitting(RetirementEntry::new(
+                request,
+                root,
+                TargetKind::Ticket,
+                &item(),
+            ));
+            previous.retirement_operation(request, OperationId::new());
+            previous.retirement_ended(request, RetirementEnd::Accepted);
+        }
+    }
+    world.backend.inner().answer_pending(Some(empty_list()));
+    world.backend.answer_poll(world.completed());
+    world.list(&roots, cx);
+    World::settle(cx, "the launch polls", |_| {
+        world.backend.polled_roots().len() == 2
+    })
+    .await;
+    World::quiet(cx).await;
+    assert_eq!(
+        entered(&world, cx),
+        [],
+        "every repository's stuck entry ended"
+    );
+}
+
 /// Review I-C: an entry whose retirement the worker holds is never
 /// reconciled, whatever the list says: the resend running now will answer.
 #[gpui_kit::test]

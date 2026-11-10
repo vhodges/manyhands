@@ -1365,3 +1365,74 @@ async fn retire_loop_leaves_what_the_worker_and_the_refused_set_hold(cx: &mut Te
     );
     assert!(consistent(&world, cx));
 }
+
+/// Review 2 (Task 11a, RT-8, R-32): a repository that waits on the person
+/// has no loop. The key an answer needs is read off the UI thread, and a
+/// loop that began while the read was out is ended when attention is raised,
+/// not left to send more retirements into a waiting repository.
+#[gpui_kit::test]
+async fn attention_raised_after_a_key_read_ends_a_loop_begun_meanwhile(cx: &mut TestAppContext) {
+    use crate::desktop::model::polling::retire::Need;
+    let (world, root) = idle(cx).await;
+    let running = world.backend.inner().hold_job(JobKind::ContextRetire);
+    for _ in 0..2 {
+        world
+            .backend
+            .inner()
+            .answer_job(JobKind::ContextRetire, retired());
+    }
+    world.heard(vec![checked(&world, &root, &[0, 1])], cx);
+    running_item(&world, cx).await;
+    assert_eq!(world.phase(&root, cx), Some(Phase::Retiring));
+    // The read of the key lands now.
+    world.services.scheduler().update(cx, |scheduler, cx| {
+        scheduler.raise(root.clone(), Need::KeyLocked, None, cx)
+    });
+    assert!(matches!(world.phase(&root, cx), Some(Phase::Attention(_))));
+    assert!(
+        consistent(&world, cx),
+        "no loop beside a waiting repository"
+    );
+    running.release();
+    World::quiet(cx).await;
+    assert_eq!(sent(&world, cx), [0], "the loop sent nothing more");
+}
+
+/// Review 3 (RT-9): Stop ends only the loop that sent the request. The
+/// person's own Retire… of another item, stopped while the loop has an item
+/// queued behind it, leaves the loop and the rest of its queue alone.
+#[gpui_kit::test]
+async fn stopping_the_persons_own_retirement_leaves_the_loop_alone(cx: &mut TestAppContext) {
+    use crate::desktop::services::requests::Lane;
+    let (world, root) = idle(cx).await;
+    let own = world.backend.inner().hold_job(JobKind::ContextRetire);
+    for answer in [
+        answer(State::Refused, Code::Cancelled, Removal::None),
+        retired(),
+        retired(),
+    ] {
+        world
+            .backend
+            .inner()
+            .answer_job(JobKind::ContextRetire, answer);
+    }
+    // Retire… of item 2 runs (held); the loop's items queue behind it.
+    let item = IDS[2].parse().unwrap();
+    let id = world.services.scheduler().update(cx, |scheduler, _| {
+        scheduler
+            .retire(&root, TargetKind::Ticket, &item, Lane::User)
+            .expect("not quitting")
+    });
+    running_item(&world, cx).await;
+    world.heard(vec![checked(&world, &root, &[0, 1])], cx);
+    World::quiet(cx).await;
+    assert_eq!(world.phase(&root, cx), Some(Phase::Retiring));
+    world
+        .services
+        .operations()
+        .update(cx, |operations, _| operations.stopping(id));
+    own.release();
+    finished(&world, &root, cx).await;
+    assert_eq!(sent(&world, cx), [2, 0, 1], "the loop went on past it");
+    assert!(consistent(&world, cx));
+}

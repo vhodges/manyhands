@@ -121,7 +121,11 @@ impl Scheduler {
                 .retirement_ended(request, RetirementEnd::Finished);
             self.schedule.retire_ended(root, kind, &item, false);
         }
-        self.entry_epoch += 1;
+        // No `entry_epoch` move here: this only ends entries the read just
+        // judged, and the reads taken for the other repositories at the same
+        // activation say nothing of these. A read that must not be applied
+        // is one that began before a retirement began, answered or settled
+        // (those move the epoch themselves).
         self.publish(cx);
         self.tick(cx);
     }
