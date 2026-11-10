@@ -1728,7 +1728,7 @@ full rerun below):
   `--lib` **1564 passed**, 0 failed (1009 s, `repository::local_sync::` skipped);
   desktop `--bins` **1818 passed**, 0 failed (1208 s; `--no-fail-fast`);
   the 27 listed integration targets **2522 passed** in total, 0 failed
-  (largest: `mutation_confirmation`-class targets 477, 384, 317, 184, 166 cases).
+  (summed from the per-target result lines in the run's log).
 - SSH tier: `remote_polling` **86 cases passed**, exit 0, about 5 min (it
   includes Task 1's `poll_cancel_during_handshake_stall` and
   `poll_cancel_during_connect_stall`). The change touches no
