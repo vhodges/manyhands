@@ -1385,8 +1385,10 @@ Each ruling's cost if wrong is rework inside D6, unless it says otherwise.
 - **R-37.** The loop stops on a pending or `Accepted` answer, an attention
   code, a transport or remote-unavailable code, `Removed` or `NotSent`, and
   is dropped whole by a reconfiguration (RT-8 to RT-10).
-- **R-38.** A graceful quit does not cancel a running background retirement;
-  it waits for it like any finishing job (proposed decision 28, Part D).
+- **R-38.** A graceful quit does not cancel a running retirement, whatever its
+  lane (Retire…, Resume and Unlock… resends included; owner, 2026-11-10,
+  Amendment 11); it waits for it like any finishing job (proposed decision 28,
+  Part D).
   Cost if wrong: a quit can wait up to one observation and its removal.
 
 ## Testing (AGENTS.md Testing Strategy; Decision 9)
@@ -1615,6 +1617,28 @@ checked again: 1 to 5 and 7 to 10. Amendment 6 waits for D6's merge.
     (`vh-ype2f`), a per-key passphrase cache (decision 25, K-23), and
     `01M70CF1VBHJAX6MK39FY5W2RY` (`vh-xmhsj`), ending a dead poll's row
     whatever the eligibility (decision 27, K-22).
+11. Task 11b design checkpoint, owner rulings of 2026-11-10 (RT-1 to RT-11
+    checked against the code at `44ac1bb1`):
+    - **Decision 28 / R-38 covers any running `ContextRetire`**, not only the
+      loop's (lane no longer matters). Supersedes "background" in R-38 and in
+      Part D item 3.
+    - **RT-5 and R-36: an unreadable draft entry is unknown.** It has no
+      target and cannot be attributed, so while the listing holds one no item
+      of any repository is auto-retired (the items get Retire…, E4).
+    - **R-37: a finished request with no retirement data (`Verdict::Failed`)
+      stops the loop** for that repository until the next completed attempt.
+      `recovery_required` with no removal stays as E3 and RT-7 say (go on,
+      counted toward the three-strikes refused set).
+    - **A successful Check now is recorded as the repository's latest attempt**
+      (its per-item targets converted in report order), and may start a loop
+      from Idle, Preempted or Waiting, or replace a running one (RT-11).
+    Also settled by the existing rows, without a ruling: a user Cancel of a
+    running loop item stops the loop (RT-9); a quit that freezes a loop drops
+    it; the loop ends at a reconfiguration's `Finished` as well as at
+    `Submitted`, and does not start while one is queued or running (RT-10);
+    duplicate targets in one report are checked once; E1's "due again at once"
+    after a settled pending row follows R-35 (the normal schedule), which E1's
+    sentence contradicts.
 
 ## Known Limits
 

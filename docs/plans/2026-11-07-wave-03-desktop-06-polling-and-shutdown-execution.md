@@ -1158,3 +1158,63 @@ Hand-offs:
   `Called from Task 12 (Resume)`; `Operations::pending_shown` is the filtered
   list. **Unlock… resending a pending retirement is not built**; a pending
   answer with an unlock, key or host code already raises its attention.
+
+## Part E design checkpoint (Task 11b), 2026-11-10
+
+Run before any 11b code, as the plan requires: the orchestrator had RT-1 to
+RT-11 compared with the code at `44ac1bb1` (read-only), then asked the owner.
+
+Where the code cannot support the rows as they stand (Task 11b builds each):
+1. Check now's per-item targets never reach the desktop types
+   (`Heard::CheckedNow(root)` carries only the root; `PollMutationDto.targets`
+   uses a different disposition enum from the one `poll_convert.rs` maps). A
+   successful Check now is not an attempt (no `RepoSchedule.last` update), and
+   `discovery_pending` from Check now becomes `CheckFailed` without R-10's
+   IndexRefresh.
+2. No "is this item being edited" function exists and the Scheduler holds
+   neither `EditTabs` nor the `DraftRegistry`. Plan: `EditTabs::item_busy`
+   (editing, unkept, and a new separate `composing` flag, not added to
+   `unkept`, which drives the quit asks and removal counts); the Scheduler is
+   handed `Entity<EditTabs>` and a weak registry. Repair text is likely
+   vacuous (an Inspect repair offer needs an item with no ID).
+3. D2's `stored_for` and `comment_drafts` conflate unknown with none; a new
+   tri-state registry query (live sessions plus listing, comments, any holder;
+   unavailable or not Ready or never landed means Unknown) is needed. The
+   cached listing is not reloaded after `DraftRegistry::begin`, so the check
+   also reads `sessions`. The RT-6 fresh listing runs off the UI thread
+   behind `ReadKind::Drafts`, and RT-3 to RT-5 are re-checked on the UI thread
+   in the same turn as the submit.
+4. No "Retiring…" state exists. Plan: derive it from the loop's marks (held in
+   `Operations`, where the panes already observe, so the mark appears in the
+   same UI update), the worker's in-flight `ContextRetire` and the in-flight
+   record entries (so it survives a relaunch), as an extra `LockState` source
+   with "Retiring…" words; the composer gets its own read-only guard (the
+   lifecycle lock lets typing go on, decision 19 does not).
+5. `WorkerHandle::cancel` signals a running retirement; RT-10 needs a new
+   remove-only-if-queued call that never signals one.
+6. `Phase::Retiring` already stops automatic polls (R-32) but nothing calls
+   `begin_retiring` in production and no path guarantees `end_retiring`; it
+   only starts from Idle, so Check now (which preempts a poll) could not start
+   or replace a loop. The loop state needs a home (a map per root: items,
+   current request, marks) and every exit must end it: items exhausted, RT-8
+   to RT-11, quit, relist failure, repository forgotten, second instance,
+   submit refused.
+7. Reconfiguration is caught only at `Moment::Submitted`; `reconfigured` does
+   not end a loop that began afterwards.
+
+Owner rulings (AskUserQuestion, 2026-11-10; written into the design as
+Document Amendment 11): decision 28 covers any running retirement; an
+unreadable draft entry is unknown (skip everything); a no-data answer stops
+the loop and `recovery_required` stays as written; a successful Check now is
+recorded as the latest attempt and may start or replace a loop.
+
+Decided by the orchestrator under the existing rows (no ruling needed):
+user Cancel of a running loop item stops the loop (RT-9); quit drops a frozen
+loop (the next completed attempt retries); duplicate targets are checked once;
+the loop ends at a reconfiguration's `Finished` as well as `Submitted`; E1's
+"due again at once" follows R-35.
+
+Known: a poll of another repository can sit between loop items on the
+background lane, and `tick`'s `user_lane_empty` waits until no job is in
+flight, so a preempted poll of another repository waits for a running loop.
+Recorded as K-44 (accepted; the loop is bounded by its items).
