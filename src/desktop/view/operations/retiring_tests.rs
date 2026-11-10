@@ -44,8 +44,12 @@ fn entry_id(rig: &Rig, part: &str) -> String {
 /// where a click reaches it at the default window, and dismisses it.
 #[gpui_kit::test]
 async fn retire_rows_hit(cx: &mut TestAppContext) {
+    // E-37: polling is off. With it on, the scheduler reads `a`'s stored
+    // policy, finds it due and sends a real poll whose answer replaces the
+    // attempt injected below, thirty rows and all, whenever it arrives: the
+    // rows and the Dismiss below the fold were only there if the answer was
+    // late, and Tab brought nothing in view.
     let rig = Rig::new(&[("a", true)], cx);
-    let _ = rig.services.clone().with_polling();
     rig.schedule(0, cx);
     rig.shell
         .visual(cx)

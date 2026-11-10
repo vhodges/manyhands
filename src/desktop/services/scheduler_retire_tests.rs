@@ -807,6 +807,19 @@ async fn unlock_picks_reachable(cx: &mut TestAppContext) {
 
     // No retirement left: the first repository with no pending local
     // operation and no hold gets a Check now.
+    // E-35: Unlock… cleared both holds, so both repositories poll again;
+    // `raise` leaves a repository whose poll is queued or running alone, so
+    // the holds are raised once neither poll is in flight, not after a
+    // bounded wait that a loaded machine overruns.
+    World::settle(cx, "both polls to answer", |cx| {
+        [&a, &b].into_iter().all(|root| {
+            !matches!(
+                world.phase(root, cx),
+                Some(Phase::Queued | Phase::Running { .. })
+            )
+        })
+    })
+    .await;
     for root in [&a, &b] {
         world.services.scheduler().update(cx, |scheduler, cx| {
             scheduler

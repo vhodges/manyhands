@@ -558,13 +558,23 @@ impl Workspace {
 
     fn dismiss(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) -> AnyElement {
         let focus = self.control_focus_for(request_id(id, "dismiss"), cx);
-        button(
+        // The action scrolls into view when focus reaches it (E-2), as the
+        // attempt entries' actions do: a Dismiss below the fold of the
+        // scrolled area is reached by Tab (W-6).
+        let marker = self.operations_scroll().marker_within(&focus);
+        let control = button(
             request_id(id, "dismiss"),
             DISMISS,
             Some(&focus),
             cx,
             cx.listener(move |this, _: &ClickEvent, _, cx| this.dismiss_request(id, cx)),
-        )
+        );
+        div()
+            .id(request_id(id, "dismiss-slot"))
+            .relative()
+            .child(control)
+            .child(marker)
+            .into_any_element()
     }
 
     /// A recovery action's control: it runs when it names something this
