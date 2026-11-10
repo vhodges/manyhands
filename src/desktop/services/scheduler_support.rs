@@ -32,9 +32,21 @@ impl World {
     /// Services over the double, the clock injected, no launch refresh;
     /// polling on when `polling`.
     pub fn new(polling: bool, cx: &mut TestAppContext) -> Self {
+        Self::new_with(polling, cx, |_| {})
+    }
+
+    /// As [`Self::new`], with `before` run over the backend before the
+    /// services start: a hold on the launch listing has to be in place
+    /// before it is asked for.
+    pub fn new_with(
+        polling: bool,
+        cx: &mut TestAppContext,
+        before: impl FnOnce(&PollingBackend),
+    ) -> Self {
         cx.executor().allow_parking();
         let fixture = Fixture::new();
         let backend = Arc::new(PollingBackend::new(fixture.delaying_backend()));
+        before(&backend);
         // Real time to start from: a real service stores real deadlines.
         let clock = Arc::new(TestClock::at(time::OffsetDateTime::now_utc()));
         let services = cx.update(|cx| {

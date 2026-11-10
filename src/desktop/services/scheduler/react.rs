@@ -75,7 +75,10 @@ impl Scheduler {
             if summary.index_pending {
                 self.refresh_index(&root);
             }
-            // TODO(Task 11b): `summary.retire` starts Part E's loop.
+            // The loop queues behind R-10's refresh. A cancelled or
+            // interrupted attempt reports nothing to retire, and a replayed
+            // old terminal row is no attempt at all (L-1).
+            self.retire_after(&root, &summary.retire, cx);
         }
         self.answering = false;
         self.publish(cx);
@@ -85,7 +88,7 @@ impl Scheduler {
 
     /// One background `IndexRefresh` for a poll that completed without its
     /// index refresh (R-10), unless one of the repository is queued.
-    fn refresh_index(&self, root: &Root) {
+    pub(super) fn refresh_index(&self, root: &Root) {
         let root = PathBuf::from(root);
         let queued = self.worker.in_flight(
             |intent| matches!(intent, Intent::IndexRefresh { root: queued } if *queued == root),
@@ -127,13 +130,18 @@ impl Scheduler {
         roots.into_iter().collect()
     }
 
-    /// The change was submitted: the retirements queued for the repositories
-    /// it reaches are dropped (R-11).
-    pub(super) fn drop_queued_retirements(&mut self, roots: &[Root]) {
+    /// The change was submitted: the loops of the repositories it reaches
+    /// are dropped whole, and so are the retirements queued for them (R-11,
+    /// RT-10). A retirement already running is never signalled: stopped
+    /// part-way it would leave its item pending (decision 28). It answers
+    /// on its own and finds no loop.
+    pub(super) fn drop_queued_retirements(&mut self, roots: &[Root], cx: &mut Context<Self>) {
         for root in roots {
-            // TODO(Task 11b): also drop the loop's queued items; there is no
-            // retirement loop yet.
-            self.schedule.end_retiring(root);
+            let path = PathBuf::from(root);
+            self.worker.cancel_queued(
+                |intent| matches!(intent, Intent::ContextRetire { root, .. } if *root == path),
+            );
+            self.end_loop(root, cx);
         }
     }
 
@@ -158,11 +166,14 @@ impl Scheduler {
             // the policy, stale, is read again after it.
             self.worker.ask_poll_cancel(CancelCause::Reconfiguration);
         }
+        // A loop that began after the change was submitted ends when it
+        // finishes (RT-10).
         for root in &reached {
+            self.end_loop(root, cx);
             self.schedule.reconfigure(root);
         }
         if let Some(root) = &gone {
-            self.forget(root);
+            self.forget(root, cx);
         }
         if succeeded {
             self.send_awaited_checks(&reached, gone.as_ref());

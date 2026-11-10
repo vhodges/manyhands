@@ -21,6 +21,7 @@ mod react;
 mod reconfigure;
 mod registration;
 mod retire;
+mod retire_loop;
 
 use gpui_kit::App;
 use manyhands::{
@@ -279,3 +280,7 @@ mod quit_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "scheduler_retire_tests.rs"]
 mod retire_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "scheduler_loop_tests.rs"]
+mod loop_tests;

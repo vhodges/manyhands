@@ -43,7 +43,9 @@ fn item() -> ItemId {
 fn retire(world: &World, root: &str, lane: Lane, cx: &mut TestAppContext) -> DesktopRequestId {
     let root = root.to_owned();
     world.services.scheduler().update(cx, |scheduler, _| {
-        scheduler.retire(&root, TargetKind::Ticket, &item(), lane)
+        scheduler
+            .retire(&root, TargetKind::Ticket, &item(), lane)
+            .expect("not quitting")
     })
 }
 
@@ -216,6 +218,7 @@ async fn retire_inflight_entry(cx: &mut TestAppContext) {
     // Never sent.
     world.heard(
         vec![Heard::Retirement(Retiring::Gone {
+            id: one,
             request: one_request,
             end: RetirementEnd::NotSent,
         })],

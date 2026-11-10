@@ -7,7 +7,8 @@
 use std::cell::Cell;
 
 use manyhands::repository::{
-    AuthoringKind, IndexPending, OperationId, PollCompletion, PollDisposition, PollIneligibility,
+    AuthoringKind, IndexPending, ItemDtoKind, OperationId, PollCompletion, PollDisposition,
+    PollIneligibility, PollMutationCompletion, PollMutationDto, PollTargetDisposition,
     RemoteOutcomeCategory, RemotePollError, RemotePollOutcome, RemotePollResult, SharedKeyId,
     transport::{
         HostKeyIdentity, SshAuthority, SshDirection, SshTransportError, SshTransportErrorKind,
@@ -15,7 +16,7 @@ use manyhands::repository::{
 };
 use time::{Duration, OffsetDateTime};
 
-use super::{Library, ReportParts, TargetParts, attempt_of, poll_attempt};
+use super::{Library, ReportParts, TargetParts, attempt_of, check_now_attempt, poll_attempt};
 use crate::desktop::{
     model::polling::{
         Answer, AttemptTarget, Authority, CancelCause, Disposition, NotEligible, TargetKind,
@@ -387,5 +388,121 @@ fn poll_attempt_conversion() {
             || CancelCause::Quit,
         );
         assert_eq!(attempt.targets, expected, "{completion:?}");
+    }
+}
+
+/// A Check now's answer is an attempt like the automatic poll's (E1): every
+/// disposition maps to its own, the targets keep the report's order, a target
+/// that names no usable item stays in the counts and retires nothing, and a
+/// Check now that did not complete is no attempt.
+#[test]
+fn check_now_attempt_reads_the_report() {
+    use PollTargetDisposition as Dto;
+    let pairs = [
+        (Dto::Current, Disposition::Current),
+        (Dto::FastForwarded, Disposition::FastForwarded),
+        (Dto::LocalAhead, Disposition::LocalAhead),
+        (Dto::Diverged, Disposition::Diverged),
+        (Dto::Dirty, Disposition::Dirty),
+        (Dto::Conflicted, Disposition::Conflicted),
+        (Dto::Inaccessible, Disposition::Inaccessible),
+        (Dto::Materialized, Disposition::Materialized),
+        (Dto::Nonconforming, Disposition::Nonconforming),
+        (Dto::BlockedByLocalState, Disposition::BlockedByLocalState),
+        (
+            Dto::MaterializationIncomplete,
+            Disposition::MaterializationIncomplete,
+        ),
+        (Dto::Malformed, Disposition::Malformed),
+        (Dto::RemotelyDeleted, Disposition::RemotelyDeleted),
+        (Dto::Closed, Disposition::Closed),
+        (Dto::Promoted, Disposition::Promoted),
+        (Dto::HistoryUnknown, Disposition::HistoryUnknown),
+        (Dto::Unpublished, Disposition::Unpublished),
+        (Dto::NotReached, Disposition::NotReached),
+    ];
+    assert_eq!(pairs.len(), Dto::ALL.len(), "every disposition has a row");
+    let operation = OperationId::new();
+    let target = |ix: usize, disposition| manyhands::repository::PollTargetDto {
+        target: None,
+        // A ticket, a document, a null ID, an ID that does not parse, a null
+        // kind: in turn.
+        kind: match ix % 5 {
+            4 => None,
+            1 => Some(ItemDtoKind::Document),
+            _ => Some(ItemDtoKind::Ticket),
+        },
+        item_id: match ix % 5 {
+            2 => None,
+            3 => Some("not an id".to_owned()),
+            1 => Some(DOCUMENT.to_owned()),
+            _ => Some(TICKET.to_owned()),
+        },
+        disposition,
+        before_oid: None,
+        after_oid: None,
+    };
+    let data = |completion| PollMutationDto {
+        operation_id: operation.to_string(),
+        completion,
+        completed_at: "2026-11-10T12:00:00Z".to_owned(),
+        next_eligible_at: Some("2026-11-10T12:05:00Z".to_owned()),
+        targets: pairs
+            .iter()
+            .enumerate()
+            .map(|(ix, (dto, _))| target(ix, *dto))
+            .collect(),
+    };
+
+    let attempt = check_now_attempt(&root(), &data(PollMutationCompletion::Completed), false)
+        .expect("a completed Check now");
+    assert_eq!(attempt.root, root());
+    assert_eq!(attempt.operation, operation);
+    assert_eq!(attempt.answer, Answer::Completed);
+    assert!(!attempt.index_pending);
+    let at_noon = OffsetDateTime::parse(
+        "2026-11-10T12:00:00Z",
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    assert_eq!(attempt.completed_at, Some(at_noon));
+    assert_eq!(
+        attempt.next_eligible_at,
+        Some(at_noon + Duration::minutes(5))
+    );
+    // An ID that is null or does not parse is no ID; a null kind stays null.
+    let expected: Vec<AttemptTarget> = pairs
+        .iter()
+        .enumerate()
+        .map(|(ix, (_, disposition))| {
+            let (item, kind) = match ix % 5 {
+                0 => (Some(item_id(TICKET)), Some(TargetKind::Ticket)),
+                1 => (Some(item_id(DOCUMENT)), Some(TargetKind::Document)),
+                2 | 3 => (None, Some(TargetKind::Ticket)),
+                _ => (Some(item_id(TICKET)), None),
+            };
+            AttemptTarget {
+                item_id: item,
+                kind,
+                disposition: *disposition,
+            }
+        })
+        .collect();
+    assert_eq!(attempt.targets, expected, "in report order");
+
+    // The index still catching up is the attempt's too (R-10).
+    let pending = check_now_attempt(&root(), &data(PollMutationCompletion::Completed), true)
+        .expect("a completed Check now");
+    assert!(pending.index_pending);
+
+    // Cancelled and interrupted ones are no attempt.
+    for completion in [
+        PollMutationCompletion::Cancelled,
+        PollMutationCompletion::Interrupted,
+    ] {
+        assert!(
+            check_now_attempt(&root(), &data(completion), false).is_none(),
+            "{completion:?}"
+        );
     }
 }

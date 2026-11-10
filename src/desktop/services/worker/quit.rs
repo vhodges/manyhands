@@ -41,8 +41,8 @@ impl WorkerHandle {
             });
         }
         ask_poll_cancel(shared, state, CancelCause::Quit);
-        // A running background `ContextRetire` is left to finish (decision
-        // 28, R-38): its token is not cancelled here, or the item would be
+        // A running `ContextRetire`, of either lane, is left to finish
+        // (decision 28, R-38): its token is not cancelled here, or the item would be
         // left pending and hold the repository's polls at the next launch
         // (Fact 32). Every other job's token is.
         match &state.running {

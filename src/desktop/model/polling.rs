@@ -16,6 +16,7 @@ pub(crate) mod attention;
 mod clock;
 pub(crate) mod entry;
 pub(crate) mod retire;
+pub(crate) mod retire_loop;
 mod state;
 pub(crate) mod status;
 mod table;
@@ -252,6 +253,23 @@ impl PollSchedule {
         Some(repo.apply(&attempt.root, now, attempt))
     }
 
+    /// A Check now completed (C1, E1): its answer is the repository's latest
+    /// attempt, and, unless a poll of it is queued or running, moves the
+    /// phase as a poll's `Completed` does. Returns what it summed to;
+    /// `None` for a repository that is not scheduled.
+    pub fn checked_now(&mut self, now: &Now, attempt: &PollAttempt) -> Option<AttemptSummary> {
+        let repo = self.repos.get_mut(&attempt.root)?;
+        if !repo.in_flight() {
+            return Some(repo.apply(&attempt.root, now, attempt));
+        }
+        let summary = AttemptSummary::of(attempt);
+        repo.last_completed = Some(attempt.completed_at.unwrap_or(now.utc));
+        if summary.is_recorded() {
+            repo.last = Some(summary.clone());
+        }
+        Some(summary)
+    }
+
     /// The user lane is empty: every preempted poll goes again with no
     /// failure backoff, except one preempted three times in a row, which
     /// waits for the interval (R-34).
@@ -335,12 +353,21 @@ impl PollSchedule {
         }
     }
 
-    /// Part E's loop for this repository starts. No poll of it meanwhile
-    /// (R-32). Returns false when it is not idle.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
+    /// Part E's loop for this repository starts, or, where one runs, starts
+    /// again over a newer attempt's items (RT-11). No poll of it meanwhile
+    /// (R-32). Returns false when the repository is not scheduled, when a
+    /// poll of it is queued or running, or when it waits for the person or
+    /// for a quit's Cancel. A wait on R-4's schedule or a preempted poll
+    /// gives way: the attempt that began the loop settled it.
     pub fn begin_retiring(&mut self, root: &Root) -> bool {
         match self.repos.get_mut(root) {
-            Some(repo) if repo.phase == Phase::Idle => {
+            Some(repo)
+                if matches!(
+                    repo.phase,
+                    Phase::Idle | Phase::Preempted | Phase::Waiting { .. } | Phase::Retiring
+                ) =>
+            {
+                repo.rearm();
                 repo.phase = Phase::Retiring;
                 true
             }
@@ -371,7 +398,6 @@ impl PollSchedule {
     }
 
     /// Whether the loop skips the item (R-21).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     pub fn retirement_refused(&self, root: &Root, item: &ItemId) -> bool {
         self.refused.contains(root, item)
     }

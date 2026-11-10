@@ -58,9 +58,10 @@ fn row(
 
 /// RT-7 and RT-8, written out row by row and not derived from the verdict:
 /// the loop goes on after a retirement, a refusal or preservation with a
-/// refusal code, a retry code other than a transport one, and a request that
-/// failed with no data; it stops on a pending or Accepted answer, an
-/// attention code, and a transport or remote-unavailable code.
+/// refusal code and a retry code other than a transport one; it stops on a
+/// pending or Accepted answer, an attention code, a transport or
+/// remote-unavailable code, and a request that failed with no data (R-37,
+/// owner ruling of 2026-11-10).
 fn goes_on(what: &str) -> bool {
     match what {
         "retired"
@@ -75,10 +76,10 @@ fn goes_on(what: &str) -> bool {
         | "refused, input"
         | "preserved"
         | "preserved, a retry code"
-        | "preserved after a removal"
-        | "no data, finished"
-        | "no data, a retry code" => true,
-        "pending, the index still catching up"
+        | "preserved after a removal" => true,
+        "no data, finished"
+        | "no data, a retry code"
+        | "pending, the index still catching up"
         | "pending, cleanup"
         | "pending, cancelled"
         | "pending, locked key"

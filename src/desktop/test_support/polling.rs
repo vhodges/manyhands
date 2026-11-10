@@ -368,6 +368,10 @@ impl Backend for PollingBackend {
         self.inner.before_job(kind);
     }
 
+    fn instead_of_job(&self, kind: JobKind) -> Option<Envelope<MutationDataDto>> {
+        self.inner.instead_of_job(kind)
+    }
+
     fn after_job(&self, kind: JobKind) -> Option<Envelope<MutationDataDto>> {
         self.inner.after_job(kind)
     }

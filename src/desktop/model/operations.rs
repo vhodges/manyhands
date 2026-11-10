@@ -33,6 +33,7 @@ mod outcomes;
 mod polls;
 mod quit_wait;
 mod retire;
+pub(crate) use retire::RetiringKey;
 mod review;
 
 pub(crate) use polls::{record_note_words, resume_offer_among};
@@ -377,6 +378,11 @@ impl Operations {
         self.requests
             .iter()
             .find(|request| matches!(request.state, RequestState::Running { .. }))
+    }
+
+    /// Whether Stop was pressed on the running request `id`.
+    pub(crate) fn is_stopping(&self, id: DesktopRequestId) -> bool {
+        self.stopping.contains(&id)
     }
 
     /// Stop was pressed on the running request `id` and signalled its

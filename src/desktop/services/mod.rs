@@ -233,6 +233,14 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// Called on the worker thread before a job's library call.
     fn before_job(&self, _kind: JobKind) {}
 
+    /// Called on the worker thread after `before_job`. An answer it gives
+    /// stands in place of the library's, and the library call is not made: a
+    /// test's canned answer for a job whose call would reach a remote no
+    /// desktop test has (D6 decision 9), or take seconds to fail.
+    fn instead_of_job(&self, _kind: JobKind) -> Option<Envelope<MutationDataDto>> {
+        None
+    }
+
     /// Called on the worker thread after a job's library call returns,
     /// before the worker decides what follows it. An answer it gives
     /// stands in place of the library's: a test's constructed answer.
@@ -533,6 +541,7 @@ impl Services {
         let polls = PollInbox::default();
         let polled = polls.clone();
         let polling = Arc::new(AtomicBool::new(false));
+        let edit_tabs = cx.new(|_| EditTabs::default());
         let scheduler = cx.new(|_| {
             Scheduler::new(
                 backend.clone(),
@@ -540,6 +549,8 @@ impl Services {
                 operations.downgrade(),
                 polls.clone(),
                 polling.clone(),
+                edit_tabs.downgrade(),
+                drafts.downgrade(),
             )
         });
         let scheduling = scheduler.downgrade();
@@ -780,7 +791,7 @@ impl Services {
             #[cfg(all(test, feature = "desktop-test-support"))]
             created,
             releases,
-            edit_tabs: cx.new(|_| EditTabs::default()),
+            edit_tabs,
             submissions,
             followups,
             resends,

@@ -57,7 +57,9 @@ pub(crate) enum Verdict {
     Retry { recovery_required: bool },
     /// `refused` or `preserved` with any other code: the item's own answer.
     Refused,
-    /// A finished request with no retirement data: an ordinary failure.
+    /// A finished request with no retirement data: an ordinary failure. It
+    /// stays, counts, and is tried again at the next attempt; the loop
+    /// stops (R-37).
     Failed,
 }
 
@@ -74,13 +76,11 @@ impl Verdict {
     }
 
     /// Whether the loop goes on to the next item (RT-7), rather than
-    /// stopping until the next completed attempt (RT-8, R-37).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
+    /// stopping until the next completed attempt (RT-8, R-37). A finished
+    /// request with no retirement data stops it too (owner ruling,
+    /// 2026-11-10): the next item would meet the same failure.
     pub(crate) fn goes_on(&self) -> bool {
-        matches!(
-            self,
-            Self::Retired | Self::Retry { .. } | Self::Refused | Self::Failed
-        )
+        matches!(self, Self::Retired | Self::Retry { .. } | Self::Refused)
     }
 
     /// The attention the answer raises, if any: a refusal's, or an Owed

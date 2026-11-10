@@ -30,6 +30,11 @@ pub(crate) struct TabEditing {
     pub editing: bool,
     /// The session holds unsaved text that no draft holds.
     pub unkept: bool,
+    /// A comment is being written in the tab: a composer holds text that is
+    /// not blank, or is posting or failed (RT-3). Kept apart from `unkept`,
+    /// which drives the quit asks and a repository's removal counts: a
+    /// composer's text is kept by its own draft, and is not counted there.
+    pub composing: bool,
 }
 
 /// What an item tab says, as it is now; `None` once the tab is gone.
@@ -76,6 +81,17 @@ impl EditTabs {
         self.counted.remove(root).unwrap_or_default()
     }
 
+    /// Whether the tab `tab` is busy with its item, so the retirement loop
+    /// leaves the item alone (RT-3): an edit session of it, live or kept, a
+    /// begin in flight, unsaved text, or a comment being written. A tab that
+    /// is gone is not busy. Read from the scheduler's update, when no tab is
+    /// being updated.
+    pub(crate) fn item_busy(&self, tab: &TabKey, cx: &App) -> bool {
+        self.tabs.iter().any(|(of, watch)| {
+            of == tab && watch(cx).is_some_and(|tab| tab.editing || tab.unkept || tab.composing)
+        })
+    }
+
     /// Whether the tab `tab` holds an edit session of its item, live or
     /// kept, or is getting one ready.
     pub(crate) fn editing(&self, tab: &TabKey, cx: &App) -> bool {
@@ -84,3 +100,7 @@ impl EditTabs {
             .any(|(of, watch)| of == tab && watch(cx).is_some_and(|tab| tab.editing))
     }
 }
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "edit_tabs_tests.rs"]
+mod tests;

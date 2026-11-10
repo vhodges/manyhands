@@ -3,9 +3,9 @@
 //! and ended when the request ends, and the answer's attention, refused set
 //! and proof of authentication.
 //!
-//! The loop that chooses the items (Task 11b) and the Retire… action (Task
-//! 12) submit through [`Scheduler::retire`]. A retirement's answer reaches
-//! [`Scheduler::retiring`] from the drain.
+//! The loop that chooses the items (`retire_loop`) and the Retire… action
+//! (Task 12) submit through [`Scheduler::retire`]. A retirement's answer
+//! reaches [`Scheduler::retiring`] from the drain.
 
 use std::path::PathBuf;
 
@@ -56,23 +56,40 @@ impl Scheduler {
     /// (R-28), after its in-flight entry is written (R-31). The loop sends
     /// it on the background lane, which never prompts (B5); Retire… sends it
     /// on the user lane. A queue that quitting closed answers it `Removed`,
-    /// which ends the entry.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
+    /// which ends the entry. Nothing is sent once quitting is asked (R-33):
+    /// `None`.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12 (Retire…).
     pub(crate) fn retire(
         &mut self,
         root: &Root,
         kind: TargetKind,
         item: &ItemId,
         lane: Lane,
-    ) -> DesktopRequestId {
+    ) -> Option<DesktopRequestId> {
+        self.retire_new(root, kind, item, lane).map(|(_, id)| id)
+    }
+
+    /// [`Self::retire`], and the library's request ID it was sent under.
+    pub(super) fn retire_new(
+        &mut self,
+        root: &Root,
+        kind: TargetKind,
+        item: &ItemId,
+        lane: Lane,
+    ) -> Option<(RequestId, DesktopRequestId)> {
+        if self.quitting {
+            return None;
+        }
         let request = RequestId::new();
-        self.resend_retirement(request, root, kind, item, lane)
+        Some((
+            request,
+            self.resend_retirement(request, root, kind, item, lane),
+        ))
     }
 
     /// Submits a retirement under the request ID `request`: the original of
     /// a pending one that Resume names (E4), or a new one. An entry already
     /// held for the request, with the operation it learned, is kept.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
     pub(crate) fn resend_retirement(
         &mut self,
         request: RequestId,
@@ -101,16 +118,23 @@ impl Scheduler {
             Retiring::Operation { request, operation } => {
                 self.store.retirement_operation(request, operation);
             }
-            Retiring::Gone { request, end } => self.store.retirement_ended(request, end),
-            Retiring::Answered(id) => self.retirement_answered(id, cx),
+            Retiring::Gone { id, request, end } => {
+                self.store.retirement_ended(request, end);
+                // Removed or never sent: the loop that waited on it stops
+                // (RT-9).
+                self.loop_gone(id, request, cx);
+            }
+            Retiring::Answered { id, stopped } => self.retirement_answered(id, stopped, cx),
         }
+        // The record's entries are what a relaunch finds "Retiring…" (R-31).
+        self.publish(cx);
     }
 
     /// The retirement `id` was answered: its entry ends unless it is Owed
     /// (R-31), the refused set hears it, an answer that got past
     /// authentication proves the repository's key and host (C3), and one
     /// that needs the person becomes attention (E3).
-    fn retirement_answered(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) {
+    fn retirement_answered(&mut self, id: DesktopRequestId, stopped: bool, cx: &mut Context<Self>) {
         let seen = self
             .operations
             .read_with(cx, |operations, _| {
@@ -128,7 +152,8 @@ impl Scheduler {
             .ok()
             .flatten();
         let Some((request, root, item, answer)) = seen else {
-            return;
+            // No answer to read: a loop waiting on it stops (R-37).
+            return self.loop_lost(id, cx);
         };
         // The entry ends with the worker's record of the request (R-31). It
         // stays while the request is Owed: Resume needs the item.
@@ -147,6 +172,8 @@ impl Scheduler {
         if answer.authenticated() {
             self.checked(&root, cx);
         }
+        // The loop goes on to its next item, or stops (RT-7 to RT-9).
+        self.loop_answered(id, &root, request, &answer.verdict, stopped, cx);
         if let Some(need) = answer.verdict.need() {
             self.retirement_needs(id, root, need, cx);
         }

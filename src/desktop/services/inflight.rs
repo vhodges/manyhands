@@ -102,12 +102,10 @@ impl RetirementEntry {
         RequestId::parse(&self.request).ok()
     }
 
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12 (Resume).
     pub(crate) fn root(&self) -> &Root {
         &self.root
     }
 
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12 (Resume).
     pub(crate) fn item(&self) -> Option<(TargetKind, ItemId)> {
         let kind = match self.kind {
             Kind::Ticket => TargetKind::Ticket,
@@ -495,7 +493,6 @@ impl InflightStore {
 
     /// Whether this instance may run a retirement loop: only the lock holder
     /// does (L-6, K-25).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     pub(crate) fn runs_retirement_loop(&self) -> bool {
         self.holds_lock()
     }

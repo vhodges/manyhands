@@ -1,7 +1,7 @@
 //! The worker's rules for a retirement (D6 Task 11a): one request under one
 //! request ID is one (Fact 36), and a graceful quit leaves a running
-//! background retirement's token alone (decision 28, R-38). Over the real
-//! worker and a held job.
+//! retirement's token alone, whatever its lane (decision 28, R-38; owner,
+//! 2026-11-10). Over the real worker and a held job.
 
 use futures::channel::mpsc::UnboundedReceiver;
 use manyhands::repository::{AuthoringKind, RequestId};
@@ -82,11 +82,11 @@ fn retire_request_twin() {
     running.release();
 }
 
-/// Decision 28, R-38: a quit waits for a running background retirement and
-/// does not cancel its token, or the item would be left pending and hold
-/// the repository's polls at the next launch (Fact 32). Every other job's
-/// token is still cancelled, a background refresh's and a user-lane
-/// retirement's among them.
+/// Decision 28, R-38: a quit waits for a running retirement, whichever lane
+/// sent it (the loop's, a Retire…, a Resume or an Unlock… resend), and does
+/// not cancel its token, or the item would be left pending and hold the
+/// repository's polls at the next launch (Fact 32). Every other job's
+/// token is still cancelled, a background refresh's among them.
 #[test]
 fn quit_spares_a_retirement_token() {
     let cases = [
@@ -106,8 +106,9 @@ fn quit_spares_a_retirement_token() {
             "user-lane retirement",
             JobKind::ContextRetire,
             Lane::User,
-            true,
+            false,
         ),
+        ("user-lane refresh", JobKind::IndexRefresh, Lane::User, true),
     ];
     for (what, kind, lane, cancelled) in cases {
         let fixture = Fixture::new();

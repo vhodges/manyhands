@@ -235,6 +235,16 @@ impl ItemPane {
         self.model.comments().and_then(ListState::rows)
     }
 
+    /// Whether a comment is being written in this tab: a composer holds
+    /// text that is not blank or is posting or failed, or its draft is
+    /// still being begun (RT-3, RT-6). Apart from the unsaved text the quit
+    /// asks count: a composer's text is kept by its own draft.
+    pub(in crate::desktop::view::item) fn composing(&self, cx: &gpui_kit::App) -> bool {
+        self.composers.slots().any(|slot| {
+            matches!(slot.draft, SlotDraft::Beginning) || slot.composer.read(cx).is_writing(cx)
+        })
+    }
+
     /// Whether the item's comment drafts are listed: the store listed
     /// once, or unavailable, when none ever will be.
     fn comment_drafts_listed(&self, cx: &gpui_kit::App) -> bool {

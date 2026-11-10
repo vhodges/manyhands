@@ -50,13 +50,16 @@ use crate::desktop::{
         operations::Operations,
         polling::{
             Authority, Clock, ClockEvent, Now, PollAttempt, PollSchedule, Root, SystemClock,
-            status::Unplaced,
+            retire_loop::RetireLoops, status::Unplaced,
         },
     },
     services::{
         Backend,
+        drafts::DraftRegistry,
+        edit_tabs::EditTabs,
         inflight::{Acquired, InflightStore},
         poll::PollInbox,
+        requests::DesktopRequestId,
         worker::WorkerHandle,
     },
 };
@@ -109,6 +112,19 @@ pub(crate) struct Scheduler {
     /// sent to make (Choose a key…, Approve host…, Open remote settings…):
     /// it is sent when a reconfiguration reaching them finishes (C3).
     pub(super) check_after: BTreeSet<Root>,
+    /// The open item tabs, which the retirement loop asks whether an item
+    /// is being edited (RT-3).
+    pub(super) edit_tabs: WeakEntity<EditTabs>,
+    /// The draft registry, which it asks what the store holds (RT-4, RT-5)
+    /// and to list the store again (RT-6).
+    pub(super) drafts: WeakEntity<DraftRegistry>,
+    /// Each repository's retirement loop (R-32).
+    pub(super) loops: RetireLoops,
+    /// The mark ("Retiring…") of the item each loop is checking.
+    pub(super) marked: BTreeMap<Root, u64>,
+    /// The retirement requests the loops sent and have not heard end, by
+    /// repository.
+    pub(super) sent: BTreeMap<DesktopRequestId, Root>,
 }
 
 impl Scheduler {
@@ -118,6 +134,8 @@ impl Scheduler {
         operations: WeakEntity<Operations>,
         inbox: PollInbox,
         on: Arc<AtomicBool>,
+        edit_tabs: WeakEntity<EditTabs>,
+        drafts: WeakEntity<DraftRegistry>,
     ) -> Self {
         let store = InflightStore::open(backend.service().data_directory());
         Self {
@@ -142,6 +160,11 @@ impl Scheduler {
             failed_reads: BTreeSet::new(),
             authorities: BTreeMap::new(),
             check_after: BTreeSet::new(),
+            edit_tabs,
+            drafts,
+            loops: RetireLoops::default(),
+            marked: BTreeMap::new(),
+            sent: BTreeMap::new(),
         }
     }
 
@@ -236,7 +259,7 @@ impl Scheduler {
         let now: BTreeSet<Root> = roots.iter().cloned().collect();
         let gone: Vec<Root> = self.known.difference(&now).cloned().collect();
         for root in gone {
-            self.forget(&root);
+            self.forget(&root, cx);
         }
         let added: Vec<Root> = now.difference(&self.known).cloned().collect();
         self.known = now;
@@ -329,7 +352,7 @@ impl Scheduler {
                     // listed as attention, like any other (decision 10).
                     self.schedule.sync_recovery(&root);
                 }
-                Read::NotPolled => self.forget_schedule(&root),
+                Read::NotPolled => self.forget_schedule(&root, cx),
                 Read::Failed => {}
             }
         }
@@ -338,13 +361,15 @@ impl Scheduler {
     }
 
     /// The repository leaves the list or the registry.
-    pub(super) fn forget(&mut self, root: &Root) {
+    pub(super) fn forget(&mut self, root: &Root, cx: &mut Context<Self>) {
         self.reading.remove(root);
         self.failed_reads.remove(root);
-        self.forget_schedule(root);
+        self.forget_schedule(root, cx);
     }
 
-    fn forget_schedule(&mut self, root: &Root) {
+    fn forget_schedule(&mut self, root: &Root, cx: &mut Context<Self>) {
+        // Its loop has nothing left to poll after (R-32).
+        self.end_loop(root, cx);
         self.schedule.remove(root);
         self.check_after.remove(root);
         self.authorities.remove(root);
@@ -448,13 +473,13 @@ impl Scheduler {
                 Heard::Retirement(retiring) => self.retiring(retiring, cx),
                 Heard::Reconfiguration(Moment::Submitted, scope) => {
                     let reached = self.reached(&scope);
-                    self.drop_queued_retirements(&reached);
+                    self.drop_queued_retirements(&reached, cx);
                 }
                 Heard::Reconfiguration(moment @ (Moment::Finished | Moment::Succeeded), scope) => {
                     self.reconfigured(scope, moment == Moment::Succeeded, cx)
                 }
                 Heard::PolicyMoved(root) => self.read_registrations(vec![root], cx),
-                Heard::CheckedNow(root) => self.checked(&root, cx),
+                Heard::CheckedNow(root, attempt) => self.checked_now(root, attempt, cx),
                 Heard::CheckFailed {
                     root,
                     request,
@@ -472,9 +497,17 @@ impl Scheduler {
 
     /// From the entry to `request_quit` the scheduler starts nothing and
     /// arms no timer; Cancel on either ask resumes it.
+    ///
+    /// Asking to quit drops every retirement loop: it started nothing more
+    /// from here, and Cancel must not find a repository left in
+    /// `Phase::Retiring`. What the loops had left waits for the next
+    /// completed attempt. A retirement already running finishes (decision
+    /// 28) and finds no loop.
     pub(crate) fn set_quitting(&mut self, quitting: bool, cx: &mut Context<Self>) {
         self.quitting = quitting;
-        if !quitting {
+        if quitting {
+            self.end_loops(cx);
+        } else {
             self.schedule.resume_stopped();
         }
         self.tick(cx);
@@ -504,11 +537,23 @@ impl Scheduler {
             })
             .filter_map(|root| self.store.poll_entry(root))
             .collect();
+        // The items whose retirement the record holds, queued, running or
+        // pending, are "Retiring…" (decision 19, RT-1).
+        let entered: Vec<_> = self
+            .store
+            .retirements()
+            .iter()
+            .filter_map(|entry| {
+                let (kind, item) = entry.item()?;
+                Some(super::retire_loop::key_of(entry.root(), kind, &item))
+            })
+            .collect();
         // The record's own problem is heard once, wherever it arose (R-31).
         let report = self.store.take_report();
         let _ = self.operations.update(cx, |operations, cx| {
             let mut changed = operations.set_automatic_polls(own);
             changed |= operations.set_running_polls(running);
+            changed |= operations.set_retirement_entries(entered);
             if let Some(report) = report {
                 changed |= operations.note_record(report);
             }

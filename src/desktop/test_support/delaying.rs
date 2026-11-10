@@ -65,6 +65,9 @@ pub(crate) struct DelayingBackend {
     /// Holds taken after a job's library call returns, each with the
     /// answer, if any, that stands in place of the library's.
     returned: Mutex<HashMap<JobKind, VecDeque<Returned>>>,
+    /// Canned answers that stand in place of the next jobs' library calls,
+    /// by kind: the call is not made.
+    instead: Mutex<HashMap<JobKind, VecDeque<Envelope<MutationDataDto>>>>,
     /// Every read kind a read or prepare asked its gate for, in order:
     /// only observed.
     reads_seen: Mutex<Vec<ReadKind>>,
@@ -98,6 +101,7 @@ impl DelayingBackend {
             reads: Mutex::default(),
             jobs: Mutex::default(),
             returned: Mutex::default(),
+            instead: Mutex::default(),
             reads_seen: Mutex::default(),
             seen: Mutex::default(),
             stages: Mutex::default(),
@@ -167,6 +171,19 @@ impl DelayingBackend {
         answer: Envelope<MutationDataDto>,
     ) -> JobGate {
         self.hold_return(kind, Some(answer))
+    }
+
+    /// Answers the next job of `kind` with `answer` and makes no library
+    /// call: for a job that would reach a remote no desktop test has, or
+    /// take seconds to fail. Answers for one kind stack: each job takes the
+    /// oldest.
+    pub(crate) fn answer_job(&self, kind: JobKind, answer: Envelope<MutationDataDto>) {
+        self.instead
+            .lock()
+            .unwrap()
+            .entry(kind)
+            .or_default()
+            .push_back(answer);
     }
 
     fn hold_return(&self, kind: JobKind, answer: Option<Envelope<MutationDataDto>>) -> JobGate {
@@ -301,6 +318,14 @@ impl Backend for DelayingBackend {
         if let Some(gate) = gate {
             gate.wait();
         }
+    }
+
+    fn instead_of_job(&self, kind: JobKind) -> Option<Envelope<MutationDataDto>> {
+        self.instead
+            .lock()
+            .unwrap()
+            .get_mut(&kind)
+            .and_then(VecDeque::pop_front)
     }
 
     fn after_job(&self, kind: JobKind) -> Option<Envelope<MutationDataDto>> {

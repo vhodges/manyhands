@@ -9,10 +9,10 @@
 //! operation an answered request is about, so a request and its pending row
 //! are one thing to the person.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use manyhands::{
-    repository::{OperationDto, OperationId, OperationListDto, ProgressEvent},
+    repository::{ItemDtoKind, OperationDto, OperationId, OperationListDto, ProgressEvent},
     results::{Envelope, RecoveryActionKind},
 };
 
@@ -29,9 +29,21 @@ use crate::desktop::{
     },
 };
 
+/// An item whose local copy is being retired, by its repository, kind and ID
+/// (decision 19): the "Retiring…" state is keyed by all three.
+pub(crate) type RetiringKey = (RepoKey, ItemDtoKind, String);
+
 /// The retirement answers and running operations, by request.
 #[derive(Default)]
 pub(super) struct Retirements {
+    /// The items the loop (or a Retire…) has marked "Retiring…" and not yet
+    /// handed to the worker, by mark: each mark is cleared by its own owner,
+    /// so one ending never clears another's share (decision 19).
+    marks: BTreeMap<u64, RetiringKey>,
+    next_mark: u64,
+    /// The items of the in-flight record's retirement entries, one per
+    /// entry: a retirement left pending stays "Retiring…" after a relaunch.
+    entries: Vec<RetiringKey>,
     /// Where the worker's record of a request stood when its last attempt
     /// finished, kept for the `Finished` event that follows (E3).
     records: HashMap<DesktopRequestId, RecordState>,
@@ -94,6 +106,39 @@ impl Operations {
         let answer = classify(record, envelope);
         self.retirements.answers.insert(id, answer.clone());
         Some(answer)
+    }
+
+    /// Marks `key` "Retiring…" in this very update (RT-6, E4 step 1). The
+    /// mark is the caller's until it clears it.
+    pub(crate) fn mark_retiring(&mut self, key: RetiringKey) -> u64 {
+        self.retirements.next_mark += 1;
+        let mark = self.retirements.next_mark;
+        self.retirements.marks.insert(mark, key);
+        mark
+    }
+
+    /// Clears one mark. True when it was held.
+    pub(crate) fn unmark_retiring(&mut self, mark: u64) -> bool {
+        self.retirements.marks.remove(&mark).is_some()
+    }
+
+    /// The items of the retirement entries the in-flight record holds,
+    /// which the scheduler sets whenever they change. True when they did.
+    pub(crate) fn set_retirement_entries(&mut self, entries: Vec<RetiringKey>) -> bool {
+        if self.retirements.entries == entries {
+            return false;
+        }
+        self.retirements.entries = entries;
+        true
+    }
+
+    /// Whether a mark or an in-flight entry holds the item "Retiring…". The
+    /// worker's own queued or running retirement is asked of the worker
+    /// (`Services::retiring`).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from the "Retiring…" lock.
+    pub(crate) fn is_retiring(&self, root: &str, kind: ItemDtoKind, id: &str) -> bool {
+        let held = |key: &RetiringKey| key.0 == root && key.1 == kind && key.2 == id;
+        self.retirements.marks.values().any(held) || self.retirements.entries.iter().any(held)
     }
 
     /// The operations of the automatic polls now queued or running, which

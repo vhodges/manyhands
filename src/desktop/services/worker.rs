@@ -279,9 +279,9 @@ struct Running {
     stops_at_safe_points: bool,
     /// The poll this is, and whether a stop was asked of it (P-1, P-2).
     poll: Option<PollRun>,
-    /// Whether it is a background `ContextRetire`, which a graceful quit
-    /// waits for and does not cancel: stopped part-way, the item would be
-    /// left pending (decision 28, R-38).
+    /// Whether it is a `ContextRetire`, of either lane, which a graceful
+    /// quit waits for and does not cancel: stopped part-way, the item would
+    /// be left pending (decision 28, R-38; owner, 2026-11-10).
     retirement: bool,
 }
 
@@ -805,6 +805,33 @@ impl WorkerHandle {
             .count()
     }
 
+    /// Removes the queued requests that ask for what `pick` picks, and
+    /// tells the UI each was removed. A request already running is never
+    /// signalled: a retirement stopped part-way leaves the item pending
+    /// (R-11, RT-10, decision 28). Returns how many were removed.
+    pub(crate) fn cancel_queued(&self, pick: impl Fn(&Intent) -> bool) -> usize {
+        let shared = self.shared();
+        let mut state = shared.lock();
+        let ids: Vec<DesktopRequestId> = state
+            .user
+            .iter()
+            .chain(&state.background)
+            .map(|job| job.id)
+            .filter(|id| {
+                state
+                    .submitted
+                    .get(id)
+                    .is_some_and(|submitted| pick(&submitted.intent))
+            })
+            .collect();
+        for id in &ids {
+            if state.remove_queued(*id) {
+                shared.send(WorkerEvent::Removed(*id));
+            }
+        }
+        ids.len()
+    }
+
     /// Stops the request `id` if it still can be.
     pub(crate) fn cancel(&self, id: DesktopRequestId) -> CancelResult {
         let shared = self.shared();
@@ -1198,16 +1225,21 @@ fn execute(
         backend,
         kind: intent.job_kind(),
     };
-    let envelope = backend.service().execute(
-        MutationCall {
-            request_id,
-            confirmation,
-            mutation,
-        },
-        session,
-        &mut progress,
-        &cancel,
-    );
+    // A test may put a constructed answer in place of the library's call.
+    let envelope = backend
+        .instead_of_job(intent.job_kind())
+        .unwrap_or_else(|| {
+            backend.service().execute(
+                MutationCall {
+                    request_id,
+                    confirmation,
+                    mutation,
+                },
+                session,
+                &mut progress,
+                &cancel,
+            )
+        });
     // A test may put a constructed answer in place of the library's.
     let envelope = backend.after_job(intent.job_kind()).unwrap_or(envelope);
     // A job answered `busy` waits and is taken again in its own lane, with
@@ -1384,12 +1416,11 @@ fn take(shared: &Shared) -> Option<Job> {
                 }),
                 _ => None,
             };
-            let retirement = job.lane == Lane::Background
-                && matches!(
-                    &job.work,
-                    Work::Execute { intent, .. } | Work::GiveUp { intent, .. }
-                        if matches!(**intent, Intent::ContextRetire { .. })
-                );
+            let retirement = matches!(
+                &job.work,
+                Work::Execute { intent, .. } | Work::GiveUp { intent, .. }
+                    if matches!(**intent, Intent::ContextRetire { .. })
+            );
             state.running = Some(Running {
                 id: job.id,
                 cancel,

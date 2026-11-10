@@ -21,14 +21,15 @@
 use manyhands::{
     canonical::ItemId,
     repository::{
-        AuthoringKind, OperationId, PollCompletion, PollDisposition, PollIneligibility,
+        AuthoringKind, ItemDtoKind, OperationId, PollCompletion, PollDisposition,
+        PollIneligibility, PollMutationCompletion, PollMutationDto, PollTargetDisposition,
         RemoteOutcomeCategory, RemotePollError, RemotePollOutcome, RemotePollReport,
         RemotePollResult, RepositoryErrorKind, SharedKeyId,
         transport::{HostKeyIdentity, SshAuthority, SshTransportErrorKind},
     },
     results::ResultCode,
 };
-use time::OffsetDateTime;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::desktop::model::polling::{
     Answer, AttemptTarget, Authority, CancelCause, Disposition, NotEligible, PollAttempt, Root,
@@ -218,6 +219,69 @@ pub(crate) fn check_now_failure(
     Some(attempt_of(root, OperationId::new(), library, || {
         CancelCause::Preemption
     }))
+}
+
+/// A completed Check now, read as an automatic poll's attempt would be
+/// (E1, owner ruling of 2026-11-10): its per-item targets in report order,
+/// and `index_pending` when the answer was `discovery_pending`. A target
+/// whose ID does not parse or whose ID or kind is null keeps its place in
+/// the counts and retires nothing, as in the poll path. `None` for a Check
+/// now that was cancelled or interrupted: it is no attempt and starts no
+/// loop.
+pub(crate) fn check_now_attempt(
+    root: &Root,
+    data: &PollMutationDto,
+    index_pending: bool,
+) -> Option<PollAttempt> {
+    if data.completion != PollMutationCompletion::Completed {
+        return None;
+    }
+    let time = |text: &str| OffsetDateTime::parse(text, &Rfc3339).ok();
+    Some(PollAttempt {
+        root: root.clone(),
+        operation: OperationId::parse(&data.operation_id).unwrap_or_else(|_| OperationId::new()),
+        answer: Answer::Completed,
+        completed_at: time(&data.completed_at),
+        next_eligible_at: data.next_eligible_at.as_deref().and_then(time),
+        targets: data
+            .targets
+            .iter()
+            .map(|target| AttemptTarget {
+                item_id: target.item_id.as_deref().and_then(|id| id.parse().ok()),
+                kind: target.kind.map(|kind| match kind {
+                    ItemDtoKind::Ticket => TargetKind::Ticket,
+                    ItemDtoKind::Document => TargetKind::Document,
+                }),
+                disposition: target_disposition(target.disposition),
+            })
+            .collect(),
+        index_pending,
+    })
+}
+
+/// Every `PollTargetDisposition`, one to one.
+fn target_disposition(disposition: PollTargetDisposition) -> Disposition {
+    use PollTargetDisposition as Dto;
+    match disposition {
+        Dto::Current => Disposition::Current,
+        Dto::FastForwarded => Disposition::FastForwarded,
+        Dto::LocalAhead => Disposition::LocalAhead,
+        Dto::Diverged => Disposition::Diverged,
+        Dto::Dirty => Disposition::Dirty,
+        Dto::Conflicted => Disposition::Conflicted,
+        Dto::Inaccessible => Disposition::Inaccessible,
+        Dto::Materialized => Disposition::Materialized,
+        Dto::Nonconforming => Disposition::Nonconforming,
+        Dto::BlockedByLocalState => Disposition::BlockedByLocalState,
+        Dto::MaterializationIncomplete => Disposition::MaterializationIncomplete,
+        Dto::Malformed => Disposition::Malformed,
+        Dto::RemotelyDeleted => Disposition::RemotelyDeleted,
+        Dto::Closed => Disposition::Closed,
+        Dto::Promoted => Disposition::Promoted,
+        Dto::HistoryUnknown => Disposition::HistoryUnknown,
+        Dto::Unpublished => Disposition::Unpublished,
+        Dto::NotReached => Disposition::NotReached,
+    }
 }
 
 /// A repository failure before the poll reserved anything (a read that

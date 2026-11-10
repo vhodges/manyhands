@@ -27,10 +27,11 @@
 use crate::desktop::{
     model::{
         operations::Operations,
-        polling::{Authority, Root},
+        polling::{Authority, PollAttempt, Root},
     },
     services::{
         inflight::RetirementEnd,
+        poll_convert::check_now_attempt,
         requests::{DesktopRequestId, Intent},
         worker::WorkerEvent,
     },
@@ -76,10 +77,12 @@ pub(crate) enum Retiring {
         request: RequestId,
         operation: OperationId,
     },
-    /// It finished. The request model has sorted its answer.
-    Answered(DesktopRequestId),
+    /// It finished. The request model has sorted its answer. `stopped`: the
+    /// person pressed Stop on it, which ends the loop that sent it (RT-9).
+    Answered { id: DesktopRequestId, stopped: bool },
     /// It was removed from the queue or never sent: its entry ends.
     Gone {
+        id: DesktopRequestId,
         request: RequestId,
         end: RetirementEnd,
     },
@@ -94,10 +97,12 @@ pub(crate) enum Heard {
     /// A request that only moved the stored policy of this repository
     /// finished: the policy is read again, nothing is cancelled.
     PolicyMoved(Root),
-    /// A Check now finished with success: a completed poll, which clears
-    /// the attention of its repository however the cause was fixed (C3),
-    /// and proves the key it used unlocked.
-    CheckedNow(Root),
+    /// A Check now finished with success, or with `discovery_pending`: a
+    /// completed poll, which clears the attention of its repository however
+    /// the cause was fixed (C3), and proves the key it used unlocked. Its
+    /// attempt, when it completed and said what it saw, is the repository's
+    /// latest and may start or replace a retirement loop (E1).
+    CheckedNow(Root, Option<PollAttempt>),
     /// A Check now finished with a failure: the request's answer, read as a
     /// poll's would be (C3, A4). The request names the keys its attempt
     /// asked for.
@@ -188,12 +193,17 @@ fn retiring(event: &WorkerEvent, operations: &Operations) -> Option<Retiring> {
             request: request.request_id,
             operation: OperationId::parse(progress.operation_id.as_deref()?).ok()?,
         }),
-        WorkerEvent::Finished(..) => Some(Retiring::Answered(id)),
+        WorkerEvent::Finished(..) => Some(Retiring::Answered {
+            id,
+            stopped: operations.is_stopping(id),
+        }),
         WorkerEvent::Removed(_) => Some(Retiring::Gone {
+            id,
             request: request.request_id,
             end: RetirementEnd::Removed,
         }),
         WorkerEvent::NotSent(..) => Some(Retiring::Gone {
+            id,
             request: request.request_id,
             end: RetirementEnd::NotSent,
         }),
@@ -228,8 +238,20 @@ pub(crate) fn heard(event: &WorkerEvent, operations: &Operations) -> Option<Hear
                 None => {
                     let root = policy_of(intent)?;
                     Some(match intent {
-                        Intent::PollOnce { .. } if envelope.outcome == Outcome::Success => {
-                            Heard::CheckedNow(root)
+                        Intent::PollOnce { .. }
+                            if envelope.outcome == Outcome::Success
+                                || envelope.code == ResultCode::DiscoveryPending =>
+                        {
+                            // The poll completed; with `discovery_pending`
+                            // its index refresh did not (R-10).
+                            let pending = envelope.code == ResultCode::DiscoveryPending;
+                            let attempt = match &envelope.data {
+                                Some(MutationDataDto::Poll(data)) => {
+                                    check_now_attempt(&root, data, pending)
+                                }
+                                _ => None,
+                            };
+                            Heard::CheckedNow(root, attempt)
                         }
                         Intent::PollOnce { .. } => Heard::CheckFailed {
                             root,

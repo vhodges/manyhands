@@ -303,6 +303,14 @@ impl Composer {
         &self.editor
     }
 
+    /// Whether a comment is being written here: the text is not blank, or
+    /// it is posting, being checked or failed. The retirement loop leaves
+    /// such an item alone (RT-3). It reads the state, not `is_read_only`,
+    /// which the "Retiring…" guard also sets.
+    pub(crate) fn is_writing(&self, cx: &App) -> bool {
+        !self.state.is_idle() || !self.text(cx).trim().is_empty()
+    }
+
     pub(crate) fn text(&self, cx: &App) -> String {
         self.editor.read(cx).text().to_owned()
     }
