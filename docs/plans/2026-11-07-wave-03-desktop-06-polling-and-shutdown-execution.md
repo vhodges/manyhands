@@ -1010,3 +1010,151 @@ a dock panel, the keyboard-journey harness). I merged it at `6af92f91`.
   `a_waiting_quit_with_activity_hidden_changes_nothing` and the resolver's
   selection of its keyboard and quit tests. Static gates (fmt, check, both
   clippy) pass at `0caa6008`. No whole suite, no other target.
+
+## Task 11a: ContextRetire, its answers and rows
+
+| 11a | `db77c352` | `00fef620`, `b8427692` (review fixes), `e6eb11b0` (record-note fix, not Task 11a) | APPROVE AFTER FIXES; Important I-1 and I-2 and minors M-1, M-3, M-4 (tried, reverted), M-5 applied; fixes checked by the orchestrator, not re-reviewed | `desktop::services::requests::retire_tests::intent_context_retire`, `desktop::model::polling::retire::tests::retire_answer_table`, `desktop::model::attention::tests::retire_rows::retire_rows_dismissed`, `desktop::services::scheduler::retire_tests::{retire_inflight_entry, background_retire_never_prompts, retire_answers_become_attention, retire_left_accepted_is_owed, retire_record_state_reaches_the_answer}`, `desktop::services::worker::retire_tests::{retire_request_twin, quit_spares_a_retirement_token}`, `desktop::view::quit::tests::quit_lets_retirement_finish`, `desktop::view::operations::record_tests::an_unreadable_record_is_reported_once_in_activity`; each singly with `--exact`, 1 test, pass (the orchestrator re-ran `retire_rows_dismissed`, `quit_spares_a_retirement_token`, `quit_lets_retirement_finish`, `retire_left_accepted_is_owed`, `retire_answer_table` and the record-note test); fmt, check --all-features, clippy -D warnings pass |
+
+Files (all under `src/desktop/`): new `model/polling/retire{,_tests}.rs`,
+`model/operations/retire.rs`, `model/attention_retire_tests.rs`,
+`services/scheduler/retire.rs`, `services/{requests_retire_tests,
+worker_retire_tests, scheduler_retire_tests}.rs`, `test_support/retire.rs`;
+changed `services/{requests.rs, requests/build.rs, mod.rs, worker.rs,
+worker/quit.rs, scheduler.rs, scheduler/{entity.rs, reconfigure.rs}}`,
+`model/{operations.rs, attention.rs, polling.rs}`, `view/operations.rs`,
+`view/operations/record.rs` (commit `e6eb11b0` only), `test_support/*`.
+Nothing outside `src/desktop/` changed; the library-boundary diff is empty.
+
+What it does: `Intent::ContextRetire` / `JobKind::ContextRetire` (label
+"Retire local copy", stage words "Retiring · …" through `Progressing::Retire`);
+the pure E3 classification (`Verdict::{Retired, Owed, Attention, Unreachable,
+Retry, Refused, Failed}`, with `dismissed`, `goes_on`, `changed`,
+`authenticated`); the refused set (3 retries join it; `Retire…` removes the
+item); the in-flight retirement entry, written before submit and ended on
+Finished, Removed and NotSent but kept for Owed; the request twin; attention
+keyed per key/host/repository through `PollSchedule::raise`; `Scheduler::checked`
+for an answer that passed authentication; `Operations::pending_shown` and the
+R-23 dedupe (a request and its pending row count once; a running operation is
+never listed as pending; this includes D6's own in-flight automatic poll);
+decision 28 (`Running.retirement`, true only for a Background lane
+`Execute | GiveUp` of `ContextRetire`; `WorkerHandle::quit` skips the token
+cancel for it). Not built, by scope: the loop (11b), Retire…, the draft export,
+replay and Resume, the Unlock… resend, and the E3 "what the person sees"
+strings (11b / 12 own them).
+
+Existing-test edits:
+- **E-16.** `view/quit_tests.rs::quit_lets_retirement_finish` now holds a real
+  background `ContextRetire` and asserts `running_job().cancelled == false`
+  after `request_quit`. The other half (a non-retire background job and a
+  user-lane retirement are still cancelled) is `quit_spares_a_retirement_token`
+  in `worker_retire_tests.rs`. Decision 28 is now proved by these two.
+- **E-17 (E-1 class).** `requests_tests.rs`: `ContextRetire` appended as
+  variant 42; the count 42 to 43; the `changes_items` and `stops_at_safe_points`
+  ranges gain `| 42`.
+- **E-18.** `model/attention_tests.rs` mounts `retire_rows` and loops over
+  `retire_rows::rows()` (additive); the "Task 11a's" comment is replaced.
+  Comment-only: `preempt_rows_tests.rs`, `attention_polling_tests.rs`.
+- No E-6 edit was needed (no D5 pending-list test broke), and no Cycle 01 test
+  pinned the double count of one operation.
+
+Rulings (the implementer's eight, all judged by the reviewer to match the
+design or be design-silent; none contradicts a design row; costs):
+1. `RecordState::Unknown` is Owed (entry kept, loop stops). Cost: an unreadable
+   record shows as pending until Resume replays it.
+2. A finished request with no retirement data is `Verdict::Failed`: stays,
+   counted, not in the refused set, retried next attempt, and **the loop goes
+   on.** **Raise at the 11b checkpoint:** if such an envelope carries an
+   attention or transport code the loop should probably stop (R-37).
+3. `changed` is true only for `retired`, `already_absent`, or a removal other
+   than `none` (Fact 25).
+4. `authenticated` is true only for `retired`, `already_absent`, `preserved`.
+5. Key for attention: the one recorded refused key (else the one asked key,
+   else `Backend::selected_key()`, read off the UI thread through the
+   background executor, else `NoKeySelected(root)`, the A4 row-3 ruling). With
+   more than one candidate the selected-key read settles it (`recorded_key`).
+6. `PollSchedule::raise` skips a repository whose poll is queued or running
+   (the poll's own answer meets the same wall).
+7. Label and stage words (wording only).
+8. A pending row is hidden while any running request holds its operation.
+
+Review fixes (commit `b8427692`): **I-1** the operation falls back to
+`envelope.operation_id` for a request left Accepted with no data (it counted
+twice; the row was added red first). **I-2** the drain's decision is now
+`scheduler::note_record(event, operations, record_of)`; a test-only
+`WorkerHandle::force_record_for_testing` makes `retire_left_accepted_is_owed`
+drive the real worker and drain with the record left Accepted (deleting the
+drain call is now caught). **M-1** an Owed answer takes only an unlock, key or
+host need (E3 row 2); **M-3** `recorded_key` replaces `keys.first()` (Task 8's
+rule); **M-5** `retire_answer_table` states `goes_on` per row by name. **M-4**:
+a refused local remote made no difference (the cost is the world setup and
+launch poll, about 7 s even for an existing test); reverted.
+
+Mutations (all caught): the drain call deleted, `note_record` ignoring the
+record, the operation taken from data only, Owed taking any need, `recorded_key`
+taking the first, the quit skip removed (three tests fail), the skip ignoring
+the lane, the E3 table mutations (12), the row-grouping mutations (5), the
+in-flight entry mutations (5), the provider-never-prompts mutations (2).
+
+Process: `retire_inflight_entry`, `background_retire_never_prompts`,
+`retire_left_accepted_is_owed` and `retire_record_state_reaches_the_answer` were
+written after the code and were green first run (mutation evidence);
+`retire_answers_become_attention` was an extra test written after the code.
+The two M-1 table rows were written with the fix rather than red first.
+`intent_context_retire`, `retire_answer_table`, `retire_rows_dismissed`,
+`retire_request_twin` and `quit_spares_a_retirement_token` were red first.
+
+The record-note regression (commit `e6eb11b0`, not Task 11a): 
+`an_unreadable_record_is_reported_once_in_activity` (Task 7) had been failing
+since the Cycle 01 merge, unnoticed because no whole suite had been run after
+the merge. Measured cause: the note row was a bare `h_flex()` 807 px wide in a
+dock panel whose Operations region ends at x 1150, so Dismiss's centre
+(x 1159) was outside it and the harness click missed. Fix: `.flex_wrap()
+.items_center()` as the attention rows do (W-6). No behaviour change, no test
+edit. **Lesson:** a Task 7 row that predates the narrow panel was not on W-6's
+hit-test list; Task 13's keyboard journey and the Task 14 fast tier will cover
+the rest.
+
+Known limits (recorded, not fixed):
+- K-40 (M-2): a retirement's answer is dismissed even when `PollSchedule::raise`
+  cannot raise its attention (the repository is not in the schedule, or a poll
+  is queued or running). The running poll raises its own; the unscheduled case
+  (polling off, policy read not landed) loses the answer. Unlikely in
+  production (a retirement implies an SSH remote with polling on).
+- K-41: a retirement answered `busy` or `poll_yielding` after a claim stays
+  Accepted in the library and is re-admitted after a backoff; if quit closes
+  the queue meanwhile, `readmit` answers `Removed` and R-31 deletes the entry.
+  The library row stays pending, so on relaunch only Abandon is offered (K-27).
+  Design-literal; narrow.
+- K-42: decision 28's skip covers only a **Background** retirement. A
+  user-lane Retire…, Resume resend or Unlock… resend still has its token
+  cancelled at quit (pinned by `quit_spares_a_retirement_token`). That matches
+  the design text; the rationale (a part-way stop leaves the item pending)
+  applies equally. **Put to the owner at the 11b checkpoint**, before Task 12
+  builds those paths.
+- K-43: the world tests take 5 to 22 s each (`retire_answers_become_attention`
+  about 22 s, `retire_inflight_entry` about 10 s, `background_retire_never_prompts`
+  about 5 s) because `hold_job_return_answering` still runs the library call;
+  a refused local remote did not help. A test seam that skips the call when an
+  answer is canned would; not built.
+- `Retirements.answers` grows for the session; `PollSchedule::raise` repeats the
+  "set Phase::Attention" step of `check_failed` and `table.rs` (trivial).
+- A flaky `attention_answer_tests::check_now_failure_becomes_attention` (phase
+  `Queued`, expected `Idle`) failed once in a 101-test parallel run and passed
+  alone; not attributed to this task; watch it at Task 14.
+
+Hand-offs:
+- **11b:** submit with `Scheduler::retire(root, kind, item, Lane::Background)`;
+  call `Verdict::goes_on()` in `Scheduler::retirement_answered`; use
+  `PollSchedule::retirement_refused` (RT-2), `Retiring::Gone` (RT-9),
+  `begin_retiring`, `end_retiring`, `drop_queued_retirements` and
+  `Scheduler::quitting` (the `TODO(Task 11b)` markers in `react.rs`,
+  `reconfigure.rs` and `drop_queued_retirements` remain true). The repository is
+  already marked changed by `Operations`, so hold no `Retirement.changed`. The
+  "Retired the copy of {item}…" text must come from the attempt entry
+  (`Workspace::attempt_entries`), because a retired request is dismissed.
+- **12:** `Scheduler::resend_retirement(request_id, root, kind, item, lane)`
+  keeps an existing in-flight entry and its operation; `PollSchedule::retire_chosen`
+  implements A19; `RetirementEntry::{root, item, operation}` carry
+  `Called from Task 12 (Resume)`; `Operations::pending_shown` is the filtered
+  list. **Unlock… resending a pending retirement is not built**; a pending
+  answer with an unlock, key or host code already raises its attention.
