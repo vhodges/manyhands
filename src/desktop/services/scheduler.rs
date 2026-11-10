@@ -242,3 +242,7 @@ mod attention_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "scheduler_attention_answer_tests.rs"]
 mod attention_answer_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "scheduler_quit_tests.rs"]
+mod quit_tests;

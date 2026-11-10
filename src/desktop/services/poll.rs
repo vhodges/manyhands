@@ -124,15 +124,7 @@ pub(super) fn run(
     }
     // The check before every `poll_automatic` (P-2).
     if let Some(cause) = asked() {
-        return PollAttempt {
-            root: root.clone(),
-            operation,
-            answer: Answer::Cancelled(cause),
-            completed_at: None,
-            next_eligible_at: stored,
-            targets: Vec::new(),
-            index_pending: false,
-        };
+        return stopped(root, operation, cause, stored);
     }
     let request = PollPublicationRemoteRequest {
         root: PathBuf::from(root),
@@ -156,6 +148,27 @@ pub(super) fn run(
         .and_then(|snapshot| snapshot.next_eligible_at());
     attempt.next_eligible_at = attempt.next_eligible_at.or(after).or(stored);
     attempt
+}
+
+/// A poll that was stopped before it called `poll_automatic`: cancelled for
+/// `cause`, with no completion time, since the desktop's own cancellation
+/// finished nothing (the record keeps the row). Quit answers the poll it
+/// drops from the queue the same way.
+pub(super) fn stopped(
+    root: &Root,
+    operation: OperationId,
+    cause: CancelCause,
+    next_eligible_at: Option<OffsetDateTime>,
+) -> PollAttempt {
+    PollAttempt {
+        root: root.clone(),
+        operation,
+        answer: Answer::Cancelled(cause),
+        completed_at: None,
+        next_eligible_at,
+        targets: Vec::new(),
+        index_pending: false,
+    }
 }
 
 fn is_recovery_required(error: &RepositoryError) -> bool {

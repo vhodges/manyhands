@@ -3,7 +3,7 @@
 use super::{QuitPhase, Region, Workspace};
 use crate::desktop::{
     model::stamp::TabId,
-    services::{prompts::PromptReply, worker::QuitState},
+    services::{prompts::PromptReply, requests::DesktopRequestId, worker::QuitState},
     view::{
         operations::draft_flush_id,
         passphrase::open_dialog,
@@ -40,6 +40,9 @@ impl Workspace {
             QuitPhase::SavingDrafts => return false,
             QuitPhase::Running => {}
         }
+        // Nothing new starts from here: the unkept ask below opens while
+        // `QuitPhase` is still `Running`, and Cancel on it lets go (R-33).
+        self.freeze_polling(true, cx);
         // Part C fix 1, I1: an edit session's text that no draft holds is
         // asked about first, once every begin in flight has landed.
         if self.unkept_asks_first(window, cx) {
@@ -127,6 +130,7 @@ impl Workspace {
             }
             NotSavedChoice::Cancel => {
                 self.prompts_held = false;
+                self.freeze_polling(false, cx);
                 if let Some(&id) = unkept.first() {
                     self.show_tab(id, cx);
                     self.focus_region(Region::Content, window, cx);
@@ -154,14 +158,64 @@ impl Workspace {
         self.prompt_unavailable(window, cx);
         match self.services.worker().quit() {
             QuitState::Idle => {
-                self.quit_now(cx);
+                self.quit_gracefully(cx);
                 true
             }
             QuitState::Finishing(id) => {
                 self.wait_to_quit(QuitPhase::Finishing(id), window, cx);
+                self.start_still_stopping(id, window, cx);
                 false
             }
         }
+    }
+
+    /// A graceful exit: the worker thread is joined before the app quits
+    /// (A9, O-7). Quit now goes to `quit_now` directly and joins nothing.
+    fn quit_gracefully(&mut self, cx: &mut Context<Self>) {
+        self.services.worker().shut_down_and_join();
+        self.quit_now(cx);
+    }
+
+    /// The polling scheduler starts nothing while quitting is asked and not
+    /// yet cancelled, through the unkept ask, the flush and the wait for a
+    /// job (R-33).
+    fn freeze_polling(&mut self, frozen: bool, cx: &mut Context<Self>) {
+        self.services
+            .scheduler()
+            .update(cx, |scheduler, cx| scheduler.set_quitting(frozen, cx));
+    }
+
+    /// Waiting for the job `id`: after the injected ten seconds the words
+    /// say so (decision 7). The UI stays interactive and nothing is cleared
+    /// or reclaimed.
+    fn start_still_stopping(
+        &mut self,
+        id: DesktopRequestId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let operations = self.services.operations().clone();
+        let after = operations.update(cx, |operations, _| {
+            operations.set_still_stopping(false);
+            operations.still_stopping_after()
+        });
+        cx.spawn_in(window, async move |workspace, cx| {
+            cx.background_executor().timer(after).await;
+            let _ = workspace.update(cx, |workspace, cx| workspace.still_stopping(id, cx));
+        })
+        .detach();
+    }
+
+    /// Ten seconds have passed while quitting waited for `id`. Quit now may
+    /// have quit meanwhile.
+    fn still_stopping(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) {
+        if self.quit != QuitPhase::Finishing(id) {
+            return;
+        }
+        self.services
+            .operations()
+            .update(cx, |operations, _| operations.set_still_stopping(true));
+        cx.notify();
     }
 
     /// Quitting waits: every dialog and the details sheet close, no sheet a
@@ -245,6 +299,7 @@ impl Workspace {
             }
             NotSavedChoice::Cancel => {
                 self.prompts_held = false;
+                self.freeze_polling(false, cx);
                 let failures = self.services.drafts().read(cx).flush_failures();
                 let first = failures
                     .iter()
@@ -277,7 +332,7 @@ impl Workspace {
         if matches!(self.quit, QuitPhase::Finishing(_))
             && self.services.worker().quit() == QuitState::Idle
         {
-            self.quit_now(cx);
+            self.quit_gracefully(cx);
         }
     }
 

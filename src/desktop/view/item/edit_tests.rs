@@ -1514,6 +1514,10 @@ mod review;
 #[path = "edit_quit_tests.rs"]
 mod quit;
 
+/// The scheduler is frozen while the unkept ask is open (D6 Task 10, R-33).
+#[path = "edit_quit_freeze_tests.rs"]
+mod quit_freeze;
+
 /// The details sheet's named controls (Task 20).
 #[path = "sheet/fields_tests.rs"]
 mod sheet_fields;

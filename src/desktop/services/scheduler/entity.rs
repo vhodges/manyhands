@@ -471,7 +471,6 @@ impl Scheduler {
 
     /// From the entry to `request_quit` the scheduler starts nothing and
     /// arms no timer; Cancel on either ask resumes it.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10.
     pub(crate) fn set_quitting(&mut self, quitting: bool, cx: &mut Context<Self>) {
         self.quitting = quitting;
         if !quitting {

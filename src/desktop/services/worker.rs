@@ -29,6 +29,11 @@
 //! (decision 8) is a job of its own over the same request: an accepted
 //! record is cancelled through `cancel_request` and the same request sent
 //! again, whose answer is the attempt's.
+//!
+//! Quitting (`quit`, in its own module) closes the queue, asks a running
+//! poll to stop through the cancel task and answers `Idle` or the job that
+//! is still running. A graceful exit then ends the thread and waits for it
+//! (`shut_down_and_join`); Quit now does not.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -51,6 +56,8 @@ use manyhands::{
 };
 
 use crate::desktop::model::polling::{CancelCause, PollAttempt, Root};
+
+mod quit;
 
 use super::{
     BUSY_RETRY_DELAYS, Backend, JobKind, poll,
@@ -263,9 +270,9 @@ pub(crate) struct SendMark(u64);
 struct Running {
     id: DesktopRequestId,
     /// `None` for a host observation, which cannot be cancelled, and for a
-    /// poll, which has no token: `quit()` does not stop a running poll. A
-    /// poll is stopped through `cancel_poll` by the cancel task (P-1) that
-    /// `ask_poll_cancel` starts; Task 10 asks it for quit.
+    /// poll, which has no token. A poll is stopped through `cancel_poll` by
+    /// the cancel task (P-1) that `ask_poll_cancel` starts, and `quit()` asks
+    /// it.
     cancel: Option<CancellationToken>,
     accepted: bool,
     /// Whether its command honours the token after acceptance (R-1).
@@ -351,12 +358,16 @@ struct State {
     running: Option<Running>,
     /// Set by `quit`: nothing more is admitted.
     closed: bool,
-    /// Set when the last handle is dropped: the thread ends once the
-    /// running job returns.
+    /// Set when the last handle is dropped, or by a graceful exit: the
+    /// thread ends once the running job returns.
     shut_down: bool,
     submitted: HashMap<DesktopRequestId, Submitted>,
     /// How many attempts have been queued.
     sends: u64,
+    /// The thread has ended, for a test: set by the thread itself, as it
+    /// goes, so a join that did not wait shows.
+    #[cfg(test)]
+    ended: bool,
 }
 
 impl State {
@@ -390,6 +401,9 @@ struct Shared {
     events: mpsc::UnboundedSender<WorkerEvent>,
     /// The keys declined with Not now, shared with the provider (R-13).
     declined: DeclinedKeys,
+    /// The worker thread, until a graceful exit joins it
+    /// (`WorkerHandle::shut_down_and_join`).
+    thread: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl Shared {
@@ -415,6 +429,10 @@ impl Drop for WorkerEnd {
         let mut state = self.0.lock();
         state.shut_down = true;
         state.running = None;
+        #[cfg(test)]
+        {
+            state.ended = true;
+        }
     }
 }
 
@@ -448,15 +466,17 @@ impl WorkerHandle {
             changed: Condvar::new(),
             events,
             declined: DeclinedKeys::default(),
+            thread: Mutex::new(None),
         });
         let worker = shared.clone();
-        thread::Builder::new()
+        let thread = thread::Builder::new()
             .name("manyhands-worker".to_owned())
             .spawn(move || {
                 let _ends = WorkerEnd(worker.clone());
                 run(&worker, backend.as_ref());
             })
             .expect("failed to start the Manyhands worker thread");
+        *shared.thread.lock().unwrap_or_else(PoisonError::into_inner) = Some(thread);
         let handle = Self {
             owner: Arc::new(Owner(shared)),
         };
@@ -812,7 +832,7 @@ impl WorkerHandle {
     /// Asks the running automatic poll, if any, to stop for `cause`: sets its
     /// flag and, the first time, sends `PreemptPoll` for the drain's cancel
     /// task (P-1, P-7). A user job admitted while a poll runs does this by
-    /// itself, with `Preemption`; quit (Task 10) asks with `Quit` and a
+    /// itself, with `Preemption`; `quit()` asks with `Quit` and a
     /// reconfiguration (the scheduler) with `Reconfiguration`. True when a poll was
     /// running.
     pub(crate) fn ask_poll_cancel(&self, cause: CancelCause) -> bool {
@@ -862,37 +882,16 @@ impl WorkerHandle {
         Some(id)
     }
 
+    /// Whether the worker thread has ended, for a test: after a join it
+    /// has.
+    #[cfg(test)]
+    pub(crate) fn ended(&self) -> bool {
+        self.shared().lock().ended
+    }
+
     /// Whether quitting has begun: no job is admitted any more.
     pub(crate) fn quitting(&self) -> bool {
         self.shared().lock().closed
-    }
-
-    /// Stops admitting jobs, empties the queue and cancels the running
-    /// job's token. Quitting may go ahead when no job is running;
-    /// otherwise once that job returns.
-    pub(crate) fn quit(&self) -> QuitState {
-        let shared = self.shared();
-        let mut guard = shared.lock();
-        let state = &mut *guard;
-        state.closed = true;
-        let removed: Vec<DesktopRequestId> = state
-            .user
-            .drain(..)
-            .chain(state.background.drain(..))
-            .map(|job| job.id)
-            .collect();
-        for id in removed {
-            shared.send(WorkerEvent::Removed(id));
-        }
-        match &state.running {
-            Some(running) => {
-                if let Some(cancel) = &running.cancel {
-                    cancel.cancel();
-                }
-                QuitState::Finishing(running.id)
-            }
-            None => QuitState::Idle,
-        }
     }
 }
 

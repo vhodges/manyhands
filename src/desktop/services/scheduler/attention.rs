@@ -143,6 +143,10 @@ impl Scheduler {
     /// the Check now was sent; false when no repository reaches
     /// authentication, or that repository's own Check now is still out.
     pub(crate) fn unlock(&mut self, key: KeyId, cx: &mut Context<Self>) -> bool {
+        // Nothing starts once quitting is asked (R-33).
+        if self.quitting {
+            return false;
+        }
         let target = self
             .operations
             .read_with(cx, |operations, _| self.unlock_target(key, operations))
@@ -171,6 +175,12 @@ impl Scheduler {
     /// again, so it polls at its stored deadline. A call that fails leaves
     /// the hold.
     pub(crate) fn resume_checking(&mut self, root: Root, cx: &mut Context<Self>) {
+        // Nothing starts once quitting is asked (R-33). One already out
+        // finishes: `resumed` frees the repository, and `tick` polls it
+        // once quitting is cancelled.
+        if self.quitting {
+            return;
+        }
         let backend = self.backend.clone();
         let path = PathBuf::from(&root);
         cx.spawn(async move |this, cx| {
@@ -210,10 +220,12 @@ impl Scheduler {
 
     /// A reconfiguration that reached `reached` finished: the Check now
     /// each armed repository was waiting for is sent on the user lane. A
-    /// repository the change removed (`gone`) is not asked.
+    /// repository the change removed (`gone`) is not asked. Once quitting is
+    /// asked none is sent (R-33); the arm goes with the ask, so Cancel does
+    /// not send it later, after the change it waited for is long over.
     pub(super) fn send_awaited_checks(&mut self, reached: &[Root], gone: Option<&Root>) {
         for root in reached {
-            if Some(root) != gone && self.check_after.remove(root) {
+            if Some(root) != gone && self.check_after.remove(root) && !self.quitting {
                 self.worker.submit(
                     Intent::PollOnce {
                         root: PathBuf::from(root),

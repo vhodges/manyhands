@@ -21,10 +21,16 @@
 //!
 //! Then, with no job running it quits. With one running it refuses,
 //! stops the worker admitting jobs, shows "Finishing" and Quit now, and
-//! quits when the job returns. Quit now quits at once: the worker thread
-//! is not waited for, and the library's journals recover what it was
-//! doing. Either way a prompt the running job waits on is answered
-//! `Unavailable` first, so the job can return.
+//! quits when the job returns. A running automatic poll is cancelled, so
+//! it returns at its next safe point (D6 Part D); after ten seconds the
+//! words say "Still stopping" and nothing else changes. Either graceful
+//! exit joins the worker thread before the app quits. Quit now quits at
+//! once: the worker thread is not waited for, and the library's journals
+//! recover what it was doing. Either way a prompt the running job waits on
+//! is answered `Unavailable` first, so the job can return.
+//!
+//! From the moment quitting is asked, the polling scheduler starts nothing
+//! (R-33); Cancel on either ask lets it go on.
 //!
 //! When quitting starts to wait, every open dialog closes and Quit now
 //! takes focus (design, Quitting: "the focused Quit now button"), so
@@ -50,6 +56,13 @@ use crate::desktop::{keys::QuitNow, services::requests::DesktopRequestId};
 pub(crate) const QUIT_NOW: &str = "Quit now";
 pub(crate) const SAVING_DRAFTS: &str = "Saving drafts for recovery";
 pub(crate) const QUIT_ANYWAY: &str = "Quit anyway";
+/// What quitting says while the job it waits for is an automatic poll,
+/// which is no request and has no label of its own (Fact 16).
+pub(crate) const FINISHING_POLL: &str = "Finishing a check for updates";
+/// What the wait says after ten seconds (decision 7, R-15). The only place
+/// the words live: no other view draws stopping feedback.
+pub(crate) const STILL_STOPPING: &str =
+    "Still stopping \u{2014} waiting for Manyhands to reach a safe point. Your work is saved.";
 const NOT_SAVED_TITLE: &str = "Quit";
 
 /// Where quitting stands.
@@ -66,7 +79,9 @@ pub(crate) enum QuitPhase {
 
 impl Workspace {
     /// What quitting waits for: "Saving drafts for recovery", or
-    /// "Finishing" and the command. Fixed text only.
+    /// "Finishing" and the command, or "Finishing a check for updates" for
+    /// a poll; after ten seconds of waiting for a job, "Still stopping".
+    /// Fixed text only.
     pub(crate) fn finishing_text(&self, cx: &App) -> Option<String> {
         let id = match self.quit_phase() {
             QuitPhase::SavingDrafts => return Some(SAVING_DRAFTS.to_owned()),
@@ -74,8 +89,12 @@ impl Workspace {
             QuitPhase::Running | QuitPhase::Quit => return None,
         };
         let operations = self.services().operations().read(cx);
+        if operations.still_stopping() {
+            return Some(STILL_STOPPING.to_owned());
+        }
         Some(match operations.request(id) {
             Some(request) => format!("Finishing {}", request.intent.label()),
+            None if self.services().worker().runs_poll(id) => FINISHING_POLL.to_owned(),
             None => "Finishing".to_owned(),
         })
     }
@@ -292,3 +311,11 @@ fn not_saved_body(ids: &AskIds, message: &str, choose: &Choose) -> impl IntoElem
                 .child(button(ids.quit, QUIT_ANYWAY, NotSavedChoice::QuitAnyway)),
         )
 }
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "quit_support.rs"]
+pub(crate) mod support;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "quit_tests.rs"]
+mod tests;

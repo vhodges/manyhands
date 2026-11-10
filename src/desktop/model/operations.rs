@@ -31,6 +31,7 @@ use manyhands::{
 
 mod outcomes;
 mod polls;
+mod quit_wait;
 mod review;
 
 pub(crate) use polls::{record_note_words, resume_offer_among};
@@ -129,6 +130,8 @@ pub(crate) struct Operations {
     prompt: Option<PromptRequest>,
     /// Quitting is saving drafts (`QuitPhase::SavingDrafts`).
     saving_drafts: bool,
+    /// How long quitting has waited for a job (Part D).
+    quit_wait: quit_wait::QuitWait,
     /// How many removals were recorded (`removals`).
     removals: u64,
     /// The last host observation's answer, by its request: what the Hosts
