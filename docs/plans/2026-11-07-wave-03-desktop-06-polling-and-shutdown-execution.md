@@ -824,7 +824,7 @@ Process: `bring_in_keeps_dirty_session` was first red on a wrong fixture
 `bring_in_kept_draft_banner` was green on first run (mutation evidence);
 `attempt_entry_share_waits_for_the_lock` was red only because its ids did not
 yet exist, and the "no lock check" mutation is its real evidence.
-| 10 | (ledger commit) | `d8e13309` | APPROVE WITH MINOR; no code fix needed (every finding is a ledger record or a hand-off); not re-reviewed (no fix commit) | `desktop::view::quit::tests::{quit_freezes_scheduler, quit_lets_retirement_finish, quit_sees_poll_end, quit_polling_still_stopping, quit_joins_worker, quit_joins_worker_when_a_job_ends, quit_during_restart_wait}`, `desktop::view::item::edit_tests::quit_freeze::quit_freezes_scheduler_for_the_unkept_ask`, `desktop::services::worker::quit::tests::quit_cancels_poll`, `desktop::services::scheduler::quit_tests::{relaunch_keeps_deadline, quit_drops_an_armed_check_now, quit_stops_unlock, quit_stops_resume_checking, quit_withdraws_queued_poll}`; the implementer ran the 14 as one command, the reviewer re-ran 15 singly with `--exact`, 1 test each, pass; fmt, check, both clippy pass |
+| 10 | `4b6ae8f2` | `d8e13309` | APPROVE WITH MINOR; no code fix needed (every finding is a ledger record or a hand-off); not re-reviewed (no fix commit) | `desktop::view::quit::tests::{quit_freezes_scheduler, quit_lets_retirement_finish, quit_sees_poll_end, quit_polling_still_stopping, quit_joins_worker, quit_joins_worker_when_a_job_ends, quit_during_restart_wait}`, `desktop::view::item::edit_tests::quit_freeze::quit_freezes_scheduler_for_the_unkept_ask`, `desktop::services::worker::quit::tests::quit_cancels_poll`, `desktop::services::scheduler::quit_tests::{relaunch_keeps_deadline, quit_drops_an_armed_check_now, quit_stops_unlock, quit_stops_resume_checking, quit_withdraws_queued_poll}`; the implementer ran the 14 as one command, the reviewer re-ran 15 singly with `--exact`, 1 test each, pass; fmt, check, both clippy pass |
 
 ## Task 10: shutdown (cancel, the poll's end, still stopping, join)
 
@@ -923,3 +923,90 @@ deadline) fails it at "not due at launch", through the real `Scheduler`.
 - Tests run: only the ones listed in the Task 10 row, by exact path. Static
   gates (fmt, check, both clippy) pass at `d8e13309`. No whole suite, no other
   target.
+
+## Wave 04 Cycle 01 merged (`01M6V8RK8B0SBCH0YZXFVSR9E3`)
+
+Cycle 01 reached `origin/main` after the Task 10 ledger commit
+(`eb0798a2`, 118 files, about 15,600 added lines: docks, a footer, Activity as
+a dock panel, the keyboard-journey harness). I merged it at `6af92f91`.
+
+- **My error, corrected.** I read `git merge-tree --write-tree HEAD
+  origin/main | head -1` as "clean"; that line is only the tree id and hides
+  the conflict list. The merge then conflicted in five files. Check the whole
+  output (or `--name-only`) before saying a merge is clean.
+- **No W item changed its contract** (read-only analysis against Cycle 01's
+  merged Cycle doc, design, ticket and 14 comments): W-1 `needs_attention
+  (&Operations, &DraftRegistry) -> usize` kept its signature (its only caller
+  is `Workspace::attention`, `view/workspace/footer.rs`); W-2 `quit-finishing`
+  is still drawn only by `activity_region`; W-3 shared files refactored only;
+  W-4 Settings stays a page; W-5 and W-7 unchanged; W-6 Activity about 550 px
+  at 1280 px, now **accepted** (K-19, owner, 2026-11-09), no longer
+  "proposed". Reword "Cycle 01's proposed K-19" to "accepted K-19" in the D6
+  documents at the Task 14 documentation pass (Amendment 8 still applies).
+  Task 0's Re-grounding entry therefore gains: `needs_attention`'s signature is
+  unchanged; `quit-finishing` is drawn only in `activity_region`; K-19 accepted.
+- **Conflicts resolved** in `desktop/mod.rs`, `services/mod.rs`,
+  `view/harness.rs`, `view/workspace/lifecycle.rs`, `view/workspace/render.rs`
+  by keeping Cycle 01's layout and re-homing D6's pieces: the attention and
+  attempt entries sit in `session_section`/`pending_section` (auto-merged), the
+  D6 `.track_scroll(self.operations_scroll().handle())` was re-added to the
+  `operation-area` in `activity_region`, the D6 quit changes (`set_quitting`,
+  `shut_down_and_join`, the ten-second timer) sit beside Cycle 01's
+  Activity-displayed guard in `wait_to_quit` and its `dock.write_for_quit`;
+  `PollingBackend` gained main's new `Backend::layout`; the harness `start`
+  now goes through a private `over(.., services_backend, ..)` so
+  `Shell::over_double` keeps `Geometry::Harness`. No Cycle 01 test was edited
+  and no D6 assertion was weakened. D6's 1280x840 hit test
+  `attention_actions_hit` still clicks every action under main's dock sizes.
+- **Steps that were skipped for want of Cycle 01 are now done:**
+  - Task 8's step (`00ba1863`): `needs_attention(&Operations, &DraftRegistry,
+    &PollSchedule)` adds `polling.attention().len()` (pure; `Workspace::attention`
+    passes `services.scheduler().read(cx).schedule()`; the footer already
+    repaints through the existing `cx.observe`). **E-14**: the table
+    `counts_what_awaits_the_person` gained a `polling` input on `Case` and the
+    rows live in the new `model/attention_polling_tests.rs`
+    (`mod polling_rows`): one count per entry however many repositories it holds
+    back; one each for the seven kinds; zero for paused, off, not-due,
+    unreachable, changed, unavailable, busy, interrupted, `recovery_required`,
+    other repository failure, conflict-pending, preempted, quit-cancelled,
+    completed, nothing registered, a paused or off policy and `Phase::Retiring`;
+    a library-held repository counts once; a sum row (1 request + 2 flush
+    failures + 2 pending rows + 1 failed read + 2 polling = 8) shows the new
+    term adds to the others. Red first (the count lacked the term); the
+    dropped-term mutation fails; no survivors. No existing row changed.
+  - Task 10's step (`0caa6008`): **E-15**, `quit_polling_still_stopping` now
+    hides Activity first (`footer-panel-activity`), asserts the layout and
+    `layout_saves()` unchanged and `quit-finishing` not drawn, `finishing_text`
+    being the still-stopping text, then presses `secondary-4` and asserts the
+    `quit-finishing` label is the still-stopping text. The only moved
+    assertion is the label check, which now runs after Activity is revealed.
+    Green on first run (the behaviour already existed); mutations (label
+    replaced with "Finishing"; `request_quit` revealing Activity) fail it.
+    Cycle 01's own quit test is untouched.
+  - Task 13's Cycle 01-dependent part is still to do (keyboard journey on the
+    new `keyboard_tests/shell*` harness; the privacy test's element list in
+    `lifecycle/privacy_tests.rs`, which names `operation-area`). `Shell::open`
+    gives a 1590 px window with a 520 px Activity; `open_as_launched` gives the
+    real 1280x840 with Activity at 150 px, and nothing in Cycle 01 scrolls a
+    focused control into view (D6's `ContentScroll` marker does for D6's own
+    actions).
+- **R-23 dedupe stays with Task 11a.** The owner's reply on Cycle 01's
+  second-review finding 2 (comment `01M717GX6J5YYKM26CWEB3BXZC`) says "Needs
+  attention counts both lists as decision 3 says", so a failed request and
+  its pending row for one operation count twice today; D6's approved R-23
+  rule ("grouped by operation ID and count once; the worker's running
+  operation is never listed as pending") deliberately changes that in Task
+  11a (design W-1: "`needs_attention` does not deduplicate today"). No test
+  pins the double count. Task 11a's table must include a row for D6's own
+  in-flight automatic poll's pending row.
+
+## Part D checkpoint (Task 10, with the Cycle 01 merge)
+
+- Main: `origin/main` is `eb0798a2` (Cycle 01 merged); merged at `6af92f91`;
+  `git merge-tree --write-tree HEAD origin/main` is clean (checked in full).
+- Tests run: only those in the Task 8 and Task 10 rows and the E-14, E-15
+  tests above, singly with `--exact`; plus, after the merge, Cycle 01's
+  `needs_attention_counts_and_leads_to_activity`,
+  `a_waiting_quit_with_activity_hidden_changes_nothing` and the resolver's
+  selection of its keyboard and quit tests. Static gates (fmt, check, both
+  clippy) pass at `0caa6008`. No whole suite, no other target.
