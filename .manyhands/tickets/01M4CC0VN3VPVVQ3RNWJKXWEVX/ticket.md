@@ -6,7 +6,7 @@ deps:
 id: 01M4CC0VN3VPVVQ3RNWJKXWEVX
 title: 'Wave 03 D6: Desktop Background Polling And Shutdown'
 type: cycle
-status: open
+status: review_ready
 project: manyhands
 team: core
 manyhands_managed: true
