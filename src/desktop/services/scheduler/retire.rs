@@ -17,15 +17,39 @@ use manyhands::{
 
 use super::{begin_retirement, entity::Scheduler, reconfigure::Retiring};
 use crate::desktop::{
-    model::polling::{
-        KeyId, Root, TargetKind,
-        retire::{Need, Verdict, reason_of},
+    model::{
+        operations::Operations,
+        polling::{
+            KeyId, Root, TargetKind,
+            retire::{Need, Verdict, reason_of, recorded_key},
+        },
     },
     services::{
         inflight::RetirementEnd,
         requests::{DesktopRequestId, Intent, Lane},
+        worker::{RecordState, WorkerEvent},
     },
 };
+
+/// Tells the request model where the worker's record of a retirement stood
+/// when its last attempt finished, before `Finished` is applied: the event
+/// carries none, and the answer is read by it first (E3). `record_of` is the
+/// worker's `record_state`; the drain calls this for every event.
+pub(crate) fn note_record(
+    event: &WorkerEvent,
+    operations: &mut Operations,
+    record_of: impl FnOnce(DesktopRequestId) -> Option<RecordState>,
+) {
+    let WorkerEvent::Finished(id, _) = event else {
+        return;
+    };
+    let retires = operations
+        .request(*id)
+        .is_some_and(|request| matches!(request.intent, Intent::ContextRetire { .. }));
+    if retires && let Some(record) = record_of(*id) {
+        operations.record_stood(*id, record);
+    }
+}
 
 impl Scheduler {
     /// Submits a retirement of `item` of `root` under a new request ID
@@ -139,11 +163,7 @@ impl Scheduler {
         need: Need,
         cx: &mut Context<Self>,
     ) {
-        let mut keys = self.worker.refused_keys(id);
-        if keys.is_empty() {
-            keys = self.worker.asked_keys(id);
-        }
-        let key = keys.first().copied();
+        let key = recorded_key(&self.worker.refused_keys(id), &self.worker.asked_keys(id));
         if key.is_some() || !matches!(need, Need::KeyLocked | Need::KeyProblem) {
             return self.raise(root, need, key, cx);
         }

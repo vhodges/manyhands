@@ -7,7 +7,7 @@ use manyhands::{
     results::ResultCode as Code,
 };
 
-use super::{Authority, Need, RefusedSet, Verdict, classify, reason_of};
+use super::{Authority, Need, RefusedSet, Verdict, classify, reason_of, recorded_key};
 use crate::desktop::{
     model::polling::Reason,
     services::worker::RecordState,
@@ -42,7 +42,6 @@ fn row(
     code: Code,
     verdict: Verdict,
 ) -> Row {
-    let stands = matches!(verdict, Retired | Refused | Retry { .. } | Failed);
     Row {
         what,
         record,
@@ -50,10 +49,64 @@ fn row(
         code,
         removal: Removal::None,
         dismissed: matches!(verdict, Retired | Attention(_) | Unreachable | Retry { .. }),
-        goes_on: stands,
+        goes_on: goes_on(what),
         changed: matches!(verdict, Retired),
         refused: matches!(verdict, Refused),
         verdict,
+    }
+}
+
+/// RT-7 and RT-8, written out row by row and not derived from the verdict:
+/// the loop goes on after a retirement, a refusal or preservation with a
+/// refusal code, a retry code other than a transport one, and a request that
+/// failed with no data; it stops on a pending or Accepted answer, an
+/// attention code, and a transport or remote-unavailable code.
+fn goes_on(what: &str) -> bool {
+    match what {
+        "retired"
+        | "already absent"
+        | "refused, index"
+        | "refused, external change"
+        | "refused, internal"
+        | "refused, cancelled"
+        | "refused, recovery required"
+        | "refused, recovery required after a removal"
+        | "refused, other"
+        | "refused, input"
+        | "preserved"
+        | "preserved, a retry code"
+        | "preserved after a removal"
+        | "no data, finished"
+        | "no data, a retry code" => true,
+        "pending, the index still catching up"
+        | "pending, cleanup"
+        | "pending, cancelled"
+        | "pending, locked key"
+        | "pending, key rejected"
+        | "pending, host"
+        | "pending, bad remote"
+        | "pending, a worktree removed"
+        | "left accepted, no publication remote"
+        | "left accepted, busy"
+        | "left accepted, poll yielding"
+        | "left accepted, no data"
+        | "left accepted, a retry code"
+        | "left accepted, locked key"
+        | "left accepted, host"
+        | "left accepted, final answer"
+        | "record unknown"
+        | "refused, locked"
+        | "refused, unlock failed"
+        | "refused, no key"
+        | "refused, key missing"
+        | "refused, key rejected"
+        | "refused, host unapproved"
+        | "refused, host replaced"
+        | "refused, bad remote"
+        | "refused, no publication remote"
+        | "refused, transport"
+        | "refused, remote" => false,
+        other => panic!("{other}: no RT-7/RT-8 value written for this row"),
     }
 }
 
@@ -121,6 +174,22 @@ fn rows() -> Vec<Row> {
             Some(State::Pending),
             Code::HostReplacementRequired,
             owed(Some(Need::Host), false),
+        ),
+        // A configuration code is the item's answer only as a refusal (E3
+        // row 6); an Owed answer raises no attention for it.
+        row(
+            "pending, bad remote",
+            Finished,
+            Some(State::Pending),
+            Code::InvalidRemote,
+            owed(None, false),
+        ),
+        row(
+            "left accepted, no publication remote",
+            Accepted,
+            Some(State::Refused),
+            Code::PublicationRemoteRequired,
+            owed(None, false),
         ),
         // A request left Accepted, whatever its answer, is pending and never
         // a retry; the entry stays.
@@ -440,6 +509,15 @@ fn attention_is_keyed() {
     for (need, key, host, reason) in cases {
         assert_eq!(reason_of(need, &root, key, host), reason, "{need:?}");
     }
+    // Which key: the one refused, else the one asked; never a guess among
+    // several, which the selected key then settles.
+    let other = SharedKeyId::new();
+    assert_eq!(recorded_key(&[key], &[]), Some(key));
+    assert_eq!(recorded_key(&[], &[key]), Some(key));
+    assert_eq!(recorded_key(&[key], &[other]), Some(key));
+    assert_eq!(recorded_key(&[], &[]), None);
+    assert_eq!(recorded_key(&[key, other], &[key]), None);
+    assert_eq!(recorded_key(&[], &[key, other]), None);
 }
 
 /// A `recovery_required` refusal is retried; the third in one session, for

@@ -33,6 +33,7 @@ pub(crate) use entity::Scheduler;
 pub(crate) use reconfigure::heard;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use reconfigure::{Heard, Moment, Scope};
+pub(crate) use retire::note_record;
 
 use super::{
     Services,

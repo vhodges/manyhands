@@ -372,6 +372,11 @@ struct State {
     /// goes, so a join that did not wait shows.
     #[cfg(test)]
     ended: bool,
+    /// For a test: the record state every finished attempt is kept as, in
+    /// place of what `show_request` says. A canned answer cannot leave a
+    /// real record `Accepted` (that needs the transport's claim).
+    #[cfg(test)]
+    forced_record: Option<RecordState>,
 }
 
 impl State {
@@ -573,6 +578,12 @@ impl WorkerHandle {
     /// the attempt, so a `Finished` event's reader finds it.
     pub(crate) fn record_state(&self, id: DesktopRequestId) -> Option<RecordState> {
         self.shared().lock().submitted.get(&id)?.record
+    }
+
+    /// Makes every finished attempt's record state `record` (a test only).
+    #[cfg(test)]
+    pub(crate) fn force_record_for_testing(&self, record: Option<RecordState>) {
+        self.shared().lock().forced_record = record;
     }
 
     /// What the request `id`'s last Give up found, until a retry.
@@ -1241,6 +1252,8 @@ fn execute(
     let record = intent
         .stops_at_safe_points()
         .then(|| record_state(backend.service(), request_id));
+    #[cfg(test)]
+    let record = shared.lock().forced_record.or(record);
     let refused = Intent::refused_answer(envelope.outcome, envelope.code, &envelope.recovery);
     if let Some(submitted) = shared.lock().submitted.get_mut(&id) {
         submitted.answers.finished(refused);

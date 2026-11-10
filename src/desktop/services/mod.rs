@@ -579,14 +579,7 @@ impl Services {
                         };
                         // A retirement's answer is read from where the worker's
                         // record of the request stood (E3); `Finished` has none.
-                        if let WorkerEvent::Finished(id, _) = &event
-                            && operations.request(*id).is_some_and(|request| {
-                                matches!(request.intent, requests::Intent::ContextRetire { .. })
-                            })
-                            && let Some(record) = resending.record_state(*id)
-                        {
-                            operations.record_stood(*id, record);
-                        }
+                        scheduler::note_record(&event, operations, |id| resending.record_state(id));
                         // A request that reconfigures polling (R-11).
                         scheduled.extend(scheduler::heard(&event, operations));
                         let ended = match &event {

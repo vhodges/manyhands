@@ -22,12 +22,12 @@ use super::{
     support::World,
 };
 use crate::desktop::{
-    model::polling::{Phase, Reason, TargetKind},
+    model::polling::{Phase, Reason, TargetKind, retire::Verdict},
     services::{
         JobKind,
         inflight::{Acquired, InflightStore, RetirementEnd},
         requests::{DesktopRequestId, Lane, RequestState},
-        worker::CancelResult,
+        worker::{CancelResult, RecordState},
     },
     test_support::{
         polling::{Asked, unlock_request},
@@ -412,4 +412,110 @@ async fn retire_answers_become_attention(cx: &mut TestAppContext) {
     })
     .await;
     assert!(entries(&world, cx).is_empty(), "the key's entry stays");
+}
+
+/// A20, R-31 through the real worker and drain: a request whose record is
+/// left `Accepted` is Owed whatever it was answered. The answer is a retry
+/// code, which a finished record dismisses and retries next attempt, and the
+/// record is forced `Accepted` (a canned answer cannot leave a real one open).
+/// The request stays and counts, its entry stays for Resume, and the item is
+/// no refused-set entry.
+#[gpui_kit::test]
+async fn retire_left_accepted_is_owed(cx: &mut TestAppContext) {
+    let (world, root) = polled(cx).await;
+    let retry = answer(State::Refused, Code::IndexUnavailable, Removal::None);
+    world
+        .services
+        .worker()
+        .force_record_for_testing(Some(RecordState::Accepted));
+    let id = answered(&world, &root, Lane::Background, retry, cx).await;
+    world.services.operations().read_with(cx, |operations, _| {
+        let request = operations.request(id).expect("the request");
+        assert!(matches!(request.state, RequestState::Finished(..)));
+        let answer = operations.retirement(id).expect("sorted");
+        assert!(matches!(answer.verdict, Verdict::Owed { .. }), "{answer:?}");
+    });
+    assert_eq!(entered(&world, cx).len(), 1, "kept for Resume");
+    world.services.scheduler().read_with(cx, |scheduler, _| {
+        assert!(!scheduler.schedule().retirement_refused(&root, &item()));
+    });
+    // A finished record is a retry: dismissed, entry ended.
+    world
+        .services
+        .worker()
+        .force_record_for_testing(Some(RecordState::Finished));
+    let again = answer(State::Refused, Code::IndexUnavailable, Removal::None);
+    let id = answered(&world, &root, Lane::Background, again, cx).await;
+    world.services.operations().read_with(cx, |operations, _| {
+        let request = operations.request(id).expect("the request");
+        assert!(matches!(request.state, RequestState::Dismissed));
+    });
+    assert_eq!(entered(&world, cx).len(), 1, "only the first remains");
+}
+
+/// E3, R-31: the drain tells the request model where the worker's record of
+/// a retirement stood before it applies `Finished`, which carries none. A
+/// canned answer cannot leave a real record Accepted (a cancel before the
+/// claim is final, and the claim needs the transport), so the worker's
+/// answer is a stub: `Accepted` makes even a retry code Owed, which the
+/// record state first reading (A20) is for.
+#[test]
+fn retire_record_state_reaches_the_answer() {
+    use crate::desktop::{
+        model::{operations::Operations, polling::retire::Verdict},
+        services::{
+            requests::{DesktopRequest, Intent},
+            scheduler::note_record,
+            worker::{RecordState, WorkerEvent},
+        },
+    };
+    let refused = || answer(State::Refused, Code::IndexUnavailable, Removal::None);
+    let intents = |retiring: bool| {
+        if retiring {
+            Intent::ContextRetire {
+                root: "/repo".into(),
+                kind: manyhands::repository::AuthoringKind::Ticket,
+                id: item(),
+            }
+        } else {
+            Intent::IndexRefresh {
+                root: "/repo".into(),
+            }
+        }
+    };
+    let cases = [
+        ("accepted", true, Some(RecordState::Accepted), true),
+        ("finished", true, Some(RecordState::Finished), false),
+        ("unknown", true, Some(RecordState::Unknown), true),
+        // The worker never took the request: it is finished.
+        ("none", true, None, false),
+        // Only a retirement's answer is sorted by its record.
+        ("another request", false, Some(RecordState::Accepted), false),
+    ];
+    for (what, retiring, record, owed) in cases {
+        let mut operations = Operations::default();
+        let id = DesktopRequestId(1);
+        operations.apply(WorkerEvent::Queued(DesktopRequest {
+            id,
+            request_id: RequestId::new(),
+            intent: intents(retiring),
+            confirmation: None,
+            lane: Lane::Background,
+            attempt: 1,
+            state: RequestState::Queued,
+        }));
+        let event = WorkerEvent::Finished(id, Box::new(refused()));
+        note_record(&event, &mut operations, |asked| {
+            assert_eq!(asked, id);
+            record
+        });
+        operations.apply(event);
+        let seen = operations.retirement(id).map(|answer| answer.verdict);
+        if retiring {
+            let owed_now = matches!(seen, Some(Verdict::Owed { .. }));
+            assert_eq!(owed_now, owed, "{what}: {seen:?}");
+        } else {
+            assert_eq!(seen, None, "{what}");
+        }
+    }
 }

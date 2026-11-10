@@ -393,6 +393,13 @@ pub(super) fn rows() -> Vec<(&'static str, usize, Operations)> {
             listed(operations, &[OPERATION]);
         },
     );
+    // The library answered `busy` after its claim with no retirement data,
+    // but the envelope names the operation: still one thing with its row.
+    case("left accepted, no data, with its row", 1, &|operations| {
+        let busy = no_data(Code::Busy).with_operation_id(OPERATION);
+        retired(operations, 1, Lane::Background, Accepted, busy);
+        listed(operations, &[OPERATION]);
+    });
     case(
         "two requests share an operation, no row listed",
         1,

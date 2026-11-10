@@ -149,7 +149,9 @@ pub(crate) fn classify(record: RecordState, envelope: &Envelope<MutationDataDto>
             || data.branch_removal != RetirementRemoval::None
     });
     let owed = |code| Verdict::Owed {
-        attention: need_of(code),
+        // E3 row 2: only an unlock, key or host code raises attention here;
+        // a configuration code is no pending row's business.
+        attention: need_of(code).filter(|need| *need != Need::Configuration),
         catching_up: code == ResultCode::DiscoveryPending,
     };
     let verdict = match (record, data) {
@@ -182,9 +184,27 @@ pub(crate) fn classify(record: RecordState, envelope: &Envelope<MutationDataDto>
         verdict,
         state: data.map(|data| data.state),
         code,
-        operation: data.map(|data| data.operation_id.clone()),
+        // The journal row's operation: the data's, else the one the envelope
+        // names, so a request left Accepted with no data is still grouped
+        // with its pending row (R-23).
+        operation: data
+            .map(|data| data.operation_id.clone())
+            .or_else(|| envelope.operation_id.clone()),
         // The copy was removed or found gone, or part of it was (Fact 25).
         changed: removed || verdict == Verdict::Retired,
+    }
+}
+
+/// The one key a retirement's answer is held under, from the keys the
+/// background provider refused and the keys the request asked for: Task 8's
+/// rule for a Check now. Exactly one is that key; with none or several the
+/// answer names no key, and the repository's selected key is read instead
+/// (E3). The sets come in no order, so a first of several would be a guess.
+pub(crate) fn recorded_key(refused: &[KeyId], asked: &[KeyId]) -> Option<KeyId> {
+    let keys = if refused.is_empty() { asked } else { refused };
+    match keys {
+        [only] => Some(*only),
+        _ => None,
     }
 }
 
