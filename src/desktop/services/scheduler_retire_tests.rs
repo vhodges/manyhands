@@ -841,6 +841,76 @@ async fn unlock_picks_reachable(cx: &mut TestAppContext) {
     assert_eq!(retirements_sent(&world, cx).len(), 1);
 }
 
+/// Review 7: "a retirement of the item is queued or running" is keyed by
+/// repository, kind and item ID, wherever it is asked. A queued retirement
+/// of a document that has the pending ticket's ID does not hold the ticket:
+/// Unlock… still resends the ticket's retirement.
+#[gpui_kit::test]
+async fn retirement_in_flight_is_keyed_by_kind(cx: &mut TestAppContext) {
+    use manyhands::repository::{AuthoringKind, ItemDtoKind};
+
+    use crate::desktop::services::scheduler::attention::UnlockTarget;
+    let world = World::new(true, cx);
+    let directory = tempfile::tempdir().unwrap();
+    let key = unlock_request(directory.path(), SharedKeyId::new());
+    let a = world.ssh_repo("a");
+    let (request, operation) = (RequestId::new(), OperationId::new());
+    {
+        let mut previous = InflightStore::open(world.fixture.data_dir());
+        assert_eq!(previous.try_acquire(), Acquired::Now);
+        previous.retirement_submitting(RetirementEntry::new(
+            request,
+            &a,
+            TargetKind::Ticket,
+            &item(),
+        ));
+        previous.retirement_operation(request, operation);
+        previous.retirement_ended(request, RetirementEnd::Accepted);
+    }
+    world
+        .backend
+        .inner()
+        .answer_pending(Some(pending_list(&operation.to_string())));
+    super::attention_tests::locked_pair(&world, &key, std::slice::from_ref(&a), cx).await;
+    // A retirement of a document with the ticket's ID runs (held).
+    let running = world.backend.inner().hold_job(JobKind::ContextRetire);
+    world.backend.inner().answer_job(
+        JobKind::ContextRetire,
+        answer(State::Retired, Code::Ok, Removal::Observed),
+    );
+    world.services.worker().submit(
+        Intent::ContextRetire {
+            root: std::path::PathBuf::from(&a),
+            kind: AuthoringKind::Document,
+            id: item(),
+        },
+        Lane::Background,
+        None,
+        None,
+    );
+    running.wait_reached();
+    let worker = world.services.worker();
+    assert!(worker.retirement_in_flight(&a, ItemDtoKind::Document, ITEM));
+    assert!(!worker.retirement_in_flight(&a, ItemDtoKind::Ticket, ITEM));
+    let target = world.services.scheduler().read_with(cx, |scheduler, cx| {
+        world.services.operations().read_with(cx, |operations, _| {
+            scheduler.unlock_target(key.key_id, operations)
+        })
+    });
+    assert_eq!(
+        target,
+        Some(UnlockTarget::Retirement {
+            root: a.clone(),
+            request,
+            kind: TargetKind::Ticket,
+            item: item(),
+        }),
+        "the document does not hold the ticket"
+    );
+    running.release();
+    World::quiet(cx).await;
+}
+
 /// E4 step 1: Retire… checks RT-1 again where it submits. A retirement of the
 /// item that the in-flight record holds pending, or the worker holds, sends
 /// nothing; one that is not held is sent on the user lane, and its item

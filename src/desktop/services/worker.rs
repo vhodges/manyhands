@@ -46,8 +46,8 @@ use std::{
 use futures::channel::mpsc;
 use manyhands::{
     repository::{
-        CancellationToken, ConfirmationId, HostObservationDto, MutationCall, MutationDataDto,
-        OperationId, ProgressEvent, ProgressSink, RepositoryService, RequestId,
+        CancellationToken, ConfirmationId, HostObservationDto, ItemDtoKind, MutationCall,
+        MutationDataDto, OperationId, ProgressEvent, ProgressSink, RepositoryService, RequestId,
         RequestState as RecordDtoState,
         keys::{SecretPassphrase, SessionCredentials},
         transport::SshAuthority,
@@ -100,6 +100,9 @@ pub(crate) enum WorkerEvent {
     PreemptPoll {
         root: Root,
         op: OperationId,
+        /// The worker job that is running the poll: a later run of the same
+        /// operation is another job, which this ask is not about.
+        id: DesktopRequestId,
     },
 }
 
@@ -269,6 +272,8 @@ pub(crate) struct SendMark(u64);
 /// The job the worker is running.
 struct Running {
     id: DesktopRequestId,
+    /// The lane it was taken from.
+    lane: Lane,
     /// `None` for a host observation, which cannot be cancelled, and for a
     /// poll, which has no token. A poll is stopped through `cancel_poll` by
     /// the cancel task (P-1) that `ask_poll_cancel` starts, and `quit()` asks
@@ -311,11 +316,11 @@ fn firmness(cause: CancelCause) -> u8 {
 /// quit, a reconfiguration and any number of user jobs share one cancel task
 /// (P-7). False when no poll is running.
 fn ask_poll_cancel(shared: &Shared, state: &mut State, cause: CancelCause) -> bool {
-    let Some(poll) = state
-        .running
-        .as_mut()
-        .and_then(|running| running.poll.as_mut())
-    else {
+    let Some(running) = state.running.as_mut() else {
+        return false;
+    };
+    let id = running.id;
+    let Some(poll) = running.poll.as_mut() else {
         return false;
     };
     let first = poll.asked.is_none();
@@ -329,6 +334,7 @@ fn ask_poll_cancel(shared: &Shared, state: &mut State, cause: CancelCause) -> bo
         shared.send(WorkerEvent::PreemptPoll {
             root: poll.root.clone(),
             op: poll.op,
+            id,
         });
     }
     true
@@ -338,19 +344,27 @@ fn ask_poll_cancel(shared: &Shared, state: &mut State, cause: CancelCause) -> bo
 /// task's reason to go on (P-1). It holds the shared state, not a
 /// `WorkerHandle`, so it never ends the worker by being the last to let go.
 #[derive(Clone)]
-pub(crate) struct PollWatch(Arc<Shared>);
+pub(crate) struct PollWatch(Arc<Shared>, Option<DesktopRequestId>);
 
 impl PollWatch {
+    /// The watch of the run that job `id` is: a later run of the same
+    /// operation is another job, and is not watched.
+    pub(crate) fn for_run(mut self, id: DesktopRequestId) -> Self {
+        self.1 = Some(id);
+        self
+    }
+
     pub(crate) fn running(&self, op: OperationId) -> bool {
         let state = self.0.lock();
         // A worker that is gone (shut down, or ended by a panic) answers no
         // poll, so the cancel task must not wait for one.
         !state.shut_down
-            && state
-                .running
-                .as_ref()
-                .and_then(|running| running.poll.as_ref())
-                .is_some_and(|poll| poll.op == op)
+            && state.running.as_ref().is_some_and(|running| {
+                // A watch of one run is about that job alone: a restart of
+                // the operation is another job.
+                self.1.is_none_or(|id| running.id == id)
+                    && running.poll.as_ref().is_some_and(|poll| poll.op == op)
+            })
     }
 }
 
@@ -746,6 +760,33 @@ impl WorkerHandle {
                 .any(|job| picked(&job.id))
     }
 
+    /// Whether the user lane holds work: a user job queued, waiting out
+    /// `busy` or running. Background jobs do not count, so a preempted poll
+    /// is not kept waiting by them (R-34, B2).
+    pub(crate) fn user_lane_busy(&self) -> bool {
+        let state = self.shared().lock();
+        !state.user.is_empty()
+            || state
+                .running
+                .as_ref()
+                .is_some_and(|running| running.lane == Lane::User)
+    }
+
+    /// Whether a retirement of the item `id` of `kind` in `root` is queued,
+    /// waiting out `busy` or running, of either lane. The one place that
+    /// answers it, keyed by repository, kind and item ID.
+    pub(crate) fn retirement_in_flight(&self, root: &str, kind: ItemDtoKind, id: &str) -> bool {
+        self.in_flight(|intent| {
+            matches!(
+                intent,
+                Intent::ContextRetire { root: asked, kind: asked_kind, id: asked_id }
+                    if asked.to_str() == Some(root)
+                        && super::retire_kind(*asked_kind) == kind
+                        && asked_id.to_string() == id
+            )
+        })
+    }
+
     /// A provider that asks this worker's UI, as the worker's own does,
     /// and shares its declined keys: for a test that raises a prompt from
     /// a plain thread.
@@ -896,7 +937,7 @@ impl WorkerHandle {
 
     /// What the cancel task asks whether its poll is still running.
     pub(crate) fn poll_watch(&self) -> PollWatch {
-        PollWatch(self.owner.0.clone())
+        PollWatch(self.owner.0.clone(), None)
     }
 
     /// The keys the background job `id`'s last attempt was refused a prompt
@@ -1435,6 +1476,7 @@ fn take(shared: &Shared) -> Option<Job> {
             );
             state.running = Some(Running {
                 id: job.id,
+                lane: job.lane,
                 cancel,
                 accepted: false,
                 stops_at_safe_points,

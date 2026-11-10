@@ -21,7 +21,10 @@ mod state;
 pub(crate) mod status;
 mod table;
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 pub(crate) use attempt::{
     Answer, AttemptSummary, AttemptTarget, Authority, CancelCause, Disposition, KeyId, NotEligible,
@@ -67,6 +70,10 @@ pub(crate) struct PollSchedule {
     /// The kind of each item in the refused set, which Retire… needs to
     /// send its retirement (E4).
     refused_kinds: BTreeMap<(Root, ItemId), TargetKind>,
+    /// Repositories removed while a poll of theirs was queued or running:
+    /// the poll goes on, so it still holds the one-at-a-time slot until it
+    /// answers (R-7). Nothing else of the repository is kept.
+    orphans: BTreeSet<Root>,
 }
 
 /// Registration and reads.
@@ -81,6 +88,9 @@ impl PollSchedule {
 
     /// Removal drops the schedule (R-11).
     pub fn remove(&mut self, root: &Root) {
+        if self.repos.get(root).is_some_and(RepoSchedule::in_flight) {
+            self.orphans.insert(root.clone());
+        }
         self.repos.remove(root);
         self.refused.forget_root(root);
         self.refused_kinds.retain(|(held, _), _| held != root);
@@ -155,7 +165,7 @@ impl PollSchedule {
 /// What to poll and when (A3).
 impl PollSchedule {
     fn busy(&self) -> bool {
-        self.repos.values().any(RepoSchedule::in_flight)
+        !self.orphans.is_empty() || self.repos.values().any(RepoSchedule::in_flight)
     }
 
     /// The repositories to poll now, fairest first: enabled, unpaused,
@@ -233,6 +243,7 @@ impl PollSchedule {
     /// back to `Idle` with its policy read again, so the one-at-a-time rule
     /// cannot silence polling for good. Returns whether it was in flight.
     pub fn abandon(&mut self, root: &Root) -> bool {
+        self.orphans.remove(root);
         match self.repos.get_mut(root) {
             Some(repo) if repo.in_flight() => {
                 repo.rearm();
@@ -256,6 +267,9 @@ impl PollSchedule {
     /// The poll's answer (A4). Returns what it summed to; the caller marks
     /// the repository changed and starts Part E's loop from it.
     pub fn after(&mut self, now: &Now, attempt: &PollAttempt) -> Option<AttemptSummary> {
+        // The answer of a poll whose repository was removed meanwhile frees
+        // the slot it held.
+        self.orphans.remove(&attempt.root);
         let repo = self.repos.get_mut(&attempt.root)?;
         Some(repo.apply(&attempt.root, now, attempt))
     }

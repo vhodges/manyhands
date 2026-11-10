@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use gpui_kit::Context;
 
-use super::entity::Scheduler;
+use super::{entity::Scheduler, retire_loop::retirement_out_in_worker};
 use manyhands::{repository::transport::SshAuthority, results::ResultCode};
 
 use crate::desktop::{
@@ -162,12 +162,7 @@ impl Scheduler {
         let retirement = entry.roots.iter().find_map(|root| {
             self.store.retirements().iter().find_map(|entered| {
                 let (kind, item) = entered.item()?;
-                let out = self.worker.in_flight(|intent| match intent {
-                    Intent::ContextRetire { root, id, .. } => {
-                        root.to_str() == Some(entered.root()) && *id == item
-                    }
-                    _ => false,
-                });
+                let out = retirement_out_in_worker(&self.worker, entered.root(), kind, &item);
                 if entered.root() != root || out {
                     return None;
                 }

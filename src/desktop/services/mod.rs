@@ -430,10 +430,10 @@ struct Canceller {
 impl Canceller {
     /// Spawns `preempt::cancel_until_answered` for the poll `op` of `root`
     /// on the background executor, never the UI thread (P-1).
-    fn start(&self, root: model_polling::Root, op: OperationId) {
+    fn start(&self, root: model_polling::Root, op: OperationId, id: requests::DesktopRequestId) {
         let (backend, watch, executor) = (
             self.backend.clone(),
-            self.watch.clone(),
+            self.watch.clone().for_run(id),
             self.executor.clone(),
         );
         self.executor
@@ -595,8 +595,8 @@ impl Services {
                                 polled.push(root, attempt);
                                 continue;
                             }
-                            WorkerEvent::PreemptPoll { root, op } => {
-                                canceller.start(root, op);
+                            WorkerEvent::PreemptPoll { root, op, id } => {
+                                canceller.start(root, op, id);
                                 continue;
                             }
                             event => event,
@@ -901,15 +901,7 @@ impl Services {
         cx: &App,
     ) -> bool {
         self.operations.read(cx).is_retiring(root, kind, id)
-            || self.worker.in_flight(|intent| {
-                matches!(
-                    intent,
-                    requests::Intent::ContextRetire { root: asked, kind: asked_kind, id: asked_id }
-                        if asked.to_str() == Some(root)
-                            && retire_kind(*asked_kind) == kind
-                            && asked_id.to_string() == id
-                )
-            })
+            || self.worker.retirement_in_flight(root, kind, id)
     }
 
     /// Where the item `id` of `kind` in `root` stands under every lock: the

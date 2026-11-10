@@ -13,12 +13,10 @@
 //! its repository is in `Phase::Retiring` and no automatic poll starts
 //! (R-32), so no exit may be left out.
 
-use std::path::PathBuf;
-
 use gpui_kit::{App, Context, WeakEntity};
 use manyhands::{
     canonical::ItemId,
-    repository::{AuthoringKind, ItemDtoKind, RequestId},
+    repository::{ItemDtoKind, RequestId},
 };
 
 use super::{entity::Scheduler, reconfigure::scope_of};
@@ -37,7 +35,7 @@ use crate::desktop::{
         drafts::{DraftRegistry, Fresh},
         edit_tabs::EditTabs,
         inflight::InflightStore,
-        requests::{DesktopRequestId, Intent, Lane},
+        requests::{DesktopRequestId, Lane},
         worker::WorkerHandle,
     },
 };
@@ -47,13 +45,6 @@ pub(super) fn dto_kind(kind: TargetKind) -> ItemDtoKind {
     match kind {
         TargetKind::Ticket => ItemDtoKind::Ticket,
         TargetKind::Document => ItemDtoKind::Document,
-    }
-}
-
-fn authoring_kind(kind: TargetKind) -> AuthoringKind {
-    match kind {
-        TargetKind::Ticket => AuthoringKind::Ticket,
-        TargetKind::Document => AuthoringKind::Document,
     }
 }
 
@@ -82,21 +73,15 @@ pub(super) fn retirement_out(
 }
 
 /// Whether a retirement of the item is queued, running or waiting out `busy`
-/// in the worker.
+/// in the worker (`WorkerHandle::retirement_in_flight`, which every such
+/// question goes through).
 pub(super) fn retirement_out_in_worker(
     worker: &WorkerHandle,
     root: &Root,
     kind: TargetKind,
     item: &ItemId,
 ) -> bool {
-    let path = PathBuf::from(root);
-    worker.in_flight(|intent| {
-        matches!(
-            intent,
-            Intent::ContextRetire { root: asked, kind: asked_kind, id }
-                if *asked == path && *asked_kind == authoring_kind(kind) && id == item
-        )
-    })
+    worker.retirement_in_flight(root, dto_kind(kind), &item.to_string())
 }
 
 /// What the loop reads of one item. Borrowed field by field from the

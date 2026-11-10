@@ -119,7 +119,7 @@ impl Harness {
                         WorkerEvent::Finished(id, _) => Heard::Finished(id),
                         WorkerEvent::HostObserved(id, _) => Heard::Host(id),
                         WorkerEvent::Polled(_, attempt) => Heard::Polled(attempt),
-                        WorkerEvent::PreemptPoll { root, op } => {
+                        WorkerEvent::PreemptPoll { root, op, .. } => {
                             self.start_task(root, op);
                             Heard::Preempt(op)
                         }
@@ -321,4 +321,85 @@ async fn the_drain_cancels_a_preempted_poll(cx: &mut TestAppContext) {
     assert_eq!(attempt.operation, op);
     assert_eq!(attempt.answer, Answer::Cancelled(CancelCause::Preemption));
     assert!(!backend.cancels().is_empty());
+}
+
+/// Review 5: a cancel task is about one run of a poll. A task still in its
+/// pause when its run ended does not cancel a later run of the same
+/// operation (a restart after `busy` or an interruption is another job).
+/// The pause is held by the test, not slept.
+#[test]
+fn a_cancel_task_ignores_a_restart_of_its_operation() {
+    use std::sync::mpsc;
+
+    use futures::StreamExt;
+    use futures::executor::block_on;
+
+    let mut h = Harness::new();
+    let op = OperationId::new();
+    h.backend.answer_poll(cancelled());
+    h.backend.answer_poll(polled(PollCompletion::Completed));
+    let first = h.hold_poll(op, false);
+    assert!(h.worker.ask_poll_cancel(CancelCause::Preemption));
+    let id = loop {
+        if let WorkerEvent::PreemptPoll { op: asked, id, .. } =
+            block_on(h.events.next()).expect("the worker hung up")
+        {
+            assert_eq!(asked, op);
+            break id;
+        }
+    };
+    // The task for the first run, held in its first pause.
+    let (paused, in_pause) = mpsc::channel::<()>();
+    let (resume, resumed) = mpsc::channel::<()>();
+    let task = {
+        let backend = h.backend.clone();
+        let watch = h.worker.poll_watch().for_run(id);
+        let root = h.root.clone();
+        let pauses = std::sync::atomic::AtomicUsize::new(0);
+        thread::spawn(move || {
+            block_on(cancel_until_answered(
+                backend.as_ref(),
+                &watch,
+                &root,
+                op,
+                &DELAYS,
+                |_| {
+                    if pauses.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        paused.send(()).unwrap();
+                        resumed.recv().unwrap();
+                    }
+                    std::future::ready(())
+                },
+            ));
+        })
+    };
+    in_pause.recv().expect("the task reached its pause");
+    let sent = h.backend.cancels().len();
+    assert!(sent > 0);
+
+    // The first run ends; the same operation runs again as another job.
+    first.release();
+    let attempt = h.until_polled();
+    assert_eq!(attempt.answer, Answer::Cancelled(CancelCause::Preemption));
+    let second = h.hold_poll(op, true);
+
+    // The task wakes: its run is over, so it ends without a cancel. (With
+    // the run matched by operation alone it cancels the second run; the
+    // second run is released then, so the task still ends.)
+    resume.send(()).unwrap();
+    let deadline = Instant::now() + WAIT;
+    while !task.is_finished() && h.backend.cancels().len() == sent {
+        assert!(
+            Instant::now() < deadline,
+            "the task neither ended nor cancelled"
+        );
+        thread::yield_now();
+    }
+    let cancelled_again = h.backend.cancels().len() > sent;
+    second.release();
+    task.join().expect("the cancel task ended");
+    assert!(
+        !cancelled_again,
+        "a later run of the operation was cancelled"
+    );
 }

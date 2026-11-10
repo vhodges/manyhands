@@ -354,3 +354,103 @@ async fn result_marks_repository_changed(cx: &mut TestAppContext) {
     World::quiet(cx).await;
     assert_eq!(index_refreshes(cx), 1);
 }
+
+/// Review 4 (B-, P- rules, R-7): at most one automatic poll is in flight.
+/// A repository forgotten while its poll runs (the list drops it, or a read
+/// says it is no longer polled) leaves the poll running, so nothing else is
+/// submitted until that poll answers; its answer then lets the next go.
+#[gpui_kit::test]
+async fn a_repository_forgotten_mid_poll_still_holds_the_single_poll(cx: &mut TestAppContext) {
+    let world = World::new(true, cx);
+    let roots = [world.ssh_repo("a1"), world.ssh_repo("a2")];
+    let gate = world.backend.hold_poll();
+    world.backend.answer_poll(world.completed());
+    world.backend.answer_poll(world.completed());
+    world.list(&roots, cx);
+    World::settle(cx, "the first launch poll", |_| {
+        !world.backend.polled_roots().is_empty()
+    })
+    .await;
+    let running = world.backend.polled_roots()[0].clone();
+    let other = roots.iter().find(|root| **root != running).unwrap().clone();
+    assert_eq!(world.phase(&other, cx), Some(Phase::Idle));
+
+    // The running poll's repository leaves the list.
+    world.list(std::slice::from_ref(&other), cx);
+    World::quiet(cx).await;
+    assert_eq!(
+        world.phase(&other, cx),
+        Some(Phase::Idle),
+        "no second poll while the first still runs"
+    );
+
+    // Its answer ends it, and the other goes.
+    drop(gate);
+    World::settle(cx, "the other repository's poll", |_| {
+        world.backend.polled_roots().len() == 2
+    })
+    .await;
+    assert_eq!(world.backend.polled_roots(), [running, other]);
+}
+
+/// Review 6 (R-34, B2): a preempted poll returns when the user lane is
+/// empty, whatever the background lane holds. A background `IndexRefresh`
+/// running behind the person's Check now does not keep the poll waiting.
+#[gpui_kit::test]
+async fn a_preempted_poll_returns_while_a_background_job_runs(cx: &mut TestAppContext) {
+    use manyhands::repository::PollCompletion;
+    use manyhands::results::{Outcome, ResultCode, Scope};
+
+    use crate::desktop::services::JobKind;
+    let world = World::new(true, cx);
+    let root = world.ssh_repo("a");
+    let gate = world.backend.hold_poll();
+    // The held poll ends `Cancelled`, as the library ends one it is asked to
+    // stop; the poll that comes back completes.
+    world
+        .backend
+        .answer_poll(world.report(PollCompletion::Cancelled, Vec::new(), false));
+    world.backend.answer_poll(world.completed());
+    world.backend.inner().answer_job(
+        JobKind::PollOnce,
+        manyhands::results::Envelope::mutation(
+            "poll once",
+            Scope::default(),
+            Outcome::Success,
+            ResultCode::Ok,
+        ),
+    );
+    world.list(std::slice::from_ref(&root), cx);
+    World::settle(cx, "the poll to be in flight", |_| {
+        !world.backend.requests().is_empty()
+    })
+    .await;
+    // A user job preempts it; a background job waits behind that, and is
+    // held at its start.
+    let background = world.backend.inner().hold_job(JobKind::IndexRefresh);
+    world.services.worker().submit(
+        Intent::PollOnce {
+            root: root.clone().into(),
+        },
+        Lane::User,
+        None,
+        None,
+    );
+    world.services.worker().submit(
+        Intent::IndexRefresh {
+            root: root.clone().into(),
+        },
+        Lane::Background,
+        None,
+        None,
+    );
+    drop(gate);
+    background.wait_reached();
+    World::quiet(cx).await;
+    assert_eq!(
+        world.phase(&root, cx),
+        Some(Phase::Queued),
+        "the poll is sent again behind the background job"
+    );
+    background.release();
+}

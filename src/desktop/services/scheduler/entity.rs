@@ -405,7 +405,7 @@ impl Scheduler {
         let now = self.clock.now();
         self.prune_arms();
         self.watch_clock(&now, cx);
-        if !self.worker.in_flight(|_| true) {
+        if !self.worker.user_lane_busy() {
             self.schedule.user_lane_empty(&now);
         }
         // The model's `next_wake` is `None` while a policy is stale: it is
