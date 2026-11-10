@@ -15,7 +15,10 @@ use super::{
     support::{Rig, held_poll},
 };
 use crate::desktop::{
-    model::polling::{Phase, Why},
+    model::{
+        layout::PanelKind,
+        polling::{Phase, Why},
+    },
     services::{
         JobKind, ReadKind,
         requests::{Intent, Lane},
@@ -112,6 +115,23 @@ async fn quit_polling_still_stopping(cx: &mut TestAppContext) {
     let gate = held_poll(&rig, cx).await;
     let (op, _) = rig.backend.requests()[0];
     let watch = rig.worker().poll_watch();
+    // Activity is hidden, as a person may have it: a quit that waits
+    // changes no layout, and its feedback shows when Activity is opened
+    // (W-2, Cycle 01 decision 7, K-18; E-5).
+    rig.shell.click("footer-panel-activity", cx);
+    let layout = |rig: &Rig, cx: &mut TestAppContext| {
+        rig.shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.layout().clone())
+    };
+    let saves = |rig: &Rig, cx: &mut TestAppContext| {
+        rig.shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.layout_saves())
+    };
+    let hidden = layout(&rig, cx);
+    assert!(!hidden.is_displayed(PanelKind::Activity));
+    let saved = saves(&rig, cx);
 
     assert!(!rig.request_quit(cx));
     let waiting = rig.phase(cx);
@@ -123,6 +143,15 @@ async fn quit_polling_still_stopping(cx: &mut TestAppContext) {
     cx.executor().advance_clock(A_MOMENT);
     rig.shell.run(cx);
     assert_eq!(rig.text(cx).as_deref(), Some(STILL_STOPPING));
+    assert_eq!(layout(&rig, cx), hidden, "the layout is unchanged");
+    assert_eq!(saves(&rig, cx), saved, "no save is scheduled");
+    assert!(
+        !rig.shell.present("quit-finishing", cx),
+        "Activity is hidden"
+    );
+    // Opening Activity shows the same text.
+    rig.shell.keys("secondary-4", cx);
+    assert!(layout(&rig, cx).is_displayed(PanelKind::Activity));
     assert_eq!(
         rig.shell.label("quit-finishing", cx).as_deref(),
         Some(STILL_STOPPING)
