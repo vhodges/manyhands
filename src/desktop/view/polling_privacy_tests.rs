@@ -116,6 +116,12 @@ const DRAFTED_COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB3";
 /// strip and the item's own page (title, read view, edit editor, comments,
 /// source) and the lists, which name items by title and path. Everything
 /// else the window draws is read.
+///
+/// `item-banners` and `item-pill` are allowed too, and are out of scope for
+/// this sweep: the item's own banners and lock pill belong to D5's and D3's
+/// sweeps (`lifecycle/privacy_tests.rs`, `editing_privacy_tests.rs`), which
+/// read them with the item's text in hand. D6 puts nothing there, and this
+/// drive opens an item tab only to hold an edit session.
 const ALLOWED: [&str; 12] = [
     "tab-strip",
     "item-title",
@@ -396,10 +402,10 @@ fn files_under(dir: &Path) -> Vec<(PathBuf, String)> {
 
 #[gpui_kit::test]
 async fn polling_privacy(cx: &mut TestAppContext) {
-    // A read-only folder stops nothing for the superuser.
-    if superuser() {
-        return;
-    }
+    // A read-only folder stops nothing for the superuser, so the one step
+    // that needs unkept text (and the quit's ask about it) is skipped there;
+    // every other step runs.
+    let rooted = superuser();
     cx.executor().allow_parking();
     let fixture = Fixture::new();
     let a = fixture.create_repository("a");
@@ -646,7 +652,8 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     // Text is typed into the edited ticket after its draft folder became
     // read-only: no draft can keep it. Retire… of that ticket asks, with a
     // count, no title and no text, and offers Show tab, which shows the tab.
-    let read_only = FolderMode::set(&window.shell.fixture.data_dir().join("drafts"), 0o500);
+    let read_only =
+        (!rooted).then(|| FolderMode::set(&window.shell.fixture.data_dir().join("drafts"), 0o500));
     window.shell.type_at_end(&host, EDIT, cx);
     window.shell.run(cx);
     let typed = host.read_with(cx, |host, cx| host.text(cx));
@@ -686,14 +693,16 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     }
     seen.sweep(&window, cx);
     let sent = asked(&window, cx).len();
-    press_retire(&window, &root, EDITED, cx);
-    window.shell.run(cx);
-    assert!(window.shell.present("retire-unkept-dialog", cx), "it asks");
-    seen.sweep(&window, cx);
-    assert!(seen.read_at("unkept ask", "1"), "the ask counts the tab");
-    window.shell.press("enter", cx);
-    seen.sweep(&window, cx);
-    assert_eq!(asked(&window, cx).len(), sent, "nothing was submitted");
+    if !rooted {
+        press_retire(&window, &root, EDITED, cx);
+        window.shell.run(cx);
+        assert!(window.shell.present("retire-unkept-dialog", cx), "it asks");
+        seen.sweep(&window, cx);
+        assert!(seen.read_at("unkept ask", "1"), "the ask counts the tab");
+        window.shell.press("enter", cx);
+        seen.sweep(&window, cx);
+        assert_eq!(asked(&window, cx).len(), sent, "nothing was submitted");
+    }
 
     // Retire… of a ticket with kept drafts (its draft and a comment's):
     // the ask counts them and is Cancelled by its default.
@@ -882,12 +891,14 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     });
     assert!(!quit, "a job is running");
     window.shell.run(cx);
-    // The typed text is not kept: quitting asks first (its words are fixed),
-    // and Quit anyway goes on to wait for the job.
-    assert!(window.shell.present("edits-not-kept-dialog", cx));
-    seen.sweep(&window, cx);
-    window.shell.click("edits-not-kept-quit", cx);
-    window.shell.run(cx);
+    // The typed text is not kept (unless rooted): quitting asks first (its
+    // words are fixed), and Quit anyway goes on to wait for the job.
+    if !rooted {
+        assert!(window.shell.present("edits-not-kept-dialog", cx));
+        seen.sweep(&window, cx);
+        window.shell.click("edits-not-kept-quit", cx);
+        window.shell.run(cx);
+    }
     seen.sweep(&window, cx);
     cx.executor().advance_clock(Duration::from_secs(10));
     window.shell.run(cx);
@@ -915,6 +926,9 @@ async fn polling_privacy(cx: &mut TestAppContext) {
         "retirement entries",
         "record file",
     ] {
+        if rooted && matches!(surface, "unkept ask" | "quit ask") {
+            continue;
+        }
         assert!(seen.surfaces(surface) > 0, "{surface} was read");
     }
     seen.holds_none();
@@ -941,6 +955,9 @@ async fn polling_privacy(cx: &mut TestAppContext) {
         ("settings row", "Needs unlocking"),
         ("operation entry", "worktree_not_clean"),
     ] {
+        if rooted && matches!(surface, "unkept ask" | "quit ask") {
+            continue;
+        }
         assert!(seen.read_at(surface, words), "{surface} read {words:?}");
     }
 }

@@ -51,6 +51,36 @@ use crate::desktop::model::stamp::SettingsPage;
 
 const CLOSED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FQ0";
 
+/// How long a wait of the journey may take. The whole journey takes about
+/// 5 s; a wait stuck for this long says so, not after the harness's 180 s.
+const BOUND: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Draws frames, with the worker running, until `done` holds of the window,
+/// for at most `BOUND`.
+async fn bounded(
+    shell: &crate::desktop::view::harness::Shell,
+    cx: &mut TestAppContext,
+    what: &str,
+    done: impl Fn(&crate::desktop::view::harness::Shell, &mut TestAppContext) -> bool,
+) {
+    let deadline = std::time::Instant::now() + BOUND;
+    loop {
+        shell.frame(cx, |_, _| ());
+        shell.run(cx);
+        if done(shell, cx) {
+            shell.frame(cx, |_, _| ());
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} did not happen"
+        );
+        cx.executor()
+            .timer(std::time::Duration::from_millis(10))
+            .await;
+    }
+}
+
 /// A Check now answered `ok`, as the library would for a repository whose
 /// poll found nothing to say.
 fn checked() -> Envelope<manyhands::repository::MutationDataDto> {
@@ -102,12 +132,10 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
     // to bring an action below the fold into view for it to be on screen.
     window.shell.set_activity_height(150., cx);
     window.start(cx);
-    window
-        .shell
-        .until_drawn(cx, "the locked key's entry", |_, cx| {
-            window.entries(cx).len() == 1
-        })
-        .await;
+    bounded(&window.shell, cx, "the locked key's entry", |_, cx| {
+        window.entries(cx).len() == 1
+    })
+    .await;
     let PollingWindow {
         shell,
         backend,
@@ -130,7 +158,10 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
         Shown::Settings(SettingsPage::Polling)
     );
     walk.on(("settings-page", 4usize), Region::Content, cx);
-    walk.until_drawn(("polling-name", 1usize), cx).await;
+    bounded(&walk.shell, cx, "the page's rows", |shell, cx| {
+        shell.present(("polling-name", 1usize), cx)
+    })
+    .await;
     let rows = walk.shell.rows("polling-name", cx);
     let row = |name: &str| rows.iter().position(|shown| shown == name).unwrap();
     let (row_a, row_b) = (row("a"), row("b"));
@@ -142,7 +173,10 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
     walk.enter(cx);
     walk.keys("down", cx);
     walk.enter(cx);
-    walk.until_drawn(("polling-interval", row_a), cx).await;
+    bounded(&walk.shell, cx, "the interval", |shell, cx| {
+        shell.present(("polling-interval", row_a), cx)
+    })
+    .await;
     let configured = |walk: &Walk, cx: &mut TestAppContext| {
         user_sent(walk, cx, |intent| {
             matches!(
@@ -231,15 +265,14 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
         answer(State::Retired, ResultCode::Ok, Removal::Observed),
     );
     walk.enter(cx);
-    walk.shell
-        .until_drawn(cx, "the retirement to be sent", |shell, cx| {
-            !shell
-                .requests(cx, |request| {
-                    matches!(request.intent, Intent::ContextRetire { .. })
-                })
-                .is_empty()
-        })
-        .await;
+    bounded(&walk.shell, cx, "the retirement to be sent", |shell, cx| {
+        !shell
+            .requests(cx, |request| {
+                matches!(request.intent, Intent::ContextRetire { .. })
+            })
+            .is_empty()
+    })
+    .await;
     let retired = user_sent(&walk, cx, |intent| {
         matches!(intent, Intent::ContextRetire { .. })
     });
@@ -262,10 +295,11 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
     );
 
     // Back in Activity, Tab reaches Unlock…, and Enter sends a Check now of
-    // the key's repository, on the user lane. It is answered `ok` (the
-    // passphrase asked for, supplied), and the entry goes.
-    // The passphrase is accepted: the poll that follows no longer finds the
-    // key locked.
+    // the key's repository, on the user lane. No passphrase is asked for
+    // here: the Check now is answered `ok` by a canned answer, standing for a
+    // key that is now unlocked, and the entry goes. The double stops making
+    // polls find the key locked, so the poll that follows does not raise the
+    // entry again.
     backend.stop_asking_unlock();
     inner.answer_job(JobKind::PollOnce, checked());
     walk.keys("secondary-4", cx);
@@ -292,9 +326,8 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
         [roots[0].clone(), roots[1].clone()],
         "the newest Check now is `a`'s, the key's repository"
     );
-    walk.shell
-        .until_drawn(cx, "the entry to go", |shell, cx| {
-            !shell.present(("attention-action", 0usize), cx)
-        })
-        .await;
+    bounded(&walk.shell, cx, "the entry to go", |shell, cx| {
+        !shell.present(("attention-action", 0usize), cx)
+    })
+    .await;
 }

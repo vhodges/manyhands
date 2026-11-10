@@ -30,11 +30,21 @@
 //!   nothing else is called: not `service()`, not the key store, not the
 //!   draft store, and no job, so nothing can push, checkpoint, merge, clean
 //!   up or retire from a poll.
-//! - **B2, Part D:** `cancel_poll`, and only for a preemption or the quit.
+//! - **B2, Part D:** `cancel_poll`, and only for a preemption or the quit,
+//!   and only for an operation the desktop started.
 //! - **Scheduler reads, which contact nothing:** `polling_status` and
 //!   `resolve` again (C1, A4), `publication_remotes` (B6, U-2),
 //!   `pending_operations` (Amendment 12, R-31), `selected_key` (E3) and the
-//!   draft store's listing (E1, RT-4, RT-5).
+//!   draft store's listing (E1, RT-4, RT-5). Off the worker thread nothing
+//!   else is called, and `service()` and the key store only as often as
+//!   start-up did before any poll existed.
+//!
+//! What is enforced, and what is not: every `Backend` method is forwarded
+//! and logged, so a call through the trait is seen. A call the desktop makes
+//! on `backend.service()` directly is seen only as a `service()` access, and
+//! so is excluded off the worker thread and inside a poll window; on the
+//! worker thread, between jobs, it is not checked (a job's own library call
+//! is a `service()` access there by design).
 //! - **Jobs:** an automatic poll (`Poll`), the person's own intents (here
 //!   one Check now, `PollOnce`), and `ContextRetire` where E1 allows: one
 //!   per reported `Closed` or `Promoted` item that is not being edited and
@@ -254,6 +264,11 @@ impl Backend for Recorder {
     }
 }
 
+/// How long one wait of the day may take. The whole day takes about 26 s, so
+/// a wait that has not come true in this long is stuck, and says so then
+/// rather than after the harness's 180 s.
+const BOUND: Duration = Duration::from_secs(30);
+
 /// B4's five calls in the order an automatic poll makes them, and `after_poll`,
 /// the double's hook between the last two.
 const POLL: [Call; 6] = [
@@ -263,6 +278,19 @@ const POLL: [Call; 6] = [
     Call::PollAutomatic,
     Call::AfterPoll,
     Call::RemoteSnapshot,
+];
+
+/// What may be called from any thread but the worker's: the scheduler's
+/// reads (`resolve` and `polling_status` again, `publication_remotes`,
+/// `pending_operations`, `selected_key`, the draft listing) and the cancel.
+const OFF_THE_WORKER: [Call; 7] = [
+    Call::Resolve,
+    Call::PollingStatus,
+    Call::PublicationRemotes,
+    Call::PendingOperations,
+    Call::SelectedKey,
+    Call::Drafts,
+    Call::CancelPoll,
 ];
 
 /// The jobs the day may run: an automatic poll, the person's Check now, and
@@ -340,6 +368,10 @@ struct Day {
     recorder: Arc<Recorder>,
     services: Services,
     clock: Arc<crate::desktop::model::polling::TestClock>,
+    /// How many `service()` and `key_store()` calls the recorder had heard
+    /// when `Services::start` returned: what start-up reads off the worker
+    /// thread (I-1).
+    started: (usize, usize),
 }
 
 impl Day {
@@ -360,12 +392,17 @@ impl Day {
                 .with_clock(clock.clone(), cx)
                 .with_polling()
         });
+        let started = (
+            recorder.count(Call::Service),
+            recorder.count(Call::KeyStore),
+        );
         Self {
             fixture,
             backend,
             recorder,
             services,
             clock,
+            started,
         }
     }
 
@@ -465,7 +502,7 @@ impl Day {
         what: &str,
         done: impl Fn(&Self, &mut TestAppContext) -> bool,
     ) {
-        let deadline = std::time::Instant::now() + crate::desktop::test_support::WAIT;
+        let deadline = std::time::Instant::now() + BOUND;
         loop {
             cx.run_until_parked();
             if done(self, cx) {
@@ -589,11 +626,12 @@ async fn polling_consent(cx: &mut TestAppContext) {
         cx,
         "the launch poll, its retirements and the next poll",
         |day, cx| {
-            day.polls_of(&a) == 2 && day.retirements(cx).len() == 2 && day.retirements_ended(cx)
+            day.polls_of(&a) >= 2 && day.retirements(cx).len() >= 2 && day.retirements_ended(cx)
         },
     )
     .await;
     day.idle(&a, cx).await;
+    assert_eq!(day.polls_of(&a), 2, "the launch poll and the one after it");
     assert_eq!(day.polls_of(&plain), 0, "no remote, no poll (B6)");
     assert_eq!(day.polls_of(&b), 0, "no remote yet, no poll (B6)");
     assert_eq!(
@@ -696,7 +734,7 @@ async fn polling_consent(cx: &mut TestAppContext) {
     let services = day.services.clone();
     cx.update(|cx| services.window_activated(cx));
     day.until(cx, "the first poll", |day, _| {
-        day.backend.polled_roots().len() == before + 1
+        day.backend.polled_roots().len() > before
     })
     .await;
     let held = day.backend.polled_roots()[before].clone();
@@ -709,7 +747,7 @@ async fn polling_consent(cx: &mut TestAppContext) {
     })
     .await;
     day.until(cx, "the second poll", |day, _| {
-        day.backend.polled_roots().len() == before + 2
+        day.backend.polled_roots().len() > before + 1
     })
     .await;
     let free = day.backend.polled_roots()[before + 1].clone();
@@ -803,7 +841,56 @@ fn verify(day: &Day, a: &str, cx: &mut TestAppContext) {
             "an automatic poll called {made:?}, which is not a prefix of B4's {POLL:?}"
         );
     }
-    assert!(windows >= 6, "the day ran its polls: {windows}");
+    // Every poll the double was asked for ran in a window of its own, and
+    // each stage of B4 ran once per poll, no more (a call from anywhere
+    // else would add to the counts).
+    assert_eq!(windows, count(JobKind::Poll));
+    assert_eq!(windows, day.backend.polled_roots().len());
+    for stage in [
+        Call::PollAutomatic,
+        Call::PollEligibility,
+        Call::RemoteSnapshot,
+    ] {
+        assert_eq!(
+            day.recorder.count(stage),
+            windows,
+            "{stage:?} once per poll"
+        );
+    }
+
+    // Outside the worker thread nothing but the scheduler's reads and the
+    // cancel is called (I-1). `service()` and the key store are the
+    // library's whole surface, so none may be reached off the worker beyond
+    // what start-up did before any poll or job existed.
+    let worker = log
+        .iter()
+        .find(|(_, call)| *call == Call::Job(JobKind::Poll))
+        .map(|(thread, _)| *thread)
+        .expect("a poll ran");
+    let (mut services, mut key_stores) = (0, 0);
+    for (thread, call) in log.iter().filter(|(thread, _)| *thread != worker) {
+        match call {
+            Call::Service => services += 1,
+            Call::KeyStore => key_stores += 1,
+            other => assert!(
+                OFF_THE_WORKER.contains(other),
+                "{other:?} was called off the worker thread {thread:?}: not on the list"
+            ),
+        }
+    }
+    assert!(
+        services <= day.started.0 && key_stores <= day.started.1,
+        "service() was reached {services} times and the key store {key_stores} times off the \
+         worker; start-up made {:?}",
+        day.started
+    );
+
+    // A cancel is for an operation the desktop started (a poll that reached
+    // `poll_automatic`), never for another's row (M-1).
+    let started: Vec<OperationId> = day.backend.requests().iter().map(|(op, _)| *op).collect();
+    for cancel in day.backend.cancels() {
+        assert!(started.contains(&cancel.op), "a cancel for another's row");
+    }
 
     // ResumePolling is the person's Resume checking, which was not pressed.
     assert_eq!(day.recorder.count(Call::ResumePolling), 0);
