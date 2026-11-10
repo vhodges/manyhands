@@ -719,14 +719,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let muted = cx.theme().muted_foreground;
-        let pending: Vec<(RepoKey, ListState<manyhands::repository::OperationListDto>)> = self
-            .services()
-            .operations()
-            .read(cx)
-            .pending()
-            .iter()
-            .map(|(root, state)| (root.clone(), state.clone()))
-            .collect();
+        // The worker's own running work is not pending (R-23).
+        let pending: Vec<(RepoKey, ListState<manyhands::repository::OperationListDto>)> =
+            self.services().operations().read(cx).pending_shown();
         // The desktop's own automatic polls are finished by its in-flight
         // record, not by Resume (D6 L-1).
         let own = self

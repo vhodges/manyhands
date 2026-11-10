@@ -30,12 +30,13 @@ use crate::desktop::{
         polling::{Authority, Root},
     },
     services::{
+        inflight::RetirementEnd,
         requests::{DesktopRequestId, Intent},
         worker::WorkerEvent,
     },
 };
 use manyhands::{
-    repository::MutationDataDto,
+    repository::{MutationDataDto, OperationId, RequestId},
     results::{Envelope, Outcome, ResultCode},
 };
 
@@ -67,9 +68,28 @@ pub(crate) enum Scope {
     Keys,
 }
 
+/// What the drain heard of a retirement request (R-31, E3).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Retiring {
+    /// Its first progress event named the operation of its journal row.
+    Operation {
+        request: RequestId,
+        operation: OperationId,
+    },
+    /// It finished. The request model has sorted its answer.
+    Answered(DesktopRequestId),
+    /// It was removed from the queue or never sent: its entry ends.
+    Gone {
+        request: RequestId,
+        end: RetirementEnd,
+    },
+}
+
 /// What the drain heard that the scheduler acts on.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Heard {
+    /// A retirement request's progress, answer or end.
+    Retirement(Retiring),
     Reconfiguration(Moment, Scope),
     /// A request that only moved the stored policy of this repository
     /// finished: the policy is read again, nothing is cancelled.
@@ -149,10 +169,45 @@ fn host_of(envelope: &Envelope<manyhands::repository::MutationDataDto>) -> Optio
     }
 }
 
+/// What `event` means to the scheduler as a retirement request's, if it is
+/// one's.
+fn retiring(event: &WorkerEvent, operations: &Operations) -> Option<Retiring> {
+    let id = match event {
+        WorkerEvent::Progress(id, _)
+        | WorkerEvent::Finished(id, _)
+        | WorkerEvent::Removed(id)
+        | WorkerEvent::NotSent(id, _) => *id,
+        _ => return None,
+    };
+    let request = operations.request(id)?;
+    if !matches!(request.intent, Intent::ContextRetire { .. }) {
+        return None;
+    }
+    match event {
+        WorkerEvent::Progress(_, progress) => Some(Retiring::Operation {
+            request: request.request_id,
+            operation: OperationId::parse(progress.operation_id.as_deref()?).ok()?,
+        }),
+        WorkerEvent::Finished(..) => Some(Retiring::Answered(id)),
+        WorkerEvent::Removed(_) => Some(Retiring::Gone {
+            request: request.request_id,
+            end: RetirementEnd::Removed,
+        }),
+        WorkerEvent::NotSent(..) => Some(Retiring::Gone {
+            request: request.request_id,
+            end: RetirementEnd::NotSent,
+        }),
+        _ => None,
+    }
+}
+
 /// What `event` means to the scheduler, if anything. Called by the drain
 /// for each event before the request model applies it, so a finished
 /// request is still there to read.
 pub(crate) fn heard(event: &WorkerEvent, operations: &Operations) -> Option<Heard> {
+    if let Some(retiring) = retiring(event, operations) {
+        return Some(Heard::Retirement(retiring));
+    }
     match event {
         // A retry or a Prepare again is not a new submission.
         WorkerEvent::Queued(request) if request.attempt <= 1 => scope_of(&request.intent, false)

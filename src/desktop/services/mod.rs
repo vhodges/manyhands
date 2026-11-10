@@ -45,7 +45,7 @@ use manyhands::{
         AutomaticPollEligibility, ConflictDto, ContextPrepareIntent, Mutation, MutationDataDto,
         OperationId, PollPublicationRemoteRequest, PollingStatusDto, PrepareDataDto, ProgressStage,
         ReadError, RemoteListDto, RemotePollError, RemotePollResult, RemoteSnapshot,
-        RepositoryError, RepositoryService, ResolvedRepository,
+        RepositoryError, RepositoryService, ResolvedRepository, SharedKeyId,
         keys::{KeyStore, SessionCredentials},
     },
     results::{Envelope, Outcome, PublicationEffect, RecoveryActionKind, ResultCode},
@@ -172,6 +172,8 @@ pub(crate) enum JobKind {
     TicketSave,
     ContextPrepare,
     ContextRelease,
+    /// Retires a completed item's local copy (D6 Part E).
+    ContextRetire,
     DocumentCreate,
     TicketCreate,
     DocumentMove,
@@ -326,6 +328,16 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// the scheduler.
     fn resume_polling(&self, root: &Path) -> Result<(), RepositoryError> {
         self.service().resume_remote_polling_after_recovery(root)
+    }
+
+    /// The key registered as selected, for the attention of a retirement
+    /// that was refused a locked key when no key was recorded against it
+    /// (D6 E3). A scheduler call, off the UI thread; `None` when no key is
+    /// selected or the registry cannot be read.
+    fn selected_key(&self) -> Option<SharedKeyId> {
+        let keys = self.service().list_keys().ok()?;
+        let selected = keys.items.iter().find(|key| key.selected)?;
+        SharedKeyId::parse(&selected.id).ok()
     }
 
     /// Asks the poll `op` of `root` to stop at its next safe point.
@@ -565,6 +577,16 @@ impl Services {
                             }
                             event => event,
                         };
+                        // A retirement's answer is read from where the worker's
+                        // record of the request stood (E3); `Finished` has none.
+                        if let WorkerEvent::Finished(id, _) = &event
+                            && operations.request(*id).is_some_and(|request| {
+                                matches!(request.intent, requests::Intent::ContextRetire { .. })
+                            })
+                            && let Some(record) = resending.record_state(*id)
+                        {
+                            operations.record_stood(*id, record);
+                        }
                         // A request that reconfigures polling (R-11).
                         scheduled.extend(scheduler::heard(&event, operations));
                         let ended = match &event {

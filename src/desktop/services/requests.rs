@@ -212,6 +212,16 @@ pub(crate) enum Intent {
         kind: AuthoringKind,
         id: ItemId,
     },
+    /// Retires the completed item's local copy: its work context, branch
+    /// and worktree (D6 Part E, Fact 24). Unconfirmed; every run takes a
+    /// fresh authenticated observation, so on the background lane it never
+    /// prompts (B5) and answers a locked key as `unlock_required`. The
+    /// library decides everything about safety.
+    ContextRetire {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+    },
     /// A new document at `path`. It holds the body. No token: the ID is
     /// fixed when the draft is written; the same request is answered from
     /// its record, and a new one finds the item `already_applied`, an
@@ -378,6 +388,7 @@ impl Intent {
             | Self::TicketSave { .. }
             | Self::ContextPrepare { .. }
             | Self::ContextRelease { .. }
+            | Self::ContextRetire { .. }
             | Self::DocumentCreate { .. }
             | Self::TicketCreate { .. }
             | Self::DocumentMove { .. }
@@ -435,6 +446,7 @@ impl Intent {
             Self::TicketSave { .. } => "Save ticket",
             Self::ContextPrepare { .. } => "Prepare to edit",
             Self::ContextRelease { .. } => "Release work context",
+            Self::ContextRetire { .. } => "Retire local copy",
             Self::DocumentCreate { .. } => "Create document",
             Self::TicketCreate { .. } => "Create ticket",
             Self::DocumentMove { .. } => "Move document",
@@ -477,6 +489,7 @@ impl Intent {
             | Self::TicketSave { root, .. }
             | Self::ContextPrepare { root, .. }
             | Self::ContextRelease { root, .. }
+            | Self::ContextRetire { root, .. }
             | Self::DocumentCreate { root, .. }
             | Self::TicketCreate { root, .. }
             | Self::DocumentMove { root, .. }
@@ -527,6 +540,7 @@ impl Intent {
             | Self::TicketSave { .. }
             | Self::ContextPrepare { .. }
             | Self::ContextRelease { .. }
+            | Self::ContextRetire { .. }
             | Self::DocumentCreate { .. }
             | Self::TicketCreate { .. }
             | Self::DocumentMove { .. }
@@ -564,7 +578,7 @@ impl Intent {
     /// Whether the call's cancellation token is honoured after the library
     /// accepts the command, at a synchronization's safe points (fact 9): the
     /// comment, the two syncs, a republish (P21), `operation resume`, Check
-    /// now (`poll once`), a promotion or closure, which stops between its
+    /// now (`poll once`), a retirement (Fact 24), a promotion or closure, which stops between its
     /// steps (D5 fact 2), a local synchronization and its resolution, and a
     /// remote resolution.
     /// Every other command, the saves and the poll policy verbs among them
@@ -582,6 +596,7 @@ impl Intent {
         match self {
             Self::OperationResume { .. }
             | Self::PollOnce { .. }
+            | Self::ContextRetire { .. }
             | Self::CommentAdd { .. }
             | Self::ItemSync { .. }
             | Self::RepoSync { .. }
@@ -727,6 +742,7 @@ impl Intent {
             Self::TicketSave { .. } => JobKind::TicketSave,
             Self::ContextPrepare { .. } => JobKind::ContextPrepare,
             Self::ContextRelease { .. } => JobKind::ContextRelease,
+            Self::ContextRetire { .. } => JobKind::ContextRetire,
             Self::DocumentCreate { .. } => JobKind::DocumentCreate,
             Self::TicketCreate { .. } => JobKind::TicketCreate,
             Self::DocumentMove { .. } => JobKind::DocumentMove,
@@ -854,6 +870,10 @@ mod tests;
 #[cfg(test)]
 #[path = "requests_poll_tests.rs"]
 mod poll_tests;
+
+#[cfg(test)]
+#[path = "requests_retire_tests.rs"]
+mod retire_tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "requests_poll_worker_tests.rs"]

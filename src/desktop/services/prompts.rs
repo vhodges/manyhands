@@ -99,7 +99,7 @@ struct Declined {
     /// which are not declined.
     refused: HashMap<DesktopRequestId, HashSet<SharedKeyId>>,
     /// The last poll job begun, whose refused keys the next poll's begin
-    /// forgets: only a retirement's record is read (Task 11a), so polls
+    /// forgets: only a retirement's record is read (`refused_for`), so polls
     /// must not grow `refused` without end.
     last_poll: Option<DesktopRequestId>,
     /// The keys the person's own request's last attempt asked the provider
@@ -194,7 +194,6 @@ impl DeclinedKeys {
     /// The keys the request `id`'s last attempt, a background one, was
     /// refused a prompt for (B5): a retirement's `unlock_required` answer
     /// names none, so these are the keys its attention is held under.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
     pub(crate) fn refused_for(&self, id: DesktopRequestId) -> Vec<SharedKeyId> {
         let declined = self.lock();
         declined

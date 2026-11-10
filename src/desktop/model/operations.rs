@@ -32,6 +32,7 @@ use manyhands::{
 mod outcomes;
 mod polls;
 mod quit_wait;
+mod retire;
 mod review;
 
 pub(crate) use polls::{record_note_words, resume_offer_among};
@@ -159,6 +160,8 @@ pub(crate) struct Operations {
     /// What the in-flight record reported of itself, until dismissed
     /// (`polls`).
     record_notes: Vec<Report>,
+    /// Retirement answers and the operations running now (`retire`).
+    retirements: retire::Retirements,
 }
 
 /// What finished requests may have changed since the views last read.
@@ -242,6 +245,7 @@ impl Operations {
                 },
             ),
             WorkerEvent::Progress(id, progress) => {
+                self.progressed(id, &progress);
                 if let Some(request) = self.request_mut(id)
                     && let RequestState::Running { stage, accepted } = &mut request.state
                 {
@@ -255,6 +259,9 @@ impl Operations {
             WorkerEvent::Finished(id, envelope) => {
                 let envelope = *envelope;
                 self.stopping.remove(&id);
+                self.left_running(id);
+                // A retirement is sorted (E3) before the request is set.
+                let retirement = self.retired(id, &envelope);
                 match review::conflict_of(&envelope) {
                     Some(review) => self.reviews.insert(id, review),
                     None => self.reviews.remove(&id),
@@ -309,7 +316,12 @@ impl Operations {
                 let root = self.request(id).and_then(|request| {
                     let root = request.intent.root()?.to_str()?.to_owned();
                     let removed = removed && matches!(request.intent, Intent::RepoRemove { .. });
-                    Some((root, request.intent.changes_items(), removed))
+                    // A retirement changes the items of its repository only
+                    // when it removed something (A20).
+                    let items = retirement
+                        .as_ref()
+                        .map_or(request.intent.changes_items(), |answer| answer.changed);
+                    Some((root, items, removed))
                 });
                 self.set(
                     id,
@@ -321,6 +333,12 @@ impl Operations {
                         envelope.message,
                     ),
                 );
+                // Attention or the next attempt covers an answer of the
+                // table's attention and retry rows, and a retirement that
+                // retired: it is neither shown nor counted (R-23).
+                if retirement.is_some_and(|answer| answer.verdict.dismissed()) {
+                    self.dismiss(id);
+                }
                 if let Some((root, items, removed)) = root {
                     if removed {
                         self.changed.removed.insert(root.clone());
@@ -332,10 +350,12 @@ impl Operations {
             }
             WorkerEvent::Removed(id) => {
                 self.stopping.remove(&id);
+                self.left_running(id);
                 self.set(id, RequestState::Removed);
             }
             WorkerEvent::NotSent(id, why) => {
                 self.stopping.remove(&id);
+                self.left_running(id);
                 self.set(id, RequestState::NotSent(why));
             }
             // The Hosts page reads it. An observation pins nothing, so no
@@ -674,11 +694,13 @@ pub(crate) enum Progressing {
     Post,
     /// Check now (`poll once`, D6 Fact 14).
     Check,
+    /// A retirement (`context retire`, D6 Part E).
+    Retire,
 }
 
 impl Progressing {
-    /// A share (`item sync`, `repo sync`), a post (`comment add`) or a
-    /// Check now (`poll once`). The poll policy verbs have none: each is
+    /// A share (`item sync`, `repo sync`), a post (`comment add`), a
+    /// Check now (`poll once`) or a retirement (`context retire`). The poll policy verbs have none: each is
     /// one write that reports `writing` and nothing else (Fact 2), so its
     /// entry reads like any other local command.
     pub(crate) fn of(intent: &Intent) -> Option<Self> {
@@ -686,6 +708,7 @@ impl Progressing {
             Intent::ItemSync { .. } | Intent::RepoSync { .. } => Some(Self::Share),
             Intent::CommentAdd { .. } => Some(Self::Post),
             Intent::PollOnce { .. } => Some(Self::Check),
+            Intent::ContextRetire { .. } => Some(Self::Retire),
             // The policy verbs: no stage words (Fact 2).
             Intent::PollConfigure { .. } | Intent::PollPause { .. } | Intent::PollResume { .. } => {
                 None
@@ -721,11 +744,15 @@ pub(crate) fn stage_text(
             ProgressStage::Accepted | ProgressStage::Observing,
             Progressing::Share | Progressing::Check,
         ) => "Getting ready…",
+        (ProgressStage::Accepted | ProgressStage::Observing, Progressing::Retire) => {
+            "Checking it is safe to remove…"
+        }
         (ProgressStage::Accepted | ProgressStage::Observing, Progressing::Post) => {
             "Getting a private copy ready…"
         }
         (ProgressStage::Writing, Progressing::Share | Progressing::Check) => return None,
         (ProgressStage::Writing, Progressing::Post) => "Saving…",
+        (ProgressStage::Writing, Progressing::Retire) => "Removing the local copy…",
         (ProgressStage::Connecting, _) => {
             return Some(match remote {
                 Some(remote) => format!("Connecting to {remote}…"),
@@ -762,6 +789,7 @@ pub(crate) fn progress_words(
         Progressing::Share => "Sharing",
         Progressing::Post => "Posting",
         Progressing::Check => "Checking",
+        Progressing::Retire => "Retiring",
     };
     let words = stage
         .and_then(|stage| stage_text(kind, stage, remote, None))

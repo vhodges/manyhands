@@ -208,8 +208,8 @@ pub(super) fn background_job_cancels_nothing() {
 
 /// P-6: a background job that is running when a user job arrives is not
 /// cancelled, and neither is anything else (decision 20). A background
-/// `IndexRefresh` stands for the retirement, `Intent::ContextRetire` coming
-/// with Task 11a: both are background jobs the admission step ignores.
+/// `IndexRefresh` stands for the retirement: both are background jobs the
+/// admission step ignores, which looks only at the lane.
 pub(super) fn running_background_job_is_left_alone() {
     let mut h = Harness::new();
     let held = h.backend.inner().hold_job(JobKind::IndexRefresh);

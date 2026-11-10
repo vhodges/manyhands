@@ -41,13 +41,15 @@ impl WorkerHandle {
             });
         }
         ask_poll_cancel(shared, state, CancelCause::Quit);
-        // TODO(Task 11a): a running background `ContextRetire` is left to
-        // finish (decision 28, R-38): its token is not cancelled here, or
-        // the item would be left pending and hold the repository's polls at
-        // the next launch (Fact 32). Every other job's token is.
+        // A running background `ContextRetire` is left to finish (decision
+        // 28, R-38): its token is not cancelled here, or the item would be
+        // left pending and hold the repository's polls at the next launch
+        // (Fact 32). Every other job's token is.
         match &state.running {
             Some(running) => {
-                if let Some(cancel) = &running.cancel {
+                if !running.retirement
+                    && let Some(cancel) = &running.cancel
+                {
                     cancel.cancel();
                 }
                 QuitState::Finishing(running.id)

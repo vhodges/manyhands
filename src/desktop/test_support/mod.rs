@@ -31,6 +31,9 @@ pub(crate) mod fixtures;
 // The recording double of the automatic poll's calls (D6 Task 3).
 #[cfg(test)]
 pub(crate) mod polling;
+// Canned `context retire` answers (D6 Task 11a).
+#[cfg(test)]
+pub(crate) mod retire;
 // Real local conflicts, for the conflict model's and reads' tests.
 #[cfg(test)]
 pub(crate) mod local_conflict;

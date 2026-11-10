@@ -152,7 +152,7 @@ pub(super) fn rows() -> Vec<(&'static str, usize, PollSchedule)> {
             ],
         ),
         // What waits for itself, or is the person's own choice, is not
-        // counted. No Retire... offer is listed yet (Task 11a).
+        // counted. A Retire... offer is no term (Task 12).
         (
             "paused, off and not due answers",
             0,

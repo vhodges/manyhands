@@ -279,6 +279,10 @@ struct Running {
     stops_at_safe_points: bool,
     /// The poll this is, and whether a stop was asked of it (P-1, P-2).
     poll: Option<PollRun>,
+    /// Whether it is a background `ContextRetire`, which a graceful quit
+    /// waits for and does not cancel: stopped part-way, the item would be
+    /// left pending (decision 28, R-38).
+    retirement: bool,
 }
 
 /// A running automatic poll, and the stop asked of it. The flag is the
@@ -848,7 +852,6 @@ impl WorkerHandle {
     /// The keys the background job `id`'s last attempt was refused a prompt
     /// for (B5): not declined, and what a retirement's `unlock_required`
     /// answer, which names no key, is held under.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
     pub(crate) fn refused_keys(
         &self,
         id: DesktopRequestId,
@@ -950,7 +953,7 @@ fn submit(
 
 /// The request in flight that `intent`, under `request_id`, would only
 /// duplicate: a resume of the same operation of the same repository, or a
-/// close or merge under the same library request ID. Queued, waiting out
+/// close, merge or retirement under the same library request ID. Queued, waiting out
 /// `busy`, or running; a finished one is no twin.
 fn in_flight_twin(
     state: &State,
@@ -968,7 +971,10 @@ fn in_flight_twin(
         (
             Intent::TicketClose { .. } | Intent::DocumentPromote { .. },
             Intent::TicketClose { .. } | Intent::DocumentPromote { .. },
-        ) => submitted.request_id == request_id,
+        )
+        | (Intent::ContextRetire { .. }, Intent::ContextRetire { .. }) => {
+            submitted.request_id == request_id
+        }
         _ => false,
     };
     // One Stop was pressed on is ending: a call sent after the Stop is a
@@ -1365,12 +1371,19 @@ fn take(shared: &Shared) -> Option<Job> {
                 }),
                 _ => None,
             };
+            let retirement = job.lane == Lane::Background
+                && matches!(
+                    &job.work,
+                    Work::Execute { intent, .. } | Work::GiveUp { intent, .. }
+                        if matches!(**intent, Intent::ContextRetire { .. })
+                );
             state.running = Some(Running {
                 id: job.id,
                 cancel,
                 accepted: false,
                 stops_at_safe_points,
                 poll,
+                retirement,
             });
             return Some(job);
         }
@@ -1445,3 +1458,7 @@ impl ProgressSink for Forward<'_> {
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "worker_retire_tests.rs"]
+mod retire_tests;

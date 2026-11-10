@@ -20,9 +20,13 @@ mod entity;
 mod react;
 mod reconfigure;
 mod registration;
+mod retire;
 
 use gpui_kit::App;
-use manyhands::repository::OperationId;
+use manyhands::{
+    canonical::ItemId,
+    repository::{OperationId, RequestId},
+};
 use time::OffsetDateTime;
 
 pub(crate) use entity::Scheduler;
@@ -32,11 +36,11 @@ pub(crate) use reconfigure::{Heard, Moment, Scope};
 
 use super::{
     Services,
-    inflight::{ActiveRow, InflightStore},
+    inflight::{ActiveRow, InflightStore, RetirementEntry},
     requests::DesktopRequestId,
 };
 use crate::desktop::model::polling::{
-    AttemptSummary, Now, Phase, PollAttempt, PollSchedule, Reason, Root,
+    AttemptSummary, Now, Phase, PollAttempt, PollSchedule, Reason, Root, TargetKind,
 };
 use crate::desktop::model::stamp::RepoKey;
 
@@ -94,6 +98,30 @@ pub(crate) fn start(
         schedule.abandon(root);
     }
     sent
+}
+
+/// Sends a retirement of `item` of `root` under `request`: writes the
+/// in-flight record's entry, and only then calls `submit` (R-31: written
+/// before the request is submitted). An entry already held for the request,
+/// a Resume resend's original, is kept with the operation it learned. The
+/// entry ends with the request: a queue that quitting closed answers the
+/// request `Removed`.
+pub(crate) fn begin_retirement(
+    store: &mut InflightStore,
+    request: RequestId,
+    root: &Root,
+    kind: TargetKind,
+    item: &ItemId,
+    submit: impl FnOnce() -> DesktopRequestId,
+) -> DesktopRequestId {
+    let held = store
+        .retirements()
+        .iter()
+        .any(|entry| entry.request() == Some(request));
+    if !held {
+        store.retirement_submitting(RetirementEntry::new(request, root, kind, item));
+    }
+    submit()
 }
 
 /// Why a repository's stale row is not taken over yet (L-2). The words are
@@ -246,3 +274,7 @@ mod attention_answer_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "scheduler_quit_tests.rs"]
 mod quit_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "scheduler_retire_tests.rs"]
+mod retire_tests;

@@ -14,8 +14,8 @@
 //!   operation ID from the request's first progress event. Written before
 //!   the request is submitted, and removed only when the worker's record of
 //!   the request is `Finished` (Fact 36), or on `Removed` or `NotSent`. An
-//!   `Accepted` request, one Owed, keeps its entry. Task 11a wires the
-//!   retirement intent to these; the rules live here.
+//!   `Accepted` request, one Owed, keeps its entry. The scheduler wires the
+//!   retirement intent to these (`scheduler::retire`); the rules live here.
 //!
 //! The record is `<data>/inflight/record.json`, replaced atomically (a
 //! temporary file, then a rename). A record that cannot be read is renamed
@@ -82,7 +82,6 @@ pub(crate) struct RetirementEntry {
     operation: Option<String>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
 impl RetirementEntry {
     /// A retirement of `item` of `root` about to be submitted under
     /// `request`.
@@ -103,10 +102,12 @@ impl RetirementEntry {
         RequestId::parse(&self.request).ok()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12 (Resume).
     pub(crate) fn root(&self) -> &Root {
         &self.root
     }
 
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12 (Resume).
     pub(crate) fn item(&self) -> Option<(TargetKind, ItemId)> {
         let kind = match self.kind {
             Kind::Ticket => TargetKind::Ticket,
@@ -117,6 +118,7 @@ impl RetirementEntry {
 
     /// The operation of the request's journal row, once a progress event
     /// named it.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12 (Resume).
     pub(crate) fn operation(&self) -> Option<OperationId> {
         OperationId::parse(self.operation.as_deref()?).ok()
     }
@@ -143,7 +145,6 @@ pub(crate) enum ActiveRow {
 
 /// How a retirement request ended, for the rule that removes its entry.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
 pub(crate) enum RetirementEnd {
     /// The worker's record of the request is finished: its answer is stored.
     Finished,
@@ -157,7 +158,6 @@ pub(crate) enum RetirementEnd {
     Unknown,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
 impl From<RecordState> for RetirementEnd {
     fn from(state: RecordState) -> Self {
         match state {
@@ -441,7 +441,6 @@ impl InflightStore {
     }
 
     /// A retirement is about to be submitted: its entry is written first.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
     pub(crate) fn retirement_submitting(&mut self, entry: RetirementEntry) {
         self.record
             .retirements
@@ -452,7 +451,6 @@ impl InflightStore {
 
     /// The request's first progress event named `op`. Only the first is
     /// kept: a request sent again names the same row.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
     pub(crate) fn retirement_operation(&mut self, request: RequestId, op: OperationId) {
         let request = request.to_string();
         let Some(entry) = self
@@ -472,7 +470,6 @@ impl InflightStore {
     /// The request ended as `end` says. Only a finished record, a request
     /// removed from the queue and one never sent end its entry; an Owed
     /// (accepted) request keeps it, since Resume needs the item.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
     pub(crate) fn retirement_ended(&mut self, request: RequestId, end: RetirementEnd) {
         if !matches!(
             end,
@@ -492,7 +489,6 @@ impl InflightStore {
 
     /// The retirements this instance sent, or its predecessor left, that have
     /// not ended.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11a.
     pub(crate) fn retirements(&self) -> &[RetirementEntry] {
         &self.record.retirements
     }

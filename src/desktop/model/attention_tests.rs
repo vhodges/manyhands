@@ -18,6 +18,8 @@ use manyhands::{
 use super::needs_attention;
 #[path = "attention_polling_tests.rs"]
 mod polling_rows;
+#[path = "attention_retire_tests.rs"]
+mod retire_rows;
 use crate::desktop::{
     model::{
         operations::Operations,
@@ -298,9 +300,18 @@ async fn counts_what_awaits_the_person(cx: &mut TestAppContext) {
         // and a key locked for two repositories + a configuration.
         expected: 1 + 2 + 2 + 1 + 2,
     });
-    // R-23's rules (a request and a pending row of one operation count
-    // once; the worker's running operation is never listed as pending) are
-    // Task 11a's. Their rows go in here with them.
+    // R-23's rules: a request and a pending row of one operation count
+    // once, however many requests share it; the worker's running operation,
+    // a retirement's or an automatic poll's, is never listed as pending.
+    for (what, expected, operations) in retire_rows::rows() {
+        cases.push(Case {
+            what,
+            operations,
+            drafts: healthy.clone(),
+            polling: PollSchedule::default(),
+            expected,
+        });
+    }
 
     for case in cases {
         let counted = case.drafts.read_with(cx, |registry, _| {

@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use gpui_kit::TestAppContext;
-use manyhands::repository::RemotePollError;
+use manyhands::repository::{AuthoringKind, RemotePollError};
 
 use super::{
     QuitPhase,
@@ -172,12 +172,11 @@ async fn quit_polling_still_stopping(cx: &mut TestAppContext) {
     drop(gate);
 }
 
-/// Decision 28, R-38, at the worker: a quit waits for a background job as
-/// for any job, says it is still stopping at the injected wait, and quits
-/// when the job returns. The job is a background `IndexRefresh`, the one
-/// background job there is: `ContextRetire` arrives with Task 11a, and what
-/// is left for it is that quit leaves its token alone (TODO in
-/// `WorkerHandle::quit`).
+/// Decision 28, R-38, through the window: a quit waits for a running
+/// background `ContextRetire` as for any job, leaves its token alone, says
+/// it is still stopping at the injected wait, and quits when the job
+/// returns. (That another background job's token is still cancelled is
+/// `worker::retire_tests::quit_spares_a_retirement_token`.)
 #[gpui_kit::test]
 async fn quit_lets_retirement_finish(cx: &mut TestAppContext) {
     let rig = Rig::new(&["a"], cx);
@@ -185,10 +184,12 @@ async fn quit_lets_retirement_finish(cx: &mut TestAppContext) {
     rig.shell.operations(cx).update(cx, |operations, _| {
         operations.set_still_stopping_after(wait)
     });
-    let held = rig.shell.backend.hold_job(JobKind::IndexRefresh);
+    let held = rig.shell.backend.hold_job(JobKind::ContextRetire);
     let job = rig.worker().submit(
-        Intent::IndexRefresh {
+        Intent::ContextRetire {
             root: rig.roots[0].clone().into(),
+            kind: AuthoringKind::Ticket,
+            id: "01ARZ3NDEKTSV4RRFFQ69G5FG0".parse().unwrap(),
         },
         Lane::Background,
         None,
@@ -198,6 +199,8 @@ async fn quit_lets_retirement_finish(cx: &mut TestAppContext) {
 
     assert!(!rig.request_quit(cx));
     assert_eq!(rig.phase(cx), QuitPhase::Finishing(job));
+    let running = rig.worker().running_job().expect("the retirement runs");
+    assert!(!running.cancelled, "its token is left alone");
     cx.executor().advance_clock(wait - A_MOMENT);
     rig.shell.run(cx);
     assert_ne!(rig.text(cx).as_deref(), Some(STILL_STOPPING));

@@ -3,6 +3,8 @@
 //!
 //! It reads the existing models and changes none of them.
 
+use std::collections::HashSet;
+
 use manyhands::results::Outcome;
 
 use crate::desktop::{
@@ -24,31 +26,53 @@ use crate::desktop::{
 ///   a host or a repository that holds checking back, however many
 ///   repositories it holds back. Paused, off, unreachable and waiting
 ///   repositories are not listed.
+///
+/// Three rules keep one thing from counting twice (R-23, W-1): requests and
+/// pending rows are grouped by operation ID, so a request and the pending
+/// row of its operation are one, and so are several requests of one
+/// operation; a request whose answer became attention or a retry was
+/// dismissed when it was answered (`Operations::apply`); and the worker's
+/// running operation is not a pending row (`Operations::is_running`).
 pub(crate) fn needs_attention(
     operations: &Operations,
     drafts: &DraftRegistry,
     polling: &PollSchedule,
 ) -> usize {
-    let requests = operations
-        .requests()
-        .iter()
-        .filter(|request| {
-            matches!(
-                request.state,
-                RequestState::Finished(Outcome::Partial | Outcome::Blocked | Outcome::Error, ..)
-            )
-        })
-        .count();
-    let pending: usize = operations
-        .pending()
-        .values()
-        .map(|list| match list {
-            ListState::Ready { rows, .. } => rows.items.len(),
-            ListState::Failed(_) => 1,
-            ListState::Loading | ListState::Busy => 0,
-        })
-        .sum();
-    requests
+    // The operations the counted requests are about, once each; a request
+    // whose answer names none counts alone.
+    let mut about: HashSet<String> = HashSet::new();
+    let mut alone = 0;
+    for request in operations.requests().iter().filter(|request| {
+        matches!(
+            request.state,
+            RequestState::Finished(Outcome::Partial | Outcome::Blocked | Outcome::Error, ..)
+        )
+    }) {
+        match operations.operation_of(request) {
+            Some(operation) => {
+                about.insert(operation);
+            }
+            None => alone += 1,
+        }
+    }
+    let mut pending = 0;
+    for list in operations.pending().values() {
+        match list {
+            ListState::Ready { rows, .. } => {
+                for row in rows.items.iter().filter(|row| !operations.is_running(row)) {
+                    pending += 1;
+                    // The row is the request's operation, shown: one thing.
+                    if let Some(operation) = &row.operation_id {
+                        about.remove(operation);
+                    }
+                }
+            }
+            ListState::Failed(_) => pending += 1,
+            ListState::Loading | ListState::Busy => {}
+        }
+    }
+    alone
+        + about.len()
         + drafts.flush_failures().len()
         + usize::from(drafts.unavailable().is_some())
         + pending

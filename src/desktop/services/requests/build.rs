@@ -2,8 +2,8 @@
 
 use manyhands::repository::{
     CommentAddInput, CommitIdentity, ConflictResolutionInput, ConflictResolveInput,
-    ContextPrepareInput, ContextReleaseInput, DocumentCreateInput, DocumentDraft,
-    DocumentMoveInput, DocumentPromoteInput, DocumentRepairInput, DocumentSaveInput,
+    ContextPrepareInput, ContextReleaseInput, ContextRetireInput, DocumentCreateInput,
+    DocumentDraft, DocumentMoveInput, DocumentPromoteInput, DocumentRepairInput, DocumentSaveInput,
     FolderCreateInput, HostApproveInput, HostReplaceInput, IndexRebuildInput, IndexRefreshInput,
     ItemRepublishInput, ItemSyncInput, KeyClearInput, KeyDeleteInput, KeyGenerateInput,
     KeyImportInput, KeyRemoveInput, KeySelectInput, LocalConflictResolutionInput,
@@ -243,6 +243,11 @@ impl Intent {
                     id: id.clone(),
                 })
             }
+            Self::ContextRetire { root, kind, id } => Mutation::ContextRetire(ContextRetireInput {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+            }),
             Self::DocumentCreate {
                 root,
                 id,

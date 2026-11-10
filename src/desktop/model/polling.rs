@@ -15,6 +15,7 @@ mod attempt;
 pub(crate) mod attention;
 mod clock;
 pub(crate) mod entry;
+pub(crate) mod retire;
 mod state;
 pub(crate) mod status;
 mod table;
@@ -30,7 +31,7 @@ pub(crate) use clock::TestClock;
 pub(crate) use clock::{Clock, Now};
 // The tests use `TestClock`, so only the production clock is unused there.
 pub(crate) use clock::SystemClock;
-use manyhands::repository::OperationId;
+use manyhands::{canonical::ItemId, repository::OperationId};
 use state::PREEMPTIONS_BEFORE_INTERVAL;
 pub(crate) use state::{Phase, Policy, Reason, RepoSchedule, Why};
 use time::OffsetDateTime;
@@ -59,6 +60,8 @@ pub(crate) enum ClockEvent {
 #[derive(Debug, Default)]
 pub(crate) struct PollSchedule {
     repos: BTreeMap<Root, RepoSchedule>,
+    /// The items the loop skips for the session (R-21).
+    refused: retire::RefusedSet,
 }
 
 /// Registration and reads.
@@ -343,6 +346,40 @@ impl PollSchedule {
             }
             _ => false,
         }
+    }
+
+    /// A retirement's answer needs the person (E3): the repository waits
+    /// for `reason` like a poll's answer would make it (A4), replacing any
+    /// entry it had, and the retirement loop, if one runs, ends (RT-8). A
+    /// poll in flight is left to its own answer, which meets the same wall.
+    /// Returns whether it was set.
+    pub fn raise(&mut self, root: &Root, reason: Reason) -> bool {
+        match self.repos.get_mut(root) {
+            Some(repo) if !repo.in_flight() => {
+                repo.rearm();
+                repo.phase = Phase::Attention(reason);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Records the answer to a retirement of `item`: a refusal the table
+    /// does not retry joins the session's refused set (R-21).
+    pub fn retirement_answered(&mut self, root: &Root, item: &ItemId, verdict: &retire::Verdict) {
+        self.refused.answered(root, item, verdict);
+    }
+
+    /// Whether the loop skips the item (R-21).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
+    pub fn retirement_refused(&self, root: &Root, item: &ItemId) -> bool {
+        self.refused.contains(root, item)
+    }
+
+    /// Retire… was chosen for the item: it leaves the refused set (A19).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
+    pub fn retire_chosen(&mut self, root: &Root, item: &ItemId) {
+        self.refused.forget(root, item);
     }
 
     pub fn end_retiring(&mut self, root: &Root) {

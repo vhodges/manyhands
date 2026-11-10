@@ -233,10 +233,15 @@ fn every_intent(root: &Path) -> Vec<Intent> {
             interval_seconds: 600,
         },
         Intent::PollPause { root: root.clone() },
-        Intent::PollResume { root },
+        Intent::PollResume { root: root.clone() },
+        Intent::ContextRetire {
+            root,
+            kind: AuthoringKind::Ticket,
+            id: ITEM.parse().unwrap(),
+        },
     ];
     let listed: HashSet<usize> = intents.iter().map(variant).collect();
-    assert_eq!(listed.len(), 42, "one intent of every variant");
+    assert_eq!(listed.len(), 43, "one intent of every variant");
     intents
 }
 
@@ -284,6 +289,7 @@ fn variant(intent: &Intent) -> usize {
         Intent::PollConfigure { .. } => 39,
         Intent::PollPause { .. } => 40,
         Intent::PollResume { .. } => 41,
+        Intent::ContextRetire { .. } => 42,
     }
 }
 
@@ -415,8 +421,8 @@ fn changes_items_names_the_intents_that_can_change_items() {
             // OperationResume, OperationAbandon, DocumentSave, TicketSave,
             // the eight Part C commands, the comment and the two syncs, the
             // two lifecycles, the resolutions and local synchronization, and
-            // the republish, and Check now (`PollOnce`).
-            0 | 1 | 7 | 8 | 17..=38 => true,
+            // the republish, Check now (`PollOnce`) and the retirement.
+            0 | 1 | 7 | 8 | 17..=38 | 42 => true,
             // RepoRemove closes the tabs instead; the rest change
             // settings, keys, hosts or polling policy, never an item.
             2..=6 | 9..=16 | 39..=41 => false,
@@ -501,8 +507,9 @@ fn syncs_comments_and_resume_stop_at_safe_points_and_saves_do_not() {
         let expected = match variant(&intent) {
             // OperationResume, CommentAdd, ItemSync, RepoSync,
             // DocumentPromote, TicketClose, ConflictResolve,
-            // LocalContextSync, LocalContextResolve, ItemRepublish, PollOnce.
-            17 | 29..=38 => true,
+            // LocalContextSync, LocalContextResolve, ItemRepublish, PollOnce,
+            // ContextRetire.
+            17 | 29..=38 | 42 => true,
             // Every local command, the saves among them, and the three
             // poll policy verbs.
             0..=16 | 18..=28 | 39..=41 => false,

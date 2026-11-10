@@ -22,10 +22,13 @@
 //!   as the transport would, with a public `UnlockRequest`, and answer the
 //!   library's locked-key failure when the session refuses. Nothing else
 //!   reaches the provider without SSH.
-//! - `ask_in_check_now` makes a Check now, the user lane's `poll once`, ask a
-//!   provider for a passphrase before its library call, as the transport
-//!   would: the worker's own provider, sharing its declined keys, so a
-//!   prompt reaches the UI and a declined key is answered at once.
+//! - `ask_in_check_now` makes a Check now, the user lane's `poll once`, and
+//!   a retirement, `context retire`, ask a provider for a passphrase before
+//!   its library call, as the transport would: the worker's own provider,
+//!   sharing its declined keys, so a prompt reaches the UI, a declined key
+//!   is answered at once, and a background job is refused (B5).
+//! - `select_key` sets the key `selected_key` answers, the registry's
+//!   selection a retirement's key attention falls back to (E3).
 //! - `resume_polling` records each Resume checking and then makes the
 //!   library's own call.
 
@@ -127,6 +130,8 @@ pub(crate) struct PollingBackend {
     asked: Mutex<Vec<Asked>>,
     /// The root of every `resume_polling` made, in order.
     resumes: Mutex<Vec<String>>,
+    /// The key `selected_key` answers.
+    selected: Mutex<Option<SharedKeyId>>,
 }
 
 /// What a Check now's passphrase request was answered.
@@ -156,6 +161,7 @@ impl PollingBackend {
             check_asks: Mutex::default(),
             asked: Mutex::default(),
             resumes: Mutex::default(),
+            selected: Mutex::default(),
         }
     }
 
@@ -244,6 +250,11 @@ impl PollingBackend {
     /// before its library call, as the transport does for a protected key.
     pub(crate) fn ask_in_check_now(&self, provider: DesktopProvider, request: UnlockRequest) {
         *self.check_asks.lock().unwrap() = Some((provider, request));
+    }
+
+    /// Sets the key `selected_key` answers (E3).
+    pub(crate) fn select_key(&self, key: Option<SharedKeyId>) {
+        *self.selected.lock().unwrap() = key;
     }
 
     /// What each of those requests was answered, in order.
@@ -343,7 +354,7 @@ impl Backend for PollingBackend {
     }
 
     fn before_job(&self, kind: JobKind) {
-        if kind == JobKind::PollOnce {
+        if matches!(kind, JobKind::PollOnce | JobKind::ContextRetire) {
             let mut asks = self.check_asks.lock().unwrap();
             if let Some((provider, request)) = asks.as_mut() {
                 let answer = match provider.request_passphrase(request) {
@@ -446,6 +457,10 @@ impl Backend for PollingBackend {
 
     fn after_poll(&self, _operation: OperationId) -> Option<Library> {
         self.canned.lock().unwrap().pop_front()
+    }
+
+    fn selected_key(&self) -> Option<SharedKeyId> {
+        *self.selected.lock().unwrap()
     }
 
     fn resume_polling(&self, root: &Path) -> Result<(), RepositoryError> {

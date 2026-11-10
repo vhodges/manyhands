@@ -445,6 +445,7 @@ impl Scheduler {
         }
         for heard in heard {
             match heard {
+                Heard::Retirement(retiring) => self.retiring(retiring, cx),
                 Heard::Reconfiguration(Moment::Submitted, scope) => {
                     let reached = self.reached(&scope);
                     self.drop_queued_retirements(&reached);
@@ -491,10 +492,23 @@ impl Scheduler {
                 .iter()
                 .filter_map(|root| self.schedule.restart_of(root)),
         );
+        // The polls queued or running now: their rows are in progress, not
+        // pending (R-23).
+        let running: HashSet<OperationId> = self
+            .known
+            .iter()
+            .filter(|root| {
+                self.schedule
+                    .repo(root)
+                    .is_some_and(|repo| repo.in_flight())
+            })
+            .filter_map(|root| self.store.poll_entry(root))
+            .collect();
         // The record's own problem is heard once, wherever it arose (R-31).
         let report = self.store.take_report();
         let _ = self.operations.update(cx, |operations, cx| {
             let mut changed = operations.set_automatic_polls(own);
+            changed |= operations.set_running_polls(running);
             if let Some(report) = report {
                 changed |= operations.note_record(report);
             }
