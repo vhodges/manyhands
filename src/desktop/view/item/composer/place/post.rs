@@ -182,7 +182,7 @@ impl ItemPane {
         if !self.edits_wait(cx) {
             return false;
         }
-        let words = self.refused_words();
+        let words = self.refused_words(cx);
         if let Some((_, slot)) = self.composers.find(composer) {
             slot.composer
                 .clone()

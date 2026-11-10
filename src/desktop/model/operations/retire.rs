@@ -135,7 +135,6 @@ impl Operations {
     /// Whether a mark or an in-flight entry holds the item "Retiring…". The
     /// worker's own queued or running retirement is asked of the worker
     /// (`Services::retiring`).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from the "Retiring…" lock.
     pub(crate) fn is_retiring(&self, root: &str, kind: ItemDtoKind, id: &str) -> bool {
         let held = |key: &RetiringKey| key.0 == root && key.1 == kind && key.2 == id;
         self.retirements.marks.values().any(held) || self.retirements.entries.iter().any(held)

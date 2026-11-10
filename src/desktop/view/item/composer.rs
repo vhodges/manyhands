@@ -144,6 +144,10 @@ pub(crate) struct Composer {
     /// The Link control's address field, while it is open.
     link: Option<LinkField>,
     state: ComposerState,
+    /// The item's local copy is being retired (D6 decision 19): no new
+    /// text, and so no new comment draft. Apart from `state`, which is the
+    /// owner's account of a post.
+    locked: bool,
     /// What the composer says of a refused Submit (P10), until the state
     /// changes.
     refused: Option<&'static str>,
@@ -196,6 +200,7 @@ impl Composer {
             controls: [(); COUNT].map(|_| cx.focus_handle()),
             link: None,
             state: ComposerState::Idle,
+            locked: false,
             refused: None,
             cursor,
             pressed: false,
@@ -244,9 +249,20 @@ impl Composer {
         }
     }
 
-    /// Whether the text cannot be edited: while posting, or failed.
+    /// Whether the text cannot be edited: while posting, or failed, or
+    /// while the item's local copy is being retired.
     pub(crate) fn is_read_only(&self) -> bool {
-        !self.state.is_idle()
+        !self.state.is_idle() || self.locked
+    }
+
+    /// The item's local copy is being retired, or no longer is: the text
+    /// is read-only meanwhile, put back as it was if anything lands. The
+    /// owner says so on every frame, so the state follows the lock.
+    pub(crate) fn set_locked(&mut self, locked: bool, cx: &mut Context<Self>) {
+        if locked != self.locked {
+            self.locked = locked;
+            cx.notify();
+        }
     }
 
     /// Sets where the composer stands. A read-only state closes the link

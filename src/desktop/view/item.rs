@@ -98,7 +98,11 @@ pub(crate) use edit::{CloseThisTab, InitialsInSettings, Leaving, SaveFirst};
 pub(crate) use header::{LIFECYCLE_ACTION, LIFECYCLE_NOTE, NO_ID, NOT_CREATED};
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use lock::OpenedFolders;
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use lock::RETIRING;
+#[cfg(test)]
 pub(crate) use lock::lock_words;
+pub(crate) use lock::locked_text;
 pub(crate) use lock::{CHECK_AGAIN, open_folder};
 pub(crate) use repair::FollowItem;
 pub(crate) use sheet::open_details;
@@ -601,6 +605,10 @@ mod page_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "item/discussion_tests.rs"]
 mod discussion_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/retiring_tests.rs"]
+mod retiring_tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "item/images_tests.rs"]

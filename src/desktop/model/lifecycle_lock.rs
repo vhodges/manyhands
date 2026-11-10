@@ -2,7 +2,8 @@
 //! R-21 to R-23): while a close or a merge of an item is unfinished, every
 //! tab of it is read-only, with "Closing…" or "Merging…".
 //!
-//! Three sources lock an item:
+//! Three sources lock an item (and a fourth, a retirement of its local copy,
+//! comes from the services, since the lifecycle's rows know nothing of it):
 //!
 //! - **Dialog.** A lifecycle dialog for it is open in any phase before its
 //!   run is sent, until the dialog is dropped (R-21).
@@ -59,6 +60,11 @@ pub(crate) enum LockSource {
     Dialog,
     Worker,
     Record,
+    /// The item's local copy is being retired, or its retirement is pending
+    /// (D6 decision 19): "Retiring…". It is not the lifecycle's: it comes
+    /// from `Services::lock`, which asks the request model, the worker and
+    /// the in-flight record.
+    Retiring,
 }
 
 /// A tidy-up refused after the merge for a change the person can undo

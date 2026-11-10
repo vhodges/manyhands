@@ -129,3 +129,43 @@ fn quit_spares_a_retirement_token() {
         held.release();
     }
 }
+
+/// R-11, RT-10: queued requests that ask for what the pick picks are
+/// removed, each announced `Removed`; the one running is never signalled,
+/// or its item would be left pending (decision 28); and what the pick does
+/// not pick stays.
+#[test]
+fn cancel_queued_never_signals_a_running_one() {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let backend = fixture.delaying_backend();
+    let (worker, mut events) = WorkerHandle::spawn(backend.clone());
+
+    let running = backend.hold_job(JobKind::ContextRetire);
+    let first = worker.submit(retire(&root), Lane::Background, None, None);
+    running.wait_reached();
+    let queued = worker.submit(retire(&root), Lane::User, None, None);
+    let refresh = worker.submit(
+        Intent::IndexRefresh { root: root.clone() },
+        Lane::Background,
+        None,
+        None,
+    );
+    let removed = worker.cancel_queued(|intent| matches!(intent, Intent::ContextRetire { .. }));
+    assert_eq!(removed, 1, "only the queued retirement");
+    let mut gone = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let WorkerEvent::Removed(id) = event {
+            gone.push(id);
+        }
+    }
+    assert_eq!(gone, [queued], "announced removed");
+    let job = worker.running_job().expect("the running one");
+    assert_eq!(job.id, first);
+    assert!(!job.cancelled, "never signalled");
+    assert!(
+        worker.in_flight(|intent| matches!(intent, Intent::IndexRefresh { .. })),
+        "the refresh {refresh:?} stays"
+    );
+    running.release();
+}

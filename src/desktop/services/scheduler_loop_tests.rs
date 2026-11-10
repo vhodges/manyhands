@@ -17,7 +17,7 @@ use manyhands::{
 };
 
 use super::{
-    reconfigure::{Heard, Moment, Scope},
+    reconfigure::{Heard, Moment, Retiring, Scope},
     support::World,
 };
 use crate::desktop::{
@@ -546,6 +546,46 @@ async fn retire_loop_exits(cx: &mut TestAppContext) {
         assert!(consistent(&world, cx));
     }
 
+    // RT-10: a reconfiguration submitted removes the item queued behind a
+    // held refresh, and ends its loop.
+    {
+        let (world, root) = idle(cx).await;
+        let refresh = world.backend.inner().hold_job(JobKind::IndexRefresh);
+        let mut pending = checked(&world, &root, &[0, 1]);
+        if let Heard::CheckedNow(_, Some(attempt)) = &mut pending {
+            attempt.index_pending = true;
+        }
+        world.heard(vec![pending], cx);
+        World::settle(cx, "the item to be queued", |cx| {
+            retire_requests(&world, cx)
+                .iter()
+                .any(|(_, _, queued)| *queued)
+        })
+        .await;
+        world.heard(
+            vec![Heard::Reconfiguration(Moment::Submitted, own(&root))],
+            cx,
+        );
+        refresh.release();
+        World::quiet(cx).await;
+        let states = world.services.operations().read_with(cx, |operations, _| {
+            operations
+                .requests()
+                .iter()
+                .filter(|request| matches!(request.intent, Intent::ContextRetire { .. }))
+                .map(|request| matches!(request.state, RequestState::Removed))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(states, [true], "the queued item was removed");
+        assert_eq!(world.phase(&root, cx), Some(Phase::Idle));
+        assert!(consistent(&world, cx));
+        let entries = world
+            .services
+            .scheduler()
+            .read_with(cx, |scheduler, _| scheduler.store().retirements().len());
+        assert_eq!(entries, 0, "its entry ended with it");
+    }
+
     // The person pressed Stop on the running item: the loop stops, though a
     // cancelled retirement is a retry code (RT-7) otherwise.
     {
@@ -846,4 +886,60 @@ fn check_now_is_heard_with_its_attempt() {
             (seen, _) => panic!("{what}: heard {seen:?}"),
         }
     }
+}
+
+/// Decision 19, R-31: a retirement the last launch left pending is still
+/// "Retiring…" after a relaunch, from the in-flight record, and is not once
+/// the record lets it go; the loop skips it (RT-1) while it is.
+#[gpui_kit::test]
+async fn a_pending_retirement_survives_a_relaunch(cx: &mut TestAppContext) {
+    use crate::desktop::services::inflight::{
+        Acquired, InflightStore, RetirementEnd, RetirementEntry,
+    };
+    let world = World::new(true, cx);
+    let root = world.ssh_repo("a");
+    // The previous launch: an entry it kept, and gone.
+    let request = manyhands::repository::RequestId::new();
+    {
+        let mut previous = InflightStore::open(world.fixture.data_dir());
+        assert_eq!(previous.try_acquire(), Acquired::Now);
+        previous.retirement_submitting(RetirementEntry::new(
+            request,
+            &root,
+            TargetKind::Ticket,
+            &IDS[0].parse().unwrap(),
+        ));
+        previous.retirement_ended(request, RetirementEnd::Accepted);
+    }
+    for _ in 0..2 {
+        world
+            .backend
+            .inner()
+            .answer_job(JobKind::ContextRetire, retired());
+    }
+    world
+        .backend
+        .answer_poll(world.report(PollCompletion::Completed, closed(&[0, 1]), false));
+    world.list(std::slice::from_ref(&root), cx);
+    finished(&world, &root, cx).await;
+    assert_eq!(
+        sent(&world, cx),
+        [1],
+        "RT-1: the pending one is not sent again"
+    );
+    assert!(retiring(&world, &root, 0, cx), "held by the record");
+    assert!(!retiring(&world, &root, 1, cx));
+
+    // The record lets it go (Abandon, or Resume finishing it).
+    world.services.scheduler().update(cx, |scheduler, cx| {
+        scheduler.heard(
+            vec![Heard::Retirement(Retiring::Gone {
+                id: crate::desktop::services::requests::DesktopRequestId(9_999),
+                request,
+                end: RetirementEnd::Removed,
+            })],
+            cx,
+        )
+    });
+    assert!(!retiring(&world, &root, 0, cx), "and then it is not");
 }

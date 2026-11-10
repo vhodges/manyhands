@@ -39,7 +39,7 @@ use crate::desktop::{
         entry::{EntryLine, LineAction, attempt_entry},
     },
     services::requests::{Intent, Lane},
-    view::{item::lock_words, workspace::Workspace},
+    view::{item::locked_text, workspace::Workspace},
 };
 
 impl Workspace {
@@ -117,14 +117,19 @@ impl Workspace {
         // While the item's close or merge is unfinished, Share… waits, as
         // the item header's Share does (D5 A2, R-23): no control, and the
         // lock's words say why.
-        let lock = self.services().lifecycle_lock(root, &id.to_string(), cx);
+        let dto = match kind {
+            TargetKind::Ticket => ItemDtoKind::Ticket,
+            TargetKind::Document => ItemDtoKind::Document,
+        };
+        let lock = self.services().lock(root, dto, &id.to_string(), cx);
         if lock.blocks() {
-            let kind = match kind {
-                TargetKind::Ticket => ItemDtoKind::Ticket,
-                TargetKind::Document => ItemDtoKind::Document,
-            };
-            return unavailable(element, LineAction::Share.label(), lock_words(kind), cx)
-                .into_any_element();
+            return unavailable(
+                element,
+                LineAction::Share.label(),
+                locked_text(lock, dto),
+                cx,
+            )
+            .into_any_element();
         }
         if self.sharing(&intent) {
             return text(element, "Sharing\u{2026}")

@@ -309,6 +309,7 @@ impl ItemPane {
             editor.update(cx, |editor, cx| editor.focus(window, cx));
         }
         let remote = self.has_remote();
+        let retiring = self.retiring(cx);
         let registry = self.services.drafts().read(cx);
         let states: Vec<(Entity<Composer>, Option<RecoveryState>)> = self
             .composers
@@ -326,6 +327,7 @@ impl ItemPane {
             composer.update(cx, |composer, cx| {
                 composer.set_remote(remote, cx);
                 composer.set_recovery(state, cx);
+                composer.set_locked(retiring, cx);
             });
         }
         self.reset_discarded(window, cx);

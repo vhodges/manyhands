@@ -178,8 +178,8 @@ impl ItemPane {
         // A run of the item, or its record, says so first (D5 A2); its
         // dialog, open in front of the tab, says so itself.
         let progress = self
-            .run_locks(cx)
-            .then(|| self.refused_words().to_owned())
+            .shows_lock_progress(cx)
+            .then(|| self.refused_words(cx).to_owned())
             .or_else(|| self.share_progress(cx));
         let pill = item.map(|item| {
             // A running share or post of the item says its stage.

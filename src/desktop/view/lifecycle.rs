@@ -592,6 +592,10 @@ mod lock_tests;
 mod lock_restart_tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/retiring_tests.rs"]
+mod retiring_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/after_tests.rs"]
 mod after_tests;
 

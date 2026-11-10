@@ -52,7 +52,7 @@ use manyhands::{
 };
 
 use crate::desktop::model::{
-    lifecycle_lock::{LockKey, LockState},
+    lifecycle_lock::{self as model_lock, LockKey, LockState},
     list_state::ListState,
     operations::Operations,
     polling as model_polling,
@@ -874,6 +874,48 @@ impl Services {
         operations.locks().state(&key, in_flight, loading)
     }
 
+    /// Whether the local copy of the item `id` of `kind` in `root` is being
+    /// retired (D6 decision 19, E1): a retirement of it is queued or
+    /// running in the worker, of any lane, a mark holds it for the loop or a
+    /// Retire… not yet handed over, or the in-flight record holds one that
+    /// is pending, after a relaunch too. Keyed by all three, and counted per
+    /// request: one ending clears nothing of another's.
+    pub(crate) fn retiring(
+        &self,
+        root: &str,
+        kind: manyhands::repository::ItemDtoKind,
+        id: &str,
+        cx: &App,
+    ) -> bool {
+        self.operations.read(cx).is_retiring(root, kind, id)
+            || self.worker.in_flight(|intent| {
+                matches!(
+                    intent,
+                    requests::Intent::ContextRetire { root: asked, kind: asked_kind, id: asked_id }
+                        if asked.to_str() == Some(root)
+                            && retire_kind(*asked_kind) == kind
+                            && asked_id.to_string() == id
+                )
+            })
+    }
+
+    /// Where the item `id` of `kind` in `root` stands under every lock: the
+    /// lifecycle's (`lifecycle_lock`), then "Retiring…" (D6 decision 19). A
+    /// lifecycle that holds the item says so first.
+    pub(crate) fn lock(
+        &self,
+        root: &str,
+        kind: manyhands::repository::ItemDtoKind,
+        id: &str,
+        cx: &App,
+    ) -> LockState {
+        let state = self.lifecycle_lock(root, id, cx);
+        if matches!(state, LockState::Locked(_)) || !self.retiring(root, kind, id, cx) {
+            return state;
+        }
+        LockState::Locked(model_lock::LockSource::Retiring)
+    }
+
     /// Whether a republish of the item `id` of `root` is queued or running.
     pub(crate) fn republish_running(
         &self,
@@ -937,6 +979,16 @@ impl Services {
 
     pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
+    }
+}
+
+/// The kind of item a retirement names, as the tabs know it.
+fn retire_kind(kind: manyhands::repository::AuthoringKind) -> manyhands::repository::ItemDtoKind {
+    match kind {
+        manyhands::repository::AuthoringKind::Ticket => manyhands::repository::ItemDtoKind::Ticket,
+        manyhands::repository::AuthoringKind::Document => {
+            manyhands::repository::ItemDtoKind::Document
+        }
     }
 }
 
