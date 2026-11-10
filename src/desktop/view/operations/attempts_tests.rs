@@ -5,19 +5,22 @@
 //! click at the default window and by Tab. The attempts reach the schedule
 //! as the scheduler hands them (`PollSchedule::after`).
 
-use gpui_kit::{TestAppContext, px, size};
+use gpui_kit::{TestAppContext, px, size, test::TestWindowExt};
 use manyhands::{
     canonical::ItemId,
-    repository::{AuthoringKind, OperationId, PollDisposition},
+    repository::{AuthoringKind, ItemDtoKind, OperationId, PollDisposition},
 };
 
 use crate::desktop::{
-    model::polling::{
-        Answer, AttemptTarget, Clock, Disposition, PollAttempt, TargetKind,
-        entry::{SHARE, UNPUBLISHED},
+    model::{
+        lifecycle_lock::LockKey,
+        polling::{
+            Answer, AttemptTarget, Clock, Disposition, PollAttempt, TargetKind,
+            entry::{SHARE, UNPUBLISHED},
+        },
     },
     services::{JobKind, requests::Intent},
-    view::settings::polling_support::Rig,
+    view::{item::lock_words, settings::polling_support::Rig},
 };
 
 const TABS: usize = 60;
@@ -57,8 +60,14 @@ fn attempt(
     ids
 }
 
+/// The element `part` of repository `ix`'s entry: its ids are keyed by the
+/// repository, not by its place among the entries (R-23).
+fn id(rig: &Rig, ix: usize, part: &str) -> String {
+    format!("attempt-{}-{part}", rig.key(ix))
+}
+
 fn line(rig: &Rig, n: usize, i: usize, cx: &mut TestAppContext) -> Option<String> {
-    rig.shell.label(format!("attempt-{n}-line-{i}"), cx)
+    rig.shell.label(id(rig, n, &format!("line-{i}")), cx)
 }
 
 #[gpui_kit::test]
@@ -68,14 +77,14 @@ async fn dispositions_listed(cx: &mut TestAppContext) {
     rig.schedule(0, cx);
     rig.schedule(1, cx);
     assert!(
-        !rig.shell.present("attempt-0-repository", cx),
+        !rig.shell.present(id(&rig, 0, "repository"), cx),
         "no attempt, no entry"
     );
 
     // A quiet attempt shows no entry.
     attempt(&rig, 0, &[Current, LocalAhead], cx);
     assert!(
-        !rig.shell.present("attempt-0-repository", cx),
+        !rig.shell.present(id(&rig, 0, "repository"), cx),
         "quiet: no entry"
     );
 
@@ -96,9 +105,9 @@ async fn dispositions_listed(cx: &mut TestAppContext) {
         NotReached,
     ];
     attempt(&rig, 0, &left_alone, cx);
-    assert!(rig.shell.present("attempt-0-repository", cx));
+    assert!(rig.shell.present(id(&rig, 0, "repository"), cx));
     assert!(
-        !rig.shell.present("attempt-1-repository", cx),
+        !rig.shell.present(id(&rig, 1, "repository"), cx),
         "one entry per repository"
     );
     let expected = [
@@ -117,14 +126,14 @@ async fn dispositions_listed(cx: &mut TestAppContext) {
     ];
     for (i, words) in expected.into_iter().enumerate() {
         assert_eq!(line(&rig, 0, i, cx).as_deref(), Some(words), "line {i}");
-        let action = rig.shell.label(format!("attempt-0-action-{i}"), cx);
+        let action = rig.shell.label(id(&rig, 0, &format!("action-{i}")), cx);
         match i {
             10 => assert_eq!(action.as_deref(), Some(SHARE)),
             _ => assert_eq!(action, None, "line {i} offers nothing"),
         }
     }
-    assert!(!rig.shell.present("attempt-0-line-12", cx));
-    assert_eq!(rig.shell.label("attempt-0-brought-in", cx), None);
+    assert!(!rig.shell.present(id(&rig, 0, "line-12"), cx));
+    assert_eq!(rig.shell.label(id(&rig, 0, "brought-in"), cx), None);
 
     // A disposition is only text: nothing was sent.
     assert!(rig.sent(cx, |_| true).is_empty(), "no request, no mutation");
@@ -132,24 +141,24 @@ async fn dispositions_listed(cx: &mut TestAppContext) {
     // The next attempt replaces the entry; a quiet one removes it.
     attempt(&rig, 0, &[Dirty, FastForwarded], cx);
     assert_eq!(
-        rig.shell.label("attempt-0-brought-in", cx).as_deref(),
+        rig.shell.label(id(&rig, 0, "brought-in"), cx).as_deref(),
         Some("Brought in 1 change")
     );
     assert_eq!(
         line(&rig, 0, 0, cx).as_deref(),
         Some(PollDisposition::Dirty.guidance())
     );
-    assert!(!rig.shell.present("attempt-0-line-1", cx), "replaced");
+    assert!(!rig.shell.present(id(&rig, 0, "line-1"), cx), "replaced");
     attempt(&rig, 0, &[Current], cx);
     assert!(
-        !rig.shell.present("attempt-0-repository", cx),
+        !rig.shell.present(id(&rig, 0, "repository"), cx),
         "quiet again: no entry"
     );
 
     // Another repository's entry is its own.
     attempt(&rig, 1, &[Malformed], cx);
     assert_eq!(
-        line(&rig, 0, 0, cx).as_deref(),
+        line(&rig, 1, 0, cx).as_deref(),
         Some(PollDisposition::Malformed.guidance())
     );
     assert!(rig.sent(cx, |_| true).is_empty(), "still no mutation");
@@ -187,24 +196,98 @@ async fn attempt_entry_actions_hit(cx: &mut TestAppContext) {
     };
     assert!(shares(&rig, cx).is_empty());
     assert_eq!(
-        rig.shell.label("attempt-0-action-30", cx).as_deref(),
+        rig.shell.label(id(&rig, 0, "action-30"), cx).as_deref(),
         Some(SHARE)
     );
 
     let held = rig.shell.backend.hold_job(JobKind::SynchronizeItem);
-    assert!(rig.shell.tab_reaches("attempt-0-action-30", TABS, cx));
-    rig.shell.click("attempt-0-action-30", cx);
+    assert!(rig.shell.tab_reaches(id(&rig, 0, "action-30"), TABS, cx));
+    rig.shell.click(id(&rig, 0, "action-30"), cx);
     assert_eq!(shares(&rig, cx), [ids[30].clone()]);
     held.wait_reached();
     rig.shell.run(cx);
     assert_eq!(
-        rig.shell.label("attempt-0-action-30", cx).as_deref(),
+        rig.shell.label(id(&rig, 0, "action-30"), cx).as_deref(),
         Some("Sharing\u{2026}"),
         "no second press while it runs"
     );
 
-    assert!(rig.shell.tab_reaches("attempt-0-action-31", TABS, cx));
+    assert!(rig.shell.tab_reaches(id(&rig, 0, "action-31"), TABS, cx));
     rig.shell.press("enter", cx);
     assert_eq!(shares(&rig, cx), [ids[30].clone(), ids[31].clone()]);
     held.release();
+}
+
+/// The lock on `ix`'s item `id`, as an open close dialog holds it, or not.
+fn lock(rig: &Rig, ix: usize, id: &ItemId, held: bool, cx: &mut TestAppContext) {
+    let holder = rig.shell.workspace.entity_id();
+    let locked = LockKey::new(&rig.key(ix), &id.to_string());
+    rig.shell.operations(cx).update(cx, |operations, cx| {
+        operations.locks_mut().set_dialog(holder, locked, held);
+        cx.notify();
+    });
+    rig.shell.run(cx);
+}
+
+/// D5 A2, R-23: Share… waits while the item's close or merge is
+/// unfinished, as the item header's Share does: a stale `Unpublished`
+/// line offers no live Share… over a locked item, pressing what is shown
+/// sends nothing, and it comes back when the lock clears.
+#[gpui_kit::test]
+async fn attempt_entry_share_waits_for_the_lock(cx: &mut TestAppContext) {
+    use Disposition::*;
+    let rig = Rig::new(&[("a", true)], cx);
+    rig.schedule(0, cx);
+    let ids = attempt(&rig, 0, &[Unpublished], cx);
+    let action = id(&rig, 0, "action-0");
+    assert_eq!(rig.shell.label(action.clone(), cx).as_deref(), Some(SHARE));
+
+    lock(&rig, 0, &ids[0], true, cx);
+    let shown = rig.shell.label(action.clone(), cx).expect("it says why");
+    assert!(
+        shown.starts_with(SHARE) && shown.contains(lock_words(ItemDtoKind::Ticket)),
+        "{shown}"
+    );
+    assert!(
+        !rig.shell.tab_reaches(action.clone(), 20, cx),
+        "not focusable"
+    );
+    rig.shell.click(action.clone(), cx);
+    assert!(rig.sent(cx, |_| true).is_empty(), "nothing is sent");
+
+    lock(&rig, 0, &ids[0], false, cx);
+    assert_eq!(rig.shell.label(action.clone(), cx).as_deref(), Some(SHARE));
+    rig.shell.click(action, cx);
+    assert_eq!(rig.sent(cx, |_| true).len(), 1);
+}
+
+/// R-23: an entry's ids are keyed by its repository, so a focused Share…
+/// stays where it is, and on its own item, when an earlier repository's
+/// entry disappears.
+#[gpui_kit::test]
+async fn attempt_entry_ids_follow_the_repository(cx: &mut TestAppContext) {
+    use Disposition::*;
+    let rig = Rig::new(&[("a", true), ("b", true)], cx);
+    rig.schedule(0, cx);
+    rig.schedule(1, cx);
+    attempt(&rig, 0, &[Unpublished], cx);
+    let theirs = attempt(&rig, 1, &[Unpublished], cx);
+    let action = id(&rig, 1, "action-0");
+    assert!(rig.shell.tab_reaches(action.clone(), TABS, cx));
+
+    // The first repository's entry goes: the second keeps its id, its focus
+    // and its item.
+    attempt(&rig, 0, &[Current], cx);
+    assert!(!rig.shell.present(id(&rig, 0, "repository"), cx));
+    assert_eq!(rig.shell.label(action.clone(), cx).as_deref(), Some(SHARE));
+    let focused = rig.shell.frame(cx, |window, _| {
+        window
+            .try_find(action.clone())
+            .and_then(|element| element.focused())
+    });
+    assert_eq!(focused, Some(true), "focus stays on it");
+    rig.shell.press("enter", cx);
+    let sent = rig.sent(cx, |_| true);
+    assert_eq!(sent.len(), 1);
+    assert!(matches!(&sent[0].intent, Intent::ItemSync { id, .. } if *id == theirs[0]));
 }

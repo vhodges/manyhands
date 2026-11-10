@@ -117,3 +117,27 @@ fn a_quiet_attempt_has_no_entry() {
     let entry = attempt_entry(&summary).expect("an entry");
     assert_eq!(entry.lines[0].action, None);
 }
+
+/// `Closed` and `Promoted` are Part E's (Retire…): the entry lists neither,
+/// from a completed attempt (where they go to `retire`) or an interrupted
+/// one (where they wait in `listed`). Part E adds their lines. Tasks 11a and
+/// 11b must not source Retire… from `last` alone: a failed or interrupted
+/// attempt replaces it, and its listing with it.
+#[test]
+fn closed_and_promoted_are_left_to_part_e() {
+    use Disposition::*;
+    for answer in [Answer::Completed, Answer::Interrupted] {
+        for disposition in [Closed, Promoted] {
+            let summary = attempt(answer.clone(), &[disposition]);
+            assert_eq!(
+                attempt_entry(&summary),
+                None,
+                "{disposition:?} in {answer:?}"
+            );
+            // And they hide nothing else.
+            let summary = attempt(answer.clone(), &[disposition, Disposition::Dirty]);
+            let entry = attempt_entry(&summary).expect("the dirty one is listed");
+            assert_eq!(entry.lines.len(), 1, "{disposition:?} in {answer:?}");
+        }
+    }
+}

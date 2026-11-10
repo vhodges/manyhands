@@ -9,6 +9,10 @@
 //! area at the default window, and carries a scroll marker so Tab brings it
 //! into view (W-6, E-2).
 //!
+//! The ids of an entry's parts are keyed by its repository, not its place,
+//! so a focused action stays on its own item when an earlier entry comes or
+//! goes.
+//!
 //! The entry is where the retirement summary (Task 11a), and the failure
 //! of an attempt (Task 12) join: `attempt_entry` in the model decides what
 //! is worth showing, and each adds its rows after the listed ones.
@@ -23,16 +27,19 @@ use gpui_kit::{
     component::{ActiveTheme, h_flex, v_flex},
     div,
 };
-use manyhands::{canonical::ItemId, repository::AuthoringKind};
+use manyhands::{
+    canonical::ItemId,
+    repository::{AuthoringKind, ItemDtoKind},
+};
 
-use super::{button, scope_name, text};
+use super::{button, scope_name, text, unavailable};
 use crate::desktop::{
     model::polling::{
         Root, TargetKind,
         entry::{EntryLine, LineAction, attempt_entry},
     },
     services::requests::{Intent, Lane},
-    view::workspace::Workspace,
+    view::{item::lock_words, workspace::Workspace},
 };
 
 impl Workspace {
@@ -49,20 +56,20 @@ impl Workspace {
             .collect();
         let muted = cx.theme().muted_foreground;
         let mut shown = Vec::with_capacity(entries.len());
-        for (n, (root, entry)) in entries.into_iter().enumerate() {
-            let mut rows = v_flex().id(format!("attempt-{n}")).gap_1().child(text(
-                format!("attempt-{n}-repository"),
+        for (root, entry) in entries {
+            let mut rows = v_flex().id(format!("attempt-{root}")).gap_1().child(text(
+                format!("attempt-{root}-repository"),
                 scope_name(Some(Path::new(&root))),
             ));
             if let Some(brought_in) = entry.brought_in {
                 rows = rows.child(
-                    text(format!("attempt-{n}-brought-in"), brought_in)
+                    text(format!("attempt-{root}-brought-in"), brought_in)
                         .text_xs()
                         .text_color(muted),
                 );
             }
             for (i, line) in entry.lines.iter().enumerate() {
-                rows = rows.child(self.attempt_line(n, i, &root, line, cx));
+                rows = rows.child(self.attempt_line(i, &root, line, cx));
             }
             shown.push(rows.into_any_element());
         }
@@ -73,7 +80,6 @@ impl Workspace {
     /// wraps.
     fn attempt_line(
         &mut self,
-        n: usize,
         i: usize,
         root: &Root,
         line: &EntryLine,
@@ -83,16 +89,16 @@ impl Workspace {
         let mut row = h_flex().gap_2().flex_wrap().items_center();
         if let Some(id) = &line.item_id {
             row = row.child(
-                text(format!("attempt-{n}-item-{i}"), id.to_string())
+                text(format!("attempt-{root}-item-{i}"), id.to_string())
                     .text_xs()
                     .text_color(muted),
             );
         }
-        row = row.child(text(format!("attempt-{n}-line-{i}"), line.text));
+        row = row.child(text(format!("attempt-{root}-line-{i}"), line.text));
         if let (Some(LineAction::Share), Some(id), Some(kind)) =
             (line.action, line.item_id.clone(), line.kind)
         {
-            row = row.child(self.share_action(n, i, root, kind, id, cx));
+            row = row.child(self.share_action(i, root, kind, id, cx));
         }
         row.into_any_element()
     }
@@ -100,7 +106,6 @@ impl Workspace {
     /// Share…, or "Sharing…" while a share of the item is queued or running.
     fn share_action(
         &mut self,
-        n: usize,
         i: usize,
         root: &Root,
         kind: TargetKind,
@@ -108,7 +113,19 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let intent = share_of(root, kind, &id);
-        let element = format!("attempt-{n}-action-{i}");
+        let element = format!("attempt-{root}-action-{i}");
+        // While the item's close or merge is unfinished, Share… waits, as
+        // the item header's Share does (D5 A2, R-23): no control, and the
+        // lock's words say why.
+        let lock = self.services().lifecycle_lock(root, &id.to_string(), cx);
+        if lock.blocks() {
+            let kind = match kind {
+                TargetKind::Ticket => ItemDtoKind::Ticket,
+                TargetKind::Document => ItemDtoKind::Document,
+            };
+            return unavailable(element, LineAction::Share.label(), lock_words(kind), cx)
+                .into_any_element();
+        }
         if self.sharing(&intent) {
             return text(element, "Sharing\u{2026}")
                 .text_xs()
