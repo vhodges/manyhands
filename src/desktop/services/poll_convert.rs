@@ -24,8 +24,9 @@ use manyhands::{
         AuthoringKind, OperationId, PollCompletion, PollDisposition, PollIneligibility,
         RemoteOutcomeCategory, RemotePollError, RemotePollOutcome, RemotePollReport,
         RemotePollResult, RepositoryErrorKind, SharedKeyId,
-        transport::{SshAuthority, SshTransportErrorKind},
+        transport::{HostKeyIdentity, SshAuthority, SshTransportErrorKind},
     },
+    results::ResultCode,
 };
 use time::OffsetDateTime;
 
@@ -164,6 +165,59 @@ pub(crate) fn poll_attempt(
     cancel: impl FnOnce() -> CancelCause,
 ) -> PollAttempt {
     attempt_of(root, operation, classify(result), cancel)
+}
+
+/// A Check now's failure, read as the poll's own would be (C3, A4): the
+/// request's answer carries a code, and `host_data`'s host for a host
+/// answer, but not `e.kind`, so each code stands for the one kind that
+/// gives it and `transport_failure` sorts it, with the key the attempt asked
+/// for. Only the codes one A4 row owns are read. `recovery_required`
+/// (`HostVerificationUnavailable`, but also a pending operation, a conflict
+/// or an interruption) and `internal_error` (`ProtocolFailure`,
+/// `RuntimeUninitialized`, but also anything else) say too little: they, and
+/// every code that is not a transport failure, give `None`.
+pub(crate) fn check_now_failure(
+    root: &Root,
+    code: ResultCode,
+    key: Option<SharedKeyId>,
+    authority: Option<SshAuthority>,
+) -> Option<PollAttempt> {
+    use SshTransportErrorKind as Kind;
+    // The host's identity is not read: only that it is a host answer.
+    let unknown = || HostKeyIdentity {
+        algorithm: String::new(),
+        sha256: String::new(),
+    };
+    let kind = match code {
+        ResultCode::UnlockRequired => Kind::UnlockCancelled,
+        ResultCode::UnlockFailed => Kind::UnlockFailed,
+        ResultCode::NoSelectedKey => Kind::NoSelectedKey,
+        ResultCode::KeyUnavailable => Kind::KeyMissing,
+        ResultCode::KeyRejected => Kind::KeyRejected,
+        ResultCode::HostApprovalRequired => Kind::HostApprovalRequired {
+            presented: unknown(),
+        },
+        ResultCode::HostReplacementRequired => Kind::HostReplacementRequired {
+            expected: unknown(),
+            presented: unknown(),
+        },
+        ResultCode::InvalidRemote => Kind::ConfigurationInvalid,
+        ResultCode::PublicationRemoteRequired => Kind::PublicationRemoteMissing,
+        ResultCode::ExternalChange => Kind::SelectionChanged,
+        ResultCode::TransportUnavailable => Kind::TransportUnavailable,
+        ResultCode::RemoteUnavailable => Kind::RemoteUnavailable,
+        ResultCode::PushRejected => Kind::PushRejected,
+        ResultCode::IndexUnavailable => Kind::RegistryUnavailable,
+        _ => return None,
+    };
+    let library = Library::Transport {
+        kind,
+        key,
+        authority,
+    };
+    Some(attempt_of(root, OperationId::new(), library, || {
+        CancelCause::Preemption
+    }))
 }
 
 /// A repository failure before the poll reserved anything (a read that

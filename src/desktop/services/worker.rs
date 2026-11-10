@@ -498,6 +498,15 @@ impl WorkerHandle {
         submit(self.shared(), intent, lane, None, None, request_id)
     }
 
+    /// The keys the request `id`'s last attempt asked the provider for,
+    /// answered or not: a Check now's failure names no key (C3).
+    pub(crate) fn asked_keys(
+        &self,
+        id: DesktopRequestId,
+    ) -> Vec<manyhands::repository::SharedKeyId> {
+        self.shared().declined.asked_for(id)
+    }
+
     /// Queues the request `id` again, under its own request ID, so the
     /// library answers a finished one from its record. A request that is
     /// queued or running, or that this worker never took, is left alone,

@@ -346,6 +346,7 @@ impl Scheduler {
 
     fn forget_schedule(&mut self, root: &Root) {
         self.schedule.remove(root);
+        self.check_after.remove(root);
         self.authorities.remove(root);
         if let Some(op) = self.store.poll_entry(root) {
             self.store.poll_withdrawn(root, op);
@@ -362,6 +363,7 @@ impl Scheduler {
             return;
         }
         let now = self.clock.now();
+        self.prune_arms();
         self.watch_clock(&now, cx);
         if !self.worker.in_flight(|_| true) {
             self.schedule.user_lane_empty(&now);
@@ -447,9 +449,17 @@ impl Scheduler {
                     let reached = self.reached(&scope);
                     self.drop_queued_retirements(&reached);
                 }
-                Heard::Reconfiguration(Moment::Finished, scope) => self.reconfigured(scope, cx),
+                Heard::Reconfiguration(moment @ (Moment::Finished | Moment::Succeeded), scope) => {
+                    self.reconfigured(scope, moment == Moment::Succeeded, cx)
+                }
                 Heard::PolicyMoved(root) => self.read_registrations(vec![root], cx),
                 Heard::CheckedNow(root) => self.checked(&root, cx),
+                Heard::CheckFailed {
+                    root,
+                    request,
+                    code,
+                    authority,
+                } => self.check_failed(&root, request, code, authority, cx),
             }
         }
         self.answers.extend(self.inbox.take());

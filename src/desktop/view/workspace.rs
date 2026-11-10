@@ -105,6 +105,9 @@ pub(crate) struct Workspace {
     choice_focus: HashMap<&'static str, FocusHandle>,
     _find_events: Subscription,
     content: ContentArea,
+    /// The operation area's scroll: a control in it that takes focus is
+    /// brought into view (E-2), sharing the focus the content region saw.
+    operations_scroll: super::scroll::ContentScroll,
     _settings_events: Subscription,
     _drafts_events: Subscription,
     /// Fallback when the control holding focus is no longer drawn.
@@ -216,6 +219,7 @@ impl Workspace {
             }
         });
         let tabs = TabContent::default();
+        let operations_scroll = tabs.scroll().region();
         let settings = {
             let services = services.clone();
             let scroll = tabs.scroll().clone();
@@ -261,6 +265,7 @@ impl Workspace {
                 .map(|id| (id, cx.focus_handle()))
                 .collect(),
             _find_events: find_events,
+            operations_scroll,
             content: ContentArea {
                 tabs,
                 settings,
@@ -308,6 +313,9 @@ impl Workspace {
 
     pub(crate) fn services(&self) -> &Services {
         &self.services
+    }
+    pub(in crate::desktop::view) fn operations_scroll(&self) -> &super::scroll::ContentScroll {
+        &self.operations_scroll
     }
     pub(crate) fn navigation(&self) -> &Navigation {
         &self.navigation

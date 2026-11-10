@@ -29,9 +29,15 @@ use crate::desktop::{
         operations::Operations,
         polling::{Authority, Root},
     },
-    services::{requests::Intent, worker::WorkerEvent},
+    services::{
+        requests::{DesktopRequestId, Intent},
+        worker::WorkerEvent,
+    },
 };
-use manyhands::results::{Outcome, ResultCode};
+use manyhands::{
+    repository::MutationDataDto,
+    results::{Envelope, Outcome, ResultCode},
+};
 
 /// When the request was heard.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -42,6 +48,10 @@ pub(crate) enum Moment {
     /// Answered: their polls are cancelled, their attention cleared and
     /// their policies and remotes read again.
     Finished,
+    /// Answered, and the change went through: all that `Finished` does,
+    /// and the Check now the person was sent to make the change for is sent
+    /// (C3).
+    Succeeded,
 }
 
 /// What a reconfiguring request reaches.
@@ -68,6 +78,15 @@ pub(crate) enum Heard {
     /// the attention of its repository however the cause was fixed (C3),
     /// and proves the key it used unlocked.
     CheckedNow(Root),
+    /// A Check now finished with a failure: the request's answer, read as a
+    /// poll's would be (C3, A4). The request names the keys its attempt
+    /// asked for.
+    CheckFailed {
+        root: Root,
+        request: DesktopRequestId,
+        code: ResultCode,
+        authority: Option<Authority>,
+    },
 }
 
 fn root_of(intent: &Intent) -> Option<Root> {
@@ -119,6 +138,17 @@ fn policy_of(intent: &Intent) -> Option<Root> {
     }
 }
 
+/// The host a host answer names, from the data it carries.
+fn host_of(envelope: &Envelope<manyhands::repository::MutationDataDto>) -> Option<Authority> {
+    match &envelope.data {
+        Some(MutationDataDto::Synchronization(data)) => Some(Authority {
+            host: data.host.clone(),
+            port: data.port,
+        }),
+        _ => None,
+    }
+}
+
 /// What `event` means to the scheduler, if anything. Called by the drain
 /// for each event before the request model applies it, so a finished
 /// request is still there to read.
@@ -132,15 +162,27 @@ pub(crate) fn heard(event: &WorkerEvent, operations: &Operations) -> Option<Hear
             let gone =
                 envelope.outcome == Outcome::Success || envelope.code == ResultCode::AlreadyApplied;
             match scope_of(intent, gone) {
-                Some(scope) => Some(Heard::Reconfiguration(Moment::Finished, scope)),
+                Some(scope) => {
+                    let moment = if gone {
+                        Moment::Succeeded
+                    } else {
+                        Moment::Finished
+                    };
+                    Some(Heard::Reconfiguration(moment, scope))
+                }
                 None => {
                     let root = policy_of(intent)?;
-                    let completed = matches!(intent, Intent::PollOnce { .. })
-                        && envelope.outcome == Outcome::Success;
-                    Some(if completed {
-                        Heard::CheckedNow(root)
-                    } else {
-                        Heard::PolicyMoved(root)
+                    Some(match intent {
+                        Intent::PollOnce { .. } if envelope.outcome == Outcome::Success => {
+                            Heard::CheckedNow(root)
+                        }
+                        Intent::PollOnce { .. } => Heard::CheckFailed {
+                            root,
+                            request: *id,
+                            code: envelope.code,
+                            authority: host_of(envelope),
+                        },
+                        _ => Heard::PolicyMoved(root),
                     })
                 }
             }

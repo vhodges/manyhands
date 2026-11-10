@@ -102,6 +102,10 @@ struct Declined {
     /// forgets: only a retirement's record is read (Task 11a), so polls
     /// must not grow `refused` without end.
     last_poll: Option<DesktopRequestId>,
+    /// The keys the person's own request's last attempt asked the provider
+    /// for, whatever the answer: a Check now's failure names no key, and
+    /// these are the ones its attention is held under (C3).
+    asked: HashMap<DesktopRequestId, HashSet<SharedKeyId>>,
 }
 
 impl DeclinedKeys {
@@ -141,6 +145,7 @@ impl DeclinedKeys {
         if let Some(id) = id {
             declined.by_request.remove(&id);
             declined.refused.remove(&id);
+            declined.asked.remove(&id);
         }
     }
 
@@ -152,6 +157,24 @@ impl DeclinedKeys {
         if let Some(previous) = declined.last_poll.replace(id) {
             declined.refused.remove(&previous);
         }
+    }
+
+    /// The running attempt asks for `key_id`: remembered against its request.
+    fn ask(&self, key_id: SharedKeyId) {
+        let mut declined = self.lock();
+        if let Some(id) = declined.attempt {
+            declined.asked.entry(id).or_default().insert(key_id);
+        }
+    }
+
+    /// The keys the request `id`'s last attempt asked the provider for.
+    pub(crate) fn asked_for(&self, id: DesktopRequestId) -> Vec<SharedKeyId> {
+        let declined = self.lock();
+        declined
+            .asked
+            .get(&id)
+            .map(|keys| keys.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     /// Whether the running job is a background one and `key_id` is refused
@@ -239,6 +262,7 @@ impl SessionCredentialProvider for DesktopProvider {
         if self.declined.refused(request.key_id) {
             return PassphraseResponse::Unavailable;
         }
+        self.declined.ask(request.key_id);
         // Declined with Not now: not asked again until Unlock… (R-13).
         if self.declined.declined(request.key_id) {
             return PassphraseResponse::Cancelled;

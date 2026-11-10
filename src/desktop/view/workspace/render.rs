@@ -128,6 +128,7 @@ impl Render for Workspace {
                     .gap_2()
                     .size_full()
                     .overflow_y_scroll()
+                    .track_scroll(self.operations_scroll().handle())
                     .children(finishing)
                     .child(
                         h_flex()

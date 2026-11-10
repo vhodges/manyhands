@@ -6,19 +6,26 @@
 //! An entry is cleared only by proof or by a change (R-11): a Check now of
 //! one of its repositories that completed, or a reconfiguration that
 //! reached it. Unlock… itself clears nothing; a failed unlock, or an
-//! unreachable repository, leaves the entry (K-26).
+//! unreachable repository, leaves the entry (K-26). A Check now that
+//! fails is an answer like a poll's (A4): it becomes the attention its
+//! code names, in place of the entry the repository had.
 
 use std::path::PathBuf;
 
 use gpui_kit::Context;
 
 use super::entity::Scheduler;
+use manyhands::{repository::transport::SshAuthority, results::ResultCode};
+
 use crate::desktop::{
     model::{
         operations::Operations,
-        polling::{KeyId, Phase, Reason, Root},
+        polling::{Answer, Authority, KeyId, Phase, Reason, Root, TransportFailure},
     },
-    services::requests::{Intent, Lane},
+    services::{
+        poll_convert::check_now_failure,
+        requests::{DesktopRequestId, Intent, Lane},
+    },
 };
 
 impl Scheduler {
@@ -47,6 +54,66 @@ impl Scheduler {
             }
         }
         self.read_registrations(reread, cx);
+    }
+
+    /// A Check now of `root` finished with `code` (C3, A4): what the code
+    /// says becomes the repository's attention, as a poll's answer would,
+    /// replacing the entry it had (a host answer after the key was
+    /// supplied). A repository already held back stays so when the answer
+    /// is only that it cannot be reached (K-26); one that is not is `Idle`
+    /// on its stored deadline. A code A4 has no row for changes nothing
+    /// but the policy read again.
+    pub(super) fn check_failed(
+        &mut self,
+        root: &Root,
+        request: DesktopRequestId,
+        code: ResultCode,
+        authority: Option<Authority>,
+        cx: &mut Context<Self>,
+    ) {
+        let held = match self.schedule.repo(root).map(|repo| &repo.phase) {
+            Some(Phase::Attention(reason)) => Some(reason.clone()),
+            _ => None,
+        };
+        let asked = self.worker.asked_keys(request);
+        let key = match (asked.as_slice(), &held) {
+            ([only], _) => Some(*only),
+            (_, Some(Reason::KeyLocked(key) | Reason::KeyProblem(key))) => Some(*key),
+            _ => None,
+        };
+        let authority = authority.map(|authority| SshAuthority {
+            host: authority.host,
+            port: authority.port,
+        });
+        let in_flight = self
+            .schedule
+            .repo(root)
+            .is_some_and(|repo| repo.in_flight());
+        if let Some(attempt) = check_now_failure(root, code, key, authority)
+            && !in_flight
+        {
+            let unreachable = matches!(
+                attempt.answer,
+                Answer::Transport(TransportFailure::Unreachable | TransportFailure::Unavailable)
+            );
+            if !(held.is_some() && unreachable) {
+                let now = self.clock.now();
+                self.schedule.after(&now, &attempt);
+            }
+        }
+        self.read_registrations(vec![root.clone()], cx);
+    }
+
+    /// An armed Check now whose repository is no longer held back is
+    /// dropped: its entry cleared by other means, or the repository went
+    /// (a removed and created one starts afresh).
+    pub(super) fn prune_arms(&mut self) {
+        let schedule = &self.schedule;
+        self.check_after.retain(|root| {
+            schedule
+                .repo(root)
+                .is_some_and(|repo| matches!(repo.phase, Phase::Attention(_)))
+        });
     }
 
     /// The repository Unlock… sends its Check now through for `key`: the

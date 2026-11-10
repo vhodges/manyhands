@@ -29,8 +29,10 @@ use crate::desktop::{
     view::workspace::Workspace,
 };
 use gpui_kit::{
-    AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled, Window,
+    AnyElement, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Styled,
+    Window,
     component::{ActiveTheme, h_flex},
+    div,
 };
 
 const STEP_ASIDE: &str = "finish the pending operations of these repositories first";
@@ -92,7 +94,9 @@ impl Workspace {
         let focus = self.control_focus_for(format!("attention-action-{ix}"), cx);
         let reason = entry.reason.clone();
         let root = entry.roots.first().cloned();
-        button(
+        // The action scrolls into view when focus reaches it (E-2).
+        let marker = self.operations_scroll().marker_within(&focus);
+        let control = button(
             id,
             action.label(),
             Some(&focus),
@@ -102,7 +106,13 @@ impl Workspace {
                     this.attend(action, &reason, root, window, cx);
                 }
             }),
-        )
+        );
+        div()
+            .id(("attention-slot", ix))
+            .relative()
+            .child(control)
+            .child(marker)
+            .into_any_element()
     }
 
     /// The person pressed `action` on an entry of `reason` whose first

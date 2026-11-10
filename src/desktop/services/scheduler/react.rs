@@ -141,7 +141,7 @@ impl Scheduler {
     /// cancelled, their attention is cleared and their policies and remotes
     /// are read again, so they re-arm. A removal drops the schedule. A
     /// stored pause is the library's, so a re-added remote leaves it alone.
-    pub(super) fn reconfigured(&mut self, scope: Scope, cx: &mut Context<Self>) {
+    pub(super) fn reconfigured(&mut self, scope: Scope, succeeded: bool, cx: &mut Context<Self>) {
         let reached = self.reached(&scope);
         let gone = match &scope {
             Scope::Repository { root, gone: true } => Some(root.clone()),
@@ -164,7 +164,9 @@ impl Scheduler {
         if let Some(root) = &gone {
             self.forget(root);
         }
-        self.send_awaited_checks(&reached, gone.as_ref());
+        if succeeded {
+            self.send_awaited_checks(&reached, gone.as_ref());
+        }
         let reread = reached
             .into_iter()
             .filter(|root| Some(root) != gone.as_ref())

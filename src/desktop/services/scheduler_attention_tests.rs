@@ -31,7 +31,7 @@ use crate::desktop::{
     test_support::polling::{Asked, locked, transport_error, unlock_request},
 };
 
-fn send(world: &World, intent: Intent) -> DesktopRequestId {
+pub(super) fn send(world: &World, intent: Intent) -> DesktopRequestId {
     world
         .services
         .worker()
@@ -39,7 +39,7 @@ fn send(world: &World, intent: Intent) -> DesktopRequestId {
 }
 
 /// The scheduler's entries as `(reason, roots)`, roots sorted.
-fn entries(world: &World, cx: &mut TestAppContext) -> Vec<(Reason, Vec<String>)> {
+pub(super) fn entries(world: &World, cx: &mut TestAppContext) -> Vec<(Reason, Vec<String>)> {
     world.services.scheduler().read_with(cx, |scheduler, _| {
         scheduler
             .schedule()
@@ -70,7 +70,7 @@ fn paused(world: &World, root: &str, cx: &mut TestAppContext) -> bool {
     })
 }
 
-fn unlock(world: &World, key: SharedKeyId, cx: &mut TestAppContext) -> bool {
+pub(super) fn unlock(world: &World, key: SharedKeyId, cx: &mut TestAppContext) -> bool {
     world
         .services
         .scheduler()
@@ -86,12 +86,12 @@ fn answered_ok() -> Envelope<manyhands::repository::MutationDataDto> {
     )
 }
 
-fn refused(code: ResultCode) -> Envelope<manyhands::repository::MutationDataDto> {
+pub(super) fn refused(code: ResultCode) -> Envelope<manyhands::repository::MutationDataDto> {
     Envelope::failure("poll once", Scope::default(), code, vec![])
 }
 
 /// The Check now requests this session sent, as roots, oldest first.
-fn checks(world: &World, cx: &mut TestAppContext) -> Vec<String> {
+pub(super) fn checks(world: &World, cx: &mut TestAppContext) -> Vec<String> {
     world.services.operations().read_with(cx, |operations, _| {
         let mut sent: Vec<String> = operations
             .requests()
@@ -106,7 +106,7 @@ fn checks(world: &World, cx: &mut TestAppContext) -> Vec<String> {
     })
 }
 
-fn polls_of(world: &World, root: &str) -> usize {
+pub(super) fn polls_of(world: &World, root: &str) -> usize {
     world
         .backend
         .polled_roots()
@@ -116,7 +116,7 @@ fn polls_of(world: &World, root: &str) -> usize {
 }
 
 /// Waits for a prompt to reach the request model and takes it.
-async fn prompt(
+pub(super) async fn prompt(
     world: &World,
     cx: &mut TestAppContext,
 ) -> crate::desktop::services::prompts::PromptRequest {
@@ -144,7 +144,7 @@ fn has_prompt(world: &World, cx: &mut TestAppContext) -> bool {
 /// A locked key met by a poll, for each of `roots`: the poll asks the
 /// session as the transport would, and the provider refuses a background
 /// job (B5).
-async fn locked_pair(
+pub(super) async fn locked_pair(
     world: &World,
     key: &UnlockRequest,
     roots: &[String],
@@ -325,6 +325,11 @@ async fn unlock_clears_for_all_repos(cx: &mut TestAppContext) {
         .await;
         World::quiet(cx).await;
         assert_eq!(entries(&world, cx), held, "{code:?} leaves the attention");
+        // Nothing moved the repositories: they were not polled again.
+        assert_eq!(
+            (polls_of(&world, &a), polls_of(&world, &b)),
+            (polls_a, polls_b)
+        );
         assert_eq!(checks(&world, cx)[n], a.clone().min(b.clone()));
     }
 

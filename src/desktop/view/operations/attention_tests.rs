@@ -225,7 +225,7 @@ async fn attention_actions_by_reason(cx: &mut TestAppContext) {
         assert_eq!(shown(&rig, cx), page);
         assert_eq!(rig.checks(cx).len(), n, "nothing is sent before the change");
         rig.services.scheduler().update(cx, |scheduler, cx| {
-            scheduler.heard(vec![Heard::Reconfiguration(Moment::Finished, scope)], cx)
+            scheduler.heard(vec![Heard::Reconfiguration(Moment::Succeeded, scope)], cx)
         });
         rig.shell
             .until_drawn(cx, "the Check now", |_, cx| rig.checks(cx).len() == n + 1)
@@ -358,11 +358,11 @@ async fn every_reason(cx: &mut TestAppContext) -> Rig {
     rig
 }
 
-/// W-6, decision 13: every action of the operation area is where a click
-/// reaches it at the default window (1280 by 840), and does what it says. A
-/// click on a clipped or covered action finds nothing or does nothing. Five
-/// entries do not fit the area at once, so the first four are clicked, then
-/// a key change clears them and the fifth, which stays, is.
+/// W-6, decision 13, E-2: every action of the operation area is where a
+/// click reaches it at the default window (1280 by 840), and does what it
+/// says. Five entries do not fit the 260 px area, so the area scrolls; Tab
+/// to the fifth action brings it into view, and it is then clickable at its
+/// position. A click on a clipped or covered action does nothing.
 #[gpui_kit::test]
 async fn attention_actions_hit(cx: &mut TestAppContext) {
     let rig = every_reason(cx).await;
@@ -390,28 +390,9 @@ async fn attention_actions_hit(cx: &mut TestAppContext) {
     rig.shell.click((ACTION, 3usize), cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Remotes));
 
-    // The change clears the four; the repository the library holds stays,
-    // and its action is now the first.
-    for _ in 0..4 {
-        rig.backend.answer_poll(poll_done(&rig));
-    }
-    rig.services.scheduler().update(cx, |scheduler, cx| {
-        scheduler.heard(
-            vec![Heard::Reconfiguration(Moment::Finished, Scope::Keys)],
-            cx,
-        )
-    });
-    rig.shell
-        .until_drawn(cx, "the four to clear", |_, cx| {
-            rig.entries(cx)
-                == [(
-                    Reason::RecoveryHeld(rig.roots[4].clone()),
-                    vec![rig.roots[4].clone()],
-                )]
-        })
-        .await;
-    assert_eq!(label(&rig, ACTION, 0, cx).as_deref(), Some(RESUME_CHECKING));
-    rig.shell.click((ACTION, 0usize), cx);
+    // The fifth is below the fold until focus reaches it.
+    assert!(rig.shell.tab_reaches((ACTION, 4usize), TABS, cx));
+    rig.shell.click((ACTION, 4usize), cx);
     assert_eq!(rig.backend.resumed(), [rig.roots[4].clone()]);
 }
 
