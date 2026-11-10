@@ -1684,3 +1684,118 @@ Known limits (recorded, not fixed):
 - Time: `polling_consent` 26 s, `polling_privacy` 19 s, `polling_keyboard` 5 s.
   Failing waits are now bounded at 30 s (review fix I-2; the no-op Retire…
   mutation fails in 34 s, before 184 s).
+
+## Task 14: final gates, checklist, documentation
+
+Branch HEAD for the gates: `e5d00bb9` code (docs commits after it do not touch
+code). `origin/main` is `eb0798a2`, already merged; `git log HEAD..origin/main`
+is empty and `git merge-tree --write-tree HEAD origin/main` printed one line (a
+tree id): clean, nothing to merge (read in full, 2026-11-10).
+
+**First whole-suite run (at `b0da75fe`).** fmt, `cargo check --all-features`
+and clippy `--all-targets --all-features -D warnings` pass. `--lib` 1564
+passed. The desktop `--bins` run failed 3 of 1818 and cargo stopped before the
+integration targets (no `--no-fail-fast`): the first whole-suite run since
+Tasks 11a to 13 (K-67). Fix commit `e5d00bb9` (implementer, not re-reviewed;
+checked by the orchestrator: the diff read, tree clean, boundary empty, and the
+full rerun below):
+- `scheduler::retire_tests::unlock_picks_reachable` (a race, 55 of 480 failures
+  under heavy load): after Unlock… both repositories poll again and
+  `PollSchedule::raise` skips a repository whose poll is queued or running
+  (returns false, ignored by the test). **E-35:** wait until neither root is
+  `Queued` or `Running` before the raise loop; no assertion weakened. After:
+  0 of 480 under the same load.
+- `view::dock::restore_tests::a_file_that_cannot_be_read_restores_the_default_and_says_so`
+  (deterministic): `Scheduler::new` opens `<data>/inflight` for the instance
+  lock at launch (B3, R-31), so the store-directory snapshot gains `inflight`.
+  The test's expectation was stale. **E-36:** the test's `before` state opens
+  the in-flight store too; the entry-names snapshot is kept, so a stray new
+  store directory still fails (mutation caught).
+- `view::operations::retiring_tests::retire_rows_hit`: **a real production
+  defect and a test race.** The request row's Dismiss had no scroll-into-view
+  marker, so Tab could reach an off-screen Dismiss (the attempt entries'
+  actions have it, E-2). `Workspace::dismiss` in `view/operations.rs` now
+  wraps the button in `request-N-dismiss-slot` with the marker (the inner id is
+  unchanged). The test also turned polling on, so a real poll answer wiped the
+  injected rows (about 2 of 144 under load). **E-37:** the incidental
+  `with_polling()` is removed (polling must stay off there). Mutation (marker
+  removed) fails deterministically; 320 of 320 pass under load.
+
+**Final gates after the fix (the tree at `e5d00bb9`, docs commits since):**
+- Static gates, whole tree, all exit 0: `cargo check --all-features --locked`,
+  `cargo fmt --check`, `cargo clippy --all-targets --all-features --locked -- -D warnings`.
+- Fast tier (AGENTS.md list; `--lib` from the first run, unchanged since):
+  `--lib` **1564 passed**, 0 failed (1009 s, `repository::local_sync::` skipped);
+  desktop `--bins` **1818 passed**, 0 failed (1208 s; `--no-fail-fast`);
+  the 27 listed integration targets **2522 passed** in total, 0 failed
+  (largest: `mutation_confirmation`-class targets 477, 384, 317, 184, 166 cases).
+- SSH tier: `remote_polling` **86 cases passed**, exit 0, about 5 min (it
+  includes Task 1's `poll_cancel_during_handshake_stall` and
+  `poll_cancel_during_connect_stall`). The change touches no
+  `src/repository/` path; the tier ran because the Cycle's brief requires it.
+- Library boundary (`src/repository*`, `src/results.rs`, `src/canonical.rs`,
+  `src/drafts/`, `src/runtime.rs`, `src/lib.rs`, `Cargo.toml`, `Cargo.lock`,
+  `tests/`): empty against `6af92f91`, the Cycle 01 merge (checked after the
+  last code commit).
+- Native CI not dispatched (owner-gated); the full `cargo test` suite and
+  native CI run after merge (AGENTS.md).
+
+**The flaky test.** `attention_answer_tests::check_now_failure_becomes_attention`
+failed once earlier under load. It passed in both whole-suite runs and three
+solo runs; no cause is proven. It uses the same bounded `World::quiet` wait
+before a `raise` that returns false for a queued or running poll as
+`unlock_picks_reachable` did (E-35): a plausible, unproven race (K-68).
+
+**Existing-test edits this Task:** E-35, E-36, E-37 (above). No other.
+
+**Checklist** `docs/plans/2026-11-07-wave-03-desktop-06-on-screen-checklist.md`
+(`feb839cd`, 70 rows, about 10 rare), drafted from the app's wording by an
+agent and not run. Findings it reported (source versus design or ledger,
+nothing fixed):
+- The ledger's "Own copy of the item" and "Closed on primary" are test
+  identifiers, not UI text; the checklist uses the "Closed" pill and the
+  "Closed at" and "Closed by" fields.
+- A Check now's "Unlock key" dialog has no "Sharing {repository} is waiting
+  for your passphrase." line (`waiting_share` accepts only Share and Post).
+- Retirement rows name an item by the last 8 characters of its ID (K-46), not
+  by the ticket's short code that E3 names.
+- A running retirement's quit text is "Finishing Retire local copy".
+- The unkept Retire… ask is reachable by hand only with a read-only drafts
+  folder (drafts flush within 5 s).
+- Local-only saved work blocks retirement (the proof compares against the
+  closed main), so the checklist says to Share first.
+- Wording not found (marked "(wording not checked)"): the pending row's action
+  text, the Abandon confirmation's retirement details, the Hosts page controls,
+  the dirty-context guidance line, the "draft could not be saved" entry, the
+  tab's discard-edit control.
+- Not verified: that its `close_ticket` helper makes a poll classify a ticket
+  as closed on a real remote.
+
+**Cycle Acceptance table** (`54429ace`): every row has an evidence-based status.
+Verified (tests) or verified with native evidence pending, except A4, A5, A19,
+A20 and A22 (partly verified: the 12b gap, K-58, K-29, K-60, the unmeasured
+stalls). Library SSH cases other than `remote_polling` (`poll_materialize_*`
+ran there; `retirement_cli_authenticated_live_pass` and the yield tests did not)
+are not in this Cycle's runs.
+
+**Documentation done:** K-16 and Amendment 8 reworded for the Activity columns'
+`min_w_0`; "proposed K-19" is now "accepted K-19" in the design and the Cycle;
+K-27 reworded for E4 (Resume stays for a hand-off-only row); the plan's R-23
+owner line; Amendment 12 recorded in the design (awaits acknowledgement).
+
+Known limits added (recorded, not fixed):
+- K-67: the first whole-suite run came only at the end, so three failures
+  (two stale or racy tests, one real Dismiss scroll defect) survived to Task 14.
+  A lesson, not a code limit.
+- K-68: `check_now_failure_becomes_attention` may share E-35's race (above);
+  other tests that inject attempt state and also call `with_polling()` may carry
+  E-37's race (`operations/retire_tests.rs`, `operations/record_tests.rs`,
+  `lifecycle/retiring_tests.rs`); none failed in the two whole-suite runs.
+- K-69: the request row's other controls (Stop, Cancel, Open, recovery actions,
+  Review, Retry in `view/operations.rs` and `operations/review.rs`) have no
+  scroll-into-view marker either, so a keyboard user can Tab to an off-screen
+  control. Only Dismiss was fixed (a D6 row). The rest are the "existing
+  unwrapped rows" of K-16, left to Wave 04 Cycle 03 (a marker in the shared
+  `button()` would cover all).
+- Time: the desktop suite takes about 20 minutes; the longest tests are the
+  real-library world tests (K-43).

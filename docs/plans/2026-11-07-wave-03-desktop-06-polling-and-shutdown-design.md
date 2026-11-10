@@ -1828,3 +1828,10 @@ on main after `9512080d` is checked at Task 0.
 Revision 6's edits had no independent review: the planning procedure stops
 rewriting a mechanism after a third round and moves its proof to a
 test-first task with a design checkpoint.
+
+**Implementation review (2026-11-10).** Tasks 1 to 13 were each reviewed by a
+fresh reviewer; findings were fixed in review-fix commits (execution ledger).
+The implementation added Document Amendments 11 (the owner's Task 11b rulings)
+and 12 (the in-flight retirement entry's exits; awaits the owner's
+acknowledgement), and K-28 to K-69. The final gates are recorded in the ledger's
+"Task 14" section.
