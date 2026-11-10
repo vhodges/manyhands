@@ -1616,3 +1616,71 @@ Known limits (recorded, not fixed):
 - Known limits to report at review-ready: K-28..K-61 (K-33 library-shaped; no
   ticket created; ask the owner about follow-up tickets for K-33, the
   `owes_only_its_hand_off` flag, the retirement test hook and K-59).
+
+## Task 13: privacy, consent and keyboard evidence
+
+| 13 | `4c35b3cf` | `8c4fd1b4` (review fixes) | APPROVE WITH FIXES (no Critical; reviewer found no leak and no call the design does not allow); the fix commit was checked by the orchestrator (clean tree, boundary, `polling_consent` re-run), not re-reviewed | `desktop::view::polling_privacy_tests::polling_privacy` (A16), `desktop::services::scheduler::consent_tests::polling_consent` (A8), `desktop::view::keyboard_tests::shell::polling_journey::polling_keyboard` (A15); each singly with `--exact`, 1 test, pass (5.5 s, 26.3 s, 18.8 s); the orchestrator re-ran all three at `4c35b3cf` and `polling_consent` at `8c4fd1b4`; fmt, check --all-features, clippy -D warnings pass |
+
+Tests only. All three were green on their first run, because Tasks 7, 8, 11
+and 12 had already built the behaviour (no red-first run is possible for
+evidence tests). Library-boundary diff empty. The only non-test-file change is
+`Shell::set_activity_height` (test harness) going `pub(crate)`, plus three
+`cfg(test)` mount lines. No existing test was edited (no E-35+ entries).
+
+- `polling_consent` (A8): one recording `Backend` forwarding all 23 trait
+  methods, a simulated day on an injected clock (launch, due, busy, preempt,
+  attention, quit with a poll in flight). The allowed list is written from the
+  design: B4's prefix per `Job(Poll)` window on the worker thread; jobs only
+  `{Poll, PollOnce, ContextRetire}` with exactly one `PollOnce`; `cancel_poll`
+  0 during launch/busy/attention and greater than 0 after preemption and quit;
+  exactly two `ContextRetire` jobs (the free ticket and the promoted document,
+  in report order, background lane; not the edited or kept-draft items);
+  `ResumePolling` never; every intent rebuilt with `Intent::build` (none is
+  `PollOnceRetiring`). Review fix I-1: calls off the worker thread are limited
+  to the scheduler's read list, and `Service`/`KeyStore` off the worker only up
+  to the count after `Services::start`; `PollAutomatic`, `PollEligibility` and
+  `RemoteSnapshot` each equal the count of `Job(Poll)`.
+- `polling_privacy` (A16): eight sentinels (title, body, comment, draft, typed
+  edit, path, passphrase, key-file content), each shown to exist in its source;
+  the drive covers every D6 surface (automatic poll with closed, edited, kept
+  and promoted targets, attention, Retire… offers, both asks, retirement
+  answers, Resume, Unlock… with the passphrase typed, Settings status, quit
+  text); the sweep reads entries, answers, the `Debug` of the schedule and of
+  the record's entries, the in-flight record's bytes and every drawn label and
+  value outside `ALLOWED`, in 15 surface classes. Mutation proof: the passphrase
+  input unmasked is caught.
+- `polling_keyboard` (A15): `secondary-,`, the interval, the switch (Pause,
+  Resume), Check now, then `secondary-4` to Unlock… and Retire… by Tab with
+  focus on-screen and ringed at every step; Enter on Retire… sends one
+  user-lane `ContextRetire`. The Activity panel is at the launched 150 px.
+- Mutations all caught and reverted: quit's cancel removed; Retire… and switch
+  and Check now handlers a no-op; Retire…'s scroll marker removed; RT-3 and RT-4
+  off; `backend.service()` inside `poll::run` and in `Scheduler::activated`;
+  attention repositories polled again; B6 gate off; `resume_polling` at
+  activation; passphrase unmasked; sentinels in a canned message and in a
+  directory name. The privacy mutations show the scan reads the surfaces; no
+  production type holds item text, so no real production leak could be injected.
+
+Known limits (recorded, not fixed):
+- K-62: the recorder sees `Backend` calls only. A direct library call that
+  does not go through `Backend` is invisible; a new `Backend` method with a
+  default body is caught only because it reaches the library through
+  `service()`, `key_store()` or `drafts()`. A direct `service()` call on the
+  worker thread between jobs is not caught.
+- K-63: W-4's "both layouts" is not exercised (one layout today); the keyboard
+  journey uses the harness window resized to 1280x840 with Activity at 150 px,
+  not `open_as_launched`.
+- K-64: `polling_privacy` skips its unkept-ask and quit-edits steps when run as
+  root (the drafts folder cannot be made read-only); the rest still runs. The
+  root path was not exercised.
+- K-65: text drawn under `item-banners` and `item-pill` is outside the privacy
+  sweep (D6 draws nothing there).
+- K-66: both polling tests use canned answers. The real library's answers are
+  covered by the earlier tasks' real-library tests, not here.
+- Overlap, accepted: `polling_keyboard` repeats the interval, switch and Check
+  now steps of `checking_for_updates_by_keyboard` and Retire… by keyboard is
+  also in `retire_tests`; the plan asks for the single walk. The two files are
+  857 and 981 lines (neighbours: 1,153 and 1,367); not split.
+- Time: `polling_consent` 26 s, `polling_privacy` 19 s, `polling_keyboard` 5 s.
+  Failing waits are now bounded at 30 s (review fix I-2; the no-op Retire…
+  mutation fails in 34 s, before 184 s).
