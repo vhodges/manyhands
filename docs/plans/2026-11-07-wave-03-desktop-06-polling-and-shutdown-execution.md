@@ -590,7 +590,7 @@ variants did not exist); the mutation runs carry the evidence that they bite
 reason; the passphrase test was written after the variant (its guard was the
 fix). The table version of `poll_once_rereads_status` was a modification of an
 existing test and has no separate red run.
-| 7 | (ledger commit) | `667aaf9b`, `9eee8b82` (review fixes) | APPROVE WITH MINOR; D-1 stopped for the owner and ruled (below); Important (conflict flag clearing unpinned), minor 2 (Check now disabled rule unpinned), 2b (stale allow), 4 (select after a failed re-read) applied; 5, 6, 7, 8 recorded; the fix commit's own report did not arrive, so the orchestrator ran its three changed tests and the gates (below) and did not see its mutation results | `desktop::model::polling::status::tests::{status_text_table, status_detail_for_an_interrupted_check}`, `desktop::view::settings::polling_tests::{settings_polling_rows, settings_polling_controls, settings_polling_states, settings_polling_pending_link}`, `desktop::view::settings::polling_real_tests::{settings_polling_real_paused, settings_polling_unplaced, settings_polling_failed_reread}`, `desktop::view::lifecycle::check_now_tests::way_out_check_now`, `desktop::view::keyboard_tests::settings::checking_for_updates_by_keyboard`, `desktop::view::operations::record_tests::an_unreadable_record_is_reported_once_in_activity`; each singly with `--exact`, 1 test, pass; fmt, check, clippy pass |
+| 7 | `3bb403d5` | `667aaf9b`, `9eee8b82` (review fixes) | APPROVE WITH MINOR; D-1 stopped for the owner and ruled (below); Important (conflict flag clearing unpinned), minor 2 (Check now disabled rule unpinned), 2b (stale allow), 4 (select after a failed re-read) applied; 5, 6, 7, 8 recorded; the fix commit's own report did not arrive, so the orchestrator ran its three changed tests and the gates (below) and did not see its mutation results | `desktop::model::polling::status::tests::{status_text_table, status_detail_for_an_interrupted_check}`, `desktop::view::settings::polling_tests::{settings_polling_rows, settings_polling_controls, settings_polling_states, settings_polling_pending_link}`, `desktop::view::settings::polling_real_tests::{settings_polling_real_paused, settings_polling_unplaced, settings_polling_failed_reread}`, `desktop::view::lifecycle::check_now_tests::way_out_check_now`, `desktop::view::keyboard_tests::settings::checking_for_updates_by_keyboard`, `desktop::view::operations::record_tests::an_unreadable_record_is_reported_once_in_activity`; each singly with `--exact`, 1 test, pass; fmt, check, clippy pass |
 
 ## Task 7: Checking for updates page, status text, Check now way-out
 
@@ -670,3 +670,91 @@ first but seen failing only after a stub page was swapped back in;
 survivors at the first commit: removing only the `disabled` flag or only the
 handler guard (fixed in `9eee8b82` by asserting the button is unreachable by
 Tab while its own check runs).
+| 8 | (ledger commit) | `fb2f728a`, `6585fe44` (review fixes) | APPROVE WITH MINOR; I-1 (a failed Check now becomes attention; the design's C3 "the poll's answer becomes attention" settled it) and I-2 (the fifth action unreachable; W-6 settled it) fixed, M-1 and M-2 applied; M-3 to M-7 recorded; fixes checked by the orchestrator (three tests, gates, boundary), not re-reviewed | `desktop::services::scheduler::attention_tests::{attention_pause_independent, unlock_after_cancelled_prompt, unlock_clears_for_all_repos, attention_cleared_by_change, two_keys_evict}`, `desktop::services::scheduler::attention_answer_tests::{check_now_failure_becomes_attention, awaited_check_only_after_success}`, `desktop::services::prompts::tests::unlocking_one_key_leaves_another_declined`, `desktop::view::operations::attention_tests::{attention_locked_key, attention_host, attention_actions_by_reason, attention_recovery_held, attention_actions_hit, attention_actions_by_keyboard}`, `desktop::view::settings::attention_tests::settings_polling_attention_actions`, `desktop::model::polling::tests::attention::recovery_hold_follows_the_policy`; each singly with `--exact`, 1 test, pass; fmt, check, both clippy pass |
+
+## Task 8: needs attention
+
+Files (all under `src/desktop/`): new `model/polling/attention.rs`,
+`services/scheduler/attention.rs`, `services/{scheduler_attention_tests.rs,
+scheduler_attention_answer_tests.rs}`, `view/operations/{attention.rs,
+attention_support.rs, attention_tests.rs}`, `view/settings/{polling_attention.rs,
+attention.rs, attention_tests.rs}`; changed `model/{polling.rs (sync_recovery),
+operations/polls.rs}`, `services/{mod.rs (Backend::resume_polling), worker.rs,
+prompts.rs (the per-key declined clear is production), poll_convert.rs
+(check_now_failure), scheduler/{entity,react,reconfigure}.rs}`,
+`view/{operations.rs, workspace.rs, workspace/render.rs, settings/{polling.rs,
+mod.rs}, harness.rs}`, `test_support/polling.rs`, `mod.rs`
+(`open_test_window_over`). Nothing outside `src/desktop/` changed. No existing
+test edited (no E-12). Every `Called from Task 8` allow is gone.
+`needs_attention` (D/model/attention.rs) is untouched.
+
+Rulings (implementer, accepted unless noted):
+- Surface: both. Activity entries at the top of "This session" (one wrapped
+  row: headline, "Holding back a, b", action; no Dismiss, they go when the
+  scheduler clears them) and the same action on the Settings row (design C2, C3).
+- Choose a key…, Approve host… and Open remote settings… open the page and arm
+  the repository; the Check now is sent when a reconfiguration reaching it
+  succeeds (`Moment::Succeeded`; `Finished` still does the rest, K-28 unchanged).
+  Arms are pruned when the entry clears and on `forget`.
+- Proof is a Check now that succeeds; a completed Check now clears its
+  repository's attention, and a key reason clears for every repository sharing
+  it. Unlock… itself clears nothing, so a failed unlock or an unreachable
+  chosen repository leaves the entry (K-26). Cost: a success on a repository
+  with no entry does not clear another repository's key entry.
+- A repository the library holds until recovery is listed as attention
+  (`sync_recovery`, called when a policy is read); it counts once each through
+  `attention()`.
+- Unlock… targets the first repository of the key that is on, not held and has
+  no pending local operation; with none, it shows as text with its reason.
+- A user-lane Check now's transport failure becomes attention through the one
+  A4 conversion (`check_now_failure` → `transport_failure` / `attempt_of` →
+  `PollSchedule::after`). The code is mapped to one representative
+  `SshTransportErrorKind`; the key comes from a per-request record of the keys
+  the attempt asked the provider for, the host from `host_data`.
+- The operation area has its own `ContentScroll`; each attention action carries
+  a scroll marker so Tab scrolls it into view (W-6, E-2).
+
+Known limits (recorded, not fixed):
+- **K-33 (library-shaped; reported to the owner at the Part C checkpoint):** a
+  Check now's envelope carries a code and `host_data` but not `e.kind`, so
+  `HostVerificationUnavailable` (code `recovery_required`) and
+  `ProtocolFailure` / `RuntimeUninitialized` (code `internal_error`) cannot be
+  told from other causes of those codes. They give no attention and any
+  existing entry stays, so after Unlock… a host-verification-unavailable Check
+  now leaves the old KeyLocked entry in place until the next automatic poll
+  raises the host entry. Closing it needs the library to put `e.kind` in the
+  envelope; no ticket was created (not authorized). A KeyLocked or KeyProblem
+  code with no prompt asked falls to `NoKeySelected(root)` ("Choose a key") per
+  the owner's A4 row 3 ruling.
+- K-34 (M-3): Resume checking fails silently: when the library call does not
+  release the hold, nothing is shown and the hold stays.
+- K-35 (M-5): `two_keys_evict` drives the real provider and `SessionCredentials`
+  but injects the final "entry returns" failure with `fail_poll`; a mutation
+  that makes the background refusal also mark the key declined is caught only
+  by Task 3's `background_poll_never_prompts`.
+- K-36 (M-6, M-7): the keyboard test is insensitive to layout; page tests use
+  the harness's real settle timers (a red run waits the 60 s `WAIT`).
+- Attention entries push a running request's Cancel and Stop buttons down.
+- Task 10 must gate `send_awaited_checks`, `unlock` and `resumed` on `quitting`.
+- Task 11b needs a setter or a new answer path for a retirement's answer to set
+  attention (only `PollSchedule::after` sets it today), and Unlock… does not yet
+  resend a pending retirement (design C3, E4); a retirement that got past
+  authentication should call `Scheduler::checked(root)`.
+
+**Wave 04 Cycle 01 step (skipped; not on main).** When Cycle 01 merges, the step
+adds the polling model as a third input of `needs_attention(&Operations,
+&DraftRegistry)` in `D/model/attention.rs`: count `PollSchedule::attention()`'s
+entries (one each, however many repositories it holds back; a library-held
+repository counts once, ruling above); update the callers; extend its test
+(E-4) with a row per reason (`KeyLocked`, `KeyProblem`, `NoKeySelected`,
+`HostUnapproved`, `HostUnidentified`, `ConfigurationRequired`, `RecoveryHeld`),
+rows for states that do not count (paused, off, unreachable, waiting, not-due, a
+Retire… offer) and the three R-23 dedupe rules.
+
+Process: all tests were seen red for the right reason before the code except
+`attention_host` and `two_keys_evict` (green when first written; they pin
+behaviour Tasks 3 and 5 built, `attention_host`'s UI half was red) and
+`recovery_hold_follows_the_policy`, written after the code (a process lapse;
+mutation only). Reviewer mutations: disabling the background refusal fails
+`attention_locked_key` and `two_keys_evict` (by timeout). Survivor: N6c, the
+explicit removal in `forget_schedule` is redundant with the prune on `tick`.
