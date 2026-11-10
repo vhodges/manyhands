@@ -15,10 +15,10 @@ use std::{rc::Rc, sync::Arc};
 
 use gpui_kit::{
     App, AppContext, Bounds, ClickEvent, Context, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, Render, Styled, TestSupportExt, Window, WindowBounds, WindowHandle,
-    WindowOptions,
+    ParentElement, Render, Styled, TestSupportExt, Window, WindowBounds, WindowDecorations,
+    WindowHandle, WindowOptions,
     component::{
-        Root,
+        Root, TitleBar,
         button::{Button, ButtonVariants},
         h_flex, v_flex,
     },
@@ -30,8 +30,11 @@ use manyhands::{
 };
 
 use keys::Quit;
-use services::{LibraryBackend, Services, resolutions::ResolutionStore};
-use view::workspace::Workspace;
+use services::{LibraryBackend, Services, layout::LayoutStore, resolutions::ResolutionStore};
+use view::{
+    shell::{title::window_title, title_bar_closing},
+    workspace::Workspace,
+};
 
 /// Opens the service the desktop runs over. Production opens the default
 /// data directory; tests open a temporary one.
@@ -42,6 +45,13 @@ pub(crate) const STARTUP_FAILURE_DATA_DIRECTORY: &str =
 pub(crate) const STARTUP_FAILURE_INDEX: &str = "Manyhands could not open its repository index.";
 pub(crate) const STARTUP_FAILURE_OTHER: &str = "Manyhands could not start.";
 
+/// Binds the desktop's keys and the editor's, for the application and the
+/// test harness alike. The order does not matter for Ctrl B (decision 2).
+pub(crate) fn bind_all_keys(cx: &mut App) {
+    keys::bind(cx);
+    view::editor::keys::bind(cx);
+}
+
 /// Runs the desktop application. The Git transport is initialized before
 /// this is called.
 pub(crate) fn run() {
@@ -51,8 +61,7 @@ pub(crate) fn run() {
             #[cfg(target_os = "linux")]
             fonts::register(cx);
             gpui_kit::init(cx);
-            keys::bind(cx);
-            view::editor::keys::bind(cx);
+            bind_all_keys(cx);
             let opener: Opener = Rc::new(RepositoryService::open_default);
             cx.spawn(async move |cx| {
                 cx.update(|cx| start(opener, cx));
@@ -84,6 +93,18 @@ fn window_options(cx: &App) -> WindowOptions {
     }
 }
 
+/// The main window draws its own title bar (Part D), so it takes the Kit's
+/// title bar options and asks for client decorations, which make Linux draw
+/// the Kit's window controls (R-15). The startup failure window takes them
+/// too and draws the same bar: a successful Retry puts the workspace, with
+/// its own bar, into that window.
+fn main_window_options(cx: &App) -> WindowOptions {
+    let mut options = TitleBar::window_options();
+    options.window_bounds = window_options(cx).window_bounds;
+    options.window_decorations = Some(WindowDecorations::Client);
+    options
+}
+
 /// Builds `Root` over a new workspace. `Root`'s entity is reserved before
 /// this runs, so the workspace's comes after it.
 fn root_over_workspace(services: Services, window: &mut Window, cx: &mut Context<Root>) -> Root {
@@ -91,22 +112,24 @@ fn root_over_workspace(services: Services, window: &mut Window, cx: &mut Context
     Root::new(workspace, window, cx)
 }
 
-/// The production services: the library, and the draft store and the
-/// kept resolution sets in the data directory the service opened, with
-/// no delays, and its worker. A store that cannot open leaves the
-/// desktop running without drafts, or without kept resolutions.
+/// The production services: the library, and the draft store, the kept
+/// resolution sets and the panel layout in the data directory the service
+/// opened, with no delays, and its worker. A store that cannot open leaves
+/// the desktop running without drafts, without kept resolutions, or
+/// without a saved layout.
 fn library_services(service: RepositoryService, cx: &mut App) -> Services {
     let data = service.data_directory().to_owned();
     let drafts = DraftStore::open_in(&data);
     let resolutions = ResolutionStore::open_in(&data);
+    let layout = LayoutStore::open_in(&data);
     Services::start(
-        Arc::new(LibraryBackend::new(service, drafts, resolutions)),
+        Arc::new(LibraryBackend::new(service, drafts, resolutions, layout)),
         cx,
     )
 }
 
 fn open_main_window(services: Services, cx: &mut App) -> WindowHandle<Root> {
-    cx.open_window(window_options(cx), |window, cx| {
+    cx.open_window(main_window_options(cx), |window, cx| {
         cx.new(|cx| root_over_workspace(services, window, cx))
     })
     .expect("failed to open the Manyhands window")
@@ -117,7 +140,7 @@ fn open_startup_failure_window(
     opener: Opener,
     cx: &mut App,
 ) -> WindowHandle<Root> {
-    cx.open_window(window_options(cx), |window, cx| {
+    cx.open_window(main_window_options(cx), |window, cx| {
         cx.new(|cx| {
             let view = cx.new(|cx| {
                 let focus = cx.focus_handle();
@@ -214,39 +237,51 @@ impl StartupFailureView {
 
 impl Render for StartupFailureView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The window's own bar, as the workspace's (the window takes the
+        // main window's options); its close control quits.
+        let title_bar = title_bar_closing(
+            window_title(None).into(),
+            cx.listener(|this, _: &ClickEvent, _, cx| this.quit(cx)),
+            cx,
+        );
         v_flex()
             .id("startup-failure")
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &Quit, _, cx| this.quit(cx)))
             .size_full()
-            .items_center()
-            .justify_center()
-            .gap_4()
+            .child(title_bar)
             .child(
-                div()
-                    .id("startup-failure-message")
-                    .test_support()
-                    .child(self.failure.message()),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
+                v_flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .gap_4()
                     .child(
-                        div().id("startup-retry").test_support().child(
-                            Button::new("startup-retry-button")
-                                .primary()
-                                .label("Retry")
-                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.retry(window, cx)
-                                })),
-                        ),
+                        div()
+                            .id("startup-failure-message")
+                            .test_support()
+                            .child(self.failure.message()),
                     )
                     .child(
-                        div().id("startup-quit").test_support().child(
-                            Button::new("startup-quit-button")
-                                .label("Quit")
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.quit(cx))),
-                        ),
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                div().id("startup-retry").test_support().child(
+                                    Button::new("startup-retry-button")
+                                        .primary()
+                                        .label("Retry")
+                                        .on_click(cx.listener(
+                                            |this, _: &ClickEvent, window, cx| {
+                                                this.retry(window, cx)
+                                            },
+                                        )),
+                                ),
+                            )
+                            .child(div().id("startup-quit").test_support().child(
+                                Button::new("startup-quit-button").label("Quit").on_click(
+                                    cx.listener(|this, _: &ClickEvent, _, cx| this.quit(cx)),
+                                ),
+                            )),
                     ),
             )
     }

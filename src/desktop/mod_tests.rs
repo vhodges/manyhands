@@ -156,6 +156,9 @@ mod view {
             window.render_frame(cx);
             assert!(window.try_find("startup-failure-message").is_some());
             assert!(window.try_find("startup-quit").is_some());
+            // The window takes the main window's options, so it draws the
+            // bar itself.
+            assert!(window.try_find("title-bar-title").is_some());
             // Still blocked: Retry opens again and fails again.
             window.click("startup-retry", cx);
         });
@@ -197,6 +200,7 @@ mod view {
             data.join("resolutions").is_dir(),
             "resolutions beside the service"
         );
+        assert!(data.join("layout").is_dir(), "layout beside the service");
     }
 
     /// Two Retry presses before the window's root is replaced open the

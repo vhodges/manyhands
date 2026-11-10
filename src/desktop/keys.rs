@@ -3,6 +3,8 @@
 
 use gpui_kit::{App, KeyBinding, NoAction};
 
+use crate::desktop::model::layout::{PanelKind, Side};
+
 gpui_kit::actions!(
     manyhands,
     [
@@ -66,7 +68,8 @@ gpui_kit::actions!(
         /// Make the edit editor's selection a link: the toolbar asks for
         /// the address.
         InsertLink,
-        /// New document or New ticket, the shown list's.
+        /// New document or New ticket, the focused list's: Documents or
+        /// Tickets.
         NewItem,
         /// Focus the edit toolbar's next control.
         ToolbarNext,
@@ -106,16 +109,38 @@ gpui_kit::actions!(
         ComposerToggleMode,
         /// Save resolution, in the resolve conflict sheet (D5 B3).
         SaveResolution,
+        /// Show or hide the left dock.
+        ToggleLeftDock,
+        /// Show or hide the right dock.
+        ToggleRightDock,
+        /// Show or hide the bottom dock.
+        ToggleBottomDock,
+        /// Open the dock menu of the focused panel toggle.
+        OpenDockMenu,
         /// Escape in the sheet's Result editor: back to its tab stop, the
         /// sheet left open (R-31).
         LeaveResult,
     ]
 );
 
-/// The key context of the navigation region, the documents and tickets
-/// lists with their find bar and choices: `secondary-n` opens the shown
-/// list's New document… or New ticket… there, and nowhere else.
+/// The dock menu's choice (R-12): `panel` moves to the end of `side`'s dock
+/// and is revealed. Data for the menu's items; no key and no keymap file
+/// name it, hence `no_json`.
+#[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
+#[action(namespace = manyhands, no_json)]
+pub(crate) struct DockPanel {
+    pub panel: PanelKind,
+    pub side: Side,
+}
+
+/// The key context of the Documents and Tickets regions (the tickets list
+/// with its find bar and filters): `secondary-n` opens the focused list's
+/// New document… or New ticket… there, and nowhere else.
 pub(crate) const NAVIGATION_CONTEXT: &str = "Navigation";
+
+/// The key context of a footer panel toggle (`view::footer`): `menu` and
+/// `shift-f10` open its dock menu there, and nowhere else.
+pub(crate) const PANEL_TOGGLE_CONTEXT: &str = "PanelToggle";
 
 /// The key context of the document tree's wrapper, where `enter` opens
 /// the selected row.
@@ -217,9 +242,19 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-shift-d", OpenDrafts, None),
         KeyBinding::new("secondary-q", Quit, None),
+        // The dock keys, in the workspace. An editor's own `ctrl-b` (Bold) is
+        // bound in its "Editor" context, which lies deeper, so it wins in an
+        // editable editor whichever is registered first; a read-only editor
+        // has it unbound (`editor::keys`, decision 2).
+        KeyBinding::new("secondary-b", ToggleLeftDock, Some("Workspace")),
+        KeyBinding::new("secondary-alt-b", ToggleRightDock, Some("Workspace")),
+        KeyBinding::new("secondary-j", ToggleBottomDock, Some("Workspace")),
+        // On a focused panel toggle: its dock menu.
+        KeyBinding::new("menu", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
+        KeyBinding::new("shift-f10", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
-        // New document… or New ticket…, the shown list's, in the navigation
-        // region only.
+        // New document… or New ticket…, the focused list's, in either
+        // list's region (both carry this context) and nowhere else.
         KeyBinding::new("secondary-n", NewItem, Some(NAVIGATION_CONTEXT)),
         KeyBinding::new("pageup", ScrollPageUp, Some(CONTENT_CONTEXT)),
         KeyBinding::new("pagedown", ScrollPageDown, Some(CONTENT_CONTEXT)),

@@ -2,7 +2,7 @@
 
 use super::{QuitPhase, Region, Workspace};
 use crate::desktop::{
-    model::stamp::TabId,
+    model::{layout::PanelKind, stamp::TabId},
     services::{prompts::PromptReply, worker::QuitState},
     view::{
         operations::draft_flush_id,
@@ -167,6 +167,8 @@ impl Workspace {
     /// Quitting waits: every dialog and the details sheet close, no sheet a
     /// chip asked for opens over it, and Quit now takes focus. Closing the
     /// sheet gives focus back to its chip, so Quit now is focused after it.
+    /// Quit now lives in Activity: with Activity not displayed focus stays
+    /// where the closing left it, and the layout is untouched (R-20).
     fn wait_to_quit(&mut self, phase: QuitPhase, window: &mut Window, cx: &mut Context<Self>) {
         self.set_quit(phase, cx);
         window.close_all_dialogs(cx);
@@ -175,8 +177,10 @@ impl Workspace {
         if window.has_active_sheet(cx) {
             window.close_sheet(cx);
         }
-        window.focus(&self.quit_focus, cx);
-        self.last_region = Some(Region::Operations);
+        if self.layout.is_displayed(PanelKind::Activity) {
+            window.focus(&self.quit_focus, cx);
+            self.last_region = Some(Region::Operations);
+        }
         cx.notify();
     }
 
@@ -228,7 +232,9 @@ impl Workspace {
     }
 
     /// Quit anyway goes on to D1's quit. Cancel stays, with the first
-    /// failed draft's Retry focused, in the operation area's order.
+    /// failed draft's Retry focused, in the operation area's order. Retry
+    /// lives in Activity: with Activity not displayed, focus goes to the
+    /// item area, and Needs attention counts the failure (R-20, P27).
     fn not_saved_chosen(
         &mut self,
         choice: NotSavedChoice,
@@ -251,7 +257,9 @@ impl Workspace {
                     .map(|(id, ..)| *id)
                     .find(|id| failed.contains(id))
                     .or_else(|| failures.first().map(|(id, ..)| *id));
-                if let Some(id) = first {
+                if !self.layout.is_displayed(PanelKind::Activity) {
+                    self.focus_region(Region::Content, window, cx);
+                } else if let Some(id) = first {
                     let retry = self.control_focus_for(draft_flush_id(id, "retry"), cx);
                     window.focus(&retry, cx);
                     self.last_region = Some(Region::Operations);
@@ -265,7 +273,10 @@ impl Workspace {
         }
     }
 
+    /// Every exit passes through here: the layout is written first, on this
+    /// thread, so a change made while the quit waited is kept (R-19, P31).
     pub(in crate::desktop::view) fn quit_now(&mut self, cx: &mut Context<Self>) {
+        self.dock.write_for_quit(&self.layout, cx);
         self.set_quit(QuitPhase::Quit, cx);
         self.prompts_held = false;
         self.prompt_unavailable_now(cx);

@@ -1,4 +1,4 @@
-//! The Find input, at the top of the navigation region, and what it
+//! The Find input, at the top of the Tickets region, and what it
 //! found (design, Discovery / Find).
 //!
 //! `secondary-p` focuses it, and Enter searches the selected repository.

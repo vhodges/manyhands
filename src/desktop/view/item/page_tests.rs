@@ -408,7 +408,7 @@ fn a_press_beside_the_text_focuses_the_read_editor(cx: &mut TestAppContext) {
         "Back to top rings the page"
     );
     shell.keys("secondary-2", cx);
-    assert!(holds_focus(&shell, "region-navigation", cx));
+    assert!(holds_focus(&shell, "region-documents", cx));
     assert!(!shell.present("item-page-ring", cx));
 
     // Left of the editor by more than its gutter grip, inside the column.
@@ -417,7 +417,7 @@ fn a_press_beside_the_text_focuses_the_read_editor(cx: &mut TestAppContext) {
     press(&shell, beside, Modifiers::none(), cx);
 
     assert!(focused(&shell, &editor, cx), "the read editor has focus");
-    assert!(!holds_focus(&shell, "region-navigation", cx));
+    assert!(!holds_focus(&shell, "region-documents", cx));
     assert_eq!(cursor(&editor, cx), 3, "the caret stays where it was");
     assert!(!shell.present("item-page-ring", cx), "no ring on a press");
 }
@@ -441,7 +441,7 @@ fn a_press_on_an_inspect_page_focuses_the_content_region(cx: &mut TestAppContext
     );
     assert!(shell.present("item-source", cx));
     shell.keys("secondary-2", cx);
-    assert!(holds_focus(&shell, "region-navigation", cx));
+    assert!(holds_focus(&shell, "region-documents", cx));
 
     let page = bounds(&shell, "item-page", cx);
     press(
@@ -454,7 +454,7 @@ fn a_press_on_an_inspect_page_focuses_the_content_region(cx: &mut TestAppContext
         holds_focus(&shell, "region-content", cx),
         "the content region"
     );
-    assert!(!holds_focus(&shell, "region-navigation", cx));
+    assert!(!holds_focus(&shell, "region-documents", cx));
     assert!(!shell.present("item-page-ring", cx), "no ring on a press");
 }
 

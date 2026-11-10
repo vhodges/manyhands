@@ -2,8 +2,11 @@
 //! own its transitions; sibling views render through queries and named actions.
 
 mod content;
+mod docks;
 mod find;
 mod focus;
+mod footer;
+mod layout_notices;
 mod lifecycle;
 mod lists;
 mod render;
@@ -18,6 +21,7 @@ use std::{
 use gpui_kit::{
     AppContext, Context, Entity, FocusHandle, Subscription, Task, WeakEntity, Window,
     component::{
+        dock::DockArea,
         input::{InputEvent, InputState},
         list::ListEvent,
     },
@@ -25,8 +29,10 @@ use gpui_kit::{
 
 pub(crate) use super::quit::QuitPhase;
 use super::{
+    dock::{DockShell, Launch},
     documents::DocumentsPane,
     drafts::{DraftsEvent, DraftsPage},
+    footer::Footer,
     item::{ChipField, ItemPane},
     passphrase::PassphraseDialog,
     settings::{SettingsEvent, SettingsHost},
@@ -38,6 +44,7 @@ use crate::desktop::{
     model::{
         documents::Documents,
         find::Find,
+        layout::{Layout, PanelKind, f6_stops},
         navigation::Navigation,
         stamp::{Generations, RepoKey},
         tickets::Tickets,
@@ -81,7 +88,13 @@ struct ContentArea {
 pub(crate) struct Workspace {
     services: Services,
     /// One handle per region, in `REGIONS` order.
-    regions: [FocusHandle; 4],
+    regions: [FocusHandle; 5],
+    /// The panels the person sees and how they are arranged.
+    layout: Layout,
+    /// The dock area, whose panels draw the regions.
+    dock: DockShell,
+    /// The footer's focus handles and the open dock menu.
+    footer: Footer,
     navigation: Navigation,
     /// Replacing a read drops the previous task.
     list_read: Option<Task<()>>,
@@ -109,6 +122,9 @@ pub(crate) struct Workspace {
     _drafts_events: Subscription,
     /// Fallback when the control holding focus is no longer drawn.
     last_region: Option<Region>,
+    /// The title last given to the window, so it is set only when the
+    /// derived title changes (R-14). Empty until the first frame.
+    window_title: String,
     quit: QuitPhase,
     quit_focus: FocusHandle,
     /// The dialog layer owns the open passphrase dialog.
@@ -161,8 +177,8 @@ impl Workspace {
             cx.focus_handle(),
             cx.focus_handle(),
             cx.focus_handle(),
+            cx.focus_handle(),
         ];
-        window.focus(&regions[Region::Repositories.index()], cx);
         let operations = cx.observe_in(services.operations(), window, |this, _, window, cx| {
             this.operations_changed(window, cx)
         });
@@ -234,9 +250,25 @@ impl Workspace {
             window,
             |this, _, event: &DraftsEvent, window, cx| this.drafts_event(event, window, cx),
         );
+        let mut layout = Layout::default();
+        let launch = Launch::read(services.backend().as_ref());
+        let dock = DockShell::build(&regions, &mut layout, launch, window, cx);
+        // Focus starts on Repositories if it is displayed, otherwise on the
+        // first F6 stop (R-9).
+        let start = if layout.is_displayed(PanelKind::Repositories) {
+            Region::Repositories
+        } else {
+            f6_stops(&layout)
+                .first()
+                .map_or(Region::Content, |stop| Region::of_stop(*stop))
+        };
+        window.focus(&regions[start.index()], cx);
         let mut workspace = Self {
             services,
             regions,
+            layout,
+            dock,
+            footer: Footer::new(cx),
             navigation: Navigation::default(),
             list_read: None,
             resolve_read: None,
@@ -269,7 +301,8 @@ impl Workspace {
             },
             _settings_events: settings_events,
             _drafts_events: drafts_events,
-            last_region: Some(Region::Repositories),
+            last_region: Some(start),
+            window_title: String::new(),
             quit: QuitPhase::Running,
             quit_focus: cx.focus_handle().tab_stop(true),
             passphrase: None,
@@ -334,11 +367,32 @@ impl Workspace {
     pub(super) fn choice_focus(&self, id: &str) -> Option<&FocusHandle> {
         self.choice_focus.get(id)
     }
+    /// The dock area, whose panels draw the regions.
+    pub(crate) fn dock_area(&self) -> &Entity<DockArea> {
+        self.dock.area()
+    }
     pub(crate) fn quit_phase(&self) -> QuitPhase {
         self.quit
     }
     pub(super) fn quit_focus(&self) -> &FocusHandle {
         &self.quit_focus
+    }
+
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    /// The dump the shell last accepted as the layout (R-6, R-38).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn dock_accepted(&self) -> &gpui_kit::component::dock::DockAreaState {
+        self.dock.accepted()
+    }
+
+    /// How many saves the layout has asked for (R-31).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn layout_saves(&self) -> usize {
+        self.dock.saves()
     }
 
     #[cfg(all(test, feature = "desktop-test-support"))]

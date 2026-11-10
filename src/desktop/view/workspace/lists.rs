@@ -6,7 +6,7 @@ use super::{Region, Workspace};
 use crate::desktop::{
     model::{
         list_state::ListState,
-        navigation::{Pane, Resolution},
+        navigation::Resolution,
         stamp::{RepoKey, Stamp},
         tickets::{TicketQuery, TicketRead},
     },
@@ -195,8 +195,7 @@ impl Workspace {
             self.select_repository(key, cx);
             let _ = self.tickets.set_query(query);
         }
-        self.show_pane(Pane::Tickets, window, cx);
-        self.focus_region(Region::Navigation, window, cx);
+        self.focus_region(Region::Tickets, window, cx);
     }
 
     pub(in crate::desktop::view) fn open_selected_document(&mut self, cx: &mut Context<Self>) {

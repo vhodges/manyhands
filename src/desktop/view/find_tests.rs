@@ -89,7 +89,7 @@ fn find_focused(shell: &Shell, cx: &mut TestAppContext) -> bool {
     })
 }
 
-/// `secondary-p` focuses the Find input, inside the navigation region,
+/// `secondary-p` focuses the Find input, inside the Tickets region,
 /// whose ring says so.
 #[gpui_kit::test]
 fn secondary_p_focuses_find(cx: &mut TestAppContext) {
@@ -97,7 +97,7 @@ fn secondary_p_focuses_find(cx: &mut TestAppContext) {
     assert!(!find_focused(&shell, cx));
     shell.keys("secondary-p", cx);
     assert!(find_focused(&shell, cx));
-    assert!(shell.present(Region::Navigation.ring_id(), cx));
+    assert!(shell.present(Region::Tickets.ring_id(), cx));
 }
 
 /// A ULID opens its ticket in a tab, a lifecycle-closed one as any other,
@@ -274,7 +274,7 @@ fn a_matchs_open_is_reached_by_tab_and_enter_opens_it(cx: &mut TestAppContext) {
     };
     shell.keys("tab", cx);
     assert!(open_focused(&shell, 0, cx));
-    assert!(shell.present(Region::Navigation.ring_id(), cx));
+    assert!(shell.present(Region::Tickets.ring_id(), cx));
     shell.keys("tab", cx);
     assert!(open_focused(&shell, 1, cx));
 
