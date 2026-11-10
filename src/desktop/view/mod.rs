@@ -26,6 +26,7 @@ pub(crate) mod operations;
 pub(crate) mod passphrase;
 pub(crate) mod quit;
 pub(crate) mod relationships;
+pub(crate) mod retire_asks;
 pub(crate) mod scroll;
 pub(crate) mod settings;
 pub(crate) mod shell;

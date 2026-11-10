@@ -5,7 +5,7 @@
 use gpui_kit::{Context, Task};
 use manyhands::{
     canonical::ItemId,
-    drafts::{DraftStore, Entry},
+    drafts::{DraftErrorKind, DraftId, DraftStore, Entry},
     repository::ItemDtoKind,
 };
 
@@ -31,7 +31,98 @@ pub(crate) enum Fresh {
     Failed,
 }
 
+/// How many drafts an item has, for Retire…'s question (E4 step 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kept {
+    /// The store is unavailable, its listing has not landed or failed, or
+    /// it holds an entry that cannot be read: the number is not known.
+    Unknown,
+    /// The drafts of the item itself and of comments on it, a live
+    /// session's included, each counted once.
+    Counted { item: usize, comments: usize },
+}
+
 impl DraftRegistry {
+    /// The drafts the item `id` of `kind` in `repo` has, whoever holds
+    /// them. A session that is not yet in the listing counts, once.
+    pub(crate) fn kept_of(&self, repo: &RepoKey, kind: ItemDtoKind, id: &ItemId) -> Kept {
+        if self.held_by(repo, kind, id) == Held::Unknown {
+            return Kept::Unknown;
+        }
+        let kind = item_kind(kind);
+        let of_item = |target: &manyhands::drafts::DraftTarget| {
+            target.repository == *repo && target.item_kind == kind && target.item_id == *id
+        };
+        let mut seen = std::collections::BTreeMap::new();
+        for (draft, live) in &self.sessions {
+            if of_item(live.session.target()) {
+                seen.insert(*draft, live.session.target().comment.is_some());
+            }
+        }
+        if let ListState::Ready { rows, .. } = &self.listing {
+            for row in rows {
+                if let Entry::Draft(draft) = &row.entry
+                    && of_item(&draft.target)
+                {
+                    seen.insert(draft.id, draft.target.comment.is_some());
+                }
+            }
+        }
+        let comments = seen.values().filter(|comment| **comment).count();
+        Kept::Counted {
+            item: seen.len() - comments,
+            comments,
+        }
+    }
+
+    /// Writes the newest revision of every live session of the item now
+    /// (E4 step 4), while the item is read-only. Answers the drafts that
+    /// could not be written. A session that ended meanwhile left nothing
+    /// unsaved, as `flush_all` judges it.
+    pub(crate) fn flush_item(
+        &mut self,
+        repo: &RepoKey,
+        kind: ItemDtoKind,
+        id: &ItemId,
+        cx: &mut Context<Self>,
+    ) -> Task<Vec<(DraftId, DraftErrorKind)>> {
+        let kind = item_kind(kind);
+        let ids: Vec<DraftId> = self
+            .sessions
+            .iter()
+            .filter(|(_, live)| {
+                let target = live.session.target();
+                target.repository == *repo && target.item_kind == kind && target.item_id == *id
+            })
+            .map(|(draft, _)| *draft)
+            .collect();
+        let flushes: Vec<_> = ids
+            .into_iter()
+            .map(|draft| {
+                let flush = self.flush_now(draft, cx);
+                async move { (draft, flush.await) }
+            })
+            .collect();
+        cx.spawn(async move |registry, cx| {
+            let failed: Vec<(DraftId, DraftErrorKind)> = futures::future::join_all(flushes)
+                .await
+                .into_iter()
+                .filter_map(|(draft, result)| result.err().map(|kind| (draft, kind)))
+                .collect();
+            registry
+                .read_with(cx, |registry, _| {
+                    failed
+                        .iter()
+                        .filter_map(|(draft, kind)| match (registry.current_id(*draft), kind) {
+                            (None, DraftErrorKind::NotFound) => None,
+                            (current, kind) => Some((current.unwrap_or(*draft), *kind)),
+                        })
+                        .collect()
+                })
+                .unwrap_or(failed)
+        })
+    }
+
     /// Whether the store holds a draft of the item `id` of `kind` in `repo`,
     /// or of a comment on it, whoever holds it. A live session counts too:
     /// the cached listing is not reloaded when a session begins.

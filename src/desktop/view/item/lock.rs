@@ -179,7 +179,10 @@ impl ItemPane {
     /// record, locks it ends if clean and is kept otherwise (R-23). The
     /// dialog's own lock waits for its save first.
     pub(super) fn lock_changed(&mut self, cx: &mut Context<Self>) {
-        if self.run_locks(cx) {
+        // A retirement of the item's local copy ends a clean session too:
+        // Retire… marked it after it checked that no text is unkept (E4
+        // step 4), and the loop never retires an item with a session.
+        if self.run_locks(cx) || self.retiring(cx) {
             self.lock_session(cx);
         }
     }

@@ -79,3 +79,37 @@ fn item_busy_table(cx: &mut TestAppContext) {
         );
     }
 }
+
+/// E4 step 2: Retire… counts the tabs of the item that hold unsaved text no
+/// draft keeps, in every window: a clean session, a composer's text and a
+/// tab that is gone are not counted, nor is another item's tab.
+#[gpui_kit::test]
+fn unkept_count_counts_the_items_tabs(cx: &mut TestAppContext) {
+    let quiet = TabEditing::default();
+    let unkept = TabEditing {
+        unkept: true,
+        ..quiet
+    };
+    let tabs = cx.new(|_| EditTabs::default());
+    tabs.update(cx, |tabs, _| {
+        tabs.watch(item("A"), says(unkept));
+        tabs.watch(item("A"), says(unkept));
+        tabs.watch(item("A"), says(quiet));
+        tabs.watch(
+            item("A"),
+            says(TabEditing {
+                editing: true,
+                composing: true,
+                ..quiet
+            }),
+        );
+        tabs.watch(item("A"), Box::new(|_| None));
+        tabs.watch(item("B"), says(unkept));
+    });
+    let count = |id: &str, cx: &mut TestAppContext| {
+        tabs.read_with(cx, |tabs, cx| tabs.unkept_count(&item(id), cx))
+    };
+    assert_eq!(count("A", cx), 2);
+    assert_eq!(count("B", cx), 1);
+    assert_eq!(count("C", cx), 0);
+}

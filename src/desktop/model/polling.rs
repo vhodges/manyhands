@@ -495,7 +495,6 @@ impl PollSchedule {
     /// not reached all land here. The worker and the in-flight record hold
     /// the state a line cannot (a retirement sent before a relaunch): the
     /// caller leaves those out.
-    #[allow(dead_code)] // Used by the Retire… row.
     pub fn retire_offers(&self, root: &Root) -> Vec<entry::RetireOffer> {
         let Some(repo) = self.repos.get(root) else {
             return Vec::new();

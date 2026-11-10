@@ -215,16 +215,20 @@ async fn retire_inflight_entry(cx: &mut TestAppContext) {
     ended(&world, three, cx).await;
     assert_eq!(entered(&world, cx), [one_request], "removed on Removed");
 
-    // Never sent.
-    world.heard(
+    // Never sent: this one is Owed, so the library holds it pending and the
+    // entry stays (review I-3, E-29: this used to remove it); a request that
+    // never reached the library is `a_removed_resend_keeps_a_pending_entry`'s.
+    let gone = |end| {
         vec![Heard::Retirement(Retiring::Gone {
             id: one,
             request: one_request,
-            end: RetirementEnd::NotSent,
-        })],
-        cx,
-    );
-    assert!(entered(&world, cx).is_empty(), "removed on NotSent");
+            end,
+        })]
+    };
+    world.heard(gone(RetirementEnd::NotSent), cx);
+    assert_eq!(entered(&world, cx), [one_request], "kept on NotSent");
+    world.heard(gone(RetirementEnd::Finished), cx);
+    assert!(entered(&world, cx).is_empty(), "removed on Finished");
 }
 
 /// B5, A13, U-12: a background retirement through the real provider, its
@@ -752,4 +756,61 @@ async fn unlock_picks_reachable(cx: &mut TestAppContext) {
     assert!(!super::attention_tests::unlock(&world, key.key_id, cx));
     assert!(super::attention_tests::checks(&world, cx).is_empty());
     assert_eq!(retirements_sent(&world, cx).len(), 1);
+}
+
+/// E4 step 1: Retire… checks RT-1 again where it submits. A retirement of the
+/// item that the in-flight record holds pending, or the worker holds, sends
+/// nothing; one that is not held is sent on the user lane, and its item
+/// leaves the refused set (A19). Nothing is sent once quitting is asked.
+#[gpui_kit::test]
+async fn retire_chosen_checks_rt1_again(cx: &mut TestAppContext) {
+    let (world, root) = polled(cx).await;
+    let other: ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FG9".parse().unwrap();
+    let choose = |world: &World, item: &ItemId, cx: &mut TestAppContext| {
+        let (root, item) = (root.clone(), item.clone());
+        world.services.scheduler().update(cx, |scheduler, cx| {
+            scheduler.retire_chosen(&root, TargetKind::Ticket, &item, cx)
+        })
+    };
+    // Held pending by the record: nothing.
+    world.services.scheduler().update(cx, |scheduler, cx| {
+        scheduler.hold_retirement(
+            RequestId::new(),
+            &root,
+            TargetKind::Ticket,
+            &item(),
+            OperationId::new(),
+            cx,
+        )
+    });
+    assert_eq!(choose(&world, &item(), cx), None);
+    assert!(retirements_sent(&world, cx).is_empty());
+
+    // Not held: sent, and the refusal is forgotten.
+    world.services.scheduler().update(cx, |scheduler, _| {
+        scheduler.schedule_mut().retirement_answered(
+            &root,
+            TargetKind::Ticket,
+            &other,
+            &Verdict::Refused,
+        );
+        assert!(scheduler.schedule().retirement_refused(&root, &other));
+    });
+    world.backend.inner().answer_job(
+        JobKind::ContextRetire,
+        answer(State::Retired, Code::Ok, Removal::Observed),
+    );
+    let sent = choose(&world, &other, cx).expect("sent");
+    ended(&world, sent, cx).await;
+    assert_eq!(retirements_sent(&world, cx)[0].0, Lane::User);
+    world.services.scheduler().read_with(cx, |scheduler, _| {
+        assert!(!scheduler.schedule().retirement_refused(&root, &other));
+    });
+
+    // Quitting: nothing.
+    world
+        .services
+        .scheduler()
+        .update(cx, |scheduler, cx| scheduler.set_quitting(true, cx));
+    assert_eq!(choose(&world, &other, cx), None);
 }

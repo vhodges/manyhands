@@ -13,9 +13,10 @@
 //! so a focused action stays on its own item when an earlier entry comes or
 //! goes.
 //!
-//! The entry is where the retirement summary (Task 11a), and the failure
-//! of an attempt (Task 12) join: `attempt_entry` in the model decides what
-//! is worth showing, and each adds its rows after the listed ones.
+//! The entry is where the retirement summary (Task 11a), the items Retire…
+//! is offered for (`retire`, E4) and the failure of an attempt join:
+//! `attempt_entry` in the model decides what is worth showing, and each
+//! adds its rows after the listed ones.
 //!
 //! Text is the library's fixed words and an item's ID; no title, body or
 //! comment is named.
@@ -36,7 +37,7 @@ use super::{button, scope_name, text, unavailable};
 use crate::desktop::{
     model::polling::{
         Root, TargetKind,
-        entry::{EntryLine, LineAction, attempt_entry},
+        entry::{AttemptEntry, EntryLine, LineAction, attempt_entry},
     },
     services::requests::{Intent, Lane},
     view::{item::locked_text, workspace::Workspace},
@@ -46,14 +47,33 @@ impl Workspace {
     /// The entries of the repositories whose latest attempt has something
     /// to say, in the order of their roots.
     pub(super) fn attempt_entries(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let entries: Vec<_> = self
-            .services()
+        let services = self.services().clone();
+        let entries: Vec<_> = services
             .scheduler()
             .read(cx)
             .schedule()
             .attempts()
             .filter_map(|(root, summary, retirements)| {
-                Some((root.clone(), attempt_entry(summary, retirements)?))
+                // Retire… is not offered while a retirement of the item is
+                // queued, running or pending, or marked (RT-1).
+                let offers = services
+                    .scheduler()
+                    .read(cx)
+                    .schedule()
+                    .retire_offers(root)
+                    .into_iter()
+                    .filter(|offer| {
+                        let kind = match offer.kind {
+                            TargetKind::Ticket => ItemDtoKind::Ticket,
+                            TargetKind::Document => ItemDtoKind::Document,
+                        };
+                        !services.retiring(root, kind, &offer.item.to_string(), cx)
+                    })
+                    .collect();
+                Some((
+                    root.clone(),
+                    AttemptEntry::with_offers(attempt_entry(summary, retirements), offers)?,
+                ))
             })
             .collect();
         let muted = cx.theme().muted_foreground;
@@ -78,6 +98,10 @@ impl Workspace {
             for (i, line) in entry.retirements.iter().enumerate() {
                 rows = rows
                     .child(text(format!("attempt-{root}-retirement-{i}"), line.text()).w_full());
+            }
+            // The items the loop left alone, each with Retire… (E4).
+            for offer in &entry.offers {
+                rows = rows.child(self.retire_offer(&root, offer, cx));
             }
             shown.push(rows.into_any_element());
         }

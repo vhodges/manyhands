@@ -81,7 +81,6 @@ impl Scheduler {
     /// the item leaves the refused set (A19). RT-1 is checked again here:
     /// `None`, and nothing sent, when one is queued, running or pending, and
     /// once quitting is asked (R-33).
-    #[allow(dead_code)] // Used by the Retire… row.
     pub(crate) fn retire_chosen(
         &mut self,
         root: &Root,
@@ -193,6 +192,29 @@ impl Scheduler {
         self.schedule.retire_settled(root, kind, &item, &verdict);
         self.publish(cx);
         self.tick(cx);
+    }
+
+    /// Holds a retirement of `item` pending in the in-flight record, as a
+    /// previous launch left it (a test): the lock is taken, the entry
+    /// written with the operation its journal row has, and left Owed.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn hold_retirement(
+        &mut self,
+        request: RequestId,
+        root: &Root,
+        kind: TargetKind,
+        item: &ItemId,
+        operation: OperationId,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::desktop::services::inflight::RetirementEntry;
+        self.store.try_acquire();
+        self.store
+            .retirement_submitting(RetirementEntry::new(request, root, kind, item));
+        self.store.retirement_operation(request, operation);
+        self.store
+            .retirement_ended(request, RetirementEnd::Accepted);
+        self.publish(cx);
     }
 
     /// A retirement request's progress, answer or end (the drain, E3).

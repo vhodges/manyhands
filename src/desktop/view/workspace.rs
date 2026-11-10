@@ -148,6 +148,9 @@ pub(crate) struct Workspace {
     abandon_drawn: HashSet<(RepoKey, String)>,
     control_focus: HashMap<String, FocusHandle>,
     control_drawn: HashSet<String>,
+    /// The items a Retire… press is in progress for, by repository and item
+    /// ID: a second press waits (E4).
+    pub(in crate::desktop::view) retire_asked: HashSet<(RepoKey, String)>,
     _operations: Subscription,
     /// A session's recovery state shows in the operation area.
     _drafts: Subscription,
@@ -326,6 +329,7 @@ impl Workspace {
             abandon_drawn: HashSet::new(),
             control_focus: HashMap::new(),
             control_drawn: HashSet::new(),
+            retire_asked: HashSet::new(),
             _operations: operations,
             _drafts: drafts,
             _focus_lost: focus_lost,

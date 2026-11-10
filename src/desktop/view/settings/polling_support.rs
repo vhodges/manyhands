@@ -41,6 +41,12 @@ impl Rig {
             fixture.refresh(&root);
             roots.push(root);
         }
+        Self::over(fixture, roots, cx)
+    }
+
+    /// The window over `fixture`, whose repositories `roots` the caller made
+    /// (and published) in it, with a clock moved by hand.
+    pub(crate) fn over(fixture: Fixture, roots: Vec<PathBuf>, cx: &mut TestAppContext) -> Self {
         let shell = Shell::open(fixture, cx);
         let clock = Arc::new(TestClock::at(OffsetDateTime::now_utc()));
         let services = shell

@@ -277,3 +277,114 @@ async fn relist_reads_the_store_behind_its_gate(cx: &mut TestAppContext) {
         "overtaken by a newer listing"
     );
 }
+
+/// E4 step 3: the drafts Retire…'s question counts are those of the item and
+/// of the comments on it, each once, a live session's before it is listed
+/// included; another item's are not, and a listing that is not known gives no
+/// number.
+#[gpui_kit::test]
+async fn kept_drafts_are_counted_once_each(cx: &mut TestAppContext) {
+    use super::Kept;
+    let fixture = Fixture::new();
+    let registry = registry(fixture.delaying_backend(), cx);
+    let kept = |registry: &Entity<DraftRegistry>, cx: &mut TestAppContext| {
+        registry.read_with(cx, |registry, _| {
+            registry.kept_of(&REPO.to_owned(), ItemDtoKind::Ticket, &id(ITEM))
+        })
+    };
+    assert_eq!(kept(&registry, cx), Kept::Unknown, "not listed");
+
+    list(&registry, cx);
+    assert_eq!(
+        kept(&registry, cx),
+        Kept::Counted {
+            item: 0,
+            comments: 0
+        }
+    );
+    store(&fixture, target(REPO, ItemKind::Ticket, ITEM, None));
+    store(
+        &fixture,
+        target(REPO, ItemKind::Ticket, ITEM, Some(COMMENT)),
+    );
+    store(&fixture, target(REPO, ItemKind::Ticket, OTHER, None));
+    store(&fixture, target(REPO, ItemKind::Document, ITEM, None));
+    list(&registry, cx);
+    assert_eq!(
+        kept(&registry, cx),
+        Kept::Counted {
+            item: 1,
+            comments: 1
+        }
+    );
+
+    // A session begun now is counted before the listing shows it, and once
+    // after.
+    let second = target(
+        REPO,
+        ItemKind::Ticket,
+        ITEM,
+        Some("01ARZ3NDEKTSV4RRFFQ69G5FC2"),
+    );
+    let current = fields(&second);
+    registry
+        .update(cx, |registry, cx| registry.begin(second, None, current, cx))
+        .await
+        .unwrap();
+    assert_eq!(
+        kept(&registry, cx),
+        Kept::Counted {
+            item: 1,
+            comments: 2
+        }
+    );
+    list(&registry, cx);
+    assert_eq!(
+        kept(&registry, cx),
+        Kept::Counted {
+            item: 1,
+            comments: 2
+        }
+    );
+}
+
+/// E4 step 4: the item's live sessions are written now, and nothing fails
+/// for an item with none.
+#[gpui_kit::test]
+async fn flush_item_writes_the_items_sessions(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let registry = registry(fixture.delaying_backend(), cx);
+    let flush = |registry: &Entity<DraftRegistry>, cx: &mut TestAppContext| {
+        registry.update(cx, |registry, cx| {
+            registry.flush_item(&REPO.to_owned(), ItemDtoKind::Ticket, &id(ITEM), cx)
+        })
+    };
+    assert!(flush(&registry, cx).await.is_empty(), "no session");
+    let comment = target(REPO, ItemKind::Ticket, ITEM, Some(COMMENT));
+    let current = fields(&comment);
+    let draft = registry
+        .update(cx, |registry, cx| {
+            registry.begin(comment, None, current, cx)
+        })
+        .await
+        .unwrap();
+    // Newer text waits for its schedule; the flush writes it now.
+    registry.update(cx, |registry, cx| {
+        registry.edit(
+            draft,
+            DraftFields::Comment {
+                body: "Newer".to_owned(),
+            },
+            cx,
+        )
+    });
+    assert!(
+        registry.read_with(cx, |registry, _| registry.unsaved()),
+        "waiting"
+    );
+    assert!(flush(&registry, cx).await.is_empty(), "written");
+    assert!(
+        !registry.read_with(cx, |registry, _| registry.unsaved()),
+        "saved"
+    );
+}

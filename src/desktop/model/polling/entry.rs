@@ -9,10 +9,12 @@
 //!
 //! The text of a disposition is the library's `guidance()`, except where it
 //! names a CLI command: the desktop names its own action instead (R-20).
-//! `Unpublished` says so and offers Share…. `Closed` and `Promoted` are
-//! Part E's (Retire…): they are left out here until that part lists them.
-//! The retirement lines of the entry (E3) are Task 11b's; the failure and the
-//! attention slots are Tasks 12 and 8's.
+//! `Unpublished` says so and offers Share…. `Closed` and `Promoted` are not
+//! listed from the attempt alone: the items the retirement loop left alone
+//! join the entry as offers of Retire… (`AttemptEntry::with_offers`, E4),
+//! from the schedule's account of what was reported, retired and refused.
+//! The retirement lines of the entry (E3) follow the requests; the failure
+//! and the attention slots are Task 8's.
 //!
 //! Nothing here names a title, a body or a comment: only an item's ID and
 //! the library's fixed words.
@@ -62,7 +64,7 @@ pub(crate) enum RetireState {
     /// `retired` or `already_absent`: the copy is gone.
     Retired,
     /// `pending`, or left `Accepted`: it did not finish. The pending row
-    /// offers Resume and Abandon (Task 12).
+    /// offers Resume and Abandon (E4).
     Unfinished {
         /// `discovery_pending`: the lists are still catching up.
         catching_up: bool,
@@ -97,7 +99,6 @@ pub(crate) fn short_code(item: &ItemId) -> String {
 
 /// What the entry says of an item whose retirement it offers: the item by
 /// its short code, never a title.
-#[allow(dead_code)] // Used by the Retire… row.
 pub(crate) fn offer_text(kind: TargetKind, item: &str) -> String {
     let what = match kind {
         TargetKind::Ticket => "is closed",
@@ -107,11 +108,9 @@ pub(crate) fn offer_text(kind: TargetKind, item: &str) -> String {
 }
 
 /// "Retire…", the action of such an item.
-#[allow(dead_code)] // Used by the Retire… row.
 pub(crate) const RETIRE: &str = "Retire\u{2026}";
 
 impl RetireOffer {
-    #[allow(dead_code)] // Used by the Retire… row.
     pub(crate) fn text(&self) -> String {
         offer_text(self.kind, &short_code(&self.item))
     }
@@ -166,7 +165,6 @@ pub(crate) struct AttemptEntry {
 impl AttemptEntry {
     /// The entry with `offers` added. An attempt that had nothing else to
     /// say still has an entry once there is an item to retire.
-    #[allow(dead_code)] // Used by the Retire… row.
     pub(crate) fn with_offers(entry: Option<Self>, offers: Vec<RetireOffer>) -> Option<Self> {
         if offers.is_empty() {
             return entry;

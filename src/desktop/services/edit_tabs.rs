@@ -92,6 +92,16 @@ impl EditTabs {
         })
     }
 
+    /// How many tabs of the item `tab` hold unsaved text that no draft
+    /// holds, in every window: Retire… submits nothing while there are any
+    /// (E4 step 2). A tab that is gone is not counted.
+    pub(crate) fn unkept_count(&self, tab: &TabKey, cx: &App) -> usize {
+        self.tabs
+            .iter()
+            .filter(|(of, watch)| of == tab && watch(cx).is_some_and(|tab| tab.unkept))
+            .count()
+    }
+
     /// Whether the tab `tab` holds an edit session of its item, live or
     /// kept, or is getting one ready.
     pub(crate) fn editing(&self, tab: &TabKey, cx: &App) -> bool {

@@ -329,6 +329,13 @@ fn a_removed_resend_keeps_a_pending_entry() {
     assert_eq!(store.retirements().len(), 3);
     assert!(store.retirement_ended(fresh, RetirementEnd::Removed));
     assert_eq!(store.retirements().len(), 2);
+    let never = RequestId::new();
+    store.retirement_submitting(retirement(never));
+    assert!(
+        store.retirement_ended(never, RetirementEnd::NotSent),
+        "unsent"
+    );
+    assert_eq!(store.retirements().len(), 2);
 
     // Kept on disk, owed flag and all.
     drop(store);

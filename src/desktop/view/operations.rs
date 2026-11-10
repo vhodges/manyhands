@@ -75,6 +75,7 @@ mod record;
 mod recovered;
 pub(crate) mod republish;
 mod resume;
+mod retire;
 mod review;
 
 use outcomes::{ALREADY_FINISHED, already_finished};
@@ -976,3 +977,7 @@ mod attempts_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "operations/retiring_tests.rs"]
 mod retiring_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/retire_tests.rs"]
+mod retire_tests;
