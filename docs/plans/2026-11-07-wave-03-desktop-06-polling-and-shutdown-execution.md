@@ -758,7 +758,7 @@ behaviour Tasks 3 and 5 built, `attention_host`'s UI half was red) and
 mutation only). Reviewer mutations: disabling the background refusal fails
 `attention_locked_key` and `two_keys_evict` (by timeout). Survivor: N6c, the
 explicit removal in `forget_schedule` is redundant with the prune on `tick`.
-| 9 | (ledger commit) | `7ab7674c`, `197b60f2`, `20e337ad` (review fixes) | APPROVE WITH MINOR; Important (the attempt entry's Share… skipped the lifecycle lock) and two minors applied; the rest recorded; the fixes were checked by the orchestrator (three tests, gates, boundary), not re-reviewed | `desktop::view::item::edit_tests::bring_in::{bring_in_keeps_dirty_session, bring_in_kept_draft_banner}`, `desktop::model::polling::entry::tests::{dispositions_listed, a_quiet_attempt_has_no_entry, closed_and_promoted_are_left_to_part_e}`, `desktop::view::operations::attempts_tests::{dispositions_listed, attempt_entry_actions_hit, attempt_entry_share_waits_for_the_lock, attempt_entry_ids_follow_the_repository}`; each singly with `--exact`, 1 test, pass; fmt, check, clippy pass |
+| 9 | `68624a93` | `7ab7674c`, `197b60f2`, `20e337ad` (review fixes) | APPROVE WITH MINOR; Important (the attempt entry's Share… skipped the lifecycle lock) and two minors applied; the rest recorded; the fixes were checked by the orchestrator (three tests, gates, boundary), not re-reviewed | `desktop::view::item::edit_tests::bring_in::{bring_in_keeps_dirty_session, bring_in_kept_draft_banner}`, `desktop::model::polling::entry::tests::{dispositions_listed, a_quiet_attempt_has_no_entry, closed_and_promoted_are_left_to_part_e}`, `desktop::view::operations::attempts_tests::{dispositions_listed, attempt_entry_actions_hit, attempt_entry_share_waits_for_the_lock, attempt_entry_ids_follow_the_repository}`; each singly with `--exact`, 1 test, pass; fmt, check, clippy pass |
 
 ## Task 9: unsaved work across a bring-in; dispositions
 
@@ -824,3 +824,102 @@ Process: `bring_in_keeps_dirty_session` was first red on a wrong fixture
 `bring_in_kept_draft_banner` was green on first run (mutation evidence);
 `attempt_entry_share_waits_for_the_lock` was red only because its ids did not
 yet exist, and the "no lock check" mutation is its real evidence.
+| 10 | (ledger commit) | `d8e13309` | APPROVE WITH MINOR; no code fix needed (every finding is a ledger record or a hand-off); not re-reviewed (no fix commit) | `desktop::view::quit::tests::{quit_freezes_scheduler, quit_lets_retirement_finish, quit_sees_poll_end, quit_polling_still_stopping, quit_joins_worker, quit_joins_worker_when_a_job_ends, quit_during_restart_wait}`, `desktop::view::item::edit_tests::quit_freeze::quit_freezes_scheduler_for_the_unkept_ask`, `desktop::services::worker::quit::tests::quit_cancels_poll`, `desktop::services::scheduler::quit_tests::{relaunch_keeps_deadline, quit_drops_an_armed_check_now, quit_stops_unlock, quit_stops_resume_checking, quit_withdraws_queued_poll}`; the implementer ran the 14 as one command, the reviewer re-ran 15 singly with `--exact`, 1 test each, pass; fmt, check, both clippy pass |
+
+## Task 10: shutdown (cancel, the poll's end, still stopping, join)
+
+Files (all under `src/desktop/`): new `services/worker/{quit.rs, quit_tests.rs}`,
+`services/scheduler_quit_tests.rs`, `model/operations/quit_wait.rs`,
+`view/{quit_support.rs, quit_tests.rs, item/edit_quit_freeze_tests.rs}`; changed
+`view/{quit.rs, workspace/lifecycle.rs}`, `services/{worker.rs, poll.rs,
+scheduler.rs, scheduler/{attention.rs, entity.rs}}`, `model/operations.rs`,
+`view/item/edit_tests.rs` (**E-13**, a 4-line `mod quit_freeze` mount, nothing
+else). Nothing outside `src/desktop/` changed. `worker.rs` stays 1447 lines.
+No `Called from Task 10` allow remains. No `finishing_text` test needed an
+E-3 edit (the existing wording did not change). No path loses a draft or
+editor text (reviewer checked every exit of the quit flow).
+
+What it does: `Workspace::request_quit` calls `set_quitting(true)` on entry and
+Cancel on the unkept ask or the failed-flush ask resumes (R-33). `quit()` calls
+`ask_poll_cancel(CancelCause::Quit)` once per operation (later calls only raise
+firmness). `finishing_text` says "Finishing a check for updates" for a poll
+and, after the injected ten seconds, "Still stopping — waiting for Manyhands to
+reach a safe point. Your work is saved." (only in `view/quit.rs`, R-15; the wait
+is a GPUI timer, the duration injected). `WorkerHandle::shut_down_and_join`
+joins the worker thread on the `Idle` exit (`finish_job`) and when a `Finishing`
+job ends (`quit_if_finished`), never from Quit now.
+
+Rulings (accepted by the orchestrator; the design is silent on each, cost
+stated):
+1. **A queued poll dropped by quit is answered `Polled(Cancelled(Quit),
+   completed_at None)`, not `Removed`, and not `schedule.abandon`** (the
+   Task 5 hand-off suggested `abandon`; this is a deviation, taken because the
+   drain ignores `Removed` for non-requests and the model already has the row
+   `Cancelled(Quit)` → `Stopped`). If the app exits before the async answer is
+   applied, the in-flight entry stays, as after a crash: on relaunch the
+   never-run operation is resent with `restart=true`, the library answers
+   `recovery_required` (reservation.rs:~1577), L-3 drops the entry and the
+   model waits about 5 s as "Waiting for an unfinished operation", then a new
+   operation. One library call, a transient status line, no Activity row, no
+   attention entry. Not run as a relaunch test (rests on the L-3 reading).
+2. **An armed Check now is dropped while quitting, not kept**; and
+   **`resume_checking` is dropped, not queued, while quitting** (the click is
+   lost if a failed-flush Cancel follows; the person presses again). Cost:
+   small; `resumed` is not gated (it only clears attention and re-reads policy,
+   and `tick` cannot send while quitting).
+3. **`IndexRefresh` after a poll is not frozen**: it is R-10's refresh, not a
+   "loop item"; it cannot make a quit wait unboundedly. Cost: a quit asked just
+   before can wait for one background refresh.
+4. **Quit keeps cancelling the running token of a non-retire background job**
+   (today `IndexRefresh`); only `ContextRetire` is exempt (decision 28, with
+   Task 11a). That is existing behaviour.
+
+Deferred / handed on:
+- **Decision 28 / R-38 has no effective test yet.** `quit_lets_retirement_finish`
+  covers only the generic half (a background `IndexRefresh` held on the
+  worker: the quit waits, says "still stopping" at the injected wait, quits on
+  return) and could not fail if quit cancelled the token. Do not cite it as
+  proving decision 28. **Task 11a must:** add a field to `Running` marking a
+  background `ContextRetire`; skip the token cancel in `WorkerHandle::quit` for
+  it (`TODO(Task 11a)` marks the line); repoint this test at a held real
+  `ContextRetire` and assert its token is not cancelled. Quit now leaving the
+  retirement pending is covered by the existing Quit-now tests.
+- **Task 11b:** the retirement loop must check `Scheduler::quitting` before each
+  item (`TODO(Task 11b)` in `react.rs`); queued retirements are dropped by
+  `quit()` through the same removal path.
+- **Wave 04 Cycle 01 step (skipped; not on main):** `quit_polling_still_stopping`
+  also hides the Activity panel first and asserts the layout is unchanged and
+  that `quit-finishing` carries the still-stopping text (Cycle 01 decision 7,
+  K-18; design decision 12; E-5, A18). Cycle 01's own quit test is left alone.
+  When Cycle 01 merges, add it.
+
+Known limits (recorded, not fixed):
+- K-38: removing `thread.join()` is not detected: a woken idle thread exits
+  before the assertion runs (3 of 3 runs). The tests prove the thread has ended
+  before the app quits (`WorkerHandle::ended()`, `cfg(test)`) and the
+  removed-call mutations on both graceful exits are caught. A deterministic
+  test needs a negative observation or a timeout, which AGENTS.md forbids; not
+  worth requiring (the join is three lines).
+- K-39: `Rig::quiet` in `quit_support.rs` duplicates `World::quiet` (a real
+  200 ms wait; the tests take 3 to 5 s each); `quit_polling_still_stopping`
+  asserts `!cancels().is_empty()` on a background-executor task (timing-
+  dependent, but it passed); `QuitWait.after` ships as a production `Option`
+  that only tests set.
+- The untested `quit != Finishing(id)` check in `still_stopping` is equivalent
+  in effect.
+
+Process: the freeze code in `lifecycle.rs` and the queued-poll change in
+`worker/quit.rs` were written before their tests (a process lapse); the two
+freeze tests and `quit_withdraws_queued_poll` were green on first run and rest
+on mutation (reviewer re-ran three: no freeze, no cancel, `Removed` instead
+of the answer, each caught). `relaunch_keeps_deadline` was green on first run
+(it pins existing behaviour); the reviewer's mutation (ignore the stored
+deadline) fails it at "not due at launch", through the real `Scheduler`.
+
+## Part D checkpoint (Task 10)
+
+- Main: `origin/main` unchanged since the Part C checkpoint (`d6789cb9`);
+  Cycle 01 (`01M6V8RK8B0SBCH0YZXFVSR9E3`) not on main. See the skipped step above.
+- Tests run: only the ones listed in the Task 10 row, by exact path. Static
+  gates (fmt, check, both clippy) pass at `d8e13309`. No whole suite, no other
+  target.
