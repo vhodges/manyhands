@@ -12,8 +12,9 @@
 //! - `COMMENT`: a comment on two tickets, and a comment draft;
 //! - `DRAFT`: the fields of the kept drafts of a ticket and a document;
 //! - `EDIT`: text typed into an open ticket's editor, unkept;
-//! - `PATH`: the document's path, which the lists show and a retirement of
-//!   the document could be tempted to name;
+//! - `PATH`: the document's path, which its tree row carries only in a
+//!   tooltip and a description, neither of which the test snapshot reads
+//!   (E-15), and which a retirement of the document could be tempted to name;
 //! - `PASSPHRASE`: typed into the passphrase dialog an Unlock… raises;
 //! - `PRIVATE`: the content of the private key file the unlock asks for.
 //!
@@ -114,7 +115,8 @@ const DRAFTED_COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB3";
 
 /// Where the design puts item text, so a sentinel may show there: the tab
 /// strip and the item's own page (title, read view, edit editor, comments,
-/// source) and the lists, which name items by title and path. Everything
+/// source) and the lists, which name items by title (a row's path is its
+/// tooltip, which no snapshot reads, E-15). Everything
 /// else the window draws is read.
 ///
 /// `item-banners` and `item-pill` are allowed too, and are out of scope for
@@ -684,7 +686,7 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     for (at, sentinel) in [
         ("tab-strip", TITLE),
         ("region-tickets", TITLE),
-        ("region-documents", PATH),
+        ("region-documents", TITLE),
     ] {
         assert!(
             seen.allowed.contains(&(at, sentinel)),

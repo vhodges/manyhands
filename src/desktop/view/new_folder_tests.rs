@@ -29,7 +29,7 @@ use crate::desktop::{
         requests::{DesktopRequestId, Intent, RequestState},
     },
     test_support::fixtures::Fixture,
-    view::{documents::EMPTY_FOLDER, harness::Shell},
+    view::{documents::EMPTY_TRAILING, harness::Shell},
 };
 
 const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FN0";
@@ -217,7 +217,7 @@ async fn new_folder_creates_and_explains_local_folders_and_lists_it(cx: &mut Tes
     let at = nodes.iter().position(|node| node == "plans").unwrap();
     assert_eq!(
         shell.label(("doc-empty", at), cx).as_deref(),
-        Some(EMPTY_FOLDER)
+        Some(EMPTY_TRAILING)
     );
     assert_eq!(refreshes(&shell, cx), 0, "no refresh of the desktop's own");
 

@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use super::{Region, Workspace};
 use crate::desktop::{
     model::{
+        documents::folder_path,
         list_state::ListState,
-        list_view::ListAction,
+        list_view::{ListAction, ListKind},
         markers::row_markers,
         navigation::{Pane, Resolution},
         polling::retire_loop::Held,
@@ -16,7 +17,7 @@ use crate::desktop::{
     services::ReadKind,
     view::tickets::ShownTicket,
 };
-use gpui_kit::{App, Context, Window};
+use gpui_kit::{App, Context, Window, component::tree::TreeEvent};
 use manyhands::repository::{ClosureFilter, ItemDtoKind, ReadinessFilter, ResolvedRepository};
 
 impl Workspace {
@@ -242,31 +243,48 @@ impl Workspace {
             .update(cx, |input, cx| input.focus(window, cx));
     }
 
-    /// What an alert's or an empty state's button does (Part A).
+    /// What an alert's or an empty state's button does (Part A), in the
+    /// panel of `kind`: Refresh, Retry and Rebuild leave focus on that
+    /// panel's list or tree (R-28).
     pub(in crate::desktop::view) fn list_action(
         &mut self,
         action: ListAction,
+        kind: ListKind,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match action {
             ListAction::Refresh => {
                 self.maintain_index(false, cx);
-                self.tickets_pane.focus(window, cx);
+                self.focus_list(kind, window, cx);
             }
             ListAction::Retry => {
                 self.reload_lists(cx);
-                self.tickets_pane.focus(window, cx);
+                self.focus_list(kind, window, cx);
             }
             ListAction::RebuildIndex => {
                 self.maintain_index(true, cx);
-                self.tickets_pane.focus(window, cx);
+                self.focus_list(kind, window, cx);
             }
             ListAction::ClearFilters => self.clear_filters(window, cx),
             ListAction::ShowAll => self.show_all(window, cx),
-            ListAction::NewItem => self.new_item(Pane::Tickets, window, cx),
+            ListAction::NewItem => self.new_item(
+                match kind {
+                    ListKind::Tickets => Pane::Tickets,
+                    ListKind::Documents => Pane::Documents,
+                },
+                window,
+                cx,
+            ),
         }
         cx.notify();
+    }
+
+    fn focus_list(&mut self, kind: ListKind, window: &mut Window, cx: &mut Context<Self>) {
+        match kind {
+            ListKind::Tickets => self.tickets_pane.focus(window, cx),
+            ListKind::Documents => self.documents_pane.focus(window, cx),
+        }
     }
 
     /// Home and End in the ticket list: the first or the last row, and the
@@ -279,6 +297,23 @@ impl Workspace {
     ) {
         self.tickets_pane.select_edge(last, window, cx);
         cx.notify();
+    }
+
+    /// Home and End in the document tree: the first or the last row (R-15).
+    pub(in crate::desktop::view) fn select_document_edge(
+        &mut self,
+        last: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.documents_pane.select_edge(last, cx);
+        cx.notify();
+    }
+
+    /// The selected repository's display name, once its documents are
+    /// loaded.
+    pub(in crate::desktop::view) fn documents_repo_name(&self) -> Option<String> {
+        let key = self.documents.repo()?;
+        Some(self.repo_name(key))
     }
 
     /// The selected repository's display name, once its tickets are loaded.
@@ -321,9 +356,29 @@ impl Workspace {
         self.focus_region(Region::Tickets, window, cx);
     }
 
+    /// Enter in the tree: a folder with child nodes opens or closes, as a
+    /// click does (R-24), through the model and a rebuild, since the Kit's
+    /// toggle is private; a document opens.
     pub(in crate::desktop::view) fn open_selected_document(&mut self, cx: &mut Context<Self>) {
-        if let Some(target) = self.documents_pane.selected_target(cx) {
+        if let Some((path, open)) = self.documents_pane.toggle_target(cx) {
+            self.documents.set_expanded(&path, !open);
+            self.documents_changed(cx);
+        } else if let Some(target) = self.documents_pane.selected_target(cx) {
             self.open_item(target, cx);
+        }
+    }
+
+    /// A folder the person opened or closed in the tree, by key or by
+    /// mouse: the model keeps it, so a reload or a hidden panel does too
+    /// (R-12, P19). The tree's own state already shows it.
+    pub(super) fn tree_event(&mut self, event: &TreeEvent, cx: &mut Context<Self>) {
+        let (id, open) = match event {
+            TreeEvent::Expanded(id) => (id, true),
+            TreeEvent::Collapsed(id) => (id, false),
+        };
+        if let Some(path) = folder_path(id) {
+            self.documents.set_expanded(path, open);
+            cx.notify();
         }
     }
 

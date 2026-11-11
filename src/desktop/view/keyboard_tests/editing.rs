@@ -890,6 +890,9 @@ const ADOPTED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX8";
 const READABLE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX9";
 const MARKER: &str = "docs/marker.md";
 const NOTES: &str = "docs/notes.md";
+/// What the tree labels the two files by (E-9): their file names.
+const MARKER_FILE: &str = "marker.md";
+const NOTES_FILE: &str = "notes.md";
 
 /// A window over `a`: a marker-only document, which needs fixing; a file
 /// under `docs/` with no front matter, unmanaged; and a conforming
@@ -943,7 +946,7 @@ async fn repair_and_adopt_by_keyboard_alone(cx: &mut TestAppContext) {
     walk.select_a_repository(cx);
 
     // Repair…, from "Needs fixing".
-    walk.open_document(MARKER, cx);
+    walk.open_document(MARKER_FILE, cx);
     walk.keys("secondary-3", cx);
     walk.tab_to("tab", "item-repair-button", cx);
     walk.on("item-repair-button", Region::Content, cx);
@@ -987,7 +990,7 @@ async fn repair_and_adopt_by_keyboard_alone(cx: &mut TestAppContext) {
     walk.region(Region::Content, cx);
 
     // Adopt…, and the close prompt.
-    walk.open_document(NOTES, cx);
+    walk.open_document(NOTES_FILE, cx);
     walk.keys("secondary-3", cx);
     let shown = walk.shown_tab(cx);
     walk.tab_to("tab", "item-repair-button", cx);

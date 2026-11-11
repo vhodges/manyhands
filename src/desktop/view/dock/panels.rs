@@ -185,11 +185,16 @@ pub(super) fn count(workspace: &Workspace, kind: PanelKind) -> Option<Count> {
                 .rows()
                 .map(|_| Count::Rows(tickets.view().listed))
         }
-        PanelKind::Documents => workspace
-            .documents()
-            .state()
-            .rows()
-            .map(|rows| Count::Rows(document_count(rows))),
+        PanelKind::Documents => {
+            let documents = workspace.documents();
+            if documents.list().reloading() {
+                return Some(Count::Updating);
+            }
+            documents
+                .state()
+                .rows()
+                .map(|rows| Count::Rows(document_count(rows)))
+        }
         PanelKind::Activity => None,
     }
 }

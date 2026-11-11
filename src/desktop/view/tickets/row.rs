@@ -8,9 +8,8 @@
 //! is an icon with its own tooltip, which is also its accessible name.
 
 use gpui_kit::{
-    App, InteractiveElement, IntoElement, ParentElement, SharedString, StatefulInteractiveElement,
-    Styled, TestSupportExt,
-    component::{ActiveTheme, Icon, h_flex, tooltip::Tooltip},
+    App, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled, TestSupportExt,
+    component::{ActiveTheme, h_flex},
     div,
     prelude::FluentBuilder,
     px,
@@ -19,7 +18,6 @@ use time::OffsetDateTime;
 
 use super::ShownTicket;
 use crate::desktop::{
-    assets::icon_path,
     model::{
         status::{Tint, tint},
         ticket_view::{
@@ -30,7 +28,7 @@ use crate::desktop::{
     },
     view::{
         item::relative_time,
-        rows::ListRow,
+        rows::{ListRow, named_icon},
         shell::tokens::{ChromeColors, chrome_colors},
     },
 };
@@ -62,36 +60,6 @@ fn type_icon(ticket_type: Option<&str>) -> &'static str {
         Some("task") => "list-checks",
         _ => "ticket",
     }
-}
-
-fn icon(name: &str, size: f32, color: gpui_kit::Hsla) -> Icon {
-    Icon::default()
-        .path(icon_path(name))
-        .w(px(size))
-        .h(px(size))
-        .flex_none()
-        .text_color(color)
-}
-
-/// An icon that has a tooltip, which is also its accessible name.
-fn named_icon(
-    id: impl Into<gpui_kit::ElementId>,
-    name: &str,
-    size: f32,
-    color: gpui_kit::Hsla,
-    text: impl Into<SharedString>,
-) -> impl IntoElement {
-    let text: SharedString = text.into();
-    let tooltip = text.clone();
-    div()
-        .id(id)
-        .test_support()
-        .aria_label(text)
-        .flex_none()
-        .flex()
-        .items_center()
-        .child(icon(name, size, color))
-        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
 }
 
 /// The pill's text colour and the fill behind it.

@@ -272,10 +272,9 @@ fn holds(root: &Path, branch: &str, at: usize, path: &str) -> bool {
 
 /// The paths the document tree shows, in its order.
 fn tree_paths(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
-    let nodes = shell.rows("doc-node", cx).len();
-    (0..nodes)
-        .filter_map(|ix| shell.label(("doc-path", ix), cx))
-        .collect()
+    shell.workspace.read_with(cx, |workspace, cx| {
+        workspace.documents_pane().document_paths(cx)
+    })
 }
 
 fn failing_at(shell: &Shell, point: FailurePoint) {

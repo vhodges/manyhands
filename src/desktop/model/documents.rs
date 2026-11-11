@@ -49,6 +49,18 @@ pub(crate) fn document_count(nodes: &[TreeNode]) -> usize {
         .sum()
 }
 
+/// How many nodes a tree lists, folders and documents in every folder: the
+/// rows the panel would draw (`BodyInput::listed`, P27).
+pub(crate) fn node_count(nodes: &[TreeNode]) -> usize {
+    nodes
+        .iter()
+        .map(|node| match node {
+            TreeNode::Folder { children, .. } => 1 + node_count(children),
+            TreeNode::Document(_) => 1,
+        })
+        .sum()
+}
+
 /// The folder a path is directly in: everything before its last `/`.
 fn parent(path: &str) -> Option<&str> {
     path.rsplit_once('/').map(|(parent, _)| parent)
@@ -132,7 +144,14 @@ pub(crate) fn build_tree(
 
 /// A folder's id in the tree: the Kit's item id and the app's.
 pub(crate) fn folder_id(path: &str) -> String {
-    format!("folder:{path}")
+    format!("{FOLDER_PREFIX}{path}")
+}
+
+const FOLDER_PREFIX: &str = "folder:";
+
+/// The path of the folder a tree id names; `None` for a document's.
+pub(crate) fn folder_path(id: &str) -> Option<&str> {
+    id.strip_prefix(FOLDER_PREFIX)
 }
 
 /// A document's id in the tree. Paths are unique within one context's
@@ -142,7 +161,6 @@ pub(crate) fn document_id(item: &ItemDto) -> String {
 }
 
 /// The last part of a path.
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 6.
 fn last_segment(path: &str) -> &str {
     path.rsplit_once('/').map_or(path, |(_, last)| last)
 }
@@ -162,7 +180,6 @@ impl Expansion {
         !self.collapsed.contains(path)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 6.
     pub(crate) fn set(&mut self, path: &str, expanded: bool) {
         if expanded {
             self.collapsed.remove(path);
@@ -230,7 +247,6 @@ pub(crate) fn visible_selection(
 /// What a row's trailing cell says. The unsaved marker is the view's: it
 /// comes from the draft registry, not the tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 6.
 pub(crate) enum Trailing {
     None,
     /// A folder's documents, shown while it is collapsed or has nothing
@@ -241,7 +257,6 @@ pub(crate) enum Trailing {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 6.
 pub(crate) enum DocKind {
     Folder,
     Document,
@@ -254,7 +269,6 @@ pub(crate) enum DocKind {
 
 /// What one row says, apart from where it is drawn (Part E).
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 6.
 pub(crate) struct DocRow {
     pub label: String,
     pub kind: DocKind,
@@ -265,13 +279,10 @@ pub(crate) struct DocRow {
     pub tooltip: Vec<String>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 6.
 pub(crate) const EMPTY_FOLDER_TOOLTIP: &str = "Empty folder. Shared once it contains a document.";
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 6.
 pub(crate) const ADOPT_TOOLTIP: &str = "Not a managed document yet. Open to adopt it.";
 
 /// The row `node` is drawn as, a folder being `expanded` or not.
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 6.
 pub(crate) fn doc_row(node: &TreeNode, expanded: bool) -> DocRow {
     match node {
         TreeNode::Folder {
@@ -386,7 +397,6 @@ impl Documents {
 
     /// A folder of the selected repository opened or closed. The tree is
     /// rebuilt from the set by the view.
-    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 6.
     pub(crate) fn set_expanded(&mut self, path: &str, expanded: bool) {
         if let Some(repo) = self.repo.clone() {
             self.expansions.entry(repo).or_default().set(path, expanded);

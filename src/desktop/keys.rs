@@ -261,8 +261,8 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("menu", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
         KeyBinding::new("shift-f10", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
-        // The first and last row of a list; the document tree handles them
-        // from Task 6 of Cycle 02.
+        // The first and last row of a list; the Workspace handles them in
+        // the document tree as in the ticket list (`view::documents`).
         KeyBinding::new("home", SelectFirst, Some(TICKET_LIST_CONTEXT)),
         KeyBinding::new("end", SelectLast, Some(TICKET_LIST_CONTEXT)),
         KeyBinding::new("home", SelectFirst, Some(DOCUMENTS_CONTEXT)),

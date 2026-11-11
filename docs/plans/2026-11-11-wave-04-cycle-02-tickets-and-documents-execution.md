@@ -373,6 +373,53 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
   ledger reserves E-15 for Task 6's `polling_privacy_tests.rs` edit; Task 5's
   four are E-16 to E-19 below.
 
+- **Ruling (Task 6): `list_action` takes a `ListKind`** so Refresh, Retry and
+  Rebuild focus the panel's own list or tree (R-28) and `NewItem` opens that
+  panel's dialog; the old code hard-coded Tickets. `lists.rs`'s `tickets_state`
+  became the generic `list_state(kind, ids, body)` shared by both panels;
+  Tickets' ids are unchanged — cost if wrong: one parameter. (Reviewer agrees.)
+- **Ruling (Task 6): E-15 replaces the `("region-documents", PATH)` pair with
+  `("region-documents", TITLE)` instead of only dropping it.** `region-documents`
+  is in `ALLOWED`, so the PATH pair was a positive proof that the sweep reads
+  that surface. The path is now tooltip and description only, which the
+  snapshot cannot read, so the sweep cannot check it there; the TITLE pair gives
+  the same proof from the row's label, and fails if the row stops drawing it.
+  The `PATH` sentinel stays in `SENTINELS`, swept and never allowed anywhere.
+- **Ruling (Task 6): `doc-nonconforming` is named by the row's first tooltip
+  line** (the adopt or fix reason; the design gives no name), pinned against
+  `doc_row(..).tooltip[0]`; `doc-count` and `doc-empty` are named by their text.
+  Minor, not acted on: the reason is also in the row's `aria_description`, so a
+  screen reader reads it twice; `document_row` takes `state: (bool, bool, bool)`
+  where named fields would read better.
+- **Ruling (Task 6): `icon` and `named_icon` moved from `tickets/row.rs` to
+  `rows.rs`** and are shared; a pure move with a one-line import change in a
+  Task 3 file.
+- **Out-of-list edits (Task 6):** `view/rows.rs`, `view/tickets/row.rs`,
+  `model/documents.rs` (`node_count`, `folder_path`, allow removals),
+  `model/list_view.rs` (file-level allow removed), `keys.rs` and
+  `keyboard_tests/frame.rs` (comments only), `polling_privacy_tests.rs` (E-15).
+- **Handovers a to e from Tasks 3 and 5 are done**, and no `Used from Task 6`
+  text remains. Remaining allows: `ticket_view.rs` `CANT_BE_READ_*` (Task 7) and
+  the two `collapse_all` methods (Task 8).
+- **Known gaps (Task 6, not acted on):** `focused` (the region ring) is untested
+  by design (appearance, AGENTS.md); P26 (hide and show keeps the state and
+  selection) has no mutation that breaks only it — the pane, its `TreeState` and
+  the expansion set are Workspace-owned and hide clears nothing — and is pinned
+  by the `folders_keep_their_state_and_toggle_by_key` step as a regression
+  guard; Documents' tab "· Updating…" is untested until Task 8's P29 test (the
+  code path is the shared `counted`); `view/documents_tests.rs` is about 840
+  lines (was 262) — split `the_tree_says_each_list_state_and_acts_on_it` and its
+  helpers into `documents_tests/states.rs` when Task 7 or 8 next touches it.
+- **Process note (Task 6):** the six documents tests were seen failing on their
+  first divergent assertion only; the later steps (P19, P26, Home/End, alerts,
+  Retry) were not seen failing first and were mutation-proven instead (the
+  implementer's 25 and the reviewer's 11 mutations). The review found three
+  gaps (a document row click opens it; P25 re-baseline after the refresh; the
+  failed alert's message) and one removed assertion (Enter on an empty folder
+  does nothing) that was reinstated; each is now mutation-proven. Two assertions
+  stayed removed because their ids no longer exist (`doc-path`, `doc-problem`
+  absence). The tests ran by exact name only, as the brief required.
+
 ## Test Edits
 
 | E | Site | Reason | Task | Removes an assertion |
@@ -393,12 +440,16 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
 | E-17 | `D/view/documents_tests.rs` `the_tree_shows_what_the_library_reads_give` | Added: select `Nested`, collapse `docs/guides` through the model, reload, assert rows `["empty","guides","Top"]` and the selection on `guides` | 5 | no |
 | E-18 | `D/view/new_folder_tests.rs` `new_folder_creates_and_explains_local_folders_and_lists_it` | Added: collapse `docs/plans` before the second create, then wait for the `drafts` row (needs the reveal) | 5 | no |
 | E-19 | `D/view/move_document_tests.rs` `move_from_the_sheet_commits_both_paths_and_the_tab_follows` | Added: collapse `docs/archive` before the move, so its final tree assertion needs the reveal | 5 | no |
-| E-15 (expected) | `D/view/polling_privacy_tests.rs:687`, comments :15, :96, :493 | Part F moves the path from `doc-path` to the tooltip, which the snapshot cannot read | 6 | yes, the `("region-documents", PATH)` pair; the title pair stays |
+| E-15 | `D/view/polling_privacy_tests.rs` (:687, comments :15, :96, :493) | Part F moves the path from `doc-path` to the tooltip, which the snapshot cannot read; the `("region-documents", PATH)` pair becomes `("region-documents", TITLE)` (see Rulings, Task 6); comments updated | 6 | yes, the `PATH` pair (replaced by a `TITLE` pair; the existing title pair stays; the `PATH` sentinel is still swept as absent) |
+| E-8 | `D/view/documents_tests.rs`, `new_folder_tests.rs`, `move_document_tests.rs` | `flatten` uses `doc_row(node, true).label`, so rows read `marker.md` and the like; `doc-empty` reads `EMPTY_TRAILING`; `doc-nonconforming` is named by `doc_row`'s tooltip[0]; an open folder has no `doc-count`; `arrows_move_in_the_tree_and_enter_opens` asserts Enter toggles a folder and a click on a document row opens it by target (item and by path); `a_held_tree_of_a_never_replaces_bs` reads `only-in-b.md`; `tree_paths` calls `documents_pane().document_paths(cx)` (visible rows only, so E-19's reveal is still exercised) | 6 | yes: the `doc-path` second line, the "Nonconforming" text, the `doc-problem` code, "Empty folder", and the `doc-path`/`doc-problem` absence checks (their ids no longer exist) |
+| E-9 | `D/view/keyboard_tests/actions.rs`, `editing.rs` | Look documents up by file name (`MARKER_FILE`, `NOTES_FILE`) instead of the old path labels | 6 | no |
 
 ## Additional Tests
 
 | Test | Why it catches something existing tests don't | Task |
 | --- | --- | --- |
+| `documents::tests::the_tree_says_each_list_state_and_acts_on_it` | The plan's one test names only stale and never-refreshed for Documents; this covers the skeleton while the first read is held, a reload with "Updating…", the busy-over-kept alert (via `hold_read(Folders)`, `hold_read(Documents)` and a cache-write lease), Retry through `reload_lists`, empty with New document…, P27 folders-only, stale and never-refreshed with Refresh (registry SQL), failed with its message, and an unavailable index with Rebuild | 6 |
+| `documents::tests::a_document_with_unsaved_work_is_marked_at_once` | `doc-unsaved` and its no-read rule (P14) would otherwise have no test | 6 |
 | `documents::tests::the_tree_is_kept_over_a_reload_of_the_same_repository` | The kept tree, `last_loaded` and the changed flag are new `KeptList` behaviour no plan test pins | 5 |
 | `operations::tests::a_folder_made_or_a_document_moved_names_its_place_to_reveal` | A table over ok, `discovery_pending`, `already_applied` and refused; pins the new `Changed.reveal` | 5 |
 | `documents::tests::rows_read_as_the_design_writes_them`, extra rows (11 over the plan's seven kinds, including an untitled document) | Review hardening: the file-name label for an untitled document | 5 |
@@ -424,3 +475,4 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
 | 3 | base `f360e8bb`, task commit in the git log | `view::tickets::tests::{the_filter_bar_works_without_a_read, list_states_act_and_a_reload_keeps_the_rows (5 of 5 runs), markers_appear_without_a_read, each_closure_filter_shows_the_librarys_rows_and_keeps_the_nonconforming_entry, ready_and_blocked_show_the_librarys_rows_with_reasons_and_keep_the_nonconforming_entry, the_why_blocked_panel_gives_the_selected_rows_reasons_in_full, the_panel_says_incomplete_where_the_library_does, every_choice_has_its_own_label_and_the_chosen_one_is_said_in_text, a_long_why_blocked_panel_scrolls_by_keyboard, arrows_move_in_the_list_and_enter_opens}`; `view::keyboard_tests::every_core_action_works_by_keyboard_alone`; `view::dock::tests::state::a_hidden_panel_keeps_its_state`; `keys::tests::each_key_is_bound_to_its_action`; the two made-ready tests (earlier in the task): 12 run together on the final tree, all passed; fmt, check, clippy pass | one fresh reviewer: 0 Blocking, 3 Important (Retry not pinned to `reload_lists`; `chmod` trick breaks on Windows and as root; stale and never-refreshed states makeable by SQL), 5 Minor (drag ghost fixed; per-render clone, allows, Documents Home/End, test file length recorded); Important and the drag ghost fixed, re-run | see Rulings (Task 3), E-3, E-6, E-10, E-12, handovers to Tasks 4 and 6 |
 | 4 | base `8946bff7`, task commit in the git log | `view::find::tests::*` (14: the 13 plus `the_text_is_cleared_once_per_change_of_repository`); `model::find::tests::*` (3); `model::ticket_view::tests::a_sole_match_is_the_one_conforming_ticket_the_text_matches`; `view::workspace::tests::a_selection_that_goes_drops_a_held_id_read`; `view::keyboard_tests::every_core_action_works_by_keyboard_alone`: 20 passed on the final tree (the last gate edit restored one clippy `allow`; fmt, check, clippy re-run green by the orchestrator). Neighbours, by filter, earlier in the task and unchanged since: 20 `Walk::find` callers and 64 `clear_lists` neighbours passed | one fresh reviewer: 0 Blocking, 2 Important (a held ID read survived the selection going to None; the once-per-change guard and first-selection clear untested), 3 Minor; both Important and the blank-Enter test fixed, re-run | see Rulings (Task 4), E-4, E-5, E-6 (find part), Additional tests, handover to Task 8 |
 | 5 | base `ce46c643`, task commit in the git log (Step 0: origin/main still `48653d01`, already merged) | `model::documents::tests::{expansion_survives_rebuilds_and_collapse_all, rows_read_as_the_design_writes_them, the_tree_is_kept_over_a_reload_of_the_same_repository, the_tree_is_ready_once_both_reads_are, either_read_failing_fails_the_tree, an_old_repositorys_reads_are_dropped}`; `model::operations::tests::a_folder_made_or_a_document_moved_names_its_place_to_reveal`; `view::documents::tests::the_tree_shows_what_the_library_reads_give`; `view::new_folder::tests::new_folder_creates_and_explains_local_folders_and_lists_it`; `view::move_document::tests::move_from_the_sheet_commits_both_paths_and_the_tab_follows`; `view::workspace::tests::a_busy_list_reload_keeps_the_last_rows_with_a_label`: each 1 passed on the final tree; fmt, check, clippy green. Earlier in the task, by module prefix, once: 177 neighbour tests passed (documents, new_folder, move_document, repair, operations, item, polling_privacy, workspace, dock state, tabs, and four keyboard walks) | one fresh reviewer: 0 Blocking, 0 Important, 7 Minor; the untitled-label row and the dead `load_documents` guard fixed, re-run; the rest recorded | see Rulings (Task 5), E-16 to E-19, Additional tests, handovers to Tasks 6, 7 and 8 |
+| 6 | base `ec8ecb39`, task commit in the git log | `view::documents::tests::{folders_keep_their_state_and_toggle_by_key, the_tree_shows_what_the_library_reads_give, arrows_move_in_the_tree_and_enter_opens, a_held_tree_of_a_never_replaces_bs, the_tree_says_each_list_state_and_acts_on_it, a_document_with_unsaved_work_is_marked_at_once}`; `keyboard_tests::every_core_action_works_by_keyboard_alone`; `polling_privacy_tests::polling_privacy`: 8 passed together on the final tree. Earlier in the task, by exact name, 20 passed (adding `documents::tests::new_folder_opens_its_dialog`, the new_folder and move_document tests, `operations::tests::a_refresh_keeps_the_selected_document`, `keyboard_tests::actions::a_nonconforming_entry_opens_by_keyboard`, `keyboard_tests::editing::{repair_and_adopt_by_keyboard_alone, create_by_keyboard_alone, move_and_new_folder_by_keyboard_alone}`, `create::tests::*`, `editing_privacy_tests::sentinels_reach_no_surface_through_create_move_and_repair`, `workspace::tests::a_busy_list_reload_keeps_the_last_rows_with_a_label`); the reviewer ran `tickets::tests::list_states_act_and_a_reload_keeps_the_rows` and `dock::tests::state::a_hidden_panel_keeps_its_state` on the same code; fmt, check, clippy green | one fresh reviewer: 0 Blocking, 1 Important (a document row click opening it untested), 5 Minor; the Important and three Minor (P25 re-baseline, failure message, Enter on an empty folder) fixed, re-run; the rest recorded | see Rulings (Task 6), E-8, E-9, E-15, Additional tests, known gaps |

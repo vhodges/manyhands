@@ -24,6 +24,7 @@ use gpui_kit::{
         dock::DockArea,
         input::{InputEvent, InputState},
         list::ListEvent,
+        tree::TreeEvent,
     },
 };
 
@@ -170,6 +171,8 @@ pub(crate) struct Workspace {
     /// did meanwhile (D5 A2, P26).
     _activation: Subscription,
     _ticket_events: Subscription,
+    /// The folders the person opens and closes in the tree.
+    _tree_events: Subscription,
     repositories_pane: RepositoriesPane,
     _repository_events: Subscription,
     remove_focus: FocusHandle,
@@ -214,6 +217,10 @@ impl Workspace {
             workspace
                 .update(cx, |workspace, cx| workspace.request_quit(window, cx))
                 .unwrap_or(true)
+        });
+        let documents_pane = DocumentsPane::new(cx);
+        let tree_events = cx.subscribe(documents_pane.tree(), |this, _, event: &TreeEvent, cx| {
+            this.tree_event(event, cx)
         });
         let tickets_pane = TicketsPane::new(window, cx);
         let ticket_events = cx.subscribe(tickets_pane.list(), |this, list, event, cx| {
@@ -304,7 +311,7 @@ impl Workspace {
             list_read: None,
             resolve_read: None,
             documents: Documents::default(),
-            documents_pane: DocumentsPane::new(cx),
+            documents_pane,
             folder_read: None,
             document_read: None,
             tickets: Tickets::default(),
@@ -354,6 +361,7 @@ impl Workspace {
             _focus_lost: focus_lost,
             _activation: activation,
             _ticket_events: ticket_events,
+            _tree_events: tree_events,
             repositories_pane,
             _repository_events: repository_events,
             remove_focus: cx.focus_handle(),
@@ -404,6 +412,11 @@ impl Workspace {
     }
     pub(super) fn tickets_pane(&self) -> &TicketsPane {
         &self.tickets_pane
+    }
+    /// The focus handle of `region`, which tells rows whether it holds
+    /// focus.
+    pub(in crate::desktop::view) fn region_focus(&self, region: Region) -> FocusHandle {
+        self.regions[region.index()].clone()
     }
     pub(super) fn choice_focus(&self, id: &str) -> Option<&FocusHandle> {
         self.choice_focus.get(id)

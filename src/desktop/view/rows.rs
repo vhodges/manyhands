@@ -7,7 +7,7 @@
 //! come from `chrome_colors` (fact 33).
 
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement, IntoElement,
+    AnyElement, App, ClickEvent, Div, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
     ParentElement, Pixels, RenderOnce, SharedString, Stateful, StatefulInteractiveElement,
     StyleRefinement, Styled, TestSupportExt, Window,
     base::ObservedElement,
@@ -84,14 +84,12 @@ impl ListRow {
 
     /// The left padding, in place of the standard 12 px: the tree's
     /// indent for the row's depth.
-    #[allow(dead_code)] // Used from Task 6 (the tree).
     pub(crate) fn indent(mut self, left: Pixels) -> Self {
         self.indent = left;
         self
     }
 
     /// The gap between the row's cells: 8 in Tickets, 5 in Documents.
-    #[allow(dead_code)] // Used from Task 6 (the tree).
     pub(crate) fn gap(mut self, gap: Pixels) -> Self {
         self.gap = gap;
         self
@@ -104,7 +102,6 @@ impl ListRow {
     }
 
     /// A tree folder's `aria_expanded`; `None` for a leaf.
-    #[allow(dead_code)] // Used from Task 6 (the tree).
     pub(crate) fn expanded(mut self, expanded: Option<bool>) -> Self {
         self.expanded = expanded;
         self
@@ -126,7 +123,6 @@ impl ListRow {
         self
     }
 
-    #[allow(dead_code)] // Used from Task 6 (the tree).
     pub(crate) fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -214,6 +210,37 @@ impl RenderOnce for ListRow {
                 )
             })
     }
+}
+
+/// A `size` px icon, `name` from the app's icons, in `color`.
+pub(crate) fn icon(name: &str, size: f32, color: Hsla) -> Icon {
+    Icon::default()
+        .path(icon_path(name))
+        .w(px(size))
+        .h(px(size))
+        .flex_none()
+        .text_color(color)
+}
+
+/// An icon that has a tooltip, which is also its accessible name.
+pub(crate) fn named_icon(
+    id: impl Into<ElementId>,
+    name: &str,
+    size: f32,
+    color: Hsla,
+    text: impl Into<SharedString>,
+) -> impl IntoElement {
+    let text: SharedString = text.into();
+    let tooltip = text.clone();
+    div()
+        .id(id)
+        .test_support()
+        .aria_label(text)
+        .flex_none()
+        .flex()
+        .items_center()
+        .child(icon(name, size, color))
+        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
 }
 
 /// `count` static bars where a first load's rows will be: plain bars in

@@ -1,8 +1,6 @@
 //! What a list panel's body shows (Part A): a pure function of a list's
 //! state, so each state has its own text and none is shown by colour.
 
-#![allow(dead_code)] // Used from Tasks 2, 3, 5 and 6; the tests read the bodies, not the labels.
-
 use manyhands::{
     repository::{ClosureFilter, IndexState},
     results::ResultCode,

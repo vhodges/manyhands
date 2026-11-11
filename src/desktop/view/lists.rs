@@ -2,53 +2,101 @@
 //! `workspace/lists`. The ticket list opens with the filter bar, its create
 //! dialog (`view::create`), as the document tree does with New document….
 
+use std::rc::Rc;
+
 use super::{
     create::NEW_TICKET,
+    documents::Unsaved,
     rows::{EmptyAction, alert_row, empty_state, skeleton_rows},
-    sidebar,
-    workspace::{Workspace, unless_dialog},
+    workspace::{Region, Workspace, unless_dialog},
 };
 use crate::desktop::{
     keys::{SelectFirst, SelectLast, TICKET_LIST_CONTEXT},
     model::{
-        list_state::{ListState, Rows},
+        documents::node_count,
         list_view::{
             BodyInput, ListAction, ListBody, ListKind, SELECT_A_REPOSITORY, list_body, loading_text,
         },
+        markers::row_markers,
         navigation::Pane,
         ticket_view::footnote,
     },
     view::shell::tokens::chrome_colors,
 };
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
+    AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
-    component::{ActiveTheme, button::Button, h_flex, v_flex},
+    component::{button::Button, h_flex, v_flex},
     div, px,
 };
-use manyhands::repository::ReadinessFilter;
+use manyhands::repository::{ClosureFilter, ItemDtoKind, ReadinessFilter};
 
 /// The rows of a first load's skeleton.
 const SKELETON_ROWS: usize = 6;
 
+/// The ids of the elements a list's state is drawn as.
+#[derive(Clone, Copy)]
+struct StateIds {
+    skeleton: &'static str,
+    alert: &'static str,
+    empty: &'static str,
+}
+
+const TICKET_STATE: StateIds = StateIds {
+    skeleton: "tickets-skeleton",
+    alert: "tickets-alert",
+    empty: "tickets-empty",
+};
+
+const DOCUMENT_STATE: StateIds = StateIds {
+    skeleton: "documents-skeleton",
+    alert: "documents-alert",
+    empty: "documents-empty",
+};
+
 impl Workspace {
-    /// The Documents region's body: New document…, New folder… and the tree.
+    /// The Documents region's body (Part F): New document… and New folder…,
+    /// the state of the tree, and the tree itself.
+    ///
+    /// The tree is drawn in every state while a repository is selected, so
+    /// focus always has its element (R-34); the state, if any, is drawn
+    /// above it.
     pub(super) fn documents_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let body = match self.documents().repo() {
-            None => v_flex().child(div().text_sm().child(sidebar::NOTHING_SELECTED)),
-            Some(_) => v_flex()
-                .gap_1()
-                .flex_1()
-                .min_h_0()
-                .child(list_status("documents-state", self.documents().state(), cx))
-                .child(self.documents_pane().render(cx.entity().downgrade(), cx)),
-        };
-        v_flex()
+        let name = self.documents_repo_name();
+        let list = self.documents().list();
+        let body = list_body(
+            list,
+            BodyInput {
+                kind: ListKind::Documents,
+                repo: name.as_deref(),
+                listed: list.rows().map_or(0, |rows| node_count(rows)),
+                // Documents have no filter to narrow them.
+                elsewhere: 0,
+                closure: ClosureFilter::Open,
+                narrowed: false,
+            },
+        );
+        let state = self.list_state(ListKind::Documents, DOCUMENT_STATE, body, cx);
+        let pane = v_flex()
             .id("documents-pane")
             .test_support()
             .gap_2()
-            .size_full()
-            .child(body)
+            .size_full();
+        let Some(repo) = self.documents().repo().cloned() else {
+            return pane.child(state);
+        };
+        let drafts = self.services().drafts().clone();
+        let unsaved: Unsaved = Rc::new(move |id, cx| {
+            let held = drafts.read(cx).held_by(&repo, ItemDtoKind::Document, id);
+            row_markers(held, false, false, ClosureFilter::Open).unsaved
+        });
+        let focus = self.region_focus(Region::Documents);
+        pane.child(state).child(self.documents_pane().render(
+            cx.entity().downgrade(),
+            focus,
+            unsaved,
+            cx,
+        ))
     }
 
     /// The Tickets region's body (Part C): the filter bar, what the ID read
@@ -83,7 +131,7 @@ impl Workspace {
             .filter(|_| view.counts.is_some())
             .map(|name| footnote(view, query, name));
         let blocked = query.readiness == Some(ReadinessFilter::Blocked);
-        let state = self.tickets_state(body, cx);
+        let state = self.list_state(ListKind::Tickets, TICKET_STATE, body, cx);
         let pane = v_flex()
             .id("tickets-pane")
             .test_support()
@@ -142,14 +190,20 @@ impl Workspace {
             }))
     }
 
-    /// What the body draws above the Tickets list: the message when no
-    /// repository is selected, the skeleton of a first load, an alert row
-    /// or an empty state, with the action each offers.
-    fn tickets_state(&self, body: ListBody, cx: &mut Context<Self>) -> AnyElement {
-        let act = |action: ListAction, cx: &mut Context<Self>| {
+    /// What the body draws above a list: the message when no repository is
+    /// selected, the skeleton of a first load, an alert row or an empty
+    /// state, with the action each offers.
+    fn list_state(
+        &self,
+        kind: ListKind,
+        ids: StateIds,
+        body: ListBody,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let act = move |action: ListAction, cx: &mut Context<Self>| {
             let workspace = cx.entity().downgrade();
             move |window: &mut Window, cx: &mut App| {
-                let _ = workspace.update(cx, |this, cx| this.list_action(action, window, cx));
+                let _ = workspace.update(cx, |this, cx| this.list_action(action, kind, window, cx));
             }
         };
         match body {
@@ -159,84 +213,25 @@ impl Workspace {
                 .text_size(px(13.))
                 .child(SELECT_A_REPOSITORY)
                 .into_any_element(),
-            ListBody::Skeleton => skeleton_rows(
-                "tickets-skeleton",
-                SKELETON_ROWS,
-                loading_text(ListKind::Tickets),
-                cx,
-            )
-            .into_any_element(),
+            ListBody::Skeleton => {
+                skeleton_rows(ids.skeleton, SKELETON_ROWS, loading_text(kind), cx)
+                    .into_any_element()
+            }
             ListBody::Rows { alert: None } => div().into_any_element(),
             ListBody::Rows { alert: Some(alert) } | ListBody::Problem(alert) => {
                 let action = act(alert.action, cx);
-                alert_row("tickets-alert", &alert, action, cx).into_any_element()
+                alert_row(ids.alert, &alert, action, cx).into_any_element()
             }
             ListBody::Empty { text, action } => {
                 let action: Option<EmptyAction> = action.map(|action| {
                     let handler = act(action, cx);
                     (
-                        action.label(ListKind::Tickets).into(),
+                        action.label(kind).into(),
                         Box::new(handler) as Box<dyn Fn(&mut Window, &mut App)>,
                     )
                 });
-                empty_state("tickets-empty", &text, action, cx).into_any_element()
+                empty_state(ids.empty, &text, action, cx).into_any_element()
             }
         }
     }
-}
-
-fn list_status<T: Rows>(
-    name: &'static str,
-    list: &ListState<T>,
-    cx: &mut Context<Workspace>,
-) -> impl IntoElement + use<T> {
-    let muted = cx.theme().muted_foreground;
-    let state = match list {
-        ListState::Ready {
-            rows,
-            complete,
-            index,
-        } if !rows.is_empty()
-            && *complete
-            && index
-                .as_ref()
-                .is_none_or(|index| index.state == manyhands::repository::IndexState::Current) =>
-        {
-            None
-        }
-        _ => Some(
-            div()
-                .id((name, 0usize))
-                .test_support()
-                .aria_label(list.label())
-                .text_sm()
-                .text_color(muted)
-                .child(list.label()),
-        ),
-    };
-    let failure =
-        match list {
-            ListState::Busy | ListState::Failed(_) => Some(
-                v_flex()
-                    .gap_1()
-                    .children(match list {
-                        ListState::Failed(failure) => Some(
-                            div()
-                                .id((name, 1usize))
-                                .test_support()
-                                .aria_label(failure.code.message())
-                                .text_sm()
-                                .child(failure.code.message()),
-                        ),
-                        _ => None,
-                    })
-                    .child(div().id((name, 2usize)).test_support().child(
-                        Button::new((name, 3usize)).label(sidebar::RETRY).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| this.load_lists(cx)),
-                        ),
-                    )),
-            ),
-            _ => None,
-        };
-    v_flex().gap_1().children(state).children(failure)
 }
