@@ -99,6 +99,23 @@ fn the_tree_shows_what_the_library_reads_give(cx: &mut TestAppContext) {
         shell.label(("doc-problem", marker), cx).as_deref(),
         Some("missing_field")
     );
+
+    // What the person collapsed stays collapsed when the tree is rebuilt
+    // by a reload (R-12): the folder's contents are not drawn, and the
+    // selected row inside it moves to the folder, which stays closed
+    // (R-27).
+    shell.keys("secondary-2", cx);
+    for _ in 0..4 {
+        shell.keys("down", cx);
+    }
+    assert!(shell.selected(("doc-node", at("Nested")), cx));
+    shell.workspace.update(cx, |workspace, cx| {
+        workspace.documents_mut().set_expanded("docs/guides", false);
+        workspace.reload_lists(cx);
+    });
+    shell.run(cx);
+    assert_eq!(shell.rows("doc-node", cx), ["empty", "guides", "Top"]);
+    assert!(shell.selected(("doc-node", 1usize), cx), "guides");
 }
 
 /// E-10: New folder opens its dialog, under `docs` with no folder

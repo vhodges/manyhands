@@ -96,7 +96,7 @@ impl Workspace {
         resolved: ResolvedRepository,
         cx: &mut Context<Self>,
     ) {
-        let stamp = self.documents.load(key);
+        let (stamp, _) = self.documents.load(key);
         let repo = resolved.clone();
         self.folder_read = Some(self.services.read(
             ReadKind::Folders,
@@ -123,11 +123,19 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The tree the pane shows is the model's: its ready rows, or the ones
+    /// it kept over a reload, built under the repository's expansion.
     fn documents_changed(&mut self, cx: &mut Context<Self>) {
-        match (self.documents.repo(), self.documents.state()) {
-            (Some(repo), ListState::Ready { rows, .. }) => self.documents_pane.set(repo, rows, cx),
+        match (
+            self.documents.repo(),
+            self.documents.list().rows(),
+            self.documents.expansion(),
+        ) {
+            (Some(repo), Some(rows), Some(expansion)) => {
+                self.documents_pane.set(repo, rows, expansion, cx)
+            }
             // One read landed: keep the previous rows until the other does.
-            (Some(_), ListState::Loading) => {}
+            (Some(_), None, _) if matches!(self.documents.state(), ListState::Loading) => {}
             _ => self.documents_pane.clear(cx),
         }
         cx.notify();

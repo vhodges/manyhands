@@ -391,6 +391,11 @@ impl Workspace {
     pub(crate) fn documents(&self) -> &Documents {
         &self.documents
     }
+    /// A test's way to leave the tree as a person would: a folder collapsed.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(super) fn documents_mut(&mut self) -> &mut Documents {
+        &mut self.documents
+    }
     pub(super) fn tickets(&self) -> &Tickets {
         &self.tickets
     }

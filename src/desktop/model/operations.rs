@@ -184,6 +184,10 @@ pub(crate) struct Changed {
     /// draft holds stays open, as when a repository leaves the list (Part C
     /// fix 1, I1).
     pub confirmed: BTreeSet<RepoKey>,
+    /// Where a finished New folder made a folder or a Move put a document,
+    /// by repository and path from the repository root: the Documents tree
+    /// opens the folders above each, so the result is visible (R-27).
+    pub reveal: Vec<(RepoKey, String)>,
 }
 
 impl Changed {
@@ -324,6 +328,27 @@ impl Operations {
                         .map_or(request.intent.changes_items(), |answer| answer.changed);
                     Some((root, items, removed))
                 });
+                // A folder made, or a document moved, wants its place seen.
+                let reveal = matches!(
+                    envelope.code,
+                    ResultCode::Ok | ResultCode::DiscoveryPending | ResultCode::AlreadyApplied
+                )
+                .then(|| self.request(id))
+                .flatten()
+                .and_then(|request| match &request.intent {
+                    Intent::FolderCreate { root, path } => {
+                        Some((root.to_str()?.to_owned(), path.clone()))
+                    }
+                    Intent::DocumentMove {
+                        root,
+                        destination_path,
+                        ..
+                    } => Some((
+                        root.to_str()?.to_owned(),
+                        destination_path.to_str()?.to_owned(),
+                    )),
+                    _ => None,
+                });
                 self.set(
                     id,
                     RequestState::Finished(
@@ -334,6 +359,7 @@ impl Operations {
                         envelope.message,
                     ),
                 );
+                self.changed.reveal.extend(reveal);
                 // Attention or the next attempt covers an answer of the
                 // table's attention and retry rows, and a retirement that
                 // retired: it is neither shown nor counted (R-23).

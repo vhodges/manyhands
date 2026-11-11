@@ -38,11 +38,11 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::{ItemPane, RECOVERY, repair::unmanaged, text};
+use super::{ItemPane, RECOVERY, text};
 use crate::desktop::{
     assets::icon_path,
     model::{
-        item::{CONTEXT_PROBLEMS, context_problems},
+        item::{CONTEXT_PROBLEMS, context_problems, unmanaged},
         links::LinkTarget,
         list_state::ListState,
         operations::CONFLICT_BANNER,

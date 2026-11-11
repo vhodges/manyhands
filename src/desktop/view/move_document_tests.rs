@@ -339,6 +339,13 @@ async fn move_from_the_sheet_commits_both_paths_and_the_tab_follows(cx: &mut Tes
         fixture.create_folder(root, "docs/archive");
     });
     open(&shell, &root, DOCUMENT, cx);
+    // The destination folder is one the person collapsed: the move
+    // reveals it (R-27).
+    shell.workspace.update(cx, |workspace, _| {
+        workspace
+            .documents_mut()
+            .set_expanded("docs/archive", false)
+    });
     let before = shown(&shell, &root, DOCUMENT);
     let branch = before
         .context

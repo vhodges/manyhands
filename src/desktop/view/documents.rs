@@ -24,7 +24,7 @@ use gpui_kit::{
 
 use super::{create::NEW_DOCUMENT, workspace::Workspace};
 use crate::desktop::model::{
-    documents::TreeNode,
+    documents::{Expansion, TreeNode, document_id, folder_id, visible_selection},
     navigation::{OpenTarget, Pane},
     stamp::RepoKey,
 };
@@ -78,18 +78,28 @@ impl DocumentsPane {
         }
     }
 
-    /// Shows `nodes`, the tree of `repo`, every folder open. The selected
-    /// row stays selected when the new tree still has it: a reload after a
-    /// refresh does not lose the user's place.
-    pub(crate) fn set(&mut self, repo: &RepoKey, nodes: &[TreeNode], cx: &mut App) {
+    /// Shows `nodes`, the tree of `repo`, each folder open or closed as
+    /// `expansion` says. The selected row stays selected when the new tree
+    /// still has it, and goes to its nearest visible folder when a
+    /// collapsed one hides it: a reload after a refresh does not lose the
+    /// user's place. The selection is set by index, never by an item,
+    /// which would expand its ancestors (R-27).
+    pub(crate) fn set(
+        &mut self,
+        repo: &RepoKey,
+        nodes: &[TreeNode],
+        expansion: &Expansion,
+        cx: &mut App,
+    ) {
         let mut facts = HashMap::new();
-        let items = items(repo, nodes, &mut facts);
+        let items = items(repo, nodes, expansion, &mut facts);
         self.nodes = Rc::new(facts);
         self.tree.update(cx, |tree, cx| {
-            let selected = tree.selected_item().map(|item| item.id.clone());
+            let selected = tree.selected_item().map(|item| item.id.to_string());
             tree.set_items(items, cx);
-            if let Some(selected) = selected {
-                let at = tree.index_of(&selected);
+            let visible = selected.and_then(|id| visible_selection(nodes, expansion, &id));
+            if let Some(visible) = visible {
+                let at = tree.index_of(&SharedString::from(visible));
                 tree.set_selected_index(at, cx);
             }
         });
@@ -261,6 +271,7 @@ impl DocumentsPane {
 fn items(
     repo: &RepoKey,
     nodes: &[TreeNode],
+    expansion: &Expansion,
     facts: &mut HashMap<SharedString, Node>,
 ) -> Vec<TreeItem> {
     nodes
@@ -273,8 +284,8 @@ fn items(
                     empty,
                     children,
                 } => {
-                    let id: SharedString = format!("folder:{path}").into();
-                    let children = items(repo, children, facts);
+                    let id: SharedString = folder_id(path).into();
+                    let children = items(repo, children, expansion, facts);
                     facts.insert(
                         id.clone(),
                         Node::Folder {
@@ -283,13 +294,12 @@ fn items(
                             path: path.clone(),
                         },
                     );
-                    TreeItem::new(id, label).expanded(true).children(children)
+                    TreeItem::new(id, label)
+                        .expanded(expansion.is_expanded(path))
+                        .children(children)
                 }
                 TreeNode::Document(item) => {
-                    // Paths are unique within one context's list; a
-                    // document in an item worktree has its own.
-                    let id: SharedString =
-                        format!("document:{}:{}", item.context.worktree, item.path).into();
+                    let id: SharedString = document_id(item).into();
                     let problem = match item.id {
                         Some(_) => None,
                         None => item.problems.first().map(|problem| problem.code.as_str()),

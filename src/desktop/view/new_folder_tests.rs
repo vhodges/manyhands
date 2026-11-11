@@ -227,6 +227,11 @@ async fn new_folder_creates_and_explains_local_folders_and_lists_it(cx: &mut Tes
     shell.keys("down", cx);
     shell.keys("up", cx);
     assert!(shell.selected(("doc-node", at), cx), "plans is selected");
+    // `plans` is one the person collapsed: making a folder in it reveals
+    // the new folder (R-27).
+    shell.workspace.update(cx, |workspace, _| {
+        workspace.documents_mut().set_expanded("docs/plans", false)
+    });
     open_dialog(&shell, cx);
     assert_eq!(
         shell.label("new-folder-path", cx).as_deref(),
@@ -250,6 +255,13 @@ async fn new_folder_creates_and_explains_local_folders_and_lists_it(cx: &mut Tes
     assert!(root.join("docs/plans/drafts").is_dir());
     assert_eq!(head(&root), commit, "still no commit");
     assert_eq!(refreshes(&shell, cx), 0);
+    shell
+        .until_drawn(
+            cx,
+            "the new folder in the tree, its parent open",
+            |shell, cx| shell.rows("doc-node", cx).contains(&"drafts".to_owned()),
+        )
+        .await;
 }
 
 /// A create whose answer is lost after it ran (the library's

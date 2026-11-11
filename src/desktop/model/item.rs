@@ -49,6 +49,32 @@ pub(crate) const LATER_NOTE: &str = "Available in a later release";
 pub(crate) const CONTEXT_PROBLEMS: [ProblemCode; 2] =
     [ProblemCode::ContextProblem, ProblemCode::BranchProblem];
 
+/// The kind of item the file at `path` is repaired as: a document under
+/// `docs/`, a ticket's file under `.manyhands/tickets/`.
+pub(crate) fn repair_kind(path: &str) -> Option<ItemDtoKind> {
+    if path.starts_with("docs/") {
+        Some(ItemDtoKind::Document)
+    } else if path.starts_with(".manyhands/tickets/") {
+        Some(ItemDtoKind::Ticket)
+    } else {
+        None
+    }
+}
+
+/// Whether `item`, a nonconforming entry, is an unmanaged document: a file
+/// under `docs/` whose only problem is that it has no front matter.
+pub(crate) fn unmanaged(item: &ItemDto) -> bool {
+    let mut problems = item
+        .problems
+        .iter()
+        .filter(|problem| !CONTEXT_PROBLEMS.contains(&problem.code));
+    repair_kind(&item.path) == Some(ItemDtoKind::Document)
+        && problems
+            .next()
+            .is_some_and(|problem| problem.code == ProblemCode::MissingFrontMatter)
+        && problems.next().is_none()
+}
+
 /// A context kind in text.
 pub(crate) fn context_kind_label(kind: ItemContextKind) -> &'static str {
     match kind {
