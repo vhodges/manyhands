@@ -15,6 +15,7 @@ pub(crate) mod layout;
 pub(crate) mod lifecycle_lock;
 pub(crate) mod links;
 pub(crate) mod list_state;
+pub(crate) mod list_view;
 pub(crate) mod markdown_edit;
 pub(crate) mod names;
 pub(crate) mod navigation;

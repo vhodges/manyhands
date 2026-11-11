@@ -145,19 +145,47 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
   documents model tests call `state()` — cost if wrong: Task 5 edits those
   assertions (E-15 onward, recorded).**
 
+- **Ruling (Task 1): `list_body` ignores `narrowed` for Documents — Part A's
+  table defines no Documents narrowed row, the Documents panel has no filters,
+  and Global Constraints make every string the design's verbatim; the plan's
+  "`closure` and `elsewhere` are ignored for Documents" is read to include
+  `narrowed` (implementer and reviewer agree) — cost if wrong: a Documents
+  filter added later must add its own copy and rows.**
+- **Ruling (Task 1): `skeleton_rows(id, count, label, cx)` takes an accessible
+  name — the plan's `skeleton_rows(id, count, cx)` leaves the skeleton without
+  `.test_support()` or a name, so Task 3 could not give it "Loading tickets";
+  Task 3 is the only caller and passes `loading_text(kind)` — cost if wrong:
+  one parameter to drop.**
+- **Ruling (Task 1): file-level `#![allow(dead_code)]` with a "Used from
+  Tasks …" comment in `D/model/list_view.rs` and `D/view/rows.rs`, in place of
+  the plan's `cfg_attr(not(test), …)` — `cargo clippy --all-targets -D warnings`
+  warns in the test build, where no test reads the labels or draws a row — cost
+  if wrong: dead code in those two files stays hidden until the allows go.**
+  Removal steps: Task 3 removes the one in `rows.rs` (Task 6 for anything still
+  unused after Task 3) and removes `list_view.rs`'s once Task 6 has used the
+  Documents paths; each of those tasks checks that the file builds without it.
+  `KeptList` keeps the plan's `cfg_attr` form; Task 2 removes it.
+- **Out-of-list edit (Task 1):** `D/view/shell/tokens.rs` lost two stale
+  `allow(dead_code)` attributes on `selection` and `teal`, now used by
+  `rows.rs`. No test changed.
+
 ## Test Edits
 
 | E | Site | Reason | Task | Removes an assertion |
 | --- | --- | --- | --- | --- |
+| E-11 | `D/assets_tests.rs` `every_item_view_icon_loads` | The table and its array length (37 to 47) gain `repeat`, `bug`, `sparkles`, `list-checks`, `file-plus`, `folder-plus`, `chevrons-down-up`, `arrow-up-down`, `list-filter`, `file-exclamation-point` | 1 | no |
 | E-15 (expected) | `D/view/polling_privacy_tests.rs:687`, comments :15, :96, :493 | Part F moves the path from `doc-path` to the tooltip, which the snapshot cannot read | 6 | yes, the `("region-documents", PATH)` pair; the title pair stays |
 
 ## Additional Tests
 
 | Test | Why it catches something existing tests don't | Task |
 | --- | --- | --- |
+| `list_view::tests::each_state_has_its_own_body`, case: empty rows with `listed` 1 expects `Rows` | Review hardening: pins P27 against a regression that used `rows.is_empty()` | 1 |
+| `list_state::tests::kept_rows_follow_reloads`, row `Marked`: an incomplete, stale-index ready state keeps both through busy and reload | Review hardening: a busy read over kept rows restores the kept state whole | 1 |
 
 ## Tasks
 
 | Task | Commit range | Tests run (exact names) | Review | Notes |
 | --- | --- | --- | --- | --- |
-| 0 | | none | n/a | gates green |
+| 0 | base `38c64b3c`, ledger `c6a22b97`, comment `002428b1` | none | n/a | gates green |
+| 1 | base `002428b1`, task commit see Notes | `desktop::model::list_state::tests::kept_rows_follow_reloads`, `desktop::model::list_view::tests::each_state_has_its_own_body`, `desktop::assets::tests::every_item_view_icon_loads` (1 run each, passed; seen failing first: two compile errors, one "repeat errored"); fmt, `check --features desktop`, clippy all pass | one fresh reviewer: 0 Blocking, 1 Important (Documents `narrowed`), 5 Minor; fixed and re-run | rulings above; reviewer's items 3 (kind-free alert label) and 6 (recorded) not changed |
