@@ -1781,7 +1781,7 @@ are not in this Cycle's runs.
 **Documentation done:** K-16 and Amendment 8 reworded for the Activity columns'
 `min_w_0`; "proposed K-19" is now "accepted K-19" in the design and the Cycle;
 K-27 reworded for E4 (Resume stays for a hand-off-only row); the plan's R-23
-owner line; Amendment 12 recorded in the design (awaits acknowledgement).
+owner line; Amendment 12 recorded in the design (acknowledged by the owner, 2026-11-10).
 
 Known limits added (recorded, not fixed):
 - K-67: the first whole-suite run came only at the end, so three failures

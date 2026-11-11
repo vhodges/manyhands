@@ -1641,8 +1641,8 @@ checked again: 1 to 5 and 7 to 10. Amendment 6 waits for D6's merge.
     after a settled pending row follows R-35 (the normal schedule), which E1's
     sentence contradicts.
 12. Task 12a: the in-flight retirement entry's exits (B3, R-31), design-silent
-    gap fixes found in implementation and review; for the owner's
-    acknowledgement:
+    gap fixes found in implementation and review; acknowledged by the owner on
+    2026-11-10:
     - A `Removed` or `NotSent` answer ends the entry only when the library
       cannot hold the retirement; when the entry names a journal operation
       (the library row exists and is pending) it is kept, so a quit or a
@@ -1832,6 +1832,6 @@ test-first task with a design checkpoint.
 **Implementation review (2026-11-10).** Tasks 1 to 13 were each reviewed by a
 fresh reviewer; findings were fixed in review-fix commits (execution ledger).
 The implementation added Document Amendments 11 (the owner's Task 11b rulings)
-and 12 (the in-flight retirement entry's exits; awaits the owner's
-acknowledgement), and K-28 to K-69. The final gates are recorded in the ledger's
+and 12 (the in-flight retirement entry's exits; acknowledged by the owner on
+2026-11-10), and K-28 to K-69. The final gates are recorded in the ledger's
 "Task 14" section.
