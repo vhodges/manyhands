@@ -320,7 +320,9 @@ Answered by the owner during planning:
    and this Cycle merges second.
 4. **Find moves to the top of the Tickets panel.** It still finds tickets
    and documents. `secondary-p` shows the Tickets panel if it is hidden and
-   focuses Find.
+   focuses Find. *Superseded in part by Wave 04 Cycle 02 decision 2
+   (2026-11-11): Find is now the Tickets filter input; `secondary-p` and the
+   open-by-ID path are kept.*
 
 Proposed by the planner and confirmed by the owner:
 

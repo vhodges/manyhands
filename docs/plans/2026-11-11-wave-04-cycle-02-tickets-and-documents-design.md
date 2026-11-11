@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 02 Tickets And Documents Panels Design"
 date: 2026-11-11
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -21,7 +21,9 @@ covers the mechanisms, rulings, named test edits and task order. It does
 not authorize implementation, pushes beyond the ticket branch, merging or
 closing.
 
-**Draft, revision 3, with round 3's fixes.** Grounded at the ticket branch `a0a734a4`, which
+**Approved 2026-11-11** by the owner (revision 3 with round 3's fixes),
+with decision 10's narrowing (R-38) accepted; Document Amendments 1–6 were
+applied in the approval commit. Grounded at the ticket branch `a0a734a4`, which
 holds origin/main `48653d01` (Cycle 01 and Wave 03 D6 both merged); `src/`
 is unchanged since. Revision 1 (`563763e2`) had two reviews in round 1;
 revision 2 (`4c32325f`, decisions confirmed at `787c5345`) had a scoped

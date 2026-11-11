@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 02 Tickets And Documents Panels Implementation Plan"
 date: 2026-11-11
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,9 +12,10 @@ id: "01M75C77FRSVW977B3HPJP4P79"
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
-> superpowers:executing-plans to implement this plan task by task. Draft,
-> revision 3 with round 3's fixes: implementation waits for the owner's approval of the three
-> documents and a separate go-ahead. Re-read the design before each task
+> superpowers:executing-plans to implement this plan task by task.
+> Approved 2026-11-11 (revision 3 with round 3's fixes); implementation is
+> authorized, subagent-driven and serial, in a fresh session working from
+> `docs/plans/2026-11-11-wave-04-cycle-02-handoff.md` (Cycle decision 21). Re-read the design before each task
 > and record every checkpoint on ticket `01M757DHFAVPEVY4TWQTVKQAMJ`.
 > Steps use checkbox (`- [ ]`) syntax.
 

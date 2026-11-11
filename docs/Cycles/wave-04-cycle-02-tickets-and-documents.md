@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 02: Tickets And Documents Panels"
 date: 2026-11-11
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -14,13 +14,14 @@ Ticket `01M757DHFAVPEVY4TWQTVKQAMJ` (`vh-r2n89`).
 [Design](../plans/2026-11-11-wave-04-cycle-02-tickets-and-documents-design.md) and
 [implementation plan](../plans/2026-11-11-wave-04-cycle-02-tickets-and-documents-implementation.md).
 
-Status: **draft, revision 3; decisions confirmed; for the owner's
-approval.** The owner asked to go straight to the ticket, design and plan
+Status: **approved 2026-11-11** (revision 3 with round 3's fixes). The
+owner wrote: "Accept Decision 10. Documents are approved. Implementation
+is approved. Subagent driven development but prepare a brief to hand to a
+fresh session" (decisions 10 and 21). The owner asked to go straight to the ticket, design and plan
 from `docs/design/` (2026-11-11), so decisions 1–20 below were the
 planner's proposals, each with its reason. The owner confirmed all twenty
 on 2026-11-11 ("I confirm the decisions"). Those marked **(owner's eye)**
-change a behaviour people have today or depart from an authority. The
-documents themselves are not yet approved.
+change a behaviour people have today or depart from an authority.
 
 - Drafted on the ticket branch at `a0a734a4`, which holds origin/main
   `48653d01`. Cycle 01 and Wave 03 D6 are both merged there.
@@ -35,8 +36,10 @@ documents themselves are not yet approved.
   findings resolved, 1 Important (task order in the plan) and 12 Minor,
   applied in place.
 
-Approval of the documents does not authorize implementation, which needs
-its own go-ahead.
+The approval commit applied the design's Document Amendments 1–6 (the
+Wave's Cycle 02 section and Deferred Work, Cycle 01 decision 4, handoff
+`03` and `08`, and the ticket relationships RFC). Implementation is
+authorized (decision 21).
 
 ## Purpose And Authority
 
@@ -277,8 +280,8 @@ Cycle 01 decisions stand except where decision 2 says otherwise.
     it once, and each unreadable ticket or document file shows in its list
     as "can't be read" with the guidance and its path. This adds one read
     per load and one row kind, and no library change. *Alternative:*
-    accept the gap and amend RFC IA 57-59. **Narrowed in revision 3, for
-    the owner's confirmation:** such a row does not open, because opening
+    accept the gap and amend RFC IA 57-59. **Narrowed in revision 3 and
+    accepted by the owner on 2026-11-11:** such a row does not open, because opening
     it by path answers "The repository cannot be read." for a permission
     failure, which blames the whole repository (design R-38). The
     confirmed text said it opens by path.
@@ -333,6 +336,20 @@ Cycle 01 decisions stand except where decision 2 says otherwise.
     design's "ready" added. A status reads the same colour in both places;
     "open", "done" and "duplicate" follow the header, not `03`'s table.
 
+**Answered by the owner at approval (2026-11-11):**
+
+21. **Implementation is authorized, subagent-driven and serial, in a
+    fresh session.** One implementer per task, then a fresh reviewer, one
+    at a time, following `.agents/skills/implementing-a-cycle/SKILL.md`.
+    The fresh session works from the brief
+    `docs/plans/2026-11-11-wave-04-cycle-02-handoff.md`. Authorized:
+    Tasks 0–9, the named test edits E-1 to E-14 and further edits under
+    decision 16, and pushing this ticket branch after each task. Not
+    authorized without the owner's go-ahead at the time: a push of any
+    other branch, a pull request, the merge, closing the ticket, worktree
+    cleanup, native CI, creating tickets, and `ticket save` or `comment
+    add` on any other ticket.
+
 ## Known Limits
 
 These are visible to users; the design's Known Limits give the detail.
@@ -371,4 +388,5 @@ relies on it; U-1, U-2, U-4 and U-5 were settled in review.
 | Review round 1 (two reviewers, `563763e2`) | 8 Blocking, 37 Important, many Minor; among them header focus, unnamed compile sites, duplicate codes across lifecycles, unreadable files, nonconforming-only lists, the ULID path | Decisions (proposed), rulings, named edits | Decisions 2, 8, 10, 18, 19, 20 revised or added; design revision 2 | Design Review Record |
 | Owner, 2026-11-11 | "I confirm the descisions" | Owner decision | Decisions 1–20 confirmed; review round 2 requested | Session, 2026-11-11 |
 | Review round 2 (scoped re-review and adversarial, `85210ab0`) | 3 Blocking, 13 Important, many Minor; among them the keyboard walk's region check, no list element in the empty and failed states, outcomes without a test, Retry clearing the filter, the details sheet's suggestions, Show all under a readiness, an unreadable file's open | Rulings, named edits; decision 10 narrowed for confirmation | Design revision 3: E-14, R-33 to R-38, new test steps; decision 10's rows do not open | Design Review Record |
-| Review round 3 (scoped re-review, `ba5da196`) | Round 2 resolved; 1 Important: the plan's Task 3 tests needed the filter input that Task 4 placed; 12 Minor | Plan task moves; settled | Revision 3 with round 3's fixes; decision 10's narrowing still awaits the owner | Design Review Record |
+| Review round 3 (scoped re-review, `ba5da196`) | Round 2 resolved; 1 Important: the plan's Task 3 tests needed the filter input that Task 4 placed; 12 Minor | Plan task moves; settled | Revision 3 with round 3's fixes | Design Review Record |
+| Owner, 2026-11-11 | "Accept Decision 10. Documents are approved. Implementation is approved. Subagent driven development but prepare a brief to hand to a fresh session" | Owner decision | Decision 10's narrowing accepted; documents approved; decision 21; Document Amendments 1–6 applied; the handoff brief written | Session, 2026-11-11 |
