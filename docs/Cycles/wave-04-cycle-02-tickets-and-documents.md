@@ -13,12 +13,13 @@ Ticket `01M757DHFAVPEVY4TWQTVKQAMJ` (`vh-r2n89`).
 [Design](../plans/2026-11-11-wave-04-cycle-02-tickets-and-documents-design.md) and
 [implementation plan](../plans/2026-11-11-wave-04-cycle-02-tickets-and-documents-implementation.md).
 
-Status: **draft, revision 2, for the owner's review.** The owner asked to
-go straight to the ticket, design and plan from `docs/design/` (2026-11-11),
-so decisions 1–20 below are the planner's proposals, each with its reason,
-for the owner to confirm, change or reject at approval. Those marked
-**(owner's eye)** change a behaviour people have today or depart from an
-authority.
+Status: **draft, revision 2; decisions confirmed; review round 2
+pending.** The owner asked to go straight to the ticket, design and plan
+from `docs/design/` (2026-11-11), so decisions 1–20 below were the
+planner's proposals, each with its reason. The owner confirmed all twenty
+on 2026-11-11 ("I confirm the decisions"). Those marked **(owner's eye)**
+change a behaviour people have today or depart from an authority. The
+documents themselves are not yet approved.
 
 - Drafted on the ticket branch at `a0a734a4`, which holds origin/main
   `48653d01`. Cycle 01 and Wave 03 D6 are both merged there.
@@ -202,7 +203,7 @@ rows await the owner's checks; Claude records only what the owner reports.
 Wave 04 decisions 1–10 (2026-11-07) govern and are not repeated. The
 Cycle 01 decisions stand except where decision 2 says otherwise.
 
-**Proposed by the planner, for the owner to confirm at approval:**
+**Proposed by the planner and confirmed by the owner on 2026-11-11:**
 
 1. **One Cycle.** The Wave gives Cycle 02 no split line, and the two
    panels share the row and the states.
@@ -351,3 +352,4 @@ relies on each.
 | Planning research | Sources disagree on short-code case, no-code display, closure signal, counts, footnote, Find, list states, nonconforming wording, inaccessible entries, empty folders | Decisions (proposed) | Decisions 2–15 | Design Review Record |
 | Planning research | Kit list, table, tree, segmented control, menu and skeleton facts | Rulings | Design R-2 to R-6 | Design facts 1–12 |
 | Review round 1 (two reviewers, `563763e2`) | 8 Blocking, 37 Important, many Minor; among them header focus, unnamed compile sites, duplicate codes across lifecycles, unreadable files, nonconforming-only lists, the ULID path | Decisions (proposed), rulings, named edits | Decisions 2, 8, 10, 18, 19, 20 revised or added; design revision 2 | Design Review Record |
+| Owner, 2026-11-11 | "I confirm the descisions" | Owner decision | Decisions 1–20 confirmed; review round 2 requested | Session, 2026-11-11 |

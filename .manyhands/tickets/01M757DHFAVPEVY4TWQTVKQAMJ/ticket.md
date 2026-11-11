@@ -19,17 +19,21 @@ exit evidence. The design is `docs/design/` (`03`, with `06`, `07` and
 
 ## Planning
 
-- [ ] Merge the latest main into this ticket branch.
-- [ ] Create `docs/Cycles/wave-04-cycle-02-tickets-and-documents.md`.
-- [ ] Verify every GPUI Kit 0.6.6 name the plan uses (virtualized list or
+- [x] Merge the latest main into this ticket branch. Created from
+  origin/main `48653d01`, which it still holds.
+- [x] Create `docs/Cycles/wave-04-cycle-02-tickets-and-documents.md`.
+- [x] Verify every GPUI Kit 0.6.6 name the plan uses (virtualized list or
   tree, segmented control, input, menu, skeleton, tooltip) against the
-  locked source.
-- [ ] Map each Wave 03 list behavior to its place in the rebuilt panels:
+  locked source. Done in the design's Baseline Facts 1–12, checked in
+  review round 1: the Kit `List` and base `Tree` with app rows, not
+  `DataTable` or the styled `tree()`.
+- [x] Map each Wave 03 list behavior to its place in the rebuilt panels:
   Ready and Blocked, Why blocked, duplicate short codes, nonconforming and
   inaccessible entries, Find, New ticket… and New document…, New folder…
-  and Move….
-- [ ] Create the design and implementation plan and record their
-  checkpoints as ticket comments.
+  and Move…. In the design's Parts B–I and decisions 2, 9, 10 and 19.
+- [x] Create the design and implementation plan and record their
+  checkpoints as ticket comments. Revision 2, decisions confirmed
+  2026-11-11; review round 2 pending.
 
 ## Entry Gate
 
