@@ -30,7 +30,7 @@ use super::{
     tests::{DOCUMENT, SLUG, TICKET, closes, code, open, saved_ticket, shell, until_present},
 };
 use crate::desktop::{
-    model::{navigation::Pane, tickets::TicketQuery},
+    model::navigation::Pane,
     services::{
         JobKind,
         requests::{DesktopRequestId, Intent},
@@ -56,6 +56,25 @@ pub(super) fn query(
         let query = workspace.tickets().query();
         (query.closure, query.readiness, query.text.clone())
     })
+}
+
+/// Types `text` in the filter input as `set_filter_text` does: the input
+/// and the query both hold it.
+pub(super) fn type_filter(shell: &Shell, text: &str, cx: &mut TestAppContext) {
+    shell.frame(cx, |window, cx| {
+        shell.workspace.update(cx, |workspace, cx| {
+            workspace.set_filter_text(text, window, cx)
+        })
+    });
+    shell.run(cx);
+}
+
+/// What the filter input holds.
+pub(super) fn filter_text(shell: &Shell, cx: &mut TestAppContext) -> String {
+    let input = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.find_input().clone());
+    input.read_with(cx, |input, _| input.value().to_string())
 }
 
 /// A ticket that depends on `TICKET` alone, so closing it makes this one
@@ -301,18 +320,16 @@ async fn index_unavailable_final_offers_open_ready_tickets(cx: &mut TestAppConte
     // Closed with text typed: Closed with Blocked cannot be chosen (R-26),
     // and the text is what Open ready tickets clears (R-29).
     shell.workspace.update(cx, |workspace, cx| {
-        workspace.set_ticket_query(
-            TicketQuery {
-                text: TYPED.to_owned(),
-                ..TicketQuery::default().with_closure(ClosureFilter::Closed)
-            },
-            cx,
-        );
+        workspace.set_closure(ClosureFilter::Closed, cx)
     });
-    shell.run(cx);
+    type_filter(&shell, TYPED, cx);
     assert_eq!(
         query(&shell, cx),
         (ClosureFilter::Closed, None, TYPED.to_owned())
+    );
+    assert_eq!(
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: any")
     );
 
     confirming(&shell, &root, cx).await;
@@ -381,6 +398,11 @@ async fn index_unavailable_final_offers_open_ready_tickets(cx: &mut TestAppConte
             String::new()
         )
     );
+    assert_eq!(
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: ready")
+    );
+    assert_eq!(filter_text(&shell, cx), "", "the input is cleared too");
     assert!(
         shell.present(Region::Tickets.ring_id(), cx),
         "the Tickets region has focus"

@@ -57,6 +57,7 @@ pub(crate) use focus::Region;
 #[cfg(all(test, feature = "desktop-test-support"))]
 use gpui_kit::App;
 use manyhands::drafts::DraftId;
+pub(in crate::desktop::view) use render::unless_dialog;
 
 /// The tabs, the cached Settings entity and the cached Drafts page share
 /// one content region; `content.rs` routes between them.
@@ -107,14 +108,15 @@ pub(crate) struct Workspace {
     tickets: Tickets,
     tickets_pane: TicketsPane,
     ticket_read: Option<Task<()>>,
-    /// Rows go to the Kit list at the next frame, which supplies its window.
-    tickets_changed: bool,
+    /// The filter input, which was Find's: its text is the query's text
+    /// (R-30).
     find_input: Entity<InputState>,
     find: Find,
     find_read: Option<Task<()>>,
     /// Around each match's Open, whose own focus is the Kit's.
     find_focus: Vec<FocusHandle>,
-    /// Around each pane and filter choice, by element ID.
+    /// Around each lifecycle segment and sort header, by element ID: tab
+    /// stops of their own.
     choice_focus: HashMap<&'static str, FocusHandle>,
     _find_events: Subscription,
     content: ContentArea,
@@ -223,13 +225,19 @@ impl Workspace {
                 }
             }
         });
-        let find_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder(super::find::FIND_LABEL));
-        let find_events = cx.subscribe(&find_input, |this, _, event: &InputEvent, cx| {
-            if let InputEvent::PressEnter { .. } = event {
-                this.submit_find(cx);
-            }
+        let find_input = cx.new(|cx| {
+            let mut input =
+                InputState::new(window, cx).placeholder(super::tickets::FILTER_PLACEHOLDER);
+            // Escape clears the text.
+            input.set_clean_on_escape(true);
+            input
         });
+        let find_events =
+            cx.subscribe(&find_input, |this, _, event: &InputEvent, cx| match event {
+                InputEvent::PressEnter { .. } => this.submit_find(cx),
+                InputEvent::Change => this.filter_text_changed(cx),
+                _ => {}
+            });
         let repositories_pane = RepositoriesPane::new(window, cx);
         let repository_events = cx.subscribe(repositories_pane.list(), |this, list, event, cx| {
             if let ListEvent::Confirm(ix) = event {
@@ -293,13 +301,12 @@ impl Workspace {
             tickets: Tickets::default(),
             tickets_pane,
             ticket_read: None,
-            tickets_changed: false,
             find_input,
             find: Find::default(),
             find_read: None,
             find_focus: Vec::new(),
-            choice_focus: super::lists::choice_ids()
-                .map(|id| (id, cx.focus_handle()))
+            choice_focus: super::tickets::choice_ids()
+                .map(|id| (id, cx.focus_handle().tab_stop(true)))
                 .collect(),
             _find_events: find_events,
             operations_scroll,

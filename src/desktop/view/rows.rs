@@ -6,8 +6,6 @@
 //! Kit's `ListItem`, whose selected background cannot be replaced. Colours
 //! come from `chrome_colors` (fact 33).
 
-#![allow(dead_code)] // Used from Tasks 3 and 6; no test draws a row (no appearance tests).
-
 use gpui_kit::{
     AnyElement, App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement, IntoElement,
     ParentElement, Pixels, RenderOnce, SharedString, Stateful, StatefulInteractiveElement,
@@ -86,12 +84,14 @@ impl ListRow {
 
     /// The left padding, in place of the standard 12 px: the tree's
     /// indent for the row's depth.
+    #[allow(dead_code)] // Used from Task 6 (the tree).
     pub(crate) fn indent(mut self, left: Pixels) -> Self {
         self.indent = left;
         self
     }
 
     /// The gap between the row's cells: 8 in Tickets, 5 in Documents.
+    #[allow(dead_code)] // Used from Task 6 (the tree).
     pub(crate) fn gap(mut self, gap: Pixels) -> Self {
         self.gap = gap;
         self
@@ -104,6 +104,7 @@ impl ListRow {
     }
 
     /// A tree folder's `aria_expanded`; `None` for a leaf.
+    #[allow(dead_code)] // Used from Task 6 (the tree).
     pub(crate) fn expanded(mut self, expanded: Option<bool>) -> Self {
         self.expanded = expanded;
         self
@@ -125,6 +126,7 @@ impl ListRow {
         self
     }
 
+    #[allow(dead_code)] // Used from Task 6 (the tree).
     pub(crate) fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -300,6 +302,9 @@ pub(crate) fn alert_row(
                 .child(div().text_color(colors.text).child(alert.text.clone()))
                 .children(alert.detail.clone().map(|detail| {
                     div()
+                        .id((id.clone(), "detail"))
+                        .test_support()
+                        .aria_label(detail.clone())
                         .text_size(px(DETAIL_SIZE))
                         .text_color(colors.secondary)
                         .child(detail)

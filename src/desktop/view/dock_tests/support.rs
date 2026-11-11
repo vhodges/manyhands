@@ -168,6 +168,17 @@ pub(in crate::desktop::view) fn panel_id(
     })
 }
 
+/// The text of the count in the header of `kind`'s group (`("panel-count",
+/// node)`), when the panel is alone in its group and the header draws one.
+pub(in crate::desktop::view) fn panel_count(
+    shell: &Shell,
+    kind: PanelKind,
+    cx: &mut TestAppContext,
+) -> Option<String> {
+    let node = group_of(&area(shell, cx), kind, cx).as_u64();
+    shell.label(("panel-count", node), cx)
+}
+
 /// The group holding `kind`.
 pub(in crate::desktop::view) fn group_of(
     area: &Entity<DockArea>,

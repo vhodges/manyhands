@@ -21,7 +21,7 @@ use super::{
     harness::{Shell, key},
     quit::QuitPhase,
     settings::{PAGES, Shown},
-    tickets::{LIFECYCLE_CLOSED, READINESS_FILTERS},
+    tickets::LIFECYCLE_CLOSED,
     workspace::{REGIONS, Region},
 };
 use crate::desktop::{
@@ -339,9 +339,10 @@ impl Walk {
         self.enter(cx);
     }
 
-    /// The closure and readiness filters, each by shift-Tab and Enter
-    /// from the ticket list. Each says what it shows in text; the rows
-    /// change with it. Back to Open and any readiness at the end.
+    /// The closure segments, each by shift-Tab and Enter from the ticket
+    /// list, and the readiness menu: Tab to its button, Enter to open it,
+    /// Down to an item and Enter to choose it. The rows change with each
+    /// choice. Back to Open and any readiness at the end.
     fn change_the_filters(&self, cx: &mut TestAppContext) {
         // F6 from the document tree, through Content, to the ticket list.
         self.keys("f6 f6", cx);
@@ -354,10 +355,6 @@ impl Walk {
         assert!(!rows(cx).contains(&"Closed one".to_owned()));
 
         self.choose("filter-closed", cx);
-        assert_eq!(
-            self.shell.label("tickets-showing", cx).as_deref(),
-            Some("Showing closed tickets")
-        );
         assert_eq!(rows(cx), ["Closed one"]);
         self.on("filter-closed", Region::Tickets, cx);
 
@@ -366,24 +363,26 @@ impl Walk {
         assert!(self.shell.selected("filter-open", cx));
         assert!(rows(cx).contains(&"Waits".to_owned()));
 
-        self.tab_to("tab", "filter-blocked", cx);
-        self.enter(cx);
-        let blocked = READINESS_FILTERS
-            .iter()
-            .find(|(id, ..)| *id == "filter-blocked")
-            .map(|(_, _, showing, _)| *showing);
+        // The menu: Enter opens it, three Downs reach Blocked, and Enter
+        // chooses it. Focus is back on the button, which names the choice.
+        self.tab_to("tab", "filter-readiness", cx);
+        self.on("filter-readiness", Region::Tickets, cx);
+        self.keys("enter down down down enter", cx);
         assert_eq!(
-            self.shell.label("tickets-readiness-showing", cx).as_deref(),
-            blocked
+            self.shell.label("filter-readiness", cx).as_deref(),
+            Some("Readiness: blocked")
         );
         assert_eq!(rows(cx), ["Waits"]);
         assert!(self.shell.present("why-blocked", cx));
-        self.on("filter-blocked", Region::Tickets, cx);
+        self.on("filter-readiness", Region::Tickets, cx);
 
-        self.tab_to("shift-tab", "filter-any-readiness", cx);
-        self.enter(cx);
-        assert!(self.shell.selected("filter-any-readiness", cx));
+        self.keys("enter down enter", cx);
+        assert_eq!(
+            self.shell.label("filter-readiness", cx).as_deref(),
+            Some("Readiness: any")
+        );
         assert!(!self.shell.present("why-blocked", cx));
+        self.on("filter-readiness", Region::Tickets, cx);
     }
 
     /// The ticket list: `secondary-2` focuses it, the arrows move to

@@ -27,6 +27,7 @@ use crate::desktop::{
     assets::icon_path,
     model::layout::PanelKind,
     view::{
+        dock::panels::{Count, UPDATING, count},
         shell::tokens::{ChromeColors, chrome_colors},
         workspace::Workspace,
     },
@@ -36,6 +37,8 @@ use crate::desktop::{
 const HEIGHT: f32 = 32.;
 const ICON_SIZE: f32 = 13.;
 const TITLE_SIZE: f32 = 12.;
+/// Size of a header's count (`02`).
+const COUNT_SIZE: f32 = 11.;
 /// A group of more than this many tabs uses short labels (R-32).
 const FULL_LABEL_TABS: usize = 2;
 /// The size the drag preview occupies, reported so a drop placeholder knows
@@ -70,8 +73,8 @@ pub(super) fn header(
         [(_, only)] if PanelHandle::of(only).is_some_and(|handle| !handle.title_bar(cx)) => {
             Empty.into_any_element()
         }
-        [(ix, only)] => single(group, *ix, only, window, cx),
-        _ => tabs(group, &shown, cx),
+        [(ix, only)] => single(group, *ix, only, workspace, window, cx),
+        _ => tabs(group, &shown, workspace, cx),
     }
 }
 
@@ -111,12 +114,19 @@ fn tab_label(panel: &Arc<dyn BasePanelView>, tabs: usize, cx: &App) -> SharedStr
     }
 }
 
+/// What the header says of the list of `kind`: its count, or that it is
+/// updating.
+fn counted(workspace: &WeakEntity<Workspace>, kind: PanelKind, cx: &App) -> Option<Count> {
+    count(workspace.upgrade()?.read(cx), kind)
+}
+
 /// One panel alone in its group: icon, title and count, with no tab
 /// treatment.
 fn single(
     group: &TabGroupContext,
     ix: usize,
     panel: &Arc<dyn BasePanelView>,
+    workspace: &WeakEntity<Workspace>,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
@@ -132,7 +142,9 @@ fn single(
             .text_color(colors.secondary)
     });
     let title = handle.map(|handle| handle.title(window, cx));
-    let count = handle.and_then(|handle| handle.title_suffix(window, cx));
+    let count = kind
+        .and_then(|kind| counted(workspace, kind, cx))
+        .map(Count::text);
     let label = tab_label(panel, FULL_LABEL_TABS, cx);
     let node = group.node().as_u64();
     let element = row(cx)
@@ -149,7 +161,15 @@ fn single(
                 .whitespace_nowrap()
                 .children(title),
         )
-        .children(count);
+        .children(count.map(|text| {
+            div()
+                .id(("panel-count", node))
+                .test_support()
+                .aria_label(text.clone())
+                .text_size(px(COUNT_SIZE))
+                .text_color(colors.muted)
+                .child(text)
+        }));
     drag_source(element, group, ix, label, cx)
         .when(group.is_droppable(), |element| {
             element
@@ -164,53 +184,76 @@ fn single(
         .into_any_element()
 }
 
-/// One tab per drawn panel; the active one shows the amber line.
-fn tabs(group: &TabGroupContext, shown: &Shown, cx: &mut App) -> AnyElement {
+/// One tab per drawn panel; the active one shows the amber line. A panel
+/// whose list is updating reads "{title} · Updating…" on its tab, since a
+/// tabbed group draws no count (R-36).
+fn tabs(
+    group: &TabGroupContext,
+    shown: &Shown,
+    workspace: &WeakEntity<Workspace>,
+    cx: &mut App,
+) -> AnyElement {
     let colors = chrome_colors(cx);
     let count = shown.len();
     let displayed = group.active_panel().map(|panel| panel.panel_id(cx));
-    let bar = shown.iter().fold(row(cx), |bar, (ix, panel)| {
-        let active = Some(panel.panel_id(cx)) == displayed;
-        let label = tab_label(panel, count, cx);
-        let tab = div()
-            .id(tab_id(panel, cx))
-            .test_support()
-            .role(Role::Tab)
-            .aria_label(label.clone())
-            .aria_selected(active)
-            .flex()
-            .items_center()
-            .h_full()
-            .px(px(10.))
-            .text_size(px(TITLE_SIZE))
-            .whitespace_nowrap()
-            .cursor_pointer()
-            .border_b_2()
-            .map_active(active, &colors)
-            .on_click({
-                let group = group.clone();
-                let ix = *ix;
-                move |_, window, cx| group.select_tab(ix, window, cx)
-            })
-            .child(label.clone());
-        let tab = drag_source(tab, group, *ix, label, cx).when(group.is_droppable(), |tab| {
-            tab.drag_over::<DragPanel>(|style, _, _, cx| {
-                style
-                    .rounded_l_none()
-                    .border_l_2()
-                    .border_r_0()
-                    .border_color(cx.theme().drag_border)
-            })
-            .on_drop({
-                let group = group.clone();
-                let ix = *ix;
-                move |drag: &DragPanel, window, cx| {
-                    group.drop_panel(drag.clone(), Some(ix), true, window, cx);
-                }
-            })
+    let updating: Vec<bool> = shown
+        .iter()
+        .map(|(_, panel)| {
+            kind_of(panel, cx)
+                .is_some_and(|kind| counted(workspace, kind, cx) == Some(Count::Updating))
+        })
+        .collect();
+    let bar = shown
+        .iter()
+        .zip(updating)
+        .fold(row(cx), |bar, ((ix, panel), updating)| {
+            let active = Some(panel.panel_id(cx)) == displayed;
+            // The drag preview names the panel; only the tab says Updating….
+            let plain = tab_label(panel, count, cx);
+            let label: SharedString = if updating {
+                format!("{plain} \u{b7} {UPDATING}").into()
+            } else {
+                plain.clone()
+            };
+            let tab = div()
+                .id(tab_id(panel, cx))
+                .test_support()
+                .role(Role::Tab)
+                .aria_label(label.clone())
+                .aria_selected(active)
+                .flex()
+                .items_center()
+                .h_full()
+                .px(px(10.))
+                .text_size(px(TITLE_SIZE))
+                .whitespace_nowrap()
+                .cursor_pointer()
+                .border_b_2()
+                .map_active(active, &colors)
+                .on_click({
+                    let group = group.clone();
+                    let ix = *ix;
+                    move |_, window, cx| group.select_tab(ix, window, cx)
+                })
+                .child(label.clone());
+            let tab = drag_source(tab, group, *ix, plain, cx).when(group.is_droppable(), |tab| {
+                tab.drag_over::<DragPanel>(|style, _, _, cx| {
+                    style
+                        .rounded_l_none()
+                        .border_l_2()
+                        .border_r_0()
+                        .border_color(cx.theme().drag_border)
+                })
+                .on_drop({
+                    let group = group.clone();
+                    let ix = *ix;
+                    move |drag: &DragPanel, window, cx| {
+                        group.drop_panel(drag.clone(), Some(ix), true, window, cx);
+                    }
+                })
+            });
+            bar.child(tab)
         });
-        bar.child(tab)
-    });
     // The slot a drop addresses indexes the group's full panel list, hidden
     // panels included, not the tabs drawn: with [A, hidden, B], a panel
     // dropped past the last tab must land after B.

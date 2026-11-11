@@ -1,7 +1,9 @@
-//! The Find input, at the top of the Tickets region, and what it
-//! found (design, Discovery / Find).
+//! What Find found, at the top of the Tickets region (design, Discovery /
+//! Find). The input is the filter input, drawn in the filter bar; Task 4 of
+//! Wave 04 Cycle 02 replaces this with the filter status line.
 //!
-//! `secondary-p` focuses it, and Enter searches the selected repository.
+//! `secondary-p` focuses the input, and Enter searches the selected
+//! repository.
 //! Text that parses as a ULID opens its item in a tab through
 //! `show_item`, a lifecycle-closed ticket as any other. Other text is a
 //! short code: every ticket `find_tickets_by_slug` gives for it is listed
@@ -15,9 +17,7 @@ use gpui_kit::{
     component::{
         ActiveTheme,
         button::{Button, ButtonVariants},
-        h_flex,
-        input::Input,
-        v_flex,
+        h_flex, v_flex,
     },
     div,
 };
@@ -31,7 +31,6 @@ use crate::desktop::model::{
     tickets::TicketRow,
 };
 
-pub(crate) const FIND_LABEL: &str = "Find by short code or ID";
 pub(crate) const FIND_SEARCHING: &str = "Finding";
 pub(crate) const FIND_OPENED: &str = "Opened in a tab";
 pub(crate) const FIND_NONE: &str = "No match";
@@ -62,13 +61,6 @@ impl Workspace {
         v_flex()
             .id("find")
             .gap_1()
-            .child(
-                div()
-                    .id("find-input")
-                    .test_support()
-                    .aria_label(FIND_LABEL)
-                    .child(Input::new(self.find_input()).aria_label(FIND_LABEL)),
-            )
             .children(state.map(|text| {
                 div()
                     .id("find-state")

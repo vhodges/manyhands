@@ -1,88 +1,49 @@
-//! The Tickets pane: the closure filter and the selected repository's
-//! tickets in the Kit's list, with its arrow and Enter bindings.
+//! The Tickets pane: the Kit's list of the rows the panel shows under its
+//! query, with the arrow and Enter bindings, Home and End, and the Why
+//! blocked panel.
 //!
-//! Columns: short code, title, type, status, lifecycle and change time.
-//! Status is shown as written and lifecycle comes from closure, both as
-//! text: an open ticket whose status is `closed` shows status `closed`
-//! and lifecycle Open. A nonconforming entry shows its path, the word
-//! Nonconforming and its problem code.
+//! The filter bar, the column header and the rows are drawn from
+//! `filter_bar`, `columns` and `row`. A row is one line: type, short code,
+//! title with its markers, status pill and age (Part C). Status is shown
+//! as written, and an open ticket whose status is `closed` shows status
+//! `closed`: lifecycle shows only as the Closed marker under All. A
+//! nonconforming entry shows its path, and "needs fixing".
 
 use gpui_kit::{
-    App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    ParentElement, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
-        ActiveTheme, IndexPath, h_flex,
-        list::{List, ListDelegate, ListItem, ListState as KitListState},
+        ActiveTheme, IndexPath, Selectable,
+        list::{List, ListDelegate, ListState as KitListState},
         v_flex,
     },
     div,
 };
-use manyhands::repository::{ClosureFilter, ReadinessFilter};
+use time::OffsetDateTime;
 
-use super::scroll::ContentScroll;
+use self::row::ticket_row;
+use super::{rows::ListRow, scroll::ContentScroll};
 use crate::desktop::{
     keys::{ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, WHY_BLOCKED_CONTEXT},
-    model::tickets::{Lifecycle, TicketRow},
+    model::{
+        markers::Markers,
+        tickets::{Lifecycle, TicketRow},
+    },
 };
+
+mod columns;
+mod filter_bar;
+mod row;
+
+pub(crate) use filter_bar::{FILTER_PLACEHOLDER, choice_ids};
 
 pub(crate) const LIFECYCLE_OPEN: &str = "Open";
 pub(crate) const LIFECYCLE_CLOSED: &str = "Closed";
-pub(crate) const NONCONFORMING: &str = "Nonconforming";
-pub(crate) use crate::desktop::model::ticket_view::NO_SHORT_CODE;
 pub(crate) const WHY_BLOCKED: &str = "Why blocked";
 pub(crate) const SELECT_BLOCKED: &str = "Select a ticket to see why it is blocked";
 pub(crate) const NO_REASONS: &str = "The library gives no reasons for this entry";
-/// The readiness choice that asks for none.
-pub(crate) const ANY_READINESS: &str = "Any readiness";
 /// The Why blocked panel grows to this height, then scrolls.
 pub(crate) const WHY_BLOCKED_MAX_HEIGHT: gpui_kit::Pixels = gpui_kit::px(160.);
-
-/// The closure filters, in the order they are offered: their element id,
-/// label and what they show.
-pub(crate) const CLOSURE_FILTERS: [(&str, &str, &str, ClosureFilter); 3] = [
-    (
-        "filter-open",
-        "Open",
-        "Showing open tickets",
-        ClosureFilter::Open,
-    ),
-    (
-        "filter-closed",
-        "Closed",
-        "Showing closed tickets",
-        ClosureFilter::Closed,
-    ),
-    (
-        "filter-all",
-        "All",
-        "Showing all tickets",
-        ClosureFilter::All,
-    ),
-];
-
-/// The readiness filters, in the order they are offered: their element
-/// id, label, what they show and the readiness they ask for. A filter
-/// never hides a nonconforming entry: the library keeps it under each.
-pub(crate) const READINESS_FILTERS: [(&str, &str, &str, Option<ReadinessFilter>); 3] = [
-    (
-        "filter-any-readiness",
-        ANY_READINESS,
-        "Showing tickets ready or not",
-        None,
-    ),
-    (
-        "filter-ready",
-        "Ready",
-        "Showing ready tickets",
-        Some(ReadinessFilter::Ready),
-    ),
-    (
-        "filter-blocked",
-        "Blocked",
-        "Showing blocked tickets and why",
-        Some(ReadinessFilter::Blocked),
-    ),
-];
 
 pub(crate) fn lifecycle_label(lifecycle: Lifecycle) -> &'static str {
     match lifecycle {
@@ -91,60 +52,39 @@ pub(crate) fn lifecycle_label(lifecycle: Lifecycle) -> &'static str {
     }
 }
 
-/// What a row is labeled by: its title, or for a nonconforming entry,
-/// which has none, its path.
-fn label(row: &TicketRow) -> String {
-    row.name().title_or(&row.path).to_owned()
-}
-
 /// The label of the row `item` makes.
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) fn row_label(item: &manyhands::repository::ItemDto) -> String {
-    label(&TicketRow::from_item(item))
+    row::label(&TicketRow::from_item(item))
 }
 
-/// The row's accessible description: its reasons, in full, so a screen
-/// reader hears them on landing on the row. None when it has none.
-pub(crate) fn row_description(row: &TicketRow) -> Option<String> {
-    (!row.reasons.is_empty()).then(|| row.reasons.join("; "))
-}
-
-/// The line of why the row at `index` is blocked: each reason in text,
-/// on one line, so every row keeps the height the list measured.
-fn reasons(row: &TicketRow, index: usize) -> impl IntoElement + use<> {
-    h_flex()
-        .gap_2()
-        .overflow_hidden()
-        .text_xs()
-        .whitespace_nowrap()
-        // A space keeps the line's height when there is no reason.
-        .child("\u{a0}")
-        .children(row.reasons.iter().enumerate().map(|(n, reason)| {
-            div()
-                .id(SharedString::from(format!("ticket-reason-{index}-{n}")))
-                .test_support()
-                .aria_label(reason.clone())
-                .child(reason.clone())
-        }))
+/// A row the panel shows, with the marks it carries: what the list draws,
+/// and what it compares to know whether anything changed (R-32).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ShownTicket {
+    pub row: TicketRow,
+    pub markers: Markers,
 }
 
 /// The Kit list's delegate: the rows shown and the one selected.
 pub(crate) struct TicketDelegate {
-    rows: Vec<TicketRow>,
-    /// Some row gives reasons. The Kit's list measures one row for all,
-    /// so then every row has a line for them, empty where it gives none.
-    reasons_shown: bool,
+    rows: Vec<ShownTicket>,
     selected: Option<IndexPath>,
+    /// The repository's display name, for each row's tooltip.
+    repo: String,
+    /// The list's own focus, so the selected row draws its ring while the
+    /// list holds focus.
+    focus: Option<FocusHandle>,
 }
 
 impl TicketDelegate {
     pub(crate) fn row(&self, ix: IndexPath) -> Option<&TicketRow> {
-        self.rows.get(ix.row)
+        self.rows.get(ix.row).map(|shown| &shown.row)
     }
 }
 
 impl ListDelegate for TicketDelegate {
-    type Item = ListItem;
+    type Item = ListRow;
 
     fn items_count(&self, _section: usize, _cx: &App) -> usize {
         self.rows.len()
@@ -153,63 +93,30 @@ impl ListDelegate for TicketDelegate {
     fn render_item(
         &mut self,
         ix: IndexPath,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<KitListState<Self>>,
-    ) -> Option<ListItem> {
-        let row = self.rows.get(ix.row)?;
-        let index = ix.row;
+    ) -> Option<ListRow> {
+        let shown = self.rows.get(ix.row)?;
         let selected = self.selected.is_some_and(|selected| selected.eq_row(ix));
-        let muted = cx.theme().muted_foreground;
-        let cell = |name: &'static str, text: String| {
-            div()
-                .id((name, index))
-                .test_support()
-                .aria_label(text.clone())
-                .text_xs()
-                .child(text)
-        };
-        let columns = match row.nonconforming {
-            Some(problem) => h_flex()
-                .gap_2()
-                .child(cell("ticket-nonconforming", NONCONFORMING.to_owned()))
-                .child(cell("ticket-problem", problem.as_str().to_owned())),
-            None => h_flex()
-                .gap_2()
-                .child(cell(
-                    "ticket-slug",
-                    row.name().short_or(NO_SHORT_CODE).to_owned(),
-                ))
-                .children(
-                    row.ticket_type
-                        .clone()
-                        .map(|text| cell("ticket-type", text)),
-                )
-                .children(row.status.clone().map(|text| cell("ticket-status", text)))
-                .children(row.lifecycle.map(|lifecycle| {
-                    cell("ticket-lifecycle", lifecycle_label(lifecycle).to_owned())
-                }))
-                .children(
-                    row.changed_at
-                        .clone()
-                        .map(|text| cell("ticket-changed", text)),
-                ),
-        };
-        let mut entry = v_flex()
-            .id(("ticket-row", index))
-            .test_support()
-            .aria_label(label(row))
-            .aria_selected(selected);
-        if let Some(description) = row_description(row) {
-            entry = entry.aria_description(description);
-        }
+        let focused = self
+            .focus
+            .as_ref()
+            .is_some_and(|focus| focus.is_focused(window));
         Some(
-            ListItem::new(("ticket-item", index)).child(
-                entry
-                    .child(div().text_sm().child(label(row)))
-                    .child(columns.text_color(muted))
-                    .children(self.reasons_shown.then(|| reasons(row, index))),
-            ),
+            ticket_row(ix.row, shown, &self.repo, OffsetDateTime::now_utc(), cx)
+                .selected(selected)
+                .focused(focused),
         )
+    }
+
+    /// An empty list draws nothing of the Kit's: the panel's body says what
+    /// there is to say (R-34).
+    fn render_empty(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<KitListState<Self>>,
+    ) -> impl IntoElement {
+        div()
     }
 
     fn set_selected_index(
@@ -235,11 +142,17 @@ impl TicketsPane {
     pub(crate) fn new(window: &mut Window, cx: &mut App) -> Self {
         let delegate = TicketDelegate {
             rows: Vec::new(),
-            reasons_shown: false,
             selected: None,
+            repo: String::new(),
+            focus: None,
         };
+        let list = cx.new(|cx| KitListState::new(delegate, window, cx));
+        list.update(cx, |list, cx| {
+            let focus = list.focus_handle(cx);
+            list.delegate_mut().focus = Some(focus);
+        });
         Self {
-            list: cx.new(|cx| KitListState::new(delegate, window, cx)),
+            list,
             why_focus: cx.focus_handle().tab_stop(true),
             why_scroll: ContentScroll::default(),
         }
@@ -249,30 +162,66 @@ impl TicketsPane {
         &self.list
     }
 
-    /// Shows `rows`, none selected.
-    pub(crate) fn set(&self, rows: Vec<TicketRow>, window: &mut Window, cx: &mut App) {
+    /// The repository's display name, which the rows' tooltips carry.
+    pub(crate) fn set_repository(&self, name: &str, cx: &mut App) {
+        if self.list.read(cx).delegate().repo != name {
+            self.list.update(cx, |list, cx| {
+                list.delegate_mut().repo = name.to_owned();
+                cx.notify();
+            });
+        }
+    }
+
+    /// Shows `rows`. The selected row stays selected where the new rows
+    /// still have it, by ID, or for an entry with no ID by worktree and
+    /// path; where they do not, nothing is selected, so Enter never opens
+    /// another ticket (Review Focus 1). Nothing happens when the rows are
+    /// the ones shown.
+    pub(crate) fn set(&self, rows: Vec<ShownTicket>, window: &mut Window, cx: &mut App) {
+        if self.list.read(cx).delegate().rows == rows {
+            return;
+        }
         self.list.update(cx, |list, cx| {
-            // The selected row stays selected where the new rows still
-            // have it, by ID or, for a nonconforming entry, by path.
             let selected = list
                 .selected_index()
-                .and_then(|ix| list.delegate().rows.get(ix.row))
-                .map(|row| (row.id.clone(), row.path.clone()));
-            let at = selected.and_then(|(id, path)| {
-                rows.iter()
-                    .position(|row| row.id == id && (id.is_some() || row.path == path))
+                .and_then(|ix| list.delegate().row(ix))
+                .map(|row| (row.id.clone(), row.worktree.clone(), row.path.clone()));
+            let at = selected.and_then(|(id, worktree, path)| {
+                rows.iter().position(|shown| match (&shown.row.id, &id) {
+                    (Some(shown), Some(selected)) => shown == selected,
+                    (None, None) => shown.row.worktree == worktree && shown.row.path == path,
+                    _ => false,
+                })
             });
-            list.delegate_mut().reasons_shown = rows.iter().any(|row| !row.reasons.is_empty());
             list.delegate_mut().rows = rows;
             list.set_selected_index(at.map(IndexPath::new), window, cx);
             cx.notify();
         });
     }
 
+    /// Selects the first or the last row and scrolls to it (R-15). Nothing
+    /// when there is none.
+    pub(crate) fn select_edge(&self, last: bool, window: &mut Window, cx: &mut App) {
+        self.list.update(cx, |list, cx| {
+            let count = list.delegate().rows.len();
+            if count == 0 {
+                return;
+            }
+            let row = if last { count - 1 } else { 0 };
+            list.set_selected_index(Some(IndexPath::new(row)), window, cx);
+            list.scroll_to_selected_item(window, cx);
+        });
+    }
+
     /// The rows shown, for tests.
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn rows(&self, cx: &App) -> Vec<TicketRow> {
-        self.list.read(cx).delegate().rows.clone()
+        let list = self.list.read(cx);
+        list.delegate()
+            .rows
+            .iter()
+            .map(|shown| shown.row.clone())
+            .collect()
     }
 
     /// The selected row, if any.
@@ -382,7 +331,8 @@ impl TicketsPane {
         self.list.update(cx, |list, cx| list.focus(window, cx));
     }
 
-    pub(crate) fn render(&self) -> impl IntoElement + use<> {
+    /// The list, always drawn while a repository is selected (R-34).
+    pub(crate) fn render(&self) -> impl InteractiveElement + IntoElement + use<> {
         div()
             .id("tickets-list")
             .test_support()

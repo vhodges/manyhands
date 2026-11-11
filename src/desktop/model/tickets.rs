@@ -36,7 +36,6 @@ use crate::desktop::services::ReadResult;
 
 /// A column the list sorts by.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
 pub(crate) enum SortColumn {
     Type,
     Code,
@@ -65,7 +64,6 @@ impl Default for TicketSort {
 
 impl TicketSort {
     /// Sorting by `column`: a new column ascending, the same one reversed.
-    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
     pub(crate) fn toggled(self, column: SortColumn) -> Self {
         Self {
             column,
@@ -98,7 +96,6 @@ impl Default for TicketQuery {
 
 impl TicketQuery {
     /// Whether the text or a readiness choice narrows the list.
-    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
     pub(crate) fn narrowed(&self) -> bool {
         !self.text.trim().is_empty() || self.readiness.is_some()
     }

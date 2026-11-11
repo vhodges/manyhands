@@ -30,14 +30,12 @@ impl RowContext {
     }
 
     /// The copy's kind, in the details sheet's words.
-    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
     pub(crate) fn label(&self) -> &'static str {
         context_kind_label(self.kind)
     }
 
     /// `Git: branch {branch} · worktree {worktree}`; a missing branch is
     /// `NO_BRANCH`, as the details sheet says it.
-    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
     pub(crate) fn git_line(&self) -> String {
         let branch = branch_label(self.branch.as_deref());
         format!("{GIT_PREFIX}{branch} \u{b7} worktree {}", self.worktree)
@@ -46,7 +44,6 @@ impl RowContext {
 
 /// The marks a row carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
 pub(crate) struct Markers {
     /// A draft of the item, or of a comment on it, is held.
     pub unsaved: bool,
@@ -59,7 +56,6 @@ pub(crate) struct Markers {
 /// The markers of a row. `Held::Unknown` marks nothing, so a store that
 /// cannot be read does not mark every row (R-8). A closed row is marked
 /// only under All, where it stands among open ones.
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
 pub(crate) fn row_markers(
     held: Held,
     conflict: bool,

@@ -209,13 +209,11 @@ impl<T> KeptList<T> {
     }
 
     /// Loading over kept rows.
-    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
     pub(crate) fn reloading(&self) -> bool {
         matches!(self.state, ListState::Loading) && self.kept.is_some()
     }
 
     /// The last read stayed busy and the rows shown are the earlier ones.
-    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
     pub(crate) fn busy_over_kept(&self) -> bool {
         self.busy_over_kept
     }

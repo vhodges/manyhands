@@ -23,6 +23,21 @@ pub(crate) const OPEN_IT_TO_FIX: &str = " Open it to fix.";
 /// For a nonconforming entry with no problem code. This is copy the
 /// design does not give, in the words of the line above.
 pub(crate) const NEEDS_FIXING_NO_GUIDANCE: &str = "Needs fixing. Open it to fix.";
+/// A nonconforming entry's status pill and the name of its type cell.
+pub(crate) const NEEDS_FIXING_PILL: &str = "needs fixing";
+pub(crate) const NEEDS_FIXING_TYPE: &str = "Needs fixing";
+/// An unreadable file's status pill and the name of its type cell.
+#[allow(dead_code)] // Used from Task 7; no test reads it before.
+pub(crate) const CANT_BE_READ_PILL: &str = "can't be read";
+#[allow(dead_code)] // Used from Task 7; no test reads it before.
+pub(crate) const CANT_BE_READ_TYPE: &str = "Can't be read";
+/// The markers' tooltips, which are also their accessible names. The
+/// Closed marker's is `CLOSED_LINE`.
+pub(crate) const UNSAVED_MARKER: &str = "You have unsaved work on this.";
+pub(crate) const CONFLICT_MARKER: &str =
+    "This has a conflict to resolve. Open it to choose what to keep.";
+/// The accessible name of a row's age: `Updated {relative time}`.
+pub(crate) const UPDATED_PREFIX: &str = "Updated ";
 /// The hint above the rows, for one ticket and for `{k}`.
 pub(crate) const MORE_MATCH_ONE: &str = "1 more ticket matches with other filters.";
 pub(crate) fn more_match_text(k: usize) -> String {
@@ -186,7 +201,6 @@ pub(crate) fn derive(rows: Option<&[TicketRow]>, query: &TicketQuery) -> TicketV
 
 /// The line under the list (decision 7): what is shown, in which
 /// repository, matching what, and what needs attention.
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
 pub(crate) fn footnote(view: &TicketView, query: &TicketQuery, repo: &str) -> String {
     let word = match (query.readiness, query.closure) {
         (Some(ReadinessFilter::Ready), _) => "ready ",
@@ -219,7 +233,6 @@ pub(crate) fn footnote(view: &TicketView, query: &TicketQuery, repo: &str) -> St
 
 /// The line above the rows when other filters hold more matches
 /// (decision 2). The empty state says the same when nothing is listed.
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
 pub(crate) fn hint(view: &TicketView) -> Option<String> {
     (view.listed > 0 && view.elsewhere > 0).then(|| match view.elsewhere {
         1 => MORE_MATCH_ONE.to_owned(),
@@ -230,7 +243,6 @@ pub(crate) fn hint(view: &TicketView) -> Option<String> {
 /// How long ago a ticket changed, as the prototype writes it (R-20):
 /// whole minutes under an hour, rounded hours under a day, then rounded
 /// days. A time after `now` is `0m`; one that cannot be read is blank.
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
 pub(crate) fn age_label(changed_at: Option<&str>, now: OffsetDateTime) -> String {
     let Some(then) = changed_at.and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok()) else {
         return String::new();
@@ -245,7 +257,6 @@ pub(crate) fn age_label(changed_at: Option<&str>, now: OffsetDateTime) -> String
 
 /// A row's tooltip, line by line, each only where it applies (R-14); its
 /// description is the lines joined by "; ".
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
 pub(crate) fn ticket_tooltip(row: &TicketRow, repo: &str) -> Vec<String> {
     if row.id.is_none() {
         let guidance = row.nonconforming.map(|problem| problem.guidance());

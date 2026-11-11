@@ -6,14 +6,18 @@ use super::{Region, Workspace};
 use crate::desktop::{
     model::{
         list_state::ListState,
-        navigation::Resolution,
+        list_view::ListAction,
+        markers::row_markers,
+        navigation::{Pane, Resolution},
+        polling::retire_loop::Held,
         stamp::{RepoKey, Stamp},
-        tickets::{TicketQuery, read_filter},
+        tickets::{Lifecycle, SortColumn, TicketQuery, read_filter},
     },
     services::ReadKind,
+    view::tickets::ShownTicket,
 };
-use gpui_kit::{Context, Window};
-use manyhands::repository::{ClosureFilter, ReadinessFilter, ResolvedRepository};
+use gpui_kit::{App, Context, Window};
+use manyhands::repository::{ClosureFilter, ItemDtoKind, ReadinessFilter, ResolvedRepository};
 
 impl Workspace {
     pub(super) fn resolved_selection(&self) -> Option<(RepoKey, ResolvedRepository)> {
@@ -30,11 +34,11 @@ impl Workspace {
             return;
         };
         self.load_documents(key.clone(), resolved.clone(), cx);
-        self.load_tickets(key, resolved, true, cx);
+        self.load_tickets(key, resolved, cx);
     }
 
     /// Reload retains rows and selection until their replacement arrives.
-    pub(super) fn reload_lists(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::desktop::view) fn reload_lists(&mut self, cx: &mut Context<Self>) {
         let Some((key, resolved)) = self.resolved_selection() else {
             return;
         };
@@ -42,7 +46,7 @@ impl Workspace {
             return self.load_lists(cx);
         }
         self.load_documents(key.clone(), resolved.clone(), cx);
-        self.load_tickets(key, resolved, false, cx);
+        self.load_tickets(key, resolved, cx);
     }
 
     pub(super) fn clear_lists(&mut self, cx: &mut Context<Self>) {
@@ -52,7 +56,6 @@ impl Workspace {
         self.document_read = None;
         self.tickets.clear();
         self.ticket_read = None;
-        self.tickets_changed = true;
         self.clear_find(cx);
         cx.notify();
     }
@@ -103,28 +106,15 @@ impl Workspace {
     }
 
     #[allow(clippy::result_large_err)]
-    fn load_tickets(
-        &mut self,
-        key: RepoKey,
-        resolved: ResolvedRepository,
-        clear: bool,
-        cx: &mut Context<Self>,
-    ) {
+    fn load_tickets(&mut self, key: RepoKey, resolved: ResolvedRepository, cx: &mut Context<Self>) {
         let (stamp, _) = self.tickets.load(key);
-        self.read_tickets(stamp, resolved, clear, cx);
+        self.read_tickets(stamp, resolved, cx);
     }
 
     /// The one read of the load: every ticket, whatever the query (R-1).
     #[allow(clippy::result_large_err)]
-    fn read_tickets(
-        &mut self,
-        stamp: Stamp,
-        resolved: ResolvedRepository,
-        clear: bool,
-        cx: &mut Context<Self>,
-    ) {
+    fn read_tickets(&mut self, stamp: Stamp, resolved: ResolvedRepository, cx: &mut Context<Self>) {
         let filter = read_filter();
-        self.tickets_changed |= clear;
         self.ticket_read = Some(self.services.read(
             ReadKind::Tickets,
             stamp,
@@ -132,7 +122,6 @@ impl Workspace {
             cx,
             |this: &mut Self, stamp, result, cx| {
                 if this.tickets.apply(stamp, result) {
-                    this.tickets_changed = true;
                     cx.notify();
                 }
             },
@@ -144,7 +133,6 @@ impl Workspace {
     /// from the read the model holds.
     fn show_tickets(&mut self, query: TicketQuery, cx: &mut Context<Self>) {
         self.tickets.set_query(query);
-        self.tickets_changed = true;
         cx.notify();
     }
 
@@ -162,10 +150,108 @@ impl Workspace {
         self.show_tickets(query, cx);
     }
 
-    /// Lists `query`, typed text included.
-    #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn set_ticket_query(&mut self, query: TicketQuery, cx: &mut Context<Self>) {
+    /// Sorts by `column`: a new column ascending, the active one reversed.
+    pub(crate) fn set_sort(&mut self, column: SortColumn, cx: &mut Context<Self>) {
+        let mut query = self.tickets.query().clone();
+        query.sort = query.sort.toggled(column);
         self.show_tickets(query, cx);
+    }
+
+    /// The filter text as the input holds it, after a change in the input
+    /// itself: the query follows. No read, and nothing moves (R-30).
+    pub(super) fn filter_text_changed(&mut self, cx: &mut Context<Self>) {
+        let text = self.find_input.read(cx).value().to_string();
+        if text != self.tickets.query().text {
+            let mut query = self.tickets.query().clone();
+            query.text = text;
+            self.show_tickets(query, cx);
+        }
+    }
+
+    /// Puts `text` in the filter input and in the query, the one source of
+    /// the filter text (R-30).
+    pub(crate) fn set_filter_text(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.find_input
+            .update(cx, |input, cx| input.set_value(text, window, cx));
+        self.filter_text_changed(cx);
+    }
+
+    /// Clear filters: no text, Any readiness, and focus in the input
+    /// (R-28). The lifecycle stays.
+    pub(crate) fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.tickets.query().clone().with_readiness(None);
+        self.show_tickets(query, cx);
+        self.set_filter_text("", window, cx);
+        self.find_input
+            .update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    /// Show all: every ticket, ready or not, matching the text, and focus
+    /// in the input (R-28).
+    pub(crate) fn show_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self
+            .tickets
+            .query()
+            .clone()
+            .with_readiness(None)
+            .with_closure(ClosureFilter::All);
+        self.show_tickets(query, cx);
+        self.find_input
+            .update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    /// What an alert's or an empty state's button does (Part A).
+    pub(in crate::desktop::view) fn list_action(
+        &mut self,
+        action: ListAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            ListAction::Refresh => {
+                self.maintain_index(false, cx);
+                self.tickets_pane.focus(window, cx);
+            }
+            ListAction::Retry => {
+                self.reload_lists(cx);
+                self.tickets_pane.focus(window, cx);
+            }
+            ListAction::RebuildIndex => {
+                self.maintain_index(true, cx);
+                self.tickets_pane.focus(window, cx);
+            }
+            ListAction::ClearFilters => self.clear_filters(window, cx),
+            ListAction::ShowAll => self.show_all(window, cx),
+            ListAction::NewItem => self.new_item(Pane::Tickets, window, cx),
+        }
+        cx.notify();
+    }
+
+    /// Home and End in the ticket list: the first or the last row, and the
+    /// Workspace is told, so Why blocked follows (R-15).
+    pub(in crate::desktop::view) fn select_edge(
+        &mut self,
+        last: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.tickets_pane.select_edge(last, window, cx);
+        cx.notify();
+    }
+
+    /// The selected repository's display name, once its tickets are loaded.
+    pub(in crate::desktop::view) fn tickets_repo_name(&self) -> Option<String> {
+        let key = self.tickets.repo()?;
+        Some(
+            self.navigation
+                .entry(key)
+                .map_or_else(|| key.clone(), |entry| entry.name()),
+        )
     }
 
     /// Open ready tickets (D5 design, A3, R-20; R-29): the repository at
@@ -183,17 +269,17 @@ impl Workspace {
         let Some(key) = root.to_str().map(str::to_owned) else {
             return;
         };
-        let mut query = self
+        let query = self
             .tickets
             .query()
             .clone()
             .with_closure(ClosureFilter::Open)
             .with_readiness(Some(ReadinessFilter::Ready));
-        query.text.clear();
         self.show_tickets(query, cx);
+        self.set_filter_text("", window, cx);
         if self.navigation.selected() == Some(&key) {
             if let Some((key, resolved)) = self.resolved_selection() {
-                self.load_tickets(key, resolved, false, cx);
+                self.load_tickets(key, resolved, cx);
             }
         } else {
             // Selecting clears the list first and reads it under the query.
@@ -208,18 +294,48 @@ impl Workspace {
         }
     }
 
-    /// Kit selection needs the frame's window, so changed rows wait until here.
-    pub(super) fn sync_tickets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if std::mem::take(&mut self.tickets_changed) {
-            let mut rows = self.tickets.view().rows.clone();
-            // The model gives every blocked row its reasons; the panel
-            // shows them only under Blocked.
-            if self.tickets.query().readiness != Some(ReadinessFilter::Blocked) {
-                for row in &mut rows {
-                    row.reasons.clear();
+    /// The rows the panel shows, with the marks each carries, worked out
+    /// now from the draft registry and the repository's pending conflicts
+    /// (R-32): a new draft or conflict shows at once, with no read.
+    fn shown_tickets(&self, cx: &App) -> Vec<ShownTicket> {
+        let Some(repo) = self.tickets.repo() else {
+            return Vec::new();
+        };
+        let closure = self.tickets.query().closure;
+        let drafts = self.services.drafts().read(cx);
+        let conflicts = self.pending_conflicts.get(repo);
+        self.tickets
+            .view()
+            .rows
+            .iter()
+            .map(|row| {
+                let markers = match &row.id {
+                    Some(id) => row_markers(
+                        drafts.held_by(repo, ItemDtoKind::Ticket, id),
+                        conflicts.is_some_and(|conflicts| {
+                            conflicts
+                                .iter()
+                                .any(|c| c.kind == ItemDtoKind::Ticket && c.item == *id)
+                        }),
+                        row.lifecycle == Some(Lifecycle::Closed),
+                        closure,
+                    ),
+                    None => row_markers(Held::No, false, false, closure),
+                };
+                ShownTicket {
+                    row: row.clone(),
+                    markers,
                 }
-            }
-            self.tickets_pane.set(rows, window, cx);
-        }
+            })
+            .collect()
+    }
+
+    /// Kit selection needs the frame's window, so the rows go to the list
+    /// here, in every render, and only when they or their marks changed.
+    pub(super) fn sync_tickets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.tickets_repo_name().unwrap_or_default();
+        self.tickets_pane.set_repository(&name, cx);
+        let rows = self.shown_tickets(cx);
+        self.tickets_pane.set(rows, window, cx);
     }
 }

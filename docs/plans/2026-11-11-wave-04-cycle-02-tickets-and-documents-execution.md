@@ -211,6 +211,60 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
   plural verb; hint plural) and saw each fail, then reverted (diff checked).
   Later briefs repeat that test-first is binding.
 
+- **Ruling (Task 3): the stale and never-refreshed list states are made with
+  the registry SQL seam (`rusqlite` on `data_dir().join(REGISTRY_FILE)`, as
+  `scheduler_quit_tests.rs` does): `UPDATE repositories SET refresh_required =
+  1` for stale; `refreshed_at = NULL` plus a `contexts` delete for never
+  refreshed — the implementer first said no seam could make them and used a
+  `chmod 000` ticket folder for the incomplete alert, which the reviewer showed
+  fails on Windows and as root; the handoff's "a list state cannot be made"
+  trigger does not apply — cost if wrong: a registry schema change breaks two
+  UPDATE statements, each asserted to hit exactly one row.** The incomplete
+  list alert is covered only by `list_view`'s table test
+  (`each_state_has_its_own_body`); no view test makes it.
+- **Ruling (Task 3): `sync_tickets` runs on every render from `held_by` and
+  `pending_conflicts`, so markers appear with no read (P-markers); it clones the
+  shown rows each time and `set` returns early when they are equal — R-32
+  accepts the cost — cost if wrong: O(rows × drafts) per render; fix by
+  comparing in place or caching by a generation.**
+- **Ruling (Task 3): the filter bar's segments are focusable divs (tab stop,
+  `Role::Tab`, `aria_selected`, name with count); the nonconforming row's code
+  cell is an empty spacer with no `ticket-slug`; the footnote draws only when a
+  read exists; `New ticket…` stays the body button until Task 8; Find's bar
+  still draws state and cards below the filter bar until Task 4.**
+- **Ruling (Task 3): dead-code allows left, each with its removal step.**
+  `CANT_BE_READ_PILL` and `CANT_BE_READ_TYPE` (`ticket_view.rs`) carry plain
+  `#[allow(dead_code)] // Used from Task 7`, and `ListRow::{indent, gap,
+  expanded, on_click}` (`rows.rs`) carry method-level `// Used from Task 6`,
+  because the `cfg_attr(not(test))` form warns in the test build. The file-level
+  allow in `rows.rs` is gone; `list_view.rs`'s stays until Task 6. Tasks 6 and 7
+  remove theirs.
+- **Out-of-list edits (Task 3):** `view/dock.rs` (`mod tests` widened to
+  `pub(in crate::desktop::view)`) and `view/dock_tests/support.rs` (a
+  `panel_count` helper) so a tickets test reads the header count by node id;
+  `view/item.rs` and `model/*` lost their "Used from Task 3" allows.
+- **Handover to Task 4:** `Tickets::load` returns the changed flag and the
+  filter input is cleared in `open_ready_tickets` only; Task 4 acts on the flag
+  (R-35), removes Find's `FindSlug` call and test hold, and must keep
+  `ReadKind::FindSlug` (the relations picker uses it).
+- **Handover to Task 6:** `DOCUMENTS_CONTEXT` has `home`/`end` bound with no
+  handler (`keys.rs`); confirm the tree does not swallow Home and End.
+- **Review notes not acted on (Task 3, Minor):** `tickets_tests.rs` grew from
+  610 to 1374 lines (the 500-line limit is for new source files); consider a
+  split when Task 4 touches it. The per-render clone above.
+- **Process note (Task 3): the three new tests were seen failing first against
+  the old code; the E-3, E-6, E-10 and E-12 edits were written with the code
+  (E-10 and E-12 failed to compile first).** The review mutated twelve
+  behaviours (closed count, sort direction, Show all, Clear filters, Retry,
+  count text, markers, `select_edge`, selection by id, readiness menu, Why
+  blocked, `open_ready_tickets`); eleven were caught, and Retry was not, so the
+  test now holds the read and asserts the kept rows, no skeleton, "Updating…"
+  and list focus (seen failing under the `load_lists` mutation, then reverted).
+  `list_states_act_and_a_reload_keeps_the_rows` flaked about 1 in 8 before the
+  implementer moved the failed and unavailable steps last and held
+  `IndexRebuild`; the cause is not identified; 35 of 35 passed in the review and
+  5 of 5 after the fixes.
+
 ## Test Edits
 
 | E | Site | Reason | Task | Removes an assertion |
@@ -219,12 +273,18 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
 | E-1 | `D/model/tickets_tests.rs` | The five tests became `a_read_lands_only_for_its_repository_and_load` (one table, 12 steps, plus the review's reasons-under-the-default-query step); `the_default_query_lists_open_tickets` asserts the default query and `read_filter() == TicketFilter::default()`; the two `blocked_reasons` tests use `TicketFilter` literals; `empty()` and the `TicketRead` import removed | 2 | yes: the filter-to-library-filter mapping and "a filter change drops the read" assertions, as E-1 says |
 | E-2 | `D/view/tickets_tests.rs` | Deleted `a_filter_change_drops_the_held_read_of_the_last_filter` and `a_readiness_change_drops_the_held_read_of_the_last_one`; `library()`, `blocked_list` and the readiness query take `TicketFilter` literals; unused imports removed | 2 | yes: those two tests' assertions, as E-2 says |
 | E-10 (made-ready part) | `D/view/lifecycle/made_ready_tests.rs` (:288, :350), `made_ready_review_tests.rs` (:65, :119) | The set-ups start from Closed with typed text through `set_ticket_query`, assert the model query before the click, and after `open_ready_tickets` assert (Open, Some(Ready), "") from the model; `filter-ready` and `filter-blocked` element reads become model reads until Task 3 draws `filter-readiness` | 2 | no coverage lost beyond swapping element reads for model reads |
+| E-3 | `D/view/tickets_tests.rs` (the six tests, plus `arrows_move_in_the_list_and_enter_opens`, which only clicks `filter-all`) | Rows no longer carry "Showing …", inline `ticket-reason-*`, problem-code cells or `row_description`. The tests now assert the `ticket-closed` marker, the "needs fixing" pill and type cell, Why blocked lines for the selected row, `ticket_tooltip` lines, segment names with counts and "Readiness: …"; each still compares with `list_tickets(TicketFilter{closure, readiness})` | 3 | yes: "Showing …", inline reasons, problem-code cells, `row_description` |
+| E-6 | `D/view/keyboard_tests.rs` `change_the_filters` | New Tab order (segments, readiness, input) and the readiness menu; the "Showing …" checks are gone | 3 | yes: "Showing …" |
+| E-10 (hidden panel part) | `D/view/dock_tests/state.rs` `a_hidden_panel_keeps_its_state` | The kept text is `s`, and the test also chooses a sort and Ready and checks the model query | 3 | no |
+| E-10 (made-ready part, finished) | `made_ready_tests.rs`, `made_ready_review_tests.rs` | `set_ticket_query` replaced by `set_closure` plus `set_filter_text` through a `type_filter` helper; readiness from `filter-readiness`'s name; the cleared input asserted | 3 | no |
+| E-12 | `D/keys_tests.rs` `each_key_is_bound_to_its_action` | `home` and `end` added to the table (array length 24) | 3 | no |
 | E-15 (expected) | `D/view/polling_privacy_tests.rs:687`, comments :15, :96, :493 | Part F moves the path from `doc-path` to the tooltip, which the snapshot cannot read | 6 | yes, the `("region-documents", PATH)` pair; the title pair stays |
 
 ## Additional Tests
 
 | Test | Why it catches something existing tests don't | Task |
 | --- | --- | --- |
+| Task 3 added none beyond the plan's three (`the_filter_bar_works_without_a_read`, `list_states_act_and_a_reload_keeps_the_rows`, `markers_appear_without_a_read`); the review's fixes extended the second (Retry held, stale and never-refreshed Refresh, focus after Retry, Refresh and Rebuild) | Retry through `load_lists` would drop the kept rows and the count | 3 |
 | `status::tests::statuses_tint_by_their_words` | Pins "ready" as Done and "waiting"/"not started" as none (design: status colour, decision 20); a pure function, not an appearance test | 2 |
 | `tickets::tests::only_text_or_readiness_narrows_the_query`, `tickets::tests::a_sort_toggles_by_column` | `narrowed` and `toggled` are logic with no other test and would be dead code under `--all-targets` | 2 |
 | `ticket_view::tests::the_footnote_counts_what_needs_attention` and extra `derive` rows ("Closed after Ready", text "vh-" under Closed, footnotes on the All and "zzz" rows) | Pins the plural and singular branches of the footnote and the hint, and the unreadable text Task 7 reuses; the plan's own rows are unchanged | 2 |
@@ -238,3 +298,4 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
 | 0 | base `38c64b3c`, ledger `c6a22b97`, comment `002428b1` | none | n/a | gates green |
 | 1 | base `002428b1`, task commit `e7026fe1` | `desktop::model::list_state::tests::kept_rows_follow_reloads`, `desktop::model::list_view::tests::each_state_has_its_own_body`, `desktop::assets::tests::every_item_view_icon_loads` (1 run each, passed; seen failing first: two compile errors, one "repeat errored"); fmt, `check --features desktop`, clippy all pass | one fresh reviewer: 0 Blocking, 1 Important (Documents `narrowed`), 5 Minor; fixed and re-run | rulings above; reviewer's items 3 (kind-free alert label) and 6 (recorded) not changed |
 | 2 | base `e7026fe1`, task commit in the git log | `ticket_view::tests::{derive_filters_counts_and_sorts, ages_read_as_the_prototype_writes_them, tooltips_carry_the_id_context_and_reasons, the_footnote_counts_what_needs_attention}`; `markers::tests::markers_follow_drafts_conflicts_and_closure`; `status::tests::statuses_tint_by_their_words`; `tickets::tests::{a_read_lands_only_for_its_repository_and_load, the_default_query_lists_open_tickets, only_text_or_readiness_narrows_the_query, a_sort_toggles_by_column, blocked_reasons_name_the_blocker_the_missing_id_and_the_cycle, an_untitled_blocker_is_named_by_its_short_code}`; `model::item::tests::provenance_names_the_context_kind_its_branch_and_worktree`; `view::item::tests::the_provenance_says_primary_or_active_with_its_branch_and_worktree`; `view::lifecycle::made_ready_review_tests::open_ready_tickets_on_the_shown_repository`; `view::lifecycle::made_ready_tests::index_unavailable_final_offers_open_ready_tickets`; `view::tickets::tests::{arrows_move_in_the_list_and_enter_opens, each_closure_filter_shows_the_librarys_rows_and_keeps_the_nonconforming_entry, ready_and_blocked_show_the_librarys_rows_with_reasons_and_keep_the_nonconforming_entry, the_why_blocked_panel_gives_the_selected_rows_reasons_in_full, the_panel_says_incomplete_where_the_library_does}`; `view::item::edit_tests::sheet_fields::suggestions_come_from_the_loaded_tickets_values` (unchanged): 22 run, all passed on the final tree; fmt, check, clippy pass | one fresh reviewer: 0 Blocking, 2 Important (reasons under the default query; footnote plurals), 8 Minor; fixed, re-run | see Rulings, process note, handover |
+| 3 | base `f360e8bb`, task commit in the git log | `view::tickets::tests::{the_filter_bar_works_without_a_read, list_states_act_and_a_reload_keeps_the_rows (5 of 5 runs), markers_appear_without_a_read, each_closure_filter_shows_the_librarys_rows_and_keeps_the_nonconforming_entry, ready_and_blocked_show_the_librarys_rows_with_reasons_and_keep_the_nonconforming_entry, the_why_blocked_panel_gives_the_selected_rows_reasons_in_full, the_panel_says_incomplete_where_the_library_does, every_choice_has_its_own_label_and_the_chosen_one_is_said_in_text, a_long_why_blocked_panel_scrolls_by_keyboard, arrows_move_in_the_list_and_enter_opens}`; `view::keyboard_tests::every_core_action_works_by_keyboard_alone`; `view::dock::tests::state::a_hidden_panel_keeps_its_state`; `keys::tests::each_key_is_bound_to_its_action`; the two made-ready tests (earlier in the task): 12 run together on the final tree, all passed; fmt, check, clippy pass | one fresh reviewer: 0 Blocking, 3 Important (Retry not pinned to `reload_lists`; `chmod` trick breaks on Windows and as root; stale and never-refreshed states makeable by SQL), 5 Minor (drag ghost fixed; per-render clone, allows, Documents Home/End, test file length recorded); Important and the drag ghost fixed, re-run | see Rulings (Task 3), E-3, E-6, E-10, E-12, handovers to Tasks 4 and 6 |
