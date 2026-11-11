@@ -1,0 +1,163 @@
+# Wave 04 Cycle 02 Execution Ledger
+
+Written only by the orchestrator. Ticket `01M757DHFAVPEVY4TWQTVKQAMJ`
+(`vh-r2n89`), branch `manyhands/ticket/01M757DHFAVPEVY4TWQTVKQAMJ`.
+Plan: `2026-11-11-wave-04-cycle-02-tickets-and-documents-implementation.md`.
+Brief: `2026-11-11-wave-04-cycle-02-handoff.md`.
+
+## Authority Recorded During Execution
+
+- **2026-11-11, owner (session message).** "If testing scope needs to
+  increase to cover additional tests not accounted for in the plan is
+  pre-approved." Applied as: additional tests beyond the plan's list, written
+  or run, are pre-approved for this Cycle when a task shows a real gap. The
+  AGENTS.md Testing Strategy still governs where a test goes (cheapest layer,
+  extend an existing test first), the 15-minute stop, no appearance tests and
+  no real waits. Each added test is listed under "Additional tests" below
+  with its reason; each edit to an existing test is an E-15 onward entry.
+
+## Task 0: Baseline
+
+- **Base:** `origin/main` = `48653d01882ba52fd4fd2d58cdb890856f96c237`, already
+  an ancestor of the branch (`git merge-base --is-ancestor` true).
+- **HEAD before the merge:** `38c64b3ce193cfa083a5cd1fd6a316696a411b27`. The merge
+  was "Already up to date"; HEAD after is the same. The remote ticket branch
+  equalled HEAD.
+- **Worktree:** clean; `git worktree list` shows this path on the ticket
+  branch. The main checkout was clean at `48653d01`.
+- **Static gates on the branch, cold build:**
+  - `devenv shell -- cargo check --all-features --locked`: pass.
+  - `devenv shell -- cargo fmt --check`: pass.
+  - `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`: pass.
+- **Facts re-check:** `git diff --stat a0a734a4 HEAD -- src/desktop src/repository/read docs/Waves docs/RFC docs/design Cargo.lock`
+  shows only the approval commit's Document Amendments (RFC relationships,
+  Wave 04, `03-panels.md`, `08-gpui-kit-mapping.md`). `src/` and `Cargo.lock`
+  are unchanged, so Baseline Facts 1–33 stand and `gpui-kit`, `gpui-base` and
+  `gpui-component` did not move.
+- **Tests run at this checkpoint:** none (Task 0 runs the static gates only).
+
+## E-List Sweep
+
+The plan's three `git grep` commands returned 142, 128 and 429 lines (699).
+A read-only agent classified them, and the orchestrator re-checked every gap
+below against the source. Line numbers are at `38c64b3c`.
+
+**Test sites an E-n names** (the implementer of the named task edits them;
+`D/` is `src/desktop/`):
+
+| E | Task | Sites |
+| --- | --- | --- |
+| E-1 | 2 | `D/model/tickets_tests.rs`: `the_default_query_lists_open_tickets` :23, `the_query_maps_closure_and_readiness_and_nothing_else` :38, `a_filter_change_drops_the_last_filters_read` :145, `set_query_keeps_the_query_and_drops_the_last_read` :174, `blocked_reasons_name_the_blocker…` :255, `an_untitled_blocker_is_named_by_its_short_code` :301, `rows_read_under_blocked_carry_their_reasons` :351, `a_readiness_change_drops_the_last_readinesss_read` :391; imports :14 |
+| E-2 | 2 | `D/view/tickets_tests.rs`: delete :159 and :395; helpers `library()` :49, `blocked_list` :449, query :322; users :183, :94, :464, :530 |
+| E-3 | 3 | `D/view/tickets_tests.rs`: :94, :281, :464, :530, :571, :602; imports :13-14; helpers `visible()`/`expected()` :62-85 |
+| E-4 | 4 | `D/view/find_tests.rs`: all 8 tests (:95 … :266), helpers `find()` :50, `find_focused()` :83, the `FindSlug` hold :237 |
+| E-5 | 4 | `D/model/find_tests.rs`: :17 to a `parse_id` table; `matches_are_the_librarys_and_none_says_so` :55 and helper `found()` :45 go |
+| E-6 | 3, 4, 8 | `D/view/keyboard_tests.rs`: `change_the_filters` :345, `choose` :264, `find` :430, `find_by_short_code_and_ulid` :450, imports :20, :24, walk calls :603-607 |
+| E-7 | 8 | `D/view/keyboard_tests/editing.rs`: `create_by_keyboard_alone` :700, `move_and_new_folder_by_keyboard_alone` :791; `D/view/documents_tests.rs` `new_folder_opens_its_dialog` :108 |
+| E-8 | 5, 6, 7 | `D/view/documents_tests.rs`: :59, :151, :239, helper `flatten` :43, imports :9; `D/view/new_folder_tests.rs` :32, :216-221; `D/view/move_document_tests.rs` `tree_paths` :274, users :432, :981, :1107 |
+| E-9 | 6 | `D/view/keyboard_tests/actions.rs` :224; `D/view/keyboard_tests/editing.rs` :940 (`open_document` :946, :990); helper `keyboard_tests/frame.rs:174` |
+| E-10 | 2, 3 | `D/view/dock_tests/state.rs` :31; `D/view/lifecycle/made_ready_tests.rs` :288, :350; `made_ready_review_tests.rs` :65, :119 |
+| E-11 | 1 | `D/assets_tests.rs` :49 |
+| E-12 | 3 | `D/keys_tests.rs` `each_key_is_bound_to_its_action` (array `[..; 22]` :13) |
+| E-14 | 8 | `D/view/keyboard_tests.rs` `on` :150, `ringed` :618 |
+
+**Sites no E-n names** (pre-authorized, decision 16; recorded as E-15 onward
+when edited):
+
+- **E-15 (Task 6, expected).** `D/view/polling_privacy_tests.rs:687` asserts
+  `("region-documents", PATH)`; `PATH` is the document's file path, which
+  Part F moves from the `doc-path` label to the tooltip. The snapshot cannot
+  read a description (fact 11), so the pair never appears. Edit: drop the pair
+  (the title still shows) and fix the comments at :15, :96, :493. The path is
+  still planted and still asserted absent from every surface that must not
+  show it, so the privacy check keeps its force.
+- **Task 5 may touch `D/model/documents_tests.rs:225, 251, 270, 271`**
+  (`model.load("/a")`) if `Documents::load`'s signature changes, and the
+  `model.state()` assertions (:226, :228, :237, :261, :274) if `state()` stops
+  being a pass-through. Keep `Documents::state()` a pass-through, as
+  `Tickets::state()` is, so only a signature change would edit them.
+- **Plan error corrected.** E-8 and Task 7 put "the exhaustive `match` at
+  `:100-111`" in `D/view/documents_tests.rs`. It is `shape()` in
+  **`D/model/documents_tests.rs:100-111`** (an exhaustive match on `TreeNode`);
+  Task 7 breaks it by adding the unreadable form. `D/view/documents_tests.rs`
+  `:100-111` is only a `doc-problem` assertion (E-8 removes it). Both files
+  are already in the tasks' `Files:` lists.
+
+**Tests that depend on a changed helper but no E-n names** (check, expect no
+edit): `keyboard_tests` callers of `find()` (`actions.rs:53, 83`;
+`editing.rs:140, 219, 1074`; `conflict.rs:209`; `discussion.rs:178, 301`;
+`drafts.rs:383`; `lifecycle.rs:149`; `frame.rs:191, 192, 306, 386`), with
+`frame.rs:228` relying on Find making Tickets the list used last;
+`create_tests.rs` and `editing_privacy_tests.rs:496` (click `new-ticket-button`
+and `new-document-button`, which keep their ids; Task 8 keeps them enabled once
+a repository is selected); `operations_tests.rs:234, 416` (click `filter-all`;
+R-4 keeps its id and click target); the Tab-order tests
+`keyboard_tests/shell/journey.rs:80-104` (`TAB_LIMIT` 40) and
+`keyboard_tests.rs:174`; hold-and-count tests that must survive
+`ReadKind::IndexStatus` in Task 7 (`tabs_tests.rs:251-270`, `:541-560`,
+`dock_tests/state.rs:129-147`, `keyboard_tests/shell/journey.rs:49`).
+`view/item/sheet/fields_tests.rs:461`
+(`suggestions_come_from_the_loaded_tickets_values`) must pass unchanged
+(R-33; it needs the closed ticket `Gone` excluded from the single
+all-tickets read).
+
+**Production sites.** Every site the sweep found in `src/desktop/` is in a
+task's `Files:` list except these:
+
+- **G1 (Task 4).** `ReadKind::FindSlug` has a second user:
+  `D/view/item/relations_edit/picker.rs:164` (the relations picker's short-code
+  lookup) with tests at `relations_edit_tests.rs:290, 308`. Only Find's use
+  (`view/workspace/find.rs:59-62`, `find_tests.rs:237`) goes. See the ruling
+  below.
+- **G2 (Task 4).** Callers of `clear_lists` and `load_lists` outside every
+  `Files:` list: `D/view/workspace/repositories.rs:31, 35, 113, 120, 135`,
+  `D/view/workspace/requests.rs:147`. Task 4 changes `clear_lists` to keep the
+  filter text and a held ID read unless the selected repository differs from
+  the last-loaded one, and `load_lists` itself starts with `clear_lists`
+  (`lists.rs:28`), so the comparison must be made against the incoming
+  selection inside `clear_lists`/`load`, not at those callers. These callers
+  stay as they are unless a test shows otherwise.
+- **G3 (Tasks 2–3).** Between Task 2 and Task 3, `D/view/dock/panels.rs:172`
+  counts `state().rows()`, which is every ticket whatever the filter. No test
+  asserts that count; Task 3 corrects it with the `listed` count.
+
+**Noise** (no change reaches these): `ReadKind::` in services, item, settings,
+lifecycle, drafts and operations tests; `new-ticket`, `new-document`,
+`new-folder` ids in the create and new-folder dialog tests; `NONCONFORMING` in
+`draft_comparison*`, `item/details.rs`, `item_tests.rs`, `sheet_tests.rs`
+(`NONCONFORMING_FILE`); `TreeNode::` helpers in `model/documents*`; `fn ringed`
+at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
+`tint` in `item/header_tests.rs` (:21 keeps its import); `.state()` in
+`services/layout.rs`, `model/find_tests.rs`; `ReadKind::Tickets` in
+`relations_edit/picker.rs:100` (reads `TicketFilter::default()` directly).
+
+## Rulings
+
+- **Ruling: `ReadKind::FindSlug` stays — Task 4's plan removes it "with its
+  last use", but the relations picker (`picker.rs:164`) is a second use, and
+  the plan's file lists do not name it — keeping the variant changes nothing for
+  the picker and removes only Find's call, so no other file is touched — cost if
+  wrong: one enum variant and its two tests remain; the owner can rename it to a
+  picker-specific kind in a later cleanup.** Task 4 removes Find's call and
+  test hold, not the variant.
+- **Ruling: `Documents::state()` stays a pass-through to its `KeptList`'s
+  state — the plan states it for `Tickets::state()` only; the existing
+  documents model tests call `state()` — cost if wrong: Task 5 edits those
+  assertions (E-15 onward, recorded).**
+
+## Test Edits
+
+| E | Site | Reason | Task | Removes an assertion |
+| --- | --- | --- | --- | --- |
+| E-15 (expected) | `D/view/polling_privacy_tests.rs:687`, comments :15, :96, :493 | Part F moves the path from `doc-path` to the tooltip, which the snapshot cannot read | 6 | yes, the `("region-documents", PATH)` pair; the title pair stays |
+
+## Additional Tests
+
+| Test | Why it catches something existing tests don't | Task |
+| --- | --- | --- |
+
+## Tasks
+
+| Task | Commit range | Tests run (exact names) | Review | Notes |
+| --- | --- | --- | --- | --- |
+| 0 | | none | n/a | gates green |
