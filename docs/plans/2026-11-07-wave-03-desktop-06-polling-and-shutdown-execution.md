@@ -1799,3 +1799,75 @@ Known limits added (recorded, not fixed):
   `button()` would cover all).
 - Time: the desktop suite takes about 20 minutes; the longest tests are the
   real-library world tests (K-43).
+
+## Code review (owner-run, 2026-11-10) and the fix round
+
+The owner's code review of the branch at `57414f32` (182 files, about 38.8k
+lines; the reviewer read the scheduler, polling, in-flight record, worker,
+quit, preempt and retirement code in full and skimmed most views and tests; its
+findings were not checked a second time) reported 10 issues. Findings 1 to 6
+were to be fixed before approval. The owner asked for no ruling beyond that;
+the orchestrator also fixed 7 (a bug of the same kind). Each of 1 to 7 was
+reproduced with a failing test first, fixed, made green and mutation-checked
+by one implementer; none was a false alarm.
+
+| Finding | Reproduced | Fix | Test (`desktop::services::…`) |
+| --- | --- | --- | --- |
+| 1. One repository's stuck retirement cleared per activation (`reconcile.rs`, shared `entry_epoch`) | yes | reconcile no longer bumps the epoch; the three entry-changing paths still do | `scheduler::retire_tests::retire_one_activation_ends_the_stuck_entries_of_every_repository` |
+| 2. Attention raised while a loop that began during an off-thread key read keeps running (`retire.rs` `raise`) | yes | `end_loop(root)` before `schedule.raise` (R-32, RT-8) | `scheduler::loop_tests::attention_raised_after_a_key_read_ends_a_loop_begun_meanwhile` |
+| 3. Stop on the person's own retirement ended the whole loop (`retire_loop.rs` `loop_answered`) | yes | Stop ends the loop only when the stopped request is the loop's own; walls still stop it (RT-8, RT-9); a user Cancel of a running loop item still stops the loop | `scheduler::loop_tests::stopping_the_persons_own_retirement_leaves_the_loop_alone` |
+| 4. Two polls at once after a schedule is forgotten mid-poll (`entity.rs`, `PollSchedule::remove`) | yes | an `orphans` set holds the single-poll slot until that poll's own answer (`PollSchedule::poll_ended`, called from `scheduler::apply`) | `scheduler::entity_tests::a_repository_forgotten_mid_poll_still_holds_the_single_poll`; `model::polling::tests::schedule::a_removed_repositorys_poll_holds_the_slot_until_it_ends` |
+| 5. A late cancel hit a restarted run of the same operation (`worker.rs` `PollWatch::running`) | yes | `PreemptPoll` carries the job id; `PollWatch::for_run(id)`; `Canceller::watch_for(id)` | `preempt::tests::a_cancel_task_ignores_a_restart_of_its_operation`; `preempt::tests::the_drains_canceller_watches_the_named_run` |
+| 6. A preempted poll stayed stuck while any background job existed (`entity.rs`, R-34) | yes | `WorkerHandle::user_lane_busy()`: only user-lane work holds the wake | `scheduler::entity_tests::a_preempted_poll_returns_while_a_background_job_runs` |
+| 7. The third copy of "is this retirement queued or running" ignored the kind (`attention.rs`) | yes | one helper `WorkerHandle::retirement_in_flight(root, kind, id)` used by every copy | `scheduler::retire_tests::retirement_in_flight_is_keyed_by_kind` |
+
+Commits: `0d4129b7` (1 to 3), `0aa17e73` (4 to 7), `7d9a2a94` (the second
+review's fixes). A fresh reviewer read all of it: APPROVE WITH FIXES, no
+Critical. Its two Important items were test gaps, both closed in `7d9a2a94`:
+the three `entry_epoch` bump sites were untested although finding 1 made them
+the only guard against a stale read ending a live entry
+(`scheduler::retire_tests::retire_entry_events_move_the_epoch`, each bump
+mutation-checked, and a stale read after `Retiring::Operation` keeps the
+entry), and finding 5's production wiring in `Canceller::start` was unpinned
+(now `watch_for`). Its Minor items: an orphan could be cleared by a failed
+Check now's `after` (fixed: only `poll_ended` clears it) and a comment at
+`raise`. Existing-test edit **E-38**: `preempt_tests.rs` `Harness::pump`
+destructures `PreemptPoll { root, op, .. }` because the event gained a field;
+no assertion changed. The reviewer ran every touched test singly, checked the
+library boundary empty, and found no interleaving in which reconcile ends a live
+entry (by reading and mutation; not a model checker).
+
+**Gates after the fix round** (the tree at `7d9a2a94`): `cargo check
+--all-features --locked`, `cargo fmt --check` and `cargo clippy --all-targets
+--all-features --locked -- -D warnings` exit 0. The desktop `--bins` run:
+**1828 passed**, 0 failed (1192 s; was 1818, plus the ten new tests). The
+`--lib`, the 27 integration targets and `remote_polling` were not rerun: no
+library, `tests/` or Cargo file changed since their green run (the boundary
+diff is empty). Library-boundary diff against `6af92f91`: empty.
+
+**Findings not fixed, with the reason:**
+- **8** (the conversions between `TargetKind`, `ItemDtoKind` and
+  `AuthoringKind` are written out in about eight places; `From` impls would
+  replace them): a refactor with no behaviour change; recorded as **K-70**.
+- **9** (`tests/remote_polling.rs`: two SSH cases against AGENTS.md's "at most
+  one per feature"): the owner approved both in the design (decision 22,
+  Task 1: the handshake stall and the connect stall are different transport
+  stages, and cancel behaviour under a stall exists only over a real
+  socket). Not changed. Each takes about 10 to 30 s (`poll_cancel_during_
+  handshake_stall` about 30 s and `poll_cancel_during_connect_stall` about
+  10 s in Task 1's runs).
+- **10** (every retirement progress event rebuilds the poll sets and the
+  entered list and republishes to Operations; `tick` calls `cx.notify()` on
+  every run, so every window's Workspace and Settings re-render on routine
+  worker traffic): not measured or changed in this round; recorded as **K-71**
+  (act only when something changed).
+
+**Known limits changed:**
+- **K-44 is removed** (finding 6): a preempted poll no longer waits for a
+  running loop or any background job; only user-lane work holds it
+  (`user_lane_busy`, R-34).
+- **K-72:** a removed repository's poll that never answers would hold the
+  single-poll slot for the session (the worker always answers a poll and quit
+  stops polling, so it was accepted); a repository removed and re-added while
+  its old poll runs has that old answer applied to the new schedule, as before.
+- **K-70, K-71:** above.
