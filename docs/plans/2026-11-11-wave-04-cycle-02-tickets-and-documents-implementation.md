@@ -5,6 +5,7 @@ status: "draft"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
+id: "01M75C77FRSVW977B3HPJP4P79"
 ---
 
 # Wave 04 Cycle 02 Tickets And Documents Panels Implementation Plan
