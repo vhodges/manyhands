@@ -8,7 +8,7 @@ use crate::desktop::{
         list_state::ListState,
         navigation::Resolution,
         stamp::{RepoKey, Stamp},
-        tickets::{TicketQuery, TicketRead},
+        tickets::{TicketQuery, read_filter},
     },
     services::ReadKind,
 };
@@ -110,10 +110,11 @@ impl Workspace {
         clear: bool,
         cx: &mut Context<Self>,
     ) {
-        let stamp = self.tickets.load(key);
+        let (stamp, _) = self.tickets.load(key);
         self.read_tickets(stamp, resolved, clear, cx);
     }
 
+    /// The one read of the load: every ticket, whatever the query (R-1).
     #[allow(clippy::result_large_err)]
     fn read_tickets(
         &mut self,
@@ -122,20 +123,12 @@ impl Workspace {
         clear: bool,
         cx: &mut Context<Self>,
     ) {
-        let query = self.tickets.query();
-        let (filter, names) = (query.to_filter(), query.names_filter());
+        let filter = read_filter();
         self.tickets_changed |= clear;
         self.ticket_read = Some(self.services.read(
             ReadKind::Tickets,
             stamp,
-            move |service| {
-                let list = service.list_tickets(&resolved, &filter)?;
-                let names = match &names {
-                    Some(names) => Some(service.list_tickets(&resolved, names)?),
-                    None => None,
-                };
-                Ok(TicketRead { list, names })
-            },
+            move |service| service.list_tickets(&resolved, &filter),
             cx,
             |this: &mut Self, stamp, result, cx| {
                 if this.tickets.apply(stamp, result) {
@@ -147,12 +140,17 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Lists `query` from now on. Nothing is read: the rows are derived
+    /// from the read the model holds.
+    fn show_tickets(&mut self, query: TicketQuery, cx: &mut Context<Self>) {
+        self.tickets.set_query(query);
+        self.tickets_changed = true;
+        cx.notify();
+    }
+
     pub(crate) fn set_closure(&mut self, closure: ClosureFilter, cx: &mut Context<Self>) {
-        let stamp = self.tickets.set_closure(closure);
-        match (stamp, self.resolved_selection()) {
-            (Some(stamp), Some((_, resolved))) => self.read_tickets(stamp, resolved, true, cx),
-            _ => cx.notify(),
-        }
+        let query = self.tickets.query().clone().with_closure(closure);
+        self.show_tickets(query, cx);
     }
 
     pub(crate) fn set_readiness(
@@ -160,17 +158,22 @@ impl Workspace {
         readiness: Option<ReadinessFilter>,
         cx: &mut Context<Self>,
     ) {
-        let stamp = self.tickets.set_readiness(readiness);
-        match (stamp, self.resolved_selection()) {
-            (Some(stamp), Some((_, resolved))) => self.read_tickets(stamp, resolved, true, cx),
-            _ => cx.notify(),
-        }
+        let query = self.tickets.query().clone().with_readiness(readiness);
+        self.show_tickets(query, cx);
     }
 
-    /// Open ready tickets (D5 design, A3, R-20): the repository at `root`
-    /// selected, its Tickets pane shown under Open and Ready, and the
-    /// navigation focused. A repository not yet selected keeps that query
-    /// through its selection: the list is read under it once it resolves.
+    /// Lists `query`, typed text included.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn set_ticket_query(&mut self, query: TicketQuery, cx: &mut Context<Self>) {
+        self.show_tickets(query, cx);
+    }
+
+    /// Open ready tickets (D5 design, A3, R-20; R-29): the repository at
+    /// `root` selected, its Tickets pane shown under Open and Ready with no
+    /// text and the sort kept, and the navigation focused. The repository's
+    /// tickets are read once. A repository not yet selected keeps that
+    /// query through its selection: the list is read under it once it
+    /// resolves.
     pub(in crate::desktop::view) fn open_ready_tickets(
         &mut self,
         root: PathBuf,
@@ -180,20 +183,21 @@ impl Workspace {
         let Some(key) = root.to_str().map(str::to_owned) else {
             return;
         };
-        let query = TicketQuery {
-            closure: ClosureFilter::Open,
-            readiness: Some(ReadinessFilter::Ready),
-        };
+        let mut query = self
+            .tickets
+            .query()
+            .clone()
+            .with_closure(ClosureFilter::Open)
+            .with_readiness(Some(ReadinessFilter::Ready));
+        query.text.clear();
+        self.show_tickets(query, cx);
         if self.navigation.selected() == Some(&key) {
-            match (self.tickets.set_query(query), self.resolved_selection()) {
-                (Some(stamp), Some((_, resolved))) => self.read_tickets(stamp, resolved, true, cx),
-                _ => cx.notify(),
+            if let Some((key, resolved)) = self.resolved_selection() {
+                self.load_tickets(key, resolved, false, cx);
             }
         } else {
-            // Selecting clears the list first, so nothing is read under the
-            // query for the repository shown until now.
+            // Selecting clears the list first and reads it under the query.
             self.select_repository(key, cx);
-            let _ = self.tickets.set_query(query);
         }
         self.focus_region(Region::Tickets, window, cx);
     }
@@ -207,7 +211,14 @@ impl Workspace {
     /// Kit selection needs the frame's window, so changed rows wait until here.
     pub(super) fn sync_tickets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if std::mem::take(&mut self.tickets_changed) {
-            let rows = self.tickets.state().rows().cloned().unwrap_or_default();
+            let mut rows = self.tickets.view().rows.clone();
+            // The model gives every blocked row its reasons; the panel
+            // shows them only under Blocked.
+            if self.tickets.query().readiness != Some(ReadinessFilter::Blocked) {
+                for row in &mut rows {
+                    row.reasons.clear();
+                }
+            }
             self.tickets_pane.set(rows, window, cx);
         }
     }

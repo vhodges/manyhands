@@ -52,7 +52,7 @@ use crate::desktop::{
             Phase,
             fields::{self, Field, Suggestions},
         },
-        tickets::Tickets,
+        tickets::{Lifecycle, Tickets},
     },
     view::item::{ChipField, ItemPane, text},
 };
@@ -337,11 +337,16 @@ impl ItemPane {
         if !self.controls_editable() {
             return;
         }
+        // The read's open conforming tickets, whatever the filters (R-33).
         let rows = tickets
-            .state()
+            .list()
             .rows()
             .filter(|_| tickets.repo().map(String::as_str) == Some(self.repo()));
-        let mut suggestions = Suggestions::of_rows(rows.into_iter().flatten());
+        let mut suggestions = Suggestions::of_rows(
+            rows.into_iter()
+                .flatten()
+                .filter(|row| row.lifecycle == Some(Lifecycle::Open)),
+        );
         if let Some(item) = self.model.item().rows() {
             suggestions.add(Field::Type, item.ticket_type.as_deref());
             suggestions.add(Field::Status, item.status.as_deref());

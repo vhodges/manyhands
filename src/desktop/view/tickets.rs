@@ -28,7 +28,7 @@ use crate::desktop::{
 pub(crate) const LIFECYCLE_OPEN: &str = "Open";
 pub(crate) const LIFECYCLE_CLOSED: &str = "Closed";
 pub(crate) const NONCONFORMING: &str = "Nonconforming";
-pub(crate) const NO_SHORT_CODE: &str = "No short code";
+pub(crate) use crate::desktop::model::ticket_view::NO_SHORT_CODE;
 pub(crate) const WHY_BLOCKED: &str = "Why blocked";
 pub(crate) const SELECT_BLOCKED: &str = "Select a ticket to see why it is blocked";
 pub(crate) const NO_REASONS: &str = "The library gives no reasons for this entry";

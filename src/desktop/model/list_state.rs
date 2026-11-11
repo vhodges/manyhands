@@ -130,7 +130,6 @@ impl<T: Rows> ListState<T> {
 /// over kept rows keeps them and says so; a failure replaces them, as D1's
 /// ruling R-B5 says. `clear` drops them, as a change of repository does.
 #[derive(Clone, Debug)]
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 2.
 pub(crate) struct KeptList<T> {
     state: ListState<T>,
     /// The last `Ready` state, while the list is `Loading` over it.
@@ -148,7 +147,6 @@ impl<T> Default for KeptList<T> {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Used from Task 2.
 impl<T> KeptList<T> {
     /// Loading again, keeping the ready rows. A list that has none keeps
     /// none.
@@ -211,11 +209,13 @@ impl<T> KeptList<T> {
     }
 
     /// Loading over kept rows.
+    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
     pub(crate) fn reloading(&self) -> bool {
         matches!(self.state, ListState::Loading) && self.kept.is_some()
     }
 
     /// The last read stayed busy and the rows shown are the earlier ones.
+    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 3.
     pub(crate) fn busy_over_kept(&self) -> bool {
         self.busy_over_kept
     }

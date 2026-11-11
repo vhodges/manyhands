@@ -1,6 +1,5 @@
 //! The ticket list: the closure filter keeps every nonconforming entry,
-//! the rows are the library's, a filter change drops the last filter's
-//! read, and the keyboard moves and opens.
+//! the rows are the library's, and the keyboard moves and opens.
 
 use std::path::{Path, PathBuf};
 
@@ -16,9 +15,8 @@ use super::{
 use crate::desktop::{
     model::{
         navigation::{OpenTarget, Pane},
-        tickets::{TicketQuery, blocked_reasons},
+        tickets::blocked_reasons,
     },
-    services::ReadKind,
     test_support::fixtures::Fixture,
     view::harness::{Shell, key},
 };
@@ -49,11 +47,11 @@ fn four_tickets(cx: &mut TestAppContext) -> (Shell, PathBuf) {
 fn library(shell: &Shell, root: &Path, closure: ClosureFilter) -> ItemListDto {
     let service = shell.fixture.service();
     let repo = service.resolve_repository(root).unwrap();
-    let query = TicketQuery {
+    let filter = TicketFilter {
         closure,
-        ..TicketQuery::default()
+        ..TicketFilter::default()
     };
-    service.list_tickets(&repo, &query.to_filter()).unwrap()
+    service.list_tickets(&repo, &filter).unwrap()
 }
 
 /// What a test reads of one row: its label, status and lifecycle.
@@ -152,30 +150,6 @@ fn each_closure_filter_shows_the_librarys_rows_and_keeps_the_nonconforming_entry
         shell.label(("ticket-problem", at), cx).as_deref(),
         Some("malformed_front_matter")
     );
-}
-
-/// Review Focus 1: the Closed read is held while the user moves on to
-/// All; releasing it leaves All's rows.
-#[gpui_kit::test]
-fn a_filter_change_drops_the_held_read_of_the_last_filter(cx: &mut TestAppContext) {
-    let (shell, root) = four_tickets(cx);
-    let held = shell.backend.hold_read(ReadKind::Tickets);
-    shell.click("filter-closed", cx);
-    shell.click("filter-all", cx);
-    let all: Vec<Seen> = library(&shell, &root, ClosureFilter::All)
-        .items
-        .iter()
-        .map(expected)
-        .collect();
-    assert_eq!(visible(&shell, cx), all);
-
-    // The Closed read may already be dropped with its task; either way it
-    // is let go.
-    let _ = held.send(());
-    shell.run(cx);
-    assert_eq!(visible(&shell, cx), all);
-    assert!(shell.selected("filter-all", cx));
-    assert!(!shell.selected("filter-closed", cx));
 }
 
 /// Arrows move through the list and Enter opens the row by its ID, or by
@@ -319,11 +293,12 @@ fn ready_and_blocked_show_the_librarys_rows_with_reasons_and_keep_the_nonconform
             shell.label("tickets-readiness-showing", cx).as_deref(),
             showing
         );
-        let query = TicketQuery {
+        let filter = TicketFilter {
             closure: ClosureFilter::Open,
             readiness: Some(readiness),
+            ..TicketFilter::default()
         };
-        let list = service.list_tickets(&repo, &query.to_filter()).unwrap();
+        let list = service.list_tickets(&repo, &filter).unwrap();
         let seen = visible(&shell, cx);
         let library_rows: Vec<Seen> = list.items.iter().map(expected).collect();
         assert_eq!(seen, library_rows, "{id}");
@@ -390,35 +365,6 @@ fn ready_and_blocked_show_the_librarys_rows_with_reasons_and_keep_the_nonconform
     assert!((0..count).all(|index| reasons(&shell, index, cx).is_empty()));
 }
 
-/// Review Focus 1: the Blocked read is held while the user moves on to
-/// Ready; releasing it leaves Ready's rows.
-#[gpui_kit::test]
-fn a_readiness_change_drops_the_held_read_of_the_last_one(cx: &mut TestAppContext) {
-    let (shell, root) = related(cx);
-    let held = shell.backend.hold_read(ReadKind::Tickets);
-    shell.click("filter-blocked", cx);
-    shell.click("filter-ready", cx);
-    let service = shell.fixture.service();
-    let repo = service.resolve_repository(&root).unwrap();
-    let query = TicketQuery {
-        closure: ClosureFilter::Open,
-        readiness: Some(ReadinessFilter::Ready),
-    };
-    let ready: Vec<Seen> = service
-        .list_tickets(&repo, &query.to_filter())
-        .unwrap()
-        .items
-        .iter()
-        .map(expected)
-        .collect();
-    assert_eq!(visible(&shell, cx), ready);
-    let _ = held.send(());
-    shell.run(cx);
-    assert_eq!(visible(&shell, cx), ready);
-    assert!(shell.selected("filter-ready", cx));
-    assert!(!shell.selected("filter-blocked", cx));
-}
-
 /// The lines of the Why blocked panel.
 fn panel(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
     shell.rows("why-blocked-reason", cx)
@@ -449,11 +395,12 @@ fn names(
 fn blocked_list(shell: &Shell, root: &Path) -> ItemListDto {
     let service = shell.fixture.service();
     let repo = service.resolve_repository(root).unwrap();
-    let query = TicketQuery {
+    let filter = TicketFilter {
         closure: ClosureFilter::Open,
         readiness: Some(ReadinessFilter::Blocked),
+        ..TicketFilter::default()
     };
-    service.list_tickets(&repo, &query.to_filter()).unwrap()
+    service.list_tickets(&repo, &filter).unwrap()
 }
 
 /// Under Blocked, the panel below the list gives the selected row's

@@ -62,11 +62,16 @@ pub(crate) fn context_kind_label(kind: ItemContextKind) -> &'static str {
 /// worktree. It says nothing of how the copy compares with the primary.
 pub(crate) fn provenance_label(ctx: &ItemContextDto) -> String {
     let kind = context_kind_label(ctx.kind);
-    let branch = match &ctx.branch {
+    let branch = branch_label(ctx.branch.as_deref());
+    format!("{kind}, {branch}, worktree {}", ctx.worktree)
+}
+
+/// "branch {branch}", or `NO_BRANCH` when the copy has none.
+pub(crate) fn branch_label(branch: Option<&str>) -> String {
+    match branch {
         Some(branch) => format!("branch {branch}"),
         None => NO_BRANCH.to_owned(),
-    };
-    format!("{kind}, {branch}, worktree {}", ctx.worktree)
+    }
 }
 
 /// The item's context and branch problems, in the item's order.

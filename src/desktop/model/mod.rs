@@ -17,6 +17,7 @@ pub(crate) mod links;
 pub(crate) mod list_state;
 pub(crate) mod list_view;
 pub(crate) mod markdown_edit;
+pub(crate) mod markers;
 pub(crate) mod names;
 pub(crate) mod navigation;
 pub(crate) mod polling;
@@ -27,7 +28,9 @@ pub(crate) mod relationships;
 pub(crate) mod resources;
 pub(crate) mod review;
 pub(crate) mod stamp;
+pub(crate) mod status;
 pub(crate) mod tabs;
+pub(crate) mod ticket_view;
 pub(crate) mod tickets;
 
 pub(crate) mod operations;

@@ -30,7 +30,7 @@ use super::{
     tests::{DOCUMENT, SLUG, TICKET, closes, code, open, saved_ticket, shell, until_present},
 };
 use crate::desktop::{
-    model::navigation::Pane,
+    model::{navigation::Pane, tickets::TicketQuery},
     services::{
         JobKind,
         requests::{DesktopRequestId, Intent},
@@ -43,6 +43,20 @@ use crate::desktop::{
         workspace::Region,
     },
 };
+
+/// Text typed into the Tickets filter before Open ready tickets clears it.
+pub(super) const TYPED: &str = "Closing";
+
+/// The Tickets query the model holds: closure, readiness and text.
+pub(super) fn query(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+) -> (ClosureFilter, Option<ReadinessFilter>, String) {
+    shell.workspace.read_with(cx, |workspace, _| {
+        let query = workspace.tickets().query();
+        (query.closure, query.readiness, query.text.clone())
+    })
+}
 
 /// A ticket that depends on `TICKET` alone, so closing it makes this one
 /// ready.
@@ -284,11 +298,22 @@ async fn index_unavailable_final_offers_open_ready_tickets(cx: &mut TestAppConte
     });
     let other = root.with_file_name("b");
     shell.select(&other, cx);
+    // Closed with text typed: Closed with Blocked cannot be chosen (R-26),
+    // and the text is what Open ready tickets clears (R-29).
     shell.workspace.update(cx, |workspace, cx| {
-        workspace.set_closure(ClosureFilter::Closed, cx);
-        workspace.set_readiness(Some(ReadinessFilter::Blocked), cx);
+        workspace.set_ticket_query(
+            TicketQuery {
+                text: TYPED.to_owned(),
+                ..TicketQuery::default().with_closure(ClosureFilter::Closed)
+            },
+            cx,
+        );
     });
     shell.run(cx);
+    assert_eq!(
+        query(&shell, cx),
+        (ClosureFilter::Closed, None, TYPED.to_owned())
+    );
 
     confirming(&shell, &root, cx).await;
     let request = RequestId::new();
@@ -348,7 +373,14 @@ async fn index_unavailable_final_offers_open_ready_tickets(cx: &mut TestAppConte
         .await;
     assert_eq!(selected(&shell, cx), (Some(key(&root)), Pane::Tickets));
     assert!(shell.selected("filter-open", cx));
-    assert!(shell.selected("filter-ready", cx));
+    assert_eq!(
+        query(&shell, cx),
+        (
+            ClosureFilter::Open,
+            Some(ReadinessFilter::Ready),
+            String::new()
+        )
+    );
     assert!(
         shell.present(Region::Tickets.ring_id(), cx),
         "the Tickets region has focus"
