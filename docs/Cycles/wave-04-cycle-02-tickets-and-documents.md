@@ -30,8 +30,10 @@ documents themselves are not yet approved.
   applied in revision 2 (Review Record).
 - Revision 2 (`85210ab0`) had a scoped re-review and an adversarial
   review (round 2): 3 Blocking, 13 Important and many Minor findings, each
-  verified against the source and applied in revision 3. Revision 3 has
-  had no independent review.
+  verified against the source and applied in revision 3.
+- Revision 3 (`ba5da196`) had a scoped re-review (round 3): round 2's
+  findings resolved, 1 Important (task order in the plan) and 12 Minor,
+  applied in place.
 
 Approval of the documents does not authorize implementation, which needs
 its own go-ahead.
@@ -201,8 +203,8 @@ rows await the owner's checks; Claude records only what the owner reports.
 | A11 | Toolbars by keyboard, counted as their region, refused behind a dialog (contracts 5, 8) | `panel_toolbars_work_by_tab_and_enter` (P24) | Planned |
 | A12 | Every existing keyboard journey still passes | The edited journeys and the fast tier at review-ready | Planned |
 | A13 | The list states act, and focus finds an empty or failed list | `list_states_act_and_a_reload_keeps_the_rows` (P15, P16, P31) | Planned |
-| A15 | Unsaved work shows without a reload | `markers_appear_without_a_read` (P14) | Planned |
 | A14 | The rows match the design in the dark theme | On screen: the owner, against frames 1a and 1b | Planned |
+| A15 | Unsaved work shows without a reload | `markers_appear_without_a_read` (P14) | Planned |
 
 ## Product-Owner Decisions (2026-11-11)
 
@@ -369,3 +371,4 @@ relies on it; U-1, U-2, U-4 and U-5 were settled in review.
 | Review round 1 (two reviewers, `563763e2`) | 8 Blocking, 37 Important, many Minor; among them header focus, unnamed compile sites, duplicate codes across lifecycles, unreadable files, nonconforming-only lists, the ULID path | Decisions (proposed), rulings, named edits | Decisions 2, 8, 10, 18, 19, 20 revised or added; design revision 2 | Design Review Record |
 | Owner, 2026-11-11 | "I confirm the descisions" | Owner decision | Decisions 1–20 confirmed; review round 2 requested | Session, 2026-11-11 |
 | Review round 2 (scoped re-review and adversarial, `85210ab0`) | 3 Blocking, 13 Important, many Minor; among them the keyboard walk's region check, no list element in the empty and failed states, outcomes without a test, Retry clearing the filter, the details sheet's suggestions, Show all under a readiness, an unreadable file's open | Rulings, named edits; decision 10 narrowed for confirmation | Design revision 3: E-14, R-33 to R-38, new test steps; decision 10's rows do not open | Design Review Record |
+| Review round 3 (scoped re-review, `ba5da196`) | Round 2 resolved; 1 Important: the plan's Task 3 tests needed the filter input that Task 4 placed; 12 Minor | Plan task moves; settled | Revision 3 with round 3's fixes; decision 10's narrowing still awaits the owner | Design Review Record |

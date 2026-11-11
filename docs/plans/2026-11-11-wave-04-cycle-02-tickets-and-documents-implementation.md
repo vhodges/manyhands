@@ -13,7 +13,7 @@ id: "01M75C77FRSVW977B3HPJP4P79"
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task. Draft,
-> revision 3: implementation waits for the owner's approval of the three
+> revision 3 with round 3's fixes: implementation waits for the owner's approval of the three
 > documents and a separate go-ahead. Re-read the design before each task
 > and record every checkpoint on ticket `01M757DHFAVPEVY4TWQTVKQAMJ`.
 > Steps use checkbox (`- [ ]`) syntax.
@@ -172,9 +172,9 @@ person, each pinned by a test in the task named:
 | --- | --- | --- |
 | 0 | — | Merge main, baseline gates, re-check facts, E-sweep, ledger. |
 | 1 | A | `KeptList`, list bodies, `ListRow`, state elements, icons; E-11. |
-| 2 | B | Ticket query, rows, one read, `derive`, footnote, age, markers, tooltip, status mapping, last-loaded repository; every `TicketQuery` site; E-1, E-2. |
-| 3 | C | Tickets panel: filter bar, hint, column header, rows, footnote, states over an always-drawn list, header and tab count, Home and End, Retry without clearing; E-3, E-6 part, E-10 part, E-12. |
-| 4 | D | The filter input replaces Find, keeping the ID read; E-4, E-5, E-6 part, E-10 part; checkpoint. |
+| 2 | B | Ticket query, rows, one read, `derive`, footnote, age, markers, tooltip, status mapping, last-loaded repository; every `TicketQuery` site; E-1, E-2, E-10 part. |
+| 3 | C | Tickets panel: filter bar with the filter input's place and one-source text, hint, column header, rows, footnote, states over an always-drawn list, header and tab count, Home and End, Retry without clearing; E-3, E-6 part, E-10 part, E-12. |
+| 4 | D | Enter, the ID read and its status, the repository-change clear; Find's cards and lookup go; E-4, E-5, E-6 part; checkpoint. |
 | 5 | E | Documents model: expansion, selection rule, `doc_row`, kept tree, `unmanaged` moved. |
 | 6 | F | Documents panel: base tree, rows, keys, states; E-8, E-9. |
 | 7 | I | Unreadable files: the status read, rows in both lists. |
@@ -274,6 +274,7 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
     (`listed` as Part A defines it; `closure` and `elsewhere` are ignored
     for Documents).
   - `pub(crate) fn list_body<T: Rows>(list: &KeptList<T>, input: BodyInput<'_>) -> ListBody`
+    (`Rows` is the existing trait, `D/model/list_state.rs:28-36`).
 - Produces, in `D/view/rows.rs`:
   - `pub(crate) const ROW_HEIGHT: Pixels` (28 px).
   - `pub(crate) struct ListRow` with `fn new(id: impl Into<ElementId>) -> Self`
@@ -340,7 +341,10 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
   its import), `D/view/workspace/lists.rs` (the read, the setters,
   `sync_tickets`, `open_ready_tickets`), `D/view/lists.rs` (`query()` by
   reference), `D/view/item/sheet/fields.rs` (`take_loaded_tickets` reads
-  the open conforming rows, R-33), `D/view/tickets_tests.rs` (E-2)
+  the open conforming rows, R-33), `D/view/tickets_tests.rs` (E-2),
+  `D/view/lifecycle/made_ready_tests.rs` (`:288-289`) and
+  `made_ready_review_tests.rs` (`:65-70`) (E-10's made-ready part: R-26
+  reaches their set-up here)
 
 **Interfaces:**
 - Consumes: `KeptList` (Task 1).
@@ -368,9 +372,10 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
     (a pass-through); `fn view(&self) -> &TicketView`;
     `fn set_query(&mut self, query: TicketQuery)` derives at once and
     starts no read; `fn list(&self) -> &KeptList<Vec<TicketRow>>`;
-    `fn load(&mut self, repo: RepoKey, …) -> bool` calls `reload()` for
-    the last-loaded repository and `clear()` for another, and returns true
-    when the repository changed (R-35).
+    `fn load(&mut self, repo: RepoKey, …) -> (Stamp, bool)` calls
+    `reload()` for the last-loaded repository and `clear()` for another,
+    and returns the read's stamp and whether the repository changed
+    (R-35).
 - Produces, in `D/model/markers.rs`:
   - `pub(crate) struct RowContext { pub kind: ItemContextKind, pub branch: Option<String>, pub worktree: String }`
     with `fn of(item: &ItemDto) -> RowContext`; its label is
@@ -457,10 +462,17 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
     after `clear`, a load of the last-loaded repository returns false and
     one of another returns true. `the_default_query_lists_open_tickets`
     asserts the default query and `read_filter() == TicketFilter::default()`;
-    the two `blocked_reasons` tests build `TicketFilter` literals.
+    `blocked_reasons_name_the_blocker_the_missing_id_and_the_cycle` and
+    `an_untitled_blocker_is_named_by_its_short_code` build `TicketFilter`
+    literals.
   - E-2 in `D/view/tickets_tests.rs`: delete the two tests; the
     `library()` and `blocked_list` helpers and `:322-326` take
     `TicketFilter` literals.
+  - E-10's made-ready part: the set-ups start from Closed with text set
+    through `set_query` (Closed with Blocked is unreachable under R-26),
+    and assert that `open_ready_tickets` gives Open, Ready and no text
+    (R-29); readiness is read from the model until Task 3 draws
+    `filter-readiness`.
 - [ ] **Step 2: Run the new tests; they fail.**
 - [ ] **Step 3: Implement** the model per Part B, then every site the
   `TicketQuery` change reaches: `D/view/lists.rs:58`, `:77`;
@@ -477,33 +489,38 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
   `desktop::model::markers::tests::markers_follow_drafts_conflicts_and_closure`,
   `desktop::model::tickets::tests::a_read_lands_only_for_its_repository_and_load`,
   `desktop::model::tickets::tests::the_default_query_lists_open_tickets`,
-  the two `blocked_reasons` tests, and in `desktop::view::tickets::tests`
+  `desktop::model::tickets::tests::blocked_reasons_name_the_blocker_the_missing_id_and_the_cycle`,
+  `desktop::model::tickets::tests::an_untitled_blocker_is_named_by_its_short_code`,
+  the edited made-ready tests, and in `desktop::view::tickets::tests`
   `arrows_move_in_the_list_and_enter_opens`,
   `each_closure_filter_shows_the_librarys_rows_and_keeps_the_nonconforming_entry`,
   `ready_and_blocked_show_the_librarys_rows_with_reasons_and_keep_the_nonconforming_entry`,
   `the_why_blocked_panel_gives_the_selected_rows_reasons_in_full`,
   `the_panel_says_incomplete_where_the_library_does`, and
-  `desktop::view::item::sheet::fields::tests::suggestions_come_from_the_loaded_tickets_values`
-  (path as its `mod` line gives; it must pass unchanged). Write the full
+  `desktop::view::item::edit_tests::sheet_fields::suggestions_come_from_the_loaded_tickets_values`
+  (it must pass unchanged). Write the full
   names in the ledger. They pass.
 - [ ] **Step 5: Verify lines; commit; push.**
 
 ## Task 3: The Tickets Panel (Part C)
 
 **Files:**
-- Modify: `D/view/tickets.rs`, `D/view/lists.rs` (`tickets_body`,
-  `choice_ids`, Retry through `reload_lists`), `D/view/workspace.rs`
-  (`choice_focus`, the `ListEvent::Confirm` subscription, the sort focus
-  handles), `D/view/workspace/render.rs` (`sync_tickets` every render, the
-  new actions)
+- Modify: `D/view/tickets.rs` (the delegate's `render_empty` draws
+  nothing), `D/view/lists.rs` (`tickets_body`, `choice_ids`, Retry through
+  `reload_lists`), `D/view/workspace.rs` (`choice_focus`, the
+  `ListEvent::Confirm` subscription, the sort focus handles, `find_input`
+  with the new placeholder and `set_clean_on_escape(true)`),
+  `D/view/workspace/render.rs` (`sync_tickets` every render, the new
+  actions), `D/view/workspace/find.rs` (`set_filter_text`; Change sets the
+  text), `D/view/find.rs` (Find's bar no longer draws the input)
 - Create: `D/view/tickets/filter_bar.rs`, `D/view/tickets/columns.rs`, `D/view/tickets/row.rs`
 - Modify: `D/view/workspace/lists.rs`, `D/view/workspace/focus.rs` (focus
   targets after actions), `D/view/dock/panels.rs` (`listed()`, "Updating…"),
   `D/view/dock/header/tabs.rs` (an id on the count; "Updating…" on a tab),
   `D/keys.rs`, `D/keys_tests.rs` (E-12)
 - Tests: `D/view/tickets_tests.rs` (E-3 and new), `D/view/keyboard_tests.rs`
-  `change_the_filters` (E-6 part), `D/view/lifecycle/made_ready_tests.rs`,
-  `made_ready_review_tests.rs` (E-10 part)
+  `change_the_filters` (E-6 part), `D/view/dock_tests/state.rs` (E-10's
+  hidden-panel part), the made-ready tests (`filter-readiness`'s name)
 
 **Interfaces:**
 - Consumes: `ListRow`, `list_body`, `alert_row`, `empty_state`,
@@ -516,7 +533,12 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
     and does nothing when the rows are unchanged.
   - `Workspace::set_sort(&mut self, column: SortColumn, cx)`,
     `Workspace::clear_filters(&mut self, window, cx)`,
-    `Workspace::show_all(&mut self, window, cx)`.
+    `Workspace::show_all(&mut self, window, cx)`,
+    `Workspace::set_filter_text(&mut self, text: &str, window, cx)` (R-30),
+    `pub(crate) const FILTER_PLACEHOLDER: &str = "Filter by title or code";`.
+    The filter bar draws `find_input` (`list-filter` prefix, `cleanable`);
+    its Change sets the query's text. Enter keeps today's Find behaviour
+    until Task 4.
   - Actions `SelectFirst` and `SelectLast` in `D/keys.rs`, bound to `home`
     and `end` in `TICKET_LIST_CONTEXT = "TicketList"` (a `key_context` on a
     div around the Kit list) and in `DOCUMENTS_CONTEXT` (handled from
@@ -527,7 +549,8 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
     `ticket-type`, `ticket-slug`, `ticket-unsaved`, `ticket-conflict`,
     `ticket-closed`, `ticket-status`, `ticket-changed`, `tickets-footnote`,
     `tickets-alert`, `tickets-empty`, `tickets-skeleton`, and
-    `("panel-count", node)` on the header's count.
+    `("panel-count", node)` on the header's count, with its text as
+    `aria_label`.
 
 - [ ] **Step 1: Write the failing tests.**
   - `desktop::view::tickets::tests::the_filter_bar_works_without_a_read`:
@@ -561,16 +584,17 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
     Any readiness and focuses the filter input; the unnarrowed empty
     state's New ticket… opens the dialog; on a stale or never-refreshed
     repository, Refresh submits `IndexRefresh`; on an unavailable index,
-    Rebuild the search index submits `IndexRebuild` (made as the
-    made-ready tests make `index_unavailable`; if a state cannot be made,
-    stop for the owner).
+    Rebuild the search index submits `IndexRebuild` (a failed or
+    unavailable read through `DelayingBackend::replace_service`; if a state
+    cannot be made, stop for the owner).
   - `desktop::view::tickets::tests::markers_appear_without_a_read`: open a
     ticket and start editing it (`e`, following D3's editor-test rules);
     its row shows `ticket-unsaved`, and `reads_seen(Tickets)` is unchanged
     (P14).
-  - E-3, E-6 (`change_the_filters`), E-10 (made-ready tests; the hidden
-    panel test also chooses a sort and Ready and checks they are kept,
-    P26) as the design words them. E-12: `each_key_is_bound_to_its_action`
+  - E-3 and E-6 (`change_the_filters`) as the design words them. E-10's
+    hidden-panel part: the kept text is filter text that keeps both rows,
+    and the test also chooses a sort and Ready and checks they are kept
+    (P26); the made-ready tests read readiness from `filter-readiness`. E-12: `each_key_is_bound_to_its_action`
     gains `home` → `SelectFirst` and `end` → `SelectLast`.
 - [ ] **Step 2: Run them; the new ones fail.**
 - [ ] **Step 3: Implement** Part C: the filter bar (segments restyled from
@@ -585,6 +609,8 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
   `pending_conflicts` (R-32). Find stays at the top of the panel until
   Task 4. Remove the "Showing …" texts and the inline reasons line; keep
   `LIFECYCLE_OPEN`, `LIFECYCLE_CLOSED` and `lifecycle_label` (fact 14).
+  The filter input moves into the filter bar with one-source text (R-30);
+  Find's Enter, cards and status stay as they are until Task 4.
 - [ ] **Step 4: Run** the new tests and every edited one by exact name;
   they pass.
 - [ ] **Step 5: Verify lines; commit; push.**
@@ -592,24 +618,24 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
 ## Task 4: The Filter Input Replaces Find (Part D)
 
 **Files:**
-- Modify: `D/view/find.rs` (it now draws the filter input and its status
-  line; `find_bar`, `match_row` and their constants go),
-  `D/view/workspace/find.rs`, `D/view/tickets/filter_bar.rs` (places the
-  input), `D/model/find.rs` (the short-code half goes), `D/view/lists.rs`,
-  `D/view/workspace.rs` (`find_input` with `set_clean_on_escape(true)`),
-  `D/view/workspace/render.rs` (the deferred clear),
-  `D/view/workspace/lists.rs` (`clear_lists` keeps the text and a held ID
-  read unless the repository changed)
+- Modify: `D/view/find.rs` (it now draws the filter status line;
+  `find_bar`, `match_row` and their constants go),
+  `D/view/workspace/find.rs` (`submit_filter`; `find_focus` and
+  `find_match_focus` go), `D/model/find.rs` (the short-code half goes),
+  `D/services/mod.rs` (`ReadKind::FindSlug` goes with its last use),
+  `D/view/lists.rs`, `D/view/workspace.rs`, `D/view/workspace/render.rs`
+  (the deferred clear), `D/view/workspace/lists.rs` (`clear_lists` keeps
+  the text and a held ID read unless the selected repository differs
+  from the last-loaded one)
 - Tests: `D/view/find_tests.rs` (E-4), `D/model/find_tests.rs` (E-5),
   `D/view/keyboard_tests.rs` `find`, `find_by_short_code_and_ulid` (E-6
-  part), `D/view/dock_tests/state.rs` (E-10 part)
+  part)
 
 **Interfaces:**
 - Consumes: `TicketQuery.text`, `set_query`, `load`'s repository-changed
-  answer (Task 2); the filter bar (Task 3).
-- Produces: `pub(crate) const FILTER_PLACEHOLDER: &str = "Filter by title or code";`
-  `Workspace::set_filter_text(&mut self, text: &str, window, cx)`;
-  `Workspace::submit_filter(&mut self, window, cx)` (brings the pane up to
+  answer (Task 2); the filter bar, `set_filter_text` and the input
+  (Task 3).
+- Produces: `Workspace::submit_filter(&mut self, window, cx)` (brings the pane up to
   date before it selects); `pub(crate) fn parse_id(text: &str) -> Option<ItemId>`
   in `D/model/find.rs`, beside the kept stamped ID read and its states;
   element id `filter-status`.
@@ -627,15 +653,14 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
   input's value and the query's text are empty and no row of the first
   repository is drawn, while a Retry of the same repository keeps the
   text (P17, Review Focus 4). `desktop::model::find::tests` per E-5. Then
-  E-6 and E-10 as the design words them.
+  E-6 as the design words it.
 - [ ] **Step 2: Run them; they fail.**
-- [ ] **Step 3: Implement** Part D: the existing `find_input` becomes the
-  filter bar's input (placeholder, `list-filter` prefix, `cleanable`,
-  clean on Escape); its Change sets `query.text`; PressEnter runs
-  `submit_filter`; `secondary-p` focuses it; the repository-change clear
-  is applied at the next render (R-30, R-35). Remove the match cards, the
-  short-code lookup and `find_tickets_by_slug`'s call; keep the stamped ID
-  read (R-31).
+- [ ] **Step 3: Implement** Part D: PressEnter runs `submit_filter`;
+  `secondary-p` focuses the input; `filter-status` says the ID read's
+  state, with no Retry control (Enter again retries); the
+  repository-change clear is applied at the next render (R-30, R-35).
+  Remove the match cards, the short-code lookup, `find_tickets_by_slug`'s
+  call and `ReadKind::FindSlug`; keep the stamped ID read (R-31).
 - [ ] **Step 4: Run** the rewritten and edited tests by exact name.
 - [ ] **Step 5: Verify lines; commit; push; ticket comment** (Tickets
   done).
@@ -789,15 +814,22 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
     `tooltips_carry_the_id_context_and_reasons` with `u` in an item
     worktree (`Can't be read: {guidance}`, its path, `Git: worktree …`)
     and `rows_read_as_the_design_writes_them` with the unreadable kind.
+  - Extend `a_read_lands_only_for_its_repository_and_load` with status
+    rows: a status read that lands replaces the unreadable files; a busy
+    or failed one keeps them; one for another repository is dropped.
   - `desktop::view::tickets::tests::an_unreadable_file_is_listed_with_its_reason`:
     a ticket file and a document file written as invalid UTF-8, then a
-    refresh job; `reads_seen(IndexStatus)` rose by one with the lists'
+    refresh job (the ticket written as a raw directory with no item
+    worktree: discovery drops primary-copy problems inside a ticket
+    directory that has one, `L/repository/discovery.rs:802-804`); `reads_seen(IndexStatus)` rose by one with the lists'
     reload (P1); the ticket row shows its path and a `ticket-status` of
     "can't be read" under every lifecycle, and the document its file name
     with `doc-unreadable`; Enter on either opens no tab (R-38); the
-    footnote ends `· 1 can't be read`. Then hold the status read and make
-    it busy, then failed, on further reloads: the lists land and keep the
-    unreadable rows (P28).
+    footnote ends `· 1 can't be read`. Then hold the status read on a
+    further reload and make it busy, as
+    `a_busy_list_reload_keeps_the_last_rows_with_a_label` makes a read
+    busy: the lists land and keep the unreadable rows (P28). The failed
+    status read is the model table's row (no seam fails one).
 - [ ] **Step 2: Run them; they fail.**
 - [ ] **Step 3: Implement** Part I.
 - [ ] **Step 4: Run** the new and extended tests by exact name.
@@ -844,7 +876,8 @@ git grep -n -e 'doc-path' -e 'doc-empty' -e 'doc-nonconforming' -e 'doc-problem'
   the button disabled and focus on the tree (P20). Move Documents into
   the Tickets group as a tab (the dock's move, as C1's tests do) → with
   Documents active its toolbar is drawn and works; with Tickets active,
-  New ticket's. With no repository selected, the three New buttons are
+  New ticket's; while a reload of Tickets is held, its tab reads
+  "Tickets · Updating…" (P29). With no repository selected, the three New buttons are
   disabled. With a dialog open, activating a toolbar button does nothing
   (P24). Each button's accessible name is the design's. Extend
   `folders_keep_their_state_and_toggle_by_key` with Collapse all by

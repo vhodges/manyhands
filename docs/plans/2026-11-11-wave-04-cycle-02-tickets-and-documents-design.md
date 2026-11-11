@@ -21,12 +21,13 @@ covers the mechanisms, rulings, named test edits and task order. It does
 not authorize implementation, pushes beyond the ticket branch, merging or
 closing.
 
-**Draft, revision 3.** Grounded at the ticket branch `a0a734a4`, which
+**Draft, revision 3, with round 3's fixes.** Grounded at the ticket branch `a0a734a4`, which
 holds origin/main `48653d01` (Cycle 01 and Wave 03 D6 both merged); `src/`
 is unchanged since. Revision 1 (`563763e2`) had two reviews in round 1;
 revision 2 (`4c32325f`, decisions confirmed at `787c5345`) had a scoped
 re-review and an adversarial review in round 2. Revision 3 applies round
-2's findings (Review Record).
+2's findings, and a scoped re-review of revision 3 (round 3, `ba5da196`)
+found them resolved; its fixes are applied here (Review Record).
 
 Conventions:
 
@@ -634,7 +635,14 @@ description.
 
 **Header count** (R-11): the number of rows listed (`listed`, nonconforming
 and unreadable included), as Cycle 01 counted rows listed under the
-filters; "Updating…" during a reload over kept rows (Part A).
+filters; "Updating…" during a reload over kept rows (Part A). The count's
+element gets the id `("panel-count", node)` and its text as `aria_label`,
+so tests can read it.
+
+**An empty list draws nothing of the Kit's.** The Kit `List` draws an
+Inbox icon when it has no rows (`C/list/delegate.rs:74-85`); under R-34
+the ticket delegate's `render_empty` draws nothing, so only Part A's
+state shows.
 
 **Selection** (R-7) stays the list's own: set by a click (which also
 opens, fact 1) or the arrows, kept by ID (or worktree and path) across
@@ -670,8 +678,9 @@ Decision 2. The design draws no Find in the Tickets panel, and its filter
     stamped `show_item` read, ticket or document, closed or not, whatever
     the filters (fact 20; RFC 67-71). `filter-status` says "Opening…"
     while it is held, then nothing once the tab opens, "Nothing in {repo}
-    has that ID." when it is not found, "{repo} is busy right now." with
-    Retry when busy, or the failure's message with Retry. A read held
+    has that ID." when it is not found, "{repo} is busy right now." when
+    busy, or the failure's message; Enter again tries again, as with Find
+    today, so there is no Retry control. A read held
     across a change of repository is dropped, as today (RFC 341-342).
     Focus stays in the input (fact 20);
   - otherwise, with non-blank text, when exactly one conforming ticket
@@ -772,7 +781,9 @@ into this Cycle's panel header").
   active tab's at the right of the tab strip. `single` and `tabs` receive
   the Workspace handle `tabs::header` holds (and the window), and ask it
   for the panel's toolbar (R-13). The drag source and drop target is the
-  title area (flex 1), not the whole row, and the toolbar wrapper stops
+  title area (flex 1), which keeps the id `("panel-title", node)` the dock
+  tests drag from (`dock_tests/moves.rs:196`), not the whole row, and the
+  toolbar wrapper stops
   mouse-down from propagating, so pressing a button never drags the panel
   (R-37; fact 10, fact 21).
 - **Buttons.** The base `gpui_kit::base::Button` with
@@ -823,7 +834,7 @@ into this Cycle's panel header").
   End stay the input's, whose context is deeper.
 - **Enter on a folder** toggles it (R-24).
 - **Tab order** in Tickets: the toolbar; the segments, the readiness menu
-  and the filter input; the filter status's Retry when shown; the hint's
+  and the filter input; the hint's
   Show all when shown; the five column headers; the alert's or empty
   state's action when shown; Why blocked when shown. In Documents: the
   toolbar, then the alert's or empty state's action when shown. The list
@@ -844,7 +855,7 @@ visible with their reason, and the read that reports them exists
   through `D/services/reads.rs` under a new `ReadKind::IndexStatus`
   (fact 32). Its completion carries both lists' stamps and is applied to
   each list whose stamp is still current.
-- **The mapping.** `unreadable_rows(status) -> (Vec<UnreadableFile>, Vec<UnreadableFile>)`
+- **The mapping.** `unreadable_rows(status, root) -> (Vec<UnreadableFile>, Vec<UnreadableFile>)`
   (`D/model/unreadable.rs`) picks the `SourceUnreadable` problems whose
   path is relative and names a `.md` file under `.manyhands/tickets/`
   (Tickets) or `docs/` (Documents), with the worktree each was found in.
@@ -886,7 +897,7 @@ visible with their reason, and the read that reports them exists
 | P5 | Under All | A lifecycle-closed row has a `secondary` title and the Closed marker |
 | P6 | Nonconforming and unreadable rows | Listed under every lifecycle, readiness and text, last in read order under every sort, with their reason |
 | P7 | A short code typed that tickets outside the filters also carry | The hint, or the empty state, names how many more match; Show all lists them all; each opens its own ticket by ID |
-| P8 | A ULID typed, then Enter | That ticket or document opens, closed or not, whatever the filters; "Opening…" while held; "Nothing in {repo} has that ID." when not found; busy and failure with Retry; dropped when the repository changes first; focus stays in the input |
+| P8 | A ULID typed, then Enter | That ticket or document opens, closed or not, whatever the filters; "Opening…" while held; "Nothing in {repo} has that ID." when not found; busy and failure said, Enter again retrying; dropped when the repository changes first; focus stays in the input |
 | P9 | Enter with non-blank text and exactly one match under any filters; with several | It opens; focus moves to the list with the first row selected |
 | P10 | Segment counts | Conforming tickets matching the text, by lifecycle; Open + Closed = All; readiness does not change them; none shown with nothing to count |
 | P11 | Ready or Blocked chosen through the menu, by mouse and by keyboard | The rows of that readiness; the button names it; Why blocked under Blocked; focus back on the button; Closed becomes Open |
@@ -929,7 +940,9 @@ Desktop-only, so AGENTS.md's fast tier at review-ready and no SSH target.
 - Reads are counted with `reads_seen` and held with `hold_read`
   (fact 32); busy and failed reads are made as the existing tests make
   them (`a_busy_list_reload_keeps_the_last_rows_with_a_label`; the
-  made-ready tests' `index_unavailable`).
+  failed read through `DelayingBackend::replace_service`
+  (`D/test_support/delaying.rs:257`); a state no seam can make stops the
+  task for the owner.
 - No real waits; `now` is passed in.
 
 | Test | What |
@@ -944,7 +957,7 @@ Desktop-only, so AGENTS.md's fast tier at review-ready and no SSH target.
 | `desktop::model::unreadable::tests::unreadable_files_go_to_their_list` | One table of `unreadable_rows`: ticket file, document file, a file in an item worktree, a directory, a file elsewhere, an absolute path, no path, another code (P28) |
 | `desktop::model::documents::tests::expansion_survives_rebuilds_and_collapse_all` | Toggle, rebuild with a new folder and with a folder gone and back, Collapse all, `expand_ancestors`, another repository; the set and the built `expanded` flags; the selection rule (P19, P20) |
 | `desktop::model::documents::tests::rows_read_as_the_design_writes_them` | One table of `doc_row` over Part E's eight kinds: label, expanded, trailing and tooltip (P22, P23) |
-| `desktop::view::tickets::tests::the_filter_bar_works_without_a_read` | A journey: one ticket read and one status read on load; segments by click and key; the readiness menu by keyboard; text with the hint and Show all, under a readiness choice too; sorts by click and by Enter; Home and End; a filter hiding the selected row; header count, footnote and segment names at each step; no read or request after the load (P1, P2, P7, P10–P12, P18, P25, P29, P30) |
+| `desktop::view::tickets::tests::the_filter_bar_works_without_a_read` | A journey: one ticket read on load; segments by click and key; the readiness menu by keyboard; text with the hint and Show all, under a readiness choice too; sorts by click and by Enter; Home and End; a filter hiding the selected row; header count, footnote and segment names at each step; no read or request after the load (P1, P2, P7, P10–P12, P18, P25, P29, P30) |
 | `desktop::view::tickets::tests::list_states_act_and_a_reload_keeps_the_rows` | Retry reads without clearing and keeps the text; Refresh submits `IndexRefresh`; Rebuild the search index submits `IndexRebuild`; Clear filters clears and focuses the input; the empty state's New ticket… opens the dialog; a job-driven reload keeps the rows with "Updating…"; a held busy reload keeps them under the busy alert; a failed reload shows the failure and its message; F6 into the empty and the failed list keeps the region's ring (P15, P16, P31) |
 | `desktop::view::tickets::tests::markers_appear_without_a_read` | Start editing a ticket (D3's editor-test rules): its row shows `ticket-unsaved` with no list read (P14) |
 | `desktop::view::tickets::tests::an_unreadable_file_is_listed_with_its_reason` | A ticket file and a document file written as invalid UTF-8, then a refresh job: each listed with "can't be read"; Enter does not open it; the footnote ends `· 1 can't be read`; a held then busy status read leaves the lists unchanged (P1, P28) |
@@ -962,7 +975,7 @@ production code, and records any other site as a further edit
 
 | E | Tests | Edit | Part |
 | --- | --- | --- | --- |
-| E-1 | `D/model/tickets_tests.rs`: `the_query_maps_closure_and_readiness_and_nothing_else`, `a_filter_change_drops_the_last_filters_read`, `set_query_keeps_the_query_and_drops_the_last_read`, `a_readiness_change_drops_the_last_readinesss_read`, `rows_read_under_blocked_carry_their_reasons`; the two `blocked_reasons` tests' query set-up (`:259-266`, `:305-312`) | The five become one table test, `a_read_lands_only_for_its_repository_and_load`, keeping the repository-change, clear and generation guards (`:157-169`), the query kept before a load, and the blocked reasons filled when a read is applied; the mapping to a library filter and "a filter change drops the read" go (R-1). `the_default_query_lists_open_tickets` asserts the default query and `read_filter() == TicketFilter::default()`. The `blocked_reasons` tests build `TicketFilter` literals. **Removes** | B |
+| E-1 | `D/model/tickets_tests.rs`: `the_query_maps_closure_and_readiness_and_nothing_else`, `a_filter_change_drops_the_last_filters_read`, `set_query_keeps_the_query_and_drops_the_last_read`, `a_readiness_change_drops_the_last_readinesss_read`, `rows_read_under_blocked_carry_their_reasons`; the query set-up of `blocked_reasons_name_the_blocker_the_missing_id_and_the_cycle` (`:259-266`) and `an_untitled_blocker_is_named_by_its_short_code` (`:305-312`) | The five become one table test, `a_read_lands_only_for_its_repository_and_load`, keeping the repository-change, clear and generation guards (`:157-169`), the query kept before a load, and the blocked reasons filled when a read is applied; the mapping to a library filter and "a filter change drops the read" go (R-1). `the_default_query_lists_open_tickets` asserts the default query and `read_filter() == TicketFilter::default()`. The `blocked_reasons` tests build `TicketFilter` literals. **Removes** | B |
 | E-2 | `D/view/tickets_tests.rs`: `a_filter_change_drops_the_held_read_of_the_last_filter`, `a_readiness_change_drops_the_held_read_of_the_last_one`; helpers `library()` (`:49-57`) and `blocked_list` (`:449-457`) and the query at `:322-326`; their users `arrows_move_in_the_list_and_enter_opens`, `each_closure_filter_…` (`:122`), `the_panel_says_incomplete_…` (`:552`) | The two tests are deleted: a filter change no longer reads; the repository-change guard is E-1's table and P17's view step. The helpers and `:322-326` take `TicketFilter` literals. **Removes** | B |
 | E-3 | `D/view/tickets_tests.rs`: `each_closure_filter_shows_the_librarys_rows_and_keeps_the_nonconforming_entry`, `ready_and_blocked_show_the_librarys_rows_with_reasons_and_keep_the_nonconforming_entry`, `the_why_blocked_panel_gives_the_selected_rows_reasons_in_full`, `the_panel_says_incomplete_where_the_library_does`, `every_choice_has_its_own_label_and_the_chosen_one_is_said_in_text`, `a_long_why_blocked_panel_scrolls_by_keyboard` | Each still compares the rows shown under each choice with `list_tickets(TicketFilter { closure, readiness })` (contract 1). `ticket-lifecycle` becomes the `ticket-closed` marker under All; the nonconforming row's `ticket-nonconforming` and `ticket-problem` cells (`:142-154`) become its "needs fixing" `ticket-status`, and `expected()` changes with it; readiness is chosen through `filter-readiness`; `ticket-reason-{i}-{n}` becomes Why blocked's lines; the `row_description` check becomes `ticket_tooltip`'s; the "Showing …" texts go, so the label test checks the segments' names with counts and the menu button's name. **Removes** the "Showing …", inline-reason and problem-code assertions | C |
 | E-4 | `D/view/find_tests.rs` (8) | Rewritten for the filter input. `secondary_p_focuses_find`, `a_ulid_opens_its_ticket_closed_or_not`, `find_does_nothing_while_a_dialog_is_open`, `a_held_search_never_lands_after_the_selection_changed` (the ULID read) and `find_needs_a_selected_repository_and_a_new_selection_clears_it` (the text is cleared) keep their intent; `no_match_says_so_and_opens_nothing` checks "Nothing in {repo} has that ID." and, for text, "No tickets match these filters."; `a_shared_short_code_lists_both_and_choosing_one_opens_it_by_id` lists both as rows, one through Show all. Steps for a document's ULID and one match are added. `a_matchs_open_is_reached_by_tab_and_enter_opens_it` is deleted (no match cards), and the cards' context labels are no longer asserted (the context is in the tooltip, tested by its function). **Removes** | D |
@@ -1027,7 +1040,7 @@ To apply in the approval commit:
 | R-5 | The readiness menu is a `Button::dropdown_menu` with checked items; the button names the choice (fact 8) | A screen reader hears the choice on the button, not on the item (K-6) |
 | R-6 | Skeleton rows are static bars in `theme.skeleton`, not the pulsing Kit `Skeleton` (fact 9; `07`:68) | — |
 | R-7 | `ListRow` draws hover, the selected treatment and, while its list has focus, an inset ring on the selected row. Selection is the list's own, not the open tab (unlike the prototype, `:1017`); a hidden selected row is cleared | The open item is not highlighted in the list unless selected there |
-| R-8 | Markers come from in-memory state only: `held_by`, the repository's pending conflicts, the row's closure. `Held::Unknown` shows no marker, so a store that cannot be read does not mark every row (unlike R-36's retirement, which must assume the worst) | A draft in an unreadable store shows no marker |
+| R-8 | Markers come from in-memory state only: `held_by`, the repository's pending conflicts, the row's closure. `Held::Unknown` shows no marker, so a store that cannot be read does not mark every row (unlike the retirement path, for which `held.rs:131` counts an unknown listing as a draft) | A draft in an unreadable store shows no marker |
 | R-9 | Nonconforming and unreadable rows pass every filter, the text included, and sort last in read order | — |
 | R-10 | The sort is stable over the library's order; descending reverses the rows that have the value; rows without it sort last in either direction | — |
 | R-11 | The header count is the rows listed, nonconforming and unreadable included, as C1 R-22 counted rows listed under the filters | — |
@@ -1152,3 +1165,4 @@ U-1, U-2, U-4 and U-5 were settled in review (facts 1, 4, 8, 27, 28).
 | Owner, 2026-11-11 | Decisions 1–20 confirmed; review round 2 requested | Owner decision | Recorded in the Cycle document | Session |
 | Review round 2, scoped re-review (`85210ab0`) | Round 1 resolved except S-B1, S-B2, S-I6 partly; 4 new Important: toolbar focus fails `ringed`; Retry clears the text; the details sheet's suggestions change; R-26 makes the made-ready set-up unreachable; Minor: fact citations, file lists, E-list gaps, `ListRow` interface, `clean_on_escape`, menu keys, P26 for sort and readiness | Named edits, rulings, settled | E-14, R-35, R-33 (open tickets only, so its test holds), E-10; facts 5, 11, 12, 13, 21; plan file lists; E-1, E-2, E-3, E-5, E-7, E-8; Part A `ListRow`; Part D | Reviewer report, 2026-11-11 |
 | Review round 2, adversarial (`85210ab0`) | 3 Blocking: E-7 rests on `ringed` being unchanged; no list element in the non-row states; outcomes without proof (P1, P14, P15, P16, Part I's busy read); 9 Important: Retry, Show all under a readiness, the hint against the empty state, an unreadable file's open, the status read's stamps, buttons inside the drag source, the component `Button`'s keyed focus, "Updating…" in tabbed groups, Enter on stale rows; Minor | Rulings, named edits, settled; one narrowing of decision 10 | E-14; R-34; new test steps and `markers_appear_without_a_read`; R-35; Show all sets Any readiness; the empty state with matches elsewhere; R-38; Part I's read and kept files; R-37; R-36; R-32; Minor in Parts A–I and K-10, K-13 | Reviewer report, 2026-11-11 |
+| Review round 3, scoped re-review (`ba5da196`) | Round 2's Blocking and Important all resolved; the new mechanisms and the invalid-UTF-8 fixture hold against the source. 1 Important: Task 3's tests need the filter input that Task 4 placed, and R-26 reaches the made-ready set-up at Task 2. 12 Minor: a test path, `ReadKind::FindSlug` left unused, R-8's wording, the status read in Task 3's journey, failed status reads, the filter status's Retry, the tabbed "Updating…" step and the count's label, the Kit's empty-list icon, signatures, E-10's task, the drag id, the acceptance order | Plan task moves; settled | The input and its one-source wiring move to Task 3; E-10's made-ready edit to Task 2; Part C header count and empty list; Part D without a Retry control; Part G drag id; Testing seams; E-1's test names; plan fixes | Reviewer report, 2026-11-11 |
