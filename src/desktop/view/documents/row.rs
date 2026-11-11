@@ -16,7 +16,7 @@ use gpui_kit::{
 use super::{EMPTY_TRAILING, Node};
 use crate::desktop::{
     model::{
-        documents::{DocKind, Trailing},
+        doc_rows::{DocKind, Trailing},
         ticket_view::UNSAVED_MARKER,
     },
     view::{
@@ -76,6 +76,7 @@ pub(super) fn document_row(
         ),
         DocKind::Document => ("file-text", colors.secondary, colors.text),
         DocKind::Nonconforming { .. } => ("file-exclamation-point", colors.accent, colors.accent),
+        DocKind::Unreadable => ("circle-x", colors.red, colors.red),
     };
     let label = div()
         .flex_1()
@@ -116,6 +117,16 @@ pub(super) fn document_row(
                     "triangle-alert",
                     MARKER_SIZE,
                     colors.accent,
+                    row.tooltip[0].clone(),
+                )
+                .into_any_element(),
+            ),
+            DocKind::Unreadable => Some(
+                named_icon(
+                    ("doc-unreadable", ix),
+                    "circle-x",
+                    MARKER_SIZE,
+                    colors.red,
                     row.tooltip[0].clone(),
                 )
                 .into_any_element(),

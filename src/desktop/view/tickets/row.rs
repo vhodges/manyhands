@@ -21,8 +21,9 @@ use crate::desktop::{
     model::{
         status::{Tint, tint},
         ticket_view::{
-            CLOSED_LINE, CONFLICT_MARKER, NEEDS_FIXING_PILL, NEEDS_FIXING_TYPE, NO_SHORT_CODE,
-            TYPE_PREFIX, UNSAVED_MARKER, UPDATED_PREFIX, age_label, ticket_tooltip,
+            CANT_BE_READ_PILL, CANT_BE_READ_TYPE, CLOSED_LINE, CONFLICT_MARKER, NEEDS_FIXING_PILL,
+            NEEDS_FIXING_TYPE, NO_SHORT_CODE, TYPE_PREFIX, UNSAVED_MARKER, UPDATED_PREFIX,
+            age_label, ticket_tooltip,
         },
         tickets::{Lifecycle, TicketRow},
     },
@@ -104,6 +105,8 @@ pub(super) fn ticket_row(
             colors.secondary,
             text,
         )
+    } else if row.unreadable.is_some() {
+        ("circle-x", colors.red, CANT_BE_READ_TYPE.to_owned())
     } else {
         (
             "triangle-alert",
@@ -200,6 +203,12 @@ pub(super) fn ticket_row(
             }
             None => (None, colors.text, cx.theme().secondary),
         }
+    } else if row.unreadable.is_some() {
+        (
+            Some(CANT_BE_READ_PILL.to_owned()),
+            colors.red,
+            colors.red.opacity(0.13),
+        )
     } else {
         (
             Some(NEEDS_FIXING_PILL.to_owned()),

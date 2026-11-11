@@ -40,9 +40,8 @@ use super::{
 use crate::desktop::{
     keys::{DOCUMENTS_CONTEXT, SelectFirst, SelectLast},
     model::{
-        documents::{
-            DocRow, Expansion, TreeNode, doc_row, document_id, folder_id, visible_selection,
-        },
+        doc_rows::{DocRow, Expansion, doc_row, visible_selection},
+        documents::{TreeNode, document_id, folder_id, unreadable_id},
         navigation::{OpenTarget, Pane},
         stamp::RepoKey,
     },
@@ -323,6 +322,20 @@ fn items(
                                 #[cfg(all(test, feature = "desktop-test-support"))]
                                 path: item.path.clone(),
                             }),
+                        },
+                    );
+                    TreeItem::new(id, label)
+                }
+                // It selects, and it opens nothing: no `Document`, so
+                // neither a click nor Enter has a target (R-38).
+                TreeNode::Unreadable(file) => {
+                    let id: SharedString = unreadable_id(file).into();
+                    facts.insert(
+                        id.clone(),
+                        Node {
+                            rows,
+                            folder: None,
+                            document: None,
                         },
                     );
                     TreeItem::new(id, label)

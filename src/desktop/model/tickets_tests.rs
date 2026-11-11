@@ -8,7 +8,7 @@ use manyhands::{
         ClosureFilter, ClosureState, ItemDtoKind, ItemListDto, ReadinessFilter, ReadinessState,
         TicketFilter,
     },
-    results::ProblemCode,
+    results::{ProblemCode, ResultCode},
 };
 
 use super::{
@@ -16,8 +16,10 @@ use super::{
     TicketSort, Tickets, UNRESOLVED_DEPENDENCY, blocked_reasons, read_filter,
 };
 use crate::desktop::{
-    model::{list_state::ListState, navigation::OpenTarget, stamp::Stamp},
-    services::ReadResult,
+    model::{
+        list_state::ListState, navigation::OpenTarget, stamp::Stamp, unreadable::UnreadableFile,
+    },
+    services::{ReadFailure, ReadResult},
     test_support::fixtures::Fixture,
 };
 
@@ -228,6 +230,48 @@ fn a_read_lands_only_for_its_repository_and_load() {
         let read = ReadResult::Ok(run.list.clone());
         assert_eq!(run.model.apply(run.stamps[stamp].clone(), read), landed);
     }
+    fn file(name: &str) -> UnreadableFile {
+        UnreadableFile {
+            path: format!(".manyhands/tickets/{name}/ticket.md"),
+            worktree: "/a".to_owned(),
+            primary: true,
+        }
+    }
+    /// The status read of load `stamp` answers `result`.
+    fn status(run: &mut Run, stamp: usize, result: ReadResult<Vec<UnreadableFile>>, landed: bool) {
+        assert_eq!(
+            run.model
+                .apply_unreadable(run.stamps[stamp].clone(), result),
+            landed
+        );
+    }
+    fn failed() -> ReadResult<Vec<UnreadableFile>> {
+        ReadResult::Failed(ReadFailure {
+            code: ResultCode::RepositoryInaccessible,
+            recovery: Vec::new(),
+        })
+    }
+    /// The files the model holds, and that its view lists them last, after
+    /// every other row, counted apart from the tickets shown (R-9, P6).
+    fn holds(run: &Run, names: &[&str]) {
+        let files: Vec<_> = names.iter().map(|name| file(name)).collect();
+        assert_eq!(run.model.unreadable(), files);
+        let view = run.model.view();
+        assert_eq!(view.unreadable, files.len());
+        let tail: Vec<_> = view
+            .rows
+            .iter()
+            .filter_map(|row| row.unreadable.clone())
+            .collect();
+        assert_eq!(tail, files, "listed in the status's order");
+        assert!(
+            view.rows
+                .iter()
+                .skip(view.rows.len() - files.len())
+                .all(|row| row.unreadable.is_some()),
+            "after every other row"
+        );
+    }
 
     let steps: Vec<Step> = vec![
         (
@@ -309,41 +353,79 @@ fn a_read_lands_only_for_its_repository_and_load() {
             }),
         ),
         (
+            "a status read that lands replaces the unreadable files, listed last",
+            Box::new(|run| {
+                holds(run, &[]);
+                status(run, 0, ReadResult::Ok(vec![file("U1")]), true);
+                holds(run, &["U1"]);
+                status(run, 0, ReadResult::Ok(vec![file("U1"), file("U2")]), true);
+                holds(run, &["U1", "U2"]);
+            }),
+        ),
+        (
+            "a busy or a failed status read keeps them",
+            Box::new(|run| {
+                status(run, 0, ReadResult::Busy, true);
+                holds(run, &["U1", "U2"]);
+                status(run, 0, failed(), true);
+                holds(run, &["U1", "U2"]);
+            }),
+        ),
+        (
             "a reload of the same repository keeps its rows and is no change",
             Box::new(|run| {
                 load(run, "/a", false);
                 assert!(run.model.list().reloading());
                 assert!(!run.model.view().rows.is_empty());
+                // The unreadable files stay while the reload runs.
+                holds(run, &["U1", "U2"]);
             }),
         ),
         (
-            "a read for an earlier load is dropped",
+            "a read for an earlier load is dropped, a status read too",
             Box::new(|run| {
                 apply(run, 0, false);
                 assert!(run.model.list().reloading());
+                status(run, 0, ReadResult::Ok(Vec::new()), false);
+                holds(run, &["U1", "U2"]);
             }),
         ),
         (
-            "the read of the current load lands",
+            "the read of the current load lands, and its status read replaces the files",
             Box::new(|run| {
                 apply(run, 1, true);
                 assert!(!run.model.list().reloading());
+                holds(run, &["U1", "U2"]);
+                status(run, 1, ReadResult::Ok(vec![file("U3")]), true);
+                holds(run, &["U3"]);
+                status(run, 1, ReadResult::Ok(Vec::new()), true);
+                holds(run, &[]);
+                status(run, 1, ReadResult::Ok(vec![file("U3")]), true);
+                holds(run, &["U3"]);
             }),
         ),
         (
-            "another repository is a change and drops the kept rows",
+            "another repository is a change and drops the kept rows and the files",
             Box::new(|run| {
                 load(run, "/b", true);
                 assert!(run.model.list().rows().is_none());
                 assert_eq!(run.model.view().listed, 0);
                 assert_eq!(run.model.view().counts, None);
+                assert!(run.model.unreadable().is_empty());
             }),
         ),
         (
-            "a read for the repository left is dropped",
+            "a read for the repository left is dropped, a status read too",
             Box::new(|run| {
                 apply(run, 1, false);
+                status(run, 1, ReadResult::Ok(vec![file("U4")]), false);
+                assert!(run.model.unreadable().is_empty());
+                // A status read may land before the tickets: nothing shows
+                // until they do.
+                status(run, 2, ReadResult::Ok(vec![file("U5")]), true);
+                assert_eq!(run.model.view().listed, 0);
                 apply(run, 2, true);
+                holds(run, &["U5"]);
             }),
         ),
         (
@@ -351,6 +433,8 @@ fn a_read_lands_only_for_its_repository_and_load() {
             Box::new(|run| {
                 run.model.clear();
                 apply(run, 2, false);
+                status(run, 2, ReadResult::Ok(vec![file("U6")]), false);
+                assert!(run.model.unreadable().is_empty());
                 assert_eq!(run.model.repo(), None);
                 assert!(matches!(run.model.state(), ListState::Loading));
                 assert!(run.model.list().rows().is_none());

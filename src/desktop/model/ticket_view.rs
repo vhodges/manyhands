@@ -10,7 +10,10 @@ use std::cmp::Reverse;
 use manyhands::repository::{ClosureFilter, ReadinessFilter, ReadinessState};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use super::tickets::{Lifecycle, SortColumn, TicketQuery, TicketRow};
+use super::{
+    tickets::{Lifecycle, SortColumn, TicketQuery, TicketRow},
+    unreadable::unreadable_tooltip,
+};
 
 pub(crate) const NO_SHORT_CODE: &str = "No short code";
 /// The tooltip's lines: `ID {ULID}`, `Type {type}`, `Closed`.
@@ -27,9 +30,7 @@ pub(crate) const NEEDS_FIXING_NO_GUIDANCE: &str = "Needs fixing. Open it to fix.
 pub(crate) const NEEDS_FIXING_PILL: &str = "needs fixing";
 pub(crate) const NEEDS_FIXING_TYPE: &str = "Needs fixing";
 /// An unreadable file's status pill and the name of its type cell.
-#[allow(dead_code)] // Used from Task 7; no test reads it before.
 pub(crate) const CANT_BE_READ_PILL: &str = "can't be read";
-#[allow(dead_code)] // Used from Task 7; no test reads it before.
 pub(crate) const CANT_BE_READ_TYPE: &str = "Can't be read";
 /// The markers' tooltips, which are also their accessible names. The
 /// Closed marker's is `CLOSED_LINE`.
@@ -57,7 +58,8 @@ pub(crate) struct SegmentCounts {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct TicketView {
     /// Every row the panel draws, in order: the conforming ones sorted,
-    /// then the nonconforming ones in read order.
+    /// then the nonconforming ones and then the unreadable files, each in
+    /// read order.
     pub rows: Vec<TicketRow>,
     /// `None` with nothing to count: no rows read, or none kept.
     pub counts: Option<SegmentCounts>,
@@ -162,9 +164,15 @@ pub(crate) fn derive(rows: Option<&[TicketRow]>, query: &TicketQuery) -> TicketV
     };
     let text = query.text.trim();
     let mut counts = SegmentCounts::default();
-    let (mut elsewhere, mut conforming, mut nonconforming) = (0, Vec::new(), Vec::new());
+    let (mut elsewhere, mut conforming, mut nonconforming, mut unreadable) =
+        (0, Vec::new(), Vec::new(), Vec::new());
     for row in rows {
-        // R-9: a nonconforming entry passes every filter, the text too.
+        // R-9: a nonconforming entry and a file that cannot be read pass
+        // every filter, the text too.
+        if row.unreadable.is_some() {
+            unreadable.push(row);
+            continue;
+        }
         if row.id.is_none() {
             nonconforming.push(row);
             continue;
@@ -185,9 +193,10 @@ pub(crate) fn derive(rows: Option<&[TicketRow]>, query: &TicketQuery) -> TicketV
     }
     counts.all = counts.open + counts.closed;
     let shown = conforming.len();
-    let needs_fixing = nonconforming.len();
+    let (needs_fixing, unreadable_count) = (nonconforming.len(), unreadable.len());
     let mut rows = sort(conforming, query);
     rows.extend(nonconforming.into_iter().cloned());
+    rows.extend(unreadable.into_iter().cloned());
     TicketView {
         listed: rows.len(),
         rows,
@@ -195,7 +204,7 @@ pub(crate) fn derive(rows: Option<&[TicketRow]>, query: &TicketQuery) -> TicketV
         elsewhere,
         shown,
         needs_fixing,
-        unreadable: 0,
+        unreadable: unreadable_count,
     }
 }
 
@@ -272,6 +281,9 @@ pub(crate) fn age_label(changed_at: Option<&str>, now: OffsetDateTime) -> String
 /// A row's tooltip, line by line, each only where it applies (R-14); its
 /// description is the lines joined by "; ".
 pub(crate) fn ticket_tooltip(row: &TicketRow, repo: &str) -> Vec<String> {
+    if let Some(file) = &row.unreadable {
+        return unreadable_tooltip(file);
+    }
     if row.id.is_none() {
         let guidance = row.nonconforming.map(|problem| problem.guidance());
         return vec![match guidance {

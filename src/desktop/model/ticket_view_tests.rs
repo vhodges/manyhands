@@ -11,13 +11,14 @@ use super::{
 use crate::desktop::model::{
     item::{NO_BRANCH, context_kind_label},
     tickets::{DEPENDENCY_CYCLE, OPEN_DEPENDENCY, SortColumn, TicketQuery, TicketRow},
+    unreadable::UnreadableFile,
 };
 
 #[path = "ticket_view_tests/fixtures.rs"]
 mod fixtures;
 use fixtures::{
     ID_A, ID_D, REPO, Spec, a, context, id_of, library, nonconforming, now, query, sorted,
-    tooltip_row,
+    tooltip_row, unreadable_file,
 };
 
 struct Case {
@@ -59,47 +60,55 @@ fn derive_filters_counts_and_sorts() {
         Case {
             counts: Some((4, 1, 5)),
             elsewhere: Some(0),
-            footnote: Some("4 open tickets in manyhands \u{b7} 1 needs fixing"),
+            footnote: Some(
+                "4 open tickets in manyhands \u{b7} 1 needs fixing \u{b7} 1 can't be read",
+            ),
             ..case(
                 "default",
                 TicketQuery::default(),
-                &["a", "e", "d", "b", "n"],
+                &["a", "e", "d", "b", "n", "u"],
             )
         },
         Case {
-            footnote: Some("1 closed ticket in manyhands \u{b7} 1 needs fixing"),
+            footnote: Some(
+                "1 closed ticket in manyhands \u{b7} 1 needs fixing \u{b7} 1 can't be read",
+            ),
             ..case(
                 "Closed",
                 query(ClosureFilter::Closed, None, ""),
-                &["c", "n"],
+                &["c", "n", "u"],
             )
         },
         Case {
-            footnote: Some("5 tickets in manyhands \u{b7} 1 needs fixing"),
+            footnote: Some("5 tickets in manyhands \u{b7} 1 needs fixing \u{b7} 1 can't be read"),
             ..case(
                 "All",
                 query(ClosureFilter::All, None, ""),
-                &["a", "e", "d", "c", "b", "n"],
+                &["a", "e", "d", "c", "b", "n", "u"],
             )
         },
         Case {
             counts: Some((1, 1, 2)),
             elsewhere: Some(1),
-            footnote: Some("1 open ticket in manyhands matches \"VH-AAAAA\" \u{b7} 1 needs fixing"),
+            footnote: Some(
+                "1 open ticket in manyhands matches \"VH-AAAAA\" \u{b7} 1 needs fixing \u{b7} 1 can't be read",
+            ),
             hint: Some(MORE_ELSEWHERE),
             ..case(
                 "text under Open, pasted with spaces and capitals",
                 query(ClosureFilter::Open, None, " VH-AAAAA "),
-                &["a", "n"],
+                &["a", "n", "u"],
             )
         },
         Case {
             elsewhere: Some(0),
-            footnote: Some("2 tickets in manyhands match \"VH-AAAAA\" \u{b7} 1 needs fixing"),
+            footnote: Some(
+                "2 tickets in manyhands match \"VH-AAAAA\" \u{b7} 1 needs fixing \u{b7} 1 can't be read",
+            ),
             ..case(
                 "the same text under All",
                 query(ClosureFilter::All, None, " VH-AAAAA "),
-                &["a", "c", "n"],
+                &["a", "c", "n", "u"],
             )
         },
         Case {
@@ -112,20 +121,22 @@ fn derive_filters_counts_and_sorts() {
                     Some(ReadinessFilter::Ready),
                     " VH-AAAAA ",
                 ),
-                &["a", "n"],
+                &["a", "n", "u"],
             )
         },
         case(
             "an ID in lowercase",
             query(ClosureFilter::Open, None, &d_ulid),
-            &["d", "n"],
+            &["d", "n", "u"],
         ),
         Case {
-            footnote: Some("0 open tickets in manyhands match \"zzz\" \u{b7} 1 needs fixing"),
+            footnote: Some(
+                "0 open tickets in manyhands match \"zzz\" \u{b7} 1 needs fixing \u{b7} 1 can't be read",
+            ),
             ..case(
                 "text nothing matches keeps the nonconforming entry",
                 query(ClosureFilter::Open, None, "zzz"),
-                &["n"],
+                &["n", "u"],
             )
         },
         Case {
@@ -134,25 +145,29 @@ fn derive_filters_counts_and_sorts() {
             ..case(
                 "text under Closed matches three open tickets elsewhere",
                 query(ClosureFilter::Closed, None, "vh-"),
-                &["c", "n"],
+                &["c", "n", "u"],
             )
         },
         Case {
             counts: Some((4, 1, 5)),
-            footnote: Some("3 ready tickets in manyhands \u{b7} 1 needs fixing"),
+            footnote: Some(
+                "3 ready tickets in manyhands \u{b7} 1 needs fixing \u{b7} 1 can't be read",
+            ),
             ..case(
                 "Ready",
                 query(ClosureFilter::Open, Some(ReadinessFilter::Ready), ""),
-                &["a", "e", "d", "n"],
+                &["a", "e", "d", "n", "u"],
             )
         },
         Case {
             counts: Some((4, 1, 5)),
-            footnote: Some("1 blocked ticket in manyhands \u{b7} 1 needs fixing"),
+            footnote: Some(
+                "1 blocked ticket in manyhands \u{b7} 1 needs fixing \u{b7} 1 can't be read",
+            ),
             ..case(
                 "Blocked",
                 query(ClosureFilter::Open, Some(ReadinessFilter::Blocked), ""),
-                &["b", "n"],
+                &["b", "n", "u"],
             )
         },
         Case {
@@ -162,7 +177,7 @@ fn derive_filters_counts_and_sorts() {
                 TicketQuery::default()
                     .with_closure(ClosureFilter::Closed)
                     .with_readiness(Some(ReadinessFilter::Ready)),
-                &["a", "e", "d", "n"],
+                &["a", "e", "d", "n", "u"],
             )
         },
         Case {
@@ -172,53 +187,53 @@ fn derive_filters_counts_and_sorts() {
                 TicketQuery::default()
                     .with_readiness(Some(ReadinessFilter::Ready))
                     .with_closure(ClosureFilter::Closed),
-                &["c", "n"],
+                &["c", "n", "u"],
             )
         },
         case(
             "Title ascending",
             sorted(SortColumn::Title, true),
-            &["a", "e", "b", "d", "n"],
+            &["a", "e", "b", "d", "n", "u"],
         ),
         case(
             "Title descending",
             sorted(SortColumn::Title, false),
-            &["d", "b", "e", "a", "n"],
+            &["d", "b", "e", "a", "n", "u"],
         ),
         case(
             "Status ascending",
             sorted(SortColumn::Status, true),
-            &["e", "a", "d", "b", "n"],
+            &["e", "a", "d", "b", "n", "u"],
         ),
         case(
             "Status descending",
             sorted(SortColumn::Status, false),
-            &["d", "a", "e", "b", "n"],
+            &["d", "a", "e", "b", "n", "u"],
         ),
         case(
             "Code ascending",
             sorted(SortColumn::Code, true),
-            &["a", "b", "e", "d", "n"],
+            &["a", "b", "e", "d", "n", "u"],
         ),
         case(
             "Code descending",
             sorted(SortColumn::Code, false),
-            &["e", "b", "a", "d", "n"],
+            &["e", "b", "a", "d", "n", "u"],
         ),
         case(
             "Type ascending",
             sorted(SortColumn::Type, true),
-            &["a", "d", "e", "b", "n"],
+            &["a", "d", "e", "b", "n", "u"],
         ),
         case(
             "Type descending",
             sorted(SortColumn::Type, false),
-            &["b", "e", "d", "a", "n"],
+            &["b", "e", "d", "a", "n", "u"],
         ),
         case(
             "Updated descending",
             sorted(SortColumn::Updated, false),
-            &["d", "e", "a", "b", "n"],
+            &["d", "e", "a", "b", "n", "u"],
         ),
         Case {
             read: false,
@@ -239,7 +254,7 @@ fn derive_filters_counts_and_sorts() {
         assert_eq!(view.listed, case.ids.len(), "{name}: listed");
         assert_eq!(
             view.shown,
-            case.ids.len().saturating_sub(1),
+            case.ids.len().saturating_sub(2),
             "{name}: shown"
         );
         if let Some((open, closed, all)) = case.counts {
@@ -262,7 +277,7 @@ fn derive_filters_counts_and_sorts() {
         }
         if case.read {
             assert_eq!(view.needs_fixing, 1, "{name}: needs fixing");
-            assert_eq!(view.unreadable, 0, "{name}: unreadable");
+            assert_eq!(view.unreadable, 1, "{name}: unreadable");
         } else {
             assert_eq!(view.counts, None, "{name}: nothing to count");
             assert_eq!(
@@ -428,6 +443,33 @@ fn tooltips_carry_the_id_context_and_reasons() {
             )],
         ),
         (
+            "an unreadable file in an item worktree",
+            TicketRow::unreadable(&unreadable_file()),
+            vec![
+                format!(
+                    "Can't be read: {}",
+                    ProblemCode::SourceUnreadable.guidance()
+                ),
+                ".manyhands/tickets/U/ticket.md".to_owned(),
+                "Git: worktree /repo/.manyhands/worktrees/U".to_owned(),
+            ],
+        ),
+        (
+            "an unreadable file in the primary worktree has no Git line",
+            TicketRow::unreadable(&UnreadableFile {
+                worktree: "/repo".to_owned(),
+                primary: true,
+                ..unreadable_file()
+            }),
+            vec![
+                format!(
+                    "Can't be read: {}",
+                    ProblemCode::SourceUnreadable.guidance()
+                ),
+                ".manyhands/tickets/U/ticket.md".to_owned(),
+            ],
+        ),
+        (
             "a closed ticket",
             tooltip_row(&closed, primary, &[]),
             vec![
@@ -478,6 +520,19 @@ fn the_footnote_counts_what_needs_attention() {
         };
         assert_eq!(footnote(&view, &TicketQuery::default(), REPO), line);
     }
+
+    // Counted by `derive` too: two unreadable files are two, not one.
+    let mut rows = library();
+    rows.push(TicketRow::unreadable(&UnreadableFile {
+        path: ".manyhands/tickets/V/ticket.md".to_owned(),
+        ..unreadable_file()
+    }));
+    let view = derive(Some(&rows), &TicketQuery::default());
+    assert_eq!(view.unreadable, 2);
+    assert_eq!(
+        footnote(&view, &TicketQuery::default(), REPO),
+        "4 open tickets in manyhands \u{b7} 1 needs fixing \u{b7} 2 can't be read"
+    );
 }
 
 /// P9: Enter opens the one conforming ticket the text matches, whatever the

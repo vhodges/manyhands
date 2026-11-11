@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use manyhands::{
     canonical::ItemId,
     repository::{
-        ClosureFilter, ClosureState, ItemDto, ItemListDto, ReadinessFilter, ReadinessReasonCode,
-        ReadinessState, TicketFilter,
+        ClosureFilter, ClosureState, ItemContextKind, ItemDto, ItemListDto, ReadinessFilter,
+        ReadinessReasonCode, ReadinessState, TicketFilter,
     },
     results::ProblemCode,
 };
@@ -31,6 +31,7 @@ use super::{
     navigation::{ItemLocator, OpenTarget},
     stamp::{Generations, RepoKey, Stamp, ViewScope},
     ticket_view::{TicketView, derive, sole_match},
+    unreadable::UnreadableFile,
 };
 use crate::desktop::services::ReadResult;
 
@@ -215,6 +216,9 @@ pub(crate) struct TicketRow {
     /// Why it is blocked, when it is: see `blocked_reasons`. Filled when
     /// the read is applied. Empty otherwise.
     pub reasons: Vec<String>,
+    /// The file, for a row that is one the library could not read (Part
+    /// I). It has nothing else of a ticket's, and it does not open.
+    pub unreadable: Option<UnreadableFile>,
 }
 
 impl TicketRow {
@@ -243,12 +247,57 @@ impl TicketRow {
             readiness: item.readiness.as_ref().map(|readiness| readiness.state),
             context: RowContext::of(item),
             reasons: Vec::new(),
+            unreadable: None,
         }
     }
 
-    /// What activating the row opens.
+    /// The row for a file the library could not read: its path and
+    /// worktree, and nothing made up. Its address is the file's, but
+    /// `open_target` gives none (R-38).
+    pub(crate) fn unreadable(file: &UnreadableFile) -> Self {
+        Self {
+            locator: ItemLocator::Inspect {
+                worktree: file.worktree.clone(),
+                path: file.path.clone(),
+            },
+            id: None,
+            slug: None,
+            title: None,
+            ticket_type: None,
+            status: None,
+            project: None,
+            team: None,
+            lifecycle: None,
+            changed_at: None,
+            nonconforming: None,
+            path: file.path.clone(),
+            worktree: file.worktree.clone(),
+            readiness: None,
+            // Nothing reads this for an unreadable row; the copy's kind and
+            // branch are not known.
+            context: RowContext {
+                kind: if file.primary {
+                    ItemContextKind::Primary
+                } else {
+                    ItemContextKind::Unverified
+                },
+                branch: None,
+                worktree: file.worktree.clone(),
+            },
+            reasons: Vec::new(),
+            unreadable: Some(file.clone()),
+        }
+    }
+
+    /// The row's address in `repo`, whether or not it opens.
     pub(crate) fn target(&self, repo: &RepoKey) -> OpenTarget {
         self.locator.in_repository(repo)
+    }
+
+    /// What activating the row opens: nothing for an unreadable file,
+    /// whose open would blame the whole repository (R-38).
+    pub(crate) fn open_target(&self, repo: &RepoKey) -> Option<OpenTarget> {
+        self.unreadable.is_none().then(|| self.target(repo))
     }
 
     pub(crate) fn name(&self) -> TicketName<'_> {
@@ -268,6 +317,11 @@ pub(crate) struct Tickets {
     last_loaded: Option<RepoKey>,
     query: TicketQuery,
     list: KeptList<Vec<TicketRow>>,
+    /// The files the last status read could not read, beside the rows
+    /// under the same rules (Part I): replaced when a status read lands,
+    /// kept over a busy or failed one and during a reload, dropped on a
+    /// change of repository.
+    unreadable: Vec<UnreadableFile>,
     view: TicketView,
     generations: Generations,
 }
@@ -324,6 +378,7 @@ impl Tickets {
         let changed = self.last_loaded.as_ref() != Some(&repo);
         if changed {
             self.list.clear();
+            self.unreadable.clear();
         } else {
             self.list.reload();
         }
@@ -340,6 +395,7 @@ impl Tickets {
         self.drop_reads();
         self.repo = None;
         self.list.clear();
+        self.unreadable.clear();
         self.derive();
     }
 
@@ -349,19 +405,62 @@ impl Tickets {
         }
     }
 
+    /// The view of the rows, and the files that could not be read after
+    /// them. Nothing is derived of files alone: with no rows there is no
+    /// list to add them to.
     fn derive(&mut self) {
-        self.view = derive(self.list.rows().map(Vec::as_slice), &self.query);
+        let Some(rows) = self.list.rows() else {
+            self.view = TicketView::default();
+            return;
+        };
+        self.view = if self.unreadable.is_empty() {
+            derive(Some(rows), &self.query)
+        } else {
+            let all: Vec<TicketRow> = rows
+                .iter()
+                .cloned()
+                .chain(self.unreadable.iter().map(TicketRow::unreadable))
+                .collect();
+            derive(Some(&all), &self.query)
+        };
+    }
+
+    fn wanted(&self, stamp: &Stamp) -> bool {
+        self.generations.is_current(stamp)
+            && self
+                .repo
+                .as_ref()
+                .is_some_and(|repo| stamp.scope == ViewScope::Tickets(repo.clone()))
+    }
+
+    /// The files the last status read could not read.
+    #[cfg(test)]
+    pub(crate) fn unreadable(&self) -> &[UnreadableFile] {
+        &self.unreadable
+    }
+
+    /// The status read completed. False when it is no longer wanted. One
+    /// that gave its files replaces them; a busy or failed one keeps them,
+    /// and never fails the list.
+    pub(crate) fn apply_unreadable(
+        &mut self,
+        stamp: Stamp,
+        result: ReadResult<Vec<UnreadableFile>>,
+    ) -> bool {
+        if !self.wanted(&stamp) {
+            return false;
+        }
+        if let ReadResult::Ok(files) = result {
+            self.unreadable = files;
+            self.derive();
+        }
+        true
     }
 
     /// A read completed. False when it is no longer wanted. Each blocked
     /// row carries its reasons, named from all the rows the read gave.
     pub(crate) fn apply(&mut self, stamp: Stamp, result: ReadResult<ItemListDto>) -> bool {
-        let wanted = self.generations.is_current(&stamp)
-            && self
-                .repo
-                .as_ref()
-                .is_some_and(|repo| stamp.scope == ViewScope::Tickets(repo.clone()));
-        if !wanted {
+        if !self.wanted(&stamp) {
             return false;
         }
         self.list.apply(result, |list| {

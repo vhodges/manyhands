@@ -75,8 +75,11 @@ impl Workspace {
         self.clear_find(cx);
         match self.tickets.sole_match() {
             Some(row) => {
-                let target = row.target(&key);
-                self.open_item(target, cx);
+                // Defensive: `sole_match` takes only conforming tickets, so a
+                // row that does not open (R-38) cannot reach here today.
+                if let Some(target) = row.open_target(&key) {
+                    self.open_item(target, cx);
+                }
             }
             None => self.focus_first_row(window, cx),
         }

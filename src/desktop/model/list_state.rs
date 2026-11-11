@@ -208,6 +208,18 @@ impl<T> KeptList<T> {
             .or_else(|| self.kept.as_ref().and_then(ListState::rows))
     }
 
+    /// Changes the ready rows, or the kept rows while loading over them:
+    /// what `rows` would give.
+    pub(crate) fn map_rows(&mut self, change: impl FnOnce(&mut T)) {
+        let state = match &mut self.state {
+            ListState::Ready { .. } => Some(&mut self.state),
+            _ => self.kept.as_mut(),
+        };
+        if let Some(ListState::Ready { rows, .. }) = state {
+            change(rows);
+        }
+    }
+
     /// Loading over kept rows.
     pub(crate) fn reloading(&self) -> bool {
         matches!(self.state, ListState::Loading) && self.kept.is_some()

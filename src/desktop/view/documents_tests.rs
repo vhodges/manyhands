@@ -11,7 +11,8 @@ use manyhands::repository::ItemDtoKind;
 use super::EMPTY_TRAILING;
 use crate::desktop::{
     model::{
-        documents::{TreeNode, build_tree, doc_row},
+        doc_rows::doc_row,
+        documents::{TreeNode, build_tree},
         layout::PanelKind,
         navigation::OpenTarget,
     },
@@ -61,7 +62,7 @@ fn find_document(node: &TreeNode, path: &str) -> Option<TreeNode> {
         TreeNode::Folder { children, .. } => {
             children.iter().find_map(|child| find_document(child, path))
         }
-        TreeNode::Document(_) => None,
+        TreeNode::Document(_) | TreeNode::Unreadable(_) => None,
     }
 }
 

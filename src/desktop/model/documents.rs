@@ -7,15 +7,15 @@
 //! is made up: a document whose folder the folder read did not give sits
 //! under the nearest one it did, or at the top.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use manyhands::repository::{DocumentFolderListDto, ItemDto, ItemListDto};
 
 use super::{
-    item::unmanaged,
+    doc_rows::Expansion,
     list_state::{KeptList, ListState},
     stamp::{Generations, RepoKey, Stamp, ViewScope},
-    ticket_view::{NEEDS_FIXING_NO_GUIDANCE, NEEDS_FIXING_PREFIX, OPEN_IT_TO_FIX},
+    unreadable::UnreadableFile,
 };
 use crate::desktop::services::ReadResult;
 
@@ -36,6 +36,9 @@ pub(crate) enum TreeNode {
     },
     /// A document or a nonconforming entry, as the read gave it.
     Document(ItemDto),
+    /// A file the library could not read (Part I). It selects but does not
+    /// open (R-38).
+    Unreadable(UnreadableFile),
 }
 
 /// How many documents a tree lists, in every folder.
@@ -45,6 +48,7 @@ pub(crate) fn document_count(nodes: &[TreeNode]) -> usize {
         .map(|node| match node {
             TreeNode::Folder { children, .. } => document_count(children),
             TreeNode::Document(_) => 1,
+            TreeNode::Unreadable(_) => 1,
         })
         .sum()
 }
@@ -57,12 +61,13 @@ pub(crate) fn node_count(nodes: &[TreeNode]) -> usize {
         .map(|node| match node {
             TreeNode::Folder { children, .. } => 1 + node_count(children),
             TreeNode::Document(_) => 1,
+            TreeNode::Unreadable(_) => 1,
         })
         .sum()
 }
 
 /// The folder a path is directly in: everything before its last `/`.
-fn parent(path: &str) -> Option<&str> {
+pub(super) fn parent(path: &str) -> Option<&str> {
     path.rsplit_once('/').map(|(parent, _)| parent)
 }
 
@@ -142,6 +147,45 @@ pub(crate) fn build_tree(
     )
 }
 
+/// `file` put in `nodes`: under the deepest listed folder above its path,
+/// among that folder's documents in path order, after the same path of
+/// another worktree. Nothing is made up: no folder is made for it.
+fn insert_unreadable(nodes: &mut Vec<TreeNode>, file: &UnreadableFile) {
+    let inside = nodes.iter_mut().find_map(|node| match node {
+        TreeNode::Folder { path, children, .. }
+            if file
+                .path
+                .strip_prefix(path.as_str())
+                .is_some_and(|rest| rest.starts_with('/')) =>
+        {
+            Some(children)
+        }
+        _ => None,
+    });
+    if let Some(children) = inside {
+        return insert_unreadable(children, file);
+    }
+    let at = nodes
+        .iter()
+        .position(|node| match node {
+            TreeNode::Folder { .. } => false,
+            TreeNode::Document(item) => item.path > file.path,
+            TreeNode::Unreadable(other) => other.path > file.path,
+        })
+        .unwrap_or(nodes.len());
+    nodes.insert(at, TreeNode::Unreadable(file.clone()));
+}
+
+/// `nodes` without the unreadable files, at every depth.
+fn remove_unreadable(nodes: &mut Vec<TreeNode>) {
+    nodes.retain(|node| !matches!(node, TreeNode::Unreadable(_)));
+    for node in nodes {
+        if let TreeNode::Folder { children, .. } = node {
+            remove_unreadable(children);
+        }
+    }
+}
+
 /// A folder's id in the tree: the Kit's item id and the app's.
 pub(crate) fn folder_id(path: &str) -> String {
     format!("{FOLDER_PREFIX}{path}")
@@ -157,191 +201,22 @@ pub(crate) fn folder_path(id: &str) -> Option<&str> {
 /// A document's id in the tree. Paths are unique within one context's
 /// list; a document in an item worktree has its own.
 pub(crate) fn document_id(item: &ItemDto) -> String {
-    format!("document:{}:{}", item.context.worktree, item.path)
+    leaf_id(&item.context.worktree, &item.path)
+}
+
+/// An unreadable file's id: a row is keyed by worktree and path, as a
+/// document is.
+pub(crate) fn unreadable_id(file: &UnreadableFile) -> String {
+    leaf_id(&file.worktree, &file.path)
+}
+
+fn leaf_id(worktree: &str, path: &str) -> String {
+    format!("document:{worktree}:{path}")
 }
 
 /// The last part of a path.
-fn last_segment(path: &str) -> &str {
+pub(super) fn last_segment(path: &str) -> &str {
     path.rsplit_once('/').map_or(path, |(_, last)| last)
-}
-
-/// The folders the person has collapsed, by path (R-12). A folder not in
-/// the set is expanded, so a new one starts open, and what is in the set
-/// stays there when its folder is gone from a rebuild, so one that comes
-/// back is as the person left it. A folder with no child nodes cannot
-/// toggle: the tree never shows it expanded, whatever the set says.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Expansion {
-    collapsed: BTreeSet<String>,
-}
-
-impl Expansion {
-    pub(crate) fn is_expanded(&self, path: &str) -> bool {
-        !self.collapsed.contains(path)
-    }
-
-    pub(crate) fn set(&mut self, path: &str, expanded: bool) {
-        if expanded {
-            self.collapsed.remove(path);
-        } else {
-            self.collapsed.insert(path.to_owned());
-        }
-    }
-
-    /// Collapses every folder of `nodes`, at every depth.
-    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 8.
-    pub(crate) fn collapse_all(&mut self, nodes: &[TreeNode]) {
-        for node in nodes {
-            if let TreeNode::Folder { path, children, .. } = node {
-                self.collapsed.insert(path.clone());
-                self.collapse_all(children);
-            }
-        }
-    }
-
-    /// Expands every folder above `path`, so what is at `path` is
-    /// visible. `path` itself is left as it is.
-    pub(crate) fn expand_ancestors(&mut self, path: &str) {
-        let mut at = parent(path);
-        while let Some(folder) = at {
-            self.collapsed.remove(folder);
-            at = parent(folder);
-        }
-    }
-}
-
-/// The row to select after a rebuild (R-27): `selected` while it is
-/// visible, else the outermost collapsed folder above it. Nothing expands.
-/// `None` when the tree has no such row.
-pub(crate) fn visible_selection(
-    nodes: &[TreeNode],
-    expansion: &Expansion,
-    selected: &str,
-) -> Option<String> {
-    for node in nodes {
-        match node {
-            TreeNode::Folder { path, children, .. } => {
-                let id = folder_id(path);
-                if id == selected {
-                    return Some(id);
-                }
-                if let Some(inside) = visible_selection(children, expansion, selected) {
-                    return Some(if expansion.is_expanded(path) {
-                        inside
-                    } else {
-                        id
-                    });
-                }
-            }
-            TreeNode::Document(item) => {
-                let id = document_id(item);
-                if id == selected {
-                    return Some(id);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// What a row's trailing cell says. The unsaved marker is the view's: it
-/// comes from the draft registry, not the tree.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Trailing {
-    None,
-    /// A folder's documents, shown while it is collapsed or has nothing
-    /// to open.
-    Count(usize),
-    /// A folder with nothing in it (decision 14).
-    Empty,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DocKind {
-    Folder,
-    Document,
-    /// A file that is not a managed document. `adoptable` is the item
-    /// view's own `unmanaged` test, so the tree and the banner agree.
-    Nonconforming {
-        adoptable: bool,
-    },
-}
-
-/// What one row says, apart from where it is drawn (Part E).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DocRow {
-    pub label: String,
-    pub kind: DocKind,
-    /// A folder with child nodes: whether it is open. `None` otherwise.
-    pub expanded: Option<bool>,
-    pub trailing: Trailing,
-    /// The tooltip, line by line; the description is the lines joined.
-    pub tooltip: Vec<String>,
-}
-
-pub(crate) const EMPTY_FOLDER_TOOLTIP: &str = "Empty folder. Shared once it contains a document.";
-pub(crate) const ADOPT_TOOLTIP: &str = "Not a managed document yet. Open to adopt it.";
-
-/// The row `node` is drawn as, a folder being `expanded` or not.
-pub(crate) fn doc_row(node: &TreeNode, expanded: bool) -> DocRow {
-    match node {
-        TreeNode::Folder {
-            path,
-            empty,
-            children,
-        } => {
-            let (expanded, trailing, tooltip) = if !children.is_empty() {
-                let trailing = if expanded {
-                    Trailing::None
-                } else {
-                    Trailing::Count(document_count(children))
-                };
-                (Some(expanded), trailing, vec![path.clone()])
-            } else if *empty {
-                (None, Trailing::Empty, vec![EMPTY_FOLDER_TOOLTIP.to_owned()])
-            } else {
-                (None, Trailing::Count(0), vec![path.clone()])
-            };
-            DocRow {
-                label: last_segment(path).to_owned(),
-                kind: DocKind::Folder,
-                expanded,
-                trailing,
-                tooltip,
-            }
-        }
-        TreeNode::Document(item) if item.id.is_some() => DocRow {
-            label: item
-                .title
-                .clone()
-                .unwrap_or_else(|| last_segment(&item.path).to_owned()),
-            kind: DocKind::Document,
-            expanded: None,
-            trailing: Trailing::None,
-            tooltip: vec![item.path.clone()],
-        },
-        TreeNode::Document(item) => {
-            let adoptable = unmanaged(item);
-            let reason = if adoptable {
-                ADOPT_TOOLTIP.to_owned()
-            } else {
-                match item.problems.first() {
-                    Some(problem) => format!(
-                        "{NEEDS_FIXING_PREFIX}{}{OPEN_IT_TO_FIX}",
-                        problem.code.guidance()
-                    ),
-                    None => NEEDS_FIXING_NO_GUIDANCE.to_owned(),
-                }
-            };
-            DocRow {
-                label: last_segment(&item.path).to_owned(),
-                kind: DocKind::Nonconforming { adoptable },
-                expanded: None,
-                trailing: Trailing::None,
-                tooltip: vec![reason, item.path.clone()],
-            }
-        }
-    }
 }
 
 /// The selected repository's tree, and the two reads it is made of.
@@ -353,6 +228,11 @@ pub(crate) struct Documents {
     folders: ListState<DocumentFolderListDto>,
     documents: ListState<ItemListDto>,
     tree: KeptList<Vec<TreeNode>>,
+    /// The files the last status read could not read, which sit in `tree`
+    /// beside its documents (Part I). Held under the tree's rules:
+    /// replaced when a status read lands, kept over a busy or failed one
+    /// and during a reload, dropped on a change of repository (R-35).
+    unreadable: Vec<UnreadableFile>,
     /// What the person collapsed, per repository, for the session. A
     /// clear or a load of another repository does not forget it (R-12).
     expansions: HashMap<RepoKey, Expansion>,
@@ -367,6 +247,7 @@ impl Default for Documents {
             folders: ListState::Loading,
             documents: ListState::Loading,
             tree: KeptList::default(),
+            unreadable: Vec::new(),
             expansions: HashMap::new(),
             generations: Generations::default(),
         }
@@ -432,6 +313,7 @@ impl Documents {
         self.forget();
         if changed {
             self.tree.clear();
+            self.unreadable.clear();
         } else {
             self.tree.reload();
         }
@@ -446,6 +328,7 @@ impl Documents {
     pub(crate) fn clear(&mut self) {
         self.forget();
         self.tree.clear();
+        self.unreadable.clear();
         self.repo = None;
     }
 
@@ -463,6 +346,37 @@ impl Documents {
                 .repo
                 .as_ref()
                 .is_some_and(|repo| stamp.scope == ViewScope::Documents(repo.clone()))
+    }
+
+    /// The files the last status read could not read.
+    #[cfg(test)]
+    pub(crate) fn unreadable(&self) -> &[UnreadableFile] {
+        &self.unreadable
+    }
+
+    /// The status read completed. False when it is no longer wanted. One
+    /// that gave its files replaces them, in the tree shown or the one
+    /// kept over a reload; a busy or failed one keeps them, and never
+    /// fails the tree.
+    pub(crate) fn apply_unreadable(
+        &mut self,
+        stamp: Stamp,
+        result: ReadResult<Vec<UnreadableFile>>,
+    ) -> bool {
+        if !self.wanted(&stamp) {
+            return false;
+        }
+        if let ReadResult::Ok(files) = result {
+            self.unreadable = files;
+            let files = &self.unreadable;
+            self.tree.map_rows(|rows| {
+                remove_unreadable(rows);
+                for file in files {
+                    insert_unreadable(rows, file);
+                }
+            });
+        }
+        true
     }
 
     /// The folder read completed. False when it is no longer wanted.
@@ -521,7 +435,13 @@ impl Documents {
                     index,
                 },
             ) => ListState::Ready {
-                rows: build_tree(folders, documents),
+                rows: {
+                    let mut tree = build_tree(folders, documents);
+                    for file in &self.unreadable {
+                        insert_unreadable(&mut tree, file);
+                    }
+                    tree
+                },
                 complete: *folders_complete && *documents_complete,
                 index: index.clone(),
             },

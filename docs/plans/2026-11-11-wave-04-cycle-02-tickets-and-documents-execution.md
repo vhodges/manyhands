@@ -420,6 +420,65 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
   stayed removed because their ids no longer exist (`doc-path`, `doc-problem`
   absence). The tests ran by exact name only, as the brief required.
 
+- **Task 7 split (done first, a pure move):** `Expansion`, `visible_selection`,
+  `Trailing`, `DocKind`, `DocRow`, `doc_row` and the two tooltip constants moved
+  from `D/model/documents.rs` to the new `D/model/doc_rows.rs` (207 lines);
+  `parent` and `last_segment` became `pub(super)`; importers were updated, not
+  re-exported. The reviewer diffed it: every moved line is found at HEAD except
+  the header, imports and the `Unreadable` additions. The two Task 5 plan tests
+  stay in `model/documents_tests.rs` under the same paths.
+- **Ruling (Task 7): the unreadable files are held beside the lists and, for
+  Documents, also inside the `KeptList` tree (stripped and re-inserted when a
+  status read lands)** — a kept tree has no source reads left to rebuild from
+  (`forget()` resets them), so patching it is the only way to show a status read
+  that lands during a reload; `combine` re-inserts from the held files so a
+  later rebuild neither loses nor doubles them. Added `KeptList::map_rows`
+  (Documents only). (Reviewer agrees.)
+- **Ruling (Task 7): `unreadable_rows` keeps a `SourceUnreadable` problem only
+  when it has a path and a worktree, the path ends in `.md`, and it starts with
+  `.manyhands/tickets/` (tickets) or `docs/` (documents); `primary` is
+  `worktree == root`; a file named twice in one worktree is one row.** The `.md`
+  suffix is the design's "names a `.md` file" rule and the only signal
+  (`IndexProblemDto` has just code, path and worktree): an unreadable directory
+  named `x.md` would be listed as a file. Verified against real data: the
+  planted primary ticket directory and document are `primary: true`.
+- **Ruling (Task 7): an unreadable ticket row's `context` is invented minimally
+  (Primary if `primary`, else Unverified, no branch); nothing reads it** — the
+  tooltip returns early. A later reader of `row.context` would see a made-up
+  copy kind; revisit if one appears.
+- **Ruling (Task 7): an unreadable document row draws `circle-x` as its
+  leading icon (red label) and again as the `doc-unreadable` trailing mark**,
+  following the design table literally; it may look doubled on screen — a
+  checklist item for the owner.
+- **Ruling (Task 7): `open_ready_tickets` reloads only tickets and starts no
+  status read** (Part I says each load reads the status once; R-29 reads once;
+  K-10 costs a full read). Known gap: a status read already in flight for the old
+  tickets stamp is dropped there, so on a first load the Tickets list shows no
+  unreadable rows until the next full load while Documents is unaffected; if the
+  status read had already landed, the files stay. No test covers the race.
+- **Known gaps (Task 7, Minor, not acted on):** `derive` clones every row once
+  more when unreadable files exist (cosmetic); removing `cx.notify()` after the
+  tickets apply is not caught (frames are forced in tests); the failed status
+  step asserts that rows and alerts are unchanged, not the failure itself (the
+  mutation of `split_status`'s Failed branch is caught, so it is effective);
+  `open_target`'s guard in `find.rs` is defensive and unreachable (commented).
+- **Handover to Task 8:** first step, a pure-move split of `view/tickets_tests.rs`
+  (1558 lines): move `an_unreadable_file_is_listed_with_its_reason` and its
+  helpers into a `tickets_tests/` submodule, before adding toolbar tests;
+  `tickets.rs` is at 495 lines and Task 8 will push it over (move toolbar code
+  out as needed); `view/documents_tests.rs` (846) and `model/documents_tests.rs`
+  (about 1040) can wait until Task 9.
+- **Process note (Task 7):** all seven new or extended tests were seen failing
+  first. A script truncated `model/documents_tests.rs` mid-task and deleted
+  `the_tree_is_kept_over_a_reload_of_the_same_repository` (a Task 5 test); the
+  implementer first wrote "not found" and then, when asked, restored it from HEAD
+  and audited every modified test file (function names, assert counts, every
+  removed line); the reviewer re-ran the audit and found no other loss. The
+  review's 11 mutations were caught except the footnote's count above one (the
+  `derive`-side count), now pinned. The implementer found that
+  `DelayingBackend::replace_service` can fail only the status read, so the
+  failed step is a real view test, not only a model-table row.
+
 ## Test Edits
 
 | E | Site | Reason | Task | Removes an assertion |
@@ -440,6 +499,8 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
 | E-17 | `D/view/documents_tests.rs` `the_tree_shows_what_the_library_reads_give` | Added: select `Nested`, collapse `docs/guides` through the model, reload, assert rows `["empty","guides","Top"]` and the selection on `guides` | 5 | no |
 | E-18 | `D/view/new_folder_tests.rs` `new_folder_creates_and_explains_local_folders_and_lists_it` | Added: collapse `docs/plans` before the second create, then wait for the `drafts` row (needs the reveal) | 5 | no |
 | E-19 | `D/view/move_document_tests.rs` `move_from_the_sheet_commits_both_paths_and_the_tab_follows` | Added: collapse `docs/archive` before the move, so its final tree assertion needs the reveal | 5 | no |
+| E-20 | `D/model/documents_tests.rs`, `D/view/documents_tests.rs`, `D/view/documents/row.rs`, `D/view/documents.rs` | Import-only edits for the `doc_rows.rs` split | 7 | no |
+| E-21 | `D/view/documents_tests.rs` `find_document` | The exhaustive match on `TreeNode` gains `Unreadable(_)`: `Document(_) \| Unreadable(_) => None`. (The plan's `:100-111` match is `shape()` in `model/documents_tests.rs`, which gained a `Shape::Unreadable` arm as a plan-named extension.) | 7 | no |
 | E-15 | `D/view/polling_privacy_tests.rs` (:687, comments :15, :96, :493) | Part F moves the path from `doc-path` to the tooltip, which the snapshot cannot read; the `("region-documents", PATH)` pair becomes `("region-documents", TITLE)` (see Rulings, Task 6); comments updated | 6 | yes, the `PATH` pair (replaced by a `TITLE` pair; the existing title pair stays; the `PATH` sentinel is still swept as absent) |
 | E-8 | `D/view/documents_tests.rs`, `new_folder_tests.rs`, `move_document_tests.rs` | `flatten` uses `doc_row(node, true).label`, so rows read `marker.md` and the like; `doc-empty` reads `EMPTY_TRAILING`; `doc-nonconforming` is named by `doc_row`'s tooltip[0]; an open folder has no `doc-count`; `arrows_move_in_the_tree_and_enter_opens` asserts Enter toggles a folder and a click on a document row opens it by target (item and by path); `a_held_tree_of_a_never_replaces_bs` reads `only-in-b.md`; `tree_paths` calls `documents_pane().document_paths(cx)` (visible rows only, so E-19's reveal is still exercised) | 6 | yes: the `doc-path` second line, the "Nonconforming" text, the `doc-problem` code, "Empty folder", and the `doc-path`/`doc-problem` absence checks (their ids no longer exist) |
 | E-9 | `D/view/keyboard_tests/actions.rs`, `editing.rs` | Look documents up by file name (`MARKER_FILE`, `NOTES_FILE`) instead of the old path labels | 6 | no |
@@ -448,6 +509,8 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
 
 | Test | Why it catches something existing tests don't | Task |
 | --- | --- | --- |
+| `documents::tests::unreadable_files_sit_in_their_folders_and_are_kept_with_the_tree` | The plan extends only the tickets model test; Documents' merge of the files into the tree (placement, counts, selection, keep and replace rules, a status read during a reload) is new logic with no other test | 7 |
+| Extra cases in `ticket_view::tests::the_footnote_counts_what_needs_attention` (two unreadable rows) and in `an_unreadable_file_is_listed_with_its_reason` (real-data `primary`) | Review hardening: a count above one, and `primary == (worktree == root)` against real paths | 7 |
 | `documents::tests::the_tree_says_each_list_state_and_acts_on_it` | The plan's one test names only stale and never-refreshed for Documents; this covers the skeleton while the first read is held, a reload with "Updating…", the busy-over-kept alert (via `hold_read(Folders)`, `hold_read(Documents)` and a cache-write lease), Retry through `reload_lists`, empty with New document…, P27 folders-only, stale and never-refreshed with Refresh (registry SQL), failed with its message, and an unavailable index with Rebuild | 6 |
 | `documents::tests::a_document_with_unsaved_work_is_marked_at_once` | `doc-unsaved` and its no-read rule (P14) would otherwise have no test | 6 |
 | `documents::tests::the_tree_is_kept_over_a_reload_of_the_same_repository` | The kept tree, `last_loaded` and the changed flag are new `KeptList` behaviour no plan test pins | 5 |
@@ -476,3 +539,4 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
 | 4 | base `8946bff7`, task commit in the git log | `view::find::tests::*` (14: the 13 plus `the_text_is_cleared_once_per_change_of_repository`); `model::find::tests::*` (3); `model::ticket_view::tests::a_sole_match_is_the_one_conforming_ticket_the_text_matches`; `view::workspace::tests::a_selection_that_goes_drops_a_held_id_read`; `view::keyboard_tests::every_core_action_works_by_keyboard_alone`: 20 passed on the final tree (the last gate edit restored one clippy `allow`; fmt, check, clippy re-run green by the orchestrator). Neighbours, by filter, earlier in the task and unchanged since: 20 `Walk::find` callers and 64 `clear_lists` neighbours passed | one fresh reviewer: 0 Blocking, 2 Important (a held ID read survived the selection going to None; the once-per-change guard and first-selection clear untested), 3 Minor; both Important and the blank-Enter test fixed, re-run | see Rulings (Task 4), E-4, E-5, E-6 (find part), Additional tests, handover to Task 8 |
 | 5 | base `ce46c643`, task commit in the git log (Step 0: origin/main still `48653d01`, already merged) | `model::documents::tests::{expansion_survives_rebuilds_and_collapse_all, rows_read_as_the_design_writes_them, the_tree_is_kept_over_a_reload_of_the_same_repository, the_tree_is_ready_once_both_reads_are, either_read_failing_fails_the_tree, an_old_repositorys_reads_are_dropped}`; `model::operations::tests::a_folder_made_or_a_document_moved_names_its_place_to_reveal`; `view::documents::tests::the_tree_shows_what_the_library_reads_give`; `view::new_folder::tests::new_folder_creates_and_explains_local_folders_and_lists_it`; `view::move_document::tests::move_from_the_sheet_commits_both_paths_and_the_tab_follows`; `view::workspace::tests::a_busy_list_reload_keeps_the_last_rows_with_a_label`: each 1 passed on the final tree; fmt, check, clippy green. Earlier in the task, by module prefix, once: 177 neighbour tests passed (documents, new_folder, move_document, repair, operations, item, polling_privacy, workspace, dock state, tabs, and four keyboard walks) | one fresh reviewer: 0 Blocking, 0 Important, 7 Minor; the untitled-label row and the dead `load_documents` guard fixed, re-run; the rest recorded | see Rulings (Task 5), E-16 to E-19, Additional tests, handovers to Tasks 6, 7 and 8 |
 | 6 | base `ec8ecb39`, task commit in the git log | `view::documents::tests::{folders_keep_their_state_and_toggle_by_key, the_tree_shows_what_the_library_reads_give, arrows_move_in_the_tree_and_enter_opens, a_held_tree_of_a_never_replaces_bs, the_tree_says_each_list_state_and_acts_on_it, a_document_with_unsaved_work_is_marked_at_once}`; `keyboard_tests::every_core_action_works_by_keyboard_alone`; `polling_privacy_tests::polling_privacy`: 8 passed together on the final tree. Earlier in the task, by exact name, 20 passed (adding `documents::tests::new_folder_opens_its_dialog`, the new_folder and move_document tests, `operations::tests::a_refresh_keeps_the_selected_document`, `keyboard_tests::actions::a_nonconforming_entry_opens_by_keyboard`, `keyboard_tests::editing::{repair_and_adopt_by_keyboard_alone, create_by_keyboard_alone, move_and_new_folder_by_keyboard_alone}`, `create::tests::*`, `editing_privacy_tests::sentinels_reach_no_surface_through_create_move_and_repair`, `workspace::tests::a_busy_list_reload_keeps_the_last_rows_with_a_label`); the reviewer ran `tickets::tests::list_states_act_and_a_reload_keeps_the_rows` and `dock::tests::state::a_hidden_panel_keeps_its_state` on the same code; fmt, check, clippy green | one fresh reviewer: 0 Blocking, 1 Important (a document row click opening it untested), 5 Minor; the Important and three Minor (P25 re-baseline, failure message, Enter on an empty folder) fixed, re-run; the rest recorded | see Rulings (Task 6), E-8, E-9, E-15, Additional tests, known gaps |
+| 7 | base `c42ab081`, task commit in the git log | `model::unreadable::tests::unreadable_files_go_to_their_list`; `model::ticket_view::tests::{derive_filters_counts_and_sorts, tooltips_carry_the_id_context_and_reasons, the_footnote_counts_what_needs_attention}`; `model::documents::tests::{rows_read_as_the_design_writes_them, expansion_survives_rebuilds_and_collapse_all, unreadable_files_sit_in_their_folders_and_are_kept_with_the_tree, the_tree_is_kept_over_a_reload_of_the_same_repository}`; `model::tickets::tests::a_read_lands_only_for_its_repository_and_load`; `view::tickets::tests::an_unreadable_file_is_listed_with_its_reason`; `polling_privacy_tests::polling_privacy`: each 1 passed on the final tree; fmt, check, clippy green. By exact name, 60 neighbours passed before the review fixes (list-state, read-count, tabs, dock, operations, find, new_folder, move_document, made-ready and keyboard tests; nothing needed an edit for the extra IndexStatus read) | one fresh reviewer: 0 Blocking, 2 Important (open_ready_tickets starts no status read: recorded; tickets_tests.rs size: split moves to Task 8), 5 Minor; the footnote count, the find.rs comment and the real-data `primary` fixed, re-run | see Rulings (Task 7), the split, E-20, E-21, Additional tests, handover to Task 8 |

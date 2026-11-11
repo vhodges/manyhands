@@ -13,6 +13,7 @@ use crate::desktop::{
         polling::retire_loop::Held,
         stamp::{RepoKey, Stamp},
         tickets::{Lifecycle, SortColumn, TicketQuery, read_filter},
+        unreadable::split_status,
     },
     services::ReadKind,
     view::tickets::ShownTicket,
@@ -34,8 +35,20 @@ impl Workspace {
         let Some((key, resolved)) = self.resolved_selection() else {
             return;
         };
-        self.load_documents(key.clone(), resolved.clone(), cx);
-        self.load_tickets(key, resolved, cx);
+        self.load_lists_of(key, resolved, cx);
+    }
+
+    /// The lists' reads and the status read beside them, under the stamps
+    /// of one load.
+    fn load_lists_of(
+        &mut self,
+        key: RepoKey,
+        resolved: ResolvedRepository,
+        cx: &mut Context<Self>,
+    ) {
+        let documents = self.load_documents(key.clone(), resolved.clone(), cx);
+        let tickets = self.load_tickets(key, resolved.clone(), cx);
+        self.load_status(tickets, documents, resolved, cx);
     }
 
     /// Reload retains rows and selection until their replacement arrives.
@@ -46,8 +59,7 @@ impl Workspace {
         if self.documents.repo() != Some(&key) {
             return self.load_lists(cx);
         }
-        self.load_documents(key.clone(), resolved.clone(), cx);
-        self.load_tickets(key, resolved, cx);
+        self.load_lists_of(key, resolved, cx);
     }
 
     pub(super) fn clear_lists(&mut self, cx: &mut Context<Self>) {
@@ -55,6 +67,7 @@ impl Workspace {
         self.documents_pane.clear(cx);
         self.folder_read = None;
         self.document_read = None;
+        self.status_read = None;
         self.tickets.clear();
         self.ticket_read = None;
         // A Retry or a reload of the same repository keeps the filter text
@@ -96,9 +109,10 @@ impl Workspace {
         key: RepoKey,
         resolved: ResolvedRepository,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Stamp {
         let (stamp, _) = self.documents.load(key);
         let repo = resolved.clone();
+        let loaded = stamp.clone();
         self.folder_read = Some(self.services.read(
             ReadKind::Folders,
             stamp.clone(),
@@ -122,6 +136,36 @@ impl Workspace {
             },
         ));
         cx.notify();
+        loaded
+    }
+
+    /// The status read of a load: the files the lists could not read.
+    /// Its answer goes to each list whose own stamp is still current, so
+    /// a busy or failed one leaves them as they were.
+    #[allow(clippy::result_large_err)]
+    fn load_status(
+        &mut self,
+        tickets: Stamp,
+        documents: Stamp,
+        resolved: ResolvedRepository,
+        cx: &mut Context<Self>,
+    ) {
+        let root = resolved.root().to_string_lossy().into_owned();
+        self.status_read = Some(self.services.read(
+            ReadKind::IndexStatus,
+            documents,
+            move |service| service.index_status(&resolved),
+            cx,
+            move |this: &mut Self, documents, result, cx| {
+                let (for_tickets, for_documents) = split_status(result, &root);
+                if this.tickets.apply_unreadable(tickets, for_tickets) {
+                    cx.notify();
+                }
+                if this.documents.apply_unreadable(documents, for_documents) {
+                    this.documents_changed(cx);
+                }
+            },
+        ));
     }
 
     /// The tree the pane shows is the model's: its ready rows, or the ones
@@ -143,10 +187,16 @@ impl Workspace {
     }
 
     #[allow(clippy::result_large_err)]
-    fn load_tickets(&mut self, key: RepoKey, resolved: ResolvedRepository, cx: &mut Context<Self>) {
+    fn load_tickets(
+        &mut self,
+        key: RepoKey,
+        resolved: ResolvedRepository,
+        cx: &mut Context<Self>,
+    ) -> Stamp {
         let (stamp, changed) = self.tickets.load(key.clone());
         self.repository_change(Some(key), changed, cx);
-        self.read_tickets(stamp, resolved, cx);
+        self.read_tickets(stamp.clone(), resolved, cx);
+        stamp
     }
 
     /// The one read of the load: every ticket, whatever the query (R-1).

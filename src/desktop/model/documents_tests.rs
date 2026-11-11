@@ -10,12 +10,13 @@ use manyhands::{
     results::{ProblemCode, ResultCode},
 };
 
-use super::{
-    DocKind, DocRow, Documents, Expansion, Trailing, TreeNode, build_tree, doc_row,
-    visible_selection,
-};
+use super::{Documents, TreeNode, build_tree, document_count, node_count, unreadable_id};
 use crate::desktop::{
-    model::list_state::ListState,
+    model::{
+        doc_rows::{DocKind, DocRow, Expansion, Trailing, doc_row, visible_selection},
+        list_state::ListState,
+        unreadable::UnreadableFile,
+    },
     services::{ReadFailure, ReadResult},
 };
 
@@ -98,6 +99,7 @@ const ID_C: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD2";
 enum Shape {
     Folder(String, bool, Vec<Shape>),
     Document(String),
+    Unreadable(String),
 }
 
 fn shape(nodes: &[TreeNode]) -> Vec<Shape> {
@@ -110,6 +112,7 @@ fn shape(nodes: &[TreeNode]) -> Vec<Shape> {
                 children,
             } => Shape::Folder(path.clone(), *empty, shape(children)),
             TreeNode::Document(item) => Shape::Document(item.path.clone()),
+            TreeNode::Unreadable(file) => Shape::Unreadable(file.path.clone()),
         })
         .collect()
 }
@@ -280,6 +283,169 @@ fn an_old_repositorys_reads_are_dropped() {
     model.clear();
     assert!(!model.apply_documents(b, ok(documents(Vec::new()))));
     assert_eq!(model.repo(), None);
+}
+
+/// Part I: a file the library could not read sits in the tree by its path,
+/// among the documents in path order, under the nearest listed folder, and
+/// is counted. It is kept as the tree is: a status read that lands replaces
+/// it, a busy or failed one keeps it, a reload keeps it and a status read
+/// during the reload changes the rows kept, a change of repository drops
+/// it, and a status read of an earlier load is dropped (P28, R-35).
+#[test]
+fn unreadable_files_sit_in_their_folders_and_are_kept_with_the_tree() {
+    let item = "/repo/.manyhands/worktrees/X";
+    let file = |path: &str, worktree: &str| unreadable_file(path, worktree, worktree == "/repo");
+    let b = file("docs/guides/b.md", "/repo");
+    let b_in_item = file("docs/guides/b.md", item);
+    let deep = file("docs/guides/deep/q.md", "/repo");
+    let zed = file("docs/zzz/x.md", "/repo");
+    let folder_list = || folders(&[("docs/guides", false)]);
+    let document_list = || {
+        documents(vec![
+            document("docs/guides/a.md", Some(ID_A)),
+            document("docs/guides/c.md", Some(ID_B)),
+            document("docs/top.md", Some(ID_C)),
+        ])
+    };
+    let unreadable = |path: &str| Shape::Unreadable(path.to_owned());
+    let failed = || {
+        ReadResult::Failed(ReadFailure {
+            code: ResultCode::RepositoryInaccessible,
+            recovery: Vec::new(),
+        })
+    };
+
+    // A status read can land before the lists: nothing shows until they do.
+    let mut model = Documents::default();
+    let (stamp, _) = model.load("/a".to_owned());
+    assert!(model.apply_unreadable(
+        stamp.clone(),
+        ok(vec![
+            b.clone(),
+            b_in_item.clone(),
+            deep.clone(),
+            zed.clone()
+        ])
+    ));
+    assert!(model.list().rows().is_none());
+    assert!(model.apply_folders(stamp.clone(), ok(folder_list())));
+    assert!(model.apply_documents(stamp.clone(), ok(document_list())));
+    let rows = model.state().rows().expect("a ready tree");
+    assert_eq!(
+        shape(rows),
+        [
+            folder(
+                "docs/guides",
+                false,
+                vec![
+                    doc("docs/guides/a.md"),
+                    unreadable("docs/guides/b.md"),
+                    unreadable("docs/guides/b.md"),
+                    doc("docs/guides/c.md"),
+                    unreadable("docs/guides/deep/q.md"),
+                ],
+            ),
+            doc("docs/top.md"),
+            unreadable("docs/zzz/x.md"),
+        ],
+        "in their folders, by path, the same path once per worktree"
+    );
+    // Counted as documents and as rows.
+    assert_eq!(document_count(rows), 7);
+    assert_eq!(node_count(rows), 8);
+    assert_eq!(model.unreadable().len(), 4);
+
+    // Selecting an unreadable file: it is its own row while visible, and
+    // its folder's while that is collapsed.
+    let mut expansion = Expansion::default();
+    let id = unreadable_id(&b_in_item);
+    assert_eq!(
+        visible_selection(rows, &expansion, &id).as_deref(),
+        Some(id.as_str())
+    );
+    expansion.set("docs/guides", false);
+    assert_eq!(
+        visible_selection(rows, &expansion, &id).as_deref(),
+        Some("folder:docs/guides")
+    );
+
+    // A status read that lands replaces the files; none left leaves none.
+    assert!(model.apply_unreadable(stamp.clone(), ok(vec![zed.clone()])));
+    assert_eq!(
+        shape(model.state().rows().unwrap()),
+        [
+            folder(
+                "docs/guides",
+                false,
+                vec![doc("docs/guides/a.md"), doc("docs/guides/c.md")],
+            ),
+            doc("docs/top.md"),
+            unreadable("docs/zzz/x.md"),
+        ]
+    );
+    // A busy or a failed one keeps them, and is still its load's.
+    for (name, result) in [("busy", ReadResult::Busy), ("failed", failed())] {
+        assert!(model.apply_unreadable(stamp.clone(), result), "{name}");
+        assert_eq!(model.unreadable(), std::slice::from_ref(&zed), "{name}");
+        assert_eq!(
+            node_count(model.state().rows().unwrap()),
+            5,
+            "{name}: the tree is as it was"
+        );
+    }
+
+    // A reload keeps the tree and the files; a status read during it
+    // changes the rows kept; the lists landing then keep the new files.
+    let (reload_stamp, changed) = model.load("/a".to_owned());
+    assert!(!changed);
+    assert!(model.list().reloading());
+    assert_eq!(model.unreadable(), std::slice::from_ref(&zed));
+    assert_eq!(node_count(model.list().rows().unwrap()), 5);
+    assert!(!model.apply_unreadable(stamp, ok(vec![b.clone()])));
+    assert_eq!(
+        model.unreadable(),
+        std::slice::from_ref(&zed),
+        "an earlier load's is dropped"
+    );
+    assert!(model.apply_unreadable(reload_stamp.clone(), ok(vec![b.clone()])));
+    assert!(model.list().reloading(), "still the reload");
+    assert_eq!(
+        shape(model.list().rows().unwrap())[0],
+        folder(
+            "docs/guides",
+            false,
+            vec![
+                doc("docs/guides/a.md"),
+                unreadable("docs/guides/b.md"),
+                doc("docs/guides/c.md"),
+            ],
+        ),
+        "the status read changed the rows kept, and left no stale file"
+    );
+    assert!(model.apply_folders(reload_stamp.clone(), ok(folder_list())));
+    assert!(model.apply_documents(reload_stamp, ok(document_list())));
+    assert_eq!(model.unreadable(), [b]);
+    assert_eq!(node_count(model.state().rows().unwrap()), 5);
+
+    // Another repository is a change: the files go with the tree.
+    let (other, changed) = model.load("/b".to_owned());
+    assert!(changed);
+    assert!(model.unreadable().is_empty());
+    assert!(model.list().rows().is_none());
+    assert!(model.apply_folders(other.clone(), ok(folder_list())));
+    assert!(model.apply_documents(other, ok(document_list())));
+    assert_eq!(
+        node_count(model.state().rows().unwrap()),
+        4,
+        "the folder and its two documents, and the top one: no file left"
+    );
+
+    // A clear drops them too.
+    let (last, _) = model.load("/b".to_owned());
+    assert!(model.apply_unreadable(last.clone(), ok(vec![zed])));
+    model.clear();
+    assert!(model.unreadable().is_empty());
+    assert!(!model.apply_unreadable(last, ok(vec![deep])));
 }
 
 /// Loads `repo` again and lands both reads, as a reload does.
@@ -543,6 +709,14 @@ fn broken(path: &str, codes: &[ProblemCode]) -> TreeNode {
     TreeNode::Document(item)
 }
 
+fn unreadable_file(path: &str, worktree: &str, primary: bool) -> UnreadableFile {
+    UnreadableFile {
+        path: path.to_owned(),
+        worktree: worktree.to_owned(),
+        primary,
+    }
+}
+
 fn folder_node(path: &str, empty: bool, children: Vec<TreeNode>) -> TreeNode {
     TreeNode::Folder {
         path: path.to_owned(),
@@ -571,11 +745,16 @@ fn row(
     }
 }
 
-/// Part E's row facts for the seven kinds before Part I (P22, P23).
+/// Part E's row facts for the kinds of node (P22, P23), and Part I's.
 #[test]
 fn rows_read_as_the_design_writes_them() {
     const ADOPT: &str = "Not a managed document yet. Open to adopt it.";
     const FIX_FIELD: &str = "Needs fixing: Add the required front matter field. Open it to fix.";
+    let cant_be_read = format!(
+        "Can't be read: {}",
+        ProblemCode::SourceUnreadable.guidance()
+    );
+    let cant_be_read = cant_be_read.as_str();
     let three_documents = folder_node(
         "docs/guides",
         false,
@@ -750,6 +929,38 @@ fn rows_read_as_the_design_writes_them() {
                 &[
                     "Needs fixing: Add YAML front matter to the file. Open it to fix.",
                     "notes/loose.md",
+                ],
+            ),
+        ),
+        (
+            "an unreadable file is its file name, with why and where",
+            TreeNode::Unreadable(unreadable_file("docs/guides/a.md", "/repo", true)),
+            false,
+            row(
+                "a.md",
+                DocKind::Unreadable,
+                None,
+                Trailing::None,
+                &[cant_be_read, "docs/guides/a.md"],
+            ),
+        ),
+        (
+            "an unreadable file in an item worktree names the worktree",
+            TreeNode::Unreadable(unreadable_file(
+                "docs/guides/a.md",
+                "/repo/.manyhands/worktrees/X",
+                false,
+            )),
+            true,
+            row(
+                "a.md",
+                DocKind::Unreadable,
+                None,
+                Trailing::None,
+                &[
+                    cant_be_read,
+                    "docs/guides/a.md",
+                    "Git: worktree /repo/.manyhands/worktrees/X",
                 ],
             ),
         ),

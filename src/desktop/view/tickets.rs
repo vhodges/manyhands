@@ -7,7 +7,8 @@
 //! title with its markers, status pill and age (Part C). Status is shown
 //! as written, and an open ticket whose status is `closed` shows status
 //! `closed`: lifecycle shows only as the Closed marker under All. A
-//! nonconforming entry shows its path, and "needs fixing".
+//! nonconforming entry shows its path, and "needs fixing"; a file that
+//! cannot be read shows its path, and "can't be read", and does not open.
 
 use gpui_kit::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,

@@ -99,6 +99,9 @@ pub(crate) enum ReadKind {
     Dependencies,
     Children,
     FindSlug,
+    /// `index_status`, read beside the lists for the files they could not
+    /// read (Part I).
+    IndexStatus,
     Operations,
     /// `inspect_repository`, of a folder the Repositories page checks.
     Inspect,

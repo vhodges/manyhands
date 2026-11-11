@@ -5,6 +5,7 @@ pub(crate) mod attention;
 pub(crate) mod conflict;
 pub(crate) mod create;
 pub(crate) mod discussion;
+pub(crate) mod doc_rows;
 pub(crate) mod documents;
 pub(crate) mod drafts;
 pub(crate) mod edit;
@@ -32,5 +33,6 @@ pub(crate) mod status;
 pub(crate) mod tabs;
 pub(crate) mod ticket_view;
 pub(crate) mod tickets;
+pub(crate) mod unreadable;
 
 pub(crate) mod operations;

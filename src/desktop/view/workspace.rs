@@ -106,6 +106,9 @@ pub(crate) struct Workspace {
     /// The folder and document reads, in parallel under one stamp.
     folder_read: Option<Task<()>>,
     document_read: Option<Task<()>>,
+    /// The index status read beside them, for the files they could not
+    /// read (Part I), under the lists' stamps.
+    status_read: Option<Task<()>>,
     tickets: Tickets,
     tickets_pane: TicketsPane,
     ticket_read: Option<Task<()>>,
@@ -227,11 +230,12 @@ impl Workspace {
             // The Why blocked panel shows the selected row.
             cx.notify();
             if let ListEvent::Confirm(ix) = event {
+                // An unreadable file selects and opens nothing (R-38).
                 let target = this.tickets.repo().and_then(|repo| {
                     list.read(cx)
                         .delegate()
                         .row(*ix)
-                        .map(|row| row.target(repo))
+                        .and_then(|row| row.open_target(repo))
                 });
                 if let Some(target) = target {
                     this.open_item(target, cx);
@@ -314,6 +318,7 @@ impl Workspace {
             documents_pane,
             folder_read: None,
             document_read: None,
+            status_read: None,
             tickets: Tickets::default(),
             tickets_pane,
             ticket_read: None,

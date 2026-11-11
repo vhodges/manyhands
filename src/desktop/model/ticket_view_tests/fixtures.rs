@@ -14,6 +14,7 @@ use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 use crate::desktop::model::{
     markers::RowContext,
     tickets::{SortColumn, TicketQuery, TicketRow, TicketSort},
+    unreadable::UnreadableFile,
 };
 
 pub(super) const REPO: &str = "manyhands";
@@ -131,6 +132,15 @@ pub(super) fn nonconforming() -> TicketRow {
     TicketRow::from_item(&broken)
 }
 
+/// A file the library could not read, in an item worktree.
+pub(super) fn unreadable_file() -> UnreadableFile {
+    UnreadableFile {
+        path: ".manyhands/tickets/U/ticket.md".to_owned(),
+        worktree: "/repo/.manyhands/worktrees/U".to_owned(),
+        primary: false,
+    }
+}
+
 pub(super) fn a() -> Spec {
     Spec {
         id: ID_A,
@@ -144,7 +154,8 @@ pub(super) fn a() -> Spec {
     }
 }
 
-/// `a`, `e`, `d`, `c`, `b` and `n`, in the library's order.
+/// `a`, `e`, `d`, `c`, `b` and `n`, in the library's order, then the file
+/// it could not read, `u`.
 pub(super) fn library() -> Vec<TicketRow> {
     let specs = [
         a(),
@@ -192,6 +203,7 @@ pub(super) fn library() -> Vec<TicketRow> {
         .map(|spec| TicketRow::from_item(&item(spec)))
         .collect();
     rows.push(nonconforming());
+    rows.push(TicketRow::unreadable(&unreadable_file()));
     rows
 }
 
@@ -204,6 +216,7 @@ pub(super) fn id_of(row: &TicketRow) -> &'static str {
         Some(ID_D) => "d",
         Some(ID_E) => "e",
         Some(other) => panic!("{other}"),
+        None if row.unreadable.is_some() => "u",
         None => "n",
     }
 }
