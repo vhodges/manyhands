@@ -14,8 +14,8 @@ Ticket `01M757DHFAVPEVY4TWQTVKQAMJ` (`vh-r2n89`).
 [Design](../plans/2026-11-11-wave-04-cycle-02-tickets-and-documents-design.md) and
 [implementation plan](../plans/2026-11-11-wave-04-cycle-02-tickets-and-documents-implementation.md).
 
-Status: **draft, revision 2; decisions confirmed; review round 2
-pending.** The owner asked to go straight to the ticket, design and plan
+Status: **draft, revision 3; decisions confirmed; for the owner's
+approval.** The owner asked to go straight to the ticket, design and plan
 from `docs/design/` (2026-11-11), so decisions 1–20 below were the
 planner's proposals, each with its reason. The owner confirmed all twenty
 on 2026-11-11 ("I confirm the decisions"). Those marked **(owner's eye)**
@@ -28,6 +28,10 @@ documents themselves are not yet approved.
   (source and feasibility; contract and consistency): 8 Blocking, 37
   Important and many Minor findings, each verified against the source and
   applied in revision 2 (Review Record).
+- Revision 2 (`85210ab0`) had a scoped re-review and an adversarial
+  review (round 2): 3 Blocking, 13 Important and many Minor findings, each
+  verified against the source and applied in revision 3. Revision 3 has
+  had no independent review.
 
 Approval of the documents does not authorize implementation, which needs
 its own go-ahead.
@@ -196,7 +200,8 @@ rows await the owner's checks; Claude records only what the owner reports.
 | A10 | Expansion survives a reload and a hidden panel | `expansion_survives_rebuilds_and_collapse_all`; `folders_keep_their_state_and_toggle_by_key` (P19, P26) | Planned |
 | A11 | Toolbars by keyboard, counted as their region, refused behind a dialog (contracts 5, 8) | `panel_toolbars_work_by_tab_and_enter` (P24) | Planned |
 | A12 | Every existing keyboard journey still passes | The edited journeys and the fast tier at review-ready | Planned |
-| A13 | The list states act | `list_states_act_and_a_reload_keeps_the_rows` (P15, P16) | Planned |
+| A13 | The list states act, and focus finds an empty or failed list | `list_states_act_and_a_reload_keeps_the_rows` (P15, P16, P31) | Planned |
+| A15 | Unsaved work shows without a reload | `markers_appear_without_a_read` (P14) | Planned |
 | A14 | The rows match the design in the dark theme | On screen: the owner, against frames 1a and 1b | Planned |
 
 ## Product-Owner Decisions (2026-11-11)
@@ -211,8 +216,9 @@ Cycle 01 decisions stand except where decision 2 says otherwise.
 2. **Find becomes the Tickets filter input (owner's eye).** The design
    draws no Find in the panel; its filter input "matches title and short
    code. Duplicate short codes show all matches." Typing filters as you
-   go. When the text matches tickets the lifecycle choice hides, a line
-   says so ("1 closed ticket also matches.") with Show all. Enter on a
+   go. When the text matches tickets the filters hide, a line says so
+   ("1 more ticket matches with other filters.") with Show all, which
+   chooses All and Any readiness. Enter on a
    ULID still opens that ticket or document, closed or not, with "Opening…"
    and "Nothing in {repository} has that ID." as feedback; Enter with one
    match in any lifecycle opens it. `secondary-p` still focuses it. Find's
@@ -267,9 +273,13 @@ Cycle 01 decisions stand except where decision 2 says otherwise.
     reason. An unreadable file never makes a list "incomplete"; only the
     index status read reports it, and that read exists. Each load reads
     it once, and each unreadable ticket or document file shows in its list
-    as "can't be read" with the guidance, and opens by path. This adds
-    one read per load and one row kind, and no library change.
-    *Alternative:* accept the gap and amend RFC IA 57-59.
+    as "can't be read" with the guidance and its path. This adds one read
+    per load and one row kind, and no library change. *Alternative:*
+    accept the gap and amend RFC IA 57-59. **Narrowed in revision 3, for
+    the owner's confirmation:** such a row does not open, because opening
+    it by path answers "The repository cannot be read." for a permission
+    failure, which blames the whole repository (design R-38). The
+    confirmed text said it opens by path.
 11. **List states in plain words.** The design's four states hold D1's
     eight, each with its own sentence naming the repository and one
     action (design Part A's table): Refresh for never refreshed, stale and
@@ -294,10 +304,12 @@ Cycle 01 decisions stand except where decision 2 says otherwise.
     under a busy reload, as the Repositories list already does, and say
     the list was not updated. A failed read still replaces them with the
     failure (D1 ruling R-B5).
-16. **Existing-test edits.** The named edits E-1 to E-13 are part of
-    approving the design. E-1 to E-6 and E-8 remove assertions, each
-    named in the design. Any other edit to an existing test that this
-    Cycle's changes need is pre-authorized, recorded in the ledger as E-14
+16. **Existing-test edits.** The named edits E-1 to E-14 are part of
+    approving the design. E-1 to E-6, E-8 and E-13 remove assertions,
+    each named in the design; E-14 loosens Cycle 01's keyboard-walk helper
+    so a header toolbar button counts as its panel's region (decision
+    18). Any other edit to an existing test that this
+    Cycle's changes need is pre-authorized, recorded in the ledger as E-15
     onward with its reason, checked by the task's reviewer, and called
     out in the review-ready summary when it removes an assertion (as
     Cycle 01 decision 17).
@@ -339,11 +351,13 @@ These are visible to users; the design's Known Limits give the detail.
 - The list and the tree are reached by F6, `secondary-2`, a click or Enter
   in the filter, not by Tab, as today (K-11).
 - Very long short codes are clipped in their column (K-12).
+- An unreadable ticket folder hides its ticket without a row (K-13).
+- An unreadable file's row does not open (K-14).
 
 ## Open Questions
 
-None blocking. The design's U-3 and U-5 are checked by the first task that
-relies on each.
+None blocking. The design's U-3 is checked by Task 8, the first task that
+relies on it; U-1, U-2, U-4 and U-5 were settled in review.
 
 ## Review Record
 
@@ -354,3 +368,4 @@ relies on each.
 | Planning research | Kit list, table, tree, segmented control, menu and skeleton facts | Rulings | Design R-2 to R-6 | Design facts 1–12 |
 | Review round 1 (two reviewers, `563763e2`) | 8 Blocking, 37 Important, many Minor; among them header focus, unnamed compile sites, duplicate codes across lifecycles, unreadable files, nonconforming-only lists, the ULID path | Decisions (proposed), rulings, named edits | Decisions 2, 8, 10, 18, 19, 20 revised or added; design revision 2 | Design Review Record |
 | Owner, 2026-11-11 | "I confirm the descisions" | Owner decision | Decisions 1–20 confirmed; review round 2 requested | Session, 2026-11-11 |
+| Review round 2 (scoped re-review and adversarial, `85210ab0`) | 3 Blocking, 13 Important, many Minor; among them the keyboard walk's region check, no list element in the empty and failed states, outcomes without a test, Retry clearing the filter, the details sheet's suggestions, Show all under a readiness, an unreadable file's open | Rulings, named edits; decision 10 narrowed for confirmation | Design revision 3: E-14, R-33 to R-38, new test steps; decision 10's rows do not open | Design Review Record |
