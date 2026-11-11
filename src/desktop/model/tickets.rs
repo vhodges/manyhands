@@ -30,7 +30,7 @@ use super::{
     names::TicketName,
     navigation::{ItemLocator, OpenTarget},
     stamp::{Generations, RepoKey, Stamp, ViewScope},
-    ticket_view::{TicketView, derive},
+    ticket_view::{TicketView, derive, sole_match},
 };
 use crate::desktop::services::ReadResult;
 
@@ -295,6 +295,18 @@ impl Tickets {
     /// changes, so it is current the moment a key is handled (R-32).
     pub(crate) fn view(&self) -> &TicketView {
         &self.view
+    }
+
+    /// The one conforming ticket the query's text matches under any
+    /// lifecycle and readiness, among the rows kept (P9).
+    pub(crate) fn sole_match(&self) -> Option<&TicketRow> {
+        sole_match(self.list.rows()?, &self.query.text)
+    }
+
+    /// Whether a load of `selected` would be a change of repository: it is
+    /// not the one last loaded, which a clear does not forget (R-35).
+    pub(crate) fn is_change_to(&self, selected: Option<&RepoKey>) -> bool {
+        self.last_loaded.as_ref() != selected
     }
 
     /// Shows the tickets `query` asks for from now on. No read is made:

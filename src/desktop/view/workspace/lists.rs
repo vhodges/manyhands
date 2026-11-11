@@ -56,8 +56,36 @@ impl Workspace {
         self.document_read = None;
         self.tickets.clear();
         self.ticket_read = None;
-        self.clear_find(cx);
+        // A Retry or a reload of the same repository keeps the filter text
+        // and a held ID read; only another repository drops both (R-35).
+        let to = self.navigation.selected().cloned();
+        let changed = self.tickets.is_change_to(to.as_ref());
+        self.repository_change(to, changed, cx);
         cx.notify();
+    }
+
+    /// The selected repository is not the one last loaded: a held ID read
+    /// is dropped now, and the filter text is cleared at the next render,
+    /// which has the window `set_value` needs (R-30, R-35). Once per
+    /// change: the clear before a load and the load itself both see it.
+    fn repository_change(&mut self, to: Option<RepoKey>, changed: bool, cx: &mut Context<Self>) {
+        if !changed {
+            self.change_applied = None;
+        } else if self.change_applied.as_ref() != Some(&to) {
+            // `Some(None)` is the change to no selection, applied: distinct
+            // from `None`, no change applied.
+            self.change_applied = Some(to);
+            self.clear_find(cx);
+            self.filter_reset = true;
+        }
+    }
+
+    /// Clears the filter text a change of repository left, now there is a
+    /// window to clear it in.
+    pub(super) fn apply_filter_reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.filter_reset) {
+            self.set_filter_text("", window, cx);
+        }
     }
 
     /// Folder and document reads run in parallel under one stamp.
@@ -107,7 +135,8 @@ impl Workspace {
 
     #[allow(clippy::result_large_err)]
     fn load_tickets(&mut self, key: RepoKey, resolved: ResolvedRepository, cx: &mut Context<Self>) {
-        let (stamp, _) = self.tickets.load(key);
+        let (stamp, changed) = self.tickets.load(key.clone());
+        self.repository_change(Some(key), changed, cx);
         self.read_tickets(stamp, resolved, cx);
     }
 
@@ -247,11 +276,7 @@ impl Workspace {
     /// The selected repository's display name, once its tickets are loaded.
     pub(in crate::desktop::view) fn tickets_repo_name(&self) -> Option<String> {
         let key = self.tickets.repo()?;
-        Some(
-            self.navigation
-                .entry(key)
-                .map_or_else(|| key.clone(), |entry| entry.name()),
-        )
+        Some(self.repo_name(key))
     }
 
     /// Open ready tickets (D5 design, A3, R-20; R-29): the repository at

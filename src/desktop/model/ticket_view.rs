@@ -199,6 +199,20 @@ pub(crate) fn derive(rows: Option<&[TicketRow]>, query: &TicketQuery) -> TicketV
     }
 }
 
+/// The one conforming ticket the text matches under any lifecycle and
+/// readiness (P9). Nothing for blank text, none or several.
+pub(crate) fn sole_match<'a>(rows: &'a [TicketRow], text: &str) -> Option<&'a TicketRow> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let mut found = rows
+        .iter()
+        .filter(|row| row.id.is_some() && matches(row, text));
+    let sole = found.next()?;
+    found.next().is_none().then_some(sole)
+}
+
 /// The line under the list (decision 7): what is shown, in which
 /// repository, matching what, and what needs attention.
 pub(crate) fn footnote(view: &TicketView, query: &TicketQuery, repo: &str) -> String {

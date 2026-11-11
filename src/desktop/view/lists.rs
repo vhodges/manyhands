@@ -51,8 +51,8 @@ impl Workspace {
             .child(body)
     }
 
-    /// The Tickets region's body (Part C): the filter bar, what Find says
-    /// until it goes, the hint, the column header, the state of the list,
+    /// The Tickets region's body (Part C): the filter bar, what the ID read
+    /// says, the hint, the column header, the state of the list,
     /// the list itself, Why blocked and the footnote.
     ///
     /// The list is drawn in every state while a repository is selected, so
@@ -89,7 +89,7 @@ impl Workspace {
             .test_support()
             .size_full()
             .child(self.filter_bar(window, cx))
-            .child(self.find_bar(cx));
+            .children(self.filter_status(cx));
         if name.is_none() {
             return pane.child(state);
         }

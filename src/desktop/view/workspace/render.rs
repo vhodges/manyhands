@@ -179,6 +179,7 @@ pub(in crate::desktop::view) fn unless_dialog<A: 'static>(
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.apply_filter_reset(window, cx);
         self.sync_tickets(window, cx);
         self.apply_review(window, cx);
         self.open_deferred_republish(window, cx);

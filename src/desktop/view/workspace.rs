@@ -111,10 +111,16 @@ pub(crate) struct Workspace {
     /// The filter input, which was Find's: its text is the query's text
     /// (R-30).
     find_input: Entity<InputState>,
+    /// The ID read behind Enter in the input, and its task.
     find: Find,
     find_read: Option<Task<()>>,
-    /// Around each match's Open, whose own focus is the Kit's.
-    find_focus: Vec<FocusHandle>,
+    /// The repository changed, so the filter text is cleared at the next
+    /// render, which has the window `set_value` needs (R-30, R-35).
+    filter_reset: bool,
+    /// The selection whose change `filter_reset` already answered; `None`
+    /// when no change is pending an answer, `Some(None)` for a change to no
+    /// selection.
+    change_applied: Option<Option<RepoKey>>,
     /// Around each lifecycle segment and sort header, by element ID: tab
     /// stops of their own.
     choice_focus: HashMap<&'static str, FocusHandle>,
@@ -232,12 +238,15 @@ impl Workspace {
             input.set_clean_on_escape(true);
             input
         });
-        let find_events =
-            cx.subscribe(&find_input, |this, _, event: &InputEvent, cx| match event {
-                InputEvent::PressEnter { .. } => this.submit_find(cx),
+        let find_events = cx.subscribe_in(
+            &find_input,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } => this.submit_filter(window, cx),
                 InputEvent::Change => this.filter_text_changed(cx),
                 _ => {}
-            });
+            },
+        );
         let repositories_pane = RepositoriesPane::new(window, cx);
         let repository_events = cx.subscribe(repositories_pane.list(), |this, list, event, cx| {
             if let ListEvent::Confirm(ix) = event {
@@ -304,7 +313,8 @@ impl Workspace {
             find_input,
             find: Find::default(),
             find_read: None,
-            find_focus: Vec::new(),
+            filter_reset: false,
+            change_applied: None,
             choice_focus: super::tickets::choice_ids()
                 .map(|id| (id, cx.focus_handle().tab_stop(true)))
                 .collect(),

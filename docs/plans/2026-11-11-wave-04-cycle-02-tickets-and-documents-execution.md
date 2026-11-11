@@ -265,6 +265,49 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
   `IndexRebuild`; the cause is not identified; 35 of 35 passed in the review and
   5 of 5 after the fixes.
 
+- **Ruling (Task 4): `ReadKind::FindSlug` stays and `D/services/mod.rs` is
+  untouched** — `picker.rs:164` and `relations_edit_tests.rs:290,308` still use
+  it; Task 4 removed only Find's call and its test hold (as the Task 1 ruling
+  said).
+- **Ruling (Task 4): blank Enter with rows listed focuses the list on the first
+  row and opens nothing** — design Part D bullet 3 ("otherwise, when rows are
+  listed") read literally; pinned by `blank_text_opens_nothing` — cost if wrong:
+  one branch and one test.
+- **Ruling (Task 4): Enter on blank or non-ID text clears an older ID status;
+  typing and Escape do not; a non-blank Enter with no repository says "Select
+  an available repository to find in", blank Enter says nothing** — the design
+  is silent; Find behaved the same — cost if wrong: copy and one branch.
+- **Ruling (Task 4): text typed before any repository was selected is cleared
+  when one is first selected** (`last_loaded` None to Some is a change, per
+  Task 2's table) — pinned by `the_text_is_cleared_once_per_change_of_repository`.
+- **Ruling (Task 4): `clear_lists` compares `Tickets::is_change_to(selected)`
+  and drops a held ID read at selection; `change_applied: Option<Option<RepoKey>>`
+  makes the drop and the text clear happen once per change** — a plain
+  `Option<RepoKey>` could not tell "no selection applied" from "nothing
+  applied", and the review's repro let a held read land after the repository
+  was forgotten (`a_selection_that_goes_drops_a_held_id_read`) — cost if wrong:
+  a held read or typed text survives a change.
+- **Known gaps (Task 4, Minor, not acted on):** a re-click of the already
+  selected repository keeps the text and the held read (the old code dropped the
+  read; R-35's "same repository" rule agrees); a vanished repository that is
+  retried (`retry_resolution`) keeps the same selection, so a held read for it
+  is kept; Escape or typing leaves a stale "Nothing in {repo} has that ID." line
+  until the next Enter; the Enter-again retry of a failed ID read has no view
+  test, and the busy and failure wording is pinned only by the pure
+  `status_text` table. `read_id` keeps `#[allow(clippy::result_large_err)]`
+  (clippy fails without it). `sole_match`'s `row.id.is_some()` is redundant
+  and kept for intent.
+- **Handover to Task 8:** the body `New ticket…` button is still a Tab stop
+  between `filter-status` and the hint's Show all; Task 8 moves it into the
+  header toolbar.
+- **Process note (Task 4): the implementer added copy constants and stubs
+  before the first run so the tests failed on assertions; ten of twelve view
+  tests, `parse_id`, `sole_match` and the keyboard walk were seen failing first;
+  two model tests already passed against the old code and now also pin Busy and
+  `parse_id`.** The review's mutations found three gaps (once-per-change guard,
+  first selection, blank-Enter clear), now pinned by tests that were seen failing
+  under each mutation.
+
 ## Test Edits
 
 | E | Site | Reason | Task | Removes an assertion |
@@ -278,12 +321,20 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
 | E-10 (hidden panel part) | `D/view/dock_tests/state.rs` `a_hidden_panel_keeps_its_state` | The kept text is `s`, and the test also chooses a sort and Ready and checks the model query | 3 | no |
 | E-10 (made-ready part, finished) | `made_ready_tests.rs`, `made_ready_review_tests.rs` | `set_ticket_query` replaced by `set_closure` plus `set_filter_text` through a `type_filter` helper; readiness from `filter-readiness`'s name; the cleared input asserted | 3 | no |
 | E-12 | `D/keys_tests.rs` `each_key_is_bound_to_its_action` | `home` and `end` added to the table (array length 24) | 3 | no |
+| E-4 | `D/view/find_tests.rs` | All eight tests rewritten for the filter input. Renamed: `secondary_p_focuses_find` to `secondary_p_focuses_the_filter_input`; `a_ulid_opens_its_ticket_closed_or_not` to `a_ulid_opens_its_item_whatever_the_filters`; `a_shared_short_code_lists_both_and_choosing_one_opens_it_by_id` to `several_matches_move_focus_to_the_list_on_the_first`; `no_match_says_so_and_opens_nothing` to `nothing_found_says_so_and_opens_nothing`; `a_held_search_never_lands_after_the_selection_changed` to `a_held_id_read_is_dropped_when_another_repository_is_selected`. `find_needs_a_selected_repository_and_a_new_selection_clears_it` split into `enter_needs_a_selected_repository` and `selecting_another_repository_clears_the_text_and_its_rows`. `a_matchs_open_is_reached_by_tab_and_enter_opens_it` deleted. `find_does_nothing_while_a_dialog_is_open` keeps its name | 4 | yes: match cards, their context, ID and lifecycle labels, Open buttons, the `FIND_MATCHES` and `FIND_NONE` texts, the `FindSlug` hold |
+| E-5 | `D/model/find_tests.rs` | The short-code test became the `parse_id` table; `matches_are_the_librarys_and_none_says_so` and its `found()` helper deleted; `an_earlier_search_is_dropped` uses `apply_item`; `an_id_found…` gains a Busy step | 4 | yes: the short-code parse and `apply_matches` assertions |
+| E-6 (find part) | `D/view/keyboard_tests.rs` | The walk's `find` is split into `filter` (types) and `find` (an ID, Enter, focus stays in the input); `find_by_short_code_and_ulid` checks no tab opens, focus in the list on the first row, Enter opens it by ID, then a closed ticket's ULID opens with focus staying in the input | 4 | yes: the `find-state`/`FIND_MATCHES` check and the match-card Tab steps |
 | E-15 (expected) | `D/view/polling_privacy_tests.rs:687`, comments :15, :96, :493 | Part F moves the path from `doc-path` to the tooltip, which the snapshot cannot read | 6 | yes, the `("region-documents", PATH)` pair; the title pair stays |
 
 ## Additional Tests
 
 | Test | Why it catches something existing tests don't | Task |
 | --- | --- | --- |
+| `ticket_view::tests::a_sole_match_is_the_one_conforming_ticket_the_text_matches` | The pure logic P9's Enter depends on, at the cheapest layer | 4 |
+| `find::tests::the_status_line_says_where_the_id_read_is` | A pure table of `status_text` over every `FindState`; the only place the busy and failure wording is pinned, since no view seam makes a busy ID read cheaply | 4 |
+| `find::tests::enter_selects_from_the_rows_the_text_lists` | R-32: Enter brings the pane up to date before it selects; real keystrokes render between typing and Enter, so only a same-frame call shows it | 4 |
+| `find::tests::the_text_is_cleared_once_per_change_of_repository` | Review hardening: text typed before the first selection clears; text typed while a resolve is held is kept; mutations of the guard and of "first load is a change" passed every other test | 4 |
+| `workspace::tests::a_selection_that_goes_drops_a_held_id_read` | Review hardening: select A, `reload_lists`, hold an ID read, forget A; failed first, found a regression | 4 |
 | Task 3 added none beyond the plan's three (`the_filter_bar_works_without_a_read`, `list_states_act_and_a_reload_keeps_the_rows`, `markers_appear_without_a_read`); the review's fixes extended the second (Retry held, stale and never-refreshed Refresh, focus after Retry, Refresh and Rebuild) | Retry through `load_lists` would drop the kept rows and the count | 3 |
 | `status::tests::statuses_tint_by_their_words` | Pins "ready" as Done and "waiting"/"not started" as none (design: status colour, decision 20); a pure function, not an appearance test | 2 |
 | `tickets::tests::only_text_or_readiness_narrows_the_query`, `tickets::tests::a_sort_toggles_by_column` | `narrowed` and `toggled` are logic with no other test and would be dead code under `--all-targets` | 2 |
@@ -299,3 +350,4 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
 | 1 | base `002428b1`, task commit `e7026fe1` | `desktop::model::list_state::tests::kept_rows_follow_reloads`, `desktop::model::list_view::tests::each_state_has_its_own_body`, `desktop::assets::tests::every_item_view_icon_loads` (1 run each, passed; seen failing first: two compile errors, one "repeat errored"); fmt, `check --features desktop`, clippy all pass | one fresh reviewer: 0 Blocking, 1 Important (Documents `narrowed`), 5 Minor; fixed and re-run | rulings above; reviewer's items 3 (kind-free alert label) and 6 (recorded) not changed |
 | 2 | base `e7026fe1`, task commit in the git log | `ticket_view::tests::{derive_filters_counts_and_sorts, ages_read_as_the_prototype_writes_them, tooltips_carry_the_id_context_and_reasons, the_footnote_counts_what_needs_attention}`; `markers::tests::markers_follow_drafts_conflicts_and_closure`; `status::tests::statuses_tint_by_their_words`; `tickets::tests::{a_read_lands_only_for_its_repository_and_load, the_default_query_lists_open_tickets, only_text_or_readiness_narrows_the_query, a_sort_toggles_by_column, blocked_reasons_name_the_blocker_the_missing_id_and_the_cycle, an_untitled_blocker_is_named_by_its_short_code}`; `model::item::tests::provenance_names_the_context_kind_its_branch_and_worktree`; `view::item::tests::the_provenance_says_primary_or_active_with_its_branch_and_worktree`; `view::lifecycle::made_ready_review_tests::open_ready_tickets_on_the_shown_repository`; `view::lifecycle::made_ready_tests::index_unavailable_final_offers_open_ready_tickets`; `view::tickets::tests::{arrows_move_in_the_list_and_enter_opens, each_closure_filter_shows_the_librarys_rows_and_keeps_the_nonconforming_entry, ready_and_blocked_show_the_librarys_rows_with_reasons_and_keep_the_nonconforming_entry, the_why_blocked_panel_gives_the_selected_rows_reasons_in_full, the_panel_says_incomplete_where_the_library_does}`; `view::item::edit_tests::sheet_fields::suggestions_come_from_the_loaded_tickets_values` (unchanged): 22 run, all passed on the final tree; fmt, check, clippy pass | one fresh reviewer: 0 Blocking, 2 Important (reasons under the default query; footnote plurals), 8 Minor; fixed, re-run | see Rulings, process note, handover |
 | 3 | base `f360e8bb`, task commit in the git log | `view::tickets::tests::{the_filter_bar_works_without_a_read, list_states_act_and_a_reload_keeps_the_rows (5 of 5 runs), markers_appear_without_a_read, each_closure_filter_shows_the_librarys_rows_and_keeps_the_nonconforming_entry, ready_and_blocked_show_the_librarys_rows_with_reasons_and_keep_the_nonconforming_entry, the_why_blocked_panel_gives_the_selected_rows_reasons_in_full, the_panel_says_incomplete_where_the_library_does, every_choice_has_its_own_label_and_the_chosen_one_is_said_in_text, a_long_why_blocked_panel_scrolls_by_keyboard, arrows_move_in_the_list_and_enter_opens}`; `view::keyboard_tests::every_core_action_works_by_keyboard_alone`; `view::dock::tests::state::a_hidden_panel_keeps_its_state`; `keys::tests::each_key_is_bound_to_its_action`; the two made-ready tests (earlier in the task): 12 run together on the final tree, all passed; fmt, check, clippy pass | one fresh reviewer: 0 Blocking, 3 Important (Retry not pinned to `reload_lists`; `chmod` trick breaks on Windows and as root; stale and never-refreshed states makeable by SQL), 5 Minor (drag ghost fixed; per-render clone, allows, Documents Home/End, test file length recorded); Important and the drag ghost fixed, re-run | see Rulings (Task 3), E-3, E-6, E-10, E-12, handovers to Tasks 4 and 6 |
+| 4 | base `8946bff7`, task commit in the git log | `view::find::tests::*` (14: the 13 plus `the_text_is_cleared_once_per_change_of_repository`); `model::find::tests::*` (3); `model::ticket_view::tests::a_sole_match_is_the_one_conforming_ticket_the_text_matches`; `view::workspace::tests::a_selection_that_goes_drops_a_held_id_read`; `view::keyboard_tests::every_core_action_works_by_keyboard_alone`: 20 passed on the final tree (the last gate edit restored one clippy `allow`; fmt, check, clippy re-run green by the orchestrator). Neighbours, by filter, earlier in the task and unchanged since: 20 `Walk::find` callers and 64 `clear_lists` neighbours passed | one fresh reviewer: 0 Blocking, 2 Important (a held ID read survived the selection going to None; the once-per-change guard and first-selection clear untested), 3 Minor; both Important and the blank-Enter test fixed, re-run | see Rulings (Task 4), E-4, E-5, E-6 (find part), Additional tests, handover to Task 8 |

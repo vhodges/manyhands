@@ -20,7 +20,7 @@ gpui_kit::actions!(
         FocusContent,
         /// Focus the operation area.
         FocusOperations,
-        /// Find an item by short code or ID.
+        /// Focus the filter input, where a ULID opens its item.
         Find,
         /// Show the next tab.
         NextTab,
@@ -138,7 +138,7 @@ pub(crate) struct DockPanel {
 }
 
 /// The key context of the Documents and Tickets regions (the tickets list
-/// with its find bar and filters): `secondary-n` opens the focused list's
+/// with its filter bar): `secondary-n` opens the focused list's
 /// New document… or New ticket… there, and nowhere else.
 pub(crate) const NAVIGATION_CONTEXT: &str = "Navigation";
 

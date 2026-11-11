@@ -5,7 +5,8 @@ use manyhands::{
 use time::{Duration, format_description::well_known::Rfc3339};
 
 use super::{
-    NO_SHORT_CODE, SegmentCounts, TicketView, age_label, derive, footnote, hint, ticket_tooltip,
+    NO_SHORT_CODE, SegmentCounts, TicketView, age_label, derive, footnote, hint, sole_match,
+    ticket_tooltip,
 };
 use crate::desktop::model::{
     item::{NO_BRANCH, context_kind_label},
@@ -477,4 +478,34 @@ fn the_footnote_counts_what_needs_attention() {
         };
         assert_eq!(footnote(&view, &TicketQuery::default(), REPO), line);
     }
+}
+
+/// P9: Enter opens the one conforming ticket the text matches, whatever the
+/// lifecycle and readiness, even one a filter hides; blank text, no match
+/// and several matches open nothing. The text is read as the filter reads
+/// it: trimmed, any case, a code, a title or a whole ID.
+#[test]
+fn a_sole_match_is_the_one_conforming_ticket_the_text_matches() {
+    let rows = library();
+    let d_ulid = ID_D.to_lowercase();
+    for (text, wanted) in [
+        ("vh-bbbbb", Some("b")),
+        (" VH-EEEEE ", Some("e")),
+        ("old dock", Some("c")),
+        ("ZETA", Some("d")),
+        (d_ulid.as_str(), Some("d")),
+        ("", None),
+        (" \t ", None),
+        ("vh-aaaaa", None),
+        ("dock", None),
+        ("zzz", None),
+    ] {
+        assert_eq!(
+            sole_match(&rows, text).map(id_of),
+            wanted,
+            "{text:?} among the six entries"
+        );
+    }
+    // The nonconforming entry matches nothing, so it never makes a second.
+    assert_eq!(sole_match(&rows[5..], "vh-bbbbb"), None);
 }

@@ -17,7 +17,6 @@ use manyhands::{
 };
 
 use super::{
-    find::FIND_MATCHES,
     harness::{Shell, key},
     quit::QuitPhase,
     settings::{PAGES, Shown},
@@ -425,8 +424,9 @@ impl Walk {
         self.region(Region::Content, cx);
     }
 
-    /// `secondary-p` focuses Find; its text is selected and typed over.
-    fn find(&self, text: &str, cx: &mut TestAppContext) {
+    /// `secondary-p` focuses the filter input; its text is selected and
+    /// typed over. Enter is the caller's.
+    fn filter(&self, text: &str, cx: &mut TestAppContext) {
         self.keys("secondary-p", cx);
         let input = self
             .shell
@@ -440,26 +440,43 @@ impl Walk {
             input.read_with(cx, |input, _| input.value().to_string()),
             text
         );
+    }
+
+    /// Opens the item whose ID is `id` through the filter input: Enter
+    /// opens it, and focus stays in the input.
+    fn find(&self, id: &str, cx: &mut TestAppContext) {
+        self.filter(id, cx);
         self.keys("enter", cx);
+        let input = self
+            .shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.find_input().clone());
+        let focus = input.read_with(cx, gpui_kit::Focusable::focus_handle);
         self.on_handle(&focus, Region::Tickets, cx);
     }
 
-    /// Find by short code lists both sharers; Tab reaches each Open and
-    /// Enter opens the second. Find by ULID opens the closed ticket.
+    /// Enter on a short code two tickets share opens neither: focus moves
+    /// to the list with the first row selected, and Enter there opens that
+    /// row. Enter on a ULID opens the closed ticket and focus stays in the
+    /// input.
     fn find_by_short_code_and_ulid(&self, cx: &mut TestAppContext) {
-        self.find(SLUG, cx);
-        assert_eq!(
-            self.shell.label("find-state", cx).as_deref(),
-            Some(FIND_MATCHES)
+        self.filter(SLUG, cx);
+        self.keys("enter", cx);
+        assert_eq!(self.tab_count(cx), 3, "no tab opened");
+        self.list_focused(
+            |workspace, cx| workspace.tickets_list_focus(cx),
+            Region::Tickets,
+            cx,
         );
-        assert_eq!(self.shell.rows("find-match", cx).len(), 2);
-        self.keys("tab", cx);
-        self.on(("find-match-open", 0usize), Region::Tickets, cx);
-        self.keys("tab", cx);
-        self.on(("find-match-open", 1usize), Region::Tickets, cx);
-        let second = self.shell.label(("find-match-id", 1usize), cx).unwrap();
+        assert_eq!(self.shell.rows("ticket-row", cx).len(), 2);
+        assert!(self.shell.selected(("ticket-row", 0usize), cx));
+        let first = match self.shell.label(("ticket-row", 0usize), cx).as_deref() {
+            Some("First sharer") => FIRST,
+            Some("Second sharer") => SECOND,
+            other => panic!("a sharer is listed first, not {other:?}"),
+        };
         self.enter(cx);
-        assert_eq!(self.opened(cx), Some(self.ticket(&second)));
+        assert_eq!(self.opened(cx), Some(self.ticket(first)));
         assert_eq!(self.tab_count(cx), 4);
 
         self.find(CLOSED, cx);
