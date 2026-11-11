@@ -18,7 +18,7 @@ use manyhands::{
         CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
         FailurePoint, FolderCreateInput, IndexRefreshInput, InitialsChange, KeyGenerateInput,
         KeyRemoveInput, KeySelectInput, Mutation, MutationCall, MutationDataDto, NoProgress,
-        OperationAbandonInput, OperationId, OperationResumeInput, PrepareDataDto,
+        OperationAbandonInput, OperationId, OperationResumeInput, PollPauseInput, PrepareDataDto,
         RelationshipWrite, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
         RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId, SharedKeyId,
         TicketCreateInput, TicketDraft, TicketSaveInput,
@@ -575,6 +575,17 @@ impl Fixture {
         assert_eq!(refreshed.code, ResultCode::Ok, "{}", refreshed.message);
     }
 
+    /// Pauses automatic polling of `root` through the library.
+    pub(crate) fn pause_polling(&self, root: &Path) {
+        let paused = self.execute(
+            None,
+            Mutation::PollPause(PollPauseInput {
+                root: root.to_owned(),
+            }),
+        );
+        assert_eq!(paused.code, ResultCode::Ok, "{}", paused.message);
+    }
+
     fn execute(
         &self,
         confirmation: Option<ConfirmationId>,
@@ -954,7 +965,12 @@ impl Fixture {
     /// `root` and selects it for publication through the library's
     /// `remote select`. Nothing is contacted.
     pub(crate) fn publish_over_ssh(&self, root: &Path) {
-        self.add_remote(root, "origin", "ssh://git@example.invalid/team/repo.git");
+        self.publish_at(root, "ssh://git@example.invalid/team/repo.git");
+    }
+
+    /// `publish_over_ssh`, the remote `origin` fetching from `url`.
+    pub(crate) fn publish_at(&self, root: &Path, url: &str) {
+        self.add_remote(root, "origin", url);
         let selected = self.execute(
             None,
             Mutation::RemoteSelect(RemoteSelectInput {

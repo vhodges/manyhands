@@ -259,7 +259,12 @@ fn waiting_share(window: &Window, cx: &App) -> Option<String> {
     let workspace = root.read(cx).view().clone().downcast::<Workspace>().ok()?;
     let operations = workspace.read(cx).services().operations().read(cx);
     let request = operations.running()?;
-    Progressing::of(&request.intent)?;
+    // Not a Check now: it may prompt too, but it is not a share.
+    matches!(
+        Progressing::of(&request.intent)?,
+        Progressing::Share | Progressing::Post
+    )
+    .then_some(())?;
     Some(scope_name(Some(request.intent.root()?)))
 }
 

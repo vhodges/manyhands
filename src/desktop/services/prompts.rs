@@ -16,12 +16,22 @@
 //!
 //! Not now (`Cancelled`) marks the key declined for the session (R-13):
 //! a later request for it answers `Cancelled` at once, with no prompt,
-//! until Unlock… clears the mark through `WorkerHandle::clear_declined`.
+//! until Unlock… clears the mark through `WorkerHandle::clear_declined`
+//! (a needs-attention entry's, by key) or `clear_declined_for` (a request's).
 //! The set is shared by the worker's provider and its handle. Each key the
 //! provider answers `Cancelled`, declined now or before, is also recorded
 //! against the request whose attempt asked for it, so Unlock… on that
 //! request's outcome clears its keys (`WorkerHandle::clear_declined_for`)
 //! without the outcome naming one (R-3, R-13, R-17).
+//!
+//! A background job never prompts (D6 B5, R-26): `automatic` polling does
+//! not stop a first prompt, so the provider refuses for the running job's
+//! lane. A passphrase request of a background job is answered
+//! `Unavailable` at once, with no `Prompt`, and its key is not marked
+//! declined: Not now is the person's answer, and none was asked. The key is
+//! recorded as refused against the running request, so a retirement's later
+//! `unlock_required` answer, which names no key, can find one to hold
+//! (`refused_for`).
 
 use std::{
     collections::{HashMap, HashSet},
@@ -40,7 +50,10 @@ use manyhands::repository::{
     },
 };
 
-use super::{requests::DesktopRequestId, worker::WorkerEvent};
+use super::{
+    requests::{DesktopRequestId, Lane},
+    worker::WorkerEvent,
+};
 
 /// A passphrase the library asks for while a job runs. The worker waits
 /// for `reply`; a dropped sender reads as `Unavailable`.
@@ -80,6 +93,19 @@ struct Declined {
     attempt: Option<DesktopRequestId>,
     /// The keys each request's last attempt was answered `Cancelled` for.
     by_request: HashMap<DesktopRequestId, HashSet<SharedKeyId>>,
+    /// Whether the job the worker is running is a background one (B5).
+    background: bool,
+    /// The keys a background job's last attempt was refused a prompt for,
+    /// which are not declined.
+    refused: HashMap<DesktopRequestId, HashSet<SharedKeyId>>,
+    /// The last poll job begun, whose refused keys the next poll's begin
+    /// forgets: only a retirement's record is read (`refused_for`), so polls
+    /// must not grow `refused` without end.
+    last_poll: Option<DesktopRequestId>,
+    /// The keys the person's own request's last attempt asked the provider
+    /// for, whatever the answer: a Check now's failure names no key, and
+    /// these are the ones its attention is held under (C3).
+    asked: HashMap<DesktopRequestId, HashSet<SharedKeyId>>,
 }
 
 impl DeclinedKeys {
@@ -100,6 +126,18 @@ impl DeclinedKeys {
         true
     }
 
+    /// Whether `key_id` is declined now, without answering anything.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn is_declined(&self, key_id: SharedKeyId) -> bool {
+        self.lock().keys.contains(&key_id)
+    }
+
+    /// Declines `key_id` as a Not now would (a test).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn decline_for_testing(&self, key_id: SharedKeyId) {
+        self.decline(key_id);
+    }
+
     /// Not now: `key_id` is declined, and recorded against the running
     /// attempt's request.
     fn decline(&self, key_id: SharedKeyId) {
@@ -108,20 +146,78 @@ impl DeclinedKeys {
         declined.record(key_id);
     }
 
-    /// The worker begins an attempt of `id`, or, with `None`, runs no
-    /// request's attempt: what a later answer is recorded against. An
+    /// The worker begins a job of `lane` that is the attempt of `id`, or,
+    /// with `None`, no request's attempt: what a later answer is recorded
+    /// against, and whether the provider may ask the person at all. An
     /// attempt begun forgets what the request's last one recorded.
-    pub(crate) fn attempting(&self, id: Option<DesktopRequestId>) {
+    pub(crate) fn attempting(&self, id: Option<DesktopRequestId>, lane: Lane) {
         let mut declined = self.lock();
         declined.attempt = id;
+        declined.background = lane == Lane::Background;
         if let Some(id) = id {
             declined.by_request.remove(&id);
+            declined.refused.remove(&id);
+            declined.asked.remove(&id);
         }
     }
 
-    /// Clears `key_id`'s mark; true when it was declined. Unlock… clears
-    /// by request (`clear_for`); this per-key form serves the tests.
-    #[cfg(test)]
+    /// The worker begins the poll job `id` (after `attempting`): the keys
+    /// the previous poll was refused a prompt for are forgotten, so a poll
+    /// a minute leaves one record, not one each.
+    pub(crate) fn polling(&self, id: DesktopRequestId) {
+        let mut declined = self.lock();
+        if let Some(previous) = declined.last_poll.replace(id) {
+            declined.refused.remove(&previous);
+        }
+    }
+
+    /// The running attempt asks for `key_id`: remembered against its request.
+    fn ask(&self, key_id: SharedKeyId) {
+        let mut declined = self.lock();
+        if let Some(id) = declined.attempt {
+            declined.asked.entry(id).or_default().insert(key_id);
+        }
+    }
+
+    /// The keys the request `id`'s last attempt asked the provider for.
+    pub(crate) fn asked_for(&self, id: DesktopRequestId) -> Vec<SharedKeyId> {
+        let declined = self.lock();
+        declined
+            .asked
+            .get(&id)
+            .map(|keys| keys.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Whether the running job is a background one and `key_id` is refused
+    /// a prompt: recorded against the running attempt's request, and not
+    /// declined.
+    fn refused(&self, key_id: SharedKeyId) -> bool {
+        let mut declined = self.lock();
+        if !declined.background {
+            return false;
+        }
+        if let Some(id) = declined.attempt {
+            declined.refused.entry(id).or_default().insert(key_id);
+        }
+        true
+    }
+
+    /// The keys the request `id`'s last attempt, a background one, was
+    /// refused a prompt for (B5): a retirement's `unlock_required` answer
+    /// names none, so these are the keys its attention is held under.
+    pub(crate) fn refused_for(&self, id: DesktopRequestId) -> Vec<SharedKeyId> {
+        let declined = self.lock();
+        declined
+            .refused
+            .get(&id)
+            .map(|keys| keys.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Clears `key_id`'s mark; true when it was declined. A retried request
+    /// clears by request (`clear_for`); a needs-attention entry names the
+    /// key and no request, so Unlock… clears by key (C3).
     pub(crate) fn clear(&self, key_id: SharedKeyId) -> bool {
         self.lock().keys.remove(&key_id)
     }
@@ -173,6 +269,11 @@ impl SessionCredentialProvider for DesktopProvider {
     /// Runs on the worker thread, which no executor uses: blocking it on
     /// the reply stalls nothing else.
     fn request_passphrase(&mut self, request: &UnlockRequest) -> PassphraseResponse {
+        // A background job never asks the person (B5, R-26).
+        if self.declined.refused(request.key_id) {
+            return PassphraseResponse::Unavailable;
+        }
+        self.declined.ask(request.key_id);
         // Declined with Not now: not asked again until Unlock… (R-13).
         if self.declined.declined(request.key_id) {
             return PassphraseResponse::Cancelled;

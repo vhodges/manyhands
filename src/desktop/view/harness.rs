@@ -32,6 +32,7 @@ use crate::desktop::{
     },
     open_test_window_over,
     services::{
+        Backend,
         prompts::{PromptReply, PromptRequest},
         requests::{DesktopRequest, DesktopRequestId, Intent},
     },
@@ -119,6 +120,17 @@ impl Shell {
     /// fixture's, and nothing is resized (R-26). The Kit and the keys are
     /// already set up.
     pub(crate) fn relaunch(self, cx: &mut TestAppContext) -> Self {
+        self.relaunch_over(|backend| backend, cx)
+    }
+
+    /// [`Self::relaunch`], the new window's services over the double
+    /// `wrap` makes of the new delaying backend (a test of the polling
+    /// calls, as `over_double` is).
+    pub(crate) fn relaunch_over(
+        self,
+        wrap: impl FnOnce(Arc<DelayingBackend>) -> Arc<dyn Backend>,
+        cx: &mut TestAppContext,
+    ) -> Self {
         let Self {
             window, fixture, ..
         } = self;
@@ -126,7 +138,16 @@ impl Shell {
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();
         VisualTestContext::from_window(window.into(), cx).run_until_parked();
-        Self::start(fixture, false, |_| {}, Geometry::AsLaunched, false, cx)
+        let backend = fixture.delaying_backend();
+        Self::over(
+            fixture,
+            wrap(backend.clone()),
+            backend,
+            false,
+            Geometry::AsLaunched,
+            false,
+            cx,
+        )
     }
 
     /// Opens the main window as the application does, refreshing every
@@ -149,6 +170,48 @@ impl Shell {
         first: bool,
         cx: &mut TestAppContext,
     ) -> Self {
+        let backend = fixture.delaying_backend();
+        before(&backend);
+        Self::over(
+            fixture,
+            backend.clone(),
+            backend,
+            launch_refresh,
+            geometry,
+            first,
+            cx,
+        )
+    }
+
+    /// Opens the main window over `services_backend`, a double that wraps
+    /// the fixture's `backend` (a test of the poll's calls), with no launch
+    /// refresh.
+    pub(crate) fn over_double(
+        fixture: Fixture,
+        services_backend: Arc<dyn Backend>,
+        backend: Arc<DelayingBackend>,
+        cx: &mut TestAppContext,
+    ) -> Self {
+        Self::over(
+            fixture,
+            services_backend,
+            backend,
+            false,
+            Geometry::Harness,
+            true,
+            cx,
+        )
+    }
+
+    fn over(
+        fixture: Fixture,
+        services_backend: Arc<dyn Backend>,
+        backend: Arc<DelayingBackend>,
+        launch_refresh: bool,
+        geometry: Geometry,
+        first: bool,
+        cx: &mut TestAppContext,
+    ) -> Self {
         if first {
             cx.update(gpui_kit::init);
             cx.update(crate::desktop::bind_all_keys);
@@ -156,9 +219,7 @@ impl Shell {
             // finds them where they rest.
             cx.update(|cx| cx.set_reduce_motion(true));
         }
-        let backend = fixture.delaying_backend();
-        before(&backend);
-        let window = cx.update(|cx| open_test_window_over(backend.clone(), launch_refresh, cx));
+        let window = cx.update(|cx| open_test_window_over(services_backend, launch_refresh, cx));
         let workspace = window
             .update(cx, |root, _, _| {
                 root.view().clone().downcast::<Workspace>().unwrap()
@@ -185,7 +246,7 @@ impl Shell {
     }
 
     /// Sets the bottom dock's height, as a person dragging its edge would.
-    fn set_activity_height(&self, height: f32, cx: &mut TestAppContext) {
+    pub(crate) fn set_activity_height(&self, height: f32, cx: &mut TestAppContext) {
         let area = self
             .workspace
             .read_with(cx, |workspace, _| workspace.dock_area().clone());
@@ -321,6 +382,19 @@ impl Shell {
     pub(crate) fn present(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
         let id = id.into();
         self.frame(cx, |window, _| window.try_find(id).is_some())
+    }
+
+    /// Whether the element `id` says it is checked, a switch or a
+    /// checkbox; `None` when it says nothing or is not drawn.
+    pub(crate) fn checked(
+        &self,
+        id: impl Into<ElementId>,
+        cx: &mut TestAppContext,
+    ) -> Option<bool> {
+        let id = id.into();
+        self.frame(cx, |window, _| {
+            window.try_find(id).and_then(|element| element.checked())
+        })
     }
 
     pub(crate) fn selected(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {

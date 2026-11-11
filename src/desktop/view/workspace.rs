@@ -118,6 +118,9 @@ pub(crate) struct Workspace {
     choice_focus: HashMap<&'static str, FocusHandle>,
     _find_events: Subscription,
     content: ContentArea,
+    /// The operation area's scroll: a control in it that takes focus is
+    /// brought into view (E-2), sharing the focus the content region saw.
+    operations_scroll: super::scroll::ContentScroll,
     _settings_events: Subscription,
     _drafts_events: Subscription,
     /// Fallback when the control holding focus is no longer drawn.
@@ -145,6 +148,11 @@ pub(crate) struct Workspace {
     abandon_drawn: HashSet<(RepoKey, String)>,
     control_focus: HashMap<String, FocusHandle>,
     control_drawn: HashSet<String>,
+    /// The items a Retire… press is in progress for, by repository and item
+    /// ID: a second press waits (E4), unless the press is waiting on a
+    /// question that no longer stands.
+    pub(in crate::desktop::view) retire_asked:
+        HashMap<(RepoKey, String), super::operations::RetireStep>,
     _operations: Subscription,
     /// A session's recovery state shows in the operation area.
     _drafts: Subscription,
@@ -183,6 +191,10 @@ impl Workspace {
             this.operations_changed(window, cx)
         });
         let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
+        // What the scheduler holds back for the person is drawn in Activity
+        // (D6 C3): its entries change with its answers, not with a request.
+        cx.observe(services.scheduler(), |_, _, cx| cx.notify())
+            .detach();
         let focus_lost = cx.on_focus_lost(window, |this, window, cx| this.focus_lost(window, cx));
         let activation = cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
@@ -228,6 +240,7 @@ impl Workspace {
             }
         });
         let tabs = TabContent::default();
+        let operations_scroll = tabs.scroll().region();
         let settings = {
             let services = services.clone();
             let scroll = tabs.scroll().clone();
@@ -238,6 +251,7 @@ impl Workspace {
             window,
             |this, _, event: &SettingsEvent, window, cx| match event {
                 SettingsEvent::Closed => this.focus_region(Region::Content, window, cx),
+                SettingsEvent::ShowActivity => this.focus_region(Region::Operations, window, cx),
             },
         );
         let drafts_page = {
@@ -288,6 +302,7 @@ impl Workspace {
                 .map(|id| (id, cx.focus_handle()))
                 .collect(),
             _find_events: find_events,
+            operations_scroll,
             content: ContentArea {
                 tabs,
                 settings,
@@ -316,6 +331,7 @@ impl Workspace {
             abandon_drawn: HashSet::new(),
             control_focus: HashMap::new(),
             control_drawn: HashSet::new(),
+            retire_asked: HashMap::new(),
             _operations: operations,
             _drafts: drafts,
             _focus_lost: focus_lost,
@@ -336,6 +352,9 @@ impl Workspace {
 
     pub(crate) fn services(&self) -> &Services {
         &self.services
+    }
+    pub(in crate::desktop::view) fn operations_scroll(&self) -> &super::scroll::ContentScroll {
+        &self.operations_scroll
     }
     pub(crate) fn navigation(&self) -> &Navigation {
         &self.navigation

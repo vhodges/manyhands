@@ -29,6 +29,11 @@
 //! (decision 8) is a job of its own over the same request: an accepted
 //! record is cancelled through `cancel_request` and the same request sent
 //! again, whose answer is the attempt's.
+//!
+//! Quitting (`quit`, in its own module) closes the queue, asks a running
+//! poll to stop through the cancel task and answers `Idle` or the job that
+//! is still running. A graceful exit then ends the thread and waits for it
+//! (`shut_down_and_join`); Quit now does not.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -41,16 +46,21 @@ use std::{
 use futures::channel::mpsc;
 use manyhands::{
     repository::{
-        CancellationToken, ConfirmationId, HostObservationDto, MutationCall, MutationDataDto,
-        ProgressEvent, ProgressSink, RepositoryService, RequestId, RequestState as RecordDtoState,
+        CancellationToken, ConfirmationId, HostObservationDto, ItemDtoKind, MutationCall,
+        MutationDataDto, OperationId, ProgressEvent, ProgressSink, RepositoryService, RequestId,
+        RequestState as RecordDtoState,
         keys::{SecretPassphrase, SessionCredentials},
         transport::SshAuthority,
     },
     results::{Envelope, ResultCode},
 };
 
+use crate::desktop::model::polling::{CancelCause, PollAttempt, Root};
+
+mod quit;
+
 use super::{
-    BUSY_RETRY_DELAYS, Backend, JobKind,
+    BUSY_RETRY_DELAYS, Backend, JobKind, poll,
     prompts::{DeclinedKeys, DesktopProvider, PromptRequest},
     requests::{DesktopRequest, DesktopRequestId, Intent, Lane, Refusals, RequestState},
 };
@@ -78,6 +88,22 @@ pub(crate) enum WorkerEvent {
     /// The running job's library call asks for a passphrase, and the
     /// worker waits for the reply (`prompts`).
     Prompt(PromptRequest),
+    /// An automatic poll ended (D6 B1), with the desktop's account of its
+    /// answer. Sent after the worker clears its running job, as `Finished`
+    /// is, so a quit that hears it finds the worker idle. A poll sends no
+    /// `Queued`, `Started` or `Progress`: it is not a request.
+    Polled(Root, PollAttempt),
+    /// A user job was admitted while this poll runs, or quit or a
+    /// reconfiguration asked to stop it (D6 B2, P-1, P-7). The drain starts
+    /// the task that calls `cancel_poll` until the poll answers. Sent once
+    /// per running poll, however many asks follow.
+    PreemptPoll {
+        root: Root,
+        op: OperationId,
+        /// The worker job that is running the poll: a later run of the same
+        /// operation is another job, which this ask is not about.
+        id: DesktopRequestId,
+    },
 }
 
 /// What cancelling a request did.
@@ -178,6 +204,15 @@ enum Work {
         root: PathBuf,
         authority: Option<SshAuthority>,
     },
+    /// An automatic poll of the repository at `root` (D6 B1). Not an
+    /// `Intent`: it does not go through the mutation boundary. `restart`
+    /// resends `operation` after `Busy`, an interruption or a launch
+    /// takeover (R-4); otherwise `operation` is new.
+    Poll {
+        root: Root,
+        operation: OperationId,
+        restart: bool,
+    },
 }
 
 struct Job {
@@ -195,7 +230,7 @@ impl Job {
     fn cancelled(&self) -> bool {
         match &self.work {
             Work::Execute { cancel, .. } | Work::GiveUp { cancel, .. } => cancel.is_cancelled(),
-            Work::ObserveHost { .. } => false,
+            Work::ObserveHost { .. } | Work::Poll { .. } => false,
         }
     }
 
@@ -237,11 +272,100 @@ pub(crate) struct SendMark(u64);
 /// The job the worker is running.
 struct Running {
     id: DesktopRequestId,
-    /// `None` for a host observation, which cannot be cancelled.
+    /// The lane it was taken from.
+    lane: Lane,
+    /// `None` for a host observation, which cannot be cancelled, and for a
+    /// poll, which has no token. A poll is stopped through `cancel_poll` by
+    /// the cancel task (P-1) that `ask_poll_cancel` starts, and `quit()` asks
+    /// it.
     cancel: Option<CancellationToken>,
     accepted: bool,
     /// Whether its command honours the token after acceptance (R-1).
     stops_at_safe_points: bool,
+    /// The poll this is, and whether a stop was asked of it (P-1, P-2).
+    poll: Option<PollRun>,
+    /// Whether it is a `ContextRetire`, of either lane, which a graceful
+    /// quit waits for and does not cancel: stopped part-way, the item would
+    /// be left pending (decision 28, R-38; owner, 2026-11-10).
+    retirement: bool,
+}
+
+/// A running automatic poll, and the stop asked of it. The flag is the
+/// worker's: the library's cancel can be lost (Fact 30), so the worker also
+/// checks this before every `poll_automatic` (P-2).
+struct PollRun {
+    root: Root,
+    op: OperationId,
+    asked: Option<CancelCause>,
+}
+
+/// How firmly a cause ends a poll: quit, then a configuration change, then a
+/// takeover's stored cancel, then a user job's preemption. The strongest ask
+/// names the answer.
+fn firmness(cause: CancelCause) -> u8 {
+    match cause {
+        CancelCause::Quit => 3,
+        CancelCause::Reconfiguration => 2,
+        CancelCause::Takeover => 1,
+        CancelCause::Preemption => 0,
+    }
+}
+
+/// Asks the running poll, if there is one, to stop for `cause`. The first ask
+/// of a poll sends `PreemptPoll`; later asks only name a firmer cause, so
+/// quit, a reconfiguration and any number of user jobs share one cancel task
+/// (P-7). False when no poll is running.
+fn ask_poll_cancel(shared: &Shared, state: &mut State, cause: CancelCause) -> bool {
+    let Some(running) = state.running.as_mut() else {
+        return false;
+    };
+    let id = running.id;
+    let Some(poll) = running.poll.as_mut() else {
+        return false;
+    };
+    let first = poll.asked.is_none();
+    if poll
+        .asked
+        .is_none_or(|asked| firmness(cause) > firmness(asked))
+    {
+        poll.asked = Some(cause);
+    }
+    if first {
+        shared.send(WorkerEvent::PreemptPoll {
+            root: poll.root.clone(),
+            op: poll.op,
+            id,
+        });
+    }
+    true
+}
+
+/// Whether the poll `op` is the job the worker is running now: the cancel
+/// task's reason to go on (P-1). It holds the shared state, not a
+/// `WorkerHandle`, so it never ends the worker by being the last to let go.
+#[derive(Clone)]
+pub(crate) struct PollWatch(Arc<Shared>, Option<DesktopRequestId>);
+
+impl PollWatch {
+    /// The watch of the run that job `id` is: a later run of the same
+    /// operation is another job, and is not watched.
+    pub(crate) fn for_run(mut self, id: DesktopRequestId) -> Self {
+        self.1 = Some(id);
+        self
+    }
+
+    pub(crate) fn running(&self, op: OperationId) -> bool {
+        let state = self.0.lock();
+        // A worker that is gone (shut down, or ended by a panic) answers no
+        // poll, so the cancel task must not wait for one.
+        !state.shut_down
+            && state.running.as_ref().is_some_and(|running| {
+                // A watch of one run is about that job alone: a restart of
+                // the operation is another job.
+                self.1.is_none_or(|id| running.id == id)
+                    && running.poll.as_ref().is_some_and(|poll| poll.op == op)
+            })
+    }
 }
 
 #[derive(Default)]
@@ -252,12 +376,21 @@ struct State {
     running: Option<Running>,
     /// Set by `quit`: nothing more is admitted.
     closed: bool,
-    /// Set when the last handle is dropped: the thread ends once the
-    /// running job returns.
+    /// Set when the last handle is dropped, or by a graceful exit: the
+    /// thread ends once the running job returns.
     shut_down: bool,
     submitted: HashMap<DesktopRequestId, Submitted>,
     /// How many attempts have been queued.
     sends: u64,
+    /// The thread has ended, for a test: set by the thread itself, as it
+    /// goes, so a join that did not wait shows.
+    #[cfg(test)]
+    ended: bool,
+    /// For a test: the record state every finished attempt is kept as, in
+    /// place of what `show_request` says. A canned answer cannot leave a
+    /// real record `Accepted` (that needs the transport's claim).
+    #[cfg(test)]
+    forced_record: Option<RecordState>,
 }
 
 impl State {
@@ -291,6 +424,9 @@ struct Shared {
     events: mpsc::UnboundedSender<WorkerEvent>,
     /// The keys declined with Not now, shared with the provider (R-13).
     declined: DeclinedKeys,
+    /// The worker thread, until a graceful exit joins it
+    /// (`WorkerHandle::shut_down_and_join`).
+    thread: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl Shared {
@@ -303,6 +439,23 @@ impl Shared {
     /// Sends to the UI. A UI that is gone wants nothing more.
     fn send(&self, event: WorkerEvent) {
         let _ = self.events.unbounded_send(event);
+    }
+}
+
+/// Marks the worker gone when its thread ends, a panic included: nothing is
+/// running then, and the cancel task of a poll (`PollWatch`) stops instead of
+/// resending for ever.
+struct WorkerEnd(Arc<Shared>);
+
+impl Drop for WorkerEnd {
+    fn drop(&mut self) {
+        let mut state = self.0.lock();
+        state.shut_down = true;
+        state.running = None;
+        #[cfg(test)]
+        {
+            state.ended = true;
+        }
     }
 }
 
@@ -336,12 +489,17 @@ impl WorkerHandle {
             changed: Condvar::new(),
             events,
             declined: DeclinedKeys::default(),
+            thread: Mutex::new(None),
         });
         let worker = shared.clone();
-        thread::Builder::new()
+        let thread = thread::Builder::new()
             .name("manyhands-worker".to_owned())
-            .spawn(move || run(&worker, backend.as_ref()))
+            .spawn(move || {
+                let _ends = WorkerEnd(worker.clone());
+                run(&worker, backend.as_ref());
+            })
             .expect("failed to start the Manyhands worker thread");
+        *shared.thread.lock().unwrap_or_else(PoisonError::into_inner) = Some(thread);
         let handle = Self {
             owner: Arc::new(Owner(shared)),
         };
@@ -381,6 +539,15 @@ impl WorkerHandle {
         request_id: RequestId,
     ) -> DesktopRequestId {
         submit(self.shared(), intent, lane, None, None, request_id)
+    }
+
+    /// The keys the request `id`'s last attempt asked the provider for,
+    /// answered or not: a Check now's failure names no key (C3).
+    pub(crate) fn asked_keys(
+        &self,
+        id: DesktopRequestId,
+    ) -> Vec<manyhands::repository::SharedKeyId> {
+        self.shared().declined.asked_for(id)
     }
 
     /// Queues the request `id` again, under its own request ID, so the
@@ -427,15 +594,21 @@ impl WorkerHandle {
         self.shared().lock().submitted.get(&id)?.record
     }
 
+    /// Makes every finished attempt's record state `record` (a test only).
+    #[cfg(test)]
+    pub(crate) fn force_record_for_testing(&self, record: Option<RecordState>) {
+        self.shared().lock().forced_record = record;
+    }
+
     /// What the request `id`'s last Give up found, until a retry.
     pub(crate) fn gave_up(&self, id: DesktopRequestId) -> Option<GaveUp> {
         self.shared().lock().submitted.get(&id)?.gave_up
     }
 
-    /// Unlock…: clears the Not now mark of `key_id`, so its next request
-    /// prompts again (R-3, R-13). True when it was declined. Unlock… uses
-    /// `clear_declined_for`; this per-key form serves the tests.
-    #[cfg(test)]
+    /// Unlock… on a needs-attention entry: clears the Not now mark of
+    /// `key_id`, so its next request prompts again (R-3, R-13, C3). The
+    /// entry names the key and no request, so this is the per-key form of
+    /// `clear_declined_for`. True when it was declined.
     pub(crate) fn clear_declined(&self, key_id: manyhands::repository::SharedKeyId) -> bool {
         self.shared().declined.clear(key_id)
     }
@@ -587,6 +760,33 @@ impl WorkerHandle {
                 .any(|job| picked(&job.id))
     }
 
+    /// Whether the user lane holds work: a user job queued, waiting out
+    /// `busy` or running. Background jobs do not count, so a preempted poll
+    /// is not kept waiting by them (R-34, B2).
+    pub(crate) fn user_lane_busy(&self) -> bool {
+        let state = self.shared().lock();
+        !state.user.is_empty()
+            || state
+                .running
+                .as_ref()
+                .is_some_and(|running| running.lane == Lane::User)
+    }
+
+    /// Whether a retirement of the item `id` of `kind` in `root` is queued,
+    /// waiting out `busy` or running, of either lane. The one place that
+    /// answers it, keyed by repository, kind and item ID.
+    pub(crate) fn retirement_in_flight(&self, root: &str, kind: ItemDtoKind, id: &str) -> bool {
+        self.in_flight(|intent| {
+            matches!(
+                intent,
+                Intent::ContextRetire { root: asked, kind: asked_kind, id: asked_id }
+                    if asked.to_str() == Some(root)
+                        && super::retire_kind(*asked_kind) == kind
+                        && asked_id.to_string() == id
+            )
+        })
+    }
+
     /// A provider that asks this worker's UI, as the worker's own does,
     /// and shares its declined keys: for a test that raises a prompt from
     /// a plain thread.
@@ -601,7 +801,26 @@ impl WorkerHandle {
     /// from a plain thread through `provider`.
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn attempting_for_testing(&self, id: Option<DesktopRequestId>) {
-        self.shared().declined.attempting(id);
+        self.shared().declined.attempting(id, Lane::User);
+    }
+
+    /// Whether `key_id` is declined now (a test).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn is_declined(&self, key_id: manyhands::repository::SharedKeyId) -> bool {
+        self.shared().declined.is_declined(key_id)
+    }
+
+    /// Declines `key_id` as the person's Not now would (a test).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn decline_for_testing(&self, key_id: manyhands::repository::SharedKeyId) {
+        self.shared().declined.decline_for_testing(key_id);
+    }
+
+    /// As `attempting_for_testing`, for a job of `lane`: a background job
+    /// is refused every prompt (B5).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn attempting_in_for_testing(&self, id: Option<DesktopRequestId>, lane: Lane) {
+        self.shared().declined.attempting(id, lane);
     }
 
     /// The running job, if any.
@@ -639,6 +858,33 @@ impl WorkerHandle {
             .count()
     }
 
+    /// Removes the queued requests that ask for what `pick` picks, and
+    /// tells the UI each was removed. A request already running is never
+    /// signalled: a retirement stopped part-way leaves the item pending
+    /// (R-11, RT-10, decision 28). Returns how many were removed.
+    pub(crate) fn cancel_queued(&self, pick: impl Fn(&Intent) -> bool) -> usize {
+        let shared = self.shared();
+        let mut state = shared.lock();
+        let ids: Vec<DesktopRequestId> = state
+            .user
+            .iter()
+            .chain(&state.background)
+            .map(|job| job.id)
+            .filter(|id| {
+                state
+                    .submitted
+                    .get(id)
+                    .is_some_and(|submitted| pick(&submitted.intent))
+            })
+            .collect();
+        for id in &ids {
+            if state.remove_queued(*id) {
+                shared.send(WorkerEvent::Removed(*id));
+            }
+        }
+        ids.len()
+    }
+
     /// Stops the request `id` if it still can be.
     pub(crate) fn cancel(&self, id: DesktopRequestId) -> CancelResult {
         let shared = self.shared();
@@ -653,6 +899,7 @@ impl WorkerHandle {
                 cancel: Some(cancel),
                 accepted,
                 stops_at_safe_points,
+                ..
             }) if *running == id && (!accepted || *stops_at_safe_points) => {
                 cancel.cancel();
                 CancelResult::Signalled
@@ -677,37 +924,68 @@ impl WorkerHandle {
         id
     }
 
+    /// Asks the running automatic poll, if any, to stop for `cause`: sets its
+    /// flag and, the first time, sends `PreemptPoll` for the drain's cancel
+    /// task (P-1, P-7). A user job admitted while a poll runs does this by
+    /// itself, with `Preemption`; `quit()` asks with `Quit` and a
+    /// reconfiguration (the scheduler) with `Reconfiguration`. True when a poll was
+    /// running.
+    pub(crate) fn ask_poll_cancel(&self, cause: CancelCause) -> bool {
+        let shared = self.shared();
+        ask_poll_cancel(shared, &mut shared.lock(), cause)
+    }
+
+    /// What the cancel task asks whether its poll is still running.
+    pub(crate) fn poll_watch(&self) -> PollWatch {
+        PollWatch(self.owner.0.clone(), None)
+    }
+
+    /// The keys the background job `id`'s last attempt was refused a prompt
+    /// for (B5): not declined, and what a retirement's `unlock_required`
+    /// answer, which names no key, is held under.
+    pub(crate) fn refused_keys(
+        &self,
+        id: DesktopRequestId,
+    ) -> Vec<manyhands::repository::SharedKeyId> {
+        self.shared().declined.refused_for(id)
+    }
+
+    /// Queues an automatic poll of the repository at `root` on the
+    /// background lane, under `operation` (D6 B1): a new ID from
+    /// `OperationId::new()`, or the stored one for a `restart`. The UI
+    /// hears `WorkerEvent::Polled` when it ends. `None` once quitting has
+    /// closed the queue: nothing is queued.
+    pub(crate) fn submit_poll(
+        &self,
+        root: Root,
+        operation: OperationId,
+        restart: bool,
+    ) -> Option<DesktopRequestId> {
+        let shared = self.shared();
+        let mut state = shared.lock();
+        if state.closed {
+            return None;
+        }
+        let id = next_id(&mut state);
+        let work = Work::Poll {
+            root,
+            operation,
+            restart,
+        };
+        admit(shared, &mut state, Job::new(id, work, Lane::Background));
+        Some(id)
+    }
+
+    /// Whether the worker thread has ended, for a test: after a join it
+    /// has.
+    #[cfg(test)]
+    pub(crate) fn ended(&self) -> bool {
+        self.shared().lock().ended
+    }
+
     /// Whether quitting has begun: no job is admitted any more.
     pub(crate) fn quitting(&self) -> bool {
         self.shared().lock().closed
-    }
-
-    /// Stops admitting jobs, empties the queue and cancels the running
-    /// job's token. Quitting may go ahead when no job is running;
-    /// otherwise once that job returns.
-    pub(crate) fn quit(&self) -> QuitState {
-        let shared = self.shared();
-        let mut guard = shared.lock();
-        let state = &mut *guard;
-        state.closed = true;
-        let removed: Vec<DesktopRequestId> = state
-            .user
-            .drain(..)
-            .chain(state.background.drain(..))
-            .map(|job| job.id)
-            .collect();
-        for id in removed {
-            shared.send(WorkerEvent::Removed(id));
-        }
-        match &state.running {
-            Some(running) => {
-                if let Some(cancel) = &running.cancel {
-                    cancel.cancel();
-                }
-                QuitState::Finishing(running.id)
-            }
-            None => QuitState::Idle,
-        }
     }
 }
 
@@ -766,7 +1044,7 @@ fn submit(
 
 /// The request in flight that `intent`, under `request_id`, would only
 /// duplicate: a resume of the same operation of the same repository, or a
-/// close or merge under the same library request ID. Queued, waiting out
+/// close, merge or retirement under the same library request ID. Queued, waiting out
 /// `busy`, or running; a finished one is no twin.
 fn in_flight_twin(
     state: &State,
@@ -784,7 +1062,10 @@ fn in_flight_twin(
         (
             Intent::TicketClose { .. } | Intent::DocumentPromote { .. },
             Intent::TicketClose { .. } | Intent::DocumentPromote { .. },
-        ) => submitted.request_id == request_id,
+        )
+        | (Intent::ContextRetire { .. }, Intent::ContextRetire { .. }) => {
+            submitted.request_id == request_id
+        }
         _ => false,
     };
     // One Stop was pressed on is ending: a call sent after the Stop is a
@@ -823,6 +1104,13 @@ fn admit(shared: &Shared, state: &mut State, job: Job) {
     if state.closed {
         shared.send(WorkerEvent::Removed(job.id));
         return;
+    }
+    // Every way a user job enters the worker comes through here (`submit`,
+    // `submit_with_request_id`, `requeue`, `observe_host`; Fact 36), so a
+    // running poll hears of it once, whichever it was (P-1). A background
+    // job, a retirement among them, asks nothing (P-5, P-6).
+    if job.lane == Lane::User {
+        ask_poll_cancel(shared, state, CancelCause::Preemption);
     }
     match job.lane {
         Lane::User => state.user.push_back(job),
@@ -864,8 +1152,17 @@ fn run(shared: &Shared, backend: &dyn Backend) {
         } = job;
         // A key the provider answers `Cancelled` is recorded against the
         // request whose attempt asked for it (R-13).
-        let attempt = matches!(work, Work::Execute { .. } | Work::GiveUp { .. }).then_some(id);
-        shared.declined.attempting(attempt);
+        let attempt = matches!(
+            work,
+            Work::Execute { .. } | Work::GiveUp { .. } | Work::Poll { .. }
+        )
+        .then_some(id);
+        // The provider learns the lane, so a background job never prompts
+        // (B5).
+        shared.declined.attempting(attempt, lane);
+        if matches!(work, Work::Poll { .. }) {
+            shared.declined.polling(id);
+        }
         match work {
             Work::Execute {
                 request_id,
@@ -911,6 +1208,19 @@ fn run(shared: &Shared, backend: &dyn Backend) {
                         .observe_host(&root, authority.as_ref(), &mut session);
                 finish(shared);
                 shared.send(WorkerEvent::HostObserved(id, envelope));
+            }
+            Work::Poll {
+                root,
+                operation,
+                restart,
+            } => {
+                backend.before_job(JobKind::Poll);
+                let attempt = poll::run(backend, &mut session, &root, operation, restart, || {
+                    asked_cause(shared)
+                });
+                // The job is over before the UI hears so (Fact 36).
+                finish(shared);
+                shared.send(WorkerEvent::Polled(root, attempt));
             }
         }
     }
@@ -968,16 +1278,21 @@ fn execute(
         backend,
         kind: intent.job_kind(),
     };
-    let envelope = backend.service().execute(
-        MutationCall {
-            request_id,
-            confirmation,
-            mutation,
-        },
-        session,
-        &mut progress,
-        &cancel,
-    );
+    // A test may put a constructed answer in place of the library's call.
+    let envelope = backend
+        .instead_of_job(intent.job_kind())
+        .unwrap_or_else(|| {
+            backend.service().execute(
+                MutationCall {
+                    request_id,
+                    confirmation,
+                    mutation,
+                },
+                session,
+                &mut progress,
+                &cancel,
+            )
+        });
     // A test may put a constructed answer in place of the library's.
     let envelope = backend.after_job(intent.job_kind()).unwrap_or(envelope);
     // A job answered `busy` waits and is taken again in its own lane, with
@@ -1022,6 +1337,8 @@ fn execute(
     let record = intent
         .stops_at_safe_points()
         .then(|| record_state(backend.service(), request_id));
+    #[cfg(test)]
+    let record = shared.lock().forced_record.or(record);
     let refused = Intent::refused_answer(envelope.outcome, envelope.code, &envelope.recovery);
     if let Some(submitted) = shared.lock().submitted.get_mut(&id) {
         submitted.answers.finished(refused);
@@ -1140,13 +1457,31 @@ fn take(shared: &Shared) -> Option<Job> {
                 Work::Execute { cancel, intent, .. } | Work::GiveUp { cancel, intent, .. } => {
                     (Some(cancel.clone()), intent.stops_at_safe_points())
                 }
-                Work::ObserveHost { .. } => (None, false),
+                Work::ObserveHost { .. } | Work::Poll { .. } => (None, false),
             };
+            let poll = match &job.work {
+                Work::Poll {
+                    root, operation, ..
+                } => Some(PollRun {
+                    root: root.clone(),
+                    op: *operation,
+                    asked: None,
+                }),
+                _ => None,
+            };
+            let retirement = matches!(
+                &job.work,
+                Work::Execute { intent, .. } | Work::GiveUp { intent, .. }
+                    if matches!(**intent, Intent::ContextRetire { .. })
+            );
             state.running = Some(Running {
                 id: job.id,
+                lane: job.lane,
                 cancel,
                 accepted: false,
                 stops_at_safe_points,
+                poll,
+                retirement,
             });
             return Some(job);
         }
@@ -1174,6 +1509,18 @@ fn take(shared: &Shared) -> Option<Job> {
                 .unwrap_or_else(PoisonError::into_inner),
         };
     }
+}
+
+/// Why the running poll was asked to stop, if it was: quit closed the queue,
+/// or a user job, a reconfiguration or quit asked (`ask_poll_cancel`). The
+/// poll reads it before every `poll_automatic` (P-2) and, for a `Cancelled`
+/// answer, to name the cause (R-3).
+fn asked_cause(shared: &Shared) -> Option<CancelCause> {
+    let state = shared.lock();
+    if state.closed {
+        return Some(CancelCause::Quit);
+    }
+    state.running.as_ref()?.poll.as_ref()?.asked
 }
 
 fn finish(shared: &Shared) {
@@ -1209,3 +1556,7 @@ impl ProgressSink for Forward<'_> {
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "worker_retire_tests.rs"]
+mod retire_tests;

@@ -11,19 +11,25 @@
 //! in a repository with a publication remote, offers Stop at a safe point
 //! (R-1, R-15), which reads Stopping… once pressed; a resume stops at safe
 //! points only when it takes up a remote synchronization listed pending,
-//! so any other resume reads Finishing. A running share or post reads its
-//! stage in words ("Sharing · …", "Posting · …"), and a finished share
-//! says its outcome in fixed words and offers the controls that outcome
-//! names in place of the envelope's recovery actions (`outcomes`): a
-//! stopped one says whether part of its work finished and offers Share, a
-//! new request. Stop trying to share gives a request up (decision 8); one
+//! so any other resume reads Finishing. A running share, post or Check now
+//! reads its stage in words ("Sharing · …", "Posting · …", "Checking · …"),
+//! and a finished share says its outcome in fixed words and offers the
+//! controls that outcome names in place of the envelope's recovery actions
+//! (`outcomes`): a stopped one says whether part of its work finished and
+//! offers Share, a new request. Stop trying to share gives a request up (decision 8); one
 //! whose record had already finished says "Already finished" above the
 //! stored answer it replayed, and the answer of a Give up never offers it
 //! again (P14). A draft store that did not open keeps an entry with its
 //! fixed reason at the top, with no Dismiss; so does each session whose
 //! recovery copy could not be written, named by its item's title as read,
 //! with Retry, until a write lands. The launch's "Recovered drafts" entry
-//! (`recovered`) follows the store's, with Review and Dismiss.
+//! (`recovered`) follows the store's, with Review and Dismiss, and so does
+//! a problem with the in-flight record of unfinished checks (`record`).
+//!
+//! What waits for the person comes first in "This session": one entry per
+//! key, host or repository the polling scheduler holds back, with the
+//! repositories it holds back and the action its reason names (`attention`,
+//! D6 C3). The entry goes when the scheduler clears it; there is no Dismiss.
 //!
 //! **Pending in repositories** lists the operations each listed
 //! repository reports with work outstanding: command, scope, operation ID
@@ -62,11 +68,17 @@ use manyhands::{
     results::{Effects, Outcome, RecoveryAction},
 };
 
+mod attempts;
+mod attention;
 mod outcomes;
+mod record;
 mod recovered;
 pub(crate) mod republish;
 mod resume;
+mod retire;
 mod review;
+
+pub(in crate::desktop::view) use retire::RetireStep;
 
 use outcomes::{ALREADY_FINISHED, already_finished};
 pub(crate) use outcomes::{share_result, share_words};
@@ -78,7 +90,7 @@ use crate::desktop::{
         operations::{
             NOT_AVAILABLE_YET, NOT_SENT_AGAIN, Progressing, RecoveryControl, ResumeOffer,
             StopOffer, abandon_offered, draft_flush_failed, drafts_unavailable, progress_words,
-            recovery_control, resume_offer,
+            recovery_control, resume_offer_among,
         },
         stamp::RepoKey,
     },
@@ -295,10 +307,10 @@ impl Workspace {
             .clone()
     }
 
-    /// A request's state in words: a running share or post by its stage,
-    /// naming the publication remote `remote`, and a running lifecycle by
-    /// its latest stage (D5, A3), naming the primary branch `primary`; any
-    /// other as `state_label`.
+    /// A request's state in words: a running share, post or Check now by
+    /// its stage, naming the publication remote `remote`, and a running
+    /// lifecycle by its latest stage (D5, A3), naming the primary branch
+    /// `primary`; any other as `state_label`.
     fn entry_state(
         request: &DesktopRequest,
         remote: Option<&str>,
@@ -546,13 +558,23 @@ impl Workspace {
 
     fn dismiss(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) -> AnyElement {
         let focus = self.control_focus_for(request_id(id, "dismiss"), cx);
-        button(
+        // The action scrolls into view when focus reaches it (E-2), as the
+        // attempt entries' actions do: a Dismiss below the fold of the
+        // scrolled area is reached by Tab (W-6).
+        let marker = self.operations_scroll().marker_within(&focus);
+        let control = button(
             request_id(id, "dismiss"),
             DISMISS,
             Some(&focus),
             cx,
             cx.listener(move |this, _: &ClickEvent, _, cx| this.dismiss_request(id, cx)),
-        )
+        );
+        div()
+            .id(request_id(id, "dismiss-slot"))
+            .relative()
+            .child(control)
+            .child(marker)
+            .into_any_element()
     }
 
     /// A recovery action's control: it runs when it names something this
@@ -653,17 +675,25 @@ impl Workspace {
             .map(|request| request.id)
             .collect();
         let unavailable = self.services().drafts().read(cx).unavailable();
+        let attention = self.attention_entries(cx);
+        let attempts = self.attempt_entries(cx);
         let recovered = self.recovered_entry(cx);
+        let record = self.record_entries(cx);
         let mut section = v_flex()
             .id("session-section")
             .gap_1()
             .child(div().text_sm().child(THIS_SESSION))
+            // What waits for the person comes first (D6 C3).
+            .children(attention)
+            // Then what the latest checks brought in and left alone (D6 A4).
+            .children(attempts)
             // Persistent: the store stays closed for the session, so the
             // entry offers no Dismiss.
             .children(
                 unavailable.map(|reason| text("drafts-unavailable", drafts_unavailable(reason))),
             )
-            .children(recovered);
+            .children(recovered)
+            .children(record);
         let failures = self.services().drafts().read(cx).flush_failures();
         for (id, title, kind) in failures {
             // Until a later flush succeeds: no Dismiss.
@@ -702,14 +732,19 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let muted = cx.theme().muted_foreground;
-        let pending: Vec<(RepoKey, ListState<manyhands::repository::OperationListDto>)> = self
-            .services()
-            .operations()
-            .read(cx)
-            .pending()
-            .iter()
-            .map(|(root, state)| (root.clone(), state.clone()))
-            .collect();
+        // The worker's own running work is not pending (R-23).
+        let pending: Vec<(RepoKey, ListState<manyhands::repository::OperationListDto>)> =
+            self.services().operations().read(cx).pending_shown();
+        // The desktop's own automatic polls are finished by its in-flight
+        // record, not by Resume (D6 L-1); a pending retirement is resumed
+        // from the record's entry (E4, K-27).
+        let (own, entries) = {
+            let operations = self.services().operations().read(cx);
+            (
+                operations.automatic_polls().clone(),
+                operations.entered_operations(),
+            )
+        };
         let mut section = v_flex()
             .id("pending-section")
             .gap_1()
@@ -802,7 +837,7 @@ impl Workspace {
                             ),
                     );
                 let mut controls = h_flex().gap_2();
-                match resume_offer(&operation) {
+                match resume_offer_among(&operation, &own, &entries) {
                     ResumeOffer::Offered => {
                         let focus = self.control_focus_for(
                             format!(
@@ -930,3 +965,35 @@ impl<E: Styled> FocusRing for E {
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "operations_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/check_tests.rs"]
+mod check_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/record_tests.rs"]
+mod record_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/attention_support.rs"]
+mod attention_support;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/attention_tests.rs"]
+mod attention_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/attempts_tests.rs"]
+mod attempts_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/retiring_tests.rs"]
+mod retiring_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/retire_tests.rs"]
+mod retire_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "operations/retire_real_tests.rs"]
+mod retire_real_tests;

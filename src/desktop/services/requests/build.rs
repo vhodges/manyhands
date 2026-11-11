@@ -2,15 +2,16 @@
 
 use manyhands::repository::{
     CommentAddInput, CommitIdentity, ConflictResolutionInput, ConflictResolveInput,
-    ContextPrepareInput, ContextReleaseInput, DocumentCreateInput, DocumentDraft,
-    DocumentMoveInput, DocumentPromoteInput, DocumentRepairInput, DocumentSaveInput,
+    ContextPrepareInput, ContextReleaseInput, ContextRetireInput, DocumentCreateInput,
+    DocumentDraft, DocumentMoveInput, DocumentPromoteInput, DocumentRepairInput, DocumentSaveInput,
     FolderCreateInput, HostApproveInput, HostReplaceInput, IndexRebuildInput, IndexRefreshInput,
     ItemRepublishInput, ItemSyncInput, KeyClearInput, KeyDeleteInput, KeyGenerateInput,
     KeyImportInput, KeyRemoveInput, KeySelectInput, LocalConflictResolutionInput,
     LocalContextResolveInput, LocalContextSyncInput, Mutation, OperationAbandonInput,
-    OperationResumeInput, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput,
-    RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, RepoSyncInput, TicketCloseInput,
-    TicketCreateInput, TicketDraft, TicketRepairInput, TicketSaveInput,
+    OperationResumeInput, PollConfigureInput, PollOnceInput, PollPauseInput, PollResumeInput,
+    RemoteAddInput, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
+    RepoIdentitySetInput, RepoRemoveInput, RepoSyncInput, TicketCloseInput, TicketCreateInput,
+    TicketDraft, TicketRepairInput, TicketSaveInput,
     keys::{KeyProtection, KeyStore, SecretPassphrase},
 };
 
@@ -105,6 +106,18 @@ impl Intent {
             }
             Self::IndexRebuild { root } => {
                 Mutation::IndexRebuild(IndexRebuildInput { root: root.clone() })
+            }
+            Self::PollOnce { root } => Mutation::PollOnce(PollOnceInput { root: root.clone() }),
+            Self::PollConfigure {
+                root,
+                interval_seconds,
+            } => Mutation::PollConfigure(PollConfigureInput {
+                root: root.clone(),
+                interval_seconds: *interval_seconds,
+            }),
+            Self::PollPause { root } => Mutation::PollPause(PollPauseInput { root: root.clone() }),
+            Self::PollResume { root } => {
+                Mutation::PollResume(PollResumeInput { root: root.clone() })
             }
             Self::KeyGenerate { label, protected } => {
                 let protection = if *protected {
@@ -230,6 +243,11 @@ impl Intent {
                     id: id.clone(),
                 })
             }
+            Self::ContextRetire { root, kind, id } => Mutation::ContextRetire(ContextRetireInput {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+            }),
             Self::DocumentCreate {
                 root,
                 id,

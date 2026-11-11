@@ -336,6 +336,14 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The tab open on `key` in this window.
+    pub(in crate::desktop::view) fn tab_of(
+        &self,
+        key: &crate::desktop::model::tabs::TabKey,
+    ) -> Option<TabId> {
+        self.content.tabs.find(key)
+    }
+
     /// Shows the tab `id`, and so the tabs.
     pub(in crate::desktop::view) fn show_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
         if self.content.tabs.activate(id) {

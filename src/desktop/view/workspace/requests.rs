@@ -482,18 +482,7 @@ impl Workspace {
         operation_id: &str,
         cx: &mut Context<Self>,
     ) {
-        let Ok(operation_id) = OperationId::parse(operation_id) else {
-            return;
-        };
-        self.services.worker().submit(
-            Intent::OperationResume {
-                root: PathBuf::from(root),
-                operation_id,
-            },
-            Lane::User,
-            None,
-            None,
-        );
+        self.services.resume(&root, operation_id, cx);
         cx.notify();
     }
 

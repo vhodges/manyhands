@@ -169,6 +169,9 @@ the work review-ready.
   D3. Removing a repository closes its tabs and keeps their drafts.
 - **Quit.** Quitting flushes every session first, with Quit now offered
   while it waits. If a flush fails, the user chooses Quit anyway or Cancel.
+  Amended 2026-11-09 by Wave 03 D6: after ten seconds of waiting, the text
+  becomes "Still stopping — waiting for Manyhands to reach a safe point. Your
+  work is saved."
 - **Recovery surface (decision 1).** A Drafts page in the content region
   lists every stored draft with its target, last recovery save time and
   state, and offers Inspect (fields and comparison), Restore where the

@@ -377,6 +377,12 @@ the places the design puts them.
 **Out of scope:** The Add repository sheet (Cycle 05); background polling
 itself (D6).
 
+Amended 2026-11-09 by Wave 03 D6 (decision 13, design W-5): this Cycle also
+owns rewrapping the three operation-area rows that Cycle 01's proposed K-19
+names (the draft-flush Retry, the pending repository Retry, and pending
+controls such as Abandon), and its "Check all for updates now" submits D6's
+Check now per repository.
+
 **Exit evidence:** Failures persist until resolved and appear in both
 Activity and the popover; every popover action works by keyboard; Activity
 can be hidden and the popover still works; each repository state comes from

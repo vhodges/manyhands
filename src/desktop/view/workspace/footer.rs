@@ -27,11 +27,12 @@ use crate::desktop::{
 };
 
 impl Workspace {
-    /// How many things await the person (decisions 3 and 14).
+    /// How many things await the person (decisions 3, 11 and 14).
     pub(in crate::desktop::view) fn attention(&self, cx: &gpui_kit::App) -> usize {
         needs_attention(
             self.services.operations().read(cx),
             self.services.drafts().read(cx),
+            self.services.scheduler().read(cx).schedule(),
         )
     }
 

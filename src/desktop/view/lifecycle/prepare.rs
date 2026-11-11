@@ -15,8 +15,8 @@ use manyhands::{
 };
 
 use super::{
-    CONTINUE, LifecycleDialog, NOT_SENT, OPEN_FOLDER, Phase, RESUME, STILL_RUNNING, button,
-    share_main, sharing_main, text,
+    CHECK_NOW, CHECKING_ORIGIN, CONTINUE, LifecycleDialog, NOT_SENT, OPEN_FOLDER, Phase, RESUME,
+    STILL_RUNNING, button, share_main, sharing_main, text,
 };
 use crate::desktop::{
     model::{
@@ -341,6 +341,29 @@ impl LifecycleDialog {
         }
     }
 
+    /// Whether this process's own Check now of `root` is queued or running.
+    fn checking_origin(&self, root: &std::path::Path) -> bool {
+        self.services
+            .worker()
+            .in_flight(|intent| matches!(intent, Intent::PollOnce { root: asked } if asked == root))
+    }
+
+    /// Check now, from a blocked prepare whose way out is the poll: `poll
+    /// once` of the item's repository, as the person's own action. The
+    /// dialog does not prepare again by itself (D6 C2).
+    fn check_now(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.root().map(|root| root.to_path_buf()) else {
+            return;
+        };
+        if self.checking_origin(&root) {
+            return;
+        }
+        self.services
+            .worker()
+            .submit(Intent::PollOnce { root }, Lane::User, None, None);
+        cx.notify();
+    }
+
     /// The held item's one way on, as a button; while the item's lifecycle
     /// is in flight, that it is still running.
     pub(super) fn held_action(
@@ -388,6 +411,10 @@ impl LifecycleDialog {
         let muted = cx.theme().muted_foreground;
         let primary = self.primary();
         let known = self.known_primary();
+        // The poll is a way out with a button of its own (D6 C2): while
+        // this process's Check now runs, the dialog says so instead.
+        let polls = way_out.contains(&LifecycleWayOut::PollOnce);
+        let checking = polls && self.root().is_some_and(|root| self.checking_origin(root));
         let guidance: Vec<String> = way_out
             .iter()
             .filter_map(|step| guidance(step, item, &primary))
@@ -410,6 +437,7 @@ impl LifecycleDialog {
             .children(
                 shared.then(|| text("lifecycle-sharing-main", sharing_main(&primary)).text_sm()),
             )
+            .children(checking.then(|| text("lifecycle-checking", CHECKING_ORIGIN).text_sm()))
             .child(
                 text("lifecycle-code", code.as_str())
                     .text_xs()
@@ -426,6 +454,10 @@ impl LifecycleDialog {
                 false,
                 move |_, _, cx: &mut App| cx.open_with_system(&root),
             ));
+        }
+        if polls && !checking {
+            let check = self.on(cx, |dialog, _, cx| dialog.check_now(cx));
+            actions.push(button("lifecycle-check-now", CHECK_NOW, false, check));
         }
         if way_out.contains(&LifecycleWayOut::SharePrimary) && !shared {
             let share = self.on(cx, |dialog, _, cx| dialog.share_main(cx));

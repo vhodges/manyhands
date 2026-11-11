@@ -62,6 +62,9 @@ impl Workspace {
         let Some(roots) = self.listed() else {
             return;
         };
+        // The launch poll, and the schedule of a repository that came or
+        // went (D6 B6, R-16).
+        self.services.repositories_listed(&roots, cx);
         if !self.launched {
             self.launched = true;
             if self.services.launch_refresh() {

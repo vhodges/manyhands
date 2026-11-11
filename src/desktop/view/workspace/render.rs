@@ -89,18 +89,22 @@ impl Workspace {
             v_flex().size_full().gap_2().children(notices).child(
                 v_flex()
                     .id("operation-area")
+                    .test_support()
                     .gap_2()
                     .w_full()
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .track_scroll(self.operations_scroll().handle())
                     .children(finishing)
                     .child(
                         h_flex()
                             .gap_4()
                             .items_start()
-                            .child(session.flex_1())
-                            .child(pending.flex_1()),
+                            // Each column may be narrower than its longest
+                            // row, which then wraps inside it (W-6).
+                            .child(session.flex_1().min_w_0())
+                            .child(pending.flex_1().min_w_0()),
                     ),
             ),
         )

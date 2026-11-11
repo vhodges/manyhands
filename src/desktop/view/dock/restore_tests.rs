@@ -13,6 +13,7 @@ use crate::desktop::{
     model::layout::{Layout, PanelKind, Restore, Side, encode, restore, state_for},
     services::{
         JobKind,
+        inflight::InflightStore,
         requests::{Intent, Lane},
     },
     test_support::{fixtures::Fixture, snapshot::RepositorySnapshot},
@@ -177,6 +178,12 @@ fn a_file_that_cannot_be_read_restores_the_default_and_says_so(cx: &mut TestAppC
     fixture.draft_store();
     fixture.resolution_store();
     let data = fixture.data_dir().to_owned();
+    // E-36: the scheduler opens the in-flight store's folder at every
+    // launch, for its instance lock (R-31), whatever the layout file says.
+    // It is here before the launch, as the other stores' are, so the
+    // snapshot of the data directory's entries still catches a store that a
+    // failed layout read adds. What the folder holds is the scheduler's.
+    drop(InflightStore::open(&data));
     // A directory named `layout.json` cannot be read on any platform.
     fs::create_dir(data.join("layout").join("layout.json")).unwrap();
     fs::write(data.join("drafts").join("sentinel"), b"drafts").unwrap();

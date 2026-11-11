@@ -108,6 +108,27 @@ pub(crate) enum Intent {
     IndexRebuild {
         root: PathBuf,
     },
+    /// Check now (D6 C1): `poll once` of the repository's publication
+    /// remote, on the user lane. A resend of it under a request ID is what
+    /// Resume does for a Check now's row left active (L-4, U-15).
+    PollOnce {
+        root: PathBuf,
+    },
+    /// The interval between a repository's automatic polls (D6 C1): a
+    /// policy verb, one write that reports `writing` and is never accepted
+    /// (Fact 2). Sent again, last commit wins (C5 decision 15).
+    PollConfigure {
+        root: PathBuf,
+        interval_seconds: u64,
+    },
+    /// Pauses a repository's automatic polling (a policy verb).
+    PollPause {
+        root: PathBuf,
+    },
+    /// Resumes a repository's automatic polling (a policy verb).
+    PollResume {
+        root: PathBuf,
+    },
     /// Whether the key is protected, never the passphrase.
     KeyGenerate {
         label: String,
@@ -187,6 +208,16 @@ pub(crate) enum Intent {
     /// command records a checkpoint, so the desktop never sends one again
     /// across the other (R-78, `undone_by`).
     ContextRelease {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+    },
+    /// Retires the completed item's local copy: its work context, branch
+    /// and worktree (D6 Part E, Fact 24). Unconfirmed; every run takes a
+    /// fresh authenticated observation, so on the background lane it never
+    /// prompts (B5) and answers a locked key as `unlock_required`. The
+    /// library decides everything about safety.
+    ContextRetire {
         root: PathBuf,
         kind: AuthoringKind,
         id: ItemId,
@@ -343,6 +374,10 @@ impl Intent {
             | Self::RemoteSelect { .. }
             | Self::IndexRefresh { .. }
             | Self::IndexRebuild { .. }
+            | Self::PollOnce { .. }
+            | Self::PollConfigure { .. }
+            | Self::PollPause { .. }
+            | Self::PollResume { .. }
             | Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -353,6 +388,7 @@ impl Intent {
             | Self::TicketSave { .. }
             | Self::ContextPrepare { .. }
             | Self::ContextRelease { .. }
+            | Self::ContextRetire { .. }
             | Self::DocumentCreate { .. }
             | Self::TicketCreate { .. }
             | Self::DocumentMove { .. }
@@ -392,6 +428,10 @@ impl Intent {
             Self::RemoteSelect { .. } => "Select remote",
             Self::IndexRefresh { .. } => "Refresh index",
             Self::IndexRebuild { .. } => "Rebuild index",
+            Self::PollOnce { .. } => "Check now",
+            Self::PollConfigure { .. } => "Set check interval",
+            Self::PollPause { .. } => "Pause checking",
+            Self::PollResume { .. } => "Resume checking",
             Self::KeyGenerate { .. } => "Generate key",
             Self::KeyImport { .. } => "Import key",
             Self::KeySelect { .. } => "Select key",
@@ -406,6 +446,7 @@ impl Intent {
             Self::TicketSave { .. } => "Save ticket",
             Self::ContextPrepare { .. } => "Prepare to edit",
             Self::ContextRelease { .. } => "Release work context",
+            Self::ContextRetire { .. } => "Retire local copy",
             Self::DocumentCreate { .. } => "Create document",
             Self::TicketCreate { .. } => "Create ticket",
             Self::DocumentMove { .. } => "Move document",
@@ -436,6 +477,10 @@ impl Intent {
             | Self::RemoteSelect { root, .. }
             | Self::IndexRefresh { root }
             | Self::IndexRebuild { root }
+            | Self::PollOnce { root }
+            | Self::PollConfigure { root, .. }
+            | Self::PollPause { root }
+            | Self::PollResume { root }
             | Self::HostApprove { root, .. }
             | Self::HostReplace { root, .. }
             | Self::OperationResume { root, .. }
@@ -444,6 +489,7 @@ impl Intent {
             | Self::TicketSave { root, .. }
             | Self::ContextPrepare { root, .. }
             | Self::ContextRelease { root, .. }
+            | Self::ContextRetire { root, .. }
             | Self::DocumentCreate { root, .. }
             | Self::TicketCreate { root, .. }
             | Self::DocumentMove { root, .. }
@@ -485,6 +531,7 @@ impl Intent {
         match self {
             Self::IndexRefresh { .. }
             | Self::IndexRebuild { .. }
+            | Self::PollOnce { .. }
             | Self::OperationResume { .. }
             | Self::OperationAbandon { .. }
             | Self::RepoCreate { .. }
@@ -493,6 +540,7 @@ impl Intent {
             | Self::TicketSave { .. }
             | Self::ContextPrepare { .. }
             | Self::ContextRelease { .. }
+            | Self::ContextRetire { .. }
             | Self::DocumentCreate { .. }
             | Self::TicketCreate { .. }
             | Self::DocumentMove { .. }
@@ -513,6 +561,9 @@ impl Intent {
             | Self::RemoteAdd { .. }
             | Self::RemoteRemove { .. }
             | Self::RemoteSelect { .. }
+            | Self::PollConfigure { .. }
+            | Self::PollPause { .. }
+            | Self::PollResume { .. }
             | Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -526,11 +577,12 @@ impl Intent {
 
     /// Whether the call's cancellation token is honoured after the library
     /// accepts the command, at a synchronization's safe points (fact 9): the
-    /// comment, the two syncs, a republish (P21), `operation resume`, a
-    /// promotion or closure, which stops between its steps (D5 fact 2), a
-    /// local synchronization and its resolution, and a remote resolution.
-    /// Every other command, the saves among them, cannot be stopped once
-    /// accepted.
+    /// comment, the two syncs, a republish (P21), `operation resume`, Check
+    /// now (`poll once`), a retirement (Fact 24), a promotion or closure, which stops between its
+    /// steps (D5 fact 2), a local synchronization and its resolution, and a
+    /// remote resolution.
+    /// Every other command, the saves and the poll policy verbs among them
+    /// (one write, never accepted: Fact 2), cannot be stopped once accepted.
     ///
     /// This is not the library's `Command::stops_at_safe_points`
     /// (`R/mutation/command.rs:407-414`), which says whether `request
@@ -543,6 +595,8 @@ impl Intent {
     pub(crate) fn stops_at_safe_points(&self) -> bool {
         match self {
             Self::OperationResume { .. }
+            | Self::PollOnce { .. }
+            | Self::ContextRetire { .. }
             | Self::CommentAdd { .. }
             | Self::ItemSync { .. }
             | Self::RepoSync { .. }
@@ -561,6 +615,9 @@ impl Intent {
             | Self::RemoteSelect { .. }
             | Self::IndexRefresh { .. }
             | Self::IndexRebuild { .. }
+            | Self::PollConfigure { .. }
+            | Self::PollPause { .. }
+            | Self::PollResume { .. }
             | Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -667,6 +724,10 @@ impl Intent {
             Self::RemoteSelect { .. } => JobKind::RemoteSelect,
             Self::IndexRefresh { .. } => JobKind::IndexRefresh,
             Self::IndexRebuild { .. } => JobKind::IndexRebuild,
+            Self::PollOnce { .. } => JobKind::PollOnce,
+            Self::PollConfigure { .. } => JobKind::PollConfigure,
+            Self::PollPause { .. } => JobKind::PollPause,
+            Self::PollResume { .. } => JobKind::PollResume,
             Self::KeyGenerate { .. } => JobKind::KeyGenerate,
             Self::KeyImport { .. } => JobKind::KeyImport,
             Self::KeySelect { .. } => JobKind::KeySelect,
@@ -681,6 +742,7 @@ impl Intent {
             Self::TicketSave { .. } => JobKind::TicketSave,
             Self::ContextPrepare { .. } => JobKind::ContextPrepare,
             Self::ContextRelease { .. } => JobKind::ContextRelease,
+            Self::ContextRetire { .. } => JobKind::ContextRetire,
             Self::DocumentCreate { .. } => JobKind::DocumentCreate,
             Self::TicketCreate { .. } => JobKind::TicketCreate,
             Self::DocumentMove { .. } => JobKind::DocumentMove,
@@ -804,3 +866,15 @@ pub(crate) enum RequestState {
 #[cfg(test)]
 #[path = "requests_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "requests_poll_tests.rs"]
+mod poll_tests;
+
+#[cfg(test)]
+#[path = "requests_retire_tests.rs"]
+mod retire_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "requests_poll_worker_tests.rs"]
+mod poll_worker_tests;
