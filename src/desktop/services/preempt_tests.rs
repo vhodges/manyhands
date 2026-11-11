@@ -403,3 +403,38 @@ fn a_cancel_task_ignores_a_restart_of_its_operation() {
         "a later run of the operation was cancelled"
     );
 }
+
+/// Review I-2: the drain's cancel task is pinned to the job the worker named
+/// in `PreemptPoll`, not to the operation alone. The `Canceller` the drain
+/// starts its tasks with watches that job's run, and no other.
+#[gpui_kit::test]
+async fn the_drains_canceller_watches_the_named_run(cx: &mut TestAppContext) {
+    use futures::{StreamExt, executor::block_on};
+
+    use crate::desktop::services::Canceller;
+    cx.executor().allow_parking();
+    let mut h = Harness::new();
+    let op = OperationId::new();
+    h.backend.answer_poll(cancelled());
+    let gate = h.hold_poll(op, false);
+    assert!(h.worker.ask_poll_cancel(CancelCause::Preemption));
+    let id = loop {
+        if let WorkerEvent::PreemptPoll { id, .. } =
+            block_on(h.events.next()).expect("the worker hung up")
+        {
+            break id;
+        }
+    };
+    let canceller = Canceller {
+        backend: h.backend.clone(),
+        watch: h.worker.poll_watch(),
+        executor: cx.executor().clone(),
+    };
+    assert!(canceller.watch_for(id).running(op), "the named run");
+    assert!(
+        !canceller.watch_for(DesktopRequestId(id.0 + 1)).running(op),
+        "another job's run of the same operation is not watched"
+    );
+    drop(gate);
+    let _ = h.until_polled();
+}

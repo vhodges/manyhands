@@ -841,6 +841,72 @@ async fn unlock_picks_reachable(cx: &mut TestAppContext) {
     assert_eq!(retirements_sent(&world, cx).len(), 1);
 }
 
+/// Review I-1: `reconcile` is guarded by `entry_epoch` alone once a read
+/// no longer moves it, so every event that begins, answers or settles an
+/// entry must move it. Each of the three sites, singly.
+#[gpui_kit::test]
+async fn retire_entry_events_move_the_epoch(cx: &mut TestAppContext) {
+    let epoch = |world: &World, cx: &mut TestAppContext| {
+        world
+            .services
+            .scheduler()
+            .read_with(cx, |scheduler, _| scheduler.entry_epoch)
+    };
+
+    // A retirement submitted (`resend_retirement`).
+    {
+        let (world, root) = polled(cx).await;
+        world.backend.inner().answer_job(
+            JobKind::ContextRetire,
+            answer(State::Retired, Code::Ok, Removal::Observed),
+        );
+        let before = epoch(&world, cx);
+        retire(&world, &root, Lane::User, cx);
+        assert!(epoch(&world, cx) > before, "a submit moves the epoch");
+    }
+
+    // A pending retirement ended by an Abandon or a Resume (`pending_ended`).
+    {
+        let (world, root, _, operation) = left_pending(cx, None).await;
+        let before = epoch(&world, cx);
+        world.heard(
+            vec![Heard::PendingEnded {
+                root,
+                operation,
+                finished: true,
+            }],
+            cx,
+        );
+        assert!(epoch(&world, cx) > before, "an ended row moves the epoch");
+        assert!(entered(&world, cx).is_empty());
+    }
+
+    // A retirement's progress (`retiring`), and the stronger claim: a list
+    // read before it, complete and without the entry's row, ends nothing.
+    {
+        let (world, root, request, _) = left_pending(cx, None).await;
+        let before = epoch(&world, cx);
+        let operation = OperationId::new();
+        world.heard(
+            vec![Heard::Retirement(Retiring::Operation {
+                request,
+                operation,
+            })],
+            cx,
+        );
+        assert!(epoch(&world, cx) > before, "progress moves the epoch");
+        world.services.scheduler().update(cx, |scheduler, cx| {
+            scheduler.reconciled(&root, before, Some(empty_list()), cx)
+        });
+        assert_eq!(
+            entered(&world, cx),
+            [request],
+            "a read that began before the change ends nothing"
+        );
+        assert!(retiring_now(&world, &root, cx));
+    }
+}
+
 /// Review 7: "a retirement of the item is queued or running" is keyed by
 /// repository, kind and item ID, wherever it is asked. A queued retirement
 /// of a document that has the pending ticket's ID does not hold the ticket:

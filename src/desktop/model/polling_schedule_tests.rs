@@ -238,3 +238,33 @@ fn preempted_three_times() {
     assert_eq!(fx.due(), vec![root("r")]);
     assert_eq!(fx.repo("r").preempted, 0);
 }
+
+/// Review minor 1: a repository removed while its poll runs still holds the
+/// one-at-a-time slot until that poll ends. An `after` that is not a poll's
+/// end (a failed Check now's) does not free it; `poll_ended` does.
+#[test]
+fn a_removed_repositorys_poll_holds_the_slot_until_it_ends() {
+    let mut fx = Fx::new();
+    fx.add("a", policy(Some(fx.at(-10))));
+    fx.add("b", policy(Some(fx.at(-10))));
+    fx.schedule.mark_queued(&root("a"));
+    assert!(fx.due().is_empty(), "one at a time");
+    fx.schedule.remove(&root("a"));
+    assert!(fx.due().is_empty(), "its poll still runs");
+
+    // A Check now's failure is applied through `after`: not a poll's end.
+    let attempt = PollAttempt {
+        root: root("a"),
+        operation: OperationId::new(),
+        completed_at: None,
+        answer: Answer::Busy,
+        next_eligible_at: None,
+        targets: Vec::new(),
+        index_pending: false,
+    };
+    assert!(fx.schedule.after(&fx.now(), &attempt).is_none());
+    assert!(fx.due().is_empty(), "still held");
+
+    fx.schedule.poll_ended(&root("a"));
+    assert_eq!(fx.due(), vec![root("b")]);
+}

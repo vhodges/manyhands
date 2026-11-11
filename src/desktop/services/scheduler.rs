@@ -213,6 +213,9 @@ pub(crate) fn apply(
     launched_at: OffsetDateTime,
 ) -> Option<AttemptSummary> {
     store.poll_answered(attempt, active);
+    // The poll is over, whatever the answer counts for: a repository removed
+    // meanwhile no longer holds the one-at-a-time slot.
+    schedule.poll_ended(&attempt.root);
     if !counts(attempt, launched_at) {
         schedule.abandon(&attempt.root);
         return None;

@@ -238,12 +238,18 @@ impl PollSchedule {
         }
     }
 
+    /// The poll of `root` answered (or will not): a repository removed
+    /// while it ran no longer holds the one-at-a-time slot. Only a poll's
+    /// end calls this; a Check now's `after` is not a poll ending.
+    pub fn poll_ended(&mut self, root: &Root) {
+        self.orphans.remove(root);
+    }
+
     /// A queued or running poll will not answer (it was dropped before it
     /// ran, the worker panicked or its channel closed): the repository goes
     /// back to `Idle` with its policy read again, so the one-at-a-time rule
     /// cannot silence polling for good. Returns whether it was in flight.
     pub fn abandon(&mut self, root: &Root) -> bool {
-        self.orphans.remove(root);
         match self.repos.get_mut(root) {
             Some(repo) if repo.in_flight() => {
                 repo.rearm();
@@ -267,9 +273,6 @@ impl PollSchedule {
     /// The poll's answer (A4). Returns what it summed to; the caller marks
     /// the repository changed and starts Part E's loop from it.
     pub fn after(&mut self, now: &Now, attempt: &PollAttempt) -> Option<AttemptSummary> {
-        // The answer of a poll whose repository was removed meanwhile frees
-        // the slot it held.
-        self.orphans.remove(&attempt.root);
         let repo = self.repos.get_mut(&attempt.root)?;
         Some(repo.apply(&attempt.root, now, attempt))
     }

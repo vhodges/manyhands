@@ -382,7 +382,9 @@ impl Scheduler {
         let host = self.authorities.get(&root).cloned().flatten();
         let reason = reason_of(need, &root, key, host);
         // A loop that began while the key was being read ends with the
-        // repository's wait (RT-8, R-32): it must not send into it.
+        // repository's wait (RT-8, R-32): it must not send into it. It ends
+        // even when `schedule.raise` returns false: a loop cannot coexist
+        // with a poll in flight (R-32), so that is intended.
         self.end_loop(&root, cx);
         if self.schedule.raise(&root, reason) {
             self.publish(cx);
