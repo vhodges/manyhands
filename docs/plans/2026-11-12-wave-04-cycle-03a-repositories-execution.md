@@ -20,8 +20,8 @@ reason.
 
 | Task | Status | Commit | Pushed |
 | --- | --- | --- | --- |
-| 0 | done | (this commit) | yes |
-| 1 | not started | | |
+| 0 | done | `09437383` (ledger); `2aafa5d0` (ticket comment) | yes |
+| 1 | done, review approved with Minors parked | code `a2abc5fa` (base `2aafa5d0`); ledger commit follows it | yes |
 | 2 | not started | | |
 | 3 | not started | | |
 | 4 | not started | | |
@@ -148,9 +148,161 @@ stay valid because Task 3 keeps the id.
 
 **Test edits.** None yet (E-1 to E-16 open).
 
-**U-checks.** U-1 to U-7 open: U-6 and U-7 in Task 1, U-4 in Task 3, U-1 and
-U-2 in Task 5, U-5 in Task 8, U-3 in Task 9.
+**U-checks.** U-1 to U-7 open at Task 0; U-6 and U-7 answered in Task 1
+(below). Open: U-4 in Task 3, U-1 and U-2 in Task 5, U-5 in Task 8, U-3 in
+Task 9.
 
 **Tests run.** None.
 
 **Boundary check:** `git diff --stat origin/main...HEAD -- src ':!src/desktop' tests Cargo.toml Cargo.lock packaging` prints nothing.
+
+## Process rulings
+
+- Ruling: each task has two commits, the implementer's code commit and the
+  orchestrator's ledger commit — only the orchestrator may write the ledger
+  (brief), so it cannot be in the implementer's commit — a reviewer's range is
+  the code commit alone; cost if wrong: one extra commit per task.
+- The superpowers skill (`subagent-driven-development`) was not installed at
+  the start of the session and was installed by the owner during Task 1. Task 0
+  and Task 1's implementation were dispatched before it was loaded, to the same
+  shape (fresh implementer, then a fresh reviewer). Its scratch workspace
+  `.superpowers/` is inside the worktree (git-ignored); it is removed at close
+  with `target/` and `.devenv/`. Where the skill says only four things stop the
+  run, the owner's brief governs: its stop list is the stricter one.
+
+## Task 1: sharing facts the scheduler keeps (Part A)
+
+**Commits.** Code `a2abc5fa` (base `2aafa5d0`, 29 files, all under
+`src/desktop/`). Boundary command prints nothing. Pushed with the ledger
+commit.
+
+**Design checkpoint: passed.** `desktop::model::polling::tests::schedule::
+unshared_follows_attempts_shares_and_saves` is one table with a row for each
+of U1–U15, written before any Task 1 code (red: 12 compile errors for the
+missing interfaces). The reviewer compared it row by row with design Part A
+(`design.md:618-634`): no row weakened, merged or edited to fit; items,
+problems and `as_of` asserted after every step. Extras: a save of an item
+already listed counts once; a save, share and `main_ahead` on a root with no
+schedule log nothing; a new save is `Unpublished`; the first check sets the
+list whole; U14 also pins the Settings line "Not checked yet · 1 not shared
+yet". Every row passed on the first run after implementation.
+
+**U-6: settled.** `scheduler::attention_tests::unlock_after_cancelled_prompt`
+(`services/scheduler_attention_tests.rs:227`) sends a user-lane `PollOnce`
+and the worker's provider prompts; a background poll never prompts
+(`services/worker.rs:1160-1162`). Caveat, raised by the reviewer: the prompt
+in that test comes from the double's `ask_in_check_now`, not a real
+transport; the design cites the same evidence.
+- Ruling: U-6 is settled by the test the plan names — the provider is
+  lane-aware in production code and the plan says this test settles it —
+  decision 9 stands; cost if wrong: decision 9 (a user-lane Check now of a
+  locked key asks for the passphrase) goes back to the owner, and Task 2's
+  Locked rows and Task 5's Check now menu item change.
+
+**U-7: does not hold.** A `LocalContextResolve` envelope names no item
+(`LocalSyncBinding::Resolve` builds `Scope { repository, ..Scope::default() }`,
+`src/repository/mutation/bind/local_sync.rs:258-264`, a library file). Its
+data DTO does carry `item_id` and `kind`; that is a possible later library
+change, which needs a ticket and the owner. Moved to **K-1**: a local-context
+resolve's save, like a conflict resolution's share, shows in "N to share" at
+the next check, not at once. The design's K-1 text (`design.md:1259-1264`)
+names only the conflict resolution's share; the approved design is not edited
+(a ledger amendment instead), and the review-ready summary says so.
+`Heard::Saved` reads `envelope.scope.item_id` for every intent; the test pins
+that the real shape gives `None` and that an envelope naming an item gives
+`Saved { kind: None }`.
+
+**Tests run** (`devenv shell -- cargo test --locked --features
+desktop-test-support --bin manyhands <path> -- --exact`, final run 7 ran,
+7 passed):
+`desktop::model::polling::tests::schedule::unshared_follows_attempts_shares_and_saves`,
+`desktop::model::polling::tests::schedule::to_share_counts_and_finished_shares`,
+`desktop::model::polling::tests::schedule::attempt_summary_counts` (E-9),
+`desktop::model::polling::status::tests::status_text_table` (E-9),
+`desktop::services::scheduler::reconfigure::tests::finished_shares_and_saves_are_heard`,
+`desktop::services::scheduler::entity_tests::the_stored_outcome_and_shared_copy_are_kept`,
+`desktop::services::poll_convert::tests::check_now_attempt_reads_the_report` (E-17).
+`desktop::view::settings::polling_tests::settings_polling_rows` is unchanged
+and was not run: it pins no text that changed (implementer's claim; the
+reviewer could not confirm it from the diff, and it runs at Task 10). Verify
+lines, each exit 0: `cargo fmt --check`, `cargo check --locked --features
+desktop`, `cargo clippy --all-targets --all-features --locked -- -D warnings`.
+The Step 3 tests other than the table were written before the code but were
+compile-red only, not run red separately.
+
+**Test edits.**
+- E-9, as named: `attempt_summary_counts` asserts `to_share.len()` 3 and
+  `problems.len()` 10 per case; `status_text_table` gains `stored: None`, the
+  stored-outcome rows and the "· N not shared yet" rows; `main: false` on 19
+  `TargetParts` and `AttemptTarget` literals (fact 66), by a script keyed on
+  compiler error positions. Test functions of the touched files listed before
+  and after: three additions
+  (`to_share_counts_and_finished_shares`,
+  `unshared_follows_attempts_shares_and_saves`,
+  `the_stored_outcome_and_shared_copy_are_kept`), none lost. The only removed
+  assertion lines are `attempt_summary_counts`' `not_shared` tuple, which E-9
+  replaces.
+- **E-17**: `desktop::services::poll_convert::tests::check_now_attempt_reads_the_report`
+  gains a block asserting that `main` comes from a DTO target that names a ref
+  and has no kind — the Check now path's `main` (Task 1's new field) had no
+  test. It removes no assertion.
+
+**Rulings (implementer's, reviewed).**
+1. "· N not shared yet" is also appended on the checking-off and held lines,
+   not only Polling rows — the design says "whatever its status" (decision 24,
+   P44) — reviewer: consistent; cost if wrong: two rows and two `counted()`
+   calls.
+2. `saved` and `main_ahead` return true when the list changed, like `shared`
+   — symmetry; cost: none visible (only the no-schedule `false` is asserted).
+3. A replayed share also removes the item from `last.listed` — design R-3,
+   so Activity's entry agrees with the count; reviewer: consistent; cost: three
+   lines.
+4. An attempt with no `completed_at` counts as older than every change and
+   older than a list that has an `as_of` — rule 3 states the first part; the
+   second is conservative; reviewer: not a defect, untested; cost: one
+   condition.
+5. `unshared_after(&mut self, root, &AttemptSummary)` uses a new
+   `AttemptSummary::carries_targets()`.
+6. `Heard::Saved` takes the item from `envelope.scope.item_id` for every
+   intent; `Heard::Shared` from the intent's own ID.
+7. The change log is not pruned; `remove(root)` drops it.
+
+**Dead-code allows (differs from the plan).** `#[allow(dead_code)] // Used
+from Task 3` on `Scheduler::shared_copy`; `// Used from Task 5` on
+`Scheduler::reread`; `#[allow(unused_imports)] // Used from Task 3` on the
+`SharedCopy` re-export in `scheduler.rs` (the lint that fires; the plan names
+`dead_code`). Not added: the plan's allows on `Unshared`, `problems` and the
+`SharedCopy` fields — the compiler does not warn on them (derives count as
+reads), so Task 3 has nothing to remove there.
+
+**Review** (fresh reviewer, opus; diff `2aafa5d0..a2abc5fa`): code and tests
+faithful to Part A and the brief, no Critical, no code defect. Its only
+Important finding was these ledger records (done here), plus the push (done
+with this commit). Redaction: `SharedCopy.location` comes from the already
+redacted `list_remotes_redacted`; no new string carries it.
+
+**Deferred findings (Minor), carried to the final review:**
+1. The no-`completed_at` rows (rule 3, ruling 4) are not in the table.
+2. When rule 4 rejects an older completed attempt, `apply` has already made it
+   `last`, but shares heard after its `completed_at` are not taken out of its
+   `listed`, so Activity can list an item the count no longer has (U13 with a
+   share between the two checks). Fix: replay `Shared` changes onto
+   `last.listed` before the rule-4 early return. Revisit in Task 3, which
+   first draws from `last`, or at the final review.
+3. The change log is never pruned; after a list replacement, entries timed at
+   or before `as_of` can never replay. Fix: `retain(|(_, when)| *when > as_of)`.
+4. No test covers `stored`'s refresh in `answered` (`react.rs`).
+5. No entity-level test covers the `heard` arms for Shared, Saved and
+   MainAhead.
+6. File growth: `model/polling.rs` 576 → 692 (the unshared impl block could be
+   its own `polling/unshared.rs`), `scheduler/reconfigure.rs` 527 → 970 (mostly
+   the test the plan asks for in its `mod tests`), `polling_schedule_tests.rs`
+   270 → 983.
+7. R-43 ("Up to date" from `unshared.as_of`) is the panel state's (Task 2),
+   not owed here: `checked` still dates the Settings line from `last`.
+
+**Doubts carried.** `ReportParts::of` (the automatic path's `main`) has no
+unit test; a real `RemotePollReport` can be built only inside the library.
+`PollingBackend::store_outcome` replaces `latest_outcome` for every
+`polling_status` of that root, so it also overrides what a real `Completed`
+poll stored.
