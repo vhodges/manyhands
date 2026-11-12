@@ -20,9 +20,10 @@ Panel And Sharing Status.
   Work only there.
 - **Branch:** `manyhands/ticket/01M784Y8C73B39GR4JWENXE5D0`, pushed to
   `origin`.
-- **HEAD at handoff:** the commit that adds this file, on top of
-  `1b68793d` (the approval commit). Confirm it with
-  `git log --oneline -3`.
+- **HEAD at handoff:** the branch's latest commit. The approval commit is
+  `1b68793d`; this file was added in `942045f5`; after it come only the
+  approval's ticket comment and a Wave wording fix. Confirm with
+  `git log --oneline -6`.
 - **Main at handoff:** `origin/main` at `37be101d`. The branch was created
   from it and holds it. Cycle 01 (`eb0798a2`), Cycle 02 (`37be101d`) and
   Wave 03 D6 (`48653d01`) are merged there.

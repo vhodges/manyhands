@@ -452,7 +452,8 @@ opening it no longer hides the open item.
 - The existing pages folded into the design's nav: **Repositories** (today's
   Repositories and Remotes pages, with the identity form), **Sharing &
   keys** (today's Shared SSH keys page, plus Trusted servers from today's
-  Hosts page), and **Checking for updates** only once D6 has merged.
+  Hosts page), and **Checking for updates** (D6 merged at `48653d01`;
+  amended 2026-11-12).
   Behavior unchanged; copy moves to the `06` vocabulary, and Sharing & keys
   follows `05`'s layout.
 - Every existing route into Settings (recovery actions such as
@@ -577,7 +578,7 @@ Wave 04 is complete when its Cycles have approved exit evidence and:
 | Moving regions into `DockArea` breaks focus, R-60 sheet refusal or key contexts | Cycle 01 keeps the sheet layer in the center and the region actions mapped to panels; the existing keyboard and dialog tests are the regression net. |
 | Client-side title bar behaves differently per platform (drag, double-click, controls, Wayland decorations) | Use Kit `TitleBar` and its window options; check Linux locally, macOS and Windows in native CI after merge (decision 4). |
 | A layout file from an older build, or a removed panel, breaks startup | Versioned file; a file naming any panel other than the known ones, or missing one, restores the default, reported in Activity; one table-driven test (amended 2026-11-08, Cycle 01 decision 5). |
-| D6 lands while Cycles 01 and 03 move and rework the operations area | Cycle 01 wraps the area as the Activity panel without editing `view/operations/` or `model/operations.rs`; 03 bases its plan on whatever D6 has merged and leaves the polling states out until then. Whichever merges second merges main and adapts, per `AGENTS.md`. |
+| D6 lands while Cycles 01 and 03 move and rework the operations area | Cycle 01 wraps the area as the Activity panel without editing `view/operations/` or `model/operations.rs`; 03 bases its plan on whatever D6 has merged and leaves the polling states out until then. Whichever merges second merges main and adapts, per `AGENTS.md`. *Settled 2026-11-12: D6 merged at `48653d01` before Cycle 03 was planned, so 03a and 03b plan against it, polling states included.* |
 | Quit feedback ("Finishing …", Quit now, and D6's "still stopping") renders in the operations area, so a hidden Activity panel would hide it | Cycle 01 keeps the feedback in the Activity panel and changes no layout when a quit waits; a person who wonders why opens Activity (amended 2026-11-08, Cycle 01 decision 7). |
 | Needs attention misses the attention states D6 adds (key locked, host approval, recovery hold) | The footer count is one read-only function over the existing models; whichever of D6 and Cycle 01 merges second adds D6's states to it (amended 2026-11-08, Cycle 01 decision 3). |
 | Cycle 01 or 05 grows too large to review | The split line in each. |
