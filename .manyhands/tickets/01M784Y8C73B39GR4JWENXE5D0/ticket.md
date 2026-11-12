@@ -35,11 +35,14 @@ evidence, amended by the split. The design is `docs/design/` (`03`, with
 - [x] Map each repository action and state the desktop has today to its
   place in the rebuilt panel. In the design's Part F table and Parts B
   and D.
-- [ ] Create the design and implementation plan and record their
+- [x] Create the design and implementation plan and record their
   checkpoints as ticket comments. Drafted at `f6d57bd4`; review round 1
   (two reviewers) applied in revision 2 (`2a0f202e`) with the owner's
   second-round answers; round 2 (a scoped re-review and an adversarial
-  review) applied in revision 3 with decision 24; round 3 pending.
+  review) applied in revision 3 (`b3851766`) with decision 24; round 3
+  (a scoped re-review) applied in revision 4 (`542a3824`), which had no
+  independent review. Planning checkpoint comment added; awaiting the
+  owner's approval.
 
 ## Entry Gate
 
