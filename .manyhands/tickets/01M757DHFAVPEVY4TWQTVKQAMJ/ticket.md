@@ -3,7 +3,7 @@ slug: vh-r2n89
 id: 01M757DHFAVPEVY4TWQTVKQAMJ
 title: 'Wave 04 Cycle 02: Tickets And Documents Panels'
 type: cycle
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
