@@ -235,11 +235,15 @@ async fn rows_and_list_states(cx: &mut TestAppContext) {
     assert!(!shell.present(("repo-selected", at_a), cx));
     assert_eq!(claims(&shell, at_b, cx), None, "the chosen row");
 
-    // A finished share that published one item drops the count at once
-    // (P5); a save of it that made a checkpoint and did not publish adds it
-    // back (P33). Neither waits for a list read, which each finished
-    // request starts and which is held here, nor for a check.
+    // A finished share that published one item drops the count (P5); a
+    // save of it that made a checkpoint and did not publish adds it back
+    // (P33). Each finished request starts one list read: it is held, and
+    // the row already reads the new count while it is, so the count comes
+    // from the request, not from a read; once the read lands the count is
+    // the same (it moved once, and the reload does not reset it). No check
+    // runs meanwhile.
     let polls = backend.polled_roots().len();
+    let listed = reads(&shell, ReadKind::Repositories);
     let held = shell.backend.hold_read(ReadKind::Repositories);
     backend
         .inner()
@@ -250,9 +254,16 @@ async fn rows_and_list_states(cx: &mut TestAppContext) {
         id: id(FIRST),
     };
     finish(&shell, sync, cx).await;
-    assert_eq!(state(&shell, "a", cx), Some(to_share(1)));
+    assert_eq!(
+        reads(&shell, ReadKind::Repositories),
+        listed + 1,
+        "the share's one list read, held"
+    );
+    assert_eq!(state(&shell, "a", cx), Some(to_share(1)), "while held");
     let _ = held.send(());
     shell.run(cx);
+    assert_eq!(state(&shell, "a", cx), Some(to_share(1)), "after the read");
+    let listed = reads(&shell, ReadKind::Repositories);
     let held = shell.backend.hold_read(ReadKind::Repositories);
     backend
         .inner()
@@ -271,9 +282,15 @@ async fn rows_and_list_states(cx: &mut TestAppContext) {
         observation: String::new(),
     };
     finish(&shell, save, cx).await;
-    assert_eq!(state(&shell, "a", cx), Some(to_share(2)));
+    assert_eq!(
+        reads(&shell, ReadKind::Repositories),
+        listed + 1,
+        "the save's one list read, held"
+    );
+    assert_eq!(state(&shell, "a", cx), Some(to_share(2)), "while held");
     let _ = held.send(());
     shell.run(cx);
+    assert_eq!(state(&shell, "a", cx), Some(to_share(2)), "after the read");
     assert_eq!(backend.polled_roots().len(), polls, "no check");
 
     // An incomplete list keeps its rows under its alert; Retry reads again.
