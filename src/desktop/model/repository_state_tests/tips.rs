@@ -49,11 +49,7 @@ pub(super) fn ahead(n: u32) -> AttemptTarget {
     item(n, Disposition::LocalAhead)
 }
 
-const EACH: &str = "Share each from its tab or from Activity.";
-const MAIN_SHARES: &str = "Share main shares main.";
-
 pub(super) fn tips() -> Vec<Tip> {
-    let unchanged = "Its files are unchanged. Retry, or remove it from Manyhands.";
     let message = ResultCode::RepositoryNotRegistered.message();
     let guidance = ProblemCode::InvalidPath.guidance();
     vec![
@@ -61,19 +57,19 @@ pub(super) fn tips() -> Vec<Tip> {
             "can't open, the kept row",
             |s| s.kept = true,
             tip(&format!(
-                "alpha is no longer registered with Manyhands. {unchanged}"
+                "alpha is no longer registered with Manyhands. {UNCHANGED}"
             )),
         ),
         tipped(
             "can't open, unavailable",
             |s| s.unavailable(),
-            tip(&format!("{message} {unchanged}")),
+            tip(&format!("{message} {UNCHANGED}")),
         ),
         tipped(
             "can't open, failed",
             |s| s.failed(),
             tip(&format!(
-                "{} {unchanged}",
+                "{} {UNCHANGED}",
                 ResultCode::RepositoryInaccessible.message()
             )),
         ),
@@ -115,12 +111,12 @@ pub(super) fn tips() -> Vec<Tip> {
         tipped(
             "needs attention, a reason",
             |s| s.schedule().phase = attention(Reason::KeyProblem(key())),
-            tip("Choose a key"),
+            tip(status::CHOOSE_A_KEY),
         ),
         tipped(
             "needs attention, a pending conflict",
             |s| s.schedule().conflict_pending = true,
-            tip("Waiting for the conflict to be resolved"),
+            tip(status::WAITING_FOR_CONFLICT),
         ),
         tipped(
             "needs attention, held, with D6's detail",
@@ -128,19 +124,21 @@ pub(super) fn tips() -> Vec<Tip> {
                 s.schedule().policy.recovery_suspended = true;
                 s.holding = Some(Holding::Held);
             },
-            tip(
-                "Checking is held until recovery An interrupted check is holding this repository. Resume checking to finish it.",
-            ),
+            // D6's status has no final stop, so the joined sentence adds one.
+            tip(&format!(
+                "{}. An interrupted check is holding this repository. Resume checking to finish it.",
+                status::HELD
+            )),
         ),
         tipped(
             "needs attention, can't check",
             |s| s.schedule().phase = waiting(Why::Failed),
-            tip("Can't check"),
+            tip(status::CANT_CHECK),
         ),
         tipped(
             "needs attention, a stored outcome",
             |s| s.stored = Some(PollingOutcome::HostApprovalRequired),
-            tip("Needs host approval"),
+            tip(status::NEEDS_HOST_APPROVAL),
         ),
         tipped(
             "needs attention, unreadable",
@@ -196,11 +194,11 @@ pub(super) fn tips() -> Vec<Tip> {
             |s| s.unscheduled(Some("origin")),
             tip("origin isn't an SSH shared copy, so Manyhands can't check or share it."),
         ),
-        tipped("not checked yet", |_| {}, tip("Not checked yet")),
+        tipped("not checked yet", |_| {}, tip(status::NOT_CHECKED_YET)),
         tipped(
             "unfinished operation",
             |s| s.schedule().phase = waiting(Why::Unfinished),
-            tip("Waiting for an unfinished operation"),
+            tip(status::WAITING_FOR_UNFINISHED),
         ),
         tipped(
             "polling off: no sentence",
@@ -209,6 +207,22 @@ pub(super) fn tips() -> Vec<Tip> {
                 s.polling = false;
             },
             facts_lines(true, false),
+        ),
+        tipped(
+            "paused after a live failure reads paused",
+            |s| {
+                s.schedule().last = Some(attempt(unreachable()));
+                s.schedule().policy.paused = true;
+            },
+            tip(PAUSED_SENTENCE),
+        ),
+        tipped(
+            "off after a live failure says checking is off",
+            |s| {
+                s.schedule().last = Some(attempt(unreachable()));
+                s.schedule().policy.enabled = false;
+            },
+            tip(status::CHECKING_IS_OFF),
         ),
         // The facts after the sentence.
         tipped(
@@ -246,22 +260,32 @@ pub(super) fn tips() -> Vec<Tip> {
             },
             titles: &[(1, "Fix login"), (3, "Never asked")],
             lines: tip(&format!(
-                "Not shared yet: Fix login, {}, {}. {EACH}",
+                "Not shared yet: Fix login, {}, {}. {SHARE_EACH}",
                 ulid(2),
                 ulid(3)
             )),
         },
         tipped(
+            "to share, an item with no parsed ID",
+            |s| {
+                let mut unparsed = ahead(1);
+                unparsed.item_id = None;
+                unparsed.kind = None;
+                s.checked(vec![unparsed], Vec::new());
+            },
+            tip(&format!("Not shared yet: {UNNAMED_ITEM}. {SHARE_EACH}")),
+        ),
+        tipped(
             "to share, main alone",
             |s| s.checked(vec![main_ahead()], Vec::new()),
-            tip(&format!("Not shared yet: main. {MAIN_SHARES}")),
+            tip(&format!("Not shared yet: main. {SHARE_MAIN_SHARES}")),
         ),
         Tip {
             name: "to share, items and main",
             set: |s| s.checked(vec![main_ahead(), ahead(1)], Vec::new()),
             titles: &[(1, "Fix login")],
             lines: tip(&format!(
-                "Not shared yet: main, Fix login. {EACH} {MAIN_SHARES}"
+                "Not shared yet: main, Fix login. {SHARE_EACH} {SHARE_MAIN_SHARES}"
             )),
         },
         Tip {
@@ -276,7 +300,9 @@ pub(super) fn tips() -> Vec<Tip> {
                 (6, "F"),
                 (7, "G"),
             ],
-            lines: tip(&format!("Not shared yet: A, B, C, D, E and 2 more. {EACH}")),
+            lines: tip(&format!(
+                "Not shared yet: A, B, C, D, E and 2 more. {SHARE_EACH}"
+            )),
         },
     ]
 }

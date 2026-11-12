@@ -206,5 +206,80 @@ pub(super) fn pairs() -> Vec<Case> {
             Some(NEEDS_ATTENTION),
             Act::None,
         ),
+        // A failed check outlives pausing and switching off: only while
+        // checking is on and not paused does it speak (owner ruling).
+        case(
+            "paused after a live unreachable",
+            |s| {
+                s.schedule().last = Some(attempt(unreachable()));
+                s.schedule().policy.paused = true;
+            },
+            Paused,
+            Some(PAUSED),
+            Act::CheckNow,
+        ),
+        case(
+            "off after a live unreachable",
+            |s| {
+                s.schedule().last = Some(attempt(unreachable()));
+                s.schedule().policy.enabled = false;
+            },
+            Unknown,
+            None,
+            Act::None,
+        ),
+        case(
+            "paused after a live transport unavailable",
+            |s| {
+                s.schedule().last = Some(attempt(Answer::Transport(TransportFailure::Unavailable)));
+                s.schedule().policy.paused = true;
+            },
+            Paused,
+            Some(PAUSED),
+            Act::CheckNow,
+        ),
+        case(
+            "off after a live configuration required",
+            |s| {
+                s.schedule().last = Some(attempt(Answer::Transport(
+                    TransportFailure::ConfigurationRequired,
+                )));
+                s.schedule().policy.enabled = false;
+            },
+            Unknown,
+            None,
+            Act::None,
+        ),
+        case(
+            "to share over paused after a live failure",
+            |s| {
+                s.checked(vec![main_ahead()], Vec::new());
+                s.schedule().last = Some(attempt(unreachable()));
+                s.schedule().policy.paused = true;
+            },
+            ToShare(1),
+            Some(&to_one),
+            Act::None,
+        ),
+        case(
+            "an off repository with an unshared list is still to share",
+            |s| {
+                s.checked(vec![main_ahead()], Vec::new());
+                s.schedule().policy.enabled = false;
+            },
+            ToShare(1),
+            Some(&to_one),
+            Act::None,
+        ),
+        case(
+            "an off repository that was checked is still up to date",
+            |s| {
+                s.checked(Vec::new(), Vec::new());
+                s.schedule().policy.enabled = false;
+            },
+            UpToDate,
+            Some(UP_TO_DATE),
+            Act::None,
+        ),
     ]
 }

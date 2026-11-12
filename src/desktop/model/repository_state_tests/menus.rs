@@ -50,7 +50,6 @@ const UP_TO_DATE_LINE: &str = "Checked 7 minutes ago \u{b7} up to date";
 
 pub(super) fn menus() -> Vec<Menu> {
     use MenuChoice::*;
-    let unchanged = "Its files are unchanged. Retry, or remove it from Manyhands.";
     vec![
         menu(
             "up to date: Check now enabled",
@@ -97,14 +96,44 @@ pub(super) fn menus() -> Vec<Menu> {
         menu(
             "can't check, stored: Retry now",
             |s| s.stored = Some(PollingOutcome::ConfigurationRequired),
-            vec![sentence("Can't check"), entry(StateAction, RETRY_NOW, true)],
+            vec![
+                sentence(status::CANT_CHECK),
+                entry(StateAction, RETRY_NOW, true),
+            ],
+            tail(SHARE_MAIN, true, true, true),
+        ),
+        menu(
+            "can't check, live: Retry now",
+            |s| s.schedule().phase = waiting(Why::Failed),
+            vec![
+                sentence(status::CANT_CHECK),
+                entry(StateAction, RETRY_NOW, true),
+            ],
+            tail(SHARE_MAIN, true, true, true),
+        ),
+        menu(
+            "can't reach, stored transport unavailable: Retry now",
+            |s| s.stored = Some(PollingOutcome::TransportUnavailable),
+            vec![
+                sentence("Can't reach alpha. Your work is safe."),
+                entry(StateAction, RETRY_NOW, true),
+            ],
+            tail(SHARE_MAIN, true, true, true),
+        ),
+        menu(
+            "can't reach, stored protocol rejected: Retry now",
+            |s| s.stored = Some(PollingOutcome::ProtocolRejected),
+            vec![
+                sentence("Can't reach alpha. Your work is safe."),
+                entry(StateAction, RETRY_NOW, true),
+            ],
             tail(SHARE_MAIN, true, true, true),
         ),
         menu(
             "stored key outcome: Check now",
             |s| s.stored = Some(PollingOutcome::SelectedKeyUnavailable),
             vec![
-                sentence("Choose a key"),
+                sentence(status::CHOOSE_A_KEY),
                 entry(StateAction, CHECK_NOW, true),
             ],
             tail(SHARE_MAIN, true, true, true),
@@ -113,7 +142,7 @@ pub(super) fn menus() -> Vec<Menu> {
             "stored host outcome: Check now",
             |s| s.stored = Some(PollingOutcome::HostApprovalRequired),
             vec![
-                sentence("Needs host approval"),
+                sentence(status::NEEDS_HOST_APPROVAL),
                 entry(StateAction, CHECK_NOW, true),
             ],
             tail(SHARE_MAIN, true, true, true),
@@ -154,7 +183,7 @@ pub(super) fn menus() -> Vec<Menu> {
             "needs attention, a reason: its action, then Check now",
             |s| s.schedule().phase = attention(Reason::KeyProblem(key())),
             vec![
-                sentence("Choose a key"),
+                sentence(status::CHOOSE_A_KEY),
                 entry(StateAction, attention::CHOOSE_A_KEY, true),
                 entry(CheckNow, CHECK_NOW, true),
             ],
@@ -164,7 +193,7 @@ pub(super) fn menus() -> Vec<Menu> {
             "held: Resume checking, and Check now disabled",
             |s| s.schedule().policy.recovery_suspended = true,
             vec![
-                sentence("Checking is held until recovery"),
+                sentence(status::HELD),
                 entry(StateAction, attention::RESUME_CHECKING, true),
                 entry(CheckNow, CHECK_NOW, false),
             ],
@@ -188,7 +217,7 @@ pub(super) fn menus() -> Vec<Menu> {
             |s| s.unavailable(),
             vec![
                 sentence(&format!(
-                    "{} {unchanged}",
+                    "{} {UNCHANGED}",
                     ResultCode::RepositoryNotRegistered.message()
                 )),
                 entry(StateAction, RETRY, true),
@@ -201,7 +230,7 @@ pub(super) fn menus() -> Vec<Menu> {
             |s| s.kept = true,
             vec![
                 sentence(&format!(
-                    "alpha is no longer registered with Manyhands. {unchanged}"
+                    "alpha is no longer registered with Manyhands. {UNCHANGED}"
                 )),
                 entry(StateAction, RETRY, true),
                 entry(CheckNow, CHECK_NOW, true),

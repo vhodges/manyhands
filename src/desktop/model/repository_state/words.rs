@@ -3,7 +3,7 @@
 //! compare them (Cycle 03a, Part B). Sentence case; no text here names a
 //! key or a passphrase.
 
-use super::RepoFacts;
+use super::{RepoFacts, RepoState};
 use crate::desktop::{
     model::polling::{AttemptTarget, status},
     services::scheduler::SharedCopy,
@@ -137,4 +137,22 @@ pub(crate) fn to_share_sentence(facts: &RepoFacts<'_>, items: &[AttemptTarget]) 
         sentence.push(SHARE_MAIN_SHARES.to_owned());
     }
     sentence
+}
+
+/// The sentence as one line: the tooltip's first line and the menu's first
+/// item. A part followed by another ends in a full stop unless it already
+/// ends in terminal punctuation, since D6's statuses carry none.
+pub(crate) fn sentence_line(state: &RepoState) -> String {
+    let mut line = String::new();
+    for (index, part) in state.sentence.iter().enumerate() {
+        if index > 0 {
+            line.push(' ');
+        }
+        line.push_str(part);
+        let last = index + 1 == state.sentence.len();
+        if !last && !part.ends_with(['.', '!', '?', ':', '\u{2026}']) {
+            line.push('.');
+        }
+    }
+    line
 }

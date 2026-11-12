@@ -191,12 +191,6 @@ fn look(label: &str, icon: &'static str, tone: Tone) -> (String, &'static str, T
     (label.to_owned(), icon, tone)
 }
 
-/// The sentence as one line: the tooltip's first line and the menu's first
-/// item.
-pub(crate) fn sentence_line(state: &RepoState) -> String {
-    state.sentence.join(" ")
-}
-
 /// The words for a state's action.
 pub(crate) fn action_label(action: &RowAction) -> &'static str {
     match action {
@@ -308,9 +302,16 @@ fn row_sentence(facts: &RepoFacts<'_>) -> Vec<String> {
     sentence
 }
 
-/// The kind of the last attempt's answer, when it is one of these.
+/// The transport failure the last attempt ended in, while it still speaks:
+/// checking is on and not paused, as for a stored outcome. A failed check
+/// outlives pausing and switching off, and the state then reads what pausing
+/// or switching off says (owner ruling, 2026-11-12).
 fn last_answer<'a>(facts: &RepoFacts<'a>) -> Option<&'a TransportFailure> {
-    match facts.schedule?.last.as_ref().map(|last| &last.answer) {
+    let schedule = facts.schedule?;
+    if !schedule.policy.enabled || schedule.policy.paused {
+        return None;
+    }
+    match schedule.last.as_ref().map(|last| &last.answer) {
         Some(Answer::Transport(failure)) => Some(failure),
         _ => None,
     }
