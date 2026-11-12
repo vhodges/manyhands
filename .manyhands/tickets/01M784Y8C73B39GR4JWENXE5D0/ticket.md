@@ -37,8 +37,9 @@ evidence, amended by the split. The design is `docs/design/` (`03`, with
   and D.
 - [ ] Create the design and implementation plan and record their
   checkpoints as ticket comments. Drafted at `f6d57bd4`; review round 1
-  (two reviewers) applied in revision 2 with the owner's second-round
-  answers; re-review pending.
+  (two reviewers) applied in revision 2 (`2a0f202e`) with the owner's
+  second-round answers; round 2 (a scoped re-review and an adversarial
+  review) applied in revision 3 with decision 24; round 3 pending.
 
 ## Entry Gate
 
@@ -71,8 +72,11 @@ The Cycle document records every decision. In short:
 21. The menu's first line is the state's sentence, for keyboard users.
 22. A chosen repository the list no longer gives stays as a Can't open
     row with Retry and Remove.
+24. A save in this app counts in "N to share" at once, as a share
+    clears it at once.
 
-Decisions 8–18 and 23 are proposals awaiting the owner.
+Decisions 8–18 and 23, the planner's proposals, were confirmed by the
+owner on 2026-11-12.
 
 ## Scope Summary
 
