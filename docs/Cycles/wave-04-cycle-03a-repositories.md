@@ -14,25 +14,32 @@ Ticket `01M784Y8C73B39GR4JWENXE5D0` (`vh-3jpbf`).
 [Design](../plans/2026-11-12-wave-04-cycle-03a-repositories-design.md) and
 [implementation plan](../plans/2026-11-12-wave-04-cycle-03a-repositories-implementation.md).
 
-Status: **draft**, not yet reviewed. The owner asked on 2026-11-12 to plan
-Wave 04 Cycle 03 starting from its requirements, split it in two, and
-answered decisions 1–7 in that session. Decisions 8–18 are the planner's
+Status: **draft, revision 2.** Revision 2 applies review round 1 and the
+owner's second-round answers; it is not yet re-reviewed. The owner asked
+on 2026-11-12 to plan Wave 04 Cycle 03 starting from its requirements,
+split it in two, answered decisions 1–7 in that session, and decisions
+19–22 after review round 1. Decisions 8–18 and 23 are the planner's
 proposals, each with its reason, for the owner to confirm. Those marked
 **(owner's eye)** change something people see today or depart from an
 authority.
 
 - Drafted on the ticket branch at `7034522f`, which holds origin/main
   `37be101d`. Cycle 01, Cycle 02 and Wave 03 D6 are merged there.
+- Revision 1 (`f6d57bd4`) was reviewed by two independent reviewers
+  (source and feasibility; contract and consistency): 3 Blocking, 30
+  Important and 24 Minor findings, each checked against the source and
+  applied in revision 2 or raised with the owner (Review Record).
 
 ## Purpose And Authority
 
 Make each repository's sharing state visible in plain language, where the
 design puts it. After this Cycle a person sees at a glance which
 repositories have work not shared yet, which are up to date, which only
-live on this computer, and which need something from them, with one
-obvious next step in each row's menu. The footer says when updates were
-last checked and how much work waits to be shared. The repository details
-no longer sit in the item area, below the item being read.
+live on this computer, and which need something from them, with the
+reason and one obvious next step at the top of each row's menu. The
+footer says when updates were last checked and how much work waits to be
+shared. The repository details no longer sit in the item area, below the
+item being read.
 
 Authorities, in order:
 
@@ -63,8 +70,7 @@ Authorities, in order:
    Remove of an unavailable repository), D4 (Share main), D6 (the polling
    model, Settings › Checking for updates, its W-5: "Cycle 03 reads them
    instead of deriving its own"), Cycle 01 (panels, footer, dock menu,
-   regions) and Cycle 02 (`ListRow`, list states, header toolbars,
-   decision 18).
+   regions) and Cycle 02 (list states, header toolbars, decision 18).
 
 ## Entry Evidence And Dependency Boundary
 
@@ -75,18 +81,18 @@ Authorities, in order:
 | Cycle 01 merged | Yes: main `eb0798a2`. |
 | Cycle 02 merged | Yes: main `37be101d`, ticket `01M757DHFAVPEVY4TWQTVKQAMJ` closed 2026-11-12. |
 | Wave 03 D6 merged | Yes: main `48653d01`. Its checking states are in scope. |
-| GPUI Kit 0.6.6 names verified | `PopupMenu`, `ContextMenuExt`, `ListState`, `StatusBar` read from the locked source during planning (design facts 10–15). |
+| GPUI Kit 0.6.6 names verified | The Kit `List` and its wrapper, `PopupMenu` and `MenuItemElement`, `ContextMenuExt` and `StatusBar`, read from the locked source during planning and review (design facts 14, 15, 31, 34, 43). |
 | Required checks at baseline | Not run during planning. Task 0 runs them. |
 | Testers | Linux (Wayland): the product owner. macOS and Windows: native CI after merge. |
 
 **Dependency boundary.** This Cycle changes `src/desktop/` and its tests
 only, plus the documents in the design's Document Amendments. It changes
 nothing in `src/lib.rs`, `src/repository.rs`, `src/repository/`,
-`src/results.rs`, `src/drafts/`, `src/runtime.rs` or the CLI, and adds no
-Cargo dependency. Every value it shows comes from reads the desktop makes
-today (`list_repositories`, `resolve_repository`, `polling_status`,
-`list_remotes_redacted` through the scheduler, `show_item`), and from D6's
-model.
+`src/results.rs`, `src/drafts/`, `src/runtime.rs`, `tests/` or the CLI,
+and adds no Cargo dependency. Every value it shows comes from reads the
+desktop makes today (`list_repositories`, `resolve_repository`,
+`polling_status`, `list_remotes_redacted` through the scheduler,
+`show_item`), and from D6's model.
 
 **In flight.** Wave 04 Cycle 03b (`01M784Y94Q3AXT6XJX38F5VK1V`, Activity
 and Needs attention) is planned after this Cycle and touches the footer
@@ -99,31 +105,37 @@ no code on their branches.
 
 1. **Sharing facts in D6's model** (design Part A): the stored last check
    outcome after a relaunch, the shared copy's redacted address, the items
-   not shared yet (ahead and never shared, main included), and a finished
-   share leaving the count at once.
+   not shared yet (ahead, never shared or diverged, main included), the
+   problems a check lists, a finished share leaving the count at once,
+   and reading one repository again on Retry.
 2. **One state per repository** (Part B): Can't open, Needs fixing,
    Locked, Needs attention, Checking…, Can't reach, {n} to share, Paused,
-   Up to date, This computer, or none, each with its icon, its one action
+   Up to date, This computer, or no label (a busy opening, a non-SSH
+   remote, anything not yet known), each with its icon, its one action
    and its sentence; the tooltip with the folder, main branch and shared
    copy.
-3. **Rows and list states** (Part C): Cycle 02's row, one meaning of
-   selected, no update during render, titles of what is not shared, and
-   the loading, empty, busy and failed states of the repositories read.
-4. **The repository menu** (Part D), by right click and by keyboard: the
-   state's action, Check now, Share main, Open folder, Settings…, Remove
-   from Manyhands….
-5. **Toolbar** (Part E): Add or create a repository…, Check all for
+3. **Rows and list states** (Part C): the panel's own row with one meaning
+   of selected, the chosen repository the list no longer gives kept as a
+   row, rows applied after the frame, and the loading, empty, incomplete,
+   busy and failed states of the repositories read.
+4. **Titles of what is not shared** (Part C), read once per item.
+5. **The repository menu** (Part D), by right click and by keyboard: the
+   state's sentence, its action, Check now, Share main, Open folder,
+   Settings…, Remove from Manyhands….
+6. **Toolbar** (Part E): Add or create a repository…, Check all for
    updates now, More with Refresh, Rebuild the search index and Remove
    from Manyhands….
-6. **The details block leaves the item area** (Part F; vh-d78zh).
-7. **Footer** (Part G): "Checked for updates {ago}" and "{n} to share".
-8. **Keyboard and privacy** (Parts H, I).
+7. **The details block leaves the item area** (Part F; vh-d78zh).
+8. **Footer** (Part G): "Checked for updates {ago}" and "{n} to share".
+9. **Keyboard, focus and privacy** (Parts H, I).
 
 ## Explicit Exclusions And Downstream Obligations
 
 - Activity, the Needs attention popover, the three operation-area rows of
-  Cycle 01's K-19, and whether an unreachable repository counts in Needs
-  attention: Cycle 03b.
+  Cycle 01's K-19: Cycle 03b.
+- Which repository states the footer's Needs attention counts (an
+  unreachable repository, Can't open, Needs fixing, a stored Locked or
+  Needs attention, a check's problems): Cycle 03b decides (design K-9).
 - The Add repository sheet (Cycle 05); Add opens today's Settings page.
 - Removing the panel's Settings button and the Settings sheet (Cycle 04).
 - Sharing every unshared item at once (decision 7).
@@ -133,13 +145,14 @@ no code on their branches.
   headless API goes to a separate library ticket.
 - **For Cycle 03b:** read the repository state from Part B's function, not
   a second derivation; the footer's right group now holds the two status
-  items before Needs attention.
+  items before Needs attention; decide the Needs attention count above.
 
 ## Required Contract
 
 1. **Same rows as the library.** One row per repository
-   `list_repositories` gives; every state comes from service state or
-   D6's model, never a guess (Wave Cycle 03 exit evidence).
+   `list_repositories` gives, plus the chosen one it no longer gives
+   (decision 22); every state comes from service state or D6's model,
+   never a guess (Wave Cycle 03 exit evidence).
 2. **Navigation sends nothing.** Choosing a repository, moving the cursor
    and opening a menu save, synchronize and send nothing beyond the reads
    a choice makes today (RFC 82–84).
@@ -149,10 +162,11 @@ no code on their branches.
 4. **Removal keeps the files.** Remove from Manyhands… confirms first and
    says local files remain (RFC 318; `MH-REPO-003`).
 5. **Keyboard.** Every new control is reachable by Tab or the menu keys,
-   works by Enter or Space, has an accessible name and shows focus (RFC
-   344–351; `MH-NFR-005`).
-6. **Colour is never the only signal.** Every state has a label and an
-   icon; every footer item has text.
+   works by Enter or Space, has an accessible name and shows focus; the
+   reason for a state is readable without hovering (RFC 344–351;
+   `MH-NFR-005`; decision 21).
+6. **Colour is never the only signal.** Every state with a colour has a
+   label and an icon; every footer item has text.
 7. **No secret** in a row, tooltip, description, menu or footer item:
    only names, paths, branches, remote names, the library's redacted
    addresses and titles (`MH-NFR-003`; RFC 340–342).
@@ -167,16 +181,19 @@ rows await the owner's checks; Claude records only what the owner reports.
 
 | # | Wave exit evidence / contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | Each repository state comes from real service state, with no fabricated rows (contract 1) | `each_state_and_its_precedence` (P1–P3); `the_stored_outcome_and_shared_copy_are_kept`; `rows_states_and_titles` | Planned |
-| A2 | "{n} to share" counts what is not shared, follows this app's shares, and agrees with Settings | `to_share_counts_and_finished_shares` (P4, P5); `status_text_table` (E-9) | Planned |
-| A3 | Every action works by keyboard (contract 5) | `the_menu_by_pointer_and_keyboard`; `panel_toolbars_work_by_tab_and_enter` (E-11); `status_items_say_and_choose`; the edited keyboard journeys (E-5) | Planned |
-| A4 | No secret appears in a row, tooltip, menu or footer item (contract 7) | `polling_privacy` (E-15); `tooltips_say_the_state_and_the_facts` | Planned |
+| A1 | Each repository state comes from real service state, with no fabricated rows (contract 1) | `each_state_and_its_precedence` (P1–P3, P18–P20); `the_stored_outcome_and_shared_copy_are_kept`; `rows_and_list_states` | Planned |
+| A2 | "{n} to share" counts what is not shared, follows this app's shares, and agrees with Settings | `to_share_counts_and_finished_shares` (P4, P5); `finished_shares_are_heard`; `status_text_table` (E-9) | Planned |
+| A3 | Every action works by keyboard, and a state's reason is readable without hovering (contract 5) | `the_menu_by_pointer_and_keyboard` (P10, P21); `panel_toolbars_work_by_tab_and_enter` (E-11); `status_items_say_and_choose`; the edited keyboard journeys (E-5) | Planned |
+| A4 | No secret appears in a row, tooltip, menu or footer item (contract 7) | `polling_privacy` (E-15, P17); `tooltips_say_the_state_and_the_facts` | Planned |
 | A5 | Every existing repository journey still passes: select, Retry, Remove, Share main, Add | The edited tests E-1 to E-8, and the fast tier | Planned |
-| A6 | The details block leaves the item area and nothing it offered is lost | `the_item_area_holds_nothing_of_the_repository` (P14); design Part F's table; E-1 to E-8 | Planned |
+| A6 | The details block leaves the item area and nothing it offered is lost | `the_item_area_holds_nothing_of_the_repository` (P14); the kept row (P18); design Part F's table; E-1 to E-8 | Planned |
 | A7 | Removal confirms and keeps the files (contract 4) | `the_menu_by_pointer_and_keyboard` (P11) | Planned |
-| A8 | Nothing acts behind a dialog or sheet (contract 8) | P12 in the menu, toolbar and footer tests | Planned |
-| A9 | One meaning of selected; no update during render (decision 3) | `a_repository_rows_selected_state_has_one_meaning` (E-3); `rows_states_and_titles` (P16) | Planned |
-| A10 | The panel and footer match the design in the dark theme | On screen: the owner, against frames 1a and 1b | Planned |
+| A8 | Nothing acts behind a dialog or sheet (contract 8) | P12 in the menu, toolbar and footer tests, each with a dialog and a sheet | Planned |
+| A9 | One meaning of selected; rows applied after the frame (decision 3) | `a_repository_rows_selected_state_has_one_meaning`, unchanged; `rows_and_list_states` (P9, P16); that nothing notifies during render is checked in code review | Planned |
+| A10 | Navigation sends nothing (contract 2) | `the_menu_by_pointer_and_keyboard` (P22) | Planned |
+| A11 | Check now and Check all only check (contract 3); Check all checks each repository (D6 W-5), skipping those waiting on a key or host | `check_all_checks_each_repository` (P23, P24); `the_menu_by_pointer_and_keyboard` | Planned |
+| A12 | Colour is never the only signal (contract 6) | `each_state_and_its_precedence` (every state with a tone has a label); `status_items_say_and_choose` | Planned |
+| A13 | The panel and footer match the design in the dark theme | On screen: the owner, against frames 1a and 1b | Planned |
 
 ## Product-Owner Decisions (2026-11-12)
 
@@ -198,7 +215,9 @@ decisions govern and are not repeated.
    details out of the item tab) and, from `01M5CS4MH25QQ769HV61ZRKHXG`,
    the repository row's double selected signal and
    `RepositoriesPane::set` notifying during render. (03b takes the
-   operations split and "Finishing".)
+   operations split and "Finishing".) Review found the first already met
+   at `7034522f`: the row sets no `aria_selected`, and a test pins it
+   (design fact 34); this Cycle keeps it so.
 4. **Four more state labels:** Can't open, Needs fixing, Locked and Needs
    attention, beside the design's six. *Alternative:* one "Needs
    attention" for all.
@@ -208,33 +227,40 @@ decisions govern and are not repeated.
    *Alternative:* a Details… sheet.
 6. **The footer's "N to share" is the total across repositories, and
    each activation chooses the next repository with work to share.**
-7. **"N to share" is a reminder.** The tooltip names the items; sharing
-   stays where it is today: each item's Share, D6's Share… in Activity,
-   Share main for main. *Alternatives:* Share all…, or opening the first
-   item.
+7. **"N to share" is a reminder.** The row's tooltip names the items;
+   sharing stays where it is today: each item's Share, D6's Share… in
+   Activity, Share main for main. *Alternatives:* Share all…, or opening
+   the first item.
 
 **Proposed by the planner, for the owner to confirm:**
 
-8. **Checking… comes before Can't reach (owner's eye).** The order shown
-   on 2026-11-12 put Can't reach first; a person who chooses Retry now
-   would then see no sign that it is working. Every other position is as
-   shown. *Alternative:* keep Can't reach first.
+8. **Checking… comes before Locked, Needs attention and Can't reach
+   (owner's eye).** The order shown on 2026-11-12 put those first; a
+   person who chooses Unlock…, Retry now or Check now would then see no
+   sign that it is working. D6's Settings line already puts a running
+   check first. Every other position is as shown. *Alternative:* keep the
+   order shown.
 9. **A stored outcome shows after a relaunch.** Until this process has
-   checked a repository, the library's stored last outcome sets its state:
-   Can't reach, Locked or Needs attention (design Part A). A stored Locked
+   checked a repository (no attempt this session) and while it is not
+   checking, the library's stored last outcome sets its state: Can't
+   reach, Locked or Needs attention (design Part A). A stored Locked
    offers Check now, which asks for the passphrase, because the stored
-   outcome names no key (R-5).
+   outcome names no key (R-5). A stored outcome never outranks Checking….
 10. **Settings agrees with the panel (owner's eye).** D6's Settings line
     reads the same stored outcome and the same count: after a relaunch it
     can say "Can't reach {repo}. Your work is safe." where it said
     "Checked 2 hours ago", and "N not shared yet" also counts items never
-    shared.
-11. **A finished share leaves the count at once.** A successful share of an
-    item, or of main, removes it from "to share" without waiting for the
-    next check. A failed share removes nothing.
+    shared and diverged ones (decision 19). D6's design is amended to
+    match (design Document Amendment 8).
+11. **A finished share leaves the count at once.** A finished share of an
+    item (Share, Republish…, a close or an approval) or of main that
+    published, by the same test the app already uses to clear a shared
+    item's marks, removes it from "to share" without waiting for the next
+    check, even when the share ended with its index refresh pending. A
+    share that did not publish removes nothing.
 12. **No label while the state is not known** (reading, not checked yet,
-    checking soon, waiting). The tooltip says why. Nothing is shown that
-    the service did not say.
+    checking soon, waiting). The tooltip and the menu's first line say
+    why. Nothing is shown that the service did not say.
 13. **The empty item area.** With no tab: "Select a repository." when none
     is chosen, as today; otherwise "Open a ticket or document from the
     lists", the design's empty-pane text, without its icon until Cycle 05.
@@ -245,8 +271,12 @@ decisions govern and are not repeated.
     restyles it.
 15. **The panel's Settings button stays** until Cycle 04 removes it with
     the sheet (Wave Cycle 04).
-16. **Check all includes paused repositories**, as Settings' Check now
-    does: it is an explicit request. *Alternative:* skip paused ones.
+16. **Check all includes paused repositories and skips those waiting on a
+    key or host.** A paused repository is checked, as Settings' Check now
+    does, since Check all is an explicit request; one waiting for a
+    passphrase, a key choice or a host approval is skipped, so one click
+    never raises prompts one after another (RFC 324–328). It is reached
+    through its own row's action. *Alternative:* skip paused ones too.
 17. **Existing-test edits.** The named edits E-1 to E-15 are part of
     approving the design; those marked **Removes** are named there. Any
     other edit this Cycle's changes need is pre-authorized, recorded in
@@ -257,25 +287,65 @@ decisions govern and are not repeated.
     wrote or changed run, by exact name. The fast tier runs once, at
     review-ready, with `--no-fail-fast`.
 
+**Answered by the owner on 2026-11-12, after review round 1:**
+
+19. **Problems a check lists.** A diverged item counts in "to share",
+    since sharing merges it. Any other problem the check lists (a dirty
+    working copy, a conflict, a branch deleted on the shared copy and the
+    rest) makes the row Needs attention: "{n} items need a look. Activity
+    lists them." "Up to date" means a completed check with nothing to
+    share and nothing to look at. *Alternative:* Up to date anyway.
+20. **A publication remote that is not SSH shows no label.** Its sentence
+    says "{remote} isn't an SSH shared copy, so Manyhands can't check or
+    share it.", and its menu leads with "Set up sharing…", which opens
+    Settings › Remotes for that repository. *Alternative:* "This
+    computer".
+21. **The reason is the menu's first line.** The menu opens with the
+    state's sentence, then the state's action, then the fixed items, so a
+    sighted keyboard user reads why a repository needs attention. The
+    owner noted that the old details block was not discoverable.
+    *Alternative:* hover only, as a known limit.
+22. **A chosen repository the list no longer gives stays as a row.** When
+    another process unregisters the chosen repository, it stays in the
+    panel as the chosen row, reading Can't open, with Retry and Remove
+    from Manyhands… in its menu, until it is removed or another
+    repository is chosen. *Alternatives:* drop the choice, or a notice in
+    the item area.
+
+**Proposed after review round 1, for the owner to confirm:**
+
+23. **The footer's "to share" with one repository (owner's eye).** When the
+    only repository with work is already chosen, activating it does
+    nothing (no reload) and its name reads "{n} to share in {repo}."; it
+    never changes the layout, so a hidden Repositories panel stays hidden.
+    *Alternative:* reselect and reload it.
+
 ## Known Limits
 
 These are visible to users; the design's Known Limits give the detail.
 
-- "N to share" appears after the first check of a session, and another
-  process's shares show at the next check (K-1).
+- "N to share" appears after the first check of a session; another
+  process's shares, the CLI's and a comment's publication show at the
+  next check (K-1).
 - After a relaunch a stored outcome stands until this app checks (K-2).
-- An unshared item whose title cannot be read is named by its ID (K-3).
+- An unshared item whose title cannot be read is named by its ID, and its
+  title is not read again this session (K-3).
 - After a relaunch a locked key is offered Check now rather than
   Unlock… (K-4).
-- A publication remote that is not SSH reads "This computer" (K-5).
+- A publication remote that is not SSH shows no label; its sentence says
+  why (K-5).
 - Tooltips show on hover only; their text is also each row's accessible
-  description (K-6).
+  description and its menu's first line (K-6).
+- "Checked for updates {ago}" is worked out when the footer is drawn
+  (K-7).
 - The panel's Settings button stays until Cycle 04 (K-8).
+- The footer's Needs attention does not yet count the states this Cycle
+  adds; Cycle 03b decides (K-9).
 
 ## Open Questions
 
-Decisions 8–18 await confirmation. The design's U-1 to U-6 are checked by
-the tasks that first rely on them.
+Decisions 8–18 and 23 await confirmation. The design's U-1 to U-6 are
+checked by the tasks that first rely on them.
 
 ## Review Record
 
@@ -284,3 +354,6 @@ the tasks that first rely on them.
 | Owner, 2026-11-12 | "start planning Wave 4 Cycle 3, start with the cycle doc and gathering requirements" | Owner direction | Research, then questions | Session, 2026-11-12 |
 | Planning research | Activity is several stores with no times; no read counts unshared saves; "Share main" shares main only; the stored outcome is dropped; the details block is drawn in two places | Facts; owner questions | Decisions 1–7; design facts 5, 17, 23, 27–29 | Session, 2026-11-12 |
 | Owner, 2026-11-12 | Split, "to share" source, Activity's shape, fold-ins, labels, details, footer, reminder | Owner decisions | Decisions 1–7; tickets `vh-3jpbf` and `vh-dt0aq` filed | Session, 2026-11-12 |
+| Review round 1, contract and consistency (`f6d57bd4`) | 1 Blocking, 17 Important, 11 Minor; among them Retry lost for a busy resolution, stored outcomes outranking Checking…, Retry on an unread row, Remove's focus, contracts without acceptance rows, the footer's sum and single repository, Check all and locked keys, Task 3's size | Rulings; revised proposals; owner questions | Design rulings R-12, R-16, R-19, R-22–R-27; decisions 9, 11, 16 revised, 23 proposed; A10–A12; Task 3 split | Design Review Record |
+| Review round 1, source and feasibility (`f6d57bd4`) | 2 Blocking, 13 Important, 13 Minor; among them the Kit list owning "selected", the kept selection without a row, `Phase::Running` never entered, the share test, Settings… on the chosen repository, the network in window tests, the privacy sweep allowing the panel, menu enablement unreadable | Facts; rulings; owner question | Design facts 33–48; R-3, R-7, R-9, R-14, R-21, R-26; decision 22 | Design Review Record |
+| Owner, 2026-11-12, after round 1 | "Up to date" with a check's problems; non-SSH remotes; the reason for keyboard users; the kept selection. The owner asked what the details block was: the selected repository's, drawn in the empty item area and at the end of every open item tab, "so it was not discoverable" | Owner decisions; clarification | Decisions 19–22 | Session, 2026-11-12 |

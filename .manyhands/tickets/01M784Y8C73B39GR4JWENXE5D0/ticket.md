@@ -24,16 +24,21 @@ evidence, amended by the split. The design is `docs/design/` (`03`, with
 
 ## Planning
 
-- [ ] Merge the latest main into this ticket branch.
-- [ ] Create `docs/Cycles/wave-04-cycle-03a-repositories.md`.
-- [ ] Verify every GPUI Kit 0.6.6 name the plan uses (context menu,
-  tooltip, popup menu, list) against the locked source.
-- [ ] Map each repository action and state the desktop has today to its
-  place in the rebuilt panel: selection, Share main, Retry, Remove,
-  Rebuild and Refresh, Add and Create, the repository details now drawn in
-  the item area, and D6's checking states.
+- [x] Merge the latest main into this ticket branch. Created from
+  origin/main `37be101d`; a merge on 2026-11-12 found nothing new.
+- [x] Create `docs/Cycles/wave-04-cycle-03a-repositories.md`.
+- [x] Verify every GPUI Kit 0.6.6 name the plan uses (context menu,
+  tooltip, popup menu, list) against the locked source. In the design's
+  Baseline Facts, checked in review round 1: the Kit list overwrites a
+  row's selected flag with its cursor, so the rows are the panel's own
+  element; the menu is a Workspace popup like the dock menu.
+- [x] Map each repository action and state the desktop has today to its
+  place in the rebuilt panel. In the design's Part F table and Parts B
+  and D.
 - [ ] Create the design and implementation plan and record their
-  checkpoints as ticket comments.
+  checkpoints as ticket comments. Drafted at `f6d57bd4`; review round 1
+  (two reviewers) applied in revision 2 with the owner's second-round
+  answers; re-review pending.
 
 ## Entry Gate
 
@@ -43,6 +48,8 @@ so its checking states are in scope.
 
 ## Owner Decisions, 2026-11-12
 
+The Cycle document records every decision. In short:
+
 1. Cycle 03 is split into 03a and 03b.
 2. "N to share" comes from D6's latest check: the items it found ahead of,
    or not yet on, the shared copy. No library change.
@@ -50,17 +57,36 @@ so its checking states are in scope.
    repository details out of the item tab) and, from
    `01M5CS4MH25QQ769HV61ZRKHXG`, the repository row's double selected
    signal and `RepositoriesPane::set` notifying during render.
+4. Four more state labels: Can't open, Needs fixing, Locked, Needs
+   attention.
+5. The details go to the row and its tooltip; the index state stays with
+   the lists.
+6. The footer's "N to share" is the total; each activation chooses the
+   next repository with work.
+7. "N to share" is a reminder; sharing stays where it is today.
+19. A diverged item counts as "to share"; other problems a check lists
+    show Needs attention.
+20. A non-SSH publication remote shows no label, explains why, and offers
+    Set up sharing….
+21. The menu's first line is the state's sentence, for keyboard users.
+22. A chosen repository the list no longer gives stays as a Can't open
+    row with Retry and Remove.
+
+Decisions 8–18 and 23 are proposals awaiting the owner.
 
 ## Scope Summary
 
 - Toolbar: Add or create a repository (today's flow), Check all for updates
-  now (D6's Check now per repository), More with Rebuild and Remove.
+  now (D6's Check now per repository), More with Refresh, Rebuild the
+  search index and Remove from Manyhands….
 - Rows: `folder-git-2`, name and the right-aligned state: "N to share",
   "Up to date", "This computer", "Can't reach", "Checking…", "Paused".
   Git detail (path, main branch, remote, counts) in the tooltip. Row
   anatomy and list states from Cycle 02 where they fit.
-- Context menu: Check now, Share main, Open folder, Settings…, Remove from
-  Manyhands… with its confirmation saying the files stay.
+- Context menu, by right click and by Shift F10 or the menu key: the
+  state's sentence, its action, Check now, Share main, Open folder,
+  Settings…, Remove from Manyhands… with its confirmation saying the files
+  stay.
 - The repository details leave the item area; their actions and facts move
   to the panel.
 - Footer: "N to share", selecting the repository with unshared work, and
