@@ -193,21 +193,21 @@ rows await the owner's checks; Claude records only what the owner reports.
 
 | # | Wave exit evidence / contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | PRD `MH-CONTENT-001/003/004` list behaviours still pass | The edited existing tests, which still compare the rows with the library's (E-3, E-8), and the fast tier | Planned |
-| A2 | Nonconforming and inaccessible items stay visible with their reason | `derive_filters_counts_and_sorts` (P6, P27); `rows_read_as_the_design_writes_them` (P23); `unreadable_files_go_to_their_list` and `an_unreadable_file_is_listed_with_its_reason` (P28) | Planned |
-| A3 | Open is the default | `derive_filters_counts_and_sorts`; `the_default_query_lists_open_tickets` (E-1) | Planned |
-| A4 | Sort, filter and the four states are covered by model tests | `derive_filters_counts_and_sorts`; `each_state_has_its_own_body`; `kept_rows_follow_reloads` | Planned |
-| A5 | Duplicate short codes list every match | `derive_filters_counts_and_sorts` (P7); the rewritten `a_shared_short_code_lists_both_and_choosing_one_opens_it_by_id` (E-4); `tooltips_carry_the_id_context_and_reasons` | Planned |
-| A6 | Keyboard-only navigation and opening work in both panels | `the_filter_bar_works_without_a_read`; `folders_keep_their_state_and_toggle_by_key`; `panel_toolbars_work_by_tab_and_enter`; the keyboard journeys (E-6, E-7) | Planned |
-| A7 | Navigation sends nothing (contract 4) | The journeys snapshot reads, requests and tabs after each step (P25) | Planned |
-| A8 | Ready, Blocked and Why blocked keep working (Wave decision 5) | `the_filter_bar_works_without_a_read` (P11); the edited Why blocked tests (E-3) | Planned |
-| A9 | A ticket or document opens by ID, closed or not, with feedback | The rewritten `desktop::view::find::tests` (E-4; P8) | Planned |
-| A10 | Expansion survives a reload and a hidden panel | `expansion_survives_rebuilds_and_collapse_all`; `folders_keep_their_state_and_toggle_by_key` (P19, P26) | Planned |
-| A11 | Toolbars by keyboard, counted as their region, refused behind a dialog (contracts 5, 8) | `panel_toolbars_work_by_tab_and_enter` (P24) | Planned |
-| A12 | Every existing keyboard journey still passes | The edited journeys and the fast tier at review-ready | Planned |
-| A13 | The list states act, and focus finds an empty or failed list | `list_states_act_and_a_reload_keeps_the_rows` (P15, P16, P31) | Planned |
-| A14 | The rows match the design in the dark theme | On screen: the owner, against frames 1a and 1b | Planned |
-| A15 | Unsaved work shows without a reload | `markers_appear_without_a_read` (P14) | Planned |
+| A1 | PRD `MH-CONTENT-001/003/004` list behaviours still pass | The edited existing tests, which still compare the rows with the library's (E-3, E-8), and the fast tier | Met: the edited tests (E-3, E-8) pass; fast tier green (Task 9) |
+| A2 | Nonconforming and inaccessible items stay visible with their reason | `derive_filters_counts_and_sorts` (P6, P27); `rows_read_as_the_design_writes_them` (P23); `unreadable_files_go_to_their_list` and `an_unreadable_file_is_listed_with_its_reason` (P28) | Met by tests (Tasks 2, 7); the doubled `circle-x` is an owner question (checklist T-8.6) |
+| A3 | Open is the default | `derive_filters_counts_and_sorts`; `the_default_query_lists_open_tickets` (E-1) | Met by tests (Tasks 2, 3) |
+| A4 | Sort, filter and the four states are covered by model tests | `derive_filters_counts_and_sorts`; `each_state_has_its_own_body`; `kept_rows_follow_reloads` | Met by tests (Task 1, Task 2) |
+| A5 | Duplicate short codes list every match | `derive_filters_counts_and_sorts` (P7); the rewritten `a_shared_short_code_lists_both_and_choosing_one_opens_it_by_id` (E-4); `tooltips_carry_the_id_context_and_reasons` | Met by tests (Tasks 2, 4) |
+| A6 | Keyboard-only navigation and opening work in both panels | `the_filter_bar_works_without_a_read`; `folders_keep_their_state_and_toggle_by_key`; `panel_toolbars_work_by_tab_and_enter`; the keyboard journeys (E-6, E-7) | Met by tests (Tasks 3, 6, 8) |
+| A7 | Navigation sends nothing (contract 4) | The journeys snapshot reads, requests and tabs after each step (P25) | Met by tests (the journeys' P25 snapshots); on-screen quiet Activity in checklist T-11 |
+| A8 | Ready, Blocked and Why blocked keep working (Wave decision 5) | `the_filter_bar_works_without_a_read` (P11); the edited Why blocked tests (E-3) | Met by tests (Tasks 2, 3) |
+| A9 | A ticket or document opens by ID, closed or not, with feedback | The rewritten `desktop::view::find::tests` (E-4; P8) | Met by tests (Task 4) |
+| A10 | Expansion survives a reload and a hidden panel | `expansion_survives_rebuilds_and_collapse_all`; `folders_keep_their_state_and_toggle_by_key` (P19, P26) | Met by tests (Tasks 5, 6) |
+| A11 | Toolbars by keyboard, counted as their region, refused behind a dialog (contracts 5, 8) | `panel_toolbars_work_by_tab_and_enter` (P24) | Met by tests (Task 8); U-3 held; owner questions on Collapse all in checklist T-6.11, T-6.12 |
+| A12 | Every existing keyboard journey still passes | The edited journeys and the fast tier at review-ready | Met: every edited journey passes and the fast tier is green (30 targets, 0 failures) |
+| A13 | The list states act, and focus finds an empty or failed list | `list_states_act_and_a_reload_keeps_the_rows` (P15, P16, P31) | Met by tests (Tasks 1, 3) |
+| A14 | The rows match the design in the dark theme | On screen: the owner, against frames 1a and 1b | Awaiting the owner: on-screen checklist T-2, T-5, T-12 |
+| A15 | Unsaved work shows without a reload | `markers_appear_without_a_read` (P14) | Met by tests (Task 3, Task 6) |
 
 ## Product-Owner Decisions (2026-11-11)
 
