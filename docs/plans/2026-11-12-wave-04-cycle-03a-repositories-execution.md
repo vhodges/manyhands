@@ -26,7 +26,7 @@ reason.
 | 3 | done, review approved after fix round 1 | code `6cb077c2` (base `3dbaa472`), fix `eb2bc10e`; ledger commit follows | yes |
 | 4 | done, review approved first time | code `02bd0015` (base `64d92f09`); ledger commit follows | yes |
 | 5 | done, review approved after fix round 1; checkpoint comment follows | code `caa23a81` (base `94f5abbd`), fix `ba2a24bc`; ledger commit follows | yes |
-| 6 | not started | | |
+| 6 | done, review approved after fix round 1 | code `b8044b60` (base `9cc1a4a0`), fix `c0ab728a`; ledger commit follows | yes |
 | 7 | not started | | |
 | 8 | not started | | |
 | 9 | not started | | |
@@ -806,3 +806,146 @@ Important issue.
    them is owed as cleanup).
 8. Task 2's and Task 3's deferred items stand (Task 3's items 1 and 2 are now
    done).
+
+## Task 6: toolbar, More menu, Check all (Part E)
+
+**Main.** `git fetch origin && git merge origin/main` at the start of the task
+(plan: Task 6): "Already up to date", origin/main `37be101d` an ancestor of
+HEAD `9cc1a4a0`. No Wave 04 Cycle 03b, D1, D4 or D5 follow-up branch has
+reached main, so no owner checkpoint is due.
+
+**Commits.** Code `b8044b60` (base `9cc1a4a0`); fix round 1 `c0ab728a`.
+Boundary command prints nothing. New: `model/repository_state/menu/check_all.rs`
+(44), `view/repositories_tests/toolbar.rs` (331),
+`view/dock_tests/toolbars/repositories.rs` (171). `workspace.rs` 491,
+`repository_state.rs` 496, `lists.rs` 500 (untouched), `toolbars.rs` 411 (the
+Repositories journey moved to the child module because the file would have
+reached 544).
+
+**Tests run** (`devenv shell -- cargo test --locked --features
+desktop-test-support --bin manyhands <path> -- --exact`, 1 test each, all
+green):
+- Red: the pure table (22 compile errors for the missing buttons, constants and
+  `check_all_*`); E-12's `refresh-cw` errored until `RefreshCw` was added.
+- `desktop::model::repository_state::tests::check_all_takes_each_repository_that_can_check`
+  (new, pure table); `desktop::assets::tests::every_item_view_icon_loads`
+  (E-12 part); `desktop::view::repositories::tests::check_all_checks_each_repository`
+  (new); `…::the_more_menu_acts_on_the_chosen_repository` (new);
+  `desktop::view::dock::tests::toolbars::panel_toolbars_work_by_tab_and_enter`
+  (E-11); `…::the_menu_by_pointer_and_keyboard` (menu code changed).
+- Sanity runs, unedited, to see whether three new Tab stops disturbed region
+  walks: `keyboard_tests::every_core_action_works_by_keyboard_alone`,
+  `workspace::tests::f6_cycles_the_regions_and_secondary_digits_focus_each`,
+  `workspace::tests::the_repository_selector_selects_with_arrows_and_enter` —
+  ok. `behind_a_dialog`'s `ToolbarButton::ALL` loop (the Task 0 watch item) passed
+  unedited: `press_toolbar` returns early under a modal.
+- Fix round: the five covering tests above plus
+  `desktop::model::polling::status::tests::status_text_table` (to prove
+  `stored_applies` is unchanged): each 1 passed. Mutation checks (reverted):
+  without press-time `release_check_all` the focus-to-list check fails; with the
+  stored exclusion a no-op the window test fails with `[a, b, d]`; using
+  `stored_applies` for Check all fails with `[a, b, e]`.
+- Verify lines, each exit 0 after each round: `cargo fmt --check`, `cargo check
+  --locked --features desktop`, `cargo clippy --all-targets --all-features
+  --locked -- -D warnings`.
+
+**Named test edits.** E-11: `panel_toolbars_work_by_tab_and_enter` loops Add and
+More (Check all excluded), `with_no_repository` names all three buttons (Add
+enabled, Check all disabled, More enabled) and opens More with nothing chosen
+(its three items send nothing, Esc returns focus to More); the old
+`assert!(!enabled(..))` became `assert_eq!(enabled(..), on, ..)`, the same
+assertion for the original four buttons; the window fixture gained a repository
+`b`. E-12 part: `refresh-cw` added (`ICONS` 48 → 49); `plus` and `ellipsis` are
+Kit built-ins. No E-19: no other existing test changed; no assertion removed;
+`toolbars.rs` holds one test before and after. Visibility-only widening of
+`repositories::tests` and its `support` helpers.
+
+**Owner ruling, asked and answered 2026-11-12 during Task 6 (amends R-32 and
+Part E).** Check all SKIPS a repository whose stored outcome says it waits on a
+key or host (`UnlockRequired`, `SelectedKeyUnavailable`, `HostApprovalRequired`)
+whether or not the repository is paused, off or in a busy, interrupted or failed
+wait — decision 16 (one click never raises prompts one after another) governs.
+The documents contradicted themselves: Part E ("`stored_applies` gives none of
+`UnlockRequired`, …; paused ones included"), R-32 and Part A ("Check all use it
+and nothing else") made `stored_applies`, which is `None` for a paused
+repository, the only test, so Check all took a paused repository with a stored
+locked key and a user-lane `PollOnce` would have asked for the passphrase (U-6),
+one prompt per distinct key; a live `KeyLocked` on a paused repository was
+already skipped. Implemented as `status::stored_for_check_all`: `stored_applies`
+and it both call a private `stored_when(facts, strict)` holding every shared
+condition (checking on, not held, no attempt this session, not checking, not in
+flight, no conflict pending); `strict` adds only "not paused" and "quiet phase".
+`since_library`, `repository_state`, the row and tooltip keep `stored_applies`
+(R-32 stands for them). Cost if wrong: a future change to the shared conditions
+must keep both callers in step. The table's paused-`UnlockRequired` row changed
+from `true` to `false` (owner-ruled, not a removal) with rows for the other two
+outcomes paused, a stored key wait while off, and each wait kind; a window check
+that a paused repository with a stored locked key gets no `PollOnce` and no
+prompt. **The implementer's first ruling (a paused repository with a stored
+`UnlockRequired` is taken) is superseded by this ruling.**
+
+**Rulings (implementer's, reviewed).**
+1. `RepositoryMenu.root` is `Option<RepoKey>`: More opens with nothing chosen,
+   every item disabled (the choice carries an empty root, which `still_offered`
+   rejects; such a menu is never dropped for its root leaving the rows) — cost:
+   one `Option` in a Task 5 type.
+2. Check all does not look at `kept`, a pending conflict,
+   `Attention(ConfigurationRequired)` or an unreadable/no-schedule repository
+   beyond the polling shape — Part E lists only the key and host reasons and the
+   row menu's Check now has the same Polling-and-not-checking rule; the reviewer
+   found no sentence that decides it and no prompt at stake (a kept row is
+   checked only if the scheduler still holds a `Polling` schedule); pinned in the
+   table as today's behaviour (true) — cost: one harmless check per such
+   repository.
+3. `toolbar_enabled` for Check all builds the rows (`check_all_roots`) on each
+   header draw — one source with the press and the R-22 release — cost: extra row
+   construction per header render, no I/O (deferred item 1).
+4. `toolbar_focus` is typed `[FocusHandle; ToolbarButton::ALL.len()]`.
+5. The More button's bounds come from a `canvas` in a wrapper `div` around the
+   button, kept in `RepositoriesPane::more_bounds`.
+6. R-22: press-time `release_check_all` (focus moves to the list when Check all
+   was focused and nothing more is taken) plus a render-time guard in
+   `panel_toolbar` (`cx.defer_in`).
+7. R5-9 filled: `repository_menu_chosen` maps Refresh and Rebuild to
+   `maintain_index(false|true)`, acted on only when the menu's root is still the
+   chosen repository; `still_offered` checks them against `more_items`; Remove
+   from More goes through the generic arm with the More button as `opened_from`.
+   `maintain_index` is the existing request the sidebar and list actions use.
+
+**Dead-code allows.** Removed: `// Used from Task 6` on `MenuChoice::Refresh`,
+`MenuChoice::Rebuild`, `more_items` and its re-export. Added: none. Remaining:
+Task 9's `RepositoryRow::tooltip()` and `menu()`.
+
+**Review** (fresh reviewer, opus, `9cc1a4a0..b8044b60`): toolbar, the R-40
+branch (exercised by E-11 with a same-update focus read), the More menu, E-11
+and E-12, reuse of `maintain_index`, dead-code allows and sizes verified; Check
+all is a subset of the menu's Check now (no repository whose own Check now is
+disabled is taken); no Critical. Important: `repository_state.rs` grew from 496
+to 498 (fixed). The reviewer raised the Check all stored-outcome question as a
+contract conflict for the owner (ruling above). Fix round 1
+(`b8044b60..c0ab728a`): size, the owner ruling, three test-hygiene fixes (the
+Refresh wait now picks the request Refresh just sent — the report notes
+`sent[0]` was in fact already the newest; the Esc-to-More assertion is
+unconditional; `close_menu` keys on an open menu through the new
+`Workspace::repository_menu_open`); the scoped re-review (sonnet) approved.
+
+**Deferred findings (Minor).**
+1. The header rebuilds every row on each draw (`check_all_roots`), and
+   `defer_in` runs each frame while Check all is disabled; an `is_focused` test
+   before the defer is the tightening.
+2. The render-time R-22 path (Check all focused, then disabled by something
+   other than its own press) is untested; only the press-time path is pinned by
+   mutation.
+3. A stale Remove from a More menu opened for repository `a` still removes `a`
+   after `b` is chosen (Refresh and Rebuild are guarded by
+   `navigation.selected() == root`); defensible — the dialog names the
+   repository — but asymmetric.
+4. `stored_for_check_all` also lets a stored key or host outcome exclude a
+   repository in any non-quiet phase where `last.is_none()` and nothing is in
+   flight (for example a non-key `Attention` phase): consistent with the ruling,
+   not pinned in the table.
+5. A doc line in `menu/check_all.rs` runs past the file's wrapping.
+6. The static gate ran `cargo check --features desktop`; `--all-features` runs at
+   Task 10 (AGENTS.md).
+7. **Task 9's privacy sweep must cover the toolbar and More menu strings** (all
+   constants; no repository data reaches them).
