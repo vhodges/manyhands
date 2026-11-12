@@ -23,7 +23,7 @@ reason.
 | 0 | done | `09437383` (ledger); `2aafa5d0` (ticket comment) | yes |
 | 1 | done, review approved with Minors parked | code `a2abc5fa` (base `2aafa5d0`); ledger commit follows it | yes |
 | 2 | done, review approved after fix round 1 | code `4979f441` (base `d21b14f5`), fix `b103c639`; ledger commit follows | yes |
-| 3 | not started | | |
+| 3 | done, review approved after fix round 1 | code `6cb077c2` (base `3dbaa472`), fix `eb2bc10e`; ledger commit follows | yes |
 | 4 | not started | | |
 | 5 | not started | | |
 | 6 | not started | | |
@@ -392,3 +392,152 @@ verified by the first review.
    fixing:" ending on a colon — the design's sentence; left.
 4. `repository_state.rs` is at 497 lines (the cap): Task 3 must not grow it.
 5. The punctuation rule recognises only the single character `…`, not "...".
+
+## Task 3: rows and list states (Part C)
+
+**Commits.** Code `6cb077c2` (base `3dbaa472`; the commit's trailer says
+"Claude Opus 5.5", the implementer's own model and the plan's wording); fix
+round 1 `eb2bc10e`. Boundary command prints nothing. New: `view/repositories.rs`
+(236), `repositories/row.rs` (272), `repositories/body.rs` (143),
+`view/repositories_tests.rs` (447), `repositories_tests/support.rs` (132).
+`sidebar.rs` 576 → 294. `workspace.rs` 495 (not grown); `repository_state.rs`
+496 (not grown). No new file over 500 lines.
+
+**U-4: holds.** A discarded scratch test (host view whose render compares its
+model with a child view's rows and applies them with `window.defer`) shows the
+child holds the new rows after one `run_until_parked`: one deferred apply, no
+render loop (`gpui-pre-0.3.6/src/app.rs:1781-1830`); the committed journey's
+`pane_follows` confirms it. The plan's fallback was not needed. The scratch
+run also checked E-12's icons: all but `lock` already load.
+
+**Tests run** (`devenv shell -- cargo test --locked --features
+desktop-test-support --bin manyhands <path> -- --exact`):
+- Red: the journey `desktop::view::repositories::tests::rows_and_list_states`
+  against a stub module: 6 compile errors. Mutation check: R-37 switched off →
+  the journey fails at "resolved again"; restored.
+- Step 5 set, one command, 49 exact names: 49 ran, 48 passed, 1 failed:
+  `desktop::view::keyboard_tests::editing::edit_the_mode_key_save_and_done_by_keyboard_alone`
+  timed out (`harness.rs:501`) under 49 parallel window tests; alone it passed
+  (1 ran, 8.6 s). Known flaky: Cycle 02 ledger
+  (`docs/plans/2026-11-11-wave-04-cycle-02-…-execution.md:525-530`, `:624`) and
+  Cycle 01 (`…cycle-01-…-execution.md:1718-1725`).
+  The 49: the journey; E-1 `workspace::tests::a_renamed_away_repository_is_unavailable_until_retry_finds_it_again`;
+  E-2 `workspace::tests::a_busy_list_reload_keeps_the_last_rows_with_a_label` and
+  `settings::repositories::manage_tests::tabs_close_once_the_list_no_longer_gives_their_root`;
+  E-3 `workspace::tests::the_fixtures_repositories_are_listed_by_name`; E-12
+  `assets::tests::every_item_view_icon_loads`; unchanged
+  `workspace::tests::a_repository_rows_selected_state_has_one_meaning` and
+  `the_repository_selector_selects_with_arrows_and_enter`; six
+  `desktop::model::navigation::tests::` tests around R-37 (the Task 0 watch
+  item: the range held four `take_vanished` functions, not five — the four plus
+  two `apply_repositories` tests); and the `select_a_repository` users, mapped
+  to 30 `keyboard_tests` test names (`every_core_action_works_by_keyboard_alone`;
+  `actions::` 6; `conflict::` 1; `discussion::` 2; `drafts::` 1; `editing::` 10;
+  `frame::` 4; `lifecycle::` 4; `settings::` 4; `shell::ctrl_b_in_an_editor_is_bold`;
+  `shell::journey::arrange_the_workspace_by_keyboard_alone`).
+- Final tree, fix round: `rows_and_list_states` and
+  `desktop::model::navigation::tests::a_kept_selection_listed_again_is_resolved_again`,
+  2 ran, 2 passed. Break-on-purpose checks, each restored: share update off →
+  the journey fails at its "while held" assertion; R-37 off → the new unit test
+  fails at its `Resolution::Unknown` assertion.
+- Verify lines, each exit 0 on the final tree: `cargo fmt --check`,
+  `cargo check --locked --features desktop`, `cargo clippy --all-targets
+  --all-features --locked -- -D warnings`.
+
+**Named test edits.**
+- E-1, row part: in `a_renamed_away_repository_is_unavailable_until_retry_finds_it_again`
+  the `("repo-unavailable", 0)` presence/absence assertions became equality /
+  inequality of `("repo-state", 0)`'s label with `CANT_OPEN`.
+- E-2, row part: in `a_busy_list_reload_keeps_the_last_rows_with_a_label`,
+  `repositories-state` = `LABEL_BUSY` became `repositories-alert` =
+  `NOT_UPDATED_BUSY` and `repositories-retry` became the alert's
+  `("repositories-alert", "action")`; in `manage_tests::tabs_close_once_the_list_no_longer_gives_their_root`
+  `repositories-last-read` became the alert's label. **Assertion removed (E-2):
+  the `repositories-last-read` = "Showing the last list read" assertion and its
+  negative form.**
+- E-3, row part: in `the_fixtures_repositories_are_listed_by_name` **the
+  `("repo-root", 0)` root-path assertion and its comment are removed (E-3).**
+- E-12, part: `lock` added to `ItemIcons` and `ICONS` (47 → 48); the other
+  icons already load. (The report first said `hard-drive` is not in the Kit's
+  `default-icons.txt`; it is, line 48 — the conclusion stands.)
+- **E-18** (needed edit): `model/repository_state_tests/scene.rs` loses the
+  unused `pub(super) const NAME`. Task 2's module-wide `dead_code` allow had
+  hidden it; removing the allow (required here) made it a test-build warning,
+  so an error under `-D warnings`. No assertion removed.
+- E-14: no appearance test was deleted. `editing_privacy_tests` and
+  `lifecycle/privacy_tests` untouched.
+- Test functions before/after (by grep, edits by exact replacement):
+  `workspace_tests.rs` 28/28, `repositories_manage_tests.rs` 20/20,
+  `assets_tests.rs` 2/2, identical. Fix round adds
+  `a_kept_selection_listed_again_is_resolved_again` (new; `navigation_tests.rs`
+  425 lines).
+
+**Rulings (implementer's, reviewed).**
+1. The plan's "a finished `ItemSync` → '1 to share' with no list read" (and the
+   `TicketSave`) cannot hold literally: `Workspace::operations_changed`
+   (`workspace/requests.rs:169-170`) already reloads the repository list after
+   every changed request batch, so Repositories reads grow by one per request.
+   The journey instead holds that one read and asserts the row already shows
+   the count while it is held, that no poll ran (`polled_roots` unchanged), and
+   that the same count shows after the read lands — design P5/P33 ask only that
+   the count moves "at once, once" — cost if wrong: if the owner meant no list
+   read at all after a share or save, `operations_changed` must stop reloading
+   for those batches, a behaviour change of its own. The first review judged
+   the first version weak (a possible second unheld read); the measured count
+   is exactly one read per request, and the fix added the held-read count, the
+   while-held and the post-release assertions.
+2. "Ready, no rows" means no rows drawn: a ready list that gives none while the
+   chosen repository is kept shows the kept row and no empty state (R-20) —
+   cost: one condition in `body::state`.
+3. A reload that stays busy or fails says so before "incomplete", both keeping
+   the rows (Cycle 02's `list_body` order) — cost: two arms.
+4. Alert tones: `Warning` for busy and incomplete, `Failure` for a failure; the
+   failure's text is `failure.code.message()` — Part C says "with the failure's
+   message".
+5. The bounds map lives in `RepositoriesPane`, not a new `Workspace` field
+   (`workspace.rs` is at 495 lines) — Task 5 reaches it through the pane.
+6. Copy constants in `view/repositories.rs`; `body.rs` uses them; the panel's
+   "Settings" label is a private const in `body.rs`.
+7. The skeleton draws 3 rows (the design gives no count; Tickets/Documents use 6).
+8. `RepositoriesPane::set` became `show_after_frame` (defer) plus a private
+   `show`; `rows(&self, cx)` returns a clone.
+9. Journey seams: a corrupt `manyhands.sqlite3` through `replace_service` for
+   the first-load failure; a `CacheWrite` lease plus `advance_clock(1 s)` for
+   busy; a real empty registry for the empty state; `enable_through` to
+   register again; a constructed `RepositoryListDto { complete: false, … }`
+   through a test-only `Workspace::apply_repository_list`; the re-registered
+   repository's poll canned as `Library::Busy` so P44 runs with no completed
+   check. No SQL, no chmod.
+
+**Dead-code allows.** Removed: the module-wide one on `repository_state`
+(`model/mod.rs`), both `unused_imports` re-export allows, `Scheduler::shared_copy`'s.
+Added, each on its item: `// Used from Task 5` on `RepositoriesPane::bounds`,
+`RepositoryDelegate::workspace`, and the re-export of `MenuChoice`, `OPEN_FOLDER`,
+`REMOVE_FROM_MANYHANDS`; `// Used from Task 6` on `MenuChoice::Refresh`,
+`Rebuild`, `more_items` and its re-export; `// Used from Task 9` on the two
+`#[cfg(test)]` accessors `tooltip()` and `menu()`. `Scheduler::reread` keeps
+`// Used from Task 5`. This resolves Task 2's deferred item 2.
+
+**Review** (fresh reviewer, opus, `3dbaa472..6cb077c2`): Part C, R-7, R-8, R-20,
+R-37 and the named edits verified; one Important finding (the journey's
+"with no list read" steps held only the next list read), addressed in fix
+round 1 (`6cb077c2..eb2bc10e`); the scoped re-review (sonnet) approved with no
+new issue.
+
+**Deferred findings (Minor).**
+1. **To Task 5:** the bounds map is never pruned, so a row that leaves keeps
+   its entry and a scrolled-out row keeps stale bounds, and R-42's fallback
+   (anchor on the list's bounds when the row has none) cannot fire after a
+   first draw; clear stale keys in `show` or per prepaint, and add an accessor
+   (the field is private).
+2. **To Task 5:** `workspace/focus.rs:220-228`: `secondary-1` focuses the Kit
+   list only when the navigation list gives rows; with only the kept row drawn
+   the one visible row is unreachable by keyboard, and E-6 drives the kept
+   row's menu.
+3. `body.rs`'s `alert()` duplicates `list_view.rs:183`'s private helper.
+4. `show_after_frame` clones every pane row each frame to compare; compare in
+   place instead.
+5. `view/shell/tokens.rs` `ChromeColors::green`'s `cfg_attr(not(test),
+   allow(dead_code))` is stale (Up to date uses it); remove in a task that
+   touches the file.
+6. Task 2's deferred items 1, 3, 4, 5 stand.
