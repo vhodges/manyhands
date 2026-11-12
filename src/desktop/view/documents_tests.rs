@@ -154,7 +154,9 @@ fn new_folder_opens_its_dialog(cx: &mut TestAppContext) {
     shell.keys("down", cx);
     assert!(shell.selected(("doc-node", 1usize), cx));
     assert_eq!(before[1], "guides");
-    shell.keys("shift-tab", cx);
+    // New folder… is in the panel's header now (E-7): Shift-Tab from the
+    // tree reaches the toolbar's last button, Collapse all, then New folder….
+    shell.keys("shift-tab shift-tab", cx);
     let focused = |shell: &Shell, cx: &mut TestAppContext| {
         shell.frame(cx, |window, _| {
             window
@@ -404,6 +406,37 @@ async fn folders_keep_their_state_and_toggle_by_key(cx: &mut TestAppContext) {
     assert_eq!(shell.rows("doc-node", cx).len(), 6);
     assert!(kept_open(&shell, "docs/guides", cx));
     assert_eq!(quiet(&shell, cx), before);
+
+    // Collapse all, by click (P20, P25), with the selection two folders
+    // down: every folder that can toggle is collapsed and kept so, the
+    // selection goes to its top-level folder, nothing is read or sent, the
+    // button disables itself and focus is in the tree. The empty folder
+    // cannot toggle and is left out of the collapsed ones, so it starts
+    // open once it has a document (E-22).
+    shell.keys("secondary-2", cx);
+    shell.keys("down down down", cx);
+    assert!(shell.selected(("doc-node", 4usize), cx), "Nested");
+    shell.click("collapse-all-button", cx);
+    assert_eq!(shell.rows("doc-node", cx), ["empty", "guides", "Top"]);
+    assert!(shell.selected(("doc-node", 1usize), cx), "the top folder");
+    assert!(!kept_open(&shell, "docs/guides", cx));
+    assert!(!kept_open(&shell, "docs/guides/deep", cx));
+    assert!(kept_open(&shell, "docs/empty", cx));
+    assert!(
+        shell.frame(cx, |window, _| window
+            .find("collapse-all-button")
+            .focused()
+            .is_none()),
+        "disabled: it tracks no focus"
+    );
+    assert_eq!(quiet(&shell, cx), before);
+    shell.keys("down", cx);
+    assert!(
+        shell.selected(("doc-node", 2usize), cx),
+        "focus is in the tree"
+    );
+    shell.keys("up", cx);
+    assert!(shell.selected(("doc-node", 1usize), cx));
 
     // Collapsed again, it stays collapsed over a finished refresh job's
     // reload (P19), and keeps the selection.

@@ -55,10 +55,11 @@ use crate::desktop::{
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use focus::REGIONS;
 pub(crate) use focus::Region;
+pub(in crate::desktop::view) use focus::ToolbarButton;
 #[cfg(all(test, feature = "desktop-test-support"))]
 use gpui_kit::App;
 use manyhands::drafts::DraftId;
-pub(in crate::desktop::view) use render::unless_dialog;
+pub(in crate::desktop::view) use render::{modal_open, unless_dialog};
 
 /// The tabs, the cached Settings entity and the cached Drafts page share
 /// one content region; `content.rs` routes between them.
@@ -128,6 +129,10 @@ pub(crate) struct Workspace {
     /// Around each lifecycle segment and sort header, by element ID: tab
     /// stops of their own.
     choice_focus: HashMap<&'static str, FocusHandle>,
+    /// The panel toolbars' buttons, in `ToolbarButton::ALL` order. The
+    /// Workspace owns them, so a dock `load` or move, which changes the
+    /// header's element paths, keeps them (R-37).
+    toolbar_focus: [FocusHandle; 4],
     _find_events: Subscription,
     content: ContentArea,
     /// The operation area's scroll: a control in it that takes focus is
@@ -330,6 +335,12 @@ impl Workspace {
             choice_focus: super::tickets::choice_ids()
                 .map(|id| (id, cx.focus_handle().tab_stop(true)))
                 .collect(),
+            toolbar_focus: [
+                cx.focus_handle(),
+                cx.focus_handle(),
+                cx.focus_handle(),
+                cx.focus_handle(),
+            ],
             _find_events: find_events,
             operations_scroll,
             content: ContentArea {
@@ -422,6 +433,10 @@ impl Workspace {
     /// focus.
     pub(in crate::desktop::view) fn region_focus(&self, region: Region) -> FocusHandle {
         self.regions[region.index()].clone()
+    }
+    /// The handle a toolbar button tracks (R-37).
+    pub(in crate::desktop::view) fn toolbar_focus(&self, button: ToolbarButton) -> &FocusHandle {
+        &self.toolbar_focus[button.index()]
     }
     pub(super) fn choice_focus(&self, id: &str) -> Option<&FocusHandle> {
         self.choice_focus.get(id)

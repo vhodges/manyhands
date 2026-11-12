@@ -141,15 +141,23 @@ impl Walk {
     /// Exactly `region` holds focus, and it alone draws its ring, which is
     /// visible.
     fn region(&self, region: Region, cx: &mut TestAppContext) {
-        self.shell.frame(cx, |window, _| ringed(window, region));
+        self.shell.frame(cx, |window, cx| {
+            ringed(window, self.held_region(window, cx), region)
+        });
+    }
+
+    /// The region the Workspace says holds focus: a region's own element,
+    /// or the toolbar button of its panel in the header (E-14).
+    fn held_region(&self, window: &gpui_kit::Window, cx: &gpui_kit::App) -> Option<Region> {
+        self.shell.workspace.read(cx).held_region(window, cx)
     }
 
     /// The element `id` holds focus and is drawn on screen, inside
     /// `region`, whose ring shows it.
     fn on(&self, id: impl Into<ElementId>, region: Region, cx: &mut TestAppContext) {
         let id = id.into();
-        self.shell.frame(cx, |window, _| {
-            ringed(window, region);
+        self.shell.frame(cx, |window, cx| {
+            ringed(window, self.held_region(window, cx), region);
             let element = window.find(id.clone());
             assert_eq!(element.focused(), Some(true), "{id:?} holds focus");
             assert!(element.visible(), "{id:?} is on screen");
@@ -361,6 +369,12 @@ impl Walk {
         self.enter(cx);
         assert!(self.shell.selected("filter-open", cx));
         assert!(rows(cx).contains(&"Waits".to_owned()));
+
+        // The toolbar is first in the Tab order (Part H, E-6): Shift-Tab
+        // from the first segment reaches New ticket…, in the header, which
+        // counts as the Tickets region (E-14).
+        self.tab_to("shift-tab", "new-ticket-button", cx);
+        self.on("new-ticket-button", Region::Tickets, cx);
 
         // The menu: Enter opens it, three Downs reach Blocked, and Enter
         // chooses it. Focus is back on the button, which names the choice.
@@ -630,10 +644,13 @@ async fn every_core_action_works_by_keyboard_alone(cx: &mut TestAppContext) {
 }
 
 /// In the frame just drawn, exactly `region` holds focus, and it alone
-/// draws its ring, which is visible.
-fn ringed(window: &gpui_kit::Window, region: Region) {
+/// draws its ring, which is visible. A region holds focus when its element
+/// does, or when `held`, the Workspace's own answer, names it: the focus of
+/// a panel's toolbar button in the header counts as the panel's (E-14,
+/// decision 18).
+fn ringed(window: &gpui_kit::Window, held: Option<Region>, region: Region) {
     for each in REGIONS {
-        let focused = window.find(each.id()).focused() == Some(true);
+        let focused = window.find(each.id()).focused() == Some(true) || held == Some(each);
         assert_eq!(focused, each == region, "{each:?} holds focus");
         let ring = window.try_find(each.ring_id());
         assert_eq!(ring.is_some(), each == region, "{each:?} draws a ring");

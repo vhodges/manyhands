@@ -1,11 +1,10 @@
 //! Rendering the Tickets and Documents lists; read transitions live in
-//! `workspace/lists`. The ticket list opens with the filter bar, its create
-//! dialog (`view::create`), as the document tree does with New document….
+//! `workspace/lists`. The ticket list opens with the filter bar; New ticket…
+//! and the Documents buttons are the panels' toolbars, in their headers.
 
 use std::rc::Rc;
 
 use super::{
-    create::NEW_TICKET,
     documents::Unsaved,
     rows::{EmptyAction, alert_row, empty_state, skeleton_rows},
     workspace::{Region, Workspace, unless_dialog},
@@ -18,16 +17,13 @@ use crate::desktop::{
             BodyInput, ListAction, ListBody, ListKind, SELECT_A_REPOSITORY, list_body, loading_text,
         },
         markers::row_markers,
-        navigation::Pane,
         ticket_view::footnote,
     },
     view::shell::tokens::chrome_colors,
 };
 use gpui_kit::{
     AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt, Window,
-    component::{button::Button, h_flex, v_flex},
-    div, px,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window, component::v_flex, div, px,
 };
 use manyhands::repository::{ClosureFilter, ItemDtoKind, ReadinessFilter};
 
@@ -55,8 +51,9 @@ const DOCUMENT_STATE: StateIds = StateIds {
 };
 
 impl Workspace {
-    /// The Documents region's body (Part F): New document… and New folder…,
-    /// the state of the tree, and the tree itself.
+    /// The Documents region's body (Part F): the state of the tree, and the
+    /// tree itself. New document…, New folder… and Collapse all are the
+    /// panel's toolbar, in its header (Part G).
     ///
     /// The tree is drawn in every state while a repository is selected, so
     /// focus always has its element (R-34); the state, if any, is drawn
@@ -141,19 +138,6 @@ impl Workspace {
         if name.is_none() {
             return pane.child(state);
         }
-        // New ticket…, until the panel's toolbar replaces it, above the
-        // filters where the Documents pane has New document….
-        let new_ticket = {
-            let workspace = cx.entity().downgrade();
-            h_flex().child(div().id("new-ticket").test_support().child(
-                Button::new("new-ticket-button").label(NEW_TICKET).on_click(
-                    move |_, window, cx| {
-                        let _ = workspace
-                            .update(cx, |this, cx| this.new_item(Pane::Tickets, window, cx));
-                    },
-                ),
-            ))
-        };
         let list = self
             .tickets_pane()
             .render()
@@ -164,8 +148,7 @@ impl Workspace {
             .on_action(unless_dialog(cx, |this, _: &SelectLast, window, cx| {
                 this.select_edge(true, window, cx)
             }));
-        pane.child(new_ticket)
-            .children(self.tickets_hint(cx))
+        pane.children(self.tickets_hint(cx))
             .child(self.column_header(window, cx))
             .child(state)
             .child(list)

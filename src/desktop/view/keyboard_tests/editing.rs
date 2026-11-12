@@ -725,7 +725,8 @@ async fn create_by_keyboard_alone(cx: &mut TestAppContext) {
         assert_eq!(focused_handle(&walk, cx), list, "{kind}: back to the list");
         walk.region(region, cx);
 
-        // Its button, by Tab and Enter; Escape gives focus back to it.
+        // Its button, in the panel's header, by Shift-Tab and Enter (E-7);
+        // Escape gives focus back to it.
         walk.tab_to("shift-tab", button, cx);
         walk.on(button, region, cx);
         walk.enter(cx);

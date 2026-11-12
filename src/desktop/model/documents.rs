@@ -284,8 +284,16 @@ impl Documents {
         }
     }
 
+    /// Whether a folder that can toggle is open in the selected repository's
+    /// tree: what Collapse all would change (Part G).
+    pub(crate) fn any_folder_open(&self) -> bool {
+        match (self.expansion(), self.tree.rows()) {
+            (Some(expansion), Some(rows)) => expansion.any_open(rows),
+            _ => false,
+        }
+    }
+
     /// Every folder of the selected repository's tree collapsed.
-    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 8.
     pub(crate) fn collapse_all(&mut self) {
         let (Some(repo), Some(rows)) = (self.repo.clone(), self.tree.rows()) else {
             return;

@@ -11,19 +11,16 @@
 //! a click on a folder toggles it, the tree's own doing. The folders the
 //! person closed are the model's (`Documents::expansion`): the Workspace
 //! hears the tree's events and keeps them, and a rebuild sets each item's
-//! state from them. New document… and New folder… open their dialogs
-//! (`view::create`, `view::new_folder`).
+//! state from them. New document…, New folder… and Collapse all are the
+//! panel's toolbar, in its header (`dock::header::toolbar`).
 
 use std::{collections::HashMap, rc::Rc};
 
 use gpui_kit::{
-    App, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, ScrollStrategy, SharedString, StyleRefinement, Styled, TestSupportExt,
-    WeakEntity, Window,
+    App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    ScrollStrategy, SharedString, StyleRefinement, Styled, TestSupportExt, WeakEntity, Window,
     base::Tree,
     component::{
-        button::Button,
-        h_flex,
         scroll::ScrollableElement,
         tree::{TreeItem, TreeState},
         v_flex,
@@ -33,16 +30,13 @@ use gpui_kit::{
 use manyhands::canonical::ItemId;
 
 use self::row::document_row;
-use super::{
-    create::NEW_DOCUMENT,
-    workspace::{Workspace, unless_dialog},
-};
+use super::workspace::{Workspace, unless_dialog};
 use crate::desktop::{
     keys::{DOCUMENTS_CONTEXT, SelectFirst, SelectLast},
     model::{
         doc_rows::{DocRow, Expansion, doc_row, visible_selection},
         documents::{TreeNode, document_id, folder_id, unreadable_id},
-        navigation::{OpenTarget, Pane},
+        navigation::OpenTarget,
         stamp::RepoKey,
     },
 };
@@ -50,6 +44,7 @@ use crate::desktop::{
 mod row;
 
 pub(crate) const NEW_FOLDER: &str = "New folder\u{2026}";
+pub(crate) const COLLAPSE_ALL: &str = "Collapse all folders";
 /// An empty folder's trailing cell, where a count would be (decision 14).
 pub(crate) const EMPTY_TRAILING: &str = "empty";
 
@@ -202,7 +197,7 @@ impl DocumentsPane {
             .collect()
     }
 
-    /// The tree, with New document… and New folder… above it. `focus` is
+    /// The tree. `focus` is
     /// the Documents region's handle: its selected row draws a ring while
     /// the region holds focus; `unsaved` says which documents hold a draft.
     pub(crate) fn render(
@@ -213,8 +208,6 @@ impl DocumentsPane {
         cx: &mut Context<Workspace>,
     ) -> impl IntoElement + use<> {
         let nodes = self.nodes.clone();
-        let opener = workspace.clone();
-        let folder_opener = workspace.clone();
         let scroll = self.tree.read(cx).scroll_handle().clone();
         let rows = Tree::new(&self.tree)
             .item(move |ix, entry, state, window, cx| {
@@ -239,46 +232,22 @@ impl DocumentsPane {
             .list_style(StyleRefinement::default().flex_grow_1().size_full())
             .relative()
             .size_full();
-        // New document…, before New folder… (`03-panels.md`): each opens
-        // its dialog (`view::create`, `view::new_folder`).
-        let new_document = div().id("new-document").test_support().child(
-            Button::new("new-document-button")
-                .label(NEW_DOCUMENT)
-                .on_click(move |_: &ClickEvent, window, cx| {
-                    let _ = opener.update(cx, |workspace, cx| {
-                        workspace.new_item(Pane::Documents, window, cx)
-                    });
-                }),
-        );
-        let new_folder = div().id("new-folder").test_support().child(
-            Button::new("new-folder-button").label(NEW_FOLDER).on_click(
-                move |_: &ClickEvent, window, cx| {
-                    let _ =
-                        folder_opener.update(cx, |workspace, cx| workspace.new_folder(window, cx));
-                },
-            ),
-        );
-        v_flex()
-            .gap_1()
-            .size_full()
-            .min_h_0()
-            .child(h_flex().gap_2().child(new_document).child(new_folder))
-            .child(
-                div()
-                    .id("documents-tree")
-                    .test_support()
-                    .key_context(DOCUMENTS_CONTEXT)
-                    .on_action(unless_dialog(cx, |this, _: &SelectFirst, _, cx| {
-                        this.select_document_edge(false, cx)
-                    }))
-                    .on_action(unless_dialog(cx, |this, _: &SelectLast, _, cx| {
-                        this.select_document_edge(true, cx)
-                    }))
-                    .flex_1()
-                    .min_h_0()
-                    .child(rows)
-                    .vertical_scrollbar(&scroll),
-            )
+        v_flex().gap_1().size_full().min_h_0().child(
+            div()
+                .id("documents-tree")
+                .test_support()
+                .key_context(DOCUMENTS_CONTEXT)
+                .on_action(unless_dialog(cx, |this, _: &SelectFirst, _, cx| {
+                    this.select_document_edge(false, cx)
+                }))
+                .on_action(unless_dialog(cx, |this, _: &SelectLast, _, cx| {
+                    this.select_document_edge(true, cx)
+                }))
+                .flex_1()
+                .min_h_0()
+                .child(rows)
+                .vertical_scrollbar(&scroll),
+        )
     }
 }
 

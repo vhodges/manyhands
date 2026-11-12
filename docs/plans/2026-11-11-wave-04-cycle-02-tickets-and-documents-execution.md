@@ -479,6 +479,66 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
   `DelayingBackend::replace_service` can fail only the status read, so the
   failed step is a real view test, not only a model-table row.
 
+- **Ruling (Task 8): U-3 holds.** The header draws Workspace-built base
+  `Button`s (`new-ticket-button`, `new-document-button`, `new-folder-button`,
+  `collapse-all-button`) beside the title area, and a toolbar handle counts as
+  its panel's region in `focused_region`, so `cycle_region`, the ring and
+  `NewItem` follow. Decision 18's body-row alternative was not needed. Proven by
+  `dock::tests::toolbars::panel_toolbars_work_by_tab_and_enter`.
+- **Ruling (Task 8): the toolbar sits outside the drag source.** `single` splits
+  the row into a `flex_1` title area (drag source and drop target, id
+  `("panel-title", node)`) and the toolbar; `tabs` draws the active tab's toolbar
+  after the end-of-strip drop area. The wrapper's mouse-down stop is belt and
+  braces: placement alone protects, and a mutation that removed only the stopper
+  passes (known gap).
+- **Ruling (Task 8): the modal guard is in `Workspace::press_toolbar`**, through a
+  new shared `render::modal_open` that `unless_dialog` also uses, so a test can
+  reach the guard (a pointer click behind a dialog lands on the overlay). Only
+  Collapse all depends on it; `new_item` and `new_folder` have their own guards.
+- **Ruling (Task 8): `Expansion::collapse_all` collapses only folders with child
+  nodes; Collapse all is disabled when `any_open` finds no such folder expanded
+  in the set.** Part E says a folder with no child nodes "is never expanded", P20
+  says "every folder collapsed", and the literal reading would keep an empty
+  folder collapsed after it gains its first document (against "a new folder
+  starts expanded"). The Task 5 ruling pre-authorized the change. **Flag for the
+  owner at Task 9:** Cycle decision 13 reads "Collapse all collapses every
+  folder"; the only observable difference is a leaf or empty folder that later
+  gains a document (it now opens). Cost if wrong: one function and one test.
+- **Ruling (Task 8): `any_open` follows the set, not what is visible.** After a
+  hand-collapse of `guides`, its nested `deep` stays expanded in the set, so
+  Collapse all stays enabled until pressed, and pressing it changes nothing
+  visible. Part G says "no folder is expanded" and Part E defines expanded as not
+  in the collapsed set (R-12), so the set is the literal reading. The reviewer
+  recommended it. Known gap; one function to change.
+- **Ruling (Task 8): a toolbar button that disables itself while focused falls
+  back through `focus_lost` and `last_region`** (no `focus_lost` toolbar case).
+  Only Collapse all moves focus explicitly (R-28); the explicit move is redundant
+  with the fallback and survives its removal (mutation), kept for the design.
+- **Known gaps (Task 8, Minor, not acted on):** a New button disabling while
+  focused (repository deselected) and a reload that removes every folder are
+  untested, as is Shift-F6 from a button; the NewItem key in a tooltip cannot be
+  read by the snapshot; the accessible-name check compares to the same constants
+  the code uses; `documents.rs:235` keeps a one-child `v_flex().gap_1()`;
+  `ToolbarButton::index` uses position plus `expect`; `workspace.rs` is 495
+  lines, so the next addition there needs a split; `documents_tests.rs` (879),
+  `model/documents_tests.rs` (1053) and `keyboard_tests.rs` (674) grew.
+- **Flaky test (found Task 8, present at HEAD):**
+  `keyboard_tests::editing::edit_the_mode_key_save_and_done_by_keyboard_alone`
+  fails intermittently in large parallel batches ("tab never reached item-page"
+  or "the edit editor opened did not happen"), also at `da14adfa` in one of four
+  concurrent runs. Alone it passes (8 s). It uses neither the toolbar nor
+  `ringed`'s new path. It may appear in the Task 9 fast tier; if so, rerun alone.
+- **Process note (Task 8):** the step-0 split moved
+  `an_unreadable_file_is_listed_with_its_reason` byte-for-byte (the reviewer
+  diffed 205 lines) to `D/view/tickets_tests/unreadable.rs`; its exact name is now
+  `desktop::view::tickets::tests::unreadable::an_unreadable_file_is_listed_with_its_reason`.
+  The test-function audit against `da14adfa` (1847 names, 1848 now) found one
+  addition and that one move, nothing lost. Findings from writing the toolbar
+  test: Tickets, alone in the right dock, cannot be dragged (so a "no drag from
+  its button" check would be vacuous; the check runs on Documents with a positive
+  control); moving Documents into Tickets' group makes it active (R-36).
+
+
 ## Test Edits
 
 | E | Site | Reason | Task | Removes an assertion |
@@ -504,11 +564,18 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
 | E-15 | `D/view/polling_privacy_tests.rs` (:687, comments :15, :96, :493) | Part F moves the path from `doc-path` to the tooltip, which the snapshot cannot read; the `("region-documents", PATH)` pair becomes `("region-documents", TITLE)` (see Rulings, Task 6); comments updated | 6 | yes, the `PATH` pair (replaced by a `TITLE` pair; the existing title pair stays; the `PATH` sentinel is still swept as absent) |
 | E-8 | `D/view/documents_tests.rs`, `new_folder_tests.rs`, `move_document_tests.rs` | `flatten` uses `doc_row(node, true).label`, so rows read `marker.md` and the like; `doc-empty` reads `EMPTY_TRAILING`; `doc-nonconforming` is named by `doc_row`'s tooltip[0]; an open folder has no `doc-count`; `arrows_move_in_the_tree_and_enter_opens` asserts Enter toggles a folder and a click on a document row opens it by target (item and by path); `a_held_tree_of_a_never_replaces_bs` reads `only-in-b.md`; `tree_paths` calls `documents_pane().document_paths(cx)` (visible rows only, so E-19's reveal is still exercised) | 6 | yes: the `doc-path` second line, the "Nonconforming" text, the `doc-problem` code, "Empty folder", and the `doc-path`/`doc-problem` absence checks (their ids no longer exist) |
 | E-9 | `D/view/keyboard_tests/actions.rs`, `editing.rs` | Look documents up by file name (`MARKER_FILE`, `NOTES_FILE`) instead of the old path labels | 6 | no |
+| E-14 | `D/view/keyboard_tests.rs` `ringed` and `on` | `ringed` takes the Workspace's `#[cfg(test)]` `held_region`: a region holds focus when its element does or a toolbar handle of it does; `region()` and `on()` pass it. `on(id, region)` still needs the element itself focused | 8 | no |
+| E-6 (toolbar step) | `D/view/keyboard_tests.rs` `change_the_filters` | Gains Shift-Tab from `filter-open` to `new-ticket-button`, then `on(.., Region::Tickets)` | 8 | no |
+| E-7 | `D/view/documents_tests.rs` `new_folder_opens_its_dialog`; `D/view/keyboard_tests/editing.rs` | The first presses `shift-tab shift-tab` (Collapse all is now the toolbar's last button); the two editing walks needed no code change since E-14 makes `on` hold, one comment changed | 8 | no |
+| E-22 | `D/model/documents_tests.rs` `expansion_survives_rebuilds_and_collapse_all` | Collapse all's scope changed (see Rulings, Task 8): the assertion that `empty` is in the collapsed set is removed; replaced by `empty` staying expanded, `empty` opening once it gains a document (a reload step), and `any_folder_open` true before and false after | 8 | yes: `empty` in the collapsed set |
+
 
 ## Additional Tests
 
 | Test | Why it catches something existing tests don't | Task |
 | --- | --- | --- |
+| Task 8 added none beyond the plan's `dock::tests::toolbars::panel_toolbars_work_by_tab_and_enter` (split into phase helpers: no repository, single panels, behind a dialog, a tabbed group) | Part G's U-3, P24, P29, R-13 and R-37 | 8 |
+| Extension: `documents::tests::folders_keep_their_state_and_toggle_by_key` gains Collapse all by click | The button's effect, selection to the top folder, nothing read or sent, button disabled, focus in the tree | 8 |
 | `documents::tests::unreadable_files_sit_in_their_folders_and_are_kept_with_the_tree` | The plan extends only the tickets model test; Documents' merge of the files into the tree (placement, counts, selection, keep and replace rules, a status read during a reload) is new logic with no other test | 7 |
 | Extra cases in `ticket_view::tests::the_footnote_counts_what_needs_attention` (two unreadable rows) and in `an_unreadable_file_is_listed_with_its_reason` (real-data `primary`) | Review hardening: a count above one, and `primary == (worktree == root)` against real paths | 7 |
 | `documents::tests::the_tree_says_each_list_state_and_acts_on_it` | The plan's one test names only stale and never-refreshed for Documents; this covers the skeleton while the first read is held, a reload with "Updating…", the busy-over-kept alert (via `hold_read(Folders)`, `hold_read(Documents)` and a cache-write lease), Retry through `reload_lists`, empty with New document…, P27 folders-only, stale and never-refreshed with Refresh (registry SQL), failed with its message, and an unavailable index with Rebuild | 6 |
@@ -540,3 +607,4 @@ at `keyboard_tests/drafts.rs:105` and `shell/support.rs:53`; `relative_time` and
 | 5 | base `ce46c643`, task commit in the git log (Step 0: origin/main still `48653d01`, already merged) | `model::documents::tests::{expansion_survives_rebuilds_and_collapse_all, rows_read_as_the_design_writes_them, the_tree_is_kept_over_a_reload_of_the_same_repository, the_tree_is_ready_once_both_reads_are, either_read_failing_fails_the_tree, an_old_repositorys_reads_are_dropped}`; `model::operations::tests::a_folder_made_or_a_document_moved_names_its_place_to_reveal`; `view::documents::tests::the_tree_shows_what_the_library_reads_give`; `view::new_folder::tests::new_folder_creates_and_explains_local_folders_and_lists_it`; `view::move_document::tests::move_from_the_sheet_commits_both_paths_and_the_tab_follows`; `view::workspace::tests::a_busy_list_reload_keeps_the_last_rows_with_a_label`: each 1 passed on the final tree; fmt, check, clippy green. Earlier in the task, by module prefix, once: 177 neighbour tests passed (documents, new_folder, move_document, repair, operations, item, polling_privacy, workspace, dock state, tabs, and four keyboard walks) | one fresh reviewer: 0 Blocking, 0 Important, 7 Minor; the untitled-label row and the dead `load_documents` guard fixed, re-run; the rest recorded | see Rulings (Task 5), E-16 to E-19, Additional tests, handovers to Tasks 6, 7 and 8 |
 | 6 | base `ec8ecb39`, task commit in the git log | `view::documents::tests::{folders_keep_their_state_and_toggle_by_key, the_tree_shows_what_the_library_reads_give, arrows_move_in_the_tree_and_enter_opens, a_held_tree_of_a_never_replaces_bs, the_tree_says_each_list_state_and_acts_on_it, a_document_with_unsaved_work_is_marked_at_once}`; `keyboard_tests::every_core_action_works_by_keyboard_alone`; `polling_privacy_tests::polling_privacy`: 8 passed together on the final tree. Earlier in the task, by exact name, 20 passed (adding `documents::tests::new_folder_opens_its_dialog`, the new_folder and move_document tests, `operations::tests::a_refresh_keeps_the_selected_document`, `keyboard_tests::actions::a_nonconforming_entry_opens_by_keyboard`, `keyboard_tests::editing::{repair_and_adopt_by_keyboard_alone, create_by_keyboard_alone, move_and_new_folder_by_keyboard_alone}`, `create::tests::*`, `editing_privacy_tests::sentinels_reach_no_surface_through_create_move_and_repair`, `workspace::tests::a_busy_list_reload_keeps_the_last_rows_with_a_label`); the reviewer ran `tickets::tests::list_states_act_and_a_reload_keeps_the_rows` and `dock::tests::state::a_hidden_panel_keeps_its_state` on the same code; fmt, check, clippy green | one fresh reviewer: 0 Blocking, 1 Important (a document row click opening it untested), 5 Minor; the Important and three Minor (P25 re-baseline, failure message, Enter on an empty folder) fixed, re-run; the rest recorded | see Rulings (Task 6), E-8, E-9, E-15, Additional tests, known gaps |
 | 7 | base `c42ab081`, task commit in the git log | `model::unreadable::tests::unreadable_files_go_to_their_list`; `model::ticket_view::tests::{derive_filters_counts_and_sorts, tooltips_carry_the_id_context_and_reasons, the_footnote_counts_what_needs_attention}`; `model::documents::tests::{rows_read_as_the_design_writes_them, expansion_survives_rebuilds_and_collapse_all, unreadable_files_sit_in_their_folders_and_are_kept_with_the_tree, the_tree_is_kept_over_a_reload_of_the_same_repository}`; `model::tickets::tests::a_read_lands_only_for_its_repository_and_load`; `view::tickets::tests::an_unreadable_file_is_listed_with_its_reason`; `polling_privacy_tests::polling_privacy`: each 1 passed on the final tree; fmt, check, clippy green. By exact name, 60 neighbours passed before the review fixes (list-state, read-count, tabs, dock, operations, find, new_folder, move_document, made-ready and keyboard tests; nothing needed an edit for the extra IndexStatus read) | one fresh reviewer: 0 Blocking, 2 Important (open_ready_tickets starts no status read: recorded; tickets_tests.rs size: split moves to Task 8), 5 Minor; the footnote count, the find.rs comment and the real-data `primary` fixed, re-run | see Rulings (Task 7), the split, E-20, E-21, Additional tests, handover to Task 8 |
+| 8 | base `da14adfa`, task commit in the git log | `dock::tests::toolbars::panel_toolbars_work_by_tab_and_enter`; `documents::tests::{folders_keep_their_state_and_toggle_by_key, new_folder_opens_its_dialog}`; `model::documents::tests::expansion_survives_rebuilds_and_collapse_all`; `keyboard_tests::every_core_action_works_by_keyboard_alone`; `keyboard_tests::editing::{create_by_keyboard_alone, move_and_new_folder_by_keyboard_alone}`; `tickets::tests::unreadable::an_unreadable_file_is_listed_with_its_reason`: each 1 passed on the final tree (implementer and reviewer); fmt, check, clippy green. By exact name, 156 neighbours (keyboard, dock, create, documents, new_folder, footer, tickets, find, model::documents) and 148 more (workspace, tabs, conflict, lifecycle, move_document, operations, scroll, item, editing_privacy, assets, model::doc) passed before the review; the reviewer ran 10 more that click the moved buttons | one fresh reviewer: 0 Blocking, 0 Important, 1 Minor fixed (a misplaced doc comment in `toolbars.rs`), 3 Minor recorded; 3 own mutations all caught | see Rulings (Task 8), E-14, E-6 (toolbar step), E-7, E-22, Additional tests, known gaps, flaky test |

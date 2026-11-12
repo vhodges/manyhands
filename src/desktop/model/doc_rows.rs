@@ -35,15 +35,30 @@ impl Expansion {
         }
     }
 
-    /// Collapses every folder of `nodes`, at every depth.
-    #[cfg_attr(not(test), allow(dead_code))] // Used from Task 8.
+    /// Collapses every folder of `nodes` that can toggle, at every depth. A
+    /// folder with no child nodes never toggles and is never drawn open, so
+    /// it stays out of the set and starts open once it gains a document, as
+    /// a new folder does.
     pub(crate) fn collapse_all(&mut self, nodes: &[TreeNode]) {
         for node in nodes {
-            if let TreeNode::Folder { path, children, .. } = node {
+            if let TreeNode::Folder { path, children, .. } = node
+                && !children.is_empty()
+            {
                 self.collapsed.insert(path.clone());
                 self.collapse_all(children);
             }
         }
+    }
+
+    /// Whether a folder of `nodes` that can toggle is open, at any depth:
+    /// whether Collapse all has something to do.
+    pub(crate) fn any_open(&self, nodes: &[TreeNode]) -> bool {
+        nodes.iter().any(|node| match node {
+            TreeNode::Folder { path, children, .. } => {
+                !children.is_empty() && (self.is_expanded(path) || self.any_open(children))
+            }
+            _ => false,
+        })
     }
 
     /// Expands every folder above `path`, so what is at `path` is

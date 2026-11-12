@@ -590,12 +590,27 @@ fn expansion_survives_rebuilds_and_collapse_all() {
     assert!(!model.expansion().expect("loaded").is_expanded("guides"));
     assert!(model.expansion().expect("loaded").is_expanded("plans"));
 
-    // Collapse all: every folder, the ones that cannot toggle included.
+    // Collapse all: every folder that can toggle (E-22). `empty` has no
+    // child nodes and is never drawn open, so it stays out of the collapsed
+    // set and starts open once it gains its first document, as a new
+    // folder does.
+    assert!(model.any_folder_open(), "Collapse all has something to do");
     model.collapse_all();
     let expansion = model.expansion().expect("loaded");
-    for path in ["guides", "guides/deep", "plans", "empty", "notes"] {
+    for path in ["guides", "guides/deep", "plans", "notes"] {
         assert!(!expansion.is_expanded(path), "{path} is collapsed");
     }
+    assert!(expansion.is_expanded("empty"), "empty cannot toggle");
+    assert!(open_folders(&model).is_empty());
+    assert!(!model.any_folder_open(), "Collapse all has nothing to do");
+    let mut gains = with_notes.clone();
+    gains[3] = ("empty", false);
+    let mut gained = base_documents();
+    gained.push(document("empty/e.md", Some(ID_C)));
+    reload(&mut model, "/a", folders(&gains), documents(gained));
+    assert_eq!(open_folders(&model), paths(&["empty"]));
+    assert!(model.any_folder_open(), "the new document opens its folder");
+    model.collapse_all();
     assert!(open_folders(&model).is_empty());
 
     // A folder made or moved into is revealed in its own repository: its

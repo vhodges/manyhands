@@ -24,6 +24,7 @@ mod state;
 mod strip;
 pub(in crate::desktop::view) mod support;
 mod toggles;
+mod toolbars;
 
 /// The groups of a dump's dock, top to bottom or left to right: each as its
 /// panels' names.

@@ -418,6 +418,20 @@ impl Workspace {
         }
     }
 
+    /// Collapse all (Part G, P20): every folder that can toggle closed, in
+    /// the model and the tree, the hidden selection moved to its top-level
+    /// folder by the rebuild, and focus in the tree, since the button
+    /// disables itself (R-28). Nothing is read or sent (P25).
+    pub(in crate::desktop::view) fn collapse_all_folders(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.documents.collapse_all();
+        self.documents_changed(cx);
+        self.focus_region(Region::Documents, window, cx);
+    }
+
     /// A folder the person opened or closed in the tree, by key or by
     /// mouse: the model keeps it, so a reload or a hidden panel does too
     /// (R-12, P19). The tree's own state already shows it.
