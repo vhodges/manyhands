@@ -25,7 +25,7 @@ reason.
 | 2 | done, review approved after fix round 1 | code `4979f441` (base `d21b14f5`), fix `b103c639`; ledger commit follows | yes |
 | 3 | done, review approved after fix round 1 | code `6cb077c2` (base `3dbaa472`), fix `eb2bc10e`; ledger commit follows | yes |
 | 4 | done, review approved first time | code `02bd0015` (base `64d92f09`); ledger commit follows | yes |
-| 5 | not started | | |
+| 5 | done, review approved after fix round 1; checkpoint comment follows | code `caa23a81` (base `94f5abbd`), fix `ba2a24bc`; ledger commit follows | yes |
 | 6 | not started | | |
 | 7 | not started | | |
 | 8 | not started | | |
@@ -632,3 +632,177 @@ id), pruned on removal); no Critical, no Important.
    `share_title` clones a `String` and an `ItemId` per lookup (≤ 5 per row per
    frame).
 7. `a_kept` row dropping titles: see ruling 2 (K-3 covers an item named by ID).
+
+## Task 5: the repository menu (Part D)
+
+**Commits.** Code `caa23a81` (base `94f5abbd`); fix round 1 `ba2a24bc` (trailers
+say "Claude Opus 5.5", the implementer's model, as the plan's Commits rule
+reads). Boundary command prints nothing. New: `view/repositories/menu.rs` (177),
+`view/workspace/repository_menu.rs` (247), `repositories_tests/menu.rs` (485),
+`test_support/polling/unanswered.rs` (48). `workspace.rs` 502 → **496**
+(accessors moved into `repository_menu.rs`), `lists.rs` 500 (untouched),
+`repository_state.rs` 496. Files already over 500 that grew: `content.rs`
+744 → 772, `requests.rs` 632 → 636, `test_support/polling.rs` 528 → 536 (the new
+mode is in its own file).
+
+**U-1 and U-2: both hold** (scratch test, discarded; `secondary-1` then
+`shift-f10` and `menu`): the context stack with the Kit list focused is
+`[Root, Workspace, Repositories, List]`; `shift-f10` and `menu` both reached
+the `Repositories`-context binding and the Kit `List` binds neither, so no
+fallback; `window.right_click(("repo-row", 1))` reached the row's
+`capture_any_mouse_down` with the right button.
+
+**Tests run** (`devenv shell -- cargo test --locked --features
+desktop-test-support --bin manyhands <paths> -- --exact`):
+- Red: the journey `desktop::view::repositories::tests::the_menu_by_pointer_and_keyboard`
+  — 11 compile errors (missing `OpenRepositoryMenu`, `RepositoryMenuChoice`,
+  `Shown`, `MenuAnchor`, the 3-vs-4-argument `remove_repository`, the opener
+  and accessors).
+- Journey, three attempts: a wait that expected a poll for a newly read
+  repository (it is scheduled `Idle`, not polled at once), then `managed-root`
+  unset (R5-2), then 1 passed (17.7 s).
+- E-13 `desktop::keys::tests::each_key_is_bound_to_its_action`, Settings'
+  `desktop::view::settings::polling_tests::settings_polling_controls` (unchanged),
+  `rows_and_list_states`, `titles_of_what_is_not_shared`: 4 passed.
+- E-16, five call sites reaching seven tests, by exact name:
+  `desktop::view::operations::republish::tests::republish_waits_for_another_dialog_to_close`,
+  `…::republish_opens_when_the_dialog_it_waits_for_is_cancelled`,
+  `desktop::view::item::edit_tests::quit::removing_the_repository_says_an_unkept_tab_closes`,
+  `…::removing_a_repository_with_no_unkept_tab_says_nothing_of_it`,
+  `…::a_removal_found_already_applied_keeps_an_unkept_tab`,
+  `…::a_tab_unkept_after_confirm_stays_when_the_removal_lands`, and the
+  `repair_tests` one — all passed.
+- A named doubt (the sidebar's Remove now passes the list's focus handle): 3
+  passed — `keyboard_tests::actions::remove_an_unavailable_repository_by_keyboard`,
+  `settings::repositories::manage_tests::removing_a_registration_whose_folder_was_renamed_away_succeeds`,
+  `…::the_sidebar_remove_of_a_registration_already_gone_lets_the_entry_go`.
+- Fix round: the journey 1 passed (and three reruns, 1 passed each); with two
+  restores disabled on purpose, all four focus checks read false (restored,
+  no residue); final `the_menu_by_pointer_and_keyboard`, `rows_and_list_states`,
+  `titles_of_what_is_not_shared`: 3 passed.
+- Verify lines, each exit 0 after each round: `cargo fmt --check`, `cargo
+  check --locked --features desktop`, `cargo clippy --all-targets --all-features
+  --locked -- -D warnings`.
+
+**Named test edits.** E-13: `each_key_is_bound_to_its_action` gains `menu` and
+`shift-f10` → `OpenRepositoryMenu` (26 rows); no assertion removed. E-16: the
+five `remove_repository` test calls (`republish_tests.rs` :597, :722;
+`edit_quit_tests.rs` :106 in `ask_to_remove`, :405; `repair_tests.rs` :1048)
+pass the Repositories list's focus handle; no assertion changed. Settings'
+Check now (`settings_polling_controls`) runs unchanged. No E-19: no other
+existing test changed; no assertion removed. Test functions of the scripted
+files before/after: identical (`republish_tests.rs` 22, `edit_quit_tests.rs` 18,
+`repair_tests.rs` 53, `keys_tests.rs` 2); `repositories_tests.rs` gains
+`the_menu_by_pointer_and_keyboard`.
+
+**What the journey covers.** Four repositories (`a` with a ticket tab for the
+sheet; `b`; `c` renamed away before the scheduler reads it; `d` with no
+publication remote). A right click on a non-chosen row opens that row's menu
+and the choice stays; labels equal `menu_items`' in order, the sentence first;
+opening, moving and Esc read nothing and send nothing (P22); `shift-f10`, `menu`
+open it for the highlighted row; Check now sends `PollOnce` for that root on the
+user lane; with a dialog and with the details sheet open the action, a
+dispatched `RepositoryMenuChoice` and the opener do nothing and an open menu
+closes; Open folder records the root in `OpenedFolders`; Share main sends
+`RepoSync`; a Locked row's Unlock… reaches `Scheduler::unlock`; a Can't reach row
+whose "Retry now" is shown, made Needs attention by a live recovery hold, then
+"Retry now" chosen, sends nothing and resumes nothing; a check starting after
+the menu opened, then Check now, sends nothing (P26-P27 re-check, Review Focus
+4); Retry on `c` (not chosen) reads it again; "Share main…" on `d` opens Settings
+› Remotes; Settings… on `b` opens Settings › Repositories managing `b`;
+Remove… opens the dialog with `FILES_REMAIN`, Cancel returns focus to the list
+(read in the same update), OK removes the row and its stale bounds; a reload
+dropping the menu's repository closes it (P29); a kept row alone: `secondary-1`
+focuses the list and `shift-f10` opens its menu with Retry and Remove; activating
+the always-disabled sentence, a dispatched Sentence choice and a Check now built
+disabled send nothing.
+
+**Rulings (implementer's, reviewed).**
+- R5-1: `RepositoryMenu::open` takes `action: Option<RowAction>` after `items`
+  (`MenuItem` does not carry the `RowAction`, `Shown::Action` needs it) — 8
+  arguments, `#[allow(clippy::too_many_arguments)]`.
+- **R5-2: for `SettingsPage::Repositories`, `open_settings_on` also calls the
+  page's existing `manage_root(root, false)`** — the plan's `set_selection`
+  alone is ignored by Settings › Repositories (only Remotes and Hosts read it),
+  so P27 ("Settings opens on that repository") was not met; reviewer: the right
+  seam, mirrors `SettingsHost::identity` and `open_remotes_on`; one local
+  Identity read, no secret or network; side effect: it empties the identity
+  form's inputs as a Manage click does — cost if wrong: Settings… replaces the
+  page's managed repository and starts one identity read. No owner ruling needed.
+- R5-3: `remove_repository`'s "caller's region" is the region whose handle
+  contains `restore`, or the toolbar button's region, else Content (new
+  `region_of` in `focus.rs`) — the design names no rule.
+- R5-4: the sidebar's Remove (the details block, until Task 7) passes the
+  Repositories list's focus handle, as the brief reads (plan-mandated; reviewer
+  notes `this.remove_focus.clone()` would keep today's focus) — Cancel there
+  returns focus to the list until Task 7 deletes the block; no assertion
+  weakened.
+- R5-5: a key-opened menu with focus elsewhere in `REPOSITORIES_CONTEXT` is for
+  the chosen repository and its context is the focused handle (R-40 in one
+  place; the toolbar branch cannot be exercised until Task 6).
+- R5-6: `MenuAnchor::Bounds(b)` opens at `b.bottom_left()`, `Pointer(p)` at `p`,
+  Kit `Anchor::TopLeft`, 8 px window margin.
+- R5-7: when the menu's repository leaves the rows the layer drops the menu and
+  focuses its context. R5-8: a choice that fails the re-check still marks the
+  menu chosen, so focus stays in the menu's context. R5-9: `Refresh` and
+  `Rebuild` choices do nothing until Task 6.
+- R5-10: the stand-in answer for unqueued polls is "not due in an hour" (records
+  no attempt) — a completed answer could replace `last` mid-step. R5-11: the
+  stand-in count is asserted as bounded (1 to 4, all `b`), not exact — cost: an
+  extra poll goes unnoticed rather than fails. R5-12: the pointer-Esc check uses
+  the footer's Settings control as the earlier focus (the fallback never picks a
+  footer control). R5-13: the bounds map is cleared before each list prepaint,
+  replacing the per-key prune, so only drawn rows have bounds.
+
+**Dead-code allows.** Removed: the four `// Used from Task 5` allows
+(`RepositoriesPane::bounds`, `RepositoryDelegate::workspace`, `Scheduler::reread`,
+the `MenuChoice`/`OPEN_FOLDER`/`REMOVE_FROM_MANYHANDS` re-export — `MenuChoice`
+now plain, the two constants `#[cfg(test)]`). Added: one
+`#[allow(clippy::too_many_arguments)]` (R5-1). Still staged: `more_items`, its
+re-export and `MenuChoice::Refresh`/`Rebuild` (Task 6); `RepositoryRow::tooltip()`
+and `menu()` (Task 9).
+
+**Other changes.** `REPOSITORIES_CONTEXT` replaces the literal in
+`Region::key_context`; `Services::check_now(&self, root) -> bool` (user lane,
+refuses while a `PollOnce` is in flight) is called by Settings' Check now (after
+its own dialog guard) and the menu; `attend` is widened; `focus_region(
+Region::Repositories)` focuses the Kit list when the panel draws any row, the
+kept row included.
+
+**Review** (fresh reviewer, opus, `94f5abbd..caa23a81`): the functional contract,
+the choice checked again (R-35, structural: `Shown` derives `PartialEq` over
+`RowAction`), the guards (R-36, R-12), keys (E-13), `check_now`, E-16, allows and
+file sizes verified; no Critical. Two Important findings, both test strength:
+(1) the journey's 8 queued poll answers were a count, not a guarantee (a 9th
+poll would reach the real library); (2) four Esc and post-choice focus
+assertions were read after a draw, where `focus_lost`'s fallback could satisfy
+them. Both addressed in fix round 1 (`caa23a81..ba2a24bc`), with a mutation
+check that the four focus checks fail without the menu's restore; Task 3's two
+carried items done (bounds cleared per prepaint; the kept row reachable by
+`secondary-1`); the scoped re-review (sonnet) approved with no Critical or
+Important issue.
+
+**Deferred findings (Minor).**
+1. The list-bounds fallback (R-42) is untested: on the test platform every effect
+   flush draws the window, so a row in the model is drawn before any key reaches
+   it. Stale bounds for a listed row scrolled out of a virtualized view are
+   cleared by the per-prepaint clear.
+2. The "all `b`" clause of the stand-in assertion would fail if `c` were ever
+   polled automatically, unrelated to the network guarantee; it could be dropped.
+3. The new "built disabled" and sentence checks have no mutation evidence that
+   they can fail.
+4. The `PollOnce`-in-flight predicate exists three times
+   (`scheduler.rs:246-248`, `repositories.rs` `checking_now`,
+   `settings/polling.rs:199-203`): a `Services::checking_now(root)` for all.
+5. `RepositoryMenu::open` has 8 arguments; carrying `RowAction` on `MenuItem`'s
+   state-action item would remove the allow.
+6. Untested: the `Retry`, `Attend` (positive), `Settings` and `SetUpSharing`
+   state actions; `Services::check_now`'s own in-flight refusal; the R-40 toolbar
+   branch (`repository_menu.rs:64-68`) — **Task 6 must exercise it** with the
+   buttons.
+7. Test-only accessors `remove_focus`, `repository_menu_at` live in
+   `workspace/repository_menu.rs`, placed there to keep `workspace.rs` ≤ 500;
+   `content.rs`, `requests.rs`, `test_support/polling.rs` are over 500 (splitting
+   them is owed as cleanup).
+8. Task 2's and Task 3's deferred items stand (Task 3's items 1 and 2 are now
+   done).
