@@ -36,9 +36,11 @@ use crate::desktop::{
 #[path = "repositories_tests/menu.rs"]
 mod menu;
 #[path = "repositories_tests/support.rs"]
-mod support;
+pub(in crate::desktop::view) mod support;
 #[path = "repositories_tests/titles.rs"]
 mod titles;
+#[path = "repositories_tests/toolbar.rs"]
+mod toolbar;
 
 use support::*;
 
@@ -471,4 +473,23 @@ async fn titles_of_what_is_not_shared(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 async fn the_menu_by_pointer_and_keyboard(cx: &mut TestAppContext) {
     menu::journey(cx).await;
+}
+
+/// P23, P24: Check all sends `PollOnce` for the ordinary and the paused
+/// repository, in list order, and none for a locked one or one whose stored
+/// outcome is `UnlockRequired`; nothing else is sent; it takes nothing while
+/// those run; focus moves to the list once it disables itself; refused
+/// behind a dialog and the sheet.
+#[gpui_kit::test]
+async fn check_all_checks_each_repository(cx: &mut TestAppContext) {
+    toolbar::check_all(cx).await;
+}
+
+/// P11, P13, R-35, R-40: the More menu opens for the chosen repository
+/// whatever row the Kit cursor rests on; Rebuild the search index, Esc and
+/// Remove from Manyhands… leave focus on the More button; a choice made for
+/// another repository sends nothing.
+#[gpui_kit::test]
+async fn the_more_menu_acts_on_the_chosen_repository(cx: &mut TestAppContext) {
+    toolbar::more_menu(cx).await;
 }

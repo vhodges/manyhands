@@ -5,8 +5,8 @@
 use std::path::Path;
 
 use gpui_kit::{
-    ElementId, FocusHandle, InputEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
-    MouseUpEvent, Pixels, Point, TestAppContext, test::TestWindowExt,
+    ElementId, FocusHandle, InputEvent, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
+    MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, TestAppContext, test::TestWindowExt,
 };
 use manyhands::{
     canonical::ItemId,
@@ -221,7 +221,10 @@ pub(super) fn items_of(shell: &Shell, name: &str, cx: &mut TestAppContext) -> Ve
 }
 
 /// The repository whose menu is open.
-pub(super) fn open_root(shell: &Shell, cx: &mut TestAppContext) -> Option<RepoKey> {
+pub(in crate::desktop::view) fn open_root(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+) -> Option<RepoKey> {
     shell.frame(cx, |_, _| ());
     shell
         .workspace
@@ -229,7 +232,7 @@ pub(super) fn open_root(shell: &Shell, cx: &mut TestAppContext) -> Option<RepoKe
 }
 
 /// The open menu's items, in order, by label; a separator has none.
-pub(super) fn labels(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
+pub(in crate::desktop::view) fn labels(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
     shell.frame(cx, |window, _| {
         let menu = window.within("popup-menu");
         (0usize..16)
@@ -255,7 +258,7 @@ fn item_at(shell: &Shell, label: &str, cx: &mut TestAppContext) -> Point<Pixels>
 /// Clicks the open menu's item `label`, its mouse events one at a time, so
 /// the choice reaches the Workspace before the next frame, as in the
 /// application (`Shell::click_settled`).
-pub(super) fn choose(shell: &Shell, label: &str, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn choose(shell: &Shell, label: &str, cx: &mut TestAppContext) {
     let at = item_at(shell, label, cx);
     let mut visual = shell.visual(cx);
     visual.simulate_click(at, Modifiers::default());
@@ -264,7 +267,7 @@ pub(super) fn choose(shell: &Shell, label: &str, cx: &mut TestAppContext) {
 
 /// Clicks the open menu's item `label` and says whether `handle` holds
 /// focus in that same update, before its effects run and the next draw.
-pub(super) fn choose_and_hold(
+pub(in crate::desktop::view) fn choose_and_hold(
     shell: &Shell,
     label: &str,
     handle: &FocusHandle,
@@ -296,7 +299,7 @@ pub(super) fn choose_and_hold(
 
 /// Presses `key` and says whether `handle` holds focus in that same
 /// update, before its effects run and the next draw.
-pub(super) fn press_and_hold(
+pub(in crate::desktop::view) fn press_and_hold(
     shell: &Shell,
     key: &str,
     handle: &FocusHandle,
@@ -310,8 +313,32 @@ pub(super) fn press_and_hold(
     held
 }
 
+/// Presses and releases `key`, as a keyboard does (GPUI clicks a focused
+/// button when Enter is released), and says whether `handle` holds focus in
+/// that same update, before its effects run and the next draw.
+pub(in crate::desktop::view) fn press_released_and_hold(
+    shell: &Shell,
+    key: &str,
+    handle: &FocusHandle,
+    cx: &mut TestAppContext,
+) -> bool {
+    let held = shell.frame(cx, |window, cx| {
+        let keystroke = Keystroke::parse(key).unwrap();
+        let down = KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        };
+        window.dispatch_event(down.to_platform_input(), cx);
+        window.dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx);
+        handle.is_focused(window)
+    });
+    shell.run(cx);
+    held
+}
+
 /// Closes the open menu, if one is, by Esc.
-pub(super) fn close_menu(shell: &Shell, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn close_menu(shell: &Shell, cx: &mut TestAppContext) {
     if open_root(shell, cx).is_some() {
         shell.keys("escape", cx);
     }
@@ -337,7 +364,11 @@ pub(super) fn all_reads(shell: &Shell) -> usize {
     shell.backend.reads_in_order().len()
 }
 
-pub(super) fn focused(shell: &Shell, handle: &FocusHandle, cx: &mut TestAppContext) -> bool {
+pub(in crate::desktop::view) fn focused(
+    shell: &Shell,
+    handle: &FocusHandle,
+    cx: &mut TestAppContext,
+) -> bool {
     shell.frame(cx, |window, _| handle.is_focused(window))
 }
 

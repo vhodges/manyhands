@@ -39,7 +39,8 @@ use crate::desktop::{
         navigation::RepositoryEntry,
         polling::{Phase, Reason},
         repository_state::{
-            MenuItem, RepoFacts, RepoState, menu_items, repository_state, repository_tooltip,
+            MenuItem, RepoFacts, RepoState, check_all_applies, menu_items, repository_state,
+            repository_tooltip,
         },
         stamp::RepoKey,
     },
@@ -50,6 +51,9 @@ pub(crate) const LOADING_REPOSITORIES: &str = "Loading repositories";
 pub(crate) const NO_REPOSITORIES: &str = "No repositories yet.";
 /// Part E's Add, which the empty state offers too.
 pub(crate) const ADD_OR_CREATE: &str = "Add or create a repository\u{2026}";
+/// Part E's Check all and More.
+pub(crate) const CHECK_ALL: &str = "Check all for updates now";
+pub(crate) const MORE: &str = "More";
 pub(crate) const NOT_UPDATED_BUSY: &str = "Repositories were not updated: Manyhands is busy.";
 pub(crate) const LIST_INCOMPLETE: &str = "The list of repositories is incomplete.";
 
@@ -72,6 +76,8 @@ pub(crate) struct RepositoryRow {
     chosen: bool,
     /// The chosen repository the list no longer gives (decision 22).
     kept: bool,
+    /// Check all takes it (`check_all_applies`).
+    checkable: bool,
 }
 
 impl RepositoryRow {
@@ -138,11 +144,22 @@ pub(crate) fn rows(workspace: &Workspace, cx: &App) -> Vec<RepositoryRow> {
                 name: entry.name(),
                 tooltip: repository_tooltip(&facts, &state),
                 menu: menu_items(&facts, &state),
+                checkable: check_all_applies(&facts),
                 state,
                 chosen: chosen == Some(root),
                 kept,
             }
         })
+        .collect()
+}
+
+/// The repositories Check all takes, in list order (R-13): the roots of
+/// the rows whose `check_all_applies` holds.
+pub(crate) fn check_all_roots(workspace: &Workspace, cx: &App) -> Vec<RepoKey> {
+    rows(workspace, cx)
+        .into_iter()
+        .filter(|row| row.checkable)
+        .map(|row| row.key)
         .collect()
 }
 
@@ -162,6 +179,9 @@ pub(crate) struct RepositoriesPane {
     /// The list's own bounds, as drawn last: a key-opened menu's anchor
     /// when its row has none (R-42).
     list_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The toolbar's More button, as drawn last: where its menu opens
+    /// (Part E).
+    more_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 impl RepositoriesPane {
@@ -179,6 +199,7 @@ impl RepositoriesPane {
             list,
             bounds,
             list_bounds: Rc::default(),
+            more_bounds: Rc::default(),
         }
     }
 
@@ -246,6 +267,16 @@ impl RepositoriesPane {
         self.list_bounds.get()
     }
 
+    /// Where the More button was drawn last.
+    pub(crate) fn more_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.more_bounds.get()
+    }
+
+    /// The cell the More button's canvas records its bounds into.
+    pub(crate) fn more_bounds_cell(&self) -> Rc<Cell<Option<Bounds<Pixels>>>> {
+        self.more_bounds.clone()
+    }
+
     fn render(&self) -> impl IntoElement + use<> {
         let drawn = self.list_bounds.clone();
         let rows = self.bounds.clone();
@@ -299,4 +330,4 @@ fn show(
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "repositories_tests.rs"]
-mod tests;
+pub(in crate::desktop::view) mod tests;

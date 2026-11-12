@@ -65,6 +65,7 @@ icon_assets!(
         ListFilter,
         FileExclamationPoint,
         Lock,
+        RefreshCw,
     ]
 );
 

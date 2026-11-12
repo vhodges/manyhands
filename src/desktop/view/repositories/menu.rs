@@ -17,7 +17,7 @@ use super::RepositoryRow;
 use crate::desktop::{
     keys::{RepositoryMenuChoice, Shown},
     model::{
-        repository_state::{MenuChoice, MenuItem, RowAction},
+        repository_state::{MenuChoice, MenuItem, RowAction, more_items},
         stamp::RepoKey,
     },
     view::workspace::Workspace,
@@ -57,7 +57,14 @@ pub(crate) fn menu_of(
 /// shows what it showed when the menu opened. A "Retry now" that has
 /// become "Resume checking" or "Unlock…" does not.
 pub(crate) fn still_offered(rows: &[RepositoryRow], choice: &RepositoryMenuChoice) -> bool {
+    let more = matches!(choice.choice, MenuChoice::Refresh | MenuChoice::Rebuild);
     menu_of(rows, &choice.root).is_some_and(|(items, action)| {
+        // Refresh and Rebuild are More's, never a row's.
+        let items = if more {
+            more_items(Some(&choice.root))
+        } else {
+            items
+        };
         items.iter().any(|item| {
             item.choice == choice.choice
                 && item.enabled
@@ -69,8 +76,8 @@ pub(crate) fn still_offered(rows: &[RepositoryRow], choice: &RepositoryMenuChoic
 /// An open repository menu.
 pub(crate) struct RepositoryMenu {
     /// Whose menu it is: it closes when the repository leaves the rows
-    /// (R-23).
-    pub(crate) root: RepoKey,
+    /// (R-23). More with no repository chosen is no one's.
+    pub(crate) root: Option<RepoKey>,
     view: Entity<PopupMenu>,
     /// The menu's top left corner.
     at: Point<Pixels>,
@@ -93,7 +100,7 @@ impl RepositoryMenu {
     /// Workspace says what to do once it is dismissed.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open(
-        root: RepoKey,
+        root: Option<RepoKey>,
         items: Vec<MenuItem>,
         action: Option<RowAction>,
         context: FocusHandle,
@@ -102,7 +109,7 @@ impl RepositoryMenu {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) -> Self {
-        let choices = root.clone();
+        let choices = root.clone().unwrap_or_default();
         let view = PopupMenu::build(window, cx, |menu, _, _| {
             items
                 .iter()

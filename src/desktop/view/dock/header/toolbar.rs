@@ -1,30 +1,35 @@
 //! A panel's toolbar, drawn in its header (Part G, R-13): Tickets' New
-//! ticket…; Documents' New document…, New folder… and Collapse all.
+//! ticket…; Documents' New document…, New folder… and Collapse all;
+//! Repositories' Add or create a repository…, Check all and More.
 //!
 //! The buttons are the base Kit's, tracking handles the Workspace owns, so a
 //! dock `load` or move, which changes the header's element paths, keeps
 //! them (R-37). A focused button counts as its panel's region
 //! (`Workspace::focused_region`), so its ring shows, F6 moves on from it and
 //! `NewItem` makes its kind. The wrapper carries the `Navigation` key
-//! context, for `secondary-n`, and stops a mouse-down from reaching the
-//! header, so pressing a button never drags the panel.
+//! context, for `secondary-n`, and the Repositories panel's own context,
+//! for `menu` and `shift-f10` (R-14, R-40); it stops a mouse-down from
+//! reaching the header, so pressing a button never drags the panel.
 
 use gpui_kit::{
-    AnyElement, ClickEvent, Context, InteractiveElement, IntoElement, MouseButton, ParentElement,
-    StatefulInteractiveElement, Styled, Window,
+    AnyElement, App, ClickEvent, Context, InteractiveElement, IntoElement, MouseButton,
+    ParentElement, StatefulInteractiveElement, Styled, Window,
     base::Button,
+    canvas,
     component::{ActiveTheme, Icon, h_flex, tooltip::Tooltip},
+    div,
     prelude::FluentBuilder,
     px, transparent_black,
 };
 
 use crate::desktop::{
     assets::icon_path,
-    keys::{NAVIGATION_CONTEXT, NewItem},
-    model::{layout::PanelKind, navigation::Pane},
+    keys::{NAVIGATION_CONTEXT, NewItem, REPOSITORIES_CONTEXT},
+    model::{layout::PanelKind, navigation::Pane, stamp::SettingsPage},
     view::{
         create::{NEW_DOCUMENT, NEW_TICKET},
         documents::{COLLAPSE_ALL, NEW_FOLDER},
+        repositories::{ADD_OR_CREATE, CHECK_ALL, MORE, check_all_roots},
         shell::tokens::chrome_colors,
         workspace::{ToolbarButton, Workspace, modal_open},
     },
@@ -44,6 +49,9 @@ impl ToolbarButton {
             Self::NewDocument => NEW_DOCUMENT,
             Self::NewFolder => NEW_FOLDER,
             Self::CollapseAll => COLLAPSE_ALL,
+            Self::AddRepository => ADD_OR_CREATE,
+            Self::CheckAll => CHECK_ALL,
+            Self::RepositoriesMore => MORE,
         }
     }
 
@@ -53,6 +61,9 @@ impl ToolbarButton {
             Self::NewDocument => "file-plus",
             Self::NewFolder => "folder-plus",
             Self::CollapseAll => "chevrons-down-up",
+            Self::AddRepository => "plus",
+            Self::CheckAll => "refresh-cw",
+            Self::RepositoriesMore => "ellipsis",
         }
     }
 
@@ -66,7 +77,10 @@ impl ToolbarButton {
         match kind {
             PanelKind::Tickets => &[Self::NewTicket],
             PanelKind::Documents => &[Self::NewDocument, Self::NewFolder, Self::CollapseAll],
-            PanelKind::Repositories | PanelKind::Activity => &[],
+            PanelKind::Repositories => {
+                &[Self::AddRepository, Self::CheckAll, Self::RepositoriesMore]
+            }
+            PanelKind::Activity => &[],
         }
     }
 }
@@ -77,7 +91,7 @@ impl Workspace {
     pub(in crate::desktop::view) fn panel_toolbar(
         &mut self,
         kind: PanelKind,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let buttons = ToolbarButton::of(kind);
@@ -86,9 +100,18 @@ impl Workspace {
         }
         let colors = chrome_colors(cx);
         let ring = cx.theme().ring;
+        let more_bounds = self.more_bounds_cell();
         let buttons = buttons.iter().map(|button| {
             let button = *button;
-            let enabled = self.toolbar_enabled(button);
+            let enabled = self.toolbar_enabled(button, cx);
+            if button == ToolbarButton::CheckAll && !enabled {
+                // Check all disabled itself while it held focus (R-22):
+                // after this frame, as focus is not moved while drawing.
+                cx.defer_in(window, |this, window, cx| {
+                    this.release_check_all(window, cx)
+                });
+            }
+            let more_bounds = more_bounds.clone();
             let tooltip = move |window: &mut Window, cx: &mut gpui_kit::App| {
                 let tip = Tooltip::new(button.name());
                 if button.has_key() {
@@ -98,7 +121,7 @@ impl Workspace {
                 }
                 .build(window, cx)
             };
-            Button::new(button.id())
+            let element = Button::new(button.id())
                 .track_focus(self.toolbar_focus(button))
                 .accessibility_label(button.name())
                 .disabled(!enabled)
@@ -124,29 +147,53 @@ impl Workspace {
                         .path(icon_path(button.icon()))
                         .w(px(ICON_SIZE))
                         .h(px(ICON_SIZE)),
+                );
+            if button != ToolbarButton::RepositoriesMore {
+                return element.into_any_element();
+            }
+            // Where More's menu opens: below the button, as drawn.
+            div()
+                .relative()
+                .flex_none()
+                .child(element)
+                .child(
+                    canvas(move |at, _, _| more_bounds.set(Some(at)), |_, (), _, _| {})
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
                 )
+                .into_any_element()
         });
+        let context = match kind {
+            PanelKind::Repositories => REPOSITORIES_CONTEXT,
+            _ => NAVIGATION_CONTEXT,
+        };
         Some(
             h_flex()
                 .flex_none()
                 .gap_1()
                 .pr(px(6.))
-                .key_context(NAVIGATION_CONTEXT)
+                .key_context(context)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .children(buttons)
                 .into_any_element(),
         )
     }
 
-    /// Whether `button` can act (Part G): the New buttons with a repository
-    /// resolved; Collapse all with a folder open.
-    fn toolbar_enabled(&self, button: ToolbarButton) -> bool {
+    /// Whether `button` can act (Parts E and G): the New buttons with a
+    /// repository resolved; Collapse all with a folder open; Check all when
+    /// one repository qualifies (R-13); Add and More always, More's items
+    /// disabled with no repository chosen.
+    fn toolbar_enabled(&self, button: ToolbarButton, cx: &App) -> bool {
         match button {
             ToolbarButton::NewTicket => self.tickets().repo().is_some(),
             ToolbarButton::NewDocument | ToolbarButton::NewFolder => {
                 self.documents().repo().is_some()
             }
             ToolbarButton::CollapseAll => self.documents().any_folder_open(),
+            ToolbarButton::AddRepository | ToolbarButton::RepositoriesMore => true,
+            ToolbarButton::CheckAll => !check_all_roots(self, cx).is_empty(),
         }
     }
 
@@ -159,7 +206,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if modal_open(window, cx) || !self.toolbar_enabled(button) {
+        if modal_open(window, cx) || !self.toolbar_enabled(button, cx) {
             return;
         }
         match button {
@@ -167,6 +214,11 @@ impl Workspace {
             ToolbarButton::NewDocument => self.new_item(Pane::Documents, window, cx),
             ToolbarButton::NewFolder => self.new_folder(window, cx),
             ToolbarButton::CollapseAll => self.collapse_all_folders(window, cx),
+            ToolbarButton::AddRepository => {
+                self.open_settings(SettingsPage::Repositories, window, cx)
+            }
+            ToolbarButton::CheckAll => self.check_all(window, cx),
+            ToolbarButton::RepositoriesMore => self.open_more_menu(window, cx),
         }
     }
 }

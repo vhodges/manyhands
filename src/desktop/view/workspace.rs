@@ -134,7 +134,7 @@ pub(crate) struct Workspace {
     /// The panel toolbars' buttons, in `ToolbarButton::ALL` order. The
     /// Workspace owns them, so a dock `load` or move, which changes the
     /// header's element paths, keeps them (R-37).
-    toolbar_focus: [FocusHandle; 4],
+    toolbar_focus: [FocusHandle; ToolbarButton::ALL.len()],
     _find_events: Subscription,
     content: ContentArea,
     /// The operation area's scroll: a control in it that takes focus is
@@ -344,12 +344,7 @@ impl Workspace {
             choice_focus: super::tickets::choice_ids()
                 .map(|id| (id, cx.focus_handle().tab_stop(true)))
                 .collect(),
-            toolbar_focus: [
-                cx.focus_handle(),
-                cx.focus_handle(),
-                cx.focus_handle(),
-                cx.focus_handle(),
-            ],
+            toolbar_focus: std::array::from_fn(|_| cx.focus_handle()),
             _find_events: find_events,
             operations_scroll,
             content: ContentArea {

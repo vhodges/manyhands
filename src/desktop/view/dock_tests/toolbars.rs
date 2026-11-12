@@ -8,7 +8,11 @@ use gpui_kit::{Modifiers, MouseButton, TestAppContext, point, px, test::TestWind
 
 use super::support::*;
 use crate::desktop::{
-    model::layout::PanelKind::{Documents, Tickets},
+    model::{
+        layout::PanelKind::{Documents, Tickets},
+        list_view::{REBUILD_INDEX, REFRESH},
+        repository_state::REMOVE_FROM_MANYHANDS,
+    },
     services::ReadKind,
     test_support::fixtures::Fixture,
     view::{
@@ -16,6 +20,7 @@ use crate::desktop::{
         dock::panels::UPDATING,
         documents::{COLLAPSE_ALL, NEW_FOLDER},
         harness::Shell,
+        repositories::{ADD_OR_CREATE, CHECK_ALL, MORE, tests::support as menu},
         workspace::{REGIONS, Region, ToolbarButton},
     },
 };
@@ -46,6 +51,9 @@ fn window(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     fixture.commit_nonconforming_document(&root, "docs/guides/deep/marker.md");
     fixture.create_folder(&root, "docs/empty");
     fixture.refresh(&root);
+    // A second repository, so the Kit cursor can rest on a row that is not
+    // the chosen one (R-40).
+    fixture.create_repository("b");
     (Shell::open(fixture, cx), root)
 }
 
@@ -157,31 +165,68 @@ async fn panel_toolbars_work_by_tab_and_enter(cx: &mut TestAppContext) {
     let (shell, root) = window(cx);
     with_no_repository(&shell, cx);
     shell.select(&root, cx);
+    // Check all is left out: this window has no schedule (E-11); it is
+    // tested in `check_all_checks_each_repository`.
     for button in ToolbarButton::ALL {
-        assert!(enabled(&shell, button, cx), "{button:?} with a repository");
+        if button != ToolbarButton::CheckAll {
+            assert!(enabled(&shell, button, cx), "{button:?} with a repository");
+        }
     }
     single_panels(&shell, cx);
     behind_a_dialog(&shell, cx);
     a_tabbed_group(&shell, cx).await;
+    repositories::repositories_toolbar(&shell, &root, cx).await;
 }
 
 /// Each button is drawn, named as the design names it, and disabled: with no
-/// repository there is nothing to make, and no folder to collapse.
+/// repository there is nothing to make, and no folder to collapse. The
+/// Repositories buttons: Add and More stay enabled, with More's items
+/// disabled, and Check all is disabled (P12, P13, P28, P39).
 fn with_no_repository(shell: &Shell, cx: &mut TestAppContext) {
     let names = [
-        (ToolbarButton::NewTicket, NEW_TICKET),
-        (ToolbarButton::NewDocument, NEW_DOCUMENT),
-        (ToolbarButton::NewFolder, NEW_FOLDER),
-        (ToolbarButton::CollapseAll, COLLAPSE_ALL),
+        (ToolbarButton::NewTicket, NEW_TICKET, false),
+        (ToolbarButton::NewDocument, NEW_DOCUMENT, false),
+        (ToolbarButton::NewFolder, NEW_FOLDER, false),
+        (ToolbarButton::CollapseAll, COLLAPSE_ALL, false),
+        (ToolbarButton::AddRepository, ADD_OR_CREATE, true),
+        (ToolbarButton::CheckAll, CHECK_ALL, false),
+        (ToolbarButton::RepositoriesMore, MORE, true),
     ];
-    for (button, name) in names {
+    for (button, name, on) in names {
         assert_eq!(
             shell.label(button.id(), cx).as_deref(),
             Some(name),
             "{button:?} is named"
         );
-        assert!(!enabled(shell, button, cx), "{button:?} is disabled");
+        assert_eq!(enabled(shell, button, cx), on, "{button:?} enablement");
     }
+
+    // More opens with its three items, which choose nothing: no repository
+    // is chosen. Esc gives focus back to the button.
+    let more = handle(shell, ToolbarButton::RepositoriesMore, cx);
+    tab_to(shell, ToolbarButton::RepositoriesMore, cx);
+    shell.press("enter", cx);
+    assert!(shell.present("popup-menu", cx), "More opens");
+    assert_eq!(
+        menu::labels(shell, cx),
+        [REFRESH, REBUILD_INDEX, REMOVE_FROM_MANYHANDS]
+    );
+    let before = shell.requests(cx, |_| true).len();
+    menu::choose(shell, REFRESH, cx);
+    menu::choose(shell, REBUILD_INDEX, cx);
+    menu::choose(shell, REMOVE_FROM_MANYHANDS, cx);
+    assert_eq!(shell.requests(cx, |_| true).len(), before, "nothing sent");
+    assert!(!shell.present("confirm-dialog", cx), "no removal asked");
+    if shell.present("popup-menu", cx) {
+        assert!(menu::press_and_hold(shell, "escape", &more, cx));
+    }
+    assert!(!shell.present("popup-menu", cx));
+}
+
+fn handle(shell: &Shell, button: ToolbarButton, cx: &mut TestAppContext) -> gpui_kit::FocusHandle {
+    shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.toolbar_focus(button).clone())
 }
 
 /// Tickets and Documents each alone in their group (the default layout).
@@ -353,3 +398,6 @@ async fn a_tabbed_group(shell: &Shell, cx: &mut TestAppContext) {
     }
     assert!(!shell.present(ToolbarButton::NewTicket.id(), cx));
 }
+
+#[path = "toolbars/repositories.rs"]
+mod repositories;

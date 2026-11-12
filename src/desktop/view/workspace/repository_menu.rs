@@ -1,18 +1,21 @@
 //! A repository's menu (Part D): opened by a right click on a row and by
 //! `menu` or `shift-f10`, its choice checked again and done, its
-//! dismissal, and its layer. Every entry point refuses behind a dialog or
-//! the details sheet (R-36): the actions through `unless_dialog`, the row's
-//! right press through the opener's own guard.
+//! dismissal, and its layer; and the toolbar's More menu and Check all
+//! (Part E). Every entry point refuses behind a dialog or the details
+//! sheet (R-36): the actions through `unless_dialog`, the row's right press
+//! through the opener's own guard, the toolbar's through `press_toolbar`.
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::{AnyElement, App, Context, FocusHandle, Point, Window};
+use std::{cell::Cell, rc::Rc};
 
-use super::{Workspace, modal_open};
+use gpui_kit::{AnyElement, App, Bounds, Context, FocusHandle, Pixels, Point, Window};
+
+use super::{Region, ToolbarButton, Workspace, modal_open};
 use crate::desktop::{
     keys::{RepositoryMenuChoice, Shown},
     model::{
-        repository_state::{MenuChoice, RowAction},
+        repository_state::{MenuChoice, RowAction, more_items},
         stamp::{RepoKey, SettingsPage},
     },
     view::{
@@ -97,9 +100,81 @@ impl Workspace {
             return;
         };
         self.repository_menu = Some(RepositoryMenu::open(
-            root, items, action, context, anchor, restore, window, cx,
+            Some(root),
+            items,
+            action,
+            context,
+            anchor,
+            restore,
+            window,
+            cx,
         ));
         cx.notify();
+    }
+
+    /// The More button's press (Part E): the More menu for the chosen
+    /// repository, below the button, with every item disabled when none is
+    /// chosen. Focus belongs to the button: a choice and Escape give it
+    /// back there, and Remove's dialog does too (R-25).
+    pub(in crate::desktop::view) fn open_more_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if modal_open(window, cx) {
+            return;
+        }
+        let button = self.toolbar_focus(ToolbarButton::RepositoriesMore).clone();
+        let chosen = self.navigation.selected().cloned();
+        let anchor = self
+            .repositories_pane
+            .more_bounds()
+            .map_or(MenuAnchor::Pointer(Point::default()), MenuAnchor::Bounds);
+        let items = more_items(chosen.as_ref());
+        self.repository_menu = Some(RepositoryMenu::open(
+            chosen, items, None, button, anchor, None, window, cx,
+        ));
+        cx.notify();
+    }
+
+    /// The cell the More button records where it was drawn into.
+    pub(in crate::desktop::view) fn more_bounds_cell(&self) -> Rc<Cell<Option<Bounds<Pixels>>>> {
+        self.repositories_pane.more_bounds_cell()
+    }
+
+    /// Check all (Part E, R-13): one Check now for each repository it takes,
+    /// in list order, each through `Services::check_now`, which refuses one
+    /// already checking. The toolbar's press refuses behind a dialog or the
+    /// sheet before it gets here.
+    pub(in crate::desktop::view) fn check_all(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut sent = false;
+        for root in repositories::check_all_roots(self, cx) {
+            sent |= self.services.check_now(Path::new(&root));
+        }
+        if sent {
+            cx.notify();
+        }
+        self.release_check_all(window, cx);
+    }
+
+    /// Check all took nothing more while it held focus: focus moves to the
+    /// list, as Collapse all's does (R-22).
+    pub(in crate::desktop::view) fn release_check_all(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .toolbar_focus(ToolbarButton::CheckAll)
+            .is_focused(window)
+            && repositories::check_all_roots(self, cx).is_empty()
+        {
+            self.focus_region(Region::Repositories, window, cx);
+        }
     }
 
     /// A menu item chosen. It acts only while it still stands: its
@@ -123,8 +198,15 @@ impl Workspace {
         }
         let root = choice.root.clone();
         match choice.choice {
-            // Read, never chosen; Refresh and Rebuild are the More menu's.
-            MenuChoice::Sentence | MenuChoice::Refresh | MenuChoice::Rebuild => {}
+            // Read, never chosen.
+            MenuChoice::Sentence => {}
+            // The More menu's, for the chosen repository: a menu built for
+            // another is ignored, as `maintain_index` acts on the chosen.
+            MenuChoice::Refresh | MenuChoice::Rebuild => {
+                if self.navigation.selected() == Some(&root) {
+                    self.maintain_index(choice.choice == MenuChoice::Rebuild, cx);
+                }
+            }
             MenuChoice::StateAction => {
                 if let Shown::Action(action) = &choice.shown {
                     self.row_action(action, root, window, cx);
@@ -219,7 +301,9 @@ impl Workspace {
             return None;
         }
         let menu = self.repository_menu.as_ref()?;
-        if !rows.iter().any(|row| row.key == menu.root) {
+        if let Some(root) = &menu.root
+            && !rows.iter().any(|row| row.key == *root)
+        {
             let context = menu.context.clone();
             self.repository_menu = None;
             window.focus(&context, cx);
@@ -233,7 +317,9 @@ impl Workspace {
 impl Workspace {
     /// The repository whose menu is open.
     pub(crate) fn repository_menu_root(&self) -> Option<RepoKey> {
-        self.repository_menu.as_ref().map(|menu| menu.root.clone())
+        self.repository_menu
+            .as_ref()
+            .and_then(|menu| menu.root.clone())
     }
 
     /// Where the open repository menu's top left corner is.

@@ -213,3 +213,129 @@ fn menu_items_follow_the_state() {
         );
     }
 }
+
+/// Part E's Check all: which repositories it takes, one table over the
+/// facts. A paused repository is taken (decision 16); one checking, one
+/// whose shape does not poll, one waiting on a key or a host, live or by a
+/// stored outcome that still applies, is not (R-13).
+#[test]
+fn check_all_takes_each_repository_that_can_check() {
+    let cases: Vec<(&str, Set, bool)> = vec![
+        ("an ordinary repository", |_| {}, true),
+        ("a paused one", |s| s.schedule().policy.paused = true, true),
+        (
+            "our own Check now is running",
+            |s| s.checking_now = true,
+            false,
+        ),
+        (
+            "a poll is queued",
+            |s| s.schedule().phase = Phase::Queued,
+            false,
+        ),
+        (
+            "a live locked key",
+            |s| s.schedule().phase = attention(Reason::KeyLocked(key())),
+            false,
+        ),
+        (
+            "a live key problem",
+            |s| s.schedule().phase = attention(Reason::KeyProblem(key())),
+            false,
+        ),
+        (
+            "no key selected",
+            |s| s.schedule().phase = attention(Reason::NoKeySelected(ROOT.to_owned())),
+            false,
+        ),
+        (
+            "an unapproved host",
+            |s| s.schedule().phase = attention(Reason::HostUnapproved(authority())),
+            false,
+        ),
+        (
+            "a host that names none",
+            |s| s.schedule().phase = attention(Reason::HostUnidentified(ROOT.to_owned())),
+            false,
+        ),
+        (
+            "locked and paused",
+            |s| {
+                s.schedule().policy.paused = true;
+                s.schedule().phase = attention(Reason::KeyLocked(key()));
+            },
+            false,
+        ),
+        (
+            "a configuration that needs its remote settings",
+            |s| s.schedule().phase = attention(Reason::ConfigurationRequired(ROOT.to_owned())),
+            true,
+        ),
+        (
+            "held until recovery",
+            |s| s.schedule().phase = attention(Reason::RecoveryHeld(ROOT.to_owned())),
+            false,
+        ),
+        (
+            "a stored unlock required",
+            |s| s.stored = Some(PollingOutcome::UnlockRequired),
+            false,
+        ),
+        (
+            "a stored selected key unavailable",
+            |s| s.stored = Some(PollingOutcome::SelectedKeyUnavailable),
+            false,
+        ),
+        (
+            "a stored host approval required",
+            |s| s.stored = Some(PollingOutcome::HostApprovalRequired),
+            false,
+        ),
+        (
+            "a stored transport failure",
+            |s| s.stored = Some(PollingOutcome::TransportUnavailable),
+            true,
+        ),
+        (
+            "a stored completion",
+            |s| s.stored = Some(PollingOutcome::Completed),
+            true,
+        ),
+        (
+            "a stored unlock required, after an attempt this session",
+            |s| {
+                s.stored = Some(PollingOutcome::UnlockRequired);
+                s.schedule().last = Some(attempt(Answer::Completed));
+            },
+            true,
+        ),
+        (
+            "a stored unlock required, paused: it does not apply",
+            |s| {
+                s.stored = Some(PollingOutcome::UnlockRequired);
+                s.schedule().policy.paused = true;
+            },
+            true,
+        ),
+        ("no schedule, no remote", |s| s.unscheduled(None), false),
+        (
+            "its remotes still being read",
+            |s| {
+                s.unscheduled(None);
+                s.unplaced = Some(Unplaced::Reading);
+            },
+            false,
+        ),
+        (
+            "checking switched off",
+            |s| s.schedule().policy.enabled = false,
+            false,
+        ),
+    ];
+    for (name, set, takes) in cases {
+        let mut scene = Scene::new();
+        set(&mut scene);
+        let titles = |_: &manyhands::canonical::ItemId| None;
+        assert_eq!(check_all_applies(&scene.facts(&titles)), takes, "{name}");
+    }
+}
