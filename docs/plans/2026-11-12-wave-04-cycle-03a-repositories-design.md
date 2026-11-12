@@ -21,14 +21,18 @@ panel. Approval covers the mechanisms, rulings, named test edits and task
 order. It does not authorize implementation, pushes beyond the ticket
 branch, merging or closing.
 
-**Draft, revision 3.** Grounded at the ticket branch `7034522f`, which
+**Draft, revision 4.** Grounded at the ticket branch `7034522f`, which
 holds origin/main `37be101d` (Cycle 01, Cycle 02 and Wave 03 D6 merged).
 Revision 1 (`f6d57bd4`) had two reviews in round 1 (source and
 feasibility; contract and consistency). Revision 2 (`2a0f202e`) applied
 their findings and the owner's second-round answers (decisions 19–22),
 and had a scoped re-review and an adversarial review in round 2.
-Revision 3 applies round 2's findings and decision 24. Not yet
-re-reviewed.
+Revision 3 (`b3851766`) applied round 2's findings and decision 24, and
+had a scoped re-review in round 3 (0 Blocking, 4 Important, 9 Minor).
+Revision 4 applies round 3's findings. It had no independent review:
+round 3 was the third on the unshared list, so that mechanism is now a
+table of required outcomes (Part A, U1–U15) and Task 1 is test-first
+with a design checkpoint.
 
 Conventions:
 
@@ -433,6 +437,59 @@ Conventions:
     (`D/view/operations/attention.rs:140-151`), so focus goes to the item
     area.
 
+**Found in review round 3.**
+
+63. **Where Settings reads the library's stored time.** `since_library` is
+    reached only from `Phase::Waiting { why: NotDue }` and, through
+    `after_last` with no `conflict_pending` and no `last`, from `Idle` and
+    `Stopped` (`D/model/polling/status.rs:174-178`, `:197-202`,
+    `:215-234`). `Busy`, `Interrupted`, `Unfinished` and `Failed` waits,
+    `Queued`, `Running`, `Preempted`, `Retiring` and `Attention` never
+    reach it.
+64. **Check now's own path.** `Heard::CheckedNow` is handled in `heard`
+    itself (`D/services/scheduler/entity.rs:510`, handled by
+    `Scheduler::checked_now`, `retire_loop.rs:149-165`), not through
+    `answers`;
+    an older automatic answer still waiting for its status read
+    (`D/services/scheduler/react.rs:18-36`) is applied after it.
+    `PollSchedule::checked_now` with a poll in flight sets `last` and
+    `last_completed` without calling `apply`
+    (`D/model/polling.rs:284-296`).
+65. **The read task owns the read.** `read_job` returns the `cx.spawn`
+    task that awaits the background read (`D/services/reads.rs:183-201`);
+    dropping the task cancels the read.
+66. **Target literals.** `TargetParts { item_id, kind, disposition }`
+    (`D/services/poll_convert.rs:40-44`) is filled from the library's
+    report at `:66`, and `AttemptTarget` is built from it at `:459-460`,
+    from a Check now's data at `:249`, and in the test window
+    `D/view/polling_window.rs:113`. Tests build `TargetParts` at
+    `D/services/scheduler_consent_tests.rs:337`,
+    `D/services/poll_convert_tests.rs:352`,
+    `D/services/scheduler_loop_tests.rs:60` and
+    `D/view/polling_privacy_tests.rs:330`, and `AttemptTarget` in
+    `D/model/polling/entry_tests.rs`, `retire_loop_tests.rs`,
+    `D/model/polling_retiring_tests.rs`, `polling_schedule_tests.rs`,
+    `D/model/polling/status_tests.rs`, `D/services/poll_convert_tests.rs`,
+    `scheduler_entity_tests.rs`, `scheduler_loop_tests.rs`,
+    `scheduler_retire_tests.rs`, `D/view/operations/attempts_tests.rs`,
+    `retire_real_tests.rs`, `retire_tests.rs` and `retiring_tests.rs`.
+67. **Check now's guard and its home.** Settings' Check now sends
+    `PollOnce` only while none is in flight for the root
+    (`D/view/settings/polling.rs:225-235`). The views' polling entry points
+    on `Services` are in `impl Services` in `D/services/scheduler.rs:228-247`.
+68. **Resolving again.** `take_vanished` gives the selection to be
+    resolved again only when `vanished` is set
+    (`D/model/navigation.rs:339-344`); `apply_repositories` sets it only
+    for a selected entry the list let go (`:326`).
+69. **An envelope's item.** Every result envelope carries `scope:
+    Scope { item_id: Option<String>, … }` (`L/results.rs:104`,
+    `:293-299`). `LocalContextResolve` names no item in its intent
+    (`D/services/requests.rs:345`). `ConflictResolve` (`:328`) is not in
+    the drain's "item shared" predicate (`D/services/mod.rs:640-650`).
+70. **Main is always reported.** Every poll's targets start with main
+    (`L/repository/remote/poll.rs:1920-1925`). `status.rs:166` is the only
+    reader of `AttemptSummary.not_shared` outside tests.
+
 ## Part A: Sharing Facts The Scheduler Keeps
 
 Rows read D6's model, never their own guess (D6 W-5). These additions let
@@ -446,14 +503,19 @@ the model say what the panel needs.
   literals stay as they are. `status::Facts` gains `stored:
   Option<PollingOutcome>`; `phase_status` and `after_last` take `&Facts`
   so `since_library` can read it, and `since_library` returns a retry flag
-  as `after_last` does. A stored outcome counts only where Settings' row
-  reaches `since_library` (fact 53): checking is enabled, the repository
+  as `after_last` does. **One predicate decides whether a stored outcome
+  counts:** `status::stored_applies(&Facts) -> Option<PollingOutcome>`
+  gives the stored outcome only when checking is enabled, the repository
   is not held, not paused and D6's shape is `Polling`, there is no attempt
-  this session (`last.is_none()`, fact 33), and it is not checking
-  (`checking_now` or `in_flight()`). So it never outranks Checking…
-  (decision 9), and a paused, off or held repository says Paused, nothing
-  or Needs attention as Settings does (decision 10; R-32). Settings and
-  the panel then say the same:
+  this session (`last.is_none()`, fact 33), it is not checking
+  (`checking_now` or `in_flight()`), its phase is `Idle`, `Stopped` or
+  `Waiting { why: NotDue }`, and no conflict is pending: exactly where
+  Settings' row reaches `since_library` (facts 53, 63). `since_library`,
+  `repository_state` and Check all use it and nothing else. So a stored
+  outcome never outranks Checking… (decision 9), and a paused, off or held
+  repository, a busy or failed wait and a pending conflict say what
+  Settings says (decision 10; R-32). Settings and the panel then say the
+  same:
 
   | Stored outcome, under that condition | Settings line and action | Panel state and action |
   | --- | --- | --- |
@@ -471,9 +533,12 @@ the model say what the panel needs.
   fact 27). No new read (R-2). `SharedCopy` is re-exported from the
   scheduler for the model (fact 27).
 - **Main is explicit.** `AttemptTarget` gains `main: bool`, true for the
-  target with a target and no kind (fact 51), set where the desktop maps a
-  poll's targets (`D/services/poll_convert.rs`). Nothing identifies main
-  by `item_id: None` (R-29).
+  target with a target and no kind (fact 51). `TargetParts` gains the same
+  field, set from the library's report (`D/services/poll_convert.rs:66`)
+  and carried into `AttemptTarget` (`:459-460`); a Check now's data sets
+  it at `:249` (fact 66). Every `TargetParts` and `AttemptTarget` literal
+  in tests gains it (E-9). Nothing identifies main by `item_id: None`
+  (R-29).
 - **What one attempt saw.** `AttemptSummary` gains `to_share:
   Vec<AttemptTarget>`: every `LocalAhead`, `Unpublished` and `Diverged`
   target of the attempt, main included (decision 19). Main counts as one
@@ -481,17 +546,22 @@ the model say what the panel needs.
   `Dirty`, `Conflicted`, `Inaccessible`, `Nonconforming`,
   `BlockedByLocalState`, `MaterializationIncomplete`, `Malformed`,
   `RemotelyDeleted`, `HistoryUnknown` and `NotReached` target (decision
-  19). The `not_shared` field becomes a method returning
-  `to_share.len()`.
+  19). The `not_shared` field goes: its only reader outside tests,
+  `checked` (fact 70), reads the unshared list instead, and E-9 asserts
+  `to_share.len()` (R-44).
 - **The unshared list.** `RepoSchedule` gains `unshared: Unshared { items:
   Vec<AttemptTarget>, problems: Vec<AttemptTarget>, as_of:
   Option<OffsetDateTime> }`. It is replaced only by a `Completed` attempt
-  that carries targets (its `to_share`, `problems` and `completed_at`). A
-  `Transport`, `Interrupted` or `Cancelled` attempt never replaces it,
-  although it replaces `last` (fact 49), and neither does a replayed
-  `Completed` with no targets (fact 50) (R-28). Rows, the footer and
-  Settings' "· N not shared yet" read the unshared list, not `last`
-  (decision 10).
+  that carries targets (its `to_share`, `problems` and `completed_at`), by
+  the rules below. A `Transport`, `Interrupted` or `Cancelled` attempt
+  never replaces it, although it replaces `last` (fact 49), and neither
+  does a replayed `Completed` with no targets (fact 50) (R-28). Rows, the
+  footer and Settings read the unshared list, not `last` (decision 10):
+  Settings' line appends "· {n} not shared yet" from the list's `items`
+  whenever they are not empty, whatever its status, so a save before the
+  first completed check shows in Settings as in the panel (decision 24);
+  and "Up to date" says "Checked {ago} · up to date" from
+  `ago(unshared.as_of, now)`, not from `last` (R-43).
 - **A finished share.** `heard` gains `Heard::Shared { root, item:
   Option<ItemId>, main: bool }` for a finished request the drain already
   treats as "item shared" (fact 40): an `ItemSync` or `ItemRepublish`
@@ -501,23 +571,65 @@ the model say what the panel needs.
   only. The scheduler removes the matching targets from the unshared list
   and from the last attempt's `listed`, so Activity's attempt entry agrees
   with the count (a change to D6's display) (R-3; decision 11). An answer
-  that did not publish removes nothing.
+  that did not publish removes nothing, except that a `TicketClose` or
+  `DocumentPromote` whose `effects.integration` is `Complete` and whose
+  publication is `Pending` (`L/results.rs:76-87`; merged into main, not
+  published) adds main as `LocalAhead` (`Heard::MainAhead`), since main is
+  then ahead of the shared copy (R-45). A
+  `ConflictResolve` is not in the drain's predicate (fact 69): its share
+  shows at the next check (K-1).
 - **A finished save.** `heard` gains `Heard::Saved { root, item: ItemId,
-  kind: TargetKind, new: bool }` for a finished `DocumentSave`,
-  `TicketSave`, `DocumentCreate`, `TicketCreate`, `DocumentMove`,
-  `CommentAdd` or `LocalContextSync` (fact 59) whose
-  `effects.checkpoint` is `Committed` and whose publication is neither
-  `Published` nor `Current`. For a repository with a schedule, the
+  kind: Option<TargetKind>, new: bool }` for a finished request whose envelope
+  names an item in `scope.item_id` (fact 69), whose `effects.checkpoint`
+  is `Committed` and whose publication is neither `Published` nor
+  `Current`: the authoring intents of fact 59 and `LocalContextResolve`,
+  whose intent names no item (U-7). The kind comes from the intent (every
+  intent of fact 59 names one); `LocalContextResolve` names none, so its
+  item joins with no kind (`AttemptTarget.kind` is optional) and is named
+  by its ID (K-3). For a repository with a schedule, the
   scheduler adds the item to the unshared list, as `Unpublished` for a
-  create (`new`) and `LocalAhead` otherwise, unless it is there already
-  (R-30; decision 24).
-- **Order.** `Heard::Shared` and `Heard::Saved` join the poll answers'
-  queue (`answers`, fact 52) and are applied in arrival order, and the
-  scheduler keeps, per root, this session's shares and saves with the
-  time it heard each. Applying an attempt then drops from its items any
-  item this app shared after the attempt's `completed_at`, and keeps in
-  the list any item this app saved after it; an attempt with no
-  `completed_at` counts as older than every share and save heard (R-31).
+  create (`new`) and `LocalAhead` otherwise, unless it is there already,
+  also before this session's first completed check (R-30; decision
+  24).
+- **Rules for the unshared list** (R-31). This is the third round of
+  review on this mechanism, so its contract is the rules and the table
+  below, and Task 1 is test-first with a design checkpoint: the
+  implementer writes `unshared_follows_attempts_shares_and_saves` from
+  the table first, and stops and reports to the orchestrator before
+  implementing if any row cannot be expressed against the code.
+  1. Each share and save is recorded, per root, with the time it is
+     **heard**: the scheduler's `utc()` when `heard` runs, not when it is
+     applied.
+  2. A share or save also applies to the list at once (decisions 11,
+     24).
+  3. Applying a `Completed` attempt with targets sets the list from its
+     targets; then, per item, the **last** of this session's changes heard
+     after the attempt's `completed_at`, in arrival order, decides: a
+     share removes the item, a save adds it. An attempt with no
+     `completed_at` counts as older than every change heard.
+  4. An attempt whose `completed_at` is older than `unshared.as_of` never
+     replaces the list.
+  5. The in-flight branch of `PollSchedule::checked_now` (fact 64), which
+     sets `last` without `apply`, follows rules 3 and 4 too, as does a
+     Check now handled before an older automatic answer is applied.
+
+  | # | Sequence | The list |
+  | --- | --- | --- |
+  | U1 | A check lists X | X counted |
+  | U2 | Then X is shared | X gone |
+  | U3 | Then X is saved | X back |
+  | U4 | A check that completed before that save lists X as `Current` | X stays (the save is later) |
+  | U5 | A check that completed after the share lists X as `LocalAhead` | X counted (the check saw it after) |
+  | U6 | X saved, then X shared, both heard before an older check is applied | X gone (the share is last) |
+  | U7 | X shared, then X saved, both heard before an older check is applied | X counted (the save is last) |
+  | U8 | A failed, interrupted or cancelled check | Unchanged |
+  | U9 | A replayed `Completed` with no targets | Unchanged |
+  | U10 | An attempt whose `completed_at` is older than `as_of` | Ignored |
+  | U11 | A close or approval that published | The item and main gone |
+  | U12 | A close or approval that merged without publishing | Main added |
+  | U13 | A Check now answered while an older automatic answer waits for its status read | The older answer never replaces the newer list |
+  | U14 | A save before this session's first completed check | X counted; Settings says "· 1 not shared yet" |
+  | U15 | A Check now completed while a poll is in flight (`checked_now`'s in-flight branch) | The list follows rules 3 and 4 |
 - **Reading one repository again.** `Scheduler::reread(&mut self, root:
   Root, cx)` drops `root` from `failed_reads` and reads its registration
   again through `read_registrations` (fact 39), for Retry on a row the
@@ -547,9 +659,9 @@ titles known for the repository's items (Part C), and `now`.
 | 2 | The chosen repository's `Resolution` is `Busy` | no label | — | Retry (`retry_resolution`) |
 | 3 | `configuration.state` is `Invalid` or `Missing` | Needs fixing | `triangle-alert`, amber | Settings… (Settings › Repositories for this repository) |
 | 4 | `checking_now`, or `in_flight()` (fact 36) | Checking… | `loader-circle`, teal | — |
-| 5 | Phase `Attention(KeyLocked(_))`; or stored `UnlockRequired` (Part A's condition) | Locked | `lock`, amber | Unlock… (live; disabled when `unlock_target` is `None`, fact 46); Check now (stored, R-5) |
-| 6 | Phase `Attention(_)` for any other reason; `Shape::Held`; `conflict_pending`; phase `Waiting { why: Failed }`; `Unplaced::Unreadable`; last answer `Transport(Unavailable)` or `Transport(ConfigurationRequired)`; a stored outcome Part A maps here; or the unshared list's `problems` not empty | Needs attention | `circle-alert`, red | D6's `action_of(reason)` (Choose a key…, Approve host…, Open remote settings…, Resume checking); Retry (`Scheduler::reread`) for `Unreadable`; Retry now for "Can't check" and a stored Can't check; Check now for a stored key or host outcome; none for a pending conflict or problems (Activity has them) |
-| 7 | Last answer `Transport(Unreachable)`; or stored `TransportUnavailable` or `ProtocolRejected` (Part A's condition) | Can't reach | `circle-alert`, red | Retry now |
+| 5 | Phase `Attention(KeyLocked(_))`; or `stored_applies` gives `UnlockRequired` | Locked | `lock`, amber | Unlock… (live; disabled when `unlock_target` is `None`, fact 46); Check now (stored, R-5) |
+| 6 | Phase `Attention(_)` for any other reason; `Shape::Held`; `conflict_pending`; phase `Waiting { why: Failed }`; `Unplaced::Unreadable`; last answer `Transport(Unavailable)` or `Transport(ConfigurationRequired)`; a stored outcome `stored_applies` gives that Part A maps here; or the unshared list's `problems` not empty | Needs attention | `circle-alert`, red | D6's `action_of(reason)` (Choose a key…, Approve host…, Open remote settings…, Resume checking); Retry (`Scheduler::reread`) for `Unreadable`; Retry now for "Can't check" and a stored Can't check; Check now for a stored key or host outcome; none for a pending conflict or problems (Activity has them) |
+| 7 | Last answer `Transport(Unreachable)`; or `stored_applies` gives `TransportUnavailable` or `ProtocolRejected` | Can't reach | `circle-alert`, red | Retry now |
 | 8 | The unshared list's `items` not empty | {n} to share | `cloud-upload`, amber | — |
 | 9 | `policy.paused` | Paused | `pause`, muted | Check now |
 | 10 | The unshared list's `as_of` set, its `items` and `problems` empty | Up to date | `circle-check`, green | — |
@@ -565,10 +677,11 @@ titles known for the repository's items (Part C), and `now`.
 - Rows 7 to 10 hold only when the phase is not `Waiting { why: Unfinished }`
   (R-34): a repository waiting for an unfinished operation shows no label
   and D6's sentence, as Settings does.
-- Part A's condition keeps a stored outcome off a paused, off or held
-  repository, so a paused one reads Paused (or {n} to share) and an off
-  one shows no label with "Checking is off", as Settings does (fact 53;
-  decision 10; R-32).
+- `stored_applies` keeps a stored outcome off a paused, off or held
+  repository, a busy, interrupted, unfinished or failed wait and a pending
+  conflict, so a paused one reads Paused (or {n} to share), an off one
+  shows no label with "Checking is off", and the others read as their
+  phase does, as Settings does (facts 53, 63; decision 10; R-32).
 - Can't open comes only from the chosen or kept repository's resolution;
   a repository the scheduler could not read is Needs attention, "Can't
   check", with Retry, and never suggests Remove (fact 55; R-33). When both
@@ -602,7 +715,7 @@ description, and the menu's first line (decision 21):
 | Can't reach | D6's `status::row(…).status` (`cant_reach(name)`, which says "Your work is safe.") |
 | {n} to share | "Not shared yet: " and at most five titles (Part C), main as "main", joined with ", ", then " and {k} more" when there are more, ending "."; then "Share each from its tab or from Activity." when an item is listed; then "Share main shares main." when main is listed |
 | Paused | "Checking for updates is paused." |
-| Up to date | D6's `status::row(…).status` ("Checked {ago} · up to date") |
+| Up to date | "Checked {ago} · up to date", with `{ago}` from `ago(unshared.as_of, now)` (R-43) |
 | This computer | "No shared copy, so changes stay on this computer." |
 | Not SSH (row 12) | "{remote} isn't an SSH shared copy, so Manyhands can't check or share it." |
 | Row 13 | D6's `status::row(…).status`, or nothing while polling is off |
@@ -650,8 +763,9 @@ library's redacted one (Part I).
   (fact 35); it reads Can't open. The header counts the rows drawn, the
   kept row included (R-20). When the list gives a kept entry again (it was
   registered again), `apply_repositories` resets its resolution to
-  `Unknown` and the chosen repository is resolved again, instead of
-  keeping the old `Unavailable` (fact 56; R-37).
+  `Unknown` **and** sets `vanished`, so `take_vanished` gives it to be
+  resolved again, instead of keeping the old `Unavailable` (facts 56, 68;
+  R-37).
 - **Applied after the frame** (decision 3, D1 polish). `Workspace::render`
   still builds the rows, and when they differ from the pane's it applies
   them in `window.defer`, after the frame, instead of calling `set`
@@ -662,7 +776,8 @@ library's redacted one (Part I).
   Workspace, `titles: HashMap<(RepoKey, ItemId), String>`, is filled from
   the Tickets and Documents lists whenever they load. A row's sentence
   names at most five items, then "and {n} more", and titles are read only
-  for the named ones. When the scheduler notifies and a repository's named
+  for the named ones that have a kind (one with no kind, fact 69, is
+  named by its ID). When the scheduler notifies and a repository's named
   items include IDs neither cached nor done, the Workspace sends one read
   job for that repository, copying D5's made-ready reads (fact 45):
   resolve it, then `show_item` for each such ID, under
@@ -670,11 +785,15 @@ library's redacted one (Part I).
   under a new `ViewScope::ShareTitles(RepoKey)`, but every answer is
   merged by (root, id) whatever the stamp, since a title is a fact. The
   job's task is kept per repository, `HashMap<RepoKey, Task<()>>`, so one
-  repository's job never cancels another's. An item is done when its read
-  finds it or finds it gone; a dropped, cancelled, failed or busy read
-  returns it to untried, with at most three tries per item a session.
-  Until then, or after three, the item is named by its ID (K-3). The
-  cache, the tries and the task go when a repository is removed.
+  repository's job never cancels another's. **No job starts for a
+  repository whose task is still running**: dropping a task cancels its
+  read (fact 65), so a notify while a read is held starts nothing and
+  costs no try; the entry is cleared when the answer is applied. An item
+  is done when its read finds it or finds it gone; only a busy or failed
+  answer counts a try and returns it to untried, with at most three tries
+  per item a session. Until then, or after three, the item is named by
+  its ID (K-3). The cache, the tries and the task go when a repository is
+  removed.
 - **List states** of the repositories read, by Cycle 02's helpers, in a
   small body function of the panel's own (fact 11; R-10):
 
@@ -724,7 +843,7 @@ Vec<MenuItem>` beside `repository_state`; the More menu's from
 | --- | --- | --- |
 | The state's sentence, as one line (decision 21) | Nothing | Always (it is read, not chosen); left out when the sentence is empty |
 | The state's action, when it has one (Retry, Unlock…, Choose a key…, Approve host…, Open remote settings…, Resume checking, Settings…, Set up sharing…, Check now, Retry now) | As Part B says; `attend` widened for D6's actions (fact 46) | Unlock… when `unlock_target` is `None` |
-| Check now, or Retry now when the state is Can't reach or "Can't check"; left out when the state's action is the same | `Intent::PollOnce { root }`, user lane, through the one guarded function Settings' Check now also uses (R-35) | D6's shape is not `Polling`, or the repository is checking |
+| Check now, or Retry now when the state is Can't reach or "Can't check"; left out when the state's action is the same | `Services::check_now(root)`, which sends `Intent::PollOnce { root }` on the user lane (R-35) | D6's shape is not `Polling`, or the repository is checking |
 | Share main, "Share main…" with no publication remote, "Sharing…" while sharing | `share_main(root, remote)` | `sharing_main(root)`; under Can't open from a resolution or the kept row; under a non-SSH remote (row 12), which Manyhands can't share |
 | Open folder | `open_folder(root)` | under Can't open from a resolution or the kept row |
 | Settings…, left out when it is the state's action | Settings › Repositories for this repository | — |
@@ -743,12 +862,20 @@ Vec<MenuItem>` beside `repository_state`; the More menu's from
   modal, as the dock menu's. The menu closes when its repository leaves
   the rows (R-23).
 - **A choice is checked again when chosen.** The menu is built when it
-  opens; when an item is chosen, `menu_items` is evaluated again for its
-  repository, and the choice is ignored if the repository is no longer
-  listed or kept, or the item is now disabled (R-35). Check now and Retry
-  now go through one guarded function, extracted from Settings' Check now
-  (`D/view/settings/polling.rs:225`), which both call and which refuses
-  while a check of the repository is in flight.
+  opens, and each item's `RepositoryMenuChoice` carries the `RowAction`
+  it showed (for the state's action) or its `MenuChoice` and label. When
+  an item is chosen, `menu_items` is evaluated again for its repository,
+  and the choice is ignored if the repository is no longer listed or
+  kept, the item is now disabled, or the re-evaluated item differs from
+  what was shown (a "Retry now" that has become "Resume checking" or
+  "Unlock…" does nothing) (R-35).
+- **Check now.** `Services::check_now(&self, root: &Path) -> bool`, in
+  `impl Services` in `D/services/scheduler.rs` beside the other polling
+  entry points (fact 67), sends `Intent::PollOnce { root }` on the user
+  lane through `worker().submit` unless `worker().in_flight` finds one for
+  the root (`D/services/worker.rs:515`, `:744`), and says whether it
+  sent. Settings' Check now, the menu's Check now and Retry now, and Check
+  all call it; each caller keeps its own dialog and sheet guard.
 - **Remove from the panel.** `remove_repository(root, restore, window,
   cx)` takes the focus to give back from its caller: the list for the row
   menu, the More button for More. It still refuses only under a dialog
@@ -765,7 +892,7 @@ mechanism carries three more buttons (fact 13; C2 Part G):
 | Id | Icon | Name and tooltip | Does | Disabled when |
 | --- | --- | --- | --- | --- |
 | `add-repository-button` | `plus` | "Add or create a repository…" | `open_settings(SettingsPage::Repositories)`, today's flow, until Cycle 05's sheet | — |
-| `check-all-button` | `refresh-cw` | "Check all for updates now" | `PollOnce` for each repository whose D6 shape is `Polling`, that is not checking, whose phase is not `Attention` for a key or host (`KeyLocked`, `KeyProblem`, `NoKeySelected`, `HostUnapproved`, `HostUnidentified`), and whose state is not Locked or Needs attention from a stored `UnlockRequired`, `SelectedKeyUnavailable` or `HostApprovalRequired` (Part A's condition), in list order; paused ones included (R-13; decision 16) | none qualifies |
+| `check-all-button` | `refresh-cw` | "Check all for updates now" | `PollOnce` for each repository whose D6 shape is `Polling`, that is not checking, whose phase is not `Attention` for a key or host (`KeyLocked`, `KeyProblem`, `NoKeySelected`, `HostUnapproved`, `HostUnidentified`), and for which `stored_applies` gives none of `UnlockRequired`, `SelectedKeyUnavailable` or `HostApprovalRequired`, in list order, each through `Services::check_now`; paused ones included (R-13; decision 16) | none qualifies |
 | `repositories-more-button` | `ellipsis` | "More" | Opens the More menu at the button's bounds, recorded by a `canvas` | — |
 
 - **More menu**, the same popup mechanism as Part D, for the chosen
@@ -778,8 +905,9 @@ mechanism carries three more buttons (fact 13; C2 Part G):
 - **Context.** The Repositories toolbar's wrapper carries
   `REPOSITORIES_CONTEXT`, not `NAVIGATION_CONTEXT` (fact 41), so
   `secondary-n` there does nothing, as from the list (R-14). It also
-  means `menu` and `shift-f10` on a toolbar button open the chosen
-  repository's menu, as in the list; Esc returns focus to the button
+  means `menu` and `shift-f10` on a toolbar button open a row menu: from a
+  toolbar button it is always the **chosen** repository's, even when the
+  Kit cursor rests on another row; Esc returns focus to the button
   (R-40).
 - When Check all becomes disabled while it holds focus, focus moves to the
   list, as Cycle 02's Collapse all does (R-22).
@@ -904,7 +1032,7 @@ fixed copy. No key, passphrase, fingerprint or unredacted URL is read into
 | P3 | A stored outcome and no attempt this session; then an attempt | The stored outcome's state; then the attempt's; Settings' line agrees at each step |
 | P4 | An attempt with `LocalAhead`, `Unpublished` and `Diverged` targets and main ahead | "{n} to share" counts all of them, main as one; Settings' "N not shared yet" says the same |
 | P5 | A finished `ItemSync` whose publication is `Published` (also when `Partial`); an `ItemRepublish` that published; a `TicketClose` or `DocumentPromote` that published; one that did not publish; a `RepoSync` that published | The item leaves the count and the attempt's `listed`; the same; the item and main leave; unchanged; main leaves |
-| P6 | Titles known from a loaded list; unknown, read; the read busy or failed; another notify; a fourth notify after three failed tries; a second job for the same repository before the first answers | Named by title; by title after the read; by ID; read again; by ID and not read again; the first job's answer still merged |
+| P6 | Titles known from a loaded list; unknown, read; the read busy or failed; another notify; a fourth notify after three failed tries; notifies while a read is held | Named by title; by title after the read; by ID; read again; by ID and not read again; no second job starts and no try is used |
 | P7 | The tooltip and description of each state | Part B's lines, and nothing else |
 | P8 | The repositories read: loading, first load busy, ready empty, ready incomplete, busy reload, failed reload, failed with no rows | Part C's state, with its action; the rows kept where it says |
 | P9 | A click or Enter on a row; arrows | Chooses it, which carries the mark; moves the Kit cursor only; the row sets no `aria_selected` |
@@ -930,17 +1058,19 @@ fixed copy. No key, passphrase, fingerprint or unredacted URL is read into
 | P29 | A reload that drops the repository of an open menu | The menu closes |
 | P30 | A completed check finds items to share, then a check fails, is interrupted or is cancelled | The unshared list, the row and the footer keep the items |
 | P31 | A replayed `Completed` with no targets | The unshared list stays as it was |
-| P32 | A share heard before an earlier check's answer is applied; a save heard after it | The shared item stays out of the count; the saved item stays in |
+| P32 | Each sequence of Part A's table, U1 to U15 | The list that row gives |
 | P33 | A save, a new ticket or document, a move, a comment saved or a local repair that made a checkpoint and did not publish; one that published (decision 24) | Its item joins "{n} to share" at once, once; the one that published does not join |
 | P34 | A paused repository with a stored outcome and no attempt this session | Paused, and Settings says Paused |
 | P35 | A pending conflict; `Waiting { why: Failed }`; `Waiting { why: Unfinished }` | Needs attention with D6's sentence and no action; Needs attention, "Can't check", Retry now; no label |
 | P36 | More than five items not shared yet | Five named, then "and {n} more"; titles read for those five only |
 | P37 | The focused To share or Update check item hides | Focus moves to the next shown footer control to its right |
-| P38 | A kept row whose repository is registered again | It is resolved again, and Can't open goes when it resolves |
-| P39 | `menu` or `shift-f10` on a Repositories toolbar button, then Esc | The chosen repository's menu; focus back on the button |
-| P40 | A menu item chosen after a check changed its row's state, or after its repository left the list | It acts only if still enabled and its repository is still listed or kept |
+| P38 | A kept row whose repository is registered again | A resolve read is sent, and Can't open goes when it resolves |
+| P39 | `menu` or `shift-f10` on a Repositories toolbar button while the Kit cursor rests on another row, then Esc | The chosen repository's menu; focus back on the button |
+| P40 | A menu item chosen after a check changed its row's state, or after its repository left the list | It acts only if still enabled, still what it showed, and its repository is still listed or kept; a "Retry now" that has become "Resume checking" or "Unlock…" does nothing |
 | P41 | Two listed repositories with the same folder name, one with work | The footer's name adds its parent folder |
 | P42 | `Scheduler::reread` of a root it does not know | Nothing is read |
+| P43 | A stored outcome with a busy, interrupted or failed wait, with `Waiting { why: Unfinished }`, or with a pending conflict | The stored outcome does not apply; the row and Settings say what the phase says |
+| P44 | A save before this session's first completed check | "1 to share" in the row and the footer; Settings' line ends "· 1 not shared yet" |
 
 ## Testing
 
@@ -970,22 +1100,26 @@ Desktop-only, so AGENTS.md's fast tier at review-ready and no SSH target.
 - Guard tests cover a sheet (the item details sheet) as well as a dialog,
   with key presses or dispatched actions (a pointer press behind a dialog
   lands on its overlay).
+- The unshared list's test is written first from Part A's table, before
+  any of Task 1's code: if a row cannot be expressed against the code, the
+  implementer stops and reports to the orchestrator (a design
+  checkpoint).
 
 | Test | What |
 | --- | --- |
-| `desktop::model::repository_state::tests::each_state_and_its_precedence` | One table over Part B's rows, alone and in pairs, with stored outcomes, live attempts, problems, the kept row, a non-SSH remote, a paused, off and held repository with a stored outcome, a pending conflict and each `Waiting` reason (P1–P3, P18–P20, P34, P35) |
-| `desktop::model::repository_state::tests::tooltips_say_the_state_and_the_facts` | One table of `repository_tooltip` per state, with and without branch, shared copy and titles, and with seven items not shared (P6, P7, P36) |
+| `desktop::model::repository_state::tests::each_state_and_its_precedence` | One table over Part B's rows, alone and in pairs, with stored outcomes, live attempts, problems, the kept row, a non-SSH remote, a paused, off and held repository with a stored outcome, a pending conflict and each `Waiting` reason, and a stored outcome with a busy wait, a pending conflict and `Waiting { why: Unfinished }` (P1–P3, P18–P20, P34, P35, P43) |
+| `desktop::model::repository_state::tests::tooltips_say_the_state_and_the_facts` | One table of `repository_tooltip` per state, with and without branch, shared copy and titles, with seven items not shared, and Up to date's "Checked {ago}" from `as_of` (P6, P7, P36) |
 | `desktop::model::repository_state::tests::menu_items_follow_the_state` | One table of `menu_items` and `more_items`: first line, order, labels and enablement per state (P10, P13, P21) |
 | `desktop::model::polling::tests::schedule::to_share_counts_and_finished_shares` | `AttemptSummary::of` with `LocalAhead`, `Unpublished`, `Diverged`, problems and main (`main: true`, and an item with an unparseable ID that is not main); `shared` for an item, for an item and main, for main, unknown and twice, the attempt's `listed` following (P4, P5, P19) |
-| `desktop::model::polling::tests::schedule::unshared_follows_attempts_shares_and_saves` | One table of the unshared list over a sequence: a completed check with targets, then a failed, an interrupted and a cancelled one, an empty replay, a share and a save heard before and after an earlier attempt is applied, a save of an item already listed (P30–P33) |
-| `desktop::model::polling::status::tests::status_text_table` (E-9) | Gains the stored-outcome rows of Part A, with their retry flag, and a paused, off and held repository with a stored outcome (P3, P34) |
-| `desktop::services::scheduler::reconfigure::tests::finished_shares_and_saves_are_heard` | A finished `ItemSync` (`Success`, `Partial` with `Published`, `Error`), `ItemRepublish`, `TicketClose`, `DocumentPromote` and `RepoSync` with `Published`, `Current` and `NotRequested` publication give `Heard::Shared` (item, item and main, or main) or nothing; each authoring intent of fact 59 with `checkpoint` `Committed` and publication `NotRequested` or `Pending` gives `Heard::Saved`, a create with `new`; one with `Published` or with `checkpoint` `Unchanged` gives nothing (P5, P33) |
+| `desktop::model::polling::tests::schedule::unshared_follows_attempts_shares_and_saves` | One table with a row for each of Part A's U1 to U15, written first, before any of Task 1's code (its design checkpoint), plus a save of an item already listed (P30–P33, P44) |
+| `desktop::model::polling::status::tests::status_text_table` (E-9) | Gains the stored-outcome rows of Part A, with their retry flag; a paused, off and held repository, a busy wait, `Waiting { why: Unfinished }` and a pending conflict with a stored outcome; and "· {n} not shared yet" from the unshared list, before any completed check too (P3, P34, P43, P44) |
+| `desktop::services::scheduler::reconfigure::tests::finished_shares_and_saves_are_heard` | A finished `ItemSync` (`Success`, `Partial` with `Published`, `Error`), `ItemRepublish`, `TicketClose`, `DocumentPromote` and `RepoSync` with `Published`, `Current` and `NotRequested` publication give `Heard::Shared` (item, item and main, or main) or nothing; each authoring intent of fact 59, and a `LocalContextResolve` whose envelope's `scope.item_id` names an item, with `checkpoint` `Committed` and publication `NotRequested` or `Pending` gives `Heard::Saved`, a create with `new`; one with `Published` or with `checkpoint` `Unchanged` gives nothing; a `TicketClose` or `DocumentPromote` with integration `Complete` and publication `Pending` adds main (P5, P32, P33) |
 | `desktop::services::scheduler::entity_tests::the_stored_outcome_and_shared_copy_are_kept` | With `store_outcome` and a fixture remote, the launch poll answered or held: kept on `registered`, replaced on a later read, dropped with the repository; the folder renamed so the registration read fails, then renamed back and `reread` reads it again; `reread` of an unknown root reads nothing (P3, P26, P42) |
-| `desktop::view::repositories::tests::rows_and_list_states` | A window journey with polling on: rows with states from the schedule; a finished share drops the count and a finished save adds to it; the kept row, and the same repository registered again resolving afresh; list states with Retry; click, Enter and arrows; the rows after the frame (P5, P8, P9, P16, P18, P33, P38) |
-| `desktop::view::repositories::tests::titles_of_what_is_not_shared` | Titles from a loaded list and from a `ShareTitles` read (held, answered); one busy, read again, and after three tries named by ID and not read again; a second job's answer and the first's both merged; seven items, five read (P6, P36) |
-| `desktop::view::repositories::tests::the_menu_by_pointer_and_keyboard` | Right click and `shift-f10`; the first line; each item's request or effect, by label; a disabled item sends nothing; Remove with Cancel and OK and focus; Retry on an unread row; Settings… on another row; refused under a dialog and a sheet; no read after opening, moving and Esc; the menu closing when its row goes; a choice made after the row's state changed ignored when now disabled (P10–P12, P21, P22, P26, P27, P29, P40) |
+| `desktop::view::repositories::tests::rows_and_list_states` | A window journey with polling on: rows with states from the schedule; a finished share drops the count and a finished save adds to it; the kept row, and the same repository registered again resolving afresh (a resolve read sent); list states with Retry; click, Enter and arrows; the rows after the frame (P5, P8, P9, P16, P18, P33, P38) |
+| `desktop::view::repositories::tests::titles_of_what_is_not_shared` | Titles from a loaded list and from a `ShareTitles` read (held, answered); one busy, read again, and after three tries named by ID and not read again; no second job while one runs, and notifies during a held read use no tries; seven items, five read (P6, P36) |
+| `desktop::view::repositories::tests::the_menu_by_pointer_and_keyboard` | Right click and `shift-f10`; the first line; each item's request or effect, by label; a disabled item sends nothing; Remove with Cancel and OK and focus; Retry on an unread row; Settings… on another row; refused under a dialog and a sheet; no read after opening, moving and Esc; the menu closing when its row goes; a choice made after the row's state changed ignored when now disabled or no longer what it showed (P10–P12, P21, P22, P26, P27, P29, P40) |
 | `desktop::view::repositories::tests::check_all_checks_each_repository` | With a paused, a locked, a stored-`UnlockRequired` and an ordinary repository: two `PollOnce`, none for the locked and the stored one; nothing else sent (P23, P24) |
-| `desktop::view::dock::tests::toolbars::panel_toolbars_work_by_tab_and_enter` (E-11) | Gains Add and More; `secondary-n` from a Repositories button opens nothing; `shift-f10` on one opens the chosen repository's menu and Esc returns to it (P12, P13, P28, P39) |
+| `desktop::view::dock::tests::toolbars::panel_toolbars_work_by_tab_and_enter` (E-11) | Gains Add and More; `secondary-n` from a Repositories button opens nothing; `shift-f10` on one, with the Kit cursor on another row, opens the chosen repository's menu and Esc returns to it (P12, P13, P28, P39) |
 | `desktop::view::footer::tests::status_items_say_and_choose` | `plan` with `FooterStatus`; the two items' texts and names by function, a duplicate name with its parent; Enter on To share cycles the choice, and does nothing for the only chosen one; Update check opens Settings › Checking for updates; a focused item that hides gives focus to the next control; refused under a dialog and a sheet (P12, P15, P25, P37, P41) |
 | `desktop::view::workspace::tests::the_item_area_holds_nothing_of_the_repository` | No tab: the two texts; a tab: no repository details at its end (P14) |
 | `desktop::view::polling_privacy_tests::polling_privacy` (E-15) | Part I's sweep and its positive control (P17) |
@@ -1008,7 +1142,7 @@ production code, and records any other site as a further edit (decision
 | E-6 | `D/view/settings/repositories_manage_tests.rs` (path `desktop::view::settings::repositories::manage_tests::…`): `removing_a_registration_whose_folder_was_renamed_away_succeeds` (:533), `the_sidebar_remove_of_a_registration_already_gone_lets_the_entry_go` (:731) | Remove is reached through the menu, for the second test the kept row's (decision 22); the focus after the dialog is the list | D, F |
 | E-7 | `D/view/item/share_tests.rs`: `share_main_in_the_repository_detail_submits_repo_sync` (:232), `share_main_without_a_remote_reads_share_main_and_opens_remotes` (:280), `an_accepted_share_offers_stop_and_stopping_signals_it` (:537), `a_stopped_share_says_what_completed_and_offers_share` (:599), `share_opens_remotes_on_its_own_repository_after_another` (:789); `share_main_at_the_end_of_an_item_tab_submits_repo_sync` (:299) | Share main is chosen from the menu, by label, and its label checked through `menu_items`. `share_main_at_the_end_of_an_item_tab_…` is deleted: no tab carries the details. **Removes** | D, F |
 | E-8 | `D/view/keyboard_tests/discussion.rs` `tab_order_runs_header_share_chips_page_discussion_composer` (:297) and its `SHARE_MAIN` constant (:34) | The Tab order ends at the composer; the steps to and from `selection-share-main` go. **Removes** | F |
-| E-9 | `D/model/polling_schedule_tests.rs` `attempt_summary_counts` (:10; path `desktop::model::polling::tests::schedule::…`), whose fixture lists every disposition once, so `not_shared()` is now 3 (`LocalAhead`, `Unpublished`, `Diverged`) and `problems` 10; `D/model/polling/status_tests.rs` `status_text_table` (:73) and every `status::Facts` literal (not `retire_loop::Facts`); `D/view/settings/polling_tests.rs` `settings_polling_rows` (:43; path `desktop::view::settings::polling_tests::…`) | `not_shared` is a method returning `to_share.len()`; `status::Facts` literals gain `stored: None`; the table gains Part A's stored rows; texts with "not shared yet" follow the new count. `PillState::EditingSaved { not_shared }` (`D/view/item/pill.rs`) is unrelated and unchanged | A |
+| E-9 | `D/model/polling_schedule_tests.rs` `attempt_summary_counts` (:10; path `desktop::model::polling::tests::schedule::…`), whose fixture lists every disposition once, so `to_share.len()` is now 3 (`LocalAhead`, `Unpublished`, `Diverged`) and `problems.len()` 10; `D/model/polling/status_tests.rs` `status_text_table` (:73) and every `status::Facts` literal (not `retire_loop::Facts`); `D/view/settings/polling_tests.rs` `settings_polling_rows` (:43; path `desktop::view::settings::polling_tests::…`) | The `not_shared` field goes and the test asserts `to_share.len()` (R-44); `status::Facts` literals gain `stored: None`; the table gains Part A's stored rows; texts with "not shared yet" follow the unshared list; every `TargetParts` and `AttemptTarget` literal in the tests of fact 66 gains `main`. `PillState::EditingSaved { not_shared }` (`D/view/item/pill.rs`) is unrelated and unchanged | A |
 | E-10 | `D/view/footer_tests/mod.rs`: `a_secondary_click_opens_the_dock_menu_with_its_side_checked` (:191-199), `toggle_names_follow_their_state` (:445-464); `D/view/keyboard_tests/shell.rs`: `each_side_is_reached_by_the_dock_menu_keys` (:353-356), `footer_controls_are_reached_by_tab` (:409-415); `keyboard_tests/shell/support.rs` `said` (:93) | `plan` takes `FooterStatus`; `said` gains the two controls; the Tab walk keeps an explicit expected list for its fixture, in which nothing is scheduled, so the two status items are absent there and walked in `status_items_say_and_choose` | G |
 | E-11 | `D/view/dock_tests/toolbars.rs` `panel_toolbars_work_by_tab_and_enter` and `with_no_repository` | Add and More join the loop that asserts enablement with a chosen repository; Check all is left out of it, since its window has no schedule, and is tested in `check_all_checks_each_repository`; `with_no_repository` names the three with their enablement (Add enabled, Check all disabled, More enabled with its items disabled) | E |
 | E-12 | `D/assets_tests.rs` `every_item_view_icon_loads` and its fixed-length `ICONS` array | Each icon Parts B, E and G use is checked first; one that is neither in `ItemIcons` nor a Kit built-in is added to both, and the array's length follows (`hard-drive`, `pause`, `lock`, `loader-circle`, `refresh-cw`, `ellipsis`, `plus`, `triangle-alert` are not there at `7034522f`) | B, E, G |
@@ -1072,7 +1206,7 @@ task:
 
 | R | Ruling | Cost if wrong |
 | --- | --- | --- |
-| R-1 | The stored `latest_outcome` lives in a scheduler side map, not in `Policy`; it informs only a repository under Part A's condition (R-32) | A stored outcome older than a later success by another process is shown until this process checks (K-2) |
+| R-1 | The stored `latest_outcome` lives in a scheduler side map, not in `Policy`; it informs only a repository for which `stored_applies` gives it (R-32) | A stored outcome older than a later success by another process is shown until this process checks (K-2) |
 | R-2 | The shared copy's name and location come from the `publication_remotes` read the scheduler already makes | — |
 | R-3 | A finished `ItemSync`, `ItemRepublish`, `TicketClose`, `DocumentPromote` or `RepoSync` whose publication is `Published` or `Current` removes its targets from the unshared list and the last attempt's `listed` at once, by the drain's own predicate (fact 40): an item, an item and main for a close or promotion, main for a `RepoSync` | A share by another process, the CLI, a resumed share or a comment's publication shows only after the next check (K-1) |
 | R-4 | The stored-outcome seam is a desktop test double, not SQL on the registry | — |
@@ -1080,11 +1214,11 @@ task:
 | R-6 | A row with no known state shows no label; its tooltip, description and menu still carry its sentence | — |
 | R-7 | Rows are the panel's own element, not `ListRow`, because the Kit overwrites `selected` with its cursor (fact 34): the Kit cursor is the list's selection, announced by its wrapper; the chosen repository carries the selected treatment and the `("repo-selected", i)` mark labelled "Selected"; the cursor draws the focus ring | A screen reader hears the chosen repository through the mark and description, not through selection |
 | R-8 | Rows are built at render and applied in `window.defer` when they changed (U-4) | Rows lag one frame |
-| R-9 | Titles: from loaded lists, else one read job per repository (resolve, then `show_item` per unknown named ID), triggered by the scheduler's notify, kept per repository; every answer merged by (root, id) whatever its stamp; an item done when found or gone, else tried again up to three times a session; at most five named; all pruned when the repository goes | A renamed item keeps its old title until the lists reload; a title that fails three times is named by ID for the session |
+| R-9 | Titles: from loaded lists, else one read job per repository (resolve, then `show_item` per unknown named ID), triggered by the scheduler's notify, kept per repository, none started while that repository's job runs (fact 65); every answer merged by (root, id) whatever its stamp; an item done when found or gone; only a busy or failed answer counts a try, up to three a session; at most five named; all pruned when the repository goes | A renamed item keeps its old title until the lists reload; a title that fails three times is named by ID for the session |
 | R-10 | The repositories list's states are a small body function of the panel's own, using `rows.rs`'s helpers; `list_body` is not widened | — |
 | R-11 | The menu is a Workspace-owned `PopupMenu` layer like the dock menu, opened by right click and by `menu` and `shift-f10`; not the Kit `ContextMenu`, which has no keyboard path (facts 14, 15) | — |
 | R-12 | `remove_repository` takes the focus to give back from its caller and keeps its own dialog guard; the menu and toolbar entry points refuse under a sheet; Settings' Remove is unaffected (fact 48) | — |
-| R-13 | Check all sends one `PollOnce` per repository whose D6 shape is `Polling`, not checking and not waiting on a key or host, live or stored, paused ones included (decision 16) | A person who paused a repository sees it checked once |
+| R-13 | Check all sends one `PollOnce`, through `Services::check_now`, per repository whose D6 shape is `Polling`, not checking and not waiting on a key or host, live or by `stored_applies`, paused ones included (decision 16) | A person who paused a repository sees it checked once |
 | R-14 | The Repositories toolbar's wrapper carries `REPOSITORIES_CONTEXT`, so `secondary-n` there does nothing, as from the list (fact 41) | — |
 | R-15 | The item area's empty text is `04`'s, without its icon, until Cycle 05 | — |
 | R-16 | A busy resolution shows no label, its sentence, and Retry as its action (Part B row 2) | — |
@@ -1101,30 +1235,36 @@ task:
 | R-27 | Under Can't open from a resolution or the kept row, Share main and Open folder are disabled; under a non-SSH remote, Share main is | — |
 | R-28 | The unshared list is replaced only by a `Completed` attempt that carries targets; a failed, interrupted or cancelled attempt and an empty replay leave it (facts 49, 50) | An item another process shared stays counted until this app's next completed check |
 | R-29 | Main is the target with `main: true`, set from the target having a target and no kind (fact 51), never `item_id: None` | — |
-| R-30 | A finished authoring request of fact 59 whose checkpoint is `Committed` and whose publication is neither `Published` nor `Current` adds its item to the unshared list of a repository with a schedule, as `Unpublished` for a create (decision 24) | A save another process shares at once stays counted until the next check |
-| R-31 | Shares and saves join the poll answers' queue in arrival order; applying an attempt drops items this app shared after its `completed_at` and keeps items it saved after it; an attempt without `completed_at` is older than every share and save (fact 52) | — |
-| R-32 | A stored outcome applies only where Settings' row reaches `since_library`: checking enabled, not held, not paused, D6's shape `Polling`, no attempt this session, not checking (fact 53); `since_library` returns a retry flag so Settings offers Retry now for a stored Can't reach and Can't check | A paused repository's stored failure shows only in its tooltip's D6 line, not as its state |
+| R-30 | A finished request whose envelope names an item in `scope.item_id`, whose checkpoint is `Committed` and whose publication is neither `Published` nor `Current` (the authoring intents of fact 59 and `LocalContextResolve`) adds its item to the unshared list of a repository with a schedule, as `Unpublished` for a create, also before the session's first completed check (decision 24) | A save another process shares at once stays counted until the next check |
+| R-31 | The unshared list follows Part A's five rules and its table U1–U15: changes are timed when heard and apply at once; a completed attempt with targets sets the list, then the last change per item heard after its `completed_at` decides; an attempt older than `as_of` never replaces it; Check now's own path and `checked_now`'s in-flight branch follow the same rules (facts 52, 64) | An item another process shared between this app's share and a later check that saw it ahead is counted until the next check |
+| R-32 | One predicate, `status::stored_applies(&Facts) -> Option<PollingOutcome>`, decides whether a stored outcome applies: checking enabled, not held, not paused, D6's shape `Polling`, no attempt this session, not checking, phase `Idle`, `Stopped` or `Waiting { why: NotDue }`, no conflict pending, which is where Settings' row reaches `since_library` (facts 53, 63); `since_library`, `repository_state` and Check all use it; `since_library` returns a retry flag so Settings offers Retry now for a stored Can't reach and Can't check | A paused repository's stored failure shows only in its tooltip's D6 line, not as its state |
 | R-33 | A repository the scheduler could not read (`Unplaced::Unreadable`) is Needs attention, "Can't check", with Retry by `reread`; it never suggests Remove or disables Open folder (fact 55) | A folder that is really gone reads Needs attention until it is chosen, when its resolution says Can't open |
 | R-34 | A pending conflict is Needs attention with D6's sentence and no action; `Waiting { why: Failed }` is Needs attention, "Can't check", with Retry now; `Waiting { why: Unfinished }` shows no label; Part B's rows 7 to 10 hold in any other phase (fact 49) | — |
-| R-35 | The menu's choice is checked again when chosen (`menu_items` re-evaluated; ignored when disabled or its repository is gone); Check now and Retry now go through one guarded function shared with Settings | — |
+| R-35 | The menu's choice carries what it showed and is checked again when chosen (`menu_items` re-evaluated; ignored when disabled, changed or its repository is gone); Check now and Retry now, Settings' Check now and Check all go through `Services::check_now(&self, root: &Path) -> bool`, which refuses while a `PollOnce` for the root is in flight (fact 67) | — |
 | R-36 | The row's right-press hook reaches the Workspace through a `WeakEntity<Workspace>` in the delegate, with a bounds map shared through an `Rc`; the opener refuses under `modal_open` itself (fact 61) | — |
-| R-37 | A kept entry the list gives again is reset to `Resolution::Unknown` and resolved again (fact 56) | — |
+| R-37 | A kept entry the list gives again is reset to `Resolution::Unknown` and `vanished` is set, so `take_vanished` resolves it again (facts 56, 68) | — |
 | R-38 | When a focused footer status item hides, focus moves to the next shown footer control to its right | — |
 | R-39 | The footer's To share name and choice come from one function evaluated at press; the kept row is never its choice; a display name two listed repositories share gains its parent folder in the footer's name | — |
-| R-40 | `menu` and `shift-f10` on a Repositories toolbar button open the chosen repository's menu, since the wrapper carries `REPOSITORIES_CONTEXT`; Esc returns focus to the button | — |
+| R-40 | `menu` and `shift-f10` on a Repositories toolbar button open the chosen repository's menu, never the Kit cursor's row, since the wrapper carries `REPOSITORIES_CONTEXT`; Esc returns focus to the button | — |
 | R-41 | `Scheduler::reread` ignores a root it does not know | — |
 | R-42 | A key-opened menu scrolls the highlighted row into view before anchoring on it, and anchors on the list's bounds when the row has none | — |
+| R-43 | "Up to date" says "Checked {ago} · up to date" with `{ago}` from the unshared list's `as_of`, not D6's `checked` of `last`, which may be an interrupted or cancelled attempt | — |
+| R-44 | `AttemptSummary.not_shared` goes; `checked` reads the unshared list, and tests assert `to_share.len()` (fact 70) | — |
+| R-45 | A `TicketClose` or `DocumentPromote` with integration `Complete` and publication `Pending` adds main to the unshared list as `LocalAhead` | — |
 
 ## Known Limits
 
-- **K-1.** "{n} to share" starts from a completed check this session and
-  follows this app's saves and shares at once (decisions 11, 24); another
-  process's or the CLI's work, a resumed share and a comment's
-  publication show only at the next completed check.
+- **K-1.** "{n} to share" follows this app's saves and shares at once,
+  from the first save of the session, before any completed check
+  (decisions 11, 24), and the first completed check with targets sets it
+  whole. Another process's or the CLI's work, a resumed share, a
+  comment's publication and a conflict resolution's share (fact 69) show
+  only at the next completed check.
 - **K-2.** A stored outcome is shown until this process checks, even if
   another process has since checked successfully.
 - **K-3.** Items not shared yet are named by ID while their title is not
-  read, and for the session after three failed tries.
+  read, for the session after three failed tries, and when a local
+  conflict resolution added them with no kind.
 - **K-4.** After a relaunch a locked key is offered Check now, which asks
   for the passphrase, rather than Unlock….
 - **K-5.** A publication remote that is not SSH shows no label; its
@@ -1168,6 +1308,10 @@ task:
   (`D/services/scheduler_attention_tests.rs:227`). Task 1 checks it; if
   not, R-5's Check now becomes Settings › Shared SSH keys
   (`SettingsPage::Keys`) and decision 9 is raised with the owner.
+- **U-7.** A `LocalContextResolve`'s envelope names its item in
+  `scope.item_id` (fact 69). Task 1 checks it in
+  `finished_shares_and_saves_are_heard`; if not, that request joins
+  K-1's list.
 
 ## Alternatives Rejected
 
@@ -1189,7 +1333,7 @@ task:
 
 | Risk | Control |
 | --- | --- |
-| The state table and D6's Settings line drift apart | Both read `stored`, `to_share` and `problems` from one model; P3 and P4 check both |
+| The state table and D6's Settings line drift apart | Both read the stored outcome through `stored_applies` and the count from the unshared list; P3, P4, P43 and P44 check both |
 | Removing the details block loses a recovery route | Part F's table maps every part, the kept row included; E-1 to E-8 keep each journey through the menu |
 | The footer's new stops break the Tab walks | E-10; U-5 |
 | Rows and the menu read Workspace state while panels are built inside `workspace.update` | Rows are computed by the Workspace and pushed to the pane (R-8); the menu is a Workspace layer |
@@ -1210,3 +1354,4 @@ task:
 | Review round 2, scoped re-review (`2a0f202e`) | 0 Blocking, 6 Important, 12 Minor; among them Check all after a relaunch, Choose a key… and Approve host… focus, a stored outcome over Paused, constants removed a task late, `remove_repository`'s other callers, the row hook's path to the Workspace | Facts, rulings, named edit | Facts 53, 57–62; R-13, R-25, R-32, R-36; E-16; Parts C, F, H | This document |
 | Review round 2, adversarial (`2a0f202e`) | 1 Blocking, 10 Important, 9 Minor; among them a failed check wiping "to share", a share applied before an earlier answer, phase and conflict ignored, this app's saves not counted, titles lost to stale stamps, unbounded titles, an unread registration shown as Can't open, focus lost when a footer item hides, a re-registered kept row, main left after a close | Facts, rulings, owner question | Facts 49–52, 54–56; R-28–R-31, R-33–R-42; decision 24 | This document |
 | Owner, 2026-11-12, after round 2 | Decisions 8–18 and 23 confirmed; a save counts at once | Owner decisions | Decision 24 | Session, 2026-11-12 |
+| Review round 3, scoped re-review (`b3851766`) | 0 Blocking, 4 Important, 9 Minor: the stored-outcome condition missing phase and conflict; one sequence of the unshared list left open, with Check now's own path and `checked_now`'s in-flight branch; one titles task per repository cancelling reads; a menu choice running a changed action; `not_shared` dead code; `TargetParts` literals; the shared Check now unnamed; a re-listed kept row not resolved; a save before the first check; Up to date's sentence; unheard requests; `shift-f10` from a toolbar; stale text | Facts, rulings; the unshared list as a table of required outcomes (third round on that mechanism), Task 1 test-first with a design checkpoint | Facts 63–70; Part A rules and U1–U15; R-9, R-13, R-30–R-32, R-35, R-37, R-40, R-43–R-45; P6, P32, P38–P40, P43, P44; U-7; E-9. Revision 4 had no independent review | This document |

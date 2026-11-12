@@ -14,8 +14,11 @@ Ticket `01M784Y8C73B39GR4JWENXE5D0` (`vh-3jpbf`).
 [Design](../plans/2026-11-12-wave-04-cycle-03a-repositories-design.md) and
 [implementation plan](../plans/2026-11-12-wave-04-cycle-03a-repositories-implementation.md).
 
-Status: **draft, revision 3.** Revision 3 applies review round 2 and
-decision 24; it is not yet re-reviewed. The owner asked on 2026-11-12 to
+Status: **draft, revision 4.** Revision 4 applies review round 3 (0
+Blocking, 4 Important, 9 Minor); it was not independently re-reviewed.
+Round 3 was the third review of the unshared list, so its contract is
+now a table of required outcomes (design Part A, U1–U15) and its task is
+test-first with a design checkpoint. The owner asked on 2026-11-12 to
 plan Wave 04 Cycle 03 starting from its requirements, split it in two,
 answered decisions 1–7 in that session, decisions 19–22 after review
 round 1 and decision 24 after review round 2. Decisions 8–18 and 23 were
@@ -33,6 +36,9 @@ authority.
 - Revision 2 (`2a0f202e`) had a scoped re-review and an adversarial review
   (round 2): 1 Blocking, 16 Important and 21 Minor findings, each checked
   against the source and applied in revision 3 or raised with the owner.
+- Revision 3 (`b3851766`) had a scoped re-review (round 3): 0 Blocking,
+  4 Important and 9 Minor findings, each checked against the source and
+  applied in revision 4, without a further review.
 
 ## Purpose And Authority
 
@@ -191,7 +197,7 @@ rows await the owner's checks; Claude records only what the owner reports.
 | A2 | "{n} to share" counts what is not shared, survives a failed check, follows this app's saves and shares, and agrees with Settings | `to_share_counts_and_finished_shares` (P4, P5); `unshared_follows_attempts_shares_and_saves` (P30–P33); `finished_shares_and_saves_are_heard`; `status_text_table` (E-9) | Planned |
 | A3 | Every action works by keyboard, and a state's reason is readable without hovering (contract 5) | `the_menu_by_pointer_and_keyboard` (P10, P21); `panel_toolbars_work_by_tab_and_enter` (E-11); `status_items_say_and_choose`; the edited keyboard journeys (E-5) | Planned |
 | A4 | No secret appears in a row, tooltip, menu or footer item (contract 7) | `polling_privacy` (E-15, P17); `tooltips_say_the_state_and_the_facts` | Planned |
-| A5 | Every existing repository journey still passes: select, Retry, Remove, Share main, Add | The edited tests E-1 to E-8, and the fast tier | Planned |
+| A5 | Every existing repository journey still passes: select, Retry, Remove, Share main, Add | The edited tests E-1 to E-8 and E-16, and the fast tier | Planned |
 | A6 | The details block leaves the item area and nothing it offered is lost | `the_item_area_holds_nothing_of_the_repository` (P14); the kept row (P18); design Part F's table; E-1 to E-8 | Planned |
 | A7 | Removal confirms and keeps the files (contract 4) | `the_menu_by_pointer_and_keyboard` (P11) | Planned |
 | A8 | Nothing acts behind a dialog or sheet (contract 8) | P12 in the menu, toolbar and footer tests, each with a dialog and a sheet | Planned |
@@ -347,14 +353,16 @@ decisions govern and are not repeated.
 
 These are visible to users; the design's Known Limits give the detail.
 
-- "N to share" starts from the first completed check of a session and
-  then follows this app's saves and shares at once; another process's or
-  the CLI's work, a resumed share and a comment's publication show at the
-  next check (K-1).
+- "N to share" follows this app's saves and shares at once, from the
+  first save of a session, even before any completed check, and a
+  completed check sets it whole; another process's or the CLI's work, a
+  resumed share, a comment's publication and a conflict resolution's
+  share show at the next check (K-1).
 - After a relaunch a stored outcome stands until this app checks (K-2).
-- An unshared item is named by its ID until its title is read, and for
-  the session after three failed tries (K-3); a row names at most five
-  items, then "and {n} more" (K-11).
+- An unshared item is named by its ID until its title is read, for the
+  session after three failed tries, and when a local conflict resolution
+  added it (K-3); a row names at most five items, then "and {n} more"
+  (K-11).
 - After a relaunch a locked key is offered Check now rather than
   Unlock… (K-4).
 - A publication remote that is not SSH shows no label; its sentence says
@@ -373,7 +381,7 @@ These are visible to users; the design's Known Limits give the detail.
 
 ## Open Questions
 
-None from the owner: decisions 1–24 are settled. The design's U-1 to U-6
+None from the owner: decisions 1–24 are settled. The design's U-1 to U-7
 are checked by the tasks that first rely on them.
 
 ## Review Record
@@ -390,3 +398,4 @@ are checked by the tasks that first rely on them.
 | Review round 2, scoped re-review (`2a0f202e`) | 0 Blocking, 6 Important, 12 Minor; among them Check all after a relaunch, focus after Choose a key… and Approve host…, a stored outcome over Paused, `remove_repository`'s other callers, the row hook's path to the Workspace | Facts; rulings; named edit | Design facts 53, 57–62; R-13, R-25, R-32, R-36; E-16; decisions 9 and 16 refined | Design Review Record |
 | Review round 2, adversarial (`2a0f202e`) | 1 Blocking, 10 Important, 9 Minor; among them a failed check wiping "to share", a share applied before an earlier answer, phase and conflict ignored, this app's saves not counted, titles lost to stale stamps, an unread registration shown as Can't open, a re-registered kept row, main left after a close | Facts; rulings; owner question | Design facts 49–52, 54–56; R-28–R-31, R-33–R-42; decision 11 refined; decision 24 | Design Review Record |
 | Owner, 2026-11-12, after round 2 | "Count saves at once" | Owner decision | Decision 24 | Session, 2026-11-12 |
+| Review round 3, scoped re-review (`b3851766`) | 0 Blocking, 4 Important, 9 Minor; among them the stored-outcome condition missing phase and conflict, one sequence of the unshared list left open (the third round on that mechanism), one titles task per repository cancelling reads, a menu choice running a changed action, a save before the first check, a re-listed kept row not resolved, `shift-f10` from a toolbar, unheard requests | Facts; rulings; the unshared list as a table of required outcomes; Task 1 test-first with a design checkpoint | Design facts 63–70; Part A rules and U1–U15; R-9, R-13, R-30–R-32, R-35, R-37, R-40, R-43–R-45; U-7; revision 4 without a further review | Design Review Record |

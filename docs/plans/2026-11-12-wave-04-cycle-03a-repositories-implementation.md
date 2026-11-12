@@ -13,7 +13,7 @@ id: "01M7888XHHWDYGFXG0ZEXNG8KX"
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task.
-> **Draft, revision 2:** not approved; nothing here is authorized until the
+> **Draft, revision 4:** not approved; nothing here is authorized until the
 > owner approves the three documents and chooses the execution method.
 > Re-read the design before each task and record every checkpoint on
 > ticket `01M784Y8C73B39GR4JWENXE5D0`. Steps use checkbox (`- [ ]`) syntax.
@@ -24,8 +24,11 @@ the Git detail, a toolbar, a context menu by pointer and keyboard, and the
 footer's "Checked for updates …" and "N to share" items; take the
 repository details block out of the item area.
 
-**Architecture:** The scheduler keeps two more facts per repository and
-the attempt keeps what is not shared and what needs a look (Part A). A
+**Architecture:** The scheduler keeps two more facts per repository (the
+stored outcome and the shared copy); each repository keeps an unshared
+list, set by completed checks and changed at once by this app's saves and
+shares, which a per-root change log, timed when heard, keeps right when an
+older check lands later (Part A's rules and table U1–U15). A
 pure function turns them and the navigation entry into one state, its
 action, its sentence, its tooltip and its menu (Part B). The panel draws
 its own rows from those states, the kept row included, and names unshared
@@ -119,7 +122,11 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 **Test-first.** Each behaviour's test is written and seen to fail before
 its code. Model tests are table-driven (one table per function). Focus
 assertions read focus inside the same update that causes the change
-(Cycle 01 ledger).
+(Cycle 01 ledger). **Task 1 has a design checkpoint:** its implementer
+writes `unshared_follows_attempts_shares_and_saves` from the design's
+table U1–U15 before any of its code, and if a row cannot be expressed
+against the code, stops and reports to the orchestrator, who settles it
+with the design before implementation goes on.
 
 **No appearance tests** (Wave Testing): nothing asserts colours, sizes,
 icons, tones or that a view renders. Tooltip, description and menu
@@ -259,7 +266,8 @@ git grep -n -e 'repo-row' -e 'repo-root' -e 'repo-selected' -e 'repo-unavailable
   -e 'remove_repository' -e 'RESOLVING' -e 'NOTHING_SELECTED' -- $P
 git grep -n -e 'not_shared' -e 'AttemptSummary' -e 'status::Facts' -e 'Facts {' \
   -e 'Read::Polled' -e 'fn since_library' -e 'fn phase_status' -e 'fn after_last' \
-  -e 'Heard::' -e 'ViewScope::' -e 'AttemptTarget {' -e 'item_id: None' -- $P
+  -e 'Heard::' -e 'ViewScope::' -e 'AttemptTarget {' -e 'TargetParts {' \
+  -e 'item_id: None' -e 'fn check_now' -e 'take_vanished' -- $P
 git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
   -e 'ToolbarButton::ALL' -e 'toolbar_focus' -e 'toolbar_enabled' \
   -e 'with_no_repository' -e 'ICONS' -e '"Repositories"' -e 'ALLOWED' -- $P
@@ -288,58 +296,90 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
   `D/model/polling/status.rs`, `D/services/poll_convert.rs` (`main`),
   `D/services/scheduler.rs` (re-export), `D/services/scheduler/registration.rs`,
   `D/services/scheduler/entity.rs`, `D/services/scheduler/react.rs`,
-  `D/services/scheduler/reconfigure.rs`, `D/view/settings/polling.rs`,
-  `D/test_support/polling.rs`
+  `D/services/scheduler/retire_loop.rs` (`Scheduler::checked_now`,
+  `:149-165`, Check now's path), `D/services/scheduler/reconfigure.rs`,
+  `D/view/settings/polling.rs`, `D/test_support/polling.rs`,
+  `D/view/polling_window.rs` (an `AttemptTarget` literal, fact 66)
 - Tests: `D/model/polling_schedule_tests.rs` (E-9, new tests),
   `D/model/polling/status_tests.rs` (E-9),
   `D/view/settings/polling_tests.rs` (E-9),
   `D/services/scheduler/reconfigure.rs` (its `mod tests`),
-  `D/services/scheduler_entity_tests.rs`
+  `D/services/scheduler_entity_tests.rs`; and, for `main` on every
+  `TargetParts` and `AttemptTarget` literal (E-9, fact 66):
+  `D/services/scheduler_consent_tests.rs`, `D/services/poll_convert_tests.rs`,
+  `D/services/scheduler_loop_tests.rs`, `D/view/polling_privacy_tests.rs`,
+  `D/model/polling/entry_tests.rs`, `D/model/polling/retire_loop_tests.rs`,
+  `D/model/polling_retiring_tests.rs`, `D/services/scheduler_retire_tests.rs`,
+  `D/view/operations/attempts_tests.rs`, `D/view/operations/retire_real_tests.rs`,
+  `D/view/operations/retire_tests.rs`, `D/view/operations/retiring_tests.rs`
 
 **Interfaces:**
 - Produces, in `D/model/polling/attempt.rs`:
-  - `AttemptTarget` gains `pub main: bool`, set in
-    `D/services/poll_convert.rs` where targets are mapped (`:246-254` and
-    the automatic poll's mapping) from the target having a target and no
-    kind (fact 51); every `AttemptTarget` literal gains it.
+  - `AttemptTarget` gains `pub main: bool`. `TargetParts`
+    (`D/services/poll_convert.rs:40-44`) gains the same field, set at `:66`
+    from the report's target (`target.target().is_some() &&
+    target.kind().is_none()`, fact 51) and carried into `AttemptTarget` at
+    `:459-460`; a Check now's data sets it at `:249` from the DTO's
+    `target` and `kind`. Every `TargetParts` and `AttemptTarget` literal
+    (fact 66) gains it.
   - `AttemptSummary` gains `pub to_share: Vec<AttemptTarget>` (every
     `LocalAhead`, `Unpublished` and `Diverged` target, main included) and
     `pub problems: Vec<AttemptTarget>` (every `Dirty`, `Conflicted`,
     `Inaccessible`, `Nonconforming`, `BlockedByLocalState`,
     `MaterializationIncomplete`, `Malformed`, `RemotelyDeleted`,
     `HistoryUnknown` and `NotReached` target). The `not_shared: u32` field
-    goes; `pub fn not_shared(&self) -> usize` returns `to_share.len()`.
+    goes and no method replaces it (R-44): its only production reader,
+    `checked` (`D/model/polling/status.rs:166`), reads the unshared list.
     Every target in `listed` today stays there; `LocalAhead` still counts
     in `up_to_date`.
 - Produces, in `D/model/polling/state.rs`:
   - `pub(crate) struct Unshared { pub items: Vec<AttemptTarget>, pub problems: Vec<AttemptTarget>, pub as_of: Option<OffsetDateTime> }`
     and `RepoSchedule.unshared: Unshared` (empty at `new`).
-- Produces, in `D/model/polling/table.rs` and `D/model/polling.rs`:
-  - `apply` replaces `repo.unshared` only for an `Answer::Completed`
-    attempt with targets (facts 49, 50), after dropping the items this
-    app shared after the attempt's `completed_at` and keeping the items it
-    saved after it, from a per-root log kept in `PollSchedule` for the
-    session, `changes: BTreeMap<Root, Vec<(Change, OffsetDateTime)>>` with
-    `enum Change { Shared { item: Option<ItemId>, main: bool }, Saved {
-    item: ItemId, kind: TargetKind, new: bool } }`; an attempt without
-    `completed_at` is older than every change (R-31).
+- Produces, in `D/model/polling/table.rs` and `D/model/polling.rs`, the
+  design's rules 1–5 (Part A; R-31), in one place both attempt paths call:
+  - A per-root log kept in `PollSchedule` for the session, `changes:
+    BTreeMap<Root, Vec<(Change, OffsetDateTime)>>`, with `enum Change {
+    Shared { item: Option<ItemId>, main: bool }, Saved { item: ItemId,
+    kind: Option<TargetKind>, new: bool }, MainAhead }`, each entry timed
+    when the scheduler heard it (rule 1).
+  - `fn unshared_after(&mut self, root: &Root, attempt: &AttemptSummary)`:
+    for an `Answer::Completed` attempt with targets whose `completed_at`
+    is not older than `unshared.as_of` (rule 4), sets the list from the
+    attempt's `to_share` and `problems` and `as_of` from its
+    `completed_at`, then replays, per item, the last change in the log
+    timed after that `completed_at` (rule 3); any other attempt leaves the
+    list (facts 49, 50). `apply` calls it, and so does `checked_now`'s
+    in-flight branch (`D/model/polling.rs:284-296`, fact 64; rule 5).
   - `pub fn shared(&mut self, root: &Root, item: Option<&ItemId>, main: bool, at: OffsetDateTime) -> bool`:
-    removes the item (by `item_id`) and, when `main`, the target with
-    `main: true` from `repo.unshared.items` and from `repo.last`'s
-    `listed`; records the share; true when one went.
-  - `pub fn saved(&mut self, root: &Root, item: ItemId, kind: TargetKind, new: bool, at: OffsetDateTime) -> bool`:
-    adds the item to `repo.unshared.items` (`Unpublished` when `new`, else
-    `LocalAhead`) unless it is there; records the save; false when the
-    root has no schedule (decision 24).
+    logs the share and removes at once (rule 2) the item (by `item_id`)
+    and, when `main`, the target with `main: true` from
+    `repo.unshared.items` and from `repo.last`'s `listed`; true when one
+    went.
+  - `pub fn saved(&mut self, root: &Root, item: ItemId, kind: Option<TargetKind>, new: bool, at: OffsetDateTime) -> bool`:
+    logs the save and adds the item at once to `repo.unshared.items`
+    (`Unpublished` when `new`, else `LocalAhead`) unless it is there, also
+    before any completed check; false when the root has no schedule
+    (decision 24).
+  - `pub fn main_ahead(&mut self, root: &Root, at: OffsetDateTime) -> bool`:
+    logs and adds main as `LocalAhead` (R-45).
   - `Unshared` and `problems` carry `#[allow(dead_code)] // Used from Task 3`
     until the rows read them.
 - Produces, in `D/model/polling/status.rs`:
   - `Facts` gains `pub stored: Option<PollingOutcome>`; `phase_status` and
-    `after_last` take `&Facts`; `since_library` returns `(String, bool)`,
-    the bool a retry flag, and gives Part A's Settings line for a stored
-    outcome under Part A's condition (R-32), before "Checked {ago}" or
-    "Not checked yet". `checked` (private) reads "· N not shared yet" from
-    `repo.unshared.items.len()`.
+    `after_last` take `&Facts`.
+  - `pub(crate) fn stored_applies(facts: &Facts) -> Option<PollingOutcome>`:
+    `facts.stored` only when checking is enabled, the repository is not
+    held, not paused and its shape is `Polling`, `last.is_none()`, not
+    `checking_now` or `in_flight()`, the phase `Idle`, `Stopped` or
+    `Waiting { why: NotDue }`, and no conflict pending (facts 53, 63;
+    R-32). `since_library`, `repository_state` (Task 2) and Check all
+    (Task 6) use it and nothing else.
+  - `since_library` returns `(String, bool)`, the bool a retry flag, and
+    gives Part A's Settings line for what `stored_applies` returns, before
+    "Checked {ago}" or "Not checked yet".
+  - Every Settings line appends "· {n} not shared yet" from
+    `repo.unshared.items.len()` when it is not 0, whatever the status
+    (decision 24; P44); `checked` no longer reads `not_shared`.
   - `pub(crate) fn ago(then: OffsetDateTime, now: OffsetDateTime) -> String`
     (was private, `:134`).
 - Produces, in `D/services/scheduler/registration.rs`, re-exported from
@@ -364,10 +404,14 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
     drops it from `failed_reads` and calls
     `read_registrations(vec![root], cx)` (`:312`)
     (`#[allow(dead_code)] // Used from Task 5`).
-  - `Heard::Shared` and `Heard::Saved` handled in `heard` (`:482-521`) by
-    joining the `answers` queue in arrival order (R-31); applied with
-    `schedule.shared(…)` and `schedule.saved(…)` at the scheduler's `utc()`,
-    then `cx.notify()` when one changed.
+  - `Heard::Shared`, `Heard::Saved` and `Heard::MainAhead` handled in
+    `heard` (`:482-521`) at once, in arrival order, with
+    `schedule.shared(…)`, `schedule.saved(…)` or `schedule.main_ahead(…)`
+    timed at the scheduler's `utc()` when heard (rules 1, 2), then
+    `cx.notify()` when one changed. An older automatic answer applied
+    later through `answers` (`react.rs:18-36`), and a Check now handled in
+    `heard` itself (`:510`, fact 64), go through `unshared_after`, so the
+    log keeps them right (rules 3–5).
 - Produces, in `D/services/scheduler/reconfigure.rs`:
   - `Heard::Shared { root: Root, item: Option<ItemId>, main: bool }`;
     `heard` returns it, before `scope_of`, for `WorkerEvent::Finished` whose
@@ -376,45 +420,57 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
     `main: false`), `TicketClose` or `DocumentPromote` (`item: Some(id)`,
     `main: true`), `RepoSync` (`item: None`, `main: true`), the drain's
     predicate (`D/services/mod.rs:636-652`) with `RepoSync` added.
-  - `Heard::Saved { root: Root, item: ItemId, kind: TargetKind, new: bool }`
-    for `WorkerEvent::Finished` of `DocumentSave`, `TicketSave`,
-    `DocumentCreate`, `TicketCreate` (`new: true`), `DocumentMove`,
-    `CommentAdd` or `LocalContextSync` (fact 59) whose
+  - `Heard::Saved { root: Root, item: ItemId, kind: Option<TargetKind>, new: bool }`
+    for `WorkerEvent::Finished` whose envelope names an item in
+    `envelope.scope.item_id` (`L/results.rs:104`, `:293-299`), whose
     `envelope.effects.checkpoint` is `CheckpointEffect::Committed` and
-    whose publication is neither `Published` nor `Current`.
+    whose publication is neither `Published` nor `Current`: `DocumentSave`,
+    `TicketSave`, `DocumentCreate`, `TicketCreate` (`new: true`),
+    `DocumentMove`, `CommentAdd` and `LocalContextSync` (fact 59, `kind`
+    from the intent) and `LocalContextResolve` (`kind: None`; U-7).
+  - `Heard::MainAhead { root: Root }` for a `TicketClose` or
+    `DocumentPromote` whose `effects.integration` is
+    `IntegrationEffect::Complete` and whose publication is `Pending`
+    (`L/results.rs:76-87`; R-45).
 - Produces, in `D/test_support/polling.rs`:
   - `pub(crate) fn store_outcome(&self, root: &str, outcome: PollingOutcome)`
     on `PollingBackend`; its `polling_status` (`:404`) returns the
     library's answer with `latest_outcome` replaced for that root.
 - Consumes: `PollingOutcome` (`L/repository/read/dto.rs:689`),
   `RemoteListDto`/`RemoteDto` (`:200`), `PublicationEffect`,
-  `CheckpointEffect` (`L/results.rs:63`).
+  `IntegrationEffect`, `CheckpointEffect` (`L/results.rs:63-87`), the
+  envelope's `scope` (`:104`, `:293-299`).
 
 - [ ] **Step 1: Check U-6.** Read
   `desktop::services::scheduler::attention_tests::unlock_after_cancelled_prompt`
   (`D/services/scheduler_attention_tests.rs:227`): a user-lane `PollOnce`
   prompts through the worker's provider. Record in the ledger whether this
   settles U-6. If it does not, stop for the owner (decision 9).
-- [ ] **Step 2: Write the failing tests.**
+- [ ] **Step 2: Design checkpoint: the unshared list's table first.**
+  Write `desktop::model::polling::tests::schedule::unshared_follows_attempts_shares_and_saves`
+  before any of this task's code: one table with a row for each of the
+  design's U1 to U15 (Part A), each a sequence of attempts (`Completed`
+  with targets, `Transport(Unreachable)`, `Interrupted`, `Cancelled`, a
+  `Completed` replay with none, one older than `as_of`, a Check now
+  through `checked_now` with and without a poll in flight) and of
+  `shared`, `saved` and `main_ahead` calls with their heard times, and the
+  list and `as_of` asserted after each step; plus a save of an item
+  already listed (once) and a save on a root with no schedule (nothing)
+  (P30–P33, P44). If any row cannot be expressed against the code (an
+  answer or a path the model does not have), **stop and report to the
+  orchestrator** with the row and why; the orchestrator settles it with
+  the design before implementation goes on. Record the outcome in the
+  ledger.
+- [ ] **Step 3: Write the other failing tests.**
   - `desktop::model::polling::tests::schedule::to_share_counts_and_finished_shares`,
     one table: an attempt with `LocalAhead` (ticket), `Unpublished`
     (document), `Diverged` (ticket), `Dirty` (ticket), main `LocalAhead`
     (`main: true`), an item with an unparseable ID (`item_id: None`,
-    `main: false`) and `Current`; `not_shared()` 5 and `problems` 1; then
+    `main: false`) and `Current`; `to_share.len()` 5 and `problems.len()` 1; then
     `shared` with the first ticket's ID → true, count 4, gone from
     `listed` too; again → false; an unknown ID → false; the second ticket
     with `main` → both gone; on a root with no schedule → false (P4, P5,
     P19).
-  - `desktop::model::polling::tests::schedule::unshared_follows_attempts_shares_and_saves`,
-    one table over a sequence, the list and `as_of` asserted after each
-    step: a `Completed` attempt with three items; a `Transport(Unreachable)`,
-    an `Interrupted` and a `Cancelled` attempt that listed something (the
-    list kept, `last` replaced); a `Completed` replay with no targets (kept);
-    a share of item 1 heard at t5, then an earlier attempt completed at t4
-    naming item 1 applied (item 1 stays out); a save of item 4 heard at t6,
-    then an attempt completed at t5 not naming it (item 4 stays in); a
-    save of an item already listed (once); a save on a root with no
-    schedule (nothing) (P30–P33).
   - `desktop::services::scheduler::reconfigure::tests::finished_shares_and_saves_are_heard`,
     one table of `heard` over `WorkerEvent::Finished` envelopes:
     `ItemSync` `Success` with publication `Published` → `Shared { item:
@@ -424,10 +480,14 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
     `TicketClose` and `DocumentPromote` with `Published` → `Shared { main:
     true }`; `RepoSync` with `Published` → `Shared { item: None, main:
     true }`; each authoring intent of fact 59 with checkpoint `Committed`
-    and publication `NotRequested` or `Pending` → `Saved`, `new` for the
-    two creates; a `TicketSave` with `Published`, and one with checkpoint
-    `Unchanged`, → `None`; `PollOnce` unchanged (P5, P33). Build requests
-    as `resumed_and_abandoned_retirements_are_heard` (`:354`) does.
+    and publication `NotRequested` or `Pending` → `Saved` with its kind,
+    `new` for the two creates; a `LocalContextResolve` whose envelope's
+    `scope.item_id` names an item → `Saved { kind: None }` (U-7: if its
+    envelope names none, record it and move it to K-1); a `TicketSave`
+    with `Published`, and one with checkpoint `Unchanged`, → `None`; a
+    `TicketClose` with integration `Complete` and publication `Pending`
+    → `MainAhead`; `PollOnce` unchanged (P5, P32, P33). Build requests as
+    `resumed_and_abandoned_retirements_are_heard` (`:354`) does.
   - `desktop::services::scheduler::entity_tests::the_stored_outcome_and_shared_copy_are_kept`:
     `World::new(true, cx)`, `ssh_repo("a")`, `store_outcome(a,
     TransportUnavailable)`, `list`, with the launch poll answered by
@@ -440,21 +500,26 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
     reads); `reread` of a root never listed → no read; the repository
     removed (listed without it) → both gone (P3, P26, P42).
   - E-9: `desktop::model::polling::tests::schedule::attempt_summary_counts`
-    expects `not_shared()` 3 and `problems` 10 in each case (its fixture
-    lists every disposition once); `desktop::model::polling::status::tests::status_text_table`
-    gains `stored: None` on every `status::Facts` and rows for each stored
+    expects `to_share.len()` 3 and `problems.len()` 10 in each case (its
+    fixture lists every disposition once; R-44);
+    `desktop::model::polling::status::tests::status_text_table` gains
+    `stored: None` on every `status::Facts` and rows for each stored
     outcome of Part A's table with its retry flag, with no `last`, while
-    checking, and for a paused, an off and a held repository (P3, P34);
-    "N not shared yet" texts follow the unshared list;
+    checking, for a paused, an off and a held repository, and with a busy
+    wait, `Waiting { why: Unfinished }` and a pending conflict, where the
+    stored outcome does not apply (P3, P34, P43); "· N not shared yet"
+    follows the unshared list, also before any completed check (P44);
     `desktop::view::settings::polling_tests::settings_polling_rows`
-    follows if a text it pins changed.
-- [ ] **Step 3: Run them; they fail** (fields, methods and variants
+    follows if a text it pins changed; every `TargetParts` and
+    `AttemptTarget` literal in this task's test files gains `main` (fact
+    66).
+- [ ] **Step 4: Run them; they fail** (fields, methods and variants
   missing).
-- [ ] **Step 4: Implement** the interfaces above. `D/view/settings/polling.rs`'s
+- [ ] **Step 5: Implement** the interfaces above. `D/view/settings/polling.rs`'s
   `row` (`:379-399`) passes `stored: scheduler.stored(root)` and offers
   Retry now when `since_library`'s flag says so.
-- [ ] **Step 5: Run** each test of Step 2 by exact name.
-- [ ] **Step 6: Verify lines; commit; push.**
+- [ ] **Step 6: Run** each test of Steps 2 and 3 by exact name.
+- [ ] **Step 7: Verify lines; commit; push.**
 
 ---
 
@@ -493,8 +558,11 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
     stop, fact 54; the to-share one names at most five items, then "and
     {n} more") and Part D's labels; `SHARE_MAIN`, `SHARE_MAIN_SET_UP` and
     `SHARING` are `sidebar.rs`'s (fact 6).
-- Consumes: Task 1's `SharedCopy`, `Facts.stored`, `RepoSchedule.unshared`,
-  `status::row`, `status::ago`, `cant_reach`, `attention::headline`.
+- Consumes: Task 1's `SharedCopy`, `Facts.stored`, `status::stored_applies`
+  (the only test of whether a stored outcome applies; R-32),
+  `RepoSchedule.unshared`, `status::row`, `status::ago` (Up to date's
+  "Checked {ago} · up to date" from `unshared.as_of`, R-43), `cant_reach`,
+  `attention::headline`.
 
 - [ ] **Step 1: Write the failing tests.**
   - `desktop::model::repository_state::tests::each_state_and_its_precedence`,
@@ -512,14 +580,19 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
     `TransportUnavailable` (Paused, no label, Needs attention); To share
     with `Waiting { why: Unfinished }` (no label); Paused with Up to date;
     a stored outcome with a live attempt (the attempt wins); an unshared
-    list kept after a failed attempt (To share). Assert `kind`, `label`
-    and `action`; every kind with a tone has a label (P1–P3, P18–P20,
-    P34, P35).
+    list kept after a failed attempt (To share); a stored
+    `TransportUnavailable` with a busy wait, with `Waiting { why:
+    Unfinished }` and with a pending conflict (the stored outcome does
+    not apply: Checking soon's no label, no label, Needs attention for the
+    conflict). Assert `kind`, `label` and `action`; every kind with a tone
+    has a label (P1–P3, P18–P20, P34, P35, P43).
   - `desktop::model::repository_state::tests::tooltips_say_the_state_and_the_facts`,
     one table of `repository_tooltip`: each state's sentence; with and
     without a primary branch and a shared copy; To share with titles
-    known, unknown (ID), main alone, items and main, and seven items (five
-    named, "and 2 more") (P6, P7, P36).
+    known, unknown (ID), with no kind (ID), main alone, items and main, and
+    seven items (five named, "and 2 more"); Up to date's "Checked {ago} ·
+    up to date" from `as_of` while `last` is an interrupted attempt (P6,
+    P7, P36).
   - `desktop::model::repository_state::tests::menu_items_follow_the_state`,
     one table of `menu_items` and `more_items`: the sentence first and
     disabled, absent when empty; the state's action next, not repeated
@@ -583,8 +656,9 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
     ("Add or create a repository…", shared with Task 6),
     `NOT_UPDATED_BUSY`, `LIST_INCOMPLETE`.
 - Produces, in `D/model/navigation.rs`: `apply_repositories` (`:289-299`)
-  gives a listed entry that was the kept entry `Resolution::Unknown`, so
-  the chosen repository is resolved again (R-37).
+  gives a listed entry that was the kept entry `Resolution::Unknown` and
+  sets `vanished`, so `take_vanished` (`:339-344`) gives the chosen
+  repository to be resolved again (fact 68; R-37).
 - Removes: `REPOSITORIES_HEADING` and `SHOWING_LAST_READ` from
   `sidebar.rs`, which the new body no longer draws and E-2's row part no
   longer reads (`workspace_tests.rs:923`), so clippy stays clean.
@@ -603,17 +677,23 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
   - `desktop::view::repositories::tests::rows_and_list_states`, a window
     journey with polling on (copy the opt-in from
     `D/view/polling_window.rs:74`), answering each launch poll with
-    `answer_poll`: two repositories; `schedule_mut()` gives one a
-    completed attempt with two `to_share` items and the other none; the
-    rows' `("repo-state", i)` read "2 to share" and "Up to date"; a
+    `answer_poll`: two repositories; through `schedule_mut()`, each gets
+    a `Completed` attempt applied by `apply` (or `checked_now`), so the
+    unshared list follows Task 1's rules: one with two `to_share` items,
+    the other whose only target is main `Current` (main is always
+    reported, fact 70); the rows' `("repo-state", i)` read "2 to share"
+    and "Up to date"; a
     finished `ItemSync` that published one (`answer_job`, as the share
     tests do) → "1 to share" with no list read; the chosen repository's
     registration removed by a second actor and the list reloaded → a kept
     row last, reading "Can't open", the header counting it; the repository
-    registered again and the list reloaded → it is resolved again and the
-    row no longer reads "Can't open" (P38); a finished `TicketSave` that
+    registered again and the list reloaded → a resolve read is sent
+    (`reads_seen(ReadKind::Resolve)` grows) and the row no longer reads
+    "Can't open" once it lands (P38); a finished `TicketSave` that
     made a checkpoint without publishing (`answer_job`) → "2 to share"
-    again with no list read (P33); the first load
+    again with no list read (P33); a finished `DocumentSave` in a
+    scheduled repository with no completed check yet → "1 to share" (P44);
+    the first load
     shows `repositories-loading`; a held busy first load shows the busy
     alert; with no repositories, `repositories-empty` and its action opens
     Settings › Repositories; an incomplete list, built by applying a
@@ -672,16 +752,21 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
   `fn learn_titles(&mut self, root: &RepoKey, rows)` called when the
   Tickets or Documents lists load; `fn read_share_titles(&mut self, cx)`
   called from the scheduler observer (`D/view/workspace.rs:215`): for each
-  repository whose named unshared items (at most five, R-9) include IDs
-  neither in `titles` nor `Done` with fewer than three tries, one read
+  repository with no task in `title_reads` (a running job is never
+  replaced: dropping its task cancels the read, fact 65) whose named
+  unshared items (at most five, R-9) include IDs that have a kind and are
+  neither in `titles` nor `Done`, with fewer than three tries, one read
   job, copying `D/view/lifecycle/made_ready.rs:133-171`
   (`resolve_repository`, then `show_item` per ID), under
   `ReadKind::ShareTitles`, its task kept in `title_reads` for that root
   (fact 58). The stamp, under `ViewScope::ShareTitles(root)`, is the one
   `read_job` requires; every answer is merged by (root, id) whatever it
-  says (R-9). A found item gets its title and `Done`; a not-found item
-  `Done`; a busy, failed or dropped read counts one try. The three maps
-  drop a repository's entries when it is removed.
+  says (R-9). When the answer is applied the root's entry leaves
+  `title_reads`. A found item gets its title and `Done`; a not-found item
+  `Done`; only a busy or failed answer counts one try. An item with no
+  kind (a local conflict resolution's, fact 69) is not read and is named
+  by its ID. The three maps drop a repository's entries when it is
+  removed.
 - Changes: `repositories::rows` passes `titles` lookups into `RepoFacts`.
 
 - [ ] **Step 1: Write the failing test.**
@@ -691,8 +776,10 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
   repository read under `ShareTitles` (held with `hold_read`, then
   answered) and named by title after; one whose read is busy, read again
   at the next scheduler notify, and after three busy tries named by its ID
-  and not read again (`reads_seen`); a second job for the same repository
-  sent before the first answers, both answers merged; seven unshared
+  and not read again (`reads_seen`); scheduler notifies while a read is
+  held start no second job for that repository and use no tries
+  (`reads_seen` unchanged, the item still read once the hold is released);
+  an item with no kind named by its ID and not read; seven unshared
   items, five read; titles checked through `repository_tooltip` on the
   workspace's facts (P6, P36).
 - [ ] **Step 2: Run it; it fails.**
@@ -712,7 +799,8 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
   (`remove_repository`), `D/view/sidebar.rs` (its `remove_repository`
   call, `:471`, until Task 7), `D/view/workspace/content.rs`
   (`open_settings_on`), `D/view/operations/attention.rs` (`attend`
-  widened), `D/view/settings/polling.rs` (the shared Check now)
+  widened), `D/services/scheduler.rs` (`Services::check_now`),
+  `D/view/settings/polling.rs` (its Check now calls it)
 - Tests: `D/view/repositories_tests.rs`, `D/keys_tests.rs` (E-13),
   `D/view/operations/republish_tests.rs`, `D/view/item/edit_quit_tests.rs`,
   `D/view/item/repair_tests.rs` (E-16)
@@ -722,29 +810,34 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
   (used by `Region::key_context`, `D/view/workspace/focus.rs:100`); the
   action `OpenRepositoryMenu`; `KeyBinding::new("menu", OpenRepositoryMenu, Some(REPOSITORIES_CONTEXT))`
   and the same for `shift-f10`; the `no_json` action
-  `pub(crate) struct RepositoryMenuChoice { pub root: RepoKey, pub choice: MenuChoice }`
-  (as `DockPanel`, `:133-138`).
+  `pub(crate) struct RepositoryMenuChoice { pub root: RepoKey, pub choice: MenuChoice, pub shown: Shown }`
+  (as `DockPanel`, `:133-138`), where `pub(crate) enum Shown {
+  Action(RowAction), Label(String) }` is what the item showed: its
+  `RowAction` for the state's action, its label otherwise (R-35).
 - Produces, in `D/view/repositories/menu.rs`:
   - `pub(crate) enum MenuAnchor { Pointer(Point<Pixels>), Bounds(Bounds<Pixels>) }`
     (not `Anchor`, which clashes with `gpui_kit::Anchor`).
   - `pub(crate) struct RepositoryMenu` with
     `fn open(root: RepoKey, items: Vec<MenuItem>, context: FocusHandle, anchor: MenuAnchor, restore: Option<FocusHandle>, window, cx) -> Self`
-    building a `PopupMenu` with `menu_with_disabled(label, Box::new(RepositoryMenuChoice { root, choice }), !enabled)`
+    building a `PopupMenu` with `menu_with_disabled(label, Box::new(RepositoryMenuChoice { root, choice, shown }), !enabled)`
     for each item and `separator()` before Remove, subscribed to
     `DismissEvent`; and `fn layer(&self, window, cx) -> impl IntoElement`
     as `D/view/footer/menu.rs:98`.
 - Produces, on `Workspace`: `repository_menu: Option<RepositoryMenu>`;
   `fn open_repository_menu(&mut self, root: RepoKey, anchor: MenuAnchor, window, cx)`;
-  `fn open_focused_repository_menu(&mut self, window, cx)` (the
-  highlighted row, else the chosen one, scrolled into view and anchored at
-  its recorded bounds, or at the list's bounds when it has none, R-42);
+  `fn open_focused_repository_menu(&mut self, window, cx)`: from the
+  list, the highlighted row, else the chosen one; from a Repositories
+  toolbar button, always the chosen one, whatever row the Kit cursor
+  rests on (R-40); scrolled into view and anchored at its recorded bounds,
+  or at the list's bounds when it has none (R-42);
   `fn repository_menu_chosen(&mut self, action: &RepositoryMenuChoice, window, cx)`
   which first evaluates `menu_items` again for the root and ignores the
-  choice when the root is no longer listed or kept or the item is now
-  disabled (R-35), then dispatches: state action → `retry_resolution`,
+  choice when the root is no longer listed or kept, the item is now
+  disabled, or the re-evaluated item's `RowAction` or label differs from
+  `shown` (R-35), then dispatches: state action → `retry_resolution`,
   `Scheduler::reread`, `Scheduler::unlock`, `attend`, Check now,
-  `open_settings_on` or `open_remotes`; Check now and Retry now → the
-  shared Check now below; Share main → `share_main`; Open folder →
+  `open_settings_on` or `open_remotes`; Check now and Retry now →
+  `Services::check_now`; Share main → `share_main`; Open folder →
   `open_folder(Path::new(&root), cx)`; Settings… →
   `open_settings_on(SettingsPage::Repositories, root)`; Remove →
   `remove_repository(root, restore)`. The `OpenRepositoryMenu` and
@@ -755,11 +848,16 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
   `modal_open` (R-36). The layer is dropped under a modal as
   `dock_menu_layer` (`D/view/workspace/footer.rs:244`), and when its root
   leaves the rows (R-23).
-- Produces, extracted from Settings' `check_now`
-  (`D/view/settings/polling.rs:225`): one function both call, sending
-  `Intent::PollOnce { root }` on `Lane::User` and refusing while a
-  `PollOnce` for the root is in flight (`WorkerHandle::in_flight`); the
-  ledger records its name and home.
+- Produces, in `impl Services` in `D/services/scheduler.rs` (`:228-247`,
+  beside `repositories_listed` and `window_activated`; fact 67):
+  `pub(crate) fn check_now(&self, root: &Path) -> bool`, which sends
+  `Intent::PollOnce { root }` through `self.worker().submit(…, Lane::User,
+  None, None)` unless `self.worker().in_flight` finds a `PollOnce` for
+  the root (`D/services/worker.rs:515`, `:744`), and returns whether it
+  sent. Settings' `check_now` (`D/view/settings/polling.rs:225-235`)
+  calls it after its own dialog guard; the menu's Check now and Retry now
+  call it here, and Check all in Task 6. Each caller keeps its own dialog
+  and sheet guard (R-35).
 - Produces, in `D/view/workspace/content.rs`:
   `fn open_settings_on(&mut self, page: SettingsPage, root: PathBuf, window, cx)`,
   setting `set_selection(Some(root))` as `open_remotes` does
@@ -800,16 +898,24 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
     and a dispatched `RepositoryMenuChoice` do nothing, and an open menu
     closes when a modal opens; a reload that drops the menu's repository
     closes it; a menu opened on a row, then a check of it starting, then
-    Check now chosen → nothing sent; the Retry of a row that reads Needs
+    Check now chosen → nothing sent; a menu opened on a row reading Can't
+    reach (its first action "Retry now"), then a live attention making the
+    row Needs attention with "Resume checking", then the "Retry now" item
+    chosen → nothing sent and nothing resumed (the shown action differs);
+    the Retry of a row that reads Needs
     attention because its registration read failed reads it again (P10–P12,
     P21, P22, P26, P27, P29, P40).
   - E-16: the five `remove_repository` test calls pass the list's focus
     handle.
   - E-13: `desktop::keys::tests::each_key_is_bound_to_its_action` gains
     `menu` and `shift-f10` → `OpenRepositoryMenu`; the table is 26 long.
+  - Settings' Check now, now through `Services::check_now`: its existing
+    tests (`desktop::view::settings::polling_tests::settings_polling_controls`)
+    run unchanged by exact name.
 - [ ] **Step 3: Run them; they fail.**
 - [ ] **Step 4: Implement.**
-- [ ] **Step 5: Run** both tests and the five E-16 tests by exact name.
+- [ ] **Step 5: Run** both tests, the five E-16 tests and
+  `settings_polling_controls` by exact name.
 - [ ] **Step 6: Verify lines; commit; push; ticket comment** (checkpoint:
   commits, tests with counts, the U-1, U-2, U-4 and U-6 answers,
   rulings).
@@ -833,15 +939,16 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
   the three (`D/view/dock/header/toolbar.rs:65-69`).
 - The Repositories toolbar wrapper carries `REPOSITORIES_CONTEXT`, not
   `NAVIGATION_CONTEXT` (`:134`) (R-14), so `menu` and `shift-f10` on a
-  Repositories button open the chosen repository's menu with that button
-  as `restore` (R-40).
+  Repositories button open the chosen repository's menu, never the Kit
+  cursor's row, with that button as `restore` (R-40).
 - `toolbar_enabled(&self, button, cx: &App)` (`:143`): Check all only when
   one repository qualifies (R-13).
 - `press_toolbar` (`:156`): Add → `open_settings(SettingsPage::Repositories)`;
-  Check all → the shared Check now (Task 5) for each repository whose D6
+  Check all → `Services::check_now` (Task 5) for each repository whose D6
   shape is `Polling`, that is not checking, whose phase is not `Attention`
-  for a key or host, and whose state is not Locked or Needs attention from
-  a stored key or host outcome, in list order, then focus to the list if
+  for a key or host, and for which `status::stored_applies` (Task 1) gives
+  none of `UnlockRequired`, `SelectedKeyUnavailable` or
+  `HostApprovalRequired`, in list order, then focus to the list if
   it disabled itself (R-13, R-22); More → the More menu (`more_items`) at the button's bounds,
   recorded by a `canvas`, restoring focus to the button;
   `repository_menu_chosen` maps Refresh and Rebuild to
@@ -855,8 +962,10 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
     schedule): each reached by Tab, run by Enter, its region Repositories
     with the ring; Add opens Settings › Repositories; More opens its menu,
     and Refresh sends `IndexRefresh` for the chosen repository;
-    `secondary-n` from a Repositories button opens nothing; `shift-f10` on
-    Add opens the chosen repository's menu and Esc returns focus to Add;
+    `secondary-n` from a Repositories button opens nothing; with the Kit
+    cursor moved to another row than the chosen one, `shift-f10` on Add
+    opens the chosen repository's menu, not the cursor's, and Esc returns
+    focus to Add;
     refused behind a dialog and a sheet. `with_no_repository` (`:170`)
     names the three: Add enabled, Check all disabled, More enabled with
     its items disabled (P12, P13, P28, P39).
@@ -1006,7 +1115,9 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
     has focus moves focus to Needs attention, or the next shown control;
     two repositories in folders of the same name: the name carries the
     parent; Enter on Update check opens Settings › Checking for updates;
-    refused behind a dialog and a sheet (P12, P15, P25, P37, P41).
+    refused behind a dialog and a sheet; a `saved` item in a scheduled
+    repository with no completed check yet shows "1 to share" (P12, P15,
+    P25, P37, P41, P44).
   - E-10: `desktop::view::footer::tests::a_secondary_click_opens_the_dock_menu_with_its_side_checked`,
     `…::toggle_names_follow_their_state`,
     `desktop::view::keyboard_tests::shell::each_side_is_reached_by_the_dock_menu_keys`,
@@ -1129,17 +1240,27 @@ git grep -n -e 'plan(' -e 'Control::ALL' -e 'fn said' -e 'TAB_LIMIT' \
 | P36 | 2 (sentence), 4 (reads) |
 | P38 | 3 |
 | P42 | 1 |
+| P43 | 1 (Settings, `stored_applies`), 2 (state) |
+| P44 | 1 (list, Settings), 3 (row), 8 (footer) |
 
 **Rulings:** R-1, R-2, R-3, R-4, R-18, R-19, R-28, R-29, R-30, R-31, R-32,
-R-41 → Task 1; R-5, R-6, R-17, R-27, R-33, R-34 → Task 2; R-7, R-8,
+R-41, R-44, R-45 → Task 1; R-5, R-6, R-17, R-27, R-33, R-34, R-43 → Task
+2; R-7, R-8,
 R-10, R-20, R-37 → Task 3; R-9 → Tasks 2 and 4; R-11, R-12, R-21, R-23,
-R-25, R-35, R-36, R-42 → Task 5; R-13, R-14, R-22, R-40 → Task 6; R-15,
+R-25, R-35, R-36, R-42 → Task 5 (R-35's `Services::check_now` used by
+Task 6 too); R-13, R-14, R-22, R-40 → Task 6; R-15,
 R-16 → Tasks 2 and 7; R-24, R-26 → Tasks 2 and 8; R-38, R-39 → Task 8.
 
-**Unverified:** U-6 → Task 1 Step 1; U-4 → Task 3 Step 1; U-1, U-2 →
+**Unverified:** U-6 → Task 1 Step 1; U-7 → Task 1
+(`finished_shares_and_saves_are_heard`); U-4 → Task 3 Step 1; U-1, U-2 →
 Task 5 Step 1; U-5 → Task 8 Step 1; U-3 → Task 9 Step 1.
 
-**Named edits:** E-9 → Task 1; E-1, E-2 and E-3 (row parts), E-12 (part)
+**Design checkpoint:** Task 1 Step 2 writes the unshared list's table
+(U1–U15) before any code and stops for the orchestrator if a row cannot
+be expressed (Global Constraints, Test-first).
+
+**Named edits:** E-9 → Task 1 (with `main` on every `TargetParts` and
+`AttemptTarget` literal of fact 66); E-1, E-2 and E-3 (row parts), E-12 (part)
 → Task 3; E-13, E-16 → Task 5; E-11, E-12 (part) → Task 6; E-1, E-2 and
 E-3 (rest), E-4, E-5, E-6, E-7, E-8 → Task 7; E-10, E-12 (part) → Task 8;
 E-15 → Task 9; E-14 → any task.
