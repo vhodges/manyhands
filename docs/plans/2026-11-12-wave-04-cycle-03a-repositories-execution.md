@@ -22,7 +22,7 @@ reason.
 | --- | --- | --- | --- |
 | 0 | done | `09437383` (ledger); `2aafa5d0` (ticket comment) | yes |
 | 1 | done, review approved with Minors parked | code `a2abc5fa` (base `2aafa5d0`); ledger commit follows it | yes |
-| 2 | not started | | |
+| 2 | done, review approved after fix round 1 | code `4979f441` (base `d21b14f5`), fix `b103c639`; ledger commit follows | yes |
 | 3 | not started | | |
 | 4 | not started | | |
 | 5 | not started | | |
@@ -306,3 +306,89 @@ unit test; a real `RemotePollReport` can be built only inside the library.
 `PollingBackend::store_outcome` replaces `latest_outcome` for every
 `polling_status` of that root, so it also overrides what a real `Completed`
 poll stored.
+
+## Task 2: repository state (Part B)
+
+**Commits.** Code `4979f441` (base `d21b14f5`); fix round 1 `b103c639`. New
+files: `model/repository_state.rs` (497 lines), `repository_state/words.rs`,
+`repository_state/menu.rs`, `model/repository_state_tests.rs` and
+`repository_state_tests/{menus,pairs,scene,states,tips}.rs`; `model/mod.rs`
+gains the module; the `#[allow(unused_imports)]` on the `SharedCopy` re-export
+in `services/scheduler.rs` is removed (now used). No existing test edited. The
+boundary command prints nothing.
+
+**Tests run** (`devenv shell -- cargo test --locked --features
+desktop-test-support --bin manyhands <path> -- --exact`; each ran 1 test and
+passed, in the first round and again after the fix):
+`desktop::model::repository_state::tests::each_state_and_its_precedence`,
+`desktop::model::repository_state::tests::tooltips_say_the_state_and_the_facts`,
+`desktop::model::repository_state::tests::menu_items_follow_the_state`.
+Red first: a compile failure for the missing items; in the fix round the first
+two failed on the new cases before the code changed (`menu_items_follow_the_state`
+already passed: the new rows filled a coverage gap). Verify lines, each exit 0
+after each round: `cargo fmt --check`, `cargo check --locked --features
+desktop`, `cargo clippy --all-targets --all-features --locked -- -D warnings`.
+
+**Owner rulings, asked and answered 2026-11-12 during Task 2** (the review
+found a contract question the Cycle, design and plan do not settle):
+- Ruling (owner): Part B rows 6 and 7's last-answer triggers
+  (`Transport(Unavailable)`, `Transport(ConfigurationRequired)`,
+  `Transport(Unreachable)`) hold only while `policy.enabled && !policy.paused`
+  — the design's table put them ahead of row 9 while its sentence rules and
+  fact 53 say Paused outranks everything but an attention, and `last` survives
+  pausing, so a paused repository showed label "Can't reach" with the sentence
+  "Paused" — a paused repository now reads Paused (or "{n} to share"), an off
+  one row 13; cost if wrong: one `last_answer` helper and five pairs
+  (`repository_state.rs:309-319`, `pairs.rs:313-386`). **Amends Part B's
+  table, rows 6 and 7 (the approved design is not edited; this entry is the
+  amendment, and the review-ready summary says so).** Attention phases, Held,
+  a pending conflict, `Waiting { why: Failed }`, `Unreadable` and stored
+  outcomes are unchanged.
+- Ruling (owner): rows 8 and 10 are not gated on `enabled` — an off repository
+  with an unshared list still reads "{n} to share" or "Up to date" — the list
+  is a fact about the repository and Settings appends "· N not shared yet"
+  whatever the status (decision 24); cost if wrong: gate two rows; the footer's
+  N to share total would then need the same gate. Row 13's "checking off" means
+  off with no completed check.
+- Ruling (owner): the wording for an unshared item with no parsed ID is "an
+  item" (`words.rs` `UNNAMED_ITEM`), one constant with a tooltip case — the
+  design is silent; cost: one constant.
+
+**Rulings (implementer's, reviewed).**
+1. Tooltip line 1 is the sentence parts joined with a space — reviewer found
+   a run-on; **fixed in round 1**: a part followed by another and not ending in
+   `.`, `!`, `?`, `:` or `…` gets a full stop (`words.rs:116-128`); the
+   expectation pinned to the run-on is corrected (it was shaped to the bug).
+2. A policy-only hold gets `Attend(ResumeChecking, RecoveryHeld(root))`
+   (row 6 names `Shape::Held` with `action_of`'s Resume checking).
+3. Some menu labels (Check now, Retry now, Set up sharing…, Open folder) are
+   duplicated into the model. The implementer's stated reason ("the model must
+   not import view modules") is inaccurate — `menu.rs:14` imports
+   `view::sidebar`, as the design asks (design:851) — corrected in its report;
+   see deferred 1.
+4. The kept row beats a busy resolution (row 1 over row 2).
+
+**Dead-code allows.** One module-wide `#[allow(dead_code)] // Used from Task 3`
+on `repository_state` in `model/mod.rs:29`, and `unused_imports` on the
+re-exports in `repository_state.rs`, all marked "Used from Task 3".
+
+**Review** (fresh reviewer, opus, `d21b14f5..4979f441`): spec ❌ for the paused
+contradiction (above), the run-on sentence, two missing brief-listed menu cases
+and the invented "an item" copy; no Critical. Fix round 1 (the original
+implementer, resumed) addressed findings 1, 2, 3, 4 and 6; the scoped
+re-review (sonnet, `4979f441..b103c639`) verdicted all ADDRESSED with no new
+issue. Table fidelity (rows 1–13, all required pairs) and signatures were
+verified by the first review.
+
+**Deferred findings (Minor), carried to the final review and to Task 3:**
+1. Label duplication: the shared labels (`SHARE_MAIN`, `SHARE_MAIN_SET_UP`,
+   `SHARING`, `CHECK_NOW`, `RETRY_NOW`, `SET_UP_SHARING`, `OPEN_FOLDER`) exist
+   in several places (model, `sidebar.rs`, `lifecycle.rs`, `settings/polling.rs`)
+   and the tests compare each against its own copy, so drift would go
+   unnoticed. Better: one copy in the model, the views point at it.
+2. **Task 3 must remove** the module-wide `#[allow(dead_code)]` at
+   `model/mod.rs:29` and check that nothing stays dead.
+3. A `Missing` configuration with no problems reads "Its configuration needs
+   fixing:" ending on a colon — the design's sentence; left.
+4. `repository_state.rs` is at 497 lines (the cap): Task 3 must not grow it.
+5. The punctuation rule recognises only the single character `…`, not "...".
