@@ -33,6 +33,8 @@ use crate::desktop::{
     },
 };
 
+#[path = "repositories_tests/menu.rs"]
+mod menu;
 #[path = "repositories_tests/support.rs"]
 mod support;
 #[path = "repositories_tests/titles.rs"]
@@ -457,4 +459,16 @@ async fn rows_and_list_states(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 async fn titles_of_what_is_not_shared(cx: &mut TestAppContext) {
     titles::journey(cx).await;
+}
+
+/// P10-P12, P21, P22, P26, P27, P29, P40: a row's menu by a right click,
+/// for that row and not the chosen one, and by `shift-f10` and `menu`, for
+/// the Kit cursor's row, the kept row alone included; its first line;
+/// what each item sends or opens, by label; a choice made after its row
+/// changed sends nothing; Remove's dialog and focus; refused behind a
+/// dialog and the details sheet; nothing read by opening, moving or Esc;
+/// the menu closing when its row goes.
+#[gpui_kit::test]
+async fn the_menu_by_pointer_and_keyboard(cx: &mut TestAppContext) {
+    menu::journey(cx).await;
 }

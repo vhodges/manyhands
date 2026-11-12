@@ -191,8 +191,36 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.content.hide_drafts(cx);
         let selection = self.navigation.selected().map(PathBuf::from);
+        self.open_settings_at(page, selection, window, cx);
+    }
+
+    /// Settings' `page` on the repository at `root`, not the chosen one,
+    /// as `open_remotes` does (R-21); the Repositories page manages it.
+    pub(in crate::desktop::view) fn open_settings_on(
+        &mut self,
+        page: SettingsPage,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_settings_at(page, Some(root.clone()), window, cx);
+        if page == SettingsPage::Repositories {
+            self.content.settings.update(cx, |settings, cx| {
+                let page = settings.repositories(window, cx);
+                page.update(cx, |page, cx| page.manage_root(root, false, window, cx));
+            });
+        }
+    }
+
+    fn open_settings_at(
+        &mut self,
+        page: SettingsPage,
+        selection: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.content.hide_drafts(cx);
         self.content.settings.update(cx, |settings, cx| {
             settings.set_selection(selection);
             settings.open(page, window, cx)

@@ -6,7 +6,8 @@ use crate::desktop::model::{
     navigation::Pane,
 };
 use gpui_kit::{
-    App, Context, InteractiveElement, IntoElement, ParentElement, Styled, TestSupportExt, Window,
+    App, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Styled,
+    TestSupportExt, Window,
     component::{ActiveTheme, WindowExt},
     div,
 };
@@ -97,7 +98,7 @@ impl Region {
 
     fn key_context(self) -> &'static str {
         match self {
-            Self::Repositories => "Repositories",
+            Self::Repositories => crate::desktop::keys::REPOSITORIES_CONTEXT,
             Self::Documents | Self::Tickets => crate::desktop::keys::NAVIGATION_CONTEXT,
             Self::Content => crate::desktop::keys::CONTENT_CONTEXT,
             Self::Operations => "Operations",
@@ -191,6 +192,21 @@ impl Workspace {
             })
     }
 
+    /// The region whose handle holds `handle`, or whose toolbar button it
+    /// is; the item area otherwise.
+    pub(super) fn region_of(&self, handle: &FocusHandle, window: &Window) -> Region {
+        REGIONS
+            .into_iter()
+            .find(|region| self.regions[region.index()].contains(handle, window))
+            .or_else(|| {
+                ToolbarButton::ALL
+                    .into_iter()
+                    .find(|button| self.toolbar_focus(*button) == handle)
+                    .map(ToolbarButton::region)
+            })
+            .unwrap_or(Region::Content)
+    }
+
     /// `focused_region`, for the keyboard walk (E-14).
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(in crate::desktop::view) fn held_region(
@@ -217,12 +233,15 @@ impl Workspace {
             self.navigation.set_pane(pane);
         }
         match region {
+            // Whenever the panel draws a row, the kept one alone included,
+            // so its menu is reached by keyboard (decision 22).
             Region::Repositories
-                if self
-                    .navigation
-                    .repositories()
-                    .rows()
-                    .is_some_and(|rows| !rows.is_empty()) =>
+                if self.navigation.kept().is_some()
+                    || self
+                        .navigation
+                        .repositories()
+                        .rows()
+                        .is_some_and(|rows| !rows.is_empty()) =>
             {
                 self.repositories_pane.focus(window, cx)
             }

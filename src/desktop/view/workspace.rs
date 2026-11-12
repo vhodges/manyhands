@@ -11,6 +11,7 @@ mod lifecycle;
 mod lists;
 mod render;
 mod repositories;
+mod repository_menu;
 mod requests;
 mod titles;
 
@@ -37,7 +38,7 @@ use super::{
     footer::Footer,
     item::{ChipField, ItemPane},
     passphrase::PassphraseDialog,
-    repositories::RepositoriesPane,
+    repositories::{RepositoriesPane, RepositoryMenu},
     settings::{SettingsEvent, SettingsHost},
     tabs::TabContent,
     tickets::TicketsPane,
@@ -183,6 +184,8 @@ pub(crate) struct Workspace {
     /// The folders the person opens and closes in the tree.
     _tree_events: Subscription,
     repositories_pane: RepositoriesPane,
+    /// The open repository menu (Part D).
+    repository_menu: Option<RepositoryMenu>,
     _repository_events: Subscription,
     remove_focus: FocusHandle,
     retry_focus: FocusHandle,
@@ -385,6 +388,7 @@ impl Workspace {
             _ticket_events: ticket_events,
             _tree_events: tree_events,
             repositories_pane,
+            repository_menu: None,
             _repository_events: repository_events,
             remove_focus: cx.focus_handle(),
             retry_focus: cx.focus_handle(),
@@ -482,18 +486,8 @@ impl Workspace {
     }
 
     #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn repositories_list_focus(&self, cx: &App) -> FocusHandle {
-        gpui_kit::Focusable::focus_handle(self.repositories_pane.list().read(cx), cx)
-    }
-
-    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn tickets_list_focus(&self, cx: &App) -> FocusHandle {
         gpui_kit::Focusable::focus_handle(self.tickets_pane.list().read(cx), cx)
-    }
-
-    #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn remove_focus(&self) -> FocusHandle {
-        self.remove_focus.clone()
     }
 }
 

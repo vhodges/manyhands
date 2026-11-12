@@ -594,7 +594,8 @@ async fn republish_waits_for_another_dialog_to_close(cx: &mut TestAppContext) {
     // The removal asked for behind the Give up, and left running.
     shell.frame(cx, |window, cx| {
         shell.workspace.update(cx, |workspace, cx| {
-            workspace.remove_repository(key(&other), window, cx)
+            let restore = workspace.repositories_list_focus(cx);
+            workspace.remove_repository(key(&other), restore, window, cx)
         })
     });
     shell
@@ -719,7 +720,8 @@ async fn republish_opens_when_the_dialog_it_waits_for_is_cancelled(cx: &mut Test
     // A removal asked for, its preview shown and never confirmed.
     shell.frame(cx, |window, cx| {
         shell.workspace.update(cx, |workspace, cx| {
-            workspace.remove_repository(key(&other), window, cx)
+            let restore = workspace.repositories_list_focus(cx);
+            workspace.remove_repository(key(&other), restore, window, cx)
         })
     });
     shell

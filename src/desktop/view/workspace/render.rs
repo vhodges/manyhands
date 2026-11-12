@@ -6,9 +6,9 @@ use crate::desktop::{
     keys::{
         CloseTab, DockPanel, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
         FocusRepositories, JumpToDiscussion, NewItem, NextRegion, NextTab, OpenDockMenu,
-        OpenDrafts, OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow,
-        Rebuild, Refresh, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop,
-        ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
+        OpenDrafts, OpenRepositoryMenu, OpenSelected, OpenSettings, PreviousRegion, PreviousTab,
+        Quit, QuitNow, Rebuild, Refresh, RepositoryMenuChoice, ScrollPageDown, ScrollPageUp,
+        ScrollToBottom, ScrollToTop, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
     },
     model::{
         layout::{PanelKind, Side},
@@ -203,8 +203,10 @@ impl Render for Workspace {
                 self.navigation.set_pane(pane);
             }
         }
-        // The rows follow the model after this frame, not during it (R-8).
+        // The rows follow the model after this frame, not during it (R-8);
+        // the repository menu closes as soon as its row goes (R-23).
         let rows = repositories::rows(self, cx);
+        let repository_menu = self.repository_menu_layer(&rows, window, cx);
         self.repositories_pane.show_after_frame(rows, window, cx);
         // The title bar draws the string the window is titled with, which is
         // set only when it changes (R-14).
@@ -331,6 +333,18 @@ impl Render for Workspace {
             .on_action(unless_dialog(cx, |this, action: &DockPanel, window, cx| {
                 this.dock_chosen(action.panel, action.side, window, cx)
             }))
+            .on_action(unless_dialog(
+                cx,
+                |this, _: &OpenRepositoryMenu, window, cx| {
+                    this.open_focused_repository_menu(window, cx)
+                },
+            ))
+            .on_action(unless_dialog(
+                cx,
+                |this, action: &RepositoryMenuChoice, window, cx| {
+                    this.repository_menu_chosen(action, window, cx)
+                },
+            ))
             .relative()
             .size_full()
             .bg(cx.theme().background)
@@ -338,6 +352,7 @@ impl Render for Workspace {
             .child(dock)
             .child(footer)
             .children(dock_menu)
+            .children(repository_menu)
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }

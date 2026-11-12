@@ -8,9 +8,9 @@
 //! treatment and a mark labelled "Selected".
 
 use gpui_kit::{
-    App, Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, TestSupportExt, WeakEntity,
-    Window, canvas,
+    App, Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton,
+    MouseDownEvent, ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled,
+    TestSupportExt, WeakEntity, Window, canvas,
     component::{
         IndexPath, Selectable,
         list::{ListDelegate, ListState as KitListState},
@@ -21,7 +21,7 @@ use gpui_kit::{
     px,
 };
 
-use super::{RepositoryRow, RowBounds};
+use super::{MenuAnchor, RepositoryRow, RowBounds};
 use crate::desktop::{
     model::repository_state::Tone,
     view::{
@@ -50,7 +50,6 @@ pub(crate) struct RepositoryDelegate {
     focus: Option<FocusHandle>,
     /// The Workspace a row's pointer hook reaches, since a row is drawn in
     /// the list's context, not the Workspace's (fact 61; R-36).
-    #[allow(dead_code)] // Used from Task 5
     workspace: WeakEntity<Workspace>,
     bounds: RowBounds,
 }
@@ -76,6 +75,10 @@ impl RepositoryDelegate {
 
     pub(super) fn rows(&self) -> &[RepositoryRow] {
         &self.rows
+    }
+
+    pub(super) fn bounds(&self) -> &RowBounds {
+        &self.bounds
     }
 
     pub(crate) fn row(&self, ix: IndexPath) -> Option<&RepositoryRow> {
@@ -107,6 +110,7 @@ impl ListDelegate for RepositoryDelegate {
             cursor: false,
             focused,
             bounds: self.bounds.clone(),
+            workspace: self.workspace.clone(),
         })
     }
 
@@ -141,6 +145,7 @@ pub(crate) struct RowElement {
     /// The list holds focus.
     focused: bool,
     bounds: RowBounds,
+    workspace: WeakEntity<Workspace>,
 }
 
 impl Selectable for RowElement {
@@ -177,6 +182,7 @@ impl RenderOnce for RowElement {
             cursor,
             focused,
             bounds,
+            workspace,
         } = self;
         let tooltip: SharedString = row.tooltip.join("\n").into();
         let state = row.state.label.clone().map(|label| {
@@ -198,11 +204,24 @@ impl RenderOnce for RowElement {
                 .child(label)
         });
         let key = row.key.clone();
+        let root = row.key.clone();
         div()
             .id(("repo-row", index))
             .test_support()
             .aria_label(row.name.clone())
             .aria_description(row.tooltip.join(" "))
+            // A secondary press opens the row's menu at the pointer (Part
+            // C), taken before the list can choose or focus: the choice
+            // stays. The Workspace's opener refuses under a modal (R-36).
+            .capture_any_mouse_down(move |event: &MouseDownEvent, window, cx| {
+                if event.button == MouseButton::Right {
+                    window.prevent_default();
+                    let at = MenuAnchor::Pointer(event.position);
+                    let _ = workspace.update(cx, |workspace, cx| {
+                        workspace.open_repository_menu(root.clone(), at, window, cx)
+                    });
+                }
+            })
             .relative()
             .flex()
             .flex_none()

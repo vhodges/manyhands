@@ -1,24 +1,28 @@
 //! What the Repositories panel's window tests share: item IDs, poll and
-//! job answers, and readings of the rows.
+//! job answers, readings of the rows, and the repository menu read and
+//! chosen by label.
 
-use gpui_kit::{ElementId, TestAppContext};
+use std::path::Path;
+
+use gpui_kit::{ElementId, FocusHandle, Modifiers, TestAppContext, test::TestWindowExt};
 use manyhands::{
     canonical::ItemId,
     repository::{MutationDataDto, OperationId, PollCompletion},
-    results::{CheckpointEffect, Effects, Envelope, PublicationEffect, ResultCode, Scope},
+    results::{CheckpointEffect, Effects, Envelope, Outcome, PublicationEffect, ResultCode, Scope},
 };
 
-use super::super::rows;
+use super::super::{RepositoryRow, rows};
 use crate::desktop::{
     model::polling::{
         Answer, AttemptTarget, Clock as _, Disposition, PollAttempt, TargetKind, TestClock,
     },
+    model::stamp::RepoKey,
     services::{
         ReadKind, Services,
         poll_convert::{Library, ReportParts},
-        requests::{Intent, Lane},
+        requests::{DesktopRequestId, Intent, Lane},
     },
-    view::harness::Shell,
+    view::{harness::Shell, settings::Shown as Page},
 };
 
 pub(super) const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5RA1";
@@ -162,4 +166,107 @@ pub(super) fn checked(
 /// The scheduler notifies with nothing new to say.
 pub(super) fn notify(services: &Services, cx: &mut TestAppContext) {
     services.scheduler().update(cx, |_, cx| cx.notify());
+}
+
+/// A Check now's answer, in place of the library's: nothing reaches a
+/// transport.
+pub(super) fn polled() -> Envelope<MutationDataDto> {
+    Envelope::mutation(
+        "poll once",
+        Scope::default(),
+        Outcome::Success,
+        ResultCode::Ok,
+    )
+}
+
+/// A share of main's answer, in place of the library's.
+pub(super) fn synced() -> Envelope<MutationDataDto> {
+    Envelope::mutation(
+        "repo sync",
+        Scope::default(),
+        Outcome::Success,
+        ResultCode::Ok,
+    )
+}
+
+/// The row named `name`, as the model gives it.
+pub(super) fn row_of(shell: &Shell, name: &str, cx: &mut TestAppContext) -> RepositoryRow {
+    shell.workspace.read_with(cx, |workspace, cx| {
+        rows(workspace, cx)
+            .into_iter()
+            .find(|row| row.name == name)
+            .unwrap_or_else(|| panic!("no row {name}"))
+    })
+}
+
+/// The labels `menu_items` gives the row named `name`, in order.
+pub(super) fn items_of(shell: &Shell, name: &str, cx: &mut TestAppContext) -> Vec<String> {
+    let row = row_of(shell, name, cx);
+    row.menu.iter().map(|item| item.label.clone()).collect()
+}
+
+/// The repository whose menu is open.
+pub(super) fn open_root(shell: &Shell, cx: &mut TestAppContext) -> Option<RepoKey> {
+    shell.frame(cx, |_, _| ());
+    shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.repository_menu_root())
+}
+
+/// The open menu's items, in order, by label; a separator has none.
+pub(super) fn labels(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
+    shell.frame(cx, |window, _| {
+        let menu = window.within("popup-menu");
+        (0usize..16)
+            .filter_map(|ix| menu.try_find(ix))
+            .filter_map(|item| item.label().map(str::to_owned))
+            .collect()
+    })
+}
+
+/// Clicks the open menu's item `label`, its mouse events one at a time, so
+/// the choice reaches the Workspace before the next frame, as in the
+/// application (`Shell::click_settled`).
+pub(super) fn choose(shell: &Shell, label: &str, cx: &mut TestAppContext) {
+    let at = shell
+        .frame(cx, |window, _| {
+            let menu = window.within("popup-menu");
+            (0usize..16)
+                .filter_map(|ix| menu.try_find(ix))
+                .find(|item| item.label() == Some(label))
+                .map(|item| item.bounds().center())
+        })
+        .unwrap_or_else(|| panic!("no item {label}"));
+    let mut visual = shell.visual(cx);
+    visual.simulate_click(at, Modifiers::default());
+    visual.run_until_parked();
+}
+
+/// A right click on the row named `name`.
+pub(super) fn right_click(shell: &Shell, name: &str, cx: &mut TestAppContext) {
+    let at = index(shell, name, cx);
+    shell.frame(cx, |window, cx| window.right_click(("repo-row", at), cx));
+    shell.run(cx);
+}
+
+/// The Check nows of `root` sent on the user lane, newest first.
+pub(super) fn checks(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
+    shell.requests(cx, |request| {
+        request.lane == Lane::User
+            && matches!(&request.intent, Intent::PollOnce { root: asked } if asked == root)
+    })
+}
+
+pub(super) fn all_reads(shell: &Shell) -> usize {
+    shell.backend.reads_in_order().len()
+}
+
+pub(super) fn focused(shell: &Shell, handle: &FocusHandle, cx: &mut TestAppContext) -> bool {
+    shell.frame(cx, |window, _| handle.is_focused(window))
+}
+
+pub(super) fn page(shell: &Shell, cx: &mut TestAppContext) -> Page {
+    shell
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.settings_shown(cx))
 }

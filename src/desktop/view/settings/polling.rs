@@ -222,15 +222,14 @@ impl PollingPage {
         cx.notify();
     }
 
+    /// Check now, through the one entry point the menu and Check all share
+    /// (R-35), after this page's own dialog guard.
     fn check_now(&mut self, root: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.checking_now(root) {
-            self.send(
-                Intent::PollOnce {
-                    root: root.to_owned(),
-                },
-                window,
-                cx,
-            );
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        if self.services.check_now(root) {
+            cx.notify();
         }
     }
 

@@ -186,7 +186,8 @@ fn remove(
             .danger()
             .label(REMOVE)
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.remove_repository(key.clone(), window, cx)
+                let restore = this.repositories_list_focus(cx);
+                this.remove_repository(key.clone(), restore, window, cx)
             })),
     )
 }

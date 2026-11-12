@@ -317,7 +317,6 @@ impl Scheduler {
     /// scheduler could not read (R-19): it leaves the failed ones, which the
     /// tick does not read, and asks for its own read. A root the scheduler
     /// never listed is ignored (R-41).
-    #[allow(dead_code)] // Used from Task 5
     pub(crate) fn reread(&mut self, root: Root, cx: &mut Context<Self>) {
         if !self.known.contains(&root) {
             return;

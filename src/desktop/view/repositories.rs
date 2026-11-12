@@ -8,13 +8,19 @@
 //! `ListRow` (R-7), drawn in `row`; the list's states in `body`.
 
 mod body;
+pub(crate) mod menu;
 mod row;
 
-use std::{cell::RefCell, collections::HashMap, path::Path, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    path::Path,
+    rc::Rc,
+};
 
 use gpui_kit::{
-    App, AppContext, Bounds, Entity, InteractiveElement, IntoElement, ParentElement, Pixels,
-    Styled, TestSupportExt, WeakEntity, Window,
+    App, AppContext, Bounds, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Pixels, ScrollStrategy, Styled, TestSupportExt, WeakEntity, Window, canvas,
     component::{
         IndexPath,
         list::{List, ListState as KitListState},
@@ -23,6 +29,7 @@ use gpui_kit::{
 };
 
 pub(crate) use self::body::body;
+pub(crate) use self::menu::{MenuAnchor, RepositoryMenu};
 use self::row::RepositoryDelegate;
 use manyhands::canonical::ItemId;
 
@@ -151,8 +158,10 @@ fn checking_now(services: &Services, root: &Path) -> bool {
 pub(crate) struct RepositoriesPane {
     list: Entity<KitListState<RepositoryDelegate>>,
     /// The rows' bounds, shared with the delegate, which records them.
-    #[allow(dead_code)] // Used from Task 5
     bounds: RowBounds,
+    /// The list's own bounds, as drawn last: a key-opened menu's anchor
+    /// when its row has none (R-42).
+    list_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 impl RepositoriesPane {
@@ -166,7 +175,11 @@ impl RepositoriesPane {
             let focus = gpui_kit::Focusable::focus_handle(list, cx);
             list.delegate_mut().set_focus(focus);
         });
-        Self { list, bounds }
+        Self {
+            list,
+            bounds,
+            list_bounds: Rc::default(),
+        }
     }
 
     pub(crate) fn list(&self) -> &Entity<KitListState<RepositoryDelegate>> {
@@ -197,13 +210,56 @@ impl RepositoriesPane {
         self.list.update(cx, |list, cx| list.focus(window, cx));
     }
 
+    /// The Kit list's focus handle: a key-opened menu's action context.
+    pub(crate) fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.list.read(cx).focus_handle(cx)
+    }
+
+    /// The repository of the row the Kit cursor is on.
+    pub(crate) fn highlighted(&self, cx: &App) -> Option<RepoKey> {
+        let list = self.list.read(cx);
+        let row = list.delegate().row(list.selected_index()?)?;
+        Some(row.key.clone())
+    }
+
+    /// Scrolls the row of `root` into view, when it is shown (R-42).
+    pub(crate) fn scroll_to(&self, root: &RepoKey, window: &mut Window, cx: &mut App) {
+        self.list.update(cx, |list, cx| {
+            let at = list
+                .delegate()
+                .rows()
+                .iter()
+                .position(|row| row.key == *root);
+            if let Some(at) = at {
+                list.scroll_to_item(IndexPath::new(at), ScrollStrategy::Nearest, window, cx);
+            }
+        });
+    }
+
+    /// Where the row of `root` was drawn last, while it is shown.
+    pub(crate) fn row_bounds(&self, root: &RepoKey) -> Option<Bounds<Pixels>> {
+        self.bounds.borrow().get(root).copied()
+    }
+
+    /// Where the list was drawn last.
+    pub(crate) fn list_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.list_bounds.get()
+    }
+
     fn render(&self) -> impl IntoElement + use<> {
+        let drawn = self.list_bounds.clone();
         div()
             .id("repositories-list")
             .test_support()
+            .relative()
             .flex_1()
             .min_h_0()
             .child(List::new(&self.list))
+            .child(
+                canvas(move |at, _, _| drawn.set(Some(at)), |_, (), _, _| {})
+                    .absolute()
+                    .size_full(),
+            )
     }
 }
 
@@ -226,6 +282,12 @@ fn show(
         let at = cursor
             .and_then(|key| rows.iter().position(|row| row.key == key))
             .or_else(|| rows.iter().position(|row| row.chosen));
+        // A row that goes keeps no bounds, so a key-opened menu never
+        // anchors where it was (R-42).
+        list.delegate()
+            .bounds()
+            .borrow_mut()
+            .retain(|root, _| rows.iter().any(|row| row.key == *root));
         list.delegate_mut().set_rows(rows);
         list.set_selected_index(at.map(IndexPath::new), window, cx);
         cx.notify();

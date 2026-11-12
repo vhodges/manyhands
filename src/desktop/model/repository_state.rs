@@ -21,11 +21,12 @@ use manyhands::{
 };
 use time::OffsetDateTime;
 
+pub(crate) use self::menu::MenuChoice;
 #[allow(unused_imports)] // Used from Task 6
 pub(crate) use self::menu::more_items;
 pub(crate) use self::menu::{CHECK_NOW, MenuItem, RETRY_NOW, SET_UP_SHARING, SETTINGS, menu_items};
-#[allow(unused_imports)] // Used from Task 5
-pub(crate) use self::menu::{MenuChoice, OPEN_FOLDER, REMOVE_FROM_MANYHANDS};
+#[cfg(test)]
+pub(crate) use self::menu::{OPEN_FOLDER, REMOVE_FROM_MANYHANDS};
 pub(crate) use self::words::*;
 use super::{
     list_view::RETRY,
@@ -38,8 +39,7 @@ use super::{
 };
 use crate::desktop::services::scheduler::{Holding, SharedCopy};
 
-/// What a repository's state is made from: what the Workspace already has
-/// for it.
+/// What a repository's state is made from: what the Workspace has for it.
 pub(crate) struct RepoFacts<'a> {
     /// The registration and what resolving it gave.
     pub entry: &'a RepositoryEntry,

@@ -3,7 +3,11 @@
 
 use gpui_kit::{App, KeyBinding, NoAction};
 
-use crate::desktop::model::layout::{PanelKind, Side};
+use crate::desktop::model::{
+    layout::{PanelKind, Side},
+    repository_state::{MenuChoice, RowAction},
+    stamp::RepoKey,
+};
 
 gpui_kit::actions!(
     manyhands,
@@ -121,6 +125,9 @@ gpui_kit::actions!(
         ToggleBottomDock,
         /// Open the dock menu of the focused panel toggle.
         OpenDockMenu,
+        /// Open the repository menu: the Kit cursor's row from the list, the
+        /// chosen repository's from a toolbar button (Part D).
+        OpenRepositoryMenu,
         /// Escape in the sheet's Result editor: back to its tab stop, the
         /// sheet left open (R-31).
         LeaveResult,
@@ -136,6 +143,30 @@ pub(crate) struct DockPanel {
     pub panel: PanelKind,
     pub side: Side,
 }
+
+/// What an item of a repository's menu showed when the menu opened, so the
+/// choice is checked against what it would show now (R-35): the state's
+/// action as its `RowAction`, any other item as its label.
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum Shown {
+    Action(RowAction),
+    Label(String),
+}
+
+/// A repository menu's choice (Part D): `choice` on the repository at
+/// `root`, as the item showed it. Data for the menu's items; no key and no
+/// keymap file name it, hence `no_json`.
+#[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
+#[action(namespace = manyhands, no_json)]
+pub(crate) struct RepositoryMenuChoice {
+    pub root: RepoKey,
+    pub choice: MenuChoice,
+    pub shown: Shown,
+}
+
+/// The key context of the Repositories region and its toolbar: `menu` and
+/// `shift-f10` open a repository's menu there (Part H).
+pub(crate) const REPOSITORIES_CONTEXT: &str = "Repositories";
 
 /// The key context of the Documents and Tickets regions (the tickets list
 /// with its filter bar): `secondary-n` opens the focused list's
@@ -260,6 +291,10 @@ pub(crate) fn bind(cx: &mut App) {
         // On a focused panel toggle: its dock menu.
         KeyBinding::new("menu", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
         KeyBinding::new("shift-f10", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
+        // In the Repositories list or toolbar: a repository's menu. The Kit
+        // list binds neither key, so they reach this context (U-1).
+        KeyBinding::new("menu", OpenRepositoryMenu, Some(REPOSITORIES_CONTEXT)),
+        KeyBinding::new("shift-f10", OpenRepositoryMenu, Some(REPOSITORIES_CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
         // The first and last row of a list; the Workspace handles them in
         // the document tree as in the ticket list (`view::documents`).

@@ -116,8 +116,8 @@ impl Workspace {
     }
 
     /// The person pressed `action` on an entry of `reason` whose first
-    /// repository is `root`.
-    fn attend(
+    /// repository is `root`, or chose it from that repository's menu.
+    pub(in crate::desktop::view) fn attend(
         &mut self,
         action: Action,
         reason: &Reason,
