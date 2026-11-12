@@ -4,15 +4,17 @@
 use gpui_kit::{ElementId, TestAppContext};
 use manyhands::{
     canonical::ItemId,
-    repository::{MutationDataDto, PollCompletion},
+    repository::{MutationDataDto, OperationId, PollCompletion},
     results::{CheckpointEffect, Effects, Envelope, PublicationEffect, ResultCode, Scope},
 };
 
 use super::super::rows;
 use crate::desktop::{
-    model::polling::{AttemptTarget, Clock as _, Disposition, TargetKind, TestClock},
+    model::polling::{
+        Answer, AttemptTarget, Clock as _, Disposition, PollAttempt, TargetKind, TestClock,
+    },
     services::{
-        ReadKind,
+        ReadKind, Services,
         poll_convert::{Library, ReportParts},
         requests::{Intent, Lane},
     },
@@ -129,4 +131,35 @@ pub(super) async fn finish(shell: &Shell, intent: Intent, cx: &mut TestAppContex
     });
     shell.until_ended(request, cx).await;
     shell.run(cx);
+}
+
+/// A completed check of `root` that reported `targets`, as the schedule's
+/// own transition takes it; the scheduler notifies, as it does when a poll
+/// is answered.
+pub(super) fn checked(
+    services: &Services,
+    clock: &TestClock,
+    root: &str,
+    targets: Vec<AttemptTarget>,
+    cx: &mut TestAppContext,
+) {
+    let now = clock.now();
+    let attempt = PollAttempt {
+        root: root.to_owned(),
+        operation: OperationId::new(),
+        answer: Answer::Completed,
+        completed_at: Some(now.utc),
+        next_eligible_at: Some(now.utc + time::Duration::seconds(300)),
+        targets,
+        index_pending: false,
+    };
+    services.scheduler().update(cx, |scheduler, cx| {
+        scheduler.schedule_mut().after(&now, &attempt);
+        cx.notify();
+    });
+}
+
+/// The scheduler notifies with nothing new to say.
+pub(super) fn notify(services: &Services, cx: &mut TestAppContext) {
+    services.scheduler().update(cx, |_, cx| cx.notify());
 }

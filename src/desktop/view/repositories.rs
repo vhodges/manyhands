@@ -24,6 +24,8 @@ use gpui_kit::{
 
 pub(crate) use self::body::body;
 use self::row::RepositoryDelegate;
+use manyhands::canonical::ItemId;
+
 use super::workspace::Workspace;
 use crate::desktop::{
     model::{
@@ -90,8 +92,6 @@ pub(crate) fn rows(workspace: &Workspace, cx: &App) -> Vec<RepositoryRow> {
     let chosen = navigation.selected();
     let polling = services.polling();
     let now = scheduler.utc();
-    // Task 4 reads the titles of what is not shared yet.
-    let titles = |_: &manyhands::canonical::ItemId| None;
     let listed = navigation
         .repositories()
         .rows()
@@ -109,6 +109,7 @@ pub(crate) fn rows(workspace: &Workspace, cx: &App) -> Vec<RepositoryRow> {
                 }
                 _ => false,
             };
+            let titles = |id: &ItemId| workspace.share_title(root, id);
             let facts = RepoFacts {
                 entry,
                 kept,

@@ -85,6 +85,7 @@ impl Workspace {
             cx.notify();
         });
         self.pending_reads.retain(|root, _| roots.contains(root));
+        self.retain_titles(&roots);
         // A removed repository's conflict offers go, and a read of them
         // still running lands on nothing.
         let gone: Vec<RepoKey> = self

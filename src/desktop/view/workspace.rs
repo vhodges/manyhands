@@ -12,6 +12,7 @@ mod lists;
 mod render;
 mod repositories;
 mod requests;
+mod titles;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -195,6 +196,8 @@ pub(crate) struct Workspace {
     /// was open, waiting for it to close (R-32).
     pub(in crate::desktop::view) republish_deferred:
         Vec<(super::operations::republish::Republishing, FocusHandle)>,
+    /// The titles of what a repository has not shared yet, and their reads.
+    share_titles: titles::ShareTitles,
 }
 
 impl Workspace {
@@ -212,8 +215,11 @@ impl Workspace {
         let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
         // What the scheduler holds back for the person is drawn in Activity
         // (D6 C3): its entries change with its answers, not with a request.
-        cx.observe(services.scheduler(), |_, _, cx| cx.notify())
-            .detach();
+        cx.observe(services.scheduler(), |this, _, cx| {
+            cx.notify();
+            this.read_share_titles(cx);
+        })
+        .detach();
         let focus_lost = cx.on_focus_lost(window, |this, window, cx| this.focus_lost(window, cx));
         let activation = cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
@@ -386,6 +392,7 @@ impl Workspace {
                 .observe_self(|this, cx| this.content.tabs.share_remotes(&this.navigation, cx)),
             stopping_to_republish: Vec::new(),
             republish_deferred: Vec::new(),
+            share_titles: Default::default(),
         };
         workspace.load_repositories(cx);
         workspace

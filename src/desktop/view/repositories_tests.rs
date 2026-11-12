@@ -35,6 +35,8 @@ use crate::desktop::{
 
 #[path = "repositories_tests/support.rs"]
 mod support;
+#[path = "repositories_tests/titles.rs"]
+mod titles;
 
 use support::*;
 
@@ -444,4 +446,15 @@ async fn rows_and_list_states(cx: &mut TestAppContext) {
     };
     finish(&shell, save, cx).await;
     assert_eq!(state(&shell, "a", cx), Some(to_share(1)));
+}
+
+/// P6, P36: what a row names of what is not shared. A title the loaded
+/// Tickets or Documents list gives costs no read; any other is read once
+/// per repository, held, answered, and named after; a busy read is read
+/// again at the next notify and, after three, the item is named by its ID
+/// for good; notifies while a read is held start nothing and use no tries;
+/// an item with no kind is never read; of seven, five are read.
+#[gpui_kit::test]
+async fn titles_of_what_is_not_shared(cx: &mut TestAppContext) {
+    titles::journey(cx).await;
 }

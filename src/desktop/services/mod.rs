@@ -121,6 +121,10 @@ pub(crate) enum ReadKind {
     /// made ready (D5 A3), apart from `Item`, which the item's tabs reload
     /// under as the run ends.
     MadeReady,
+    /// The Workspace's reads of the titles of what a repository has not
+    /// shared yet (Cycle 03a, R-9): its repository's resolution and one
+    /// `show_item` per unknown ID.
+    ShareTitles,
     /// `observe_path`: the path a clicked link names, and any other path
     /// the desktop asks the library about.
     ObservePath,

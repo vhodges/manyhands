@@ -55,6 +55,10 @@ pub(crate) enum ViewScope {
     /// made ready (D5 design, A3). Each dialog keeps its own generations,
     /// so one scope serves them all.
     MadeReady,
+    /// The Workspace's read of the titles of the items a repository has not
+    /// shared yet (Cycle 03a, R-9). Its answer is merged whatever the
+    /// generation: a title is a fact.
+    ShareTitles(RepoKey),
     /// The resolve conflict sheet's reads of its conflict (D5 B1). Each
     /// sheet keeps its own generations, so one scope serves them all.
     Conflict,
