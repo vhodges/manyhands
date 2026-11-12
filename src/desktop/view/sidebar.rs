@@ -1,22 +1,18 @@
-//! The repository selector: the list in the sidebar, and the selected
-//! repository's detail in the content region.
+//! The selected repository's detail in the content region, until Cycle 03a
+//! Task 7 takes it out (Part F), and the constants other views share. The
+//! Repositories panel itself is `view::repositories`.
 //!
-//! Rows are `list_repositories` rows in the Kit's list, with its arrow and
-//! Enter bindings, labeled with the root's directory name and the full
-//! root as secondary text. The selected repository's row says Selected,
-//! so it is not shown by color alone. Text is fixed per state or
-//! `ResultCode::message()`; no error is ever formatted into it.
+//! Text is fixed per state or `ResultCode::message()`; no error is ever
+//! formatted into it.
 
 use gpui_kit::{
-    App, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, StatefulInteractiveElement, Styled, TestSupportExt, ViewElement,
-    WeakEntity, Window,
+    App, ClickEvent, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    RenderOnce, StatefulInteractiveElement, Styled, TestSupportExt, ViewElement, WeakEntity,
+    Window,
     component::{
-        ActiveTheme, Disableable, Icon, IndexPath, Sizable,
+        ActiveTheme, Disableable, Icon, Sizable,
         button::{Button, ButtonVariants},
-        h_flex,
-        list::{List, ListDelegate, ListItem, ListState as KitListState},
-        v_flex,
+        h_flex, v_flex,
     },
     div,
 };
@@ -26,25 +22,19 @@ use super::{scroll::ContentScroll, workspace::Workspace};
 use crate::desktop::{
     assets::icon_path,
     model::{
-        list_state::{ListState, index_label},
-        navigation::{Navigation, NotReloaded, RepositoryEntry, Resolution},
-        stamp::{RepoKey, SettingsPage},
+        list_state::index_label,
+        navigation::{Navigation, RepositoryEntry, Resolution},
+        stamp::RepoKey,
     },
 };
 
-pub(crate) const REPOSITORIES_HEADING: &str = "Repositories";
 pub(crate) const UNAVAILABLE: &str = "Unavailable";
 pub(crate) const RESOLVING: &str = "Opening";
 pub(crate) const NOTHING_SELECTED: &str = "Select a repository.";
 pub(crate) const RETRY: &str = "Retry";
 pub(crate) const REMOVE: &str = "Remove";
-/// The sidebar's entry to the settings.
-pub(crate) const SETTINGS: &str = "Settings";
-/// The selected repository's row says so in text.
+/// The chosen repository's row says so in text: its mark's label.
 pub(crate) const SELECTED: &str = "Selected";
-/// The rows shown are those of an earlier read: the last one failed or
-/// stayed busy.
-pub(crate) const SHOWING_LAST_READ: &str = "Showing the last list read";
 /// The repository detail's Share main: `repo sync` (design, Lane B, Share
 /// controls).
 pub(crate) const SHARE_MAIN: &str = "Share main";
@@ -62,278 +52,6 @@ pub(crate) fn configuration_label(state: ConfigurationState) -> &'static str {
         ConfigurationState::Valid => "Configuration valid",
         ConfigurationState::Invalid => "Configuration invalid",
         ConfigurationState::Missing => "Configuration missing",
-    }
-}
-
-/// The repository list: `pane` shows its rows.
-pub(crate) fn repositories(
-    navigation: &Navigation,
-    pane: &RepositoriesPane,
-    cx: &mut Context<Workspace>,
-) -> impl IntoElement + use<> {
-    let muted = cx.theme().muted_foreground;
-    let list = navigation.repositories();
-    // A reload that gave no rows: the earlier rows stay, labeled as such,
-    // with what the reload gave.
-    let reload = navigation.not_reloaded().map(|why| match why {
-        NotReloaded::Busy => ListState::<Vec<RepositoryEntry>>::Busy,
-        NotReloaded::Failed(failure) => ListState::Failed(failure.clone()),
-    });
-    let shown = reload.as_ref().unwrap_or(list);
-    let state = match shown {
-        ListState::Ready { rows, complete, .. } if !rows.is_empty() && *complete => None,
-        _ => Some(
-            div()
-                .id("repositories-state")
-                .test_support()
-                .aria_label(shown.label())
-                .text_sm()
-                .text_color(muted)
-                .child(shown.label()),
-        ),
-    };
-    let last_read = reload.is_some().then(|| {
-        div()
-            .id("repositories-last-read")
-            .test_support()
-            .aria_label(SHOWING_LAST_READ)
-            .text_xs()
-            .text_color(muted)
-            .child(SHOWING_LAST_READ)
-    });
-    let failure = match shown {
-        ListState::Busy | ListState::Failed(_) => Some(
-            v_flex()
-                .gap_1()
-                .children(last_read)
-                .children(match shown {
-                    ListState::Failed(failure) => Some(
-                        div()
-                            .id("repositories-failure")
-                            .test_support()
-                            .aria_label(failure.code.message())
-                            .text_sm()
-                            .child(failure.code.message()),
-                    ),
-                    _ => None,
-                })
-                .child(
-                    div().id("repositories-retry").test_support().child(
-                        Button::new("repositories-retry-button")
-                            .label(RETRY)
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.load_repositories(cx)
-                            })),
-                    ),
-                ),
-        ),
-        _ => None,
-    };
-    v_flex()
-        .gap_1()
-        .size_full()
-        .child(
-            div()
-                .text_sm()
-                .font_weight(gpui_kit::FontWeight::BOLD)
-                .child(REPOSITORIES_HEADING),
-        )
-        .child(pane.render())
-        .children(state)
-        .children(failure)
-        .child(
-            div()
-                .id("sidebar-settings")
-                .test_support()
-                .aria_label(SETTINGS)
-                .child(
-                    Button::new("sidebar-settings-button")
-                        .ghost()
-                        .label(SETTINGS)
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.open_settings(SettingsPage::Repositories, window, cx)
-                        })),
-                ),
-        )
-}
-
-/// One row of the selector, as drawn.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct RepositoryRow {
-    pub key: RepoKey,
-    name: String,
-    unavailable: bool,
-    /// The selected repository.
-    selected: bool,
-}
-
-impl RepositoryRow {
-    /// The rows `navigation` lists, in list order.
-    pub(crate) fn rows(navigation: &Navigation) -> Vec<Self> {
-        let selected = navigation.selected();
-        navigation
-            .repositories()
-            .rows()
-            .into_iter()
-            .flatten()
-            .map(|entry| Self::new(entry, selected == Some(entry.key())))
-            .collect()
-    }
-
-    fn new(entry: &RepositoryEntry, selected: bool) -> Self {
-        Self {
-            key: entry.key().clone(),
-            name: entry.name(),
-            unavailable: matches!(entry.resolution, Resolution::Unavailable(_)),
-            selected,
-        }
-    }
-}
-
-/// The Kit list's delegate: the rows, and the row the arrows are on,
-/// which is not the selected repository until Enter or a click selects
-/// it.
-pub(crate) struct RepositoryDelegate {
-    rows: Vec<RepositoryRow>,
-    highlighted: Option<IndexPath>,
-}
-
-impl RepositoryDelegate {
-    pub(crate) fn row(&self, ix: IndexPath) -> Option<&RepositoryRow> {
-        self.rows.get(ix.row)
-    }
-}
-
-impl ListDelegate for RepositoryDelegate {
-    type Item = ListItem;
-
-    fn items_count(&self, _section: usize, _cx: &App) -> usize {
-        self.rows.len()
-    }
-
-    fn render_item(
-        &mut self,
-        ix: IndexPath,
-        _window: &mut Window,
-        cx: &mut Context<KitListState<Self>>,
-    ) -> Option<ListItem> {
-        let row = self.rows.get(ix.row)?;
-        let index = ix.row;
-        let muted = cx.theme().muted_foreground;
-        let unavailable = row.unavailable.then(|| {
-            div()
-                .id(("repo-unavailable", index))
-                .test_support()
-                .aria_label(UNAVAILABLE)
-                .text_xs()
-                .child(UNAVAILABLE)
-        });
-        let selected = row.selected.then(|| {
-            div()
-                .id(("repo-selected", index))
-                .test_support()
-                .aria_label(SELECTED)
-                .text_xs()
-                .font_weight(gpui_kit::FontWeight::BOLD)
-                .child(SELECTED)
-        });
-        // "Selected" has one meaning here. The Kit's wrapper marks the row
-        // the arrows are on as its own cursor state; the chosen repository
-        // says Selected, in text and in its description.
-        let mut entry = v_flex()
-            .id(("repo-row", index))
-            .test_support()
-            .aria_label(row.name.clone());
-        if row.selected {
-            entry = entry.aria_description(SELECTED);
-        }
-        Some(
-            ListItem::new(("repo-item", index)).child(
-                entry
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(div().text_sm().child(row.name.clone()))
-                            .children(selected)
-                            .children(unavailable),
-                    )
-                    .child(
-                        div()
-                            .id(("repo-root", index))
-                            .test_support()
-                            .aria_label(row.key.clone())
-                            .text_xs()
-                            .text_color(muted)
-                            .child(row.key.clone()),
-                    ),
-            ),
-        )
-    }
-
-    fn set_selected_index(
-        &mut self,
-        ix: Option<IndexPath>,
-        _window: &mut Window,
-        cx: &mut Context<KitListState<Self>>,
-    ) {
-        self.highlighted = ix;
-        cx.notify();
-    }
-}
-
-/// The selector's Kit list. A click or Enter on a row emits the Kit's
-/// `ListEvent::Confirm`, which the workspace answers by selecting it.
-pub(crate) struct RepositoriesPane {
-    list: Entity<KitListState<RepositoryDelegate>>,
-}
-
-impl RepositoriesPane {
-    pub(crate) fn new(window: &mut Window, cx: &mut App) -> Self {
-        let delegate = RepositoryDelegate {
-            rows: Vec::new(),
-            highlighted: None,
-        };
-        Self {
-            list: cx.new(|cx| KitListState::new(delegate, window, cx)),
-        }
-    }
-
-    pub(crate) fn list(&self) -> &Entity<KitListState<RepositoryDelegate>> {
-        &self.list
-    }
-
-    /// Shows `rows` when they differ from those shown. The row the arrows
-    /// are on stays where the new rows still have it; with none, they
-    /// start from the selected repository.
-    pub(crate) fn set(&self, rows: Vec<RepositoryRow>, window: &mut Window, cx: &mut App) {
-        self.list.update(cx, |list, cx| {
-            if list.delegate().rows == rows {
-                return;
-            }
-            let highlighted = list
-                .selected_index()
-                .and_then(|ix| list.delegate().rows.get(ix.row))
-                .map(|row| row.key.clone());
-            let at = highlighted
-                .and_then(|key| rows.iter().position(|row| row.key == key))
-                .or_else(|| rows.iter().position(|row| row.selected));
-            list.delegate_mut().rows = rows;
-            list.set_selected_index(at.map(IndexPath::new), window, cx);
-            cx.notify();
-        });
-    }
-
-    pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
-        self.list.update(cx, |list, cx| list.focus(window, cx));
-    }
-
-    fn render(&self) -> impl IntoElement + use<> {
-        div()
-            .id("repositories-list")
-            .test_support()
-            .flex_1()
-            .min_h_0()
-            .child(List::new(&self.list))
     }
 }
 

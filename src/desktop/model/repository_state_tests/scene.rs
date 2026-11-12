@@ -30,7 +30,6 @@ use crate::desktop::{
 };
 
 pub(super) const ROOT: &str = "/work/alpha";
-pub(super) const NAME: &str = "alpha";
 /// The `n`th item's ID text, a valid ULID.
 pub(super) fn ulid(n: u32) -> String {
     format!("01JD{n:022}")

@@ -31,6 +31,7 @@ use crate::desktop::{
     view::{
         confirm::{CONFIRM, DRAFTS_REMAIN, FILES_REMAIN, PREPARE_AGAIN},
         harness::{Shell, key, wait_until},
+        repositories::NOT_UPDATED_BUSY,
     },
 };
 
@@ -664,8 +665,9 @@ fn tabs_close_once_the_list_no_longer_gives_their_root(cx: &mut TestAppContext) 
         .update(cx, |workspace, cx| workspace.load_repositories(cx));
     cx.executor().advance_clock(Duration::from_secs(1));
     shell.run(cx);
-    assert!(
-        shell.present("repositories-last-read", cx),
+    assert_eq!(
+        shell.label("repositories-alert", cx).as_deref(),
+        Some(NOT_UPDATED_BUSY),
         "the reload stayed busy"
     );
     assert_eq!(tabs(&shell, cx), 1, "a busy reload keeps the tabs");

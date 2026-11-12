@@ -228,7 +228,6 @@ impl Scheduler {
     }
 
     /// The publication remote `root` is checked against.
-    #[allow(dead_code)] // Used from Task 3
     pub(crate) fn shared_copy(&self, root: &Root) -> Option<&SharedCopy> {
         self.shared_copies.get(root)
     }

@@ -64,6 +64,7 @@ icon_assets!(
         ArrowUpDown,
         ListFilter,
         FileExclamationPoint,
+        Lock,
     ]
 );
 

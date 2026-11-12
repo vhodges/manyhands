@@ -16,9 +16,10 @@ use crate::desktop::{
     },
     view::{
         dock::Slot,
+        repositories,
         scroll::ContentScroll,
         shell::{title::window_title, title_bar},
-        sidebar::{self, RepositoryRow},
+        sidebar,
     },
 };
 use gpui_kit::{
@@ -66,7 +67,7 @@ impl Workspace {
     }
 
     fn repositories_region(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let repositories = sidebar::repositories(&self.navigation, &self.repositories_pane, cx);
+        let repositories = repositories::body(&self.navigation, &self.repositories_pane, cx);
         self.region(Region::Repositories, window, cx, repositories)
             .size_full()
             .into_any_element()
@@ -202,8 +203,9 @@ impl Render for Workspace {
                 self.navigation.set_pane(pane);
             }
         }
-        self.repositories_pane
-            .set(RepositoryRow::rows(&self.navigation), window, cx);
+        // The rows follow the model after this frame, not during it (R-8).
+        let rows = repositories::rows(self, cx);
+        self.repositories_pane.show_after_frame(rows, window, cx);
         // The title bar draws the string the window is titled with, which is
         // set only when it changes (R-14).
         let title = window_title(self.navigation.selected_entry());

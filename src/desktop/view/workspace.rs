@@ -36,8 +36,8 @@ use super::{
     footer::Footer,
     item::{ChipField, ItemPane},
     passphrase::PassphraseDialog,
+    repositories::RepositoriesPane,
     settings::{SettingsEvent, SettingsHost},
-    sidebar::RepositoriesPane,
     tabs::TabContent,
     tickets::TicketsPane,
 };
@@ -263,7 +263,7 @@ impl Workspace {
                 _ => {}
             },
         );
-        let repositories_pane = RepositoriesPane::new(window, cx);
+        let repositories_pane = RepositoriesPane::new(cx.entity().downgrade(), window, cx);
         let repository_events = cx.subscribe(repositories_pane.list(), |this, list, event, cx| {
             if let ListEvent::Confirm(ix) = event {
                 let key = list.read(cx).delegate().row(*ix).map(|row| row.key.clone());

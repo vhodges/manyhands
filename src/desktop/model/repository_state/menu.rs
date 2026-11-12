@@ -32,7 +32,9 @@ pub(crate) enum MenuChoice {
     OpenFolder,
     Settings,
     Remove,
+    #[allow(dead_code)] // Used from Task 6
     Refresh,
+    #[allow(dead_code)] // Used from Task 6
     Rebuild,
 }
 
@@ -117,6 +119,7 @@ pub(crate) fn menu_items(facts: &RepoFacts<'_>, state: &RepoState) -> Vec<MenuIt
 
 /// The More menu's items: Refresh, Rebuild the search index and Remove from
 /// Manyhands…, each disabled while no repository is chosen.
+#[allow(dead_code)] // Used from Task 6
 pub(crate) fn more_items(chosen: Option<&RepoKey>) -> Vec<MenuItem> {
     use MenuChoice::*;
     let enabled = chosen.is_some();

@@ -5,7 +5,7 @@ use gpui_kit::AssetSource;
 use super::{DesktopAssets, icon_path};
 
 /// The item view's Lucide icons (design R-52).
-const ICONS: [&str; 47] = [
+const ICONS: [&str; 48] = [
     "folder-git-2",
     "ticket",
     "file-text",
@@ -53,6 +53,7 @@ const ICONS: [&str; 47] = [
     "arrow-up-down",
     "list-filter",
     "file-exclamation-point",
+    "lock",
 ];
 
 #[test]

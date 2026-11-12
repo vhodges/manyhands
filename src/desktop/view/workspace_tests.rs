@@ -22,9 +22,8 @@ use super::{QuitPhase, REGIONS, Region, Workspace};
 use crate::desktop::{
     keys::{self, Quit},
     model::{
-        layout::PanelKind,
-        list_state::{LABEL_BUSY, index_label},
-        navigation::Resolution,
+        layout::PanelKind, list_state::index_label, navigation::Resolution,
+        repository_state::CANT_OPEN,
     },
     open_test_window_with,
     services::{
@@ -38,7 +37,8 @@ use crate::desktop::{
     },
     view::{
         harness::wait_until,
-        sidebar::{SELECTED, SHOWING_LAST_READ, configuration_label},
+        repositories::NOT_UPDATED_BUSY,
+        sidebar::{SELECTED, configuration_label},
     },
 };
 
@@ -692,6 +692,11 @@ fn row(index: usize) -> (&'static str, usize) {
     ("repo-row", index)
 }
 
+/// The action of the repository list's alert row: Retry.
+fn alert_action() -> gpui_kit::ElementId {
+    (gpui_kit::ElementId::from("repositories-alert"), "action").into()
+}
+
 #[gpui_kit::test]
 fn the_fixtures_repositories_are_listed_by_name(cx: &mut TestAppContext) {
     let shell = Shell::new(cx);
@@ -701,8 +706,6 @@ fn the_fixtures_repositories_are_listed_by_name(cx: &mut TestAppContext) {
     assert_eq!(shell.label(row(0), cx).as_deref(), Some("a"));
     assert_eq!(shell.label(row(1), cx).as_deref(), Some("b"));
     assert!(!shell.present(row(2), cx), "no row the read did not give");
-    // Each row carries its full root as secondary text.
-    assert_eq!(shell.label(("repo-root", 0usize), cx), Some(key(&shell.a)));
 }
 
 #[gpui_kit::test]
@@ -773,7 +776,10 @@ fn a_renamed_away_repository_is_unavailable_until_retry_finds_it_again(cx: &mut 
     assert!(shell.present("selection-remove", cx));
     assert!(!shell.present("selection-configuration", cx));
     // The row says so in text, not by color alone.
-    assert!(shell.present(("repo-unavailable", 0usize), cx));
+    assert_eq!(
+        shell.label(("repo-state", 0usize), cx).as_deref(),
+        Some(CANT_OPEN)
+    );
 
     fs::rename(&away, &shell.a).unwrap();
     shell.click("selection-retry", cx);
@@ -782,7 +788,10 @@ fn a_renamed_away_repository_is_unavailable_until_retry_finds_it_again(cx: &mut 
         Resolution::Resolved(_)
     ));
     assert!(!shell.present("selection-unavailable", cx));
-    assert!(!shell.present(("repo-unavailable", 0usize), cx));
+    assert_ne!(
+        shell.label(("repo-state", 0usize), cx).as_deref(),
+        Some(CANT_OPEN)
+    );
     assert!(shell.present("selection-configuration", cx));
 }
 
@@ -893,9 +902,9 @@ fn a_selection_that_goes_drops_a_held_id_read(cx: &mut TestAppContext) {
 }
 
 /// A list reload that stays busy keeps the rows of the last good read
-/// shown, labeled busy and as the last list read, with Retry; the
-/// sidebar does not collapse to "Busy". Retry, once the lease is let go,
-/// reads the list again and the labels go.
+/// shown, under the busy alert with Retry; the panel does not collapse to
+/// "Busy". Retry, once the lease is let go, reads the list again and the
+/// alert goes.
 #[gpui_kit::test]
 fn a_busy_list_reload_keeps_the_last_rows_with_a_label(cx: &mut TestAppContext) {
     let shell = Shell::new(cx);
@@ -915,21 +924,16 @@ fn a_busy_list_reload_keeps_the_last_rows_with_a_label(cx: &mut TestAppContext) 
     assert_eq!(shell.label(row(0), cx).as_deref(), Some("a"));
     assert_eq!(shell.label(row(1), cx).as_deref(), Some("b"));
     assert_eq!(
-        shell.label("repositories-state", cx).as_deref(),
-        Some(LABEL_BUSY)
+        shell.label("repositories-alert", cx).as_deref(),
+        Some(NOT_UPDATED_BUSY)
     );
-    assert_eq!(
-        shell.label("repositories-last-read", cx).as_deref(),
-        Some(SHOWING_LAST_READ)
-    );
-    assert!(shell.present("repositories-retry", cx));
+    assert!(shell.present(alert_action(), cx));
     assert_eq!(shell.selected(cx), Some(key(&shell.a)));
     assert_eq!(shell.label("selection-name", cx).as_deref(), Some("a"));
 
     drop(lease);
-    shell.click("repositories-retry", cx);
-    assert!(!shell.present("repositories-state", cx));
-    assert!(!shell.present("repositories-last-read", cx));
+    shell.click(alert_action(), cx);
+    assert!(!shell.present("repositories-alert", cx));
     assert_eq!(shell.label(row(1), cx).as_deref(), Some("b"));
 }
 

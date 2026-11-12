@@ -21,12 +21,11 @@ use manyhands::{
 };
 use time::OffsetDateTime;
 
-#[allow(unused_imports)] // Used from Task 3
-pub(crate) use self::menu::{
-    CHECK_NOW, MenuChoice, MenuItem, OPEN_FOLDER, REMOVE_FROM_MANYHANDS, RETRY_NOW, SET_UP_SHARING,
-    SETTINGS, menu_items, more_items,
-};
-#[allow(unused_imports)] // Used from Task 3
+#[allow(unused_imports)] // Used from Task 6
+pub(crate) use self::menu::more_items;
+pub(crate) use self::menu::{CHECK_NOW, MenuItem, RETRY_NOW, SET_UP_SHARING, SETTINGS, menu_items};
+#[allow(unused_imports)] // Used from Task 5
+pub(crate) use self::menu::{MenuChoice, OPEN_FOLDER, REMOVE_FROM_MANYHANDS};
 pub(crate) use self::words::*;
 use super::{
     list_view::RETRY,
