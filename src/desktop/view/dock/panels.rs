@@ -10,9 +10,8 @@
 
 use gpui_kit::{
     App, AppContext as _, Context, Empty, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, WeakEntity, Window,
+    IntoElement, Render, SharedString, Subscription, WeakEntity, Window,
     component::dock::{BasePanel, Panel, PanelControl, PanelEvent},
-    div, px,
 };
 
 use crate::desktop::{
@@ -20,14 +19,12 @@ use crate::desktop::{
         documents::document_count,
         layout::{ITEM_AREA_NAME, PanelKind},
     },
-    view::{
-        shell::tokens::chrome_colors,
-        workspace::{Region, Workspace},
-    },
+    view::workspace::{Region, Workspace},
 };
 
-/// Size of a header's count (`02`).
-const COUNT_SIZE: f32 = 11.;
+/// What a header says in place of a count while a list reloads over the
+/// rows it kept (R-36).
+pub(crate) const UPDATING: &str = "Updating\u{2026}";
 
 /// What a panel draws.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -139,20 +136,6 @@ impl Panel for RegionPanel {
         }
     }
 
-    /// The count the header shows beside the title (R-22).
-    fn title_suffix(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let Slot::Panel(kind) = self.slot else {
-            return None;
-        };
-        let count = listed(self.workspace.upgrade()?.read(cx), kind)?;
-        Some(
-            div()
-                .text_size(px(COUNT_SIZE))
-                .text_color(chrome_colors(cx).muted)
-                .child(count.to_string()),
-        )
-    }
-
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
         None
     }
@@ -163,18 +146,55 @@ impl Panel for RegionPanel {
     }
 }
 
-/// How many rows the panel's list has, once it is loaded: repositories
-/// listed, tickets listed under the current filters, documents listed.
-/// Activity has none (R-22).
-fn listed(workspace: &Workspace, kind: PanelKind) -> Option<usize> {
+/// What a panel's header says beside its title: how many rows its list
+/// has, or that the list is updating.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Count {
+    Rows(usize),
+    Updating,
+}
+
+impl Count {
+    /// The count as the header draws it, and as its accessible name.
+    pub(super) fn text(self) -> String {
+        match self {
+            Self::Rows(rows) => rows.to_string(),
+            Self::Updating => UPDATING.to_owned(),
+        }
+    }
+}
+
+/// The count the header shows (R-22, R-11, R-36): repositories listed,
+/// tickets listed under the filters (nonconforming ones included),
+/// documents listed. While a list reloads over the rows it kept, it says
+/// "Updating…"; on a first load, and for Activity, there is none.
+pub(super) fn count(workspace: &Workspace, kind: PanelKind) -> Option<Count> {
     match kind {
-        PanelKind::Repositories => workspace.navigation().repositories().rows().map(Vec::len),
-        PanelKind::Tickets => workspace.tickets().state().rows().map(Vec::len),
-        PanelKind::Documents => workspace
-            .documents()
-            .state()
+        PanelKind::Repositories => workspace
+            .navigation()
+            .repositories()
             .rows()
-            .map(|rows| document_count(rows)),
+            .map(|rows| Count::Rows(rows.len())),
+        PanelKind::Tickets => {
+            let tickets = workspace.tickets();
+            if tickets.list().reloading() {
+                return Some(Count::Updating);
+            }
+            tickets
+                .state()
+                .rows()
+                .map(|_| Count::Rows(tickets.view().listed))
+        }
+        PanelKind::Documents => {
+            let documents = workspace.documents();
+            if documents.list().reloading() {
+                return Some(Count::Updating);
+            }
+            documents
+                .state()
+                .rows()
+                .map(|rows| Count::Rows(document_count(rows)))
+        }
         PanelKind::Activity => None,
     }
 }

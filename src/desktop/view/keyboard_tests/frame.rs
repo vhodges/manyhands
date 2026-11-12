@@ -169,7 +169,7 @@ impl Walk {
     }
 
     /// `secondary-2`, then the arrows reach the document tree's row `label`,
-    /// a document's title or a file's path, and Enter opens it into a tab.
+    /// a document's title or a file's name, and Enter opens it into a tab.
     /// Focus stays in the tree.
     pub(super) fn open_document(&self, label: &str, cx: &mut TestAppContext) {
         self.keys("secondary-2", cx);

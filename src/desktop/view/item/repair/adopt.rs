@@ -23,9 +23,12 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::{Offer, unmanaged};
+use super::Offer;
 use crate::desktop::{
-    model::stamp::{Generations, Stamp, ViewScope},
+    model::{
+        item::unmanaged,
+        stamp::{Generations, Stamp, ViewScope},
+    },
     services::{ReadKind, ReadResult},
     view::item::ItemPane,
 };

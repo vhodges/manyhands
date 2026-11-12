@@ -1,233 +1,220 @@
 //! Rendering the Tickets and Documents lists; read transitions live in
-//! `workspace/lists`. The ticket list opens with Find, then New ticket…, its
-//! create dialog (`view::create`), as the document tree does with New
-//! document….
+//! `workspace/lists`. The ticket list opens with the filter bar; New ticket…
+//! and the Documents buttons are the panels' toolbars, in their headers.
+
+use std::rc::Rc;
 
 use super::{
-    create::NEW_TICKET,
-    sidebar,
-    tickets::{CLOSURE_FILTERS, READINESS_FILTERS},
-    workspace::Workspace,
+    documents::Unsaved,
+    rows::{EmptyAction, alert_row, empty_state, skeleton_rows},
+    workspace::{Region, Workspace, unless_dialog},
 };
-use crate::desktop::model::{
-    list_state::{ListState, Rows},
-    navigation::Pane,
+use crate::desktop::{
+    keys::{SelectFirst, SelectLast, TICKET_LIST_CONTEXT},
+    model::{
+        documents::node_count,
+        list_view::{
+            BodyInput, ListAction, ListBody, ListKind, SELECT_A_REPOSITORY, list_body, loading_text,
+        },
+        markers::row_markers,
+        ticket_view::footnote,
+    },
+    view::shell::tokens::chrome_colors,
 };
 use gpui_kit::{
-    App, ClickEvent, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Role,
-    StatefulInteractiveElement, Styled, TestSupportExt, Window,
-    component::{ActiveTheme, Selectable, button::Button, h_flex, v_flex},
-    div,
+    AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window, component::v_flex, div, px,
 };
-use manyhands::repository::ReadinessFilter;
+use manyhands::repository::{ClosureFilter, ItemDtoKind, ReadinessFilter};
 
-pub(super) fn choice_ids() -> impl Iterator<Item = &'static str> {
-    CLOSURE_FILTERS
-        .iter()
-        .map(|(id, ..)| *id)
-        .chain(READINESS_FILTERS.iter().map(|(id, ..)| *id))
+/// The rows of a first load's skeleton.
+const SKELETON_ROWS: usize = 6;
+
+/// The ids of the elements a list's state is drawn as.
+#[derive(Clone, Copy)]
+struct StateIds {
+    skeleton: &'static str,
+    alert: &'static str,
+    empty: &'static str,
 }
 
+const TICKET_STATE: StateIds = StateIds {
+    skeleton: "tickets-skeleton",
+    alert: "tickets-alert",
+    empty: "tickets-empty",
+};
+
+const DOCUMENT_STATE: StateIds = StateIds {
+    skeleton: "documents-skeleton",
+    alert: "documents-alert",
+    empty: "documents-empty",
+};
+
 impl Workspace {
-    /// The Documents region's body: New document…, New folder… and the tree.
+    /// The Documents region's body (Part F): the state of the tree, and the
+    /// tree itself. New document…, New folder… and Collapse all are the
+    /// panel's toolbar, in its header (Part G).
+    ///
+    /// The tree is drawn in every state while a repository is selected, so
+    /// focus always has its element (R-34); the state, if any, is drawn
+    /// above it.
     pub(super) fn documents_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let body = match self.documents().repo() {
-            None => v_flex().child(div().text_sm().child(sidebar::NOTHING_SELECTED)),
-            Some(_) => v_flex()
-                .gap_1()
-                .flex_1()
-                .min_h_0()
-                .child(list_status("documents-state", self.documents().state(), cx))
-                .child(self.documents_pane().render(cx.entity().downgrade(), cx)),
-        };
-        v_flex()
+        let name = self.documents_repo_name();
+        let list = self.documents().list();
+        let body = list_body(
+            list,
+            BodyInput {
+                kind: ListKind::Documents,
+                repo: name.as_deref(),
+                listed: list.rows().map_or(0, |rows| node_count(rows)),
+                // Documents have no filter to narrow them.
+                elsewhere: 0,
+                closure: ClosureFilter::Open,
+                narrowed: false,
+            },
+        );
+        let state = self.list_state(ListKind::Documents, DOCUMENT_STATE, body, cx);
+        let pane = v_flex()
             .id("documents-pane")
             .test_support()
             .gap_2()
-            .size_full()
-            .child(body)
+            .size_full();
+        let Some(repo) = self.documents().repo().cloned() else {
+            return pane.child(state);
+        };
+        let drafts = self.services().drafts().clone();
+        let unsaved: Unsaved = Rc::new(move |id, cx| {
+            let held = drafts.read(cx).held_by(&repo, ItemDtoKind::Document, id);
+            row_markers(held, false, false, ClosureFilter::Open).unsaved
+        });
+        let focus = self.region_focus(Region::Documents);
+        pane.child(state).child(self.documents_pane().render(
+            cx.entity().downgrade(),
+            focus,
+            unsaved,
+            cx,
+        ))
     }
 
-    /// The Tickets region's body: Find, then New ticket…, the filters, the
-    /// list and Why blocked (decision 4).
+    /// The Tickets region's body (Part C): the filter bar, what the ID read
+    /// says, the hint, the column header, the state of the list,
+    /// the list itself, Why blocked and the footnote.
+    ///
+    /// The list is drawn in every state while a repository is selected, so
+    /// focus always has its element (R-34); the state, if any, is drawn
+    /// above it.
     pub(super) fn tickets_body(
         &mut self,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let closure = self.tickets().query().closure;
-        let filters = h_flex()
-            .gap_1()
-            .children(CLOSURE_FILTERS.map(|(id, label, _, filter)| {
-                let workspace = cx.entity().downgrade();
-                choice(
-                    id,
-                    label,
-                    closure == filter,
-                    self.choice_focus(id),
-                    move |_, _, cx| {
-                        let _ = workspace.update(cx, |this, cx| this.set_closure(filter, cx));
-                    },
-                )
-            }));
-        let showing = CLOSURE_FILTERS
-            .iter()
-            .find(|(.., filter)| *filter == closure)
-            .map(|(_, _, showing, _)| *showing);
-        let readiness = self.tickets().query().readiness;
-        let readiness_filters =
-            h_flex()
-                .gap_1()
-                .children(READINESS_FILTERS.map(|(id, label, _, filter)| {
-                    let workspace = cx.entity().downgrade();
-                    choice(
-                        id,
-                        label,
-                        readiness == filter,
-                        self.choice_focus(id),
-                        move |_, _, cx| {
-                            let _ = workspace.update(cx, |this, cx| this.set_readiness(filter, cx));
-                        },
-                    )
-                }));
-        let readiness_showing = READINESS_FILTERS
-            .iter()
-            .find(|(.., filter)| *filter == readiness)
-            .map(|(_, _, showing, _)| *showing);
-        let showing_text = |id: &'static str, text: &'static str| {
-            div()
-                .id(id)
-                .test_support()
-                .aria_label(text)
-                .text_xs()
-                .child(text)
-        };
-        let header = v_flex()
-            .gap_1()
-            .child(filters)
-            .children(showing.map(|text| showing_text("tickets-showing", text)))
-            .child(readiness_filters)
-            .children(
-                readiness_showing.map(|text| showing_text("tickets-readiness-showing", text)),
-            );
-        // New ticket…, above the filters, where the Documents pane
-        // has New document… (`03-panels.md`): its dialog
-        // (`view::create`).
-        let new_ticket = {
-            let workspace = cx.entity().downgrade();
-            h_flex().child(div().id("new-ticket").test_support().child(
-                Button::new("new-ticket-button").label(NEW_TICKET).on_click(
-                    move |_, window, cx| {
-                        let _ = workspace
-                            .update(cx, |this, cx| this.new_item(Pane::Tickets, window, cx));
-                    },
-                ),
-            ))
-        };
-        let body = match self.tickets().repo() {
-            None => v_flex()
-                .gap_1()
-                .child(header)
-                .child(div().text_sm().child(sidebar::NOTHING_SELECTED)),
-            Some(_) => v_flex()
-                .gap_1()
-                .flex_1()
-                .min_h_0()
-                .child(new_ticket)
-                .child(header)
-                .child(list_status("tickets-state", self.tickets().state(), cx))
-                .child(self.tickets_pane().render())
-                .children(
-                    (readiness == Some(ReadinessFilter::Blocked))
-                        .then(|| self.tickets_pane().why_blocked(window, cx)),
-                ),
-        };
-        v_flex()
+        let colors = chrome_colors(cx);
+        let name = self.tickets_repo_name();
+        let view = self.tickets().view();
+        let query = self.tickets().query();
+        let body = list_body(
+            self.tickets().list(),
+            BodyInput {
+                kind: ListKind::Tickets,
+                repo: name.as_deref(),
+                listed: view.listed,
+                elsewhere: view.elsewhere,
+                closure: query.closure,
+                narrowed: query.narrowed(),
+            },
+        );
+        let footnote = name
+            .as_deref()
+            .filter(|_| view.counts.is_some())
+            .map(|name| footnote(view, query, name));
+        let blocked = query.readiness == Some(ReadinessFilter::Blocked);
+        let state = self.list_state(ListKind::Tickets, TICKET_STATE, body, cx);
+        let pane = v_flex()
             .id("tickets-pane")
             .test_support()
-            .gap_2()
             .size_full()
-            .child(self.find_bar(cx))
-            .child(body)
-    }
-}
-
-/// Choice state remains text as well as a selected accessibility signal.
-fn choice(
-    id: &'static str,
-    label: &'static str,
-    chosen: bool,
-    focus: Option<&FocusHandle>,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let mut wrapper = div().id(id).test_support();
-    if let Some(focus) = focus {
-        wrapper = wrapper.track_focus(focus);
-    }
-    wrapper
-        .role(Role::Tab)
-        .aria_label(label)
-        .aria_selected(chosen)
-        .child(
-            Button::new((id, 0usize))
-                .label(label)
-                .selected(chosen)
-                .on_click(on_click),
-        )
-}
-
-fn list_status<T: Rows>(
-    name: &'static str,
-    list: &ListState<T>,
-    cx: &mut Context<Workspace>,
-) -> impl IntoElement + use<T> {
-    let muted = cx.theme().muted_foreground;
-    let state = match list {
-        ListState::Ready {
-            rows,
-            complete,
-            index,
-        } if !rows.is_empty()
-            && *complete
-            && index
-                .as_ref()
-                .is_none_or(|index| index.state == manyhands::repository::IndexState::Current) =>
-        {
-            None
+            .child(self.filter_bar(window, cx))
+            .children(self.filter_status(cx));
+        if name.is_none() {
+            return pane.child(state);
         }
-        _ => Some(
-            div()
-                .id((name, 0usize))
-                .test_support()
-                .aria_label(list.label())
-                .text_sm()
-                .text_color(muted)
-                .child(list.label()),
-        ),
-    };
-    let failure =
-        match list {
-            ListState::Busy | ListState::Failed(_) => Some(
-                v_flex()
-                    .gap_1()
-                    .children(match list {
-                        ListState::Failed(failure) => Some(
-                            div()
-                                .id((name, 1usize))
-                                .test_support()
-                                .aria_label(failure.code.message())
-                                .text_sm()
-                                .child(failure.code.message()),
-                        ),
-                        _ => None,
-                    })
-                    .child(div().id((name, 2usize)).test_support().child(
-                        Button::new((name, 3usize)).label(sidebar::RETRY).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| this.load_lists(cx)),
-                        ),
-                    )),
-            ),
-            _ => None,
+        let list = self
+            .tickets_pane()
+            .render()
+            .key_context(TICKET_LIST_CONTEXT)
+            .on_action(unless_dialog(cx, |this, _: &SelectFirst, window, cx| {
+                this.select_edge(false, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &SelectLast, window, cx| {
+                this.select_edge(true, window, cx)
+            }));
+        pane.children(self.tickets_hint(cx))
+            .child(self.column_header(window, cx))
+            .child(state)
+            .child(list)
+            .children(blocked.then(|| self.tickets_pane().why_blocked(window, cx)))
+            .children(footnote.map(|text| {
+                div()
+                    .id("tickets-footnote")
+                    .test_support()
+                    .aria_label(text.clone())
+                    .flex_none()
+                    .w_full()
+                    .px(px(10.))
+                    .py(px(4.))
+                    .border_t_1()
+                    .border_color(colors.border)
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(px(11.))
+                    .text_color(colors.muted)
+                    .child(text)
+            }))
+    }
+
+    /// What the body draws above a list: the message when no repository is
+    /// selected, the skeleton of a first load, an alert row or an empty
+    /// state, with the action each offers.
+    fn list_state(
+        &self,
+        kind: ListKind,
+        ids: StateIds,
+        body: ListBody,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let act = move |action: ListAction, cx: &mut Context<Self>| {
+            let workspace = cx.entity().downgrade();
+            move |window: &mut Window, cx: &mut App| {
+                let _ = workspace.update(cx, |this, cx| this.list_action(action, kind, window, cx));
+            }
         };
-    v_flex().gap_1().children(state).children(failure)
+        match body {
+            ListBody::NoRepository => div()
+                .px(px(12.))
+                .py(px(8.))
+                .text_size(px(13.))
+                .child(SELECT_A_REPOSITORY)
+                .into_any_element(),
+            ListBody::Skeleton => {
+                skeleton_rows(ids.skeleton, SKELETON_ROWS, loading_text(kind), cx)
+                    .into_any_element()
+            }
+            ListBody::Rows { alert: None } => div().into_any_element(),
+            ListBody::Rows { alert: Some(alert) } | ListBody::Problem(alert) => {
+                let action = act(alert.action, cx);
+                alert_row(ids.alert, &alert, action, cx).into_any_element()
+            }
+            ListBody::Empty { text, action } => {
+                let action: Option<EmptyAction> = action.map(|action| {
+                    let handler = act(action, cx);
+                    (
+                        action.label(kind).into(),
+                        Box::new(handler) as Box<dyn Fn(&mut Window, &mut App)>,
+                    )
+                });
+                empty_state(ids.empty, &text, action, cx).into_any_element()
+            }
+        }
+    }
 }

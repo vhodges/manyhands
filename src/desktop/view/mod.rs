@@ -31,6 +31,7 @@ mod polling_window;
 pub(crate) mod quit;
 pub(crate) mod relationships;
 pub(crate) mod retire_asks;
+pub(crate) mod rows;
 pub(crate) mod scroll;
 pub(crate) mod settings;
 pub(crate) mod shell;

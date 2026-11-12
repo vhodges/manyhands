@@ -5,14 +5,14 @@ use gpui_kit::{Action, Keystroke, TestAppContext};
 use super::{
     CloseInspect, CloseTab, Find, FocusContent, FocusNavigation, FocusOperations,
     FocusRepositories, NextRegion, NextTab, OpenDockMenu, OpenDrafts, OpenSelected, OpenSettings,
-    PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, ToggleBottomDock, ToggleLeftDock,
-    ToggleRightDock, bind,
+    PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, SelectFirst, SelectLast,
+    ToggleBottomDock, ToggleLeftDock, ToggleRightDock, bind,
 };
 
 #[gpui_kit::test]
 fn each_key_is_bound_to_its_action(cx: &mut TestAppContext) {
     cx.update(bind);
-    let table: [(&str, Box<dyn Action>); 22] = [
+    let table: [(&str, Box<dyn Action>); 24] = [
         ("f6", Box::new(NextRegion)),
         ("shift-f6", Box::new(PreviousRegion)),
         ("secondary-1", Box::new(FocusRepositories)),
@@ -30,6 +30,9 @@ fn each_key_is_bound_to_its_action(cx: &mut TestAppContext) {
         ("secondary-q", Box::new(Quit)),
         // In the document tree; the ticket list is the Kit's own.
         ("enter", Box::new(OpenSelected)),
+        // In the ticket list and the document tree: the first and last row.
+        ("home", Box::new(SelectFirst)),
+        ("end", Box::new(SelectLast)),
         // In the Drafts page's Inspect panel.
         ("escape", Box::new(CloseInspect)),
         // The dock keys, in the workspace (Bold wins in an editable editor, decision 2).

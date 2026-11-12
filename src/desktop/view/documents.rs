@@ -1,67 +1,88 @@
-//! The Documents pane: the selected repository's tree in the Kit's tree,
-//! with its arrow bindings. Folders show by name, empty ones say so;
-//! documents show by title with their path as secondary text; a
-//! nonconforming document shows its path and problem code. Enter or a
-//! click opens a document. New document… opens its dialog
-//! (`view::create`), and New folder… its own, under the folder selected
-//! in the tree (`view::new_folder`, E-10).
+//! The Documents pane: the selected repository's tree in the Kit's base
+//! tree, one `ListRow` per node (Part F), always drawn while a repository is
+//! selected (R-34). A folder shows a chevron, its name, and its document
+//! count while it is closed; a document its title and, while a draft of it
+//! is held, the unsaved marker; a nonconforming file its file name in amber.
+//! A row's path and the reason for its mark are its tooltip, which is also
+//! its accessible description.
+//!
+//! The tree's own keys are up, down, left and right; Enter and Home and End
+//! are the Workspace's (`workspace::lists`). A click on a document opens it;
+//! a click on a folder toggles it, the tree's own doing. The folders the
+//! person closed are the model's (`Documents::expansion`): the Workspace
+//! hears the tree's events and keeps them, and a rebuild sets each item's
+//! state from them. New document…, New folder… and Collapse all are the
+//! panel's toolbar, in its header (`dock::header::toolbar`).
 
 use std::{collections::HashMap, rc::Rc};
 
 use gpui_kit::{
-    App, AppContext, ClickEvent, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, TestSupportExt, WeakEntity, Window,
+    App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    ScrollStrategy, SharedString, StyleRefinement, Styled, TestSupportExt, WeakEntity, Window,
+    base::Tree,
     component::{
-        ActiveTheme,
-        button::Button,
-        h_flex,
-        list::ListItem,
-        tree::{TreeItem, TreeState, tree},
+        scroll::ScrollableElement,
+        tree::{TreeItem, TreeState},
         v_flex,
     },
-    div, px,
+    div,
+};
+use manyhands::canonical::ItemId;
+
+use self::row::document_row;
+use super::workspace::{Workspace, unless_dialog};
+use crate::desktop::{
+    keys::{DOCUMENTS_CONTEXT, SelectFirst, SelectLast},
+    model::{
+        doc_rows::{DocRow, Expansion, doc_row, visible_selection},
+        documents::{TreeNode, document_id, folder_id, unreadable_id},
+        navigation::OpenTarget,
+        stamp::RepoKey,
+    },
 };
 
-use super::{create::NEW_DOCUMENT, workspace::Workspace};
-use crate::desktop::model::{
-    documents::TreeNode,
-    navigation::{OpenTarget, Pane},
-    stamp::RepoKey,
-};
+mod row;
 
-pub(crate) const NONCONFORMING: &str = "Nonconforming";
-pub(crate) const EMPTY_FOLDER: &str = "Empty folder";
 pub(crate) const NEW_FOLDER: &str = "New folder\u{2026}";
+pub(crate) const COLLAPSE_ALL: &str = "Collapse all folders";
+/// An empty folder's trailing cell, where a count would be (decision 14).
+pub(crate) const EMPTY_TRAILING: &str = "empty";
 
-/// A folder's name: the last part of its path.
-fn folder_name(path: &str) -> &str {
-    path.rsplit_once('/').map_or(path, |(_, name)| name)
-}
+/// Whether the person has unsaved work on a document, by its ID.
+pub(crate) type Unsaved = Rc<dyn Fn(&ItemId, &App) -> bool>;
 
-/// What a node is labeled by: a folder by name, a document by title, and
-/// a nonconforming document, which has no title, by path.
-pub(crate) fn node_label(node: &TreeNode) -> String {
-    match node {
-        TreeNode::Folder { path, .. } => folder_name(path).to_owned(),
-        TreeNode::Document(item) => item.title.clone().unwrap_or_else(|| item.path.clone()),
-    }
+/// A drawn document: what a click or Enter opens.
+struct Document {
+    target: OpenTarget,
+    /// The path, which a test reads back (E-8).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    path: String,
 }
 
 /// A drawn node's facts, by its tree id.
-enum Node {
-    Folder {
-        label: String,
-        empty: bool,
-        /// Below the repository root, from `docs`: where New folder… makes
-        /// a folder while this one is selected.
-        path: String,
-    },
-    Document {
-        label: String,
-        path: String,
-        problem: Option<&'static str>,
-        target: OpenTarget,
-    },
+struct Node {
+    /// The row while its folder is closed, and while it is open: the tree
+    /// toggles a folder with no word to the pane, so both are kept. A node
+    /// that is not a folder with child nodes has the one row twice.
+    rows: [DocRow; 2],
+    /// A folder's path, below the repository root: where New folder… makes
+    /// a folder while this one is selected.
+    folder: Option<String>,
+    document: Option<Document>,
+}
+
+impl Node {
+    fn row(&self, open: bool) -> &DocRow {
+        &self.rows[usize::from(open)]
+    }
+
+    /// The ID a held draft of the node's document would name.
+    fn item_id(&self) -> Option<&ItemId> {
+        match &self.document.as_ref()?.target {
+            OpenTarget::Item { id, .. } => Some(id),
+            OpenTarget::Inspect { .. } => None,
+        }
+    }
 }
 
 /// The tree's Kit state, and what each of its ids stands for.
@@ -78,18 +99,34 @@ impl DocumentsPane {
         }
     }
 
-    /// Shows `nodes`, the tree of `repo`, every folder open. The selected
-    /// row stays selected when the new tree still has it: a reload after a
-    /// refresh does not lose the user's place.
-    pub(crate) fn set(&mut self, repo: &RepoKey, nodes: &[TreeNode], cx: &mut App) {
+    /// The Kit's state, whose events tell the Workspace what the person
+    /// opened and closed.
+    pub(crate) fn tree(&self) -> &Entity<TreeState> {
+        &self.tree
+    }
+
+    /// Shows `nodes`, the tree of `repo`, each folder open or closed as
+    /// `expansion` says. The selected row stays selected when the new tree
+    /// still has it, and goes to its nearest visible folder when a
+    /// collapsed one hides it: a reload after a refresh does not lose the
+    /// user's place. The selection is set by index, never by an item,
+    /// which would expand its ancestors (R-27).
+    pub(crate) fn set(
+        &mut self,
+        repo: &RepoKey,
+        nodes: &[TreeNode],
+        expansion: &Expansion,
+        cx: &mut App,
+    ) {
         let mut facts = HashMap::new();
-        let items = items(repo, nodes, &mut facts);
+        let items = items(repo, nodes, expansion, &mut facts);
         self.nodes = Rc::new(facts);
         self.tree.update(cx, |tree, cx| {
-            let selected = tree.selected_item().map(|item| item.id.clone());
+            let selected = tree.selected_item().map(|item| item.id.to_string());
             tree.set_items(items, cx);
-            if let Some(selected) = selected {
-                let at = tree.index_of(&selected);
+            let visible = selected.and_then(|id| visible_selection(nodes, expansion, &id));
+            if let Some(visible) = visible {
+                let at = tree.index_of(&SharedString::from(visible));
                 tree.set_selected_index(at, cx);
             }
         });
@@ -106,154 +143,111 @@ impl DocumentsPane {
         self.tree.update(cx, |tree, cx| tree.focus(window, cx));
     }
 
+    /// Selects the first or the last row and scrolls to it (R-15). Nothing
+    /// when there is none.
+    pub(crate) fn select_edge(&self, last: bool, cx: &mut App) {
+        self.tree.update(cx, |tree, cx| {
+            let count = (0..).take_while(|ix| tree.entry(*ix).is_some()).count();
+            if count == 0 {
+                return;
+            }
+            let (ix, strategy) = if last {
+                (count - 1, ScrollStrategy::Bottom)
+            } else {
+                (0, ScrollStrategy::Top)
+            };
+            tree.set_selected_index(Some(ix), cx);
+            tree.scroll_to_item(ix, strategy);
+        });
+    }
+
     /// What the selected node opens; nothing for a folder.
     pub(crate) fn selected_target(&self, cx: &App) -> Option<OpenTarget> {
         let id = &self.tree.read(cx).selected_item()?.id;
-        match self.nodes.get(id)? {
-            Node::Document { target, .. } => Some(target.clone()),
-            Node::Folder { .. } => None,
-        }
+        Some(self.nodes.get(id)?.document.as_ref()?.target.clone())
     }
 
     /// The path of the selected folder; nothing for a document, or with
     /// nothing selected.
     pub(crate) fn selected_folder(&self, cx: &App) -> Option<String> {
         let id = &self.tree.read(cx).selected_item()?.id;
-        match self.nodes.get(id)? {
-            Node::Folder { path, .. } => Some(path.clone()),
-            Node::Document { .. } => None,
-        }
+        self.nodes.get(id)?.folder.clone()
     }
 
-    /// The tree, with New document… and New folder… above it.
+    /// The selected folder, when Enter can toggle it (R-24): its path and
+    /// whether it is open. A folder with no child nodes cannot toggle.
+    pub(crate) fn toggle_target(&self, cx: &App) -> Option<(String, bool)> {
+        let tree = self.tree.read(cx);
+        let entry = tree.selected_entry()?;
+        if !entry.is_folder() {
+            return None;
+        }
+        let folder = self.nodes.get(&entry.item().id)?.folder.clone()?;
+        Some((folder, entry.is_expanded()))
+    }
+
+    /// The paths of the documents drawn, in the tree's order (E-8).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn document_paths(&self, cx: &App) -> Vec<String> {
+        let tree = self.tree.read(cx);
+        (0..)
+            .map_while(|ix| tree.entry(ix))
+            .filter_map(|entry| self.nodes.get(&entry.item().id)?.document.as_ref())
+            .map(|document| document.path.clone())
+            .collect()
+    }
+
+    /// The tree. `focus` is
+    /// the Documents region's handle: its selected row draws a ring while
+    /// the region holds focus; `unsaved` says which documents hold a draft.
     pub(crate) fn render(
         &self,
         workspace: WeakEntity<Workspace>,
+        focus: FocusHandle,
+        unsaved: Unsaved,
         cx: &mut Context<Workspace>,
     ) -> impl IntoElement + use<> {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
         let nodes = self.nodes.clone();
-        let opener = workspace.clone();
-        let folder_opener = workspace.clone();
-        let rows = tree(&self.tree, move |ix, entry, selected, _, _| {
-            let indent = px(12. * entry.depth() as f32);
-            let item = ListItem::new(("doc-item", ix))
-                .pl(indent)
-                .selected(selected);
-            let Some(node) = nodes.get(&entry.item().id) else {
-                return item;
-            };
-            let (label, secondary) = match node {
-                Node::Folder { label, empty, .. } => (
-                    label.clone(),
-                    empty.then(|| {
-                        h_flex().child(
-                            div()
-                                .id(("doc-empty", ix))
-                                .test_support()
-                                .aria_label(EMPTY_FOLDER)
-                                .text_xs()
-                                .text_color(muted)
-                                .child(EMPTY_FOLDER),
-                        )
-                    }),
-                ),
-                Node::Document {
-                    label,
-                    path,
-                    problem,
-                    ..
-                } => (
-                    label.clone(),
-                    Some(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .id(("doc-path", ix))
-                                    .test_support()
-                                    .aria_label(path.clone())
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(path.clone()),
-                            )
-                            .children(problem.map(|code| {
-                                h_flex()
-                                    .gap_1()
-                                    .text_xs()
-                                    .child(
-                                        div()
-                                            .id(("doc-nonconforming", ix))
-                                            .test_support()
-                                            .aria_label(NONCONFORMING)
-                                            .child(NONCONFORMING),
-                                    )
-                                    .child(
-                                        div()
-                                            .id(("doc-problem", ix))
-                                            .test_support()
-                                            .aria_label(code)
-                                            .child(code),
-                                    )
-                            })),
+        let scroll = self.tree.read(cx).scroll_handle().clone();
+        let rows = Tree::new(&self.tree)
+            .item(move |ix, entry, state, window, cx| {
+                let Some(node) = nodes.get(&entry.item().id) else {
+                    return div().into_any_element();
+                };
+                let held = node.item_id().is_some_and(|id| unsaved(id, cx));
+                document_row(
+                    ix,
+                    entry,
+                    node,
+                    (
+                        state.is_selected(),
+                        focus.contains_focused(window, cx),
+                        held,
                     ),
-                ),
-            };
-            let item = match node {
-                Node::Document { target, .. } => {
-                    let target = target.clone();
-                    let workspace = workspace.clone();
-                    item.on_click(move |_: &ClickEvent, _, cx| {
-                        let _ = workspace
-                            .update(cx, |workspace, cx| workspace.open_item(target.clone(), cx));
-                    })
-                }
-                Node::Folder { .. } => item,
-            };
-            item.child(
-                v_flex()
-                    .id(("doc-node", ix))
-                    .test_support()
-                    .aria_label(label.clone())
-                    .aria_selected(selected)
-                    .child(div().text_sm().child(label))
-                    .children(secondary),
-            )
-        });
-        // New document…, before New folder… (`03-panels.md`): each opens
-        // its dialog (`view::create`, `view::new_folder`).
-        let new_document = div().id("new-document").test_support().child(
-            Button::new("new-document-button")
-                .label(NEW_DOCUMENT)
-                .on_click(move |_: &ClickEvent, window, cx| {
-                    let _ = opener.update(cx, |workspace, cx| {
-                        workspace.new_item(Pane::Documents, window, cx)
-                    });
-                }),
-        );
-        let new_folder = div().id("new-folder").test_support().child(
-            Button::new("new-folder-button").label(NEW_FOLDER).on_click(
-                move |_: &ClickEvent, window, cx| {
-                    let _ =
-                        folder_opener.update(cx, |workspace, cx| workspace.new_folder(window, cx));
-                },
-            ),
-        );
-        v_flex()
-            .gap_1()
-            .size_full()
-            .min_h_0()
-            .child(h_flex().gap_2().child(new_document).child(new_folder))
-            .child(
-                div()
-                    .id("documents-tree")
-                    .test_support()
-                    .key_context(crate::desktop::keys::DOCUMENTS_CONTEXT)
-                    .flex_1()
-                    .min_h_0()
-                    .child(rows),
-            )
+                    workspace.clone(),
+                    cx,
+                )
+                .into_any_element()
+            })
+            .list_style(StyleRefinement::default().flex_grow_1().size_full())
+            .relative()
+            .size_full();
+        v_flex().gap_1().size_full().min_h_0().child(
+            div()
+                .id("documents-tree")
+                .test_support()
+                .key_context(DOCUMENTS_CONTEXT)
+                .on_action(unless_dialog(cx, |this, _: &SelectFirst, _, cx| {
+                    this.select_document_edge(false, cx)
+                }))
+                .on_action(unless_dialog(cx, |this, _: &SelectLast, _, cx| {
+                    this.select_document_edge(true, cx)
+                }))
+                .flex_1()
+                .min_h_0()
+                .child(rows)
+                .vertical_scrollbar(&scroll),
+        )
     }
 }
 
@@ -261,46 +255,56 @@ impl DocumentsPane {
 fn items(
     repo: &RepoKey,
     nodes: &[TreeNode],
+    expansion: &Expansion,
     facts: &mut HashMap<SharedString, Node>,
 ) -> Vec<TreeItem> {
     nodes
         .iter()
         .map(|node| {
-            let label = node_label(node);
+            let rows = [doc_row(node, false), doc_row(node, true)];
+            let label = rows[0].label.clone();
             match node {
-                TreeNode::Folder {
-                    path,
-                    empty,
-                    children,
-                } => {
-                    let id: SharedString = format!("folder:{path}").into();
-                    let children = items(repo, children, facts);
+                TreeNode::Folder { path, children, .. } => {
+                    let id: SharedString = folder_id(path).into();
+                    let children = items(repo, children, expansion, facts);
                     facts.insert(
                         id.clone(),
-                        Node::Folder {
-                            label: label.clone(),
-                            empty: *empty,
-                            path: path.clone(),
+                        Node {
+                            rows,
+                            folder: Some(path.clone()),
+                            document: None,
                         },
                     );
-                    TreeItem::new(id, label).expanded(true).children(children)
+                    TreeItem::new(id, label)
+                        .expanded(expansion.is_expanded(path))
+                        .children(children)
                 }
                 TreeNode::Document(item) => {
-                    // Paths are unique within one context's list; a
-                    // document in an item worktree has its own.
-                    let id: SharedString =
-                        format!("document:{}:{}", item.context.worktree, item.path).into();
-                    let problem = match item.id {
-                        Some(_) => None,
-                        None => item.problems.first().map(|problem| problem.code.as_str()),
-                    };
+                    let id: SharedString = document_id(item).into();
                     facts.insert(
                         id.clone(),
-                        Node::Document {
-                            label: label.clone(),
-                            path: item.path.clone(),
-                            problem,
-                            target: OpenTarget::for_item(repo, item),
+                        Node {
+                            rows,
+                            folder: None,
+                            document: Some(Document {
+                                target: OpenTarget::for_item(repo, item),
+                                #[cfg(all(test, feature = "desktop-test-support"))]
+                                path: item.path.clone(),
+                            }),
+                        },
+                    );
+                    TreeItem::new(id, label)
+                }
+                // It selects, and it opens nothing: no `Document`, so
+                // neither a click nor Enter has a target (R-38).
+                TreeNode::Unreadable(file) => {
+                    let id: SharedString = unreadable_id(file).into();
+                    facts.insert(
+                        id.clone(),
+                        Node {
+                            rows,
+                            folder: None,
+                            document: None,
                         },
                     );
                     TreeItem::new(id, label)

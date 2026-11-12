@@ -848,6 +848,50 @@ fn a_list_reload_after_a_second_actor_removes_the_selection_shows_unavailable(
     }));
 }
 
+/// A selection that goes, as when its repository is removed, drops a held
+/// ID read, whatever loaded before: after a reload that was no change of
+/// repository, the read must still land on nothing and open no tab.
+#[gpui_kit::test]
+fn a_selection_that_goes_drops_a_held_id_read(cx: &mut TestAppContext) {
+    use crate::desktop::model::find::FindState;
+
+    let shell = Shell::new(cx);
+    shell.click(row(0), cx);
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.reload_lists(cx));
+    shell.visual(cx).run_until_parked();
+
+    let held = shell.backend.hold_read(ReadKind::Item);
+    shell.frame(cx, |window, cx| {
+        shell.workspace.update(cx, |workspace, cx| {
+            workspace.set_filter_text("01ARZ3NDEKTSV4RRFFQ69G5FK9", window, cx);
+            workspace.submit_filter(window, cx);
+        })
+    });
+    shell.visual(cx).run_until_parked();
+    let state = |cx: &mut TestAppContext| {
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.find_state().clone())
+    };
+    assert_eq!(state(cx), FindState::Searching);
+
+    shell.workspace.update(cx, |workspace, cx| {
+        assert!(workspace.navigation.forget(&key(&shell.a)));
+        workspace.clear_lists(cx);
+    });
+    assert_eq!(state(cx), FindState::Idle, "dropped with the selection");
+    let _ = held.send(());
+    shell.visual(cx).run_until_parked();
+    assert_eq!(state(cx), FindState::Idle, "and never lands");
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.tab_keys().is_empty())
+    );
+}
+
 /// A list reload that stays busy keeps the rows of the last good read
 /// shown, labeled busy and as the last list read, with Retry; the
 /// sidebar does not collapse to "Busy". Retry, once the lease is let go,

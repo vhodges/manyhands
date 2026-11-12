@@ -276,7 +276,7 @@ fn side_layout(
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "dock_tests/mod.rs"]
-mod tests;
+pub(in crate::desktop::view) mod tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "dock/restore_tests.rs"]

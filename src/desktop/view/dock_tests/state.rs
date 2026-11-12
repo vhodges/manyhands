@@ -25,8 +25,8 @@ use manyhands::repository::ItemDtoKind;
 const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
 const SECOND: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG1";
 
-/// P2: Tickets, with a filter, Find text and a selection, is hidden and
-/// shown again, and has them all.
+/// P2, P26: Tickets, with a filter, filter text, a sort, a readiness and a
+/// selection, is hidden and shown again, and has them all.
 #[gpui_kit::test]
 fn a_hidden_panel_keeps_its_state(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -38,17 +38,23 @@ fn a_hidden_panel_keeps_its_state(cx: &mut TestAppContext) {
     shell.click(("repo-row", 0usize), cx);
     shell.use_list(Pane::Tickets, cx);
     shell.click("filter-all", cx);
+    // Filter text that keeps both rows, a sort and a readiness.
+    act(&shell, cx, |workspace, window, cx| {
+        workspace.set_filter_text("s", window, cx)
+    });
+    shell.click("sort-title", cx);
+    shell.click("filter-readiness", cx);
+    shell.keys("down down enter", cx);
     shell.keys("secondary-2 down down", cx);
     let input = shell
         .workspace
         .read_with(cx, |workspace, _| workspace.find_input().clone());
-    shell.frame(cx, |window, cx| {
-        input.update(cx, |input, cx| input.set_value("needle", window, cx))
-    });
     let state = |shell: &Shell, cx: &mut TestAppContext| {
         (
             shell.selected("filter-all", cx),
             input.read_with(cx, |input, _| input.value().to_string()),
+            shell.label("filter-readiness", cx),
+            shell.label("sort-title", cx),
             shell.workspace.read_with(cx, |workspace, cx| {
                 workspace.tickets_pane().selected_row(cx)
             }),
@@ -57,9 +63,18 @@ fn a_hidden_panel_keeps_its_state(cx: &mut TestAppContext) {
     };
     let before = state(&shell, cx);
     assert!(
-        before.0 && before.2.is_some() && !before.3.is_empty(),
+        before.0 && before.4.is_some() && before.5.len() == 2,
         "setup: {before:?}"
     );
+    assert_eq!(before.1, "s");
+    assert_eq!(before.2.as_deref(), Some("Readiness: ready"));
+    assert_eq!(before.3.as_deref(), Some("Sort by title, A to Z"));
+    // The model keeps them too, not only the elements.
+    let query = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.tickets().query().clone());
+    assert_eq!(query.text, "s");
+    assert!(query.readiness.is_some());
 
     toggle_panel(&shell, Tickets, cx);
     assert!(!shell.present(Region::Tickets.id(), cx));

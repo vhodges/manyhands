@@ -20,7 +20,7 @@ gpui_kit::actions!(
         FocusContent,
         /// Focus the operation area.
         FocusOperations,
-        /// Find an item by short code or ID.
+        /// Focus the filter input, where a ULID opens its item.
         Find,
         /// Show the next tab.
         NextTab,
@@ -43,6 +43,10 @@ gpui_kit::actions!(
         /// Open the selected row of the document tree. The ticket list is
         /// the Kit's, whose own `enter` binding opens its row.
         OpenSelected,
+        /// Select the first row of the ticket list or the document tree.
+        SelectFirst,
+        /// Select the last row of the ticket list or the document tree.
+        SelectLast,
         /// Scroll the content region up by a page.
         ScrollPageUp,
         /// Scroll the content region down by a page.
@@ -134,7 +138,7 @@ pub(crate) struct DockPanel {
 }
 
 /// The key context of the Documents and Tickets regions (the tickets list
-/// with its find bar and filters): `secondary-n` opens the focused list's
+/// with its filter bar): `secondary-n` opens the focused list's
 /// New document… or New ticket… there, and nowhere else.
 pub(crate) const NAVIGATION_CONTEXT: &str = "Navigation";
 
@@ -145,6 +149,10 @@ pub(crate) const PANEL_TOGGLE_CONTEXT: &str = "PanelToggle";
 /// The key context of the document tree's wrapper, where `enter` opens
 /// the selected row.
 pub(crate) const DOCUMENTS_CONTEXT: &str = "Documents";
+
+/// The key context of the ticket list's wrapper, where Home and End select
+/// the first and last row. The filter input, outside it, keeps its own.
+pub(crate) const TICKET_LIST_CONTEXT: &str = "TicketList";
 
 /// The key context of the content region, where PageUp, PageDown, Home
 /// and End scroll it. A focused control that binds them itself, such as
@@ -253,6 +261,12 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("menu", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
         KeyBinding::new("shift-f10", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
+        // The first and last row of a list; the Workspace handles them in
+        // the document tree as in the ticket list (`view::documents`).
+        KeyBinding::new("home", SelectFirst, Some(TICKET_LIST_CONTEXT)),
+        KeyBinding::new("end", SelectLast, Some(TICKET_LIST_CONTEXT)),
+        KeyBinding::new("home", SelectFirst, Some(DOCUMENTS_CONTEXT)),
+        KeyBinding::new("end", SelectLast, Some(DOCUMENTS_CONTEXT)),
         // New document… or New ticket…, the focused list's, in either
         // list's region (both carry this context) and nowhere else.
         KeyBinding::new("secondary-n", NewItem, Some(NAVIGATION_CONTEXT)),

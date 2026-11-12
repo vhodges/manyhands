@@ -164,6 +164,11 @@ impl Workspace {
     }
 }
 
+/// Whether a dialog or the details sheet is open (R-60).
+pub(in crate::desktop::view) fn modal_open(window: &mut Window, cx: &mut App) -> bool {
+    window.has_active_dialog(cx) || window.has_active_sheet(cx)
+}
+
 /// Except Quit, workspace actions must not escape a dialog's focus trap,
 /// nor act behind the details sheet (R-60).
 pub(in crate::desktop::view) fn unless_dialog<A: 'static>(
@@ -171,7 +176,7 @@ pub(in crate::desktop::view) fn unless_dialog<A: 'static>(
     f: impl Fn(&mut Workspace, &A, &mut Window, &mut Context<Workspace>) + 'static,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
     cx.listener(move |this, action: &A, window, cx| {
-        if !window.has_active_dialog(cx) && !window.has_active_sheet(cx) {
+        if !modal_open(window, cx) {
             f(this, action, window, cx)
         }
     })
@@ -179,6 +184,7 @@ pub(in crate::desktop::view) fn unless_dialog<A: 'static>(
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.apply_filter_reset(window, cx);
         self.sync_tickets(window, cx);
         self.apply_review(window, cx);
         self.open_deferred_republish(window, cx);

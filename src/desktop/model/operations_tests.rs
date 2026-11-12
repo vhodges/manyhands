@@ -289,6 +289,83 @@ fn a_finished_settings_request_does_not_mark_items_changed() {
     assert!(changed.items.is_empty());
 }
 
+/// R-27: a New folder that made its folder, and a Move that put its
+/// document in place (or found it there), name that place, so the Documents
+/// tree opens the folders above it. A refused request, and any other
+/// intent, name nothing.
+#[test]
+fn a_folder_made_or_a_document_moved_names_its_place_to_reveal() {
+    let intents = || {
+        [
+            Intent::FolderCreate {
+                root: PathBuf::from("/fixture/a"),
+                path: "docs/guides/new".to_owned(),
+            },
+            Intent::DocumentMove {
+                root: PathBuf::from("/fixture/b"),
+                id: "01ARZ3NDEKTSV4RRFFQ69G5FD0".parse().unwrap(),
+                observation: None,
+                destination_path: PathBuf::from("docs/plans/moved.md"),
+                destination_observation: "absent".to_owned(),
+            },
+            Intent::IndexRefresh {
+                root: PathBuf::from("/fixture/c"),
+            },
+        ]
+    };
+    let table = [
+        (
+            "made",
+            ResultCode::Ok,
+            Some(Outcome::Success),
+            vec![
+                ("/fixture/a", "docs/guides/new"),
+                ("/fixture/b", "docs/plans/moved.md"),
+            ],
+        ),
+        (
+            "made with its index refresh owed",
+            ResultCode::DiscoveryPending,
+            Some(Outcome::Partial),
+            vec![
+                ("/fixture/a", "docs/guides/new"),
+                ("/fixture/b", "docs/plans/moved.md"),
+            ],
+        ),
+        (
+            "found already done",
+            ResultCode::AlreadyApplied,
+            Some(Outcome::Noop),
+            vec![
+                ("/fixture/a", "docs/guides/new"),
+                ("/fixture/b", "docs/plans/moved.md"),
+            ],
+        ),
+        ("refused", ResultCode::Busy, None, Vec::new()),
+    ];
+    for (name, code, outcome, want) in table {
+        let mut operations = Operations::default();
+        for (n, intent) in intents().into_iter().enumerate() {
+            let mut queued = request(n as u64 + 1);
+            queued.intent = intent;
+            operations.apply(WorkerEvent::Queued(queued));
+            let envelope = match outcome {
+                Some(outcome) => Envelope::mutation("request", Scope::default(), outcome, code),
+                None => Envelope::failure("request", Scope::default(), code, vec![]),
+            };
+            operations.apply(WorkerEvent::Finished(
+                DesktopRequestId(n as u64 + 1),
+                Box::new(envelope),
+            ));
+        }
+        let want: Vec<(String, String)> = want
+            .into_iter()
+            .map(|(root, path)| (root.to_owned(), path.to_owned()))
+            .collect();
+        assert_eq!(operations.take_changed().reveal, want, "{name}");
+    }
+}
+
 /// A removal that succeeded names its root removed, so the workspace
 /// closes its tabs and lets its selection go, and so does one that found
 /// the registration already gone (ruling R-T13a). A refused one does not.

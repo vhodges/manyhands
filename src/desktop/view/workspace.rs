@@ -24,6 +24,7 @@ use gpui_kit::{
         dock::DockArea,
         input::{InputEvent, InputState},
         list::ListEvent,
+        tree::TreeEvent,
     },
 };
 
@@ -54,9 +55,11 @@ use crate::desktop::{
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use focus::REGIONS;
 pub(crate) use focus::Region;
+pub(in crate::desktop::view) use focus::ToolbarButton;
 #[cfg(all(test, feature = "desktop-test-support"))]
 use gpui_kit::App;
 use manyhands::drafts::DraftId;
+pub(in crate::desktop::view) use render::{modal_open, unless_dialog};
 
 /// The tabs, the cached Settings entity and the cached Drafts page share
 /// one content region; `content.rs` routes between them.
@@ -104,18 +107,32 @@ pub(crate) struct Workspace {
     /// The folder and document reads, in parallel under one stamp.
     folder_read: Option<Task<()>>,
     document_read: Option<Task<()>>,
+    /// The index status read beside them, for the files they could not
+    /// read (Part I), under the lists' stamps.
+    status_read: Option<Task<()>>,
     tickets: Tickets,
     tickets_pane: TicketsPane,
     ticket_read: Option<Task<()>>,
-    /// Rows go to the Kit list at the next frame, which supplies its window.
-    tickets_changed: bool,
+    /// The filter input, which was Find's: its text is the query's text
+    /// (R-30).
     find_input: Entity<InputState>,
+    /// The ID read behind Enter in the input, and its task.
     find: Find,
     find_read: Option<Task<()>>,
-    /// Around each match's Open, whose own focus is the Kit's.
-    find_focus: Vec<FocusHandle>,
-    /// Around each pane and filter choice, by element ID.
+    /// The repository changed, so the filter text is cleared at the next
+    /// render, which has the window `set_value` needs (R-30, R-35).
+    filter_reset: bool,
+    /// The selection whose change `filter_reset` already answered; `None`
+    /// when no change is pending an answer, `Some(None)` for a change to no
+    /// selection.
+    change_applied: Option<Option<RepoKey>>,
+    /// Around each lifecycle segment and sort header, by element ID: tab
+    /// stops of their own.
     choice_focus: HashMap<&'static str, FocusHandle>,
+    /// The panel toolbars' buttons, in `ToolbarButton::ALL` order. The
+    /// Workspace owns them, so a dock `load` or move, which changes the
+    /// header's element paths, keeps them (R-37).
+    toolbar_focus: [FocusHandle; 4],
     _find_events: Subscription,
     content: ContentArea,
     /// The operation area's scroll: a control in it that takes focus is
@@ -162,6 +179,8 @@ pub(crate) struct Workspace {
     /// did meanwhile (D5 A2, P26).
     _activation: Subscription,
     _ticket_events: Subscription,
+    /// The folders the person opens and closes in the tree.
+    _tree_events: Subscription,
     repositories_pane: RepositoriesPane,
     _repository_events: Subscription,
     remove_focus: FocusHandle,
@@ -207,29 +226,43 @@ impl Workspace {
                 .update(cx, |workspace, cx| workspace.request_quit(window, cx))
                 .unwrap_or(true)
         });
+        let documents_pane = DocumentsPane::new(cx);
+        let tree_events = cx.subscribe(documents_pane.tree(), |this, _, event: &TreeEvent, cx| {
+            this.tree_event(event, cx)
+        });
         let tickets_pane = TicketsPane::new(window, cx);
         let ticket_events = cx.subscribe(tickets_pane.list(), |this, list, event, cx| {
             // The Why blocked panel shows the selected row.
             cx.notify();
             if let ListEvent::Confirm(ix) = event {
+                // An unreadable file selects and opens nothing (R-38).
                 let target = this.tickets.repo().and_then(|repo| {
                     list.read(cx)
                         .delegate()
                         .row(*ix)
-                        .map(|row| row.target(repo))
+                        .and_then(|row| row.open_target(repo))
                 });
                 if let Some(target) = target {
                     this.open_item(target, cx);
                 }
             }
         });
-        let find_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder(super::find::FIND_LABEL));
-        let find_events = cx.subscribe(&find_input, |this, _, event: &InputEvent, cx| {
-            if let InputEvent::PressEnter { .. } = event {
-                this.submit_find(cx);
-            }
+        let find_input = cx.new(|cx| {
+            let mut input =
+                InputState::new(window, cx).placeholder(super::tickets::FILTER_PLACEHOLDER);
+            // Escape clears the text.
+            input.set_clean_on_escape(true);
+            input
         });
+        let find_events = cx.subscribe_in(
+            &find_input,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } => this.submit_filter(window, cx),
+                InputEvent::Change => this.filter_text_changed(cx),
+                _ => {}
+            },
+        );
         let repositories_pane = RepositoriesPane::new(window, cx);
         let repository_events = cx.subscribe(repositories_pane.list(), |this, list, event, cx| {
             if let ListEvent::Confirm(ix) = event {
@@ -287,20 +320,27 @@ impl Workspace {
             list_read: None,
             resolve_read: None,
             documents: Documents::default(),
-            documents_pane: DocumentsPane::new(cx),
+            documents_pane,
             folder_read: None,
             document_read: None,
+            status_read: None,
             tickets: Tickets::default(),
             tickets_pane,
             ticket_read: None,
-            tickets_changed: false,
             find_input,
             find: Find::default(),
             find_read: None,
-            find_focus: Vec::new(),
-            choice_focus: super::lists::choice_ids()
-                .map(|id| (id, cx.focus_handle()))
+            filter_reset: false,
+            change_applied: None,
+            choice_focus: super::tickets::choice_ids()
+                .map(|id| (id, cx.focus_handle().tab_stop(true)))
                 .collect(),
+            toolbar_focus: [
+                cx.focus_handle(),
+                cx.focus_handle(),
+                cx.focus_handle(),
+                cx.focus_handle(),
+            ],
             _find_events: find_events,
             operations_scroll,
             content: ContentArea {
@@ -337,6 +377,7 @@ impl Workspace {
             _focus_lost: focus_lost,
             _activation: activation,
             _ticket_events: ticket_events,
+            _tree_events: tree_events,
             repositories_pane,
             _repository_events: repository_events,
             remove_focus: cx.focus_handle(),
@@ -374,6 +415,11 @@ impl Workspace {
     pub(crate) fn documents(&self) -> &Documents {
         &self.documents
     }
+    /// A test's way to leave the tree as a person would: a folder collapsed.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(super) fn documents_mut(&mut self) -> &mut Documents {
+        &mut self.documents
+    }
     pub(super) fn tickets(&self) -> &Tickets {
         &self.tickets
     }
@@ -382,6 +428,15 @@ impl Workspace {
     }
     pub(super) fn tickets_pane(&self) -> &TicketsPane {
         &self.tickets_pane
+    }
+    /// The focus handle of `region`, which tells rows whether it holds
+    /// focus.
+    pub(in crate::desktop::view) fn region_focus(&self, region: Region) -> FocusHandle {
+        self.regions[region.index()].clone()
+    }
+    /// The handle a toolbar button tracks (R-37).
+    pub(in crate::desktop::view) fn toolbar_focus(&self, button: ToolbarButton) -> &FocusHandle {
+        &self.toolbar_focus[button.index()]
     }
     pub(super) fn choice_focus(&self, id: &str) -> Option<&FocusHandle> {
         self.choice_focus.get(id)

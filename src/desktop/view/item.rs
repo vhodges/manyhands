@@ -87,6 +87,7 @@ use crate::desktop::{
 };
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use banners::{LINK_NOT_FOUND, LINK_NOT_OPENED, NEAREST_MATCH};
+pub(crate) use chips::relative_time;
 pub(crate) use chips::{ChipField, OpenDetails};
 pub(super) use details::text;
 #[cfg(all(test, feature = "desktop-test-support"))]

@@ -147,6 +147,11 @@ impl Workspace {
                 self.clear_lists(cx);
             }
         }
+        // Before the lists reload, so the rebuilt tree shows each place
+        // (R-27).
+        for (root, path) in &changed.reveal {
+            self.documents.reveal(root, path);
+        }
         let listed = self.listed().unwrap_or_default();
         for root in &changed.roots {
             if listed.contains(root) {

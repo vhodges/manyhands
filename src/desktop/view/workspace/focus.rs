@@ -105,6 +105,51 @@ impl Region {
     }
 }
 
+/// A button of a panel's toolbar (Part G): the focus handles the Workspace
+/// owns for them, and the panel each belongs to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::desktop::view) enum ToolbarButton {
+    NewTicket,
+    NewDocument,
+    NewFolder,
+    CollapseAll,
+}
+
+impl ToolbarButton {
+    pub(in crate::desktop::view) const ALL: [Self; 4] = [
+        Self::NewTicket,
+        Self::NewDocument,
+        Self::NewFolder,
+        Self::CollapseAll,
+    ];
+
+    /// The element's id: the body buttons' ids for the three New buttons.
+    pub(in crate::desktop::view) fn id(self) -> &'static str {
+        match self {
+            Self::NewTicket => "new-ticket-button",
+            Self::NewDocument => "new-document-button",
+            Self::NewFolder => "new-folder-button",
+            Self::CollapseAll => "collapse-all-button",
+        }
+    }
+
+    pub(in crate::desktop::view) fn index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|button| *button == self)
+            .expect("every button is listed")
+    }
+
+    /// The panel's region that holds focus while the button does
+    /// (decision 18).
+    pub(in crate::desktop::view) fn region(self) -> Region {
+        match self {
+            Self::NewTicket => Region::Tickets,
+            Self::NewDocument | Self::NewFolder | Self::CollapseAll => Region::Documents,
+        }
+    }
+}
+
 impl Workspace {
     /// Whether the region is on screen: the item area always is; a panel is
     /// when the layout displays it (R-9).
@@ -131,10 +176,29 @@ impl Workspace {
         }
     }
 
+    /// The region that holds focus: the one whose handle contains it, or the
+    /// one whose panel's toolbar button has it (decision 18, R-13), so the
+    /// ring shows, F6 moves on from it and `NewItem` makes its kind.
     pub(super) fn focused_region(&self, window: &Window, cx: &App) -> Option<Region> {
         REGIONS
             .into_iter()
             .find(|region| self.regions[region.index()].contains_focused(window, cx))
+            .or_else(|| {
+                ToolbarButton::ALL
+                    .into_iter()
+                    .find(|button| self.toolbar_focus(*button).is_focused(window))
+                    .map(ToolbarButton::region)
+            })
+    }
+
+    /// `focused_region`, for the keyboard walk (E-14).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(in crate::desktop::view) fn held_region(
+        &self,
+        window: &Window,
+        cx: &App,
+    ) -> Option<Region> {
+        self.focused_region(window, cx)
     }
 
     pub(in crate::desktop::view) fn focus_region(

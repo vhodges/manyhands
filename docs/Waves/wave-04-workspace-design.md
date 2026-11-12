@@ -314,18 +314,24 @@ Cycle, Cycle 01 decision 1, 2026-11-08.)
 
 - **Common row anatomy** (28 px, hover, the selected treatment with the
   amber left line and 600 weight, visible keyboard focus) and the four
-  states (loading skeleton rows, empty with its primary action, failed or
-  stale scan with Retry, normal). Lists stay virtualized and keyboard
+  states (loading skeleton rows, empty with its primary action, failed
+  with Retry and stale or never refreshed with Refresh, normal; amended
+  2026-11-11, Cycle 02 decision 11). Lists stay virtualized and keyboard
   navigable.
-- **Tickets:** toolbar (New ticket, More); filter bar with the
-  `Open | Closed | All` segmented control and counts, Open the default; the
-  "Filter by title or code" input; sortable column header (type, code,
+- **Tickets:** toolbar (New ticket; More waits for an action, Cycle 02
+  decision 12); filter bar with the `Open | Closed | All` segmented control
+  and counts, Open the default; the "Filter by title or code" input, which
+  replaces Find (Cycle 02 decision 2); sortable column header (type, code,
   title, status, updated; default updated, newest first); type icons; status
-  pills by the `03` color table, unknown values neutral; editing and
-  conflict markers after the title; nonconforming rows kept visible with
-  "needs fixing"; closed titles in `secondary`; the footnote
-  `{n} open tickets in {repository}`. Ready and Blocked filters keep working,
-  in a filter menu beside the segmented control (decision 5).
+  pills by the item header's status mapping, unknown values neutral (Cycle
+  02 decision 20); unsaved-work and conflict markers after the title (Cycle
+  02 decision 8); nonconforming rows kept visible with "needs fixing";
+  closed titles in `secondary`; the footnote
+  `{n} open tickets in {repository}`, worded per filter as Cycle 02 decision
+  7 sets out. Ready and Blocked filters keep working, in a filter menu
+  beside the segmented control (decision 5); Why blocked stays under
+  Blocked, and a row's reasons move to Why blocked and its tooltip (Cycle
+  02 decision 19). (Amended 2026-11-11 at Cycle 02's approval.)
 - **Documents:** toolbar (New document, New folder, Collapse all); tree rows
   with depth indent, chevrons, folder and file icons, collapsed descendant
   counts, the document title as the label and the path in the tooltip;
@@ -339,8 +345,9 @@ Cycle, Cycle 01 decision 1, 2026-11-08.)
 column resizing or choosing columns.
 
 **Exit evidence:** PRD `MH-CONTENT-001/003/004` list behaviors still pass;
-nonconforming and inaccessible items stay visible with their reason; Open is
-the default; sort, filter and the four states are covered by model tests;
+nonconforming and inaccessible items stay visible with their reason
+(unreadable files from the index status read, as rows that do not open;
+amended 2026-11-11, Cycle 02 decision 10); Open is the default; sort, filter and the four states are covered by model tests;
 duplicate short codes list every match; keyboard-only navigation and opening
 work in both panels.
 
@@ -589,6 +596,9 @@ Owner item 6 and the excluded design parts, to be planned later:
     replacing Quit now and Quit anyway;
   - a watchdog for pending operations: keep waiting, or abandon the job as
     far as the request can safely be stopped.
+- Added 2026-11-11 by Cycle 02 (its design, Document Amendment 2): saving
+  the ticket sort, the ticket filters and the document folders' expansion
+  with the layout.
 
 ## Approval And Remaining Readiness
 

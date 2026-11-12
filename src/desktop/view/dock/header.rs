@@ -2,6 +2,7 @@
 //! except the group header, which is the shell's own.
 
 mod tabs;
+mod toolbar;
 
 use std::{rc::Rc, sync::Arc};
 

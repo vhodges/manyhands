@@ -229,9 +229,10 @@ fn a_nonconforming_entry_opens_by_keyboard(cx: &mut TestAppContext) {
     walk.keys("secondary-2", cx);
     walk.region(Region::Documents, cx);
     let nodes = walk.shell.rows("doc-node", cx);
+    // A nonconforming file is labeled by its file name (E-9).
     let at = nodes
         .iter()
-        .position(|node| node == MARKER)
+        .position(|node| node == MARKER.rsplit('/').next().unwrap())
         .expect("the file is listed");
     let mut presses = 0;
     while !walk.shell.selected(("doc-node", at), cx) {

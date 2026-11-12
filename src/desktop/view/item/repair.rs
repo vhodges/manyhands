@@ -58,12 +58,12 @@ use gpui_kit::{
 use manyhands::{
     canonical::ItemId,
     repository::{ItemContextKind, ItemDto, ItemDtoKind, PreviewDetailsDto},
-    results::{CheckpointEffect, ProblemCode, ResultCode},
+    results::{CheckpointEffect, ResultCode},
 };
 
 use super::ItemPane;
 use crate::desktop::{
-    model::{edit::Phase, item::CONTEXT_PROBLEMS, navigation::OpenTarget},
+    model::{edit::Phase, item::repair_kind, navigation::OpenTarget},
     services::requests::{DesktopRequestId, Intent, RequestState},
     view::confirm::{self, Followed},
 };
@@ -86,32 +86,6 @@ pub(crate) const PREVIEW: &str = "Preview";
 pub(crate) struct FollowItem(pub(crate) OpenTarget);
 
 impl EventEmitter<FollowItem> for ItemPane {}
-
-/// The kind of item the file at `path` is repaired as: a document under
-/// `docs/`, a ticket's file under `.manyhands/tickets/`.
-fn repair_kind(path: &str) -> Option<ItemDtoKind> {
-    if path.starts_with("docs/") {
-        Some(ItemDtoKind::Document)
-    } else if path.starts_with(".manyhands/tickets/") {
-        Some(ItemDtoKind::Ticket)
-    } else {
-        None
-    }
-}
-
-/// Whether `item`, a nonconforming entry, is an unmanaged document: a file
-/// under `docs/` whose only problem is that it has no front matter.
-pub(super) fn unmanaged(item: &ItemDto) -> bool {
-    let mut problems = item
-        .problems
-        .iter()
-        .filter(|problem| !CONTEXT_PROBLEMS.contains(&problem.code));
-    repair_kind(&item.path) == Some(ItemDtoKind::Document)
-        && problems
-            .next()
-            .is_some_and(|problem| problem.code == ProblemCode::MissingFrontMatter)
-        && problems.next().is_none()
-}
 
 /// What a tab offers for the file it read.
 enum Offer {

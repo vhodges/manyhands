@@ -17,7 +17,10 @@ use manyhands::{
 use super::{
     confirm_tests::confirming,
     made_ready::{COULD_NOT_WORK_OUT, OPEN_READY_TICKETS},
-    made_ready_tests::{DEPENDENT, DEPENDENT_TITLE, OTHER, report, until_rows, with_dependent},
+    made_ready_tests::{
+        DEPENDENT, DEPENDENT_TITLE, OTHER, TYPED, filter_text, query, report, type_filter,
+        until_rows, with_dependent,
+    },
     outcome::{ENDING_DONE, ENDING_FAILED},
     outcome_canned_tests::{answer, reached, reached_effects, retry},
     short_id,
@@ -61,13 +64,21 @@ async fn open_ready_tickets_on_the_shown_repository(cx: &mut TestAppContext) {
     });
     shell.select(&root, cx);
     shell.use_list(Pane::Tickets, cx);
+    // Closed with text typed: Closed with Blocked cannot be chosen (R-26),
+    // and the text is what Open ready tickets clears (R-29).
     shell.workspace.update(cx, |workspace, cx| {
-        workspace.set_closure(ClosureFilter::Closed, cx);
-        workspace.set_readiness(Some(ReadinessFilter::Blocked), cx);
+        workspace.set_closure(ClosureFilter::Closed, cx)
     });
-    shell.run(cx);
+    type_filter(&shell, TYPED, cx);
     assert!(shell.selected("filter-closed", cx));
-    assert!(shell.selected("filter-blocked", cx));
+    assert_eq!(
+        query(&shell, cx),
+        (ClosureFilter::Closed, None, TYPED.to_owned())
+    );
+    assert_eq!(
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: any")
+    );
 
     confirming(&shell, &root, cx).await;
     let request = RequestId::new();
@@ -117,7 +128,19 @@ async fn open_ready_tickets_on_the_shown_repository(cx: &mut TestAppContext) {
     });
     assert_eq!((selected, pane), (Some(key(&root)), Pane::Tickets));
     assert!(shell.selected("filter-open", cx));
-    assert!(shell.selected("filter-ready", cx));
+    assert_eq!(
+        query(&shell, cx),
+        (
+            ClosureFilter::Open,
+            Some(ReadinessFilter::Ready),
+            String::new()
+        )
+    );
+    assert_eq!(
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: ready")
+    );
+    assert_eq!(filter_text(&shell, cx), "", "the input is cleared too");
     let list = shell
         .workspace
         .read_with(cx, |workspace, cx| workspace.tickets_list_focus(cx));

@@ -54,6 +54,16 @@ icon_assets!(
         ArrowDown,
         Archive,
         Activity,
+        Repeat,
+        Bug,
+        Sparkles,
+        ListChecks,
+        FilePlus,
+        FolderPlus,
+        ChevronsDownUp,
+        ArrowUpDown,
+        ListFilter,
+        FileExclamationPoint,
     ]
 );
 

@@ -413,10 +413,25 @@ impl Fixture {
     /// `closed_at` and `closed_by` as `tests/support/items.rs` writes it:
     /// no local operation closes a ticket. Refresh to index it.
     pub(crate) fn commit_closed_ticket(&self, root: &Path, id: &str, title: &str) {
+        self.commit_closed_ticket_with(root, id, title, "");
+    }
+
+    /// `commit_closed_ticket`, carrying the short code `slug`.
+    pub(crate) fn commit_closed_ticket_with_slug(
+        &self,
+        root: &Path,
+        id: &str,
+        title: &str,
+        slug: &str,
+    ) {
+        self.commit_closed_ticket_with(root, id, title, &format!("slug: {slug}\n"));
+    }
+
+    fn commit_closed_ticket_with(&self, root: &Path, id: &str, title: &str, extra: &str) {
         let source = format!(
             "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {id}\ntitle: {title}\n\
              type: task\nstatus: done\nclosed_at: 2026-09-30T12:34:56Z\n\
-             closed_by: Ada Lovelace <ada@example.invalid>\n---\nBody of {title}.\n"
+             closed_by: Ada Lovelace <ada@example.invalid>\n{extra}---\nBody of {title}.\n"
         );
         self.commit_file(root, &ticket_path(id), source.as_bytes());
     }
