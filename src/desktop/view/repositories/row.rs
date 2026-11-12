@@ -77,10 +77,6 @@ impl RepositoryDelegate {
         &self.rows
     }
 
-    pub(super) fn bounds(&self) -> &RowBounds {
-        &self.bounds
-    }
-
     pub(crate) fn row(&self, ix: IndexPath) -> Option<&RepositoryRow> {
         self.rows.get(ix.row)
     }

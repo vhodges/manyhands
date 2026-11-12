@@ -4,7 +4,12 @@
 //! menu opened by a right click and by `shift-f10` and `menu`. Items are
 //! read and chosen by label: a separator takes an index (fact 43), and the
 //! snapshot cannot read an item's enablement, which `menu_items`' own table
-//! pins; here a disabled choice is checked to send nothing.
+//! pins; here a disabled choice is checked to send nothing. A poll nothing
+//! is queued for gets the double's stand-in, never the library's call.
+//!
+//! Focus after Esc or a choice is read in the update that causes it: the
+//! next draw's fallback (`Workspace::focus_lost`) would put it back on the
+//! last region anyway.
 
 use std::{fs, path::Path};
 
@@ -32,6 +37,7 @@ use crate::desktop::{
     test_support::fixtures::{Fixture, item_id, remove_registration},
     view::{
         confirm::{CONFIRM, FILES_REMAIN},
+        footer::Control,
         footer::tests::support::{modal_open, open_modal},
         harness::{Shell, key},
         item::OpenedFolders,
@@ -65,11 +71,11 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
         fixture,
         &[],
         |backend, clock| {
-            // `a`'s and `b`'s launch polls, `c`'s once it is read again, and
-            // spares for the polls a test answer's rearm or backoff starts.
-            for _ in 0..8 {
-                backend.answer_poll(completed(clock));
-            }
+            // `a`'s and `b`'s launch polls; every later poll, however many
+            // a test answer's rearm or backoff starts, is not due.
+            backend.answer_poll(completed(clock));
+            backend.answer_poll(completed(clock));
+            backend.answer_unanswered_polls(not_due(clock));
         },
         cx,
     );
@@ -139,7 +145,12 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
     // the choice unchanged. Its items are `menu_items`', the state's
     // sentence first. Opening it, moving in it and Esc read nothing and
     // send nothing (P22); Esc gives focus back to what held it.
-    let before = shell.frame(cx, |window, cx| window.focused(cx));
+    // Focus is on the footer's Settings, which the draw's fallback never
+    // picks, so only the menu's own restore puts it back there.
+    let settings = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.footer_focus(Control::Settings));
+    shell.frame(cx, |window, cx| settings.focus(window, cx));
     let (reads, requests, polls) = (all_reads(&shell), sent(cx), backend.polled_roots().len());
     right_click(&shell, "b", cx);
     assert_eq!(open_root(&shell, cx), Some(key_b.clone()), "b's menu");
@@ -154,7 +165,7 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
     shell.keys("down", cx);
     shell.keys("escape", cx);
     assert_eq!(open_root(&shell, cx), None, "Esc closes it");
-    assert_eq!(shell.frame(cx, |window, cx| window.focused(cx)), before);
+    assert!(focused(&shell, &settings, cx), "Esc: back where focus was");
     assert_eq!(all_reads(&shell), reads, "no read");
     assert_eq!(sent(cx), requests, "no request");
     assert_eq!(backend.polled_roots().len(), polls, "no poll");
@@ -173,10 +184,18 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
     shell.keys("shift-f10", cx);
     assert_eq!(open_root(&shell, cx), Some(key_b.clone()), "shift-f10");
     assert_eq!(labels(&shell, cx), b_items);
+    let anchored = shell.workspace.read_with(cx, |workspace, _| {
+        let row = workspace.repositories_pane().row_bounds(&key_b);
+        (
+            workspace.repository_menu_at(),
+            row.map(|row| row.bottom_left()),
+        )
+    });
+    assert!(anchored.1.is_some(), "b's row was drawn");
+    assert_eq!(anchored.0, anchored.1, "below b's row (R-42)");
     shell.keys("down", cx);
-    shell.keys("escape", cx);
+    assert!(press_and_hold(&shell, "escape", &list, cx), "Esc: the list");
     assert_eq!(open_root(&shell, cx), None);
-    assert!(focused(&shell, &list, cx), "Esc: back on the list");
     assert_eq!(all_reads(&shell), reads, "no read by keyboard");
     assert_eq!(sent(cx), requests, "no request by keyboard");
     shell.keys("menu", cx);
@@ -186,11 +205,11 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
     // the list it was opened from.
     assert!(b_items.iter().any(|label| label == CHECK_NOW));
     backend.inner().answer_job(JobKind::PollOnce, polled());
-    choose(&shell, CHECK_NOW, cx);
+    let held = choose_and_hold(&shell, CHECK_NOW, &list, cx);
+    assert!(held, "the list it was opened from");
     assert_eq!(open_root(&shell, cx), None);
     let checked = checks(&shell, &b, cx);
     assert_eq!(checked.len(), 1, "one Check now of b");
-    assert!(focused(&shell, &list, cx), "the list it was opened from");
     shell.until_ended(checked[0], cx).await;
     shell.run(cx);
 
@@ -233,6 +252,22 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
         });
         shell.run(cx);
     }
+
+    // The sentence, always disabled, chosen by pointer and as a dispatched
+    // choice: nothing is sent.
+    let requests = sent(cx);
+    right_click(&shell, "b", cx);
+    let sentence = labels(&shell, cx)[0].clone();
+    choose(&shell, &sentence, cx);
+    let read = RepositoryMenuChoice {
+        root: key_b.clone(),
+        choice: MenuChoice::Sentence,
+        shown: Shown::Label(sentence),
+    };
+    shell.frame(cx, |window, cx| window.dispatch_action(Box::new(read), cx));
+    shell.run(cx);
+    assert_eq!(sent(cx), requests, "the sentence sends nothing");
+    close_menu(&shell, cx);
 
     // Open folder records `b`'s folder.
     right_click(&shell, "b", cx);
@@ -319,6 +354,11 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
     let before = checks(&shell, &a, cx).len();
     choose(&shell, CHECK_NOW, cx);
     assert_eq!(checks(&shell, &a, cx).len(), before, "it was disabled");
+    // Opened while the check runs, its Check now is built disabled.
+    right_click(&shell, "a", cx);
+    choose(&shell, CHECK_NOW, cx);
+    assert_eq!(checks(&shell, &a, cx).len(), before, "built disabled");
+    close_menu(&shell, cx);
     schedule(cx, &|schedule| schedule.poll_ended(&key_a));
 
     // Retry on `c`, which the scheduler could not read and which is not
@@ -431,6 +471,15 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
     assert_eq!(kept[0], kept_sentence("a"));
     assert!(kept.iter().any(|label| label == RETRY));
     assert!(kept.iter().any(|label| label == REMOVE_FROM_MANYHANDS));
-    shell.keys("escape", cx);
-    assert!(focused(&shell, &list, cx));
+    assert!(press_and_hold(&shell, "escape", &list, cx), "Esc: the list");
+
+    // Every poll after the launch polls got the stand-in, never the
+    // library's call. They are `b`'s, which the test's own answers to `b`
+    // start (two in every run seen); at least one, so the stand-in is
+    // shown to be used, and bounded, so a slower interleaving still passes.
+    let stood_in = backend.unanswered_roots();
+    assert!(
+        !stood_in.is_empty() && stood_in.len() <= 4 && stood_in.iter().all(|root| *root == key_b),
+        "stand-ins: {stood_in:?}"
+    );
 }

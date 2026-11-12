@@ -4,10 +4,13 @@
 
 use std::path::Path;
 
-use gpui_kit::{ElementId, FocusHandle, Modifiers, TestAppContext, test::TestWindowExt};
+use gpui_kit::{
+    ElementId, FocusHandle, InputEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
+    MouseUpEvent, Pixels, Point, TestAppContext, test::TestWindowExt,
+};
 use manyhands::{
     canonical::ItemId,
-    repository::{MutationDataDto, OperationId, PollCompletion},
+    repository::{MutationDataDto, OperationId, PollCompletion, PollIneligibility},
     results::{CheckpointEffect, Effects, Envelope, Outcome, PublicationEffect, ResultCode, Scope},
 };
 
@@ -35,6 +38,18 @@ pub(super) fn id(text: &str) -> ItemId {
 
 pub(super) fn child(name: &'static str, part: &'static str) -> ElementId {
     (ElementId::from(name), part).into()
+}
+
+/// A poll the library says is not due for an hour: it records no attempt
+/// and changes no state a row shows, only when the next poll is due. The
+/// stand-in for every poll nothing is queued for.
+pub(super) fn not_due(clock: &TestClock) -> impl Fn() -> Library + Send + 'static {
+    let next = clock.utc() + time::Duration::hours(1);
+    move || Library::NotEligible {
+        reason: PollIneligibility::NotDue,
+        next_eligible_at: Some(next),
+        index_pending: false,
+    }
 }
 
 /// A poll that completed now and reported no target: it sets no list.
@@ -224,11 +239,9 @@ pub(super) fn labels(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
     })
 }
 
-/// Clicks the open menu's item `label`, its mouse events one at a time, so
-/// the choice reaches the Workspace before the next frame, as in the
-/// application (`Shell::click_settled`).
-pub(super) fn choose(shell: &Shell, label: &str, cx: &mut TestAppContext) {
-    let at = shell
+/// Where the open menu's item `label` is.
+fn item_at(shell: &Shell, label: &str, cx: &mut TestAppContext) -> Point<Pixels> {
+    shell
         .frame(cx, |window, _| {
             let menu = window.within("popup-menu");
             (0usize..16)
@@ -236,10 +249,73 @@ pub(super) fn choose(shell: &Shell, label: &str, cx: &mut TestAppContext) {
                 .find(|item| item.label() == Some(label))
                 .map(|item| item.bounds().center())
         })
-        .unwrap_or_else(|| panic!("no item {label}"));
+        .unwrap_or_else(|| panic!("no item {label}"))
+}
+
+/// Clicks the open menu's item `label`, its mouse events one at a time, so
+/// the choice reaches the Workspace before the next frame, as in the
+/// application (`Shell::click_settled`).
+pub(super) fn choose(shell: &Shell, label: &str, cx: &mut TestAppContext) {
+    let at = item_at(shell, label, cx);
     let mut visual = shell.visual(cx);
     visual.simulate_click(at, Modifiers::default());
     visual.run_until_parked();
+}
+
+/// Clicks the open menu's item `label` and says whether `handle` holds
+/// focus in that same update, before its effects run and the next draw.
+pub(super) fn choose_and_hold(
+    shell: &Shell,
+    label: &str,
+    handle: &FocusHandle,
+    cx: &mut TestAppContext,
+) -> bool {
+    let at = item_at(shell, label, cx);
+    let held = shell.frame(cx, |window, cx| {
+        let (button, modifiers) = (MouseButton::Left, Modifiers::default());
+        let down = MouseDownEvent {
+            button,
+            position: at,
+            modifiers,
+            click_count: 1,
+            first_mouse: false,
+        };
+        window.dispatch_event(down.to_platform_input(), cx);
+        let up = MouseUpEvent {
+            button,
+            position: at,
+            modifiers,
+            click_count: 1,
+        };
+        window.dispatch_event(up.to_platform_input(), cx);
+        handle.is_focused(window)
+    });
+    shell.run(cx);
+    held
+}
+
+/// Presses `key` and says whether `handle` holds focus in that same
+/// update, before its effects run and the next draw.
+pub(super) fn press_and_hold(
+    shell: &Shell,
+    key: &str,
+    handle: &FocusHandle,
+    cx: &mut TestAppContext,
+) -> bool {
+    let held = shell.frame(cx, |window, cx| {
+        window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+        handle.is_focused(window)
+    });
+    shell.run(cx);
+    held
+}
+
+/// Closes the open menu, if one is, by Esc.
+pub(super) fn close_menu(shell: &Shell, cx: &mut TestAppContext) {
+    if open_root(shell, cx).is_some() {
+        shell.keys("escape", cx);
+    }
+    assert_eq!(open_root(shell, cx), None);
 }
 
 /// A right click on the row named `name`.

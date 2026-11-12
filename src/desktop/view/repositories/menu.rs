@@ -142,6 +142,12 @@ impl RepositoryMenu {
         }
     }
 
+    /// The menu's top left corner.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn at(&self) -> Point<Pixels> {
+        self.at
+    }
+
     /// The menu drawn above everything but tooltips, anchored at its
     /// position and kept inside the window, with focus in it, as the dock
     /// menu is.

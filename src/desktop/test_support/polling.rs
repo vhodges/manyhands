@@ -31,6 +31,10 @@
 //!   selection a retirement's key attention falls back to (E3).
 //! - `resume_polling` records each Resume checking and then makes the
 //!   library's own call.
+//! - `answer_unanswered_polls` (opt-in) answers every poll nothing is queued
+//!   for with a stand-in, counted, instead of the library's call.
+
+mod unanswered;
 
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -135,6 +139,8 @@ pub(crate) struct PollingBackend {
     outcomes: Mutex<BTreeMap<String, PollingOutcome>>,
     /// The key `selected_key` answers.
     selected: Mutex<Option<SharedKeyId>>,
+    /// The stand-in for polls nothing is queued for, when opted in.
+    unanswered: Mutex<Option<unanswered::Unanswered>>,
 }
 
 /// What a Check now's passphrase request was answered.
@@ -166,6 +172,7 @@ impl PollingBackend {
             resumes: Mutex::default(),
             outcomes: Mutex::default(),
             selected: Mutex::default(),
+            unanswered: Mutex::default(),
         }
     }
 
@@ -464,7 +471,8 @@ impl Backend for PollingBackend {
         }
         // A constructed answer stands in: the library is not asked, and
         // `after_poll` gives the answer.
-        if !self.canned.lock().unwrap().is_empty() {
+        let queued = !self.canned.lock().unwrap().is_empty();
+        if queued || self.stand_in(&request.root) {
             return Err(RemotePollError::Busy);
         }
         let unlock = self.unlock.lock().unwrap().clone();

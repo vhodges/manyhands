@@ -248,12 +248,21 @@ impl RepositoriesPane {
 
     fn render(&self) -> impl IntoElement + use<> {
         let drawn = self.list_bounds.clone();
+        let rows = self.bounds.clone();
         div()
             .id("repositories-list")
             .test_support()
             .relative()
             .flex_1()
             .min_h_0()
+            // Prepainted before the list, whose drawn rows record their
+            // bounds after it: a row not drawn this frame, scrolled out or
+            // gone, has none, so a key-opened menu anchors on the list
+            // (R-42).
+            .child(canvas(
+                move |_, _, _| rows.borrow_mut().clear(),
+                |_, (), _, _| {},
+            ))
             .child(List::new(&self.list))
             .child(
                 canvas(move |at, _, _| drawn.set(Some(at)), |_, (), _, _| {})
@@ -282,12 +291,6 @@ fn show(
         let at = cursor
             .and_then(|key| rows.iter().position(|row| row.key == key))
             .or_else(|| rows.iter().position(|row| row.chosen));
-        // A row that goes keeps no bounds, so a key-opened menu never
-        // anchors where it was (R-42).
-        list.delegate()
-            .bounds()
-            .borrow_mut()
-            .retain(|root, _| rows.iter().any(|row| row.key == *root));
         list.delegate_mut().set_rows(rows);
         list.set_selected_index(at.map(IndexPath::new), window, cx);
         cx.notify();
