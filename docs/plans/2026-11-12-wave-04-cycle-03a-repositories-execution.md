@@ -24,7 +24,7 @@ reason.
 | 1 | done, review approved with Minors parked | code `a2abc5fa` (base `2aafa5d0`); ledger commit follows it | yes |
 | 2 | done, review approved after fix round 1 | code `4979f441` (base `d21b14f5`), fix `b103c639`; ledger commit follows | yes |
 | 3 | done, review approved after fix round 1 | code `6cb077c2` (base `3dbaa472`), fix `eb2bc10e`; ledger commit follows | yes |
-| 4 | not started | | |
+| 4 | done, review approved first time | code `02bd0015` (base `64d92f09`); ledger commit follows | yes |
 | 5 | not started | | |
 | 6 | not started | | |
 | 7 | not started | | |
@@ -541,3 +541,94 @@ new issue.
    allow(dead_code))` is stale (Up to date uses it); remove in a task that
    touches the file.
 6. Task 2's deferred items 1, 3, 4, 5 stand.
+
+## Task 4: titles of what is not shared (Part C)
+
+**Commit.** Code `02bd0015` (base `64d92f09`). Boundary command prints nothing.
+New: `view/workspace/titles.rs` (217), `repositories_tests/titles.rs` (240).
+Modified: `model/stamp.rs` (+4, `ViewScope::ShareTitles(RepoKey)`),
+`services/mod.rs` (+4, `ReadKind::ShareTitles`), `view/repositories.rs` (237),
+`repositories_tests.rs` (460), `repositories_tests/support.rs` (165),
+`workspace.rs` **502** (was 495), `workspace/lists.rs` **500**,
+`workspace/repositories.rs` (+1). No exhaustive match over `ReadKind` or
+`ViewScope` existed, so none needed a new arm. No existing test edited
+(E-19: none); no assertion removed; no dead-code allow added or removed.
+
+**Tests run** (`devenv shell -- cargo test --locked --features
+desktop-test-support --bin manyhands <path> -- --exact`):
+`desktop::view::repositories::tests::titles_of_what_is_not_shared` — red first
+(15 × E0599, all `ReadKind::ShareTitles`), then 1 passed; checked it can fail by
+replacing the "no job while one runs" filter with `|_| true` (fails at "no second
+job while held", 3 vs 1), restored. `desktop::view::repositories::tests::rows_and_list_states`
+re-run because `repositories::rows` changed: 1 passed. Verify lines, each exit 0:
+`cargo fmt --check`, `cargo check --locked --features desktop`, `cargo clippy
+--all-targets --all-features --locked -- -D warnings`.
+
+**Orchestrator's extra run, for a named doubt** (the reviewer's ⚠️: other
+polling window tests whose polls report kinded unshared items now also start
+real `ShareTitles` reads on every scheduler notify). Command: `cargo test
+--locked --features desktop-test-support --bin manyhands --
+view::polling_privacy_tests:: keyboard_tests::shell::polling_journey
+view::operations::retire_tests:: view::operations::retire_real_tests::` — 12
+ran, 12 passed (22.8 s): `polling_privacy`, `polling_keyboard`, seven
+`retire_tests`, three `retire_real_tests`. This is not a suite run; those tests
+run again in the fast tier at Task 10.
+
+**What the journey covers** (through `rows(workspace, cx)` tooltips, so through
+`repository_tooltip` on the Workspace's facts, every launch poll answered, no
+sleeps): titles from loaded Tickets and Documents lists with 0 `ShareTitles`
+reads; one read held with `hold_read`, 4 notifies while held starting no second
+job and using no try, then the read answered and the item named by title, main
+and a no-kind item not read; a CacheWrite lease making the read busy: three
+jobs, one per notify (timers advanced), then the item named by ID and, with the
+lease dropped, not read again; seven unshared items, five named
+("S1, … S5 and 2 more."), reads = 1 resolve + 5 `show_item`, none after
+another notify.
+
+**Rulings (implementer's, reviewed).**
+1. The title maps are `BTreeMap<(RepoKey, ItemId), _>`, not the brief's
+   `HashMap`, and the three maps plus a `Generations` live in one `ShareTitles`
+   struct in a single Workspace field `share_titles` — `ItemId` has `Ord` but no
+   `Hash` and a library change is out of bounds; the struct keeps `workspace.rs`
+   near 500 — cost: a rename or a re-key. (The brief names `HashMap` and three
+   fields; recorded here so Task 9 and the final review do not flag the drift.)
+2. Only listed repositories are read and pruned (`retain_titles` from
+   `repositories_loaded`); the kept row (chosen, unlisted) gets no read and its
+   titles are dropped, so it names items by ID — its registration is gone, a
+   read could only fail — cost: a kept row's tooltip loses titles.
+3. The "five named" are the first five of `unshared.items` (main counts among
+   them, as in `to_share_sentence`); those with a kind, an ID and not main are
+   read — matches what the tooltip names.
+4. Lists teach titles whatever their stamp (the root from the `Tickets(root)` /
+   `Documents(root)` scope, only on `ReadResult::Ok`), and a list's title
+   overwrites a read one and the reverse — R-9 accepts a renamed item keeping an
+   old title until the next list load.
+5. `ItemNotFound` is "gone" (Done); a resolve that fails for any reason counts
+   one try for every ID of the job; a found item with no title is Done and
+   named by ID (K-3); a single ID's `show_item` busy or failure retries that ID
+   only.
+6. The `RepositoryRow::tooltip()` accessor keeps `#[allow(dead_code)] // Used
+   from Task 9` (the test reads the private field).
+
+**Review** (fresh reviewer, opus, `64d92f09..02bd0015`): spec compliant; every
+R-9 rule verified in the code (tries counted only on an applied answer, `Done`
+final so no re-read loop, a running job never replaced, answers merged by (root,
+id), pruned on removal); no Critical, no Important.
+
+**Deferred findings (Minor).**
+1. The per-ID `Retry` path (`show_item` busy or a non-`ItemNotFound` failure) is
+   never run: the busy case comes from a CacheWrite lease making
+   `resolve_repository` itself busy. `ItemNotFound` → Done is also untested.
+   Add one mixed job (one found, one retry) if a seam appears.
+2. Repository removal (pruning, including cancelling a held read) is not tested.
+3. Main is not exercised in the journey: `main_current()` is `Current`, not an
+   unshared item; the code filters main twice.
+4. A stale list teaches titles without a notify; a later render shows them.
+5. **`workspace.rs` is 502 lines and `workspace/lists.rs` 500: the next task
+   that touches either must split it first** (Task 5 is to put its menu code in
+   new files and offset any `workspace.rs` addition).
+6. The struct `ShareTitles` shares its name with `ReadKind::ShareTitles` and
+   `ViewScope::ShareTitles` (a name like `ShareTitleCache` reads better);
+   `share_title` clones a `String` and an `ItemId` per lookup (≤ 5 per row per
+   frame).
+7. `a_kept` row dropping titles: see ruling 2 (K-3 covers an item named by ID).
