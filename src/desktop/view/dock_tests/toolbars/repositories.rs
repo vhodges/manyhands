@@ -28,13 +28,15 @@ use crate::desktop::{
     },
 };
 
-fn index_requests(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> usize {
-    shell
-        .requests(
-            cx,
-            |request| matches!(&request.intent, Intent::IndexRefresh { root: asked } if asked == root),
-        )
-        .len()
+fn index_requests(
+    shell: &Shell,
+    root: &Path,
+    cx: &mut TestAppContext,
+) -> Vec<crate::desktop::services::requests::DesktopRequestId> {
+    shell.requests(
+        cx,
+        |request| matches!(&request.intent, Intent::IndexRefresh { root: asked } if asked == root),
+    )
 }
 
 /// The Repositories panel's three buttons (P13, P28, P39, E-11): Add by Tab
@@ -119,13 +121,13 @@ pub(super) async fn repositories_toolbar(shell: &Shell, root: &Path, cx: &mut Te
         .workspace
         .read_with(cx, |workspace, _| workspace.repository_menu_at());
     assert_eq!(at, Some(below), "below the More button");
-    let before = index_requests(shell, root, cx);
+    let known = index_requests(shell, root, cx);
     assert!(menu::choose_and_hold(shell, REFRESH, &more, cx), "focus");
-    let sent = shell.requests(
-        cx,
-        |request| matches!(&request.intent, Intent::IndexRefresh { root: asked } if asked == root),
-    );
-    assert_eq!(sent.len(), before + 1, "Refresh sends IndexRefresh");
+    let sent: Vec<_> = index_requests(shell, root, cx)
+        .into_iter()
+        .filter(|id| !known.contains(id))
+        .collect();
+    assert_eq!(sent.len(), 1, "Refresh sends IndexRefresh");
     shell.until_ended(sent[0], cx).await;
     shell.run(cx);
 

@@ -3,6 +3,9 @@
 //! draws what this says; a choice is checked again, by evaluating this
 //! again, when it is chosen (R-35).
 
+mod check_all;
+
+pub(crate) use self::check_all::check_all_applies;
 use super::{
     super::{
         list_view::{REBUILD_INDEX, REFRESH},

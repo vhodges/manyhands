@@ -100,9 +100,24 @@ pub(crate) struct Facts<'a> {
 /// checking is on, the repository is not held or paused and polls, this
 /// process has seen no attempt, nothing is checking, the phase is `Idle`,
 /// `Stopped` or waiting for a deadline, and no conflict is pending. It is
-/// exactly where Settings' row reaches [`since_library`], so the row, the
-/// panel and Check all say the same.
+/// exactly where Settings' row reaches [`since_library`], so the row and
+/// the panel say the same.
 pub(crate) fn stored_applies(facts: &Facts) -> Option<PollingOutcome> {
+    stored_when(facts, true)
+}
+
+/// The stored outcome as Check all asks for it (owner ruling 2026-11-12,
+/// decision 16): every condition of [`stored_applies`] except that the
+/// repository is not paused and that its phase is quiet, so a paused
+/// repository, or one in a busy, interrupted or failed wait, whose stored
+/// outcome waits on a key or a host is still known to, and Check all never
+/// raises a prompt for it.
+pub(crate) fn stored_for_check_all(facts: &Facts) -> Option<PollingOutcome> {
+    stored_when(facts, false)
+}
+
+/// `stored_applies`' conditions; `strict` adds "not paused" and "quiet".
+fn stored_when(facts: &Facts, strict: bool) -> Option<PollingOutcome> {
     let stored = facts.stored?;
     let repo = facts.schedule?;
     let held = repo.policy.recovery_suspended
@@ -118,11 +133,10 @@ pub(crate) fn stored_applies(facts: &Facts) -> Option<PollingOutcome> {
     );
     (repo.policy.enabled
         && !held
-        && !repo.policy.paused
+        && (!strict || (!repo.policy.paused && quiet))
         && repo.last.is_none()
         && !facts.checking_now
         && !repo.in_flight()
-        && quiet
         && !repo.conflict_pending)
         .then_some(stored)
 }

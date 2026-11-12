@@ -337,12 +337,20 @@ pub(in crate::desktop::view) fn press_released_and_hold(
     held
 }
 
+/// Whether a repository menu is open, one with no repository included.
+pub(in crate::desktop::view) fn menu_open(shell: &Shell, cx: &mut TestAppContext) -> bool {
+    shell.frame(cx, |_, _| ());
+    shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.repository_menu_open())
+}
+
 /// Closes the open menu, if one is, by Esc.
 pub(in crate::desktop::view) fn close_menu(shell: &Shell, cx: &mut TestAppContext) {
-    if open_root(shell, cx).is_some() {
+    if menu_open(shell, cx) {
         shell.keys("escape", cx);
     }
-    assert_eq!(open_root(shell, cx), None);
+    assert!(!menu_open(shell, cx));
 }
 
 /// A right click on the row named `name`.

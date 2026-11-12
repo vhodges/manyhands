@@ -206,21 +206,29 @@ fn with_no_repository(shell: &Shell, cx: &mut TestAppContext) {
     let more = handle(shell, ToolbarButton::RepositoriesMore, cx);
     tab_to(shell, ToolbarButton::RepositoriesMore, cx);
     shell.press("enter", cx);
-    assert!(shell.present("popup-menu", cx), "More opens");
+    assert!(menu::menu_open(shell, cx), "More opens");
     assert_eq!(
         menu::labels(shell, cx),
         [REFRESH, REBUILD_INDEX, REMOVE_FROM_MANYHANDS]
     );
+    // Esc gives focus back to the button.
+    assert!(menu::menu_open(shell, cx), "the menu is open");
+    assert!(
+        menu::press_and_hold(shell, "escape", &more, cx),
+        "Esc: More"
+    );
+    assert!(!menu::menu_open(shell, cx));
+
+    // Opened again, its disabled items choose nothing.
+    shell.press("enter", cx);
+    assert!(menu::menu_open(shell, cx), "More opens again");
     let before = shell.requests(cx, |_| true).len();
     menu::choose(shell, REFRESH, cx);
     menu::choose(shell, REBUILD_INDEX, cx);
     menu::choose(shell, REMOVE_FROM_MANYHANDS, cx);
     assert_eq!(shell.requests(cx, |_| true).len(), before, "nothing sent");
     assert!(!shell.present("confirm-dialog", cx), "no removal asked");
-    if shell.present("popup-menu", cx) {
-        assert!(menu::press_and_hold(shell, "escape", &more, cx));
-    }
-    assert!(!shell.present("popup-menu", cx));
+    menu::close_menu(shell, cx);
 }
 
 fn handle(shell: &Shell, button: ToolbarButton, cx: &mut TestAppContext) -> gpui_kit::FocusHandle {

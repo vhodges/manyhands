@@ -322,6 +322,12 @@ impl Workspace {
             .and_then(|menu| menu.root.clone())
     }
 
+    /// Whether a repository menu is open, More with no repository chosen
+    /// included (it has no root).
+    pub(crate) fn repository_menu_open(&self) -> bool {
+        self.repository_menu.is_some()
+    }
+
     /// Where the open repository menu's top left corner is.
     pub(crate) fn repository_menu_at(&self) -> Option<gpui_kit::Point<gpui_kit::Pixels>> {
         self.repository_menu.as_ref().map(RepositoryMenu::at)

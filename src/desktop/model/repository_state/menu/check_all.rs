@@ -4,7 +4,7 @@
 
 use manyhands::repository::PollingOutcome;
 
-use super::{
+use super::super::{
     super::polling::{
         Phase, Reason,
         status::{self, Shape},
@@ -14,9 +14,9 @@ use super::{
 
 /// Whether Check all sends a `PollOnce` for this repository: D6's shape is
 /// `Polling` (paused included, decision 16), nothing is checking, no live
-/// attention waits on a key or a host, and a stored outcome that still
-/// applies (`status::stored_applies`) does not say a key or a host is
-/// wanted. The sentences and the actions are the row's; this only decides.
+/// attention waits on a key or a host, and the stored outcome, as
+/// `status::stored_for_check_all` gives it (paused or waiting included),
+/// does not say a key or a host is wanted. The sentences and the actions are the row's; this only decides.
 pub(crate) fn check_all_applies(facts: &RepoFacts<'_>) -> bool {
     if !matches!(facts.row().shape, Shape::Polling(_)) || facts.checking() {
         return false;
@@ -31,7 +31,7 @@ pub(crate) fn check_all_applies(facts: &RepoFacts<'_>) -> bool {
                 | Reason::HostUnidentified(_)
         ))
     );
-    let stored = status::stored_applies(&facts.polling_facts(&facts.entry.name()));
+    let stored = status::stored_for_check_all(&facts.polling_facts(&facts.entry.name()));
     !waiting_on_key_or_host
         && !matches!(
             stored,

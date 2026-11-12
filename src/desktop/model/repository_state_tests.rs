@@ -309,12 +309,80 @@ fn check_all_takes_each_repository_that_can_check() {
             },
             true,
         ),
+        // Owner ruling 2026-11-12 (decision 16): a stored outcome that waits
+        // on a key or a host is skipped whether or not the repository is
+        // paused or in a wait; this row's expectation was `true` under the
+        // literal "stored_applies only" reading and is now `false`.
         (
-            "a stored unlock required, paused: it does not apply",
+            "a stored unlock required, paused",
             |s| {
                 s.stored = Some(PollingOutcome::UnlockRequired);
                 s.schedule().policy.paused = true;
             },
+            false,
+        ),
+        (
+            "a stored selected key unavailable, paused",
+            |s| {
+                s.stored = Some(PollingOutcome::SelectedKeyUnavailable);
+                s.schedule().policy.paused = true;
+            },
+            false,
+        ),
+        (
+            "a stored host approval required, paused",
+            |s| {
+                s.stored = Some(PollingOutcome::HostApprovalRequired);
+                s.schedule().policy.paused = true;
+            },
+            false,
+        ),
+        (
+            "a stored unlock required, checking off",
+            |s| {
+                s.stored = Some(PollingOutcome::UnlockRequired);
+                s.schedule().policy.enabled = false;
+            },
+            false,
+        ),
+        (
+            "a stored unlock required, in a busy wait",
+            |s| {
+                s.stored = Some(PollingOutcome::UnlockRequired);
+                s.schedule().phase = waiting(Why::Busy);
+            },
+            false,
+        ),
+        (
+            "a stored unlock required, in an interrupted wait",
+            |s| {
+                s.stored = Some(PollingOutcome::UnlockRequired);
+                s.schedule().phase = waiting(Why::Interrupted);
+            },
+            false,
+        ),
+        (
+            "a stored unlock required, in a failed wait",
+            |s| {
+                s.stored = Some(PollingOutcome::UnlockRequired);
+                s.schedule().phase = waiting(Why::Failed);
+            },
+            false,
+        ),
+        (
+            "a stored transport failure, paused: not a key or a host",
+            |s| {
+                s.stored = Some(PollingOutcome::TransportUnavailable);
+                s.schedule().policy.paused = true;
+            },
+            true,
+        ),
+        // The design states no expectation for these two; they pin what the
+        // code answers: neither excludes a repository.
+        ("the kept row", |s| s.kept = true, true),
+        (
+            "a pending conflict",
+            |s| s.schedule().conflict_pending = true,
             true,
         ),
         ("no schedule, no remote", |s| s.unscheduled(None), false),

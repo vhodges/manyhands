@@ -78,24 +78,29 @@ fn check_alls(shell: &Shell, cx: &mut TestAppContext) -> Vec<RepoKey> {
 /// is refused behind a dialog and a sheet.
 pub(super) async fn check_all(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
-    let (a, b, c, d) = (
+    let (a, b, c, d, e) = (
         fixture.create_repository("a"),
         fixture.create_repository("b"),
         fixture.create_repository("c"),
         fixture.create_repository("d"),
+        fixture.create_repository("e"),
     );
     fixture.commit_ticket(&a, TICKET, "Ticket", "");
-    for root in [&a, &b, &c, &d] {
+    for root in [&a, &b, &c, &d, &e] {
         fixture.publish_over_ssh(root);
         fixture.refresh(root);
     }
+    // `e` is paused and its stored outcome says a key is locked (owner
+    // ruling 2026-11-12): Check all takes it for no check, so no prompt.
     fixture.pause_polling(&b);
+    fixture.pause_polling(&e);
     let [key_a, key_b, key_c] = [&a, &b, &c].map(|root| key(root));
     let (window, ()) = PollingWindow::over(
         fixture,
         &[],
         |backend, clock| {
             backend.store_outcome(&key(&d), PollingOutcome::UnlockRequired);
+            backend.store_outcome(&key(&e), PollingOutcome::UnlockRequired);
             // Every launch poll, and every poll a check's end starts, is
             // not due: nothing reaches the library.
             backend.answer_unanswered_polls(not_due(clock));
@@ -190,6 +195,7 @@ pub(super) async fn check_all(cx: &mut TestAppContext) {
     assert_eq!((first.len(), second.len()), (1, 1), "one check each");
     assert!(sent_to(&c, cx).is_empty(), "locked: none");
     assert!(sent_to(&d, cx).is_empty(), "stored unlock required: none");
+    assert!(sent_to(&e, cx).is_empty(), "paused, stored unlock required");
     let mut by_time = [(first[0], key_a.clone()), (second[0], key_b.clone())];
     by_time.sort_by_key(|(id, _)| *id);
     assert_eq!(
@@ -208,6 +214,13 @@ pub(super) async fn check_all(cx: &mut TestAppContext) {
     }
     shell.run(cx);
     assert_eq!(check_alls(&shell, cx), taken, "enabled again");
+    assert!(backend.asked().is_empty(), "no passphrase was asked for");
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.passphrase().is_none()),
+        "no passphrase dialog"
+    );
 }
 
 /// P11, P13, R-35, R-40: the More menu, for the chosen repository whatever

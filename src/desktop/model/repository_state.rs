@@ -12,7 +12,6 @@
 //! No text here carries a key, a passphrase or a URL that is not the
 //! library's redacted one (Part I).
 
-mod check_all;
 mod menu;
 mod words;
 
@@ -22,10 +21,9 @@ use manyhands::{
 };
 use time::OffsetDateTime;
 
-pub(crate) use self::check_all::check_all_applies;
-pub(crate) use self::menu::MenuChoice;
 pub(crate) use self::menu::{
-    CHECK_NOW, MenuItem, RETRY_NOW, SET_UP_SHARING, SETTINGS, menu_items, more_items,
+    CHECK_NOW, MenuChoice, MenuItem, RETRY_NOW, SET_UP_SHARING, SETTINGS, check_all_applies,
+    menu_items, more_items,
 };
 #[cfg(test)]
 pub(crate) use self::menu::{OPEN_FOLDER, REMOVE_FROM_MANYHANDS};
