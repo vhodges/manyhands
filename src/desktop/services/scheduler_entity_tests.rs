@@ -291,6 +291,7 @@ async fn result_marks_repository_changed(cx: &mut TestAppContext) {
         item_id: Some(item_id(ONE)),
         kind: Some(TargetKind::Ticket),
         disposition,
+        main: false,
     };
     let hear = |attempt: PollAttempt, cx: &mut TestAppContext| {
         services.polls().push(key_root.clone(), attempt);
@@ -453,4 +454,110 @@ async fn a_preempted_poll_returns_while_a_background_job_runs(cx: &mut TestAppCo
         "the poll is sent again behind the background job"
     );
     background.release();
+}
+
+/// Part A: the scheduler keeps each scheduled repository's stored outcome and
+/// its shared copy from the same read that places it; a later read replaces
+/// them; a read that fails leaves them; `reread` reads one repository again,
+/// including one whose read failed, and ignores a root it never listed; and
+/// the repository leaving the list drops both (P3, P26, P42).
+#[gpui_kit::test]
+async fn the_stored_outcome_and_shared_copy_are_kept(cx: &mut TestAppContext) {
+    use manyhands::repository::PollingOutcome;
+
+    let world = World::new(true, cx);
+    let a = world.ssh_repo("a");
+    world
+        .backend
+        .store_outcome(&a, PollingOutcome::TransportUnavailable);
+    world.backend.answer_poll(world.completed());
+    world.list(std::slice::from_ref(&a), cx);
+    let stored = |cx: &mut TestAppContext| {
+        world
+            .services
+            .scheduler()
+            .read_with(cx, |scheduler, _| scheduler.stored(&a))
+    };
+    World::settle(cx, "the registration to be read", |cx| stored(cx).is_some()).await;
+    World::quiet(cx).await;
+    assert_eq!(stored(cx), Some(PollingOutcome::TransportUnavailable));
+    let copy = world.services.scheduler().read_with(cx, |scheduler, _| {
+        scheduler
+            .shared_copy(&a)
+            .map(|copy| (copy.name.clone(), copy.location.clone()))
+    });
+    let (name, location) = copy.expect("the publication remote");
+    assert_eq!(name, "origin");
+    assert!(
+        location.contains("example.invalid/team/repo.git"),
+        "{location}"
+    );
+
+    // A later read replaces the stored outcome.
+    world.backend.store_outcome(&a, PollingOutcome::Completed);
+    world.activate(cx);
+    World::settle(cx, "the outcome to be replaced", |cx| {
+        stored(cx) == Some(PollingOutcome::Completed)
+    })
+    .await;
+    World::quiet(cx).await;
+
+    // The folder is renamed away: the read fails and leaves what was kept.
+    let away = format!("{a}.away");
+    std::fs::rename(&a, &away).unwrap();
+    world.activate(cx);
+    let failed = |cx: &mut TestAppContext| {
+        world
+            .services
+            .scheduler()
+            .read_with(cx, |scheduler, _| scheduler.failed_reads.contains(&a))
+    };
+    World::settle(cx, "the read to fail", |cx| failed(cx)).await;
+    World::quiet(cx).await;
+    assert_eq!(stored(cx), Some(PollingOutcome::Completed), "kept");
+    let kept = world
+        .services
+        .scheduler()
+        .read_with(cx, |scheduler, _| scheduler.shared_copy(&a).is_some());
+    assert!(kept, "the shared copy is kept");
+
+    // Renamed back, it is read again by `reread` alone: one more read of
+    // its remotes, and it is no longer a failed read.
+    std::fs::rename(&away, &a).unwrap();
+    let reads = world
+        .backend
+        .remote_read_roots()
+        .iter()
+        .filter(|root| **root == a)
+        .count();
+    world.services.scheduler().update(cx, |scheduler, cx| {
+        scheduler.reread(a.clone(), cx);
+    });
+    World::settle(cx, "the read to land", |cx| !failed(cx)).await;
+    World::quiet(cx).await;
+    let after = world
+        .backend
+        .remote_read_roots()
+        .iter()
+        .filter(|root| **root == a)
+        .count();
+    assert_eq!(after, reads + 1, "read again");
+
+    // A root the scheduler never listed is not read.
+    let never = world.ssh_repo("never");
+    let (reads, calls) = (world.backend.remote_reads(), world.backend.calls().len());
+    world.services.scheduler().update(cx, |scheduler, cx| {
+        scheduler.reread(never.clone(), cx);
+    });
+    World::quiet(cx).await;
+    assert_eq!(world.backend.remote_reads(), reads, "no read");
+    assert_eq!(world.backend.calls().len(), calls, "no call");
+
+    // The repository leaves the list: both are gone.
+    world.list(&[], cx);
+    World::quiet(cx).await;
+    let gone = world.services.scheduler().read_with(cx, |scheduler, _| {
+        (scheduler.stored(&a), scheduler.shared_copy(&a).is_none())
+    });
+    assert_eq!(gone, (None, true));
 }

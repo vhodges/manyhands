@@ -339,6 +339,7 @@ fn report(clock: &TestClock, items: &[(&str, bool)]) -> Library {
                     } else {
                         PollDisposition::Closed
                     },
+                    main: false,
                 })
                 .collect(),
             outcome: None,

@@ -56,6 +56,12 @@ impl Scheduler {
             active,
             launched_at,
         );
+        // The same read shows how the library stored this check's outcome.
+        if self.schedule.repo(&root).is_some()
+            && let Some(status) = &status
+        {
+            self.keep_stored(&root, status.latest_outcome);
+        }
         // The read just made is the freshest policy there is: a repository
         // the answer left stale takes it at once.
         if self.schedule.repo(&root).is_some_and(|repo| repo.stale)

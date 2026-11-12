@@ -98,6 +98,7 @@ fn report(rig: &Rig, targets: Vec<(ItemId, TargetKind)>, cx: &mut TestAppContext
                     TargetKind::Ticket => Disposition::Closed,
                     TargetKind::Document => Disposition::Promoted,
                 },
+                main: false,
             })
             .collect(),
         index_pending: false,

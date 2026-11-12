@@ -394,6 +394,7 @@ impl PollingPage {
                 unplaced: scheduler.unplaced(root),
                 holding: scheduler.holding(root),
                 checking_now: checking,
+                stored: scheduler.stored(root),
                 now: scheduler.utc(),
             })
         };

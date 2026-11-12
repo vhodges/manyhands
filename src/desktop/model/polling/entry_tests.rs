@@ -18,6 +18,7 @@ fn attempt(answer: Answer, dispositions: &[Disposition]) -> AttemptSummary {
                 item_id: Some(ItemId::generate()),
                 kind: Some(TargetKind::Ticket),
                 disposition,
+                main: false,
             })
             .collect(),
         index_pending: false,

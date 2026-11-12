@@ -2,13 +2,16 @@
 //! table over the model's own transitions: each row reaches its state by
 //! the answer that gives it, not by writing the phase.
 
-use manyhands::repository::OperationId;
+use manyhands::{
+    canonical::ItemId,
+    repository::{OperationId, PollingOutcome},
+};
 
 use super::{Controls, Facts, Row, Shape, Unplaced, row};
 use crate::desktop::{
     model::polling::{
         Answer, AttemptTarget, CancelCause, Clock, Disposition, KeyId, NotEligible, Phase,
-        PollAttempt, TargetKind, TransportFailure,
+        PollAttempt, TargetKind, TransportFailure, Why,
         tests::{Fx, policy, root},
     },
     services::scheduler::Holding,
@@ -23,6 +26,7 @@ fn facts<'a>(fx: &'a Fx, checking_now: bool) -> Facts<'a> {
         unplaced: None,
         holding: None,
         checking_now,
+        stored: None,
         now: fx.clock.utc(),
     }
 }
@@ -32,6 +36,7 @@ fn target(disposition: Disposition) -> AttemptTarget {
         item_id: None,
         kind: Some(TargetKind::Ticket),
         disposition,
+        main: false,
     }
 }
 
@@ -430,6 +435,367 @@ fn status_text_table() {
         let row = row(&facts);
         assert_eq!((row.status.as_str(), &row.shape), (words, &Shape::Pending));
     }
+
+    // The library's stored outcome speaks for a repository this process has
+    // not checked (Part A, R-32): no attempt, not checking, checking on, not
+    // held, not paused, idle, stopped or waiting for a deadline, and no
+    // conflict pending. (status, offers Retry now)
+    let bare = || {
+        let mut fx = Fx::new();
+        fx.add("r", policy(None));
+        fx
+    };
+    let said = |fx: &Fx, outcome: Option<PollingOutcome>, checking_now: bool| {
+        let row = row(&Facts {
+            stored: outcome,
+            ..facts(fx, checking_now)
+        });
+        (row.status.clone(), retry(&row))
+    };
+    use PollingOutcome::*;
+    let stored_rows = [
+        (TransportUnavailable, unreachable, true),
+        (ProtocolRejected, unreachable, true),
+        (UnlockRequired, "Needs unlocking", false),
+        (SelectedKeyUnavailable, "Choose a key", false),
+        (HostApprovalRequired, "Needs host approval", false),
+        (ConfigurationRequired, "Can't check", true),
+        (RepositoryUnavailable, "Can't check", true),
+        // Today's text: nothing stored of a completed or cancelled check
+        // that this process could say more of.
+        (Completed, "Not checked yet", false),
+        (Cancelled, "Not checked yet", false),
+    ];
+    for (outcome, words, retry_now) in stored_rows {
+        assert_eq!(
+            said(&bare(), Some(outcome), false),
+            (words.to_owned(), retry_now),
+            "{outcome:?}"
+        );
+    }
+    assert_eq!(said(&bare(), None, false).0, "Not checked yet");
+    // Waiting for a deadline, or stopped by a quit, is still no attempt.
+    let mut not_due = Fx::new();
+    let (ahead, completed) = (not_due.at(240), not_due.at(-60));
+    not_due
+        .schedule
+        .add(root("r"), policy(Some(ahead)), Some(completed));
+    not_due.answer("r", Answer::NotEligible(NotEligible::NotDue), Some(ahead));
+    assert!(matches!(
+        not_due.phase("r"),
+        Phase::Waiting {
+            why: Why::NotDue,
+            ..
+        }
+    ));
+    assert_eq!(
+        said(&not_due, Some(TransportUnavailable), false),
+        (unreachable.to_owned(), true)
+    );
+    assert_eq!(
+        said(&not_due, Some(Completed), false).0,
+        "Checked 1 minute ago",
+        "the library's time is today's text"
+    );
+    let stopped = plain(Answer::Cancelled(CancelCause::Quit));
+    assert_eq!(stopped.phase("r"), Phase::Stopped);
+    assert_eq!(
+        said(&stopped, Some(UnlockRequired), false),
+        ("Needs unlocking".to_owned(), false)
+    );
+
+    // Where it does not apply, the row says what the phase says (P34, P43).
+    let mut paused = bare();
+    paused.schedule.set_policy(&root("r"), {
+        let mut stored = policy(None);
+        stored.paused = true;
+        stored
+    });
+    let mut off = Fx::new();
+    off.schedule.add(
+        root("r"),
+        {
+            let mut stored = policy(None);
+            stored.enabled = false;
+            stored
+        },
+        None,
+    );
+    let mut held = Fx::new();
+    held.schedule.add(
+        root("r"),
+        {
+            let mut stored = policy(None);
+            stored.recovery_suspended = true;
+            stored
+        },
+        None,
+    );
+    let mut queued = bare();
+    queued.schedule.mark_queued(&root("r"));
+    let mut waiting = plain(Answer::Busy);
+    for _ in 0..3 {
+        waiting.answer("r", Answer::Busy, None);
+    }
+    let not_applying: Vec<(&str, Fx, bool, &str, bool)> = vec![
+        ("paused", paused, false, "Paused", false),
+        ("off", off, false, "Checking is off", false),
+        (
+            "held",
+            held,
+            false,
+            "Checking is held until recovery",
+            false,
+        ),
+        (
+            "queued or running",
+            queued,
+            false,
+            "Checking\u{2026}",
+            false,
+        ),
+        ("an own Check now", bare(), true, "Checking\u{2026}", false),
+        (
+            "a busy wait, first step",
+            plain(Answer::Busy),
+            false,
+            "Checking soon",
+            false,
+        ),
+        (
+            "a busy wait, after the steps",
+            waiting,
+            false,
+            "Waiting for another operation to finish",
+            false,
+        ),
+        (
+            "interrupted",
+            plain(Answer::Interrupted),
+            false,
+            "Checking soon",
+            false,
+        ),
+        (
+            "waiting for an unfinished operation",
+            plain(Answer::Repository {
+                recovery_required: true,
+            }),
+            false,
+            "Waiting for an unfinished operation",
+            false,
+        ),
+        (
+            "a failed wait",
+            plain(Answer::Repository {
+                recovery_required: false,
+            }),
+            false,
+            "Can't check",
+            true,
+        ),
+        (
+            "a pending conflict",
+            plain(Answer::ConflictPending),
+            false,
+            "Waiting for the conflict to be resolved",
+            false,
+        ),
+        (
+            "attention",
+            plain(transport(TransportFailure::HostUnapproved {
+                authority: None,
+            })),
+            false,
+            "Needs host approval",
+            false,
+        ),
+        (
+            "preempted",
+            plain(Answer::Cancelled(CancelCause::Preemption)),
+            false,
+            "Checking soon",
+            false,
+        ),
+        (
+            "an attempt this session",
+            plain(Answer::Completed),
+            false,
+            "Checked just now \u{b7} up to date",
+            false,
+        ),
+    ];
+    for (name, fx, checking_now, words, retry_now) in &not_applying {
+        for outcome in [TransportUnavailable, UnlockRequired] {
+            assert_eq!(
+                said(fx, Some(outcome), *checking_now),
+                (words.to_string(), *retry_now),
+                "{name}: {outcome:?} does not apply"
+            );
+        }
+        assert_eq!(
+            said(fx, None, *checking_now),
+            (words.to_string(), *retry_now),
+            "{name}: as stored none"
+        );
+    }
+
+    // "\u{b7} N not shared yet" follows the unshared list, whatever the
+    // status, and before any completed check too (decision 24, P44).
+    let ticket = Some(TargetKind::Ticket);
+    let save = |fx: &mut Fx, count: usize| {
+        let at = fx.at(1);
+        for _ in 0..count {
+            fx.schedule
+                .saved(&root("r"), ItemId::generate(), ticket, false, at);
+        }
+    };
+    let mut before_any = bare();
+    save(&mut before_any, 1);
+    let mut two = bare();
+    save(&mut two, 2);
+    let mut stored_and_saved = bare();
+    save(&mut stored_and_saved, 1);
+    let mut saved_paused = a_paused_repository();
+    save(&mut saved_paused, 1);
+    let mut saved_checking = bare();
+    save(&mut saved_checking, 1);
+    saved_checking.schedule.mark_queued(&root("r"));
+    let mut failed_after = answered(Answer::Completed, vec![target(Disposition::LocalAhead)], 0);
+    failed_after.answer("r", Answer::Interrupted, None);
+    let brought = answered(
+        Answer::Completed,
+        vec![
+            target(Disposition::FastForwarded),
+            target(Disposition::FastForwarded),
+            target(Disposition::LocalAhead),
+        ],
+        0,
+    );
+    let mut shared = answered(
+        Answer::Completed,
+        vec![AttemptTarget {
+            item_id: None,
+            kind: None,
+            disposition: Disposition::LocalAhead,
+            main: true,
+        }],
+        0,
+    );
+    let at = shared.at(1);
+    assert!(shared.schedule.shared(&root("r"), None, true, at));
+    let mut saved_off = Fx::new();
+    saved_off.schedule.add(
+        root("r"),
+        {
+            let mut stored = policy(None);
+            stored.enabled = false;
+            stored
+        },
+        None,
+    );
+    save(&mut saved_off, 1);
+    let mut saved_held = Fx::new();
+    saved_held.schedule.add(
+        root("r"),
+        {
+            let mut stored = policy(None);
+            stored.recovery_suspended = true;
+            stored
+        },
+        None,
+    );
+    save(&mut saved_held, 1);
+    let counted: Vec<(&str, Fx, Option<PollingOutcome>, String, bool)> = vec![
+        (
+            "before any check",
+            before_any,
+            None,
+            "Not checked yet \u{b7} 1 not shared yet".to_owned(),
+            false,
+        ),
+        (
+            "two",
+            two,
+            None,
+            "Not checked yet \u{b7} 2 not shared yet".to_owned(),
+            false,
+        ),
+        (
+            "with a stored outcome",
+            stored_and_saved,
+            Some(TransportUnavailable),
+            format!("{unreachable} \u{b7} 1 not shared yet"),
+            true,
+        ),
+        (
+            "paused",
+            saved_paused,
+            None,
+            "Paused \u{b7} 1 not shared yet".to_owned(),
+            false,
+        ),
+        (
+            "checking",
+            saved_checking,
+            None,
+            "Checking\u{2026} \u{b7} 1 not shared yet".to_owned(),
+            false,
+        ),
+        (
+            "a failed check leaves the list",
+            failed_after,
+            None,
+            "Checking soon \u{b7} 1 not shared yet".to_owned(),
+            false,
+        ),
+        (
+            "with changes brought in",
+            brought,
+            None,
+            "Checked just now \u{b7} Brought in 2 changes \u{b7} 1 not shared yet".to_owned(),
+            false,
+        ),
+        (
+            "a share takes it off",
+            shared,
+            None,
+            "Checked just now \u{b7} up to date".to_owned(),
+            false,
+        ),
+        (
+            "off",
+            saved_off,
+            None,
+            "Checking is off \u{b7} 1 not shared yet".to_owned(),
+            false,
+        ),
+        (
+            "held",
+            saved_held,
+            None,
+            "Checking is held until recovery \u{b7} 1 not shared yet".to_owned(),
+            false,
+        ),
+    ];
+    for (name, fx, outcome, words, retry_now) in &counted {
+        assert_eq!(
+            said(fx, *outcome, false),
+            (words.clone(), *retry_now),
+            "{name}"
+        );
+    }
+}
+
+/// A repository whose policy is paused.
+fn a_paused_repository() -> Fx {
+    let mut fx = Fx::new();
+    fx.add("r", {
+        let mut stored = policy(None);
+        stored.paused = true;
+        stored
+    });
+    fx
 }
 
 /// L-2: a repository an interrupted check holds says why it waits and what

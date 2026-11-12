@@ -33,7 +33,7 @@
 //!   library's own call.
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -42,9 +42,9 @@ use manyhands::{
     drafts::DraftStore,
     repository::{
         AutomaticPollEligibility, ConflictDto, Mutation, MutationDataDto, OperationId,
-        PollPublicationRemoteRequest, PollingStatusDto, PrepareDataDto, ProgressStage, ReadError,
-        RemoteListDto, RemotePollError, RemotePollResult, RemoteSnapshot, RepositoryError,
-        RepositoryService, ResolvedRepository, SharedKeyId,
+        PollPublicationRemoteRequest, PollingOutcome, PollingStatusDto, PrepareDataDto,
+        ProgressStage, ReadError, RemoteListDto, RemotePollError, RemotePollResult, RemoteSnapshot,
+        RepositoryError, RepositoryService, ResolvedRepository, SharedKeyId,
         keys::{
             KeySourceToken, KeyStore, PassphraseResponse, SessionCredentialProvider,
             SessionCredentials, SessionUnlockFailure, UnlockReason, UnlockRequest,
@@ -130,6 +130,9 @@ pub(crate) struct PollingBackend {
     asked: Mutex<Vec<Asked>>,
     /// The root of every `resume_polling` made, in order.
     resumes: Mutex<Vec<String>>,
+    /// The latest outcome `polling_status` says for a root, in place of the
+    /// library's (`store_outcome`).
+    outcomes: Mutex<BTreeMap<String, PollingOutcome>>,
     /// The key `selected_key` answers.
     selected: Mutex<Option<SharedKeyId>>,
 }
@@ -161,6 +164,7 @@ impl PollingBackend {
             check_asks: Mutex::default(),
             asked: Mutex::default(),
             resumes: Mutex::default(),
+            outcomes: Mutex::default(),
             selected: Mutex::default(),
         }
     }
@@ -250,6 +254,16 @@ impl PollingBackend {
     /// before its library call, as the transport does for a protected key.
     pub(crate) fn ask_in_check_now(&self, provider: DesktopProvider, request: UnlockRequest) {
         *self.check_asks.lock().unwrap() = Some((provider, request));
+    }
+
+    /// Makes `polling_status` of `root` say `outcome` as the latest check's,
+    /// in place of what the library stored, so a test sets a stored outcome
+    /// without SQL.
+    pub(crate) fn store_outcome(&self, root: &str, outcome: PollingOutcome) {
+        self.outcomes
+            .lock()
+            .unwrap()
+            .insert(root.to_owned(), outcome);
     }
 
     /// Sets the key `selected_key` answers (E3).
@@ -403,7 +417,12 @@ impl Backend for PollingBackend {
 
     fn polling_status(&self, repo: &ResolvedRepository) -> Result<PollingStatusDto, ReadError> {
         self.record(PollCall::PollingStatus);
-        self.inner.polling_status(repo)
+        let mut status = self.inner.polling_status(repo)?;
+        let root = repo.root().to_string_lossy().into_owned();
+        if let Some(outcome) = self.outcomes.lock().unwrap().get(&root) {
+            status.latest_outcome = Some(*outcome);
+        }
+        Ok(status)
     }
 
     fn publication_remotes(&self, repo: &ResolvedRepository) -> Result<RemoteListDto, ReadError> {
