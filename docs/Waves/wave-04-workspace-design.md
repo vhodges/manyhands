@@ -48,11 +48,12 @@ suggested sequence. This Wave replaces it with the owner's priorities from
 | `01` scope model, Repository scope only | Cycle 01 (title), Cycle 02 (lists) |
 | `02` regions, docks, groups, panel header, footer toggles, persistence, keyboard | Cycle 01 |
 | `03` Tickets, Documents | Cycle 02 |
-| `03` Repositories, Activity | Cycle 03 |
-| `05` Needs attention popover | Cycle 03 |
+| `03` Repositories | Cycle 03a |
+| `03` Activity | Cycle 03b |
+| `05` Needs attention popover | Cycle 03b |
 | `05` Settings sheet frame, Sharing & keys | Cycle 04 |
 | `05` common sheet and dialog frame, Add repository, Unlock key, Close ticket and Approve and merge, Resolve conflict | Cycle 05 |
-| `04` empty item area | Cycle 05 |
+| `04` empty item area | Cycle 03a (text), Cycle 05 (icon) |
 | `06` copy and state vocabulary | every Cycle, for the surfaces it touches |
 | `07` color, type, spacing tokens (both modes) | Cycle 01 (chrome tokens), then each Cycle's surfaces |
 | `08` GPUI Kit mapping | every Cycle, verified against the locked version |
@@ -184,20 +185,22 @@ Made on 2026-11-07, after the owner approved this Wave:
 
 ## Cycles
 
-Five Cycles, in priority order. Each gets a Manyhands ticket before its plan,
-and its Cycle document at the path named below.
+Six Cycles, in priority order, Cycle 03 having been split in two on
+2026-11-12 (Cycle 03a decision 1). Each gets a Manyhands ticket before its
+plan, and its Cycle document at the path named below.
 
 | Cycle | Delivers | Depends on |
 | --- | --- | --- |
 | 01 Workspace shell | Title bar, docks and panels, footer toggles, layout persistence, chrome tokens | Wave approval and RFC amendment |
 | 02 Tickets and Documents panels | The two lists rebuilt to `03` | 01 |
-| 03 Repositories, Activity and Needs attention | Sharing states, the activity log, the popover, the footer's "to share" | 01; D6 for the polling states only |
+| 03a Repositories panel and sharing status | Sharing states, the toolbar and row menu, the footer's "to share" and "Checked for updates", the repository details out of the item area | 01 (D6 merged) |
+| 03b Activity and Needs attention | The activity log, the popover, the three K-19 rows | 01, 03a |
 | 04 Settings sheet | Settings moved from the item area into a sheet | 01 |
 | 05 Existing sheets and dialogs | Add repository, Unlock key, Close ticket and Approve and merge, Resolve conflict and the other dialogs in the design's frame | 01, 04 |
 
-Cycles 02, 03 and 04 each depend only on 01. Cycle 05 also depends on 04,
+Cycles 02, 03a and 04 each depend only on 01; 03b also depends on 03a. Cycle 05 also depends on 04,
 because it moves Add repository out of the Settings sheet's Repositories
-page. Run them in order unless the owner asks to overlap them. 02 and 03 both touch panel headers and shared row
+page. Run them in order unless the owner asks to overlap them. 02 and 03a both touch panel headers and shared row
 helpers, so overlapping them means more merging.
 
 ### Cycle 01: Workspace Shell
@@ -248,11 +251,11 @@ today's region contents unchanged inside the new frame.
   failed pending reads. `model/operations.rs` has no attention entries, so a
   new read-only function counts them from the existing models, and D6's
   states join it when the second of D6 and Cycle 01 merges (amended
-  2026-11-08, Cycle 01 decisions 3 and 14); until Cycle 03 it shows and
+  2026-11-08, Cycle 01 decisions 3 and 14); until Cycle 03b it shows and
   focuses the Activity panel),
   and after a separator the **Settings** button (`settings`, tooltip
   "Settings (Ctrl ,)") opening today's Settings page. The other status
-  items are Cycle 03's.
+  items are Cycle 03a's (amended 2026-11-12, the Cycle 03 split).
 - **Dock menu** on every panel toggle (secondary click, and the keyboard's
   context-menu key as in Zed, or Shift F10; amended 2026-11-08, Cycle 01
   decision 8): "Dock left", "Dock right", "Dock bottom",
@@ -351,23 +354,59 @@ amended 2026-11-11, Cycle 02 decision 10); Open is the default; sort, filter and
 duplicate short codes list every match; keyboard-only navigation and opening
 work in both panels.
 
-### Cycle 03: Repositories, Activity And Needs Attention
+### Cycle 03a: Repositories Panel And Sharing Status
 
-**Planned document:** `docs/Cycles/wave-04-cycle-03-repositories-and-activity.md`
+**Planned document:** `docs/Cycles/wave-04-cycle-03a-repositories.md`
 
-**Purpose:** Make sharing state and recovery visible in plain language, in
-the places the design puts them.
+Amended 2026-11-12: the owner split Cycle 03 into 03a and 03b (Cycle 03a
+decision 1). 03a is ticket `01M784Y8C73B39GR4JWENXE5D0` (`vh-3jpbf`); 03b
+is ticket `01M784Y94Q3AXT6XJX38F5VK1V` (`vh-dt0aq`). Wave 03 D6 has
+merged, so its checking states are in scope here.
+
+**Purpose:** Make each repository's sharing state visible in plain
+language, in the places the design puts it.
 
 **In scope:**
 
 - **Repositories:** toolbar (Add or create a repository, opening today's
-  flow; Check all for updates now, when D6 provides it; More with Rebuild
-  and Remove); rows with `folder-git-2`, name and the right-aligned state
-  from `03` ("2 to share", "Up to date", "This computer", "Can't reach");
-  the Git detail in the tooltip; the context menu (Share main, Open folder,
-  Settings…, Remove from Manyhands… with its confirmation saying the files
-  stay). "Checking…" and "Paused" and the Check now action appear only once
-  D6 has merged.
+  flow; Check all for updates now; More with Refresh, Rebuild the search
+  index and Remove from Manyhands…); rows with `folder-git-2`, name and the
+  right-aligned state from `03` ("2 to share", "Up to date", "This
+  computer", "Can't reach", "Checking…", "Paused", with Can't open, Needs
+  fixing, Locked and Needs attention added, Cycle 03a decision 4); the Git
+  detail in the tooltip; the context menu (the state's sentence and
+  action, Check now, Share main, Open folder, Settings…, Remove from
+  Manyhands… with its confirmation saying the files stay).
+- **The repository details** leave the item area; their facts and actions
+  move to the panel (Cycle 03a decision 5, folding in ticket
+  `01M654G5VGQMXTH3BX9GKE7JEY`).
+- **Footer status:** "N to share" (`cloud-upload`, amber), selecting the
+  repository with unshared work, and "Checked for updates …".
+
+**Out of scope:** Activity, the Needs attention popover and the
+repository states its count includes (Cycle 03b); the Add repository sheet
+(Cycle 05); background polling itself (D6).
+
+Amended 2026-11-09 by Wave 03 D6 (decision 13, design W-5): this Cycle's
+"Check all for updates now" submits D6's Check now per repository.
+
+**Exit evidence:** Each repository state comes from real service state,
+with no fabricated rows; every action works by keyboard; no secret
+appears in a row, tooltip, menu or footer item (extend the existing
+privacy tests).
+
+### Cycle 03b: Activity And Needs Attention
+
+**Planned document:** `docs/Cycles/wave-04-cycle-03b-activity-and-needs-attention.md`
+
+Amended 2026-11-12: split from Cycle 03 (Cycle 03a decision 1); depends
+on Cycle 03a.
+
+**Purpose:** Make recovery visible in plain language, in the places the
+design puts it.
+
+**In scope:**
+
 - **Activity:** rows of time, colored icon, message in the `06` register,
   repository tag and at most one action; the Git detail in the tooltip;
   newest first; failures kept until resolved; the "Show only things that
@@ -377,23 +416,24 @@ the places the design puts them.
   one row per unresolved recovery state with its single action, and "Show
   everything in Activity". It is a filtered view of the same store as
   Activity.
-- **Footer status:** "N to share" (`cloud-upload`, amber), selecting the
-  repository with unshared work. "Checked for updates …" only once D6 has
-  merged.
+- **Which repository states the footer's Needs attention count includes**
+  (Cycle 03a's downstream obligation): Can't reach, Can't open, Needs
+  fixing, and Locked or Needs attention from a stored outcome or from a
+  check's problems.
 
-**Out of scope:** The Add repository sheet (Cycle 05); background polling
-itself (D6).
+**Out of scope:** The repository rows and the footer's status items
+(Cycle 03a); background polling itself (D6).
 
 Amended 2026-11-09 by Wave 03 D6 (decision 13, design W-5): this Cycle also
-owns rewrapping the three operation-area rows that Cycle 01's proposed K-19
-names (the draft-flush Retry, the pending repository Retry, and pending
-controls such as Abandon), and its "Check all for updates now" submits D6's
-Check now per repository.
+owns rewrapping the three operation-area rows that Cycle 01's K-19
+(accepted 2026-11-09) names (the draft-flush Retry, the pending repository
+Retry, and pending controls such as Abandon). Cycle 03b reads each
+repository's state from Cycle 03a's state function, not a second
+derivation (Cycle 03a, Explicit Exclusions).
 
 **Exit evidence:** Failures persist until resolved and appear in both
 Activity and the popover; every popover action works by keyboard; Activity
-can be hidden and the popover still works; each repository state comes from
-real service state, with no fabricated rows; no secret appears in a row,
+can be hidden and the popover still works; no secret appears in a row,
 tooltip or popover (extend the existing privacy tests).
 
 ### Cycle 04: Settings Sheet
@@ -483,7 +523,8 @@ shared tokens and frame, and the split line below is unlikely to be needed.
   changing how parts are chosen or saved.
 - **Empty item area** (`04`, "Empty pane"): the faded app icon and "Open a
   ticket or document from the lists". The "Ctrl K to search" line waits
-  for Search.
+  for Search. (Amended 2026-11-12, Cycle 03a decision 13: Cycle 03a shows
+  the text; this Cycle adds the icon.)
 
 **Out of scope:** New behavior in any of these surfaces, the General and
 Appearance settings pages, and theme switching.

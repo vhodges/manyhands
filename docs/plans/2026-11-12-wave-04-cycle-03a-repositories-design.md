@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 03a Repositories Panel And Sharing Status Design"
 date: 2026-11-12
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -21,7 +21,9 @@ panel. Approval covers the mechanisms, rulings, named test edits and task
 order. It does not authorize implementation, pushes beyond the ticket
 branch, merging or closing.
 
-**Draft, revision 4.** Grounded at the ticket branch `7034522f`, which
+**Approved 2026-11-12** by the owner (revision 4), with decision 25
+(subagent-driven implementation in a fresh session); the Document
+Amendments below were applied in the approval commit. Grounded at the ticket branch `7034522f`, which
 holds origin/main `37be101d` (Cycle 01, Cycle 02 and Wave 03 D6 merged).
 Revision 1 (`f6d57bd4`) had two reviews in round 1 (source and
 feasibility; contract and consistency). Revision 2 (`2a0f202e`) applied

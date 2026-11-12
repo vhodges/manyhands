@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 03a Repositories Panel And Sharing Status Implementation Plan"
 date: 2026-11-12
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -13,8 +13,9 @@ id: "01M7888XHHWDYGFXG0ZEXNG8KX"
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task.
-> **Draft, revision 4:** not approved; nothing here is authorized until the
-> owner approves the three documents and chooses the execution method.
+> **Approved 2026-11-12** (revision 4). Execution is subagent-driven and
+> serial, in a fresh session from the handoff brief
+> `docs/plans/2026-11-12-wave-04-cycle-03a-handoff.md` (Cycle decision 25).
 > Re-read the design before each task and record every checkpoint on
 > ticket `01M784Y8C73B39GR4JWENXE5D0`. Steps use checkbox (`- [ ]`) syntax.
 

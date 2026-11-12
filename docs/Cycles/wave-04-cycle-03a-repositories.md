@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 03a: Repositories Panel And Sharing Status"
 date: 2026-11-12
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -14,7 +14,8 @@ Ticket `01M784Y8C73B39GR4JWENXE5D0` (`vh-3jpbf`).
 [Design](../plans/2026-11-12-wave-04-cycle-03a-repositories-design.md) and
 [implementation plan](../plans/2026-11-12-wave-04-cycle-03a-repositories-implementation.md).
 
-Status: **draft, revision 4.** Revision 4 applies review round 3 (0
+Status: **approved 2026-11-12** (revision 4). The owner wrote: "Docs are approved.  We'll use subagent-driven development (there should be a skill for this).  Prepare the brief and handoff prompt"
+(decision 25). Revision 4 applies review round 3 (0
 Blocking, 4 Important, 9 Minor); it was not independently re-reviewed.
 Round 3 was the third review of the unshared list, so its contract is
 now a table of required outcomes (design Part A, U1–U15) and its task is
@@ -348,6 +349,21 @@ decisions govern and are not repeated.
     removes it (decision 11). So a row never reads "Up to date" right
     after a save. *Alternative:* wait for the next check, as a known
     limit.
+
+
+**Answered by the owner at approval (2026-11-12):**
+
+25. **Implementation is authorized, subagent-driven and serial, in a
+    fresh session.** One implementer per task, then a fresh reviewer, one
+    at a time, following `.agents/skills/implementing-a-cycle/SKILL.md`
+    and `superpowers:subagent-driven-development`. The fresh session works
+    from the brief `docs/plans/2026-11-12-wave-04-cycle-03a-handoff.md`.
+    Authorized: Tasks 0–10, the named test edits E-1 to E-16 and further
+    edits under decision 17, and pushing this ticket branch after each
+    task. Not authorized without the owner's go-ahead at the time: a push
+    of any other branch, a pull request, the merge, closing the ticket,
+    worktree cleanup, native CI, creating tickets, and `ticket save` or
+    `comment add` on any other ticket.
 
 ## Known Limits
 
