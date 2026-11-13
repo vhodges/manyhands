@@ -47,8 +47,10 @@ use crate::desktop::{
     services::requests::Intent,
 };
 
-pub(crate) const STOP: &str = "Stop at a safe point";
-pub(crate) const STOPPING: &str = "Stopping\u{2026}";
+// The model owns these words (R-41); the dialog keeps its old paths.
+pub(crate) use crate::desktop::model::activity::copy::{
+    CHECK_HOST, OPEN_SHARING_AND_KEYS, STOP, STOPPING, UNLOCK,
+};
 /// A stop at a safe point answered `cancelled` (MH-COLLAB-006).
 pub(crate) const CANCELLATION_FINISHED: &str =
     "The cancellation finished: nothing after the completed steps ran.";
@@ -62,9 +64,6 @@ pub(crate) const REMOVED: &str = "Cancelled before it ran. Nothing was changed."
 /// The run's entry was dismissed from the operation area, and its answer
 /// with it.
 pub(crate) const DISMISSED: &str = "This run was dismissed from Activity.";
-pub(crate) const UNLOCK: &str = "Unlock\u{2026}";
-pub(crate) const OPEN_SHARING_AND_KEYS: &str = "Open Sharing & keys";
-pub(crate) const CHECK_HOST: &str = "Check host";
 pub(crate) const OPEN_REPOSITORY_DETAILS: &str = "Open repository details";
 
 /// The step a stage lights (L3); `None` for a stage before the steps, or
