@@ -14,7 +14,7 @@ Ticket `01M7AMAPNHHTNECXBF4CA5WPKV`.
 [Design](../plans/2026-11-13-wave-04-cycle-04-settings-sheet-design.md) and
 [implementation plan](../plans/2026-11-13-wave-04-cycle-04-settings-sheet-implementation.md).
 
-Status: **draft**, revision 3.
+Status: **draft**, revision 4.
 
 - On 2026-11-13, with Cycle 03b in implementation, the owner asked to
   create this ticket and plan the Cycle. Execution waits until Cycle 03b
@@ -38,10 +38,23 @@ Revision history:
   - scoped re-review: 0 Blocking, 5 Important, 18 Minor;
   - adversarial review of the close and focus mechanics: 1 Blocking, 7
     Important, 8 Minor.
-- Revision 3 applies both. Most of round 2 sits in where focus goes, so
-  that contract is now a table of required outcomes (design A6), which
-  Task 2 writes test-first. **Revision 3 has not been independently
-  reviewed.**
+- Revision 3 applied both. Most of round 2 sat in where focus goes, so
+  that contract became a table of required outcomes (design A6).
+- Review round 3 read revision 3 at `58bee94b`:
+  - scoped re-review: 1 Blocking, 3 Important, 8 Minor;
+  - adversarial review of the focus table: 3 Blocking, 5 Important, 7
+    Minor.
+- **Rounds 2 and 3 both found Blocking issues in one mechanism:** how
+  focus is kept in the sheet and returned from it. As the planning skill
+  directs after a third such round, revision 4 stops rewriting that
+  mechanism.
+  - Design A6's table (F1–F19) is the contract.
+  - The design's mechanism text is a sketch.
+  - Design A7 lists what the reviews found a mechanism must survive.
+  - Task 2 builds the mechanism test-first, under a design checkpoint
+    that stops for the owner if a row cannot be met.
+- Revision 4 also applies round 3's other findings. **Revision 4 has not
+  been independently reviewed.**
 - The plan has 10 tasks (0–9). There is no split line: the Wave defines
   none for this Cycle.
 
@@ -198,8 +211,8 @@ Settings, footer, content-area or keymap files (planning sweep,
 3. **The details sheet gives way.** Settings opened while an item's
    details sheet is open closes that sheet first and loses no edit (Wave
    decision 6).
-4. **Focus is trapped and returns** (`05`; RFC 343–345), as the design's
-   table A6 sets out:
+4. **Focus is trapped and returns** (`05`; RFC 343–345), exactly as the
+   design's table A6 (F1–F19) sets out. In short:
    - Tab stays inside the sheet, and focus never stays behind it while it
      is open;
    - Escape closes it;
@@ -207,7 +220,8 @@ Settings, footer, content-area or keymap files (planning sweep,
      that is the list, and for a popover row the footer item (Cycle 03b);
    - when that control is no longer drawn, focus goes to its region, and
      for a hidden footer item to the next footer control (03b R-49);
-   - a quiet close (quitting, Show in Activity) moves no focus back.
+   - Show in Activity and quitting put focus where they always do
+     (Activity, Quit now, a quit dialog), not back on the origin.
 5. **Every way in lands.** Each existing route into Settings opens the
    sheet at its page and control, by keyboard as well as pointer (Wave;
    design Part D).
@@ -238,7 +252,7 @@ Settings, footer, content-area or keymap files (planning sweep,
    (`MH-NFR-003`; RFC 321–328).
 9. **A typed passphrase does not outlive the page.** It is emptied when
    Settings closes, when the page leaves Sharing & keys, and when the
-   other key form is chosen (D2).
+   Generate form is hidden by either button (D2).
 
 ## Acceptance And Exit Evidence
 
@@ -252,7 +266,7 @@ reports.
 | A1 | Settings opens as a sheet from the footer and Ctrl ,, and the workspace keeps it (Wave scope; contract 1) | `settings_is_a_sheet_the_workspace_keeps` (P1); `each_route_lands_on_its_page_and_control` (P4); E-18's footer tests | Planned |
 | A2 | Opening and closing Settings leaves the open item, its scroll position and any draft untouched (Wave exit; contract 2) | `settings_leaves_the_item_as_it_was` (P2) | Planned |
 | A3 | Opening Settings while a details sheet is open closes it first and loses no edit (Wave exit; contract 3) | `settings_replaces_the_details_sheet_and_keeps_its_edits` (P3); E-2 | Planned |
-| A4 | Focus trapped, Escape closes, focus returns to the invoking control (Wave scope; contract 4) | Design A6 rows F1–F17, through `focus_returns_to_what_opened_settings` (P5), `settings_closes_every_way` (P6), `focus_stays_inside_settings` (P23) and `late_work_moves_no_focus` (P22) | Planned |
+| A4 | Focus trapped, Escape closes, focus returns to the invoking control (Wave scope; contract 4) | Design A6 rows F1–F19, each read after a draw, through P3, P4, `focus_returns_to_what_opened_settings` (P5), `settings_closes_every_way` (P6), P14, `late_work_moves_no_focus` (P22) and `focus_stays_inside_settings` (P23) | Planned |
 | A5 | Every existing settings journey and recovery route passes through the sheet by keyboard (Wave exit; contract 5) | `routes_by_keyboard` (P20); `sharing_and_keys_by_keyboard` (P19); P4; E-18; the keyboard journeys in `D/view/keyboard_tests/settings.rs` and `polling_keyboard`, edited only as E-5, E-12, E-14, E-15 and E-16 say | Planned |
 | A6 | The pages folded into the design's menu (Wave scope) | `settings_has_three_pages` (P16); `one_repository_is_chosen` (P10); `the_key_forms_open_from_their_buttons` (P13) | Planned |
 | A7 | Behaviour unchanged, with contract 6's exceptions | `key_rows_send_what_todays_controls_sent` (P12); today's page tests pass, edited only as the named edits say | Planned |
@@ -396,3 +410,4 @@ None blocking. Design U-3 is checked on screen, and U-5 in Task 0.
 | Owner, 2026-11-13, after review round 1 | Decision 3's attribution and two more items; the click outside | Owner decisions | Decisions 12 and 13 | Session, 2026-11-13 |
 | Review round 2, scoped re-review (revision 2, `2574a277`) | 0 Blocking, 5 Important, 18 Minor: task order (P3, E-13), no route for W-5 and W-6, origins not wired, module runs after Task 5. All round-1 Blocking and Important findings resolved | Important, Minor | Revision 3 (design Review Record) | Review report, 2026-11-13 |
 | Review round 2, adversarial on close and focus (revision 2, `2574a277`) | 1 Blocking, 7 Important, 8 Minor. Blocking: focus can be left behind the open sheet with no keyboard way back | Blocking, Important, Minor | Revision 3: contract 4; design A6's table, R-43 to R-56 | Review report, 2026-11-13 |
+| Review round 3, scoped re-review and adversarial on A6 (revision 3, `58bee94b`) | Scoped: 1 Blocking, 3 Important, 8 Minor. Adversarial: 3 Blocking, 5 Important, 7 Minor. Every Blocking finding is in the focus mechanism: a render-time check that reads the previous frame, Kit popups and Root's context menu, a quiet close leaving the Kit sheet active | Blocking, Important, Minor | Revision 4: the third round in one mechanism. A6 is the contract (F1–F19), the mechanism a sketch, A7 its pitfalls; Task 2 test-first under a design checkpoint. Contracts 4 and 9; A4 | Review report, 2026-11-13 |

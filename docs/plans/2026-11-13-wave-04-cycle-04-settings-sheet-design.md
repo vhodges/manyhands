@@ -36,7 +36,7 @@ citation below against it (U-5). After approval, a note goes on
 `01M5F3GVDYTH1Q5V5FCS9YF7V3` saying which items this Cycle takes. That is
 the planner's step 9 work, not a Document Amendment.
 
-Status: **draft**, revision 3.
+Status: **draft**, revision 4.
 
 - Revision 2 applied review round 1 (source and feasibility: 0 Blocking,
   10 Important, 9 Minor; contract and consistency: 2 Blocking, 16
@@ -46,7 +46,16 @@ Status: **draft**, revision 3.
   mechanics: 1 Blocking, 7 Important, 8 Minor).
 - Most of round 2 sits in where focus goes, so that contract is now a
   table of required outcomes (A6), which Task 2 writes test-first.
-- **Revision 3 has not been independently reviewed.**
+- Revision 4 applies review round 3 (scoped re-review: 1 Blocking, 3
+  Important, 8 Minor; adversarial review of A6: 3 Blocking, 5 Important,
+  7 Minor). Every Blocking finding of rounds 2 and 3 sits in one
+  mechanism: how focus is kept in the sheet and returned from it. As the
+  planning skill directs after a third such round, that mechanism is no
+  longer rewritten here. **A6's table is the contract.** A2's origin
+  rules, A3 and A4 are the planner's sketch, with the pitfalls the
+  reviews found (A7). Task 2 builds whatever meets the table, test-first,
+  under a design checkpoint, and a row it cannot meet goes to the owner.
+- **Revision 4 has not been independently reviewed.**
 
 ## Conventions
 
@@ -472,8 +481,10 @@ Status: **draft**, revision 3.
     (`K/root.rs:341-363`) closes a dialog at once, then focuses its
     previous handle 0.25 s later if the dialog count is unchanged. It does
     not look at sheets. It runs when a dialog's `on_ok` returns true:
-    Drafts' Discard… (`D/view/drafts/actions.rs:248`) and quit's Not saved
-    (`D/view/quit.rs:259-262`). The app's confirmation and passphrase
+    Drafts' Discard… (`D/view/drafts/actions.rs:248`), quit's Not saved
+    (`D/view/quit.rs:259-262`), the retire asks
+    (`D/view/operations/retire_asks.rs:159`) and the edit review
+    (`D/view/item/edit/review.rs:261`). The app's confirmation and passphrase
     dialogs close at once.
 47. **`focus_lost`'s target.** GPUI fires `focus_lost` when focus moves
     from something to nothing (`gpui-pre-0.3.6/src/window.rs:3360-3369`).
@@ -509,16 +520,16 @@ pub(super) enum SheetOwner {
 3. **The host is open, but the owner is not `Settings`:** a defensive
    case. `settings_closed` runs quietly.
 4. **`Details(pane)`:** as today's `Some(pane)`.
-5. **A requested details sheet** (`content.details`): as today. It cannot
-   be requested while Settings is open, since its chip is behind the
-   sheet, and `show_settings` drops one requested before it (A2 step 4;
-   R-51).
+5. **A requested details sheet** (`content.details`) never opens while
+   the owner is `Settings`. `show_settings` drops one requested before it,
+   whether or not a sheet is active (R-51).
 
 Owner changes:
 
 - `open_item` clears the owner only when it is `Details` (fact 29).
-- `wait_to_quit`, and every quit path before it asks anything (EditsNotKept,
-  NotSaved), closes Settings quietly first (A3; R-52).
+- Every quit path closes Settings quietly before it asks or waits
+  (EditsNotKept, Not saved, `wait_to_quit`), after closing dialogs, as
+  today's order for the details sheet (A3; R-52).
 
 The details sheet and Settings never coexist: Root has one slot (fact 33;
 Wave decision 6).
@@ -595,8 +606,8 @@ The page methods that focus a field today stop focusing when called from
 `arrive`, and give back the handle instead (fact 10): `manage_root`,
 `ask_again`, the Hosts `check_host` and `set_up_sharing`.
 
-**The origin** (R-6, R-43). The control focus returns to on close is the
-first of:
+**The origin** (R-6, R-43; a sketch, A7). The control focus returns to
+on close is the first of:
 
 1. the `origin` argument;
 2. the Workspace's pending origin, `settings_origin`. Cycle 03b's
@@ -604,9 +615,9 @@ first of:
    handle, or the footer item for a popover row) for the length of one
    handler call, and clears it after. So `attend`, `row_action` and
    `open_route` keep their signatures;
-3. when focus is in one of the Workspace's own layers (03b's popover, a
-   row menu, a dock menu), the handle that layer gives focus back to (its
-   `restore`), and the layer closes;
+3. while one of the Workspace's own layers is open (03b's popover, a row
+   menu, a dock menu), whether or not it holds focus: its `restore`, else
+   its context (the row or the list it was opened on). The layer closes;
 4. the focused handle.
 
 **Open** means the owner is `Settings` and a sheet is active (R-36).
@@ -619,15 +630,15 @@ first of:
    quietly first.
 3. **If Settings is open**, calls `arrive` and focuses its target, else
    the entry. The origin recorded at opening is kept.
-4. **If a sheet is active and the owner is not `Settings`** (the details
-   sheet), sets the owner to `None` and calls `window.close_sheet`. That
-   gives focus back to the sheet's chip (facts 28, 34). The sheet's edits
-   are already in the draft (fact 32). A requested details sheet
-   (`content.details`) is dropped (R-51).
-5. **Records the origin** (above), and the region it is in
-   (`focused_region`; `None` for the footer) as `settings_return`'s
-   region (R-45). If the origin is not the focused handle, focuses it,
-   so that the Kit's own record (fact 34) is the origin too (R-44).
+4. **Drops a requested details sheet** (`content.details`; R-51). **If a
+   sheet is active and the owner is not `Settings`** (the details sheet),
+   sets the owner to `None` and calls `window.close_sheet`. That gives
+   focus back to the sheet's chip (facts 28, 34). The sheet's edits are
+   already in the draft (fact 32).
+5. **Records the origin** (above), held weakly, with the origin's own
+   region (`region_of(origin)`, or the footer; not the focused handle's)
+   (R-45). If the origin is not the focused handle, focuses it, so that
+   the Kit's own record (fact 34) is the origin too (R-44).
 6. **Sets the chosen repository** (R-14; C1).
 7. **Opens the sheet.**
    - Sets the owner to `SheetOwner::Settings` and the host's `open` flag
@@ -656,20 +667,26 @@ Settings closes by any of:
 - "Show in Activity" (Part C3);
 - quitting.
 
-The Kit's `on_close` does not run on every path (fact 37), so the close is
-detected in `sync_sheet` (A1 case 2). Then `settings_closed(quiet)`:
+A sketch (A7). The Kit's `on_close` runs at once for Escape, the close
+button and the scrim (fact 37), so `settings_closed` runs there, and
+`sync_sheet` (A1 case 2) is the backstop for closes made by a direct
+`window.close_sheet`. `settings_closed(quiet)`:
 
+0. if the Kit's sheet is still active (a close the Kit did not make:
+   quitting, Show in Activity, A1 case 3), calls `window.close_sheet`
+   first, before any focus move or dialog;
 1. sets the owner to `None` and clears the host's `open` flag (A4);
 2. hides the host (`Shown::Tabs`). That empties a typed passphrase (B3)
    and a pending Add (A4);
 3. unless `quiet`, or a dialog or sheet is now open, focuses the origin
-   and sets `settings_return` (below).
+   and arms `settings_return` (below). It is armed only here.
 
 A2 step 5 focused the origin before `open_sheet`, so the Kit's own
 `close_sheet` already gives focus back to it on every close the Kit makes
 (fact 34). Step 3 does the same for closes the Kit did not make.
 
-**Quietly.** Steps 1 and 2 only:
+**Quietly.** Steps 0 to 2 only; the code that closed Settings then puts
+focus where A6 says:
 
 - every quit path, which then focuses Quit now or asks (A1; R-52);
 - Show in Activity, which then focuses Activity (C3);
@@ -681,31 +698,25 @@ frame's focus path, which ran through the sheet, inside the Content region
 (facts 26, 47). Left alone, focus would land in the item area. Instead:
 
 - `settings_return` holds the origin's region from A2 step 5. The
-  Workspace's `focus_lost` takes it, if it is set, and focuses that
-  region (`focus_region`). It is cleared at the end of the next frame
-  either way.
+  Workspace's `focus_lost` takes it, if it is set and no modal is open,
+  and focuses that region (`focus_region`). `focus_lost` and the render
+  after the close each clear it.
 - A footer origin has no region. `keep_focus_in_footer` (03b R-49) runs
   in the same render, after `sync_sheet` (`render.rs:179`, then
   `footer.rs:51`). It moves focus to E1's control when the footer item
   has hidden. Cycle 03b's R-50 does not apply, since no origin is its
   `attention_focus` (A2, "The origin", case 3).
-- When the origin's handle was dropped, its region is focused, else
-  `Region::Content`.
+- When the origin's handle was dropped, its region is focused. With no
+  origin, or none with a region, `Region::Content`.
 
-**The sheet keeps focus** (R-46). On each render, the Workspace checks.
-While Settings is open and no dialog is open, if focus is not inside the
-sheet layer, it focuses the shown page's entry.
-
-- "Inside the sheet layer" means the focus is inside the div that
-  `item_area_region` wraps around Root's sheet layer (fact 26), which
-  tracks a focus handle of its own (`sheet_layer`). Deferred draws keep
-  their parent dispatch node, so `sheet_layer.contains_focused` holds
-  for any focus in the sheet, the Kit's close button included.
-- This catches:
-  - the Kit's deferred focus restore after a confirmed dialog (fact 46);
-  - a route target that is not drawn (facts 46, 47);
-  - any landing that slips past A4.
-- U-6 checks that a focus change brings a render.
+**The sheet keeps focus** (R-46; a sketch, A7). While Settings is open
+and no dialog is, focus that sits on a control the Workspace drew behind
+the sheet in the last frame (a region, the footer, the title bar) goes to
+the shown page's entry. Focus that is not yet drawn, inside the sheet, or
+in one of Root's own overlays (a Kit popup, an input's context menu) is
+left alone. While Settings is open and no dialog is, `focus_lost` with no
+restore target also focuses the page's entry. The check runs where it
+sees the frame just drawn, not the one before it (A7).
 
 ### A4. Escape, and work that finishes after a close
 
@@ -717,9 +728,10 @@ sheet layer, it focuses the shown page's entry.
   reported in Activity. The page shows its result when Settings next opens
   on the same repository, since the page entities are kept and `opened`
   reads again.
-- **Settings knows whether it is open** (R-47). `SettingsHost` holds
-  `open: Rc<Cell<bool>>`, set by `show_settings` and `settings_closed`,
-  and gives each page a clone when it makes it.
+- **Settings knows whether it is open** (R-47; a sketch, A7).
+  `SettingsHost` holds `open: Rc<Cell<bool>>`, set by `show_settings` and
+  cleared by `settings_closed`, which runs at once on the Kit's close
+  (A3). It gives each page a clone when it makes it.
 - **While it is false, a landing moves no focus and opens nothing:**
   - Repositories' `resume_submit` (`repositories.rs:418-427`,
     `:461-478`). A folder check that lands after the close opens no
@@ -763,30 +775,85 @@ sheet layer, it focuses the shown page's entry.
 
 ### A6. Where Focus Goes: Required Outcomes
 
-Focus has been the contract's most-reviewed part, so its outcomes are a
-table. Task 2 writes them test-first, before the mechanism. A row the
-implementer cannot express against the code goes back to the orchestrator
-and the owner.
+**This table is the contract** for where focus goes (revision 4). A2's
+origin rules, A3 and A4 sketch one way to meet it; A7 lists what the
+reviews found that a mechanism must survive. Task 2 writes every row it
+owns as a test before it changes any focus code. A row it cannot meet
+goes back to the orchestrator and the owner.
+
+**Reading a row.** Each row's focus is read after at least one draw, and
+after a second draw when `focus_lost` or a render-time rule moves focus
+on the first. A read inside the update that moved focus does not count.
 
 | F | When | Focus goes to | Test |
 | --- | --- | --- | --- |
-| F1 | Settings opens on a route naming a field the page draws | That field | P4 |
+| F1 | Settings opens on a route naming a field the page draws | That field, still there after the next draw | P4 |
 | F2 | Settings opens on a route naming no field, or a field not drawn | The page's menu entry | P4 |
 | F3 | Settings opens over the details sheet; later it closes | F1 or F2; on close, the chip | P3 |
 | F4 | Settings closes (Escape, close button, scrim) and the origin is drawn | The origin | P5 |
-| F5 | F4, the origin being an Activity row (button, menu or Enter) | The Activity list, the row still highlighted | P5 |
+| F5 | F4, the origin being an Activity row (button, menu or Enter) | The Activity list, the row still highlighted, else 03b's cursor rule when the row has gone | P5 |
 | F6 | F4, the origin being a popover row, the footer item still shown | The footer item | P5 |
 | F7 | F6, the footer item hidden by then | E1's control (03b R-49) | P5 |
-| F8 | F4, the origin being 03b's popover itself or a row menu (Ctrl+, pressed there) | The control that layer returns to | P5 |
-| F9 | Settings closes, the origin no longer drawn | The origin's region | P5 |
-| F10 | Settings closes, the origin's handle dropped | Its region, else the content region | P5 |
+| F8 | F4, Settings opened while 03b's popover, a row menu or a dock menu was open (Ctrl+, pressed there) | The control that layer returns to, else its row or list; if that is gone, F9 | P5 |
+| F9 | Settings closes, the origin no longer drawn | The origin's own region | P5 |
+| F10 | Settings closes with no origin, or one with no region (its control gone) | The content region | P5 |
 | F11 | Show in Activity | The Activity list | P14 |
 | F12 | Quitting with Activity displayed | Quit now | P6 |
-| F13 | Quitting with Activity hidden | Where quitting puts it today, not inside a closed sheet | P6 |
-| F14 | A dialog opened from Settings closes | Back inside the sheet, on its origin | P23 |
-| F15 | The Kit's deferred restore, or any landing, puts focus behind the open sheet | The shown page's entry, on the next render | P23 |
-| F16 | A request or read lands after Settings closed | Unchanged | P22 |
-| F17 | `FocusContent` or a review landing while Settings is open | Unchanged, inside the sheet | P23 |
+| F13 | Quitting with Activity hidden | The origin if drawn, else the content region | P6 |
+| F14 | Quitting with unkept edits | The EditsNotKept dialog; its Cancel as today | P6 |
+| F15 | A dialog opened from Settings closes | Inside the sheet: its origin, else the page's entry, also within 0.25 s of an earlier deferred close | P23 |
+| F16 | The Kit's deferred restore, or any landing, puts focus on a control drawn behind the open sheet | The shown page's entry | P23 |
+| F17 | A request or read lands after Settings closed | Unchanged | P22, P24 |
+| F18 | A focus landing (`open_created`, a review landing) while Settings is open | Unchanged, inside the sheet | P23 |
+| F19 | A Kit popup in the sheet (the interval select) or Root's context menu over an input in it is open | That popup, until it closes; then back inside the sheet | P23 |
+
+### A7. What A Mechanism Must Survive
+
+Found by review rounds 2 and 3. Each is a fact a mechanism for A6 must
+handle; none prescribes the mechanism.
+
+1. **Focus reads lag a frame.** `FocusHandle::contains` and
+   `contains_focused` read the previous rendered frame
+   (`gpui-pre-0.3.6/src/window.rs:512-524`), while `window.focus` takes
+   effect at once and asks for a redraw (`:2302-2312`). A control drawn
+   for the first time this frame is not "inside" anything yet, so a
+   render-time check sees a route's new target as outside the sheet. GPUI
+   fires focus listeners after the frame swap (`:3352-3410`), where the
+   new frame is visible.
+2. **Root's overlays sit outside the Workspace.** Root draws its native
+   menu overlay, which holds an input's context menu on Linux, as a
+   sibling of the Workspace view (`K/root.rs:598-602`;
+   `K/native_menu/fallback.rs:38-58`). It is neither in the sheet nor a
+   dialog.
+3. **Kit popups move focus.** The interval `Select`
+   (`D/view/settings/polling.rs:339`) focuses its list while open, and
+   closes when its trigger loses focus (`K/select.rs:378-397`;
+   `K/searchable_list/state.rs:106-108`).
+4. **The Kit's deferred restore** (fact 46) focuses a dialog's previous
+   handle 0.25 s after it closes, whatever is open by then. A dialog
+   opened within that time records the pending handle as its own previous
+   handle (`K/root.rs:301-305`).
+5. **`close_sheet` and `close_all_dialogs` move focus** without looking at
+   what else is open (`K/root.rs:365-377`, `:410-423`). So a Kit sheet
+   left active after Settings is logically closed is closed later by
+   `sync_sheet`'s rule for sheets it does not own (`content.rs:311-317`),
+   and focus then jumps to the sheet's recorded handle, behind any dialog
+   opened since.
+6. **`focus_lost` may have no target.** When the lost focus had no
+   focusable ancestor, `focus_lost_restore_target` is `None`, the
+   Workspace's `focus_lost` does nothing, and nothing redraws (fact 47).
+7. **A layer's `restore` may be empty.** 03b's Activity menu keeps
+   `restore: Option<…>` (03b design `:2249`). The repository menu sets it
+   only for a pointer menu (`D/view/workspace/repository_menu.rs:272-285`),
+   and drops the menu under a modal (`:299-302`).
+8. **`region_of` defaults to Content** (`D/view/workspace/focus.rs:207-219`),
+   and `focused_region` reads the previous frame.
+9. **`on_next_frame` never runs in tests** (`render.rs` near `:181-183`),
+   so state cleared "at the end of the next frame" must be cleared by an
+   event a test also drives.
+10. **The page `open` flag is only as fresh as the close that clears it.**
+    A landing between the Kit's close and the next render sees it still
+    set unless the close clears it at once.
 
 ## Part B: The Frame
 
@@ -985,7 +1052,9 @@ One page, in this order:
      `operations_changed` (`keys/commands.rs:269-275`), since the retry
      prompt is drawn inside that form (`keys/render.rs:259-300`). A
      route's retry (W-26) also focuses its passphrase field (R-T15a;
-     R-54).
+     R-54). While the page is retrying, Use a key I already have… is
+     unavailable, with the reason "Finish or cancel the retry first."
+     (R-57).
 3. **The info box** (`lock` icon): "If your key has a passphrase,
    Manyhands asks for it once each time you open the app and never stores
    it." (fact 43; R-19).
@@ -1232,9 +1301,9 @@ today's `settings/*_tests.rs`. Test-only accessors:
 | P1 | `settings_is_a_sheet_the_workspace_keeps` | After Ctrl+,, the owner is Settings and a sheet is active across frames: with an item shown, with Drafts shown under it, and after `open_item` runs (an async landing). A details sheet requested in the same frame as Ctrl+, is dropped (A1 case 5; R-51) |
 | P2 | `settings_leaves_the_item_as_it_was` | With an item open, its region scrolled and a field edited into a draft: Ctrl+,, Tab to a control below the fold, the `AddRepository` route (W-6's) to `add-path`, then Escape. The same tab is shown, `tab_keys` unchanged, the item's offset unchanged, and the draft holds the edit (Wave exit evidence) |
 | P3 | `settings_replaces_the_details_sheet_and_keeps_its_edits` | Details sheet open with a field edited: Ctrl+, opens Settings, the details sheet is gone and the draft holds the edit. Escape returns focus to the chip (Wave decision 6; R-6) |
-| P4 | `each_route_lands_on_its_page_and_control` | A table over the ten routes, through `show_settings`: `settings_shown`, the focused element's id and `settings_chosen` (A6 F1, F2). Rows include: the key list while still being read (the entry, then the radio when the read lands); a route naming no root after the panel's selection changed and after it did not (R-14); `Inspect` leaving the choice alone (R-55); `Hosts(path)` with the panel's selection on another repository (R-23). For each W no existing test raises (W-9, W-14, W-16 to W-20, W-33 to W-35), a row raises it through its own handler (the wrapper, `row_action`, `attend` or `open_route`) |
-| P5 | `focus_returns_to_what_opened_settings` | A table, one row per A6 row F4 to F10: the footer item; a ticket list row; an item header's Share…; the save banner; a lifecycle dialog route (the dialog's origin); an Activity row; a popover row; a popover row whose footer item has hidden by close time; Ctrl+, pressed while 03b's popover holds focus, and while a row menu does; W-31 inside the sheet (the first origin); a ticket row filtered out while Settings was open (the Tickets panel's region); an origin whose handle was dropped |
-| P6 | `settings_closes_every_way` | A table: Escape, the close button, the scrim, Show in Activity, quitting with Activity displayed, quitting with Activity hidden, quitting with a confirmation open inside Settings, quitting with unkept edits. Each leaves `Shown::Tabs`, the owner `None`, the host closed and a typed passphrase empty. Focus is as A6 F11 to F13 say |
+| P4 | `each_route_lands_on_its_page_and_control` | A table over the ten routes, through `show_settings`: `settings_shown`, the focused element's id after a draw, and `settings_chosen` (A6 F1, F2). Rows include: the key list while still being read (the entry, then the radio when the read lands); a route naming no root after the panel's selection changed and after it did not (R-14); `Inspect` leaving the choice alone (R-55); `Hosts(path)` with the panel's selection on another repository (R-23). For each W no existing test raises (W-9, W-14, W-16 to W-20, W-33 to W-35), a row raises it through its own handler (the wrapper, `row_action`, `attend` or `open_route`) |
+| P5 | `focus_returns_to_what_opened_settings` | A table, one row per A6 row F4 to F10: the footer item; a ticket list row; an item header's Share…; a lifecycle dialog route (the dialog's origin); an Activity row; an Activity row whose row has gone by close time (03b's cursor rule); a popover row; a popover row whose footer item has hidden by close time; Ctrl+, pressed while 03b's popover is open, while a row menu opened by keyboard is open (no `restore`: its row), and while a dock menu is open; W-31 inside the sheet (the first origin); the save banner's Open Settings, whose banner leaves once the identity is set (F9: the content region the banner was in); no origin (F10). Each read after a draw |
+| P6 | `settings_closes_every_way` | A table: Escape, the close button, the scrim, Show in Activity, quitting with Activity displayed, quitting with Activity hidden, quitting with a confirmation open inside Settings, quitting with unkept edits. Each leaves `Shown::Tabs`, the owner `None`, no active sheet, the host closed and a typed passphrase empty. Focus, read after a draw, is as A6 F11 to F14 say |
 | P7 | `nothing_acts_behind_settings` | With Settings open on Sharing & keys, by dispatched actions: the panel actions, `FocusContent`, `NewItem`, ctrl-tab, close tab and `OpenDrafts` change nothing; `OpenSettings` leaves the page as it was. Written in Task 1, before the swap, when it fails |
 | P8 | `settings_scrolls_on_its_own` | PageDown from a menu entry and End from a page control move Settings' offset, not the column's or the item's; Tab to a control below the fold reveals it |
 | P9 | `a_typed_passphrase_lives_only_on_sharing_and_keys` | A table: typed, then closed (emptied); typed, then the menu leaves Sharing & keys (emptied); typed after a `Hosts(path)` route (kept while on Sharing & keys); typed, then Use a key I already have… (emptied); typed, then Make a new key pressed again, hiding its form (emptied) |
@@ -1242,7 +1311,7 @@ today's `settings/*_tests.rs`. Test-only accessors:
 | P11 | `every_page_is_read_again_on_open` | A registration added while Settings is closed is listed on the next open of Repositories |
 | P12 | `key_rows_send_what_todays_controls_sent` | The radio, Stop using this key, the trash and Delete key file… send `KeySelect`, `KeyClear` and `KeyRemove`, and open the `KeyDelete` confirmation. Delete key file… appears only on generated keys, In use only on the selected key, and the radio of the key in use sends nothing |
 | P13 | `the_key_forms_open_from_their_buttons` | Neither form at first; each button shows its form and hides the other; pressing it again hides it; W-26 shows the Generate form with focus in its passphrase |
-| P14 | `show_in_activity_closes_settings_and_focuses_activity` | With Activity hidden: the button closes Settings, shows Activity and focuses it |
+| P14 | `show_in_activity_closes_settings_and_focuses_activity` | With Activity hidden: the button closes Settings, shows Activity and focuses its list, still so after a draw (F11) |
 | P15 | `settings_does_not_open_behind_a_dialog_or_while_quitting` | A route raised under an open dialog and one raised while quitting open nothing |
 | P16 | `settings_has_three_pages` | The menu has three entries in order; each opens its first page; Enter and Space on an entry open it; the active one is announced selected |
 | P17 | `the_old_settings_places_are_gone` | No `sidebar-settings`, no `settings-close`; the item area never shows Settings |
@@ -1250,9 +1319,9 @@ today's `settings/*_tests.rs`. Test-only accessors:
 | P19 | `sharing_and_keys_by_keyboard` | By keys only: choose a key, stop using it, Make a new key and generate, Use a key I already have…, remove a key, Delete key file… through its confirmation, Copy public key |
 | P20 | `routes_by_keyboard` | One trigger of each kind, focused and pressed with Enter: the footer item, an Activity row's button, an Activity row's menu entry, a popover row, a repository row's menu entry, an item header's Share…, a lifecycle dialog's Open Sharing & keys, the save banner's Open Settings. Each lands as Part D says |
 | P21 | `settings_copy_names_no_secret` | With a key whose label, path and fingerprint are sentinels: the new constants, tooltips and the radio's accessible name hold the label and fingerprint only, never a path or passphrase |
-| P22 | `late_work_moves_no_focus` | With the panel's selection unchanged throughout: type a folder and press Add while its check is pending, press Escape, let the check land (no confirmation opens, focus unchanged, and reopening shows no pending Add); remove a key, press Escape, let it land (focus unchanged); start a Check host, press Escape, move focus to nothing, let it land (focus not moved into the closed sheet); reopen and see each result. A route raised after the Kit closed the sheet but before `sync_sheet` saw it empties a typed passphrase first and records the new origin (A2 step 2) |
-| P23 | `focus_stays_inside_settings` | Tab from the last control reaches the first, Shift-Tab the reverse (Kit trap); `FocusContent` and a review landing leave focus inside the sheet (A6 F17); a dialog opened from a page gives focus back inside (F14); confirm Drafts' Discard… with Enter, press Ctrl+, at once, advance the clock 250 ms: focus is on the page's entry, not the Drafts row (F15; R-46) |
-| P24 | `removing_a_key_returns_focus_by_key` | Remove the middle of three keys: focus goes to the next key's radio, even if the list's order changes on the read |
+| P22 | `late_work_moves_no_focus` | With the panel's selection unchanged throughout: type a folder and press Add while its check is pending, press Escape, let the check land with no draw between (no confirmation opens, focus unchanged, and reopening shows no pending Add); a Check host landing delivered to the Hosts page's handler with the page closed and focus empty (focus not moved into the closed sheet). Reopen and see each result. A route raised after the Kit closed the sheet but before any render empties a typed passphrase first and records the new origin (A2 step 2) (F17) |
+| P23 | `focus_stays_inside_settings` | Tab from the last control reaches the first, Shift-Tab the reverse (Kit trap). An `open_created` landing and a review landing leave focus inside the sheet (F18). A dialog opened from a page gives focus back inside, also when its origin has gone (the entry) and when it opened within 0.25 s of a deferred close (F15). Drafts' Discard… confirmed with Enter, a draw, Ctrl+,, the clock advanced 250 ms and a draw: focus is on the page's entry, not the Drafts row (F16). The interval select opened by keyboard keeps focus until it closes, then focus is back on it; an input's context menu, opened, keeps focus until it closes (F19). Each read after a draw |
+| P24 | `removing_a_key_returns_focus_by_key` | Remove the middle of three keys: focus goes to the next key's radio, even if the list's order changes on the read. Remove a key, press Escape, let the removal land: focus is unchanged (F17) |
 | P25 | `a_slow_identity_read_fills_only_empty_fields` | Type a name, let the identity read land: the typed name stays and the empty email is filled |
 
 ## Testing
@@ -1263,8 +1332,11 @@ today's `settings/*_tests.rs`. Test-only accessors:
 - **Behaviour, not appearance** (Wave Testing). No test asserts widths,
   colours, icons or the header's layout. P16 checks entries and order, not
   their look.
-- **Focus** is read inside the same update that moves it (Cycle 01 and 03a
-  ledgers).
+- **Focus** is read as A6 says: after at least one draw, and after a
+  second when a render-time rule or `focus_lost` moves it. Reading inside
+  the update that moved it (the Cycle 01 and 03a ledgers' rule against
+  `focus_lost` fallbacks) still applies to assertions about that update's
+  own focus call, but no A6 row is proved that way.
 - **Guards** are tested with dispatched actions, not key presses bound in
   another context and not pointer clicks, which land on the scrim (Cycle
   02 ledger).
@@ -1277,8 +1349,10 @@ today's `settings/*_tests.rs`. Test-only accessors:
   raises (W-9, W-14, W-16 to W-20, W-33 to W-35), P4 calls the trigger's
   own handler, so it proves the trigger builds its route. P20 raises one
   trigger of each kind by keyboard.
-- **A6 first.** Task 2 writes P5's and P23's rows from A6's table before
-  any of the focus mechanism (A6).
+- **A6 first.** Task 2 writes the A6 rows it owns (P5, P22, P23) before it
+  changes focus code, and reruns the rows Task 1 owns (P3, P6, P14) after.
+  F1 and F2 are proved by P4 in Task 6, where the routes' targets are
+  built.
 
 ## Named Edits To Pre-Existing Tests
 
@@ -1366,7 +1440,7 @@ Part F record that it is superseded.
 | R-10 | Escape always closes Settings, also while a request it started runs | — (decision 6; Amendments 1–3 record the departure from `05`) |
 | R-11 | Superseded by R-40 | — |
 | R-12 | Settings scrolls its own `ContentScroll::region()`, laid over the Kit body as the details sheet does | — |
-| R-13 | A typed passphrase is emptied on close, when the page leaves Sharing & keys, and when the other form is chosen (B3) | — (D2 rule; decision 6) |
+| R-13 | A typed passphrase is emptied on close, when the page leaves Sharing & keys, and when the Generate form is hidden by either button (B3) | — (D2 rule; decision 6) |
 | R-14 | One chosen repository: the route's root, else a changed panel selection, else the previous choice (C1) **(owner's eye)** | A plain open shows the chosen repository's identity form and Remove at once, which today's Repositories page did not |
 | R-15 | The Remotes page's own repository list goes; Manage chooses for both sections **(owner's eye; decision 10)** | Choosing a repository for its remotes is now in the Repositories list |
 | R-16 | Sharing & keys holds the key section, then Trusted servers with Check host on the chosen repository | Check host's repository is chosen on the other page |
@@ -1397,15 +1471,16 @@ Part F record that it is superseded.
 | R-41 | Pushes use `item sync` (owner, 2026-11-11). A main merge that it or `comment add` performs is recorded in the ledger, and the task's tests are rerun | A merge mid-Cycle can change what was tested; the rerun catches it |
 | R-42 | Decision 12's two items are taken (Part G items 4 and 5) | — |
 | R-43 | Cycle 03b's `choose_activity` sets `settings_origin` to its origin for one handler call, so `attend`, `row_action` and `open_route` keep their signatures | An action that opens Settings outside `choose_activity`'s call returns focus to the focused handle instead |
-| R-44 | `show_settings` focuses the origin before `open_sheet`, so the Kit's own record is the origin on every Kit close | Focus visits the origin for one frame before the sheet takes it |
-| R-45 | `settings_return` keeps the origin's region; `focus_lost` uses it when the origin is no longer drawn | Focus lands on the region's own target, not the control nearest the old origin |
-| R-46 | While Settings is open and no dialog is, the Workspace pulls focus found outside the sheet layer back to the page's entry on each render | A control behind the sheet can hold focus until the next render |
-| R-47 | `SettingsHost`'s `open` flag is shared with every page; a landing moves focus or opens a dialog only while it is set | — |
+| R-44 | `show_settings` focuses the origin before `open_sheet`, so the Kit's own record is the origin on every Kit close (sketch, A7) | None seen: every move is in one update, and GPUI fires focus listeners only between frames |
+| R-45 | The origin is held weakly with its own region; `settings_return`, armed only by `settings_closed`, sends a lost focus there when no modal is open (sketch, A7) | Focus lands on the region's own target, not the control nearest the old origin |
+| R-46 | While Settings is open and no dialog is, focus on a control drawn behind the sheet goes to the page's entry; focus not yet drawn, inside the sheet, or in Root's overlays is left alone; `focus_lost` with no target goes to the entry (sketch, A7) | Contract: A6 F15, F16, F19 |
+| R-47 | `SettingsHost`'s `open` flag is shared with every page and cleared at once on the Kit's close; a landing moves focus or opens a dialog only while it is set (sketch, A7) | Contract: A6 F17 |
 | R-48 | `submit_pending` is cleared when the host hides and by `inspect_root` | Add pressed and then Settings closed before the folder check lands adds nothing; the person presses Add again |
 | R-49 | Not used, to avoid confusion with Cycle 03b's R-49 | — |
 | R-50 | Not used, to avoid confusion with Cycle 03b's R-50 | — |
 | R-51 | `show_settings` drops a requested details sheet | A chip clicked in the same frame as Ctrl+, opens nothing |
-| R-52 | Every quit path closes Settings quietly before it asks or waits | — |
+| R-52 | Every quit path closes dialogs, then Settings quietly (the Kit sheet included), before it asks or waits | — |
+| R-57 | While the Keys page is retrying, Use a key I already have… is unavailable, with its reason | One more press to import during a retry: Cancel first |
 | R-53 | `Hosts(root)` routes always focus Check host, drawn disabled when it cannot run | — |
 | R-54 | The Generate form is shown whenever the Keys page is retrying | — (R-T15a) |
 | R-55 | `Inspect` does not change the chosen repository | — (today's `inspect` leaves the managed root alone) |
@@ -1438,13 +1513,12 @@ Part F record that it is superseded.
 - **U-3.** A two-line element in `Sheet::title` lays out above the Kit's
   close button. Checked on screen (Task 9's checklist).
 - **U-4.** Settled by review round 1 (fact 28's reveal).
-- **U-6.** A focus change made by the Kit's deferred restore (fact 46)
-  brings a Workspace render, so R-46 runs on it. Task 2 checks it with
-  P23's last row; if not, the Workspace observes the window's focus and
-  notifies itself.
-- **U-7.** A focus handle tracked on the div around Root's sheet layer
-  contains the sheet's focus, the Kit's close button included (fact 26).
-  Task 2 checks it.
+- **U-6.** Settled by review round 3: `window.focus` asks for a redraw
+  (`gpui-pre-0.3.6/src/window.rs:2302-2312`), and no Workspace view is
+  cached.
+- **U-7.** Settled by review round 3 for the sheet's own elements, which
+  are deferred children (fact 26). It does not hold for Root's overlays
+  (A7 item 2).
 - **U-5.** After Cycle 03b merges:
   - where `choose_activity` calls `attend`, `row_action` and
     `open_route`, so that it can set `settings_origin` around them (R-43);
@@ -1490,4 +1564,6 @@ Part F record that it is superseded.
 | Review round 1, contract and consistency (revision 1, `65c898a5`) | 2 Blocking, 16 Important, 17 Minor. Blocking: no keyboard proof of the routes; Part D missed 03b's triggers. Important: 03b's focus fallbacks; quit focus; the passphrase predicate; Cycle 05's dependency; Escape against `05`; interruptions; contract 6's exceptions; decision 3's attribution; privacy proof; focus trap; scroll leak; named edits; Task 1's size; pushes; a pending details request; decisions 9 and 11. | Blocking, Important, Minor; owner questions | Revision 2: P19–P23, W-34, W-35, Part D's origins, A3, A4, B3, contract 6, Part G, Amendments 1–7, E-12 to E-18, R-41; Task 1 split into Tasks 1 and 2; the split line dropped; decisions 12 and 13 | Review report, 2026-11-13 |
 | Owner, 2026-11-13, after review round 1 | Decision 3's attribution and two more items; the scrim | Owner decisions | Decisions 12 and 13 | Session, 2026-11-13 |
 | Review round 2, scoped re-review (revision 2, `2574a277`) | 0 Blocking, 5 Important, 18 Minor. Important: P3 needs the key's guard in Task 1; E-13 needs R-14 in Task 3; no route for W-5 and W-6; origins from Activity, the popover and inside Settings not wired; Task 5 and later behaviour changes run no module. Every round-1 Blocking and Important finding was resolved | Important, Minor | Revision 3: `AddRepository`; A2's origin order and `settings_origin`; W-31 and W-32 inside the host; the plan's task moves and module runs; Part E's kept `REPOSITORY_HEADING`, `IMPORT_NOTE` and `…`; facts 32, K-7; E-1, E-12, E-13 | Review report, 2026-11-13 |
+| Review round 3, scoped re-review (revision 3, `58bee94b`) | 1 Blocking, 3 Important, 8 Minor. Blocking: the per-render check reads the previous frame, so it undoes every route's field focus. Important: Task 2 has no module run; P5's F9 row cannot fail and F10 is undefined; two P22 rows cannot fail in Task 2. Minor: the plan stale on `AddRepository`; when `settings_return` is armed; R-51 nested; quit order; the passphrase rule's wording; P23's `FocusContent` row; mapping gaps; fact 46's list | Blocking, Important, Minor | Revision 4: A6 rewritten as the contract with a reading rule; A7; the plan's task fixes | Review report, 2026-11-13 |
+| Review round 3, adversarial on A6 (revision 3, `58bee94b`) | 3 Blocking, 5 Important, 7 Minor. Blocking: the per-render check undoes routes; it fights Kit popups and Root's context menu; a quiet close leaves the Kit sheet active, so focus later jumps behind a dialog. Important: the `open` flag stale until the render; origin case 3 undetermined; the wrong region; in-update reads cannot prove render-time rows; `focus_lost` with no target | Blocking, Important, Minor | Revision 4: the third round with Blocking findings in the focus mechanism. Per the planning skill, A6's table is the contract (F1–F19), A2–A4 a sketch, A7 the pitfalls; Task 2 is test-first under a design checkpoint | Review report, 2026-11-13 |
 | Review round 2, adversarial on the close and focus mechanics (revision 2, `2574a277`) | 1 Blocking, 7 Important, 8 Minor. Blocking: focus can land behind the open sheet (the Kit's deferred restore; a route target not drawn) and the keyboard cannot get it back. Important: the Kit's record is not the origin; the wrappers drop the origin; an undrawn origin always lands in Content; late landings beyond A4's list; the chosen repository never unchosen; the `Hosts` focus undecidable at arrival; `Inspect` changing the choice | Blocking, Important, Minor | Revision 3: A6's table of required outcomes; R-43 to R-48, R-51 to R-56; facts 46, 47; U-6, U-7; P1, P4–P7, P9, P10, P22, P23 | Review report, 2026-11-13 |

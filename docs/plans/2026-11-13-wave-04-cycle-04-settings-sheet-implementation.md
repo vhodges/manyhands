@@ -14,11 +14,14 @@ id: "01M7APBYM2T2ERVNRWDTZXTJ3W"
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task.
 >
-> **Draft**, revision 3: revision 2 applied review round 1 and decisions
-> 12 and 13; revision 3 applies review round 2. Where focus goes is a
-> table of required outcomes (design A6), which Task 2 writes test-first,
-> with a design checkpoint. **Revision 3 has not been independently
-> reviewed.**
+> **Draft**, revision 4. Revision 2 applied review round 1 and decisions
+> 12 and 13; revision 3 applied round 2; revision 4 applies round 3.
+>
+> Where focus goes is a table of required outcomes (design A6, F1–F19),
+> and it is the contract. The design's focus mechanism is a sketch, and
+> design A7 lists what any mechanism must survive. Task 2 writes A6's
+> rows test-first and builds whatever meets them, under a design
+> checkpoint. **Revision 4 has not been independently reviewed.**
 >
 > Execution waits until Cycle 03b (`01M784Y94Q3AXT6XJX38F5VK1V`) is merged
 > to main (Cycle decision 1). Re-read the design before each task, and
@@ -144,10 +147,12 @@ moves. Never rebase.
   filter is stopped at once.
 - **Between tasks,** only the tests the task wrote or changed run, by
   exact name, each named edit included, listed in full in the ledger.
-- **Module runs** (a named doubt). Tasks 1, 3, 4, 5 and 6 change
-  behaviour that tests reach without naming it: the swap, one chosen
+- **Module runs** (a named doubt). Tasks 1 to 6 change behaviour that
+  tests reach without naming it: the swap, where focus goes, one chosen
   repository, the hidden key forms, the menu's indices, and the routes'
-  focus. So at the end of each, the orchestrator runs once, by module,
+  focus. Task 2's run includes every test that asserts focus after a
+  route or a close: the E-5 walk, the E-18 files, `keys_tests`,
+  `repositories_manage_tests` and `create_tests`. So at the end of each, the orchestrator runs once, by module,
   every test file the task touched and every file Task 0's sweep listed
   for it, and fixes what fails before the commit. Task 5 also reruns every
   P test written in Tasks 1–4, since they reach pages by entry index.
@@ -217,7 +222,8 @@ never on a module (03a ledger).
 **File size.** New source files stay below about 500 lines.
 
 - `D/view/workspace.rs` (488 lines) changes only `ContentArea.sheet`'s
-  type, the subscription and `mod settings_sheet;`. The Workspace's new
+  type, the subscription, the fields `settings_origin` and
+  `settings_return`, and `mod settings_sheet;`. The Workspace's new
   code goes in `D/view/workspace/settings_sheet.rs`.
 - `D/view/settings/mod.rs` (517 lines) moves the frame into
   `D/view/settings/frame.rs` and `arrive` into
@@ -239,8 +245,8 @@ task named:
     dialog's origin);
   - a popover row whose footer item has hidden by close time (P5);
   - Ctrl+, pressed while 03b's popover holds focus (P5);
-  - Drafts' Discard… confirmed with Enter, then Ctrl+, at once (P23: the
-    Kit's deferred restore);
+  - Drafts' Discard… confirmed with Enter, a draw, then Ctrl+, (P23: the
+    Kit's deferred restore 250 ms later);
   - Add pressed, then Escape before the folder check lands (P22);
   - a route arriving after the Kit closed the sheet (P22).
 - **Task 3:** choosing the already-chosen repository with identity text
@@ -257,6 +263,8 @@ task named:
 | `D/view/workspace/settings_sheet.rs` (new) and `settings_sheet_tests.rs` (new) | 1, 2, 6 |
 | `D/view/workspace/content.rs` | 1, 2, 8 |
 | `D/view/workspace/render.rs` | 1, 2 |
+| `D/view/workspace/focus.rs` | 2 |
+| `D/view/repositories/body.rs`, `D/view/dock/header/toolbar.rs` (W-5, W-6) | 6 |
 | `D/view/workspace.rs` | 1 |
 | `D/view/workspace/lifecycle.rs` | 1 |
 | `D/view/workspace/requests.rs`, `footer.rs`, `repository_menu.rs`, `D/view/operations/attention.rs` (or 03b's successors) | 1 (wrappers), 2 (origins), 6 (routes) |
@@ -266,7 +274,7 @@ task named:
 | `D/view/settings/keys.rs`, `keys/render.rs`, `keys/commands.rs`, `hosts.rs` | 4 |
 | `D/view/settings/polling.rs` | 1 (Show in Activity) |
 | Copy constants across `D/view/settings/` | 7 |
-| `D/view/repositories/body.rs` | 8 |
+| `D/view/repositories/body.rs` (the panel's Settings button) | 8 |
 
 Order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9.
 
@@ -351,7 +359,7 @@ pub(super) enum SheetOwner { Details(WeakEntity<ItemPane>), Settings }
 
 // D/view/settings/arrive.rs
 pub(crate) enum SettingsRoute {
-    Page(SettingsPage), Manage(PathBuf), Inspect(PathBuf), Identity(PathBuf),
+    Page(SettingsPage), AddRepository, Manage(PathBuf), Inspect(PathBuf), Identity(PathBuf),
     Remotes(PathBuf), Keys, Hosts(PathBuf),
     CheckHost(PathBuf, SshAuthority), RetryGeneration(DesktopRequestId),
 }
@@ -376,8 +384,8 @@ impl Workspace {
 
 - [ ] **Step 1: Write the tests, failing.** In `settings_sheet_tests.rs`:
   - P1 `settings_is_a_sheet_the_workspace_keeps`;
-  - P2 `settings_leaves_the_item_as_it_was` (its `AddRepository` row is
-    added in Task 6);
+  - P2 `settings_leaves_the_item_as_it_was` (its `AddRepository` row, W-6's
+    route, is added in Task 6);
   - P3 `settings_replaces_the_details_sheet_and_keeps_its_edits`;
   - P6 `settings_closes_every_way`, every row;
   - P7 `nothing_acts_behind_settings`, by dispatched actions, with the
@@ -460,22 +468,23 @@ R-26, R-28, R-29, R-30, R-31, R-33, R-40, R-51, R-52.
 `repositories.rs`, `hosts.rs`, `keys/commands.rs` (the `open` flag and
 landing gates).
 
-- [ ] **Step 1: Check U-6 and U-7** with scratch tests (discarded): a focus
-  change by a timer brings a Workspace render; a handle tracked on the div
-  around the sheet layer contains the sheet's focus, the Kit's close
-  button included. Record the answers. If U-6 fails, the Workspace
-  observes the window's focus and notifies itself.
+- [ ] **Step 1: Read design A6 and A7.** A6 is the contract. A2's origin
+  rules, A3 and A4 are a sketch: build what meets A6 and survives every
+  item of A7, and record in the ledger how each A7 item is met.
 - [ ] **Step 2: Write A6's table as tests, failing** (design checkpoint):
   - P5 `focus_returns_to_what_opened_settings`, one row per A6 row F4 to
     F10, with the rows the design lists;
-  - P22 `late_work_moves_no_focus`;
+  - P22 `late_work_moves_no_focus` (its key-removal row is P24's, in Task
+    4);
   - P23 `focus_stays_inside_settings`, with the deferred-restore row
-    (advance the test clock 250 ms).
+    (advance the test clock 250 ms), the select and context-menu rows.
 
-  Every row of A6 must be a row of these tests, or of P3, P4, P6 or P14,
-  as A6's Test column says. If a row cannot be expressed against the
-  code, stop and report to the orchestrator, who settles it with the
-  owner before the mechanism is written.
+  Every A6 row is read after a draw, as A6 says. Every row of A6 must be a
+  row of these tests, or of P3, P4, P6, P14 or P24, as A6's Test column
+  says; Task 2 reruns P3, P6 and P14 after its changes. If a row cannot be
+  expressed against the code, or cannot be met, stop and report to the
+  orchestrator, who settles it with the owner before the mechanism is
+  written.
 - [ ] **Step 3: The origin** (A2, "The origin"; R-6, R-43, R-44).
   - Add `settings_origin`. 03b's `choose_activity` sets it to its
     `origin` around each handler call and clears it after.
@@ -491,14 +500,16 @@ landing gates).
   open and no dialog is, focus found outside it goes to the page's entry.
 - [ ] **Step 6: Mid-close and already open** (A2 steps 2–3; R-36).
 - [ ] **Step 7: Late landings** (A4; R-47, R-48). The `open` flag, shared
-  with each page; `resume_submit`, `refocus_gone` and the focus by key ID
-  gated on it; `submit_pending` cleared on hide and by `inspect_root`.
+  with each page and cleared at once on the Kit's close; `resume_submit`
+  and `refocus_gone` gated on it; `submit_pending` cleared on hide and by
+  `inspect_root`.
 - [ ] **Step 8: Nothing behind** (A5; R-34). `focus_content` does nothing
   while Settings is open; `apply_review`'s `refocus` is dropped while the
   owner is Settings.
-- [ ] **Step 9: Verify,** then the ticket checkpoint.
+- [ ] **Step 9: Verify,** with the module run, then the ticket checkpoint.
 
-**Rulings:** R-6, R-34, R-35, R-36, R-43, R-44, R-45, R-46, R-47, R-48.
+**Rulings:** R-6, R-34, R-35, R-36, R-43, R-44, R-45, R-46, R-47, R-48
+(R-43 to R-47 as sketches, A7).
 
 ---
 
@@ -567,7 +578,9 @@ landing gates).
     `aria_toggled`, a tab stop and `USE_KEY`'s name (R-38).
   - The rows keep today's requests and today's `KeyDelete` confirmation.
   - Stop using this key sits under the list.
-  - After a removal, focus goes to the next key by key ID.
+  - After a removal, focus goes to the next key by key ID, only while
+    Settings is open (the `open` flag, R-47; A6 F17).
+  - While retrying, Use a key I already have… is unavailable (R-57).
 - [ ] **Step 4: The forms** (C2.2). Neither is shown at first; one at a
   time; hiding the Generate form, by either button, empties its
   passphrase fields. The Generate form is shown whenever the page is
@@ -578,7 +591,7 @@ landing gates).
 - [ ] **Step 7: Verify,** with the module run.
 
 **Rulings:** R-4 (`nav`), R-13, R-16, R-17, R-18, R-19, R-38, R-39, R-42
-(item 4), R-54.
+(item 4), R-54, R-57.
 
 ---
 
@@ -609,17 +622,19 @@ sites; `mod_tests.rs` (E-1 `:91-93`).
 
 **Files:** `D/view/settings/arrive.rs`, `mod.rs`, `keys.rs`;
 `D/view/workspace/settings_sheet.rs`; `D/view/operations/attention.rs`
-(or 03b's successor); `settings_sheet_tests.rs`; E-17's and E-18's tests.
+(or 03b's successor); `D/view/repositories/body.rs` and
+`D/view/dock/header/toolbar.rs` (W-5, W-6); `settings_sheet_tests.rs`;
+E-17's and E-18's tests.
 
 Merge `origin/main` first.
 
 - [ ] **Step 1: Write the tests, failing:**
-  - P4 `each_route_lands_on_its_page_and_control`: the nine routes
-    through `show_settings`, the rows the design lists, and a row for
+  - P4 `each_route_lands_on_its_page_and_control`: the ten routes
+    through `show_settings`, read after a draw, the rows the design lists, and a row for
     each W no existing test raises (W-9, W-14, W-16 to W-20, W-33 to
     W-35, and Task 0's W-36 onward);
   - P20 `routes_by_keyboard`;
-  - P2's W-5 row.
+  - P2's `AddRepository` row (W-6's route).
 - [ ] **Step 2: `arrive`** applies each route as Part D says:
   - the focus targets (R-24), returning only handles the page draws in
     the next frame;
@@ -735,10 +750,10 @@ devenv shell -- cargo test --all-features --locked --no-fail-fast --lib --bins \
 | Acceptance | Task |
 | --- | --- |
 | A1 | 1 (P1), 6 (P4, E-18) |
-| A2 | 1 (P2), 6 (P2's W-5 row) |
+| A2 | 1 (P2), 6 (P2's `AddRepository` row) |
 | A3 | 1 (P3, E-2) |
-| A4 | 1 (P6), 2 (P5, P23) |
-| A5 | 4 (P19, E-15), 3 (E-14), 6 (P4, P20, E-18), 1 and 5 (E-5, E-12) |
+| A4 | 1 (P3, P6, P14), 2 (P5, P22, P23), 4 (P24's landing row), 6 (P4) |
+| A5 | 4 (P19, E-15), 3 (E-14), 6 (P4, P20, E-18), 1 and 5 (E-5, E-12, E-16) |
 | A6 | 3 (P10), 4 (P13), 5 (P16) |
 | A7 | 4 (P12); 1–8 (the named edits) |
 | A8 | 8 (P17) |
@@ -757,7 +772,7 @@ devenv shell -- cargo test --all-features --locked --no-fail-fast --lib --bins \
 - **Task 2:** R-6, R-34, R-35, R-36, R-43, R-44, R-45, R-46, R-47, R-48.
 - **Task 3:** R-14, R-15, R-32, R-42 (item 5), R-55, R-56.
 - **Task 4:** R-4 (`nav`), R-13, R-16, R-17, R-18, R-19, R-38, R-39, R-42
-  (item 4), R-54.
+  (item 4), R-54, R-57.
 - **Task 5:** R-4, R-27.
 - **Task 6:** R-22, R-23, R-24, R-53.
 - **Task 7:** R-24 (copy).
@@ -785,12 +800,16 @@ devenv shell -- cargo test --all-features --locked --no-fail-fast --lib --bins \
 - **Task 3:** P10, P11, P25.
 - **Task 4:** P9, P12, P13, P19, P24.
 - **Task 5:** P16.
-- **Task 6:** P4, P20, and P2's W-5 row.
+- **Task 6:** P4, P20, and P2's `AddRepository` row.
 - **Task 7:** P18, P21.
 - **Task 8:** P17.
 
-**Unverified facts by task:** U-5 in Task 0; U-6 and U-7 in Task 2; U-3
-in Task 9 (on screen). U-1, U-2 and U-4 were settled in review round 1.
+**Unverified facts by task:** U-5 in Task 0; U-3 in Task 9 (on screen).
+U-1, U-2 and U-4 were settled in review round 1, and U-6 and U-7 in round
+3.
+
+**The focus contract:** A6's rows F1–F19 in Task 2 (P5, P22, P23, and
+P3, P6, P14 rerun), Task 4 (P24's landing row) and Task 6 (P4).
 
 **Placeholders:** none. Every test, file and interface the tasks name is
 in the design or written out above.
