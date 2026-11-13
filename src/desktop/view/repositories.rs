@@ -86,8 +86,7 @@ impl RepositoryRow {
         &self.tooltip
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)] // Used from Task 9
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn menu(&self) -> &[MenuItem] {
         &self.menu
     }

@@ -97,6 +97,30 @@ impl ShareFacts {
     }
 }
 
+#[cfg(test)]
+impl Workspace {
+    /// Every text the status items say of the listed repositories, now:
+    /// Update check's text and tooltip, To share's text, its name as drawn,
+    /// and its name as each repository would give it, chosen next or already
+    /// chosen (Part I's sweep reads these).
+    pub(crate) fn footer_texts(&self, cx: &App) -> Vec<String> {
+        use crate::desktop::view::footer::{to_share_text, update_tooltip};
+        let facts = self.share_facts(cx);
+        let total = facts.total();
+        let mut texts = vec![facts.to_share_name(), to_share_text(total)];
+        if let Some(update) = facts.status(0).update {
+            texts.push(update_tooltip(&update));
+            texts.push(update);
+        }
+        for each in &facts.listed {
+            let name = facts.display(&each.key);
+            texts.push(to_share_name(total, &name, false));
+            texts.push(to_share_name(total, &name, true));
+        }
+        texts
+    }
+}
+
 impl Workspace {
     /// What the status items read, now: checking is this process's own Check
     /// now or a scheduled check in flight (R-26); the latest check is the
