@@ -140,14 +140,28 @@ fn says_shared(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) {
     assert_eq!(share_outcome(shell, id, cx), SyncOutcome::Published);
 }
 
-/// Whether the entry of `id` offers no Stop, whatever its words: none that
-/// can be pressed.
+/// Whether the entry offers no Stop control at all: no offer labelled Stop
+/// or Stopping, enabled or not (a running accepted request that cannot be
+/// stopped offers a disabled Finishing, which is not one). The row's menu
+/// holds its button too.
 fn no_stop(entry: &ActivityRow) -> bool {
     entry
         .row
         .menu
         .iter()
-        .all(|offer| !(matches!(offer.action, ActivityAction::Stop(_)) && offer.enabled))
+        .chain(entry.row.button.iter())
+        .all(|offer| offer.label != STOP && offer.label != STOPPING)
+}
+
+/// Whether the entry offers nothing that runs a Stop, labelled however: for
+/// a request that has ended.
+fn no_stop_action(entry: &ActivityRow) -> bool {
+    entry
+        .row
+        .menu
+        .iter()
+        .chain(entry.row.button.iter())
+        .all(|offer| !matches!(offer.action, ActivityAction::Stop(_)))
 }
 
 /// With a publication remote, Share comes after Edit, in the tab order
@@ -592,7 +606,11 @@ async fn an_accepted_share_offers_stop_and_stopping_signals_it(cx: &mut TestAppC
 
     drop(release);
     shell.until_ended(id, cx).await;
-    assert!(no_stop(&entry(&shell, id, cx)));
+    let ended = entry(&shell, id, cx);
+    assert!(
+        no_stop(&ended) && no_stop_action(&ended),
+        "no Stop or Stopping"
+    );
     // It stopped at its first safe point, before anything was sent.
     assert!(matches!(
         request(&shell, id, cx).state,
