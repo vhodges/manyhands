@@ -25,7 +25,6 @@ use crate::desktop::{
 };
 
 /// What a row is about; its identity across refreshes.
-#[allow(dead_code)] // Used from Task 4
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum RowKey {
     Request(DesktopRequestId),
@@ -70,7 +69,6 @@ pub(crate) enum RowKey {
 /// A target of the unshared list. An item whose ID did not parse also has
 /// `item_id: None` (`D/model/polling/attempt.rs:134-140`), so it is
 /// `Unnamed(n)`, its position among that list's targets with no ID.
-#[allow(dead_code)] // Used from Task 4
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Target {
     Main,
@@ -92,7 +90,6 @@ pub(crate) enum Kind {
     Info,
     Success,
     Sharing,
-    #[allow(dead_code)] // Used from Task 4
     ToShare,
     Failure,
     Locked,
@@ -106,6 +103,16 @@ pub(crate) struct Offer {
     pub action: ActivityAction,
     pub label: String,
     pub enabled: bool,
+}
+
+impl Offer {
+    pub(crate) fn new(action: ActivityAction, label: &str, enabled: bool) -> Self {
+        Self {
+            action,
+            label: label.to_owned(),
+            enabled,
+        }
+    }
 }
 
 /// What the log's attention pass (A3) reads of a row, set by its source.
@@ -197,6 +204,28 @@ pub(crate) struct Derived {
     pub group: Group,
 }
 
+impl Derived {
+    /// A row with its key, kind and title, and nothing else: no description,
+    /// tag, offer, detail or time, and a quiet group.
+    pub(crate) fn new(key: RowKey, kind: Kind, title: String) -> Self {
+        Self {
+            key,
+            kind,
+            title,
+            description: None,
+            repo: None,
+            button: None,
+            menu: Vec::new(),
+            detail: Vec::new(),
+            attention: false,
+            item: None,
+            clearable: false,
+            at: None,
+            group: Group::default(),
+        }
+    }
+}
+
 /// A row of the log: a `Derived`, the time the app first learned of it, and
 /// its revision, from a log-wide counter (A4).
 #[allow(dead_code)] // Used from Task 5
@@ -208,7 +237,6 @@ pub(crate) struct ActivityRow {
 }
 
 /// What a row's offer does. Each runs an existing handler (Part F4).
-#[allow(dead_code)] // Used from Task 4
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum ActivityAction {
     Cancel(DesktopRequestId),

@@ -53,6 +53,22 @@ pub(crate) struct AttentionEntry {
     pub roots: Vec<Root>,
 }
 
+/// A check that brought something in (Wave 04 Cycle 03b design A5): an
+/// automatic one or a Check now, kept for the session and never pruned. Its
+/// row is Activity's S2.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Brought {
+    /// The order they were applied in, from this schedule's counter.
+    pub seq: u64,
+    pub root: Root,
+    /// How many items it brought in (`AttemptSummary::brought_in`), never 0.
+    pub count: u32,
+    /// The time the check was applied (`Now::utc`).
+    pub at: OffsetDateTime,
+    /// An automatic check, not a Check now.
+    pub automatic: bool,
+}
+
 /// What a clock event came to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ClockEvent {
@@ -80,6 +96,8 @@ pub(crate) struct PollSchedule {
     /// unshared list). A completed check that landed later replays those
     /// heard after it completed.
     changes: BTreeMap<Root, Vec<(Change, OffsetDateTime)>>,
+    /// The checks that brought something in, for the session (A5, K-4).
+    brought: Vec<Brought>,
 }
 
 /// Registration and reads.
@@ -105,6 +123,13 @@ impl PollSchedule {
 
     pub fn repo(&self, root: &Root) -> Option<&RepoSchedule> {
         self.repos.get(root)
+    }
+
+    /// The checks that brought something in, in the order they were applied.
+    /// Never pruned within a session, whatever becomes of the repository
+    /// (A5, K-4).
+    pub fn brought(&self) -> &[Brought] {
+        &self.brought
     }
 
     /// Each repository's last recorded attempt and the retirements since,
@@ -391,6 +416,7 @@ impl PollSchedule {
         let repo = self.repos.get_mut(&attempt.root)?;
         let summary = repo.apply(&attempt.root, now, attempt);
         self.unshared_after(&attempt.root, &summary);
+        self.note_brought(&attempt.root, &summary, now, true);
         Some(summary)
     }
 
@@ -413,7 +439,24 @@ impl PollSchedule {
         };
         // Both branches follow the same rules for the unshared list (rule 5).
         self.unshared_after(&attempt.root, &summary);
+        self.note_brought(&attempt.root, &summary, now, false);
         Some(summary)
+    }
+
+    /// Keeps a check that brought something in (A5), at the reading its
+    /// caller applied it with. The list is never pruned (K-4), so the next
+    /// sequence number is its length.
+    fn note_brought(&mut self, root: &Root, summary: &AttemptSummary, now: &Now, automatic: bool) {
+        if summary.brought_in == 0 {
+            return;
+        }
+        self.brought.push(Brought {
+            seq: self.brought.len() as u64,
+            root: root.clone(),
+            count: summary.brought_in,
+            at: now.utc,
+            automatic,
+        });
     }
 
     /// The user lane is empty: every preempted poll goes again with no

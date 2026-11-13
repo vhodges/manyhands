@@ -4,6 +4,8 @@
 //! `effects_text`, `scope_name`, `SHARE_MAIN`) live here too, so the model
 //! reads no view module (R-41); each is re-exported from its old path.
 
+mod states;
+
 use std::path::Path;
 
 use manyhands::{
@@ -12,6 +14,7 @@ use manyhands::{
     results::{Effects, Outcome},
 };
 
+pub(crate) use self::states::*;
 use crate::desktop::model::{
     item::SHARE,
     list_view::RETRY,

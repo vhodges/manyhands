@@ -25,6 +25,8 @@ use crate::desktop::{
 mod intents;
 #[path = "activity_tests/s1.rs"]
 mod s1;
+#[path = "activity_tests/states.rs"]
+mod states;
 #[path = "activity_tests/support.rs"]
 mod support;
 #[path = "activity_tests/tables.rs"]
@@ -311,9 +313,10 @@ fn share_copy_table() {
 /// P1, S1: each request in each state makes its row (key, kind, title,
 /// description, button, menu, `clearable`, detail), by the cases of `s1`;
 /// then what its `Group` and item say, for every intent and for the facts the
-/// Workspace hands in.
+/// Workspace hands in. S2 to S14 are `states`'.
 #[test]
 fn each_source_makes_its_rows() {
+    states::each_state_source_makes_its_rows();
     for case in s1::cases() {
         case.holds();
     }

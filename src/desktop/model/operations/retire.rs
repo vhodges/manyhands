@@ -14,7 +14,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use manyhands::{
     canonical::ItemId,
     repository::{
-        ItemDtoKind, OperationDto, OperationId, OperationListDto, ProgressEvent, RequestId,
+        AuthoringKind, ItemDtoKind, OperationDto, OperationId, OperationListDto, ProgressEvent,
+        RequestId,
     },
     results::{Envelope, RecoveryActionKind},
 };
@@ -25,7 +26,7 @@ use crate::desktop::{
         list_state::ListState,
         polling::{
             TargetKind,
-            retire::{Retirement, classify},
+            retire::{Retirement, Verdict, classify},
         },
         stamp::RepoKey,
     },
@@ -62,6 +63,24 @@ impl Entered {
     }
 }
 
+/// A retirement whose answer dismissed its request at once: Retired,
+/// Attention, Unreachable or Retry. Activity shows it as a history row,
+/// since nothing else does once the request is gone (Wave 04 Cycle 03b design
+/// A2, S8; R-51, R-59). Kept for the session and never pruned.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct RetireEvent {
+    /// From `Operations.next_retire_event`.
+    pub seq: u64,
+    /// The queue order of the request that produced it (`Operations::sent`):
+    /// what N22's clause 5 compares.
+    pub sent: u64,
+    pub root: RepoKey,
+    pub kind: AuthoringKind,
+    pub item: ItemId,
+    pub verdict: Verdict,
+    pub changed: bool,
+}
+
 /// The retirement answers and running operations, by request.
 #[derive(Default)]
 pub(super) struct Retirements {
@@ -82,6 +101,9 @@ pub(super) struct Retirements {
     running: HashMap<DesktopRequestId, String>,
     /// The operations of the automatic polls now queued or running (D6 B1).
     polls: HashSet<OperationId>,
+    /// The answers that dismissed their request, in the order they came
+    /// (`retire_events`).
+    events: Vec<RetireEvent>,
 }
 
 impl Operations {
@@ -90,6 +112,40 @@ impl Operations {
     /// before the `Finished` event, which carries no record state.
     pub(crate) fn record_stood(&mut self, id: DesktopRequestId, record: RecordState) {
         self.retirements.records.insert(id, record);
+    }
+
+    /// The retirements this session whose answer dismissed their request, in
+    /// the order they came: Activity's history rows (S8, R-51).
+    pub(crate) fn retire_events(&self) -> &[RetireEvent] {
+        &self.retirements.events
+    }
+
+    /// Keeps the answer of the retirement `id` as an event when it dismisses
+    /// its request. `apply(Finished)` calls it just before the dismissal, so
+    /// the request's own row is replaced by exactly one event (R-51).
+    pub(super) fn note_retire_event(&mut self, id: DesktopRequestId, answer: &Retirement) {
+        if !answer.verdict.dismissed() {
+            return;
+        }
+        let Some(Intent::ContextRetire {
+            root,
+            kind,
+            id: item,
+        }) = self.request(id).map(|request| request.intent.clone())
+        else {
+            return;
+        };
+        let event = RetireEvent {
+            seq: self.next_retire_event,
+            sent: self.sent(id).unwrap_or_default(),
+            root: root.to_string_lossy().into_owned(),
+            kind,
+            item,
+            verdict: answer.verdict,
+            changed: answer.changed,
+        };
+        self.next_retire_event += 1;
+        self.retirements.events.push(event);
     }
 
     /// The finished retirement `id`'s answer, classified.

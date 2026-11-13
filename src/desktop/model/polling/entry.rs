@@ -192,7 +192,7 @@ impl AttemptEntry {
 
 /// The library's words for `disposition`; `None` for the ones this entry
 /// does not list (`Closed`, `Promoted`: Part E; the ones that are counts).
-fn text_of(disposition: Disposition) -> Option<&'static str> {
+pub(crate) fn text_of(disposition: Disposition) -> Option<&'static str> {
     use Disposition::*;
     let library = match disposition {
         Unpublished => return Some(UNPUBLISHED),

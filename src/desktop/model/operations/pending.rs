@@ -4,7 +4,8 @@
 use std::collections::BTreeMap;
 
 use manyhands::repository::{
-    OperationAction, OperationDto, OperationFamily, OperationListDto, OperationNextAction,
+    ItemDtoKind, OperationAction, OperationDto, OperationFamily, OperationListDto,
+    OperationNextAction,
 };
 
 use super::{Operations, SYNCHRONIZATION_UNAVAILABLE};
@@ -76,6 +77,46 @@ impl Operations {
             self.pending.remove(&root);
             self.generations.next(ViewScope::Operations(root));
         }
+    }
+}
+
+/// A lifecycle row Resume takes up: its item's kind and ID, and its
+/// operation (D5 decision 10; Wave 04 Cycle 03b S9). Its fields are public so
+/// the dialog's resume reads them; `new` rebuilds the row from an action's
+/// fields.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct LifecycleRow {
+    pub kind: ItemDtoKind,
+    pub item: String,
+    pub operation: String,
+}
+
+impl LifecycleRow {
+    /// `ResumeLifecycle` rebuilds the row it was made from.
+    #[allow(dead_code)] // Used from Task 6
+    pub(crate) fn new(kind: ItemDtoKind, item: String, operation: String) -> Self {
+        Self {
+            kind,
+            item,
+            operation,
+        }
+    }
+
+    /// `operation`, when it is a lifecycle's parent waiting to be resumed.
+    pub(crate) fn of(operation: &OperationDto) -> Option<Self> {
+        let kind = match operation.action {
+            OperationAction::Close => ItemDtoKind::Ticket,
+            OperationAction::Promote => ItemDtoKind::Document,
+            _ => return None,
+        };
+        if operation.next_action != Some(OperationNextAction::Resume) {
+            return None;
+        }
+        Some(Self {
+            kind,
+            item: operation.item_id.clone()?,
+            operation: operation.operation_id.clone()?,
+        })
     }
 }
 

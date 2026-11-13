@@ -20,8 +20,11 @@ use gpui_kit::{
 };
 use manyhands::{
     canonical::ItemId,
-    repository::{ItemDtoKind, OperationAction, OperationDto, OperationId, OperationNextAction},
+    repository::{ItemDtoKind, OperationDto, OperationId},
 };
+
+// The row moved to the model, where Activity's S9 reads it.
+pub(super) use crate::desktop::model::operations::LifecycleRow;
 
 use super::{RESUME, button, scope_name, text};
 use crate::desktop::{
@@ -35,33 +38,6 @@ use crate::desktop::{
         workspace::Workspace,
     },
 };
-
-/// A lifecycle row Resume takes up: its item's kind and ID, and its
-/// operation.
-struct LifecycleRow {
-    kind: ItemDtoKind,
-    item: String,
-    operation: String,
-}
-
-impl LifecycleRow {
-    /// `operation`, when it is a lifecycle's parent waiting to be resumed.
-    fn of(operation: &OperationDto) -> Option<Self> {
-        let kind = match operation.action {
-            OperationAction::Close => ItemDtoKind::Ticket,
-            OperationAction::Promote => ItemDtoKind::Document,
-            _ => return None,
-        };
-        if operation.next_action != Some(OperationNextAction::Resume) {
-            return None;
-        }
-        Some(Self {
-            kind,
-            item: operation.item_id.clone()?,
-            operation: operation.operation_id.clone()?,
-        })
-    }
-}
 
 impl Workspace {
     /// The lifecycle row `operation` of `root`, drawn `index`th: Resume, or

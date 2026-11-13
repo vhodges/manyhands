@@ -371,11 +371,7 @@ impl<'a> Row<'a> {
 }
 
 fn offer(action: ActivityAction, label: &str, enabled: bool) -> Offer {
-    Offer {
-        action,
-        label: label.to_owned(),
-        enabled,
-    }
+    Offer::new(action, label, enabled)
 }
 
 /// An intent's family: it groups the intent with its retries and resends, and

@@ -29,10 +29,10 @@ mod progress;
 mod quit_wait;
 mod recovery;
 mod retire;
-pub(crate) use retire::{Entered, RetiringKey};
+pub(crate) use retire::{Entered, RetireEvent, RetiringKey};
 mod review;
 
-pub(crate) use pending::{ResumeOffer, abandon_offered, resume_offer};
+pub(crate) use pending::{LifecycleRow, ResumeOffer, abandon_offered, resume_offer};
 use pending::{check_now_left_active, takes_up_remote_work};
 pub(crate) use polls::{record_note_words, resume_offer_among};
 pub(crate) use progress::{Progressing, progress_words, stage_text, stage_words, stopped_text};
@@ -171,6 +171,9 @@ pub(crate) struct Operations {
     record_notes: Vec<Report>,
     /// Retirement answers and the operations running now (`retire`).
     retirements: retire::Retirements,
+    /// The sequence number of the next retirement event
+    /// (`retire_events`); events are never pruned, so it only grows.
+    next_retire_event: u64,
 }
 
 /// What finished requests may have changed since the views last read.
@@ -391,6 +394,11 @@ impl Operations {
                 // Attention or the next attempt covers an answer of the
                 // table's attention and retry rows, and a retirement that
                 // retired: it is neither shown nor counted (R-23).
+                // An answer that dismisses its request leaves one event first,
+                // so Activity shows it once its request is gone (R-51).
+                if let Some(answer) = retirement.as_ref() {
+                    self.note_retire_event(id, answer);
+                }
                 if retirement.is_some_and(|answer| answer.verdict.dismissed()) {
                     self.dismiss(id);
                 }
