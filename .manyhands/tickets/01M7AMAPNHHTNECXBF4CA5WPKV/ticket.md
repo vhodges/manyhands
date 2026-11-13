@@ -22,13 +22,13 @@ implementation. This ticket does not authorize implementation.
 
 ## Planning
 
-- [ ] Merge the latest main into this ticket branch.
-- [ ] Create `docs/Cycles/wave-04-cycle-04-settings-sheet.md`.
-- [ ] Map every existing route into Settings, including those Cycle 03b's
+- [x] Merge the latest main into this ticket branch.
+- [x] Create `docs/Cycles/wave-04-cycle-04-settings-sheet.md`.
+- [x] Map every existing route into Settings, including those Cycle 03b's
   Activity and Needs attention rows add, to a page and field of the sheet.
-- [ ] Decide with the owner what to take from
+- [x] Decide with the owner what to take from
   `01M5F3GVDYTH1Q5V5FCS9YF7V3` (settings UX from the D1 reviews).
-- [ ] Create the design and implementation plan and record their
+- [x] Create the design and implementation plan and record their
   checkpoints as ticket comments.
 
 ## Entry Gate
