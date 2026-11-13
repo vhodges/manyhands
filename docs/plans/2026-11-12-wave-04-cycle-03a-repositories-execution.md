@@ -29,7 +29,7 @@ reason.
 | 6 | done, review approved after fix round 1 | code `b8044b60` (base `9cc1a4a0`), fix `c0ab728a`; ledger commit follows | yes |
 | 7 | done, review approved first time | code `6899a165` (base `19800b2d`); ledger commit follows | yes |
 | 8 | done, review approved first time | code `d8013dcc` (base `b2997259`); ledger commit follows | yes |
-| 9 | not started | | |
+| 9 | done, review approved after fix round 1 | code `3d6d81b3` (base `6fe57a58`), fix `7d1ef534`; ledger commit follows | yes |
 | 10 | not started | | |
 
 ## Task 0: baseline, references, ledger
@@ -1277,3 +1277,90 @@ E-10 edits equal or stronger; no Critical, no Important.
    render and is not deferred (the `focus_lost` ordering above), so a later reader
    does not "fix" it to match Task 6.
 7. The U-5 counts come from a discarded scratch test and cannot be rechecked.
+
+## Task 9: privacy (Part I)
+
+**Commits.** Code `3d6d81b3` (base `6fe57a58`); fix round 1 `7d1ef534`. Boundary
+command prints nothing. `polling_privacy_tests.rs` 1001 → 1039 (+38, already far
+over 500: the constant, `SENTINELS`, `ALLOWED` and `SURFACES` edits, the `b`
+fixture, the password positive control, two call sites); the sweep itself is the
+new child module `polling_privacy_tests/repositories.rs` (about 150 lines).
+`RepositoryRow::menu()` is regated `all(test, feature = "desktop-test-support")`
+and its `// Used from Task 9` allow is gone (`git grep 'Used from Task 9'
+src/desktop` is empty); `Workspace::footer_texts` (`footer_status.rs`) is a
+test-only accessor under the same gate. No runtime change in production.
+
+**U-3: a password-carrying SSH remote is NOT publication-eligible.** `remote
+select` refuses it with `InvalidRemote`; a remote whose URL gains a password
+after selection lists as selected but ineligible, gets no shared copy
+(`registration.rs` requires selected and eligible for both `ssh_publication` and
+`shared_copy_of`) and is never polled. The fixture is therefore "select over SSH,
+then `set_remote_url` with `ssh://git:sentinel-password-03a@example.invalid/r.git`"
+on a second repository `b` (the brief's `a_remote_url_with_a_password_is_shown_redacted`
+adds an unselected remote, which would never be selected or eligible), and the
+password is shown present in `b`'s `.git/config` by a positive control. Part I's
+assertions hold either way.
+
+**Tests run** (`devenv shell -- cargo test --locked --features
+desktop-test-support --bin manyhands <path> -- --exact`):
+`desktop::view::polling_privacy_tests::polling_privacy` — red (the new surfaces
+and the sweep first), then 1 passed, and 1 passed again after the fix round; the
+other two privacy guards by exact name (`editing_privacy_tests`,
+`lifecycle/privacy_tests`): 2 passed. Scratch runs showing the guard can fail,
+each reverted with no residue in `git diff`: the password sentinel put into
+`repository_tooltip` fails at the description surface; PATH appended to
+`to_share_text` fails at the footer text. Verify lines, each exit 0 after each
+round: `cargo fmt --check`, `cargo check --locked --features desktop`, `cargo
+clippy --all-targets --all-features --locked -- -D warnings`.
+
+**What the sweep covers.** Every listed repository (two: `a` and `b`; no kept row):
+`repository_tooltip` lines and the joined description, `menu_items` labels,
+`more_items` (nothing chosen and each row chosen), the toolbar and panel constants,
+the footer's `update_text`, `to_share_name` / `to_share_text` and `update_tooltip`
+for each listed repository (as next and as chosen), plus the live drawn surfaces
+(`SURFACES` now 17, with `("repo-", "", "repository row")` and `("footer-", "",
+"footer")`), against `BODY`, `COMMENT`, `DRAFT`, `EDIT`, `PATH`, `PASSPHRASE`,
+`PRIVATE` and the URL password; not `TITLE` (titles are allowed by design). Positive
+controls: at least four tooltip lines and a "Shared copy:" line (P17), every
+surface kind non-empty, the password present in the library's data, and (fix round)
+`a`'s key in `polled_roots` before `b` is asserted absent, and `b`'s remotes
+read (`remote_read_roots`) before `shared_copy == None`.
+
+**Named edit E-15.** `region-repositories` removed from `ALLOWED` (12 → 11: a
+tightening), `SURFACES` 17, the URL-password sentinel, `std::slice::from_ref(&a)`
+→ `[a, b]`, and `answer_unanswered_polls(not_due(clock))` added so the second
+repository never reaches the network. No assertion removed or weakened. No E-24.
+
+**Review** (fresh reviewer, sonnet, `6fe57a58..3d6d81b3`): the guard is not
+vacuous (every row, all surface kinds, eight secret sentinels, a numeric positive
+control); the U-3 fixture and answer credible; no production behaviour change; the
+two production-file hunks are test-only accessors. One Important: `footer_texts`
+was `#[cfg(test)]` while its only caller is compiled under `all(test, feature =
+"desktop-test-support")`, inconsistent with `menu()`'s regate — fixed in fix round
+1 (`3d6d81b3..7d1ef534`) with two cheap guard controls; the scoped re-review
+(sonnet) approved with no new issue.
+
+**An observation for the owner (not part of this Cycle).** `cargo clippy --tests
+--features desktop --locked -- -D warnings` (the test build WITHOUT
+`desktop-test-support`) exits 101 with 51 compile errors, none in this task's
+files: it needs `gpui_kit::TestAppContext`, `run_test` and `block_test`, and
+`view::harness` and `test_support` are themselves gated on the feature. The
+reviewer judged it plausibly pre-existing (not checked on a main build); AGENTS.md's
+gate uses `--all-features`, which covers it. Because that build fails regardless
+it cannot show dead-code warnings for a feature-gated item, so the gate choice
+(`all(test, feature = "desktop-test-support")`) stands.
+
+**Deferred findings (Minor).**
+1. The footer name's two full-path fallbacks (Task 8 deferred 2: `footer_status.rs:67`
+   falls back to the key for an unlisted key; the `in {parent}` suffix falls back to
+   `parent.display()` when the parent has no file name) are not reachable from this
+   fixture — `footer_texts` only calls `display` for listed keys, so no fixture of
+   this kind can reach the first fallback; the sweep found no leak. A small unit
+   test of the name logic with a parentless path (such as `/repo`) and an unlisted
+   chosen key would cover it; carry to the final review.
+2. The scratch mutations covered the tooltip and the footer only; a mutation of the
+   `menu_items` labels or the drawn `repo-` surface would show those paths can fail
+   too.
+3. The drawn "repository row" surface is checked against `TITLE` too, so a later
+   task planting an unshared item in this fixture would trip it (tooltip titles are
+   not covered here because no unshared item is planted).
