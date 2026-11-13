@@ -1,0 +1,9 @@
+progress: accepted
+progress: writing
+error: A name and an email are required.
+code: identity_required
+request: <request-id>
+operation: <operation-id>
+Location: none
+Name: origin
+next: repo.identity_set root=<repository>

@@ -1,9 +1,10 @@
 ---
+id: 01M4HWKN6JBXJRZASBZF8R18YB
+item_id: 01M4EWN2DK3MY6H4GBYDYXF6QH
+created_at: 2026-10-10T03:09:52Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4HWKN6JBXJRZASBZF8R18YB"
-item_id: "01M4EWN2DK3MY6H4GBYDYXF6QH"
-created_at: "2026-10-10T03:09:52Z"
 ---
 
 Closed on its branch by the product owner's authorization of 2026-10-09, so

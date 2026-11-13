@@ -19,6 +19,12 @@ use std::{
 
 mod support;
 
+#[path = "repository_enablement/enablement_index.rs"]
+mod enablement_index;
+
+#[path = "repository_enablement/unusable_identity.rs"]
+mod unusable_identity;
+
 fn isolated_effective_config(source: &str) -> (tempfile::TempDir, Config) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("global.gitconfig");
@@ -192,14 +198,6 @@ fn remove_registration_request_with_operation_id(
         root: root.to_owned(),
         operation_id,
     }
-}
-
-fn stage_configuration(fixture: &support::TestRepository) {
-    let mut index = fixture.repository.index().unwrap();
-    index
-        .add_path(std::path::Path::new(canonical::CONFIG_PATH))
-        .unwrap();
-    index.write().unwrap();
 }
 
 fn commit_count(repository: &Repository) -> usize {
@@ -586,6 +584,15 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "comment_publication_bindings",
             "configuration_observations",
             "confirmation_records",
+            "context_retirement_absence_receipts",
+            "context_retirement_attempts",
+            "context_retirement_effect_intents",
+            "context_retirement_index_claims",
+            "context_retirement_preservation_claims",
+            "context_retirement_preservations",
+            "context_retirement_records",
+            "context_retirement_reentries",
+            "context_retirement_worktree_resumptions",
             "contexts",
             "discovered_comments",
             "discovered_folders",
@@ -595,9 +602,21 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "item_problems",
             "key_material_operations",
             "key_registry_changes",
+            "local_context_sync_conflicts",
+            "local_context_sync_execution",
+            "local_context_sync_images",
+            "local_context_sync_records",
+            "local_context_sync_request_control",
+            "local_context_sync_resolution_cancellation",
+            "local_context_sync_resolutions",
+            "local_context_sync_steps",
             "operation_record_contexts",
             "operation_records",
             "owned_generated_keys",
+            "poll_retirement_candidates",
+            "poll_retirement_child_sources",
+            "poll_retirement_passes",
+            "poll_retirement_targets",
             "problems",
             "registry_migrations",
             "remote_context_states",
@@ -614,12 +633,17 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "remote_ref_observations",
             "remote_resolution_attempts",
             "remote_resolution_index_artifacts",
+            "remote_resolution_owners",
             "remote_resolution_paths",
             "remote_resolution_ref_log_artifacts",
             "repositories",
             "request_operations",
             "request_records",
             "retired_contexts",
+            "retirement_advertisement_provenance",
+            "retirement_observation_pin_releases",
+            "retirement_observation_pins",
+            "retirement_observation_receipts",
             "shared_ssh_keys",
             "ssh_host_pins",
             "ticket_closures",
@@ -1381,6 +1405,36 @@ fn registration_retries_existing_configuration_without_another_commit_or_row() {
     assert!(registry_row(data.path(), &canonical_root).is_some());
 }
 
+/// A repository enabled through one data directory is enabled through a
+/// second: the second registers it and indexes it, and commits nothing.
+#[test]
+fn enabling_a_repository_enabled_elsewhere_registers_and_indexes_it() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let fixture = support::born_repository();
+    let enabled = RepositoryService::open_at(first.path())
+        .unwrap()
+        .enable(enable_request(&fixture.root, "main"))
+        .unwrap();
+    assert!(matches!(enabled, EnableRepositoryOutcome::Enabled { .. }));
+    let head = support::head_commit(&fixture.repository);
+    let service = RepositoryService::open_at(second.path()).unwrap();
+    let root = std::fs::canonicalize(&fixture.root).unwrap();
+    assert_eq!(registry_row(second.path(), &root), None);
+
+    let outcome = service
+        .enable(enable_request(&fixture.root, "main"))
+        .unwrap();
+
+    assert_eq!(outcome, EnableRepositoryOutcome::AlreadyEnabled);
+    assert_eq!(support::head_commit(&fixture.repository), head);
+    let row = registry_row(second.path(), &root).expect("registered");
+    assert_eq!(registry_row_count(second.path()), 1);
+    assert_eq!(row.0, "accessible");
+    // Indexed: nothing is left for a refresh to do.
+    assert_eq!(row.2, 0);
+}
+
 #[test]
 fn registration_reconciliation_preserves_the_original_enabled_timestamp() {
     let data = tempfile::tempdir().unwrap();
@@ -1592,7 +1646,6 @@ fn publication_remote_requires_ssh_fetch_and_effective_push_urls() {
             "git@example.invalid:push.git",
         )
         .unwrap();
-    stage_configuration(&fixture);
 
     for name in [
         "ssh",
@@ -1660,7 +1713,6 @@ fn publication_remote_rejects_same_host_local_url_rewrites() {
             "git@example.invalid:group/project.git",
         ))
         .unwrap();
-    stage_configuration(&fixture);
     fixture
         .repository
         .config()
@@ -1693,7 +1745,6 @@ fn publication_remote_rejects_same_host_local_push_url_rewrites() {
             "git@example.invalid:group/project.git",
         ))
         .unwrap();
-    stage_configuration(&fixture);
     fixture
         .repository
         .config()
@@ -1764,7 +1815,6 @@ fn publication_remote_rejects_global_fetch_and_push_url_rewrites() {
             .add_remote(add_remote_request(&fixture.root, name, url))
             .unwrap();
     }
-    stage_configuration(&fixture);
 
     for name in ["fetch-rewritten", "push-rewritten"] {
         let error = service
@@ -1789,7 +1839,6 @@ fn publication_selection_commits_only_canonical_configuration_changes() {
             "git@example.invalid:project.git",
         ))
         .unwrap();
-    stage_configuration(&fixture);
     let before = support::head_commit(&fixture.repository).unwrap();
 
     let PublicationRemoteOutcome::Changed { commit_oid } = service
@@ -1844,7 +1893,6 @@ fn publication_repeated_changes_accept_the_expected_stale_live_index() {
             ))
             .unwrap();
     }
-    stage_configuration(&fixture);
 
     let PublicationRemoteOutcome::Changed {
         commit_oid: selected,
@@ -1897,6 +1945,13 @@ fn publication_selection_rejects_a_missing_live_index_configuration_entry() {
         ))
         .unwrap();
     let head_before = support::head_commit(&fixture.repository);
+    // Enablement now leaves this entry current. Deliberately stage its
+    // deletion while retaining the worktree file to exercise the refusal.
+    let mut index = fixture.repository.index().unwrap();
+    index
+        .remove_path(std::path::Path::new(canonical::CONFIG_PATH))
+        .unwrap();
+    index.write().unwrap();
 
     let error = service
         .set_publication_remote(publication_request(&fixture.root, Some("origin")))
@@ -2025,7 +2080,6 @@ fn publication_pending_commit_retries_registration_without_another_commit() {
             "git@example.invalid:project.git",
         ))
         .unwrap();
-    stage_configuration(&fixture);
     let registry = data.path().join(REGISTRY_FILE);
     std::fs::remove_file(&registry).unwrap();
     std::fs::create_dir(&registry).unwrap();
@@ -2106,7 +2160,6 @@ fn publication_selection_blocks_selected_removal_and_dirty_configuration_path() 
             "git@example.invalid:project.git",
         ))
         .unwrap();
-    stage_configuration(&fixture);
     service
         .set_publication_remote(publication_request(&fixture.root, Some("origin")))
         .unwrap();
@@ -2224,7 +2277,6 @@ fn publication_selection_rejects_a_staged_configuration_deletion_with_restored_w
             "git@example.invalid:project.git",
         ))
         .unwrap();
-    stage_configuration(&fixture);
     let path = fixture.root.join(canonical::CONFIG_PATH);
     let source = std::fs::read(&path).unwrap();
     let mut index = fixture.repository.index().unwrap();
@@ -2262,7 +2314,6 @@ fn publication_selection_rejects_an_executable_configuration_file_without_mutati
             "git@example.invalid:project.git",
         ))
         .unwrap();
-    stage_configuration(&fixture);
     let path = fixture.root.join(canonical::CONFIG_PATH);
     let source = std::fs::read(&path).unwrap();
     let mut permissions = std::fs::metadata(&path).unwrap().permissions();
@@ -2308,7 +2359,6 @@ fn publication_selection_rejects_a_symlink_configuration_file_without_mutation()
             "git@example.invalid:project.git",
         ))
         .unwrap();
-    stage_configuration(&fixture);
     let path = fixture.root.join(canonical::CONFIG_PATH);
     let source = std::fs::read(&path).unwrap();
     let external = tempfile::NamedTempFile::new().unwrap();
@@ -2352,7 +2402,6 @@ fn publication_noop_selection_rejects_a_staged_configuration_change() {
             "git@example.invalid:project.git",
         ))
         .unwrap();
-    stage_configuration(&fixture);
     service
         .set_publication_remote(publication_request(&fixture.root, Some("origin")))
         .unwrap();
@@ -3520,7 +3569,7 @@ fn assert_recovery_before_configuration_write(fixture: support::TestRepository) 
         support::exclude_bytes(&fixture.repository),
         Some(b"before\r\n.manyhands/worktrees/\r\n".to_vec())
     );
-    assert_eq!(support::index_bytes(&fixture.repository), index_before);
+    enablement_index::assert_configuration_current(&fixture.root);
     assert_eq!(remote_names(&fixture.repository), remotes_before);
     assert_eq!(registry_row_count(data.path()), 1);
     assert_registry_matches_head(data.path(), &fixture);
@@ -3604,7 +3653,7 @@ fn assert_recovery_before_initialization_commit(fixture: support::TestRepository
         support::exclude_bytes(&fixture.repository),
         Some(b"before\r\n.manyhands/worktrees/\r\n".to_vec())
     );
-    assert_eq!(support::index_bytes(&fixture.repository), index_before);
+    enablement_index::assert_configuration_current(&fixture.root);
     assert_eq!(remote_names(&fixture.repository), remotes_before);
     assert_eq!(registry_row_count(data.path()), 1);
     assert_registry_matches_head(data.path(), &fixture);
@@ -3719,9 +3768,9 @@ fn assert_recovery_before_publication_configuration_commit(fixture: support::Tes
             "git@example.invalid:project.git",
         ))
         .unwrap();
-    stage_configuration(&fixture);
     std::fs::write(fixture.root.join("fixture.txt"), "staged but unrelated\n").unwrap();
     let mut index = fixture.repository.index().unwrap();
+    index.read(true).unwrap();
     index.add_path(std::path::Path::new("fixture.txt")).unwrap();
     index.write().unwrap();
     let config_before = support::tracked_configuration(&fixture.root);
@@ -3781,7 +3830,7 @@ fn assert_recovery_before_publication_configuration_commit(fixture: support::Tes
         panic!("expected the unfinished publication commit");
     };
     assert_eq!(commit_count(&fixture.repository), commits_before + 1);
-    assert_eq!(support::index_bytes(&fixture.repository), index_before);
+    enablement_index::assert_configuration_current(&fixture.root);
     assert_eq!(remote_names(&fixture.repository), remotes_before);
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
     assert_eq!(
@@ -3891,7 +3940,6 @@ fn assert_recovery_before_registry_write(
             "git@example.invalid:project.git",
         ))
         .unwrap();
-    stage_configuration(&publication_fixture);
     let publication_service =
         failing_service(publication_data.path(), FailurePoint::BeforeRegistryWrite);
     let publication_operation_id = support::operation_id();

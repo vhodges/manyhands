@@ -1,9 +1,10 @@
 ---
+id: 01M4W44NN8N2BRMZBC1H4AG4HN
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-14T02:33:54Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4W44NN8N2BRMZBC1H4AG4HN"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-14T02:33:54Z"
 ---
 
 Fresh Task 6-only implementer verified the assigned clean worktree/branch at

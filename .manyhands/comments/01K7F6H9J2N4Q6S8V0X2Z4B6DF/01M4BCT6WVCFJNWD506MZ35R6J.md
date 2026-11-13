@@ -1,9 +1,10 @@
 ---
+id: 01M4BCT6WVCFJNWD506MZ35R6J
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DF
+created_at: 2026-10-07T14:38:23Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4BCT6WVCFJNWD506MZ35R6J"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DF"
-created_at: "2026-10-07T14:38:23Z"
 ---
 
 The user approved the Wave 02 Cycle 07 Cycle, design and detailed implementation

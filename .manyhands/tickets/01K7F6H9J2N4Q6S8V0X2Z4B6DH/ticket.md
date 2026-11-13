@@ -1,16 +1,16 @@
 ---
+cycle: '09'
+wave: '02'
+id: 01K7F6H9J2N4Q6S8V0X2Z4B6DH
+title: 'Wave 02 Cycle 09: Confirmed Managed-Document Promotion'
+type: cycle
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-17T16:24:16Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01K7F6H9J2N4Q6S8V0X2Z4B6DH"
-title: "Wave 02 Cycle 09: Confirmed Managed-Document Promotion"
-type: "cycle"
-status: "closed"
-closed_at: "2026-10-17T16:24:16Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
-wave: "02"
-cycle: "09"
 ---
 
 Integrate a document context into primary through an explicitly confirmed,

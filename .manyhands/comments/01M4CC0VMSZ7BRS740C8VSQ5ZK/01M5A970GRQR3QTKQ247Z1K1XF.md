@@ -1,9 +1,10 @@
 ---
+id: 01M5A970GRQR3QTKQ247Z1K1XF
+item_id: 01M4CC0VMSZ7BRS740C8VSQ5ZK
+created_at: 2026-10-19T14:31:55Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5A970GRQR3QTKQ247Z1K1XF"
-item_id: "01M4CC0VMSZ7BRS740C8VSQ5ZK"
-created_at: "2026-10-19T14:31:55Z"
 ---
 
 Whole-branch spec review P2 follow-up, base

@@ -1,0 +1,23 @@
+# Ubuntu 24.04 runtime packages, not development packages or graphics drivers.
+ca-certificates
+git
+fonts-dejavu-core
+libasound2t64
+libfontconfig1
+libfreetype6
+libglib2.0-0t64
+libgtk-3-0t64
+libssl3t64
+libvulkan1
+libwayland-client0
+libwayland-cursor0
+libwayland-egl1
+libx11-xcb1
+libxcb1
+libxkbcommon0
+libxkbcommon-x11-0
+libegl1
+libgl1
+libgcc-s1
+libstdc++6
+zlib1g

@@ -1,9 +1,10 @@
 ---
+id: 01M4CSRM7ZBQ3CPV688B8SFX2D
+item_id: 01M4CC0VMQ7R15A7M9SPN3KB67
+created_at: 2026-10-08T03:43:57Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4CSRM7ZBQ3CPV688B8SFX2D"
-item_id: "01M4CC0VMQ7R15A7M9SPN3KB67"
-created_at: "2026-10-08T03:43:57Z"
 ---
 
 Task 1 checkpoint: result model and redaction, complete.

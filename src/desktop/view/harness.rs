@@ -1,0 +1,771 @@
+//! A main window over a fixture, for the views' tests: frames, clicks,
+//! keys and the labels a test reads.
+
+use std::{
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use gpui_kit::{
+    App, ElementId, Entity, Focusable, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
+    TestAppContext, VisualTestContext, Window, WindowHandle,
+    component::{Root, dock::DockPlacement},
+    px, size,
+    test::TestWindowExt,
+};
+use manyhands::{
+    drafts::{DraftBase, DraftFields, DraftId, DraftTarget, ItemKind},
+    repository::{ItemDtoKind, SharedKeyId, keys::UnlockReason},
+};
+
+use super::{
+    editor::host::EditorHost,
+    workspace::{Region, Workspace},
+};
+use crate::desktop::{
+    model::{
+        drafts::create,
+        navigation::{OpenTarget, Pane},
+        operations::Operations,
+        tabs::TabKey,
+    },
+    open_test_window_over,
+    services::{
+        Backend,
+        prompts::{PromptReply, PromptRequest},
+        requests::{DesktopRequest, DesktopRequestId, Intent},
+    },
+    test_support::{delaying::DelayingBackend, fixtures::Fixture},
+};
+
+/// Shared aggregate UI/worker wait; the existing polling and GPUI's
+/// independent per-park guard remain unchanged.
+pub(crate) use crate::desktop::test_support::WAIT;
+
+/// How often a wait looks again while the worker runs.
+const POLL: Duration = Duration::from_millis(10);
+
+/// Waits, with the worker running, until `done` holds of `entity`, then
+/// lets the reads that started finish. Panics after `WAIT` of real time.
+/// Every test that waits on the worker waits here, never with
+/// `VisualTestContext::condition`, whose timer gives up after three
+/// seconds of parked time. The test allows parking.
+pub(crate) async fn wait_until<T: 'static>(
+    cx: &TestAppContext,
+    entity: &Entity<T>,
+    done: impl Fn(&T, &App) -> bool,
+) {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        cx.run_until_parked();
+        if entity.read_with(cx, |value, cx| done(value, cx)) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the awaited state did not arrive in {WAIT:?}"
+        );
+        cx.executor().timer(POLL).await;
+    }
+}
+
+/// What `Shell::start` does to the window after opening it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Geometry {
+    /// The harness window and an Activity dock tall enough to click in.
+    Harness,
+    /// Nothing: the window and layout of a launch.
+    AsLaunched,
+}
+
+/// The window chrome that is not the item area, the dock sides or Activity:
+/// the title bar (38 px) and the footer (28 px). The item area stays
+/// 860 x 1140, and a window of 1590 x 1726 results (R-26).
+const SHELL_CHROME_HEIGHT: f32 = 66.;
+
+/// The harness window: the side docks (290 and 440 px) leave an item area of
+/// 860 px, and Activity (520 px) and the chrome leave it 1140.
+const WINDOW_WIDTH: f32 = 1590.;
+const WINDOW_HEIGHT: f32 = 1140. + ACTIVITY_HEIGHT + SHELL_CHROME_HEIGHT;
+
+/// Activity's height in the harness: twice today's operation area (R-26).
+const ACTIVITY_HEIGHT: f32 = 520.;
+
+pub(crate) struct Shell {
+    pub window: WindowHandle<Root>,
+    pub workspace: Entity<Workspace>,
+    pub backend: Arc<DelayingBackend>,
+    pub fixture: Fixture,
+}
+
+impl Shell {
+    /// Opens the main window over `fixture`, whose repositories are
+    /// already made, and lets its startup reads finish. Nothing is
+    /// refreshed at launch, so a test that does not wait for the worker
+    /// need not.
+    pub(crate) fn open(fixture: Fixture, cx: &mut TestAppContext) -> Self {
+        Self::start(fixture, false, |_| {}, Geometry::Harness, true, cx)
+    }
+
+    /// Opens the main window as the application does, at the application's
+    /// own size and layout: nothing is resized (R-26). For the tests of the
+    /// default layout.
+    pub(crate) fn open_as_launched(fixture: Fixture, cx: &mut TestAppContext) -> Self {
+        Self::start(fixture, false, |_| {}, Geometry::AsLaunched, true, cx)
+    }
+
+    /// Closes the window and opens a new one over the same fixture, as a
+    /// restart does: the data directory, its stores and their seams are the
+    /// fixture's, and nothing is resized (R-26). The Kit and the keys are
+    /// already set up.
+    pub(crate) fn relaunch(self, cx: &mut TestAppContext) -> Self {
+        self.relaunch_over(|backend| backend, cx)
+    }
+
+    /// [`Self::relaunch`], the new window's services over the double
+    /// `wrap` makes of the new delaying backend (a test of the polling
+    /// calls, as `over_double` is).
+    pub(crate) fn relaunch_over(
+        self,
+        wrap: impl FnOnce(Arc<DelayingBackend>) -> Arc<dyn Backend>,
+        cx: &mut TestAppContext,
+    ) -> Self {
+        let Self {
+            window, fixture, ..
+        } = self;
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        VisualTestContext::from_window(window.into(), cx).run_until_parked();
+        let backend = fixture.delaying_backend();
+        Self::over(
+            fixture,
+            wrap(backend.clone()),
+            backend,
+            false,
+            Geometry::AsLaunched,
+            false,
+            cx,
+        )
+    }
+
+    /// Opens the main window as the application does, refreshing every
+    /// repository at launch. `before` runs on the backend before the
+    /// window opens, to hold what the test needs held. The test waits for
+    /// the worker, so it allows parking.
+    pub(crate) fn launch(
+        fixture: Fixture,
+        before: impl FnOnce(&DelayingBackend),
+        cx: &mut TestAppContext,
+    ) -> Self {
+        Self::start(fixture, true, before, Geometry::Harness, true, cx)
+    }
+
+    fn start(
+        fixture: Fixture,
+        launch_refresh: bool,
+        before: impl FnOnce(&DelayingBackend),
+        geometry: Geometry,
+        first: bool,
+        cx: &mut TestAppContext,
+    ) -> Self {
+        let backend = fixture.delaying_backend();
+        before(&backend);
+        Self::over(
+            fixture,
+            backend.clone(),
+            backend,
+            launch_refresh,
+            geometry,
+            first,
+            cx,
+        )
+    }
+
+    /// Opens the main window over `services_backend`, a double that wraps
+    /// the fixture's `backend` (a test of the poll's calls), with no launch
+    /// refresh.
+    pub(crate) fn over_double(
+        fixture: Fixture,
+        services_backend: Arc<dyn Backend>,
+        backend: Arc<DelayingBackend>,
+        cx: &mut TestAppContext,
+    ) -> Self {
+        Self::over(
+            fixture,
+            services_backend,
+            backend,
+            false,
+            Geometry::Harness,
+            true,
+            cx,
+        )
+    }
+
+    fn over(
+        fixture: Fixture,
+        services_backend: Arc<dyn Backend>,
+        backend: Arc<DelayingBackend>,
+        launch_refresh: bool,
+        geometry: Geometry,
+        first: bool,
+        cx: &mut TestAppContext,
+    ) -> Self {
+        if first {
+            cx.update(gpui_kit::init);
+            cx.update(crate::desktop::bind_all_keys);
+            // Dialogs open without their entrance animation, so a frame
+            // finds them where they rest.
+            cx.update(|cx| cx.set_reduce_motion(true));
+        }
+        let window = cx.update(|cx| open_test_window_over(services_backend, launch_refresh, cx));
+        let workspace = window
+            .update(cx, |root, _, _| {
+                root.view().clone().downcast::<Workspace>().unwrap()
+            })
+            .unwrap();
+        let shell = Self {
+            window,
+            workspace,
+            backend,
+            fixture,
+        };
+        if geometry == Geometry::Harness {
+            // Big enough that an item, its later actions and a few expanded
+            // entries of Activity are all on screen, where a click reaches
+            // them (R-26).
+            shell
+                .visual(cx)
+                .simulate_resize(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)));
+            shell.run(cx);
+            shell.set_activity_height(ACTIVITY_HEIGHT, cx);
+        }
+        shell.run(cx);
+        shell
+    }
+
+    /// Sets the bottom dock's height, as a person dragging its edge would.
+    pub(crate) fn set_activity_height(&self, height: f32, cx: &mut TestAppContext) {
+        let area = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.dock_area().clone());
+        self.frame(cx, |window, cx| {
+            area.update(cx, |area, cx| {
+                area.set_dock_size(DockPlacement::Bottom, px(height), window, cx)
+            })
+        });
+        self.run(cx);
+    }
+
+    /// Resizes the window to the size a test asks for, grown by the docks
+    /// and Activity so that the item area keeps the size the test chose
+    /// (E-10): 150 px wider (the side docks are 290 + 440 px, the old
+    /// columns 260 + 320) and the 520 px Activity dock and the chrome
+    /// taller, less the old 260 px operation area.
+    pub(crate) fn resize_keeping_content(&self, width: f32, height: f32, cx: &mut TestAppContext) {
+        let taller = ACTIVITY_HEIGHT - 260. + SHELL_CHROME_HEIGHT;
+        self.visual(cx)
+            .simulate_resize(size(px(width + 150.), px(height + taller)));
+        self.run(cx);
+    }
+
+    pub(crate) fn visual(&self, cx: &TestAppContext) -> VisualTestContext {
+        VisualTestContext::from_window(self.window.into(), cx)
+    }
+
+    /// Lets every started read finish.
+    pub(crate) fn run(&self, cx: &TestAppContext) {
+        self.visual(cx).run_until_parked();
+    }
+
+    /// Draws a frame and runs `f` over the window.
+    pub(crate) fn frame<R>(
+        &self,
+        cx: &mut TestAppContext,
+        f: impl FnOnce(&mut Window, &mut App) -> R,
+    ) -> R {
+        let mut visual = self.visual(cx);
+        visual.update(|window, cx| {
+            window.render_frame(cx);
+            f(window, cx)
+        })
+    }
+
+    /// Clicks the element `id` and lets the reads it starts finish.
+    pub(crate) fn click(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) {
+        let id = id.into();
+        self.frame(cx, |window, cx| window.click(id, cx));
+        self.run(cx);
+    }
+
+    /// Clicks the element `id` with the mouse events dispatched one at a
+    /// time, so the events one causes (a tab group's, reaching the
+    /// Workspace) have been handled before the next frame, as in the
+    /// application. `click` dispatches both inside one update and draws
+    /// between them.
+    pub(crate) fn click_settled(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) {
+        let id = id.into();
+        let position = self.frame(cx, |window, _| window.find(id).bounds().center());
+        let mut visual = self.visual(cx);
+        visual.simulate_click(position, Modifiers::default());
+        visual.run_until_parked();
+    }
+
+    pub(crate) fn keys(&self, keystrokes: &str, cx: &mut TestAppContext) {
+        let mut visual = self.visual(cx);
+        visual.simulate_keystrokes(keystrokes);
+        visual.run_until_parked();
+    }
+
+    /// Presses and releases `key`, as a keyboard does. `keys` only presses:
+    /// GPUI clicks a focused element on Enter or Space when the key is
+    /// released.
+    pub(crate) fn press(&self, key: &str, cx: &mut TestAppContext) {
+        let keystroke = Keystroke::parse(key).unwrap();
+        let mut visual = self.visual(cx);
+        visual.simulate_event(KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        visual.simulate_event(KeyUpEvent { keystroke });
+        visual.run_until_parked();
+    }
+
+    pub(crate) fn label(
+        &self,
+        id: impl Into<ElementId>,
+        cx: &mut TestAppContext,
+    ) -> Option<String> {
+        let id = id.into();
+        self.frame(cx, |window, _| {
+            window
+                .try_find(id)
+                .and_then(|element| element.label().map(str::to_owned))
+        })
+    }
+
+    /// Whether the element `id` is a button that does not say it takes
+    /// input. The Kit's button reports no disabled flag (its snapshot's
+    /// `disabled()` is `None` either way), so a test pairs this with a
+    /// click that changes nothing.
+    pub(crate) fn inert_button(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
+        let id = id.into();
+        self.frame(cx, |window, _| {
+            window.try_find(id).is_some_and(|button| {
+                button.role() == Some(gpui_kit::Role::Button) && button.disabled() != Some(false)
+            })
+        })
+    }
+
+    /// Whether Tab, pressed at most `presses` times from where focus is,
+    /// puts focus on the element `id`. A disabled Kit button tracks no
+    /// focus, so Tab passes it by.
+    pub(crate) fn tab_reaches(
+        &self,
+        id: impl Into<ElementId>,
+        presses: usize,
+        cx: &mut TestAppContext,
+    ) -> bool {
+        let id = id.into();
+        (0..presses).any(|_| {
+            self.keys("tab", cx);
+            let id = id.clone();
+            self.frame(cx, move |window, _| {
+                window.try_find(id).and_then(|element| element.focused()) == Some(true)
+            })
+        })
+    }
+
+    /// Whether the element `id` is drawn.
+    pub(crate) fn present(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
+        let id = id.into();
+        self.frame(cx, |window, _| window.try_find(id).is_some())
+    }
+
+    /// Whether the element `id` says it is checked, a switch or a
+    /// checkbox; `None` when it says nothing or is not drawn.
+    pub(crate) fn checked(
+        &self,
+        id: impl Into<ElementId>,
+        cx: &mut TestAppContext,
+    ) -> Option<bool> {
+        let id = id.into();
+        self.frame(cx, |window, _| {
+            window.try_find(id).and_then(|element| element.checked())
+        })
+    }
+
+    pub(crate) fn selected(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
+        let id = id.into();
+        self.frame(cx, |window, _| {
+            window.try_find(id).and_then(|element| element.selected()) == Some(true)
+        })
+    }
+
+    /// The labels of `name`'s rows, `(name, 0)` onwards, until one is
+    /// absent.
+    pub(crate) fn rows(&self, name: &'static str, cx: &mut TestAppContext) -> Vec<String> {
+        (0..)
+            .map_while(|index| self.label((name, index as usize), cx))
+            .collect()
+    }
+
+    /// Selects the repository at `root` and lets its reads finish.
+    pub(crate) fn select(&self, root: &Path, cx: &mut TestAppContext) {
+        self.workspace.update(cx, |workspace, cx| {
+            workspace.select_repository(key(root), cx)
+        });
+        self.run(cx);
+    }
+
+    /// Uses the list `pane` last and focuses its region, as clicking its
+    /// choice did (E-2).
+    pub(crate) fn use_list(&self, pane: Pane, cx: &mut TestAppContext) {
+        self.frame(cx, |window, cx| {
+            self.workspace.update(cx, |workspace, cx| {
+                workspace.focus_region(Region::of_pane(pane), window, cx)
+            })
+        });
+        self.run(cx);
+    }
+
+    /// The window's request model.
+    pub(crate) fn operations(&self, cx: &mut TestAppContext) -> Entity<Operations> {
+        self.workspace
+            .read_with(cx, |workspace, _| workspace.services().operations().clone())
+    }
+
+    /// Locks the item `id` of `root` as an open lifecycle dialog would
+    /// (R-21), with no dialog: its tabs' edits wait. The lock stays for the
+    /// test. For the controls whose gate a test reaches without a real
+    /// stopped close or merge.
+    pub(crate) fn lock_item(&self, root: &Path, id: &str, cx: &mut TestAppContext) {
+        let holder = self.workspace.entity_id();
+        let locked = crate::desktop::model::lifecycle_lock::LockKey::new(&key(root), id);
+        self.operations(cx).update(cx, |operations, cx| {
+            operations.locks_mut().set_dialog(holder, locked, true);
+            cx.notify();
+        });
+        self.run(cx);
+    }
+
+    /// The requests of this session that `pick` picks, newest first.
+    pub(crate) fn requests(
+        &self,
+        cx: &mut TestAppContext,
+        pick: impl Fn(&DesktopRequest) -> bool,
+    ) -> Vec<DesktopRequestId> {
+        let operations = self.operations(cx);
+        operations.read_with(cx, |operations, _| {
+            operations
+                .requests()
+                .iter()
+                .filter(|request| pick(request))
+                .map(|request| request.id)
+                .collect()
+        })
+    }
+
+    /// Waits, with the worker running, until `done` holds of the request
+    /// model, then lets the reads that started finish. The test allows
+    /// parking.
+    pub(crate) async fn until(
+        &self,
+        cx: &mut TestAppContext,
+        done: impl Fn(&Operations) -> bool + 'static,
+    ) {
+        let operations = self.operations(cx);
+        wait_until(cx, &operations, move |operations, _| done(operations)).await;
+    }
+
+    /// Draws frames, with the worker and the reads running, until `done`
+    /// holds of the window, then draws one more. Panics after `WAIT` of
+    /// real time, saying that `what` did not happen. The test allows
+    /// parking.
+    pub(crate) async fn until_drawn(
+        &self,
+        cx: &mut TestAppContext,
+        what: &str,
+        done: impl Fn(&Shell, &mut TestAppContext) -> bool,
+    ) {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            self.frame(cx, |_, _| ());
+            self.run(cx);
+            if done(self, cx) {
+                self.frame(cx, |_, _| ());
+                return;
+            }
+            assert!(Instant::now() < deadline, "{what} did not happen");
+            cx.executor().timer(POLL).await;
+        }
+    }
+
+    /// Waits until the request `id` has ended: finished, removed or not
+    /// sent.
+    pub(crate) async fn until_ended(&self, id: DesktopRequestId, cx: &mut TestAppContext) {
+        use crate::desktop::services::requests::RequestState;
+        self.until(cx, move |operations| {
+            operations.request(id).is_some_and(|request| {
+                !matches!(
+                    request.state,
+                    RequestState::Queued | RequestState::Running { .. }
+                )
+            })
+        })
+        .await;
+    }
+}
+
+/// A ticket draft's fields with `body`; no repository holds its item.
+fn draft_fields(body: &str) -> DraftFields {
+    DraftFields::Ticket {
+        title: "Draft title".to_owned(),
+        ticket_type: "task".to_owned(),
+        status: "open".to_owned(),
+        project: None,
+        team: None,
+        deps: Vec::new(),
+        parent: None,
+        body: body.to_owned(),
+    }
+}
+
+impl Shell {
+    /// Begins a session with "First body", stored at revision 1.
+    pub(crate) async fn begin_draft(&self, cx: &mut TestAppContext) -> DraftId {
+        let drafts = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+        let target = DraftTarget {
+            repository: "/a/repository".to_owned(),
+            item_kind: ItemKind::Ticket,
+            item_id: "01ARZ3NDEKTSV4RRFFQ69G5FG0".parse().unwrap(),
+            comment: None,
+        };
+        let begun = drafts.update(cx, |registry, cx| {
+            registry.begin(target, None, draft_fields("First body"), cx)
+        });
+        self.run(cx);
+        match begun.await {
+            Ok(id) => id,
+            Err(kind) => panic!("the draft must begin: {kind:?}"),
+        }
+    }
+
+    /// A session whose newest text, "Newer body", is in memory only: its
+    /// write is not yet due.
+    pub(crate) async fn unsaved_draft(&self, cx: &mut TestAppContext) -> DraftId {
+        let id = self.begin_draft(cx).await;
+        let drafts = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+        drafts.update(cx, |registry, cx| {
+            registry.edit(id, draft_fields("Newer body"), cx)
+        });
+        self.run(cx);
+        id
+    }
+}
+
+/// A new ticket's draft fields: `title`, the default type and status, and
+/// an empty body, as New ticket… makes them.
+pub(crate) fn new_ticket_fields(title: &str) -> DraftFields {
+    create::ticket_fields(title, create::DEFAULT_TYPE)
+}
+
+/// The new item's draft of the ticket `id` of `root` with `fields`: its
+/// target, and its base, with neither observation nor source (R-20), at the
+/// ticket's path in the primary context, as New ticket… makes them. The
+/// fixture's primary branch is `main`.
+pub(crate) fn new_ticket_draft(
+    root: &Path,
+    id: &str,
+    fields: &DraftFields,
+) -> (DraftTarget, DraftBase) {
+    let id = id.parse().unwrap();
+    let path = create::ticket_path(&id);
+    create::new_item_draft(
+        &key(root),
+        Some("main".to_owned()),
+        ItemKind::Ticket,
+        id,
+        path,
+        fields,
+    )
+}
+
+impl Shell {
+    /// Begins a new item's draft of the ticket `id` of `root`, which no
+    /// repository holds yet, with `begin_new`: titled `title`, with an empty
+    /// body. Its session is attached to the item's tab, which shows it
+    /// restored once it opens.
+    pub(crate) async fn begin_new_ticket(
+        &self,
+        root: &Path,
+        id: &str,
+        title: &str,
+        cx: &mut TestAppContext,
+    ) -> DraftId {
+        let drafts = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+        let fields = new_ticket_fields(title);
+        let (target, base) = new_ticket_draft(root, id, &fields);
+        let begun = drafts.update(cx, |registry, cx| {
+            registry.begin_new(target, base, fields, cx)
+        });
+        self.run(cx);
+        let draft = match begun.await {
+            Ok(draft) => draft,
+            Err(kind) => panic!("the new item's draft must begin: {kind:?}"),
+        };
+        let tab = TabKey::Item {
+            repo: key(root),
+            kind: ItemDtoKind::Ticket,
+            id: id.to_owned(),
+        };
+        drafts.update(cx, |registry, cx| registry.attach(tab, draft, cx));
+        self.run(cx);
+        draft
+    }
+
+    /// A real not-created tab: a new item's draft of the ticket `id` of
+    /// `root`, begun with `begin_new`, in the item's tab, continued with
+    /// Continue editing, which prepares with the Create intent; once the
+    /// edit editor opens, its draft and its host. The test allows parking.
+    pub(crate) async fn edit_new_ticket(
+        &self,
+        root: &Path,
+        id: &str,
+        title: &str,
+        cx: &mut TestAppContext,
+    ) -> (DraftId, Entity<EditorHost>) {
+        let draft = self.begin_new_ticket(root, id, title, cx).await;
+        let target = OpenTarget::Item {
+            repo: key(root),
+            kind: ItemDtoKind::Ticket,
+            id: id.parse().unwrap(),
+        };
+        self.workspace
+            .update(cx, |workspace, cx| workspace.open_item(target, cx));
+        self.run(cx);
+        self.click("draft-continue-button", cx);
+        let deadline = Instant::now() + WAIT;
+        loop {
+            self.frame(cx, |_, _| ());
+            self.run(cx);
+            let pane = self
+                .workspace
+                .read_with(cx, |workspace, _| workspace.item_pane())
+                .expect("an item tab is shown");
+            if let Some(host) = pane.read_with(cx, |pane, _| pane.edit_host()) {
+                self.frame(cx, |_, _| ());
+                return (draft, host);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the new item's edit editor did not open"
+            );
+            cx.executor().timer(POLL).await;
+        }
+    }
+}
+
+impl Shell {
+    /// The shown item tab's edit host, if its editor is open.
+    fn edit_host(&self, cx: &mut TestAppContext) -> Option<Entity<EditorHost>> {
+        let pane = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.item_pane())?;
+        pane.read_with(cx, |pane, _| pane.edit_host())
+    }
+
+    /// The shown item tab's edit host, once its editor has opened: frames
+    /// are drawn while the worker and the reads run. The test allows
+    /// parking.
+    pub(crate) async fn until_editing(&self, cx: &mut TestAppContext) -> Entity<EditorHost> {
+        self.until_drawn(cx, "the edit editor opened", |shell, cx| {
+            shell.edit_host(cx).is_some()
+        })
+        .await;
+        self.edit_host(cx).expect("the edit editor is open")
+    }
+
+    /// Types `typed` at the end of `host`'s text, through the window: the
+    /// caret set there, the editor focused and a frame drawn first.
+    pub(crate) fn type_at_end(
+        &self,
+        host: &Entity<EditorHost>,
+        typed: &str,
+        cx: &mut TestAppContext,
+    ) {
+        let editor = host.read_with(cx, |host, _| host.editor().clone());
+        let end = editor.read_with(cx, |editor, _| editor.text().len());
+        editor.update(cx, |editor, cx| editor.set_cursor(end, cx));
+        let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
+        self.frame(cx, |window, cx| window.focus(&handle, cx));
+        self.frame(cx, |_, _| ());
+        self.visual(cx).simulate_input(typed);
+        self.run(cx);
+    }
+}
+
+impl Shell {
+    /// A credential prompt, placed in the worker's channel as a job's
+    /// provider places it, with nothing waiting on it: the workspace shows
+    /// it above whatever is open once the channel drains. No transport is
+    /// initialized. Gives its answer, which a dropped dialog leaves
+    /// `Canceled`.
+    pub(crate) fn prompt(
+        &self,
+        cx: &mut TestAppContext,
+    ) -> futures::channel::oneshot::Receiver<PromptReply> {
+        let (reply, answer) = futures::channel::oneshot::channel();
+        self.workspace.read_with(cx, |workspace, _| {
+            workspace.services().worker().send_prompt(PromptRequest {
+                key_id: SharedKeyId::new(),
+                label: "primary".to_owned(),
+                reason: UnlockReason::ProtectedKey,
+                reply,
+            })
+        });
+        self.run(cx);
+        self.frame(cx, |_, _| ());
+        answer
+    }
+
+    /// Whether the open prompt's passphrase input holds focus.
+    pub(crate) fn prompt_focused(&self, cx: &mut TestAppContext) -> bool {
+        let Some(dialog) = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.passphrase())
+        else {
+            return false;
+        };
+        let Some(input) = dialog.read_with(cx, |dialog, _| dialog.input()) else {
+            return false;
+        };
+        let handle = input.read_with(cx, |input, cx| input.focus_handle(cx));
+        self.frame(cx, move |window, _| handle.is_focused(window))
+    }
+}
+
+/// Whether `intent` saves an item.
+pub(crate) fn is_save(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::TicketSave { .. } | Intent::DocumentSave { .. }
+    )
+}
+
+/// A root as the repository list gives it.
+pub(crate) fn key(root: &Path) -> String {
+    root.to_str().unwrap().to_owned()
+}
+
+#[cfg(test)]
+#[path = "harness_tests.rs"]
+mod tests;

@@ -1,9 +1,10 @@
 ---
+id: 01M5ASQ4FKJG7ER1NS0SP1YNP3
+item_id: 01M4R19P943QZKHHKRXV2D2TP2
+created_at: 2026-10-19T19:20:21Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5ASQ4FKJG7ER1NS0SP1YNP3"
-item_id: "01M4R19P943QZKHHKRXV2D2TP2"
-created_at: "2026-10-19T19:20:21Z"
 ---
 
 ## Second implementation batch — Tasks 3–5

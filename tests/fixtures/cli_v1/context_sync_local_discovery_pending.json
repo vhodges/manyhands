@@ -1,0 +1,48 @@
+{
+  "code": "discovery_pending",
+  "command": "context sync-local",
+  "data": {
+    "cancel_acknowledged": false,
+    "eligibility": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "kind": "ticket",
+    "next_action": "resume",
+    "operation_id": "<operation-id>",
+    "reason": "index_pending",
+    "required_request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+    "resolution_request_id": null,
+    "result_oid": "<result-oid>",
+    "state": "index_pending",
+    "type": "local_context_sync"
+  },
+  "effects": {
+    "checkpoint": "committed",
+    "cleanup": "not_requested",
+    "commit_oid": "<result-oid>",
+    "discovery": "pending",
+    "integration": "complete",
+    "publication": "not_requested",
+    "write": "written"
+  },
+  "message": "The change is recorded; the index has not been updated yet.",
+  "operation_id": "<operation-id>",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "request.retry",
+      "arguments": {
+        "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0"
+  }
+}

@@ -1,9 +1,10 @@
 ---
+id: 01M4CQV2E1B2QC26EZFTJ0ERRY
+item_id: 01M4CKWWRA1DHFPMWKPNK7CQ1G
+created_at: 2026-10-08T03:10:20Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4CQV2E1B2QC26EZFTJ0ERRY"
-item_id: "01M4CKWWRA1DHFPMWKPNK7CQ1G"
-created_at: "2026-10-08T03:10:20Z"
 ---
 
 Closure checkpoint: the product owner accepted the three open limitations,

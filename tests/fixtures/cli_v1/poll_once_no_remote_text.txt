@@ -1,0 +1,6 @@
+--- stderr
+error: No publication remote is selected.
+code: publication_remote_required
+request: 01ARZ3NDEKTSV4RRFFQ69G5FR1
+note: once a publication remote is selected, polling again takes a new request.
+--- exit 3

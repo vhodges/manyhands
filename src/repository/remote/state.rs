@@ -189,12 +189,153 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
         transaction.execute_batch("ALTER TABLE remote_polling_state ADD COLUMN endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32))")
             .map_err(|_| recovery_required())?;
     }
+    let known_columns = transaction
+        .prepare("PRAGMA table_info(remote_polling_state)")
+        .and_then(|mut query| {
+            query
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
+    for (name, definition) in [
+        ("known_remote_name", "TEXT"),
+        ("known_primary_branch", "TEXT"),
+        (
+            "known_endpoint_digest",
+            "BLOB CHECK(known_endpoint_digest IS NULL OR (typeof(known_endpoint_digest)='blob' AND length(known_endpoint_digest)=32))",
+        ),
+    ] {
+        if !known_columns.iter().any(|column| column == name) {
+            transaction
+                .execute_batch(&format!(
+                    "ALTER TABLE remote_polling_state ADD COLUMN {name} {definition}"
+                ))
+                .map_err(|_| recovery_required())?;
+        }
+    }
     migrate_poll_attempt_times(transaction)?;
+    migrate_polling_defaults(transaction, history_unknown)?;
     migrate_poll_materializations(transaction)?;
     migrate_poll_dispositions(transaction)?;
     migrate_retired_contexts(transaction)?;
     migrate_context_publication_index(transaction)?;
+    migrate_resolution_owners(transaction)?;
+    migrate_history_per_context(transaction, history_unknown)?;
     Ok(())
+}
+
+/// A registry created while the cache-loss marker was on disk baked `DEFAULT 1`
+/// for `history_unknown` and `recovery_suspended` into `remote_polling_state`,
+/// so every repository registered after the marker was retired would start
+/// flagged and suspended. With the marker gone, the table is rebuilt from its
+/// own stored text with both defaults 0: every row, column, CHECK and the
+/// registration trigger are carried over exactly. The state (marker absent,
+/// defaults 1) is its own gate, so no migration marker is recorded.
+fn migrate_polling_defaults(tx: &Transaction<'_>, cache_lost: bool) -> Result<(), RepositoryError> {
+    if cache_lost {
+        return Ok(());
+    }
+    let stale: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('remote_polling_state') WHERE name IN ('history_unknown','recovery_suspended') AND dflt_value!='0')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if !stale {
+        return Ok(());
+    }
+    let sql_of = |kind: &str, name: &str| -> Result<String, RepositoryError> {
+        tx.query_row(
+            "SELECT sql FROM sqlite_master WHERE type=?1 AND name=?2",
+            [kind, name],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())
+    };
+    let table = sql_of("table", "remote_polling_state")?;
+    let trigger = sql_of("trigger", "remote_policy_on_registration")?;
+    let rebuilt = table
+        .replace(
+            "recovery_suspended INTEGER NOT NULL DEFAULT 1",
+            "recovery_suspended INTEGER NOT NULL DEFAULT 0",
+        )
+        .replace(
+            "history_unknown INTEGER NOT NULL DEFAULT 1",
+            "history_unknown INTEGER NOT NULL DEFAULT 0",
+        );
+    if rebuilt == table {
+        return Err(recovery_required());
+    }
+    let columns = tx
+        .prepare("SELECT name FROM pragma_table_info('remote_polling_state') ORDER BY cid")
+        .and_then(|mut q| {
+            q.query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?
+        .join(",");
+    // The trigger goes first so that dropping the table cannot touch it; the
+    // rows wait in a copy.
+    tx.execute_batch(&format!("DROP TRIGGER remote_policy_on_registration; CREATE TABLE remote_polling_state_before_defaults AS SELECT {columns} FROM remote_polling_state; DROP TABLE remote_polling_state; {rebuilt}; INSERT INTO remote_polling_state({columns}) SELECT {columns} FROM remote_polling_state_before_defaults; DROP TABLE remote_polling_state_before_defaults; {trigger};"))
+        .map_err(|_| recovery_required())
+}
+
+/// A registry stuck on the repository-wide `history_unknown` flag gains an
+/// unknown row per active context, and the flag clears; one whose cache loss
+/// is still marked on disk keeps the flag. Every registry initializes the
+/// known identity from the configured one.
+fn migrate_history_per_context(
+    tx: &Transaction<'_>,
+    cache_lost: bool,
+) -> Result<(), RepositoryError> {
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);")
+        .map_err(|_| recovery_required())?;
+    let marked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='remote_history_per_context_v1')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if marked {
+        return Ok(());
+    }
+    if !cache_lost {
+        let stuck = tx.prepare("SELECT repository_id,remote_name,primary_branch FROM remote_polling_state WHERE history_unknown=1")
+            .and_then(|mut query| query.query_map([],|row| Ok((row.get::<_,i64>(0)?,row.get::<_,Option<String>>(1)?,row.get::<_,Option<String>>(2)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+        for (id, name, branch) in stuck {
+            // With no configured remote there is no plan to write rows under:
+            // the flag stays set, which reads fail-closed.
+            let (Some(name), Some(branch)) = (name, branch) else {
+                continue;
+            };
+            let plan = RemoteRefPlan::from_configuration(&name, &branch)
+                .map_err(|_| recovery_required())?;
+            insert_unknown_context_rows(tx, id, &plan)?;
+            tx.execute(
+                "UPDATE remote_polling_state SET history_unknown=0 WHERE repository_id=?1",
+                [id],
+            )
+            .map_err(|_| recovery_required())?;
+        }
+    }
+    tx.execute_batch("UPDATE remote_polling_state SET known_remote_name=remote_name WHERE known_remote_name IS NULL AND remote_name IS NOT NULL; UPDATE remote_polling_state SET known_primary_branch=primary_branch WHERE known_primary_branch IS NULL AND primary_branch IS NOT NULL; UPDATE remote_polling_state SET known_endpoint_digest=endpoint_digest WHERE known_endpoint_digest IS NULL AND endpoint_digest IS NOT NULL;")
+        .map_err(|_| recovery_required())?;
+    tx.execute(
+        "INSERT INTO registry_migrations(name) VALUES('remote_history_per_context_v1')",
+        [],
+    )
+    .map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+/// Which request each resolution attempt of `conflict resolve` belongs to,
+/// and the digest of the input that request presented (R-35, R-41). The
+/// three are values, with no foreign key into the tables a resolution
+/// attempt is recorded in: the binding's transactions keep a row's
+/// lifecycle, and nothing the merge evidence's audits read changes (fact
+/// 75). The name holds no `request`, as no table outside the request
+/// tables does (fact 81).
+const RESOLUTION_OWNERS_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS remote_resolution_owners (
+            attempt_ulid TEXT PRIMARY KEY NOT NULL,
+            request_ulid TEXT NOT NULL,
+            input_digest BLOB NOT NULL CHECK(typeof(input_digest)='blob' AND length(input_digest)=32)
+        )";
+
+/// The association's own migration step: a registry made before it gains
+/// the table, empty, on open, and one that has it is left as it is.
+fn migrate_resolution_owners(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
+    tx.execute_batch(RESOLUTION_OWNERS_SCHEMA)
+        .map_err(|_| recovery_required())
 }
 
 const RETIRED_CONTEXT_SCHEMA: &str = "CREATE TABLE retired_contexts (
@@ -287,7 +428,11 @@ fn read_retired_contexts(
         .collect()
 }
 
-const POLL_DISPOSITION_SCHEMA: &str = r#"
+// These historical catalogs have the same frozen table/owner shape. Keep each
+// source enum literal independent of the current enum: an upgrade must never
+// legitimize a row its actual source CHECK forbade.
+macro_rules! poll_disposition_catalog {
+    ($values:literal) => { concat!(r#"
     CREATE TABLE remote_poll_dispositions (
         repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
         operation_ulid TEXT NOT NULL,
@@ -296,7 +441,7 @@ const POLL_DISPOSITION_SCHEMA: &str = r#"
         remote_ref TEXT,
         kind TEXT CHECK(kind IN ('document','ticket')),
         item_id TEXT,
-        disposition TEXT NOT NULL CHECK(disposition IN ('current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','not_reached')),
+        disposition TEXT NOT NULL CHECK(disposition IN ("#, $values, r#")),
         before_oid TEXT CHECK(length(before_oid)=40 AND before_oid NOT GLOB '*[^0-9a-f]*'),
         after_oid TEXT CHECK(length(after_oid)=40 AND after_oid NOT GLOB '*[^0-9a-f]*'),
         observed_at INTEGER NOT NULL CHECK(typeof(observed_at)='integer' AND observed_at BETWEEN 0 AND 253402300799),
@@ -307,21 +452,119 @@ const POLL_DISPOSITION_SCHEMA: &str = r#"
         CHECK((classification='malformed')=(remote_ref IS NULL))
     );
     CREATE TRIGGER remote_poll_disposition_owner_immutable BEFORE UPDATE OF repository_id,operation_ulid,action,poll_kind ON remote_operation_records WHEN EXISTS(SELECT 1 FROM remote_poll_dispositions WHERE repository_id=OLD.repository_id AND operation_ulid=OLD.operation_ulid) BEGIN SELECT RAISE(ABORT,'immutable disposition owner'); END;
-"#;
+"#) };
+}
+const POLL_DISPOSITION_SCHEMA_15: &str = poll_disposition_catalog!(
+    "'current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','not_reached'"
+);
+const POLL_DISPOSITION_SCHEMA_16: &str = poll_disposition_catalog!(
+    "'current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','unpublished','not_reached'"
+);
+const POLL_DISPOSITION_SCHEMA_17: &str = poll_disposition_catalog!(
+    "'current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','closed','promoted','history_unknown','not_reached'"
+);
+const POLL_DISPOSITION_SCHEMA: &str = poll_disposition_catalog!(
+    "'current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','closed','promoted','history_unknown','unpublished','not_reached'"
+);
 const POLL_DISPOSITION_OBJECTS: &[(&str, &str)] = &[
     ("TABLE", "remote_poll_dispositions"),
     ("TRIGGER", "remote_poll_disposition_owner_immutable"),
 ];
 fn validate_poll_disposition_schema(db: &Connection) -> Result<(), RepositoryError> {
+    validate_poll_disposition_envelope(db, POLL_DISPOSITION_SCHEMA)
+}
+fn validate_poll_disposition_envelope(
+    db: &Connection,
+    schema: &str,
+) -> Result<(), RepositoryError> {
     for &(kind, name) in POLL_DISPOSITION_OBJECTS {
-        validate_schema_object(
-            db,
-            kind,
-            name,
-            schema_object_sql(POLL_DISPOSITION_SCHEMA, kind, name).ok_or_else(recovery_required)?,
-        )?;
+        let actual: String = db
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type=?1 AND name=?2",
+                params![kind.to_ascii_lowercase(), name],
+                |r| r.get(0),
+            )
+            .map_err(|_| recovery_required())?;
+        let expected = schema_object_sql(schema, kind, name).ok_or_else(recovery_required)?;
+        if normalized_poll_schema_sql(&actual)
+            != normalized_poll_schema_sql(expected.trim_end_matches(';'))
+        {
+            return Err(recovery_required());
+        }
+    }
+    validate_poll_disposition_dependencies(db)
+}
+
+fn validate_poll_disposition_dependencies(db: &Connection) -> Result<(), RepositoryError> {
+    const TABLE: &str = "remote_poll_dispositions";
+    let mut query = db
+        .prepare("SELECT type,name,tbl_name,sql FROM sqlite_master")
+        .map_err(|_| recovery_required())?;
+    let objects = query
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|_| recovery_required())?;
+    for object in objects {
+        let (kind, name, table, sql) = object.map_err(|_| recovery_required())?;
+        // The exact table DDL above accounts for its two implicit constraint
+        // indexes. The only supported external reference is the exact immutable
+        // owner trigger, also checked above; never silently discard attachments.
+        let implicit = kind == "index"
+            && sql.is_none()
+            && matches!(
+                name.as_str(),
+                "sqlite_autoindex_remote_poll_dispositions_1"
+                    | "sqlite_autoindex_remote_poll_dispositions_2"
+            );
+        let owner = kind == "trigger" && name == "remote_poll_disposition_owner_immutable";
+        if !implicit
+            && !owner
+            && ((matches!(kind.as_str(), "index" | "trigger")
+                && table.eq_ignore_ascii_case(TABLE))
+                // Conservative reference detection handles SQLite's ASCII case
+                // and all identifier quoting without interpreting unknown SQL.
+                || (matches!(kind.as_str(), "trigger" | "view")
+                    && sql.is_some_and(|sql| sql.to_ascii_lowercase().contains(TABLE))))
+        {
+            return Err(recovery_required());
+        }
+    }
+    // Scan definitions, not child rows: even an empty incoming FK would be
+    // retargeted by RENAME. A populated CASCADE could lose evidence on DROP.
+    let incoming: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) fk WHERE m.type='table' AND fk.\"table\"=?1 COLLATE NOCASE)",
+        [TABLE], |row| row.get(0),
+    ).map_err(|_| recovery_required())?;
+    if incoming {
+        return Err(recovery_required());
     }
     Ok(())
+}
+
+fn normalized_poll_schema_sql(sql: &str) -> String {
+    // SQL keywords/spacing may vary, but CHECK/trigger string literals must
+    // match exactly. Folding literal case would accept a different enum.
+    let mut quoted = false;
+    sql.chars()
+        .filter_map(|character| {
+            if character == '\'' {
+                quoted = !quoted;
+            }
+            if quoted || character == '\'' {
+                Some(character)
+            } else if character.is_whitespace() {
+                None
+            } else {
+                Some(character.to_ascii_lowercase())
+            }
+        })
+        .collect()
 }
 fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
     let objects:i64=tx.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('remote_poll_dispositions','remote_poll_disposition_owner_immutable')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
@@ -342,7 +585,18 @@ fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError
     if !((objects == 0 && columns == 0) || (objects == 2 && columns == 2)) {
         return Err(recovery_required());
     }
+    let marked = if super::super::recovery::has_table(tx, "registry_migrations")
+        .map_err(|_| recovery_required())?
+    {
+        tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1')", [], |r| r.get::<_,bool>(0)).map_err(|_| recovery_required())?
+    } else {
+        false
+    };
     if objects == 0 {
+        if marked {
+            return Err(recovery_required());
+        }
+        validate_poll_disposition_dependencies(tx)?;
         tx.execute_batch(POLL_DISPOSITION_SCHEMA)
             .map_err(|_| recovery_required())?;
         for name in names {
@@ -352,8 +606,86 @@ fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError
         // completion fallback. Freeze it once during migration; its original
         // retry deadline is unknown and remains NULL. New rows never infer it.
         tx.execute("UPDATE remote_operation_records SET poll_completed_at=updated_at WHERE action='poll' AND poll_kind='update' AND phase IN ('completed','cancelled','failed','interrupted')",[]).map_err(|_|recovery_required())?;
+    } else {
+        validate_poll_time_columns(tx)?;
+        let (source, source_marked) = [
+            (POLL_DISPOSITION_SCHEMA, true),
+            (POLL_DISPOSITION_SCHEMA_15, false),
+            (POLL_DISPOSITION_SCHEMA_16, true),
+            (POLL_DISPOSITION_SCHEMA_17, false),
+        ]
+        .into_iter()
+        .find(|(schema, _)| validate_poll_disposition_envelope(tx, schema).is_ok())
+        .ok_or_else(recovery_required)?;
+        if marked != source_marked {
+            return Err(recovery_required());
+        }
+        // Only trusted frozen catalog text supplies this IN list. Match source
+        // membership before any DDL, including marked upstream16 -> combined18.
+        let values = source
+            .split_once("disposition IN (")
+            .and_then(|(_, rest)| rest.split_once("))").map(|(values, _)| values))
+            .ok_or_else(recovery_required)?;
+        let invalid: bool = tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM remote_poll_dispositions WHERE disposition IS NULL OR disposition NOT IN ({values}))"), [], |r| r.get(0)).map_err(|_| recovery_required())?;
+        if invalid {
+            return Err(recovery_required());
+        }
+        if source != POLL_DISPOSITION_SCHEMA {
+            tx.execute_batch("DROP TRIGGER remote_poll_disposition_owner_immutable; ALTER TABLE remote_poll_dispositions RENAME TO remote_poll_dispositions_old;").map_err(|_|recovery_required())?;
+            tx.execute_batch(POLL_DISPOSITION_SCHEMA)
+                .map_err(|_| recovery_required())?;
+            tx.execute_batch("INSERT INTO remote_poll_dispositions SELECT * FROM remote_poll_dispositions_old; DROP TABLE remote_poll_dispositions_old;").map_err(|_|recovery_required())?;
+        }
+    }
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);")
+        .map_err(|_| recovery_required())?;
+    if !marked {
+        tx.execute("INSERT INTO registry_migrations(name) VALUES('remote_poll_dispositions_unpublished_v1')",[]).map_err(|_|recovery_required())?;
     }
     validate_poll_disposition_schema(tx)?;
+    Ok(())
+}
+
+fn validate_poll_time_columns(db: &Connection) -> Result<(), RepositoryError> {
+    let sql: String = db
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='remote_operation_records'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    let sql = normalized_poll_schema_sql(&sql);
+    let definitions = sql
+        .split_once('(')
+        .and_then(|(_, body)| body.strip_suffix(')'))
+        .ok_or_else(recovery_required)?;
+    // Split only top-level column definitions, respecting SQL string literals
+    // and nested CHECK expressions. A name alone is not the paired envelope.
+    let mut depth = 0;
+    let mut quoted = false;
+    let mut start = 0;
+    let mut columns = Vec::new();
+    for (at, byte) in definitions.bytes().enumerate() {
+        match byte {
+            b'\'' => quoted = !quoted,
+            b'(' if !quoted => depth += 1,
+            b')' if !quoted => depth -= 1,
+            b',' if !quoted && depth == 0 => {
+                columns.push(&definitions[start..at]);
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    columns.push(&definitions[start..]);
+    for name in ["poll_completed_at", "poll_next_eligible_at"] {
+        let expected = format!(
+            "{name}integercheck({name}isnullor(typeof({name})='integer'and{name}between0and253402300799))"
+        );
+        if !columns.contains(&expected.as_str()) {
+            return Err(recovery_required());
+        }
+    }
     Ok(())
 }
 
@@ -367,12 +699,56 @@ pub(super) fn record_poll_completion(
     tx.execute("UPDATE remote_operation_records SET poll_completed_at=?3,poll_next_eligible_at=(SELECT next_eligible_at FROM remote_polling_state WHERE repository_id=?1) WHERE repository_id=?1 AND operation_ulid=?2 AND poll_kind='update'",params![id,op.to_string(),at]).map_err(|_|recovery_required())?;
     Ok(())
 }
+#[cfg(test)]
+type DispositionInsertHook = Box<dyn FnOnce(&Transaction<'_>, i64) -> Result<(), RepositoryError>>;
+#[cfg(test)]
+thread_local! {
+    static DISPOSITION_INSERT_HOOKS: std::cell::RefCell<std::collections::BTreeMap<(String, usize), DispositionInsertHook>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+#[cfg(test)]
+pub(super) fn set_disposition_insert_hook(
+    operation: crate::repository::OperationId,
+    ordinal: usize,
+    hook: impl FnOnce(&Transaction<'_>, i64) -> Result<(), RepositoryError> + 'static,
+) {
+    assert!(
+        DISPOSITION_INSERT_HOOKS
+            .with(|hooks| hooks
+                .borrow_mut()
+                .insert((operation.to_string(), ordinal), Box::new(hook)))
+            .is_none()
+    );
+}
+#[cfg(test)]
+pub(super) fn disposition_insert_hook_pending(
+    operation: crate::repository::OperationId,
+    ordinal: usize,
+) -> bool {
+    DISPOSITION_INSERT_HOOKS.with(|hooks| {
+        hooks
+            .borrow()
+            .contains_key(&(operation.to_string(), ordinal))
+    })
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn replace_poll_dispositions(
     tx: &Transaction<'_>,
     id: i64,
     op: crate::repository::OperationId,
     rows: &[super::poll::PollTargetReport],
     at: i64,
+) -> Result<(), RepositoryError> {
+    replace_poll_dispositions_with_insert_check(tx, id, op, rows, at, || Ok(()))
+}
+
+pub(super) fn replace_poll_dispositions_with_insert_check(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: crate::repository::OperationId,
+    rows: &[super::poll::PollTargetReport],
+    at: i64,
+    mut before_first_insert: impl FnMut() -> Result<(), RepositoryError>,
 ) -> Result<(), RepositoryError> {
     tx.execute(
         "DELETE FROM remote_poll_dispositions WHERE repository_id=?1",
@@ -387,6 +763,15 @@ pub(super) fn replace_poll_dispositions(
         } else {
             "malformed"
         };
+        #[cfg(test)]
+        if let Some(hook) = DISPOSITION_INSERT_HOOKS
+            .with(|hooks| hooks.borrow_mut().remove(&(op.to_string(), ordinal)))
+        {
+            hook(tx, id)?;
+        }
+        if ordinal == 0 {
+            before_first_insert()?;
+        }
         tx.execute("INSERT INTO remote_poll_dispositions(repository_id,operation_ulid,ordinal,classification,remote_ref,kind,item_id,disposition,before_oid,after_oid,observed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![id,op.to_string(),ordinal as i64,classification,row.target.as_ref().map(RemoteRefTarget::remote_ref),row.kind.map(|k|crate::repository::authoring_kind_segment(&k)),row.item_id.as_ref().map(ToString::to_string),disposition_name(row.disposition),row.before_oid.map(|o|o.to_string()),row.after_oid.map(|o|o.to_string()),at]).map_err(|_|recovery_required())?;
     }
     Ok(())
@@ -417,7 +802,10 @@ fn disposition_name(d: super::poll::PollDisposition) -> &'static str {
         MaterializationIncomplete => "materialization_incomplete",
         Malformed => "malformed",
         RemotelyDeleted => "remotely_deleted",
+        Closed => "closed",
+        Promoted => "promoted",
         HistoryUnknown => "history_unknown",
+        Unpublished => "unpublished",
         NotReached => "not_reached",
     }
 }
@@ -437,7 +825,10 @@ fn disposition(value: &str) -> Result<super::poll::PollDisposition, RepositoryEr
         "materialization_incomplete" => MaterializationIncomplete,
         "malformed" => Malformed,
         "remotely_deleted" => RemotelyDeleted,
+        "closed" => Closed,
+        "promoted" => Promoted,
         "history_unknown" => HistoryUnknown,
+        "unpublished" => Unpublished,
         "not_reached" => NotReached,
         _ => return Err(recovery_required()),
     })
@@ -1217,7 +1608,7 @@ fn merge_schema_object_sql(kind: &str, name: &str) -> Option<&'static str> {
     schema_object_sql(MERGE_EVIDENCE_SCHEMA, kind, name)
 }
 
-fn schema_object_sql(schema: &'static str, kind: &str, name: &str) -> Option<&'static str> {
+fn schema_object_sql<'a>(schema: &'a str, kind: &str, name: &str) -> Option<&'a str> {
     let prefix = format!("CREATE {kind} {name}");
     let start = schema.find(&prefix)?;
     let statement = &schema[start..];
@@ -1415,11 +1806,39 @@ fn migrate_synchronization(tx: &Transaction<'_>) -> Result<(), RepositoryError> 
     if count != 0 {
         return Err(recovery_required());
     }
-    // Rebuild CHECK constraints and the active index in this same migration transaction.
-    tx.execute_batch("DROP TRIGGER IF EXISTS remote_operation_target_immutable; DROP INDEX IF EXISTS remote_active_reservation; DROP INDEX IF EXISTS remote_operations_repository; ALTER TABLE remote_operation_records RENAME TO remote_operation_records_cycle04;")
+    // New retirement authority cannot legitimately predate this remote schema.
+    // Do not cascade or reconstruct it if an obsolete parent was substituted.
+    for table in [
+        "context_retirement_records",
+        "context_retirement_attempts",
+        "retirement_advertisement_provenance",
+    ] {
+        if super::super::recovery::has_table(tx, table).map_err(|_| recovery_required())?
+            && tx
+                .query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table})"), [], |r| {
+                    r.get::<_, bool>(0)
+                })
+                .map_err(|_| recovery_required())?
+        {
+            return Err(recovery_required());
+        }
+    }
+    // Rebuild without RENAMING THE OLD PARENT: SQLite would rewrite the FKs
+    // of the empty additive retirement envelope to the old temporary name.
+    // Copy into the replacement first, drop the old parent, then name the new
+    // parent. Genuine old registries keep all rows/IDs and no inferred authority.
+    let partial: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='remote_operation_records_cycle04_upgrade')", [], |r| r.get(0)).map_err(|_| recovery_required())?;
+    if partial {
+        return Err(recovery_required());
+    }
+    tx.execute_batch("DROP TRIGGER IF EXISTS remote_operation_target_immutable; DROP INDEX IF EXISTS remote_active_reservation; DROP INDEX IF EXISTS remote_operations_repository;")
         .map_err(|_| recovery_required())?;
-    tx.execute_batch(REMOTE_OPERATION_SCHEMA)
-        .map_err(|_| recovery_required())?;
+    tx.execute_batch(&REMOTE_OPERATION_SCHEMA.replacen(
+        "CREATE TABLE IF NOT EXISTS remote_operation_records",
+        "CREATE TABLE remote_operation_records_cycle04_upgrade",
+        1,
+    ))
+    .map_err(|_| recovery_required())?;
     for (name, definition) in [
         (
             "yield_requested",
@@ -1435,12 +1854,12 @@ fn migrate_synchronization(tx: &Transaction<'_>) -> Result<(), RepositoryError> 
         ),
     ] {
         tx.execute_batch(&format!(
-            "ALTER TABLE remote_operation_records ADD COLUMN {name} {definition}"
+            "ALTER TABLE remote_operation_records_cycle04_upgrade ADD COLUMN {name} {definition}"
         ))
         .map_err(|_| recovery_required())?;
     }
     let list = columns.join(",");
-    tx.execute_batch(&format!("INSERT INTO remote_operation_records({list}) SELECT {list} FROM remote_operation_records_cycle04; DROP TABLE remote_operation_records_cycle04;"))
+    tx.execute_batch(&format!("INSERT INTO remote_operation_records_cycle04_upgrade({list}) SELECT {list} FROM remote_operation_records; DROP TABLE remote_operation_records; ALTER TABLE remote_operation_records_cycle04_upgrade RENAME TO remote_operation_records;"))
         .map_err(|_| recovery_required())?;
     Ok(())
 }
@@ -1750,6 +2169,27 @@ pub struct RemoteOperationTarget {
     local_branch: Option<String>,
 }
 
+/// What a remote operation synchronizes, when it is a synchronization:
+/// primary, or an item's editing branch. `None` for a poll, a promotion or
+/// a closure, and for a context synchronization that names no item.
+pub(in super::super) fn synchronization_target(
+    target: &RemoteOperationTarget,
+) -> Option<SynchronizationTarget> {
+    match target.action() {
+        RemoteOperationAction::SynchronizePrimary => Some(SynchronizationTarget::Primary),
+        RemoteOperationAction::SynchronizeContext => {
+            let (kind, item_id) = target.item()?;
+            Some(SynchronizationTarget::Context {
+                kind,
+                item_id: item_id.clone(),
+            })
+        }
+        RemoteOperationAction::Poll
+        | RemoteOperationAction::Promote
+        | RemoteOperationAction::Close => None,
+    }
+}
+
 impl RemoteOperationTarget {
     pub fn for_poll(plan: &RemoteRefPlan) -> Self {
         Self {
@@ -2044,6 +2484,9 @@ pub struct RemoteSnapshot {
     observations: Vec<RemoteRefObservation>,
     contexts: Vec<RemoteContextSnapshot>,
     history_unknown: bool,
+    /// Whether a current batch at the current generation was read (an empty
+    /// batch counts: it advertises nothing).
+    has_current_batch: bool,
 }
 
 impl RemoteSnapshot {
@@ -2068,6 +2511,7 @@ impl RemoteSnapshot {
             observations,
             contexts,
             history_unknown: false,
+            has_current_batch: false,
         }
     }
 
@@ -2105,6 +2549,16 @@ impl RemoteSnapshot {
         &self.contexts
     }
 
+    /// The repository-wide cache-loss flag.
+    pub(in super::super) fn history_unknown(&self) -> bool {
+        self.history_unknown
+    }
+
+    /// Whether the snapshot holds a current batch to read absence from.
+    pub(in super::super) fn has_current_batch(&self) -> bool {
+        self.has_current_batch
+    }
+
     /// Missing rows never prove a deletion. After cache loss, they cannot prove
     /// first-publication eligibility either, except for an explicitly retired
     /// item (R1). A present state row always takes precedence over retirement.
@@ -2129,6 +2583,22 @@ impl RemoteSnapshot {
         } else {
             fetched
         }
+    }
+
+    /// Whether a fetch has observed the context of `kind` and `id` absent from
+    /// the remote after it was published: its stored state is
+    /// `remotely_deleted`. A push proves publication, never deletion, and an
+    /// absent tracking ref proves neither (decision 35).
+    pub(in super::super) fn context_deletion_observed(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+    ) -> bool {
+        self.contexts.iter().any(|context| {
+            context.kind == Some(kind)
+                && context.item_id.as_ref() == Some(id)
+                && context.state == RemoteContextState::RemotelyDeleted
+        })
     }
 
     /// Fetch planning must not reinterpret a qualified Push proof as a fetched
@@ -2202,20 +2672,249 @@ pub(super) fn outcome_name(value: RemoteOutcomeCategory) -> &'static str {
     }
 }
 
-/// Configuration preflight supplies only a validated plan and whether any
-/// endpoint/key selection changed. No endpoint, key ID, path, or secret-derived
-/// fingerprint is stored. Task 3 owns when to invoke this transition.
+/// Why a configuration fence is taken. Every reason bumps the generation and
+/// interrupts active operations. A fence that forgets nothing carries the
+/// current observation batch and the context rows into the new generation;
+/// only a differing identity drops them and forgets the evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum ConfigurationChange {
+    /// Key selection or credentials changed: always fences, forgets nothing.
+    Credentials,
+    /// The configured remote is unavailable (`plan` is `None`): fences when a
+    /// plan was set and keeps the known identity, so the same remote
+    /// returning forgets nothing.
+    Unavailable,
+    /// A validated plan was supplied: fences when it differs from the current
+    /// plan, and forgets when it differs from the known identity.
+    Plan,
+}
+
+/// Configuration preflight supplies only a validated plan and the reason for
+/// the fence. No endpoint, key ID, path, or secret-derived fingerprint is
+/// stored beyond the endpoint digest.
 pub(in super::super) fn configure(
     transaction: &Transaction<'_>,
     repository_id: i64,
     plan: Option<&RemoteRefPlan>,
-    configuration_changed: bool,
+    change: ConfigurationChange,
+) -> Result<i64, RepositoryError> {
+    configure_known(transaction, repository_id, plan, change, None)
+}
+
+/// The single forget decision. The identity differs from what was last known,
+/// so the evidence is about another remote. A first plan (nothing known) forgets
+/// nothing.
+fn forgets(
+    change: ConfigurationChange,
+    plan: Option<&RemoteRefPlan>,
+    (known_name, known_branch, known_digest): &KnownIdentity,
+    current: Option<&RemoteRefPlan>,
+    digest: Option<&[u8; 32]>,
+) -> bool {
+    // NULL known columns (a registry from before they existed) fall back to
+    // the plan in force before this change.
+    let known_name = known_name
+        .as_deref()
+        .or_else(|| current.map(RemoteRefPlan::remote_name));
+    let known_branch = known_branch
+        .as_deref()
+        .or_else(|| current.map(RemoteRefPlan::primary_branch));
+    (change == ConfigurationChange::Plan
+        && plan.is_some_and(|plan| {
+            known_name.is_some_and(|name| name != plan.remote_name())
+                || known_branch.is_some_and(|branch| branch != plan.primary_branch())
+        }))
+        || digest.is_some_and(|digest| known_digest.as_ref().is_some_and(|known| known != digest))
+}
+
+/// Whether every kept context row carries the refs `plan` gives it; with no
+/// plan the rows stay dormant, so they match.
+fn kept_rows_match(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    plan: Option<&RemoteRefPlan>,
+) -> Result<bool, RepositoryError> {
+    let Some(plan) = plan else {
+        return Ok(true);
+    };
+    let rows = transaction.prepare("SELECT kind,item_id,remote_ref,tracking_ref FROM remote_context_states WHERE repository_id=?1")
+        .and_then(|mut statement| statement.query_map([repository_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+    for (kind, id, remote_ref, tracking_ref) in rows {
+        let kind = match kind.as_str() {
+            "document" => AuthoringKind::Document,
+            "ticket" => AuthoringKind::Ticket,
+            _ => return Err(recovery_required()),
+        };
+        let id: ItemId = id.parse().map_err(|_| recovery_required())?;
+        let target = plan.context(kind, &id);
+        if target.remote_ref() != remote_ref || target.tracking_ref() != tracking_ref {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// An `('history_unknown','history_unknown')` row, under `plan`'s refs, for
+/// each active context that has no row yet and is not retired: the history
+/// of a retired item was consumed (R1), so its new context reads as never
+/// published, as it did before the fence.
+fn insert_unknown_context_rows(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    plan: &RemoteRefPlan,
+) -> Result<(), RepositoryError> {
+    let active = transaction.prepare("SELECT branch,item_id FROM contexts WHERE repository_id=?1 AND kind='active' ORDER BY branch")
+        .and_then(|mut statement| statement.query_map([repository_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+    let now = OffsetDateTime::now_utc().unix_timestamp().max(0);
+    for (branch, id) in active {
+        let (kind, item_id) =
+            crate::repository::stored_authoring_branch(&branch).ok_or_else(recovery_required)?;
+        if item_id.to_string() != id {
+            return Err(recovery_required());
+        }
+        let segment = crate::repository::authoring_kind_segment(&kind);
+        let present: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM remote_context_states WHERE repository_id=?1 AND kind=?2 AND item_id=?3) OR EXISTS(SELECT 1 FROM retired_contexts WHERE repository_id=?1 AND kind=?2 AND item_id=?3)",params![repository_id,segment,id],|row|row.get(0)).map_err(|_| recovery_required())?;
+        if present {
+            continue;
+        }
+        let target = plan.context(kind, &item_id);
+        transaction.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(?1,?2,?3,?4,?5,'history_unknown','history_unknown',?6)",
+            params![repository_id,target.remote_ref(),target.tracking_ref(),segment,id,now]).map_err(|_| recovery_required())?;
+    }
+    Ok(())
+}
+
+/// The owner's resolution of one context (`item resolve-history`): its row
+/// becomes `('never_published','history_unknown')` under `plan`'s refs. An
+/// explicit `never_published` row is a creation or owner resolution and is
+/// safe while the cache-loss flag is set; contexts with no row stay unknown
+/// under the flag. The registry's plan must be `plan`.
+pub(in super::super) fn record_context_resolved(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    plan: &RemoteRefPlan,
+    kind: AuthoringKind,
+    item_id: &ItemId,
+) -> Result<(), RepositoryError> {
+    if read_policy(transaction, repository_id)?.plan.as_ref() != Some(plan) {
+        return Err(recovery_required());
+    }
+    let target = plan.context(kind, item_id);
+    let now = OffsetDateTime::now_utc().unix_timestamp().max(0);
+    transaction.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(?1,?2,?3,?4,?5,'never_published','history_unknown',?6) ON CONFLICT(repository_id,remote_ref) DO UPDATE SET publication_evidence='never_published',state='history_unknown',last_advertised_oid=NULL,tracking_oid=NULL,observed_at=excluded.observed_at",
+        params![repository_id,target.remote_ref(),target.tracking_ref(),crate::repository::authoring_kind_segment(&kind),item_id.to_string(),now]).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+/// The kind and item of each active context of the repository. A row for any
+/// other context is a ghost: its context was released or removed by hand.
+pub(in super::super) fn active_contexts(
+    connection: &Connection,
+    repository_id: i64,
+) -> Result<Vec<(AuthoringKind, ItemId)>, RepositoryError> {
+    let branches = connection
+        .prepare("SELECT branch FROM contexts WHERE repository_id=?1 AND kind='active'")
+        .and_then(|mut statement| {
+            statement
+                .query_map([repository_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
+    branches
+        .iter()
+        .map(|branch| {
+            crate::repository::stored_authoring_branch(branch).ok_or_else(recovery_required)
+        })
+        .collect()
+}
+
+/// The active contexts that still read unknown: rows that say so and, while
+/// the cache-loss flag is set, active contexts with no row (which
+/// `read_snapshot` lists with the evidence `fetch_publication_evidence_for`
+/// gives them). A row whose context is no longer active is neither listed nor
+/// blocking. With the flag clear, contexts with no row read as never
+/// published, so only rows that say unknown are listed.
+pub(in super::super) fn unresolved_contexts(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+) -> Result<(bool, Vec<(AuthoringKind, ItemId)>), RepositoryError> {
+    let snapshot = read_snapshot(transaction, repository_id)?;
+    let active = active_contexts(transaction, repository_id)?;
+    let mut unknown: Vec<(AuthoringKind, ItemId)> = snapshot
+        .contexts
+        .iter()
+        .filter(|context| context.publication_evidence == RemotePublicationEvidence::HistoryUnknown)
+        .filter_map(|context| Some((context.kind?, context.item_id.clone()?)))
+        .filter(|context| active.contains(context))
+        .collect();
+    unknown.sort_by_key(|(kind, id)| (authoring_kind_sort(*kind), id.to_string()));
+    Ok((snapshot.history_unknown, unknown))
+}
+
+fn authoring_kind_sort(kind: AuthoringKind) -> u8 {
+    match kind {
+        AuthoringKind::Document => 0,
+        AuthoringKind::Ticket => 1,
+    }
+}
+
+/// Clears the cache-loss flag when no context still reads unknown: no row
+/// says so, and no active context without a row is unknown under the flag.
+/// Returns whether the flag was set and is now clear.
+pub(in super::super) fn clear_cache_loss_when_resolved(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+) -> Result<bool, RepositoryError> {
+    let (flag, unknown) = unresolved_contexts(transaction, repository_id)?;
+    if !flag || !unknown.is_empty() {
+        return Ok(false);
+    }
+    clear_cache_loss_flag(transaction, repository_id)?;
+    Ok(true)
+}
+
+/// Clears the flag; the caller has read that it is set and nothing is unknown.
+pub(in super::super) fn clear_cache_loss_flag(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+) -> Result<(), RepositoryError> {
+    transaction
+        .execute(
+            "UPDATE remote_polling_state SET history_unknown=0 WHERE repository_id=?1",
+            [repository_id],
+        )
+        .map(drop)
+        .map_err(|_| recovery_required())
+}
+
+/// Whether any repository of the registry still has the cache-loss flag set.
+/// The marker file is registry-wide, so it outlives a repair that leaves one.
+pub(in super::super) fn cache_loss_remains(
+    transaction: &Transaction<'_>,
+) -> Result<bool, RepositoryError> {
+    transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM remote_polling_state WHERE history_unknown=1)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())
+}
+
+fn configure_known(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    plan: Option<&RemoteRefPlan>,
+    change: ConfigurationChange,
+    digest: Option<&[u8; 32]>,
 ) -> Result<i64, RepositoryError> {
     read_snapshot(transaction, repository_id)?;
     let policy = read_policy(transaction, repository_id)?;
-    if !configuration_changed && policy.plan.as_ref() == plan {
+    if change != ConfigurationChange::Credentials && policy.plan.as_ref() == plan {
         return Ok(policy.generation);
     }
+    let known = read_known_identity(transaction, repository_id)?;
+    let forgets = forgets(change, plan, &known, policy.plan.as_ref(), digest);
     let generation = policy
         .generation
         .checked_add(1)
@@ -2225,24 +2924,78 @@ pub(in super::super) fn configure(
     transaction.execute("UPDATE remote_operation_records SET poll_completed_at=?2,poll_next_eligible_at=(SELECT next_eligible_at FROM remote_polling_state WHERE repository_id=?1) WHERE repository_id=?1 AND poll_kind='update' AND phase IN ('reserved','advertising','persisting','local_prepared')",params![repository_id,OffsetDateTime::now_utc().unix_timestamp().max(0)]).map_err(|_|recovery_required())?;
     transaction.execute("UPDATE remote_operation_records SET phase='interrupted',outcome='configuration_required' WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')",[repository_id]).map_err(|_| recovery_required())?;
     // The mutable current snapshot is invalidated, but a pass referenced by an
-    // immutable window is retained as historical intent. It is never made
-    // current again, nor used to authorize effects at the new generation.
+    // immutable window or retirement pin is retained as historical intent. It is never made
+    // current again: a fence that forgets nothing carries a copy of the
+    // current batch to the new generation (below), and that copy is
+    // re-validated on every read like any other batch.
+    let previous: Option<(i64, String, String)> = transaction.query_row("SELECT id,remote_name,primary_branch FROM remote_observation_batches WHERE repository_id=?1 AND is_current=1", [repository_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(|_| recovery_required())?;
     transaction.execute("UPDATE remote_observation_batches SET is_current=0 WHERE repository_id=?1 AND is_current=1", [repository_id]).map_err(|_| recovery_required())?;
-    transaction.execute("DELETE FROM remote_ref_observations WHERE batch_id IN (SELECT batch.id FROM remote_observation_batches batch WHERE batch.repository_id=?1 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=batch.id))",[repository_id]).map_err(|_| recovery_required())?;
+    // A fence that forgets nothing carries the evidence into the new
+    // generation: the batch and its observations are copied (a batch is only
+    // carried to the plan it was observed under; an unavailable plan carries
+    // it dormant) and the context rows are kept.
+    // Rows kept under refs of another plan (a registry with no known identity
+    // and no plan) would make every read fail, so they are forgotten instead.
+    let carry = !forgets
+        && previous.as_ref().is_none_or(|(_, name, branch)| {
+            plan.is_none_or(|plan| plan.remote_name() == name && plan.primary_branch() == branch)
+        })
+        && kept_rows_match(transaction, repository_id, plan)?;
+    let mut carried = None;
+    if carry && let Some((old, _, _)) = previous {
+        transaction.execute("INSERT INTO remote_observation_batches(repository_id,remote_name,primary_branch,configuration_generation,observed_at,is_current) SELECT repository_id,remote_name,primary_branch,?2,observed_at,1 FROM remote_observation_batches WHERE id=?1",params![old,generation]).map_err(|_| recovery_required())?;
+        let new = transaction.last_insert_rowid();
+        transaction.execute("INSERT INTO remote_ref_observations(batch_id,ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid) SELECT ?2,ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid FROM remote_ref_observations WHERE batch_id=?1",params![old,new]).map_err(|_| recovery_required())?;
+        carried = Some(new);
+    }
+    // Older remote-only migrations may precede the retirement envelope. Once
+    // installed, use the same exact holders for parent AND child collection.
+    let retirement_hold = if super::super::recovery::has_table(
+        transaction,
+        "retirement_observation_pins",
+    )
+    .map_err(|_| recovery_required())?
+    {
+        " AND NOT EXISTS(SELECT 1 FROM retirement_observation_pins pin WHERE pin.repository_id=batch.repository_id AND pin.observation_batch_id=batch.id)"
+    } else {
+        ""
+    };
+    transaction.execute(&format!("DELETE FROM remote_ref_observations WHERE batch_id IN (SELECT batch.id FROM remote_observation_batches batch WHERE batch.repository_id=?1 AND batch.id IS NOT ?2 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=batch.id){retirement_hold})"),params![repository_id,carried]).map_err(|_| recovery_required())?;
     transaction
         .execute(
-            "DELETE FROM remote_observation_batches WHERE repository_id=?1 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=remote_observation_batches.id)",
-            [repository_id],
+            &format!("DELETE FROM remote_observation_batches AS batch WHERE repository_id=?1 AND id IS NOT ?2 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=batch.id){retirement_hold}"),
+            params![repository_id, carried],
         )
         .map_err(|_| recovery_required())?;
-    transaction
-        .execute(
-            "DELETE FROM remote_context_states WHERE repository_id=?1",
-            [repository_id],
-        )
-        .map_err(|_| recovery_required())?;
-    transaction.execute("UPDATE remote_polling_state SET history_unknown=CASE WHEN remote_name IS NOT NULL THEN 1 ELSE history_unknown END,configuration_generation=?2,remote_name=?3,primary_branch=?4,automatic_backoff_seconds=NULL,latest_outcome=NULL WHERE repository_id=?1",
+    // Dropped rows are replaced by an unknown row per active context under the
+    // new plan, so a context registered afterwards reads as never published.
+    if !carry {
+        transaction
+            .execute(
+                "DELETE FROM remote_context_states WHERE repository_id=?1",
+                [repository_id],
+            )
+            .map_err(|_| recovery_required())?;
+        // A forgetting fence is always given a plan; the arms of `forgets` that
+        // fire without one are unreachable here, so this is fail-closed only.
+        let plan = plan.ok_or_else(recovery_required)?;
+        insert_unknown_context_rows(transaction, repository_id, plan)?;
+    }
+    transaction.execute("UPDATE remote_polling_state SET configuration_generation=?2,remote_name=?3,primary_branch=?4,automatic_backoff_seconds=NULL,latest_outcome=NULL WHERE repository_id=?1",
         params![repository_id,generation,plan.map(RemoteRefPlan::remote_name),plan.map(RemoteRefPlan::primary_branch)]).map_err(|_| recovery_required())?;
+    // The endpoint digests belong to the remote forgotten here. Leaving them
+    // would make the next endpoint registration under the new remote read as
+    // a digest change and forget again; NULL is "not recorded" and never
+    // forgets.
+    if forgets {
+        transaction.execute("UPDATE remote_polling_state SET endpoint_digest=NULL,known_endpoint_digest=NULL WHERE repository_id=?1", [repository_id]).map_err(|_| recovery_required())?;
+    }
+    if change == ConfigurationChange::Plan
+        && let Some(plan) = plan
+    {
+        transaction.execute("UPDATE remote_polling_state SET known_remote_name=?2,known_primary_branch=?3 WHERE repository_id=?1",
+            params![repository_id,plan.remote_name(),plan.primary_branch()]).map_err(|_| recovery_required())?;
+    }
     Ok(generation)
 }
 
@@ -2261,7 +3014,12 @@ pub(in super::super) fn invalidate_key_selection(
         .map_err(|_| recovery_required())?;
     for id in ids {
         let policy = read_policy(transaction, id)?;
-        configure(transaction, id, policy.plan.as_ref(), true)?;
+        configure(
+            transaction,
+            id,
+            policy.plan.as_ref(),
+            ConfigurationChange::Credentials,
+        )?;
     }
     Ok(())
 }
@@ -2280,9 +3038,19 @@ pub(in super::super) fn configure_endpoints(
     let changed = previous
         .as_ref()
         .map_or(has_history, |previous| previous != digest);
-    let generation = configure(tx, id, Some(plan), changed)?;
+    // A digest change under an unchanged plan still fences, like a credentials
+    // change; a changed plan fences through `Plan`.
+    let plan_changed = read_policy(tx, id)?.plan.as_ref() != Some(plan);
+    // `Credentials` for a digest-only change still forgets: `configure_known`
+    // compares the digest with the known one.
+    let change = if changed && !plan_changed {
+        ConfigurationChange::Credentials
+    } else {
+        ConfigurationChange::Plan
+    };
+    let generation = configure_known(tx, id, Some(plan), change, Some(digest))?;
     tx.execute(
-        "UPDATE remote_polling_state SET endpoint_digest=?2 WHERE repository_id=?1",
+        "UPDATE remote_polling_state SET endpoint_digest=?2,known_endpoint_digest=?2 WHERE repository_id=?1",
         params![id, digest.as_slice()],
     )
     .map_err(|_| recovery_required())?;
@@ -2310,6 +3078,22 @@ pub(super) fn configure_poll_endpoints(
     )
     .map_err(|_| recovery_required())?;
     Ok(generation)
+}
+
+type KnownIdentity = (Option<String>, Option<String>, Option<[u8; 32]>);
+
+fn read_known_identity(connection: &Connection, id: i64) -> Result<KnownIdentity, RepositoryError> {
+    let (name, branch, digest): (Option<String>, Option<String>, Option<Vec<u8>>) = connection
+        .query_row(
+            "SELECT known_remote_name,known_primary_branch,known_endpoint_digest FROM remote_polling_state WHERE repository_id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|_| recovery_required())?;
+    let digest = digest
+        .map(|value| value.try_into().map_err(|_| recovery_required()))
+        .transpose()?;
+    Ok((name, branch, digest))
 }
 
 fn read_endpoint_digest(
@@ -3030,6 +3814,65 @@ pub(in super::super) fn lookup_fenced(
         )
         .optional()?
         .unwrap_or(false))
+}
+
+/// The context child that the promotion or closure `operation_id` of the
+/// repository `repository_id` holds now (decision 34): the outer `None` when
+/// `operation_id` is no lifecycle parent of it, the inner one when the parent
+/// has no context child yet. A plain read of the parent's own row, as
+/// `conflict show` and `conflict resolve` map a parent's ID to its child. A
+/// stored ID that isn't one is `recovery_required`, never "no child".
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn lifecycle_context_child(
+    connection: &Connection,
+    repository_id: i64,
+    operation_id: crate::repository::OperationId,
+) -> Result<Option<Option<crate::repository::OperationId>>, ReadError> {
+    let row: Option<Option<String>> = connection
+        .query_row(
+            "SELECT context_sync_id FROM document_promotions
+              WHERE repository_id = ?1 AND operation_id = ?2
+             UNION ALL
+             SELECT context_sync_id FROM ticket_closures
+              WHERE repository_id = ?1 AND operation_id = ?2
+             LIMIT 1",
+            params![repository_id, operation_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    row.map(|child| child.as_deref().map(stored_operation_id).transpose())
+        .transpose()
+}
+
+/// An operation ID a parent's row stores: one that isn't is
+/// `recovery_required`.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+fn stored_operation_id(text: &str) -> Result<crate::repository::OperationId, ReadError> {
+    crate::repository::OperationId::parse(text).map_err(|_| recovery_required().into())
+}
+
+/// The promotion or closure of the repository `repository_id` whose context
+/// child is `child` now, if one is (decision 34). A stored ID that isn't one
+/// is `recovery_required`.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn lifecycle_parent_of(
+    connection: &Connection,
+    repository_id: i64,
+    child: crate::repository::OperationId,
+) -> Result<Option<crate::repository::OperationId>, ReadError> {
+    let row: Option<String> = connection
+        .query_row(
+            "SELECT operation_id FROM document_promotions
+              WHERE repository_id = ?1 AND context_sync_id = ?2
+             UNION ALL
+             SELECT operation_id FROM ticket_closures
+              WHERE repository_id = ?1 AND context_sync_id = ?2
+             LIMIT 1",
+            params![repository_id, child.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    row.as_deref().map(stored_operation_id).transpose()
 }
 
 /// What the remote operation `operation_id` of the registration at
@@ -4443,10 +5286,11 @@ pub(in super::super) fn has_pending_context_conflict(
     ).map_err(|_| recovery_required())
 }
 
-fn validate_child_id(
+pub(in super::super) fn validate_child_id(
     tx: &Transaction<'_>,
     operation_id: crate::repository::OperationId,
 ) -> Result<(), RepositoryError> {
+    crate::repository::local_sync::record::require_foreign_id_available(tx, operation_id)?;
     let id = operation_id.to_string();
     let collision: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_identity_confirmations WHERE confirmation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_resolution_attempts WHERE attempt_ulid=?1)",
@@ -4735,6 +5579,543 @@ fn resolution_attempt_id(
         params![attempt.to_string(),record.id,record.generation],
         |row| Ok((row.get(0)?,row.get(1)?)),
     ).optional().map_err(|_| recovery_required())?.ok_or_else(recovery_required)
+}
+
+/// The request a resolution attempt of `conflict resolve` belongs to
+/// (R-35): an ID, and no source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in super::super) struct ResolutionOwner {
+    pub request_id: String,
+}
+
+/// Where a step that met a conflict stands, as `conflict resolve` reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum ConflictStepState {
+    /// The conflict is pending, with no attempt's path written.
+    Pending,
+    /// An attempt has written paths; the index's stages are intact.
+    PathsWritten,
+    /// An attempt's resolution commit is prepared, and the branch may have
+    /// been moved to it.
+    CommitPrepared,
+    /// The conflict is resolved or repaired, and its result applied.
+    Applied,
+    /// Any other phase: the step needs recovery.
+    Other,
+}
+
+/// How far a resolution attempt got, by its own phase.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum ResolutionAttemptPhase {
+    /// Recorded, with no path written.
+    Prepared,
+    /// Writing its paths: no candidate commit yet.
+    PathsApplying,
+    /// Its candidate commit is prepared.
+    CandidatePrepared,
+    /// Its commit is the step's result.
+    Applied,
+    /// Recorded as needing recovery.
+    RecoveryRequired,
+}
+
+/// A step of a synchronization that met a conflict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) struct ResolutionConflictStep {
+    pub window_number: u32,
+    pub ordinal: u8,
+    pub state: ConflictStepState,
+}
+
+/// One resolution attempt of a synchronization's conflict.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in super::super) struct ResolutionAttemptView {
+    pub attempt: crate::repository::OperationId,
+    pub window_number: u32,
+    pub ordinal: u8,
+    pub phase: ResolutionAttemptPhase,
+    pub candidate: Option<Oid>,
+    /// Applied, with its native index sentinel released: the attempt has
+    /// nothing left to do.
+    pub released: bool,
+    /// The request it belongs to, when `conflict resolve` made it.
+    pub owner: Option<ResolutionOwner>,
+}
+
+/// What `conflict resolve` reads of a synchronization's resolution in one
+/// read (R-14, R-35): each step that met a conflict, newest first, and
+/// every resolution attempt, oldest first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in super::super) struct ResolutionView {
+    pub steps: Vec<ResolutionConflictStep>,
+    pub attempts: Vec<ResolutionAttemptView>,
+}
+
+impl ResolutionView {
+    /// The step whose conflict is live: pending, or with an attempt's paths
+    /// written.
+    pub(in super::super) fn live_step(&self) -> Option<ResolutionConflictStep> {
+        self.steps.iter().copied().find(|step| {
+            matches!(
+                step.state,
+                ConflictStepState::Pending | ConflictStepState::PathsWritten
+            )
+        })
+    }
+
+    /// The step of `attempt`.
+    fn step_of(&self, attempt: &ResolutionAttemptView) -> Option<ResolutionConflictStep> {
+        self.steps.iter().copied().find(|step| {
+            step.window_number == attempt.window_number && step.ordinal == attempt.ordinal
+        })
+    }
+
+    /// The attempt that is unfinished (fact 71): it has written paths that
+    /// no commit holds yet, or its commit is prepared, or applied with its
+    /// native artifacts not yet released. At most one is, because a new
+    /// attempt is begun only once the one before is closed.
+    pub(in super::super) fn unfinished(&self) -> Option<&ResolutionAttemptView> {
+        self.attempts
+            .iter()
+            .rev()
+            .find(|attempt| self.is_unfinished(attempt))
+    }
+
+    /// Whether an attempt other than `attempt` is unfinished: what a new
+    /// attempt is never begun beside (fact 71).
+    pub(super) fn unfinished_besides(&self, attempt: crate::repository::OperationId) -> bool {
+        self.attempts
+            .iter()
+            .any(|other| other.attempt != attempt && self.is_unfinished(other))
+    }
+
+    fn is_unfinished(&self, attempt: &ResolutionAttemptView) -> bool {
+        let step = self.step_of(attempt).map(|step| step.state);
+        match attempt.phase {
+            ResolutionAttemptPhase::PathsApplying => step == Some(ConflictStepState::PathsWritten),
+            ResolutionAttemptPhase::CandidatePrepared => {
+                step == Some(ConflictStepState::CommitPrepared)
+            }
+            ResolutionAttemptPhase::Applied => !attempt.released,
+            ResolutionAttemptPhase::Prepared | ResolutionAttemptPhase::RecoveryRequired => false,
+        }
+    }
+
+    /// Whether `attempt` has written paths that no commit holds yet: the one
+    /// state a new request may supersede it in (decision 18).
+    pub(in super::super) fn has_written_paths_only(&self, attempt: &ResolutionAttemptView) -> bool {
+        attempt.phase == ResolutionAttemptPhase::PathsApplying
+            && self.step_of(attempt).map(|step| step.state) == Some(ConflictStepState::PathsWritten)
+    }
+}
+
+fn conflict_step_state(phase: IntegrationStepPhase) -> ConflictStepState {
+    match phase {
+        IntegrationStepPhase::ConflictPending => ConflictStepState::Pending,
+        IntegrationStepPhase::ResolutionPrepared => ConflictStepState::PathsWritten,
+        IntegrationStepPhase::CommitPrepared => ConflictStepState::CommitPrepared,
+        IntegrationStepPhase::Applied => ConflictStepState::Applied,
+        IntegrationStepPhase::Prepared
+        | IntegrationStepPhase::Applying
+        | IntegrationStepPhase::RecoveryRequired => ConflictStepState::Other,
+    }
+}
+
+/// The phase a resolution attempt's row stores, by its stored name: the one
+/// vocabulary of attempt phases.
+pub(in super::super) fn resolution_attempt_phase(
+    phase: &str,
+) -> Result<ResolutionAttemptPhase, RepositoryError> {
+    Ok(match phase {
+        "prepared" => ResolutionAttemptPhase::Prepared,
+        "paths_applying" => ResolutionAttemptPhase::PathsApplying,
+        "candidate_prepared" => ResolutionAttemptPhase::CandidatePrepared,
+        "applied" => ResolutionAttemptPhase::Applied,
+        "recovery_required" => ResolutionAttemptPhase::RecoveryRequired,
+        _ => return Err(recovery_required()),
+    })
+}
+
+/// What `conflict resolve` reads of the synchronization `operation_id` of
+/// the repository `repository_id`. `None` for an ID no remote operation of
+/// the repository has; `Some` with no steps for a synchronization that met
+/// no conflict. An operation that is no synchronization is an error the
+/// caller tells apart beforehand.
+pub(in super::super) fn resolution_view(
+    connection: &Connection,
+    repository_id: i64,
+    operation_id: crate::repository::OperationId,
+) -> Result<Option<ResolutionView>, RepositoryError> {
+    let Some(record) = read_operation(connection, repository_id, operation_id)? else {
+        return Ok(None);
+    };
+    if synchronization_target(&record.target).is_none() {
+        return Err(recovery_required());
+    }
+    let steps = connection
+        .prepare(
+            "SELECT window_number,ordinal FROM remote_integration_steps
+              WHERE operation_record_id=?1 AND conflict_digest IS NOT NULL
+              ORDER BY window_number DESC, ordinal DESC",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([record.id], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?
+        .into_iter()
+        .map(|(window, ordinal)| {
+            let window = u32::try_from(window).map_err(|_| recovery_required())?;
+            let ordinal = u8::try_from(ordinal).map_err(|_| recovery_required())?;
+            let step = integration_step_in_window(connection, record.id, window, ordinal)?
+                .ok_or_else(recovery_required)?;
+            Ok(ResolutionConflictStep {
+                window_number: window,
+                ordinal,
+                state: conflict_step_state(step.phase),
+            })
+        })
+        .collect::<Result<Vec<_>, RepositoryError>>()?;
+    type AttemptRow = (
+        String,
+        i64,
+        i64,
+        String,
+        Option<String>,
+        bool,
+        Option<String>,
+    );
+    let attempts = connection
+        .prepare(
+            "SELECT attempt.attempt_ulid, step.window_number, step.ordinal, attempt.phase,
+                    attempt.candidate_oid,
+                    attempt.phase='applied' AND attempt.candidate_oid=step.result_oid
+                      AND EXISTS(SELECT 1 FROM remote_resolution_index_artifacts artifact
+                                  WHERE artifact.attempt_id=attempt.id AND artifact.phase='released'
+                                    AND artifact.ref_phase='observed'),
+                    owner.request_ulid
+               FROM remote_resolution_attempts attempt
+               JOIN remote_integration_steps step ON step.id=attempt.integration_step_id
+               LEFT JOIN remote_resolution_owners owner ON owner.attempt_ulid=attempt.attempt_ulid
+              WHERE attempt.operation_record_id=?1
+              ORDER BY attempt.id",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([record.id], |row| -> rusqlite::Result<AttemptRow> {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?
+        .into_iter()
+        .map(
+            |(attempt, window, ordinal, phase, candidate, released, request)| {
+                Ok(ResolutionAttemptView {
+                    attempt: crate::repository::OperationId::parse(&attempt)
+                        .map_err(|_| recovery_required())?,
+                    window_number: u32::try_from(window).map_err(|_| recovery_required())?,
+                    ordinal: u8::try_from(ordinal).map_err(|_| recovery_required())?,
+                    phase: resolution_attempt_phase(&phase)?,
+                    candidate: oid(candidate)?,
+                    released,
+                    owner: request.map(|request_id| ResolutionOwner { request_id }),
+                })
+            },
+        )
+        .collect::<Result<Vec<_>, RepositoryError>>()?;
+    Ok(Some(ResolutionView { steps, attempts }))
+}
+
+/// The attempts `request` is recorded as the owner of, each with the
+/// digest of the input it presented.
+pub(in super::super) fn resolution_owned_by(
+    connection: &Connection,
+    request: &str,
+) -> Result<Vec<(crate::repository::OperationId, [u8; 32])>, RepositoryError> {
+    connection
+        .prepare(
+            "SELECT attempt_ulid, input_digest FROM remote_resolution_owners
+              WHERE request_ulid=?1 ORDER BY attempt_ulid",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([request], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?
+        .into_iter()
+        .map(|(attempt, digest)| {
+            Ok((
+                crate::repository::OperationId::parse(&attempt).map_err(|_| recovery_required())?,
+                digest.try_into().map_err(|_| recovery_required())?,
+            ))
+        })
+        .collect()
+}
+
+/// Records that the attempt `attempt` is the request `request`'s, made
+/// with the input whose digest is `input_digest`. A row that already says
+/// exactly that is left as it is; one that says anything else is an error,
+/// because an attempt's ID is derived from its request.
+pub(in super::super) fn record_resolution_owner(
+    tx: &Transaction<'_>,
+    attempt: crate::repository::OperationId,
+    request: &str,
+    input_digest: [u8; 32],
+) -> Result<(), RepositoryError> {
+    tx.execute(
+        "INSERT OR IGNORE INTO remote_resolution_owners(attempt_ulid,request_ulid,input_digest) VALUES(?1,?2,?3)",
+        params![attempt.to_string(), request, input_digest.as_slice()],
+    )
+    .map_err(|_| recovery_required())?;
+    let recorded: (String, Vec<u8>) = tx
+        .query_row(
+            "SELECT request_ulid,input_digest FROM remote_resolution_owners WHERE attempt_ulid=?1",
+            [attempt.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| recovery_required())?;
+    if recorded.0 != request || recorded.1.as_slice() != input_digest {
+        return Err(recovery_required());
+    }
+    Ok(())
+}
+
+/// Removes the record of who owns the attempt `attempt`, for an attempt the
+/// domain never recorded: the request that presented it was refused before
+/// anything was written, and may present another input. `Ok(false)`, with
+/// the row kept, when the attempt is recorded: it is then the request's
+/// durable state.
+pub(in super::super) fn release_resolution_owner(
+    tx: &Transaction<'_>,
+    attempt: crate::repository::OperationId,
+) -> Result<bool, RepositoryError> {
+    let recorded: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM remote_resolution_attempts WHERE attempt_ulid=?1)",
+            [attempt.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    if recorded {
+        return Ok(false);
+    }
+    tx.execute(
+        "DELETE FROM remote_resolution_owners WHERE attempt_ulid=?1",
+        [attempt.to_string()],
+    )
+    .map_err(|_| recovery_required())?;
+    Ok(true)
+}
+
+/// The request whose resolution attempt of `step`'s conflict is
+/// unfinished, for the conflict read (R-35): the owner of the attempt that
+/// has written paths or prepared a commit. `None` when no such attempt is
+/// recorded as `conflict resolve`'s.
+pub(super) fn unfinished_resolution_request(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+    step: &IntegrationStepEvidence,
+) -> Result<Option<String>, RepositoryError> {
+    connection
+        .query_row(
+            "SELECT owner.request_ulid
+               FROM remote_resolution_attempts attempt
+               JOIN remote_integration_steps step ON step.id=attempt.integration_step_id
+               JOIN remote_resolution_owners owner ON owner.attempt_ulid=attempt.attempt_ulid
+              WHERE attempt.operation_record_id=?1 AND step.window_number=?2 AND step.ordinal=?3
+                AND ((step.phase='resolution_prepared' AND attempt.phase='paths_applying')
+                  OR (step.phase='commit_prepared' AND attempt.phase='candidate_prepared'
+                      AND attempt.candidate_oid=step.candidate_oid))
+              ORDER BY attempt.id DESC LIMIT 1",
+            params![
+                record.id,
+                i64::from(step.window_number),
+                step.intent.ordinal
+            ],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| recovery_required())
+}
+
+/// One path of a resolution attempt, as its durable row records it: the
+/// digest of its path, of the result written there and of what the path held
+/// before (its pre-write image), whether the write was observed, and the
+/// three sides' blobs of the conflict it resolves.
+#[derive(Clone, Debug)]
+pub(super) struct ResolutionPathRecord {
+    pub ordinal: u32,
+    pub path_digest: [u8; 32],
+    pub result_digest: [u8; 32],
+    pub prewrite_digest: [u8; 32],
+    pub applied: bool,
+    pub sides: [Option<Oid>; 3],
+}
+
+pub(super) fn resolution_path_records(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+) -> Result<Vec<ResolutionPathRecord>, RepositoryError> {
+    type PathRow = (
+        i64,
+        Vec<u8>,
+        Vec<u8>,
+        Vec<u8>,
+        bool,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let paths = connection
+        .prepare("SELECT path.ordinal,path.path_digest,path.result_digest,path.prewrite_digest,path.applied,path.base_blob_oid,path.local_blob_oid,path.incoming_blob_oid FROM remote_resolution_paths path JOIN remote_resolution_attempts attempt ON attempt.id=path.attempt_id WHERE attempt.attempt_ulid=?1 AND attempt.operation_record_id=?2 AND attempt.configuration_generation=?3 ORDER BY path.ordinal")
+        .and_then(|mut statement| {
+            statement
+                .query_map(
+                    params![attempt.to_string(), record.id, record.generation],
+                    |row| -> rusqlite::Result<PathRow> {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?
+        .into_iter()
+        .map(|(ordinal, path, result, prewrite, applied, base, local, incoming)| {
+            Ok(ResolutionPathRecord {
+                ordinal: ordinal.try_into().map_err(|_| recovery_required())?,
+                path_digest: path.try_into().map_err(|_| recovery_required())?,
+                result_digest: result.try_into().map_err(|_| recovery_required())?,
+                prewrite_digest: prewrite.try_into().map_err(|_| recovery_required())?,
+                applied,
+                sides: [oid(base)?, oid(local)?, oid(incoming)?],
+            })
+        })
+        .collect::<Result<Vec<_>, RepositoryError>>()?;
+    if paths.is_empty()
+        || paths
+            .iter()
+            .enumerate()
+            .any(|(index, path)| path.ordinal as usize != index)
+    {
+        return Err(recovery_required());
+    }
+    Ok(paths)
+}
+
+/// Closes the attempt `attempt`, which has written paths and no candidate,
+/// for a new request that supersedes it (decision 18): see
+/// `delete_resolution_attempt`. The caller has released its native index
+/// sentinel and proved its written paths unchanged under the repository's
+/// lease, while holding the reservation.
+pub(super) fn close_superseded_resolution_attempt(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+) -> Result<(), RepositoryError> {
+    let (id, phase) = resolution_attempt_id(tx, record, attempt)?;
+    let step_phase: String = tx
+        .query_row(
+            "SELECT step.phase FROM remote_integration_steps step JOIN remote_resolution_attempts attempt ON attempt.integration_step_id=step.id WHERE attempt.id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    if phase != "paths_applying" || step_phase != "resolution_prepared" {
+        return Err(recovery_required());
+    }
+    delete_resolution_attempt(tx, id, attempt)
+}
+
+/// Closes the attempt `attempt` when its rows show that it wrote nothing:
+/// recorded, or with its paths begun and none observed, and no native index
+/// or ref-log artifact retained or bound. `Ok(false)`, with nothing changed,
+/// otherwise. The caller has proved, under the repository's lease and while
+/// holding the reservation, that every path still holds its recorded
+/// pre-write image.
+pub(super) fn close_unwritten_resolution_attempt(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+) -> Result<bool, RepositoryError> {
+    let (id, phase) = resolution_attempt_id(tx, record, attempt)?;
+    if !matches!(phase.as_str(), "prepared" | "paths_applying") {
+        return Ok(false);
+    }
+    let held: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM remote_resolution_index_artifacts WHERE attempt_id=?1)
+                 OR EXISTS(SELECT 1 FROM remote_resolution_ref_log_artifacts WHERE attempt_id=?1)
+                 OR EXISTS(SELECT 1 FROM remote_resolution_paths WHERE attempt_id=?1 AND applied)",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    if held {
+        return Ok(false);
+    }
+    delete_resolution_attempt(tx, id, attempt)?;
+    Ok(true)
+}
+
+/// Deletes the attempt whose row is `id` and whose ULID is `attempt`: its
+/// rows and the record of its owner, in the caller's transaction. Its step,
+/// when the attempt had begun its paths, is put back to `conflict_pending`,
+/// so the conflict reads as one no attempt has begun to resolve, and
+/// outside repair is accepted again (Cycle decision 18). The step holds
+/// nothing else of the attempt: beginning its paths set only its phase.
+fn delete_resolution_attempt(
+    tx: &Transaction<'_>,
+    id: i64,
+    attempt: crate::repository::OperationId,
+) -> Result<(), RepositoryError> {
+    tx.execute(
+        "UPDATE remote_integration_steps SET phase='conflict_pending'
+          WHERE id=(SELECT integration_step_id FROM remote_resolution_attempts
+                     WHERE id=?1 AND phase='paths_applying')
+            AND phase='resolution_prepared'",
+        [id],
+    )
+    .map_err(|_| recovery_required())?;
+    for statement in [
+        "DELETE FROM remote_resolution_ref_log_artifacts WHERE attempt_id=?1",
+        "DELETE FROM remote_resolution_index_artifacts WHERE attempt_id=?1",
+        "DELETE FROM remote_resolution_paths WHERE attempt_id=?1",
+        "DELETE FROM remote_resolution_attempts WHERE id=?1",
+    ] {
+        tx.execute(statement, [id])
+            .map_err(|_| recovery_required())?;
+    }
+    tx.execute(
+        "DELETE FROM remote_resolution_owners WHERE attempt_ulid=?1",
+        [attempt.to_string()],
+    )
+    .map_err(|_| recovery_required())?;
+    Ok(())
 }
 
 /// Fixed-role manifest provenance. Images and signer authority are bound by the
@@ -5338,6 +6719,7 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
     crate::repository::closure::record::audit(&transaction)?;
     audit_poll_materializations(&transaction)?;
     validate_poll_disposition_schema(&transaction)?;
+    validate_poll_time_columns(&transaction)?;
     validate_schema_object(
         &transaction,
         "TABLE",
@@ -5463,7 +6845,10 @@ fn read_snapshot_rows(
             return Err(recovery_required());
         }
         let current = flag(current)?;
-        if generation != policy.generation || policy.plan.as_ref() != Some(&plan) {
+        // While the plan is unavailable, a current batch carried by the fence
+        // is dormant: validated, but not exposed until a plan returns.
+        let dormant = current && policy.plan.is_none() && generation == policy.generation;
+        if !dormant && (generation != policy.generation || policy.plan.as_ref() != Some(&plan)) {
             // Only an exact window-bound historical pass may outlive the
             // configuration that selected it. The ordinary snapshot never
             // selects these rows; startup still audits their complete contents.
@@ -5476,7 +6861,13 @@ fn read_snapshot_rows(
             } else {
                 false
             };
-            if !historical_pass {
+            let retirement_pass = audit_history && !current
+                && super::super::recovery::has_table(connection, "retirement_observation_pins").map_err(|_| recovery_required())?
+                && connection.query_row("SELECT EXISTS(SELECT 1 FROM retirement_observation_pins pin JOIN retirement_advertisement_provenance p ON p.id=pin.provenance_id
+                  WHERE pin.repository_id=?1 AND pin.observation_batch_id=?2 AND p.repository_id=?1 AND p.observation_batch_id=?2
+                    AND p.configuration_generation=?3 AND p.remote_name=?4 AND p.primary_branch=?5 AND p.observed_at=?6)",
+                  params![repository_id,batch_id,generation,remote,primary,observed_at], |r| r.get::<_, bool>(0)).map_err(|_| recovery_required())?;
+            if !historical_pass && !retirement_pass {
                 return Err(recovery_required());
             }
         }
@@ -5484,6 +6875,7 @@ fn read_snapshot_rows(
         if current_count > 1 {
             return Err(recovery_required());
         }
+        snapshot.has_current_batch |= current && !dormant;
         let rows = connection.prepare("SELECT ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid FROM remote_ref_observations WHERE batch_id=?1 ORDER BY ordinal")
             .and_then(|mut statement| statement.query_map([batch_id],|row| Ok((row.get::<_,i64>(0)?,row.get::<_,Option<String>>(1)?,row.get::<_,Option<String>>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,Option<String>>(5)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
         for (ordinal, remote_ref, tracking_ref, classification, advertised, tracking) in rows {
@@ -5524,7 +6916,7 @@ fn read_snapshot_rows(
                 }
                 _ => return Err(recovery_required()),
             };
-            if current {
+            if current && !dormant {
                 if observation.classification == RemoteRefClassification::MalformedContext {
                     snapshot.contexts.push(RemoteContextSnapshot::new(
                         None,
@@ -5567,15 +6959,15 @@ fn read_snapshot_rows(
             _ => return Err(recovery_required()),
         };
         let id: ItemId = id.parse().map_err(|_| recovery_required())?;
-        let target = policy
-            .plan
-            .as_ref()
-            .ok_or_else(recovery_required)?
-            .context(kind, &id);
-        if target.remote_ref() != remote_ref
-            || target.tracking_ref() != tracking_ref
-            || observed_at < 0
-        {
+        if observed_at < 0 {
+            return Err(recovery_required());
+        }
+        // Rows kept across an unavailable plan stay dormant until it returns:
+        // parsed and checked below, but not compared against refs or batches.
+        let target = policy.plan.as_ref().map(|plan| plan.context(kind, &id));
+        if target.as_ref().is_some_and(|target| {
+            target.remote_ref() != remote_ref || target.tracking_ref() != tracking_ref
+        }) {
             return Err(recovery_required());
         }
         let evidence = match evidence.as_str() {
@@ -5596,11 +6988,13 @@ fn read_snapshot_rows(
         if (state != RemoteContextState::HistoryUnknown)
             != (evidence == RemotePublicationEvidence::ObservedPublished)
             || (evidence == RemotePublicationEvidence::ObservedPublished) != advertised.is_some()
-            || (snapshot.history_unknown && evidence == RemotePublicationEvidence::NeverPublished)
         {
             return Err(recovery_required());
         }
         let tracking = oid(tracking)?;
+        let Some(target) = target else {
+            continue;
+        };
         match current_contexts.remove(remote_ref.as_str()) {
             Some(observation)
                 if matches!(
@@ -5801,6 +7195,8 @@ impl crate::repository::RepositoryService {
             .map(|snapshot| snapshot.remote)
     }
 
+    /// Writes all three fields, whatever was read of them and whenever. Only
+    /// tests call this: a policy verb goes through `update_remote_polling`.
     pub fn set_remote_polling(
         &self,
         root: &Path,
@@ -5815,6 +7211,80 @@ impl crate::repository::RepositoryService {
             Ok(())
         })
     }
+}
+
+/// What a polling policy verb changes. Each names only what it writes, so a
+/// verb can't overwrite a field another caller changed since it last read one.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PollingChange {
+    /// The interval, and not the stored due time.
+    Interval(PollingInterval),
+    /// The pause.
+    Pause,
+    /// The pause and the stored deadline, so an eligible poll is due. The
+    /// suspension, `enabled` and the backoff value stay.
+    Resume,
+}
+
+/// The policy as an `update_remote_polling` left it.
+#[derive(Clone, Debug)]
+pub(crate) struct PollingUpdate {
+    /// False when the policy was already so, and nothing was written.
+    pub(crate) changed: bool,
+    pub(crate) polling: RemotePollingConfiguration,
+    pub(crate) next_eligible_at: Option<OffsetDateTime>,
+}
+
+/// Applies `change` to the policy of the registration whose root is
+/// `root_path`, in the caller's transaction, so the request's record commits
+/// with it or not at all. Whether it is already so is read in the
+/// same transaction. Unlike `set_remote_polling`, it writes no other field.
+pub(in super::super) fn update_remote_polling(
+    transaction: &Transaction<'_>,
+    root_path: &str,
+    change: PollingChange,
+) -> Result<PollingUpdate, RepositoryError> {
+    let id: i64 = transaction
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path=?1",
+            [root_path],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| recovery_required())?
+        .ok_or_else(|| {
+            RepositoryError::new(
+                RepositoryOperation::RepositorySnapshot,
+                None,
+                RepositoryErrorKind::RepositoryNotRegistered,
+                "the repository is not registered",
+            )
+        })?;
+    let before = read_policy(transaction, id)?.polling;
+    let written = match change {
+        PollingChange::Interval(interval) if before.interval() != interval.duration() => {
+            transaction.execute(
+                "UPDATE remote_polling_state SET interval_seconds=?2 WHERE repository_id=?1",
+                params![id, interval.duration().as_secs()],
+            )
+        }
+        PollingChange::Pause if !before.paused() => transaction.execute(
+            "UPDATE remote_polling_state SET paused=1 WHERE repository_id=?1",
+            [id],
+        ),
+        PollingChange::Resume if before.paused() => transaction.execute(
+            "UPDATE remote_polling_state SET paused=0,next_eligible_at=NULL WHERE repository_id=?1",
+            [id],
+        ),
+        PollingChange::Interval(_) | PollingChange::Pause | PollingChange::Resume => Ok(0),
+    }
+    .map_err(|_| recovery_required())?;
+    let after = read_policy(transaction, id)?;
+    Ok(PollingUpdate {
+        changed: written != 0,
+        polling: after.polling,
+        next_eligible_at: after.next_eligible_at,
+    })
 }
 
 /// A short cache-recovery-guarded transaction, never held across Git or network

@@ -1,9 +1,10 @@
 ---
+id: 01M4VD7G36JQ3T0D3VXEX7YDTQ
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-13T19:53:29Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4VD7G36JQ3T0D3VXEX7YDTQ"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-13T19:53:29Z"
 ---
 
 Task 4 only, inline, no subagents. Clean assigned branch/worktree base:

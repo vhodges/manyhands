@@ -276,7 +276,6 @@ fn authoring_context_and_save_wait_for_common_git_lease_then_replay_after_releas
     service
         .enable(support::enable_request(&fixture.root))
         .unwrap();
-    stage_configuration(&fixture);
     let context_operation = OperationId::new();
     let save_operation = OperationId::new();
     let context_target = || AuthoringTarget {
@@ -341,7 +340,6 @@ fn authoring_save_respects_an_in_process_repository_lease() {
     service
         .enable(support::enable_request(&fixture.root))
         .unwrap();
-    stage_configuration(&fixture);
     let repository = git2::Repository::open(&fixture.root).unwrap();
     let lock_path = repository.commondir().join("manyhands-operation.lock");
     let (acquired_sender, acquired) = mpsc::channel();
@@ -406,7 +404,6 @@ fn remove_remote_holds_the_lease_through_its_unselected_observation() {
             operation_id: OperationId::new(),
         })
         .unwrap();
-    stage_configuration(&fixture);
     let (observed_at, observed) = mpsc::channel();
     let (released, release) = mpsc::channel();
     holder.set_lifecycle_lease_hook_for_testing(
@@ -469,7 +466,6 @@ fn publication_selection_holds_the_lease_through_its_remote_observation() {
             operation_id: OperationId::new(),
         })
         .unwrap();
-    stage_configuration(&fixture);
     let (observed_at, observed) = mpsc::channel();
     let (released, release) = mpsc::channel();
     holder.set_lifecycle_lease_hook_for_testing(
@@ -544,14 +540,6 @@ fn assert_remote_configuration(
         .map(|remote| remote.name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(names, remotes);
-}
-
-fn stage_configuration(fixture: &support::TestRepository) {
-    let mut index = fixture.repository.index().unwrap();
-    index
-        .add_path(std::path::Path::new(".manyhands/config.toml"))
-        .unwrap();
-    index.write().unwrap();
 }
 
 #[test]
@@ -814,6 +802,7 @@ fn pending_lifecycle_records_block_differently_identified_mutations_without_side
         "remove_remote",
         "refresh",
         "rebuild",
+        "retire_context",
     ] {
         let fixture = support::born_repository();
         let data = tempfile::tempdir().unwrap();
@@ -1142,10 +1131,14 @@ fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
     assert_eq!(
         committed_markers,
         [
+            "closure_refusal_blockers_v2",
             "cycle_09_context_publication_evidence",
             "cycle_09_document_promotions",
             "cycle_09_retired_contexts",
             "cycle_10_ticket_closures",
+            "promotion_refusal_blockers_v2",
+            "remote_history_per_context_v1",
+            "remote_poll_dispositions_unpublished_v1",
         ]
     );
     let legacy_columns = connection
@@ -2012,7 +2005,6 @@ fn wave_one_real_repository_journey_covers_the_recovery_gate() {
             operation_id: OperationId::new(),
         })
         .unwrap();
-    stage_configuration(&born);
     assert!(matches!(
         service
             .set_publication_remote(SetPublicationRemoteRequest {
@@ -2154,7 +2146,6 @@ fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
                     .unwrap()
                     .enable(support::enable_request(&fixture.root))
                     .unwrap();
-                stage_configuration(&fixture);
                 let request = authoring_target(
                     &fixture.root,
                     AuthoringKind::Document,
@@ -2190,7 +2181,6 @@ fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
                 setup
                     .enable(support::enable_request(&fixture.root))
                     .unwrap();
-                stage_configuration(&fixture);
                 let request = document_request(&fixture.root, operation_id);
                 let first = support::FailOnce::at(point).open_service(data.path());
                 assert!(first.save_document(request.clone()).is_err(), "{name}");

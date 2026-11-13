@@ -1,0 +1,1283 @@
+//! The shell: its regions and keys, the repository selector, and
+//! quitting. The Quit action and the window's close request share one
+//! handler, which waits for a running job.
+
+use std::{fs, path::PathBuf, sync::Arc, time::Duration};
+
+use gpui_kit::{
+    Entity, TestAppContext, VisualTestContext, WindowHandle, component::Root, test::TestWindowExt,
+};
+use manyhands::{
+    repository::{ConfigurationState, LeaseKind, RepositoryService},
+    results::ResultCode,
+};
+
+use super::{
+    QuitPhase, REGIONS, Region, Workspace,
+    content::{NOTHING_SELECTED, OPEN_FROM_THE_LISTS},
+};
+use crate::desktop::{
+    keys::{self, Quit},
+    model::{
+        layout::PanelKind,
+        list_view::RETRY,
+        navigation::{OpenTarget, Resolution},
+        repository_state::{
+            CANT_OPEN, NEEDS_FIXING, NEEDS_FIXING_SENTENCE, REMOVE_FROM_MANYHANDS, kept_sentence,
+        },
+    },
+    open_test_window_with,
+    services::{
+        JobKind, ReadKind,
+        requests::{DesktopRequestId, Intent, Lane, RequestState},
+    },
+    test_support::{
+        delaying::DelayingBackend,
+        fixtures::{Fixture, item_id, refresh_through, remove_registration},
+        snapshot::RepositorySnapshot,
+    },
+    view::{harness::wait_until, repositories::NOT_UPDATED_BUSY, sidebar::SELECTED},
+};
+
+struct Setup {
+    window: WindowHandle<Root>,
+    workspace: Entity<Workspace>,
+    backend: Arc<DelayingBackend>,
+    root: PathBuf,
+    // Kept for as long as the window reads through it.
+    _fixture: Fixture,
+}
+
+fn setup(cx: &mut TestAppContext) -> Setup {
+    cx.update(gpui_kit::init);
+    cx.update(keys::bind);
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let (window, backend) = cx.update(|cx| open_test_window_with(&fixture, cx));
+    let workspace = window
+        .update(cx, |root, _, _| {
+            root.view().clone().downcast::<Workspace>().unwrap()
+        })
+        .unwrap();
+    Setup {
+        window,
+        workspace,
+        backend,
+        root,
+        _fixture: fixture,
+    }
+}
+
+fn phase(workspace: &Entity<Workspace>, cx: &mut TestAppContext) -> QuitPhase {
+    workspace.read_with(cx, |workspace, _| workspace.quit_phase())
+}
+
+/// Submits a refresh through the window's own worker.
+fn submit_refresh(setup: &Setup, cx: &mut TestAppContext) -> DesktopRequestId {
+    setup.workspace.read_with(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::IndexRefresh {
+                root: setup.root.clone(),
+            },
+            Lane::User,
+            None,
+            None,
+        )
+    })
+}
+
+#[gpui_kit::test]
+fn quit_with_no_job_quits(cx: &mut TestAppContext) {
+    let setup = setup(cx);
+    let mut visual = VisualTestContext::from_window(setup.window.into(), cx);
+    visual.run_until_parked();
+    assert_eq!(phase(&setup.workspace, &mut visual), QuitPhase::Running);
+
+    visual.simulate_keystrokes("secondary-q");
+    assert_eq!(phase(&setup.workspace, &mut visual), QuitPhase::Quit);
+}
+
+#[gpui_kit::test]
+fn closing_the_window_with_no_job_is_allowed(cx: &mut TestAppContext) {
+    let setup = setup(cx);
+    let mut visual = VisualTestContext::from_window(setup.window.into(), cx);
+    visual.run_until_parked();
+    assert!(visual.simulate_close());
+    assert_eq!(phase(&setup.workspace, &mut visual), QuitPhase::Quit);
+}
+
+/// Quit and close with a held job both refuse, show "Finishing" and
+/// Quit now, and quit once the job returns.
+#[gpui_kit::test]
+async fn quitting_with_a_held_job_waits_for_it(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let setup = setup(cx);
+    let held = setup.backend.hold_job(JobKind::IndexRefresh);
+    let id = submit_refresh(&setup, cx);
+    held.wait_reached();
+
+    let mut visual = VisualTestContext::from_window(setup.window.into(), cx);
+    visual.dispatch_action(Quit);
+    visual.run_until_parked();
+    assert_eq!(
+        phase(&setup.workspace, &mut visual),
+        QuitPhase::Finishing(id)
+    );
+    visual.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("quit-finishing").is_some());
+        assert!(window.try_find("quit-now").is_some());
+    });
+    assert_eq!(
+        setup
+            .workspace
+            .read_with(&visual, |workspace, cx| workspace.finishing_text(cx)),
+        Some("Finishing Refresh index".to_owned())
+    );
+    // The close request goes through the same handler.
+    assert!(!visual.simulate_close());
+    assert_eq!(
+        phase(&setup.workspace, &mut visual),
+        QuitPhase::Finishing(id)
+    );
+
+    held.release();
+    wait_until(&visual, &setup.workspace, |workspace, _| {
+        workspace.quit_phase() == QuitPhase::Quit
+    })
+    .await;
+}
+
+/// Quit now does not wait: the job is still held when the app quits.
+#[gpui_kit::test]
+async fn quit_now_quits_while_the_job_is_held(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let setup = setup(cx);
+    let held = setup.backend.hold_job(JobKind::IndexRefresh);
+    let id = submit_refresh(&setup, cx);
+    held.wait_reached();
+
+    let mut visual = VisualTestContext::from_window(setup.window.into(), cx);
+    visual.dispatch_action(Quit);
+    visual.run_until_parked();
+    assert_eq!(
+        phase(&setup.workspace, &mut visual),
+        QuitPhase::Finishing(id)
+    );
+    visual.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("quit-now", cx);
+    });
+    visual.run_until_parked();
+    assert_eq!(phase(&setup.workspace, &mut visual), QuitPhase::Quit);
+    held.release();
+    // The worker must not outlive the test: wait for the job's end.
+    let operations = setup.workspace.read_with(&visual, |workspace, _| {
+        workspace.services().operations().clone()
+    });
+    wait_until(&visual, &operations, move |operations, _| {
+        matches!(
+            operations.request(id).map(|request| &request.state),
+            Some(RequestState::Finished(..))
+        )
+    })
+    .await;
+}
+
+/// Quitting with a session whose newest text is not yet stored: it is
+/// flushed first, under "Saving drafts for recovery" and Quit now, before
+/// D1's phases. A failed flush asks with Quit anyway and Cancel.
+mod saving_drafts {
+    use gpui_kit::{TestAppContext, test::TestWindowExt};
+    use manyhands::drafts::DraftId;
+
+    use super::QuitPhase;
+    use crate::desktop::{
+        model::layout::PanelKind,
+        services::ReadKind,
+        test_support::{drafts::stored_body, fixtures::Fixture},
+        view::{
+            harness::Shell,
+            quit::{DraftsNotSaved, SAVING_DRAFTS},
+        },
+    };
+
+    fn phase(shell: &Shell, cx: &mut TestAppContext) -> QuitPhase {
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.quit_phase())
+    }
+
+    async fn begun(shell: &Shell, cx: &mut TestAppContext) -> DraftId {
+        shell.begin_draft(cx).await
+    }
+
+    async fn unsaved(shell: &Shell, cx: &mut TestAppContext) -> DraftId {
+        shell.unsaved_draft(cx).await
+    }
+
+    fn body(shell: &Shell, id: DraftId) -> Option<String> {
+        stored_body(&shell.fixture.draft_store(), id)
+    }
+
+    /// `secondary-q` with the write held: "Saving drafts for recovery" and
+    /// a focused Quit now, no quit, and a close request refused the same
+    /// way; on release the text is stored and the app quits.
+    #[gpui_kit::test]
+    async fn quitting_saves_an_unsaved_draft_first(cx: &mut TestAppContext) {
+        let shell = Shell::open(Fixture::new(), cx);
+        let id = unsaved(&shell, cx).await;
+        let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+
+        shell.keys("secondary-q", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+        assert_eq!(
+            shell
+                .workspace
+                .read_with(cx, |workspace, cx| workspace.finishing_text(cx)),
+            Some(SAVING_DRAFTS.to_owned())
+        );
+        assert_eq!(SAVING_DRAFTS, "Saving drafts for recovery");
+        assert_eq!(
+            shell.label("quit-finishing", cx).as_deref(),
+            Some(SAVING_DRAFTS)
+        );
+        assert_eq!(
+            shell.frame(cx, |window, _| window.find("quit-now").focused()),
+            Some(true)
+        );
+        assert!(!shell.visual(cx).simulate_close());
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+        assert_eq!(body(&shell, id).as_deref(), Some("First body"));
+
+        let _ = gate.send(());
+        shell.run(cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::Quit);
+        assert_eq!(body(&shell, id).as_deref(), Some("Newer body"));
+    }
+
+    /// The window's close request takes the same path as `secondary-q`.
+    #[gpui_kit::test]
+    async fn closing_the_window_saves_an_unsaved_draft_first(cx: &mut TestAppContext) {
+        let shell = Shell::open(Fixture::new(), cx);
+        let id = unsaved(&shell, cx).await;
+        let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+
+        assert!(!shell.visual(cx).simulate_close());
+        shell.run(cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+        assert!(shell.present("quit-now", cx));
+
+        let _ = gate.send(());
+        shell.run(cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::Quit);
+        assert_eq!(body(&shell, id).as_deref(), Some("Newer body"));
+    }
+
+    /// Quit now does not wait for a write that never lands: the stored
+    /// revision is the last one written.
+    #[gpui_kit::test]
+    async fn quit_now_quits_while_drafts_are_saving(cx: &mut TestAppContext) {
+        let shell = Shell::open(Fixture::new(), cx);
+        let id = unsaved(&shell, cx).await;
+        let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+
+        shell.keys("secondary-q", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+        shell.click("quit-now", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::Quit);
+        assert_eq!(body(&shell, id).as_deref(), Some("First body"));
+        drop(gate);
+    }
+
+    /// Nothing opens a confirmation in front of Quit now while drafts are
+    /// saving; once they are saved and quitting is D1's, nothing does
+    /// either.
+    #[gpui_kit::test]
+    async fn no_confirmation_opens_while_drafts_are_saving(cx: &mut TestAppContext) {
+        use gpui_kit::component::WindowExt;
+
+        use crate::desktop::{services::requests::Intent, view::confirm::confirm};
+
+        let shell = Shell::open(Fixture::new(), cx);
+        unsaved(&shell, cx).await;
+        let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+        shell.keys("secondary-q", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+
+        let services = shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().clone());
+        let mut visual = shell.visual(cx);
+        let origin = visual.update(|_, cx| cx.focus_handle());
+        visual.update(|window, cx| {
+            confirm(
+                Intent::RepoRemove {
+                    root: "/a/repository".into(),
+                },
+                origin,
+                &services,
+                window,
+                cx,
+            )
+        });
+        shell.run(cx);
+        assert!(!visual.update(|window, cx| window.has_active_dialog(cx)));
+        assert!(!shell.present("confirm-dialog", cx));
+        assert_eq!(
+            shell.frame(cx, |window, _| window.find("quit-now").focused()),
+            Some(true)
+        );
+        drop(gate);
+    }
+
+    /// Part B review: closing a tab with a draft attached, by
+    /// `secondary-w` or its Close, opens no dialog in front of Quit now
+    /// while drafts are saving, and the tab stays.
+    #[gpui_kit::test]
+    async fn no_close_dialog_opens_while_drafts_are_saving(cx: &mut TestAppContext) {
+        use manyhands::{drafts::DraftFields, repository::ItemDtoKind};
+
+        use crate::desktop::{
+            model::navigation::OpenTarget,
+            test_support::{drafts::store_draft, fixtures::item_id},
+            view::harness::key,
+        };
+
+        const ONE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ0";
+        let fixture = Fixture::new();
+        let a = fixture.create_repository("a");
+        fixture.commit_ticket(&a, ONE, "One", "");
+        fixture.refresh(&a);
+        let draft = store_draft(&fixture, &a, ItemDtoKind::Ticket, ONE, "Draft body");
+        let shell = Shell::open(fixture, cx);
+        shell.workspace.update(cx, |workspace, cx| {
+            workspace.open_item(
+                OpenTarget::Item {
+                    repo: key(&a),
+                    kind: ItemDtoKind::Ticket,
+                    id: item_id(ONE),
+                },
+                cx,
+            )
+        });
+        shell.run(cx);
+        shell.click("draft-restore-button", cx);
+        assert!(shell.present("draft-section", cx), "the draft is restored");
+
+        let drafts = shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+        let mut fields = drafts.read_with(cx, |registry, _| {
+            registry.session(draft).unwrap().current().clone()
+        });
+        if let DraftFields::Ticket { body, .. } = &mut fields {
+            *body = "Unsaved body".to_owned();
+        }
+        drafts.update(cx, |registry, cx| registry.edit(draft, fields, cx));
+        shell.run(cx);
+        let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+        shell.keys("secondary-q", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+
+        shell.keys("secondary-w", cx);
+        assert!(!shell.present("close-draft-dialog", cx));
+        // The tab's Close goes through the same path.
+        let closed = shell.visual(cx).update(|window, cx| {
+            shell.workspace.update(cx, |workspace, cx| {
+                let id = workspace.content.tabs.active().expect("the tab is open");
+                workspace.close_tab(id, window, cx)
+            })
+        });
+        assert!(!closed);
+        shell.run(cx);
+        assert!(!shell.present("close-draft-dialog", cx));
+        assert_eq!(
+            shell
+                .workspace
+                .read_with(cx, |workspace, _| workspace.tab_keys().len()),
+            1,
+            "the tab stays"
+        );
+        assert_eq!(
+            shell.frame(cx, |window, _| window.find("quit-now").focused()),
+            Some(true)
+        );
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+        drop(gate);
+    }
+
+    /// With a job running too, the drafts are saved first; then quitting
+    /// is D1's "Finishing", and it quits once the job returns.
+    #[gpui_kit::test]
+    async fn saved_drafts_go_on_to_finishing(cx: &mut TestAppContext) {
+        use crate::desktop::{
+            services::{
+                JobKind,
+                requests::{Intent, Lane},
+            },
+            view::harness::wait_until,
+        };
+
+        cx.executor().allow_parking();
+        let fixture = Fixture::new();
+        let root = fixture.create_repository("a");
+        let shell = Shell::open(fixture, cx);
+        let id = unsaved(&shell, cx).await;
+        let held = shell.backend.hold_job(JobKind::IndexRefresh);
+        let job = shell.workspace.read_with(cx, |workspace, _| {
+            workspace.services().worker().submit(
+                Intent::IndexRefresh { root },
+                Lane::User,
+                None,
+                None,
+            )
+        });
+        held.wait_reached();
+        let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+
+        shell.keys("secondary-q", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+        let _ = gate.send(());
+        shell.run(cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::Finishing(job));
+        assert_eq!(body(&shell, id).as_deref(), Some("Newer body"));
+        assert_eq!(
+            shell.frame(cx, |window, _| window.find("quit-now").focused()),
+            Some(true)
+        );
+
+        held.release();
+        wait_until(cx, &shell.workspace, |workspace, _| {
+            workspace.quit_phase() == QuitPhase::Quit
+        })
+        .await;
+    }
+
+    /// A session already stored needs no flush: quitting is D1's, with no
+    /// write and no phase before it.
+    #[gpui_kit::test]
+    async fn a_stored_session_quits_at_once(cx: &mut TestAppContext) {
+        let shell = Shell::open(Fixture::new(), cx);
+        begun(&shell, cx).await;
+        let writes = shell.backend.reads_seen(ReadKind::DraftWrite);
+
+        shell.keys("secondary-q", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::Quit);
+        assert_eq!(shell.backend.reads_seen(ReadKind::DraftWrite), writes);
+    }
+
+    /// `drafts/` read-only: the dialog says how many drafts were not
+    /// saved and names none. Cancel, the default (Enter), keeps the window
+    /// and focuses the draft's Retry; Quit anyway quits.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    async fn a_draft_that_cannot_be_saved_asks_before_quitting(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::desktop::view::operations::draft_flush_id;
+
+        assert_eq!(
+            DraftsNotSaved { count: 1 }.message(),
+            "1 draft could not be saved for recovery"
+        );
+        assert_eq!(
+            DraftsNotSaved { count: 3 }.message(),
+            "3 drafts could not be saved for recovery"
+        );
+
+        let shell = Shell::open(Fixture::new(), cx);
+        let id = unsaved(&shell, cx).await;
+        let folder = shell.fixture.data_dir().join("drafts");
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        shell.keys("secondary-q", cx);
+        assert_eq!(
+            shell.label("drafts-not-saved-message", cx).as_deref(),
+            Some("1 draft could not be saved for recovery")
+        );
+        assert!(shell.present("drafts-not-saved-quit", cx));
+        assert!(shell.present("drafts-not-saved-cancel", cx));
+        assert_eq!(phase(&shell, cx), QuitPhase::Running);
+
+        // Enter is Cancel.
+        shell.press("enter", cx);
+        assert!(!shell.present("drafts-not-saved-message", cx));
+        assert_eq!(phase(&shell, cx), QuitPhase::Running);
+        assert_eq!(
+            shell.frame(cx, |window, _| window
+                .find(draft_flush_id(id, "retry"))
+                .focused()),
+            Some(true)
+        );
+
+        // Cancel by its button does the same.
+        shell.keys("secondary-q", cx);
+        assert!(shell.present("drafts-not-saved-message", cx));
+        shell.click("drafts-not-saved-cancel", cx);
+        assert!(!shell.present("drafts-not-saved-message", cx));
+        assert_eq!(phase(&shell, cx), QuitPhase::Running);
+        assert_eq!(
+            shell.frame(cx, |window, _| window
+                .find(draft_flush_id(id, "retry"))
+                .focused()),
+            Some(true)
+        );
+
+        shell.keys("secondary-q", cx);
+        shell.click("drafts-not-saved-quit", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::Quit);
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    /// The same failure with Activity hidden (P27): Retry is not on screen,
+    /// so Cancel focuses the item area, and Needs attention counts the
+    /// failure. The layout is as the person left it.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    async fn drafts_not_saved_with_activity_hidden_focuses_the_item_area(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::desktop::view::{
+            footer::Control,
+            footer::tests::support::{focused, layout, read},
+            workspace::Region,
+        };
+
+        let shell = Shell::open(Fixture::new(), cx);
+        unsaved(&shell, cx).await;
+        let folder = shell.fixture.data_dir().join("drafts");
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+        shell.click(Control::Panel(PanelKind::Activity).id(), cx);
+        let hidden = layout(&shell, cx);
+        assert!(!hidden.is_displayed(PanelKind::Activity));
+
+        shell.keys("secondary-q", cx);
+        assert!(shell.present("drafts-not-saved-message", cx));
+        assert_eq!(phase(&shell, cx), QuitPhase::Running);
+        // Read before any frame is drawn: the next draw would put focus
+        // back by itself, hiding a Cancel that moved it to a Retry not drawn.
+        let (item_area, last) = shell.frame(cx, |window, cx| {
+            window.click("drafts-not-saved-cancel", cx);
+            (
+                window.find(Region::Content.id()).focused(),
+                shell.workspace.read(cx).last_region,
+            )
+        });
+        shell.run(cx);
+        assert_eq!(item_area, Some(true), "the item area");
+        assert_eq!(last, Some(Region::Content));
+        assert!(!shell.present("drafts-not-saved-message", cx));
+        assert_eq!(phase(&shell, cx), QuitPhase::Running);
+
+        assert!(focused(&shell, Region::Content.id(), cx), "the item area");
+        assert!(!shell.present(Region::Operations.id(), cx));
+        assert_eq!(layout(&shell, cx), hidden, "no panel is revealed");
+        assert_eq!(
+            read(&shell, Control::Attention, cx),
+            Some(("1 needs attention".to_owned(), None))
+        );
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+}
+
+#[path = "workspace_tests/shell.rs"]
+mod shell;
+use shell::{
+    Shell, alert_action, choose_by_keys, key, mark, needs_fixing, no_details, open_menu, row,
+    row_of, state, tooltip,
+};
+
+const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FT0";
+
+/// P14 (Part F): with no tab shown, the item area says "Select a
+/// repository." until one is chosen, then "Open a ticket or document
+/// from the lists". Nothing of the repository is drawn there or at the
+/// end of an item tab: none of the details block's elements anywhere in
+/// the window.
+#[gpui_kit::test]
+fn the_item_area_holds_nothing_of_the_repository(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    shell.fixture.commit_ticket(&shell.a, TICKET, "Ticket", "");
+    shell.fixture.refresh(&shell.a);
+    let empty = |shell: &Shell, cx: &mut TestAppContext| shell.label("item-area-empty", cx);
+
+    assert_eq!(shell.selected(cx), None);
+    assert_eq!(empty(&shell, cx).as_deref(), Some(NOTHING_SELECTED));
+    assert!(no_details(&shell, cx), "none chosen");
+
+    shell.click(row(0), cx);
+    assert_eq!(shell.selected(cx), Some(key(&shell.a)));
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Resolved(_)
+    ));
+    assert_eq!(empty(&shell, cx).as_deref(), Some(OPEN_FROM_THE_LISTS));
+    assert!(no_details(&shell, cx), "chosen, no tab");
+
+    let target = OpenTarget::Item {
+        repo: key(&shell.a),
+        kind: manyhands::repository::ItemDtoKind::Ticket,
+        id: item_id(TICKET),
+    };
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.open_item(target, cx));
+    shell.visual(cx).run_until_parked();
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.item_pane())
+            .is_some(),
+        "the ticket's tab is shown"
+    );
+    assert_eq!(empty(&shell, cx), None, "a tab is shown");
+    assert!(no_details(&shell, cx), "nothing at the end of the tab");
+    shell.keys("secondary-3 end", cx);
+    assert!(no_details(&shell, cx), "nor at the end of its region");
+}
+
+#[gpui_kit::test]
+fn the_fixtures_repositories_are_listed_by_name(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    let listed = shell.fixture.service().list_repositories().unwrap();
+    let roots: Vec<String> = listed.items.iter().map(|item| item.root.clone()).collect();
+    assert_eq!(roots, [key(&shell.a), key(&shell.b)]);
+    assert_eq!(shell.label(row(0), cx).as_deref(), Some("a"));
+    assert_eq!(shell.label(row(1), cx).as_deref(), Some("b"));
+    assert!(!shell.present(row(2), cx), "no row the read did not give");
+}
+
+#[gpui_kit::test]
+fn selecting_a_repository_resolves_it_and_shows_its_configuration_and_index(
+    cx: &mut TestAppContext,
+) {
+    let shell = Shell::new(cx);
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Unknown
+    ));
+    shell.click(row(0), cx);
+
+    assert_eq!(shell.selected(cx), Some(key(&shell.a)));
+    let expected = shell
+        .fixture
+        .service()
+        .resolve_repository(&shell.a)
+        .unwrap();
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Resolved(resolved) if resolved == expected
+    ));
+    let summary = shell
+        .fixture
+        .service()
+        .list_repositories()
+        .unwrap()
+        .items
+        .remove(0);
+    assert_eq!(summary.configuration.state, ConfigurationState::Valid);
+    assert_eq!(shell.label(mark(0), cx).as_deref(), Some(SELECTED));
+    assert!(!shell.present(mark(1), cx));
+    // A valid configuration: the row says nothing of it, nor its tooltip.
+    assert_ne!(shell.label(state(0), cx).as_deref(), Some(NEEDS_FIXING));
+    assert!(!needs_fixing(&shell, &shell.a, cx));
+    assert_ne!(shell.label(state(0), cx).as_deref(), Some(CANT_OPEN));
+    // Valid and not scheduled: the row shows no state, and its tooltip is
+    // there, its folder first.
+    assert_eq!(shell.label(state(0), cx), None);
+    let tips = tooltip(&shell, &shell.a, cx);
+    assert_eq!(
+        tips.first(),
+        Some(&format!("Folder: {}", key(&shell.a))),
+        "{tips:?}"
+    );
+}
+
+/// Review Focus 2: the selected repository's folder is renamed away and
+/// back. Its row reads Can't open and its menu offers Retry and Remove; the
+/// menu's Retry resolves once the folder is back.
+#[gpui_kit::test]
+fn a_renamed_away_repository_is_unavailable_until_retry_finds_it_again(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    shell.click(row(0), cx);
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Resolved(_)
+    ));
+
+    let away = shell.a.with_file_name("a-away");
+    fs::rename(&shell.a, &away).unwrap();
+    shell.click(row(0), cx);
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Unavailable(ResultCode::InvalidPath)
+    ));
+    // The row says so in text, not by color alone, and its sentence gives
+    // the code's message; its menu offers Retry and Remove.
+    assert_eq!(shell.label(state(0), cx).as_deref(), Some(CANT_OPEN));
+    assert!(tooltip(&shell, &shell.a, cx)[0].starts_with(ResultCode::InvalidPath.message()));
+    let items = open_menu(&shell, cx);
+    assert!(items.iter().any(|item| item == RETRY), "{items:?}");
+    assert!(
+        items.iter().any(|item| item == REMOVE_FROM_MANYHANDS),
+        "{items:?}"
+    );
+
+    fs::rename(&away, &shell.a).unwrap();
+    assert!(choose_by_keys(&shell, RETRY, cx), "focus stays on the list");
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Resolved(_)
+    ));
+    assert_ne!(shell.label(state(0), cx).as_deref(), Some(CANT_OPEN));
+    assert!(!tooltip(&shell, &shell.a, cx)[0].starts_with(ResultCode::InvalidPath.message()));
+}
+
+/// Track rule 4: a second service over the same data directory removes
+/// the selected repository's registration. The desktop's next read shows
+/// it unavailable as not registered, not what it showed before.
+#[gpui_kit::test]
+fn a_registration_removed_by_a_second_actor_shows_unavailable(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    shell.click(row(0), cx);
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Resolved(_)
+    ));
+
+    let second = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
+    remove_registration(&second, &shell.a);
+
+    shell.click(row(0), cx);
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Unavailable(ResultCode::RepositoryNotRegistered)
+    ));
+    // The kept row, drawn after the listed one, reads Can't open (decision
+    // 22).
+    let kept = row_of(&shell, &shell.a, cx);
+    assert_eq!(kept, 1, "after b's row");
+    assert_eq!(shell.label(state(kept), cx).as_deref(), Some(CANT_OPEN));
+    assert_eq!(tooltip(&shell, &shell.a, cx)[0], kept_sentence("a"));
+}
+
+/// The selected registration is removed by a second actor and only the
+/// list is read again, as its Retry does. The entry, gone from the list,
+/// is resolved again: Unavailable as not registered, its lists no longer
+/// shown, never still Resolved.
+#[gpui_kit::test]
+fn a_list_reload_after_a_second_actor_removes_the_selection_shows_unavailable(
+    cx: &mut TestAppContext,
+) {
+    let shell = Shell::new(cx);
+    shell.click(row(0), cx);
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Resolved(_)
+    ));
+    assert!(shell.workspace.read_with(cx, |workspace, _| {
+        workspace.documents().repo() == Some(&key(&shell.a))
+    }));
+
+    let second = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
+    remove_registration(&second, &shell.a);
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.load_repositories(cx));
+    shell.visual(cx).run_until_parked();
+
+    assert_eq!(shell.selected(cx), Some(key(&shell.a)));
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Unavailable(ResultCode::RepositoryNotRegistered)
+    ));
+    // The kept row, drawn after the listed one, reads Can't open (decision
+    // 22).
+    let kept = row_of(&shell, &shell.a, cx);
+    assert_eq!(kept, 1, "after b's row");
+    assert_eq!(shell.label(state(kept), cx).as_deref(), Some(CANT_OPEN));
+    assert_eq!(tooltip(&shell, &shell.a, cx)[0], kept_sentence("a"));
+    assert!(shell.workspace.read_with(cx, |workspace, _| {
+        workspace.documents().repo().is_none()
+    }));
+}
+
+/// A selection that goes, as when its repository is removed, drops a held
+/// ID read, whatever loaded before: after a reload that was no change of
+/// repository, the read must still land on nothing and open no tab.
+#[gpui_kit::test]
+fn a_selection_that_goes_drops_a_held_id_read(cx: &mut TestAppContext) {
+    use crate::desktop::model::find::FindState;
+
+    let shell = Shell::new(cx);
+    shell.click(row(0), cx);
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.reload_lists(cx));
+    shell.visual(cx).run_until_parked();
+
+    let held = shell.backend.hold_read(ReadKind::Item);
+    shell.frame(cx, |window, cx| {
+        shell.workspace.update(cx, |workspace, cx| {
+            workspace.set_filter_text("01ARZ3NDEKTSV4RRFFQ69G5FK9", window, cx);
+            workspace.submit_filter(window, cx);
+        })
+    });
+    shell.visual(cx).run_until_parked();
+    let state = |cx: &mut TestAppContext| {
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.find_state().clone())
+    };
+    assert_eq!(state(cx), FindState::Searching);
+
+    shell.workspace.update(cx, |workspace, cx| {
+        assert!(workspace.navigation.forget(&key(&shell.a)));
+        workspace.clear_lists(cx);
+    });
+    assert_eq!(state(cx), FindState::Idle, "dropped with the selection");
+    let _ = held.send(());
+    shell.visual(cx).run_until_parked();
+    assert_eq!(state(cx), FindState::Idle, "and never lands");
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.tab_keys().is_empty())
+    );
+}
+
+/// A list reload that stays busy keeps the rows of the last good read
+/// shown, under the busy alert with Retry; the panel does not collapse to
+/// "Busy". Retry, once the lease is let go, reads the list again and the
+/// alert goes.
+#[gpui_kit::test]
+fn a_busy_list_reload_keeps_the_last_rows_with_a_label(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    shell.click(row(0), cx);
+    let lease = RepositoryService::hold_lease_for_testing(
+        &shell.a,
+        shell.fixture.data_dir(),
+        LeaseKind::CacheWrite,
+    )
+    .unwrap();
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.load_repositories(cx));
+    cx.executor().advance_clock(Duration::from_secs(1));
+    shell.visual(cx).run_until_parked();
+
+    assert_eq!(shell.label(row(0), cx).as_deref(), Some("a"));
+    assert_eq!(shell.label(row(1), cx).as_deref(), Some("b"));
+    assert_eq!(
+        shell.label("repositories-alert", cx).as_deref(),
+        Some(NOT_UPDATED_BUSY)
+    );
+    assert!(shell.present(alert_action(), cx));
+    assert_eq!(shell.selected(cx), Some(key(&shell.a)));
+    assert_eq!(shell.label(mark(0), cx).as_deref(), Some(SELECTED));
+
+    drop(lease);
+    shell.click(alert_action(), cx);
+    assert!(!shell.present("repositories-alert", cx));
+    assert_eq!(shell.label(row(1), cx).as_deref(), Some("b"));
+}
+
+/// Review Focus 1: B is selected while A's resolution is held; releasing
+/// A leaves B selected and shown.
+#[gpui_kit::test]
+fn a_held_resolution_of_a_never_replaces_b(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    // Queued after the startup reads, so it holds A's resolution.
+    let held = shell.backend.hold_read(ReadKind::Resolve);
+    shell.click(row(0), cx);
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Unknown
+    ));
+    shell.click(row(1), cx);
+    assert!(matches!(
+        shell.resolution(&shell.b, cx),
+        Resolution::Resolved(_)
+    ));
+
+    // A's read may already be dropped with its task; either way it is
+    // let go.
+    let _ = held.send(());
+    shell.visual(cx).run_until_parked();
+    assert_eq!(shell.selected(cx), Some(key(&shell.b)));
+    assert!(matches!(
+        shell.resolution(&shell.b, cx),
+        Resolution::Resolved(_)
+    ));
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Unknown
+    ));
+    assert_eq!(shell.label(mark(1), cx).as_deref(), Some(SELECTED));
+    assert!(!shell.present(mark(0), cx));
+}
+
+/// The one focused region, which must also be the one drawing a focus
+/// ring.
+fn focused_region(shell: &Shell, cx: &mut TestAppContext) -> Region {
+    shell.frame(cx, |window, _| {
+        let focused: Vec<Region> = REGIONS
+            .into_iter()
+            .filter(|region| window.find(region.id()).focused() == Some(true))
+            .collect();
+        assert_eq!(focused.len(), 1, "exactly one focused region");
+        for region in REGIONS {
+            assert_eq!(
+                window.try_find(region.ring_id()).is_some(),
+                region == focused[0],
+                "only the focused region draws its ring ({region:?})"
+            );
+        }
+        let ring = window.find(focused[0].ring_id());
+        assert!(ring.visible(), "the focus ring is visible");
+        focused[0]
+    })
+}
+
+#[gpui_kit::test]
+fn f6_cycles_the_regions_and_secondary_digits_focus_each(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    assert_eq!(focused_region(&shell, cx), Region::Repositories);
+
+    // Decision 9's order: Documents and Tickets sit either side of Content.
+    for expected in [
+        Region::Documents,
+        Region::Content,
+        Region::Tickets,
+        Region::Operations,
+        Region::Repositories,
+    ] {
+        shell.keys("f6", cx);
+        assert_eq!(focused_region(&shell, cx), expected);
+    }
+    for expected in [
+        Region::Operations,
+        Region::Tickets,
+        Region::Content,
+        Region::Documents,
+        Region::Repositories,
+    ] {
+        shell.keys("shift-f6", cx);
+        assert_eq!(focused_region(&shell, cx), expected);
+    }
+    // `secondary-2` focuses the list used last: Documents, then Tickets once
+    // F6 has taken focus there.
+    for (keystroke, expected) in [
+        ("secondary-3", Region::Content),
+        ("secondary-1", Region::Repositories),
+        ("secondary-4", Region::Operations),
+        ("secondary-2", Region::Documents),
+        ("f6", Region::Content),
+        ("f6", Region::Tickets),
+        ("secondary-1", Region::Repositories),
+        ("secondary-2", Region::Tickets),
+    ] {
+        shell.keys(keystroke, cx);
+        assert_eq!(focused_region(&shell, cx), expected, "{keystroke}");
+    }
+}
+
+/// The repository selector works from the keyboard: `secondary-1` focuses
+/// it, the arrows move and Enter selects and resolves the row. The
+/// selected row says so in text, not by color alone.
+#[gpui_kit::test]
+fn the_repository_selector_selects_with_arrows_and_enter(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    shell.keys("secondary-3", cx);
+    shell.keys("secondary-1", cx);
+    assert_eq!(focused_region(&shell, cx), Region::Repositories);
+
+    shell.keys("down", cx);
+    shell.keys("down", cx);
+    assert_eq!(shell.selected(cx), None, "moving does not select");
+    shell.keys("enter", cx);
+
+    assert_eq!(shell.selected(cx), Some(key(&shell.b)));
+    assert!(matches!(
+        shell.resolution(&shell.b, cx),
+        Resolution::Resolved(_)
+    ));
+    assert_eq!(
+        shell.label(("repo-selected", 1usize), cx).as_deref(),
+        Some(SELECTED)
+    );
+    assert!(!shell.present(("repo-selected", 0usize), cx));
+    assert_eq!(focused_region(&shell, cx), Region::Repositories);
+
+    shell.keys("up", cx);
+    shell.keys("enter", cx);
+    assert_eq!(shell.selected(cx), Some(key(&shell.a)));
+    assert!(shell.present(("repo-selected", 0usize), cx));
+    assert!(!shell.present(("repo-selected", 1usize), cx));
+}
+
+/// Selecting and browsing reads only: refs, worktrees, status and the
+/// Git configuration of both repositories are unchanged.
+#[gpui_kit::test]
+fn selecting_and_browsing_leave_the_repositories_untouched(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    let before = [
+        RepositorySnapshot::take(&shell.a),
+        RepositorySnapshot::take(&shell.b),
+    ];
+
+    shell.click(row(0), cx);
+    shell.click(row(1), cx);
+    shell.keys("f6 f6 f6 secondary-1", cx);
+    shell.click(row(0), cx);
+    shell.keys("secondary-3", cx);
+
+    let after = [
+        RepositorySnapshot::take(&shell.a),
+        RepositorySnapshot::take(&shell.b),
+    ];
+    assert_eq!(before, after);
+}
+
+/// Track rule 4: a configuration the selected repository's index has not
+/// seen is committed, and a second service refreshes the index. Selecting
+/// it again, or Retry, re-reads the list, so the configuration shown is
+/// the library's current one, not the one read at startup.
+#[gpui_kit::test]
+fn reselecting_or_retry_shows_a_configuration_refreshed_by_a_second_actor(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    let second = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
+
+    for (index, root) in [(0, &shell.a), (1, &shell.b)] {
+        shell.click(row(index), cx);
+        assert_ne!(shell.label(state(index), cx).as_deref(), Some(NEEDS_FIXING));
+        assert!(!needs_fixing(&shell, root, cx));
+
+        shell
+            .fixture
+            .commit_file(root, ".manyhands/config.toml", b"format_version = 99\n");
+        refresh_through(&second, root);
+        let summary = second.list_repositories().unwrap().items.remove(index);
+        assert_eq!(summary.configuration.state, ConfigurationState::Invalid);
+        // Until the desktop reads again it still shows what it read.
+        assert_ne!(shell.label(state(index), cx).as_deref(), Some(NEEDS_FIXING));
+        assert!(!needs_fixing(&shell, root, cx));
+
+        if index == 0 {
+            shell.click(row(0), cx);
+        } else {
+            shell.workspace.update(cx, |workspace, cx| {
+                workspace.retry_resolution(key(root), cx)
+            });
+            shell.visual(cx).run_until_parked();
+        }
+        assert_eq!(shell.selected(cx), Some(key(root)));
+        assert_eq!(shell.label(state(index), cx).as_deref(), Some(NEEDS_FIXING));
+        // Its tooltip says what needs fixing: the library's current
+        // problems, not the ones read at startup.
+        let problems = &summary.configuration.problems;
+        assert!(!problems.is_empty(), "the read gives its problems");
+        let sentence = tooltip(&shell, root, cx).remove(0);
+        assert!(sentence.starts_with(NEEDS_FIXING_SENTENCE), "{sentence}");
+        for problem in problems {
+            assert!(sentence.contains(problem.guidance()), "{sentence}");
+        }
+    }
+}
+
+/// A repository row's "selected" has one meaning. The row the arrows are
+/// on is the Kit list's own cursor state; the chosen repository is the
+/// one whose row says Selected. The row itself claims neither, so a
+/// screen reader never hears two rows selected at once.
+#[gpui_kit::test]
+fn a_repository_rows_selected_state_has_one_meaning(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    shell.keys("secondary-1 down enter", cx);
+    assert_eq!(shell.selected(cx), Some(key(&shell.a)));
+    shell.keys("down", cx);
+    assert_eq!(
+        shell.selected(cx),
+        Some(key(&shell.a)),
+        "moving chooses nothing"
+    );
+
+    let claims = |shell: &Shell, index: usize, cx: &mut TestAppContext| {
+        shell.frame(cx, |window, _| window.find(row(index)).selected())
+    };
+    assert_eq!(claims(&shell, 0, cx), None, "the chosen row");
+    assert_eq!(claims(&shell, 1, cx), None, "the row the arrows are on");
+    assert_eq!(
+        shell.label(("repo-selected", 0usize), cx).as_deref(),
+        Some(SELECTED)
+    );
+    assert!(!shell.present(("repo-selected", 1usize), cx));
+}
+
+/// Whether `region` holds focus. `focused_region` looks up every region,
+/// so it cannot be used while a panel is hidden.
+fn holds_focus(shell: &Shell, region: Region, cx: &mut TestAppContext) -> bool {
+    shell.frame(cx, |window, _| {
+        window.find(region.id()).focused() == Some(true)
+    })
+}
+
+/// A quit that waits with Activity hidden changes nothing (P26, R-20):
+/// no panel is revealed, no layout is saved, and focus stays in the item
+/// area, since Quit now is not on screen to take it. `secondary-4` then
+/// reveals Activity, which says what the quit waits for, with Quit now.
+#[gpui_kit::test]
+async fn a_waiting_quit_with_activity_hidden_changes_nothing(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let shell = Shell::new(cx);
+    shell.click("footer-panel-activity", cx);
+    let layout = |shell: &Shell, cx: &mut TestAppContext| {
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.layout().clone())
+    };
+    let hidden = layout(&shell, cx);
+    assert!(!hidden.is_displayed(PanelKind::Activity));
+    assert!(!shell.present(Region::Operations.id(), cx));
+
+    let held = shell.backend.hold_job(JobKind::IndexRefresh);
+    let intent = Intent::IndexRefresh {
+        root: shell.a.clone(),
+    };
+    let label = intent.label();
+    let id = shell.workspace.read_with(cx, |workspace, _| {
+        workspace
+            .services()
+            .worker()
+            .submit(intent, Lane::User, None, None)
+    });
+    held.wait_reached();
+    shell.keys("secondary-3", cx);
+    assert!(holds_focus(&shell, Region::Content, cx));
+    let last = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.last_region);
+    assert_eq!(last, Some(Region::Content));
+    let saves = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.layout_saves());
+
+    // Read before any frame is drawn: the next draw would put the last
+    // region and focus back by itself (`focus_lost`), hiding a quit that
+    // moved them.
+    let (focus_moved, in_flight) = shell.frame(cx, |window, cx| {
+        let before = window.focused(cx);
+        shell
+            .workspace
+            .update(cx, |workspace, cx| workspace.request_quit(window, cx));
+        let moved = window.focused(cx) != before;
+        let last = shell.workspace.read(cx).last_region;
+        (moved, last)
+    });
+    shell.visual(cx).run_until_parked();
+    assert!(!focus_moved, "focus is not moved to a control not drawn");
+    assert_eq!(in_flight, last, "the last region is kept");
+    assert_eq!(phase(&shell.workspace, cx), QuitPhase::Finishing(id));
+    assert_eq!(layout(&shell, cx), hidden, "the layout is unchanged");
+    assert_eq!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.layout_saves()),
+        saves,
+        "no save is scheduled"
+    );
+    assert!(!shell.present(Region::Operations.id(), cx));
+    assert!(!shell.present("quit-now", cx), "Quit now is not displayed");
+    assert!(
+        holds_focus(&shell, Region::Content, cx),
+        "focus stays in the item area"
+    );
+
+    shell.keys("secondary-4", cx);
+    assert!(layout(&shell, cx).is_displayed(PanelKind::Activity));
+    assert_eq!(
+        shell.label("quit-finishing", cx),
+        Some(format!("Finishing {label}"))
+    );
+    assert!(shell.present("quit-now", cx));
+    assert_eq!(phase(&shell.workspace, cx), QuitPhase::Finishing(id));
+
+    held.release();
+    wait_until(cx, &shell.workspace, |workspace, _| {
+        workspace.quit_phase() == QuitPhase::Quit
+    })
+    .await;
+}
+
+/// Quitting while a job runs and a dialog is open: the dialog closes,
+/// so nothing stands in front of "Finishing", and Quit now takes focus,
+/// ringed. No dialog opens while quitting waits. Enter on Quit now quits.
+#[gpui_kit::test]
+async fn finishing_closes_the_dialog_and_focuses_quit_now(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt;
+    cx.executor().allow_parking();
+    let setup = setup(cx);
+    let held = setup.backend.hold_job(JobKind::IndexRefresh);
+    let id = submit_refresh(&setup, cx);
+    held.wait_reached();
+    let mut visual = VisualTestContext::from_window(setup.window.into(), cx);
+    visual.update(|window, cx| window.open_dialog(cx, |dialog, _, _| dialog.title("Probe")));
+    visual.run_until_parked();
+    assert!(visual.update(|window, cx| window.has_active_dialog(cx)));
+
+    visual.simulate_keystrokes("secondary-q");
+    visual.run_until_parked();
+    assert_eq!(
+        phase(&setup.workspace, &mut visual),
+        QuitPhase::Finishing(id)
+    );
+    assert!(!visual.update(|window, cx| window.has_active_dialog(cx)));
+    visual.update(|window, cx| {
+        window.render_frame(cx);
+        let quit_now = window.find("quit-now");
+        assert_eq!(quit_now.focused(), Some(true), "Quit now holds focus");
+        assert!(quit_now.visible());
+        assert!(window.try_find("quit-now-focus-ring").is_some());
+        assert!(window.find(Region::Operations.ring_id()).visible());
+    });
+
+    // Nothing opens a dialog over it while quitting waits.
+    let services = setup
+        .workspace
+        .read_with(&visual, |workspace, _| workspace.services().clone());
+    let origin = visual.update(|_, cx| cx.focus_handle());
+    let root = setup.root.clone();
+    visual.update(|window, cx| {
+        crate::desktop::view::confirm::confirm(
+            Intent::RepoRemove { root },
+            origin,
+            &services,
+            window,
+            cx,
+        )
+    });
+    visual.run_until_parked();
+    assert!(!visual.update(|window, cx| window.has_active_dialog(cx)));
+
+    visual.simulate_event(gpui_kit::KeyDownEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    visual.simulate_event(gpui_kit::KeyUpEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").unwrap(),
+    });
+    visual.run_until_parked();
+    assert_eq!(phase(&setup.workspace, &mut visual), QuitPhase::Quit);
+    held.release();
+    let operations = setup.workspace.read_with(&visual, |workspace, _| {
+        workspace.services().operations().clone()
+    });
+    wait_until(&visual, &operations, move |operations, _| {
+        matches!(
+            operations.request(id).map(|request| &request.state),
+            Some(RequestState::Finished(..))
+        )
+    })
+    .await;
+}

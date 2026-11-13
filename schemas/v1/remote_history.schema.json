@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 remote history",
+  "description": "The data of a remote history envelope: after a fresh poll of the publication remote, every context whose publication history was unknown or that the poll just resolved. It holds names and commits and no content. A context the remote lacks is offered the choices publish (item resolve-history) and release (the desktop's context release).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "cache_loss",
+    "generation",
+    "entries"
+  ],
+  "properties": {
+    "cache_loss": {
+      "description": "The repository-wide cache-loss flag: set when the registry was lost. remote resolve-history clears it once no context reads unknown.",
+      "type": "boolean"
+    },
+    "generation": {
+      "description": "The configuration generation the report was read at.",
+      "type": "integer"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "item_id",
+          "branch",
+          "local_oid",
+          "tracking_ref_exists",
+          "remote_oid",
+          "relation",
+          "ahead",
+          "behind",
+          "resolved",
+          "disposition",
+          "choices"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "document",
+              "ticket"
+            ]
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "branch": {
+            "description": "The editing branch, as its short name.",
+            "type": "string"
+          },
+          "local_oid": {
+            "description": "The local tip of the branch. Null when it has no local ref.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracking_ref_exists": {
+            "type": "boolean"
+          },
+          "remote_oid": {
+            "description": "The commit the remote advertises for the branch. Null when it lacks it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "relation": {
+            "description": "How the local tip relates to the remote's. Null when the remote lacks the branch, or when either commit is not here to compare.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "same",
+              "local_ahead",
+              "remote_ahead",
+              "diverged",
+              null
+            ]
+          },
+          "ahead": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "behind": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "resolved": {
+            "description": "The fetch recorded the context as published, so no choice is needed.",
+            "type": "boolean"
+          },
+          "disposition": {
+            "description": "What the poll did with the context. Null when it reported no target.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "current",
+              "fast_forwarded",
+              "local_ahead",
+              "diverged",
+              "dirty",
+              "conflicted",
+              "inaccessible",
+              "materialized",
+              "nonconforming",
+              "blocked_by_local_state",
+              "materialization_incomplete",
+              "malformed",
+              "remotely_deleted",
+              "closed",
+              "promoted",
+              "history_unknown",
+              "unpublished",
+              "not_reached",
+              null
+            ]
+          },
+          "choices": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "publish",
+              "release",
+              "republish"
+            ],
+            "properties": {
+              "publish": {
+                "type": "boolean"
+              },
+              "release": {
+                "type": "boolean"
+              },
+              "republish": {
+                "description": "The remote lacks a branch a tracking ref says it once had: item republish, not a first publication.",
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

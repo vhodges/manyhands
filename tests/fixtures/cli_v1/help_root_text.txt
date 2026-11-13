@@ -17,10 +17,11 @@ Commands:
   path       
   item       
   conflict   
+  context    
 
 Options:
       --json             Write a JSON result.
-      --non-interactive  Run without prompts (no effect in C1).
+      --non-interactive  Run without terminal prompts.
       --help             Show help.
       --version          Show the version.
 
@@ -53,49 +54,58 @@ Command catalog:
   operation list  List repository operations. Available now.
   operation show  Show a repository operation. Available now.
   id new  Generate a new item ID. Available now.
-  repo create  Create a repository. Arrives with C2.
-  repo enable  Enable Manyhands in a repository. Arrives with C2.
-  repo remove  Remove a repository registration. Arrives with C2.
-  repo identity-set  Set repository identity. Arrives with C2.
-  remote add  Add a repository remote. Arrives with C2.
-  remote remove  Remove a repository remote. Arrives with C2.
-  remote select  Select a repository remote. Arrives with C2.
-  key generate  Generate a key. Arrives with C2.
-  key import  Import a key. Arrives with C2.
-  key select  Select a key for a repository. Arrives with C2.
-  key clear  Clear a repository's selected key. Arrives with C2.
-  key remove  Remove a key registration. Arrives with C2.
-  key delete  Delete a key. Arrives with C2.
-  host approve  Approve a host pin. Arrives with C2.
-  host replace  Replace a host pin. Arrives with C2.
-  host observe  Observe a host key. Arrives with C2.
-  request show  Show a request. Arrives with C2.
-  request cancel  Cancel a request. Arrives with C2.
-  folder create  Create a document folder. Arrives with C3.
-  document create  Create a document. Arrives with C3.
-  document save  Save a document. Arrives with C3.
-  document move  Move a document. Arrives with C3.
-  document repair  Repair a document. Arrives with C3.
-  ticket create  Create a ticket. Arrives with C3.
-  ticket save  Save a ticket. Arrives with C3.
-  ticket repair  Repair a ticket. Arrives with C3.
-  ticket slug-assign  Assign a ticket short code. Arrives with C3.
-  index refresh  Refresh the index. Arrives with C3.
-  index rebuild  Rebuild the index. Arrives with C3.
-  path observe  Observe a path for authoring or repair. Arrives with C3.
-  ticket check  Check ticket relationships. Arrives with C3.
-  comment add  Add a comment. Arrives with C4.
-  item sync  Synchronize an item. Arrives with C4.
-  repo sync  Synchronize a repository. Arrives with C4.
-  conflict show  Show a conflict. Arrives with C4.
-  conflict resolve  Resolve a conflict. Arrives with C4.
-  operation resume  Resume an operation. Arrives with C4.
-  operation abandon  Abandon an operation. Arrives with C4.
-  document promote  Promote a document. Arrives with C5.
-  ticket close  Close a ticket. Arrives with C5.
-  poll once  Poll a repository once. Arrives with C5.
-  poll configure  Configure polling. Arrives with C5.
-  poll pause  Pause polling. Arrives with C5.
-  poll resume  Resume polling. Arrives with C5.
+  repo create  Create a repository. Available now.
+  repo enable  Enable Manyhands in a repository. Available now.
+  repo remove  Remove a repository registration. Available now.
+  repo identity-set  Set repository identity. Available now.
+  remote add  Add a repository remote. Available now.
+  remote remove  Remove a repository remote. Available now.
+  remote select  Select a repository remote. Available now.
+  key generate  Generate a key. Available now.
+  key import  Import a key. Available now.
+  key select  Select a key for a repository. Available now.
+  key clear  Clear a repository's selected key. Available now.
+  key remove  Remove a key registration. Available now.
+  key delete  Delete a key. Available now.
+  host approve  Approve a host pin. Available now.
+  host replace  Replace a host pin. Available now.
+  host observe  Observe a host key. Available now.
+  request show  Show a request. Available now.
+  request cancel  Cancel a request. Available now.
+  folder create  Create a document folder. Available now.
+  document create  Create a document. Available now.
+  document save  Save a document. Available now.
+  document move  Move a document. Available now.
+  document repair  Repair a document. Available now.
+  ticket create  Create a ticket. Available now.
+  ticket save  Save a ticket. Available now.
+  ticket repair  Repair a ticket. Available now.
+  ticket slug-assign  Assign a ticket short code. Available now.
+  index refresh  Refresh the index. Available now.
+  index rebuild  Rebuild the index. Available now.
+  path observe  Observe a path for authoring or repair. Available now.
+  ticket check  Check ticket relationships. Available now.
+  comment add  Add a comment. Available now.
+  item sync  Synchronize an item. Available now.
+  repo sync  Synchronize a repository. Available now.
+  item republish  Republish a deleted item branch. Available now.
+  item resolve-history  Record a context whose publication history is unknown as never published. Available now.
+  remote history  Poll the publication remote and list the contexts whose publication history is unknown. Available now.
+  remote resolve-history  Clear the repository's lost-history flag once no context reads unknown. Available now.
+  conflict show  Show a conflict. Available now.
+  conflict resolve  Resolve a conflict. Available now.
+  operation resume  Resume an operation. Available now.
+  operation abandon  Abandon an operation. Available now.
+  document promote  Promote a document. Available now.
+  ticket close  Close a ticket. Available now.
+  poll once  Poll a repository once. Available now.
+  poll configure  Configure polling. Available now.
+  poll pause  Pause polling. Available now.
+  poll resume  Resume polling. Available now.
+  context retire  Retire a proven-safe completed local context, after a fresh remote observation. Available now.
+  context observe-local  Observe an item's context for a local synchronization. Available now.
+  context show-local  Show a local synchronization, or a conflict's sides with --token and --json. Available now.
+  context sync-local  Bring primary into an item's context, locally. Available now.
+  context resolve-local  Resolve a local synchronization's conflict with a source for each path. Available now.
 
 MANYHANDS_DATA_DIR: advanced/testing data-directory override; relative paths use the invocation directory.

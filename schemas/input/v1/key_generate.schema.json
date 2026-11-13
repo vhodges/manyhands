@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Key generation input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["label", "protection"],
+  "properties": {
+    "label": { "type": "string" },
+    "protection": { "type": "string", "enum": ["passphrase", "none"] }
+  }
+}

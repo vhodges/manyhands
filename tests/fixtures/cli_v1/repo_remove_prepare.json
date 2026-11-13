@@ -1,0 +1,58 @@
+{
+  "code": "ok",
+  "command": "repo remove",
+  "data": {
+    "command": "repo remove",
+    "confirmation_id": "<confirmation-id>",
+    "details": {
+      "enabled_at": "<enabled-at>",
+      "files_changed": false,
+      "git_state_changed": false,
+      "root": "<repository>"
+    },
+    "effects": [
+      {
+        "effect": "registration_removed"
+      },
+      {
+        "effect": "index_dropped"
+      },
+      {
+        "effect": "operation_records_dropped"
+      },
+      {
+        "effect": "remote_state_dropped"
+      }
+    ],
+    "expires_at": "<expires-at>",
+    "scope": {
+      "branch": null,
+      "item_id": null,
+      "remote": null,
+      "repository": "<repository>",
+      "worktree": null
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

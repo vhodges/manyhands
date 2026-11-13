@@ -818,3 +818,58 @@ fn a_ticket_names_the_whole_cycle_it_is_on_in_either_field() {
     assert_eq!(graph.dependency_cycle_ids("z"), None);
     assert_eq!(graph.parent_cycle_ids("z"), None);
 }
+
+#[test]
+fn made_ready_is_the_direct_dependents_with_every_dependency_closed() {
+    let graph = graph([
+        closed("t", &[]),
+        closed("done", &[]),
+        ticket("z", &["t"]),
+        ticket("a", &["t", "done"]),
+        // Waiting for another open ticket.
+        ticket("open", &[]),
+        ticket("m", &["t", "open"]),
+        // Review Focus 3: an ID no ticket holds.
+        ticket("u", &["t", "absent"]),
+        // Named twice, and listed once.
+        ticket("twice", &["t", "t"]),
+        // Closed itself.
+        closed("c", &["t"]),
+        // Not a direct dependent, and not ready either.
+        ticket("indirect", &["z"]),
+        // Ready, and nothing to do with `t`.
+        ticket("elsewhere", &["done"]),
+    ]);
+    assert_eq!(graph.made_ready("t"), Some((vec!["a", "twice", "z"], true)));
+}
+
+#[test]
+fn made_ready_is_empty_and_says_so_for_a_ticket_that_reads_open() {
+    let graph = graph([ticket("t", &[]), ticket("d", &["t"])]);
+    assert_eq!(graph.made_ready("t"), Some((vec![], false)));
+}
+
+#[test]
+fn made_ready_never_lists_the_ticket_itself() {
+    assert_eq!(
+        graph([closed("t", &["t"])]).made_ready("t"),
+        Some((vec![], true))
+    );
+    assert_eq!(
+        graph([ticket("t", &["t"])]).made_ready("t"),
+        Some((vec![], false))
+    );
+}
+
+#[test]
+fn made_ready_has_no_answer_for_an_id_that_is_no_tickets() {
+    assert_eq!(graph([ticket("t", &[])]).made_ready("absent"), None);
+}
+
+#[test]
+fn made_ready_is_empty_with_no_dependents() {
+    assert_eq!(
+        graph([closed("t", &[])]).made_ready("t"),
+        Some((vec![], true))
+    );
+}

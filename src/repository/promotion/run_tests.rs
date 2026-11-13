@@ -252,9 +252,6 @@ impl Fixture {
                 "fixture",
             )
             .unwrap();
-        self.db()
-            .execute("UPDATE remote_polling_state SET history_unknown=0", [])
-            .unwrap();
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let configuration = self
             .service
@@ -4876,9 +4873,17 @@ fn new_blocker_is_stored_and_replayed_before_any_child() {
 #[test]
 fn identity_and_mismatch_do_not_strand_the_item() {
     let f = Fixture::new();
+    // A record to mismatch against: a missing identity begins none.
+    let mut req = f.request();
+    RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::AfterConfirmed,
+    )
+    .unwrap()
+    .promote_document(req.clone(), &mut SessionCredentials::new(NoCredentials))
+    .unwrap_err();
     f.repo.config().unwrap().set_str("user.name", "").unwrap();
     f.repo.config().unwrap().set_str("user.email", "").unwrap();
-    let mut req = f.request();
     let expected_configuration = match f.run(req.clone()) {
         Err(DocumentPromotionError::IdentityRequired {
             expected_configuration,
@@ -5114,5 +5119,164 @@ fn refresh_failure_keeps_identical_authoritative_outcome_and_replay_repairs_inde
             .repository_snapshot(f.root.path())
             .unwrap()
             .refresh_required
+    );
+}
+
+/// The observer's half of a flag that can't be read: a child is stopped where
+/// it is, not told to go on. A run's own safe point reads the flag first, so
+/// the read fails here only inside the child.
+#[test]
+fn an_unreadable_flag_stops_a_child() {
+    use crate::repository::mutation::{CancellationToken, RequestId};
+    struct Unreadable {
+        answer: Rc<RefCell<Option<SafePointRequest>>>,
+        registry: PathBuf,
+    }
+    impl run::PromotionIo for Unreadable {
+        fn synchronize(
+            &mut self,
+            _: &RepositoryService,
+            _: SynchronizeRemoteRequest,
+            observer: &mut dyn SynchronizationObserver,
+            _: &record::ChildExecution,
+        ) -> Result<SynchronizationResult, SynchronizationError> {
+            let db = rusqlite::Connection::open(&self.registry).unwrap();
+            db.execute_batch("ALTER TABLE request_records RENAME TO hidden_records")
+                .unwrap();
+            *self.answer.borrow_mut() =
+                Some(observer.safe_point(RemoteOperationSafePoint::BeforeFetch));
+            db.execute_batch("ALTER TABLE hidden_records RENAME TO request_records")
+                .unwrap();
+            Err(SynchronizationError::RecoveryRequired)
+        }
+        #[allow(clippy::too_many_arguments)]
+        fn delete(
+            &mut self,
+            _: &RepositoryService,
+            _: VerifySshTransportRequest,
+            _: &RemoteRefPlan,
+            _: &RemoteReservation,
+            _: &crate::repository::remote::observation::ObservationConfiguration,
+            _: Oid,
+            _: &ItemId,
+        ) -> Result<DeleteObservation, SynchronizationError> {
+            unreachable!("the run stops in its child")
+        }
+    }
+    let f = Fixture::new();
+    f.remote();
+    let answer = Rc::new(RefCell::new(None));
+    let mut io = Unreadable {
+        answer: answer.clone(),
+        registry: f.service.registry_path.clone(),
+    };
+    let request = lifecycle::LifecycleRequest {
+        probe: Some(lifecycle::CancellationProbe::new(
+            CancellationToken::new(),
+            RequestId::new(),
+        )),
+        ..run::lifecycle_request(f.request())
+    };
+    let _ = run::run_with_io(
+        &lifecycle::DocumentPromotionLifecycle,
+        &f.service,
+        request,
+        &mut io,
+    );
+    assert!(matches!(*answer.borrow(), Some(SafePointRequest::Stop)));
+}
+
+/// What a run tells its observer, in order.
+pub(in super::super) struct Told(pub(in super::super) Vec<run::RunEvent>);
+impl run::RunObserver for Told {
+    fn event(&mut self, event: run::RunEvent) {
+        self.0.push(event);
+    }
+}
+
+/// D5 decision 11, R-14, R-16: a promotion tells its observer only the steps
+/// that run, in the order they run. A context primary already holds is not
+/// merged; with no publication remote nothing is synchronized or published;
+/// a request sent again past its context's synchronization starts no
+/// context child.
+#[test]
+fn a_promotion_tells_its_observer_only_the_steps_that_run() {
+    use run::RunEvent as E;
+    let told = |service: &RepositoryService, request| {
+        let mut told = Told(Vec::new());
+        run::run_with_io_observed(
+            &lifecycle::DocumentPromotionLifecycle,
+            service,
+            run::lifecycle_request(request),
+            &mut FakeIo::default(),
+            &mut told,
+        )
+        .unwrap();
+        told.0
+    };
+    let context =
+        E::ChildStarting(crate::repository::promotion::lifecycle_record::ChildRole::Context);
+    let primary =
+        E::ChildStarting(crate::repository::promotion::lifecycle_record::ChildRole::Primary);
+    // No publication remote: the merge and the tidy-up only.
+    let f = Fixture::new();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [E::Integrating, E::CleaningUp]
+    );
+    // The context is already in the primary, and there is no remote: only
+    // the tidy-up (R-14, R-16).
+    let f = Fixture::new();
+    checkout(&f.repo, f.context.head().unwrap().target().unwrap());
+    assert_eq!(told(&f.service, f.request()), [E::CleaningUp]);
+    // A remote: the context's child, the merge, the primary's child.
+    let f = Fixture::new();
+    f.remote();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [context, E::Integrating, primary, E::CleaningUp]
+    );
+    // The context is already in the primary, and a remote: the children
+    // run and the primary's publishes, with no merge between them (R-14).
+    let f = Fixture::new();
+    f.remote();
+    let merged = f.context.head().unwrap().target().unwrap();
+    checkout(&f.repo, merged);
+    f.repo
+        .reference("refs/remotes/origin/main", merged, true, "fixture")
+        .unwrap();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [context, primary, E::CleaningUp]
+    );
+    // The same, and the remote never saw the context (no tracking branch
+    // for it): the cleanup-only path starts no context child either.
+    let f = Fixture::new();
+    f.remote();
+    let merged = f.context.head().unwrap().target().unwrap();
+    checkout(&f.repo, merged);
+    f.repo
+        .reference("refs/remotes/origin/main", merged, true, "fixture")
+        .unwrap();
+    f.repo
+        .find_reference(&format!("refs/remotes/origin/manyhands/document/{ITEM}"))
+        .unwrap()
+        .delete()
+        .unwrap();
+    assert_eq!(told(&f.service, f.request()), [primary, E::CleaningUp]);
+    // Sent again past the context's synchronization: no context child.
+    let f = Fixture::new();
+    f.remote();
+    let request = f.request();
+    let failing = RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::AfterContextSync,
+    )
+    .unwrap();
+    let _ = run::promote_with_io(&failing, request.clone(), &mut FakeIo::default());
+    let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+    assert_eq!(
+        told(&reopened, request),
+        [E::Integrating, primary, E::CleaningUp]
     );
 }

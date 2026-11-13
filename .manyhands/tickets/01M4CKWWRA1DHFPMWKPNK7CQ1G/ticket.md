@@ -1,13 +1,15 @@
 ---
+wave: '03'
+id: 01M4CKWWRA1DHFPMWKPNK7CQ1G
+title: Discovery must index one effective copy per item across item worktrees
+type: defect
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-08T03:10:20Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CKWWRA1DHFPMWKPNK7CQ1G"
-title: "Discovery must index one effective copy per item across item worktrees"
-type: "defect"
-status: "closed"
-project: "manyhands"
-team: "core"
-wave: "03"
 ---
 
 Discovery records every item it finds in each item worktree's checkout, not

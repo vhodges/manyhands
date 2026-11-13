@@ -1,9 +1,10 @@
 ---
+id: 01M5AF9ADW9QFY9DH7DYC252V2
+item_id: 01M4CC0VMSZ7BRS740C8VSQ5ZK
+created_at: 2026-10-19T16:18:02Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5AF9ADW9QFY9DH7DYC252V2"
-item_id: "01M4CC0VMSZ7BRS740C8VSQ5ZK"
-created_at: "2026-10-19T16:18:02Z"
 ---
 
 C1 Task 8: **implemented, review-ready**, with independent whole-branch quality

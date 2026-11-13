@@ -1,3 +1,12 @@
+---
+title: "Wave 03 C1: Fresh-Session Handoff"
+date: 2026-10-19
+author: "Vince Hodges <vince@imbas.ca> && Claude"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J97FS6Y8RNCDG0SNSC"
+---
+
 # Wave 03 C1: Fresh-Session Handoff
 
 Completion handoff for Wave 03 Cycle C1, "CLI Shell And Inspection". The

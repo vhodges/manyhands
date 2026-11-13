@@ -1,9 +1,10 @@
 ---
+id: 01M4CQNB7YG0PWSX6S25F1W9MR
+item_id: 01M4CKWWRA1DHFPMWKPNK7CQ1G
+created_at: 2026-10-08T03:07:12Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4CQNB7YG0PWSX6S25F1W9MR"
-item_id: "01M4CKWWRA1DHFPMWKPNK7CQ1G"
-created_at: "2026-10-08T03:07:12Z"
 ---
 
 Second review checkpoint: the product owner asked for a re-review of the
