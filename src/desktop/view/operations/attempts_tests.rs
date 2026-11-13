@@ -48,6 +48,7 @@ fn attempt(
                 item_id: Some(id.clone()),
                 kind: Some(TargetKind::Ticket),
                 disposition,
+                main: false,
             })
             .collect(),
         index_pending: false,

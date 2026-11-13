@@ -153,9 +153,10 @@ Whichever of these merges second merges main and adapts, per `AGENTS.md`.
    - the left dock toggle, one toggle per left panel, a separator, the
      bottom dock toggle and one toggle per bottom panel;
    - **Needs attention**: `circle-alert` and "N need attention", red,
-     hidden at 0, counting what decisions 3 and 14 list. Until Cycle 03
+     hidden at 0, counting what decisions 3 and 14 list. Until Cycle 03b
      adds the popover, activating it by click or key shows and focuses the
-     Activity panel;
+     Activity panel (Cycle 03 was split into 03a and 03b on 2026-11-12;
+     Wave 04 Cycle 03a decision 1);
    - a separator, one toggle per right panel and the right dock toggle;
    - a separator and **Settings** (`settings`, tooltip "Settings (Ctrl ,)"),
      opening today's Settings page in the item area.
@@ -200,11 +201,11 @@ Whichever of these merges second merges main and adapts, per `AGENTS.md`.
 ## Explicit Exclusions And Downstream Obligations
 
 - New panel contents, toolbars and row rendering, including the design's
-  28 px rows (decision 11): Cycles 02 and 03.
+  28 px rows (decision 11): Cycles 02, 03a and 03b.
   - Panel toolbars go into this Cycle's panel header.
-  - Cycle 03's rebuilt Activity keeps the layout notices above its rows.
-- The Needs attention popover, and the footer's "to share" and
-  update-check items: Cycle 03. The popover reads the same count
+  - Cycle 03b's rebuilt Activity keeps the layout notices above its rows.
+- The Needs attention popover: Cycle 03b; the footer's "to share" and
+  update-check items: Cycle 03a. The popover reads the same count
   function.
 - The Settings sheet. Settings stays a page in the item area, and the
   sidebar's Settings entry stays, until Cycle 04 moves and removes them.
@@ -311,7 +312,7 @@ Answered by the owner during planning:
 2. **Ctrl B stays Bold in the editor.** While an editor has focus Ctrl B is
    Bold, as today. Everywhere else it toggles the left dock. From an editor,
    Esc first or the footer's left dock toggle.
-3. **Needs attention counts everything awaiting the user.** Until Cycle 03:
+3. **Needs attention counts everything awaiting the user.** Until Cycle 03b:
    requests that finished blocked, partial or with an error and are not
    dismissed; draft save failures; drafts unavailable; and the unfinished
    operations listed under "Pending in repositories". A new read-only
@@ -437,7 +438,7 @@ These are visible to users; the design's Known Limits give the detail.
   Retry, a pending repository row's Retry, and the pending controls row's
   later controls such as Abandon) can sit outside the visible Activity,
   which scrolls vertically only. Fixed where `operations.rs` is rebuilt
-  (Cycle 03, or D6). Accepted by the owner 2026-11-09 (K-19; added
+  (Cycle 03b, or D6). Accepted by the owner 2026-11-09 (K-19; added
   2026-11-09).
 - The app being killed or terminated by the operating system bypasses the
   quit's layout write, so a change made after the last debounced save and

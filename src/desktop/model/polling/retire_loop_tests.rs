@@ -376,6 +376,7 @@ fn candidates() {
         item_id: Some(item(n)),
         kind,
         disposition: Disposition::Closed,
+        main: false,
     };
     let targets = vec![
         target(2, Some(TargetKind::Ticket)),
@@ -386,6 +387,7 @@ fn candidates() {
             item_id: None,
             kind: Some(TargetKind::Document),
             disposition: Disposition::Promoted,
+            main: false,
         },
         target(2, Some(TargetKind::Document)),
     ];

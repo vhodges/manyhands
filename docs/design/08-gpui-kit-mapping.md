@@ -6,6 +6,8 @@ Verified for the dock on 2026-11-08 (Wave 04 Cycle 01 design, fact 1). The dock 
 
 Verified for the lists on 2026-11-11 (Wave 04 Cycle 02 design, facts 1–12). The Tickets list is a Kit `List` whose rows are the app's own `Selectable` element, with the app's column header outside it; `DataTable` has no keyboard sort or Enter, keeps Tab inside, and gives Home and End to columns. The Documents tree is the base `gpui_kit::base::Tree` with app rows, since the styled `component::tree` forces a `ListItem` whose selected background overrides the design's. The Open/Closed/All control is the app's own segmented choice, since the Kit's segmented controls have no keyboard path. Panel toolbar buttons are the base `Button` with a caller-owned focus handle. `file-warning` does not exist in the catalog; `file-exclamation-point` stands for it.
 
+Decided for the Repositories panel on 2026-11-12 (Wave 04 Cycle 03a design, R-7 and R-11). Repository rows are the panel's own element in the Kit `List`, not Cycle 02's `ListRow`: the Kit list overwrites a row's selected flag with its cursor, and the chosen repository differs from the cursor. The repository context menu is a Workspace-owned `PopupMenu` layer like the footer's dock menu, opened by a right click and by `menu` or `shift-f10`, not the Kit `ContextMenu`, which opens by a right click only.
+
 ## Component per element
 
 | Element | GPUI Kit |

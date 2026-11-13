@@ -31,9 +31,13 @@
 //!   selection a retirement's key attention falls back to (E3).
 //! - `resume_polling` records each Resume checking and then makes the
 //!   library's own call.
+//! - `answer_unanswered_polls` (opt-in) answers every poll nothing is queued
+//!   for with a stand-in, counted, instead of the library's call.
+
+mod unanswered;
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -42,9 +46,9 @@ use manyhands::{
     drafts::DraftStore,
     repository::{
         AutomaticPollEligibility, ConflictDto, Mutation, MutationDataDto, OperationId,
-        PollPublicationRemoteRequest, PollingStatusDto, PrepareDataDto, ProgressStage, ReadError,
-        RemoteListDto, RemotePollError, RemotePollResult, RemoteSnapshot, RepositoryError,
-        RepositoryService, ResolvedRepository, SharedKeyId,
+        PollPublicationRemoteRequest, PollingOutcome, PollingStatusDto, PrepareDataDto,
+        ProgressStage, ReadError, RemoteListDto, RemotePollError, RemotePollResult, RemoteSnapshot,
+        RepositoryError, RepositoryService, ResolvedRepository, SharedKeyId,
         keys::{
             KeySourceToken, KeyStore, PassphraseResponse, SessionCredentialProvider,
             SessionCredentials, SessionUnlockFailure, UnlockReason, UnlockRequest,
@@ -130,8 +134,13 @@ pub(crate) struct PollingBackend {
     asked: Mutex<Vec<Asked>>,
     /// The root of every `resume_polling` made, in order.
     resumes: Mutex<Vec<String>>,
+    /// The latest outcome `polling_status` says for a root, in place of the
+    /// library's (`store_outcome`).
+    outcomes: Mutex<BTreeMap<String, PollingOutcome>>,
     /// The key `selected_key` answers.
     selected: Mutex<Option<SharedKeyId>>,
+    /// The stand-in for polls nothing is queued for, when opted in.
+    unanswered: Mutex<Option<unanswered::Unanswered>>,
 }
 
 /// What a Check now's passphrase request was answered.
@@ -161,7 +170,9 @@ impl PollingBackend {
             check_asks: Mutex::default(),
             asked: Mutex::default(),
             resumes: Mutex::default(),
+            outcomes: Mutex::default(),
             selected: Mutex::default(),
+            unanswered: Mutex::default(),
         }
     }
 
@@ -250,6 +261,16 @@ impl PollingBackend {
     /// before its library call, as the transport does for a protected key.
     pub(crate) fn ask_in_check_now(&self, provider: DesktopProvider, request: UnlockRequest) {
         *self.check_asks.lock().unwrap() = Some((provider, request));
+    }
+
+    /// Makes `polling_status` of `root` say `outcome` as the latest check's,
+    /// in place of what the library stored, so a test sets a stored outcome
+    /// without SQL.
+    pub(crate) fn store_outcome(&self, root: &str, outcome: PollingOutcome) {
+        self.outcomes
+            .lock()
+            .unwrap()
+            .insert(root.to_owned(), outcome);
     }
 
     /// Sets the key `selected_key` answers (E3).
@@ -403,7 +424,12 @@ impl Backend for PollingBackend {
 
     fn polling_status(&self, repo: &ResolvedRepository) -> Result<PollingStatusDto, ReadError> {
         self.record(PollCall::PollingStatus);
-        self.inner.polling_status(repo)
+        let mut status = self.inner.polling_status(repo)?;
+        let root = repo.root().to_string_lossy().into_owned();
+        if let Some(outcome) = self.outcomes.lock().unwrap().get(&root) {
+            status.latest_outcome = Some(*outcome);
+        }
+        Ok(status)
     }
 
     fn publication_remotes(&self, repo: &ResolvedRepository) -> Result<RemoteListDto, ReadError> {
@@ -445,7 +471,8 @@ impl Backend for PollingBackend {
         }
         // A constructed answer stands in: the library is not asked, and
         // `after_poll` gives the answer.
-        if !self.canned.lock().unwrap().is_empty() {
+        let queued = !self.canned.lock().unwrap().is_empty();
+        if queued || self.stand_in(&request.root) {
             return Err(RemotePollError::Busy);
         }
         let unlock = self.unlock.lock().unwrap().clone();

@@ -6,9 +6,9 @@ use crate::desktop::{
     keys::{
         CloseTab, DockPanel, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
         FocusRepositories, JumpToDiscussion, NewItem, NextRegion, NextTab, OpenDockMenu,
-        OpenDrafts, OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow,
-        Rebuild, Refresh, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop,
-        ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
+        OpenDrafts, OpenRepositoryMenu, OpenSelected, OpenSettings, PreviousRegion, PreviousTab,
+        Quit, QuitNow, Rebuild, Refresh, RepositoryMenuChoice, ScrollPageDown, ScrollPageUp,
+        ScrollToBottom, ScrollToTop, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
     },
     model::{
         layout::{PanelKind, Side},
@@ -16,9 +16,9 @@ use crate::desktop::{
     },
     view::{
         dock::Slot,
+        repositories,
         scroll::ContentScroll,
         shell::{title::window_title, title_bar},
-        sidebar::{self, RepositoryRow},
     },
 };
 use gpui_kit::{
@@ -66,7 +66,7 @@ impl Workspace {
     }
 
     fn repositories_region(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let repositories = sidebar::repositories(&self.navigation, &self.repositories_pane, cx);
+        let repositories = repositories::body(&self.navigation, &self.repositories_pane, cx);
         self.region(Region::Repositories, window, cx, repositories)
             .size_full()
             .into_any_element()
@@ -116,18 +116,6 @@ impl Workspace {
     /// pages and Root's sheet layer.
     fn item_area_region(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let item_shown = self.shown_item(cx).is_some();
-        // An item tab draws the selection at the end of its own scroll
-        // region instead.
-        let selection = (!item_shown).then(|| {
-            sidebar::selection(
-                &self.navigation,
-                &self.remove_focus,
-                &self.retry_focus,
-                self.content_scroll(),
-                cx,
-            )
-            .into_any_element()
-        });
         // The region's per-frame focus note, which its scroll-into-view
         // needs (R-33).
         self.content_scroll()
@@ -148,7 +136,7 @@ impl Workspace {
         let sheet = Root::render_sheet_layer(window, cx)
             .map(|layer| div().absolute().child(deferred(layer)));
         let content = content
-            .children(self.content_body(selection, window, cx))
+            .children(self.content_body(window, cx))
             .children(sheet);
         let content = self
             .region(Region::Content, window, cx, content)
@@ -202,8 +190,11 @@ impl Render for Workspace {
                 self.navigation.set_pane(pane);
             }
         }
-        self.repositories_pane
-            .set(RepositoryRow::rows(&self.navigation), window, cx);
+        // The rows follow the model after this frame, not during it (R-8);
+        // the repository menu closes as soon as its row goes (R-23).
+        let rows = repositories::rows(self, cx);
+        let repository_menu = self.repository_menu_layer(&rows, window, cx);
+        self.repositories_pane.show_after_frame(rows, window, cx);
         // The title bar draws the string the window is titled with, which is
         // set only when it changes (R-14).
         let title = window_title(self.navigation.selected_entry());
@@ -329,6 +320,18 @@ impl Render for Workspace {
             .on_action(unless_dialog(cx, |this, action: &DockPanel, window, cx| {
                 this.dock_chosen(action.panel, action.side, window, cx)
             }))
+            .on_action(unless_dialog(
+                cx,
+                |this, _: &OpenRepositoryMenu, window, cx| {
+                    this.open_focused_repository_menu(window, cx)
+                },
+            ))
+            .on_action(unless_dialog(
+                cx,
+                |this, action: &RepositoryMenuChoice, window, cx| {
+                    this.repository_menu_chosen(action, window, cx)
+                },
+            ))
             .relative()
             .size_full()
             .bg(cx.theme().background)
@@ -336,6 +339,7 @@ impl Render for Workspace {
             .child(dock)
             .child(footer)
             .children(dock_menu)
+            .children(repository_menu)
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }

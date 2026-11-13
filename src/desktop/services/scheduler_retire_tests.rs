@@ -1104,6 +1104,7 @@ async fn retire_entry_ends_when_its_row_was_settled_elsewhere(cx: &mut TestAppCo
                     item_id: Some(item()),
                     kind: Some(TargetKind::Ticket),
                     disposition: crate::desktop::model::polling::Disposition::Closed,
+                    main: false,
                 }],
                 index_pending: false,
             }),

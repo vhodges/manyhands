@@ -12,7 +12,9 @@ use gpui_kit::{
 };
 use manyhands::results::Outcome;
 
-use super::{Control, attention_text, dock_toggle_name, menu, panel_toggle_name, plan};
+use super::{
+    Control, FooterStatus, attention_text, dock_toggle_name, menu, panel_toggle_name, plan,
+};
 use crate::desktop::{
     keys::{DockPanel, OpenDockMenu},
     model::{
@@ -23,6 +25,8 @@ use crate::desktop::{
     view::{harness::Shell, settings::Shown, workspace::Region},
 };
 
+mod status;
+mod status_table;
 pub(in crate::desktop::view) mod support;
 
 use PanelKind::{Activity, Documents, Repositories, Tickets};
@@ -188,7 +192,7 @@ fn a_secondary_click_opens_the_dock_menu_with_its_side_checked(cx: &mut TestAppC
     assert_eq!(after.side_of(Activity), Some(Side::Right));
     assert!(after.is_displayed(Activity));
     assert!(shell.present(Region::Operations.id(), cx));
-    let footer = plan(&after, 0);
+    let footer = plan(&after, &FooterStatus::default());
     assert_eq!(
         footer.right[0],
         [
@@ -442,7 +446,7 @@ fn toggle_names_follow_their_state(_cx: &mut TestAppContext) {
     assert_eq!(attention_text(2).as_deref(), Some("2 need attention"));
     assert_eq!(attention_text(30).as_deref(), Some("30 need attention"));
     // The default layout: the footer's groups (`02`, "Footer").
-    let default = plan(&Layout::default(), 0);
+    let default = plan(&Layout::default(), &FooterStatus::default());
     assert_eq!(
         default.left,
         [
@@ -461,5 +465,27 @@ fn toggle_names_follow_their_state(_cx: &mut TestAppContext) {
             vec![Control::Settings]
         ]
     );
-    assert_eq!(plan(&Layout::default(), 3).right[0], [Control::Attention]);
+    let three = FooterStatus {
+        attention: 3,
+        ..FooterStatus::default()
+    };
+    assert_eq!(
+        plan(&Layout::default(), &three).right[0],
+        [Control::Attention]
+    );
+}
+
+/// The footer's two status items, Update check and To share (Part G): their
+/// texts, names and choices as pure functions (one table), then in a window
+/// with polling on: Tab reaches both, Enter on To share chooses the next
+/// repository with work each time and focus stays, the only repository with
+/// work being chosen reads nothing and changes nothing, a hidden Repositories
+/// panel stays hidden, a modal refuses both, a share that empties the count
+/// moves focus on, two folders of the same name are told apart, a save
+/// before any check counts, and Update check opens Settings (P12, P15, P25,
+/// P37, P41, P44, R-38, R-39).
+#[gpui_kit::test]
+async fn status_items_say_and_choose(cx: &mut TestAppContext) {
+    status_table::table();
+    status::journey(cx).await;
 }

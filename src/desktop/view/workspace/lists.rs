@@ -11,11 +11,11 @@ use crate::desktop::{
         markers::row_markers,
         navigation::{Pane, Resolution},
         polling::retire_loop::Held,
-        stamp::{RepoKey, Stamp},
+        stamp::{RepoKey, Stamp, ViewScope},
         tickets::{Lifecycle, SortColumn, TicketQuery, read_filter},
         unreadable::split_status,
     },
-    services::ReadKind,
+    services::{ReadKind, ReadResult},
     view::tickets::ShownTicket,
 };
 use gpui_kit::{App, Context, Window, component::tree::TreeEvent};
@@ -130,6 +130,10 @@ impl Workspace {
             move |service| service.list_documents(&resolved),
             cx,
             |this: &mut Self, stamp, result, cx| {
+                if let (ReadResult::Ok(list), ViewScope::Documents(root)) = (&result, &stamp.scope)
+                {
+                    this.learn_titles(root, list);
+                }
                 if this.documents.apply_documents(stamp, result) {
                     this.documents_changed(cx);
                 }
@@ -209,6 +213,9 @@ impl Workspace {
             move |service| service.list_tickets(&resolved, &filter),
             cx,
             |this: &mut Self, stamp, result, cx| {
+                if let (ReadResult::Ok(list), ViewScope::Tickets(root)) = (&result, &stamp.scope) {
+                    this.learn_titles(root, list);
+                }
                 if this.tickets.apply(stamp, result) {
                     cx.notify();
                 }

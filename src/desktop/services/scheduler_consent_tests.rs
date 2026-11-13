@@ -338,6 +338,7 @@ fn target(n: usize, kind: AuthoringKind, disposition: PollDisposition) -> Target
         item_id: Some(item(n)),
         kind: Some(kind),
         disposition,
+        main: false,
     }
 }
 

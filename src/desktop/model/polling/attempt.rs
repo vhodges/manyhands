@@ -134,6 +134,10 @@ pub(crate) struct AttemptTarget {
     pub item_id: Option<ItemId>,
     pub kind: Option<TargetKind>,
     pub disposition: Disposition,
+    /// The primary branch itself: the library's target with a target and no
+    /// kind. An item whose ID did not parse has `item_id: None` too, and is
+    /// not main, so nothing identifies main by a missing ID.
+    pub main: bool,
 }
 
 /// One automatic poll, as the desktop understands it.
@@ -163,8 +167,14 @@ pub(crate) struct AttemptSummary {
     pub brought_in: u32,
     /// `Current` and `LocalAhead`.
     pub up_to_date: u32,
-    /// `LocalAhead`: "N not shared yet".
-    pub not_shared: u32,
+    /// Every `LocalAhead`, `Unpublished` and `Diverged` target, main
+    /// included: what the attempt found not shared yet.
+    pub to_share: Vec<AttemptTarget>,
+    /// Every `Dirty`, `Conflicted`, `Inaccessible`, `Nonconforming`,
+    /// `BlockedByLocalState`, `MaterializationIncomplete`, `Malformed`,
+    /// `RemotelyDeleted`, `HistoryUnknown` and `NotReached` target: what
+    /// needs a look.
+    pub problems: Vec<AttemptTarget>,
     /// Listed under the attempt entry with their text; none is an error.
     pub listed: Vec<AttemptTarget>,
     /// `Closed` and `Promoted`, from a `Completed` attempt only (E1).
@@ -179,6 +189,17 @@ impl AttemptSummary {
         self.brought_in > 0
     }
 
+    /// Whether the attempt reported any target. Every poll's targets start
+    /// with main, so a completed one with none is a replay (fact 50).
+    pub fn carries_targets(&self) -> bool {
+        self.brought_in > 0
+            || self.up_to_date > 0
+            || !self.to_share.is_empty()
+            || !self.problems.is_empty()
+            || !self.listed.is_empty()
+            || !self.retire.is_empty()
+    }
+
     pub fn of(attempt: &PollAttempt) -> Self {
         let completed = attempt.answer == Answer::Completed;
         let mut summary = Self {
@@ -186,7 +207,8 @@ impl AttemptSummary {
             completed_at: completed.then_some(attempt.completed_at).flatten(),
             brought_in: 0,
             up_to_date: 0,
-            not_shared: 0,
+            to_share: Vec::new(),
+            problems: Vec::new(),
             listed: Vec::new(),
             retire: Vec::new(),
             index_pending: attempt.index_pending,
@@ -194,12 +216,22 @@ impl AttemptSummary {
         for target in &attempt.targets {
             use Disposition::*;
             match target.disposition {
+                LocalAhead | Unpublished | Diverged => summary.to_share.push(target.clone()),
+                Dirty
+                | Conflicted
+                | Inaccessible
+                | Nonconforming
+                | BlockedByLocalState
+                | MaterializationIncomplete
+                | Malformed
+                | RemotelyDeleted
+                | HistoryUnknown
+                | NotReached => summary.problems.push(target.clone()),
+                Current | FastForwarded | Materialized | Closed | Promoted => {}
+            }
+            match target.disposition {
                 FastForwarded | Materialized => summary.brought_in += 1,
-                Current => summary.up_to_date += 1,
-                LocalAhead => {
-                    summary.up_to_date += 1;
-                    summary.not_shared += 1;
-                }
+                Current | LocalAhead => summary.up_to_date += 1,
                 Closed | Promoted
                     if completed && target.item_id.is_some() && target.kind.is_some() =>
                 {

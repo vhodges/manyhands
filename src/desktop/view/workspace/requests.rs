@@ -354,23 +354,27 @@ impl Workspace {
         Some(id)
     }
 
+    /// Remove from Manyhands… of the repository at `root`: the dialog,
+    /// which gives focus back to `restore`, its caller's (R-12). It refuses
+    /// only under a dialog; its entry points refuse under the sheet too.
     pub(in crate::desktop::view) fn remove_repository(
         &mut self,
         root: RepoKey,
+        restore: FocusHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if window.has_active_dialog(cx) {
             return;
         }
-        let origin = self.remove_focus.clone();
-        // The dialog takes focus before the next frame.
-        self.last_region = Some(Region::Content);
+        // The dialog takes focus before the next frame: the fallback is the
+        // caller's region.
+        self.last_region = Some(self.region_of(&restore, window));
         confirm(
             Intent::RepoRemove {
                 root: PathBuf::from(root),
             },
-            origin,
+            restore,
             &self.services,
             window,
             cx,

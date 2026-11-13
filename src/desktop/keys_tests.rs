@@ -4,15 +4,15 @@ use gpui_kit::{Action, Keystroke, TestAppContext};
 
 use super::{
     CloseInspect, CloseTab, Find, FocusContent, FocusNavigation, FocusOperations,
-    FocusRepositories, NextRegion, NextTab, OpenDockMenu, OpenDrafts, OpenSelected, OpenSettings,
-    PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, SelectFirst, SelectLast,
-    ToggleBottomDock, ToggleLeftDock, ToggleRightDock, bind,
+    FocusRepositories, NextRegion, NextTab, OpenDockMenu, OpenDrafts, OpenRepositoryMenu,
+    OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh,
+    SelectFirst, SelectLast, ToggleBottomDock, ToggleLeftDock, ToggleRightDock, bind,
 };
 
 #[gpui_kit::test]
 fn each_key_is_bound_to_its_action(cx: &mut TestAppContext) {
     cx.update(bind);
-    let table: [(&str, Box<dyn Action>); 24] = [
+    let table: [(&str, Box<dyn Action>); 26] = [
         ("f6", Box::new(NextRegion)),
         ("shift-f6", Box::new(PreviousRegion)),
         ("secondary-1", Box::new(FocusRepositories)),
@@ -42,6 +42,9 @@ fn each_key_is_bound_to_its_action(cx: &mut TestAppContext) {
         // On a focused panel toggle ("PanelToggle"): the dock menu.
         ("menu", Box::new(OpenDockMenu)),
         ("shift-f10", Box::new(OpenDockMenu)),
+        // In the Repositories list and toolbar ("Repositories"): a row's menu.
+        ("menu", Box::new(OpenRepositoryMenu)),
+        ("shift-f10", Box::new(OpenRepositoryMenu)),
     ];
     cx.update(|cx| {
         for (keys, action) in &table {

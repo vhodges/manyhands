@@ -7,13 +7,22 @@
 
 use std::time::Duration;
 
-use manyhands::repository::{OperationId, PollingStatusDto, RemoteListDto};
+use manyhands::repository::{OperationId, PollingOutcome, PollingStatusDto, RemoteListDto};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::desktop::{
     model::polling::{Authority, Policy, Root},
     services::{Backend, inflight::ActiveRow, poll},
 };
+
+/// The publication remote a repository is checked against: its name and its
+/// redacted push location, from the remotes read the scheduler already makes
+/// (never a URL to connect to).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SharedCopy {
+    pub name: String,
+    pub location: String,
+}
 
 /// What a repository's reads came to.
 pub(super) enum Read {
@@ -24,6 +33,11 @@ pub(super) enum Read {
         /// The host the publication remote is reached at, when its location
         /// says (a host intent reaches the repositories on that host).
         authority: Option<Authority>,
+        /// How the library's latest check ended, stored before this process
+        /// ran (it stores no time for it).
+        outcome: Option<PollingOutcome>,
+        /// The remote the checks go to.
+        shared_copy: Option<SharedCopy>,
     },
     /// It has none: it is never polled ("No shared copy, nothing to check").
     NotPolled,
@@ -40,6 +54,18 @@ pub(super) fn ssh_publication(remotes: &RemoteListDto) -> bool {
         .items
         .iter()
         .any(|remote| remote.selected_for_publication && remote.publication_eligible)
+}
+
+/// The selected publication remote's name and redacted push location.
+pub(super) fn shared_copy_of(remotes: &RemoteListDto) -> Option<SharedCopy> {
+    let remote = remotes
+        .items
+        .iter()
+        .find(|remote| remote.selected_for_publication && remote.publication_eligible)?;
+    Some(SharedCopy {
+        name: remote.name.clone(),
+        location: remote.push_location.clone(),
+    })
 }
 
 /// The host and port of the selected publication remote's redacted fetch
@@ -113,6 +139,8 @@ pub(super) fn read(backend: &dyn Backend, root: &Root) -> Read {
     };
     Read::Polled {
         authority: authority_of(&remotes),
+        shared_copy: shared_copy_of(&remotes),
+        outcome: status.latest_outcome,
         policy: policy_of(&status),
         // When the remote's branches were last observed completely: the
         // last completion, for fairness (R-7). Restored at launch.

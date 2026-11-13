@@ -10,6 +10,7 @@
 //! No text here names an item, a comment or a key: only the repository's
 //! name, which the Settings pages already show.
 
+use manyhands::repository::PollingOutcome;
 use time::OffsetDateTime;
 
 use super::{Answer, AttemptSummary, Phase, Reason, RepoSchedule, TransportFailure, Why};
@@ -88,7 +89,56 @@ pub(crate) struct Facts<'a> {
     pub holding: Option<Holding>,
     /// This process's own Check now of the repository is queued or running.
     pub checking_now: bool,
+    /// How the library's latest check of the repository ended, as stored
+    /// before this process ran (the scheduler's side map). It speaks only
+    /// where [`stored_applies`] says.
+    pub stored: Option<PollingOutcome>,
     pub now: OffsetDateTime,
+}
+
+/// The one predicate that decides whether a stored outcome counts (R-32):
+/// checking is on, the repository is not held or paused and polls, this
+/// process has seen no attempt, nothing is checking, the phase is `Idle`,
+/// `Stopped` or waiting for a deadline, and no conflict is pending. It is
+/// exactly where Settings' row reaches [`since_library`], so the row and
+/// the panel say the same.
+pub(crate) fn stored_applies(facts: &Facts) -> Option<PollingOutcome> {
+    stored_when(facts, true)
+}
+
+/// The stored outcome as Check all asks for it (owner ruling 2026-11-12,
+/// decision 16): every condition of [`stored_applies`] except that the
+/// repository is not paused and that its phase is quiet, so a paused
+/// repository, or one in a busy, interrupted or failed wait, whose stored
+/// outcome waits on a key or a host is still known to, and Check all never
+/// raises a prompt for it.
+pub(crate) fn stored_for_check_all(facts: &Facts) -> Option<PollingOutcome> {
+    stored_when(facts, false)
+}
+
+/// `stored_applies`' conditions; `strict` adds "not paused" and "quiet".
+fn stored_when(facts: &Facts, strict: bool) -> Option<PollingOutcome> {
+    let stored = facts.stored?;
+    let repo = facts.schedule?;
+    let held = repo.policy.recovery_suspended
+        || matches!(&repo.phase, Phase::Attention(Reason::RecoveryHeld(_)));
+    let quiet = matches!(
+        &repo.phase,
+        Phase::Idle
+            | Phase::Stopped
+            | Phase::Waiting {
+                why: Why::NotDue,
+                ..
+            }
+    );
+    (repo.policy.enabled
+        && !held
+        && (!strict || (!repo.policy.paused && quiet))
+        && repo.last.is_none()
+        && !facts.checking_now
+        && !repo.in_flight()
+        && !repo.conflict_pending)
+        .then_some(stored)
 }
 
 /// What the row offers.
@@ -131,7 +181,7 @@ pub(crate) struct Row {
 }
 
 /// How long ago `then` was, as of `now`.
-fn ago(then: OffsetDateTime, now: OffsetDateTime) -> String {
+pub(crate) fn ago(then: OffsetDateTime, now: OffsetDateTime) -> String {
     let minutes = (now - then).whole_minutes().max(0);
     let (count, unit) = match minutes {
         0 => return "just now".to_owned(),
@@ -149,8 +199,8 @@ pub(super) fn changes(count: u32) -> String {
     )
 }
 
-/// "Checked {ago} \u{b7} up to date" or "\u{b7} Brought in N changes", and
-/// "\u{b7} N not shared yet" when the repository is ahead.
+/// "Checked {ago} \u{b7} up to date" or "\u{b7} Brought in N changes". What
+/// is not shared yet is said by every line alike (`counted`).
 fn checked(summary: &AttemptSummary, repo: &RepoSchedule, now: OffsetDateTime) -> String {
     let when = summary.completed_at.or(repo.last_completed);
     let mut line = match when {
@@ -163,24 +213,31 @@ fn checked(summary: &AttemptSummary, repo: &RepoSchedule, now: OffsetDateTime) -
     } else {
         line.push_str("up to date");
     }
-    if summary.not_shared > 0 {
-        line.push_str(&format!("{THEN}{} not shared yet", summary.not_shared));
-    }
     line
+}
+
+/// `status`, and "\u{b7} N not shared yet" from the unshared list when it
+/// holds anything, whatever the status says and before any completed check
+/// (decision 24).
+fn counted(status: String, repo: &RepoSchedule) -> String {
+    match repo.unshared.items.len() {
+        0 => status,
+        count => format!("{status}{THEN}{count} not shared yet"),
+    }
 }
 
 /// The status of a repository the schedule is idle for, from the last
 /// recorded attempt.
-fn after_last(repo: &RepoSchedule, name: &str, now: OffsetDateTime) -> (String, bool) {
+fn after_last(repo: &RepoSchedule, facts: &Facts) -> (String, bool) {
     if repo.conflict_pending {
         return (WAITING_FOR_CONFLICT.to_owned(), false);
     }
     let Some(last) = &repo.last else {
-        return (since_library(repo, now), false);
+        return since_library(repo, facts);
     };
     match &last.answer {
-        Answer::Completed => (checked(last, repo, now), false),
-        Answer::Transport(TransportFailure::Unreachable) => (cant_reach(name), true),
+        Answer::Completed => (checked(last, repo, facts.now), false),
+        Answer::Transport(TransportFailure::Unreachable) => (cant_reach(facts.name), true),
         Answer::Transport(TransportFailure::ConfigurationRequired)
         | Answer::Transport(TransportFailure::Unavailable) => (CANT_CHECK.to_owned(), true),
         // Attention was cleared, or the key, host or endpoint changed: the
@@ -188,17 +245,31 @@ fn after_last(repo: &RepoSchedule, name: &str, now: OffsetDateTime) -> (String, 
         Answer::Transport(_) | Answer::Interrupted | Answer::Cancelled(_) => {
             (CHECKING_SOON.to_owned(), false)
         }
-        _ => (since_library(repo, now), false),
+        _ => since_library(repo, facts),
     }
 }
 
-/// What the library's stored time says, when this process has seen no
-/// attempt of its own.
-fn since_library(repo: &RepoSchedule, now: OffsetDateTime) -> String {
-    match repo.last_completed {
-        Some(when) => format!("Checked {}", ago(when, now)),
-        None => NOT_CHECKED_YET.to_owned(),
+/// What the library stored says, when this process has seen no attempt of
+/// its own: the outcome [`stored_applies`] gives, in Settings' words and
+/// with whether the action is Retry now; else the stored time.
+fn since_library(repo: &RepoSchedule, facts: &Facts) -> (String, bool) {
+    use PollingOutcome::*;
+    match stored_applies(facts) {
+        Some(TransportUnavailable | ProtocolRejected) => return (cant_reach(facts.name), true),
+        Some(UnlockRequired) => return (NEEDS_UNLOCKING.to_owned(), false),
+        Some(SelectedKeyUnavailable) => return (CHOOSE_A_KEY.to_owned(), false),
+        Some(HostApprovalRequired) => return (NEEDS_HOST_APPROVAL.to_owned(), false),
+        Some(ConfigurationRequired | RepositoryUnavailable) => {
+            return (CANT_CHECK.to_owned(), true);
+        }
+        // Nothing stored of these that today's words do not say.
+        Some(Completed | Cancelled) | None => {}
     }
+    let words = match repo.last_completed {
+        Some(when) => format!("Checked {}", ago(when, facts.now)),
+        None => NOT_CHECKED_YET.to_owned(),
+    };
+    (words, false)
 }
 
 /// What needs the person, in words. Its action is the attention row's.
@@ -212,7 +283,7 @@ fn attention(reason: &Reason) -> (&'static str, bool) {
     }
 }
 
-fn phase_status(repo: &RepoSchedule, name: &str, now: OffsetDateTime) -> (String, bool) {
+fn phase_status(repo: &RepoSchedule, facts: &Facts) -> (String, bool) {
     let say = |words: &str| (words.to_owned(), false);
     match &repo.phase {
         Phase::Queued | Phase::Running { .. } => say(CHECKING),
@@ -229,9 +300,9 @@ fn phase_status(repo: &RepoSchedule, name: &str, now: OffsetDateTime) -> (String
             Why::Busy | Why::Interrupted => say(CHECKING_SOON),
             Why::Unfinished => say(WAITING_FOR_UNFINISHED),
             Why::Failed => (CANT_CHECK.to_owned(), true),
-            Why::NotDue => say(&since_library(repo, now)),
+            Why::NotDue => since_library(repo, facts),
         },
-        Phase::Idle | Phase::Stopped => after_last(repo, name, now),
+        Phase::Idle | Phase::Stopped => after_last(repo, facts),
     }
 }
 
@@ -271,7 +342,7 @@ pub(crate) fn row(facts: &Facts) -> Row {
         || matches!(&repo.phase, Phase::Attention(Reason::RecoveryHeld(_)));
     if !repo.policy.enabled {
         return Row {
-            status: CHECKING_IS_OFF.to_owned(),
+            status: counted(CHECKING_IS_OFF.to_owned(), repo),
             detail,
             pending: false,
             shape: Shape::Off,
@@ -279,7 +350,7 @@ pub(crate) fn row(facts: &Facts) -> Row {
     }
     if held {
         return Row {
-            status: HELD.to_owned(),
+            status: counted(HELD.to_owned(), repo),
             detail,
             pending: false,
             shape: Shape::Held,
@@ -288,7 +359,7 @@ pub(crate) fn row(facts: &Facts) -> Row {
     let (mut status, mut retry) = if facts.checking_now {
         (CHECKING.to_owned(), false)
     } else {
-        phase_status(repo, facts.name, facts.now)
+        phase_status(repo, facts)
     };
     if repo.policy.paused && !facts.checking_now {
         // Pause and attention are independent (A3): both are said.
@@ -299,7 +370,7 @@ pub(crate) fn row(facts: &Facts) -> Row {
         retry = false;
     }
     Row {
-        status,
+        status: counted(status, repo),
         detail,
         pending: !facts.checking_now
             && matches!(

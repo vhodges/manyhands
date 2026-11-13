@@ -30,6 +30,7 @@ mod polling_privacy_tests;
 mod polling_window;
 pub(crate) mod quit;
 pub(crate) mod relationships;
+pub(crate) mod repositories;
 pub(crate) mod retire_asks;
 pub(crate) mod rows;
 pub(crate) mod scroll;

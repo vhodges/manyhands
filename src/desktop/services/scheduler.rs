@@ -24,6 +24,8 @@ mod registration;
 mod retire;
 mod retire_loop;
 
+use std::path::Path;
+
 use gpui_kit::App;
 use manyhands::{
     canonical::ItemId,
@@ -35,12 +37,13 @@ pub(crate) use entity::Scheduler;
 pub(crate) use reconfigure::heard;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use reconfigure::{Heard, Moment, Scope};
+pub(crate) use registration::SharedCopy;
 pub(crate) use retire::note_record;
 
 use super::{
     Services,
     inflight::{ActiveRow, InflightStore, RetirementEntry},
-    requests::DesktopRequestId,
+    requests::{DesktopRequestId, Intent, Lane},
 };
 use crate::desktop::model::polling::{
     AttemptSummary, Now, Phase, PollAttempt, PollSchedule, Reason, Root, TargetKind,
@@ -233,6 +236,28 @@ impl Services {
             self.scheduler
                 .update(cx, |scheduler, cx| scheduler.listed(roots, cx));
         }
+    }
+
+    /// Check now of `root` (R-35): one `PollOnce` on the user lane, unless
+    /// one for it is already queued or running. True when it was sent.
+    /// Settings' Check now, the repository menu's Check now and Retry now,
+    /// and Check all call it; each keeps its own dialog and sheet guard.
+    pub(crate) fn check_now(&self, root: &Path) -> bool {
+        let out = self.worker().in_flight(
+            |intent| matches!(intent, Intent::PollOnce { root: asked } if asked == root),
+        );
+        if out {
+            return false;
+        }
+        self.worker().submit(
+            Intent::PollOnce {
+                root: root.to_owned(),
+            },
+            Lane::User,
+            None,
+            None,
+        );
+        true
     }
 
     /// The window became active: policies and remotes are read again and

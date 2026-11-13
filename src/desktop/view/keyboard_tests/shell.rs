@@ -27,7 +27,7 @@ use crate::desktop::{
     },
     view::{
         footer::{
-            Control, plan,
+            Control, FooterStatus, plan,
             tests::support::{finish, focused, put_behind, read, saves},
         },
         settings::Shown,
@@ -350,10 +350,10 @@ fn each_side_is_reached_by_the_dock_menu_keys(cx: &mut TestAppContext) {
         assert_eq!(after.side_of(panel), Some(side), "{why}");
         assert!(after.is_displayed(panel), "{why}: revealed");
         assert!(
-            plan(&after, 0)
+            plan(&after, &FooterStatus::default())
                 .left
                 .iter()
-                .chain(&plan(&after, 0).right)
+                .chain(&plan(&after, &FooterStatus::default()).right)
                 .any(|group| group.contains(&Control::Panel(panel))),
             "{why}: its toggle is in the footer"
         );
@@ -412,14 +412,36 @@ fn footer_controls_are_reached_by_tab(cx: &mut TestAppContext) {
     // A toggle that is off reads "Show".
     walk.shell.click(Control::Panel(Documents).id(), cx);
     let layout = layout_of(&walk, cx);
-    let footer = plan(&layout, 1);
+    let status = FooterStatus {
+        attention: 1,
+        ..FooterStatus::default()
+    };
+    let footer = plan(&layout, &status);
     let order: Vec<Control> = footer
         .left
         .into_iter()
         .chain(footer.right)
         .flatten()
         .collect();
-    assert_eq!(order.len(), Control::ALL.len(), "every control is shown");
+    // Nothing is scheduled in this window, so Update check and To share are
+    // not shown; `status_items_say_and_choose` walks them.
+    assert_eq!(
+        order,
+        [
+            Control::Dock(Side::Left),
+            Control::Panel(Repositories),
+            Control::Panel(Documents),
+            Control::Dock(Side::Bottom),
+            Control::Panel(Activity),
+            Control::Attention,
+            Control::Panel(Tickets),
+            Control::Dock(Side::Right),
+            Control::Settings,
+        ]
+    );
+    for status_item in [Control::UpdateCheck, Control::ToShare] {
+        assert_eq!(read(&walk.shell, status_item, cx), None, "{status_item:?}");
+    }
 
     walk.keys("secondary-3", cx);
     for (at, control) in order.iter().copied().enumerate() {
