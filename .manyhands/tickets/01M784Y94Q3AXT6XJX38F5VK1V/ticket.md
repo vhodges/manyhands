@@ -21,15 +21,17 @@ popover. The Wave document owns scope, exclusions and exit evidence,
 amended by the split. The design is `docs/design/` (`03` "Activity", `05`
 "Needs attention popover", `06`, `07` and `08`, frames 1a and 2f).
 
-Planned after 03a. This ticket is a placeholder until then; it does not
-authorize implementation.
+Planned on 2026-11-12 and 2026-11-13 (Cycle document, decision 4). Planning
+does not authorize implementation.
 
 ## Planning
 
-- [ ] Merge the latest main into this ticket branch.
-- [ ] Create `docs/Cycles/wave-04-cycle-03b-activity-and-needs-attention.md`.
-- [ ] Map every row and action in today's operations area to the new log.
-- [ ] Create the design and implementation plan and record their
+- [x] Merge the latest main into this ticket branch (Cycle 03a's published
+  branch at `b37d2c2b`, decision 4; main with 03a merged at `81789331`).
+- [x] Create `docs/Cycles/wave-04-cycle-03b-activity-and-needs-attention.md`.
+- [x] Map every row and action in today's operations area to the new log
+  (design B0).
+- [x] Create the design and implementation plan and record their
   checkpoints as ticket comments.
 
 ## Entry Gate
@@ -49,6 +51,33 @@ Cycle 03a merged. Wave 03 D6 merged (main `48653d01`).
    `view/operations.rs` and classifying shares once instead of on every
    render; and, from `01M5CS4MH25QQ769HV61ZRKHXG`, "Finishing" hiding the
    running stage.
+
+## Owner Decisions, 2026-11-12 and 2026-11-13 (planning this Cycle)
+
+Recorded in full in the Cycle document; summarized here.
+
+4. Plan against Cycle 03a's published branch, merged in; implementation
+   waits for 03a to close.
+5. States leave Activity when resolved; events stay as history.
+6. The Needs attention count is the popover's rows, each thing once,
+   including Cycle 03a's repository states; "Nothing to do" stops counting.
+7. Checks get a row when they brought something in or listed problems.
+8. Extra actions go in a row menu; risky actions are never the button.
+9. Dismiss in the row menu, and "Clear finished" in ⋯.
+10. A check's problem items are one row each, with Open.
+11. Enter presses the highlighted row's button.
+12. Titles allowed in Activity and the popover; bodies, comments and
+    conflict sides never (D5's rule amended).
+13. The outline's calls: no cap; a hold over several repositories is one
+    row; every request kind gets a row.
+21. D6's title rule is amended the same way; no paths in rows.
+22. Rows are one line; D6's decision 13 amended.
+23. After a dialog, focus returns to the row, highlighted.
+24. At most one action per row; repeats about one operation show once in
+    the popover.
+25. A fixed failure stops counting by itself; its row stays as history.
+
+Decisions 14–20 are the planner's proposals, awaiting confirmation.
 
 ## Scope Summary
 

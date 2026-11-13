@@ -14,25 +14,33 @@ Ticket `01M784Y94Q3AXT6XJX38F5VK1V` (`vh-dt0aq`).
 [Design](../plans/2026-11-12-wave-04-cycle-03b-activity-and-needs-attention-design.md) and
 [implementation plan](../plans/2026-11-12-wave-04-cycle-03b-activity-and-needs-attention-implementation.md).
 
-**Status: draft, revision 4.** On 2026-11-12 the owner asked to plan this
+**Status: draft, revision 5.** On 2026-11-12 the owner asked to plan this
 Cycle while Cycle 03a was in its final review ("substantially complete").
-The owner answered decisions 4–12 in that session and accepted the
-planner's outline with decision 13 ("write the documents"). Decisions
-1–3 were made during Cycle 03a's planning and are recorded on this
-ticket. Decisions 14–20 are the planner's proposals, each with its
-reason, for the owner to confirm. The owner answered decisions 21–24 on
-2026-11-13, after review round 1, and decision 25 the same day, after
-review round 3. Those marked **(owner's eye)** change something people
-see today or depart from an authority. Revision 2 applied review round 1
-(4 Blocking, 39 Important, 25 Minor across two reviewers) and decisions
-21–24. Revision 3 applied review round 2 (scoped re-review 1 Blocking, 7
+Cycle 03a has since closed and merged (main `ba95e1b7`). The owner
+answered decisions 4–12 in that session and accepted the planner's
+outline with decision 13 ("write the documents"). Decisions 1–3 were
+made during Cycle 03a's planning and are recorded on this ticket.
+Decisions 14–20 are the planner's proposals, each with its reason, for
+the owner to confirm. The owner answered decisions 21–24 on 2026-11-13,
+after review round 1, and decision 25 the same day, after review round
+3. Those marked **(owner's eye)** change something people see today or
+depart from an authority. Revision 2 applied review round 1 (4 Blocking,
+39 Important, 25 Minor across two reviewers) and decisions 21–24.
+Revision 3 applied review round 2 (scoped re-review 1 Blocking, 7
 Important, 13 Minor; adversarial 1 Blocking, 12 Important, 9 Minor).
-Revision 4 applies review round 3 (scoped re-review 0 Blocking, 6
+Revision 4 applied review round 3 (scoped re-review 0 Blocking, 6
 Important, 8 Minor; adversarial 6 Blocking, 7 Important, 4 Minor) and
-decision 25. Retirements are redesigned: no rows derived from the
-attempt's retirement lines (R-51). Not yet re-reviewed. The log and the
-attention count are stated as tables of required outcomes (design A3,
-A4), and Task 5 writes them test-first with a design checkpoint.
+decision 25, and redesigned retirements: no rows derived from the
+attempt's retirement lines (R-51).
+
+Revision 5 applies review round 4 (scoped re-review 1 Blocking, 5
+Important, 8 Minor; adversarial 5 Blocking, 6 Important, 3 Minor) and
+re-grounds on Cycle 03a's merged code (`81789331`). **Revision 5 had no
+independent review.** Round 4 was the fourth to find Blocking issues in
+the attention count. As the planning skill directs, that contract is the
+N-table with its precedence, latches and T-rows (design A3, A4). Task 5
+writes it test-first with a design checkpoint, and any row its
+implementer cannot express goes back to the orchestrator and the owner.
 
 - Drafted on the ticket branch at `b37d2c2b`. That commit merges Cycle
   03a's published head `3086666f` into this ticket's base, origin/main
@@ -46,9 +54,16 @@ A4), and Task 5 writes them test-first with a design checkpoint.
 - Review round 3 read revision 3 at `4c596645`:
   - scoped re-review: 0 Blocking, 6 Important, 8 Minor;
   - adversarial: 6 Blocking, 7 Important, 4 Minor.
+- Review round 4 read revision 4 at `05246630`:
+  - scoped re-review with re-grounding: 1 Blocking, 5 Important, 8
+    Minor, and 11 moved citations;
+  - adversarial review of the count: 5 Blocking, 6 Important, 3 Minor.
+- Cycle 03a closed and merged (main `ba95e1b7`, ticket
+  `01M784Y8C73B39GR4JWENXE5D0`). The ticket branch merged main at
+  `81789331`, and revision 5 is grounded there.
 - The plan has 14 tasks (0–13). If the owner splits the Cycle, 03b-1 is
   Tasks 0–10 and 03b-2 is Tasks 11–13 (design Risks).
-- Revision 4 has not yet been re-reviewed.
+- **Revision 5 had no independent review.**
 
 ## Purpose And Authority
 
@@ -114,8 +129,8 @@ Authorities, in order:
 | Gate | State at planning (`b37d2c2b`) |
 | --- | --- |
 | Cycle ticket before the plan (`AGENTS.md`) | `01M784Y94Q3AXT6XJX38F5VK1V`, open, created 2026-11-12 from main and published |
-| Latest main merged into the ticket branch | Created from origin/main `37be101d`; nothing newer on main at planning |
-| Cycle 03a merged | **No.** In final review. Its published head `3086666f` is merged into this branch (decision 4); its later final-review commits are not. Implementation does not start before 03a closes: Task 0 merges main and re-grounds (design U-6) |
+| Latest main merged into the ticket branch | Created from origin/main `37be101d`; main merged again at `81789331` for revision 5. Task 0 merges main once more |
+| Cycle 03a merged | Yes: merged (main `ba95e1b7`); this branch merged main at `81789331`. At planning, only its published head `3086666f` was merged in (decision 4). Revision 5 re-read its final code; Task 0 re-checks only what changes after `81789331` (design U-6) |
 | Wave 03 D6 merged | Yes: main `48653d01` |
 | GPUI Kit 0.6.6 names read | `List`, `Popover`, `PopupMenu` and `Button` read from the locked source during planning (design facts 31–34). `uniform_list` read during planning; U-2 is checked in Task 9 |
 | Required checks at baseline | Not run during planning; Task 0 runs them |
@@ -202,7 +217,8 @@ A2), not the log.
 2. **Failures stay until resolved.** A failure or recovery state stays
    until its source no longer holds it, and an event until the person
    dismisses it (decision 5). A failed request stops counting once it is
-   fixed, and its row stays as history until dismissed (decision 25).
+   fixed, and its row stays as history until dismissed or cleared
+   (decision 25).
    Nothing exists only in a transient notification (RFC).
 3. **Nothing new is sent.** Every row action runs the handler today's
    control runs. Moving the highlight, filtering and opening a menu or
@@ -455,7 +471,7 @@ decisions govern and are not repeated.
       after the problem was fixed another way… Should a fixed failure
       stop counting by itself?" and chose "Stop counting once fixed".
 
-    The design states it as N22 and N23 (A3).
+    The design states it as N22 and N23, latched per attempt (A3; R-56).
 
     *Alternative:* count until dismissed, as today.
 
@@ -492,9 +508,10 @@ These are visible to users; the design's Known Limits give the detail.
 ## Open Questions
 
 None for the owner beyond confirming decisions 14–20. Decisions 21–25
-were answered on 2026-11-13. The design's U-1, U-2 and U-4 to U-8 are
-checked by the tasks that first rely on them; U-3 is settled (design
-fact 47).
+were answered on 2026-11-13. The design's U-1, U-2, U-4, U-5, U-7 and
+U-8 are checked by the tasks that first rely on them. U-6 was re-read at
+`81789331`, and Task 0 re-checks only what changes after that. U-3 is
+settled (design fact 47).
 
 ## Review Record
 
@@ -509,3 +526,4 @@ fact 47).
 | Review round 2, scoped re-review and adversarial (revision 2, `b830e8e3`) | Scoped: 1 Blocking, 7 Important, 13 Minor. Adversarial: 1 Blocking (the same), 12 Important, 9 Minor: a repository row's detail carried the folder path and the remote's address (Blocking); the log and the attention post-pass; focus after the popover; the seam; inputs the derivation lacked | Blocking, Important, Minor | Revision 3; design A3 and A4 as tables of required outcomes (N1–N21, T1–T13); design R-46 to R-50 | Change list, 2026-11-13 |
 | Owner, 2026-11-13, after review round 3 | Should a fixed failure stop counting by itself? | Owner decision | Decision 25; design N22 and N23; Document Amendment 11 cites decisions 6 and 25 | Session, 2026-11-13 |
 | Review round 3, scoped re-review and adversarial (revision 3, `4c596645`) | Scoped: 0 Blocking, 6 Important, 8 Minor. Adversarial: 6 Blocking, 7 Important, 4 Minor. Most sit in how retirements became rows (the S8 starts, kept rows, R-42) and when a failed request stops counting; others: a lifecycle's Resume on its pending row, L3's offers, a Busy read, the revision, `clearable` and Open…, the sentinels | Blocking, Important, Minor | Revision 4: retirements redesigned, with no rows derived from the attempt's retirement lines (design R-51); the subject, N2, N4, N9 and N21–N24 with their precedence (decision 25); design R-52 to R-55; N20, R-19 and R-42 withdrawn, T7 and T8 replaced. Scoped findings 1–3 (the S8 starts, kept counting, N20 against N21) are resolved by the redesign | Change list, 2026-11-13 |
+| Review round 4, scoped re-review with re-grounding and adversarial (revision 4, `05246630`) | Scoped: 1 Blocking, 5 Important, 8 Minor, and 11 moved citations. Adversarial: 5 Blocking, 6 Important, 3 Minor. Almost all Blocking findings sit in decision 25's "fixed" rule, the fourth round to find Blocking issues in the attention count; others: `check_applied`, clearing fixed rows, S8's information events, S9's lifecycle row, the popover's focus and revision check, dead code, stale text. Cycle 03a merged in between | Blocking, Important, Minor | Revision 5, **with no independent review**: the latch and exact subjects (design R-56, R-57), N22's five clauses, N2 by operation, N23 undone, N25, T14–T18; `check_applied` recorded (R-58); settled failures clearable; S8's information events per item (R-59); re-grounded on Cycle 03a's merged code at `81789331`. The contract is the N-table with its precedence, latches and T-rows, written test-first in Task 5; a row its implementer cannot express goes back to the orchestrator and the owner | Change list, 2026-11-13 |
