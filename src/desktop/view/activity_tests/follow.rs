@@ -204,7 +204,7 @@ async fn a_checking_repository_keeps_its_row(cx: &mut TestAppContext) {
 }
 
 /// An attempt of `rig`'s repository that found `targets` unshared.
-fn found(rig: &Rig, ix: usize, targets: Vec<AttemptTarget>, cx: &mut TestAppContext) {
+pub(super) fn found(rig: &Rig, ix: usize, targets: Vec<AttemptTarget>, cx: &mut TestAppContext) {
     let now = rig.clock.now();
     let attempt = PollAttempt {
         root: rig.key(ix),
@@ -222,7 +222,7 @@ fn found(rig: &Rig, ix: usize, targets: Vec<AttemptTarget>, cx: &mut TestAppCont
     rig.shell.run(cx);
 }
 
-fn item(disposition: Disposition) -> AttemptTarget {
+pub(super) fn item(disposition: Disposition) -> AttemptTarget {
     AttemptTarget {
         item_id: Some(ItemId::generate()),
         kind: Some(TargetKind::Ticket),
@@ -231,7 +231,7 @@ fn item(disposition: Disposition) -> AttemptTarget {
     }
 }
 
-fn main_branch(disposition: Disposition) -> AttemptTarget {
+pub(super) fn main_branch(disposition: Disposition) -> AttemptTarget {
     AttemptTarget {
         item_id: None,
         kind: None,

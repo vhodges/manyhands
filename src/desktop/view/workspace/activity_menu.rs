@@ -44,7 +44,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.activity.pane.start_highlight();
         let Some(key) = self.activity.pane.highlighted_key().cloned() else {
             return;
         };

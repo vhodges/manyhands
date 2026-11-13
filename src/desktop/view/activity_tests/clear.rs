@@ -14,6 +14,7 @@ use manyhands::{
 
 use super::{
     cases::{answered, fabricate},
+    follow::{found, item as target},
     list_support::*,
     pending_cases::{PENDING_ROOT, listing, read_pending},
     toolbar::more_open,
@@ -24,7 +25,7 @@ use crate::desktop::{
             copy::{CLEAR_FINISHED, GIVE_UP},
             rows::RowKey,
         },
-        polling::{Answer, TransportFailure},
+        polling::{Answer, Disposition, TransportFailure},
     },
     services::{
         requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
@@ -43,7 +44,7 @@ use crate::desktop::{
 
 /// A request `n` of `intent` that ends with `envelope` after the record of
 /// its share stood at `record`, as the worker's drain notes it.
-fn finished_after(
+pub(super) fn finished_after(
     shell: &Shell,
     n: u64,
     intent: Intent,
@@ -199,6 +200,8 @@ async fn clear_finished_keeps_failures_and_states(cx: &mut TestAppContext) {
     );
     read_pending(shell, PENDING_ROOT, listing(vec![save(OP_A)]), cx);
     rig.schedule(0, cx);
+    // A check that brought an item in: an S2 row, which goes through the log.
+    found(&rig, 0, vec![target(Disposition::FastForwarded)], cx);
     rig.answer(0, Answer::Transport(TransportFailure::Unreachable), cx);
     refresh(shell, cx);
 
@@ -236,9 +239,14 @@ async fn clear_finished_keeps_failures_and_states(cx: &mut TestAppContext) {
         assert_eq!(events.len(), 2, "the two S8 events: {events:?}");
         (events[0].clone(), events[1].clone())
     };
+    let brought = before
+        .iter()
+        .find(|key| matches!(key, RowKey::Brought { .. }))
+        .cloned()
+        .expect("the check brought an item in: an S2 row");
     // What the log calls clearable is exactly what goes.
     let mut expected: Vec<RowKey> = goes.to_vec();
-    expected.extend([retired_key, note_key]);
+    expected.extend([retired_key, note_key, brought]);
     expected.sort();
     let mut clearable = shell
         .workspace
@@ -316,10 +324,14 @@ async fn clear_finished_keeps_failures_and_states(cx: &mut TestAppContext) {
         present(shell, cx).contains(&RowKey::Request(late)),
         "the disabled item took nothing"
     );
-    // Closed, opened again with a clearable row: it takes it.
-    if more_open(shell, cx) {
-        shell.keys("escape", cx);
-    }
+    // The disabled item leaves the menu open; Escape closes it. Opened again
+    // with a clearable row, the item takes it.
+    assert!(
+        more_open(shell, cx),
+        "a disabled item does not close the menu"
+    );
+    shell.keys("escape", cx);
+    assert!(!more_open(shell, cx), "Escape closes it");
     shell.click(ToolbarButton::ActivityMore.id(), cx);
     choose(shell, CLEAR_FINISHED, cx);
     refresh(shell, cx);
