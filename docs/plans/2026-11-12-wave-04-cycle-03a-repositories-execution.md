@@ -28,7 +28,7 @@ reason.
 | 5 | done, review approved after fix round 1; checkpoint comment follows | code `caa23a81` (base `94f5abbd`), fix `ba2a24bc`; ledger commit follows | yes |
 | 6 | done, review approved after fix round 1 | code `b8044b60` (base `9cc1a4a0`), fix `c0ab728a`; ledger commit follows | yes |
 | 7 | done, review approved first time | code `6899a165` (base `19800b2d`); ledger commit follows | yes |
-| 8 | not started | | |
+| 8 | done, review approved first time | code `d8013dcc` (base `b2997259`); ledger commit follows | yes |
 | 9 | not started | | |
 | 10 | not started | | |
 
@@ -1154,3 +1154,126 @@ no Critical, no Important.
    not run red; both were traced by reading.
 6. Unedited tests that `tab_to` across an item tab's end now skip one stop;
    `tab_to` tolerates it, and the fast tier at Task 10 runs them.
+
+## Task 8: footer status items (Part G)
+
+**Commit.** Code `d8013dcc` (base `b2997259`). Boundary command prints nothing.
+New: `view/workspace/footer_status.rs` (181), `footer_tests/status.rs` (410),
+`footer_tests/status_table.rs` (215). `footer.rs` 437, `workspace/footer.rs` 285,
+`workspace.rs` 488 (one `mod` line), `footer_tests/mod.rs` 491. `lists.rs` and
+`repository_state.rs` untouched. Pure functions beyond the brief's list:
+`to_share_text(n)` ("{n} to share"), `focus_after_hiding(hidden, plan)` (R-38's
+decision logic) and `update_tooltip(text)`; `FooterStatus` also derives
+`Default`; the brief's `footer_status(&self, cx)` is
+`Workspace::share_facts(cx).status(attention)` so the name and the text share one
+evaluation per draw.
+
+**U-5 holds** (scratch test, discarded): `reach(Attention)` takes 12 Tab presses
+and `reach(Settings)` 15 today, 14 and 17 with the two new stops, far below
+`TAB_LIMIT` 40 (unchanged; neither status item draws in `plain`, where nothing is
+scheduled).
+
+**Tests run** (`devenv shell -- cargo test --locked --features
+desktop-test-support --bin manyhands -- --exact <paths>`): 12 ran, 12 passed —
+the new `desktop::view::footer::tests::status_items_say_and_choose`; the four E-10
+tests (`footer::tests::a_secondary_click_opens_the_dock_menu_with_its_side_checked`,
+`…::toggle_names_follow_their_state`,
+`keyboard_tests::shell::each_side_is_reached_by_the_dock_menu_keys`,
+`…::footer_controls_are_reached_by_tab`); the Task 0 watch item
+`footer::tests::a_dock_menu_closes_when_a_modal_opens_over_it` (`Control::ALL`,
+passes unedited, and now iterates 11 controls); and the `reach` and `said` users.
+A precaution, because the footer now draws the items in polling windows: 7 polling
+window tests passed (`polling_privacy`, `polling_keyboard`, five repositories
+journeys). Verify lines, each exit 0: `cargo fmt --check`, `cargo check --locked
+--features desktop`, `cargo clippy --all-targets --all-features --locked -- -D
+warnings`.
+
+**Named edits.** E-10: the exact nine-control order in
+`footer_controls_are_reached_by_tab` replaces `order.len() == Control::ALL.len()`
+and asserts both status items absent (stronger: identity and order, not a count);
+the `plan(.., 0)` / `plan(.., 3)` call sites became `FooterStatus::default()` /
+`FooterStatus { attention: 3, .. }` with the same assertions; `said` gains the two
+controls as a panic arm; the two `footer_tests` edits only add the two controls to
+their expectations. No assertion removed or weakened. **E-23** (needed edit,
+visibility only): nine helpers in `repositories_tests/support.rs` (`FIRST`,
+`SECOND`, `THIRD`, `id`, `not_due`, `completed`, `item`, `checked`, `polled`)
+widened from `pub(super)` to `pub(in crate::desktop::view)` so the footer journey
+reuses them; no body changed. No E-12 edit (no icon needed).
+
+**How R-38 was proven.** The journey focuses To share, brings the count to 0 by a
+share, and reads focus on Needs attention; removing the `keep_focus_in_footer` call
+(`workspace/footer.rs:51`) fails it at `footer_tests/status.rs:327-330` (the
+report's "status.rs:510" is a typo), and a second mutation on the press also
+failed; both reverted. The reviewer confirmed the assertion cannot be satisfied by
+`Workspace::focus_lost`'s fallback (it focuses only regions and panes, never a
+footer control).
+
+**R-38's `window.focus` runs during render — judged correct, not a defect.**
+Checked against the locked `gpui-pre-0.3.6/src/window.rs`: `Window::focus` sets
+focus and calls `refresh()`, which does nothing while drawing, and the post-draw
+re-frame test compares against a focus value captured after the swap, so there is
+no extra frame or loop; `keep_focus_in_footer` runs before the footer's elements
+are built, so the target is drawn focused in the same frame, and the target is
+always in the drawn plan (Settings is always there). Deferring (`defer_in` /
+`window.defer`) would be wrong: when the focused control leaves the tree GPUI
+fires `focus_lost` in the same draw, before any deferred callback, and
+`Workspace::focus_lost` would move focus to a region and overwrite `last_region`.
+Task 6's R-22 could defer only because a disabled Check all stays in the tree.
+Precedent: `DockMenu::layer` (`footer/menu.rs:98-102`) takes focus on draw. Not
+seen on a real display (the owner's on-screen checklist covers it).
+
+**Rulings (implementer's, reviewed).**
+1. Update check's "checking" and "latest" are over the listed repositories, not
+   the kept row (the brief's `schedule().repo(root)` for every listed repository
+   settles it; the design's "any scheduled repository" read the same way) — cost:
+   a removed repository's last check stops counting (K-10).
+2. Update check's accessible name is the text; its tooltip is
+   `"{text}\n{UPDATE_TOOLTIP}"` and `UPDATE_TOOLTIP` is also the wrapper's
+   accessible description. Part G's Name column reads "The text, then
+   'Background check…'" — see deferred 1.
+3. `next_to_share` with a chosen key not in `order` (the kept row) starts at the
+   top of the order; a chosen repository with no work: the next with work after it.
+4. The name's parent is the parent folder's file name (or its full path when it
+   has none — see deferred 2); "in {parent}" is added for every listed repository
+   whose name another listed one shares (both get it).
+5. Attention hiding while focused is left as today (fallback to a region); R-38
+   names only the status items.
+6. Icon colours (refresh-cw teal, cloud-upload amber) are appearance and
+   untested.
+
+**Dead-code allows.** None added or removed.
+
+**Review** (fresh reviewer, opus, `b2997259..d8013dcc`): spec compliant, every
+brief interface and case present; R-24, R-26, R-38, R-39 and Review Focus 6
+verified (the share-and-press in the same update, before any draw, leaves the
+footprint — chosen repository, layout, saves, reads, requests — unchanged);
+E-10 edits equal or stronger; no Critical, no Important.
+
+**Deferred findings (Minor).**
+1. **Triage at the final review:** Part G's Name column says the Update check's
+   name is "the text, then 'Background check: fetch and fast-forward only. Never
+   shares your changes.'"; the implementation puts the sentence in the tooltip and
+   `aria_description` and only the text in the accessible name. Defensible (screen
+   readers read the description) but a literal reading wants it in the name:
+   confirm the split or put `update_tooltip(text)` in the name (a one-line change).
+2. Latent full-path fallbacks in the name: `footer_status.rs:67` `display()` falls
+   back to the key (the full repository path) for an unlisted key — unreachable
+   today (it only occurs when the total is 0 and To share is hidden); the parent
+   falls back to `parent.display()` ("/" or "C:\") when it has no file name;
+   `(None, None) => to_share_name(total, "", true)` would read "N to share in ."
+   (unreachable while the item shows). Fall back to the path's `file_name()` or an
+   empty string, never the key; drop the suffix when the parent has no name. The
+   design wants names only (Task 9's privacy sweep should look).
+3. `ChromeColors::green`'s `#[cfg_attr(not(test), allow(dead_code))] // Cycle 03
+   (the update-check and to-share footer items)` in `view/shell/tokens.rs:38-40` is
+   stale (`green` is used in production by `Tone::Success`); delete it.
+4. Update check hiding while focused is covered by the table
+   (`focus_after_hiding`) but the journey hides only To share; one realistic case
+   is cheap (focus "Checking for updates…" on a repository that has never
+   completed a check, then end the check uncompleted).
+5. The journey's own `tab_to` (`status.rs:56-65`) hard-codes `0..40` instead of
+   `TAB_LIMIT` and duplicates `Walk::tab_to` / `reach`.
+6. Add a line to `keep_focus_in_footer`'s comment saying why it runs during
+   render and is not deferred (the `focus_lost` ordering above), so a later reader
+   does not "fix" it to match Task 6.
+7. The U-5 counts come from a discarded scratch test and cannot be rechecked.
