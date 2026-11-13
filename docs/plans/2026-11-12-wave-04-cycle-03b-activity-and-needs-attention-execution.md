@@ -23,7 +23,8 @@ reason.
 | --- | --- | --- | --- |
 | 0 | done (no source change; no reviewer, see ruling R0-1) | `f5e01cb9` (ledger); `a5b5ac29` (ticket comment) | yes |
 | 1 | done, review approved first time | code `ec67fea7` (base `a5b5ac29`); ledger `df8fa9cf` | yes |
-| 2 | done, review approved first time | code `879da113` (base `df8fa9cf`); ledger commit follows | yes |
+| 2 | done, review approved first time | code `879da113` (base `df8fa9cf`); ledger `622dfaa5` | yes |
+| 3 | done, review approved with Minors parked | code `bbaa6663` (base `622dfaa5`); ledger commit follows | yes |
 
 ## Base
 
@@ -191,6 +192,51 @@ F2 (a share classified once) and F3 (the stage shown). The drain's
 - Tests were first seen failing as compile errors, not assertions (the whole test
   binary shares one build).
 
+## Task 3
+
+Row types (A1, `RowKey` in full), request rows (S1), their copy (B1–B3, B5),
+`activity_time`, and the R-41 move of the pure text helpers and the lifecycle
+outcome lines into `model/activity/{copy,lifecycle_lines,intent_words}.rs` with
+re-exports from the old view paths. New files all under 500 lines (largest
+`activity_tests.rs` 490, `requests.rs` 418); `request_rows` is split into
+`requests/offers.rs`.
+
+- **U-1:** holds. Only `Report` lacked `PartialOrd, Ord`; both were added
+  (a desktop type). **U-7:** holds: `Workspace::tab_of(&TabKey::Item{..})`, then
+  `TabContent::pane(id)`, then `pane.read(cx).model.last_title()`; it needs an
+  `AuthoringKind` → `ItemDtoKind` conversion, which Task 5's title closure supplies.
+- **Dead-code markers (9, all plain):** Task 4: `RowKey`, `Target`,
+  `Kind::ToShare`, `ActivityAction`. Task 5: `Subject::Operation`, `ActivityRow`,
+  `RequestInputs`, `request_rows`, `activity_time`.
+- Ruling T3-1: the label and state constants beyond R-41's list moved into
+  `copy.rs` and are re-exported from their view paths; `LifecycleRow` stays for
+  Task 4 — the model needs them for `request_rows` — none.
+- Ruling T3-2: Task 5 contracts the interpretations bind (reviewer-confirmed
+  against A1): (1) `RequestFacts.recoveries` is the already-shown set — the Workspace
+  removes dialog-owned and hidden actions; the model finds Abandon from
+  `recovery[n].action`. (2) `shown_offers` arrives already filtered of
+  Republish… and Stop and republish… while a republish runs. (3)
+  `share_words: Some` on a BranchDeleted answer means "republish running" and
+  shows a disabled "Republishing…". (4) A succeeded share offers only Dismiss.
+  (5) An Owed retirement row is `Kind::Failure`; its `candidate` follows the
+  envelope. — design A1 field docs — Task 5 would build the facts wrongly.
+- **Parked Minors** (carried to the final review, none blocks):
+  1. `view/lifecycle/outcome.rs` still defines `STOP`, `STOPPING`, `UNLOCK`,
+     `OPEN_SHARING_AND_KEYS` and `CHECK_HOST` that `copy.rs:26-60` now defines
+     again; the strings can drift. Task 9 (the old drawing goes) re-exports the
+     model's.
+  2. R-41's "re-export each" was not kept for `APPLICATION`, `ALREADY_SHARED` and
+     the offer-label constants (`UNLOCK`, `GIVE_UP`, `OPEN_SHARING_AND_KEYS`,
+     `CHECK_HOST`, `SET_IDENTITY`, `SHOW_IT`, `SET_UP_SHARING`): nothing outside
+     uses them, and an unused re-export fails `-D warnings`.
+  3. An Owed row with a failed envelope offers Dismiss only (`offers.rs:44`);
+     today's entry would show that envelope's recovery actions. The design is
+     silent: confirm at the final review that this is intended.
+  4. A finished Success share with no `share_result` falls back to the Doing text
+     as its title; unreachable today.
+  5. A lifecycle Noop, Pending or "Not shared" outcome line is covered only through
+     `request_copy_table`, not `request_rows`.
+
 ## Tests run
 
 | Checkpoint | Tests run |
@@ -198,6 +244,7 @@ F2 (a share classified once) and F3 (the stage shown). The drain's
 | Task 0 | none (static gates only) |
 | Task 1 | `desktop::model::operations` by module: 32 passed, 0 failed (the one module run the plan names). fmt, `cargo check --features desktop` and clippy `-D warnings` clean. |
 | Task 2 | By exact path, 1 passed each: `desktop::model::operations::tests::shares_are_classified_once`; `desktop::model::operations::tests::stages_are_shown`; `desktop::view::operations::tests::state_label_shows_stages`; E-1 `desktop::view::operations::outcomes::give_up_tests::a_give_up_left_waiting_on_unlock_offers_unlock_not_give_up`; E-2 `desktop::view::operations::check_tests::a_running_check_now_reads_its_stage_words`. fmt, check and clippy clean. |
+| Task 3 | By exact path, 1 passed each, red on stubs first: `desktop::model::activity::tests::activity_time_formats`; `...::request_copy_table`; `...::share_copy_table`; `...::each_source_makes_its_rows`. fmt, check and clippy clean. No existing test run or edited. |
 
 ## Test edits (E-n)
 
