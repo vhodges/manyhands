@@ -51,6 +51,21 @@ pub(crate) fn offered(
         .find(|offer| offer.label == label)
 }
 
+/// Waits until the row `key` offers `label`, enabled.
+pub(crate) async fn until_offered(
+    shell: &Shell,
+    key: &RowKey,
+    label: &str,
+    cx: &mut TestAppContext,
+) {
+    shell
+        .until_drawn(cx, label, |shell, cx| {
+            refresh(shell, cx);
+            offered(shell, key, label, cx).is_some_and(|offer| offer.enabled)
+        })
+        .await;
+}
+
 /// The finished or running request `id`.
 pub(crate) fn request(
     shell: &Shell,

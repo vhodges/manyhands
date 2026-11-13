@@ -2,7 +2,10 @@
 //! for two presses of Enter, Escape with nothing asked and focus given
 //! back, and a stale preview that offers Prepare again.
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use gpui_kit::{TestAppContext, component::dialog::Confirm};
 use manyhands::{
@@ -21,7 +24,9 @@ use crate::desktop::{
     },
     test_support::fixtures::{Fixture, resume_through},
     view::{
-        harness::Shell,
+        activity_support::{act, pending_key},
+        harness::{Shell, key},
+        operations::ABANDON,
         workspace::{QuitPhase, REGIONS, Region},
     },
 };
@@ -91,6 +96,12 @@ fn stranded(cx: &mut TestAppContext) -> (Shell, PathBuf, String) {
     (shell, root, operation)
 }
 
+/// Chooses Abandon on the stranded save's pending row in `root`.
+fn abandon(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
+    let pending = pending_key(shell, &key(root), "save_ticket", cx);
+    act(shell, &pending, ABANDON, cx);
+}
+
 fn abandons(shell: &Shell, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
     shell.requests(cx, |request| {
         matches!(request.intent, Intent::OperationAbandon { .. })
@@ -113,8 +124,8 @@ fn finished(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> (Ou
 #[gpui_kit::test]
 async fn pressing_enter_twice_on_confirm_submits_one_request(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
-    let (shell, _, _) = stranded(cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    let (shell, root, _) = stranded(cx);
+    abandon(&shell, &root, cx);
     assert!(shell.present("confirm-ok", cx));
 
     let held = shell.backend.hold_job(JobKind::OperationAbandon);
@@ -177,7 +188,7 @@ fn rings(shell: &Shell, cx: &mut TestAppContext) -> Vec<Region> {
 fn region_and_refresh_keys_do_not_escape_the_dialog(cx: &mut TestAppContext) {
     let (shell, root, _) = stranded(cx);
     shell.select(&root, cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    abandon(&shell, &root, cx);
     assert!(shell.present("confirm-ok", cx));
     let before = rings(&shell, cx);
 
@@ -198,8 +209,8 @@ fn region_and_refresh_keys_do_not_escape_the_dialog(cx: &mut TestAppContext) {
 /// Quit still works while a dialog is open.
 #[gpui_kit::test]
 fn quit_works_while_a_dialog_is_open(cx: &mut TestAppContext) {
-    let (shell, _, _) = stranded(cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    let (shell, root, _) = stranded(cx);
+    abandon(&shell, &root, cx);
     assert!(shell.present("confirm-dialog", cx));
 
     shell.keys("secondary-q", cx);
@@ -217,7 +228,7 @@ fn quit_works_while_a_dialog_is_open(cx: &mut TestAppContext) {
 async fn a_stale_preview_is_shown_with_prepare_again(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let (shell, root, operation) = stranded(cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    abandon(&shell, &root, cx);
     assert!(shell.present("confirm-ok", cx));
 
     let other = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
@@ -276,7 +287,7 @@ fn a_busy_preview_offers_retry_which_prepares_again(cx: &mut TestAppContext) {
         LeaseKind::CacheWrite,
     )
     .unwrap();
-    shell.click(("pending-abandon", 0usize), cx);
+    abandon(&shell, &root, cx);
     cx.executor().advance_clock(Duration::from_secs(1));
     shell.run(cx);
 
@@ -340,7 +351,7 @@ async fn an_answer_to_an_earlier_attempt_is_not_shown_after_prepare_again(cx: &m
     let (shell, root, _) = stranded(cx);
 
     // The first attempt is answered `busy`: another call holds the lease.
-    shell.click(("pending-abandon", 0usize), cx);
+    abandon(&shell, &root, cx);
     let lease = RepositoryService::hold_lease_for_testing(
         &root,
         shell.fixture.data_dir(),

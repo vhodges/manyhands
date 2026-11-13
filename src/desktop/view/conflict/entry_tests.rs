@@ -37,6 +37,7 @@ use super::{
 };
 use crate::desktop::{
     model::{
+        activity::rows::{ActivityAction, RowKey},
         navigation::OpenTarget,
         operations::{CONFLICT_BANNER, ResumeOffer, resume_offer},
     },
@@ -47,10 +48,11 @@ use crate::desktop::{
     },
     test_support::fixtures::{Fixture, item_id},
     view::{
+        activity_support::{act, offered, pending_key, refresh, row, until_offered},
         harness::{Shell, key},
         item::OpenedFolders,
         lifecycle::RESOLVE_CONFLICT,
-        operations::request_id,
+        operations::{DISMISS, OPEN_LIFECYCLE, RESUME},
     },
 };
 
@@ -194,20 +196,29 @@ pub(super) fn opened_on(
     })
 }
 
-/// The pending row whose command is `command`, once listed.
-pub(super) async fn row_of(shell: &Shell, command: &str, cx: &mut TestAppContext) -> usize {
-    let command = command.to_owned();
-    let wanted = command.clone();
+/// The pending row of `root` whose command is `command`, once listed: its
+/// key, for the seam.
+pub(super) async fn row_of(
+    shell: &Shell,
+    root: &Path,
+    command: &str,
+    cx: &mut TestAppContext,
+) -> RowKey {
+    let root = key(root);
     shell
-        .until_drawn(cx, "the pending row", move |shell, cx| {
-            shell.rows("pending-command", cx).contains(&wanted)
+        .until_drawn(cx, "the pending row", |shell, cx| {
+            shell.operations(cx).read_with(cx, |operations, _| {
+                operations
+                    .pending_shown()
+                    .into_iter()
+                    .filter(|(listed, _)| *listed == root)
+                    .filter_map(|(_, state)| state.rows().map(|list| list.items.clone()))
+                    .flatten()
+                    .any(|operation| operation.action.as_str() == command)
+            })
         })
         .await;
-    shell
-        .rows("pending-command", cx)
-        .iter()
-        .position(|listed| *listed == command)
-        .expect("listed")
+    pending_key(shell, &root, command, cx)
 }
 
 /// B5, E-7, canned (decision 9): a share of the item stopped on a conflict
@@ -232,6 +243,7 @@ async fn the_banner_offers_review_changes(cx: &mut TestAppContext) {
         share_conflict(),
         cx,
     );
+    let entry = RowKey::Request(share);
     until_present(&shell, "item-conflict", cx).await;
     assert_eq!(
         shell.label("item-conflict", cx).as_deref(),
@@ -241,9 +253,10 @@ async fn the_banner_offers_review_changes(cx: &mut TestAppContext) {
         shell.label("item-review-changes", cx).as_deref(),
         Some(REVIEW_CHANGES)
     );
+    until_offered(&shell, &entry, REVIEW_CHANGES, cx).await;
     assert_eq!(
-        shell.label(request_id(share, "review"), cx).as_deref(),
-        Some(REVIEW_CHANGES)
+        offered(&shell, &entry, REVIEW_CHANGES, cx).map(|offer| offer.action),
+        Some(ActivityAction::Review(share))
     );
 
     shell
@@ -264,7 +277,7 @@ async fn the_banner_offers_review_changes(cx: &mut TestAppContext) {
     shell
         .backend
         .answer_next_conflict_read(canned(operation, vec![canned_path(TICKET, '1')]));
-    shell.click(request_id(share, "review"), cx);
+    act(&shell, &entry, REVIEW_CHANGES, cx);
     until_present(&shell, "conflict-save", cx).await;
     let sheet = opened(cx).expect("the sheet is open again");
     assert_eq!(
@@ -282,8 +295,10 @@ async fn the_banner_offers_review_changes(cx: &mut TestAppContext) {
         share_conflict(),
         cx,
     );
-    assert!(shell.present(request_id(main, "entry"), cx));
-    assert!(!shell.present(request_id(main, "review"), cx));
+    let entry = RowKey::Request(main);
+    refresh(&shell, cx);
+    assert!(row(&shell, &entry, cx).is_some(), "the entry is listed");
+    assert!(offered(&shell, &entry, REVIEW_CHANGES, cx).is_none());
 }
 
 /// B5, real: after a restart this session holds nothing of the local
@@ -297,14 +312,17 @@ async fn a_pending_resolve_row_offers_review_changes_after_restart(cx: &mut Test
     let (shell, root, operation) = local_shell_on(cx, "trunk", |fixture, root| {
         fixture.conflict_locally(root, TICKET, "Mine", "Theirs")
     });
-    let row = row_of(&shell, "context_sync_local", cx).await;
-    until_present(&shell, ("pending-review", row), cx).await;
-    assert_eq!(
-        shell.label(("pending-review", row), cx).as_deref(),
-        Some(REVIEW_CHANGES)
+    let pending = row_of(&shell, &root, "context_sync_local", cx).await;
+    until_offered(&shell, &pending, REVIEW_CHANGES, cx).await;
+    assert!(
+        matches!(
+            offered(&shell, &pending, REVIEW_CHANGES, cx).map(|offer| offer.action),
+            Some(ActivityAction::ReviewPending { .. })
+        ),
+        "the pending row's own Review changes"
     );
 
-    shell.click(("pending-review", row), cx);
+    act(&shell, &pending, REVIEW_CHANGES, cx);
     until_present(&shell, "conflict-save", cx).await;
     let sheet = opened(cx).expect("the sheet is open");
     assert_eq!(
@@ -349,13 +367,19 @@ async fn a_local_synchronization_offers_resume(cx: &mut TestAppContext) {
         assert_eq!(resume_offer(&row), ResumeOffer::Offered, "{action:?}");
     }
 
-    let (shell, _, operation) = local_shell(cx, |fixture, root| {
+    let (shell, root, operation) = local_shell(cx, |fixture, root| {
         fixture.conflict_locally(root, TICKET, "Mine", "Theirs")
     });
-    let row = row_of(&shell, "context_sync_local", cx).await;
-    assert!(shell.present(("pending-resume", row), cx));
-    assert!(!shell.present(("pending-resume-unavailable", row), cx));
-    shell.click(("pending-resume", row), cx);
+    let pending = row_of(&shell, &root, "context_sync_local", cx).await;
+    refresh(&shell, cx);
+    // Offered and enabled, not the unavailable Resume.
+    assert!(
+        offered(&shell, &pending, RESUME, cx).is_some_and(
+            |offer| offer.enabled && matches!(offer.action, ActivityAction::Resume { .. })
+        ),
+        "Resume is offered"
+    );
+    act(&shell, &pending, RESUME, cx);
     let resumed = shell.requests(cx, move |request| {
         matches!(request.intent, Intent::OperationResume { operation_id, .. }
             if operation_id == operation)
@@ -384,11 +408,13 @@ async fn resolve_conflict_opens_the_childs_sheet(cx: &mut TestAppContext) {
         child_conflict(&root, parent, RequestId::new()),
         cx,
     );
+    let entry = RowKey::Request(close);
+    until_offered(&shell, &entry, REVIEW_CHANGES, cx).await;
     assert_eq!(
-        shell.label(request_id(close, "review"), cx).as_deref(),
-        Some(REVIEW_CHANGES)
+        offered(&shell, &entry, REVIEW_CHANGES, cx).map(|offer| offer.action),
+        Some(ActivityAction::Review(close))
     );
-    shell.click(request_id(close, "open"), cx);
+    act(&shell, &entry, OPEN_LIFECYCLE, cx);
     until_present(&shell, "lifecycle-resolve-conflict", cx).await;
     assert_eq!(
         shell.label("lifecycle-resolve-conflict", cx).as_deref(),
@@ -469,7 +495,9 @@ async fn an_applied_resolution_clears_the_banner_and_its_review(cx: &mut TestApp
         id: item_id(TICKET),
     };
     let share = fabricate(&shell, 4, sync(), share_conflict(), cx);
+    let entry = RowKey::Request(share);
     until_present(&shell, "item-review-changes", cx).await;
+    until_offered(&shell, &entry, REVIEW_CHANGES, cx).await;
     shell
         .backend
         .answer_next_conflict_read(canned(operation, vec![canned_path(TICKET, '1')]));
@@ -491,13 +519,16 @@ async fn an_applied_resolution_clears_the_banner_and_its_review(cx: &mut TestApp
         })
         .await;
     assert!(!shell.present("item-review-changes", cx));
-    assert!(!shell.present(request_id(share, "review"), cx));
+    refresh(&shell, cx);
+    assert!(row(&shell, &entry, cx).is_some(), "the entry stays listed");
+    assert!(offered(&shell, &entry, REVIEW_CHANGES, cx).is_none());
 
     // Dismissed, an entry offers its conflict no more.
     let again = fabricate(&shell, 5, sync(), share_conflict(), cx);
-    until_present(&shell, request_id(again, "review"), cx).await;
+    let entry = RowKey::Request(again);
+    until_offered(&shell, &entry, REVIEW_CHANGES, cx).await;
     until_present(&shell, "item-review-changes", cx).await;
-    shell.click(request_id(again, "dismiss"), cx);
+    act(&shell, &entry, DISMISS, cx);
     shell
         .until_drawn(cx, "the banner's Review changes gone", |shell, cx| {
             !shell.present("item-review-changes", cx)
@@ -557,7 +588,12 @@ async fn a_resume_that_settles_the_conflict_clears_its_review(cx: &mut TestAppCo
         shell.present("item-review-changes", cx),
         "another operation"
     );
-    assert!(shell.present(request_id(share, "review"), cx));
+    let entry = RowKey::Request(share);
+    refresh(&shell, cx);
+    assert!(
+        offered(&shell, &entry, REVIEW_CHANGES, cx).is_some_and(|offer| offer.enabled),
+        "another operation"
+    );
 
     fabricate(&shell, 8, resume(SYNCHRONIZATION), published(), cx);
     shell
@@ -566,5 +602,7 @@ async fn a_resume_that_settles_the_conflict_clears_its_review(cx: &mut TestAppCo
         })
         .await;
     assert!(!shell.present("item-review-changes", cx));
-    assert!(!shell.present(request_id(share, "review"), cx));
+    refresh(&shell, cx);
+    assert!(row(&shell, &entry, cx).is_some(), "the entry stays listed");
+    assert!(offered(&shell, &entry, REVIEW_CHANGES, cx).is_none());
 }

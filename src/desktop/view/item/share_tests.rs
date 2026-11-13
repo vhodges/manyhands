@@ -26,11 +26,14 @@ use manyhands::{
 use super::{SHARE_BUTTON, SHARE_NOTE, SHARE_SET_UP, share_tooltip};
 use crate::desktop::{
     model::{
+        activity::{
+            copy::offer_label,
+            rows::{ActivityAction, ActivityRow, Kind, Offer, RowKey},
+        },
         item::SHARE,
         navigation::OpenTarget,
-        operations::{
-            CONFLICT_BANNER, NEEDS_ATTENTION, SHARED, STOPPED_AFTER_PART, STOPPED_BEFORE_SENDING,
-        },
+        operations::{CONFLICT_BANNER, NEEDS_ATTENTION, SHARED},
+        publication::{SyncOffer, SyncOutcome},
         stamp::SettingsPage,
     },
     services::{
@@ -43,9 +46,10 @@ use crate::desktop::{
         fixtures::{Fixture, item_id, ticket_source},
     },
     view::{
+        activity_support::{act, offered, refresh, request, row, share_outcome},
         harness::{Shell, WAIT, key},
         item::pill::{PillState, pill_words},
-        operations::{STOP, STOPPING, request_id},
+        operations::{CANCEL, DISMISS, STOP, STOPPING},
         repositories::tests::support::{choose, items_of, right_click},
         settings::Shown,
         sidebar::{SHARE_MAIN, SHARE_MAIN_SET_UP, SHARING},
@@ -121,6 +125,29 @@ fn repo_syncs(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> usize {
             matches!(&request.intent, Intent::RepoSync { root: asked } if *asked == root)
         })
         .len()
+}
+
+/// The log's entry of the request `id`, as it stands now.
+fn entry(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> ActivityRow {
+    refresh(shell, cx);
+    row(shell, &RowKey::Request(id), cx).expect("the request's entry")
+}
+
+/// The entry of the finished share `id` is listed, and its answer is a
+/// published one: the model's `SyncOutcome`, which the entry's words follow.
+fn says_shared(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) {
+    entry(shell, id, cx);
+    assert_eq!(share_outcome(shell, id, cx), SyncOutcome::Published);
+}
+
+/// Whether the entry of `id` offers no Stop, whatever its words: none that
+/// can be pressed.
+fn no_stop(entry: &ActivityRow) -> bool {
+    entry
+        .row
+        .menu
+        .iter()
+        .all(|offer| !(matches!(offer.action, ActivityAction::Stop(_)) && offer.enabled))
 }
 
 /// With a publication remote, Share comes after Edit, in the tab order
@@ -396,8 +423,9 @@ const POST_STAGES: [(ProgressStage, &str); 10] = [
     (ProgressStage::Stopping, "Stopping at a safe point…"),
 ];
 
-/// Each stage a share or a post reports reads as the design's text, in
-/// the item's pill and in its operation area entry.
+/// Each stage a share or a post reports reads as the design's text in the
+/// item's pill, and its entry in Activity is a working row of the request
+/// at that stage.
 #[gpui_kit::test]
 fn each_stage_shows_its_text_for_share_and_post(cx: &mut TestAppContext) {
     let (shell, root) = shell(true, cx);
@@ -412,11 +440,7 @@ fn each_stage_shows_its_text_for_share_and_post(cx: &mut TestAppContext) {
             Some(words.as_str()),
             "{stage:?}"
         );
-        assert_eq!(
-            shell.label(request_id(share.id, "state"), cx).as_deref(),
-            Some(words.as_str()),
-            "{stage:?}"
-        );
+        assert_staged(&shell, share.id, stage, "Sharing", cx);
     }
     finish(&shell, share.id, cx);
 
@@ -429,12 +453,29 @@ fn each_stage_shows_its_text_for_share_and_post(cx: &mut TestAppContext) {
             Some(words.as_str()),
             "{stage:?}"
         );
-        assert_eq!(
-            shell.label(request_id(post.id, "state"), cx).as_deref(),
-            Some(words.as_str()),
-            "{stage:?}"
-        );
+        assert_staged(&shell, post.id, stage, "Posting", cx);
     }
+}
+
+/// The request `id` is running at `stage`, and its entry in Activity is a
+/// working row whose title opens with `doing`.
+fn assert_staged(
+    shell: &Shell,
+    id: DesktopRequestId,
+    stage: ProgressStage,
+    doing: &str,
+    cx: &mut TestAppContext,
+) {
+    assert!(
+        matches!(
+            request(shell, id, cx).state,
+            RequestState::Running { stage: Some(reached), .. } if reached == stage
+        ),
+        "{stage:?}"
+    );
+    let entry = entry(shell, id, cx).row;
+    assert_eq!(entry.kind, Kind::Working, "{stage:?}");
+    assert!(entry.title.starts_with(doing), "{stage:?}: {}", entry.title);
 }
 
 /// Ends the fabricated request `id` with a success.
@@ -470,15 +511,15 @@ fn a_post_without_a_remote_never_says_sharing(cx: &mut TestAppContext) {
         ProgressStage::Indexing,
     ] {
         reach(&shell, &post, stage, cx);
-        for shown in [
-            shell.label("item-pill", cx),
-            shell.label(request_id(post.id, "state"), cx),
+        for (shown, starts) in [
+            (shell.label("item-pill", cx), "Posting · "),
+            (Some(entry(&shell, post.id, cx).row.title), "Posting"),
         ] {
             let shown = shown.expect("the post's progress is shown");
-            assert!(shown.starts_with("Posting · "), "{stage:?}: {shown}");
+            assert!(shown.starts_with(starts), "{stage:?}: {shown}");
             assert!(!shown.contains("Sharing"), "{stage:?}: {shown}");
         }
-        assert!(!shell.present(request_id(post.id, "stop"), cx), "{stage:?}");
+        assert!(no_stop(&entry(&shell, post.id, cx)), "{stage:?}");
     }
 }
 
@@ -526,35 +567,40 @@ async fn an_accepted_share_offers_stop_and_stopping_signals_it(cx: &mut TestAppC
     let id = shell.requests(cx, |request| {
         matches!(request.intent, Intent::RepoSync { .. })
     })[0];
+    let share = RowKey::Request(id);
+    refresh(&shell, cx);
     assert_eq!(
-        shell.label(request_id(id, "stop"), cx).as_deref(),
-        Some(STOP)
+        offered(&shell, &share, STOP, cx),
+        Some(Offer::new(ActivityAction::Stop(id), STOP, true))
     );
-    assert!(!shell.present(request_id(id, "cancel"), cx));
+    assert!(offered(&shell, &share, CANCEL, cx).is_none());
 
-    shell.click(request_id(id, "stop"), cx);
+    act(&shell, &share, STOP, cx);
     let worker = shell
         .workspace
         .read_with(cx, |workspace, _| workspace.services().worker().clone());
     let job = worker.running_job().expect("the share still runs");
     assert_eq!(job.id, id);
     assert!(job.cancelled, "Stop cancelled its token");
+    refresh(&shell, cx);
     assert_eq!(
-        shell.label(request_id(id, "stop"), cx).as_deref(),
-        Some(STOPPING)
+        offered(&shell, &share, STOPPING, cx),
+        Some(Offer::new(ActivityAction::Stop(id), STOPPING, false)),
+        "Stopping…, which cannot be pressed"
     );
+    assert!(offered(&shell, &share, STOP, cx).is_none());
 
     drop(release);
     shell.until_ended(id, cx).await;
-    assert!(!shell.present(request_id(id, "stop"), cx));
+    assert!(no_stop(&entry(&shell, id, cx)));
     // It stopped at its first safe point, before anything was sent.
+    assert!(matches!(
+        request(&shell, id, cx).state,
+        RequestState::Finished(_, ResultCode::Cancelled, ..)
+    ));
     assert_eq!(
-        shell.label(request_id(id, "code"), cx).as_deref(),
-        Some("cancelled")
-    );
-    assert_eq!(
-        shell.label(request_id(id, "outcome"), cx).as_deref(),
-        Some(STOPPED_BEFORE_SENDING)
+        share_outcome(&shell, id, cx),
+        SyncOutcome::Stopped { completed: false }
     );
 }
 
@@ -565,15 +611,12 @@ async fn a_stopped_share_says_what_completed_and_offers_share(cx: &mut TestAppCo
     cx.executor().allow_parking();
     let (shell, root) = shell(true, cx);
     shell.select(&root, cx);
-    let completed = Effects {
+    let part = Effects {
         integration: IntegrationEffect::Complete,
         ..Effects::not_requested()
     };
     let mut seen = Vec::new();
-    for (effects, text) in [
-        (Effects::not_requested(), STOPPED_BEFORE_SENDING),
-        (completed, STOPPED_AFTER_PART),
-    ] {
+    for (effects, completed) in [(Effects::not_requested(), false), (part, true)] {
         let stopped = Envelope::classified_mutation(
             "repo sync",
             Scope::default(),
@@ -587,7 +630,7 @@ async fn a_stopped_share_says_what_completed_and_offers_share(cx: &mut TestAppCo
             .hold_job_return_answering(JobKind::SynchronizeRepo, stopped);
         match seen.last() {
             None => share_from_menu(&shell, "a", SHARE_MAIN, cx),
-            Some(&previous) => shell.click(request_id(previous, "share"), cx),
+            Some(&previous) => act(&shell, &RowKey::Request(previous), SHARE, cx),
         }
         held.wait_reached();
         let sent = shell.requests(cx, |request| {
@@ -599,12 +642,17 @@ async fn a_stopped_share_says_what_completed_and_offers_share(cx: &mut TestAppCo
         held.release();
         shell.until_ended(id, cx).await;
         assert_eq!(
-            shell.label(request_id(id, "outcome"), cx).as_deref(),
-            Some(text)
+            share_outcome(&shell, id, cx),
+            SyncOutcome::Stopped { completed }
         );
+        refresh(&shell, cx);
         assert_eq!(
-            shell.label(request_id(id, "share"), cx).as_deref(),
-            Some(SHARE)
+            offered(&shell, &RowKey::Request(id), SHARE, cx),
+            Some(Offer::new(
+                ActivityAction::Offer(id, SyncOffer::Share),
+                offer_label(SyncOffer::Share),
+                true
+            ))
         );
         seen.push(id);
     }
@@ -709,7 +757,7 @@ fn the_conflict_banner_says_work_is_safe_and_offers_review_changes(cx: &mut Test
     });
     assert_eq!(others, 0, "the banner offers Review changes only");
 
-    shell.click(request_id(share.id, "dismiss"), cx);
+    act(&shell, &RowKey::Request(share.id), DISMISS, cx);
     assert!(!shell.present("item-conflict", cx));
     assert_ne!(
         shell.label("item-pill", cx).as_deref(),
@@ -738,12 +786,9 @@ fn a_finished_share_says_its_outcome_in_the_pill(cx: &mut TestAppContext) {
     );
     finish_with(&shell, share.id, published, cx);
     assert_eq!(shell.label("item-pill", cx).as_deref(), Some(SHARED));
-    assert_eq!(
-        shell.label(request_id(share.id, "outcome"), cx).as_deref(),
-        Some(SHARED)
-    );
+    says_shared(&shell, share.id, cx);
 
-    shell.click(request_id(share.id, "dismiss"), cx);
+    act(&shell, &RowKey::Request(share.id), DISMISS, cx);
     assert_eq!(shell.label("item-pill", cx), viewing);
 }
 
@@ -812,10 +857,7 @@ fn a_kept_draft_after_a_shared_outcome_reads_draft_kept(cx: &mut TestAppContext)
 
     let share = running(&shell, 1, item_sync(&root), cx);
     finish_with(&shell, share.id, published(), cx);
-    assert_eq!(
-        shell.label(request_id(share.id, "outcome"), cx).as_deref(),
-        Some(SHARED)
-    );
+    says_shared(&shell, share.id, cx);
     assert_eq!(shell.label("item-pill", cx).as_deref(), Some(kept));
 }
 
@@ -853,11 +895,7 @@ async fn a_shared_outcome_leaves_the_pill_once_the_item_reads_otherwise(cx: &mut
         shell.label("item-pill", cx).as_deref(),
         Some(pill_words(PillState::ViewingShared))
     );
-    assert_eq!(
-        shell.label(request_id(share.id, "outcome"), cx).as_deref(),
-        Some(SHARED),
-        "the entry still says it"
-    );
+    says_shared(&shell, share.id, cx);
 }
 
 /// Orchestrator ruling (Task 10b): sharing private work says Shared in
@@ -933,9 +971,5 @@ async fn sharing_private_work_shows_shared_until_the_item_reads_differently(
         })
         .await;
     assert_eq!(shell.label("item-pill", cx).as_deref(), Some(private));
-    assert_eq!(
-        shell.label(request_id(share, "outcome"), cx).as_deref(),
-        Some(SHARED),
-        "the entry still says it"
-    );
+    says_shared(&shell, share, cx);
 }
