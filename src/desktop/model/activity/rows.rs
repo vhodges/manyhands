@@ -138,10 +138,12 @@ pub(crate) struct Group {
     /// S1: its attempt's queue order, `Operations::sent` (N2, N22, R-56);
     /// S8: `RetireEvent.sent`.
     pub sent: Option<u64>,
-    /// S1: its finished outcome (N22); S8 Retired: Success.
+    /// S1: its finished outcome (N22), `None` for an Owed retirement; S8
+    /// Retired: Success.
     pub outcome: Option<Outcome>,
     /// S1: the operation it runs, or its operation when an automatic poll
-    /// runs it (N21).
+    /// runs it (N21); S9: its operation while its lifecycle runs elsewhere
+    /// (N25), so the rows about it stay quiet.
     pub running_operation: Option<String>,
     /// S1: `RequestFacts.followed` (N23).
     pub followed: bool,
@@ -155,7 +157,6 @@ pub(crate) struct Group {
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum Subject {
     /// `Group.operation` as a subject: N22 clause 1's extra match.
-    #[allow(dead_code)] // Used from Task 5
     Operation(String),
     Intent {
         family: Family,
@@ -228,7 +229,6 @@ impl Derived {
 
 /// A row of the log: a `Derived`, the time the app first learned of it, and
 /// its revision, from a log-wide counter (A4).
-#[allow(dead_code)] // Used from Task 5
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct ActivityRow {
     pub at: OffsetDateTime,

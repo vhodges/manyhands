@@ -128,3 +128,57 @@ fn brought_in_is_kept_for_the_session() {
     assert_eq!(seqs, [0, 1, 2, 3]);
     assert_eq!(fx.schedule.brought()[0], brought(0, "a", 2, first, true));
 }
+
+/// Each repository counts the completed attempts applied to it, automatic or
+/// Check now (in flight or not), and no other answer (N22 clause 4).
+#[test]
+fn completed_attempts_are_counted_per_root() {
+    use Disposition::*;
+    let mut fx = Fx::new();
+    fx.add("a", policy(None));
+    fx.add("b", policy(None));
+    let count = |fx: &Fx, name: &str| fx.schedule.completed_attempts(&root(name));
+    assert_eq!(
+        (count(&fx, "a"), count(&fx, "b"), count(&fx, "x")),
+        (0, 0, 0)
+    );
+
+    let done = attempt(&fx, "a", Answer::Completed, &[Current]);
+    fx.schedule.after(&fx.now(), &done).expect("a repository");
+    assert_eq!(count(&fx, "a"), 1, "an automatic completed attempt");
+
+    let failed = attempt(
+        &fx,
+        "a",
+        Answer::Transport(TransportFailure::Unreachable),
+        &[],
+    );
+    fx.schedule.after(&fx.now(), &failed).expect("a repository");
+    fx.schedule
+        .checked_now(&fx.now(), &failed)
+        .expect("a repository");
+    assert_eq!(count(&fx, "a"), 1, "a failed attempt is not counted");
+
+    fx.schedule
+        .checked_now(&fx.now(), &done)
+        .expect("a repository");
+    assert_eq!(count(&fx, "a"), 2, "a completed Check now");
+
+    fx.schedule.mark_queued(&root("a"));
+    fx.schedule
+        .checked_now(&fx.now(), &done)
+        .expect("a repository");
+    assert_eq!(
+        count(&fx, "a"),
+        3,
+        "a completed Check now while a poll is in flight"
+    );
+
+    let missing = attempt(&fx, "x", Answer::Completed, &[Current]);
+    assert!(fx.schedule.after(&fx.now(), &missing).is_none());
+    assert_eq!(
+        (count(&fx, "b"), count(&fx, "x")),
+        (0, 0),
+        "no other repository moves"
+    );
+}

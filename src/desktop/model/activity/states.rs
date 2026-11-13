@@ -18,6 +18,7 @@ use manyhands::{canonical::ItemId, repository::AuthoringKind};
 
 pub(crate) use self::{
     drafts::DraftsInput,
+    items::target_of,
     repositories::{RepositoryInput, ShareState},
 };
 use super::{
@@ -40,7 +41,6 @@ use crate::desktop::model::{
 
 /// The state half of `Inputs`, which `state_rows` reads: the models, the
 /// repositories' facts, and the lookups the Workspace supplies.
-#[allow(dead_code)] // Used from Task 5
 pub(crate) struct StateInputs<'a> {
     pub operations: &'a Operations,
     pub schedule: &'a PollSchedule,
@@ -60,7 +60,6 @@ pub(crate) struct StateInputs<'a> {
 }
 
 /// The rows of S2 to S14, in S order and, within a source, the source's own.
-#[allow(dead_code)] // Used from Task 5
 pub(crate) fn state_rows(inputs: &StateInputs<'_>) -> Vec<Derived> {
     let mut rows = brought_rows(inputs);
     rows.extend(hold_rows(inputs));

@@ -1,6 +1,8 @@
 //! The main window's state and subscriptions. Private implementation children
 //! own its transitions; sibling views render through queries and named actions.
 
+mod activity;
+mod activity_facts;
 mod content;
 mod docks;
 mod find;
@@ -200,6 +202,8 @@ pub(crate) struct Workspace {
         Vec<(super::operations::republish::Republishing, FocusHandle)>,
     /// The titles of what a repository has not shared yet, and their reads.
     share_titles: titles::ShareTitles,
+    /// Activity's log, refreshed at each point that changes a row (A4).
+    activity: activity::ActivityState,
 }
 
 impl Workspace {
@@ -214,12 +218,16 @@ impl Workspace {
         let operations = cx.observe_in(services.operations(), window, |this, _, window, cx| {
             this.operations_changed(window, cx)
         });
-        let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
+        let drafts = cx.observe(services.drafts(), |this, _, cx| {
+            cx.notify();
+            this.refresh_activity(cx);
+        });
         // What the scheduler holds back for the person is drawn in Activity
         // (D6 C3): its entries change with its answers, not with a request.
         cx.observe(services.scheduler(), |this, _, cx| {
             cx.notify();
             this.read_share_titles(cx);
+            this.refresh_activity(cx);
         })
         .detach();
         let focus_lost = cx.on_focus_lost(window, |this, window, cx| this.focus_lost(window, cx));
@@ -389,6 +397,7 @@ impl Workspace {
             stopping_to_republish: Vec::new(),
             republish_deferred: Vec::new(),
             share_titles: Default::default(),
+            activity: Default::default(),
         };
         workspace.load_repositories(cx);
         workspace

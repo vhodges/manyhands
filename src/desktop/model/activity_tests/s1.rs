@@ -286,3 +286,44 @@ pub(super) fn cases() -> Vec<Case> {
     ]);
     cases
 }
+
+/// T4-2: a title that begins with its subject capitalises an item named by
+/// its short code, as Task 4's state rows do ("The ticket Q69G5FG0 needs a
+/// look"); a title's quotes and a repository's own name are not touched.
+#[test]
+fn a_share_title_that_begins_with_its_subject_is_capitalised() {
+    use crate::desktop::model::{
+        activity::copy::share_words,
+        publication::{ShareTarget, SyncOutcome},
+    };
+    for (target, subject, title) in [
+        (
+            ShareTarget::Item,
+            "the ticket Q69G5FG0",
+            "The ticket Q69G5FG0 is the same as the shared copy",
+        ),
+        (
+            ShareTarget::Item,
+            "“Plan”",
+            "“Plan” is the same as the shared copy",
+        ),
+        (
+            ShareTarget::Main,
+            "trunk",
+            "trunk is the same as the shared copy",
+        ),
+    ] {
+        let said = share_words(&SyncOutcome::Current, target, subject, "demo", None, "");
+        assert_eq!(said.title, title, "{subject}");
+    }
+    // The ones that name the repository first keep its name as it is.
+    let said = share_words(
+        &SyncOutcome::NoRemote,
+        ShareTarget::Item,
+        "“Plan”",
+        "demo",
+        None,
+        "",
+    );
+    assert_eq!(said.title, "demo has nowhere to share “Plan” to");
+}

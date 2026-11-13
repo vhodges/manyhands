@@ -1,5 +1,6 @@
 //! GPUI views.
 
+pub(crate) mod activity;
 pub(crate) mod close_draft;
 pub(crate) mod confirm;
 pub(crate) mod conflict;

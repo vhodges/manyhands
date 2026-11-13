@@ -333,7 +333,11 @@ pub(super) fn pending_rows() {
                         AuthoringKind::Ticket,
                     )
                     .button(lifecycle(ItemDtoKind::Ticket), "Still running…", false)
-                    .group(pending_group(false, Some(OPERATION))),
+                    .group(Group {
+                        // N25: the rows about its operation stay quiet.
+                        running_operation: Some(OPERATION.to_owned()),
+                        ..pending_group(false, Some(OPERATION))
+                    }),
                 ],
             )
         },

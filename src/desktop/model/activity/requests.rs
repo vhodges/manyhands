@@ -61,9 +61,28 @@ pub(crate) struct RequestFacts {
     pub superseded: bool,
 }
 
+impl RequestFacts {
+    /// The facts of a request with nothing special about it (or one the model
+    /// has not heard of).
+    pub(crate) fn none() -> Self {
+        Self {
+            stop_offer: StopOffer::NotOffered,
+            shown_offers: Vec::new(),
+            share_words: None,
+            already_finished: false,
+            review: false,
+            recoveries: Vec::new(),
+            resend_waits: false,
+            followed: false,
+            follow_void: false,
+            check_applied: false,
+            superseded: false,
+        }
+    }
+}
+
 /// The request half of `Inputs`, which `request_rows` reads: the model, the
 /// facts of a request, and the lookups the Workspace supplies.
-#[allow(dead_code)] // Used from Task 5
 pub(crate) struct RequestInputs<'a> {
     pub operations: &'a Operations,
     pub requests: &'a dyn Fn(DesktopRequestId) -> RequestFacts,
@@ -75,7 +94,6 @@ pub(crate) struct RequestInputs<'a> {
 
 /// One row for each request this session holds that is not dismissed,
 /// newest first, as the model lists them.
-#[allow(dead_code)] // Used from Task 5
 pub(crate) fn request_rows(inputs: &RequestInputs<'_>) -> Vec<Derived> {
     inputs
         .operations
@@ -293,7 +311,7 @@ impl<'a> Row<'a> {
             SyncOutcome::Busy => self.facts.share_words.as_deref(),
             _ => None,
         };
-        let said = share_words(outcome, &subject, &self.names.repo, holder, failure);
+        let said = share_words(outcome, target, &subject, &self.names.repo, holder, failure);
         Said {
             kind: said.kind,
             title: said.title,
@@ -358,8 +376,10 @@ impl<'a> Row<'a> {
                 target: target_of(intent),
             }),
             sent: self.operations.sent(self.id()),
+            // An Owed retirement didn't finish whatever its envelope said, so
+            // it settles nothing (N22 clause 1; R-51).
             outcome: match &self.request.state {
-                RequestState::Finished(outcome, ..) => Some(*outcome),
+                RequestState::Finished(outcome, ..) if self.owed().is_none() => Some(*outcome),
                 _ => None,
             },
             running_operation,

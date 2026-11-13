@@ -289,9 +289,11 @@ fn needs_attention_counts_and_leads_to_activity(cx: &mut TestAppContext) {
     // A request that did not go wrong awaits nothing.
     finish(&shell, 2, Outcome::Success, cx);
     finish(&shell, 3, Outcome::Blocked, cx);
+    // Two failed requests of one subject count once, as the newer (N2); the
+    // plural text is `attention_text`'s own test.
     assert_eq!(
         read(&shell, attention, cx),
-        Some(("2 need attention".to_owned(), None))
+        Some(("1 needs attention".to_owned(), None))
     );
 
     shell.click(Control::Panel(Activity).id(), cx);

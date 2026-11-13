@@ -20,7 +20,7 @@ use crate::desktop::model::{
     list_view::RETRY,
     operations::{ANOTHER_SHARE_HOLDS, HISTORY_UNRESOLVED_GUIDANCE, stopped_text},
     polling::entry::short_code,
-    publication::{SyncOffer, SyncOutcome},
+    publication::{ShareTarget, SyncOffer, SyncOutcome},
 };
 
 /// A control a request row offers (B2).
@@ -191,6 +191,7 @@ pub(crate) struct ShareWords {
 /// Workspace worked out (R-9); `failure` the failed answer's description.
 pub(crate) fn share_words(
     outcome: &SyncOutcome,
+    target: ShareTarget,
     subject: &str,
     repo: &str,
     holder: Option<&str>,
@@ -201,7 +202,14 @@ pub(crate) fn share_words(
         SyncOutcome::Published => (Sharing, format!("Shared {subject}"), None),
         SyncOutcome::Current => (
             Success,
-            format!("{subject} is the same as the shared copy"),
+            // An item named by its short code begins a title with a capital,
+            // as the state rows do (T4-2); the main branch keeps its name.
+            match target {
+                ShareTarget::Item => {
+                    format!("{} is the same as the shared copy", upper_first(subject))
+                }
+                ShareTarget::Main => format!("{subject} is the same as the shared copy"),
+            },
             None,
         ),
         SyncOutcome::Stopped { completed } => (

@@ -114,6 +114,9 @@ impl Workspace {
                 if let ViewScope::PendingConflicts(root) = stamp.scope {
                     this.pending_conflicts.insert(root, conflicts);
                     cx.notify();
+                    // A conflict that waits changes the row that offers its
+                    // review (N10).
+                    this.refresh_activity(cx);
                 }
             },
         );
@@ -123,6 +126,7 @@ impl Workspace {
     /// Coalesce each batch's changed roots, while keeping prompt/quit order.
     pub(super) fn operations_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.notify();
+        self.refresh_activity(cx);
         // Confirmation observers close their dialogs before a prompt opens.
         // The Kit closes the top dialog only.
         cx.defer_in(window, |this, window, cx| this.show_prompt(window, cx));

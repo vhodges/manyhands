@@ -30,18 +30,18 @@ use crate::desktop::{
     services::ReadResult,
 };
 
-pub(super) const OTHER: &str = "/fixture/other";
+pub(in super::super) const OTHER: &str = "/fixture/other";
 /// A second item, a document, and the short codes the two go by.
-pub(super) const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD0";
-pub(super) const SHORT: &str = "Q69G5FG0";
-pub(super) const DOCUMENT_SHORT: &str = "Q69G5FD0";
+pub(in super::super) const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD0";
+pub(in super::super) const SHORT: &str = "Q69G5FG0";
+pub(in super::super) const DOCUMENT_SHORT: &str = "Q69G5FD0";
 
 /// An operation's ID, as pending rows and requests name it.
-pub(super) const OPERATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+pub(in super::super) const OPERATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 /// What the Workspace hands the state rows, with nothing to say yet: one
 /// repository with a state that makes no row.
-pub(super) struct World {
+pub(in super::super) struct World {
     pub operations: Operations,
     pub schedule: PollSchedule,
     pub repositories: Vec<RepositoryInput>,
@@ -56,7 +56,7 @@ pub(super) struct World {
 }
 
 /// A state with no label, as a case sets it.
-pub(super) fn state(
+pub(in super::super) fn state(
     kind: StateKind,
     action: Option<RowAction>,
     sentence: &[&str],
@@ -73,7 +73,7 @@ pub(super) fn state(
     }
 }
 
-pub(super) fn repository(root: &str, name: &str, state: RepoState) -> RepositoryInput {
+pub(in super::super) fn repository(root: &str, name: &str, state: RepoState) -> RepositoryInput {
     RepositoryInput {
         root: root.to_owned(),
         name: name.to_owned(),
@@ -194,7 +194,7 @@ impl World {
 }
 
 /// Enabled, unpaused, no deadline.
-pub(super) fn policy() -> Policy {
+pub(in super::super) fn policy() -> Policy {
     Policy {
         enabled: true,
         paused: false,
@@ -207,7 +207,7 @@ pub(super) fn policy() -> Policy {
 }
 
 /// The item `ITEM`, as a target the poll reported with `disposition`.
-pub(super) fn target(disposition: Disposition) -> AttemptTarget {
+pub(in super::super) fn target(disposition: Disposition) -> AttemptTarget {
     AttemptTarget {
         item_id: Some(ITEM.parse().unwrap()),
         kind: Some(TargetKind::Ticket),
@@ -217,7 +217,10 @@ pub(super) fn target(disposition: Disposition) -> AttemptTarget {
 }
 
 /// A pending operation of `action`, with an ID, waiting to be resumed.
-pub(super) fn operation(action: OperationAction, family: OperationFamily) -> OperationDto {
+pub(in super::super) fn operation(
+    action: OperationAction,
+    family: OperationFamily,
+) -> OperationDto {
     OperationDto {
         operation_id: Some(OPERATION.to_owned()),
         family,
@@ -236,7 +239,7 @@ pub(super) fn operation(action: OperationAction, family: OperationFamily) -> Ope
 
 /// What one state row must be: its key, kind and words first, then the
 /// rest as the case says.
-pub(super) struct Want {
+pub(in super::super) struct Want {
     key: RowKey,
     kind: Kind,
     title: String,
@@ -251,7 +254,7 @@ pub(super) struct Want {
     group: Group,
 }
 
-pub(super) fn want(key: RowKey, kind: Kind, title: &str) -> Want {
+pub(in super::super) fn want(key: RowKey, kind: Kind, title: &str) -> Want {
     Want {
         key,
         kind,
@@ -268,7 +271,7 @@ pub(super) fn want(key: RowKey, kind: Kind, title: &str) -> Want {
     }
 }
 
-pub(super) fn offer(action: ActivityAction, label: &str, enabled: bool) -> Offer {
+pub(in super::super) fn offer(action: ActivityAction, label: &str, enabled: bool) -> Offer {
     Offer {
         action,
         label: label.to_owned(),
@@ -361,7 +364,7 @@ impl Want {
 }
 
 /// The rows `rows` has, by key, are exactly `wanted`, in order.
-pub(super) fn assert_rows(rows: &[Derived], wanted: &[Want], case: &str) {
+pub(in super::super) fn assert_rows(rows: &[Derived], wanted: &[Want], case: &str) {
     let keys: Vec<&RowKey> = rows.iter().map(|row| &row.key).collect();
     let wanted_keys: Vec<&RowKey> = wanted.iter().map(|want| &want.key).collect();
     assert_eq!(keys, wanted_keys, "{case}: the rows made");
@@ -371,7 +374,7 @@ pub(super) fn assert_rows(rows: &[Derived], wanted: &[Want], case: &str) {
 }
 
 /// The group of a candidate row over `roots`.
-pub(super) fn counted(roots: &[&str]) -> Group {
+pub(in super::super) fn counted(roots: &[&str]) -> Group {
     Group {
         candidate: true,
         roots: roots.iter().map(|root| (*root).to_owned()).collect(),
@@ -380,7 +383,7 @@ pub(super) fn counted(roots: &[&str]) -> Group {
 }
 
 /// The group of a row about `roots` that counts for nothing.
-pub(super) fn quiet(roots: &[&str]) -> Group {
+pub(in super::super) fn quiet(roots: &[&str]) -> Group {
     Group {
         roots: roots.iter().map(|root| (*root).to_owned()).collect(),
         ..Group::default()
@@ -388,6 +391,6 @@ pub(super) fn quiet(roots: &[&str]) -> Group {
 }
 
 /// A key's ID, for the holds and states that name one.
-pub(super) fn key_id() -> manyhands::repository::SharedKeyId {
+pub(in super::super) fn key_id() -> manyhands::repository::SharedKeyId {
     manyhands::repository::SharedKeyId::parse("01ARZ3NDEKTSV4RRFFQ69G5FB1").unwrap()
 }

@@ -2,7 +2,6 @@
 //! GPUI `Hsla` (`discussion`).
 
 pub(crate) mod activity;
-pub(crate) mod attention;
 pub(crate) mod conflict;
 pub(crate) mod create;
 pub(crate) mod discussion;

@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::{AnyElement, ClickEvent, Context, Window, component::WindowExt};
+use gpui_kit::{AnyElement, App, ClickEvent, Context, Window, component::WindowExt};
 
 use super::{button, request_id};
 use crate::desktop::{
@@ -43,7 +43,11 @@ impl Workspace {
     /// The sheet's entry of the finished request `id`, when its answer
     /// stopped on a conflict of an item: its own, or a resume's (M3). Share
     /// main's names none, and is not offered (a known limit).
-    fn entry_of(&self, id: DesktopRequestId, cx: &Context<Self>) -> Option<Entry> {
+    pub(in crate::desktop::view) fn entry_of(
+        &self,
+        id: DesktopRequestId,
+        cx: &App,
+    ) -> Option<Entry> {
         let operations = self.services().operations().read(cx);
         let request = operations.request(id)?;
         if let Some(entry) = Entry::of_request(request, operations) {

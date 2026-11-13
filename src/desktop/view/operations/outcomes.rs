@@ -33,7 +33,7 @@ use super::{
 };
 use crate::desktop::{
     model::{
-        operations::share_text,
+        operations::{may_be_waiting_for, share_text},
         publication::{ShareTarget, SyncOffer, SyncOutcome, SyncResult},
     },
     services::{
@@ -130,6 +130,27 @@ pub(crate) fn shown_offers(
             !(republishing && matches!(offer, SyncOffer::Republish | SyncOffer::StopAndRepublish))
         })
         .collect()
+}
+
+/// What Activity's row of the finished share `id` is told of what only the
+/// Workspace knows (R-9): that a republish of its deleted branch is queued
+/// or running, or the words naming the request that may hold a busy
+/// repository. Any `Some` for a deleted branch means "republish running".
+pub(in crate::desktop::view) fn facts_words(
+    services: &Services,
+    id: DesktopRequestId,
+    result: &SyncResult,
+    cx: &App,
+) -> Option<String> {
+    match result.outcome {
+        SyncOutcome::BranchDeleted => {
+            republishing(services, id, false, cx).then(|| REPUBLISHING.to_owned())
+        }
+        SyncOutcome::Busy => busy_holder(services, id, cx)
+            .and_then(|holder| services.operations().read(cx).request(holder))
+            .map(|holder| may_be_waiting_for(holder.intent.label())),
+        _ => None,
+    }
 }
 
 /// What the finished share `id`, of outcome `result`, says; `None` for a

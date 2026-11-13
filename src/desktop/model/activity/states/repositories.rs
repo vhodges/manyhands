@@ -33,7 +33,6 @@ pub(crate) struct RepositoryInput {
     /// The shared copy's name only (B4, R-48).
     pub remote: Option<String>,
     /// A check of it is queued or running: the log keeps its row (L3).
-    #[allow(dead_code)] // Used from Task 5
     pub checking: bool,
     /// The main branch, when known.
     pub primary: Option<String>,
@@ -50,7 +49,6 @@ pub(crate) struct RepositoryInput {
 
 /// Whether an unshared item's share can be started now (S6): today's attempt
 /// entry's three states.
-#[allow(dead_code)] // Used from Task 5
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum ShareState {
     Ready,

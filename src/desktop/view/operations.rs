@@ -81,7 +81,8 @@ mod review;
 
 pub(in crate::desktop::view) use retire::RetireStep;
 
-use outcomes::{ALREADY_FINISHED, already_finished};
+use outcomes::ALREADY_FINISHED;
+pub(in crate::desktop::view) use outcomes::{already_finished, facts_words, shown_offers};
 pub(crate) use outcomes::{share_result, share_words};
 
 use super::{lifecycle, workspace::Workspace};
@@ -144,7 +145,7 @@ pub(crate) fn state_label(state: &RequestState) -> String {
 /// Whether the lifecycle dialog carries a recovery control as its own
 /// button or guidance (Retry, Prepare again, Resume, Cancel, Inspect,
 /// Check host): the entry of a close or merge leaves it to the dialog.
-fn dialog_owns(control: RecoveryControl) -> bool {
+pub(in crate::desktop::view) fn dialog_owns(control: RecoveryControl) -> bool {
     matches!(
         control,
         RecoveryControl::Retry

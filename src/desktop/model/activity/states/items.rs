@@ -23,7 +23,7 @@ use crate::desktop::model::{
 
 /// A target of the unshared list, as a row's key names it: main, its item,
 /// or its position among those with no ID.
-fn target_of(target: &AttemptTarget, unnamed: &mut u32) -> Target {
+pub(crate) fn target_of(target: &AttemptTarget, unnamed: &mut u32) -> Target {
     match (&target.item_id, target.main) {
         (_, true) => Target::Main,
         (Some(id), false) => Target::Item(id.clone()),

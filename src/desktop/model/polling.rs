@@ -98,6 +98,10 @@ pub(crate) struct PollSchedule {
     changes: BTreeMap<Root, Vec<(Change, OffsetDateTime)>>,
     /// The checks that brought something in, for the session (A5, K-4).
     brought: Vec<Brought>,
+    /// How many completed attempts were applied to each repository, for the
+    /// session (`completed_attempts`). Kept when a repository is removed, so
+    /// a count only grows.
+    completed: BTreeMap<Root, u64>,
 }
 
 /// Registration and reads.
@@ -123,6 +127,13 @@ impl PollSchedule {
 
     pub fn repo(&self, root: &Root) -> Option<&RepoSchedule> {
         self.repos.get(root)
+    }
+
+    /// How many completed attempts, automatic or Check now, were applied to
+    /// `root` this session: what a failed Check now compares to see that a
+    /// later check completed (Activity N22 clause 4).
+    pub fn completed_attempts(&self, root: &Root) -> u64 {
+        self.completed.get(root).copied().unwrap_or_default()
     }
 
     /// The checks that brought something in, in the order they were applied.
@@ -417,6 +428,7 @@ impl PollSchedule {
         let summary = repo.apply(&attempt.root, now, attempt);
         self.unshared_after(&attempt.root, &summary);
         self.note_brought(&attempt.root, &summary, now, true);
+        self.note_completed(attempt);
         Some(summary)
     }
 
@@ -440,7 +452,15 @@ impl PollSchedule {
         // Both branches follow the same rules for the unshared list (rule 5).
         self.unshared_after(&attempt.root, &summary);
         self.note_brought(&attempt.root, &summary, now, false);
+        self.note_completed(attempt);
         Some(summary)
+    }
+
+    /// Counts an applied attempt that completed.
+    fn note_completed(&mut self, attempt: &PollAttempt) {
+        if attempt.answer == Answer::Completed {
+            *self.completed.entry(attempt.root.clone()).or_default() += 1;
+        }
     }
 
     /// Keeps a check that brought something in (A5), at the reading its

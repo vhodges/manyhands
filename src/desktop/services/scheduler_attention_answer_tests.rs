@@ -17,7 +17,11 @@ use super::{
 };
 use crate::desktop::{
     model::polling::{Authority, Phase, Reason},
-    services::{JobKind, prompts::PromptReply, requests::Intent},
+    services::{
+        JobKind,
+        prompts::PromptReply,
+        requests::{DesktopRequestId, Intent},
+    },
     test_support::polling::unlock_request,
 };
 
@@ -206,4 +210,94 @@ async fn awaited_check_only_after_success(cx: &mut TestAppContext) {
     hear(&world, Moment::Succeeded, cx);
     World::quiet(cx).await;
     assert_eq!(checks(&world, cx).len(), 1, "no Check now for the old arm");
+}
+
+/// The newest Check now of `root`, as a request.
+fn last_check(world: &World, root: &str, cx: &mut TestAppContext) -> DesktopRequestId {
+    world.services.operations().read_with(cx, |operations, _| {
+        operations
+            .requests()
+            .iter()
+            .find(|request| matches!(&request.intent, Intent::PollOnce { root: held } if held.to_string_lossy() == root))
+            .map(|request| request.id)
+            .expect("a Check now")
+    })
+}
+
+/// R-58, N4 and N22 clause 4: the scheduler records the failed Check nows
+/// whose answer `check_failed` applied, and notes the repository's completed
+/// attempts when it heard each failure. A code it maps is applied; one it does
+/// not map is not; an unreachable answer for a held repository is not; a
+/// completed Check now after a failure supersedes it.
+#[gpui_kit::test]
+async fn a_failed_check_now_is_recorded_when_its_answer_applies(cx: &mut TestAppContext) {
+    use manyhands::{
+        repository::{OperationId, PollMutationCompletion, PollMutationDto},
+        results::Outcome,
+    };
+    let world = World::new(true, cx);
+    let (a, b) = (world.ssh_repo("a"), world.ssh_repo("b"));
+    for _ in 0..2 {
+        world.backend.answer_poll(world.completed());
+    }
+    world.list(&[a.clone(), b.clone()], cx);
+    World::settle(cx, "both to be polled", |_| {
+        world.backend.polled_roots().len() == 2
+    })
+    .await;
+    World::quiet(cx).await;
+    let applied = |id, cx: &mut TestAppContext| {
+        world
+            .services
+            .scheduler()
+            .read_with(cx, |scheduler, _| scheduler.check_applied(id))
+    };
+    let superseded = |id, cx: &mut TestAppContext| {
+        world
+            .services
+            .scheduler()
+            .read_with(cx, |scheduler, _| scheduler.check_superseded(id))
+    };
+
+    // A mapped code is applied.
+    checked_with(&world, &b, refused(ResultCode::TransportUnavailable), cx).await;
+    let unreachable = last_check(&world, &b, cx);
+    assert!(applied(unreachable, cx), "a mapped code is applied");
+    assert!(!superseded(unreachable, cx), "no check completed since");
+
+    // An unmapped code is not.
+    checked_with(&world, &b, refused(ResultCode::RecoveryRequired), cx).await;
+    let unmapped = last_check(&world, &b, cx);
+    assert!(!applied(unmapped, cx), "an unmapped code applies nothing");
+
+    // A held repository answered only unreachable applies nothing.
+    checked_with(&world, &a, refused(ResultCode::NoSelectedKey), cx).await;
+    assert!(!entries(&world, cx).is_empty(), "the repository is held");
+    let holding = last_check(&world, &a, cx);
+    assert!(applied(holding, cx), "the answer that held it was applied");
+    checked_with(&world, &a, refused(ResultCode::TransportUnavailable), cx).await;
+    let only_unreachable = last_check(&world, &a, cx);
+    assert!(
+        !applied(only_unreachable, cx),
+        "a held repository stays held"
+    );
+
+    // A completed Check now after a failure supersedes it.
+    let completed = Envelope::mutation(
+        "poll once",
+        Scope::default(),
+        Outcome::Success,
+        ResultCode::Ok,
+    )
+    .with_data(MutationDataDto::Poll(PollMutationDto {
+        operation_id: OperationId::new().to_string(),
+        completion: PollMutationCompletion::Completed,
+        completed_at: "2026-11-10T12:00:00Z".to_owned(),
+        next_eligible_at: None,
+        targets: Vec::new(),
+    }));
+    checked_with(&world, &b, completed, cx).await;
+    assert!(superseded(unreachable, cx), "a later check completed");
+    assert!(superseded(unmapped, cx));
+    assert!(!superseded(only_unreachable, cx), "another repository's");
 }

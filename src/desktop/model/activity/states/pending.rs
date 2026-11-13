@@ -143,6 +143,7 @@ fn row(
             // N12 counts nothing without a next action, and N25 nothing
             // while its lifecycle runs.
             candidate: next.is_some() && !still_running,
+            running_operation: id.clone().filter(|_| still_running),
             operation: id,
             roots: vec![root.clone()],
             ..Group::default()

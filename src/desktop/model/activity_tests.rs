@@ -23,6 +23,8 @@ use crate::desktop::{
 
 #[path = "activity_tests/intents.rs"]
 mod intents;
+#[path = "activity_tests/logs.rs"]
+mod logs;
 #[path = "activity_tests/s1.rs"]
 mod s1;
 #[path = "activity_tests/states.rs"]
@@ -346,8 +348,9 @@ fn each_source_makes_its_rows() {
     assert_eq!(row.group.running_operation, Some(op.to_string()));
     assert_eq!(row.detail[2], format!("Operation {op}"));
 
-    // Candidate and outcome follow the envelope, not the "didn't finish"
-    // words; the operation a failure's recovery names is its own (N1).
+    // Candidate follows the envelope, not the "didn't finish" words; an Owed
+    // retirement has no outcome, so it settles nothing (C1; N22 clause 1);
+    // the operation a failure's recovery names is its own (N1).
     for (outcome, code, candidate) in [
         (Outcome::Success, ResultCode::Ok, false),
         (Outcome::Partial, ResultCode::DiscoveryPending, true),
@@ -358,10 +361,7 @@ fn each_source_makes_its_rows() {
             finish(operations, 1, answer(outcome, code));
         });
         let row = row_of(&derive(&operations, &|_| facts(), true), 1).clone();
-        assert_eq!(
-            (row.group.candidate, row.group.outcome),
-            (candidate, Some(outcome))
-        );
+        assert_eq!((row.group.candidate, row.group.outcome), (candidate, None));
     }
     let recovery =
         RecoveryAction::for_operation(RecoveryActionKind::OperationResume, op.to_string(), []);
