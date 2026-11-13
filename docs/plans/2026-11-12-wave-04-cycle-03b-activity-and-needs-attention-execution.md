@@ -24,7 +24,8 @@ reason.
 | 0 | done (no source change; no reviewer, see ruling R0-1) | `f5e01cb9` (ledger); `a5b5ac29` (ticket comment) | yes |
 | 1 | done, review approved first time | code `ec67fea7` (base `a5b5ac29`); ledger `df8fa9cf` | yes |
 | 2 | done, review approved first time | code `879da113` (base `df8fa9cf`); ledger `622dfaa5` | yes |
-| 3 | done, review approved with Minors parked | code `bbaa6663` (base `622dfaa5`); ledger commit follows | yes |
+| 3 | done, review approved with Minors parked | code `bbaa6663` (base `622dfaa5`); ledger `f487e094` | yes |
+| 4 | done, review approved with Minors parked | code `94c7faab` (base `f487e094`); ledger commit follows | yes |
 
 ## Base
 
@@ -237,6 +238,50 @@ re-exports from the old view paths. New files all under 500 lines (largest
   5. A lifecycle Noop, Pending or "Not shared" outcome line is covered only through
      `request_copy_table`, not `request_rows`.
 
+## Task 4
+
+State rows (S2–S14, `model/activity/states*`), `AttentionCause` and `RepoState.cause`
+(`repository_state/cause.rs`), the brought-in history (A5), the retirement events
+(`RetireEvent`, `next_retire_event`, appended by `apply(Finished)` just before the
+dismissal for Retired, Attention, Unreachable and Retry only), `LifecycleRow` (with
+`new`) moved to the model, `each_repository`. The reviewer confirmed that nothing
+reads `PollSchedule`'s retirement lines. U-5: `checked_now`'s in-flight branch
+returns a summary (both branches append). Largest new file 462 lines;
+`polling.rs` grew to 740 (it was over 500) and `operations.rs` to 688.
+
+- Ruling T4-1: the pending row's recovery label is "Abandon" (today's, R-44), not
+  the "Abandon…" the design's A2, B0, P20 and Part G write — R-44 keeps today's
+  labels verbatim — if the owner wants the ellipsis, one constant and the tables
+  change; Tasks 9 and 12 use "Abandon".
+- Ruling T4-2: S4 non-SSH and S14 titles drop the trailing full stop (B's rule: a
+  title never ends with a full stop); an item name that starts a title is
+  capitalised — the design is silent — Task 5 makes B3's titles match.
+- Ruling T4-3 (binds Task 5): `lifecycle_running(root, item)` must also hold true for
+  an in-flight `OperationResume` for a stranded lifecycle, as today's view
+  (`view/operations/resume.rs:51-62`) adds the row's own operation to `held`; Task 5
+  builds the closure from the Close/Promote pending operations of `(root, item)` in
+  `Operations::pending_shown`, and says so in its report — otherwise P22 and
+  `p5_a_close_stranded_at_closing_resumes_after_relaunch` regress.
+- Ruling T4-4 (binds Task 5): the log reads `Group.sent` on `RetireNote` rows to
+  detect a replaced note (T18); the model sets it.
+- State tables were not seen failing before their code (no compile-failure RED); the
+  implementer's mutation checks on the green tree (swapped causes, a removed
+  latest-note rule) failed as expected, and the reviewer judged them adequate. The P8
+  test had a real RED.
+- `check_all_checks_each_repository` failed once in a 13-test combined run (window
+  focus, `raise` returned false) and passed alone twice; treated as the known
+  window-test flake. If it shows again at Task 13, it is a doubt to name.
+- `repository_state_tests.rs`, `polling_tests.rs` and `activity_tests.rs` gained `mod`
+  declarations and `each_source_makes_its_rows` the S2–S14 call: no existing assertion
+  edited, no E-17.
+- **Parked Minors** (carried to the final review): S9's button is the first enabled
+  non-Abandon offer, so a still-running lifecycle with an enabled Review changes would
+  show that instead of the disabled "Still running…" (not reachable with today's
+  data); a `RetireNote` stays shown after a later Retired event for the same item
+  (R-59 allows it); a doc line is duplicated in `repository_state.rs` ~160;
+  `UNNAMED_ITEM` is defined in `copy/states.rs` and `repository_state/words.rs:43`;
+  `states_pending.rs`'s header says "S9 to S14" but covers S9.
+
 ## Tests run
 
 | Checkpoint | Tests run |
@@ -245,6 +290,7 @@ re-exports from the old view paths. New files all under 500 lines (largest
 | Task 1 | `desktop::model::operations` by module: 32 passed, 0 failed (the one module run the plan names). fmt, `cargo check --features desktop` and clippy `-D warnings` clean. |
 | Task 2 | By exact path, 1 passed each: `desktop::model::operations::tests::shares_are_classified_once`; `desktop::model::operations::tests::stages_are_shown`; `desktop::view::operations::tests::state_label_shows_stages`; E-1 `desktop::view::operations::outcomes::give_up_tests::a_give_up_left_waiting_on_unlock_offers_unlock_not_give_up`; E-2 `desktop::view::operations::check_tests::a_running_check_now_reads_its_stage_words`. fmt, check and clippy clean. |
 | Task 3 | By exact path, 1 passed each, red on stubs first: `desktop::model::activity::tests::activity_time_formats`; `...::request_copy_table`; `...::share_copy_table`; `...::each_source_makes_its_rows`. fmt, check and clippy clean. No existing test run or edited. |
+| Task 4 | 1 passed each: `desktop::model::polling::tests::brought::brought_in_is_kept_for_the_session` (red on stubs first); `desktop::model::activity::tests::each_source_makes_its_rows` (S1 + S2–S14); `desktop::model::activity::tests::states::copy::state_copy_table`; `desktop::model::repository_state::tests::causes::each_attention_cause_is_set`; Cycle 03a, unchanged and green: `desktop::model::repository_state::tests::{each_state_and_its_precedence, tooltips_say_the_state_and_the_facts, menu_items_follow_the_state, check_all_takes_each_repository_that_can_check}` and `desktop::view::repositories::tests::{rows_and_list_states, titles_of_what_is_not_shared, the_menu_by_pointer_and_keyboard, check_all_checks_each_repository (one flake in a combined run, then green alone twice), the_more_menu_acts_on_the_chosen_repository}`. fmt, check, clippy clean. |
 
 ## Test edits (E-n)
 
