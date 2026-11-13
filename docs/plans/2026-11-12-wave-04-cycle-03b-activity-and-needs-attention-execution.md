@@ -26,7 +26,8 @@ reason.
 | 2 | done, review approved first time | code `879da113` (base `df8fa9cf`); ledger `622dfaa5` | yes |
 | 3 | done, review approved with Minors parked | code `bbaa6663` (base `622dfaa5`); ledger `f487e094` | yes |
 | 4 | done, review approved with Minors parked | code `94c7faab` (base `f487e094`); ledger `3b377441` | yes |
-| 5 | done, two reviewers, approved after fix round 1; checkpoint comment follows | code `110aff6f` (base `3b377441`), fix `484b0f60`; ledger commit follows | yes |
+| 5 | done, two reviewers, approved after fix round 1; checkpoint 2 posted | code `110aff6f` (base `3b377441`), fix `484b0f60`; ledger `8830224f` | yes |
+| 6 | done, review approved first time, Minors parked | code `35bdd07f` (base `8b960272`); ledger commit follows | yes |
 
 ## Base
 
@@ -331,6 +332,74 @@ The attention table now has 97 rows (the earlier 52 plus the moved E-3 rows plus
 
 - **Deferred Minors** (carried to the final review): (1) a kept row's insert index (`log.rs:104-106`) is the old index applied to the new vector, so with rows that leave beside it a tie can land after a neighbour; (2) `first_kept` is set only when a failure reaches `remaining`; (3) `follow_void` clears the whole latch, including one N22 set; (4) `settles` and `subjects` are O(unsettled failures × rows); (5) hand-indented blocks in `attention_more.rs` and `log.rs` that rustfmt does not reformat, and a duplicated doc comment at `table.rs:11-13`; (6) the pane-title map `ActivityState.titles` never shrinks and closing an item tab triggers no refresh; (7) `facts_words` restates `share_words`, and `flush_failure_items` duplicates `flush_failures`; (8) `count_and_popover_agree` covers three kinds (N3, N12, N13), not an N14 or hold step; (9) the T11 "outcome changed, offers same" case is untested; (10) `checks_applied`, `checks_heard` and `completed` grow for the session.
 
+## Task 6 (actions and the test seam; E-5 part 1)
+
+`ActivityMenuChoice` (`keys.rs`), `Workspace::choose_activity` (re-checked through
+`ActivityLog::still_offered`) and `run_activity_action` (an exhaustive match over the 21
+`ActivityAction` kinds) in `view/activity/actions.rs`; handlers gained an `origin: FocusHandle`
+parameter or were made `pub(in crate::desktop::view)` (`open_lifecycle`, `review_request`,
+`review_pending`, `run_recovery`, `run_share_offer`; reachable: `retire_chosen`, `resume_lifecycle`,
+`row_action`, `publication_remote`, `share_unpublished`). The seam is `view/activity_support.rs`
+(test only). For now every action passes today's control handle (`control_focus_for`,
+`abandon_focus_for`), through `activity_support::origin_of`. TDD: compile-red, then assertion-red
+(a no-op `choose_activity` left a Cancel request Queued), then green.
+
+- Ruling T6-1 (binds Task 9): Task 9 replaces `activity_support::origin_of` with the list's
+  handle, deletes the focus maps (`control_focus`, `abandon_focus`), deletes the kept helpers
+  `operations_tests::recovery_of` and `outcomes_tests::outcome` with the E-7 tests that use them
+  (`dismiss_and_retry_from_the_keyboard...`, `a_recovery_dialog_gives_focus_back...`,
+  `show_it_focuses_the_entry_of_the_possible_holder`), and reruns E-5 and E-6 by name; it also owns the
+  menu's "still marked chosen" step and closing the menu (R5-8). `Share { item: Some }` runs
+  `share_unpublished(Intent::ItemSync)`; `Share { item: None }` runs `share_main(root,
+  publication_remote(root))`.
+- Pruned seven test-only re-exports from `model/operations.rs` (`main_branch_deleted`,
+  `CHOOSE_A_KEY`, `CURRENT`, `KEY_LOCKED`, `NEEDS_IDENTITY`, `NOWHERE_TO_SHARE`,
+  `check_host_text`): only the converted tests used them; Task 7 may restore one — the converted tests
+  now read `SyncOutcome` — none.
+- **Parked Minors:** (1) T12's "gone" offer is not exercised through `choose_activity` directly (only
+  absence, and a disabled offer, are), so `still_offered`'s action and label clauses have no direct
+  test; `act_refused` also passes when the row itself is missing; (2) `RetryFlush` is checked only by
+  a `DraftWrite` read count rising (the earlier version, waiting for the failure to clear, timed out;
+  the reviewer judged the handler identical to the old control's `retry_draft_flush`, so a fixture
+  artefact is likelier; the same pattern is used in `keyboard_tests/drafts/quit.rs:96-101`); (3)
+  `check_tests.rs` now calls `progress_words` and `stage_words` directly rather than reading the row's
+  description; (4) weaker substitutes: `a_lease_held...` asserts the row kind is not Success only;
+  `busy_without_a_known_holder...` asserts no Pending or PendingList row; `a_give_up_left_waiting_on_unlock...`
+  dropped `!present(gave-up)`; (5) `outcomes_tests.rs` 525 → 605, `give_up_tests.rs` 548 → 596,
+  `operations_tests.rs` 892 → 927, `outcomes_route_tests.rs` 377 → 431 lines (not split); (6) the Share
+  and Offer cases assert request counts rather than the sent intent's root, kind and id.
+
+**E-5 part 1: test function lists, before and after** (taken from the implementer's report):
+
+Before and after lists were captured by `fn` name per file. The tests (`#[test]` and `#[gpui_kit::test]` functions) are equal in all six. Helper differences are listed.
+
+- `operations_tests.rs`: tests equal (the six E-5 tests plus the untouched ones). Helpers added: `message`, `pending_commands`, `pending_operations`, `recovery_index`, `recovery_offer`. `recovery_of` kept unchanged (returns the element id) because the E-7 keyboard tests `dismiss_and_retry_from_the_keyboard...` and `a_recovery_dialog_gives_focus_back...` Tab to that control; `recovery_offer` is the label-returning helper the converted test uses.
+- `give_up_tests.rs`: tests equal. Helper `words_of` replaced by `outcome_for(code, record) -> SyncOutcome`; helper `code` now reads the request model; `give_up` presses through `act`.
+- `outcomes_tests.rs`: tests equal (13). Helpers `offered` and `assert_row` rewritten (`assert_row` now takes a `SyncOutcome`); added `outcome_of`, `code_of`, `conflict_next`. `outcome` (drawn words) kept, only for the E-7 test `show_it_focuses_the_entry_of_the_possible_holder`.
+- `outcomes_route_tests.rs`: equal (helpers unchanged). `show_it_focuses...` (E-7) untouched; `a_hostless_comment_stop_opens_the_roots_hosts_page` untouched.
+- `check_tests.rs`: equal; helper `stage_of` added.
+- `record_tests.rs`: equal.
+
+**Removes (drawn-text assertions removed or turned into model reads), per file:**
+
+- `operations_tests.rs`
+  - `launch_refreshes...`: label of `request_id(id,"state")` == "Success" text; `!present(message)`. Replaced by Finished `recovery` empty, row kind Success, not an attention row.
+  - `a_failed_refresh_and_rebuild...`: state label (Error text) once; code label twice; message label (kept as the model's `message()` == `code.message()`); `pending-command` labels "refresh"/"rebuild" (now `pending_commands()` from the model); `pending-empty` text (now the pending list is empty); `message` presence twice and `entry` presence twice (now `row(..)` presence); dismiss label (now `offered(.., DISMISS)`).
+  - `a_lease_held...`: state label vs outcome label; code label; message label (kept via `message()`); message presence; state != Success label. Now: row stays and its kind is not Success.
+  - `a_pending_local_operation...`: labels of `pending-command`, `pending-operation`, `pending-next` (now the pending `OperationDto`), `pending-scope` (now the row's `repo` tag), `pending-empty` text; presence of `pending-resume` / `pending-resume-unavailable` (now `offered("Resume")` enabled).
+  - `resume_finishes...` and `an_abandon_by_a_second_actor...`: presence of `pending-row` only (now `row(..)`); nothing else removed.
+- `give_up_tests.rs`
+  - `giving_up_a_finished_record_says_already_finished`: label of `gave-up` == ALREADY_FINISHED (covered by the existing `gave_up(share) == Some(AlreadyFinished)` assertion and by P5).
+  - `a_give_up_left_waiting_on_unlock...`: `!present(gave-up)` (covered by the existing `gave_up(id) == Some(Resent)`).
+  - `a_stopped_resume_over_an_unsettled_push...`: `stop` label == STOP/STOPPING (now `offered`), state label == "Blocked" and != CANCELLED (now `Finished(Outcome::Blocked, ..)`), `outcome` label not in the stop words (now `share_result(resume)` is None, since a resume is no share), `!present(stop)`.
+  - every `assert_row` word argument (outcome words: KEY_LOCKED, main-branch-deleted text, CHOOSE_A_KEY, check-host text, NEEDS_IDENTITY, STOPPED_BEFORE_SENDING, None) became a `SyncOutcome`.
+- `outcomes_tests.rs`: all outcome words in `assert_row` calls (SHARED, CURRENT, STOPPED_BEFORE_SENDING, NEEDS_ATTENTION, KEY_LOCKED x2, CHOOSE_A_KEY x3, check-host text (named and unnamed), NEEDS_IDENTITY, ANOTHER_SHARE_HOLDS, NOWHERE_TO_SHARE, main_branch_deleted("main"), NOTHING_TO_SHARE, None) are now `share_result(id).outcome`; plus the drawn `named` label read "Check git.example.com before sharing" (its content is the model's `NeedsHost { authority }`, the copy is P5's); `code` labels "item_not_found" and "push_rejected" (now Finished code); `outcome(main) == None` for a failed main share (now `Failed { ItemNotFound, retry: true }`); `present(dismiss)`, `present(recovery_id(id,0))`, `present(Share)` (now `offered`/row menu).
+- `outcomes_route_tests.rs`: `outcome(..) == ANOTHER_SHARE_HOLDS` in `busy_without_a_known_holder...` (now `SyncOutcome::Busy` and `busy_holder == None`); `label("pending-empty")` (now no Pending/PendingList row); `present(Retry)` (now `offered`). Presses by element id became `act`.
+- `check_tests.rs`: the drawn state label "Checking · {text}" (7 stages) and "Running: Saving…" (3 verbs). Now the stage is read from `request(..).state` and the words from the model's `progress_words(Progressing::Check, Some(stage), remote)` (remote read from navigation) and `stage_words(Writing, None)`, with the same literals.
+- `record_tests.rs`: label of `(NOTE,0)` == `record_note_words(Unreadable)` and the non-empty copy assertion; `present((NOTE,1))`. Now the `RowKey::Note(Unreadable)` row exists, appears once, and `act(.., "Dismiss")` removes it.
+
+Keyboard and focus steps were left alone (`Region::Operations.ring_id()` assertions in the pending abandon test and the busy test stay; they stay green because the seam passes today's control handle).
+
 ## Tests run
 
 | Checkpoint | Tests run |
@@ -341,6 +410,7 @@ The attention table now has 97 rows (the earlier 52 plus the moved E-3 rows plus
 | Task 3 | By exact path, 1 passed each, red on stubs first: `desktop::model::activity::tests::activity_time_formats`; `...::request_copy_table`; `...::share_copy_table`; `...::each_source_makes_its_rows`. fmt, check and clippy clean. No existing test run or edited. |
 | Task 4 | 1 passed each: `desktop::model::polling::tests::brought::brought_in_is_kept_for_the_session` (red on stubs first); `desktop::model::activity::tests::each_source_makes_its_rows` (S1 + S2–S14); `desktop::model::activity::tests::states::copy::state_copy_table`; `desktop::model::repository_state::tests::causes::each_attention_cause_is_set`; Cycle 03a, unchanged and green: `desktop::model::repository_state::tests::{each_state_and_its_precedence, tooltips_say_the_state_and_the_facts, menu_items_follow_the_state, check_all_takes_each_repository_that_can_check}` and `desktop::view::repositories::tests::{rows_and_list_states, titles_of_what_is_not_shared, the_menu_by_pointer_and_keyboard, check_all_checks_each_repository (one flake in a combined run, then green alone twice), the_more_menu_acts_on_the_chosen_repository}`. fmt, check, clippy clean. |
 | Task 5 | Each alone, count 1, ok: `desktop::model::activity::tests::logs::attention::attention_counts_each_thing_once` (97 rows) and `...::logs::log::the_log_keeps_times_and_events` (written first, every row red on stubs); `...::s1::a_share_title_that_begins_with_its_subject_is_capitalised`; `desktop::model::polling::tests::brought::completed_attempts_are_counted_per_root` (red first); `desktop::services::scheduler::attention_answer_tests::a_failed_check_now_is_recorded_when_its_answer_applies` (red first, then red for the retry row); `desktop::services::resends::tests::waits_on_says_when_forgetting_would_drop_something`; `desktop::view::activity::tests::count_and_popover_agree`; `desktop::view::activity::tests::refreshes_are_coalesced` (red with coalescing off: 6 derivations vs 4); `desktop::view::operations::resume::activity_tests::a_running_resume_makes_the_stranded_row_still_running`; changed: `each_source_makes_its_rows`, `request_copy_table`, `share_copy_table`, `activity_time_formats`, `brought_in_is_kept_for_the_session`; E-3 `retire_resume_resends_original`; the nine E-4 tests above. fmt, check and clippy clean after each commit. |
+| Task 6 | Each alone, count 1, ok (35 tests): `desktop::view::activity::tests::each_action_runs_its_handler` (new; 21 kinds, T11, T12); the six E-5 `desktop::view::operations::tests::*` tests; the seven `desktop::view::operations::outcomes::give_up_tests::*`; the thirteen `...::outcomes::tests::*`; the six `...::outcomes::route_tests::*` plus the untouched E-7 `show_it_focuses_the_entry_of_the_possible_holder` (it shares the changed helpers; green); `desktop::view::operations::check_tests::a_running_check_now_reads_its_stage_words`; `desktop::view::operations::record_tests::an_unreadable_record_is_reported_once_in_activity`. (Full names in the Task 6 test lists above.) fmt, check and clippy clean. |
 
 ## Test edits (E-n)
 
@@ -355,3 +425,4 @@ The attention table now has 97 rows (the earlier 52 plus the moved E-3 rows plus
 - E-3 (Task 5): the old count `needs_attention`, its module and three test files deleted; cases moved into the Task 5 tables; `retire_resume_resends_original` reads `attention_count()` from an `ActivityLog` built over `derive`. Removed: the model test's real-`DraftRegistry` assertions (covered by an E-4 test).
 - E-4 (Task 5): nine readers of the count, one edit: `needs_attention_counts_and_leads_to_activity` expects "1 needs attention" (N2). The others unedited.
 - Candidates E-17 (`dock_tests/toolbars.rs:323`) and E-18 (`keyboard_tests/shell/support.rs:102`) are still unassigned: Task 10 and Task 11.
+- E-5 part 1 (Task 6): `operations_tests.rs`, `give_up_tests.rs`, `outcomes_tests.rs`, `outcomes_route_tests.rs`, `check_tests.rs`, `record_tests.rs` moved onto the seam; the test-function lists are equal in all six; the removed drawn-text assertions are listed under Task 6 above. No E-17+ outside these files.
