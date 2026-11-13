@@ -31,6 +31,10 @@ pub(crate) struct ActivityLog {
     /// For each failed request, the rows that absorbed it at a refresh of its
     /// current attempt (N1, N4, N18, N19).
     absorbed: BTreeMap<RowKey, BTreeSet<RowKey>>,
+    /// For each failed Check now, whether a row L3 keeps covered its root
+    /// when it was first evaluated this attempt: only such a failure is
+    /// absorbed by a kept row (N19; C9).
+    first_kept: BTreeMap<RowKey, bool>,
     revisions: u64,
     rows: Vec<ActivityRow>,
     /// The rows this refresh kept (L3, L3b): N19's covering row is one.
@@ -129,12 +133,14 @@ impl ActivityLog {
             if before.is_some_and(|row_before| row_before.row.group.sent != row.group.sent) {
                 // A retry or resend under the same ID is a new attempt.
                 self.absorbed.remove(&row.key);
+                self.first_kept.remove(&row.key);
             }
             rows.push(ActivityRow { at, revision, row });
         }
         // L3 and L3b: rows no longer derived that the log keeps.
         self.kept.clear();
-        for old in &before {
+        let mut kept_rows: Vec<(usize, ActivityRow)> = Vec::new();
+        for (index, old) in before.iter().enumerate() {
             let key = &old.row.key;
             if derived_keys.contains(key) {
                 continue;
@@ -154,11 +160,19 @@ impl ActivityLog {
                 self.revisions
             };
             self.kept.insert(key.clone());
-            rows.push(ActivityRow {
-                at: old.at,
-                revision,
-                row,
-            });
+            kept_rows.push((
+                index,
+                ActivityRow {
+                    at: old.at,
+                    revision,
+                    row,
+                },
+            ));
+        }
+        // A kept row goes back where it was, so equal times keep their order
+        // (L7).
+        for (index, row) in kept_rows {
+            rows.insert(index.min(rows.len()), row);
         }
         // L7: newest first; equal times keep derivation order.
         rows.sort_by_key(|row| std::cmp::Reverse(row.at));
@@ -171,6 +185,7 @@ impl ActivityLog {
         let present: BTreeSet<&RowKey> = rows.iter().map(|row| &row.row.key).collect();
         self.settled.retain(|key, _| present.contains(key));
         self.absorbed.retain(|key, _| present.contains(key));
+        self.first_kept.retain(|key, _| present.contains(key));
         for row in &rows {
             // A new attempt: what settled the last one does not settle it.
             if self

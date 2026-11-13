@@ -6,6 +6,8 @@ use super::{intents, states, support, utc};
 
 #[path = "attention.rs"]
 mod attention;
+#[path = "attention_kept.rs"]
+mod attention_kept;
 #[path = "attention_more.rs"]
 mod attention_more;
 #[path = "attention_moved.rs"]

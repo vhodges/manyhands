@@ -95,7 +95,7 @@ fn attention_counts_each_thing_once() {
     let mut rows = first_rows();
     rows.extend(super::attention_more::more_rows());
     rows.extend(super::attention_moved::moved_rows());
-    rows.extend(super::attention_moved::moved_rows());
+    rows.extend(super::attention_kept::kept_rows());
     super::scene::play("attention_counts_each_thing_once", rows);
 }
 

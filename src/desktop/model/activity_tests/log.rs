@@ -8,7 +8,7 @@ use manyhands::results::ResultCode;
 use super::{
     attention::{cant_reach, locked_by, repository_of, sorted, waiting},
     scene::{Row, after, key_hold, pending_row, repo, req, row, step},
-    states::world::{OPERATION, key_id},
+    states::world::{OPERATION, OTHER, key_id},
     support::ROOT,
 };
 use crate::desktop::{
@@ -220,6 +220,30 @@ fn kept() -> Vec<Row> {
                     s.world.repositories.clear();
                 }, vec![])
                 .check(|s| assert!(!s.has(&repo(ROOT)))),
+            ],
+        ),
+        // L7: rows with equal times keep derivation order, a row that becomes
+        // kept included.
+        row(
+            "T5 order: a row that becomes kept keeps its place among equal times (L7)",
+            vec![
+                step(
+                    "two Can't reach rows, seen together",
+                    |s| {
+                        s.world.repositories = vec![cant_reach(ROOT), cant_reach(OTHER)];
+                    },
+                    sorted(vec![repo(ROOT), repo(OTHER)]),
+                )
+                .check(|s| assert_eq!(s.shown(), vec![repo(ROOT), repo(OTHER)])),
+                step(
+                    "the first repository checks and its row is kept: it stays first",
+                    move |s| {
+                        checking(s);
+                        s.world.repositories.push(cant_reach(OTHER));
+                    },
+                    sorted(vec![repo(ROOT), repo(OTHER)]),
+                )
+                .check(|s| assert_eq!(s.shown(), vec![repo(ROOT), repo(OTHER)])),
             ],
         ),
         row(

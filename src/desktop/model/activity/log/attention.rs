@@ -98,6 +98,14 @@ impl ActivityLog {
             {
                 continue;
             }
+            // What N19 may absorb: whether a kept row covers it as it is
+            // first evaluated (C9), set once for the attempt.
+            if group.check {
+                let kept = rows
+                    .iter()
+                    .any(|other| covers(other, &group.roots) && self.kept.contains(&other.row.key));
+                self.first_kept.entry(key.clone()).or_insert(kept);
+            }
             remaining.push(row);
         }
 
@@ -213,7 +221,8 @@ impl ActivityLog {
                 .absorbed
                 .get(key)
                 .is_some_and(|before| covering.iter().any(|row| before.contains(row)));
-            let kept = covering.iter().any(|row| self.kept.contains(row));
+            let kept = self.first_kept.get(key) == Some(&true)
+                && covering.iter().any(|row| self.kept.contains(row));
             if !covering.is_empty() && (group.check_applied || kept || held) {
                 return Some(covering);
             }

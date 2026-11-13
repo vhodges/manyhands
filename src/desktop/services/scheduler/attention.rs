@@ -91,6 +91,7 @@ impl Scheduler {
             _ => None,
         };
         // Activity reads what was heard and what was applied (N4, N22).
+        self.checks_applied.remove(&request);
         self.checks_heard.insert(
             request,
             (root.clone(), self.schedule.completed_attempts(root)),

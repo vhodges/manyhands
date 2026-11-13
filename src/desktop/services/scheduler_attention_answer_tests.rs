@@ -270,6 +270,36 @@ async fn a_failed_check_now_is_recorded_when_its_answer_applies(cx: &mut TestApp
     let unmapped = last_check(&world, &b, cx);
     assert!(!applied(unmapped, cx), "an unmapped code applies nothing");
 
+    // A retry keeps its request ID: its new answer is recorded afresh, so an
+    // earlier applied answer does not stand for one that applies nothing.
+    let gate = world
+        .backend
+        .inner()
+        .hold_job_return_answering(JobKind::PollOnce, refused(ResultCode::RecoveryRequired));
+    assert!(world.services.worker().retry(unreachable, None));
+    World::settle(cx, "the retry to be taken", |_| {
+        world.services.worker().in_flight(|_| true)
+    })
+    .await;
+    gate.release();
+    World::settle(cx, "the retry to end", |cx| {
+        !world.services.worker().in_flight(|_| true)
+            && world.services.operations().read_with(cx, |operations, _| {
+                operations.request(unreachable).is_some_and(|request| {
+                    matches!(
+                        request.state,
+                        crate::desktop::services::requests::RequestState::Finished(..)
+                    )
+                })
+            })
+    })
+    .await;
+    World::quiet(cx).await;
+    assert!(
+        !applied(unreachable, cx),
+        "the retried answer applied nothing: the old record is gone"
+    );
+
     // A held repository answered only unreachable applies nothing.
     checked_with(&world, &a, refused(ResultCode::NoSelectedKey), cx).await;
     assert!(!entries(&world, cx).is_empty(), "the repository is held");

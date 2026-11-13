@@ -148,3 +148,7 @@ impl Workspace {
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "resume_tests.rs"]
 pub(in crate::desktop::view::operations) mod tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "resume_activity_tests.rs"]
+mod activity_tests;
