@@ -83,19 +83,6 @@ fn fits(shell: &Shell, cx: &mut TestAppContext) -> Vec<ActivityRow> {
     );
 
     let rows = drawn(shell, cx);
-    let height = shell.frame(cx, |window, _| {
-        window.find("operation-area").bounds().size.height
-    });
-    eprintln!(
-        "DEBUG {} rows, list {width:?} x {height:?} {:?}",
-        rows.len(),
-        rows.iter()
-            .map(|r| format!("{:?}", r.row.key)
-                .chars()
-                .take(30)
-                .collect::<String>())
-            .collect::<Vec<_>>()
-    );
     let longest = rows
         .iter()
         .map(|row| message_of(&row.row).len() + row.row.repo.as_ref().map_or(0, String::len))
