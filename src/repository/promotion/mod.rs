@@ -215,6 +215,8 @@ pub enum PromotionBlocker {
     RemoteContextDeleted,
     HistoryUnknown,
     DocumentInvalidAfterIntegration,
+    /// Last, so the stored blocker masks keep their bits.
+    HistoryUnresolved,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -357,13 +359,123 @@ pub enum DocumentPromotionPreflight {
     Blocked { blockers: Vec<PromotionBlocker> },
 }
 
+/// What the mutation boundary reads of a parent record: a lifecycle parent
+/// usually has no journal row, so this is where it stands. It holds
+/// IDs, OIDs, the consent's digest and fixed categories.
+pub(super) struct ParentView<B> {
+    pub(super) step: lifecycle::ParentStep,
+    /// What ended the record, when a consent refusal did.
+    pub(super) refusal: Option<lifecycle_record::Refusal<B>>,
+    /// The digest the record was begun with, which the same operation ID
+    /// is called with again.
+    pub(super) expectation: [u8; 32],
+    pub(super) item_id: ItemId,
+    /// The closure checkpoint the record holds. Its ref may not have moved
+    /// while the step is `closing`.
+    pub(super) checkpoint: Option<Oid>,
+    pub(super) integration: Option<Oid>,
+    /// How that commit reached primary: `already_contained` is a context
+    /// primary held already.
+    pub(super) integration_kind: Option<record::IntegrationKind>,
+    pub(super) publication: Option<record::PublicationCategory>,
+    /// The parent's own flag, which `cancel_document_promotion` or
+    /// `cancel_ticket_closure` sets as well as `request cancel`.
+    pub(super) cancel_requested: bool,
+    /// The children it has bound, either of which may hold the reservation.
+    pub(super) children: [Option<OperationId>; 2],
+}
+
+impl<B> ParentView<B> {
+    /// The same view, with a refusal's blockers as `blocker` gives them.
+    pub(super) fn of_blockers<C>(self, blocker: impl Fn(B) -> C) -> ParentView<C> {
+        use lifecycle_record::Refusal;
+        ParentView {
+            step: self.step,
+            refusal: self.refusal.map(|refusal| match refusal {
+                Refusal::Blocked(blockers) => {
+                    Refusal::Blocked(blockers.into_iter().map(blocker).collect())
+                }
+                Refusal::ExternalChange => Refusal::ExternalChange,
+                Refusal::ReconfirmationRequired => Refusal::ReconfirmationRequired,
+            }),
+            expectation: self.expectation,
+            item_id: self.item_id,
+            checkpoint: self.checkpoint,
+            integration: self.integration,
+            integration_kind: self.integration_kind,
+            publication: self.publication,
+            cancel_requested: self.cancel_requested,
+            children: self.children,
+        }
+    }
+}
+
+/// The parent record of `operation`, of the lifecycle `R` is the record of,
+/// when there is one.
+pub(super) fn lifecycle_parent<R, B>(
+    service: &RepositoryService,
+    root: &Path,
+    operation: OperationId,
+) -> Result<Option<ParentView<B>>, RepositoryError>
+where
+    R: lifecycle_record::ParentRecord<Refusal = lifecycle_record::Refusal<B>>,
+    B: Clone,
+{
+    crate::repository::remote::state::with_transaction(service, root, |tx, repository_id| {
+        Ok(
+            lifecycle_record::read_record::<R>(tx, repository_id, operation)?.map(|parent| {
+                ParentView {
+                    step: parent.step(),
+                    refusal: parent.refusal().cloned(),
+                    expectation: parent.expectation_bytes(),
+                    item_id: parent.item_id().clone(),
+                    checkpoint: parent.written_checkpoint(),
+                    integration: parent.integration_oid(),
+                    integration_kind: parent.integration_kind(),
+                    publication: parent.publication(),
+                    cancel_requested: parent.cancel_requested(),
+                    children: [parent.context_sync_id(), parent.primary_sync_id()],
+                }
+            }),
+        )
+    })
+}
+
+/// The operation of the item's unfinished parent record of the lifecycle `R`
+/// is the record of, in the repository `repository_id`, when a new request
+/// could not supersede it (decision 33). It is a read, made in the caller's
+/// read session.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(super) fn unfinished_holder<R: lifecycle_record::ParentRecord>(
+    db: &rusqlite::Connection,
+    repository_id: i64,
+    item: &ItemId,
+) -> Result<Option<OperationId>, crate::repository::ReadError> {
+    Ok(
+        lifecycle_record::unfinished_record::<R>(db, repository_id, item)?
+            .filter(|parent| !parent.supersedable())
+            .map(|parent| parent.operation_id()),
+    )
+}
+
 impl RepositoryService {
     pub fn promote_document<P: SessionCredentialProvider>(
         &self,
         request: PromoteDocumentRequest,
         session: &mut SessionCredentials<P>,
     ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
-        run::promote(self, request, session)
+        run::promote(self, request, session, None, &mut run::Unobserved)
+    }
+    /// `promote_document`, stopping at each safe point when `probe` says so,
+    /// and telling `progress` of its steps (D5 decision 11).
+    pub(super) fn promote_document_observed<P: SessionCredentialProvider>(
+        &self,
+        request: PromoteDocumentRequest,
+        session: &mut SessionCredentials<P>,
+        probe: lifecycle::CancellationProbe,
+        progress: &mut dyn run::RunObserver,
+    ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
+        run::promote(self, request, session, Some(probe), progress)
     }
     pub fn cancel_document_promotion(
         &self,

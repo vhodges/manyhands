@@ -1,9 +1,10 @@
 ---
+id: 01M5F2ST1ZX3GWBPHRKBXP7937
+item_id: 01M5B0Z6PNP7X4WH4JV3N0VQJ6
+created_at: 2026-10-21T11:16:03Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5F2ST1ZX3GWBPHRKBXP7937"
-item_id: "01M5B0Z6PNP7X4WH4JV3N0VQJ6"
-created_at: "2026-10-21T11:16:03Z"
 ---
 
 ## Owner approval and authorized delivery

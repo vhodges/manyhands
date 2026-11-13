@@ -31,7 +31,7 @@ use super::{CANCEL, REFUSED, UNLOCK, label_for};
 use crate::desktop::{
     keys::Quit,
     services::{
-        JobKind,
+        JobKind, ReadKind,
         prompts::{PromptReply, PromptRequest},
         requests::{Intent, Lane, RequestState},
     },
@@ -401,6 +401,100 @@ async fn closing_the_window_answers_an_open_prompt_unavailable(cx: &mut TestAppC
     .await;
 }
 
+/// Quitting saves an unsaved draft first: an open prompt's dialog closes,
+/// so nothing stands in front of Quit now, but the prompt is held, not
+/// answered. When the drafts are saved and quitting proceeds, it is
+/// answered `Unavailable`.
+#[gpui_kit::test]
+async fn a_prompt_held_while_drafts_save_is_answered_once_quitting_proceeds(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let shell = Shell::open(Fixture::new(), cx);
+    shell.unsaved_draft(cx).await;
+    let mut asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+
+    shell.visual(cx).dispatch_action(Quit);
+    shell.run(cx);
+    let phase = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.quit_phase());
+    assert_eq!(phase, QuitPhase::SavingDrafts);
+    assert!(!shell.present("passphrase-dialog", cx));
+    assert!(shell.present("quit-now", cx));
+    assert!(asked.waiting(), "the prompt is held, not answered");
+
+    let _ = gate.send(());
+    shell.run(cx);
+    let phase = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.quit_phase());
+    assert_eq!(phase, QuitPhase::Quit);
+    assert_eq!(asked.answered(), "unavailable");
+}
+
+/// A prompt that arrives while drafts save is held: no dialog, no answer,
+/// until quitting proceeds and answers it `Unavailable`.
+#[gpui_kit::test]
+async fn a_prompt_arriving_while_drafts_save_is_held(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let shell = Shell::open(Fixture::new(), cx);
+    shell.unsaved_draft(cx).await;
+    let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+    shell.visual(cx).dispatch_action(Quit);
+    shell.run(cx);
+
+    let mut asked = ask(&shell, "primary", cx);
+    let operations = shell.operations(cx);
+    wait_until(cx, &operations, |operations, _| operations.has_prompt()).await;
+    shell.run(cx);
+    assert!(asked.waiting(), "the prompt is held, not answered");
+    assert!(!shell.present("passphrase-dialog", cx));
+
+    let _ = gate.send(());
+    shell.run(cx);
+    assert_eq!(asked.answered(), "unavailable");
+}
+
+/// Quitting abandoned: with `drafts/` read-only the flush fails and the
+/// dialog asks; Cancel shows the prompt held meanwhile again, unanswered,
+/// and it is still the prompt's own to answer.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn a_prompt_held_while_drafts_save_shows_again_on_cancel(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+
+    cx.executor().allow_parking();
+    let shell = Shell::open(Fixture::new(), cx);
+    shell.unsaved_draft(cx).await;
+    let mut asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    let folder = shell.fixture.data_dir().join("drafts");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    shell.visual(cx).dispatch_action(Quit);
+    shell.run(cx);
+    assert!(shell.present("drafts-not-saved-message", cx));
+    assert!(!shell.present("passphrase-dialog", cx));
+    assert!(asked.waiting(), "the prompt is held through the dialog");
+
+    shell.click("drafts-not-saved-cancel", cx);
+    shell.run(cx);
+    assert!(!shell.present("drafts-not-saved-message", cx));
+    assert!(shell.present("passphrase-dialog", cx));
+    assert!(asked.waiting(), "Cancel shows the prompt, unanswered");
+    let phase = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.quit_phase());
+    assert_eq!(phase, QuitPhase::Running);
+
+    shell.keys("escape", cx);
+    assert_eq!(asked.answered(), "cancelled");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
 /// A prompt that arrives once quitting has begun is answered
 /// `Unavailable` at once, with no dialog.
 #[gpui_kit::test]
@@ -589,4 +683,107 @@ async fn a_finished_confirmation_and_a_prompt_in_one_batch_close_only_the_confir
     ));
     assert!(!shell.present("passphrase-dialog", cx));
     next.release();
+}
+
+/// A prompt raised while a share of repository `a` runs names what
+/// waits, and Cancel reads Not now, with a note on what it leaves; Not
+/// now answers `Cancelled`. A prompt with no share waiting names none.
+#[gpui_kit::test]
+async fn the_dialog_names_what_waits_and_says_not_now(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.publish_over_ssh(&root);
+    let shell = Shell::open(fixture, cx);
+
+    // Nothing waits: no share is named.
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    assert!(!shell.present("passphrase-subtitle", cx));
+    assert!(!shell.present("passphrase-note", cx));
+    shell.click("passphrase-cancel", cx);
+    assert_eq!(asked.answered(), "cancelled");
+
+    let held = shell.backend.hold_job(JobKind::SynchronizeRepo);
+    let id = shell.workspace.read_with(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::RepoSync { root: root.clone() },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    held.wait_reached();
+    shell
+        .until(cx, move |operations| {
+            operations
+                .request(id)
+                .is_some_and(|request| matches!(request.state, RequestState::Running { .. }))
+        })
+        .await;
+
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    assert_eq!(
+        shell.label("passphrase-subtitle", cx).as_deref(),
+        Some("Sharing a is waiting for your passphrase.")
+    );
+    assert_eq!(
+        shell.label("passphrase-note", cx).as_deref(),
+        Some(
+            "If you choose Not now, your work stays saved on this computer. \
+             Unlock later from the waiting share, or stop trying to share it."
+        )
+    );
+    assert_eq!(CANCEL, "Not now");
+    assert_eq!(
+        shell.label("passphrase-cancel", cx).as_deref(),
+        Some(CANCEL)
+    );
+    shell.click("passphrase-cancel", cx);
+    assert_eq!(asked.answered(), "cancelled");
+    assert!(!shell.present("passphrase-dialog", cx));
+
+    held.release();
+    shell.until_ended(id, cx).await;
+}
+
+/// A prompt raised while a Check now runs is not a share's: the dialog
+/// names no share and keeps the plain Cancel (Check now may prompt, and
+/// "Sharing a is waiting" would be wrong for it).
+#[gpui_kit::test]
+async fn a_prompt_for_a_check_now_names_no_share(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.publish_over_ssh(&root);
+    let shell = Shell::open(fixture, cx);
+
+    let held = shell.backend.hold_job(JobKind::PollOnce);
+    let id = shell.workspace.read_with(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::PollOnce { root: root.clone() },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    held.wait_reached();
+    shell
+        .until(cx, move |operations| {
+            operations
+                .request(id)
+                .is_some_and(|request| matches!(request.state, RequestState::Running { .. }))
+        })
+        .await;
+
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    assert!(!shell.present("passphrase-subtitle", cx));
+    assert!(!shell.present("passphrase-note", cx));
+    shell.click("passphrase-cancel", cx);
+    assert_eq!(asked.answered(), "cancelled");
+
+    held.release();
+    shell.until_ended(id, cx).await;
 }

@@ -16,6 +16,9 @@ mod cache_loss;
 #[path = "mutation_bridges/conformance.rs"]
 mod conformance;
 
+#[path = "mutation_bridges/context.rs"]
+mod context;
+
 #[path = "mutation_bridges/folder.rs"]
 mod folder;
 

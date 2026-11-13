@@ -10,8 +10,7 @@ use std::{
 };
 
 use gpui_kit::{
-    Entity, FocusHandle, TestAppContext, component::input::InputState, px, size,
-    test::TestWindowExt,
+    Entity, FocusHandle, TestAppContext, component::input::InputState, px, test::TestWindowExt,
 };
 use manyhands::{
     canonical::CONFIG_PATH,
@@ -48,7 +47,7 @@ pub(super) fn settings(fixture: Fixture, cx: &mut TestAppContext) -> Shell {
 pub(super) fn page(shell: &Shell, cx: &mut TestAppContext) -> Entity<RepositoriesPage> {
     let host = shell
         .workspace
-        .read_with(cx, |workspace, _| workspace.settings.clone());
+        .read_with(cx, |workspace, _| workspace.settings().clone());
     host.read_with(cx, |host, _| host.repositories.clone())
         .expect("the Repositories page is made")
 }
@@ -247,8 +246,8 @@ async fn create_in_an_empty_directory_previews_nothing_then_creates_and_refreshe
     shell.until_ended(id, cx).await;
     assert_eq!(finished(&shell, id, cx), (Outcome::Success, ResultCode::Ok));
     assert!(root.join(CONFIG_PATH).is_file());
-    assert_eq!(registered(&shell), [key(&root)]);
     until_onboarded(&shell, &root, cx).await;
+    assert_eq!(registered(&shell), [key(&root)]);
     assert_eq!(listed(&shell, cx), [key(&root)]);
     assert_eq!(background_refreshes(&shell, &root, cx), 1);
     assert!(!shell.present("confirm-dialog", cx));
@@ -295,8 +294,8 @@ async fn adding_a_repository_without_identity_asks_for_one_and_keeps_it(cx: &mut
     let local = config.open_level(git2::ConfigLevel::Local).unwrap();
     assert_eq!(local.get_string("user.name").unwrap(), ada().name);
     assert_eq!(local.get_string("user.email").unwrap(), ada().email);
-    assert_eq!(registered(&shell), [key(&root)]);
     until_onboarded(&shell, &root, cx).await;
+    assert_eq!(registered(&shell), [key(&root)]);
     assert_eq!(background_refreshes(&shell, &root, cx), 1);
 
     // Checked again, it is registered.
@@ -519,8 +518,8 @@ async fn pressing_confirm_twice_creates_one_repository(cx: &mut TestAppContext) 
         .filter(|kind| *kind == JobKind::RepoCreate)
         .count();
     assert_eq!(ran, 1);
-    assert_eq!(registered(&shell), [key(&root)]);
     until_onboarded(&shell, &root, cx).await;
+    assert_eq!(registered(&shell), [key(&root)]);
     assert_eq!(background_refreshes(&shell, &root, cx), 1);
 }
 
@@ -589,8 +588,8 @@ async fn a_partial_create_is_completed_by_retry_under_the_same_request(cx: &mut 
         operations.request(id).unwrap().request_id == request_id
     });
     assert!(same, "Retry is the same request to the library");
-    assert_eq!(registered(&shell), [key(&root)]);
     until_onboarded(&shell, &root, cx).await;
+    assert_eq!(registered(&shell), [key(&root)]);
     assert_eq!(background_refreshes(&shell, &root, cx), 1);
 }
 
@@ -647,7 +646,7 @@ pub(super) fn control_focus(shell: &Shell, id: &str, cx: &mut TestAppContext) ->
 #[gpui_kit::test]
 fn a_form_control_below_the_fold_is_scrolled_into_view(cx: &mut TestAppContext) {
     let shell = settings(Fixture::new(), cx);
-    shell.visual(cx).simulate_resize(size(px(1440.), px(640.)));
+    shell.resize_keeping_content(1440., 640., cx);
     shell.run(cx);
     let bounds = |shell: &Shell, cx: &mut TestAppContext| {
         shell.frame(cx, |window, _| {

@@ -1,9 +1,10 @@
 ---
+id: 01M5D4V34D1TJC8DJF1GF9X6BR
+item_id: 01M5CVB2DTK8EQKG3FMYMWNTMX
+created_at: 2026-10-20T17:13:14Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5D4V34D1TJC8DJF1GF9X6BR"
-item_id: "01M5CVB2DTK8EQKG3FMYMWNTMX"
-created_at: "2026-10-20T17:13:14Z"
 ---
 
 Review-ready on local gates. The work is in commits `e919b1e`,

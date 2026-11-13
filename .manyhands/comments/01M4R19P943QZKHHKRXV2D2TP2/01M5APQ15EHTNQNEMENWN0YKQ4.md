@@ -1,9 +1,10 @@
 ---
+id: 01M5APQ15EHTNQNEMENWN0YKQ4
+item_id: 01M4R19P943QZKHHKRXV2D2TP2
+created_at: 2026-10-19T18:27:52Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5APQ15EHTNQNEMENWN0YKQ4"
-item_id: "01M4R19P943QZKHHKRXV2D2TP2"
-created_at: "2026-10-19T18:27:52Z"
 ---
 
 ## First implementation batch — Tasks 0–2

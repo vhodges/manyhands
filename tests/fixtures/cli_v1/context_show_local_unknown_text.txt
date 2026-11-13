@@ -1,0 +1,4 @@
+--- stderr
+error: No operation has that ID.
+code: operation_not_found
+--- exit 2

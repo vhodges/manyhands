@@ -595,6 +595,7 @@ fn published(value: CommentPublicationState) -> Result<git2::Oid, FixtureError> 
                     reason: CommentPublicationPendingReason::Synchronization(error),
                 } => match *error {
                     SynchronizationError::HistoryUnknown => 112,
+                    SynchronizationError::HistoryUnresolved => 119,
                     SynchronizationError::RecoveryRequired => 101,
                     SynchronizationError::ExternalChange => 116,
                     SynchronizationError::ConflictPending { .. } => 117,
@@ -968,6 +969,7 @@ fn other_context_busy() -> Result<(), FixtureError> {
             SynchronizationError::PollYielding => 110,
             SynchronizationError::RemoteContextDeleted => 111,
             SynchronizationError::HistoryUnknown => 112,
+            SynchronizationError::HistoryUnresolved => 119,
             SynchronizationError::MergeRequired { .. } => 113,
             SynchronizationError::PushRejected => 114,
             SynchronizationError::ExternalResolutionRequired { .. } => 115,

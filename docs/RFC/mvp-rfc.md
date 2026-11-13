@@ -4,6 +4,8 @@ date: 2026-10-05
 status: approved
 author: "Vince Hodges <vhodges@gmail.com> && OpenCode"
 manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4JAA3DG00069R3J4WQV"
 ---
 
 # MVP/Dogfooding Architecture RFC
@@ -13,7 +15,8 @@ manyhands_managed: true
 This RFC defines the architectural direction, consent boundaries, and delivery
 governance for the Manyhands collaboration-complete dogfooding release. It is
 the umbrella RFC for the approved product requirements in
-[`docs/PRD/mvp.md`](../PRD/mvp.md), version 0.5.
+[`docs/PRD/mvp.md`](../PRD/mvp.md), originally version 0.5 and now v0.7 with
+the approved explicit peer-context retirement amendment below.
 
 It resolves cross-cutting decisions that must be consistent across content,
 Git, credentials, indexing, desktop, and CLI work. It does not prescribe the
@@ -139,10 +142,12 @@ pending checkpoint without duplicating the comment.
 
 ### Consent Boundary Update
 
-PRD version 0.3 updates `MH-COLLAB-006` so confirmed managed-document promotion is the only
-non-ticket lifecycle permitted to merge into the primary branch or remove its
-own local or remote branch and worktree state. Synchronization alone MUST NOT
-merge into primary or perform cleanup.
+PRD version 0.3 originally made confirmed managed-document promotion the only
+non-ticket completion lifecycle permitted to merge into primary or remove its
+own local or remote branch and worktree state. Promotion remains the only
+document **integration** lifecycle. PRD v0.7 adds the deliberate local
+peer-context retirement exception below, not document closure or remote deletion.
+Ordinary item synchronization alone MUST NOT perform cleanup.
 
 PRD version 0.3 updates `MH-NFR-006` so its idempotency requirements apply equally to document
 promotion. Update the scope and roadmap statement that only tickets are subject
@@ -184,7 +189,9 @@ create the corresponding local tracking branch and worktree, then index the
 managed item folder and comments it contains. A dirty, divergent, conflicted,
 deleted, renamed, malformed, or unrecognized remote context MUST remain
 unmodified locally and be surfaced with an actionable status. Remote deletion
-or invalidation MUST NOT remove an existing local worktree.
+or invalidation during default/automatic polling MUST NOT remove an existing
+local worktree. Only the explicit retirement amendment below allows its separately
+guarded local removal.
 
 PRD version 0.3 updates `MH-INDEX-002` so configured polling behavior includes this remote
 discovery and safe local update behavior rather than only an application-local
@@ -222,6 +229,36 @@ PRD version 0.4 distinguishes a remote poll from an index-only refresh. A poll
 may perform only the Git mutations expressly authorized by the polling contract,
 then invokes an index-only refresh or rebuild that remains non-mutating with
 respect to canonical Markdown and Git state.
+
+### Explicit Retirement Of Peer-Completed Local Contexts
+
+**Amendment, 2026-11-06:** owner D1–D14 (2026-11-04) and D15 (2026-11-06),
+recorded in the [completed-context retirement Cycle](../Cycles/wave-03-completed-context-retirement.md),
+authorize PRD v0.7's narrow local cleanup exception. `context retire` and
+explicit `poll once --retire-completed` check fresh authenticated complete
+Fetch-known remote absence, same-ID committed-primary completion, positive
+integrated-content proof and independent cleanliness/identity/lifetime before
+local removal. Closure or document presence alone is not permission. Default
+and automatic polls continue to recognize and preserve, never retire.
+
+Standalone retirement adds a fresh read-only round trip without updating
+primary. The explicit live-only poll loop shares one authoritative Fetch input
+across independent ordinary item requests, not one literal transport connection.
+Each settles its own discovery before the next; refusals continue, real debt
+stops the loop, no successful item rolls back, and only all-selected settled
+success/refusal outcomes complete at exit 0. Old selected-pass replay reports
+only, with child-only recovery and a new explicit pass for the remainder.
+
+Retirement does not publish, delete remote refs, integrate, checkpoint, change
+canonical source, delete drafts or change navigation/discard `context release`
+consumers. Read precedence is unchanged: an old own-worktree can still mask
+primary closure until retired and discovery settles. Latest-copy ticket
+`01M6K04YQM2JF6SBGPB1ZT6R8T` and remote-deletion gap
+`01M6K06B7H8V7347SRM3XGV7CB` remain separate. The headless/CLI delivery is not
+the desktop Retire action; D6 still owes that explicit action and editor/draft,
+keyboard and recovery journeys. See the [Git workflow](git-workflow-and-conflict-recovery.md#explicit-peer-context-retirement)
+and [CLI contract](cli-contract.md#completed-context-retirement) for exact guards
+and recovery. Existing release and confirmed completion lifecycles are unchanged.
 
 ## MVP Operating Model
 
@@ -270,7 +307,9 @@ index-only refresh or rebuild MUST NOT rewrite Markdown, commits, branches,
 worktrees, remotes, or Git configuration. A remote poll is a distinct lifecycle
 operation: it may perform only the explicitly authorized fetch, clean
 fast-forward, and recognized-context materialization steps before invoking an
-index-only refresh. A lost or corrupt index cannot invalidate a checkpoint,
+index-only refresh. Only explicit `poll once --retire-completed` additionally
+authorizes the guarded local peer-context retirement above; index scans remain
+non-mutating. A lost or corrupt index cannot invalidate a checkpoint,
 promotion, closure, or locally recoverable draft.
 
 The repository/index RFC MUST define how interrupted lifecycle operations are
@@ -375,11 +414,13 @@ For each poll, Manyhands MUST:
    index the managed item folder and its comments.
 6. Refresh discovery state and report an informative polling outcome.
 
-Polling MUST leave local state unchanged when a branch is dirty, divergent,
-conflicted, deleted remotely, renamed remotely, malformed, inaccessible, or
+Default and automatic polling MUST leave local state unchanged when a branch is
+dirty, divergent, conflicted, deleted remotely, renamed remotely, malformed, inaccessible, or
 not recognized as a Manyhands item context. It MUST surface the state and a
 recovery action instead. In particular, remote deletion or invalidation of an
 item branch MUST preserve an existing local worktree and mark it accordingly.
+Only explicit `poll once --retire-completed` may apply the separate guarded
+retirement contract above; automatic polling MUST NOT select that variant.
 
 The Git-workflow RFC MUST define branch recognition, remote-ref selection,
 fast-forward preconditions, local tracking-branch creation, and idempotent
@@ -426,8 +467,10 @@ checkpoints, merges, or deletions.
 
 ### Managed-Document Promotion
 
-Promotion is the only managed-document operation that can integrate into the
-primary branch or clean up its editing context. The interface MUST name this
+Promotion is the only managed-document completion operation that can integrate
+into the primary branch. Its own context cleanup follows this lifecycle;
+deliberate retirement of an already peer-promoted local context is the narrow
+exception above and does not integrate or close the document. The interface MUST name this
 operation `Approve and merge` or use equivalent language that explicitly
 communicates its effects.
 

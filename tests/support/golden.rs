@@ -25,6 +25,9 @@ pub const ENVELOPE_SCHEMA: &str = "envelope.schema.json";
 /// so the directory holds exactly the envelopes some test still produces.
 pub const CASES: &[&str] = &[
     "comment_list",
+    "conflict_show_complete",
+    "conflict_show_conflict_pending",
+    "conflict_show_repaired",
     "document_folder_list",
     "document_list",
     "document_show",
@@ -52,6 +55,9 @@ pub const CASES: &[&str] = &[
     "key_list",
     "key_public",
     "key_show",
+    "local_context_sync_observation",
+    "local_context_sync_inspection",
+    "local_context_conflict_content",
     "mutation_partial",
     "operation_list",
     "operation_show",
@@ -62,6 +68,7 @@ pub const CASES: &[&str] = &[
     "relationship_check",
     "relationship_check_cycle",
     "relationship_check_invalid",
+    "remote_history",
     "remote_list",
     "repo_identity",
     "repo_inspect",

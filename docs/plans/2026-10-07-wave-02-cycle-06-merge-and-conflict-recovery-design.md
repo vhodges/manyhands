@@ -49,7 +49,16 @@ fault tests must precede relying on merge/index/checkout behavior of this stack.
 
 ## Interfaces And Ownership
 
-Names below are proposed new API names; the existing types above are observed.
+**Dated amendment, 2026-10-27 — closure-recovery gate.** The
+[protocol amendment](2026-10-08-wave-02-cycle-06-task-04-resolution-protocol-amendment.md#closure-classification-and-local-recovery-amendment-2026-10-27)
+supersedes the old fresh-conflict eligibility description for incompatible ticket
+closures and identifies the implemented local-primary library boundary. It is
+implemented on ticket `01M57SKVF6TQ3QM6AXJ35JGGSY` at `03a27cb`, with final gates
+and whole-branch review pending. The historical Cycle 06 execution ledger remains
+unchanged; neither front-end delivery nor merged-main availability is claimed.
+
+In the original 2026-10-07 plan, names below were proposed new API names and the
+types above were observed; the dated amendment describes the later gate boundary.
 Keep library exports in `src/repository.rs`, with implementation in private
 `remote` modules. No GPUI, CLI grammar, global repository handle or cross-thread
 libgit2 object is introduced.

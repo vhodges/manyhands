@@ -65,6 +65,22 @@ commands! {
     FolderCreate => "folder create",
     DocumentRepair => "document repair",
     TicketRepair => "ticket repair",
+    LocalContextSync => "context sync-local",
+    LocalContextResolve => "context resolve-local",
+    CommentAdd => "comment add",
+    ConflictResolve => "conflict resolve",
+    ItemRepublish => "item republish",
+    ContextPrepare => "context prepare",
+    ContextRelease => "context release",
+    ContextRetire => "context retire",
+    DocumentPromote => "document promote",
+    TicketClose => "ticket close",
+    PollConfigure => "poll configure",
+    PollPause => "poll pause",
+    PollResume => "poll resume",
+    PollOnce => "poll once",
+    ItemResolveHistory => "item resolve-history",
+    RemoteResolveHistory => "remote resolve-history",
 }
 
 impl Command {
@@ -84,6 +100,16 @@ impl Command {
     /// a record any call of this build wrote.
     pub(crate) const fn has_operation(self) -> bool {
         match self {
+            Self::ContextRetire => true,
+            // One row of the remote journal, reserved for the explicit poll.
+            Self::PollOnce => true,
+            Self::LocalContextSync => true,
+            Self::LocalContextResolve => false,
+            // The comment's own operation, in the local journal: its
+            // write and its checkpoint. The synchronization that
+            // publishes it is a child the comment's binding names, made
+            // under an ID of its own that no record holds (fact 79).
+            Self::CommentAdd => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -111,12 +137,28 @@ impl Command {
             // context, its write, its checkpoint and its hand-off.
             | Self::DocumentRepair
             | Self::TicketRepair
+            // One operation of the local journal: the context's branch and
+            // worktree, and the hand-off to the index.
+            | Self::ContextPrepare
+            // One operation of the local journal: the removal of the
+            // context's worktree and branch, and the hand-off.
+            | Self::ContextRelease
             // One operation, in the remote journal. Its index hand-off
             // is a row of the local journal under the same ID, which
             // the remote row answers for: it owes work until the
-            // hand-off is done.
+            // hand-off is done. A republish's is recorded as a
+            // synchronization of the context (fact 78).
             | Self::ItemSync
-            | Self::RepoSync => true,
+            | Self::RepoSync
+            | Self::ItemRepublish => true,
+            // One parent operation, recorded in its lifecycle's own table
+            // and, once it deletes the remote context, in the remote
+            // journal under the same ID.
+            Self::DocumentPromote | Self::TicketClose => true,
+            // One write in the request's own transaction, with no operation
+            // ID and no row: the record finished with it is
+            // what says it was made.
+            Self::PollConfigure | Self::PollPause | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => false,
             // Never made twice, and so recorded against nothing: a key's
             // ID is not registered again.
             Self::KeyRemove => false,
@@ -128,6 +170,11 @@ impl Command {
             // its own ID, in its own journal, and the resume's record
             // holds none.
             Self::OperationResume => false,
+            // So is the synchronization a resolution names. Its durable
+            // state is the resolution attempt, which the remote journal
+            // records against the synchronization, and which a table of
+            // its own associates with the request (R-35).
+            Self::ConflictResolve => false,
             // A few keys of Git configuration, set by one replacement
             // of the file under the repository lease, or not at all: no
             // operation ID and no row. What shows the work to be done
@@ -150,6 +197,15 @@ impl Command {
     /// operation, and for one that has none.
     pub(crate) const fn was_accepted_without_operation(self) -> bool {
         match self {
+            Self::ContextRetire => false,
+            Self::PollOnce => false,
+            Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::CommentAdd
+            | Self::ConflictResolve
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose => false,
             Self::KeyImport | Self::KeySelect | Self::KeyClear => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -177,7 +233,14 @@ impl Command {
             | Self::HostReplace
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            | Self::ContextPrepare
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -187,6 +250,15 @@ impl Command {
     /// records and runs it.
     pub(crate) const fn restores_index(self) -> bool {
         match self {
+            Self::ContextRetire => false,
+            Self::PollOnce => false,
+            Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::CommentAdd
+            | Self::ConflictResolve
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose => false,
             Self::IndexRebuild => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -216,7 +288,14 @@ impl Command {
             | Self::HostReplace
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            | Self::ContextPrepare
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -225,6 +304,15 @@ impl Command {
     /// lacks is supplied with the request.
     pub(crate) const fn creates_its_repository(self) -> bool {
         match self {
+            Self::ContextRetire => false,
+            Self::PollOnce => false,
+            Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::CommentAdd
+            | Self::ConflictResolve
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose => false,
             Self::RepoCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -254,20 +342,42 @@ impl Command {
             | Self::HostReplace
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            | Self::ContextPrepare
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
         }
     }
 
     /// Whether the command's operation has safe points: places it can
     /// be stopped at once it is accepted, and a reservation it holds
-    /// from its first one on. Only a synchronization has. Such a
-    /// command honors a cancellation after acceptance and reports a
-    /// stage at each safe point, and a request of it that stopped with
-    /// its reservation held is continued by the same request, whatever
-    /// stopped it.
+    /// from its first one on. Only a synchronization has, a republish,
+    /// whose push-only operation is one, and a comment's submission, at
+    /// the safe points of the synchronization that publishes it. Such a
+    /// command honors a cancellation after acceptance and reports a stage
+    /// at each safe point, and a request of it that stopped with its
+    /// reservation held is continued by the same request, whatever stopped
+    /// it.
     pub(crate) const fn stops_at_safe_points(self) -> bool {
         match self {
+            Self::ContextRetire => true,
+            // A poll's own safe points, which its probe reaches.
+            Self::PollOnce => true,
+            Self::LocalContextSync | Self::LocalContextResolve => true,
             Self::ItemSync | Self::RepoSync => true,
+            // `request cancel` sets the request's flag, which the
+            // publication's observer reads at its next safe point.
+            Self::CommentAdd => true,
+            // A republish pushes as a synchronization does, from the safe
+            // points of its own operation (R-32).
+            Self::ItemRepublish => true,
+            // A promotion and a closure stop at the safe points of their
+            // one runner, and of the children it runs.
+            Self::DocumentPromote | Self::TicketClose => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -294,7 +404,14 @@ impl Command {
             | Self::HostReplace
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            | Self::ContextPrepare
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
             // A resume has no operation. One that takes up another
             // request's synchronization honors its own call's token at
             // that operation's safe points and reports their stages, but
@@ -304,6 +421,13 @@ impl Command {
             // that stopped is not offered again by the rule for a
             // synchronization.
             Self::OperationResume => false,
+            // As a resume (R-32, R-35): a resolution has no operation, and
+            // the publication it continues honors its call's token at the
+            // synchronization's safe points. Nothing is held for it between
+            // calls, so `request cancel` asks nothing of it (fact 11); the
+            // synchronization's own request is what `request cancel`
+            // reaches.
+            Self::ConflictResolve => false,
         }
     }
 
@@ -311,11 +435,24 @@ impl Command {
     /// synchronization: one that was stopped or fenced with its push not
     /// confirmed tells its caller to look at the repository, and says
     /// so again each time it is given again. A synchronization's own
-    /// result is one, and so is that of a resume that took one up. The
+    /// result is one, and so is that of a resume that took one up, and of
+    /// a comment's submission, which ends as its publication does. The
     /// finished results of every other command offer nothing.
     pub(crate) const fn finishes_as_a_synchronization(self) -> bool {
         match self {
-            Self::ItemSync | Self::RepoSync | Self::OperationResume => true,
+            Self::ContextRetire => true,
+            // How a replay reads a finished row: it keeps the pinned equality.
+            Self::PollOnce => true,
+            Self::LocalContextSync | Self::LocalContextResolve => true,
+            Self::ItemSync
+            | Self::RepoSync
+            | Self::OperationResume
+            | Self::CommentAdd
+            | Self::ItemRepublish
+            // This only decides how a replay reads a finished row, and keeps
+            // `finishes == stops || resume` (design, Command Predicates).
+            | Self::DocumentPromote
+            | Self::TicketClose => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -342,7 +479,16 @@ impl Command {
             | Self::HostReplace
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            | Self::ContextPrepare
+            | Self::ContextRelease
+            // A resolution's result says what its request did, and a
+            // replay of it offers nothing (R-35): `conflict show` names
+            // the next step.
+            | Self::ConflictResolve
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -350,8 +496,17 @@ impl Command {
     /// call: what that call is about to do.
     pub(crate) const fn stage(self) -> ProgressStage {
         match self {
+            Self::ContextRetire => ProgressStage::Observing,
+            // What a poll does first is connect, to fetch.
+            Self::PollOnce => ProgressStage::Connecting,
+            Self::LocalContextSync | Self::LocalContextResolve => ProgressStage::Observing,
             Self::IndexRefresh | Self::IndexRebuild => ProgressStage::Indexing,
-            Self::ItemSync | Self::RepoSync => ProgressStage::Connecting,
+            Self::ItemSync | Self::RepoSync | Self::ItemRepublish => ProgressStage::Connecting,
+            // What a promotion or a closure does first is look at its record
+            // and the repository: a local-only or cleanup-only run never
+            // connects, and one that does reports `connecting` itself (D5
+            // decision 11).
+            Self::DocumentPromote | Self::TicketClose => ProgressStage::Observing,
             // An approval connects to the host to see the key it
             // presents, and does nothing else there.
             Self::HostApprove | Self::HostReplace => ProgressStage::Connecting,
@@ -381,7 +536,24 @@ impl Command {
             // What a folder creation does first is make the directory.
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => ProgressStage::Writing,
+            | Self::TicketRepair
+            // What a comment's submission does first is write the
+            // comment and checkpoint it. Its publication then reports
+            // the stages of its synchronization's safe points.
+            | Self::CommentAdd
+            // What a resolution does first is write the resolved paths
+            // and commit them; its continuation then reports the stages
+            // of the synchronization's safe points.
+            | Self::ConflictResolve
+            // What a context preparation does first is cut the branch.
+            | Self::ContextPrepare
+            // What a context release does is remove the worktree and
+            // the branch.
+            | Self::ContextRelease
+            // What a policy verb does is write its one field.
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => ProgressStage::Writing,
         }
     }
 
@@ -393,6 +565,17 @@ impl Command {
     /// would find nothing to take up.
     pub(crate) const fn hands_off_to_any_refresh(self) -> bool {
         match self {
+            Self::ContextRetire => false,
+            // A poll's hand-off is a refresh of the whole repository, and the
+            // operation it finished owes nothing of it.
+            Self::PollOnce => true,
+            Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::CommentAdd
+            | Self::ConflictResolve
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose => false,
             Self::FolderCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -424,7 +607,14 @@ impl Command {
             // A repair's hand-off is its own operation's to owe, as a
             // save's is.
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            | Self::ContextPrepare
+            // A release's hand-off is its operation's to owe, as a
+            // save's is, and `operation resume` takes it up (R-32).
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -435,6 +625,17 @@ impl Command {
     /// `not_confirmable`, and so is an `execute` that presents one.
     pub(crate) const fn needs_confirmation(self) -> bool {
         match self {
+            Self::ContextRetire => false,
+            // One fetch and clean fast-forwards: nothing is lost, and what it
+            // finds in the way it leaves.
+            Self::PollOnce => false,
+            // A comment adds a file that nothing held, in the item's own
+            // context, and publishes it as a synchronization would: there
+            // is nothing to show first.
+            Self::LocalContextSync | Self::LocalContextResolve | Self::CommentAdd => false,
+            // A resolution's caller was shown the conflict by `conflict
+            // show`, and presents its observation: a stale one is refused.
+            Self::ConflictResolve => false,
             Self::RepoCreate
             | Self::RepoEnable
             | Self::RemoteRemove
@@ -448,7 +649,18 @@ impl Command {
             // file over one that could not be read: its caller is shown
             // the ID, and whether it is being assigned, first.
             | Self::DocumentRepair
-            | Self::TicketRepair => true,
+            | Self::TicketRepair
+            // A republish recreates a branch the remote deleted: its
+            // caller is shown the branch, the remote and the commit, and
+            // consents to that commit (decisions 4 and 7).
+            | Self::ItemRepublish
+            // Each merges into primary, publishes and retires a context:
+            // its caller is shown all of it, and consents to that state.
+            | Self::DocumentPromote
+            | Self::TicketClose
+            // A resolution records that a context was never published: its
+            // caller is shown the context, the remote's answer and the choice.
+            | Self::ItemResolveHistory | Self::RemoteResolveHistory => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -469,9 +681,21 @@ impl Command {
             // A directory that holds nothing is made and nothing else:
             // there is nothing to show first.
             | Self::FolderCreate
+            // A work context is a branch and a worktree cut from
+            // primary's head, with no content of the caller's in them:
+            // there is nothing to show first.
+            | Self::ContextPrepare
+            // A release removes only a context that holds nothing of
+            // anyone's, and refuses any other: nothing is lost to show.
+            | Self::ContextRelease
             // A resume does only what an operation already owes and
             // was consented to when it began.
-            | Self::OperationResume => false,
+            | Self::OperationResume
+            // One field of a stored policy: a pause and an interval lose
+            // nothing, and what they replace is shown by `poll status`.
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume => false,
         }
     }
 }
@@ -479,6 +703,17 @@ impl Command {
 #[cfg(test)]
 mod tests {
     use super::{Command, ProgressStage};
+
+    #[test]
+    fn retirement_is_an_unconfirmed_local_operation_with_safe_points() {
+        let command = Command::parse("context retire").expect("ordinary retirement is bound");
+        assert!(command.has_operation());
+        assert!(command.stops_at_safe_points());
+        assert!(command.finishes_as_a_synchronization());
+        assert!(!command.needs_confirmation());
+        assert!(!command.hands_off_to_any_refresh());
+        assert_eq!(command.stage(), ProgressStage::Observing);
+    }
 
     #[test]
     fn a_stored_name_is_read_back_as_its_command() {
@@ -519,23 +754,96 @@ mod tests {
         assert_eq!(Command::FolderCreate.name(), "folder create");
         assert_eq!(Command::DocumentRepair.name(), "document repair");
         assert_eq!(Command::TicketRepair.name(), "ticket repair");
+        assert_eq!(Command::CommentAdd.name(), "comment add");
+        assert_eq!(Command::ConflictResolve.name(), "conflict resolve");
+        assert_eq!(Command::ItemRepublish.name(), "item republish");
+        assert_eq!(Command::DocumentPromote.name(), "document promote");
+        assert_eq!(Command::TicketClose.name(), "ticket close");
+        assert_eq!(Command::PollConfigure.name(), "poll configure");
+        assert_eq!(Command::PollPause.name(), "poll pause");
+        assert_eq!(Command::PollResume.name(), "poll resume");
+        assert_eq!(Command::PollOnce.name(), "poll once");
+        assert_eq!(Command::ContextRetire.name(), "context retire");
     }
 
     #[test]
-    fn only_a_synchronization_stops_at_safe_points_and_none_needs_confirmation() {
+    fn the_stopping_commands_and_their_stages_and_confirmation() {
         for command in Command::ALL {
-            let synchronization = matches!(command, Command::ItemSync | Command::RepoSync);
-            assert_eq!(
-                command.stops_at_safe_points(),
-                synchronization,
-                "{command:?}"
+            let local = matches!(
+                command,
+                Command::LocalContextSync | Command::LocalContextResolve
             );
-            if synchronization {
-                assert!(!command.needs_confirmation(), "{command:?}");
-                assert!(command.has_operation(), "{command:?}");
-                assert_eq!(command.stage(), ProgressStage::Connecting, "{command:?}");
+            // A comment's submission publishes it by a synchronization
+            // of its own, and stops at that synchronization's safe
+            // points; what it does first is write the comment.
+            let comment = command == Command::CommentAdd;
+            // A republish pushes as a synchronization does, at its safe
+            // points, and needs confirmation, as a promotion and a
+            // closure do, which stop at the safe points of their runner.
+            let confirmed = matches!(
+                command,
+                Command::ItemRepublish | Command::DocumentPromote | Command::TicketClose
+            );
+            // A promotion or a closure looks first, and reports its steps'
+            // stages itself (D5 decision 11).
+            let lifecycle = matches!(command, Command::DocumentPromote | Command::TicketClose);
+            let stopping = local
+                || comment
+                || confirmed
+                || matches!(
+                    command,
+                    Command::ItemSync
+                        | Command::RepoSync
+                        | Command::PollOnce
+                        | Command::ContextRetire
+                );
+            assert_eq!(command.stops_at_safe_points(), stopping, "{command:?}");
+            if stopping {
+                assert_eq!(command.needs_confirmation(), confirmed, "{command:?}");
+                assert_eq!(
+                    command.has_operation(),
+                    command != Command::LocalContextResolve,
+                    "{command:?}"
+                );
+                assert_eq!(
+                    command.stage(),
+                    if local || lifecycle || command == Command::ContextRetire {
+                        ProgressStage::Observing
+                    } else if comment {
+                        ProgressStage::Writing
+                    } else {
+                        ProgressStage::Connecting
+                    },
+                    "{command:?}"
+                );
             }
         }
+        // The rest of the comment submission's predicates (R-32).
+        assert!(Command::CommentAdd.finishes_as_a_synchronization());
+        assert!(!Command::CommentAdd.was_accepted_without_operation());
+        assert!(!Command::CommentAdd.restores_index());
+        assert!(!Command::CommentAdd.creates_its_repository());
+        assert!(!Command::CommentAdd.hands_off_to_any_refresh());
+        // The rest of the republish's predicates (R-32).
+        assert!(Command::ItemRepublish.has_operation());
+        assert!(Command::ItemRepublish.finishes_as_a_synchronization());
+        assert!(!Command::ItemRepublish.was_accepted_without_operation());
+        assert!(!Command::ItemRepublish.restores_index());
+        assert!(!Command::ItemRepublish.creates_its_repository());
+        assert!(!Command::ItemRepublish.hands_off_to_any_refresh());
+        assert_eq!(Command::ItemRepublish.stage(), ProgressStage::Connecting);
+        // A resolution does not stop at safe points, as a resume does not
+        // (R-32, R-35): it holds no operation, needs no confirmation and
+        // reports `Writing` first.
+        assert!(!Command::ConflictResolve.stops_at_safe_points());
+        assert!(!Command::ConflictResolve.has_operation());
+        assert!(!Command::ConflictResolve.needs_confirmation());
+        assert!(!Command::ConflictResolve.finishes_as_a_synchronization());
+        assert!(!Command::ConflictResolve.was_accepted_without_operation());
+        assert!(!Command::ConflictResolve.restores_index());
+        assert!(!Command::ConflictResolve.creates_its_repository());
+        assert!(!Command::ConflictResolve.hands_off_to_any_refresh());
+        assert_eq!(Command::ConflictResolve.stage(), ProgressStage::Writing);
         assert_eq!(Command::IndexRefresh.stage(), ProgressStage::Indexing);
         assert_eq!(Command::IndexRebuild.stage(), ProgressStage::Indexing);
         assert_eq!(Command::TicketSave.stage(), ProgressStage::Writing);
@@ -576,6 +884,11 @@ mod tests {
                         | Command::HostReplace
                         | Command::DocumentRepair
                         | Command::TicketRepair
+                        | Command::ItemRepublish
+                        | Command::DocumentPromote
+                        | Command::TicketClose
+                        | Command::ItemResolveHistory
+                        | Command::RemoteResolveHistory
                 ),
                 "{command:?}"
             );
@@ -594,14 +907,27 @@ mod tests {
                 matches!(command, Command::KeyRemove | Command::OperationAbandon);
             // A resume takes up another request's operation, and has
             // none of its own either.
-            let names_another_s = command == Command::OperationResume;
+            let names_another_s = matches!(
+                command,
+                Command::OperationResume | Command::LocalContextResolve | Command::ConflictResolve
+            );
             // An identity is Git configuration, written under the
             // repository lease with no row.
             // So is a host's pin, written by the pin store's own
             // transaction with no row.
+            // So is a polling policy, written in its request's own
+            // transaction with no row. So is a history resolution's row of
+            // the remote registry.
             let unjournaled = matches!(
                 command,
-                Command::RepoIdentitySet | Command::HostApprove | Command::HostReplace
+                Command::RepoIdentitySet
+                    | Command::HostApprove
+                    | Command::HostReplace
+                    | Command::PollConfigure
+                    | Command::PollPause
+                    | Command::PollResume
+                    | Command::ItemResolveHistory
+                    | Command::RemoteResolveHistory
             );
             assert_eq!(
                 command.has_operation(),
@@ -632,11 +958,11 @@ mod tests {
     }
 
     #[test]
-    fn only_a_folder_creation_hands_off_to_any_refresh() {
+    fn only_a_folder_creation_and_a_poll_hand_off_to_any_refresh() {
         for command in Command::ALL {
             assert_eq!(
                 command.hands_off_to_any_refresh(),
-                command == Command::FolderCreate,
+                matches!(command, Command::FolderCreate | Command::PollOnce),
                 "{command:?}"
             );
         }
@@ -645,6 +971,97 @@ mod tests {
         assert!(!Command::FolderCreate.needs_confirmation());
         assert!(!Command::FolderCreate.stops_at_safe_points());
         assert_eq!(Command::FolderCreate.stage(), ProgressStage::Writing);
+    }
+
+    #[test]
+    fn a_context_preparation_is_a_plain_local_operation_whose_hand_off_is_owed() {
+        let command = Command::ContextPrepare;
+        assert_eq!(command.name(), "context prepare");
+        assert_eq!(Command::parse("context prepare"), Some(command));
+        assert!(command.has_operation());
+        assert!(!command.was_accepted_without_operation());
+        assert!(!command.needs_confirmation());
+        assert!(!command.restores_index());
+        assert!(!command.creates_its_repository());
+        assert!(!command.stops_at_safe_points());
+        assert!(!command.finishes_as_a_synchronization());
+        // Its hand-off is its operation's to owe. The row stays at
+        // `worktree_observed`, so a resume answers
+        // `original_request_required` and the request's own retry
+        // finishes it (R-77); no refresh does it in its place.
+        assert!(!command.hands_off_to_any_refresh());
+        assert_eq!(command.stage(), ProgressStage::Writing);
+    }
+
+    #[test]
+    fn a_context_release_is_a_plain_local_operation_whose_hand_off_resume_takes_up() {
+        let command = Command::ContextRelease;
+        assert_eq!(command.name(), "context release");
+        assert_eq!(Command::parse("context release"), Some(command));
+        assert!(command.has_operation());
+        assert!(!command.was_accepted_without_operation());
+        assert!(!command.needs_confirmation());
+        assert!(!command.restores_index());
+        assert!(!command.creates_its_repository());
+        assert!(!command.stops_at_safe_points());
+        assert!(!command.finishes_as_a_synchronization());
+        // Its hand-off is its operation's to owe: the row's step, once
+        // the branch is deleted, is one `operation resume` takes up.
+        assert!(!command.hands_off_to_any_refresh());
+        assert_eq!(command.stage(), ProgressStage::Writing);
+    }
+
+    /// The design's Command Predicates row of both lifecycle verbs. They
+    /// finish as a synchronization only in how a replay reads a finished
+    /// row, which keeps the pinned equality.
+    #[test]
+    fn a_promotion_and_a_closure_are_confirmed_operations_with_safe_points() {
+        for command in [Command::DocumentPromote, Command::TicketClose] {
+            assert!(command.needs_confirmation(), "{command:?}");
+            assert!(command.has_operation(), "{command:?}");
+            assert!(command.stops_at_safe_points(), "{command:?}");
+            assert!(command.finishes_as_a_synchronization(), "{command:?}");
+            assert!(!command.hands_off_to_any_refresh(), "{command:?}");
+            assert!(!command.was_accepted_without_operation(), "{command:?}");
+            assert!(!command.restores_index(), "{command:?}");
+            assert!(!command.creates_its_repository(), "{command:?}");
+            assert_eq!(command.stage(), ProgressStage::Observing, "{command:?}");
+        }
+    }
+
+    /// The design's Command Predicates row of `poll once`.
+    #[test]
+    fn a_poll_is_a_remote_operation_with_safe_points_and_no_confirmation() {
+        let command = Command::PollOnce;
+        assert!(!command.needs_confirmation());
+        assert!(command.has_operation());
+        assert!(command.stops_at_safe_points());
+        assert!(command.finishes_as_a_synchronization());
+        assert!(command.hands_off_to_any_refresh());
+        assert!(!command.was_accepted_without_operation());
+        assert!(!command.restores_index());
+        assert!(!command.creates_its_repository());
+        assert_eq!(command.stage(), ProgressStage::Connecting);
+    }
+
+    /// The design's Command Predicates row of the policy verbs.
+    #[test]
+    fn a_policy_verb_is_a_local_write_with_no_operation_and_no_confirmation() {
+        for command in [
+            Command::PollConfigure,
+            Command::PollPause,
+            Command::PollResume,
+        ] {
+            assert!(!command.needs_confirmation(), "{command:?}");
+            assert!(!command.has_operation(), "{command:?}");
+            assert!(!command.stops_at_safe_points(), "{command:?}");
+            assert!(!command.finishes_as_a_synchronization(), "{command:?}");
+            assert!(!command.hands_off_to_any_refresh(), "{command:?}");
+            assert!(!command.was_accepted_without_operation(), "{command:?}");
+            assert!(!command.restores_index(), "{command:?}");
+            assert!(!command.creates_its_repository(), "{command:?}");
+            assert_eq!(command.stage(), ProgressStage::Writing, "{command:?}");
+        }
     }
 
     #[test]

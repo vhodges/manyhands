@@ -1,9 +1,10 @@
 ---
+id: 01M5A0CB7E189YBKPMZF96NGPR
+item_id: 01M4CC0VMSZ7BRS740C8VSQ5ZK
+created_at: 2026-10-19T11:57:33Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5A0CB7E189YBKPMZF96NGPR"
-item_id: "01M4CC0VMSZ7BRS740C8VSQ5ZK"
-created_at: "2026-10-19T11:57:33Z"
 ---
 
 Task 1 complete under the owner's checkpoint-commit approval, in this ticket's

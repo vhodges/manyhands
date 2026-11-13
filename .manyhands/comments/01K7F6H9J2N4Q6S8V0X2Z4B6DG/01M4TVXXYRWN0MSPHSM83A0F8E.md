@@ -1,9 +1,10 @@
 ---
+id: 01M4TVXXYRWN0MSPHSM83A0F8E
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-13T14:51:10Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4TVXXYRWN0MSPHSM83A0F8E"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-13T14:51:10Z"
 ---
 
 Task 1 checkpoint. The controller conveyed owner authorization to resume

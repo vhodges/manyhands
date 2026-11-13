@@ -1,0 +1,35 @@
+{
+  "code": "identity_required",
+  "command": "repo enable",
+  "data": null,
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "A name and an email are required.",
+  "operation_id": null,
+  "outcome": "blocked",
+  "recovery": [
+    {
+      "action": "repo.identity_set",
+      "arguments": {
+        "root": "<repository>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

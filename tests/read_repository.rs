@@ -542,6 +542,15 @@ fn identity_reports_the_configuration_level_it_came_from() {
             "initials_source": "none"
         })
     );
+
+    // Nor is one Git cannot commit as.
+    let (_bracketed_directory, mut bracketed) = isolated_config(
+        ConfigLevel::Global,
+        "[user]\nname = \"Other <other@example.invalid>\"\nemail = other@example.invalid\n",
+    );
+    let unusable = identity(&mut bracketed);
+    assert_eq!(unusable.source, IdentitySource::None);
+    assert_eq!((unusable.name, unusable.email), (None, None));
     assert_git_transport_uninitialized();
 }
 

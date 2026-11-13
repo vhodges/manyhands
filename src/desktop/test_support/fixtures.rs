@@ -8,16 +8,17 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use manyhands::{
     canonical::ItemId,
+    drafts::{DraftError, DraftStore},
     repository::{
         CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
         FailurePoint, FolderCreateInput, IndexRefreshInput, InitialsChange, KeyGenerateInput,
         KeyRemoveInput, KeySelectInput, Mutation, MutationCall, MutationDataDto, NoProgress,
-        OperationAbandonInput, OperationId, OperationResumeInput, PrepareDataDto,
+        OperationAbandonInput, OperationId, OperationResumeInput, PollPauseInput, PrepareDataDto,
         RelationshipWrite, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
         RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId, SharedKeyId,
         TicketCreateInput, TicketDraft, TicketSaveInput,
@@ -31,6 +32,10 @@ use manyhands::{
 };
 
 use super::{delaying::DelayingBackend, git_home};
+use crate::desktop::services::{
+    layout::{LayoutStore, LayoutStoreError},
+    resolutions::{ResolutionStore, ResolutionStoreError},
+};
 
 /// The identity every fixture repository is created and committed as.
 pub(crate) fn identity() -> CommitIdentity {
@@ -56,6 +61,19 @@ pub(crate) struct Fixture {
     // directories are removed, unless a backend still shares it. A test
     // keeps the fixture for as long as anything it built can read.
     service: Arc<RepositoryService>,
+    /// The draft store in the data directory, opened by the first backend
+    /// or test that asks, so a test can change `drafts/` before. Every
+    /// backend and the test share it, and so its claims.
+    drafts: OnceLock<Result<DraftStore, DraftError>>,
+    /// The kept resolution sets in the data directory, opened as the
+    /// draft store is.
+    resolutions: OnceLock<Result<ResolutionStore, ResolutionStoreError>>,
+    /// The panel layout store in the data directory, opened as the draft
+    /// store is.
+    layout: OnceLock<Result<LayoutStore, LayoutStoreError>>,
+    /// The backend is given no layout store, as when its folder cannot be
+    /// opened.
+    layout_unavailable: bool,
     data: tempfile::TempDir,
     home: tempfile::TempDir,
     repositories: tempfile::TempDir,
@@ -72,6 +90,10 @@ impl Fixture {
         let service = Arc::new(RepositoryService::open_at(data.path()).unwrap());
         Self {
             service,
+            drafts: OnceLock::new(),
+            resolutions: OnceLock::new(),
+            layout: OnceLock::new(),
+            layout_unavailable: false,
             data,
             home,
             repositories,
@@ -82,13 +104,78 @@ impl Fixture {
         &self.service
     }
 
-    /// A delaying backend over this fixture's own service and home: the
-    /// desktop under test and the fixture see the same service.
+    /// A delaying backend over this fixture's own service, draft store,
+    /// resolutions store and home: the desktop under test and the fixture
+    /// see the same service and stores.
     pub(crate) fn delaying_backend(&self) -> Arc<DelayingBackend> {
-        Arc::new(DelayingBackend::new(
-            self.service.clone(),
-            self.home().to_owned(),
-        ))
+        Arc::new(
+            DelayingBackend::new(
+                self.service.clone(),
+                self.home().to_owned(),
+                self.drafts_opened(),
+            )
+            .with_resolutions(self.resolutions_opened())
+            .with_layout(if self.layout_unavailable {
+                Err(LayoutStoreError::Unavailable)
+            } else {
+                self.layout_opened()
+            }),
+        )
+    }
+
+    /// The same fixture, whose backends have no layout store: the layout
+    /// folder is never made.
+    pub(crate) fn without_layout_store(mut self) -> Self {
+        self.layout_unavailable = true;
+        self
+    }
+
+    /// `LayoutStore::open_in` of the data directory, the first time.
+    fn layout_opened(&self) -> Result<LayoutStore, LayoutStoreError> {
+        self.layout
+            .get_or_init(|| LayoutStore::open_in(self.data.path()))
+            .clone()
+    }
+
+    /// The layout store the desktop under test shares, for a test to seed
+    /// and to set its seams on. Panics if it did not open.
+    pub(crate) fn layout_store(&self) -> LayoutStore {
+        match self.layout_opened() {
+            Ok(store) => store,
+            Err(error) => panic!("the fixture's layout store must open: {error}"),
+        }
+    }
+
+    /// `ResolutionStore::open_in` of the data directory, the first time.
+    fn resolutions_opened(&self) -> Result<ResolutionStore, ResolutionStoreError> {
+        self.resolutions
+            .get_or_init(|| ResolutionStore::open_in(self.data.path()))
+            .clone()
+    }
+
+    /// The resolutions store the desktop under test shares. Panics if it
+    /// did not open.
+    pub(crate) fn resolution_store(&self) -> ResolutionStore {
+        match self.resolutions_opened() {
+            Ok(store) => store,
+            Err(error) => panic!("the fixture's resolutions store must open: {error}"),
+        }
+    }
+
+    /// `DraftStore::open_in` of the data directory, the first time.
+    fn drafts_opened(&self) -> Result<DraftStore, DraftError> {
+        self.drafts
+            .get_or_init(|| DraftStore::open_in(self.data.path()))
+            .clone()
+    }
+
+    /// The draft store the desktop under test shares, for a test to store
+    /// drafts in. Panics if it did not open.
+    pub(crate) fn draft_store(&self) -> DraftStore {
+        match self.drafts_opened() {
+            Ok(store) => store,
+            Err(error) => panic!("the fixture's draft store must open: {error}"),
+        }
     }
 
     pub(crate) fn data_dir(&self) -> &Path {
@@ -103,10 +190,15 @@ impl Fixture {
     /// `prepare` and `execute` of `repo create`, and gives its canonical
     /// root.
     pub(crate) fn create_repository(&self, name: &str) -> PathBuf {
+        self.create_repository_on(name, "main")
+    }
+
+    /// `create_repository`, its primary branch named `primary` (R-35).
+    pub(crate) fn create_repository_on(&self, name: &str, primary: &str) -> PathBuf {
         let root = self.repositories.path().canonicalize().unwrap().join(name);
         let input = || RepoCreateInput {
             root: root.clone(),
-            primary_branch: "main".to_owned(),
+            primary_branch: primary.to_owned(),
             identity: Some(identity()),
             slug_prefix: None,
         };
@@ -321,10 +413,25 @@ impl Fixture {
     /// `closed_at` and `closed_by` as `tests/support/items.rs` writes it:
     /// no local operation closes a ticket. Refresh to index it.
     pub(crate) fn commit_closed_ticket(&self, root: &Path, id: &str, title: &str) {
+        self.commit_closed_ticket_with(root, id, title, "");
+    }
+
+    /// `commit_closed_ticket`, carrying the short code `slug`.
+    pub(crate) fn commit_closed_ticket_with_slug(
+        &self,
+        root: &Path,
+        id: &str,
+        title: &str,
+        slug: &str,
+    ) {
+        self.commit_closed_ticket_with(root, id, title, &format!("slug: {slug}\n"));
+    }
+
+    fn commit_closed_ticket_with(&self, root: &Path, id: &str, title: &str, extra: &str) {
         let source = format!(
             "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {id}\ntitle: {title}\n\
              type: task\nstatus: done\nclosed_at: 2026-09-30T12:34:56Z\n\
-             closed_by: Ada Lovelace <ada@example.invalid>\n---\nBody of {title}.\n"
+             closed_by: Ada Lovelace <ada@example.invalid>\n{extra}---\nBody of {title}.\n"
         );
         self.commit_file(root, &ticket_path(id), source.as_bytes());
     }
@@ -363,6 +470,15 @@ impl Fixture {
     /// ticket that has only its primary copy provisions its own item
     /// context: a branch and a worktree.
     pub(crate) fn save_ticket(&self, root: &Path, id: &str, title: &str) {
+        self.save_ticket_as(root, id, title, None);
+    }
+
+    /// `save_ticket`, with the body `body` in place of the one shown.
+    pub(crate) fn save_ticket_with_body(&self, root: &Path, id: &str, title: &str, body: &str) {
+        self.save_ticket_as(root, id, title, Some(body));
+    }
+
+    fn save_ticket_as(&self, root: &Path, id: &str, title: &str, body: Option<&str>) {
         let repo = self.service.resolve_repository(root).unwrap();
         let shown = self.service.show_item(&repo, &item_id(id)).unwrap();
         let saved = self.execute(
@@ -376,7 +492,7 @@ impl Fixture {
                     status: shown.status.unwrap(),
                     project: shown.project,
                     team: shown.team,
-                    body: shown.body.unwrap_or_default(),
+                    body: body.map_or_else(|| shown.body.unwrap_or_default(), str::to_owned),
                 },
                 deps: RelationshipWrite::Unchanged,
                 parent: RelationshipWrite::Unchanged,
@@ -472,6 +588,17 @@ impl Fixture {
             }),
         );
         assert_eq!(refreshed.code, ResultCode::Ok, "{}", refreshed.message);
+    }
+
+    /// Pauses automatic polling of `root` through the library.
+    pub(crate) fn pause_polling(&self, root: &Path) {
+        let paused = self.execute(
+            None,
+            Mutation::PollPause(PollPauseInput {
+                root: root.to_owned(),
+            }),
+        );
+        assert_eq!(paused.code, ResultCode::Ok, "{}", paused.message);
     }
 
     fn execute(
@@ -853,7 +980,12 @@ impl Fixture {
     /// `root` and selects it for publication through the library's
     /// `remote select`. Nothing is contacted.
     pub(crate) fn publish_over_ssh(&self, root: &Path) {
-        self.add_remote(root, "origin", "ssh://git@example.invalid/team/repo.git");
+        self.publish_at(root, "ssh://git@example.invalid/team/repo.git");
+    }
+
+    /// `publish_over_ssh`, the remote `origin` fetching from `url`.
+    pub(crate) fn publish_at(&self, root: &Path, url: &str) {
+        self.add_remote(root, "origin", url);
         let selected = self.execute(
             None,
             Mutation::RemoteSelect(RemoteSelectInput {

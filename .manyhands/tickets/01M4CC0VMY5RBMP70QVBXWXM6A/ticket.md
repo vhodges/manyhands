@@ -1,16 +1,16 @@
 ---
+cycle: D1
+wave: '03'
+id: 01M4CC0VMY5RBMP70QVBXWXM6A
+title: 'Wave 03 D1: Desktop Shell, Onboarding And Discovery'
+type: cycle
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-20T13:51:31Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CC0VMY5RBMP70QVBXWXM6A"
-title: "Wave 03 D1: Desktop Shell, Onboarding And Discovery"
-type: "cycle"
-status: "closed"
-closed_at: "2026-10-20T13:51:31Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
-wave: "03"
-cycle: "D1"
 ---
 
 Provide a keyboard-usable desktop over the foundation services.

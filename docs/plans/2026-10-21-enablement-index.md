@@ -1,3 +1,12 @@
+---
+title: "Enablement Git Index Implementation Plan"
+date: 2026-10-20
+author: "Vince Hodges <vince@imbas.ca> && Claude"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J997DQXXMVANKR5GX0"
+---
+
 # Enablement Git Index Implementation Plan
 
 > **For Claude:** Use the executing-plans and test-driven-development skills to implement this plan task-by-task.

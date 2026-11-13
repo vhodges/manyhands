@@ -1,14 +1,16 @@
 ---
+cycle: '05'
+wave: '02'
+id: 01K7F6H9J2N4Q6S8V0X2Z4B6DD
+title: 'Wave 02 Cycle 05: Clean Deliberate Synchronization'
+type: cycle
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-07T12:26:02Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01K7F6H9J2N4Q6S8V0X2Z4B6DD"
-title: "Wave 02 Cycle 05: Clean Deliberate Synchronization"
-type: "cycle"
-status: "closed"
-project: "manyhands"
-team: "core"
-wave: "02"
-cycle: "05"
 ---
 
 Synchronize an item context or the primary branch when no merge is required,

@@ -192,8 +192,10 @@ normalized authority, host-key algorithm, and SHA-256 fingerprint. On a host
 key that libgit2 cannot otherwise verify, Manyhands returns a host-approval
 outcome containing the presented fingerprint. The caller must provide an
 approval for that exact authority and fingerprint before a later operation may
-continue. The approval is persisted only after the presented key is observed
-again.
+continue. **Amended 2026-10-20 by C2 (F2 decision 6):** the approval is
+persisted only after the presented algorithm/fingerprint is observed again on
+a connection that authenticates with the selected key. Observation alone,
+failed authentication, or a dismissed unlock prompt never persists approval.
 
 A changed key for an existing authority always returns a replacement-required
 outcome. It MUST NOT overwrite the existing pin, proceed with the transport, or

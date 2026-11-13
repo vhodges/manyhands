@@ -1,9 +1,10 @@
 ---
+id: 01M490DP2CGCG1Y7CTV02YYRMK
+item_id: 01M48S808PF2D8ZWVYM918RK2M
+created_at: 2026-10-06T16:23:20Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M490DP2CGCG1Y7CTV02YYRMK"
-item_id: "01M48S808PF2D8ZWVYM918RK2M"
-created_at: "2026-10-06T16:23:20Z"
 ---
 
 Task 7 accepted as a source-only, independently reviewed fallback assessment.

@@ -156,6 +156,9 @@ mod view {
             window.render_frame(cx);
             assert!(window.try_find("startup-failure-message").is_some());
             assert!(window.try_find("startup-quit").is_some());
+            // The window takes the main window's options, so it draws the
+            // bar itself.
+            assert!(window.try_find("title-bar-title").is_some());
             // Still blocked: Retry opens again and fails again.
             window.click("startup-retry", cx);
         });
@@ -189,6 +192,15 @@ mod view {
             .unwrap();
         assert!(is_workspace);
         assert!(root_id < workspace_id);
+        // The draft store and the kept resolution sets open in the data
+        // directory the service opened, never the platform's default one,
+        // so the launch sweep cannot reach a developer's real sets.
+        assert!(data.join("drafts").is_dir(), "drafts beside the service");
+        assert!(
+            data.join("resolutions").is_dir(),
+            "resolutions beside the service"
+        );
+        assert!(data.join("layout").is_dir(), "layout beside the service");
     }
 
     /// Two Retry presses before the window's root is replaced open the

@@ -34,10 +34,13 @@
         "refresh",
         "rebuild",
         "prepare_context",
+        "release_context",
+        "retire_context",
         "save_document",
         "save_ticket",
         "submit_comment",
         "repair_item",
+        "context_sync_local",
         null
       ]
     },

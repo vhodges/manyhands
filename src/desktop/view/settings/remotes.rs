@@ -56,7 +56,8 @@ use gpui_kit::{
 };
 use manyhands::{repository::RemoteDto, results::Outcome};
 
-use super::{Read, Wrapped, wrapped};
+use super::{Wrapped, wrapped};
+use crate::desktop::model::read_state::Read;
 use crate::desktop::{
     model::{
         list_state::LABEL_BUSY,
@@ -239,18 +240,18 @@ impl RemotesPage {
         page
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn input(&self, id: &str) -> Entity<InputState> {
         self.inputs[id].clone()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn control_focus(&self, id: &str) -> FocusHandle {
         self.focus[id].clone()
     }
 
     /// The names of the remotes shown.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn remote_names(&self) -> Vec<String> {
         match &self.remotes {
             Read::Ready(listed) => listed
@@ -263,7 +264,7 @@ impl RemotesPage {
     }
 
     /// The remote shown selected for publication.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn selected(&self) -> Option<&str> {
         match &self.remotes {
             Read::Ready(listed) => listed
@@ -284,6 +285,13 @@ impl RemotesPage {
         } else {
             self.load_remotes(cx);
         }
+    }
+
+    /// The page is shown on `root`, whatever repository it worked on: it
+    /// reads the registrations again and works on `root` from now on.
+    pub(crate) fn open_on(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        self.load_registrations(cx);
+        self.choose(Some(root), cx);
     }
 
     /// Works on `root` from now on, and reads its remotes.
@@ -593,7 +601,7 @@ impl RemotesPage {
                 body.child(text(id, code.message()))
                     .child(div().text_xs().text_color(muted).child(code.as_str())),
             ),
-            Read::Ready(_) => None,
+            Read::None | Read::Ready(_) => None,
         }
     }
 

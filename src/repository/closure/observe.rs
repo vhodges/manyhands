@@ -397,7 +397,8 @@ fn pending_work(
         .map_err(RepositoryError::sqlite)?;
     let local_operation = targets
         .iter()
-        .any(|target| authoring_item(target.as_deref()).as_deref() == Some(item_text.as_str()));
+        .any(|target| authoring_item(target.as_deref()).as_deref() == Some(item_text.as_str()))
+        || super::super::local_sync::record::unfinished_context(tx, repository_id, item)?;
     let comment_publication = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM comment_publication_bindings b
@@ -785,9 +786,10 @@ fn observe_git(
             }
         }
     }
-    // D5: an absent tracking context that was published means another clone
-    // deleted it. Only a context child could recreate it, and none runs for a
-    // contained context.
+    // D5: an absent tracking context that was published, and that a fetch has
+    // seen gone, means another clone deleted it; published and not seen gone
+    // is unknown (decision 35). Only a context child could recreate it, and
+    // none runs for a contained context.
     if config.publication_remote.is_some()
         && tracking_context.is_none()
         && !contained
@@ -799,6 +801,9 @@ fn observe_git(
             }
             RemoteContextHistory::Unknown => {
                 blockers.insert(HistoryUnknown);
+            }
+            RemoteContextHistory::Unresolved => {
+                blockers.insert(HistoryUnresolved);
             }
             RemoteContextHistory::NeverPublished => {}
         }

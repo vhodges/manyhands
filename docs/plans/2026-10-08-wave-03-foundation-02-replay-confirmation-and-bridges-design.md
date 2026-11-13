@@ -4155,6 +4155,15 @@ resolves for the checkpoint, in the form `Name <email>`, the same form as
 `closed_by`, without changing the order in which it returns its existing
 rejections. A caller cannot supply it.
 
+Amended 2026-10-30 by Wave 03 C4 (its decision 9): the rule "A caller cannot
+supply it" is replaced. `comment add` takes an optional caller `created_by`,
+validated as `Name <email>`, at most 256 bytes, and the checkpoint writes it
+verbatim in place of the resolved identity's text. Without one, the rule
+above applies. Either way the checkpoint still needs a commit identity, and
+the value is written once and never rewritten. The public `submit_comment`
+is unchanged; the caller's value enters through a crate-private parameter of
+the checkpoint. See [Departures from the RFCs](#departures-from-the-rfcs).
+
 On a retry, the comment file on disk keeps its `created_at` and `created_by`.
 If the identity changed between attempts, the file names the first and the
 commit is authored by the second; the canonical RFC says the field is "never
@@ -4256,6 +4265,13 @@ contract item 10 says a partial result comes with a recovery action. Two
 partial results carry none: a `request_mismatch` against a request that
 made an effect, and a key generation retained for inspection; see
 [Result codes](#result-codes).
+
+Amended 2026-10-30 by Wave 03 C4: one rule of this design is replaced by a
+later Cycle. The [Comment Author](#comment-author) rule "A caller cannot
+supply it" gives way to C4's decision 9: `comment add` takes an optional,
+validated caller `created_by`, written once, and the Git identity
+otherwise. Unlike the rows above, the RFC text changed with it: the
+canonical content and comment schema RFC is amended to match.
 
 ## Changes To Existing Code
 

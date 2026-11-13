@@ -1,9 +1,10 @@
 ---
+id: 01M4B2JBSRC8FHT42E93H5SXEF
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DF
+created_at: 2026-10-07T11:39:20Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4B2JBSRC8FHT42E93H5SXEF"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DF"
-created_at: "2026-10-07T11:39:20Z"
 ---
 
 Planning checkpoint: reused this ticket's registered worktree and branch. Fresh

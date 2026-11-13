@@ -59,7 +59,7 @@ fn keys(fixture: Fixture, cx: &mut TestAppContext) -> Shell {
 fn page(shell: &Shell, cx: &mut TestAppContext) -> Entity<KeysPage> {
     let host = shell
         .workspace
-        .read_with(cx, |workspace, _| workspace.settings.clone());
+        .read_with(cx, |workspace, _| workspace.settings().clone());
     host.read_with(cx, |host, _| host.keys.clone())
         .expect("the Keys page is made")
 }

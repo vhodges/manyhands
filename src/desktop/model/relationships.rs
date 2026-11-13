@@ -27,7 +27,8 @@ use manyhands::{
 
 use super::{
     list_state::{ListState, Rows},
-    navigation::{NotReloaded, OpenTarget},
+    names::TicketName,
+    navigation::{ItemLocator, NotReloaded, OpenTarget},
     stamp::RepoKey,
     tickets::Lifecycle,
 };
@@ -123,11 +124,20 @@ impl RelatedRow {
             return None;
         }
         let id: ItemId = self.id.parse().ok()?;
-        Some(OpenTarget::Item {
-            repo: repo.clone(),
-            kind: ItemDtoKind::Ticket,
-            id,
-        })
+        Some(
+            ItemLocator::Identified {
+                kind: ItemDtoKind::Ticket,
+                id,
+            }
+            .in_repository(repo),
+        )
+    }
+
+    pub(crate) fn name(&self) -> TicketName<'_> {
+        TicketName {
+            slug: self.slug.as_deref(),
+            title: self.title.as_deref(),
+        }
     }
 }
 

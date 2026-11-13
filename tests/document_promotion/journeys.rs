@@ -4,10 +4,21 @@ use super::*;
 mod advanced;
 #[path = "exits.rs"]
 mod exits;
+#[path = "identity.rs"]
+mod identity;
 #[path = "quality.rs"]
 mod quality;
 
 pub(super) const CASES: &[ssh_harness::Case] = &[
+    ("c5_identity_configured_bracketed", || {
+        identity::configured(identity::BRACKETED_NAME)
+    }),
+    ("c5_identity_configured_trimmed", || {
+        identity::configured(identity::TRIMMED_NAME)
+    }),
+    ("c5_identity_confirmed_unusable", identity::confirmed),
+    ("c5_identity_plain_control", identity::plain),
+    ("c5_identity_kept_records_and_replays", identity::kept),
     (
         "quality2_image_name_payload_boundaries",
         quality::image_boundaries,
@@ -481,7 +492,7 @@ fn happy() -> Result<(), FixtureError> {
             .targets()
             .iter()
             .any(|r| r.item_id().is_some_and(|id| id.to_string() == DOC)
-                && r.disposition() == PollDisposition::RemotelyDeleted)
+                && r.disposition() == PollDisposition::Promoted)
     );
     assert_eq!(image(&p.b.worktree())?, before);
     let after = poll(&p, &p.a)?;
@@ -837,7 +848,10 @@ fn retained_r1() -> Result<(), FixtureError> {
         &mut SessionCredentials::new(remote_world::Provider),
     );
     p.diagnostics(&format!("{result:?}"))?;
-    assert!(matches!(result, Err(SynchronizationError::HistoryUnknown)));
+    assert!(matches!(
+        result,
+        Err(SynchronizationError::HistoryUnresolved)
+    ));
     assert_eq!(p.server.receive_updates(), receives);
     fixed(
         p.a.service

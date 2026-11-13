@@ -1,14 +1,14 @@
 ---
+id: 01M5CVB2DTK8EQKG3FMYMWNTMX
+title: Enabling an enabled but unregistered repository must register it
+type: defect
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-21T01:12:49Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M5CVB2DTK8EQKG3FMYMWNTMX"
-title: "Enabling an enabled but unregistered repository must register it"
-type: "defect"
-status: "closed"
-closed_at: "2026-10-21T01:12:49Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
 ---
 
 The confirmed-command `RepoEnable` (the desktop's "Add existing", and the

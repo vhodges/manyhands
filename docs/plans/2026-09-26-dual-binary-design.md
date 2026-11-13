@@ -1,3 +1,12 @@
+---
+title: "Manyhands Dual-Binary Design"
+date: 2026-09-26
+author: "Vince Hodges <vince@imbas.ca>"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J6DVR0ZRP416Q6X0VA"
+---
+
 # Manyhands Dual-Binary Design
 
 ## Goal

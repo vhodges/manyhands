@@ -40,6 +40,7 @@ mod credentials;
 mod dto;
 mod graph;
 mod items;
+mod local_sync;
 mod resolve;
 mod status;
 
@@ -62,11 +63,17 @@ pub use dto::{
 };
 pub use items::{ClosureFilter, ProposedRelationships, ReadinessFilter, TicketFilter};
 pub(crate) use items::{is_plain_relative, observe_in_context};
+pub use local_sync::{
+    LocalContextConflictContentDto, LocalContextConflictEntryDto, LocalContextSyncDataType,
+    LocalContextSyncEligibility, LocalContextSyncInspectionDto, LocalContextSyncMutationDto,
+    LocalContextSyncNextAction, LocalContextSyncReason, LocalContextSyncState,
+};
 pub use resolve::ResolvedRepository;
 pub(crate) use status::local_action;
 
-/// The argument of a recovery action that names a repository root.
-const ROOT_ARGUMENT: &str = "root";
+/// The argument of a recovery action that names a repository root. The
+/// conflict read places its failures with it too.
+pub(super) const ROOT_ARGUMENT: &str = "root";
 
 /// A recovery action that takes a repository root and nothing else, with
 /// the root when one is known. Every action the reads suggest is one, and

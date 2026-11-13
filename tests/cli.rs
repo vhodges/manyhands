@@ -15,17 +15,87 @@ mod support;
 #[path = "cli/admin.rs"]
 mod admin;
 
+#[path = "cli/authoring_exits.rs"]
+mod authoring_exits;
+
+#[path = "cli/authoring_reads.rs"]
+mod authoring_reads;
+
 #[path = "cli/boundaries.rs"]
 mod boundaries;
+
+#[path = "cli/c4_support.rs"]
+mod c4_support;
+
+#[path = "cli/collaboration.rs"]
+mod collaboration;
+
+#[path = "cli/collaboration_exits.rs"]
+mod collaboration_exits;
+
+#[path = "cli/conflicts.rs"]
+mod conflicts;
+
+#[path = "cli/discussion.rs"]
+mod discussion;
 
 #[path = "cli/content.rs"]
 mod content;
 
+#[path = "cli/documents.rs"]
+mod documents;
+
 #[path = "cli/help.rs"]
 mod help;
 
+#[path = "cli/folders.rs"]
+mod folders;
+#[path = "cli/index.rs"]
+mod index;
+
+#[path = "cli/exits.rs"]
+mod exits;
+#[path = "cli/human.rs"]
+mod human;
+#[path = "cli/input_schemas.rs"]
+mod input_schemas;
+#[path = "cli/inventory.rs"]
+mod inventory;
+#[path = "cli/keys.rs"]
+mod keys;
+#[path = "cli/lifecycle.rs"]
+mod lifecycle;
+#[path = "cli/local_sync.rs"]
+mod local_sync;
+#[path = "cli/mutation.rs"]
+mod mutation;
+#[path = "cli/polling.rs"]
+mod polling;
+#[path = "cli/privacy.rs"]
+mod privacy;
+#[cfg(unix)]
+#[path = "cli/prompts.rs"]
+mod prompts;
+#[path = "cli/recovery_tables.rs"]
+mod recovery_tables;
+#[path = "cli/remotes.rs"]
+mod remotes;
+#[path = "cli/repair.rs"]
+mod repair;
+#[path = "cli/repository.rs"]
+mod repository;
+#[path = "cli/republish.rs"]
+mod republish;
+#[path = "cli/requests.rs"]
+mod requests;
+#[path = "cli/retirement.rs"]
+mod retirement;
+
 #[path = "cli/relationships.rs"]
 mod relationships;
+
+#[path = "cli/ticket_authoring.rs"]
+mod ticket_authoring;
 
 #[test]
 fn fixture_directory_is_exactly_the_registered_cases() {

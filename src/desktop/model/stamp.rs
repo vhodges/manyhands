@@ -21,6 +21,8 @@ pub(crate) enum SettingsPage {
     Remotes,
     Keys,
     Hosts,
+    /// "Checking for updates" (D6 C2).
+    Polling,
 }
 
 /// What asked for a result.
@@ -42,6 +44,32 @@ pub(crate) enum ViewScope {
     /// A confirmation dialog's preview. Each dialog keeps its own
     /// generations, so one scope serves them all.
     Confirmation,
+    /// A create dialog's path check and new ID, and Move…'s checks and
+    /// reads (Task 24). Each dialog keeps its own generations, so one
+    /// scope serves them all.
+    Create,
+    /// The draft registry's listing of the store. One scope: a new listing
+    /// drops the last.
+    Drafts,
+    /// The lifecycle dialog's reads of the titles of the tickets a closure
+    /// made ready (D5 design, A3). Each dialog keeps its own generations,
+    /// so one scope serves them all.
+    MadeReady,
+    /// The Workspace's read of the titles of the items a repository has not
+    /// shared yet (Cycle 03a, R-9). Its answer is merged whatever the
+    /// generation: a title is a fact.
+    ShareTitles(RepoKey),
+    /// The resolve conflict sheet's reads of its conflict (D5 B1). Each
+    /// sheet keeps its own generations, so one scope serves them all.
+    Conflict,
+    /// The resolve conflict sheet's read of its item's work folder (B4).
+    ConflictFolder,
+    /// Which of a repository's pending rows hold a conflict to review
+    /// (D5 B5), read once its rows have landed.
+    PendingConflicts(RepoKey),
+    /// One Drafts page row's reads of its item. A new listing, or Retry,
+    /// moves it on, so a late read never lands on a newer row.
+    DraftRow(manyhands::drafts::DraftId),
 }
 
 /// A scope and the generation it was at when the request was made.

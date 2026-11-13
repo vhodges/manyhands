@@ -172,7 +172,7 @@ fn every_c1_verb_redacts_secrets_and_preserves_repository_in_both_modes() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|entry| entry["available"] == true)
+        .filter(|entry| entry["available"] == true && entry["delivered_by"] == "C1")
         .map(|entry| entry["command"].as_str().unwrap().to_owned())
         .collect();
     let covered: BTreeSet<_> = calls
@@ -355,7 +355,7 @@ fn exit_class_table_runs_every_reachable_class_through_the_binary() {
     let rows = [
         (vec!["repo", "list"], ResultCode::Ok, 0),
         (vec!["unknown"], ResultCode::UsageError, 2),
-        (vec!["ticket", "close"], ResultCode::CommandUnavailable, 2),
+        (vec!["ticket", "close"], ResultCode::UsageError, 2),
         (
             vec!["ticket", "show", "--repo", root, "--id", "bad"],
             ResultCode::InvalidId,

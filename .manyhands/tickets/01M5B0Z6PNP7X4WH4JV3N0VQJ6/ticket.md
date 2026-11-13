@@ -1,14 +1,14 @@
 ---
+id: 01M5B0Z6PNP7X4WH4JV3N0VQJ6
+title: Enablement must leave the Git index current for the configuration it commits
+type: defect
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-21T11:16:03Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M5B0Z6PNP7X4WH4JV3N0VQJ6"
-title: "Enablement must leave the Git index current for the configuration it commits"
-type: "defect"
-status: "closed"
-closed_at: "2026-10-21T11:16:03Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
 ---
 
 Creating or enabling a repository (`repo create`, `repo enable`) commits
