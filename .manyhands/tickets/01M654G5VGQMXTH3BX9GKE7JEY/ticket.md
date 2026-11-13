@@ -5,7 +5,7 @@ deps:
 id: 01M654G5VGQMXTH3BX9GKE7JEY
 title: Move the repository details out of the item tab
 type: task
-status: open
+status: superseded
 project: manyhands
 team: core
 manyhands_managed: true
