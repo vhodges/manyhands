@@ -212,10 +212,16 @@ fn refreshes_are_coalesced(cx: &mut TestAppContext) {
 
 #[path = "activity_tests/cases.rs"]
 mod cases;
+#[path = "activity_tests/drawn.rs"]
+mod drawn_cases;
+#[path = "activity_tests/focus.rs"]
+mod focus;
 #[path = "activity_tests/list.rs"]
 mod list;
 #[path = "activity_tests/list_support.rs"]
 mod list_support;
+#[path = "activity_tests/menu.rs"]
+mod menu;
 #[path = "activity_tests/pending.rs"]
 mod pending_cases;
 #[path = "activity_tests/refused.rs"]
@@ -248,4 +254,6 @@ async fn each_action_runs_its_handler(cx: &mut TestAppContext) {
     state_cases::drafts(cx).await;
     // The stale revision (T11) and the refused offers (T12).
     refused_cases::refused(cx).await;
+    // A drawn button and a row's menu (Task 9).
+    drawn_cases::drawn(cx).await;
 }

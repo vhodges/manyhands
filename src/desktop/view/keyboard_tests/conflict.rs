@@ -116,10 +116,10 @@ impl Walk {
 }
 
 /// A1, A21, real: a local synchronization stopped on a conflict, after a
-/// restart. `secondary-4` and the arrows reach its pending row, Tab its
-/// Review changes button, and Enter opens the sheet; Escape closes it with
-/// nothing sent and gives focus back to the list, the row still highlighted,
-/// and Enter opens it again. Save resolution is disabled until
+/// restart. `secondary-4` and the arrows reach its pending row, and its
+/// menu's Review changes (`shift-f10`, the arrows and Enter) opens the sheet;
+/// Escape closes it with nothing sent and gives focus back to the list, the
+/// row still highlighted, and the menu opens it again. Save resolution is disabled until
 /// the title is chosen: Tab and Enter keep theirs, then Tab and Enter on
 /// Save resolution send the resolution, which applies. The sheet closes,
 /// the row goes, and the work context holds theirs.
@@ -131,9 +131,7 @@ async fn resolve_a_local_conflict_by_keyboard(cx: &mut TestAppContext) {
     fixture.conflict_locally(&a, TICKET, "Mine", "Theirs");
     let walk = Walk::over(Shell::open(fixture, cx), a.clone());
 
-    let review = walk.to_pending_button("context_sync_local", cx).await;
-
-    walk.enter(cx);
+    let review = walk.to_pending_review("context_sync_local", cx).await;
     walk.until_drawn("conflict-save", cx).await;
     walk.keys("escape", cx);
     assert!(
@@ -147,7 +145,7 @@ async fn resolve_a_local_conflict_by_keyboard(cx: &mut TestAppContext) {
         Some(review.clone()),
         "its row is still highlighted"
     );
-    walk.enter(cx);
+    walk.choose_review(cx);
 
     walk.choose_by_keyboard("conflict-keep-theirs", KEEPING_THEIRS, cx)
         .await;

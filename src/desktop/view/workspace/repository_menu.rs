@@ -99,6 +99,7 @@ impl Workspace {
         let Some((items, action)) = menu_of(&rows, &root) else {
             return;
         };
+        self.activity.menu = None;
         self.repository_menu = Some(RepositoryMenu::open(
             Some(root),
             items,
@@ -131,6 +132,7 @@ impl Workspace {
             .more_bounds()
             .map_or(MenuAnchor::Pointer(Point::default()), MenuAnchor::Bounds);
         let items = more_items(chosen.as_ref());
+        self.activity.menu = None;
         self.repository_menu = Some(RepositoryMenu::open(
             chosen, items, None, button, anchor, None, window, cx,
         ));

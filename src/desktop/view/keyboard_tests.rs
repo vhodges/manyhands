@@ -577,9 +577,10 @@ impl Walk {
     }
 
     /// `secondary-4`, the arrows to the pending row of `a` whose command is
-    /// `action`, and Tab to its button, which holds focus. Waits for the row
-    /// to be listed and drawn. Gives its key.
-    async fn to_pending_button(
+    /// `action`, `shift-f10`, the arrows to Review changes and Enter: the
+    /// conflict sheet opens. Waits for the row to be listed and drawn.
+    /// Gives its key.
+    async fn to_pending_review(
         &self,
         action: &str,
         cx: &mut TestAppContext,
@@ -587,10 +588,36 @@ impl Walk {
         let row =
             super::activity_support::until_pending(&self.shell, &key(&self.a), action, cx).await;
         super::activity_support::to_row(&self.shell, &row, cx);
-        self.keys("tab", cx);
-        let button = super::activity_support::button_focus(&self.shell, cx);
-        self.on_handle(&button, Region::Operations, cx);
+        self.choose_review(cx);
         row
+    }
+
+    /// With the list focused on a pending row, `shift-f10`, the arrows to
+    /// Review changes and Enter.
+    fn choose_review(&self, cx: &mut TestAppContext) {
+        self.keys("shift-f10", cx);
+        super::repositories::tests::support::highlight(
+            &mut self.shell.visual(cx),
+            super::conflict::REVIEW_CHANGES,
+        );
+        self.keys("enter", cx);
+    }
+
+    /// The pending operation's row, which `b` has stranded.
+    fn pending_row(
+        &self,
+        cx: &mut TestAppContext,
+    ) -> crate::desktop::model::activity::rows::RowKey {
+        use super::activity_support::{refresh, rows};
+        use crate::desktop::model::activity::rows::RowKey;
+        refresh(&self.shell, cx);
+        let pending: Vec<RowKey> = rows(&self.shell, cx)
+            .into_iter()
+            .map(|row| row.row.key)
+            .filter(|key| matches!(key, RowKey::Pending { .. }))
+            .collect();
+        assert_eq!(pending.len(), 1, "one pending row: {pending:?}");
+        pending[0].clone()
     }
 
     /// `secondary-4` focuses the operation area, which lists this
@@ -598,17 +625,28 @@ impl Walk {
     fn open_the_operation_area(&self, cx: &mut TestAppContext) {
         self.keys("secondary-4", cx);
         self.region(Region::Operations, cx);
-        assert!(self.shell.present(("pending-row", 0usize), cx));
+        self.pending_row(cx);
         assert!(!self.shell.requests(cx, |_| true).is_empty());
     }
 
-    /// From the operation area, Tab reaches the pending operation's
-    /// Abandon and Enter opens its confirmation dialog, which holds focus.
-    /// Escape closes it with nothing asked, and focus is back on Abandon.
+    /// From the operation area, the arrows reach the pending operation's
+    /// row, and its menu's Abandon (`shift-f10`, the arrows and Enter) opens
+    /// its confirmation dialog, which holds focus. Escape closes it with
+    /// nothing asked, and focus is back on the list, the row highlighted.
     fn start_a_confirmed_action_and_escape(&self, cx: &mut TestAppContext) {
         let requests = self.shell.requests(cx, |_| true).len();
-        self.tab_to("tab", ("pending-abandon", 0usize), cx);
-        self.on(("pending-abandon", 0usize), Region::Operations, cx);
+        let row = self.pending_row(cx);
+        super::activity_support::to_row(&self.shell, &row, cx);
+        self.on_handle(
+            &super::activity_support::list_focus(&self.shell, cx),
+            Region::Operations,
+            cx,
+        );
+        self.keys("shift-f10", cx);
+        super::repositories::tests::support::highlight(
+            &mut self.shell.visual(cx),
+            super::operations::ABANDON,
+        );
         self.enter(cx);
         assert!(self.shell.present("confirm-dialog", cx));
         self.shell.frame(cx, |window, _| {
@@ -623,7 +661,16 @@ impl Walk {
         self.keys("escape", cx);
         assert!(!self.shell.present("confirm-dialog", cx));
         assert_eq!(self.shell.requests(cx, |_| true).len(), requests);
-        self.on(("pending-abandon", 0usize), Region::Operations, cx);
+        self.on_handle(
+            &super::activity_support::list_focus(&self.shell, cx),
+            Region::Operations,
+            cx,
+        );
+        assert_eq!(
+            super::activity_support::highlighted(&self.shell, cx),
+            Some(row),
+            "its row is highlighted"
+        );
     }
 
     /// `secondary-q` with no job running quits.

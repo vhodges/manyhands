@@ -4,12 +4,13 @@
 use super::{Region, Workspace};
 use crate::desktop::{
     keys::{
-        ActivityDown, ActivityEnd, ActivityEnter, ActivityHome, ActivityUp, CloseTab, DockPanel,
-        Find as FindKey, FocusContent, FocusNavigation, FocusOperations, FocusRepositories,
-        JumpToDiscussion, NewItem, NextRegion, NextTab, OpenDockMenu, OpenDrafts,
-        OpenRepositoryMenu, OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow,
-        Rebuild, Refresh, RepositoryMenuChoice, ScrollPageDown, ScrollPageUp, ScrollToBottom,
-        ScrollToTop, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
+        ActivityDown, ActivityEnd, ActivityEnter, ActivityHome, ActivityMenuChoice, ActivityUp,
+        CloseTab, DockPanel, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
+        FocusRepositories, JumpToDiscussion, NewItem, NextRegion, NextTab, OpenActivityMenu,
+        OpenDockMenu, OpenDrafts, OpenRepositoryMenu, OpenSelected, OpenSettings, PreviousRegion,
+        PreviousTab, Quit, QuitNow, Rebuild, Refresh, RepositoryMenuChoice, ScrollPageDown,
+        ScrollPageUp, ScrollToBottom, ScrollToTop, ToggleBottomDock, ToggleLeftDock,
+        ToggleRightDock,
     },
     model::{
         layout::{PanelKind, Side},
@@ -195,6 +196,7 @@ impl Render for Workspace {
             .child(self.dock_area().clone());
         let footer = self.footer(window, cx);
         let dock_menu = self.dock_menu_layer(window, cx);
+        let activity_menu = self.activity_menu_layer(window, cx);
         // Root's first child draws its dialog and notification layers.
         v_flex()
             .id("workspace")
@@ -323,6 +325,18 @@ impl Render for Workspace {
             }))
             .on_action(unless_dialog(
                 cx,
+                |this, _: &OpenActivityMenu, window, cx| {
+                    this.open_focused_activity_menu(window, cx)
+                },
+            ))
+            .on_action(unless_dialog(
+                cx,
+                |this, action: &ActivityMenuChoice, window, cx| {
+                    this.activity_menu_chosen(action, window, cx)
+                },
+            ))
+            .on_action(unless_dialog(
+                cx,
                 |this, _: &OpenRepositoryMenu, window, cx| {
                     this.open_focused_repository_menu(window, cx)
                 },
@@ -341,6 +355,7 @@ impl Render for Workspace {
             .child(footer)
             .children(dock_menu)
             .children(repository_menu)
+            .children(activity_menu)
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }

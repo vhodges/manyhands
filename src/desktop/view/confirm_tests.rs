@@ -24,9 +24,12 @@ use crate::desktop::{
     },
     test_support::fixtures::{Fixture, resume_through},
     view::{
-        activity_support::{act, pending_key},
+        activity_support::{
+            act, choose_in_menu, highlighted, list_focus, pending_key, refresh, row as activity_row,
+        },
         harness::{Shell, key},
         operations::ABANDON,
+        repositories::tests::support::press_and_hold,
         workspace::{QuitPhase, REGIONS, Region},
     },
 };
@@ -151,26 +154,26 @@ async fn pressing_enter_twice_on_confirm_submits_one_request(cx: &mut TestAppCon
 }
 
 /// Escape closes the dialog with nothing asked of the worker, and focus
-/// goes back to the Abandon control that opened it.
+/// goes back to the list, the row that opened it highlighted (decision 23).
 #[gpui_kit::test]
 fn escape_closes_the_dialog_with_no_request_and_focus_returns_to_abandon(cx: &mut TestAppContext) {
-    let (shell, root, operation) = stranded(cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    let (shell, root, _) = stranded(cx);
+    let row = pending_key(&shell, &key(&root), "save_ticket", cx);
+    choose_in_menu(&shell, &row, ABANDON, cx);
     assert!(shell.present("confirm-dialog", cx));
 
-    shell.keys("escape", cx);
+    let list = list_focus(&shell, cx);
+    assert!(
+        press_and_hold(&shell, "escape", &list, cx),
+        "focus is back on the list, in the update Escape closed the dialog"
+    );
     assert!(!shell.present("confirm-dialog", cx));
     assert!(shell.requests(cx, |_| true).is_empty());
-    let focus = shell
-        .workspace
-        .read_with(cx, |workspace, _| {
-            workspace.abandon_focus(root.to_str().unwrap(), &operation)
-        })
-        .expect("the Abandon control has a focus");
-    assert!(shell.frame(cx, |window, _| focus.is_focused(window)));
+    assert_eq!(highlighted(&shell, cx), Some(row.clone()), "its row");
     assert!(shell.present(Region::Operations.ring_id(), cx));
     // The pending row is untouched.
-    assert!(shell.present(("pending-row", 0usize), cx));
+    refresh(&shell, cx);
+    assert!(activity_row(&shell, &row, cx).is_some());
 }
 
 /// The region rings the frame draws.

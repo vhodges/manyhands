@@ -45,6 +45,13 @@ impl Workspace {
         }
     }
 
+    /// Highlights the row `key`, when the pane draws it: a choice made on a
+    /// row leaves it the highlighted one, whether it came from its button,
+    /// its menu or Enter (C3).
+    pub(in crate::desktop::view) fn highlight_applied_row(&mut self, key: &RowKey) {
+        self.activity.pane.highlight(key);
+    }
+
     /// A left press on a row: it is highlighted and the list has focus.
     pub(in crate::desktop::view) fn highlight_activity(
         &mut self,

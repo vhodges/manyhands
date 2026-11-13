@@ -48,6 +48,7 @@ impl Workspace {
         ) {
             return;
         }
+        self.highlight_applied_row(&choice.key);
         self.run_activity_action(&choice.action, origin, window, cx);
     }
 

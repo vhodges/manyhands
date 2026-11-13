@@ -193,6 +193,7 @@ impl Workspace {
             (None, Placement::Pointer(_)) => window.focused(cx),
             (None, Placement::Toggle(_)) => None,
         };
+        self.activity.menu = None;
         self.footer.menu = Some(DockMenu::open(
             kind, current, toggle, placement, restore, window, cx,
         ));

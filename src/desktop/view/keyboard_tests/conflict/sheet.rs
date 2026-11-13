@@ -62,8 +62,8 @@ async fn check_again_by_keyboard_keeps_focus_in_the_sheet(cx: &mut TestAppContex
 }
 
 /// A local conflict whose title and body both sides changed, real, after a
-/// restart: `secondary-4`, the arrows, Tab and Enter on its pending row's
-/// Review changes button open the sheet, with nothing chosen. Gives the walk and the
+/// restart: `secondary-4`, the arrows and the row menu's Review changes open
+/// the sheet, with nothing chosen. Gives the walk and the
 /// Result editor's own focus.
 async fn body_sheet(cx: &mut TestAppContext) -> (Walk, FocusHandle) {
     cx.executor().allow_parking();
@@ -71,8 +71,7 @@ async fn body_sheet(cx: &mut TestAppContext) -> (Walk, FocusHandle) {
     let a = fixture.create_repository("a");
     fixture.conflict_locally_with_body(&a, TICKET, "Mine", Some("Mine body.\n"), "Theirs");
     let walk = Walk::over(Shell::open(fixture, cx), a);
-    walk.to_pending_button("context_sync_local", cx).await;
-    walk.enter(cx);
+    walk.to_pending_review("context_sync_local", cx).await;
     walk.sheet_drawn("conflict-save", cx).await;
     assert_eq!(
         walk.shell.label("conflict-progress", cx).as_deref(),

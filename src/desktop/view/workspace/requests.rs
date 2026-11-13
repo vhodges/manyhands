@@ -3,7 +3,7 @@
 use super::{Region, Workspace};
 use crate::desktop::{
     model::{
-        layout::PanelKind,
+        activity::rows::RowKey,
         operations::RecoveryStep,
         stamp::{RepoKey, SettingsPage, ViewScope},
     },
@@ -15,7 +15,6 @@ use crate::desktop::{
     view::{
         confirm::{confirm, prepare_again},
         item::ItemRoute,
-        operations::request_id,
     },
 };
 use gpui_kit::{
@@ -228,10 +227,13 @@ impl Workspace {
         self.focus_region(Region::Content, window, cx);
     }
 
-    /// Show it, on `busy` (Busy repositories): the operation area entry
-    /// of `request`, the request of this session that may hold the
-    /// repository; with none, or one no longer listed, the operation area,
-    /// whose pending operations of `root` are read again.
+    /// Show it, on `busy` (Busy repositories): reveals Activity and
+    /// highlights, and focuses the list on, the row of `request`, the
+    /// request of this session that may hold the repository (a running
+    /// retirement is its S1 row, R-51); with none, or one no longer listed,
+    /// the first pending row of `root`, whose pending operations are read
+    /// again (C3). Task 10's filter, when it hides the row, is turned off
+    /// here.
     fn show_holder(
         &mut self,
         root: PathBuf,
@@ -239,23 +241,37 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Activity may be hidden, or behind another tab (R-10).
-        self.reveal(PanelKind::Activity, window, cx);
-        let entry = request
-            .map(|id| request_id(id, "entry"))
-            .and_then(|entry| self.control_focus.get(&entry).cloned());
-        match entry {
-            Some(entry) => {
-                self.last_region = Some(Region::Operations);
-                window.focus(&entry, cx);
-            }
-            None => {
-                if let Some(root) = root.to_str() {
-                    self.load_pending(root.to_owned(), cx);
-                }
-                self.focus_region(Region::Operations, window, cx);
-            }
+        let listed = |key: &RowKey| {
+            self.activity
+                .log
+                .rows()
+                .iter()
+                .any(|row| &row.row.key == key)
+        };
+        let holder = request
+            .map(RowKey::Request)
+            .filter(|key| listed(key))
+            .or_else(|| {
+                let root = root.to_str()?;
+                self.activity
+                    .log
+                    .rows()
+                    .iter()
+                    .map(|row| &row.row.key)
+                    .find(|key| matches!(key, RowKey::Pending { root: of, .. } if of == root))
+                    .cloned()
+            });
+        if let Some(key) = &holder {
+            self.activity.pane.highlight_when_shown(key);
         }
+        if request.is_none_or(|id| holder != Some(RowKey::Request(id)))
+            && let Some(root) = root.to_str()
+        {
+            self.load_pending(root.to_owned(), cx);
+        }
+        // Activity may be hidden, or behind another tab (R-10): focusing its
+        // region reveals it and focuses the list.
+        self.focus_region(Region::Operations, window, cx);
         cx.notify();
     }
 
@@ -522,40 +538,6 @@ impl Workspace {
             window,
             cx,
         );
-    }
-
-    /// Where an Abandon press gave focus back to (test seam until the swap
-    /// ends the focus maps, milestone 2).
-    #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(in crate::desktop::view) fn abandon_focus_for(
-        &mut self,
-        root: &RepoKey,
-        operation_id: &str,
-        cx: &mut Context<Self>,
-    ) -> FocusHandle {
-        let key = (root.clone(), operation_id.to_owned());
-        self.abandon_focus
-            .entry(key)
-            .or_insert_with(|| cx.focus_handle())
-            .clone()
-    }
-
-    pub(in crate::desktop::view) fn control_focus_for(
-        &mut self,
-        id: String,
-        cx: &mut Context<Self>,
-    ) -> FocusHandle {
-        self.control_focus
-            .entry(id)
-            .or_insert_with(|| cx.focus_handle())
-            .clone()
-    }
-
-    #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn abandon_focus(&self, root: &str, operation_id: &str) -> Option<FocusHandle> {
-        self.abandon_focus
-            .get(&(root.to_owned(), operation_id.to_owned()))
-            .cloned()
     }
 
     fn protected_generation(&self, id: DesktopRequestId, cx: &App) -> bool {

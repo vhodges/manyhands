@@ -3,6 +3,7 @@
 
 mod activity;
 mod activity_facts;
+mod activity_menu;
 mod activity_panel;
 mod content;
 mod docks;
@@ -161,9 +162,6 @@ pub(crate) struct Workspace {
     /// Each repository's read of them; a newer read drops the last.
     pending_conflict_reads: HashMap<RepoKey, Task<()>>,
     conflict_generations: Generations,
-    #[cfg(all(test, feature = "desktop-test-support"))]
-    abandon_focus: HashMap<(RepoKey, String), FocusHandle>,
-    control_focus: HashMap<String, FocusHandle>,
     /// The items a Retire… press is in progress for, by repository and item
     /// ID: a second press waits (E4), unless the press is waiting on a
     /// question that no longer stands.
@@ -370,9 +368,6 @@ impl Workspace {
             pending_conflicts: HashMap::new(),
             pending_conflict_reads: HashMap::new(),
             conflict_generations: Generations::default(),
-            #[cfg(all(test, feature = "desktop-test-support"))]
-            abandon_focus: HashMap::new(),
-            control_focus: HashMap::new(),
             retire_asked: HashMap::new(),
             _operations: operations,
             _drafts: drafts,

@@ -14,7 +14,6 @@
 //! (`model::activity::copy`, B2 to B5).
 
 use gpui_kit::{Context, FocusHandle, Window, component::WindowExt};
-use manyhands::drafts::DraftId;
 
 mod attention;
 mod outcomes;
@@ -25,8 +24,6 @@ mod review;
 
 pub(in crate::desktop::view) use retire::{RetireStep, Subject as RetireSubject};
 
-#[cfg(all(test, feature = "desktop-test-support"))]
-pub(in crate::desktop::view) use outcomes::offer_part;
 pub(in crate::desktop::view) use outcomes::{already_finished, facts_words, shown_offers};
 pub(crate) use outcomes::{share_result, share_words};
 
@@ -89,22 +86,6 @@ pub(in crate::desktop::view) fn dialog_owns(control: RecoveryControl) -> bool {
             | RecoveryControl::Inspect
             | RecoveryControl::CheckHost
     )
-}
-
-/// The element ids of a request's parts: stable across reorders, since
-/// they carry the request's number.
-pub(crate) fn request_id(id: DesktopRequestId, part: &str) -> String {
-    format!("request-{}-{part}", id.0)
-}
-
-#[cfg(test)]
-pub(crate) fn recovery_id(id: DesktopRequestId, n: usize) -> String {
-    format!("request-{}-recovery-{n}", id.0)
-}
-
-/// The element ids of a failing session's entry.
-pub(crate) fn draft_flush_id(id: DraftId, part: &str) -> String {
-    format!("draft-flush-{id}-{part}")
 }
 
 impl Workspace {

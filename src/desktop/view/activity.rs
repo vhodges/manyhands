@@ -11,6 +11,7 @@
 //! row the log has since changed runs nothing (R-55; T8).
 
 mod actions;
+pub(crate) mod menu;
 pub(crate) mod row;
 
 use std::{
@@ -63,6 +64,9 @@ pub(crate) struct ActivityPane {
     /// The highlighted row's button, when it is enabled: the only button
     /// that is a tab stop (R-33).
     button_focus: FocusHandle,
+    /// A row to highlight once the rows that hold it are applied: "Show it"
+    /// and Drafts not saved's Cancel name a row the pane may not draw yet.
+    want: Option<RowKey>,
     scroll: UniformListScrollHandle,
     bounds: RowBounds,
     list_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -73,6 +77,7 @@ impl ActivityPane {
         Self {
             rows: Rc::default(),
             highlight: None,
+            want: None,
             list_focus,
             button_focus,
             scroll: UniformListScrollHandle::new(),
@@ -87,9 +92,13 @@ impl ActivityPane {
         &self.rows
     }
 
-    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn highlighted_key(&self) -> Option<&RowKey> {
         self.highlight.as_ref()
+    }
+
+    /// The row `key`, as drawn.
+    pub(crate) fn row(&self, key: &RowKey) -> Option<&ActivityRow> {
+        self.rows.iter().find(|row| &row.row.key == key)
     }
 
     /// The highlighted row, as drawn.
@@ -161,9 +170,16 @@ impl ActivityPane {
                 .map(|row| row.row.key.clone()),
             (false, None) => None,
         };
+        if let Some(wanted) = self.want.take()
+            && self.rows.iter().any(|row| row.row.key == wanted)
+        {
+            self.highlight = Some(wanted);
+            self.scroll_to_highlight();
+        }
         if self.list_focus.contains_focused(window, cx) {
             self.start_highlight();
         }
+        let kept = kept && self.highlight == before;
         let button = self
             .highlighted()
             .is_some_and(|row| row.row.button.as_ref().is_some_and(|offer| offer.enabled));
@@ -211,6 +227,15 @@ impl ActivityPane {
         }
     }
 
+    /// Highlights the row `key` now when the pane shows it, else once the
+    /// next rows are applied (once: a row that is still not there is
+    /// dropped).
+    pub(crate) fn highlight_when_shown(&mut self, key: &RowKey) {
+        if !self.highlight(key) {
+            self.want = Some(key.clone());
+        }
+    }
+
     fn scroll_to_highlight(&self) {
         let at = self
             .highlight
@@ -219,6 +244,16 @@ impl ActivityPane {
         if let Some(at) = at {
             self.scroll.scroll_to_item(at, ScrollStrategy::Nearest);
         }
+    }
+
+    /// Where the row `key` was drawn last, while it is drawn.
+    pub(crate) fn row_bounds(&self, key: &RowKey) -> Option<Bounds<Pixels>> {
+        self.bounds.borrow().get(key).copied()
+    }
+
+    /// Where the list was drawn last.
+    pub(crate) fn list_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.list_bounds.get()
     }
 
     /// The tooltip each applied row draws, line by line (B5).

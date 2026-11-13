@@ -47,7 +47,6 @@ use crate::desktop::{
     view::{
         activity_support::{act, offered as offer_on, request, row},
         harness::Shell,
-        operations::request_id,
         settings::Shown,
     },
 };
@@ -193,18 +192,6 @@ pub(super) fn offered(
         }
     }
     shown
-}
-
-/// What a finished share's outcome says in drawn words, as the operation
-/// area's column draws it. The keyboard test of the busy repository
-/// (`show_it_focuses_the_entry_of_the_possible_holder`, E-7) still reads it
-/// there until Task 9; every other test reads `outcome_of`.
-pub(super) fn outcome(
-    shell: &Shell,
-    id: DesktopRequestId,
-    cx: &mut TestAppContext,
-) -> Option<String> {
-    shell.label(request_id(id, "outcome"), cx)
 }
 
 /// Where the finished share `id` stands, as the request model classified it

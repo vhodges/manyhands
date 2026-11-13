@@ -2,7 +2,7 @@
 //! shows its entry when Activity does, and Show it reveals Activity (P2,
 //! P28, R-10).
 
-use gpui_kit::{TestAppContext, test::TestWindowExt};
+use gpui_kit::TestAppContext;
 
 use super::support::*;
 use crate::desktop::{
@@ -17,10 +17,9 @@ use crate::desktop::{
     },
     test_support::fixtures::{Fixture, item_id},
     view::{
-        activity_support::{refresh, row},
+        activity_support::{highlighted, list_focused, refresh, row},
         harness::{Shell, key},
         item::ItemRoute,
-        operations::request_id,
         workspace::Region,
     },
 };
@@ -178,10 +177,9 @@ async fn a_request_finishes_while_activity_is_hidden(cx: &mut TestAppContext) {
     assert_eq!(shell.backend.jobs_seen(), jobs, "showing it sent nothing");
 }
 
-/// R-10: Show it reveals Activity before it focuses the entry of the
-/// request that may hold the repository, or, with none, the region. The
-/// entry's focus handle was made while Activity was drawn and was not
-/// pruned while it was hidden.
+/// R-10: Show it reveals Activity before it highlights the row of the
+/// request that may hold the repository and focuses the list, or, with none,
+/// focuses the region. The row is in the log while Activity is hidden.
 #[gpui_kit::test]
 async fn show_it_reveals_a_hidden_activity(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -194,9 +192,11 @@ async fn show_it_reveals_a_hidden_activity(cx: &mut TestAppContext) {
     })[0];
     shell.until_ended(id, cx).await;
     shell.frame(cx, |_, _| ());
+    refresh(&shell, cx);
+    let holder = RowKey::Request(id);
     assert!(
-        shell.present(request_id(id, "entry"), cx),
-        "setup: the entry was drawn"
+        row(&shell, &holder, cx).is_some(),
+        "setup: the request has its row"
     );
 
     for (what, request) in [("its entry", Some(id)), ("the region", None)] {
@@ -223,18 +223,18 @@ async fn show_it_reveals_a_hidden_activity(cx: &mut TestAppContext) {
             "{what}: revealed"
         );
         assert!(shell.present(Region::Operations.id(), cx), "{what}: drawn");
-        let entry = shell.frame(cx, |window, _| {
-            window
-                .try_find(request_id(id, "entry"))
-                .and_then(|entry| entry.focused())
-        });
-        match request {
-            Some(_) => assert_eq!(entry, Some(true), "{what}: focused"),
-            None => assert_eq!(
-                focus(&shell, cx),
-                Some(Region::Operations),
-                "{what}: focused"
-            ),
+        assert_eq!(
+            focus(&shell, cx),
+            Some(Region::Operations),
+            "{what}: focused"
+        );
+        assert!(list_focused(&shell, cx), "{what}: the list has focus");
+        if request.is_some() {
+            assert_eq!(
+                highlighted(&shell, cx),
+                Some(holder.clone()),
+                "{what}: its row is highlighted"
+            );
         }
         assert_agreement(&shell, what, cx);
     }

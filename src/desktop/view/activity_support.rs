@@ -5,17 +5,13 @@
 //! function a menu's choice calls, after a synchronous refresh of the log and
 //! with the row's current revision. It dispatches no window action:
 //! `Window::dispatch_action` runs deferred on the focused node, and
-//! `FocusHandle::dispatch_action` does nothing for an undrawn handle. Until
-//! the swap (Task 9) the origin it passes is today's control handle for the
-//! action, so a test that also reads where focus lands is unchanged.
+//! `FocusHandle::dispatch_action` does nothing for an undrawn handle. The
+//! origin it passes is the list's handle, as the menu's and the button's
+//! are (C3, decision 23).
 
-use gpui_kit::{Context, FocusHandle, TestAppContext, component::WindowExt};
+use gpui_kit::{FocusHandle, TestAppContext, component::WindowExt};
 
-use super::{
-    harness::Shell,
-    operations::{offer_part, recovery_id, request_id},
-    workspace::{Region, Workspace},
-};
+use super::harness::Shell;
 use crate::desktop::{
     keys::ActivityMenuChoice,
     model::{
@@ -91,6 +87,15 @@ pub(crate) fn to_row(shell: &Shell, key: &RowKey, cx: &mut TestAppContext) {
     shell.keys("secondary-4", cx);
     arrow_to(shell, key, cx);
     assert!(list_focused(shell, cx), "the list holds focus on {key:?}");
+}
+
+/// Opens the menu of the row `key` by keyboard, as a person does: the list
+/// focused on the row, `shift-f10`, then a click on its item `label`. For
+/// what no row has as its button, such as Abandon… and Dismiss.
+pub(crate) fn choose_in_menu(shell: &Shell, key: &RowKey, label: &str, cx: &mut TestAppContext) {
+    to_row(shell, key, cx);
+    shell.keys("shift-f10", cx);
+    super::repositories::tests::support::choose(shell, label, cx);
 }
 
 /// The log's row `key`, as it stands.
@@ -314,44 +319,17 @@ pub(crate) fn refresh(shell: &Shell, cx: &mut TestAppContext) {
 }
 
 /// Calls `choose_activity` with `choice`, inside `workspace.update`, with the
-/// origin today's control would have given.
+/// list's handle as the origin, as a menu's choice and a button give it
+/// (C3).
 fn choose(shell: &Shell, choice: ActivityMenuChoice, settle: bool, cx: &mut TestAppContext) {
     shell.frame(cx, |window, cx| {
         shell.workspace.update(cx, |workspace, cx| {
-            let origin = origin_of(workspace, &choice.action, cx);
+            let origin = workspace.activity_pane().list_focus().clone();
             workspace.choose_activity(&choice, origin, window, cx)
         })
     });
     if settle {
         shell.run(cx);
-    }
-}
-
-/// The handle of today's control for `action`, where one has focus to give
-/// back; the operation area's otherwise (R-45). Task 9 replaces it with the
-/// list's.
-fn origin_of(
-    workspace: &mut Workspace,
-    action: &ActivityAction,
-    cx: &mut Context<Workspace>,
-) -> FocusHandle {
-    match action {
-        ActivityAction::Open(id) => workspace.control_focus_for(request_id(*id, "open"), cx),
-        ActivityAction::Review(id) => workspace.control_focus_for(request_id(*id, "review"), cx),
-        ActivityAction::Offer(id, offer) => {
-            workspace.control_focus_for(request_id(*id, offer_part(*offer)), cx)
-        }
-        ActivityAction::Recovery(id, n) => workspace.control_focus_for(recovery_id(*id, *n), cx),
-        ActivityAction::ResumeLifecycle {
-            root, operation, ..
-        } => workspace.control_focus_for(format!("resume:{root}:{operation}"), cx),
-        ActivityAction::ReviewPending { root, operation } => {
-            workspace.control_focus_for(format!("review:{root}:{operation}"), cx)
-        }
-        ActivityAction::Abandon { root, operation } => {
-            workspace.abandon_focus_for(root, operation, cx)
-        }
-        _ => workspace.region_focus(Region::Operations),
     }
 }
 

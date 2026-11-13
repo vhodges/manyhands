@@ -40,6 +40,10 @@ pub(super) fn save(operation: &str) -> OperationDto {
     waiting(OperationAction::SaveTicket, operation, None)
 }
 
+pub(super) fn waiting_close(operation: &str, item: &str) -> OperationDto {
+    waiting(OperationAction::Close, operation, Some(item))
+}
+
 pub(super) fn pending_key(operation: &str) -> RowKey {
     RowKey::Pending {
         root: PENDING_ROOT.to_owned(),
@@ -57,6 +61,7 @@ pub(super) fn pending_key(operation: &str) -> RowKey {
 /// - a refresh that was accepted and cannot be stopped: a disabled button.
 pub(super) struct Rows {
     pub(super) shell: Shell,
+    pub(super) root: std::path::PathBuf,
     pub(super) pending: [RowKey; 4],
     pub(super) plain: RowKey,
     pub(super) item: RowKey,
@@ -100,6 +105,7 @@ pub(super) fn rows(cx: &mut TestAppContext) -> Rows {
     );
     Rows {
         shell,
+        root,
         pending: [OP_A, OP_B, OP_C, OP_D].map(pending_key),
         plain: RowKey::Request(plain),
         item: RowKey::Request(item),

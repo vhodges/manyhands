@@ -45,25 +45,6 @@ use crate::desktop::{
 #[cfg(test)]
 pub(crate) use crate::desktop::model::activity::copy::offer_label;
 
-/// The part of an entry's element ids an offer's control takes. Share's
-/// is the stopped share's (design, Outcomes and routes).
-#[cfg(test)]
-pub(crate) fn offer_part(offer: SyncOffer) -> &'static str {
-    match offer {
-        SyncOffer::Share => "share",
-        SyncOffer::Retry => "share-retry",
-        SyncOffer::GiveUp => "give-up",
-        SyncOffer::Unlock => "unlock",
-        SyncOffer::OpenSharingAndKeys => "sharing-and-keys",
-        SyncOffer::CheckHost => "check-host",
-        SyncOffer::SetIdentity => "set-identity",
-        SyncOffer::ShowHolder => "show-holder",
-        SyncOffer::SetUpSharing => "set-up-sharing",
-        SyncOffer::Republish => "republish",
-        SyncOffer::StopAndRepublish => "stop-and-republish",
-    }
-}
-
 /// The outcome of the finished share `id`, classified once when it
 /// finished from where its record stood after its last attempt (unknown
 /// when the worker kept none) and whether that attempt was a Give up's.

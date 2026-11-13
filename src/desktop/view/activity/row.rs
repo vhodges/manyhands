@@ -6,8 +6,8 @@
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, ElementId, FocusHandle, Hsla, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, SharedString, StatefulInteractiveElement, Styled, TestSupportExt,
-    WeakEntity, Window, canvas,
+    MouseButton, MouseDownEvent, ParentElement, SharedString, StatefulInteractiveElement, Styled,
+    TestSupportExt, WeakEntity, Window, canvas,
     component::{ActiveTheme, Disableable, Sizable, button::Button, tooltip::Tooltip},
     div,
     prelude::FluentBuilder,
@@ -150,6 +150,23 @@ pub(super) fn element(
         .test_support()
         .aria_label(message.clone())
         .aria_description(lines.join(" "))
+        // A secondary press highlights the row and opens its menu at the
+        // pointer, taken before anything chooses or focuses: the Workspace's
+        // opener refuses behind a modal (R-36).
+        .capture_any_mouse_down({
+            let workspace = workspace.clone();
+            let key = key.clone();
+            move |event: &MouseDownEvent, window, cx| {
+                if event.button == MouseButton::Right {
+                    window.prevent_default();
+                    let at = event.position;
+                    let key = key.clone();
+                    let _ = workspace.update(cx, |workspace, cx| {
+                        workspace.open_activity_menu_at(key, at, window, cx)
+                    });
+                }
+            }
+        })
         // A left press highlights the row and focuses the list; the button
         // inside, whose click comes later, runs on its own.
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {

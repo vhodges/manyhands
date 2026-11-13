@@ -30,7 +30,7 @@ use crate::desktop::{
     },
     services::{lifecycle_of, requests::Intent},
     view::{
-        activity::ActivityPane,
+        activity::{ActivityPane, menu::ActivityMenu},
         item::{ItemPane, locked_text},
         repositories::each_repository,
     },
@@ -44,6 +44,8 @@ pub(in crate::desktop::view) struct ActivityState {
     dirty: bool,
     titles: HashMap<EntityId, Option<String>>,
     pub(super) pane: ActivityPane,
+    /// The open row menu (Part D).
+    pub(super) menu: Option<ActivityMenu>,
     #[cfg(test)]
     derivations: usize,
     /// How many choices the list's buttons and Enter made (P15, P16).
@@ -63,6 +65,7 @@ impl ActivityState {
                 cx.focus_handle().tab_stop(true),
                 cx.focus_handle().tab_stop(true),
             ),
+            menu: None,
             #[cfg(test)]
             derivations: 0,
             #[cfg(test)]

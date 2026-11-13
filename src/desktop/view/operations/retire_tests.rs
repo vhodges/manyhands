@@ -37,6 +37,7 @@ use crate::desktop::{
     view::{
         activity_support::{act, button_focus, index_of, offered, refresh, row, to_row},
         confirm::CANCEL,
+        repositories::tests::support::{choose, highlight},
         retire_asks::{RETIRE_CHOICE, SHOW_TAB, kept_message, unkept_message},
         settings::polling_support::Rig,
     },
@@ -44,7 +45,6 @@ use crate::desktop::{
 
 const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
 const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
-const TABS: usize = 120;
 
 fn id(n: usize) -> ItemId {
     format!("01ARZ3NDEKTSV4RRFFQ69G5FD{n}").parse().unwrap()
@@ -607,39 +607,40 @@ async fn retire_pending_row_by_keyboard(cx: &mut TestAppContext) {
         })
     );
 
-    // Row 0 (the entry's) offers Resume and Abandon; row 1, Abandon alone.
-    assert!(rig.shell.present(("pending-resume", 0usize), cx));
-    assert!(rig.shell.present(("pending-abandon", 0usize), cx));
-    assert!(!rig.shell.present(("pending-resume", 1usize), cx));
-    assert!(rig.shell.present(("pending-abandon", 1usize), cx));
+    // The entry's row offers Resume and Abandon; the other row, Abandon alone.
+    let (first, second) = (
+        RowKey::Pending {
+            root: root.clone(),
+            operation: operation.to_string(),
+        },
+        RowKey::Pending {
+            root: root.clone(),
+            operation: other.to_string(),
+        },
+    );
+    refresh(&rig.shell, cx);
+    let enabled = |key: &RowKey, label: &str, cx: &mut TestAppContext| {
+        offered(&rig.shell, key, label, cx).is_some_and(|offer| offer.enabled)
+    };
+    assert!(enabled(&first, "Resume", cx));
+    assert!(enabled(&first, "Abandon", cx));
+    assert!(offered(&rig.shell, &second, "Resume", cx).is_none());
+    assert!(enabled(&second, "Abandon", cx));
 
-    // W-6: both actions are inside the area at the default window, and a
-    // click reaches them. Resume's click is held in the library, so the
-    // request stays a request.
-    let area = rig
-        .shell
-        .frame(cx, |window, _| window.find("operation-area").bounds());
-    for id in [
-        ("pending-resume", 0usize),
-        ("pending-abandon", 0usize),
-        ("pending-abandon", 1usize),
-    ] {
-        assert!(rig.shell.tab_reaches(id, TABS, cx));
-        let bounds = rig.shell.frame(cx, |window, _| window.find(id).bounds());
-        assert!(
-            bounds.left() >= area.left() && bounds.right() <= area.right(),
-            "{id:?} is inside the area: {bounds:?} in {area:?}"
-        );
-    }
-    rig.shell.click(("pending-abandon", 1usize), cx);
-    assert!(rig.shell.present("confirm-dialog", cx), "a click opens it");
+    // A click on a row opens its menu by the right button, and Abandon
+    // there opens the confirmation. Resume's click on its drawn button is
+    // held in the library, so the request stays a request.
+    right_click(&rig, &second, cx);
+    choose(&rig.shell, "Abandon", cx);
+    assert!(rig.shell.present("confirm-dialog", cx), "the menu opens it");
     rig.shell.keys("escape", cx);
     // The abandon's preview read the repository's rows again: they are as
     // the library would still list them.
     seed(cx);
     rig.shell.run(cx);
     let held = rig.shell.backend.hold_job(JobKind::OperationResume);
-    rig.shell.click(("pending-resume", 0usize), cx);
+    let at = index_of(&rig.shell, &first, cx);
+    rig.shell.click(("activity-button", at), cx);
     held.wait_reached();
     let resumes = rig.shell.requests(cx, |request| {
         matches!(request.intent, Intent::OperationResume { .. })
@@ -652,10 +653,9 @@ async fn retire_pending_row_by_keyboard(cx: &mut TestAppContext) {
     seed(cx);
     rig.shell.run(cx);
 
-    // Abandon, by keyboard, on the row no entry names.
-    rig.shell.keys("secondary-4", cx);
-    assert!(rig.shell.tab_reaches(("pending-abandon", 1usize), TABS, cx));
-    rig.shell.press("enter", cx);
+    // Abandon, by keyboard, on the row no entry names: the arrows, the
+    // menu's `shift-f10`, the arrows and Enter.
+    choose_by_keys(&rig, &second, "Abandon", cx);
     assert!(
         rig.shell.present("confirm-dialog", cx),
         "the confirmation opens"
@@ -667,15 +667,15 @@ async fn retire_pending_row_by_keyboard(cx: &mut TestAppContext) {
     seed(cx);
     rig.shell.run(cx);
 
-    // Resume, by keyboard.
+    // Resume, by keyboard: the arrows, Tab to its button, Enter.
     rig.shell
         .backend
         .answer_job(JobKind::OperationResume, original_request(request));
     rig.shell
         .backend
         .answer_job(JobKind::ContextRetire, retired());
-    rig.shell.keys("secondary-4", cx);
-    assert!(rig.shell.tab_reaches(("pending-resume", 0usize), TABS, cx));
+    to_row(&rig.shell, &first, cx);
+    rig.shell.keys("tab", cx);
     rig.shell.press("enter", cx);
     rig.shell
         .until(cx, |operations| {
@@ -688,6 +688,23 @@ async fn retire_pending_row_by_keyboard(cx: &mut TestAppContext) {
     let sent = retirements(&rig, cx);
     assert_eq!(sent.len(), 1);
     assert_eq!((sent[0].lane, sent[0].request_id), (Lane::User, request));
+}
+
+/// A right click on the drawn row `key`.
+fn right_click(rig: &Rig, key: &RowKey, cx: &mut TestAppContext) {
+    let at = index_of(&rig.shell, key, cx);
+    rig.shell.frame(cx, |window, cx| {
+        window.right_click(("activity-row", at), cx)
+    });
+    rig.shell.run(cx);
+}
+
+/// The arrows to `key`'s row, `shift-f10`, the arrows to `label` and Enter.
+fn choose_by_keys(rig: &Rig, key: &RowKey, label: &str, cx: &mut TestAppContext) {
+    to_row(&rig.shell, key, cx);
+    rig.shell.keys("shift-f10", cx);
+    highlight(&mut rig.shell.visual(cx), label);
+    rig.shell.keys("enter", cx);
 }
 
 /// E4 step 4: the item's draft sessions are written while it is read-only,

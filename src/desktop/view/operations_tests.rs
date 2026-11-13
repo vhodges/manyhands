@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui_kit::{TestAppContext, test::TestWindowExt};
+use gpui_kit::TestAppContext;
 use manyhands::{
     repository::{
         ItemDtoKind, LeaseKind, OperationDto, OperationNextAction, ProgressStage, RepositoryService,
@@ -20,7 +20,7 @@ use manyhands::{
     results::{Outcome, RecoveryActionKind, ResultCode},
 };
 
-use super::{DISMISS, recovery_id, state_label};
+use super::{DISMISS, state_label};
 use crate::desktop::{
     model::{
         activity::rows::{ActivityAction, Kind, RowKey},
@@ -38,10 +38,11 @@ use crate::desktop::{
     },
     view::{
         activity_support::{
-            act, highlighted, list_focused, offered, pending_key, refresh as refresh_log, request,
-            row, to_row,
+            act, choose_in_menu, highlighted, list_focused, offered, pending_key,
+            refresh as refresh_log, request, row, to_row,
         },
         harness::{Shell, WAIT, key},
+        repositories::tests::support::press_and_hold,
         workspace::Region,
     },
 };
@@ -310,17 +311,6 @@ fn recovery_index(
             .expect("the recovery action is offered"),
         _ => panic!("not finished"),
     }
-}
-
-/// The recovery control of `id` for `kind`: its element, for the keyboard
-/// tests that Tab to it (Task 9 moves them to the list).
-fn recovery_of(
-    shell: &Shell,
-    id: DesktopRequestId,
-    kind: RecoveryActionKind,
-    cx: &mut TestAppContext,
-) -> String {
-    recovery_id(id, recovery_index(shell, id, kind, cx))
 }
 
 /// The label of the offer on `id`'s row that runs its recovery action `kind`.
@@ -811,29 +801,6 @@ async fn a_refresh_keeps_the_selected_document(cx: &mut TestAppContext) {
     assert_eq!(after, selected);
 }
 
-/// Whether the control wrapped as `id` holds focus. (Milestone 2 moves the
-/// test that still uses it to the row menu.)
-fn control_focused(shell: &Shell, id: &str, cx: &mut TestAppContext) -> bool {
-    let id = id.to_owned();
-    shell.frame(cx, |window, _| {
-        window
-            .try_find(gpui_kit::ElementId::Name(id.into()))
-            .and_then(|control| control.focused())
-            == Some(true)
-    })
-}
-
-/// From the operation area, Tab until the control `id` holds focus.
-fn tab_to(shell: &Shell, id: &str, cx: &mut TestAppContext) {
-    shell.keys("secondary-4", cx);
-    let mut presses = 0;
-    while !control_focused(shell, id, cx) {
-        presses += 1;
-        assert!(presses < 30, "Tab never reached {id}");
-        shell.keys("tab", cx);
-    }
-}
-
 /// The operation area holds focus, on the list, with `key`'s row
 /// highlighted, and rings its region (C3, decision 23).
 fn operations_keep_focus(shell: &Shell, key: &RowKey, cx: &mut TestAppContext) {
@@ -845,8 +812,8 @@ fn operations_keep_focus(shell: &Shell, key: &RowKey, cx: &mut TestAppContext) {
 
 /// Retry, pressed from the keyboard on its row (Enter on the highlighted
 /// row's button), takes its offer away with the request's state: focus stays
-/// on the list, the row still highlighted, never nowhere. (Dismiss, which
-/// is in the row's menu, is the menu test's, milestone 2.)
+/// on the list, the row still highlighted, never nowhere; and Dismiss, chosen
+/// from the row's menu, takes the row away and leaves focus on the list.
 #[gpui_kit::test]
 async fn dismiss_and_retry_from_the_keyboard_leave_focus_in_the_operation_area(
     cx: &mut TestAppContext,
@@ -883,11 +850,22 @@ async fn dismiss_and_retry_from_the_keyboard_leave_focus_in_the_operation_area(
     shell.until_ended(refresh, cx).await;
     refresh_log(&shell, cx);
     operations_keep_focus(&shell, &at, cx);
+
+    // Dismiss, which is in the row's menu, takes the row away: focus falls
+    // back to the list, never nowhere.
+    choose_in_menu(&shell, &at, DISMISS, cx);
+    refresh_log(&shell, cx);
+    assert!(row(&shell, &at, cx).is_none(), "the row is gone");
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    assert!(list_focused(&shell, cx), "the list holds focus");
+    assert!(shell.present(Region::Operations.ring_id(), cx));
 }
 
 /// A recovery action that opens the confirmation dialog, here Abandon of
-/// the operation a failed refresh left pending, gives focus back to that
-/// action's control when the dialog closes, not to the region.
+/// the operation a failed refresh left pending, chosen from the row's menu
+/// (Abandon is never its button), gives focus back to the list when the
+/// dialog closes, the row still highlighted (decision 23).
 #[gpui_kit::test]
 async fn a_recovery_dialog_gives_focus_back_to_the_action_that_opened_it(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -900,17 +878,17 @@ async fn a_recovery_dialog_gives_focus_back_to_the_action_that_opened_it(cx: &mu
     shell.until_ended(refresh, cx).await;
     reopened(&shell);
 
-    let abandon = recovery_of(&shell, refresh, RecoveryActionKind::OperationAbandon, cx);
-    tab_to(&shell, &abandon, cx);
-    shell.press("enter", cx);
+    let at = RowKey::Request(refresh);
+    let abandon = recovery_offer(&shell, refresh, RecoveryActionKind::OperationAbandon, cx);
+    choose_in_menu(&shell, &at, &abandon, cx);
     assert!(shell.present("confirm-dialog", cx));
-    shell.keys("escape", cx);
-    assert!(!shell.present("confirm-dialog", cx));
+    let list = crate::desktop::view::activity_support::list_focus(&shell, cx);
     assert!(
-        control_focused(&shell, &abandon, cx),
-        "focus is back on the recovery action"
+        press_and_hold(&shell, "escape", &list, cx),
+        "focus is back on the list, in the update Escape closed the dialog"
     );
-    assert!(shell.present(Region::Operations.ring_id(), cx));
+    assert!(!shell.present("confirm-dialog", cx));
+    operations_keep_focus(&shell, &at, cx);
 }
 
 /// A running request reads its stage, accepted or not, and only an

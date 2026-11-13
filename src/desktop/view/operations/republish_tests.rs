@@ -56,7 +56,7 @@ const FABRICATED: u64 = 4_000_000;
 
 /// One repository, `a`, with a ticket of its own working copy, its tab
 /// open.
-pub(super) fn ticket_shell(cx: &mut TestAppContext) -> (Shell, PathBuf) {
+pub(in crate::desktop::view) fn ticket_shell(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     cx.executor().allow_parking();
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
@@ -310,7 +310,7 @@ fn republish_builds_its_mutation() {
 /// A share of the ticket answered `remote_branch_deleted`, canned, whose
 /// record is finished: it ran against a repository with no publication
 /// remote, so the library holds nothing of it open.
-pub(super) async fn finished_deleted_share(
+pub(in crate::desktop::view) async fn finished_deleted_share(
     shell: &Shell,
     root: &Path,
     cx: &mut TestAppContext,

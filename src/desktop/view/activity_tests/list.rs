@@ -98,15 +98,22 @@ fn rows_draw_from_the_log_and_filter(cx: &mut TestAppContext) {
     assert!(!rows.shell.present(("activity-button", plain), cx));
 }
 
+/// The row whose menu is open, if one is.
+fn menu_key_of(shell: &Shell, cx: &mut TestAppContext) -> Option<RowKey> {
+    shell.frame(cx, |_, _| ());
+    shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.activity_menu_key())
+}
+
 /// P15: Activity by keyboard. Up and down stop at the ends, Home and End
 /// go to them; Enter presses the button when it is enabled, opens the item
 /// when the row has no button, and does nothing for a disabled button or a
 /// row with neither; Enter on the focused button runs it once, and the
 /// list's own Enter does not also fire; the highlighted row leaving moves
 /// focus from its button to the list; a row drawn before the log's took a
-/// newer revision runs nothing on Enter (T8). `shift-f10` and `menu` are
-/// the row menu's (Task 9, milestone 2); Tab through the filter and ⋯ is
-/// Task 10's.
+/// newer revision runs nothing on Enter (T8); `shift-f10` and `menu` open the
+/// row's menu. Tab through the filter and ⋯ is Task 10's.
 ///
 /// A press sends a request, whose end reads the repository's pending list
 /// again and so takes the other pending rows away: each step that presses
@@ -180,6 +187,21 @@ fn activity_by_keyboard(cx: &mut TestAppContext) {
             .any(|tab| matches!(tab, TabKey::Item { id, .. } if id == TICKET)),
         "the item's tab opened: {opened:?}"
     );
+
+    // `shift-f10` and `menu` open the highlighted row's menu (the menu's
+    // items are P17's).
+    for menu_key in ["shift-f10", "menu"] {
+        shell.keys("secondary-4", cx);
+        arrow_to(shell, &rows.item, cx);
+        shell.keys(menu_key, cx);
+        assert_eq!(
+            menu_key_of(shell, cx),
+            Some(rows.item.clone()),
+            "{menu_key}"
+        );
+        shell.keys("escape", cx);
+        assert_eq!(menu_key_of(shell, cx), None);
+    }
 
     // With an enabled button, Enter presses it, once.
     shell.keys("secondary-4", cx);
@@ -262,8 +284,8 @@ fn activity_by_keyboard(cx: &mut TestAppContext) {
 /// P16: a left click on a row highlights it, focuses the list and sends
 /// nothing; a left click on its button runs the button once and highlights
 /// its row; a disabled button does nothing; a click on a button drawn
-/// before the log's row took a newer revision runs nothing (T8). The right
-/// click is the row menu's (Task 9, milestone 2).
+/// before the log's row took a newer revision runs nothing (T8); a right
+/// click highlights its row and opens its menu.
 #[gpui_kit::test]
 fn rows_by_pointer(cx: &mut TestAppContext) {
     // A Resume the test presses runs on the worker's thread.
@@ -299,6 +321,16 @@ fn rows_by_pointer(cx: &mut TestAppContext) {
         (pressed(shell, cx), shell.requests(cx, |_| true).len()),
         before
     );
+
+    // A right click highlights its row and opens its menu.
+    let at = index_of(shell, &rows.plain, cx);
+    shell.frame(cx, |window, cx| {
+        window.right_click(("activity-row", at), cx)
+    });
+    shell.run(cx);
+    assert_eq!(menu_key_of(shell, cx), Some(rows.plain.clone()));
+    assert_eq!(highlighted(shell, cx).as_ref(), Some(&rows.plain));
+    shell.keys("escape", cx);
 
     // A click on a button runs it once, and its row is highlighted.
     let at = index_of(shell, &a, cx);

@@ -10,7 +10,7 @@ use std::{
     thread,
 };
 
-use gpui_kit::{TestAppContext, test::TestWindowExt};
+use gpui_kit::TestAppContext;
 use manyhands::{
     repository::{
         SharedKeyId,
@@ -24,10 +24,10 @@ use manyhands::{
 };
 
 use super::{
-    busy_holder, offer_label, offer_part, share_result, share_route,
+    busy_holder, offer_label, share_result, share_route,
     tests::{
-        TICKET, answer, assert_row, chosen_line, host_problem, open, open_with, outcome,
-        outcome_of, real_share, shared, submit_main,
+        TICKET, answer, assert_row, chosen_line, host_problem, open, open_with, outcome_of,
+        real_share, shared, submit_main,
     },
 };
 use crate::desktop::{
@@ -43,10 +43,10 @@ use crate::desktop::{
     },
     test_support::fixtures::item_id,
     view::{
-        activity_support::{act, offered, rows},
+        activity_support::{act, highlighted, list_focused, offered, refresh, row, rows, to_row},
         harness::{Shell, WAIT, key, wait_until},
         item::ItemRoute,
-        operations::request_id,
+        repositories::tests::support::highlight,
         settings::Shown,
         workspace::Region,
     },
@@ -317,8 +317,9 @@ async fn share_after_a_finished_locked_key_clears_its_declined_key(cx: &mut Test
 // --- Busy ---
 
 /// Show it, on a share answered `busy` while a share of this session
-/// that stopped after reserving still holds the repository: the entry
-/// names it, and Show it gives its entry the focus.
+/// that stopped after reserving still holds the repository: the row names
+/// it, and Show it, chosen from the row's menu by keyboard, highlights the
+/// holder's row and focuses the list (C3).
 #[gpui_kit::test]
 async fn show_it_focuses_the_entry_of_the_possible_holder(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -337,18 +338,28 @@ async fn show_it_focuses_the_entry_of_the_possible_holder(cx: &mut TestAppContex
         answer(ResultCode::Busy, Effects::not_requested()),
         cx,
     );
-    assert_eq!(
-        outcome(&shell, busy, cx),
-        Some(may_be_waiting_for("Share main"))
+    assert_eq!(outcome_of(&shell, busy, cx), SyncOutcome::Busy);
+    refresh(&shell, cx);
+    let (busy_key, holder_key) = (RowKey::Request(busy), RowKey::Request(holder));
+    let waiting = may_be_waiting_for("Share main");
+    assert!(
+        row(&shell, &busy_key, cx)
+            .and_then(|row| row.row.description)
+            .is_some_and(|description| description.contains(&waiting)),
+        "the row names the holder: {waiting}"
     );
-    shell.click(request_id(busy, offer_part(SyncOffer::ShowHolder)), cx);
+    to_row(&shell, &busy_key, cx);
+    assert_eq!(highlighted(&shell, cx), Some(busy_key.clone()));
+    shell.keys("shift-f10", cx);
+    highlight(&mut shell.visual(cx), offer_label(SyncOffer::ShowHolder));
+    shell.keys("enter", cx);
     shell.run(cx);
-    let focused = shell.frame(cx, |window, _| {
-        window
-            .try_find(request_id(holder, "entry"))
-            .is_some_and(|entry| entry.focused() == Some(true))
-    });
-    assert!(focused, "the holder's entry has the focus");
+    assert_eq!(
+        highlighted(&shell, cx),
+        Some(holder_key),
+        "the holder's row is highlighted"
+    );
+    assert!(list_focused(&shell, cx), "the list has the focus");
 }
 
 /// With no possible holder in this session, Show it points to the
