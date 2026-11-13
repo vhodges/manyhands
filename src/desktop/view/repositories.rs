@@ -81,8 +81,7 @@ pub(crate) struct RepositoryRow {
 }
 
 impl RepositoryRow {
-    #[cfg(test)]
-    #[allow(dead_code)] // Used from Task 9
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn tooltip(&self) -> &[String] {
         &self.tooltip
     }

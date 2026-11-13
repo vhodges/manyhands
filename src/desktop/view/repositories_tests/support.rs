@@ -6,7 +6,8 @@ use std::path::Path;
 
 use gpui_kit::{
     ElementId, FocusHandle, InputEvent, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
-    MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, TestAppContext, test::TestWindowExt,
+    MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, TestAppContext, VisualTestContext,
+    Window, test::TestWindowExt,
 };
 use manyhands::{
     canonical::ItemId,
@@ -215,7 +216,11 @@ pub(super) fn row_of(shell: &Shell, name: &str, cx: &mut TestAppContext) -> Repo
 }
 
 /// The labels `menu_items` gives the row named `name`, in order.
-pub(super) fn items_of(shell: &Shell, name: &str, cx: &mut TestAppContext) -> Vec<String> {
+pub(in crate::desktop::view) fn items_of(
+    shell: &Shell,
+    name: &str,
+    cx: &mut TestAppContext,
+) -> Vec<String> {
     let row = row_of(shell, name, cx);
     row.menu.iter().map(|item| item.label.clone()).collect()
 }
@@ -233,13 +238,52 @@ pub(in crate::desktop::view) fn open_root(
 
 /// The open menu's items, in order, by label; a separator has none.
 pub(in crate::desktop::view) fn labels(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
-    shell.frame(cx, |window, _| {
-        let menu = window.within("popup-menu");
-        (0usize..16)
-            .filter_map(|ix| menu.try_find(ix))
-            .filter_map(|item| item.label().map(str::to_owned))
-            .collect()
-    })
+    shell.frame(cx, |window, _| menu_labels(window))
+}
+
+/// The open menu's items in `window`'s last frame, in order, by label.
+pub(in crate::desktop::view) fn menu_labels(window: &mut Window) -> Vec<String> {
+    let menu = window.within("popup-menu");
+    (0usize..16)
+        .filter_map(|ix| menu.try_find(ix))
+        .filter_map(|item| item.label().map(str::to_owned))
+        .collect()
+}
+
+/// Moves the open menu's highlight to its item `label` by the arrows
+/// alone, as a keyboard does, drawing a frame before each look.
+pub(in crate::desktop::view) fn highlight(visual: &mut VisualTestContext, label: &str) {
+    for _ in 0..16 {
+        let there = visual.update(|window, cx| {
+            window.render_frame(cx);
+            let menu = window.within("popup-menu");
+            (0usize..16)
+                .filter_map(|ix| menu.try_find(ix))
+                .any(|item| item.label() == Some(label) && item.selected() == Some(true))
+        });
+        if there {
+            return;
+        }
+        visual.simulate_keystrokes("down");
+        visual.run_until_parked();
+    }
+    panic!("the arrows never reached {label}");
+}
+
+/// Presses `key` in `visual`'s window and says whether `handle` holds
+/// focus in that same update, before its effects run and the next draw.
+pub(in crate::desktop::view) fn press_and_hold_in(
+    visual: &mut VisualTestContext,
+    key: &str,
+    handle: &FocusHandle,
+) -> bool {
+    let held = visual.update(|window, cx| {
+        window.render_frame(cx);
+        window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+        handle.is_focused(window)
+    });
+    visual.run_until_parked();
+    held
 }
 
 /// Where the open menu's item `label` is.
@@ -305,12 +349,7 @@ pub(in crate::desktop::view) fn press_and_hold(
     handle: &FocusHandle,
     cx: &mut TestAppContext,
 ) -> bool {
-    let held = shell.frame(cx, |window, cx| {
-        window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
-        handle.is_focused(window)
-    });
-    shell.run(cx);
-    held
+    press_and_hold_in(&mut shell.visual(cx), key, handle)
 }
 
 /// Presses and releases `key`, as a keyboard does (GPUI clicks a focused
@@ -354,7 +393,7 @@ pub(in crate::desktop::view) fn close_menu(shell: &Shell, cx: &mut TestAppContex
 }
 
 /// A right click on the row named `name`.
-pub(super) fn right_click(shell: &Shell, name: &str, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn right_click(shell: &Shell, name: &str, cx: &mut TestAppContext) {
     let at = index(shell, name, cx);
     shell.frame(cx, |window, cx| window.right_click(("repo-row", at), cx));
     shell.run(cx);

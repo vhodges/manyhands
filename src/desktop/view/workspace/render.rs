@@ -19,7 +19,6 @@ use crate::desktop::{
         repositories,
         scroll::ContentScroll,
         shell::{title::window_title, title_bar},
-        sidebar,
     },
 };
 use gpui_kit::{
@@ -117,18 +116,6 @@ impl Workspace {
     /// pages and Root's sheet layer.
     fn item_area_region(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let item_shown = self.shown_item(cx).is_some();
-        // An item tab draws the selection at the end of its own scroll
-        // region instead.
-        let selection = (!item_shown).then(|| {
-            sidebar::selection(
-                &self.navigation,
-                &self.remove_focus,
-                &self.retry_focus,
-                self.content_scroll(),
-                cx,
-            )
-            .into_any_element()
-        });
         // The region's per-frame focus note, which its scroll-into-view
         // needs (R-33).
         self.content_scroll()
@@ -149,7 +136,7 @@ impl Workspace {
         let sheet = Root::render_sheet_layer(window, cx)
             .map(|layer| div().absolute().child(deferred(layer)));
         let content = content
-            .children(self.content_body(selection, window, cx))
+            .children(self.content_body(window, cx))
             .children(sheet);
         let content = self
             .region(Region::Content, window, cx, content)

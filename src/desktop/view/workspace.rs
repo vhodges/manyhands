@@ -187,8 +187,6 @@ pub(crate) struct Workspace {
     /// The open repository menu (Part D).
     repository_menu: Option<RepositoryMenu>,
     _repository_events: Subscription,
-    remove_focus: FocusHandle,
-    retry_focus: FocusHandle,
     /// Each change gives the open tabs their repository's publication
     /// remote from `navigation` (`TabContent::share_remotes`).
     _remotes: Subscription,
@@ -385,8 +383,6 @@ impl Workspace {
             repositories_pane,
             repository_menu: None,
             _repository_events: repository_events,
-            remove_focus: cx.focus_handle(),
-            retry_focus: cx.focus_handle(),
             _remotes: cx
                 .observe_self(|this, cx| this.content.tabs.share_remotes(&this.navigation, cx)),
             stopping_to_republish: Vec::new(),

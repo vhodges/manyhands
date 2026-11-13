@@ -332,8 +332,4 @@ impl Workspace {
     pub(crate) fn repository_menu_at(&self) -> Option<gpui_kit::Point<gpui_kit::Pixels>> {
         self.repository_menu.as_ref().map(RepositoryMenu::at)
     }
-
-    pub(crate) fn remove_focus(&self) -> FocusHandle {
-        self.remove_focus.clone()
-    }
 }

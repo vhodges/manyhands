@@ -2,28 +2,29 @@
 //! quitting. The Quit action and the window's close request share one
 //! handler, which waits for a running job.
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
 use gpui_kit::{
-    Entity, TestAppContext, VisualTestContext, Window, WindowHandle, component::Root,
-    test::TestWindowExt,
+    Entity, TestAppContext, VisualTestContext, WindowHandle, component::Root, test::TestWindowExt,
 };
 use manyhands::{
     repository::{ConfigurationState, LeaseKind, RepositoryService},
     results::ResultCode,
 };
 
-use super::{QuitPhase, REGIONS, Region, Workspace};
+use super::{
+    QuitPhase, REGIONS, Region, Workspace,
+    content::{NOTHING_SELECTED, OPEN_FROM_THE_LISTS},
+};
 use crate::desktop::{
     keys::{self, Quit},
     model::{
-        layout::PanelKind, list_state::index_label, navigation::Resolution,
-        repository_state::CANT_OPEN,
+        layout::PanelKind,
+        list_view::RETRY,
+        navigation::{OpenTarget, Resolution},
+        repository_state::{
+            CANT_OPEN, NEEDS_FIXING, NEEDS_FIXING_SENTENCE, REMOVE_FROM_MANYHANDS, kept_sentence,
+        },
     },
     open_test_window_with,
     services::{
@@ -32,14 +33,10 @@ use crate::desktop::{
     },
     test_support::{
         delaying::DelayingBackend,
-        fixtures::{Fixture, refresh_through, remove_registration},
+        fixtures::{Fixture, item_id, refresh_through, remove_registration},
         snapshot::RepositorySnapshot,
     },
-    view::{
-        harness::wait_until,
-        repositories::NOT_UPDATED_BUSY,
-        sidebar::{SELECTED, configuration_label},
-    },
+    view::{harness::wait_until, repositories::NOT_UPDATED_BUSY, sidebar::SELECTED},
 };
 
 struct Setup {
@@ -584,117 +581,60 @@ mod saving_drafts {
     }
 }
 
-/// A window over a fixture with two repositories, `a` and `b`, whose
-/// startup reads have run.
-struct Shell {
-    window: WindowHandle<Root>,
-    workspace: Entity<Workspace>,
-    backend: Arc<DelayingBackend>,
-    a: PathBuf,
-    b: PathBuf,
-    fixture: Fixture,
-}
+#[path = "workspace_tests/shell.rs"]
+mod shell;
+use shell::{
+    Shell, alert_action, choose_by_keys, key, mark, needs_fixing, no_details, open_menu, row,
+    row_of, state, tooltip,
+};
 
-impl Shell {
-    fn new(cx: &mut TestAppContext) -> Self {
-        cx.update(gpui_kit::init);
-        cx.update(keys::bind);
-        let fixture = Fixture::new();
-        let a = fixture.create_repository("a");
-        let b = fixture.create_repository("b");
-        let (window, backend) = cx.update(|cx| open_test_window_with(&fixture, cx));
-        let workspace = window
-            .update(cx, |root, _, _| {
-                root.view().clone().downcast::<Workspace>().unwrap()
-            })
-            .unwrap();
-        let shell = Self {
-            window,
-            workspace,
-            backend,
-            a,
-            b,
-            fixture,
-        };
-        shell.visual(cx).run_until_parked();
+const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FT0";
+
+/// P14 (Part F): with no tab shown, the item area says "Select a
+/// repository." until one is chosen, then "Open a ticket or document
+/// from the lists". Nothing of the repository is drawn there or at the
+/// end of an item tab: none of the details block's elements anywhere in
+/// the window.
+#[gpui_kit::test]
+fn the_item_area_holds_nothing_of_the_repository(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    shell.fixture.commit_ticket(&shell.a, TICKET, "Ticket", "");
+    shell.fixture.refresh(&shell.a);
+    let empty = |shell: &Shell, cx: &mut TestAppContext| shell.label("item-area-empty", cx);
+
+    assert_eq!(shell.selected(cx), None);
+    assert_eq!(empty(&shell, cx).as_deref(), Some(NOTHING_SELECTED));
+    assert!(no_details(&shell, cx), "none chosen");
+
+    shell.click(row(0), cx);
+    assert_eq!(shell.selected(cx), Some(key(&shell.a)));
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Resolved(_)
+    ));
+    assert_eq!(empty(&shell, cx).as_deref(), Some(OPEN_FROM_THE_LISTS));
+    assert!(no_details(&shell, cx), "chosen, no tab");
+
+    let target = OpenTarget::Item {
+        repo: key(&shell.a),
+        kind: manyhands::repository::ItemDtoKind::Ticket,
+        id: item_id(TICKET),
+    };
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.open_item(target, cx));
+    shell.visual(cx).run_until_parked();
+    assert!(
         shell
-    }
-
-    fn visual(&self, cx: &TestAppContext) -> VisualTestContext {
-        VisualTestContext::from_window(self.window.into(), cx)
-    }
-
-    /// Draws a frame and runs `f` over the window.
-    fn frame<R>(
-        &self,
-        cx: &mut TestAppContext,
-        f: impl FnOnce(&mut Window, &mut gpui_kit::App) -> R,
-    ) -> R {
-        let mut visual = self.visual(cx);
-        visual.update(|window, cx| {
-            window.render_frame(cx);
-            f(window, cx)
-        })
-    }
-
-    /// Clicks the element `id` and lets the reads it starts finish.
-    fn click(&self, id: impl Into<gpui_kit::ElementId>, cx: &mut TestAppContext) {
-        let id = id.into();
-        self.frame(cx, |window, cx| window.click(id, cx));
-        self.visual(cx).run_until_parked();
-    }
-
-    fn keys(&self, keystrokes: &str, cx: &mut TestAppContext) {
-        let mut visual = self.visual(cx);
-        visual.simulate_keystrokes(keystrokes);
-        visual.run_until_parked();
-    }
-
-    fn resolution(&self, root: &Path, cx: &mut TestAppContext) -> Resolution {
-        let key = key(root);
-        self.workspace.read_with(cx, |workspace, _| {
-            workspace
-                .navigation()
-                .entry(&key)
-                .expect("a listed repository")
-                .resolution
-                .clone()
-        })
-    }
-
-    fn selected(&self, cx: &mut TestAppContext) -> Option<String> {
-        self.workspace.read_with(cx, |workspace, _| {
-            workspace.navigation().selected().cloned()
-        })
-    }
-
-    fn label(&self, id: impl Into<gpui_kit::ElementId>, cx: &mut TestAppContext) -> Option<String> {
-        let id = id.into();
-        self.frame(cx, |window, _| {
-            window
-                .try_find(id)
-                .and_then(|element| element.label().map(str::to_owned))
-        })
-    }
-
-    fn present(&self, id: impl Into<gpui_kit::ElementId>, cx: &mut TestAppContext) -> bool {
-        let id = id.into();
-        self.frame(cx, |window, _| window.try_find(id).is_some())
-    }
-}
-
-fn key(root: &Path) -> String {
-    root.to_str().unwrap().to_owned()
-}
-
-/// Row `index` of the repository list, in the read's order.
-fn row(index: usize) -> (&'static str, usize) {
-    ("repo-row", index)
-}
-
-/// The action of the repository list's alert row: Retry.
-fn alert_action() -> gpui_kit::ElementId {
-    (gpui_kit::ElementId::from("repositories-alert"), "action").into()
+            .workspace
+            .read_with(cx, |workspace, _| workspace.item_pane())
+            .is_some(),
+        "the ticket's tab is shown"
+    );
+    assert_eq!(empty(&shell, cx), None, "a tab is shown");
+    assert!(no_details(&shell, cx), "nothing at the end of the tab");
+    shell.keys("secondary-3 end", cx);
+    assert!(no_details(&shell, cx), "nor at the end of its region");
 }
 
 #[gpui_kit::test]
@@ -737,16 +677,12 @@ fn selecting_a_repository_resolves_it_and_shows_its_configuration_and_index(
         .items
         .remove(0);
     assert_eq!(summary.configuration.state, ConfigurationState::Valid);
-    assert_eq!(shell.label("selection-name", cx).as_deref(), Some("a"));
-    assert_eq!(
-        shell.label("selection-configuration", cx).as_deref(),
-        Some(configuration_label(summary.configuration.state))
-    );
-    assert_eq!(
-        shell.label("selection-index", cx).as_deref(),
-        Some(index_label(&summary.index))
-    );
-    assert!(!shell.present("selection-unavailable", cx));
+    assert_eq!(shell.label(mark(0), cx).as_deref(), Some(SELECTED));
+    assert!(!shell.present(mark(1), cx));
+    // A valid configuration: the row says nothing of it, nor its tooltip.
+    assert_ne!(shell.label(state(0), cx).as_deref(), Some(NEEDS_FIXING));
+    assert!(!needs_fixing(&shell, &shell.a, cx));
+    assert_ne!(shell.label(state(0), cx).as_deref(), Some(CANT_OPEN));
 }
 
 /// Review Focus 2: the selected repository's folder is renamed away and
@@ -768,31 +704,25 @@ fn a_renamed_away_repository_is_unavailable_until_retry_finds_it_again(cx: &mut 
         shell.resolution(&shell.a, cx),
         Resolution::Unavailable(ResultCode::InvalidPath)
     ));
-    assert_eq!(
-        shell.label("selection-unavailable", cx).as_deref(),
-        Some(ResultCode::InvalidPath.message())
-    );
-    assert!(shell.present("selection-retry", cx));
-    assert!(shell.present("selection-remove", cx));
-    assert!(!shell.present("selection-configuration", cx));
-    // The row says so in text, not by color alone.
-    assert_eq!(
-        shell.label(("repo-state", 0usize), cx).as_deref(),
-        Some(CANT_OPEN)
+    // The row says so in text, not by color alone, and its sentence gives
+    // the code's message; its menu offers Retry and Remove.
+    assert_eq!(shell.label(state(0), cx).as_deref(), Some(CANT_OPEN));
+    assert!(tooltip(&shell, &shell.a, cx)[0].starts_with(ResultCode::InvalidPath.message()));
+    let items = open_menu(&shell, cx);
+    assert!(items.iter().any(|item| item == RETRY), "{items:?}");
+    assert!(
+        items.iter().any(|item| item == REMOVE_FROM_MANYHANDS),
+        "{items:?}"
     );
 
     fs::rename(&away, &shell.a).unwrap();
-    shell.click("selection-retry", cx);
+    assert!(choose_by_keys(&shell, RETRY, cx), "focus stays on the list");
     assert!(matches!(
         shell.resolution(&shell.a, cx),
         Resolution::Resolved(_)
     ));
-    assert!(!shell.present("selection-unavailable", cx));
-    assert_ne!(
-        shell.label(("repo-state", 0usize), cx).as_deref(),
-        Some(CANT_OPEN)
-    );
-    assert!(shell.present("selection-configuration", cx));
+    assert_ne!(shell.label(state(0), cx).as_deref(), Some(CANT_OPEN));
+    assert!(!tooltip(&shell, &shell.a, cx)[0].starts_with(ResultCode::InvalidPath.message()));
 }
 
 /// Track rule 4: a second service over the same data directory removes
@@ -802,7 +732,10 @@ fn a_renamed_away_repository_is_unavailable_until_retry_finds_it_again(cx: &mut 
 fn a_registration_removed_by_a_second_actor_shows_unavailable(cx: &mut TestAppContext) {
     let shell = Shell::new(cx);
     shell.click(row(0), cx);
-    assert!(shell.present("selection-configuration", cx));
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Resolved(_)
+    ));
 
     let second = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
     remove_registration(&second, &shell.a);
@@ -812,12 +745,12 @@ fn a_registration_removed_by_a_second_actor_shows_unavailable(cx: &mut TestAppCo
         shell.resolution(&shell.a, cx),
         Resolution::Unavailable(ResultCode::RepositoryNotRegistered)
     ));
-    assert_eq!(
-        shell.label("selection-unavailable", cx).as_deref(),
-        Some(ResultCode::RepositoryNotRegistered.message())
-    );
-    assert!(!shell.present("selection-configuration", cx));
-    assert!(!shell.present("selection-index", cx));
+    // The kept row, drawn after the listed one, reads Can't open (decision
+    // 22).
+    let kept = row_of(&shell, &shell.a, cx);
+    assert_eq!(kept, 1, "after b's row");
+    assert_eq!(shell.label(state(kept), cx).as_deref(), Some(CANT_OPEN));
+    assert_eq!(tooltip(&shell, &shell.a, cx)[0], kept_sentence("a"));
 }
 
 /// The selected registration is removed by a second actor and only the
@@ -830,7 +763,10 @@ fn a_list_reload_after_a_second_actor_removes_the_selection_shows_unavailable(
 ) {
     let shell = Shell::new(cx);
     shell.click(row(0), cx);
-    assert!(shell.present("selection-configuration", cx));
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Resolved(_)
+    ));
     assert!(shell.workspace.read_with(cx, |workspace, _| {
         workspace.documents().repo() == Some(&key(&shell.a))
     }));
@@ -847,11 +783,12 @@ fn a_list_reload_after_a_second_actor_removes_the_selection_shows_unavailable(
         shell.resolution(&shell.a, cx),
         Resolution::Unavailable(ResultCode::RepositoryNotRegistered)
     ));
-    assert_eq!(
-        shell.label("selection-unavailable", cx).as_deref(),
-        Some(ResultCode::RepositoryNotRegistered.message())
-    );
-    assert!(!shell.present("selection-configuration", cx));
+    // The kept row, drawn after the listed one, reads Can't open (decision
+    // 22).
+    let kept = row_of(&shell, &shell.a, cx);
+    assert_eq!(kept, 1, "after b's row");
+    assert_eq!(shell.label(state(kept), cx).as_deref(), Some(CANT_OPEN));
+    assert_eq!(tooltip(&shell, &shell.a, cx)[0], kept_sentence("a"));
     assert!(shell.workspace.read_with(cx, |workspace, _| {
         workspace.documents().repo().is_none()
     }));
@@ -929,7 +866,7 @@ fn a_busy_list_reload_keeps_the_last_rows_with_a_label(cx: &mut TestAppContext) 
     );
     assert!(shell.present(alert_action(), cx));
     assert_eq!(shell.selected(cx), Some(key(&shell.a)));
-    assert_eq!(shell.label("selection-name", cx).as_deref(), Some("a"));
+    assert_eq!(shell.label(mark(0), cx).as_deref(), Some(SELECTED));
 
     drop(lease);
     shell.click(alert_action(), cx);
@@ -968,7 +905,8 @@ fn a_held_resolution_of_a_never_replaces_b(cx: &mut TestAppContext) {
         shell.resolution(&shell.a, cx),
         Resolution::Unknown
     ));
-    assert_eq!(shell.label("selection-name", cx).as_deref(), Some("b"));
+    assert_eq!(shell.label(mark(1), cx).as_deref(), Some(SELECTED));
+    assert!(!shell.present(mark(0), cx));
 }
 
 /// The one focused region, which must also be the one drawing a focus
@@ -1056,7 +994,6 @@ fn the_repository_selector_selects_with_arrows_and_enter(cx: &mut TestAppContext
         shell.resolution(&shell.b, cx),
         Resolution::Resolved(_)
     ));
-    assert_eq!(shell.label("selection-name", cx).as_deref(), Some("b"));
     assert_eq!(
         shell.label(("repo-selected", 1usize), cx).as_deref(),
         Some(SELECTED)
@@ -1102,12 +1039,11 @@ fn selecting_and_browsing_leave_the_repositories_untouched(cx: &mut TestAppConte
 fn reselecting_or_retry_shows_a_configuration_refreshed_by_a_second_actor(cx: &mut TestAppContext) {
     let shell = Shell::new(cx);
     let second = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
-    let valid = Some(configuration_label(ConfigurationState::Valid));
-    let invalid = Some(configuration_label(ConfigurationState::Invalid));
 
     for (index, root) in [(0, &shell.a), (1, &shell.b)] {
         shell.click(row(index), cx);
-        assert_eq!(shell.label("selection-configuration", cx).as_deref(), valid);
+        assert_ne!(shell.label(state(index), cx).as_deref(), Some(NEEDS_FIXING));
+        assert!(!needs_fixing(&shell, root, cx));
 
         shell
             .fixture
@@ -1116,7 +1052,8 @@ fn reselecting_or_retry_shows_a_configuration_refreshed_by_a_second_actor(cx: &m
         let summary = second.list_repositories().unwrap().items.remove(index);
         assert_eq!(summary.configuration.state, ConfigurationState::Invalid);
         // Until the desktop reads again it still shows what it read.
-        assert_eq!(shell.label("selection-configuration", cx).as_deref(), valid);
+        assert_ne!(shell.label(state(index), cx).as_deref(), Some(NEEDS_FIXING));
+        assert!(!needs_fixing(&shell, root, cx));
 
         if index == 0 {
             shell.click(row(0), cx);
@@ -1127,14 +1064,16 @@ fn reselecting_or_retry_shows_a_configuration_refreshed_by_a_second_actor(cx: &m
             shell.visual(cx).run_until_parked();
         }
         assert_eq!(shell.selected(cx), Some(key(root)));
-        assert_eq!(
-            shell.label("selection-configuration", cx).as_deref(),
-            invalid
-        );
-        assert_eq!(
-            shell.label("selection-index", cx).as_deref(),
-            Some(index_label(&summary.index))
-        );
+        assert_eq!(shell.label(state(index), cx).as_deref(), Some(NEEDS_FIXING));
+        // Its tooltip says what needs fixing: the library's current
+        // problems, not the ones read at startup.
+        let problems = &summary.configuration.problems;
+        assert!(!problems.is_empty(), "the read gives its problems");
+        let sentence = tooltip(&shell, root, cx).remove(0);
+        assert!(sentence.starts_with(NEEDS_FIXING_SENTENCE), "{sentence}");
+        for problem in problems {
+            assert!(sentence.contains(problem.guidance()), "{sentence}");
+        }
     }
 }
 

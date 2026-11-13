@@ -1,12 +1,12 @@
 //! The Repositories page's registered repositories over real
 //! repositories: setting a repository's identity and initials, removing a
-//! registration from the page and from an Unavailable sidebar entry, each
+//! registration from the page and from a Can't open row's menu, each
 //! command's typed failure, Escape and a stale preview, and the
 //! `repo.identity_set` recovery.
 
 use std::{fs, path::Path, time::Duration};
 
-use gpui_kit::TestAppContext;
+use gpui_kit::{TestAppContext, test::TestWindowExt};
 use manyhands::{
     canonical::CONFIG_PATH,
     drafts::Held,
@@ -22,7 +22,10 @@ use super::{
     tests::{control_focus, finished, page, registered, set, settings, value},
 };
 use crate::desktop::{
-    model::navigation::{OpenTarget, Resolution},
+    model::{
+        navigation::{OpenTarget, Resolution},
+        repository_state::{CANT_OPEN, REMOVE_FROM_MANYHANDS},
+    },
     services::requests::{DesktopRequestId, Intent},
     test_support::{
         drafts::{Actor, held, second_actor, store_draft, stored_body},
@@ -31,7 +34,10 @@ use crate::desktop::{
     view::{
         confirm::{CONFIRM, DRAFTS_REMAIN, FILES_REMAIN, PREPARE_AGAIN},
         harness::{Shell, key, wait_until},
-        repositories::NOT_UPDATED_BUSY,
+        repositories::{
+            NOT_UPDATED_BUSY,
+            tests::support::{highlight, open_root, press_and_hold},
+        },
     },
 };
 
@@ -527,9 +533,10 @@ async fn a_registration_removed_since_its_preview_offers_prepare_again(cx: &mut 
 }
 
 /// The Part C gate (`01M4R19P94`): a registration whose folder was
-/// renamed away shows Unavailable; its Remove, reached by keyboard,
-/// prepares the removal, and Confirm takes the registration out. Its
-/// tabs close and the selection goes.
+/// renamed away reads Can't open; Remove from Manyhands… in its menu,
+/// reached by keyboard, prepares the removal, whose Escape gives focus
+/// back to the list, and Confirm takes the registration out. Its tabs
+/// close and the selection and its row go.
 #[gpui_kit::test]
 async fn removing_a_registration_whose_folder_was_renamed_away_succeeds(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -555,19 +562,28 @@ async fn removing_a_registration_whose_folder_was_renamed_away_succeeds(cx: &mut
         "{resolution:?}"
     );
 
-    // By keyboard: the content region, then Tab until Remove holds focus.
-    shell.keys("secondary-3", cx);
-    let remove = shell
-        .workspace
-        .read_with(cx, |workspace, _| workspace.remove_focus());
-    let mut presses = 0;
-    while !shell.frame(cx, |window, cx| remove.contains_focused(window, cx)) {
-        presses += 1;
-        assert!(presses < 60, "Tab never reached Remove");
-        shell.keys("tab", cx);
-    }
-    shell.press("enter", cx);
-    assert_eq!(shell.label("confirm-ok", cx).as_deref(), Some(CONFIRM));
+    assert_eq!(
+        shell.label(("repo-state", 0usize), cx).as_deref(),
+        Some(CANT_OPEN)
+    );
+
+    // By keyboard: the list, its menu, the arrows to Remove from
+    // Manyhands… and Enter. Escape gives focus back to the list the menu
+    // was opened from, read as the dialog closes (R-12).
+    let list = list_focus(&shell, cx);
+    let remove = |shell: &Shell, cx: &mut TestAppContext| {
+        shell.keys("secondary-1", cx);
+        shell.keys("shift-f10", cx);
+        assert_eq!(open_root(shell, cx), Some(key(&root)));
+        highlight(&mut shell.visual(cx), REMOVE_FROM_MANYHANDS);
+        shell.keys("enter", cx);
+        assert_eq!(shell.label("confirm-ok", cx).as_deref(), Some(CONFIRM));
+    };
+    remove(&shell, cx);
+    assert!(press_and_hold(&shell, "escape", &list, cx), "the list");
+    assert!(!shell.present("confirm-dialog", cx));
+    assert!(removals(&shell, cx).is_empty(), "nothing sent");
+    remove(&shell, cx);
     assert_eq!(
         shell.label("confirm-note", cx).as_deref(),
         Some(FILES_REMAIN)
@@ -582,7 +598,15 @@ async fn removing_a_registration_whose_folder_was_renamed_away_succeeds(cx: &mut
         workspace.tab_keys().is_empty() && workspace.navigation().selected().is_none()
     })
     .await;
-    assert!(!shell.present("selection-unavailable", cx));
+    assert!(shell.rows("repo-row", cx).is_empty(), "its row goes");
+}
+
+/// The Repositories list's focus handle: where a row's menu is opened
+/// from, and where Remove's dialog gives focus back.
+fn list_focus(shell: &Shell, cx: &mut TestAppContext) -> gpui_kit::FocusHandle {
+    shell
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.repositories_list_focus(cx))
 }
 
 /// The `repo.identity_set` recovery's entry point opens the identity form
@@ -727,8 +751,11 @@ fn removing_a_registration_already_gone_clears_its_tabs_and_selection(cx: &mut T
     assert!(!shell.present("managed-root", cx));
 }
 
-/// The dead end the review found: an Unavailable entry whose registration
-/// is gone. Its Remove is answered `already_applied`, and the entry goes.
+/// The dead end the review found: a chosen repository whose registration
+/// is gone, kept as the row the list no longer gives (decision 22). Remove
+/// from Manyhands… in that row's menu is answered `already_applied`, the
+/// entry and its row go, and closing the dialog gives focus back to the
+/// list.
 #[gpui_kit::test]
 fn the_sidebar_remove_of_a_registration_already_gone_lets_the_entry_go(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -742,14 +769,29 @@ fn the_sidebar_remove_of_a_registration_already_gone_lets_the_entry_go(cx: &mut 
         resolution(&shell, cx),
         Some(Resolution::Unavailable(ResultCode::RepositoryNotRegistered))
     ));
+    assert_eq!(shell.rows("repo-row", cx), ["a"], "the kept row alone");
+    assert_eq!(
+        shell.label(("repo-state", 0usize), cx).as_deref(),
+        Some(CANT_OPEN)
+    );
 
-    shell.click("selection-remove", cx);
+    let list = list_focus(&shell, cx);
+    shell.keys("secondary-1", cx);
+    shell.keys("shift-f10", cx);
+    assert_eq!(open_root(&shell, cx), Some(key(&root)), "the kept row's");
+    highlight(&mut shell.visual(cx), REMOVE_FROM_MANYHANDS);
+    shell.keys("enter", cx);
     assert_eq!(
         shell.label("confirm-code", cx).as_deref(),
         Some(ResultCode::AlreadyApplied.as_str())
     );
     assert_eq!(selected(&shell, cx), None);
-    assert!(!shell.present("selection-unavailable", cx));
+    assert!(shell.rows("repo-row", cx).is_empty(), "the kept row goes");
+    let back = shell.frame(cx, |window, cx| {
+        window.click("confirm-cancel", cx);
+        list.is_focused(window)
+    });
+    assert!(back, "Close: the list");
 }
 
 /// Whether `id` is a live session of this process.
