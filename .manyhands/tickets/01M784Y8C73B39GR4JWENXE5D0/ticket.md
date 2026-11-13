@@ -3,9 +3,11 @@ slug: vh-3jpbf
 id: 01M784Y8C73B39GR4JWENXE5D0
 title: 'Wave 04 Cycle 03a: Repositories Panel And Sharing Status'
 type: cycle
-status: open
+status: done
 project: manyhands
 team: core
+closed_at: 2026-11-13T11:59:39Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---

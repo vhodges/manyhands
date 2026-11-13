@@ -336,7 +336,10 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     let region = walk
         .shell
         .frame(cx, |window, cx| walk.held_region(window, cx));
-    assert_ne!(region, Some(Region::Content), "Tab left the item");
+    assert!(
+        region.is_some() && region != Some(Region::Content),
+        "Tab left the item for another region: {region:?}"
+    );
     walk.step("shift-tab", "new-comment-start", Region::Content, cx);
 
     // A reply composer in the first thread, with a list in it, so that

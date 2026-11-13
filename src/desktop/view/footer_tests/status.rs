@@ -186,7 +186,12 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
         |request| matches!(&request.intent, Intent::PollOnce { root } if root == &a),
     );
     shell.until_ended(sent[0], cx).await;
-    shell.run(cx);
+    // The answer is applied a frame after its request ends.
+    shell
+        .until_drawn(cx, "the check's answer to end it", |shell, cx| {
+            said(shell, update, cx).as_deref() == Some(checked_text)
+        })
+        .await;
     assert_eq!(said(&shell, update, cx).as_deref(), Some(checked_text));
 
     // Work in two repositories: `a` has two items, `b` one. `a` is chosen,

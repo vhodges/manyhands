@@ -30,7 +30,7 @@ reason.
 | 7 | done, review approved first time | code `6899a165` (base `19800b2d`); ledger commit follows | yes |
 | 8 | done, review approved first time | code `d8013dcc` (base `b2997259`); ledger commit follows | yes |
 | 9 | done, review approved after fix round 1 | code `3d6d81b3` (base `6fe57a58`), fix `7d1ef534`; ledger commit follows | yes |
-| 10 | not started | | |
+| 10 | done: gates, Cycle doc, ledger, push; the on-screen checklist awaits the owner | final-review fixes `43f411a0`; gate-flake test fix `595667cd`; ledger commit follows | yes |
 
 ## Task 0: baseline, references, ledger
 
@@ -162,6 +162,13 @@ Task 9.
   orchestrator's ledger commit — only the orchestrator may write the ledger
   (brief), so it cannot be in the implementer's commit — a reviewer's range is
   the code commit alone; cost if wrong: one extra commit per task.
+- Ruling: the two gate-flake test fixes (`595667cd`) were made by the
+  orchestrator, not a resumed implementer — two test-only waits, about 25
+  lines, found at the one fast-tier run, with the cause visible in the log
+  (a state read one frame before an in-flight check had ended); they change
+  no production code and no assertion — cost if wrong: an unreviewed test
+  edit; the final fast tier did not include it, so the two tests were rerun
+  by exact name instead (below).
 - The superpowers skill (`subagent-driven-development`) was not installed at
   the start of the session and was installed by the owner during Task 1. Task 0
   and Task 1's implementation were dispatched before it was loaded, to the same
@@ -1364,3 +1371,163 @@ it cannot show dead-code warnings for a feature-gated item, so the gate choice
 3. The drawn "repository row" surface is checked against `TITLE` too, so a later
    task planting an unshared item in this fixture would trip it (tooltip titles are
    not covered here because no unshared item is planted).
+
+## Final whole-branch review and fix wave
+
+**Review** (most capable model, `37be101d..3086666f`): no Critical and no
+Important defect. It classed ten cheap items FIX-WAVE and the rest FOLLOW-UP.
+
+**Fix wave** (one agent, one commit `43f411a0`, base `3086666f`; scoped
+re-review approved). Items 1–7, 9 and 10 done:
+1. `rows_and_list_states` opts into `answer_unanswered_polls(not_due(clock))`
+   like the other four journeys (every poll answered).
+2. `unshared_after`: rule 4's rejected older attempt now replays the shares
+   heard after its `completed_at` onto `last.listed`, so Activity's list and
+   the count agree (Task 1 deferred 2). Test first: a new case in
+   `to_share_counts_and_finished_shares` (the U table's `Want` cannot carry
+   `last.listed`), red then green; U1–U15 unchanged.
+3. Footer names: an unlisted key shows its folder name, never the path; a
+   parentless root drops "in {parent}"; `(None, None)` is the bare text. Test
+   first: `footer_status::tests::to_share_names_names_never_paths`.
+4. E-1 test 1 asserts the row's exact state (`None`) and its "Folder:" tooltip
+   line. 5. E-8 asserts the region is `Some` and not Content. 6. Stale
+   `cfg_attr` removed from `ChromeColors::green`. 7. `show_after_frame`
+   compares rows in place (`RepositoriesPane::rows` is test-only now).
+   9. Comments at both render-time focus moves. 10. Stale comments fixed.
+
+- Ruling: item 8 (prune the change log at `as_of`) was reverted — it broke
+  item 2's new case: a rejected older attempt must replay shares heard in
+  `(older, as_of]`, so entries at or before `as_of` are still needed. The log
+  stays unpruned for the session (cleared on `remove`) — cost if wrong: a
+  per-root log that grows with the session's shares and saves; a memory
+  follow-up, not a correctness one.
+- Gap left by item 2 (narrow): only shares replay onto `listed`; a save heard
+  between the older and newer check does not add to it, so an item saved after
+  a share in that window can be in the count but not in the older attempt's
+  `listed`. Follow-up.
+
+**Follow-ups (all Minor, none touched):** the PollOnce-in-flight predicate
+exists three times (`Services::checking_now`); label duplication and the
+`sidebar.rs` constants bag; `RepositoryMenu::open` takes eight arguments;
+`alert()` duplicates `list_view.rs`'s helper; `list_focus` copies; the `0..40`
+hard-code; file-size growth (`content.rs`, `requests.rs`, `lists.rs` at 500);
+per-header row rebuilds; the "all `b`" stand-in clause; the change log unpruned
+(above); the Task 3 to 9 Minors parked in their sections.
+
+**Amendment for the owner (the code differs from the design).** The footer's
+Update check control's accessible name is the text and its sentence is the
+tooltip and description, so the name and the sentence are split. The final
+reviewer recommends keeping it; the design's wording is literal. The owner may
+want the design amended, or the text made literal.
+
+## Task 10: gates, Cycle doc, review-ready
+
+**Merge check.** `git fetch origin`: `origin/main` is still `37be101d`.
+`git merge-tree --write-tree HEAD origin/main` answered a tree (clean).
+`git diff --stat origin/main...HEAD -- src ':!src/desktop' tests Cargo.toml
+Cargo.lock packaging` printed nothing (the boundary holds).
+
+**Static gates** on `43f411a0` (and again on `595667cd` for fmt and clippy):
+`cargo check --all-features --locked` exit 0; `cargo fmt --check` exit 0;
+`cargo clippy --all-targets --all-features --locked -- -D warnings` exit 0.
+
+**Fast tier** (`--no-fail-fast`, the AGENTS.md list, on `43f411a0`, 3553 s):
+`--lib` 1564 passed (160 filtered); `--bin manyhands` **1867 passed, 2
+failed**; `manyhands-cli` 317; `canonical_foundation` 65; `cli` 477;
+`discovery_rebuild` 79; `drafts` 48; `journal_rejection` 26; `key_material`
+39; `key_storage` 2; `local_authoring` 142; `mutation_bridges` 166;
+`mutation_confirmation` 184; `mutation_contract` 47; `mutation_relationships`
+27; `mutation_replay` 384; `read_boundary` 20; `read_characterization` 0
+(1 ignored); `read_comments` 23; `read_contract` 73; `read_credentials` 25;
+`read_items` 82; `read_relationships` 17; `read_repository` 33;
+`read_status` 28; `recovery_foundation_gate` 52; `remote_reservation` 13;
+`repository_enablement` 103; `session_credentials` 11; `shared_key_registry`
+39 (all other targets: 0 failed; the process exit was 101 from the two
+failures only).
+
+**The two failures** were this Cycle's own new journeys, flaky under the tier's
+parallel load, not product bugs; each passed alone by exact name before and
+after:
+- `desktop::view::footer::tests::status_items_say_and_choose` (assertion at
+  `footer_tests/status.rs:190`: "Checking for updates…" instead of "Checked
+  for updates just now") — the answer to a user-asked check is applied a frame
+  after its request ends, and the test read it with one `shell.run`.
+- `desktop::view::repositories::tests::check_all_checks_each_repository`
+  (`toolbar.rs:154`: Check all took only `b`) — `a`'s launch poll was still
+  in flight, and Check all skips a repository whose check is running; the test
+  waited only for `d`'s stored outcome.
+
+Fix `595667cd` (tests only, no assertion changed or removed): each now waits
+for the condition with `until_drawn` (the answer ended the check; the launch
+polls ended). Both pass alone, three runs each, and eight concurrent runs
+under 64 busy loops all passed. Because the bin's tests changed after the
+fast-tier run, those two were rerun; nothing else changed after it except this
+documentation.
+
+Known flaky and not seen this time: `keyboard_tests::editing::edit_the_mode_key_save_and_done_by_keyboard_alone`.
+
+**Acceptance.** The Cycle document's Status column is filled from these tests
+by exact name; A13 awaits the owner.
+
+**Cycle document edits.** Status column; K-1 now names the save a
+local-context conflict resolution makes (U-7); decisions 26–28 record the
+owner's execution-time rulings (Part B rows 6/7 gating, rows 8/10 not gated,
+Check all skips a stored key or host outcome, "an item").
+
+**On-screen checklist.** `docs/plans/2026-11-12-wave-04-cycle-03a-on-screen-checklist.md`
+(S-1 to S-9) is committed with this ledger. It is the owner's to run; results
+and Findings are blank. Its fixture steps are assumptions to correct while
+running: a non-SSH remote (S-2.8), Needs fixing (S-2.11), Needs attention from
+problems (S-2.12), a second actor removing a repository (S-2.10), the Check all
+skip case, an SSH host with a passphrase-protected key, and the R-38 footer
+focus move (marked Watch: check it on a real display).
+
+**Not done, by instruction:** no pull request, no merge, no ticket close, no
+worktree cleanup, no native CI, no new tickets, no comment on any other ticket
+(the closing notes on `01M654G5VGQMXTH3BX9GKE7JEY` and `01M5CS4MH25QQ769HV61ZRKHXG`
+await the owner). Observation: `cargo clippy --tests --features desktop` (without
+`desktop-test-support`) fails with 51 compile errors in untouched files (Task 9).
+
+## After review-ready: an external review of the branch (2026-11-13)
+
+A review of the branch (main...branch, no verify pass) listed ten findings.
+The orchestrator checked each against the code; the owner asked for a small
+fix wave for the two real ones.
+
+- **Fixed, `5f1f9c0b`:** `Scheduler::reread` now calls `cx.notify()` after
+  clearing the failed read, so Retry on an unreadable repository is felt at
+  once. Test: `scheduler::entity_tests::the_stored_outcome_and_shared_copy_are_kept`
+  asserts exactly one scheduler notification right after `reread` (red `0`
+  against `1`, then green). The four repository journeys and the scheduler
+  test pass by exact name; fmt, check and clippy exit 0.
+- **Not fixed, a correction:** the title retry finding (`titles.rs:208`). The
+  orchestrator's brief said the notify at the end of `apply_titles` lets the next
+  read start. That is wrong: it notifies the Workspace, and the next read starts
+  only from the Scheduler's observer (`workspace.rs:222`). A landing cannot start
+  the next read, and `titles_of_what_is_not_shared` already shows a held Busy read
+  costing one job. What remains true is narrower: every scheduler notify (polls,
+  ticks) is a trigger, so three Busy answers across a few busy seconds can spend
+  an item's three tries, and spacing them needs a clock — a design change to K-3,
+  left for the owner.
+- Ruling: the one-line fix was reviewed by the orchestrator from its diff, with
+  no separate reviewer — a notify and its test, nothing else — cost if wrong: an
+  unreviewed two-line production change.
+- **Known limits, unchanged:** a publishing save or comment stays in the list
+  until the next check (K-1); a share heard between a poll's observation and its
+  completion is dropped by the replay rule (U table); label "Can't reach" with
+  the sentence "Checking soon" after an unreachable then busy answer is the
+  design's row 7 (open question for the owner). The others were already
+  Minor follow-ups; the "held repository" test finding was a false positive.
+
+**Owner answers, 2026-11-13.**
+- Title retry backoff: file a ticket and leave it. Filed as
+  `01M7ABM6E76TATZ5CYF8J4VYGN` ("Back off the retries that name an unshared
+  item"), created on the main checkout at the owner's word; K-3 is unchanged
+  here.
+- K-1 stays as approved. A completed check sets the unshared list whole, and the
+  default check interval is 300 seconds (a per-repository setting), so a
+  publishing save or comment shows within about five minutes while checking is on,
+  and only at a Check now while a repository is paused or off. The Cycle
+  document's K-1 now says so.
+- The "Can't reach" label with the sentence "Checking soon" stays as the
+  design's row 7 reads.

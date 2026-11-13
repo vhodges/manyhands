@@ -123,6 +123,20 @@ pub(super) async fn check_all(cx: &mut TestAppContext) {
         })
         .await;
     assert_eq!(state(&shell, "b", cx).as_deref(), Some(PAUSED));
+    // The launch polls have ended: Check all skips a repository whose
+    // check is still running.
+    shell
+        .until_drawn(cx, "the launch polls to end", |_, cx| {
+            [&key_a, &key_b].iter().all(|root| {
+                services.scheduler().read_with(cx, |scheduler, _| {
+                    scheduler
+                        .schedule()
+                        .repo(root)
+                        .is_none_or(|repo| !repo.in_flight())
+                })
+            })
+        })
+        .await;
 
     // `c`'s key is locked, as the scheduler says it live.
     let locked = SharedKeyId::new();

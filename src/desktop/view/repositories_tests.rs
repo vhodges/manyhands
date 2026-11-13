@@ -57,10 +57,13 @@ async fn rows_and_list_states(cx: &mut TestAppContext) {
     let (window, held) = PollingWindow::over(
         fixture,
         &[],
-        |backend, _| {
+        |backend, clock| {
             backend
                 .inner()
                 .replace_service(RepositoryService::open_at(&degraded).unwrap());
+            // Every poll no answer is queued for (the re-registered `a`'s
+            // restart after its busy answer) is not due.
+            backend.answer_unanswered_polls(not_due(clock));
             backend.inner().hold_read(ReadKind::Repositories)
         },
         cx,

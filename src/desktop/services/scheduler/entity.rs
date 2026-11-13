@@ -322,6 +322,8 @@ impl Scheduler {
             return;
         }
         self.failed_reads.remove(&root);
+        // The row's facts changed: it is no longer a failed read.
+        cx.notify();
         self.read_registrations(vec![root], cx);
     }
 

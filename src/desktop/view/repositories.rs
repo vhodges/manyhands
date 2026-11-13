@@ -205,7 +205,8 @@ impl RepositoriesPane {
         &self.list
     }
 
-    /// The rows shown.
+    /// The rows shown, for tests.
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn rows(&self, cx: &App) -> Vec<RepositoryRow> {
         self.list.read(cx).delegate().rows().to_vec()
     }
@@ -218,11 +219,10 @@ impl RepositoriesPane {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if self.rows(cx) == rows {
-            return;
-        }
         let list = self.list.clone();
-        window.defer(cx, move |window, cx| show(&list, rows, window, cx));
+        if list.read(cx).delegate().rows() != rows.as_slice() {
+            window.defer(cx, move |window, cx| show(&list, rows, window, cx));
+        }
     }
 
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {

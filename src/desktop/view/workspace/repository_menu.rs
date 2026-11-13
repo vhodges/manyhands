@@ -306,6 +306,7 @@ impl Workspace {
         {
             let context = menu.context.clone();
             self.repository_menu = None;
+            // Now, not deferred: `focus_lost` fires in this draw and only focuses a region.
             window.focus(&context, cx);
             return None;
         }

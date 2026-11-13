@@ -188,25 +188,25 @@ no code on their branches.
 
 ## Acceptance And Exit Evidence
 
-Planned proof. The Status column is filled at the final task from the
-branch's own tests (by exact name) and the execution ledger. "On screen"
+Proof, with the Status column filled at Task 10 from the branch's own
+tests (by exact name) and the execution ledger. "On screen"
 rows await the owner's checks; Claude records only what the owner reports.
 
 | # | Wave exit evidence / contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | Each repository state comes from real service state, with no fabricated rows (contract 1) | `each_state_and_its_precedence` (P1–P3, P18–P20, P34, P35); `the_stored_outcome_and_shared_copy_are_kept`; `rows_and_list_states` (P38) | Planned |
-| A2 | "{n} to share" counts what is not shared, survives a failed check, follows this app's saves and shares, and agrees with Settings | `to_share_counts_and_finished_shares` (P4, P5); `unshared_follows_attempts_shares_and_saves` (P30–P33); `finished_shares_and_saves_are_heard`; `status_text_table` (E-9) | Planned |
-| A3 | Every action works by keyboard, and a state's reason is readable without hovering (contract 5) | `the_menu_by_pointer_and_keyboard` (P10, P21); `panel_toolbars_work_by_tab_and_enter` (E-11); `status_items_say_and_choose`; the edited keyboard journeys (E-5) | Planned |
-| A4 | No secret appears in a row, tooltip, menu or footer item (contract 7) | `polling_privacy` (E-15, P17); `tooltips_say_the_state_and_the_facts` | Planned |
-| A5 | Every existing repository journey still passes: select, Retry, Remove, Share main, Add | The edited tests E-1 to E-8 and E-16, and the fast tier | Planned |
-| A6 | The details block leaves the item area and nothing it offered is lost | `the_item_area_holds_nothing_of_the_repository` (P14); the kept row (P18); design Part F's table; E-1 to E-8 | Planned |
-| A7 | Removal confirms and keeps the files (contract 4) | `the_menu_by_pointer_and_keyboard` (P11) | Planned |
-| A8 | Nothing acts behind a dialog or sheet (contract 8) | P12 in the menu, toolbar and footer tests, each with a dialog and a sheet | Planned |
-| A9 | One meaning of selected; rows applied after the frame (decision 3) | `a_repository_rows_selected_state_has_one_meaning`, unchanged; `rows_and_list_states` (P9, P16); that nothing notifies during render is checked in code review | Planned |
-| A10 | Navigation sends nothing (contract 2) | `the_menu_by_pointer_and_keyboard` (P22) | Planned |
-| A11 | Check now and Check all only check (contract 3); Check all checks each repository (D6 W-5), skipping those waiting on a key or host, live or stored | `check_all_checks_each_repository` (P23, P24); `the_menu_by_pointer_and_keyboard` | Planned |
-| A12 | Colour is never the only signal (contract 6) | `each_state_and_its_precedence` (every state with a tone has a label); `status_items_say_and_choose` | Planned |
-| A13 | The panel and footer match the design in the dark theme | On screen: the owner, against frames 1a and 1b | Planned |
+| A1 | Each repository state comes from real service state, with no fabricated rows (contract 1) | `each_state_and_its_precedence` (P1–P3, P18–P20, P34, P35); `the_stored_outcome_and_shared_copy_are_kept`; `rows_and_list_states` (P38) | Proven by tests: passed in the fast tier at `43f411a0` |
+| A2 | "{n} to share" counts what is not shared, survives a failed check, follows this app's saves and shares, and agrees with Settings | `to_share_counts_and_finished_shares` (P4, P5); `unshared_follows_attempts_shares_and_saves` (P30–P33); `finished_shares_and_saves_are_heard`; `status_text_table` (E-9) | Proven by tests: passed in the fast tier at `43f411a0`; the final review's rule-4 fix (`43f411a0`) added a row to `unshared_follows_attempts_shares_and_saves` |
+| A3 | Every action works by keyboard, and a state's reason is readable without hovering (contract 5) | `the_menu_by_pointer_and_keyboard` (P10, P21); `panel_toolbars_work_by_tab_and_enter` (E-11); `status_items_say_and_choose`; the edited keyboard journeys (E-5) | Proven by tests: passed in the fast tier at `43f411a0`; `status_items_say_and_choose` failed once under load and passes alone after `595667cd` (ledger, Task 10) |
+| A4 | No secret appears in a row, tooltip, menu or footer item (contract 7) | `polling_privacy` (E-15, P17); `tooltips_say_the_state_and_the_facts` | Proven by tests: passed in the fast tier at `43f411a0` |
+| A5 | Every existing repository journey still passes: select, Retry, Remove, Share main, Add | The edited tests E-1 to E-8 and E-16, and the fast tier | Proven by tests: E-1 to E-8 and E-16 edited and passing; the fast tier at `43f411a0` ended 1867 passed, 2 failed (two new journeys, flaky under load), both fixed in `595667cd` and passing alone |
+| A6 | The details block leaves the item area and nothing it offered is lost | `the_item_area_holds_nothing_of_the_repository` (P14); the kept row (P18); design Part F's table; E-1 to E-8 | Proven by tests: passed in the fast tier at `43f411a0` |
+| A7 | Removal confirms and keeps the files (contract 4) | `the_menu_by_pointer_and_keyboard` (P11) | Proven by tests: passed in the fast tier at `43f411a0` |
+| A8 | Nothing acts behind a dialog or sheet (contract 8) | P12 in the menu, toolbar and footer tests, each with a dialog and a sheet | Proven by tests: passed in the fast tier at `43f411a0`; `check_all_checks_each_repository` failed once under load and passes alone after `595667cd` |
+| A9 | One meaning of selected; rows applied after the frame (decision 3) | `a_repository_rows_selected_state_has_one_meaning`, unchanged; `rows_and_list_states` (P9, P16); that nothing notifies during render is checked in code review | Proven by tests: passed in the fast tier at `43f411a0`; "nothing notifies during render" was checked in the task and final reviews |
+| A10 | Navigation sends nothing (contract 2) | `the_menu_by_pointer_and_keyboard` (P22) | Proven by tests: passed in the fast tier at `43f411a0` |
+| A11 | Check now and Check all only check (contract 3); Check all checks each repository (D6 W-5), skipping those waiting on a key or host, live or stored | `check_all_checks_each_repository` (P23, P24); `the_menu_by_pointer_and_keyboard` | Proven by tests: Check all skips a stored locked-key or host outcome (owner ruling, ledger Task 6); `check_all_checks_each_repository` failed once under load and passes alone after `595667cd` |
+| A12 | Colour is never the only signal (contract 6) | `each_state_and_its_precedence` (every state with a tone has a label); `status_items_say_and_choose` | Proven by tests: passed in the fast tier at `43f411a0` |
+| A13 | The panel and footer match the design in the dark theme | On screen: the owner, against frames 1a and 1b | Awaiting the owner: the on-screen checklist (`docs/plans/2026-11-12-wave-04-cycle-03a-on-screen-checklist.md`) |
 
 ## Product-Owner Decisions (2026-11-12)
 
@@ -365,6 +365,24 @@ decisions govern and are not repeated.
     worktree cleanup, native CI, creating tickets, and `ticket save` or
     `comment add` on any other ticket.
 
+**Answered by the owner during execution (2026-11-12):**
+
+26. **A paused or off repository does not read a failed check as live.**
+    Part B rows 6 and 7's last-answer triggers hold only while checking is
+    on and the repository is not paused, as a stored outcome already does.
+    A repository paused after a failed check reads Paused (or "{n} to
+    share"); an off one with no unshared list reads "Checking is off".
+    Rows 8 and 10 are not gated on checking being on: an off repository
+    with an unshared list still reads "{n} to share" or "Up to date".
+    (Task 2.)
+27. **Check all skips a stored key or host outcome.** A paused repository
+    whose stored last outcome is a locked key, an unavailable key or an
+    unapproved host is skipped by Check all, as a live one is (R-32,
+    decision 16): it would prompt for a passphrase for no check.
+    (`status::stored_for_check_all`; Task 6.)
+28. **An unnamed item is "an item".** An unshared item with no parsed ID
+    that is not main reads "an item" in a tooltip. (Task 2.)
+
 ## Known Limits
 
 These are visible to users; the design's Known Limits give the detail.
@@ -372,8 +390,11 @@ These are visible to users; the design's Known Limits give the detail.
 - "N to share" follows this app's saves and shares at once, from the
   first save of a session, even before any completed check, and a
   completed check sets it whole; another process's or the CLI's work, a
-  resumed share, a comment's publication and a conflict resolution's
-  share show at the next check (K-1).
+  resumed share, a comment's publication, a conflict resolution's share
+  and the save a resolution of a local-context conflict makes show at the
+  next check (K-1): five minutes at most by default while checking is on
+  (the interval is each repository's setting), and only at a Check now
+  while it is paused or off. The owner accepted this on 2026-11-13.
 - After a relaunch a stored outcome stands until this app checks (K-2).
 - An unshared item is named by its ID until its title is read, for the
   session after three failed tries, and when a local conflict resolution

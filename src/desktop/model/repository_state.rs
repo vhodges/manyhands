@@ -1,13 +1,13 @@
 //! One repository's state, tooltip and menu (Cycle 03a, Part B and D): pure
-//! functions of the facts the Workspace already holds, so the row, the
-//! tooltip, the accessible description and the menu's first line all say
-//! the same.
+//! functions of the facts the Workspace holds, so the row, the tooltip, the
+//! accessible description and the menu's first line all say the same.
 //!
 //! The first row of Part B's table that holds wins. Nothing here reads a
 //! clock or does I/O: `now` comes from the facts, and the titles of the
-//! items not shared yet come through a closure. Whether a stored outcome
-//! counts is `status::stored_applies` alone (R-32); the words of a check's
-//! outcome are D6's, from `status::row`, so Settings and the panel agree.
+//! items not shared yet come through a closure. The row and tooltip count
+//! a stored outcome by `status::stored_applies` (R-32), Check all by
+//! `status::stored_for_check_all`, which shares its core; a check's words
+//! are D6's, from `status::row`, so Settings and the panel agree.
 //!
 //! No text here carries a key, a passphrase or a URL that is not the
 //! library's redacted one (Part I).

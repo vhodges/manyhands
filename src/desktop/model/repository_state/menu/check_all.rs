@@ -16,7 +16,8 @@ use super::super::{
 /// `Polling` (paused included, decision 16), nothing is checking, no live
 /// attention waits on a key or a host, and the stored outcome, as
 /// `status::stored_for_check_all` gives it (paused or waiting included),
-/// does not say a key or a host is wanted. The sentences and the actions are the row's; this only decides.
+/// does not say a key or a host is wanted. The sentences and the actions
+/// are the row's; this only decides.
 pub(crate) fn check_all_applies(facts: &RepoFacts<'_>) -> bool {
     if !matches!(facts.row().shape, Shape::Polling(_)) || facts.checking() {
         return false;
