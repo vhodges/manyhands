@@ -14,7 +14,7 @@ fn retirement_r1_missing_row_only_overrides_unknown_history_for_that_item() {
     for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
         let (data, root, service) = fixture();
         with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), true)
+            configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)
         })
         .unwrap();
         let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -62,7 +62,7 @@ fn retirement_r1_missing_row_only_overrides_unknown_history_for_that_item() {
 fn retirement_batch_absence_preserves_retirement_and_publication_consumes_it_atomically() {
     let (data, root, service) = fixture();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), true)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)
     })
     .unwrap();
     let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -140,10 +140,15 @@ fn retirement_batch_absence_preserves_retirement_and_publication_consumes_it_ato
 }
 
 #[test]
-fn retirement_does_not_weaken_unknown_never_published_row_invariant() {
+fn an_explicit_never_published_row_is_accepted_under_the_cache_loss_flag() {
+    // Named edit (item resolve-history): the old rule rejected a
+    // `never_published` row while the flag was set, which left no way to
+    // record an owner's resolution before the last one clears the flag. An
+    // explicit row is a creation or owner resolution and is safe; contexts
+    // with no row stay unknown under the flag.
     let (data, root, service) = fixture();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), true)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)
     })
     .unwrap();
     let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -152,17 +157,22 @@ fn retirement_does_not_weaken_unknown_never_published_row_invariant() {
     seed_retirement(&db, AuthoringKind::Ticket, ITEM);
     let target = plan().context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
     db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'never_published','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM]).unwrap();
-    assert!(service.remote_snapshot(root.path()).is_err());
-    assert!(
-        matches!(RepositoryService::open_at(data.path()),Err(e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+    let item: ItemId = ITEM.parse().unwrap();
+    assert_eq!(
+        service
+            .remote_snapshot(root.path())
+            .unwrap()
+            .fetch_publication_evidence_for(AuthoringKind::Ticket, &item),
+        RemotePublicationEvidence::NeverPublished
     );
+    RepositoryService::open_at(data.path()).unwrap();
 }
 
 #[test]
 fn retirement_migration_additive_idempotent_atomic_and_audited() {
     let (data, root, service) = fixture();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), true)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)
     })
     .unwrap();
     let mut db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -326,7 +336,7 @@ fn poll_kind_direct_sql_changes_are_denied_and_preserve_the_entire_row_after_reo
     for kind in [Some(PollKind::Observe), Some(PollKind::Update), None] {
         let (data, root, service) = fixture();
         with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), false)?;
+            configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
             insert_operation_with_kind(
                 tx,
                 id,
@@ -374,7 +384,7 @@ fn poll_kind_direct_sql_changes_are_denied_and_preserve_the_entire_row_after_reo
 fn poll_kind_legacy_migration_freezes_observe_identity_and_preserves_rows_on_reopen() {
     let (data, root, service) = fixture();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -407,6 +417,15 @@ fn poll_kind_legacy_migration_freezes_observe_identity_and_preserves_rows_on_reo
         ALTER TABLE remote_operation_records DROP COLUMN poll_kind;",
     )
     .unwrap();
+    // This historical envelope also predates the unpublished migration marker.
+    assert_eq!(
+        db.execute(
+            "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'",
+            []
+        )
+        .unwrap(),
+        1
+    );
     for _ in 0..2 {
         let reopened = RepositoryService::open_at(data.path()).unwrap();
         assert_eq!(poll_kind_row(&db), before);
@@ -437,7 +456,7 @@ fn review_completed_state() -> (
     let (data, root, service) = fixture();
     let op = crate::repository::OperationId::new();
     with_transaction(&service,root.path(),|tx,id|{
-        configure(tx,id,Some(&plan()),false)?;
+        configure(tx,id,Some(&plan()),ConfigurationChange::Plan)?;
         insert_operation_with_kind(tx,id,op,&RemoteOperationTarget::for_poll(&plan()),RemoteOperationPriority::Poll,Some(PollKind::Update),123)?;
         tx.execute("UPDATE remote_operation_records SET phase='completed',completed_step='before_discovery',outcome='completed',updated_at=124,poll_completed_at=124,poll_next_eligible_at=424",[]).unwrap();
         replace_poll_dispositions(tx,id,op,&[super::super::poll::PollTargetReport{target:Some(plan().primary().clone()),kind:None,item_id:None,disposition:super::super::poll::PollDisposition::Current,before_oid:Some(ADVERTISED.parse().unwrap()),after_oid:Some(ADVERTISED.parse().unwrap())}],124)
@@ -532,8 +551,38 @@ fn review_disposition_metadata_loss_is_not_hidden_by_updated_at_fallback() {
 fn review_disposition_genuine_old_envelope_migrates_once_preserving_original_rows() {
     let (data, _, service, op) = review_completed_state();
     drop(service);
-    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let mut db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     db.execute_batch("DROP TABLE remote_poll_dispositions;DROP TRIGGER remote_poll_disposition_owner_immutable;ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at;ALTER TABLE remote_operation_records DROP COLUMN poll_next_eligible_at;").unwrap();
+    // The current fixture has a marker. Losing the entire envelope while that
+    // marker survives is evidence loss, not a genuine pre-envelope registry.
+    let original_version: i64 = db
+        .query_row("PRAGMA schema_version", [], |r| r.get(0))
+        .unwrap();
+    let tx = db.transaction().unwrap();
+    assert!(migrate_poll_dispositions(&tx).is_err());
+    assert_eq!(
+        tx.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        original_version,
+        "the marked form must be refused before DDL"
+    );
+    tx.rollback().unwrap();
+    assert!(
+        matches!(RepositoryService::open_at(data.path()), Err(e) if e.kind == crate::repository::RepositoryErrorKind::RecoveryRequired)
+    );
+    assert_eq!(
+        db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        original_version
+    );
+    assert_eq!(
+        db.execute(
+            "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'",
+            []
+        )
+        .unwrap(),
+        1
+    );
     let before = db
         .query_row(
             "SELECT phase,outcome,created_at,updated_at FROM remote_operation_records",
@@ -580,6 +629,324 @@ fn review_disposition_genuine_old_envelope_migrates_once_preserving_original_row
         db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
         version
+    );
+}
+
+// Frozen from the common pre-retirement/pre-unpublished catalog, not the current
+// builder. All four published profiles share this table/trigger shape; only the
+// independently named literal enum additions differ.
+const LEGACY_POLL_DISPOSITIONS: &str = r#"
+    CREATE TABLE remote_poll_dispositions (
+        repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        operation_ulid TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+        classification TEXT NOT NULL CHECK(classification IN ('primary','context','malformed')),
+        remote_ref TEXT,
+        kind TEXT CHECK(kind IN ('document','ticket')),
+        item_id TEXT,
+        disposition TEXT NOT NULL CHECK(disposition IN ('current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','not_reached')),
+        before_oid TEXT CHECK(length(before_oid)=40 AND before_oid NOT GLOB '*[^0-9a-f]*'),
+        after_oid TEXT CHECK(length(after_oid)=40 AND after_oid NOT GLOB '*[^0-9a-f]*'),
+        observed_at INTEGER NOT NULL CHECK(typeof(observed_at)='integer' AND observed_at BETWEEN 0 AND 253402300799),
+        PRIMARY KEY(repository_id,ordinal), UNIQUE(repository_id,remote_ref),
+        FOREIGN KEY(repository_id,operation_ulid) REFERENCES remote_operation_records(repository_id,operation_ulid) ON DELETE CASCADE,
+        CHECK((classification='context')=(kind IS NOT NULL)),
+        CHECK((kind IS NULL)=(item_id IS NULL)),
+        CHECK((classification='malformed')=(remote_ref IS NULL))
+    );
+    CREATE TRIGGER remote_poll_disposition_owner_immutable BEFORE UPDATE OF repository_id,operation_ulid,action,poll_kind ON remote_operation_records WHEN EXISTS(SELECT 1 FROM remote_poll_dispositions WHERE repository_id=OLD.repository_id AND operation_ulid=OLD.operation_ulid) BEGIN SELECT RAISE(ABORT,'immutable disposition owner'); END;
+"#;
+
+fn historical_disposition_schema(profile: u8) -> String {
+    assert!([15, 16, 17, 18].contains(&profile));
+    let mut schema = LEGACY_POLL_DISPOSITIONS.to_owned();
+    if matches!(profile, 17 | 18) {
+        schema = schema.replace(
+            "'remotely_deleted',",
+            "'remotely_deleted','closed','promoted',",
+        );
+    }
+    if matches!(profile, 16 | 18) {
+        schema = schema.replace("'history_unknown',", "'history_unknown','unpublished',");
+    }
+    schema
+}
+
+fn install_historical_dispositions(db: &Connection, profile: u8) {
+    db.execute_batch("DROP TRIGGER remote_poll_disposition_owner_immutable; ALTER TABLE remote_poll_dispositions RENAME TO old_dispositions;").unwrap();
+    db.execute_batch(&historical_disposition_schema(profile))
+        .unwrap();
+    db.execute_batch("INSERT INTO remote_poll_dispositions SELECT * FROM old_dispositions; DROP TABLE old_dispositions;").unwrap();
+    db.execute(
+        "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'",
+        [],
+    )
+    .unwrap();
+    if matches!(profile, 16 | 18) {
+        db.execute("INSERT INTO registry_migrations(name) VALUES('remote_poll_dispositions_unpublished_v1')", []).unwrap();
+    }
+}
+
+#[test]
+fn retirement_disposition_exact_old_enum_upgrade_preserves_evidence_and_owner() {
+    let legacy = [
+        "current",
+        "fast_forwarded",
+        "local_ahead",
+        "diverged",
+        "dirty",
+        "conflicted",
+        "inaccessible",
+        "materialized",
+        "nonconforming",
+        "blocked_by_local_state",
+        "materialization_incomplete",
+        "malformed",
+        "remotely_deleted",
+        "history_unknown",
+        "not_reached",
+    ];
+    for profile in [15, 16, 17, 18] {
+        let (data, _, service, op) = review_completed_state();
+        drop(service);
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let mut values = legacy.to_vec();
+        if matches!(profile, 17 | 18) {
+            values.extend(["closed", "promoted"]);
+        }
+        if matches!(profile, 16 | 18) {
+            values.push("unpublished");
+        }
+        for (ordinal, value) in values.iter().enumerate() {
+            db.execute("INSERT OR REPLACE INTO remote_poll_dispositions(repository_id,operation_ulid,ordinal,classification,disposition,before_oid,after_oid,observed_at) VALUES(1,?1,?2,'malformed',?3,?4,?4,124)",params![op.to_string(),ordinal as i64,value,ADVERTISED]).unwrap();
+        }
+        let rows_before = read_poll_dispositions(&db, 1).unwrap();
+        install_historical_dispositions(&db, profile);
+        let service = RepositoryService::open_at(data.path())
+            .unwrap_or_else(|_| panic!("valid historical profile {profile} must upgrade"));
+        validate_poll_disposition_schema(&db).unwrap();
+        assert_eq!(read_poll_dispositions(&db, 1).unwrap(), rows_before);
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM remote_poll_dispositions", [], |r| {
+                r.get::<_, usize>(0)
+            })
+            .unwrap(),
+            values.len()
+        );
+        assert_eq!(
+            poll_completion_metadata(&db, 1, op)
+                .unwrap()
+                .0
+                .unix_timestamp(),
+            124
+        );
+        assert!(
+            db.execute(
+                "UPDATE remote_operation_records SET operation_ulid=operation_ulid",
+                []
+            )
+            .is_err()
+        );
+        let version: i64 = db
+            .query_row("PRAGMA schema_version", [], |r| r.get(0))
+            .unwrap();
+        drop(service);
+        RepositoryService::open_at(data.path()).unwrap();
+        assert_eq!(
+            db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            version
+        );
+        for (ordinal, value) in ["closed", "promoted", "unpublished"].iter().enumerate() {
+            db.execute(
+                "UPDATE remote_poll_dispositions SET disposition=?1 WHERE ordinal=?2",
+                params![value, ordinal as i64],
+            )
+            .unwrap();
+        }
+        let rows = read_poll_dispositions(&db, 1).unwrap();
+        assert_eq!(
+            rows[0].disposition(),
+            super::super::poll::PollDisposition::Closed
+        );
+        assert_eq!(
+            rows[1].disposition(),
+            super::super::poll::PollDisposition::Promoted
+        );
+        assert_eq!(
+            rows[2].disposition(),
+            super::super::poll::PollDisposition::Unpublished
+        );
+        RepositoryService::open_at(data.path()).unwrap();
+        assert_eq!(read_poll_dispositions(&db, 1).unwrap(), rows);
+        assert_eq!(
+            db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            version
+        );
+    }
+}
+
+#[test]
+fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
+    let corruptions = [
+        "DROP TRIGGER remote_poll_disposition_owner_immutable",
+        "DROP TRIGGER remote_poll_disposition_owner_immutable; CREATE TRIGGER remote_poll_disposition_owner_immutable BEFORE UPDATE ON remote_operation_records BEGIN SELECT 1; END;",
+        "ALTER TABLE remote_poll_dispositions ADD COLUMN substituted TEXT",
+        "ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at",
+        "ALTER TABLE remote_operation_records DROP COLUMN poll_next_eligible_at",
+        "ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at; ALTER TABLE remote_operation_records ADD COLUMN poll_completed_at TEXT",
+        "PRAGMA writable_schema=ON; UPDATE sqlite_master SET sql=replace(sql,'''remotely_deleted''','''REMOTELY_DELETED''') WHERE name='remote_poll_dispositions'; PRAGMA writable_schema=OFF",
+        "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='closed'",
+        "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='promoted'",
+        "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='substituted'",
+    ];
+    let dependencies = [
+        "CREATE INDEX unknown_index ON \"REMOTE_POLL_DISPOSITIONS\"(disposition)",
+        "CREATE TRIGGER unknown_attached AFTER UPDATE ON [Remote_Poll_Dispositions] BEGIN SELECT 1; END",
+        "CREATE TRIGGER unknown_external AFTER INSERT ON retention_payload BEGIN SELECT count(*) FROM `REMOTE_POLL_DISPOSITIONS`; END",
+        "CREATE VIEW unknown_view AS SELECT * FROM \"Remote_Poll_Dispositions\"",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES remote_poll_dispositions(repository_id,ordinal) ON DELETE CASCADE)",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES \"REMOTE_POLL_DISPOSITIONS\"(repository_id,ordinal) ON DELETE CASCADE); INSERT INTO incoming_dispositions SELECT repository_id,ordinal,'retained cascade payload' FROM remote_poll_dispositions",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES [Remote_Poll_Dispositions](repository_id,ordinal) ON DELETE RESTRICT)",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES `Remote_Poll_Dispositions`(repository_id,ordinal) ON DELETE RESTRICT); INSERT INTO incoming_dispositions SELECT repository_id,ordinal,'retained restrict payload' FROM remote_poll_dispositions",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES 'REMOTE_POLL_DISPOSITIONS'(repository_id,ordinal) ON DELETE SET NULL); INSERT INTO incoming_dispositions SELECT repository_id,ordinal,'retained set-null payload' FROM remote_poll_dispositions",
+    ];
+    let cases = corruptions.into_iter().map(|change| (15, change))
+        .chain(dependencies.into_iter().flat_map(|change| [15,16,17,18].map(|profile| (profile,change))))
+        .chain([
+            (16, corruptions[7]),
+            (16, corruptions[8]),
+            (17, "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='unpublished'"),
+            (15, "INSERT INTO registry_migrations(name) VALUES('remote_poll_dispositions_unpublished_v1')"),
+            (17, "INSERT INTO registry_migrations(name) VALUES('remote_poll_dispositions_unpublished_v1')"),
+            (16, "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'"),
+            (18, "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'"),
+        ]);
+    let mut accepted = Vec::new();
+    for (profile, change) in cases {
+        let case = format!("profile={profile}: {change}");
+        let (data, _, service, _) = review_completed_state();
+        drop(service);
+        let mut db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        // Match the real service connection, including CASCADE effects. The
+        // unknown populated child must survive public open, not just our rollback.
+        db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        if profile != 18 {
+            install_historical_dispositions(&db, profile);
+        }
+        db.execute_batch("CREATE TABLE retention_payload(payload TEXT NOT NULL); INSERT INTO retention_payload(rowid,payload) VALUES(91,'retained independent payload')").unwrap();
+        db.execute_batch(change).unwrap();
+        // Match a newly opened registry connection: retain the corrupt row,
+        // but do not carry the fixture writer's CHECK bypass into migration.
+        db.execute_batch("PRAGMA ignore_check_constraints=OFF")
+            .unwrap();
+        let corrupt_enum = change.contains("ignore_check_constraints");
+        if corrupt_enum {
+            let integrity: String = db
+                .query_row(
+                    "PRAGMA integrity_check(remote_poll_dispositions)",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                integrity.contains("CHECK constraint failed"),
+                "{change}: {integrity}"
+            );
+        }
+        let values = |db: &Connection, sql: &str| {
+            let mut query = db.prepare(sql).unwrap();
+            let columns = query.column_count();
+            query
+                .query_map([], |r| {
+                    (0..columns)
+                        .map(|column| r.get::<_, rusqlite::types::Value>(column))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let image = |db: &Connection| {
+            let tables = db
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+                .unwrap()
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let mut image = vec![values(
+                db,
+                "SELECT type,name,tbl_name,rootpage,sql FROM sqlite_master ORDER BY name",
+            )];
+            for table in tables {
+                image.push(values(
+                    db,
+                    &format!(
+                        "SELECT rowid,* FROM \"{}\" ORDER BY rowid",
+                        table.replace('"', "\"\"")
+                    ),
+                ));
+            }
+            image
+        };
+        let before = image(&db);
+        assert!(!values(&db, "SELECT * FROM remote_poll_dispositions").is_empty());
+        let version: i64 = db
+            .query_row("PRAGMA schema_version", [], |r| r.get(0))
+            .unwrap();
+        let tx = db.transaction().unwrap();
+        let refused = migrate_poll_dispositions(&tx).is_err();
+        {
+            // The closure guard refuses BEFORE any DDL, not after a destructive
+            // rename/drop that happens to be hidden by the explicit rollback.
+            assert_eq!(image(&tx), before, "before rollback: {case}");
+            assert_eq!(
+                tx.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                version,
+                "before rollback: {case}"
+            );
+        }
+        tx.rollback().unwrap();
+        assert_eq!(image(&db), before, "{case}");
+        assert_eq!(
+            db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            version,
+            "{case}"
+        );
+        if corrupt_enum {
+            let owner_update = db.execute(
+                "UPDATE remote_operation_records SET operation_ulid=operation_ulid",
+                [],
+            );
+            assert!(
+                matches!(owner_update, Err(rusqlite::Error::SqliteFailure(_, Some(ref message))) if message == "immutable disposition owner"),
+                "{change}: {owner_update:?}"
+            );
+            assert_eq!(image(&db), before, "{case}");
+        }
+        if !refused {
+            accepted.push(case.clone());
+        }
+        let opened = RepositoryService::open_at(data.path()).map(|_| ());
+        assert!(
+            matches!(opened, Err(ref error) if error.kind == RepositoryErrorKind::RecoveryRequired),
+            "public open must refuse {case}: {opened:?}"
+        );
+        assert_eq!(image(&db), before, "public open: {case}");
+        assert_eq!(
+            db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            version,
+            "public open: {case}"
+        );
+    }
+    assert!(
+        accepted.is_empty(),
+        "old-schema corruption unexpectedly accepted: {accepted:?}"
     );
 }
 
@@ -642,7 +1009,7 @@ fn review_disposition_every_recognizable_partial_envelope_is_retained() {
 fn task6_local_history_unknown_context_also_exposes_its_latest_disposition() {
     let (_data, root, service) = fixture();
     with_transaction(&service,root.path(),|tx,id|{
-        configure(tx,id,Some(&plan()),false)?;
+        configure(tx,id,Some(&plan()),ConfigurationChange::Plan)?;
         tx.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(?1,'active','manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV','/local-context','01ARZ3NDEKTSV4RRFFQ69G5FAV')",[id]).unwrap();
         let op=crate::repository::OperationId::new();
         insert_operation_with_kind(tx,id,op,&RemoteOperationTarget::for_poll(&plan()),RemoteOperationPriority::Poll,Some(PollKind::Update),123)?;
@@ -664,7 +1031,7 @@ fn task6_disposition_schema_upgrade_rollback_corruption_and_privacy() {
     ] {
         let (data, root, service) = fixture();
         with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), false)?;
+            configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
             let op = crate::repository::OperationId::new();
             insert_operation_with_kind(
                 tx,
@@ -850,7 +1217,7 @@ fn materialization_state_fixture() -> (
     let (data, root, service) = fixture();
     let operation = crate::repository::OperationId::new();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation_with_kind(
             tx,
             id,
@@ -1035,7 +1402,7 @@ fn remove_attempt_columns(connection: &Connection) {
 fn attempt_migration_preserves_existing_rows_and_is_a_no_op_on_second_start() {
     let (data, root, service) = fixture();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1191,7 +1558,7 @@ fn state_fixture_symlink_parent_configures_and_reads_registered_root() {
     let (data, root, service) = fixture_in(&alias);
 
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1309,7 +1676,7 @@ fn current_advertisement_requires_matching_publication_evidence() {
     ] {
         let (data, root, service) = fixture();
         let generation = with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), false)
+            configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
         })
         .unwrap();
         with_transaction(&service, root.path(), |tx, id| {
@@ -1342,7 +1709,7 @@ fn current_advertisement_requires_matching_publication_evidence() {
 fn live_context_state_requires_a_matching_current_advertisement() {
     let (data, root, service) = fixture();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1401,7 +1768,7 @@ fn vm_work<T>(connection: &Connection, operation: impl FnOnce() -> T) -> (T, usi
 fn routine_reads_and_batch_writes_do_not_scale_with_retained_history() {
     let (data, root, service) = fixture();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1464,7 +1831,7 @@ fn startup_automatically_audits_historical_refs_and_foreign_keys() {
     ] {
         let (data, root, service) = fixture();
         let generation = with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), false)
+            configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
         })
         .unwrap();
         with_transaction(&service, root.path(), |tx, id| {
@@ -1503,7 +1870,7 @@ fn startup_automatically_audits_historical_refs_and_foreign_keys() {
 fn only_complete_batches_replace_current_and_deletion_retains_last_successful_oid() {
     let (data, root, service) = fixture();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1601,7 +1968,7 @@ fn configuration_changes_invalidate_remote_state_but_preserve_repository_policy(
         )
         .unwrap();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1616,7 +1983,7 @@ fn configuration_changes_invalidate_remote_state_but_preserve_repository_policy(
         Some(plan()),
     ] {
         with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, next.as_ref(), true)
+            configure(tx, id, next.as_ref(), ConfigurationChange::Credentials)
         })
         .unwrap();
         let snapshot = service.remote_snapshot(root.path()).unwrap();
@@ -1664,7 +2031,7 @@ fn malformed_response_names_never_enter_database_wal_backups_or_public_formattin
         .execute_batch("PRAGMA journal_mode=WAL; SELECT count(*) FROM repositories;")
         .unwrap();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     let sentinels = [
@@ -1762,7 +2129,7 @@ fn stored_context_states_require_valid_targets_and_publication_evidence() {
 fn operation_target_envelope_is_immutable_and_irrelevant_oid_fields_are_absent() {
     let (data, root, service) = fixture();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_poll(&plan());
@@ -1828,7 +2195,7 @@ fn local_context_with_lost_history_is_projected_as_unknown_without_a_deletion() 
 fn replacing_configuration_does_not_turn_known_publication_into_first_publication() {
     let (_data, root, service) = fixture();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1836,17 +2203,17 @@ fn replacing_configuration_does_not_turn_known_publication_into_first_publicatio
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, None, true)
+        configure(tx, id, None, ConfigurationChange::Credentials)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), true)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)
     })
     .unwrap();
     let snapshot = service.remote_snapshot(root.path()).unwrap();
     assert_eq!(
         snapshot.publication_evidence_for(AuthoringKind::Ticket, &ITEM.parse().unwrap()),
-        RemotePublicationEvidence::HistoryUnknown
+        RemotePublicationEvidence::ObservedPublished
     );
 }
 
@@ -1890,7 +2257,7 @@ CREATE UNIQUE INDEX remote_active_reservation ON remote_operation_records(reposi
 fn cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication() {
     let (data, root, service) = fixture();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -1906,6 +2273,8 @@ fn cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication()
             [],
         )
         .unwrap();
+    // Reconstruct pre-disposition history, not marked loss of its whole envelope.
+    assert_eq!(connection.execute("DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'", []).unwrap(), 1);
     connection.execute_batch(CYCLE04_OPERATION_SCHEMA).unwrap();
     let cases = [
         ("completed", "after_batch_commit", Some("completed"), 0, 0),
@@ -1987,7 +2356,7 @@ fn task2_merge_evidence_migration_preserves_cycle05_authority_and_is_idempotent(
     let operation_id = crate::repository::OperationId::new();
     let target = RemoteOperationTarget::for_primary_synchronization(&plan());
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -2091,7 +2460,7 @@ fn legacy_attempt_shape_upgrades_empty_attempts_and_rejects_populated_attempts(
     let operation = crate::repository::OperationId::new();
     let target = RemoteOperationTarget::for_primary_synchronization(&plan());
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -2221,7 +2590,7 @@ fn incompatible_context_integration_stage_requires_recovery() {
     }
     .operation_target(&plan());
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -2251,7 +2620,7 @@ fn task2_evidence_schema_has_no_content_or_transport_columns_and_wal_stays_redac
         .execute_batch("PRAGMA journal_mode=WAL; SELECT count(*) FROM repositories;")
         .unwrap();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     assert_eq!(generation, 1);
@@ -2328,7 +2697,7 @@ fn index_artifact_schema_migration_is_additive_and_rejects_weakened_provenance()
     let (data, root, service) = fixture();
     let operation = crate::repository::OperationId::new();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -2478,7 +2847,7 @@ fn window_migration_preserves_legacy_step_ids_attempt_paths_and_native_provenanc
     let (data, root, service) = fixture();
     let operation = crate::repository::OperationId::new();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -2581,7 +2950,7 @@ fn window_migration_preserves_legacy_step_ids_attempt_paths_and_native_provenanc
 fn window_fixture(service: &RepositoryService, root: &Path) -> crate::repository::OperationId {
     let operation = crate::repository::OperationId::new();
     with_transaction(service, root, |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         let target = RemoteOperationTarget::for_context(
             &plan(),
             RemoteOperationAction::SynchronizeContext,
@@ -3077,7 +3446,7 @@ fn pinned_window_pass_survives_configuration_fencing_and_registration_cascade() 
     with_transaction(&service, root.path(), |tx, id| {
         let record = read_operation(tx, id, operation)?.unwrap();
         prepare_integration_window(tx, &record, 1, &intent)?;
-        let generation = configure(tx, id, Some(&next_plan), false)?;
+        let generation = configure(tx, id, Some(&next_plan), ConfigurationChange::Plan)?;
         // A retained old pass is not live endpoint history and must not cause
         // another generation bump when the new endpoint is first bound.
         assert_eq!(
@@ -3163,7 +3532,7 @@ fn assert_missing_initial_window_requires_recovery(populated: bool) {
             RemoteOperationTarget::for_primary_synchronization(&plan())
         };
         with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), false)?;
+            configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
             insert_operation(
                 tx,
                 id,
@@ -3392,7 +3761,7 @@ fn window_zero_requirement_excludes_non_sync_operations_and_removed_registration
     ] {
         let (data, root, service) = fixture();
         with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), false)?;
+            configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
             let target = if action == RemoteOperationAction::Poll {
                 RemoteOperationTarget::for_poll(&plan())
             } else {
@@ -3450,7 +3819,7 @@ fn closing_an_unbegun_attempt_keeps_the_step_another_attempt_began() {
     let (data, root, service) = fixture();
     let operation = crate::repository::OperationId::new();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -3497,4 +3866,809 @@ fn closing_an_unbegun_attempt_keeps_the_step_another_attempt_began() {
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(attempts, [begun.to_string()]);
+}
+
+#[test]
+fn credentials_fence_carries_batch_and_rows() {
+    let document_ref = format!("refs/heads/manyhands/document/{ITEM}");
+    let document = || {
+        RemoteRefObservation::from_advertisement(
+            &plan(),
+            &document_ref,
+            Oid::from_str(TRACKING).unwrap(),
+            None,
+        )
+        .unwrap()
+    };
+    for pinned in [false, true] {
+        let (data, root, service) = fixture();
+        let operation = window_fixture(&service, root.path());
+        let generation = with_transaction(&service, root.path(), |tx, id| {
+            let generation = read_policy(tx, id)?.generation;
+            complete_batch(
+                tx,
+                id,
+                &plan(),
+                generation,
+                &[document(), advertised()],
+                123,
+            )?;
+            Ok(generation)
+        })
+        .unwrap();
+        // The second batch no longer advertises the document: its row becomes
+        // `remotely_deleted` next to the observed ticket row.
+        let old_batch = if pinned {
+            let intent = pinned_window(
+                &service,
+                root.path(),
+                operation,
+                Some(Oid::from_str(ADVERTISED).unwrap()),
+            );
+            with_transaction(&service, root.path(), |tx, id| {
+                let record = read_operation(tx, id, operation)?.unwrap();
+                prepare_integration_window(tx, &record, 1, &intent)?;
+                Ok(intent.observation_batch_id)
+            })
+            .unwrap()
+        } else {
+            with_transaction(&service, root.path(), |tx, id| {
+                complete_batch(tx, id, &plan(), generation, &[advertised()], 124)
+            })
+            .unwrap()
+        };
+        let before = service.remote_snapshot(root.path()).unwrap();
+        let carried = with_transaction(&service, root.path(), |tx, id| {
+            let after = configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)?;
+            // The startup audit reads every batch, pinned historical ones too.
+            read_snapshot_rows(tx, id, true)?;
+            Ok(after)
+        })
+        .unwrap();
+        assert_eq!(carried, generation + 1, "pinned={pinned}");
+        let after = service.remote_snapshot(root.path()).unwrap();
+        assert_eq!(
+            format!("{:?}", after.observations()),
+            format!("{:?}", before.observations()),
+            "pinned={pinned}"
+        );
+        assert_eq!(
+            format!("{:?}", after.contexts()),
+            format!("{:?}", before.contexts()),
+            "pinned={pinned}"
+        );
+        assert_eq!(after.contexts().len(), 2);
+        assert!(
+            after
+                .contexts()
+                .iter()
+                .any(|context| context.state() == RemoteContextState::RemotelyDeleted)
+        );
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let (current_generation, current_rows): (i64, i64) = db
+            .query_row(
+                "SELECT configuration_generation,(SELECT COUNT(*) FROM remote_ref_observations WHERE batch_id=remote_observation_batches.id) FROM remote_observation_batches WHERE is_current=1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(current_generation, carried);
+        assert_eq!(current_rows as usize, before.observations().len());
+        let old_kept: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM remote_observation_batches WHERE id=?1 AND is_current=0)",
+                [old_batch],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_kept, pinned, "pinned={pinned}");
+        // An unavailable plan keeps the evidence dormant; its return carries
+        // it again, and a fresh observation at that generation still works.
+        with_transaction(&service, root.path(), |tx, id| {
+            configure(tx, id, None, ConfigurationChange::Unavailable)?;
+            read_snapshot_rows(tx, id, true)?;
+            assert!(read_snapshot(tx, id)?.observations().is_empty());
+            let back = configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
+            read_snapshot_rows(tx, id, true)?;
+            assert_eq!(
+                format!("{:?}", read_snapshot(tx, id)?.contexts()),
+                format!("{:?}", before.contexts())
+            );
+            complete_batch(tx, id, &plan(), back, &[advertised()], 125)?;
+            read_snapshot_rows(tx, id, true)?;
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Call {
+    Plan(&'static str, &'static str),
+    Endpoints(&'static str, &'static str, u8),
+    Credentials,
+    Unavailable,
+}
+
+fn apply_call(service: &RepositoryService, root: &Path, call: Call) -> i64 {
+    with_transaction(service, root, |tx, id| match call {
+        Call::Plan(name, branch) => {
+            let plan = RemoteRefPlan::from_configuration(name, branch).unwrap();
+            configure(tx, id, Some(&plan), ConfigurationChange::Plan)
+        }
+        Call::Endpoints(name, branch, digest) => {
+            let plan = RemoteRefPlan::from_configuration(name, branch).unwrap();
+            configure_endpoints(tx, id, &plan, &[digest; 32])
+        }
+        Call::Credentials => {
+            let plan = read_policy(tx, id)?.plan;
+            configure(tx, id, plan.as_ref(), ConfigurationChange::Credentials)
+        }
+        Call::Unavailable => configure(tx, id, None, ConfigurationChange::Unavailable),
+    })
+    .unwrap()
+}
+
+#[test]
+fn configure_reasons_fence_and_forget() {
+    use Call::*;
+    let a = Plan("origin", "main");
+    // (setup, flag set before the call, call, bumps, forgets, flag after,
+    // known name, known branch, known digest byte)
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(
+        Vec<Call>,
+        bool,
+        Call,
+        bool,
+        bool,
+        i64,
+        Option<&str>,
+        Option<&str>,
+        Option<u8>,
+    )> = vec![
+        // first plan
+        (
+            vec![],
+            false,
+            a,
+            true,
+            false,
+            0,
+            Some("origin"),
+            Some("main"),
+            None,
+        ),
+        // credentials, unavailable
+        (
+            vec![a],
+            false,
+            Credentials,
+            true,
+            false,
+            0,
+            Some("origin"),
+            Some("main"),
+            None,
+        ),
+        (
+            vec![a],
+            false,
+            Unavailable,
+            true,
+            false,
+            0,
+            Some("origin"),
+            Some("main"),
+            None,
+        ),
+        // the same plan returning after unavailable
+        (
+            vec![a, Unavailable],
+            false,
+            a,
+            true,
+            false,
+            0,
+            Some("origin"),
+            Some("main"),
+            None,
+        ),
+        // a different plan after unavailable
+        (
+            vec![a, Unavailable],
+            false,
+            Plan("upstream", "main"),
+            true,
+            true,
+            0,
+            Some("upstream"),
+            Some("main"),
+            None,
+        ),
+        // a new primary branch
+        (
+            vec![a],
+            false,
+            Plan("origin", "trunk"),
+            true,
+            true,
+            0,
+            Some("origin"),
+            Some("trunk"),
+            None,
+        ),
+        // digest changed, then unchanged
+        (
+            vec![Endpoints("origin", "main", 1)],
+            false,
+            Endpoints("origin", "main", 2),
+            true,
+            true,
+            0,
+            Some("origin"),
+            Some("main"),
+            Some(2),
+        ),
+        (
+            vec![Endpoints("origin", "main", 1)],
+            false,
+            Endpoints("origin", "main", 1),
+            false,
+            false,
+            0,
+            Some("origin"),
+            Some("main"),
+            Some(1),
+        ),
+        // unavailable, then the same digest returning: known digest kept
+        (
+            vec![Endpoints("origin", "main", 1), Unavailable],
+            false,
+            Endpoints("origin", "main", 1),
+            true,
+            false,
+            0,
+            Some("origin"),
+            Some("main"),
+            Some(1),
+        ),
+        // the cache-loss flag stays set, and nothing here sets it
+        (
+            vec![a],
+            true,
+            Credentials,
+            true,
+            false,
+            1,
+            Some("origin"),
+            Some("main"),
+            None,
+        ),
+    ];
+    for (n, (setup, flag, call, bumps, forgets, flag_after, name, branch, digest)) in
+        rows.into_iter().enumerate()
+    {
+        let (data, root, service) = fixture();
+        let mut generation = 0;
+        let seeded = !setup.is_empty();
+        Connection::open(data.path().join(REGISTRY_FILE)).unwrap().execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,'/active',?2)", params![format!("manyhands/ticket/{ITEM}"), ITEM]).unwrap();
+        for (step_n, step) in setup.into_iter().enumerate() {
+            generation = apply_call(&service, root.path(), step);
+            if step_n == 0 {
+                // Evidence for the first remote: a current batch and a row.
+                with_transaction(&service, root.path(), |tx, id| {
+                    complete_batch(tx, id, &plan(), generation, &[advertised()], 123)
+                })
+                .unwrap();
+            }
+        }
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        if flag {
+            db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
+                .unwrap();
+        }
+        let after = apply_call(&service, root.path(), call);
+        assert_eq!(after != generation, bumps, "row {n} generation");
+        let (unknown, known_name, known_branch, known_digest): (
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<Vec<u8>>,
+        ) = db
+            .query_row(
+                "SELECT history_unknown,known_remote_name,known_primary_branch,known_endpoint_digest FROM remote_polling_state",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        if seeded {
+            // Forgetting rewrites every active context to an unknown row;
+            // anything else keeps the observed row and carries the batch.
+            let (rows, evidence, state, batch_generation): (i64, String, String, Option<i64>) = db
+                .query_row(
+                    "SELECT (SELECT COUNT(*) FROM remote_context_states),(SELECT publication_evidence FROM remote_context_states WHERE item_id=?1),(SELECT state FROM remote_context_states WHERE item_id=?1),(SELECT configuration_generation FROM remote_observation_batches WHERE is_current=1)",
+                    [ITEM],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!(rows, 1, "row {n} one row per active context");
+            let (want_evidence, want_state) = if forgets {
+                ("history_unknown", "history_unknown")
+            } else {
+                ("observed_published", "unmaterialized")
+            };
+            assert_eq!(
+                (evidence.as_str(), state.as_str()),
+                (want_evidence, want_state),
+                "row {n} rows"
+            );
+            assert_eq!(
+                batch_generation,
+                (!forgets).then_some(after),
+                "row {n} carried batch"
+            );
+            // A context registered afterwards has no row: never published.
+            let later = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+            db.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,'/later',?2)", params![format!("manyhands/ticket/{later}"), later]).unwrap();
+            assert_eq!(
+                read_snapshot(&db, 1)
+                    .unwrap()
+                    .fetch_publication_evidence_for(AuthoringKind::Ticket, &later.parse().unwrap()),
+                if flag_after == 0 {
+                    RemotePublicationEvidence::NeverPublished
+                } else {
+                    RemotePublicationEvidence::HistoryUnknown
+                },
+                "row {n} later context"
+            );
+        }
+        assert_eq!(unknown, flag_after, "row {n} flag");
+        assert_eq!(known_name.as_deref(), name, "row {n} known name");
+        assert_eq!(known_branch.as_deref(), branch, "row {n} known branch");
+        assert_eq!(
+            known_digest,
+            digest.map(|byte| vec![byte; 32]),
+            "row {n} known digest"
+        );
+    }
+}
+
+/// A forgetting fence writes an unknown row for each active context except
+/// one whose item is retired (R1): that history was consumed, and its new
+/// context keeps reading as never published.
+#[test]
+fn a_forgetting_fence_writes_no_unknown_row_for_a_retired_item() {
+    const OTHER: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+    let (data, root, service) = fixture();
+    apply_call(&service, root.path(), Call::Plan("origin", "main"));
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    for item in [ITEM, OTHER] {
+        db.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,?3,?2)", params![format!("manyhands/ticket/{item}"), item, format!("/{item}")]).unwrap();
+    }
+    seed_retirement(&db, AuthoringKind::Ticket, ITEM);
+    apply_call(&service, root.path(), Call::Plan("upstream", "main"));
+    let items: Vec<String> = db
+        .prepare("SELECT item_id FROM remote_context_states")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(items, [OTHER]);
+}
+
+/// What still reads unknown under the cache-loss flag: an unknown row counts
+/// only while its context is active, and an active context with no row counts
+/// too. A ghost row (its context released or removed by hand) is neither
+/// listed nor blocking.
+#[test]
+fn unresolved_contexts_count_only_active_contexts() {
+    const OTHER: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+    // (active contexts, rows by item, items listed, flag cleared by resolving)
+    #[allow(clippy::type_complexity)]
+    let rows: [(&[&str], &[&str], &[&str], bool); 5] = [
+        (&[ITEM], &[ITEM], &[ITEM], false),
+        (&[], &[ITEM], &[], true),
+        (&[OTHER], &[ITEM], &[OTHER], false),
+        (&[ITEM, OTHER], &[ITEM], &[ITEM, OTHER], false),
+        (&[], &[], &[], true),
+    ];
+    for (n, (active, with_rows, listed, clears)) in rows.into_iter().enumerate() {
+        let (data, root, service) = fixture();
+        apply_call(&service, root.path(), Call::Plan("origin", "main"));
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        for item in with_rows {
+            let target = plan().context(AuthoringKind::Ticket, &item.parse().unwrap());
+            db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'history_unknown','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),item]).unwrap();
+        }
+        for item in active {
+            db.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,?3,?2)", params![format!("manyhands/ticket/{item}"), item, format!("/{item}")]).unwrap();
+        }
+        db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
+            .unwrap();
+        let (flag, unknown) = with_transaction(&service, root.path(), unresolved_contexts).unwrap();
+        assert!(flag, "row {n} flag");
+        let unknown: Vec<String> = unknown.iter().map(|(_, id)| id.to_string()).collect();
+        assert_eq!(unknown, listed, "row {n} listed");
+        let cleared = with_transaction(&service, root.path(), |tx, id| {
+            clear_cache_loss_when_resolved(tx, id)
+        })
+        .unwrap();
+        assert_eq!(cleared, clears, "row {n} cleared");
+    }
+}
+
+#[test]
+fn null_known_columns_fall_back_to_the_current_plan() {
+    let (data, root, service) = fixture();
+    let generation = apply_call(&service, root.path(), Call::Plan("origin", "main"));
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    // A registry from before the known columns: no batch, a stale row.
+    db.execute_batch(
+        "UPDATE remote_polling_state SET known_remote_name=NULL,known_primary_branch=NULL;",
+    )
+    .unwrap();
+    db.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,'/active',?2)", params![format!("manyhands/ticket/{ITEM}"), ITEM]).unwrap();
+    let target = RemoteRefPlan::from_configuration("origin", "main")
+        .unwrap()
+        .context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+    db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'never_published','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM]).unwrap();
+    assert_ne!(
+        apply_call(&service, root.path(), Call::Plan("upstream", "main")),
+        generation
+    );
+    let (evidence, remote_ref): (String, String) = db
+        .query_row(
+            "SELECT publication_evidence,remote_ref FROM remote_context_states",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(evidence, "history_unknown");
+    let upstream = RemoteRefPlan::from_configuration("upstream", "main")
+        .unwrap()
+        .context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+    assert_eq!(remote_ref, upstream.remote_ref());
+}
+
+#[test]
+fn null_known_and_no_plan_rows_follow_the_new_plan() {
+    // (the remote configured afterwards, whether the kept rows are forgotten)
+    for (remote, forgets) in [("upstream", true), ("origin", false)] {
+        let (data, root, service) = fixture();
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        // No known identity and no plan, with a row under the old remote.
+        db.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,'/active',?2)", params![format!("manyhands/ticket/{ITEM}"), ITEM]).unwrap();
+        let target = plan().context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+        db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'never_published','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM]).unwrap();
+        apply_call(&service, root.path(), Call::Plan(remote, "main"));
+        let (evidence, remote_ref): (String, String) = db
+            .query_row(
+                "SELECT publication_evidence,remote_ref FROM remote_context_states",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let expected = RemoteRefPlan::from_configuration(remote, "main")
+            .unwrap()
+            .context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+        assert_eq!(remote_ref, expected.remote_ref(), "{remote} refs");
+        assert_eq!(
+            evidence,
+            if forgets {
+                "history_unknown"
+            } else {
+                "never_published"
+            },
+            "{remote} evidence"
+        );
+        read_snapshot(&db, 1).unwrap_or_else(|_| panic!("{remote} readable"));
+    }
+}
+
+#[test]
+fn history_per_context_migration() {
+    const OTHER: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+    // (flag, marker file, a row for the second context, migrations run)
+    for (n, (flag, marker, with_row, runs)) in [
+        (1, false, false, 1),
+        (1, true, false, 1),
+        (0, false, false, 1),
+        (1, false, true, 2),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (data, root, service) = fixture();
+        apply_call(&service, root.path(), Call::Plan("origin", "main"));
+        drop(service);
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        for id in [ITEM, OTHER] {
+            db.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,?2,?3)", params![format!("manyhands/ticket/{id}"), format!("/{id}"), id]).unwrap();
+        }
+        let target = plan().context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+        db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'history_unknown','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM]).unwrap();
+        if with_row {
+            let target = plan().context(AuthoringKind::Ticket, &OTHER.parse().unwrap());
+            db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'never_published','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),OTHER]).unwrap();
+        }
+        db.execute("UPDATE remote_polling_state SET history_unknown=?1,endpoint_digest=zeroblob(32),known_remote_name=NULL,known_primary_branch=NULL,known_endpoint_digest=NULL", [flag]).unwrap();
+        db.execute(
+            "DELETE FROM registry_migrations WHERE name='remote_history_per_context_v1'",
+            [],
+        )
+        .unwrap();
+        if marker {
+            std::fs::write(
+                data.path().join("remote-history-recovery-required"),
+                b"manyhands remote history recovery required v1\n",
+            )
+            .unwrap();
+        }
+        let unmigrated = |db: &Connection| -> Vec<(String, String)> {
+            db.prepare(
+                "SELECT item_id,publication_evidence FROM remote_context_states ORDER BY item_id",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+        };
+        let before = unmigrated(&db);
+        let mut after = Vec::new();
+        for _ in 0..runs {
+            drop(RepositoryService::open_at(data.path()).unwrap());
+            after = unmigrated(&db);
+        }
+        let migrates = flag == 1 && !marker;
+        let (unknown, name, branch, digest): (i64, Option<String>, Option<String>, Option<Vec<u8>>) = db
+            .query_row(
+                "SELECT history_unknown,known_remote_name,known_primary_branch,known_endpoint_digest FROM remote_polling_state",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(unknown, i64::from(flag == 1 && marker), "row {n} flag");
+        if migrates {
+            let mut want = vec![
+                (ITEM.to_owned(), "history_unknown".to_owned()),
+                (
+                    OTHER.to_owned(),
+                    if with_row {
+                        "never_published"
+                    } else {
+                        "history_unknown"
+                    }
+                    .to_owned(),
+                ),
+            ];
+            want.sort();
+            assert_eq!(after, want, "row {n} rows");
+        } else {
+            assert_eq!(after, before, "row {n} unchanged");
+        }
+        assert_eq!(name.as_deref(), Some("origin"), "row {n} known name");
+        assert_eq!(branch.as_deref(), Some("main"), "row {n} known branch");
+        assert_eq!(digest, Some(vec![0; 32]), "row {n} known digest");
+        read_snapshot(&db, 1).unwrap_or_else(|_| panic!("row {n} readable"));
+        let marked: i64 = db.query_row("SELECT count(*) FROM registry_migrations WHERE name='remote_history_per_context_v1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(marked, 1, "row {n} marker");
+    }
+}
+
+#[test]
+fn evidence_defaults_by_flag_and_rows() {
+    let ticket = AuthoringKind::Ticket;
+    let item: ItemId = ITEM.parse().unwrap();
+    for flag in [false, true] {
+        for row in [
+            None,
+            Some("never_published"),
+            Some("history_unknown"),
+            Some("observed_published"),
+        ] {
+            for retired in [false, true] {
+                let (data, root, service) = fixture();
+                let generation = apply_call(&service, root.path(), Call::Plan("origin", "main"));
+                let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+                if row == Some("observed_published") {
+                    with_transaction(&service, root.path(), |tx, id| {
+                        complete_batch(tx, id, &plan(), generation, &[advertised()], 123)
+                    })
+                    .unwrap();
+                }
+                if let Some(evidence @ ("never_published" | "history_unknown")) = row {
+                    let target = plan().context(ticket, &item);
+                    db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,?4,'history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM,evidence]).unwrap();
+                }
+                if flag {
+                    db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
+                        .unwrap();
+                }
+                if retired {
+                    seed_retirement(&db, ticket, ITEM);
+                }
+                let case = format!("flag={flag} row={row:?} retired={retired}");
+                // A `never_published` row is the owner's or the creation's
+                // explicit resolution (`item resolve-history`), so it is
+                // accepted under the cache-loss flag too; only contexts with
+                // no row read unknown under the flag.
+                let snapshot = read_snapshot(&db, 1);
+                assert!(snapshot.is_ok(), "{case} accepted");
+                if let Ok(snapshot) = snapshot {
+                    let expected = match row {
+                        Some("never_published") => RemotePublicationEvidence::NeverPublished,
+                        Some("history_unknown") => RemotePublicationEvidence::HistoryUnknown,
+                        Some(_) => RemotePublicationEvidence::ObservedPublished,
+                        None if flag && !retired => RemotePublicationEvidence::HistoryUnknown,
+                        None => RemotePublicationEvidence::NeverPublished,
+                    };
+                    assert_eq!(
+                        snapshot.fetch_publication_evidence_for(ticket, &item),
+                        expected,
+                        "{case}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn corrupt_dormant_context_rows_are_rejected_while_the_plan_is_unavailable() {
+    // (column assignment, a row the CHECKs allow but the evidence/state pairing does not)
+    for update in [
+        "last_advertised_oid='1111111111111111111111111111111111111111'",
+        "publication_evidence='observed_published'",
+        "state='observed'",
+        "item_id='not-a-ulid'",
+    ] {
+        let (data, root, service) = fixture();
+        apply_call(&service, root.path(), Call::Plan("origin", "main"));
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let target = plan().context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+        db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'never_published','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM]).unwrap();
+        apply_call(&service, root.path(), Call::Unavailable);
+        assert!(read_snapshot_rows(&db, 1, true).is_ok(), "{update} before");
+        db.execute(&format!("UPDATE remote_context_states SET {update}"), [])
+            .unwrap();
+        assert!(read_snapshot_rows(&db, 1, true).is_err(), "{update} audit");
+        assert!(read_snapshot_rows(&db, 1, false).is_err(), "{update} read");
+    }
+}
+
+#[test]
+fn poll_dispositions_unpublished_migration_preserves_rows_and_is_idempotent() {
+    let (data, _, service, _) = review_completed_state();
+    drop(service);
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    install_historical_dispositions(&db, 15);
+    let insert = format!(
+        "INSERT INTO remote_poll_dispositions SELECT repository_id,operation_ulid,1,'context','refs/heads/manyhands/ticket/{ITEM}','ticket','{ITEM}','unpublished',NULL,NULL,observed_at FROM remote_poll_dispositions WHERE ordinal=0"
+    );
+    assert!(db.execute(&insert, []).is_err());
+    let rows = |db: &Connection| -> Vec<(i64, String, Option<String>)> {
+        db.prepare(
+            "SELECT ordinal,disposition,after_oid FROM remote_poll_dispositions ORDER BY ordinal",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    };
+    let before = rows(&db);
+    assert_eq!(before.len(), 1);
+    drop(db);
+    for _ in 0..2 {
+        drop(RepositoryService::open_at(data.path()).unwrap());
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        assert_eq!(rows(&db), before);
+        let marked: i64 = db.query_row("SELECT count(*) FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(marked, 1);
+        let triggers: i64 = db.query_row("SELECT count(*) FROM sqlite_master WHERE name='remote_poll_disposition_owner_immutable'", [], |r| r.get(0)).unwrap();
+        assert_eq!(triggers, 1);
+    }
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute(&insert, []).unwrap();
+    assert_eq!(rows(&db).len(), 2);
+}
+
+/// A forgetting `Plan` fence must not leave the old remote's endpoint digest
+/// as the known one: the first endpoint registration under the new remote
+/// would read as a digest change and forget the owner's resolution again.
+#[test]
+fn a_forgetting_plan_fence_does_not_forget_again_at_the_next_endpoint_registration() {
+    let (data, root, service) = fixture();
+    apply_call(&service, root.path(), Call::Endpoints("origin", "main", 1));
+    Connection::open(data.path().join(REGISTRY_FILE)).unwrap().execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,'/active',?2)", params![format!("manyhands/ticket/{ITEM}"), ITEM]).unwrap();
+    apply_call(&service, root.path(), Call::Plan("upstream", "main"));
+    let upstream = RemoteRefPlan::from_configuration("upstream", "main").unwrap();
+    let item: ItemId = ITEM.parse().unwrap();
+    with_transaction(&service, root.path(), |tx, id| {
+        assert_eq!(
+            read_snapshot(tx, id)?.fetch_publication_evidence_for(AuthoringKind::Ticket, &item),
+            RemotePublicationEvidence::HistoryUnknown
+        );
+        record_context_resolved(tx, id, &upstream, AuthoringKind::Ticket, &item)
+    })
+    .unwrap();
+    apply_call(
+        &service,
+        root.path(),
+        Call::Endpoints("upstream", "main", 2),
+    );
+    with_transaction(&service, root.path(), |tx, id| {
+        assert_eq!(
+            read_snapshot(tx, id)?.fetch_publication_evidence_for(AuthoringKind::Ticket, &item),
+            RemotePublicationEvidence::NeverPublished
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// A registry created while the cache-loss marker was on disk bakes `DEFAULT 1`
+/// into `remote_polling_state`. Once the marker is retired, reopening rebuilds
+/// the table with defaults 0, keeping every row and the registration trigger,
+/// so a repository registered afterwards starts clear and unsuspended.
+#[test]
+fn polling_defaults_are_rebuilt_once_the_marker_is_retired() {
+    let data = tempfile::tempdir().unwrap();
+    let marker = data.path().join("remote-history-recovery-required");
+    std::fs::write(&marker, b"manyhands remote history recovery required v1\n").unwrap();
+    drop(RepositoryService::open_at(data.path()).unwrap());
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let register = |db: &Connection, root: &str| {
+        db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)", [root]).unwrap();
+    };
+    let flags = |db: &Connection, id: i64| -> (i64, i64) {
+        db.query_row(
+            "SELECT history_unknown,recovery_suspended FROM remote_polling_state WHERE repository_id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    };
+    register(&db, "/first");
+    assert_eq!(flags(&db, 1), (1, 1), "defaults while the marker stands");
+    // Distinguishable values in every kind of column.
+    db.execute("UPDATE remote_polling_state SET paused=1,interval_seconds=600,automatic_backoff_seconds=120,remote_name='origin',primary_branch='main',endpoint_digest=zeroblob(32),known_remote_name='origin',known_primary_branch='main',known_endpoint_digest=zeroblob(32),latest_outcome='completed',latest_attempt_at=5,next_eligible_at=9,configuration_generation=3 WHERE repository_id=1", []).unwrap();
+    let dump = |db: &Connection| -> String {
+        db.query_row("SELECT quote(repository_id)||quote(enabled)||quote(paused)||quote(interval_seconds)||quote(automatic_backoff_seconds)||quote(recovery_suspended)||quote(history_unknown)||quote(configuration_generation)||quote(endpoint_digest)||quote(remote_name)||quote(primary_branch)||quote(latest_outcome)||quote(latest_attempt_at)||quote(next_eligible_at)||quote(known_remote_name)||quote(known_primary_branch)||quote(known_endpoint_digest) FROM remote_polling_state WHERE repository_id=1", [], |r| r.get(0)).unwrap()
+    };
+    let columns = |db: &Connection| -> Vec<String> {
+        db.prepare("SELECT name FROM pragma_table_info('remote_polling_state') ORDER BY cid")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    let (row, order) = (dump(&db), columns(&db));
+    drop(db);
+    // With the marker still on disk the table is left alone.
+    drop(RepositoryService::open_at(data.path()).unwrap());
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    register(&db, "/second");
+    assert_eq!(flags(&db, 2), (1, 1), "marker present: defaults stay");
+    drop(db);
+    std::fs::remove_file(&marker).unwrap();
+    for _ in 0..2 {
+        drop(RepositoryService::open_at(data.path()).unwrap());
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        register_if_missing(&db);
+        assert_eq!(dump(&db), row, "existing row exactly as it was");
+        assert_eq!(columns(&db), order, "column order");
+        assert_eq!(flags(&db, 2), (1, 1), "existing rows keep their values");
+        assert_eq!(flags(&db, 3), (0, 0), "a new repository starts clear");
+        let triggers: i64 = db.query_row("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name='remote_policy_on_registration'", [], |r| r.get(0)).unwrap();
+        assert_eq!(triggers, 1);
+    }
+
+    fn register_if_missing(db: &Connection) {
+        db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) SELECT '/third',123,'accessible',0 WHERE NOT EXISTS(SELECT 1 FROM repositories WHERE root_path='/third')", []).unwrap();
+    }
 }

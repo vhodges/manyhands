@@ -19,15 +19,21 @@
 //! job started from the confirmation dialog is that dialog, and through it
 //! the control that opened it.
 //!
-//! Text is fixed strings, the key's label and ID, and the library's
-//! guidance for the reason.
+//! While a share or a post waits on the prompt, the dialog names its
+//! repository ("Sharing {repository} is waiting for your passphrase.")
+//! and says what Not now leaves (design, The passphrase dialog). One
+//! worker runs one job at a time, so what waits is the request the model
+//! has running, read once the dialog has opened.
+//!
+//! Text is fixed strings, the key's label and ID, the repository's
+//! directory name, and the library's guidance for the reason.
 
 use gpui_kit::{
     App, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, TestSupportExt,
     WeakEntity, Window,
     component::{
-        ActiveTheme, WindowExt,
+        ActiveTheme, Root, WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm,
         h_flex,
@@ -38,13 +44,26 @@ use gpui_kit::{
 };
 use manyhands::repository::keys::SecretPassphrase;
 
-use crate::desktop::services::prompts::{PromptReply, PromptRequest};
+use super::{operations::scope_name, workspace::Workspace};
+use crate::desktop::{
+    model::operations::Progressing,
+    services::prompts::{PromptReply, PromptRequest},
+};
 
 pub(crate) const TITLE: &str = "Unlock key";
 pub(crate) const UNLOCK: &str = "Unlock";
-pub(crate) const CANCEL: &str = "Cancel";
+/// Cancel, relabelled (design, The passphrase dialog).
+pub(crate) const CANCEL: &str = "Not now";
+/// What Not now leaves, while a share waits.
+pub(crate) const NOT_NOW_NOTE: &str = "If you choose Not now, your work stays saved on this \
+     computer. Unlock later from the waiting share, or stop trying to share it.";
 pub(crate) const REFUSED: &str =
     "Enter the passphrase. It cannot be empty or contain a NUL character.";
+
+/// The subtitle while a share of `repository` waits.
+pub(crate) fn waiting_subtitle(repository: &str) -> String {
+    format!("Sharing {repository} is waiting for your passphrase.")
+}
 
 /// The input's label: "Passphrase for <label>".
 pub(crate) fn label_for(label: &str) -> String {
@@ -100,6 +119,9 @@ pub(crate) struct PassphraseDialog {
     input: Option<Entity<InputState>>,
     /// The last submit was refused.
     refused: bool,
+    /// The directory name of the repository whose share or post waits on
+    /// the prompt, once found.
+    waiting: Option<String>,
     origin: Option<FocusHandle>,
     _enter: Option<Subscription>,
 }
@@ -117,6 +139,12 @@ impl PassphraseDialog {
                 this.submit(window, cx);
             }
         });
+        // The workspace that opens the dialog is being updated: what waits
+        // is read once that update has ended.
+        cx.defer_in(window, |this, window, cx| {
+            this.waiting = waiting_share(window, cx);
+            cx.notify();
+        });
         Self {
             label: label_for(&prompt.label),
             key: prompt.key_id.to_string(),
@@ -124,6 +152,7 @@ impl PassphraseDialog {
             prompt: Some(prompt),
             input: Some(input),
             refused: false,
+            waiting: None,
             origin,
             _enter: Some(enter),
         }
@@ -223,6 +252,22 @@ impl PassphraseDialog {
     }
 }
 
+/// The repository of the share or post the window's workspace has
+/// running, by its directory name: what waits on the prompt.
+fn waiting_share(window: &Window, cx: &App) -> Option<String> {
+    let root = window.root::<Root>()??;
+    let workspace = root.read(cx).view().clone().downcast::<Workspace>().ok()?;
+    let operations = workspace.read(cx).services().operations().read(cx);
+    let request = operations.running()?;
+    // Not a Check now: it may prompt too, but it is not a share.
+    matches!(
+        Progressing::of(&request.intent)?,
+        Progressing::Share | Progressing::Post
+    )
+    .then_some(())?;
+    Some(scope_name(Some(request.intent.root()?)))
+}
+
 fn text(id: &'static str, value: impl Into<String>) -> impl IntoElement {
     let value = value.into();
     div()
@@ -275,6 +320,11 @@ impl Render for PassphraseDialog {
             .id("passphrase-dialog")
             .test_support()
             .gap_2()
+            .children(self.waiting.as_ref().map(|repository| {
+                div()
+                    .text_sm()
+                    .child(text("passphrase-subtitle", waiting_subtitle(repository)))
+            }))
             .child(
                 div()
                     .text_sm()
@@ -302,6 +352,12 @@ impl Render for PassphraseDialog {
                 self.refused
                     .then(|| div().text_sm().child(text("passphrase-refused", REFUSED))),
             )
+            .children(self.waiting.is_some().then(|| {
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(text("passphrase-note", NOT_NOW_NOTE))
+            }))
             .child(
                 h_flex()
                     .gap_2()

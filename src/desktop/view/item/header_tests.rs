@@ -1,5 +1,5 @@
 //! The item's header block, over real repositories: the breadcrumb, the
-//! chips and the details they ask for, the state pill, the later actions,
+//! chips and the details they ask for, the state pill, the lifecycle action,
 //! the banners that D1's status lines became, a nonconforming file's
 //! "Needs fixing", and the tab order from the strip into the page.
 
@@ -19,12 +19,12 @@ use super::{
     ItemPane, NOT_REFRESHED, RECOVERY,
     banners::{Banner, NEEDS_FIXING, Tone, most_severe_first},
     chips::{ChipField, JUST_NOW, OpenDetails, relative_time},
-    header::{CRUMB_SEPARATOR, TICKETS},
+    header::{CRUMB_SEPARATOR, LIFECYCLE_ACTION, TICKETS},
     pill::{PillState, pill_words, viewing_state},
 };
 use crate::desktop::{
     model::{
-        item::{APPROVE_AND_MERGE, CLOSE_TICKET, COMMENT, ItemReads, LATER_NOTE, REPAIR, SHARE},
+        item::{APPROVE_AND_MERGE, CLOSE_TICKET, ItemReads, REPAIR},
         list_state::LABEL_BUSY,
         navigation::OpenTarget,
     },
@@ -556,49 +556,87 @@ fn show_read(shell: &Shell, item: ItemDto, cx: &mut TestAppContext) {
     shell.run(cx);
 }
 
-/// Share and the primary action (Close ticket… for a ticket, Approve and
-/// merge… for a document) are in the header, disabled, each with
-/// "Available in a later release"; pressing one changes nothing. Comment
-/// is the discussion's. Edit is available (E-6).
+/// Whether the element `id` is a button that is not drawn disabled and
+/// that Tab reaches: a disabled Kit button tracks no focus.
+fn live_button(shell: &Shell, id: &'static str, cx: &mut TestAppContext) -> bool {
+    let enabled = role(shell, id, cx) == Some(Role::Button)
+        && shell.frame(cx, |window, _| {
+            window
+                .try_find(id)
+                .is_some_and(|button| button.disabled() != Some(true))
+        });
+    enabled && shell.tab_reaches(id, 12, cx)
+}
+
+/// The header's lifecycle action of the item open in `target`: there, live
+/// and with its label, in the header, with no later-release note; pressing
+/// it changes no file (Task 6a opens its dialog). E-4: it was the disabled
+/// later action.
+fn assert_live(
+    shell: &Shell,
+    root: &Path,
+    target: OpenTarget,
+    label: &str,
+    cx: &mut TestAppContext,
+) {
+    open(shell, target, cx);
+    let before = RepositorySnapshot::take(root);
+    assert_eq!(shell.label(LIFECYCLE_ACTION, cx).as_deref(), Some(label));
+    assert!(in_header(shell, LIFECYCLE_ACTION, cx), "{label}");
+    assert!(live_button(shell, LIFECYCLE_ACTION, cx), "{label}");
+    assert!(!shell.present(("later-action", 0usize), cx));
+    assert!(!shell.present(("later-note", 0usize), cx));
+    let pill = shell.label("item-pill", cx);
+    shell.click(LIFECYCLE_ACTION, cx);
+    assert_eq!(shell.label("item-pill", cx), pill, "{label} did nothing");
+    assert_eq!(RepositorySnapshot::take(root), before, "{label}");
+}
+
+/// An open ticket's header offers Close ticket…, live (A1, E-4).
 #[gpui_kit::test]
-fn share_and_the_primary_action_are_disabled_with_their_note(cx: &mut TestAppContext) {
+fn close_ticket_is_live_on_a_ticket(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
         fixture.commit_ticket(root, CODED, "Ticket", "");
+    });
+    assert_live(&shell, &root, ticket(&root, CODED), CLOSE_TICKET, cx);
+}
+
+/// A document's header offers Approve and merge…, live (A1, E-4).
+#[gpui_kit::test]
+fn approve_and_merge_is_live_on_a_document(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
         fixture.create_document(root, DOCUMENT, "docs/first.md", "First");
     });
-    for (target, primary) in [
-        (ticket(&root, CODED), CLOSE_TICKET),
-        (document(&root, DOCUMENT), APPROVE_AND_MERGE),
-    ] {
-        open(&shell, target, cx);
-        let before = RepositorySnapshot::take(&root);
-        let pill = shell.label("item-pill", cx);
-        for (ix, label) in [SHARE, primary].into_iter().enumerate() {
-            assert_eq!(
-                shell.label(("later-action", ix), cx).as_deref(),
-                Some(label)
-            );
-            assert!(in_header(&shell, ("later-action", ix), cx), "{label}");
-            assert_eq!(
-                shell.label(("later-note", ix), cx).as_deref(),
-                Some(LATER_NOTE),
-                "{label}"
-            );
-            assert!(shell.inert_button(("later-button", ix), cx), "{label}");
-            // The group carries the role, so assistive tech reaches it, with
-            // the note as its description (which the snapshot cannot read).
-            assert_eq!(role(&shell, ("later-action", ix), cx), Some(Role::Group));
-            shell.click(("later-button", ix), cx);
-            assert_eq!(shell.label("item-pill", cx), pill, "{label} did nothing");
-        }
-        assert_eq!(
-            shell.label(("later-action", 2usize), cx).as_deref(),
-            Some(COMMENT)
-        );
-        assert!(inside(&shell, ("later-action", 2usize), "discussion", cx));
-        assert!(!shell.present(("later-action", 3usize), cx));
-        assert_eq!(RepositorySnapshot::take(&root), before);
-    }
+    assert_live(
+        &shell,
+        &root,
+        document(&root, DOCUMENT),
+        APPROVE_AND_MERGE,
+        cx,
+    );
+}
+
+/// A ticket the lifecycle closed (its closure says `closed`) offers no
+/// Close ticket…, while an open one beside it does (A1).
+#[gpui_kit::test]
+fn a_closed_ticket_offers_no_close(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_closed_ticket(root, CLOSED, "Closed for good");
+        fixture.commit_ticket(root, CODED, "Still open", "");
+    });
+    open(&shell, ticket(&root, CLOSED), cx);
+    assert_eq!(
+        shell.label("item-title", cx).as_deref(),
+        Some("Closed for good")
+    );
+    assert!(!shell.present(LIFECYCLE_ACTION, cx));
+    assert!(!shell.present(("later-action", 0usize), cx));
+
+    open(&shell, ticket(&root, CODED), cx);
+    assert_eq!(
+        shell.label(LIFECYCLE_ACTION, cx).as_deref(),
+        Some(CLOSE_TICKET)
+    );
 }
 
 /// Holds the registry's cache lease, as a refresh writing it would: every
@@ -801,19 +839,16 @@ fn a_nonconforming_item_shows_needs_fixing_with_repair_offered(cx: &mut TestAppC
     assert!(in_header(&shell, ("item-problem", 0usize), cx));
     assert_eq!(shell.label("item-repair", cx).as_deref(), Some(REPAIR));
     assert!(inside(&shell, "item-repair", "item-banners", cx));
-    assert!(
-        !shell.present(("later-action", 2usize), cx),
-        "Repair is no later action"
+    assert_eq!(
+        shell.label(LIFECYCLE_ACTION, cx).as_deref(),
+        Some(CLOSE_TICKET),
+        "Repair is not the header's action"
     );
 
     assert_eq!(shell.label("item-path", cx), Some(entry.path.clone()));
     assert!(shell.present("item-nonconforming", cx));
     assert!(shell.present("item-source", cx));
     assert!(!shell.present(ChipField::All.id(), cx));
-    assert_eq!(
-        shell.label(("later-action", 1usize), cx).as_deref(),
-        Some(CLOSE_TICKET)
-    );
 
     // Enabled: pressed, it opens the repair view, and writes nothing.
     shell.click("item-repair-button", cx);
@@ -827,7 +862,7 @@ fn a_nonconforming_item_shows_needs_fixing_with_repair_offered(cx: &mut TestAppC
     open(&shell, inspect(&root, MARKER), cx);
     assert!(shell.present("item-needs-fixing", cx));
     assert_eq!(
-        shell.label(("later-action", 1usize), cx).as_deref(),
+        shell.label(LIFECYCLE_ACTION, cx).as_deref(),
         Some(APPROVE_AND_MERGE)
     );
 }
@@ -849,15 +884,15 @@ fn an_inspect_tab_of_a_conforming_item_needs_no_fixing(cx: &mut TestAppContext) 
         "no banner applies"
     );
     assert_eq!(
-        shell.rows("later-action", cx),
-        [SHARE, CLOSE_TICKET],
-        "the header's actions only, with no Repair"
+        shell.label(LIFECYCLE_ACTION, cx).as_deref(),
+        Some(CLOSE_TICKET),
+        "the header's action, with no Repair"
     );
 }
 
-/// Tab runs from the tab strip into the header, through Edit and the
-/// chips in order, then into the page; the header's unavailable actions
-/// take no focus. Shift-Tab runs back.
+/// Tab runs from the tab strip into the header, through Edit, Share,
+/// Close ticket… and the chips in order, then into the page. Shift-Tab
+/// runs back.
 #[gpui_kit::test]
 fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
@@ -887,10 +922,17 @@ fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
     shell.keys("tab", cx);
     assert!(focused(&shell, "item-edit", cx), "Edit after Comments");
     shell.keys("tab", cx);
-    assert!(focused(&shell, chips[0].id(), cx), "the chips after Edit");
-    for later in 0..2usize {
-        assert!(!focused(&shell, ("later-action", later), cx));
-    }
+    assert!(focused(&shell, "item-share", cx), "Share after Edit");
+    shell.keys("tab", cx);
+    assert!(
+        focused(&shell, LIFECYCLE_ACTION, cx),
+        "Close ticket… after Share"
+    );
+    shell.keys("tab", cx);
+    assert!(
+        focused(&shell, chips[0].id(), cx),
+        "the chips after Close ticket…"
+    );
     for pair in chips.windows(2) {
         shell.keys("tab", cx);
         assert!(
@@ -910,7 +952,17 @@ fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
     }
     assert!(focused(&shell, chips[0].id(), cx));
     shell.keys("shift-tab", cx);
-    assert!(focused(&shell, "item-edit", cx), "Edit before the chips");
+    assert!(
+        focused(&shell, LIFECYCLE_ACTION, cx),
+        "Close ticket… before the chips"
+    );
+    shell.keys("shift-tab", cx);
+    assert!(
+        focused(&shell, "item-share", cx),
+        "Share before Close ticket…"
+    );
+    shell.keys("shift-tab", cx);
+    assert!(focused(&shell, "item-edit", cx), "Edit before Share");
     shell.keys("shift-tab", cx);
     assert!(focused(&shell, "item-comments", cx), "Comments before Edit");
     shell.keys("shift-tab", cx);

@@ -37,7 +37,7 @@ Left to right:
 1. **Left dock toggle** (`panel-left`) · one toggle per panel in the left dock · separator · **bottom dock toggle** (`panel-bottom`) · one toggle per bottom panel.
 2. Spacer.
 3. **Update check status**: `refresh-cw` icon (teal) + "Checked for updates 2 min ago". Tooltip: "Background check: fetch and fast-forward only. Never shares your changes."
-4. **Unshared work**: `cloud-upload` + "2 to share" (amber). Click sets scope to the repository that has the unshared work.
+4. **Unshared work**: `cloud-upload` + "2 to share" (amber). Click sets scope to the repository that has the unshared work. *The count is the total across repositories, and each activation chooses the next repository with work; when the only one is already chosen, activating it does nothing (Wave 04 Cycle 03a decisions 6 and 23, 2026-11-12).*
 5. **Needs attention**: `circle-alert` + "3 need attention" (red). Click toggles the Needs attention popover (`05-sheets-and-dialogs.md`). Hide it when the count is 0.
 6. Separator · one toggle per panel in the right dock · **right dock toggle** (`panel-right`) · separator · **Settings** (`settings`, Ctrl ,).
 
@@ -49,8 +49,8 @@ Toggle buttons are 26×22 px, radius 4, icon 14 px.
 
 Behavior:
 - Toggling a panel **on** also shows its dock if the dock was hidden.
-- When every panel in a dock is hidden, the dock collapses and the center widens.
-- Toggling the dock button hides or shows the dock without changing which panels are enabled inside it.
+- When every panel in a dock is hidden, the dock collapses and the center widens. For now a hidden bottom dock keeps GPUI Kit's 29 px strip naming its panels (Wave 04 Cycle 01 decision 16).
+- Toggling the dock button hides or shows the dock without changing which panels are enabled inside it. On a dock whose panels are all hidden it shows them all (Wave 04 Cycle 01 decision 6).
 - Panels moved by the user to another dock carry their footer button to that side.
 
 ## Center: item area

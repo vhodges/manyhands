@@ -6,6 +6,16 @@
 #[path = "../src/lib.rs"]
 mod production;
 pub use production::*;
+#[path = "mutation_remote/c5_cancel.rs"]
+mod c5_cancel;
+#[path = "mutation_remote/c5_lifecycle.rs"]
+mod c5_lifecycle;
+#[path = "mutation_remote/c5_made_ready.rs"]
+mod c5_made_ready;
+#[path = "mutation_remote/c5_poll.rs"]
+mod c5_poll;
+#[path = "mutation_remote/c5_resume.rs"]
+mod c5_resume;
 #[path = "mutation_remote/comment.rs"]
 mod comment;
 #[path = "mutation_remote/comment_domain.rs"]
@@ -14,11 +24,17 @@ mod comment_domain;
 mod conflict_read;
 #[path = "support/conformance.rs"]
 mod conformance;
+#[path = "mutation_remote/context_retirement.rs"]
+mod context_retirement;
+#[path = "mutation_remote/d5_progress.rs"]
+mod d5_progress;
 #[allow(dead_code)]
 #[path = "support/golden.rs"]
 mod golden;
 #[path = "mutation_remote/host.rs"]
 mod host;
+#[path = "support/lifecycle_world.rs"]
+mod lifecycle_world;
 #[path = "mutation_remote/merging.rs"]
 mod merging;
 #[allow(dead_code)]
@@ -59,11 +75,19 @@ fn main() {
         .chain(host::CASES)
         .chain(merging::CASES)
         .chain(comment_domain::CASES)
+        .chain(context_retirement::CASES)
         .chain(comment::CASES)
         .chain(conflict_read::CASES)
         .chain(resolution::CASES)
         .chain(resume::CASES)
         .chain(republish::CASES)
+        .chain(c5_lifecycle::CASES)
+        .chain(c5_resume::CASES)
+        .chain(c5_cancel::CASES)
+        .chain(c5_cancel::CHILD_CONFLICT)
+        .chain(c5_made_ready::CASES)
+        .chain(c5_poll::CASES)
+        .chain(d5_progress::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS
@@ -4668,7 +4692,7 @@ fn conforming(
 /// need a finished request each make a conflict to resolve, and that of
 /// `item republish` is `republish::c4_republish_conformance`, whose rules
 /// each make a deleted branch to republish.
-const CONFORMANCE: [conformance::Row; 5] = [
+const CONFORMANCE: [conformance::Row; 8] = [
     conformance::Row::new("item sync", false, "item_not_found", |rule| {
         conforming(
             |w, ask| match ask {
@@ -4740,6 +4764,24 @@ const CONFORMANCE: [conformance::Row; 5] = [
         true,
         "confirmation_not_found",
         republish::conforming,
+    ),
+    conformance::Row::new(
+        "document promote",
+        true,
+        "confirmation_not_found",
+        c5_lifecycle::conforming_promote,
+    ),
+    conformance::Row::new(
+        "ticket close",
+        true,
+        "confirmation_not_found",
+        c5_lifecycle::conforming_close,
+    ),
+    conformance::Row::new(
+        "poll once",
+        false,
+        "not_repository",
+        c5_poll::conforming_once,
     ),
 ];
 

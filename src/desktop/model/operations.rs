@@ -14,7 +14,7 @@
 //! shown as text, unavailable.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -24,22 +24,50 @@ use manyhands::{
         HostObservationDto, MutationDataDto, OperationAction, OperationDto, OperationFamily,
         OperationId, OperationListDto, OperationNextAction, ProgressStage, transport::SshAuthority,
     },
-    results::{Envelope, Outcome, RecoveryAction, RecoveryActionKind, ResultCode},
+    results::{
+        CheckpointEffect, Envelope, Outcome, RecoveryAction, RecoveryActionKind, ResultCode,
+    },
+};
+
+mod outcomes;
+mod polls;
+mod quit_wait;
+mod retire;
+pub(crate) use retire::{Entered, RetiringKey};
+mod review;
+
+pub(crate) use polls::{record_note_words, resume_offer_among};
+pub(crate) use review::{Review, ReviewOf};
+
+#[cfg(test)]
+pub(crate) use outcomes::main_branch_deleted;
+#[cfg(test)]
+pub(crate) use outcomes::{
+    ANOTHER_SHARE_HOLDS, BRANCH_DELETED, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, NEEDS_ATTENTION,
+    NEEDS_IDENTITY, NOWHERE_TO_SHARE, SHARED, check_host_text, may_be_waiting_for,
+};
+pub(crate) use outcomes::{
+    CONFLICT_BANNER, HISTORY_UNRESOLVED_BLOCKER, HISTORY_UNRESOLVED_GUIDANCE, primary_name,
+    primary_subject, share_text,
 };
 
 use super::{
+    lifecycle_lock::{LifecycleLocks, LockKey},
     list_state::{ListState, Rows},
     navigation::UNAVAILABLE_CODES,
+    publication::{ShareAttempt, ShareTarget, SyncResult, sync_outcome},
     stamp::{Generations, RepoKey, Stamp, ViewScope},
 };
 use crate::desktop::services::{
     DraftStoreUnavailable, ReadResult,
+    inflight::Report,
     prompts::PromptRequest,
     requests::{DesktopRequest, DesktopRequestId, Intent, Refusals, RequestState},
-    worker::WorkerEvent,
+    worker::{RecordState, WorkerEvent},
 };
 
-/// Why a synchronization's Resume is unavailable.
+/// Why Resume is unavailable for a pending synchronization that no
+/// `operation resume` here takes up (D5).
 pub(crate) const SYNCHRONIZATION_UNAVAILABLE: &str = "Synchronization is not available yet";
 /// Why a recovery action that names nothing this session can act on is
 /// unavailable.
@@ -47,6 +75,11 @@ pub(crate) const NOT_AVAILABLE_YET: &str = "Not available yet";
 /// Why the Retry of a context request is unavailable once a later request
 /// of its item was sent (R-78).
 pub(crate) const NOT_SENT_AGAIN: &str = "Not sent again after a later Edit or release";
+/// A share stopped at a safe point before anything was sent.
+pub(crate) const STOPPED_BEFORE_SENDING: &str =
+    "Stopped before anything was sent. Your saved work is still on this computer.";
+/// A share stopped at a safe point after part of its work finished.
+pub(crate) const STOPPED_AFTER_PART: &str = "Stopped after part of the work finished. Your saved work is on this computer; Share sends the rest.";
 /// The persistent entry of a draft store that did not open.
 pub(crate) const DRAFTS_UNAVAILABLE: &str = "Recovery copies are unavailable";
 
@@ -99,12 +132,37 @@ pub(crate) struct Operations {
     prompt: Option<PromptRequest>,
     /// Quitting is saving drafts (`QuitPhase::SavingDrafts`).
     saving_drafts: bool,
+    /// How long quitting has waited for a job (Part D).
+    quit_wait: quit_wait::QuitWait,
     /// How many removals were recorded (`removals`).
     removals: u64,
     /// The last host observation's answer, by its request: what the Hosts
     /// page that asked reads. One worker observes one host at a time, and
     /// the page waits only for its latest.
     observed: Option<(DesktopRequestId, Envelope<HostObservationDto>)>,
+    /// The running requests whose Stop was pressed and signalled their
+    /// token, until they end.
+    stopping: HashSet<DesktopRequestId>,
+    /// Each finished share's last answer, which its outcome is classified
+    /// from (`share_result`).
+    shares: HashMap<DesktopRequestId, Envelope<MutationDataDto>>,
+    /// Each finished lifecycle's last answer, which the lifecycle dialog
+    /// shows and takes its way out from (D5, A3): a promotion's or a
+    /// closure's, or a resume's that answered with lifecycle data.
+    lifecycles: HashMap<DesktopRequestId, Envelope<MutationDataDto>>,
+    /// The lifecycle lock's own state (D5 A2; R-21, R-22).
+    locks: LifecycleLocks,
+    /// The operation each finished request's last answer stopped on with a
+    /// conflict, whose sheet its entry offers (D5 B5, `review`).
+    reviews: HashMap<DesktopRequestId, Review>,
+    /// The operations of this desktop's own automatic polls (D6 Task 5):
+    /// their pending rows are not offered Resume (`polls`).
+    automatic_polls: HashSet<OperationId>,
+    /// What the in-flight record reported of itself, until dismissed
+    /// (`polls`).
+    record_notes: Vec<Report>,
+    /// Retirement answers and the operations running now (`retire`).
+    retirements: retire::Retirements,
 }
 
 /// What finished requests may have changed since the views last read.
@@ -126,6 +184,10 @@ pub(crate) struct Changed {
     /// draft holds stays open, as when a repository leaves the list (Part C
     /// fix 1, I1).
     pub confirmed: BTreeSet<RepoKey>,
+    /// Where a finished New folder made a folder or a Move put a document,
+    /// by repository and path from the repository root: the Documents tree
+    /// opens the folders above each, so the result is visible (R-27).
+    pub reveal: Vec<(RepoKey, String)>,
 }
 
 impl Changed {
@@ -167,6 +229,10 @@ impl Operations {
     pub(crate) fn apply(&mut self, event: WorkerEvent) {
         match event {
             WorkerEvent::Queued(request) => {
+                self.stopping.remove(&request.id);
+                self.shares.remove(&request.id);
+                self.lifecycles.remove(&request.id);
+                self.reviews.remove(&request.id);
                 self.sends += 1;
                 self.sent.insert(request.id, self.sends);
                 self.answers.entry(request.id).or_default().queued();
@@ -184,15 +250,52 @@ impl Operations {
                 },
             ),
             WorkerEvent::Progress(id, progress) => {
+                self.progressed(id, &progress);
                 if let Some(request) = self.request_mut(id)
                     && let RequestState::Running { stage, accepted } = &mut request.state
                 {
                     *stage = Some(progress.stage);
-                    *accepted |= progress.stage == ProgressStage::Accepted;
+                    // Every stage comes after acceptance, and a same-ID
+                    // re-entry never reports `Accepted` (fact 10): any
+                    // stage marks it accepted, as the worker does (R-14).
+                    *accepted = true;
                 }
             }
             WorkerEvent::Finished(id, envelope) => {
                 let envelope = *envelope;
+                self.stopping.remove(&id);
+                self.left_running(id);
+                // A retirement is sorted (E3) before the request is set.
+                let retirement = self.retired(id, &envelope);
+                match review::conflict_of(&envelope) {
+                    Some(review) => self.reviews.insert(id, review),
+                    None => self.reviews.remove(&id),
+                };
+                // A resolution applied: no entry offers its conflict again,
+                // and the banner clears (B3).
+                if let Some(resolved) = self
+                    .request(id)
+                    .and_then(|request| review::resolved_by(&request.intent, &envelope))
+                {
+                    self.reviews
+                        .retain(|_, review| review.operation_id != resolved);
+                }
+                if self
+                    .request(id)
+                    .is_some_and(|request| ShareTarget::of(&request.intent).is_some())
+                {
+                    self.shares.insert(id, envelope.clone());
+                }
+                if self.request(id).is_some_and(|request| {
+                    matches!(
+                        request.intent,
+                        Intent::TicketClose { .. } | Intent::DocumentPromote { .. }
+                    )
+                }) || matches!(envelope.data, Some(MutationDataDto::Lifecycle(_)))
+                {
+                    self.lifecycles.insert(id, envelope.clone());
+                }
+                self.lifecycle_answered(id, &envelope);
                 match &envelope.data {
                     Some(MutationDataDto::Ticket(ticket)) if !ticket.rejected.is_empty() => {
                         self.rejected.insert(id, ticket.rejected.clone());
@@ -218,7 +321,33 @@ impl Operations {
                 let root = self.request(id).and_then(|request| {
                     let root = request.intent.root()?.to_str()?.to_owned();
                     let removed = removed && matches!(request.intent, Intent::RepoRemove { .. });
-                    Some((root, request.intent.changes_items(), removed))
+                    // A retirement changes the items of its repository only
+                    // when it removed something (A20).
+                    let items = retirement
+                        .as_ref()
+                        .map_or(request.intent.changes_items(), |answer| answer.changed);
+                    Some((root, items, removed))
+                });
+                // A folder made, or a document moved, wants its place seen.
+                let reveal = matches!(
+                    envelope.code,
+                    ResultCode::Ok | ResultCode::DiscoveryPending | ResultCode::AlreadyApplied
+                )
+                .then(|| self.request(id))
+                .flatten()
+                .and_then(|request| match &request.intent {
+                    Intent::FolderCreate { root, path } => {
+                        Some((root.to_str()?.to_owned(), path.clone()))
+                    }
+                    Intent::DocumentMove {
+                        root,
+                        destination_path,
+                        ..
+                    } => Some((
+                        root.to_str()?.to_owned(),
+                        destination_path.to_str()?.to_owned(),
+                    )),
+                    _ => None,
                 });
                 self.set(
                     id,
@@ -230,6 +359,13 @@ impl Operations {
                         envelope.message,
                     ),
                 );
+                self.changed.reveal.extend(reveal);
+                // Attention or the next attempt covers an answer of the
+                // table's attention and retry rows, and a retirement that
+                // retired: it is neither shown nor counted (R-23).
+                if retirement.is_some_and(|answer| answer.verdict.dismissed()) {
+                    self.dismiss(id);
+                }
                 if let Some((root, items, removed)) = root {
                     if removed {
                         self.changed.removed.insert(root.clone());
@@ -239,15 +375,177 @@ impl Operations {
                     self.changed.insert(root, items);
                 }
             }
-            WorkerEvent::Removed(id) => self.set(id, RequestState::Removed),
-            WorkerEvent::NotSent(id, why) => self.set(id, RequestState::NotSent(why)),
+            WorkerEvent::Removed(id) => {
+                self.stopping.remove(&id);
+                self.left_running(id);
+                self.set(id, RequestState::Removed);
+            }
+            WorkerEvent::NotSent(id, why) => {
+                self.stopping.remove(&id);
+                self.left_running(id);
+                self.set(id, RequestState::NotSent(why));
+            }
             // The Hosts page reads it. An observation pins nothing, so no
             // view has anything to read again.
             WorkerEvent::HostObserved(id, envelope) => self.observed = Some((id, envelope)),
             // One worker asks one thing at a time: a prompt still kept
             // when the next comes is one its job no longer waits on.
             WorkerEvent::Prompt(prompt) => self.prompt = Some(prompt),
+            // A poll is not a request: the drain takes its attempt before
+            // `apply` and hands it to the poll inbox (D6 B1), and starts the
+            // cancel task of one the worker was asked to stop (B2).
+            WorkerEvent::Polled(..) | WorkerEvent::PreemptPoll { .. } => {}
         }
+    }
+
+    /// The request running now, if the model has heard it start: one
+    /// worker runs one at a time.
+    pub(crate) fn running(&self) -> Option<&DesktopRequest> {
+        self.requests
+            .iter()
+            .find(|request| matches!(request.state, RequestState::Running { .. }))
+    }
+
+    /// Whether Stop was pressed on the running request `id`.
+    pub(crate) fn is_stopping(&self, id: DesktopRequestId) -> bool {
+        self.stopping.contains(&id)
+    }
+
+    /// Stop was pressed on the running request `id` and signalled its
+    /// token: it reads Stopping… until it ends.
+    pub(crate) fn stopping(&mut self, id: DesktopRequestId) {
+        if self
+            .request(id)
+            .is_some_and(|request| matches!(request.state, RequestState::Running { .. }))
+        {
+            self.stopping.insert(id);
+        }
+    }
+
+    /// What the request `id` offers to stop it once accepted (R-1, R-15):
+    /// Stop at a safe point while an accepted command that stops at safe
+    /// points runs in a repository with a publication remote (`remote`),
+    /// Stopping… once pressed, and nothing otherwise. A resume stops at
+    /// safe points only when it takes up a synchronization: the operation
+    /// it names is listed pending in its repository as a remote item or
+    /// repository synchronization (`takes_up_remote_work`); any other
+    /// resume ignores its token. Once pressed it reads Stopping… until it
+    /// ends, whatever a later read of the pending operations lists.
+    pub(crate) fn stop_offer(&self, id: DesktopRequestId, remote: bool) -> StopOffer {
+        let Some(request) = self.request(id) else {
+            return StopOffer::NotOffered;
+        };
+        if !matches!(request.state, RequestState::Running { accepted: true, .. }) {
+            return StopOffer::NotOffered;
+        }
+        // Signalled: it reads Stopping… until it ends, even when a read
+        // since no longer lists the operation a resume took up.
+        if self.stopping.contains(&id) {
+            return StopOffer::Stopping;
+        }
+        if !request.intent.stops_at_safe_points()
+            || !remote
+            || !self.resumes_remote_work(&request.intent)
+        {
+            return StopOffer::NotOffered;
+        }
+        StopOffer::Offered
+    }
+
+    /// Whether `intent`, if it is a resume, names an operation its
+    /// repository lists pending as remote work a resume takes up at safe
+    /// points (`takes_up_remote_work`). True for any other intent.
+    fn resumes_remote_work(&self, intent: &Intent) -> bool {
+        let Intent::OperationResume { root, operation_id } = intent else {
+            return true;
+        };
+        let named = operation_id.to_string();
+        root.to_str()
+            .and_then(|root| self.pending.get(root))
+            .and_then(ListState::rows)
+            .is_some_and(|list| {
+                list.items.iter().any(|row| {
+                    row.operation_id.as_deref() == Some(named.as_str()) && takes_up_remote_work(row)
+                })
+            })
+    }
+
+    /// The outcome of the finished share `id`, classified from its last
+    /// answer under where its record stood (`record`) and whether that
+    /// answer was a Give up's. `None` for any other request, or a share
+    /// not finished.
+    pub(crate) fn share_result(
+        &self,
+        id: DesktopRequestId,
+        record: RecordState,
+        after_give_up: bool,
+    ) -> Option<SyncResult> {
+        let request = self.request(id)?;
+        if !matches!(request.state, RequestState::Finished(..)) {
+            return None;
+        }
+        let target = ShareTarget::of(&request.intent)?;
+        let envelope = self.shares.get(&id)?;
+        Some(sync_outcome(
+            envelope,
+            ShareAttempt {
+                target,
+                record,
+                after_give_up,
+            },
+        ))
+    }
+
+    /// The operation whose conflict the finished request `id` last stopped
+    /// on, which Review changes opens the sheet on (D5 B5).
+    pub(crate) fn review(&self, id: DesktopRequestId) -> Option<&Review> {
+        self.reviews.get(&id)
+    }
+
+    /// The last answer of the lifecycle `id`: a promotion's or a closure's,
+    /// or a resume's with lifecycle data. `None` while it is queued or
+    /// running again, and for any other request.
+    pub(crate) fn lifecycle_answer(
+        &self,
+        id: DesktopRequestId,
+    ) -> Option<&Envelope<MutationDataDto>> {
+        self.lifecycles.get(&id)
+    }
+
+    /// A finished request of an item's lifecycle, or a resume that
+    /// answered with lifecycle data, tells the lock: until the rows are
+    /// read again the item awaits, and the answer sets or ends its L-4
+    /// exemption (D5 A2; R-21, R-22).
+    fn lifecycle_answered(&mut self, id: DesktopRequestId, envelope: &Envelope<MutationDataDto>) {
+        let Some(request) = self.request(id) else {
+            return;
+        };
+        let Some(root) = request.intent.root().and_then(Path::to_str) else {
+            return;
+        };
+        let data = match &envelope.data {
+            Some(MutationDataDto::Lifecycle(data)) => Some(data.as_ref()),
+            _ => None,
+        };
+        let item = match (&request.intent, data) {
+            (_, Some(data)) => data.item_id.clone(),
+            (Intent::TicketClose { id, .. } | Intent::DocumentPromote { id, .. }, None) => {
+                id.to_string()
+            }
+            _ => return,
+        };
+        let key = LockKey::new(root, &item);
+        self.locks.answered(key, id, data);
+    }
+
+    /// The lifecycle lock's state.
+    pub(crate) fn locks(&self) -> &LifecycleLocks {
+        &self.locks
+    }
+
+    /// The lifecycle lock's state, to change.
+    pub(crate) fn locks_mut(&mut self) -> &mut LifecycleLocks {
+        &mut self.locks
     }
 
     /// The answer of the host observation `id`, once it has one.
@@ -312,6 +610,10 @@ impl Operations {
             )
         {
             request.state = RequestState::Dismissed;
+            // Nothing shows a dismissed lifecycle's answer, or offers its
+            // conflict, again.
+            self.lifecycles.remove(&id);
+            self.reviews.remove(&id);
         }
     }
 
@@ -374,6 +676,7 @@ impl Operations {
         let ViewScope::Operations(root) = stamp.scope else {
             return false;
         };
+        self.locks.rows_read(&root, &result);
         if let ReadResult::Failed(failure) = &result
             && UNAVAILABLE_CODES.contains(&failure.code)
         {
@@ -399,9 +702,141 @@ impl Operations {
             .cloned()
             .collect();
         for root in gone {
+            self.locks.forget(&root);
             self.pending.remove(&root);
             self.generations.next(ViewScope::Operations(root));
         }
+    }
+}
+
+/// What an accepted request offers to stop it (R-1, R-15).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StopOffer {
+    /// Stop at a safe point.
+    Offered,
+    /// Stop was pressed; the request has not ended yet.
+    Stopping,
+    NotOffered,
+}
+
+/// What a share, a post or a Check now is, for the words of its stages.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Progressing {
+    Share,
+    Post,
+    /// Check now (`poll once`, D6 Fact 14).
+    Check,
+    /// A retirement (`context retire`, D6 Part E).
+    Retire,
+}
+
+impl Progressing {
+    /// A share (`item sync`, `repo sync`), a post (`comment add`), a
+    /// Check now (`poll once`) or a retirement (`context retire`). The poll policy verbs have none: each is
+    /// one write that reports `writing` and nothing else (Fact 2), so its
+    /// entry reads like any other local command.
+    pub(crate) fn of(intent: &Intent) -> Option<Self> {
+        match intent {
+            Intent::ItemSync { .. } | Intent::RepoSync { .. } => Some(Self::Share),
+            Intent::CommentAdd { .. } => Some(Self::Post),
+            Intent::PollOnce { .. } => Some(Self::Check),
+            Intent::ContextRetire { .. } => Some(Self::Retire),
+            // The policy verbs: no stage words (Fact 2).
+            Intent::PollConfigure { .. } | Intent::PollPause { .. } | Intent::PollResume { .. } => {
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
+impl ShareTarget {
+    /// Which share `intent` is, if it is one.
+    pub(crate) fn of(intent: &Intent) -> Option<Self> {
+        match intent {
+            Intent::ItemSync { .. } => Some(Self::Item),
+            Intent::RepoSync { .. } => Some(Self::Main),
+            _ => None,
+        }
+    }
+}
+
+/// A stage's words for a share, a post or a Check now (design, Stage text),
+/// naming the publication remote `remote` while connecting. `None` for a
+/// stage the design gives no words: a share or a check does not write. A lifecycle's merge and
+/// sharing name the primary branch, `primary` when known (R-35).
+pub(crate) fn stage_text(
+    kind: Progressing,
+    stage: ProgressStage,
+    remote: Option<&str>,
+    primary: Option<&str>,
+) -> Option<String> {
+    let words = match (stage, kind) {
+        (
+            ProgressStage::Accepted | ProgressStage::Observing,
+            Progressing::Share | Progressing::Check,
+        ) => "Getting ready…",
+        (ProgressStage::Accepted | ProgressStage::Observing, Progressing::Retire) => {
+            "Checking it is safe to remove…"
+        }
+        (ProgressStage::Accepted | ProgressStage::Observing, Progressing::Post) => {
+            "Getting a private copy ready…"
+        }
+        (ProgressStage::Writing, Progressing::Share | Progressing::Check) => return None,
+        (ProgressStage::Writing, Progressing::Post) => "Saving…",
+        (ProgressStage::Writing, Progressing::Retire) => "Removing the local copy…",
+        (ProgressStage::Connecting, _) => {
+            return Some(match remote {
+                Some(remote) => format!("Connecting to {remote}…"),
+                None => "Connecting…".to_owned(),
+            });
+        }
+        (ProgressStage::Fetching, _) => "Bringing in changes…",
+        (ProgressStage::UpdatingLocal, _) => "Merging changes…",
+        (ProgressStage::Pushing, _) => "Sending your saved changes…",
+        (ProgressStage::Verifying, _) => "Checking it arrived…",
+        (ProgressStage::Indexing, _) => "Updating the list…",
+        (ProgressStage::Recording, _) => "Marking it closed…",
+        (ProgressStage::Integrating, _) => {
+            return Some(format!("Merging into {}…", primary_name(primary)));
+        }
+        (ProgressStage::Publishing, _) => {
+            return Some(format!("Sharing {}…", primary_name(primary)));
+        }
+        (ProgressStage::CleaningUp, _) => "Tidying up…",
+        (ProgressStage::Stopping, _) => "Stopping at a safe point…",
+    };
+    Some(words.to_owned())
+}
+
+/// What a running share, post or Check now says: "Sharing · {stage}",
+/// "Posting · {stage}" or "Checking · {stage}". Before its first stage, or
+/// at one with no words, it says it is getting ready.
+pub(crate) fn progress_words(
+    kind: Progressing,
+    stage: Option<ProgressStage>,
+    remote: Option<&str>,
+) -> String {
+    let prefix = match kind {
+        Progressing::Share => "Sharing",
+        Progressing::Post => "Posting",
+        Progressing::Check => "Checking",
+        Progressing::Retire => "Retiring",
+    };
+    let words = stage
+        .and_then(|stage| stage_text(kind, stage, remote, None))
+        .or_else(|| stage_text(kind, ProgressStage::Accepted, remote, None))
+        .unwrap_or_default();
+    format!("{prefix} · {words}")
+}
+
+/// A stopped share's words (design, Stop at a safe point): whether part
+/// of its work finished.
+pub(crate) fn stopped_text(completed: bool) -> &'static str {
+    if completed {
+        STOPPED_AFTER_PART
+    } else {
+        STOPPED_BEFORE_SENDING
     }
 }
 
@@ -515,6 +950,51 @@ impl Operations {
             })
     }
 
+    /// For a comment's post, whether its last answer saved it; `None` for
+    /// any other request, or a post that has not answered.
+    pub(crate) fn post_saved(&self, id: DesktopRequestId) -> Option<bool> {
+        let request = self.request(id)?;
+        if !matches!(request.intent, Intent::CommentAdd { .. }) {
+            return None;
+        }
+        match &request.state {
+            RequestState::Finished(_, _, effects, ..) => {
+                Some(effects.checkpoint == CheckpointEffect::Committed)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the recovery action `action` of the request `id` could
+    /// complete a comment post that is not saved: Retry, Resume or Prepare
+    /// again. The operation area never offers one; the post's composer is
+    /// where it is sent again (decision 26). Abandon stays. The library
+    /// does attach Resume to a pending operation's answer
+    /// (`mutation/outcome.rs`, `DiscoveryPending` and the resumable
+    /// operations it lists), so this is no mere defence.
+    pub(crate) fn hides_recovery(&self, id: DesktopRequestId, action: &RecoveryAction) -> bool {
+        matches!(
+            recovery_control(action.action),
+            RecoveryControl::Retry | RecoveryControl::Resume | RecoveryControl::Prepare
+        ) && self.post_saved(id) == Some(false)
+    }
+
+    /// A recovery action's words on the request `id`: a saved comment's
+    /// Retry only shares it, so it reads Retry sharing (decision 26).
+    pub(crate) fn recovery_words(
+        &self,
+        id: DesktopRequestId,
+        action: &RecoveryAction,
+    ) -> &'static str {
+        if recovery_control(action.action) == RecoveryControl::Retry
+            && self.post_saved(id) == Some(true)
+        {
+            RETRY_SHARING
+        } else {
+            recovery_label(action.action)
+        }
+    }
+
     /// Whether `action`, offered on the request `id`, is a Retry that R-78
     /// forbids: the operation area says so.
     pub(crate) fn retry_not_sent_again(
@@ -552,6 +1032,10 @@ impl Operations {
         // A request this session holds, by the request ID the action
         // names; this one when it names none.
         let named = || self.named(id, action);
+        // Decision 26: nothing here completes an unsaved post.
+        if self.hides_recovery(id, action) {
+            return None;
+        }
         Some(match recovery_control(action.action) {
             RecoveryControl::IndexRefresh => {
                 RecoveryStep::Submit(Intent::IndexRefresh { root: root()? })
@@ -591,7 +1075,16 @@ impl Operations {
     }
 }
 
-/// Whether a pending row is a synchronization, which D1 cannot run.
+/// Whether a pending row is a document promotion's or a ticket closure's
+/// parent (L2), which the library lists as remote work.
+fn is_lifecycle(operation: &OperationDto) -> bool {
+    matches!(
+        operation.action,
+        OperationAction::Promote | OperationAction::Close
+    )
+}
+
+/// Whether a pending row is a synchronization.
 fn is_synchronization(operation: &OperationDto) -> bool {
     operation.family == OperationFamily::Remote
         || matches!(
@@ -600,21 +1093,104 @@ fn is_synchronization(operation: &OperationDto) -> bool {
         )
 }
 
+/// Whether a pending row is remote work a resume takes up, stopping at
+/// its safe points (decision 11): a remote item or repository
+/// synchronization. A local-context synchronization, which has no remote,
+/// is not remote work.
+///
+/// No row the library lists is a comment's publication waiting to be
+/// resumed: the synchronization that publishes a comment is listed with
+/// no next action (`read/status.rs`, `remote_standing`), and the
+/// comment's `submit_comment` row is listed only while its local work is
+/// incomplete or waits for its registration, when a resume does that
+/// local work, ignoring its token; a resume takes up a publication only
+/// once that row has completed, when it is no longer listed
+/// (`bind/resume.rs`, `found_comment`).
+fn takes_up_remote_work(operation: &OperationDto) -> bool {
+    operation.family == OperationFamily::Remote
+        && matches!(
+            operation.action,
+            OperationAction::SynchronizeContext | OperationAction::SynchronizePrimary
+        )
+}
+
+/// Whether a pending row is a synchronization with no remote to publish
+/// to: the library lists it as a local operation of the remote name
+/// (`OperationDto::action`).
+fn local_synchronization(operation: &OperationDto) -> bool {
+    operation.family == OperationFamily::Local
+        && matches!(
+            operation.action,
+            OperationAction::SynchronizeContext | OperationAction::SynchronizePrimary
+        )
+}
+
+/// Whether a pending row is a poll's remote row that still holds the
+/// repository's reservation: what a Check now left active by Quit now or a
+/// crash looks like at launch (D6 L-4, Fact 34). The library lists such a
+/// row with no next action, since its store does not say whether anything
+/// still runs it, and offers it no Resume of its own. Resume sends
+/// `operation resume`, which the library answers `original_request_required`
+/// naming the request that holds a Check now's row; an automatic poll's row,
+/// which no request holds, is answered `not_resumable`, and the in-flight
+/// record's entry is what finishes that one (L-1).
+fn check_now_left_active(operation: &OperationDto) -> bool {
+    operation.family == OperationFamily::Remote
+        && operation.action == OperationAction::Poll
+        && operation.operation_id.is_some()
+        && operation.next_action.is_none()
+        && matches!(
+            operation.state.as_str(),
+            "reserved"
+                | "advertising"
+                | "persisting"
+                | "fetch_prepared"
+                | "fetch_observed"
+                | "local_prepared"
+                | "local_fast_forwarded"
+                | "push_prepared"
+                | "push_returned"
+                | "push_verified"
+                | "reconciling"
+        )
+}
+
 /// What a pending row offers for Resume.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ResumeOffer {
-    /// A local operation waiting to be resumed: Resume runs it.
+    /// An operation waiting to be resumed: Resume runs it.
     Offered,
     /// Shown disabled, with why.
     Unavailable(&'static str),
     NotOffered,
 }
 
-/// Resume is offered when the row waits to be resumed and is a local
-/// command; a synchronization shows it unavailable.
+/// Resume is offered for a Check now's row left active (D6 L-4), and
+/// otherwise when the row waits to be resumed and is a local
+/// command (a comment's incomplete `submit_comment` and a `context
+/// sync-local` among them), a remote item or repository synchronization,
+/// or a local-context or primary synchronization with no remote (D5 B6,
+/// E-5), by its operation ID (decision 11). Any other synchronization
+/// shows it unavailable. The library lists no comment publication waiting
+/// to be resumed (`takes_up_remote_work`), so none is offered. A
+/// promotion's or closure's parent (L2) is no synchronization: it is not
+/// offered here, but by its own row, whose resume opens the lifecycle
+/// dialog (D5 Part C, `view/operations/resume.rs`).
 pub(crate) fn resume_offer(operation: &OperationDto) -> ResumeOffer {
+    if check_now_left_active(operation) {
+        return ResumeOffer::Offered;
+    }
     if operation.next_action != Some(OperationNextAction::Resume) {
         return ResumeOffer::NotOffered;
+    }
+    if is_lifecycle(operation) {
+        return ResumeOffer::NotOffered;
+    }
+    if takes_up_remote_work(operation) || local_synchronization(operation) {
+        return match operation.operation_id {
+            Some(_) => ResumeOffer::Offered,
+            None => ResumeOffer::NotOffered,
+        };
     }
     if is_synchronization(operation) {
         return ResumeOffer::Unavailable(SYNCHRONIZATION_UNAVAILABLE);
@@ -659,7 +1235,12 @@ pub(crate) fn recovery_control(kind: RecoveryActionKind) -> RecoveryControl {
         RecoveryActionKind::RequestCancel => RecoveryControl::Cancel,
         RecoveryActionKind::OperationResume => RecoveryControl::Resume,
         RecoveryActionKind::OperationAbandon => RecoveryControl::Abandon,
-        RecoveryActionKind::RepoInspect => RecoveryControl::Inspect,
+        // `remote.history` has no button: repair runs in `manyhands-cli
+        // remote history` until the repair sheet (vh-ez4y9). Inspect opens
+        // the repository's details; the guidance text names the command.
+        RecoveryActionKind::RepoInspect | RecoveryActionKind::RemoteHistory => {
+            RecoveryControl::Inspect
+        }
         RecoveryActionKind::RepoIdentitySet => RecoveryControl::IdentitySet,
         // The action names the host but not the key to pin: the Hosts
         // page checks the host, and offers Approve or Replace for the key
@@ -669,6 +1250,9 @@ pub(crate) fn recovery_control(kind: RecoveryActionKind) -> RecoveryControl {
         }
     }
 }
+
+/// A saved comment's Retry, which only shares it (decision 26).
+pub(crate) const RETRY_SHARING: &str = "Retry sharing";
 
 /// A recovery action's control, in fixed text.
 pub(crate) fn recovery_label(kind: RecoveryActionKind) -> &'static str {
@@ -683,7 +1267,7 @@ pub(crate) fn recovery_label(kind: RecoveryActionKind) -> &'static str {
         RecoveryActionKind::RepoIdentitySet => "Set identity",
         RecoveryActionKind::HostApprove => "Approve host",
         RecoveryActionKind::HostReplace => "Replace host key",
-        RecoveryActionKind::RepoInspect => "Inspect repository",
+        RecoveryActionKind::RepoInspect | RecoveryActionKind::RemoteHistory => "Inspect repository",
     }
 }
 

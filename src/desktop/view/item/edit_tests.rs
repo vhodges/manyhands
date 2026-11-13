@@ -771,6 +771,35 @@ async fn loading_reloads_the_read_editor_when_the_texts_differ(cx: &mut TestAppC
     assert!(text(&read, cx) == load(newer), "the read editor reloaded");
 }
 
+/// E4 step 4, decision 19: an item whose local copy is being retired ends a
+/// clean edit session of its tab, as a lifecycle run of it does (R-23): the
+/// loop never retires an item with a session, and Retire… marks one only
+/// after it checked that no text is unkept.
+#[gpui_kit::test]
+async fn a_retirement_ends_a_clean_edit_session(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Clean", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let _host = edit(&shell, cx).await;
+    let pane = pane(&shell, cx);
+    assert!(pane.read_with(cx, |pane, _| pane.edit_host()).is_some());
+
+    let item = (key(&root), ItemDtoKind::Ticket, TICKET.to_owned());
+    let operations = shell.operations(cx);
+    operations.update(cx, |operations, cx| {
+        operations.mark_retiring(item);
+        cx.notify();
+    });
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(
+        pane.read_with(cx, |pane, _| pane.edit_host()).is_none(),
+        "the clean session ended"
+    );
+}
+
 /// Edit shows the toolbar under the header, outside the item's scroll
 /// region, with its hint, and moves focus into the edit editor.
 #[gpui_kit::test]
@@ -1514,6 +1543,10 @@ mod review;
 #[path = "edit_quit_tests.rs"]
 mod quit;
 
+/// The scheduler is frozen while the unkept ask is open (D6 Task 10, R-33).
+#[path = "edit_quit_freeze_tests.rs"]
+mod quit_freeze;
+
 /// The details sheet's named controls (Task 20).
 #[path = "sheet/fields_tests.rs"]
 mod sheet_fields;
@@ -1521,3 +1554,7 @@ mod sheet_fields;
 /// A ticket's dependencies and parent in the details sheet (Task 21).
 #[path = "relations_edit_tests.rs"]
 mod relations_edit;
+
+/// Unsaved work across a bring-in (D6 Task 9, A14).
+#[path = "edit_bring_in_tests.rs"]
+mod bring_in;

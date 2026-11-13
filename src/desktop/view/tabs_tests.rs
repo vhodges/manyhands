@@ -14,7 +14,11 @@ use zorite_editor::EditorState;
 
 use super::{TabInfo, active_line, tab_info, tooltip_text};
 use crate::desktop::{
-    model::{navigation::OpenTarget, tabs::TabKey},
+    model::{
+        layout::Side,
+        navigation::{OpenTarget, Pane},
+        tabs::TabKey,
+    },
     services::{
         JobKind, ReadKind,
         drafts::DraftRegistry,
@@ -29,7 +33,8 @@ use crate::desktop::{
         confirm::CANCEL,
         editor::host::EditorHost,
         harness::{Shell, WAIT, key},
-        item::{NOT_REFRESHED, NOT_SAVED, tokens::colors},
+        item::{NOT_REFRESHED, NOT_SAVED, PublicationRemote, tokens::colors},
+        sidebar::SELECTED,
         workspace::{REGIONS, Region},
     },
 };
@@ -191,7 +196,12 @@ fn opening_a_tab_does_not_change_the_selection(cx: &mut TestAppContext) {
         workspace.navigation().selected().cloned()
     });
     assert_eq!(selected, Some(key(&b)));
-    assert_eq!(shell.label("selection-name", cx).as_deref(), Some("b"));
+    // `b`'s row, the second, carries the chosen repository's mark.
+    assert_eq!(
+        shell.label(("repo-selected", 1usize), cx).as_deref(),
+        Some(SELECTED)
+    );
+    assert!(!shell.present(("repo-selected", 0usize), cx));
 }
 
 /// Refresh of `a` reads every open tab of `a` again, once, in place: the
@@ -240,7 +250,7 @@ async fn a_refresh_reloads_every_open_tab_of_the_repository_in_place(cx: &mut Te
 async fn a_job_for_a_while_b_is_selected_reloads_only_as_tab(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let Two { shell, a, b } = two(cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.select(&b, cx);
     open(&shell, ticket(&a, ONE), cx);
     open(&shell, ticket(&b, ONE), cx);
@@ -709,6 +719,31 @@ fn the_tab_keys_work_from_inside_the_read_view(cx: &mut TestAppContext) {
         source.read_with(cx, |editor, _| editor.text().to_owned()),
         text,
         "no indent was made"
+    );
+}
+
+/// Ctrl B with focus in the read view toggles the left dock: a read-only
+/// editor has no Bold to apply, so the key is the dock's there (decision 2).
+#[gpui_kit::test]
+fn ctrl_b_in_the_read_view_toggles_the_left_dock(cx: &mut TestAppContext) {
+    let Two { shell, a, .. } = two(cx);
+    open(&shell, ticket(&a, ONE), cx);
+    let left_open = |shell: &Shell, cx: &mut TestAppContext| {
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.layout().is_open(Side::Left))
+    };
+    let before = left_open(&shell, cx);
+
+    let source = focus_read(&shell, cx);
+    let text = source.read_with(cx, |editor, _| editor.text().to_owned());
+    shell.keys("secondary-b", cx);
+    assert_eq!(left_open(&shell, cx), !before, "the dock toggled");
+    shell.keys("secondary-b", cx);
+    assert_eq!(left_open(&shell, cx), before, "and toggled back");
+    assert_eq!(
+        source.read_with(cx, |editor, _| editor.text().to_owned()),
+        text
     );
 }
 
@@ -1662,4 +1697,67 @@ fn the_strip_scrolls_the_shown_tab_into_view(cx: &mut TestAppContext) {
     assert!(tab_in_view(&shell, 5, cx), "a sixth tab is in view");
     shell.keys("ctrl-tab", cx);
     assert!(tab_in_view(&shell, 0, cx), "the first tab is in view again");
+}
+
+/// The shown tab's publication remote, as its pane holds it.
+fn shown_remote(shell: &Shell, cx: &mut TestAppContext) -> Option<PublicationRemote> {
+    shell.workspace.read_with(cx, |workspace, cx| {
+        Some(workspace.item_pane()?.read(cx).publication_remote().clone())
+    })
+}
+
+/// Share controls: a tab learns its repository's publication remote from
+/// the workspace's navigation, the listed summary, and reads no remotes
+/// as it opens (D3's fact 41). A repository without one is `Unset`.
+#[gpui_kit::test]
+fn a_tab_learns_its_repositorys_remote_from_navigation(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    let b = fixture.create_repository("b");
+    fixture.commit_ticket(&a, ONE, "One", "");
+    fixture.commit_ticket(&b, ONE, "Other", "");
+    fixture.publish_over_ssh(&a);
+    fixture.refresh(&a);
+    fixture.refresh(&b);
+    let shell = Shell::open(fixture, cx);
+
+    open(&shell, ticket(&a, ONE), cx);
+    assert_eq!(
+        shown_remote(&shell, cx),
+        Some(PublicationRemote::Named("origin".to_owned()))
+    );
+    open(&shell, ticket(&b, ONE), cx);
+    assert_eq!(shown_remote(&shell, cx), Some(PublicationRemote::Unset));
+    assert_eq!(shell.backend.reads_seen(ReadKind::Remotes), 0);
+}
+
+/// A publication remote navigation learns later, from a list read, reaches
+/// every tab of that repository already open, still with no remotes read.
+#[gpui_kit::test]
+fn a_remote_set_later_reaches_open_tabs(cx: &mut TestAppContext) {
+    let Two { shell, a, b } = two(cx);
+    open(&shell, ticket(&a, ONE), cx);
+    open(&shell, ticket(&b, ONE), cx);
+    open(&shell, ticket(&a, TWO), cx);
+    assert_eq!(shown_remote(&shell, cx), Some(PublicationRemote::Unset));
+
+    shell.fixture.publish_over_ssh(&a);
+    shell.fixture.refresh(&a);
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.load_repositories(cx));
+    shell.run(cx);
+    let remotes: Vec<_> = (0..3usize)
+        .map(|ix| {
+            shell.click(("tab", ix), cx);
+            shown_remote(&shell, cx).expect("a tab is shown")
+        })
+        .collect();
+    let origin = PublicationRemote::Named("origin".to_owned());
+    assert_eq!(
+        remotes,
+        [origin.clone(), PublicationRemote::Unset, origin],
+        "a's two tabs, not b's"
+    );
+    assert_eq!(shell.backend.reads_seen(ReadKind::Remotes), 0);
 }

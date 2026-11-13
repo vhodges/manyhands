@@ -5,8 +5,8 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::ListState;
-use crate::desktop::services::ReadFailure;
+use super::{KeptList, ListState};
+use crate::desktop::services::{ReadFailure, ReadResult};
 
 fn index(state: IndexState) -> Option<IndexStateDto> {
     Some(IndexStateDto {
@@ -110,5 +110,194 @@ fn only_a_ready_list_has_rows() {
         failed(ResultCode::Busy),
     ] {
         assert!(state.rows().is_none());
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    Loading,
+    Ready,
+    Busy,
+    Failed,
+}
+
+fn kind(state: &ListState<Vec<u8>>) -> Kind {
+    match state {
+        ListState::Loading => Kind::Loading,
+        ListState::Ready { .. } => Kind::Ready,
+        ListState::Busy => Kind::Busy,
+        ListState::Failed(_) => Kind::Failed,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Op {
+    /// `apply_state` of a ready state with these rows.
+    State(u8),
+    /// `apply_state` of an incomplete ready state with a stale index.
+    Marked(u8),
+    Reload,
+    Clear,
+    /// `apply` of a read that gave these rows.
+    Read(u8),
+    /// `apply` of a read that stayed busy.
+    ReadBusy,
+    /// `apply` of a read that failed.
+    ReadFailed,
+}
+
+/// What a step leaves: the state's kind, `rows()`, `reloading()` and
+/// `busy_over_kept()`.
+type After = (Kind, Option<u8>, bool, bool, Shape);
+
+/// A ready state's `complete` and whether its index is stale; `None` for
+/// any other state. Kept rows must keep the shape of the read they came
+/// from.
+type Shape = Option<(bool, bool)>;
+
+const PLAIN: Shape = Some((true, false));
+const STALE: Shape = Some((false, true));
+const NONE: Shape = None;
+
+fn shape(state: &ListState<Vec<u8>>) -> Shape {
+    match state {
+        ListState::Ready {
+            complete, index, ..
+        } => Some((
+            *complete,
+            index
+                .as_ref()
+                .is_some_and(|index| matches!(index.state, IndexState::Stale)),
+        )),
+        _ => None,
+    }
+}
+
+#[test]
+fn kept_rows_follow_reloads() {
+    use Kind::{Busy, Failed, Loading, Ready};
+    use Op::{Clear, Marked, Read, ReadBusy, ReadFailed, Reload, State};
+    let table: Vec<(&str, Vec<(Op, After)>)> = vec![
+        (
+            "a reload shows the kept rows until the read lands",
+            vec![
+                (State(1), (Ready, Some(1), false, false, PLAIN)),
+                (Reload, (Loading, Some(1), true, false, NONE)),
+                (Read(2), (Ready, Some(2), false, false, PLAIN)),
+            ],
+        ),
+        (
+            "a second reload keeps them",
+            vec![
+                (State(1), (Ready, Some(1), false, false, PLAIN)),
+                (Reload, (Loading, Some(1), true, false, NONE)),
+                (Reload, (Loading, Some(1), true, false, NONE)),
+            ],
+        ),
+        (
+            "busy over kept rows keeps them, and the next reload clears the flag",
+            vec![
+                (State(1), (Ready, Some(1), false, false, PLAIN)),
+                (Reload, (Loading, Some(1), true, false, NONE)),
+                (ReadBusy, (Ready, Some(1), false, true, PLAIN)),
+                (Reload, (Loading, Some(1), true, false, NONE)),
+                (Read(2), (Ready, Some(2), false, false, PLAIN)),
+            ],
+        ),
+        (
+            "busy with no reload over a ready list keeps its rows",
+            vec![
+                (State(1), (Ready, Some(1), false, false, PLAIN)),
+                (ReadBusy, (Ready, Some(1), false, true, PLAIN)),
+                (Read(2), (Ready, Some(2), false, false, PLAIN)),
+            ],
+        ),
+        (
+            "kept rows keep the shape of their read through busy and reload",
+            vec![
+                (Marked(1), (Ready, Some(1), false, false, STALE)),
+                (Reload, (Loading, Some(1), true, false, NONE)),
+                (ReadBusy, (Ready, Some(1), false, true, STALE)),
+                (Reload, (Loading, Some(1), true, false, NONE)),
+                (ReadBusy, (Ready, Some(1), false, true, STALE)),
+                (Read(2), (Ready, Some(2), false, false, PLAIN)),
+            ],
+        ),
+        (
+            "a failure replaces the kept rows",
+            vec![
+                (State(1), (Ready, Some(1), false, false, PLAIN)),
+                (Reload, (Loading, Some(1), true, false, NONE)),
+                (ReadFailed, (Failed, None, false, false, NONE)),
+            ],
+        ),
+        (
+            "busy with nothing kept is busy",
+            vec![(ReadBusy, (Busy, None, false, false, NONE))],
+        ),
+        (
+            "a clear drops the kept rows",
+            vec![
+                (State(1), (Ready, Some(1), false, false, PLAIN)),
+                (Clear, (Loading, None, false, false, NONE)),
+            ],
+        ),
+        (
+            "a clear after a reload drops them too",
+            vec![
+                (State(1), (Ready, Some(1), false, false, PLAIN)),
+                (Reload, (Loading, Some(1), true, false, NONE)),
+                (Clear, (Loading, None, false, false, NONE)),
+            ],
+        ),
+        (
+            "a ready state applied after a reload replaces the kept rows",
+            vec![
+                (State(1), (Ready, Some(1), false, false, PLAIN)),
+                (Reload, (Loading, Some(1), true, false, NONE)),
+                (State(2), (Ready, Some(2), false, false, PLAIN)),
+            ],
+        ),
+    ];
+    for (name, steps) in table {
+        let mut list = KeptList::<Vec<u8>>::default();
+        assert_eq!(
+            (kind(list.state()), list.rows(), list.reloading()),
+            (Loading, None, false),
+            "{name}: starts empty and loading"
+        );
+        for (op, expected) in steps {
+            match op {
+                State(rows) => list.apply_state(ready(vec![rows], true, None)),
+                Marked(rows) => {
+                    list.apply_state(ready(vec![rows], false, index(IndexState::Stale)))
+                }
+                Reload => list.reload(),
+                Clear => list.clear(),
+                Read(rows) => {
+                    list.apply(ReadResult::Ok(vec![rows]), |rows| ready(rows, true, None))
+                }
+                ReadBusy => list.apply(ReadResult::<Vec<u8>>::Busy, |rows| ready(rows, true, None)),
+                ReadFailed => list.apply(
+                    ReadResult::<Vec<u8>>::Failed(ReadFailure {
+                        code: ResultCode::RepositoryInaccessible,
+                        recovery: Vec::new(),
+                    }),
+                    |rows| ready(rows, true, None),
+                ),
+            }
+            let rows = list.rows().map(|rows| rows[0]);
+            assert_eq!(
+                (
+                    kind(list.state()),
+                    rows,
+                    list.reloading(),
+                    list.busy_over_kept(),
+                    shape(list.state())
+                ),
+                expected,
+                "{name}: after {op:?}"
+            );
+        }
     }
 }

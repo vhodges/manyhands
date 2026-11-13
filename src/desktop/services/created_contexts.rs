@@ -10,14 +10,15 @@
 //! answers `ok` (R-77). A save, a new item's create, or a document's move,
 //! that commits into a context takes it out: it holds work now. So does
 //! one the library finds already applied, an earlier attempt having
-//! committed it. A release leaves it in: the release service keeps what it
+//! committed it. So does a comment whose checkpoint committed into the
+//! item's context (R-4), whether or not it was shared. A release leaves it in: the release service keeps what it
 //! has released.
 
 use std::{collections::HashSet, path::PathBuf};
 
 use manyhands::{
     canonical::ItemId,
-    repository::{AuthoringKind, ItemDtoKind, MutationDataDto},
+    repository::{AuthoringKind, ItemDtoKind, LifecycleCleanupState, MutationDataDto},
     results::{CheckpointEffect, Envelope, ResultCode},
 };
 
@@ -41,12 +42,13 @@ impl ContextKey {
         }
     }
 
-    /// The item a context command, a save, a new item's create or a
-    /// document's move names.
+    /// The item a context command, a save, a new item's create, a
+    /// document's move or a comment names.
     pub(crate) fn of(intent: &Intent) -> Option<Self> {
         let (root, kind, id) = match intent {
             Intent::ContextPrepare { root, kind, id, .. }
-            | Intent::ContextRelease { root, kind, id } => (root, dto_kind(*kind), id),
+            | Intent::ContextRelease { root, kind, id }
+            | Intent::CommentAdd { root, kind, id, .. } => (root, dto_kind(*kind), id),
             Intent::DocumentSave { root, id, .. }
             | Intent::DocumentCreate { root, id, .. }
             | Intent::DocumentMove { root, id, .. } => (root, ItemDtoKind::Document, id),
@@ -69,7 +71,8 @@ impl ContextKey {
     }
 
     /// Whether `intent` writes into this item's context: saves it, creates
-    /// it, or moves it, a document (Task 27 fix 1, B6).
+    /// it, or moves it, a document (Task 27 fix 1, B6), or comments on it
+    /// (R-4).
     pub(crate) fn saved_by(&self, intent: &Intent) -> bool {
         matches!(
             intent,
@@ -78,6 +81,7 @@ impl ContextKey {
                 | Intent::DocumentCreate { .. }
                 | Intent::TicketCreate { .. }
                 | Intent::DocumentMove { .. }
+                | Intent::CommentAdd { .. }
         ) && Self::of(intent).as_ref() == Some(self)
     }
 
@@ -118,20 +122,35 @@ impl CreatedContexts {
 
     /// A finished request: a `context prepare` that answered `ok` with
     /// `created: true` adds its item's context, and a save, a new item's
-    /// create or a document's move whose checkpoint committed takes its
-    /// item's out (R-75; Task 27 fix 1, B6),
+    /// create, a document's move or a comment whose checkpoint committed
+    /// takes its item's out (R-75; Task 27 fix 1, B6; R-4),
     /// whether or not its tab is still open. So does one answered
     /// `already_applied` (Part D fix 1, M1): an earlier attempt, whose
     /// answer was lost, committed it, so the context holds the item's
     /// commit, and its release would be refused. Any other answer, and any
     /// other request, changes nothing. True when the answer made the
     /// context: a tab that closed while it prepared releases it then
-    /// (R-37).
+    /// (R-37). A close or merge, or a resume of one, whose tidy-up is
+    /// complete takes its item's out: the context is retired (D5 A4).
     pub(crate) fn finished(
         &mut self,
         intent: &Intent,
         envelope: &Envelope<MutationDataDto>,
     ) -> bool {
+        // A close or merge tidied up retired the item's context (D5 A4).
+        if let Some(MutationDataDto::Lifecycle(data)) = &envelope.data
+            && data.cleanup == Some(LifecycleCleanupState::Complete)
+            && matches!(
+                intent,
+                Intent::TicketClose { .. }
+                    | Intent::DocumentPromote { .. }
+                    | Intent::OperationResume { .. }
+            )
+            && let Some(root) = intent.root().and_then(|root| root.to_str())
+        {
+            self.remove(&ContextKey::new(root, data.kind, &data.item_id));
+            return false;
+        }
         let Some(key) = ContextKey::of(intent) else {
             return false;
         };
@@ -140,7 +159,8 @@ impl CreatedContexts {
             | Intent::TicketSave { .. }
             | Intent::DocumentCreate { .. }
             | Intent::TicketCreate { .. }
-            | Intent::DocumentMove { .. } => {
+            | Intent::DocumentMove { .. }
+            | Intent::CommentAdd { .. } => {
                 if envelope.effects.checkpoint == CheckpointEffect::Committed
                     || envelope.code == ResultCode::AlreadyApplied
                 {

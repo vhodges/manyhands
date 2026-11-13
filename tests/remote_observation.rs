@@ -479,12 +479,16 @@ fn same_name_endpoint_replacement_after_reopen_is_not_remote_deletion() {
     // Keep the same registered key to isolate endpoint identity.
     let after = case.observe();
     assert!(after.snapshot().contexts().is_empty());
+    // The identity change forgets the former endpoint's evidence and unknowns
+    // only the contexts that exist (none here); it no longer sets the
+    // repository-wide flag, so this item reads as never published, not as
+    // observed published or deleted.
     assert_eq!(
         after.snapshot().publication_evidence_for(
             AuthoringKind::Ticket,
             &"01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().unwrap()
         ),
-        RemotePublicationEvidence::HistoryUnknown
+        RemotePublicationEvidence::NeverPublished
     );
 }
 

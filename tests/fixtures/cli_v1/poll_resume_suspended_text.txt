@@ -1,0 +1,12 @@
+The request completed.
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX2
+Backoff seconds: none
+Enabled: true
+Interval seconds: 300
+Next eligible at: none
+Paused: false
+Recovery suspended: true
+--- stderr
+progress: writing
+note: automatic polls are suspended for recovery, and poll resume does not lift that; poll once still runs.
+--- exit 0

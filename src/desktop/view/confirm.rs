@@ -668,6 +668,24 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
             put("Committed", Some(flag(operation.committed)));
             put("Files changed", Some(flag(operation.files_changed)));
             put("Git changed", Some(flag(operation.git_state_changed)));
+            if let Some(retirement) = &operation.retirement {
+                put("Request retained", retirement.request_id.clone());
+                put("Retirement phase", Some(retirement.phase.clone()));
+                put(
+                    "Worktree removal",
+                    Some(retirement.worktree_removal.as_str().into()),
+                );
+                put(
+                    "Branch removal",
+                    Some(retirement.branch_removal.as_str().into()),
+                );
+                put(
+                    "Worktree retained",
+                    Some(flag(retirement.worktree_retained)),
+                );
+                put("Branch retained", Some(flag(retirement.branch_retained)));
+                put("Discovery pending", Some(flag(retirement.index_pending)));
+            }
         }
         PreviewDetailsDto::Identity(identity) => {
             put("Root", Some(identity.root.clone()));
@@ -701,6 +719,21 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
             put("Branch", Some(republish.branch.clone()));
             put("Last published", republish.last_published_oid.clone());
             put("Local commit", Some(republish.local_oid.clone()));
+        }
+        // No desktop path asks the boundary for this preview yet (the
+        // repair sheet is a follow-on ticket).
+        PreviewDetailsDto::ResolveCacheLoss(resolve) => {
+            put("Root", Some(resolve.root.clone()));
+        }
+        PreviewDetailsDto::ResolveHistory(resolve) => {
+            put("Branch", Some(resolve.branch.clone()));
+            put("Local commit", resolve.local_oid.clone());
+        }
+        // No desktop path asks the boundary for this preview yet (D5, D6).
+        PreviewDetailsDto::Lifecycle(lifecycle) => {
+            put("Branch", Some(lifecycle.branch.clone()));
+            put("Primary", Some(lifecycle.primary_branch.clone()));
+            put("Remote", lifecycle.remote.clone());
         }
     }
     fields

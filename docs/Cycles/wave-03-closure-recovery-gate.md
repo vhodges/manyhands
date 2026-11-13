@@ -64,8 +64,11 @@ CLI catalog entries in this ticket.
 ## Explicit Exclusions And Downstream Obligations
 
 - No CLI or desktop implementation, new dependency, new test target, or native
-  CI dispatch. C4/D5 consume the published boundary; C5/D5 still own the separately
-  required promotion/closure bindings under Wave rule 6.
+  CI dispatch. C5/D5 consume the published boundary; C5/D5 still own the separately
+  required promotion/closure bindings under Wave rule 6. (Amended 2026-11-03 by
+  C5, decision 1, which corrects this line's first "C4" as C4's decision 19
+  did elsewhere: C5 exposes the local verbs and lands the lifecycle bindings, and D5
+  consumes both after C5 merges.)
 - No remote merge-policy change, implicit primary refresh/fetch, publication,
   primary integration, context retirement, or automatic closure resume.
 - No automatic reset, checkout of caller edits, conflict-marker deletion,

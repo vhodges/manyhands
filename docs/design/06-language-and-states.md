@@ -9,7 +9,7 @@ The owner's decision was **plain language everywhere; Git details only on hover 
 | Item context (branch + worktree) | **private working copy** | Tooltips, dialogs |
 | Provisioning a context | "Getting a private copy ready…" | State pill |
 | Checkpoint commit on save | **Saved on this computer** | State pill, Activity |
-| Unpublished checkpoints | **N to share** | Repo row, footer |
+| Unpublished checkpoints (counted as items not shared yet, main as one; Wave 04 Cycle 03a decision 2, 2026-11-12) | **N to share** | Repo row, footer |
 | Synchronization (fetch + integrate + push) | **Share** (button) · "Shared …" (Activity) | Item header |
 | Publication pending (no remote) | **This computer** · "changes stay on this computer" | Repo row, Activity |
 | Background poll | **Checking for updates** · "Checked 2 min ago" | Footer, Settings |

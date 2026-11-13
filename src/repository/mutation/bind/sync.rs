@@ -61,7 +61,10 @@ use rusqlite::OptionalExtension;
 
 use crate::{
     canonical::ItemId,
-    results::{DiscoveryEffect, Effects, IntegrationEffect, PublicationEffect, ResultCode, Scope},
+    results::{
+        DiscoveryEffect, Effects, IntegrationEffect, PublicationEffect, RecoveryAction,
+        RecoveryActionKind, ResultCode, Scope,
+    },
 };
 
 use super::{
@@ -520,7 +523,7 @@ impl SynchronizationObserver for Watch<'_> {
 }
 
 /// What a host that is not trusted presented, as the result's data.
-fn host_data(error: &SynchronizationError) -> Option<MutationDataDto> {
+pub(super) fn host_data(error: &SynchronizationError) -> Option<MutationDataDto> {
     let SynchronizationError::Transport(error) = error else {
         return None;
     };
@@ -1034,12 +1037,16 @@ impl SyncBinding {
                 standing: Standing::Final,
             };
         }
+        // The domain ends an operation on unresolved history as it ends a
+        // cancelled one, but it is not the caller's cancellation: the
+        // answer is the error's, and names the repair.
+        let unresolved = matches!(error, SynchronizationError::HistoryUnresolved);
         let cancelled = match &journal {
             Some(JournalRow::Final {
                 kind: FinalKind::Cancelled,
                 owes_work: _,
                 checkpointed: _,
-            }) => true,
+            }) => !unresolved,
             Some(
                 JournalRow::Absent
                 | JournalRow::Pending(_)
@@ -1155,11 +1162,22 @@ impl SyncBinding {
                 host_data(error)
             }
         };
+        let recovery = if unresolved {
+            crate::results::absolute_path_string(&accepted.root())
+                .map(|root| {
+                    RecoveryAction::new(RecoveryActionKind::RemoteHistory, [("root", root.into())])
+                })
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
         Ran {
             answer: Answer {
                 effects,
                 data,
                 local_change,
+                recovery,
                 ..Answer::stopped(code)
             },
             standing: Standing::Stopped { journal },
@@ -1201,6 +1219,22 @@ pub(crate) fn conflict_next(
 /// `None` when the journal or Git cannot be read: nothing is claimed on
 /// that.
 fn merge_made(service: &RepositoryService, accepted: &Accepted) -> Option<git2::Oid> {
+    merge_made_on(
+        service,
+        &accepted.scope,
+        accepted.operation_id,
+        accepted.position.base_ref.as_deref()?,
+    )
+}
+
+/// `merge_made`, of any operation that synchronizes `branch`: a lifecycle's
+/// child has no request of its own.
+pub(super) fn merge_made_on(
+    service: &RepositoryService,
+    scope: &super::super::identity::ScopeKey,
+    operation: OperationId,
+    branch: &str,
+) -> Option<git2::Oid> {
     let merge = service
         .read_session(RepositoryOperation::Read, |connection| {
             Ok(connection
@@ -1214,7 +1248,7 @@ fn merge_made(service: &RepositoryService, accepted: &Accepted) -> Option<git2::
                         AND step.phase = 'applied' AND step.candidate_oid IS NOT NULL
                       ORDER BY step.window_number DESC, step.ordinal DESC
                       LIMIT 1",
-                    rusqlite::params![accepted.scope.as_str(), accepted.operation_id.to_string()],
+                    rusqlite::params![scope.as_str(), operation.to_string()],
                     |row| row.get::<_, Option<String>>(0),
                 )
                 .optional()?
@@ -1222,8 +1256,7 @@ fn merge_made(service: &RepositoryService, accepted: &Accepted) -> Option<git2::
         })
         .ok()??;
     let merge = git2::Oid::from_str(&merge).ok()?;
-    let branch = accepted.position.base_ref.as_deref()?;
-    let repository = git2::Repository::open(accepted.root()).ok()?;
+    let repository = git2::Repository::open(scope.as_str()).ok()?;
     let tip = repository.refname_to_id(branch).ok()?;
     (tip == merge || repository.graph_descendant_of(tip, merge).ok()?).then_some(merge)
 }
@@ -1439,3 +1472,7 @@ impl Binding for SyncBinding {
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "sync_tests.rs"]
+mod tests;

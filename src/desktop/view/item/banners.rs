@@ -15,6 +15,9 @@
 //! review, a hand-off owed, a pending checkpoint, the change banner under
 //! the review and a refusal; a kept session raises the kept draft and the
 //! change banner, and a session a discard elsewhere ended says so (`edit`).
+//! A share or post of the item that stopped on a conflict raises the
+//! conflict banner, which says the work is safe and offers Review changes
+//! (decision 13; D5 B5, `review`).
 //! The other rows of the design's table are named here for the tasks that
 //! raise them.
 //!
@@ -35,13 +38,14 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::{ItemPane, RECOVERY, repair::unmanaged, text};
+use super::{ItemPane, RECOVERY, text};
 use crate::desktop::{
     assets::icon_path,
     model::{
-        item::{CONTEXT_PROBLEMS, context_problems},
+        item::{CONTEXT_PROBLEMS, context_problems, unmanaged},
         links::LinkTarget,
         list_state::ListState,
+        operations::CONFLICT_BANNER,
     },
     services::links::{self, LinkResolution},
     view::relationships::OpenRelated,
@@ -93,6 +97,9 @@ pub(crate) enum Banner {
     Changed,
     /// A base the save left unverified, with Review… (R-36).
     ReviewBeforeSaving,
+    /// The item's share or post stopped on a conflict: its work is safe,
+    /// and it offers Review changes (decision 13; D5 B5).
+    Conflict,
     /// Another refusal, in the library's message.
     Refused,
     /// A nonconforming file, a ticket with no type included (owner,
@@ -102,6 +109,9 @@ pub(crate) enum Banner {
     Unmanaged,
     /// A link not found, or opened as the nearest match.
     Link,
+    /// Merged, but not tidied up, with Open folder and Check again (D5
+    /// L-4).
+    NotTidied,
 }
 
 impl Banner {
@@ -117,8 +127,10 @@ impl Banner {
             | Self::DiscoveryPending
             | Self::Changed
             | Self::ReviewBeforeSaving
+            | Self::Conflict
             | Self::NeedsFixing
-            | Self::Unmanaged => Tone::Amber,
+            | Self::Unmanaged
+            | Self::NotTidied => Tone::Amber,
         }
     }
 }
@@ -202,7 +214,25 @@ impl ItemPane {
         if let Some(note) = &self.link_note {
             banners.push((Banner::Link, link_banner(note, cx)));
         }
+        // A share's conflict, or a post's (design, Posting): one banner.
+        if self
+            .share
+            .outcome
+            .as_ref()
+            .is_some_and(|outcome| outcome.conflict)
+            || self.post_conflict(cx)
+        {
+            let conflict = h_flex()
+                .flex_wrap()
+                .gap_2()
+                .items_center()
+                .child(text("item-conflict", CONFLICT_BANNER))
+                .children(self.review_button(cx))
+                .into_any_element();
+            banners.push((Banner::Conflict, conflict));
+        }
         banners.extend(self.edit_banners(cx));
+        banners.extend(self.not_tidied_banner(cx));
         most_severe_first(banners)
             .into_iter()
             .enumerate()

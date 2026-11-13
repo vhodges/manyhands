@@ -32,6 +32,9 @@ pub struct PtyCli {
     consumed: usize,
     before: libc::tcflag_t,
     live_stderr: Arc<Mutex<Vec<u8>>>,
+    /// How long `finish` waits for the child to exit: ten seconds unless a
+    /// case asks for longer (`exit_within`).
+    exit_wait: Duration,
 }
 
 fn owned(fd: libc::c_int) -> io::Result<File> {
@@ -232,7 +235,14 @@ impl PtyCli {
             consumed: 0,
             before,
             live_stderr,
+            exit_wait: Duration::from_secs(10),
         }
+    }
+    /// A longer wait for the child's exit, for a case whose run is known to
+    /// take more than the default ten seconds. Additive: no other case changes.
+    pub fn exit_within(mut self, wait: Duration) -> Self {
+        self.exit_wait = wait;
+        self
     }
     pub fn expect(&mut self, text: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -291,7 +301,7 @@ impl PtyCli {
         }
     }
     fn wait(&self) -> ExitStatus {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + self.exit_wait;
         loop {
             if let Some(status) = self
                 .child
@@ -306,7 +316,7 @@ impl PtyCli {
             }
             if Instant::now() >= deadline {
                 self.stop();
-                panic!("PTY child exceeded 10 seconds");
+                panic!("PTY child exceeded {:?}", self.exit_wait);
             }
             thread::sleep(Duration::from_millis(5));
         }

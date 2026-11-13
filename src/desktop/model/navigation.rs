@@ -141,7 +141,7 @@ impl ItemLocator {
     }
 }
 
-/// The navigation region's pane.
+/// The list used last: Documents or Tickets (R-8).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum Pane {
     #[default]
@@ -228,6 +228,12 @@ impl Navigation {
         self.entry(self.selected.as_deref()?)
     }
 
+    /// The chosen entry the last list read did not give, kept out of the
+    /// list (decision 22).
+    pub(crate) fn kept(&self) -> Option<&RepositoryEntry> {
+        self.kept.as_ref()
+    }
+
     fn entry_mut(&mut self, key: &str) -> Option<&mut RepositoryEntry> {
         let listed = match &mut self.repositories {
             ListState::Ready { rows, .. } => rows.iter_mut().find(|entry| entry.key() == key),
@@ -246,9 +252,11 @@ impl Navigation {
     /// resolved to. A selection the read did not give is kept out of the
     /// list, or cleared when there is no entry to keep. One the read
     /// before gave is no longer known to resolve: it is reset to Unknown,
-    /// and `take_vanished` gives it to be resolved again. A read that
-    /// stays busy or fails after one that gave rows keeps those rows, and
-    /// `not_reloaded` says why. False when the read is no longer wanted.
+    /// and `take_vanished` gives it to be resolved again. So is a kept
+    /// entry the read gives again, registered again since: what it last
+    /// resolved to was why it was gone (R-37). A read that stays busy or
+    /// fails after one that gave rows keeps those rows, and `not_reloaded`
+    /// says why. False when the read is no longer wanted.
     pub(crate) fn apply_repositories(
         &mut self,
         stamp: Stamp,
@@ -286,7 +294,12 @@ impl Navigation {
             ListState::Ready { rows, .. } => rows,
             _ => Vec::new(),
         };
-        previous.extend(self.kept.take());
+        let kept = self.kept.take().map(|kept| {
+            let key = kept.key().clone();
+            previous.push(kept);
+            key
+        });
+        let mut relisted = false;
         self.repositories = ListState::from_read(result, |list| ListState::Ready {
             rows: list
                 .items
@@ -297,6 +310,12 @@ impl Navigation {
                         .position(|entry| entry.summary.root == summary.root)
                         .map(|at| previous.swap_remove(at).resolution)
                         .unwrap_or(Resolution::Unknown);
+                    let resolution = if kept.as_ref() == Some(&summary.root) {
+                        relisted = true;
+                        Resolution::Unknown
+                    } else {
+                        resolution
+                    };
                     RepositoryEntry {
                         summary,
                         resolution,
@@ -306,6 +325,11 @@ impl Navigation {
             complete: list.complete,
             index: None,
         });
+        // Only the selection is ever kept: listed again, it is resolved
+        // again.
+        if relisted {
+            self.vanished = true;
+        }
         // The rows were replaced: the roots they no longer give are gone
         // from the registry (ruling R-T13a).
         if let Some(rows) = self.repositories.rows() {

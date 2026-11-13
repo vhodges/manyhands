@@ -73,6 +73,66 @@
 - Smoke-test the CLI skeleton with `devenv shell -- cargo run --locked --bin manyhands-cli`; it opens no window.
 - Smoke-test the desktop app with `devenv shell -- cargo run --locked --features desktop --bin manyhands`; it requires an active desktop display.
 
+## Testing Strategy
+
+Owner decision, 2026-11-06. The SSH-harness targets run every case in its own
+child process, one case after another, so each SSH case costs seconds and every
+new one makes the suite slower. Test time is a budget. These rules override any
+skill or plan that asks for broader runs.
+
+### When to run what
+
+- **Between steps:** run `cargo check` (or `clippy`) and only the tests you
+  just wrote or changed, selected by exact name:
+  `--lib <module>::<test>`, or `--test <target> <name> -- --exact`. An SSH
+  target accepts the same name filter and `--exact`, so run a single case,
+  never the whole target, to check a step.
+- **Never run a whole SSH target between steps.** The fast and SSH tiers in
+  Development run **once, at review-ready**. Run them again only for a target
+  whose code or tests changed after that run.
+- **Don't rerun green tests on an unchanged tree** to "make sure". A rerun
+  needs a changed tree, a failure, or a specific doubt you can name.
+- **Stop at 15 minutes.** If any single test command between steps takes
+  longer than about 15 minutes, stop, narrow the filter, and note the slow
+  target in the ticket instead of waiting it out.
+- Record in the ticket which tests ran at each checkpoint, so the next session
+  doesn't repeat them.
+
+### Where a new test goes
+
+Use the cheapest layer that can catch the regression:
+
+1. **Library unit test (default).** Test decision logic directly: what to
+   prune, merge, retry, report or reject. Use a local `git2` repository on
+   disk, a registry in a tempdir, and an injected clock (`*_at(now)`
+   functions). `src/repository/remote/poll_tests.rs` shows the pattern. Put
+   variations in one table-driven test, not in many separate cases.
+2. **Non-SSH integration target.** For CLI and public-API contracts, use a
+   local or `file://` remote, not SSH.
+3. **SSH-harness case, by exception.** Use only for behavior that depends on
+   the transport: authentication, host trust, wire-protocol framing, network
+   interruption, and output privacy over SSH. A new feature gets at most one
+   SSH case, an end-to-end check that the pieces connect. Its edge cases
+   belong in unit tests. Write in the plan why the behavior needs SSH.
+
+Also:
+
+- **No real waits.** Don't `sleep` to let time pass, to age a lease, or to wait
+  out a throttle. Inject the clock or the duration instead. Sleeps already in
+  the suite are debt to remove when you touch the test.
+- **Desktop: test behavior, not appearance.** Test model state, actions,
+  enablement, navigation and what a service receives. Don't add tests for
+  fonts, icons, styles, layout or that a view "renders". If an existing
+  appearance test breaks because of a deliberate visual change, delete it.
+- **Golden fixtures:** one per output format or contract, not one per
+  scenario.
+- **Prefer extending an existing integration target** (a module under
+  `tests/<target>/`) to creating a new one. Each target is a separate binary
+  that has to link.
+- **Each new test must catch something existing tests don't.** Before adding
+  one, check whether a test already pins the behavior, and extend that test
+  instead.
+
 ## Native CI
 
 - The Build workflow (`.github/workflows/build.yml`) runs only when dispatched
@@ -113,18 +173,27 @@
 - Before `ticket save` of your own Cycle ticket, commit your owned edits to its
   `ticket.md`: the CLI save checkpoints into that ticket's active worktree.
 - Comments remain canonical `.manyhands/comments/<item-id>/<comment-id>.md`
-  edits until C4's `comment add`; closure remains a canonical ticket-file edit
-  until C5's `ticket close`. Saving status text `closed` is not lifecycle closure.
+  edits until C4's `comment add`. Close a ticket with `manyhands-cli ticket close
+  --repo /home/vhodges/work/src/manyhands --id <ID>` from the registered main
+  checkout, after review approval: it records `closed_at`/`closed_by`, merges the
+  ticket's branch into main, publishes main, and removes the branch and worktree,
+  so it replaces the separate merge and cleanup. With a passphrase-protected key it
+  runs at the owner's terminal, since a non-interactive run answers
+  `unlock_required` (switched 2026-11-04 after the first real close,
+  `01M6KD8E25BWXQKF4REYM1DZMC`; C5 decision 9). Saving status text `closed` is not
+  lifecycle closure.
 - Exception: `working-on-a-ticket` status edits and closure keep that skill's
   own procedure until it is revised. Its loop runs in sandbox clones without
   the main checkout's registration; C3 does not change that skill.
 - Perform all implementation work for a Cycle in the ticket's worktree and on
-  its branch.
+  its branch. Exception (owner decision, 2026-11-02, D4 only): D4's Lanes A,
+  B and C may run in local lane worktrees branched from the ticket branch and
+  merged back into it, never rebased, before review-ready.
 - Add Manyhands comments to the ticket at implementation-plan checkpoints to
   record progress, decisions, blockers, verification results, and review-ready
   status.
-- Close the ticket only after the associated change receives code-review or PR
-  approval, normally in the final push before merge.
+- Close the ticket with `ticket close` only after the associated change receives
+  code-review or PR approval; the close performs the merge.
 
 ## Working on a ticket
 

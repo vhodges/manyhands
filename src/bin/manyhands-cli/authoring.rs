@@ -15,7 +15,7 @@ use crate::{
     catalog::CommandSpec,
     fill::{self, DocumentFields, TicketFields},
     input::{InputError, ListChange, Tristate},
-    mutate::{self, Plan, Session},
+    mutate::{self, Session},
     render::Output,
 };
 
@@ -61,10 +61,7 @@ fn root_only(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| build(root.clone()),
         &mut std::thread::sleep,
     )
@@ -95,10 +92,7 @@ pub fn folder_create(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::FolderCreate(FolderCreateInput {
                 root: root.clone(),
@@ -183,10 +177,7 @@ fn repair(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             build(
                 root.clone(),
@@ -232,10 +223,7 @@ pub fn document_create(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::DocumentCreate(DocumentCreateInput {
                 root: root.clone(),
@@ -332,10 +320,7 @@ pub fn document_save(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::DocumentSave(DocumentSaveInput {
                 root: root.clone(),
@@ -378,10 +363,7 @@ pub fn document_move(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::DocumentMove(DocumentMoveInput {
                 root: root.clone(),
@@ -444,10 +426,7 @@ pub fn ticket_create(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::TicketCreate(TicketCreateInput {
                 root: root.clone(),
@@ -537,10 +516,7 @@ pub fn ticket_save(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::TicketSave(TicketSaveInput {
                 root: root.clone(),
@@ -584,10 +560,7 @@ pub fn ticket_slug_assign(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::TicketSlugAssign(TicketSlugAssignInput {
                 root: root.clone(),

@@ -59,15 +59,25 @@ mod exits;
 mod human;
 #[path = "cli/input_schemas.rs"]
 mod input_schemas;
+#[path = "cli/inventory.rs"]
+mod inventory;
 #[path = "cli/keys.rs"]
 mod keys;
+#[path = "cli/lifecycle.rs"]
+mod lifecycle;
+#[path = "cli/local_sync.rs"]
+mod local_sync;
 #[path = "cli/mutation.rs"]
 mod mutation;
+#[path = "cli/polling.rs"]
+mod polling;
 #[path = "cli/privacy.rs"]
 mod privacy;
 #[cfg(unix)]
 #[path = "cli/prompts.rs"]
 mod prompts;
+#[path = "cli/recovery_tables.rs"]
+mod recovery_tables;
 #[path = "cli/remotes.rs"]
 mod remotes;
 #[path = "cli/repair.rs"]
@@ -78,6 +88,8 @@ mod repository;
 mod republish;
 #[path = "cli/requests.rs"]
 mod requests;
+#[path = "cli/retirement.rs"]
+mod retirement;
 
 #[path = "cli/relationships.rs"]
 mod relationships;

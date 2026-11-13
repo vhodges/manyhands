@@ -707,7 +707,7 @@ fn context_absence_boundaries() -> Result<(), FixtureError> {
         unknown
             .service
             .synchronize_remote(context_request(&unknown)?, &mut session),
-        Err(SynchronizationError::HistoryUnknown)
+        Err(SynchronizationError::HistoryUnresolved)
     ));
     assert_eq!(target_state(&unknown.root, &context.worktree)?, before);
     let server = fixed(git2::Repository::open_bare(

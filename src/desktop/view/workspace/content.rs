@@ -16,19 +16,25 @@ use crate::desktop::{
     view::{
         close_draft::{self, Ask, CloseWithDraft},
         drafts::DraftsEvent,
-        item::{ChipField, ItemPane, Leaving, RegionEnd, open_details},
+        item::{ChipField, ItemPane, Leaving, open_details},
         scroll::ContentScroll,
-        sidebar,
         tabs::Keeping,
     },
 };
 use gpui_kit::{
-    AnyElement, App, Context, Entity, InteractiveElement, IntoElement, ParentElement, Styled,
-    Window,
+    AnyElement, App, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{WindowExt, v_flex},
+    div,
 };
 use manyhands::{drafts::DraftId, repository::transport::SshAuthority};
-use std::{collections::BTreeSet, path::PathBuf, rc::Rc};
+use std::{collections::BTreeSet, path::PathBuf};
+
+/// The item area with no tab shown and no repository chosen (R-15).
+pub(crate) const NOTHING_SELECTED: &str = "Select a repository.";
+/// The item area with no tab shown and a repository chosen: `04`'s empty
+/// pane, without its icon until Cycle 05 (R-15; decision 13).
+pub(crate) const OPEN_FROM_THE_LISTS: &str = "Open a ticket or document from the lists";
 
 enum ContentPage {
     Tabs,
@@ -191,8 +197,36 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.content.hide_drafts(cx);
         let selection = self.navigation.selected().map(PathBuf::from);
+        self.open_settings_at(page, selection, window, cx);
+    }
+
+    /// Settings' `page` on the repository at `root`, not the chosen one,
+    /// as `open_remotes` does (R-21); the Repositories page manages it.
+    pub(in crate::desktop::view) fn open_settings_on(
+        &mut self,
+        page: SettingsPage,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_settings_at(page, Some(root.clone()), window, cx);
+        if page == SettingsPage::Repositories {
+            self.content.settings.update(cx, |settings, cx| {
+                let page = settings.repositories(window, cx);
+                page.update(cx, |page, cx| page.manage_root(root, false, window, cx));
+            });
+        }
+    }
+
+    fn open_settings_at(
+        &mut self,
+        page: SettingsPage,
+        selection: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.content.hide_drafts(cx);
         self.content.settings.update(cx, |settings, cx| {
             settings.set_selection(selection);
             settings.open(page, window, cx)
@@ -306,10 +340,6 @@ impl Workspace {
         self.content.sheet = None;
         self.content.show_tabs(cx);
         self.content.tabs.open(target, &self.services, cx);
-        if let Some(pane) = self.content.tabs.shown() {
-            let details = Self::repository_details(cx);
-            pane.update(cx, |pane, _| pane.end_region_with(details));
-        }
         cx.notify();
     }
 
@@ -325,15 +355,19 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let shown = self.content.tabs.active() == Some(id);
-        let now = self.content.tabs.follow(id, target, &self.services, cx);
-        if let Some(pane) = self.content.tabs.pane(now).cloned() {
-            let details = Self::repository_details(cx);
-            pane.update(cx, |pane, _| pane.end_region_with(details));
-        }
+        self.content.tabs.follow(id, target, &self.services, cx);
         if shown {
             self.content.landed_refocus = true;
         }
         cx.notify();
+    }
+
+    /// The tab open on `key` in this window.
+    pub(in crate::desktop::view) fn tab_of(
+        &self,
+        key: &crate::desktop::model::tabs::TabKey,
+    ) -> Option<TabId> {
+        self.content.tabs.find(key)
     }
 
     /// Shows the tab `id`, and so the tabs.
@@ -609,37 +643,28 @@ impl Workspace {
         }
     }
 
-    /// The details of the selected repository, as the end of an item's
-    /// scroll region: drawn there, and revealed by that region (owner,
-    /// 2026-10-27). D1 drew them at the end of the content column.
-    fn repository_details(cx: &mut Context<Self>) -> RegionEnd {
-        let workspace = cx.entity().downgrade();
-        Rc::new(
-            move |scroll: &ContentScroll, _: &mut Window, cx: &mut App| {
-                workspace
-                    .update(cx, |workspace, cx| {
-                        sidebar::selection(
-                            &workspace.navigation,
-                            &workspace.remove_focus,
-                            &workspace.retry_focus,
-                            scroll,
-                            cx,
-                        )
-                        .into_any_element()
-                    })
-                    .ok()
-            },
-        )
+    /// The empty pane's text, with no tab shown (Part F): nothing of the
+    /// repository is drawn in the item area, only what to do next.
+    fn empty_pane(&self) -> AnyElement {
+        let text = match self.navigation.selected_entry() {
+            Some(_) => OPEN_FROM_THE_LISTS,
+            None => NOTHING_SELECTED,
+        };
+        div()
+            .id("item-area-empty")
+            .test_support()
+            .aria_label(text)
+            .text_sm()
+            .child(text)
+            .into_any_element()
     }
 
-    /// Keep selection construction and secret clearing in their existing frame
-    /// order; leaving Settings does not replace its cached pages or scroll.
+    /// Leaving Settings does not replace its cached pages or scroll.
     /// Leaving Keys for the tabs or the Drafts page empties a typed
-    /// passphrase alike. `selection` is drawn by the empty pane; an item
-    /// tab draws its own at the end of its scroll region.
+    /// passphrase alike. With no tab shown the empty pane says what to do
+    /// next.
     pub(super) fn content_body(
         &self,
-        selection: Option<AnyElement>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
@@ -663,7 +688,7 @@ impl Workspace {
                 if self.content.tabs.shown().is_none() {
                     // The empty pane keeps D1's single scrolling column.
                     let mut body = tabs;
-                    body.extend(selection);
+                    body.push(self.empty_pane());
                     return body;
                 }
                 // An item tab fills the column: the strip, then the pane,

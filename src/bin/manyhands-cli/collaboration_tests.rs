@@ -2,7 +2,9 @@ use super::*;
 use crate::mutate::stops_on_ctrl_c;
 use manyhands::canonical::ItemId;
 use manyhands::repository::{
-    CommentAddInput, ConflictResolveInput, IndexRefreshInput, ItemRepublishInput,
+    AuthoringKind, CommentAddInput, ConflictResolveInput, DocumentPromoteInput, IndexRefreshInput,
+    ItemRepublishInput, LocalContextResolveInput, LocalContextSyncInput, PollConfigureInput,
+    PollOnceInput, PollPauseInput, PollResumeInput, TicketCloseInput,
 };
 
 const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -13,7 +15,7 @@ fn item() -> ItemId {
 }
 
 #[test]
-fn the_window_covers_exactly_the_six_stoppable_verbs() {
+fn the_window_covers_exactly_the_stoppable_verbs() {
     let root = PathBuf::from("/r");
     let operation_id = OperationId::new();
     let kind = AuthoringKind::Ticket;
@@ -74,7 +76,70 @@ fn the_window_covers_exactly_the_six_stoppable_verbs() {
             false,
         ),
         (
+            Mutation::DocumentPromote(DocumentPromoteInput {
+                root: root.clone(),
+                id: item(),
+            }),
+            true,
+        ),
+        (
+            Mutation::TicketClose(TicketCloseInput {
+                root: root.clone(),
+                id: item(),
+            }),
+            true,
+        ),
+        (
             Mutation::IndexRefresh(IndexRefreshInput { root: root.clone() }),
+            false,
+        ),
+        (
+            Mutation::PollOnce(PollOnceInput { root: root.clone() }),
+            true,
+        ),
+        (
+            Mutation::PollOnceRetiring(PollOnceInput { root: root.clone() }),
+            true,
+        ),
+        (
+            Mutation::ContextRetire(manyhands::repository::ContextRetireInput {
+                root: root.clone(),
+                kind,
+                id: item(),
+            }),
+            true,
+        ),
+        (
+            Mutation::LocalContextSync(LocalContextSyncInput {
+                root: root.clone(),
+                kind: AuthoringKind::Ticket,
+                id: item(),
+                observation: String::new(),
+            }),
+            true,
+        ),
+        (
+            Mutation::LocalContextResolve(LocalContextResolveInput {
+                root: root.clone(),
+                operation_id: OperationId::parse(REQUEST).unwrap(),
+                observation: String::new(),
+                resolutions: Vec::new(),
+            }),
+            true,
+        ),
+        (
+            Mutation::PollConfigure(PollConfigureInput {
+                root: root.clone(),
+                interval_seconds: 600,
+            }),
+            false,
+        ),
+        (
+            Mutation::PollPause(PollPauseInput { root: root.clone() }),
+            false,
+        ),
+        (
+            Mutation::PollResume(PollResumeInput { root: root.clone() }),
             false,
         ),
     ] {

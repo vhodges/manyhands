@@ -7,7 +7,9 @@
 //! never `None`, `Busy` or `Failed`. Who holds the draft comes first: one
 //! open in another window offers Inspect only, and one restored in this
 //! window Show, Inspect and Discard. Otherwise the restore policy decides
-//! Restore. An unreadable draft offers Discard only. Export is offered on
+//! Restore; a comment draft, which it never restores, offers Open, which
+//! opens its item for the item's composer to adopt it. An unreadable draft
+//! offers Discard only. Export is offered on
 //! every row, so it is not among the actions.
 //!
 //! A row holds the draft's title and, once read, its comparison, so it
@@ -55,6 +57,9 @@ pub(crate) enum RowState {
 pub(crate) struct RowActions {
     /// The restore policy allows it.
     pub(crate) restore: bool,
+    /// A comment draft no one holds: opens its item, whose composer adopts
+    /// the draft.
+    pub(crate) open: bool,
     /// Restored in this window: focuses its tab.
     pub(crate) show: bool,
     /// Readable.
@@ -98,6 +103,7 @@ pub(crate) fn row_actions(state: &RowState, restore: Option<Restore>) -> RowActi
             };
             RowActions {
                 restore: matches!(restore, Some(Restore::Allowed | Restore::AllowedFlagged)),
+                open: matches!(restore, Some(Restore::Refused(RefusalReason::CommentDraft))),
                 // Restored here after all: the tab is shown, not restored.
                 show: matches!(restore, Some(Restore::Refused(RefusalReason::HeldHere))),
                 inspect: true,

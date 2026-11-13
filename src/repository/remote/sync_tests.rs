@@ -246,7 +246,7 @@ fn applying_candidate_restart_fixture(already_at_candidate: bool) {
     let repo = git2::Repository::open(root.path()).unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let base = repo.head().unwrap().target().unwrap();
@@ -399,7 +399,7 @@ fn candidate_third_head_restart_preserves_applying_evidence() {
     let repo = git2::Repository::open(root.path()).unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let base = repo.head().unwrap().target().unwrap();
@@ -530,7 +530,7 @@ fn divergence_recheck_refuses_configuration_and_tracking_changes_before_mutation
             .unwrap();
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
         })
         .unwrap();
         let base = repo.head().unwrap().target().unwrap();
@@ -1080,7 +1080,7 @@ fn local_synchronization_binding_rejects_remote_collision_after_none_inspection_
         // Simulate the remote insertion AFTER service inspection returned None,
         // before local binding. The binder must inspect again in its transaction.
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)?;
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)?;
             state::insert_operation(
                 tx,
                 id,
@@ -1139,7 +1139,7 @@ fn existing_remote_id_rejects_other_root_before_invalid_live_configuration() {
     let req = request(root.path());
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)?;
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)?;
         state::insert_operation(
             tx,
             id,
@@ -1839,7 +1839,7 @@ fn resolution_fixture_with_baseline_bytes(
         .unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_primary_synchronization(&plan);
@@ -1975,7 +1975,7 @@ fn context_primary_conflict_fixture() -> (
         .unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_context(
@@ -3753,7 +3753,7 @@ fn local_effect_restart_before_clean_preflight_and_transport() {
         };
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
         })
         .unwrap();
         let target = RemoteOperationTarget::for_primary_synchronization(&plan);
@@ -4225,7 +4225,7 @@ impl PassFixture {
             .unwrap();
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
         })
         .unwrap();
         if published {
@@ -6298,7 +6298,7 @@ fn new_refs_append_window_immutable_evidence() {
         .unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let local = repository.head().unwrap().target().unwrap();
@@ -6783,7 +6783,7 @@ fn pending_context_synchronization_blocks_only_its_public_authoring_context() {
     let tree = repo.find_commit(head).unwrap().tree().unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_context(
@@ -12635,7 +12635,7 @@ impl ContextPass {
             .observation_configuration(root.path(), &plan)
             .unwrap();
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)?;
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)?;
             state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())
         })
         .unwrap();
@@ -15858,4 +15858,92 @@ fn an_index_hand_off_whose_row_was_abandoned_is_refused_and_stays_owed() {
         )
         .unwrap();
     assert_eq!(row, ("completed".to_owned(), Some("abandoned".to_owned())));
+}
+/// Evidence-based unknown history ends the operation and lets the
+/// reservation go, so a sync of another context isn't busy behind it; push
+/// proof of an earlier generation, and an operation that intended a push,
+/// stay pending and resumable. Should the ending itself fail, the operation
+/// is still held, so the answer is `RecoveryRequired`, not `HistoryUnresolved`.
+#[test]
+fn unresolved_history_ends_the_operation_and_frees_the_reservation() {
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let context = |id: &str| SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: id.parse().unwrap(),
+    };
+    for (error, push_intent, ends, expected, ending_fails) in [
+        (
+            SynchronizationError::HistoryUnresolved,
+            false,
+            true,
+            SynchronizationError::HistoryUnresolved,
+            false,
+        ),
+        (
+            SynchronizationError::HistoryUnresolved,
+            false,
+            false,
+            SynchronizationError::RecoveryRequired,
+            true,
+        ),
+        (
+            SynchronizationError::HistoryUnresolved,
+            true,
+            false,
+            SynchronizationError::HistoryUnresolved,
+            false,
+        ),
+        (
+            SynchronizationError::HistoryUnknown,
+            false,
+            false,
+            SynchronizationError::HistoryUnknown,
+            false,
+        ),
+        (
+            SynchronizationError::RecoveryRequired,
+            false,
+            false,
+            SynchronizationError::RecoveryRequired,
+            false,
+        ),
+    ] {
+        let data = fixture_tempdir();
+        let root = fixture_tempdir();
+        let service = if ending_fails {
+            RepositoryService::open_at_with_failure_point_for_testing(
+                data.path(),
+                crate::repository::FailurePoint::BeforeSynchronizationCancellation,
+            )
+        } else {
+            RepositoryService::open_at(data.path())
+        }
+        .unwrap();
+        rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap().execute(
+            "INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)",
+            [root.path().to_str().unwrap()]).unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let target = context("01ARZ3NDEKTSV4RRFFQ69G5FAV").operation_target(&plan);
+        let owner = match service
+            .reserve_remote_operation(root.path(), OperationId::new(), &target)
+            .unwrap()
+        {
+            RemoteReservationOutcome::Reserved(owner) => owner,
+            other => panic!("{other:?}"),
+        };
+        let returned = service.ended_if_unresolved(root.path(), &owner, push_intent, error);
+        assert_eq!(returned.to_string(), expected.to_string());
+        let other = context("01ARZ3NDEKTSV4RRFFQ69G5FAW").operation_target(&plan);
+        let second = service
+            .reserve_remote_operation(root.path(), OperationId::new(), &other)
+            .unwrap();
+        assert_eq!(
+            matches!(second, RemoteReservationOutcome::Reserved(_)),
+            ends,
+            "{returned:?} push_intent={push_intent}"
+        );
+    }
 }

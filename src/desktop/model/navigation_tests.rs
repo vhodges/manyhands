@@ -389,3 +389,37 @@ fn a_replacing_list_read_names_the_roots_it_dropped() {
     assert_eq!(navigation.take_dropped(), ["/r/a".to_owned()]);
     assert!(navigation.take_dropped().is_empty());
 }
+
+/// R-37 (Cycle 03a): a kept selection the list gives again, registered
+/// again since, is listed with its resolution reset to Unknown, not the
+/// Unavailable that said why it was gone, and `take_vanished` gives it to be
+/// resolved again, once. Nothing is kept any more, so the next list gives
+/// nothing more to resolve.
+#[test]
+fn a_kept_selection_listed_again_is_resolved_again() {
+    let mut navigation = loaded(&["/r/a", "/r/b"]);
+    let stamp = navigation.select("/r/a".to_owned());
+    assert!(navigation.apply_resolution(stamp, failure(ResultCode::InvalidPath)));
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(stamp, list(&["/r/b"])));
+    assert_eq!(navigation.take_vanished(), Some("/r/a".to_owned()));
+    let stamp = navigation.retry_resolution("/r/a".to_owned());
+    assert!(navigation.apply_resolution(stamp, failure(ResultCode::RepositoryNotRegistered)));
+    assert!(navigation.kept().is_some(), "kept out of the list");
+    assert_eq!(navigation.take_vanished(), None);
+
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(stamp, list(&["/r/a", "/r/b"])));
+    assert!(navigation.kept().is_none(), "listed again, not kept");
+    assert!(matches!(
+        resolution(&navigation, "/r/a"),
+        Resolution::Unknown
+    ));
+    assert_eq!(navigation.selected(), Some(&"/r/a".to_owned()));
+    assert_eq!(navigation.take_vanished(), Some("/r/a".to_owned()));
+    assert_eq!(navigation.take_vanished(), None);
+
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(stamp, list(&["/r/a", "/r/b"])));
+    assert_eq!(navigation.take_vanished(), None, "nothing more to resolve");
+}

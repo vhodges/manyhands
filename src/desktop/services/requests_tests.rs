@@ -5,18 +5,23 @@ use std::{
 
 use manyhands::{
     repository::{
-        AuthoringKind, ContextPrepareIntent, InitialsChange, OperationId, RelationshipWrite,
-        SharedKeyId,
+        AuthoringKind, ContextPrepareIntent, InitialsChange, Mutation, OperationId,
+        RelationshipWrite, SharedKeyId,
         keys::{KeyStore, SecretPassphrase},
         transport::SshAuthority,
     },
     results::ResultCode,
 };
 
-use super::{Intent, NotBuilt};
-use crate::desktop::{services::KeyStoreUnavailable, test_support::fixtures::Fixture};
+use super::{CommentBody, Intent, NotBuilt, PathResolution};
+use crate::desktop::{
+    services::{JobKind, KeyStoreUnavailable},
+    test_support::fixtures::Fixture,
+};
 
 const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
+const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG1";
+const PARENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG2";
 
 fn authority() -> SshAuthority {
     SshAuthority {
@@ -172,14 +177,71 @@ fn every_intent(root: &Path) -> Vec<Intent> {
             source: "source".to_owned(),
         },
         Intent::TicketRepair {
-            root,
+            root: root.clone(),
             path: PathBuf::from(".manyhands/tickets/x/ticket.md"),
             observation: "observation".to_owned(),
             source: "source".to_owned(),
         },
+        Intent::CommentAdd {
+            root: root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: ITEM.parse().unwrap(),
+            comment_id: COMMENT.parse().unwrap(),
+            parent_id: None,
+            body: CommentBody::new("Body".to_owned()),
+        },
+        Intent::ItemSync {
+            root: root.clone(),
+            kind: AuthoringKind::Document,
+            id: ITEM.parse().unwrap(),
+        },
+        Intent::RepoSync { root: root.clone() },
+        Intent::DocumentPromote {
+            root: root.clone(),
+            id: ITEM.parse().unwrap(),
+        },
+        Intent::TicketClose {
+            root: root.clone(),
+            id: ITEM.parse().unwrap(),
+        },
+        Intent::ConflictResolve {
+            root: root.clone(),
+            operation_id: OperationId::new(),
+            observation: "conflict-v1:observation".to_owned(),
+            resolutions: vec![resolution("conflict-path-v1:token", "source")],
+        },
+        Intent::LocalContextSync {
+            root: root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: ITEM.parse().unwrap(),
+            observation: "local-sync-v1:observation".to_owned(),
+        },
+        Intent::LocalContextResolve {
+            root: root.clone(),
+            operation_id: OperationId::new(),
+            observation: "local-sync-v1:observation".to_owned(),
+            resolutions: vec![resolution("token", "source")],
+        },
+        Intent::ItemRepublish {
+            root: root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: ITEM.parse().unwrap(),
+        },
+        Intent::PollOnce { root: root.clone() },
+        Intent::PollConfigure {
+            root: root.clone(),
+            interval_seconds: 600,
+        },
+        Intent::PollPause { root: root.clone() },
+        Intent::PollResume { root: root.clone() },
+        Intent::ContextRetire {
+            root,
+            kind: AuthoringKind::Ticket,
+            id: ITEM.parse().unwrap(),
+        },
     ];
     let listed: HashSet<usize> = intents.iter().map(variant).collect();
-    assert_eq!(listed.len(), 29, "one intent of every variant");
+    assert_eq!(listed.len(), 43, "one intent of every variant");
     intents
 }
 
@@ -214,6 +276,27 @@ fn variant(intent: &Intent) -> usize {
         Intent::FolderCreate { .. } => 26,
         Intent::DocumentRepair { .. } => 27,
         Intent::TicketRepair { .. } => 28,
+        Intent::CommentAdd { .. } => 29,
+        Intent::ItemSync { .. } => 30,
+        Intent::RepoSync { .. } => 31,
+        Intent::DocumentPromote { .. } => 32,
+        Intent::TicketClose { .. } => 33,
+        Intent::ConflictResolve { .. } => 34,
+        Intent::LocalContextSync { .. } => 35,
+        Intent::LocalContextResolve { .. } => 36,
+        Intent::ItemRepublish { .. } => 37,
+        Intent::PollOnce { .. } => 38,
+        Intent::PollConfigure { .. } => 39,
+        Intent::PollPause { .. } => 40,
+        Intent::PollResume { .. } => 41,
+        Intent::ContextRetire { .. } => 42,
+    }
+}
+
+fn resolution(token: &str, source: &str) -> PathResolution {
+    PathResolution {
+        token: token.to_owned(),
+        source: source.to_owned(),
     }
 }
 
@@ -274,6 +357,15 @@ fn every_intent_builds_its_own_command() {
         "folder create",
         "document repair",
         "ticket repair",
+        "comment add",
+        "item sync",
+        "repo sync",
+        "document promote",
+        "ticket close",
+        "conflict resolve",
+        "context sync-local",
+        "context resolve-local",
+        "item republish",
     ];
     let intents = every_intent(fixture.home());
     let mut kinds = HashSet::new();
@@ -327,13 +419,240 @@ fn changes_items_names_the_intents_that_can_change_items() {
         let expected = match variant(&intent) {
             // RepoCreate, RepoEnable, IndexRefresh, IndexRebuild,
             // OperationResume, OperationAbandon, DocumentSave, TicketSave,
-            // and the eight Part C commands.
-            0 | 1 | 7 | 8 | 17..=28 => true,
+            // the eight Part C commands, the comment and the two syncs, the
+            // two lifecycles, the resolutions and local synchronization, and
+            // the republish, Check now (`PollOnce`) and the retirement.
+            0 | 1 | 7 | 8 | 17..=38 | 42 => true,
             // RepoRemove closes the tabs instead; the rest change
-            // settings, keys or hosts, never an item.
-            2..=6 | 9..=16 => false,
+            // settings, keys, hosts or polling policy, never an item.
+            2..=6 | 9..=16 | 39..=41 => false,
             other => unreachable!("variant {other}"),
         };
         assert_eq!(intent.changes_items(), expected, "{}", intent.label());
     }
+}
+
+/// A comment is built with the IDs and text it was asked with, and no
+/// author: the library takes the Git identity.
+#[test]
+fn comment_add_builds_its_mutation_with_no_author() {
+    let root = PathBuf::from("/repo");
+    let intent = Intent::CommentAdd {
+        root: root.clone(),
+        kind: AuthoringKind::Ticket,
+        id: ITEM.parse().unwrap(),
+        comment_id: COMMENT.parse().unwrap(),
+        parent_id: Some(PARENT.parse().unwrap()),
+        body: CommentBody::new("A reply.".to_owned()),
+    };
+    let Ok(Mutation::CommentAdd(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("a comment builds `comment add`");
+    };
+    assert_eq!(input.root, root);
+    assert_eq!(input.kind, AuthoringKind::Ticket);
+    assert_eq!(input.id.to_string(), ITEM);
+    assert_eq!(input.comment_id.to_string(), COMMENT);
+    assert_eq!(
+        input.parent_id.map(|id| id.to_string()).as_deref(),
+        Some(PARENT)
+    );
+    assert_eq!(input.body, "A reply.");
+    assert_eq!(input.created_by, None);
+}
+
+#[test]
+fn item_and_repo_sync_build_their_mutations() {
+    let root = PathBuf::from("/repo");
+    let intent = Intent::ItemSync {
+        root: root.clone(),
+        kind: AuthoringKind::Document,
+        id: ITEM.parse().unwrap(),
+    };
+    let Ok(Mutation::ItemSync(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("an item sync builds `item sync`");
+    };
+    assert_eq!(input.root, root);
+    assert_eq!(input.kind, AuthoringKind::Document);
+    assert_eq!(input.id.to_string(), ITEM);
+
+    let intent = Intent::RepoSync { root: root.clone() };
+    let Ok(Mutation::RepoSync(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("a repository sync builds `repo sync`");
+    };
+    assert_eq!(input.root, root);
+}
+
+/// The three new labels are fixed text: no title or comment text is put
+/// in them.
+#[test]
+fn labels_are_fixed_text() {
+    let intents = every_intent(Path::new("/repo"));
+    let label = |index: usize| {
+        intents
+            .iter()
+            .find(|intent| variant(intent) == index)
+            .map(Intent::label)
+            .unwrap()
+    };
+    assert_eq!(label(29), "Post comment");
+    assert_eq!(label(30), "Share item");
+    assert_eq!(label(31), "Share main");
+}
+
+/// Only the commands the library stops at a synchronization's safe points
+/// can be stopped after acceptance (fact 9). Every variant is named.
+#[test]
+fn syncs_comments_and_resume_stop_at_safe_points_and_saves_do_not() {
+    for intent in every_intent(Path::new("/repo")) {
+        let expected = match variant(&intent) {
+            // OperationResume, CommentAdd, ItemSync, RepoSync,
+            // DocumentPromote, TicketClose, ConflictResolve,
+            // LocalContextSync, LocalContextResolve, ItemRepublish, PollOnce,
+            // ContextRetire.
+            17 | 29..=38 | 42 => true,
+            // Every local command, the saves among them, and the three
+            // poll policy verbs.
+            0..=16 | 18..=28 | 39..=41 => false,
+            other => unreachable!("variant {other}"),
+        };
+        assert_eq!(
+            intent.stops_at_safe_points(),
+            expected,
+            "{}",
+            intent.label()
+        );
+    }
+}
+
+/// Approve and merge… builds `document promote` of the document it was
+/// asked for, confirmed, stopping at safe points, and changing items.
+#[test]
+fn document_promote_builds_its_mutation() {
+    let root = PathBuf::from("/repo");
+    let intent = Intent::DocumentPromote {
+        root: root.clone(),
+        id: ITEM.parse().unwrap(),
+    };
+    let Ok(Mutation::DocumentPromote(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("an approval builds `document promote`");
+    };
+    assert_eq!(input.root, root);
+    assert_eq!(input.id.to_string(), ITEM);
+    assert_eq!(intent.label(), "Approve and merge");
+    assert_eq!(intent.job_kind(), JobKind::DocumentPromote);
+    assert_eq!(intent.root(), Some(root.as_path()));
+    assert!(intent.confirmed());
+    assert!(intent.changes_items());
+    assert!(intent.stops_at_safe_points());
+}
+
+/// Close ticket… builds `ticket close` of the ticket it was asked for,
+/// confirmed, stopping at safe points, and changing items.
+#[test]
+fn ticket_close_builds_its_mutation() {
+    let root = PathBuf::from("/repo");
+    let intent = Intent::TicketClose {
+        root: root.clone(),
+        id: ITEM.parse().unwrap(),
+    };
+    let Ok(Mutation::TicketClose(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("a close builds `ticket close`");
+    };
+    assert_eq!(input.root, root);
+    assert_eq!(input.id.to_string(), ITEM);
+    assert_eq!(intent.label(), "Close ticket");
+    assert_eq!(intent.job_kind(), JobKind::TicketClose);
+    assert_eq!(intent.root(), Some(root.as_path()));
+    assert!(intent.confirmed());
+    assert!(intent.changes_items());
+    assert!(intent.stops_at_safe_points());
+}
+
+/// Save resolution of a remote conflict builds `conflict resolve` with the
+/// observation and every path's token and source; unconfirmed, stopping at
+/// its continuation's safe points, and changing items.
+#[test]
+fn conflict_resolve_builds_its_mutation() {
+    let root = PathBuf::from("/repo");
+    let operation_id = OperationId::new();
+    let intent = Intent::ConflictResolve {
+        root: root.clone(),
+        operation_id,
+        observation: "conflict-v1:observed".to_owned(),
+        resolutions: vec![
+            resolution("conflict-path-v1:a", "first source"),
+            resolution("conflict-path-v1:b", "second source"),
+        ],
+    };
+    let Ok(Mutation::ConflictResolve(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("a resolution builds `conflict resolve`");
+    };
+    assert_eq!(input.root, root);
+    assert_eq!(input.operation_id, operation_id);
+    assert_eq!(input.observation, "conflict-v1:observed");
+    let sent: Vec<(&str, &str)> = input
+        .resolutions
+        .iter()
+        .map(|path| (path.token.as_str(), path.source.as_str()))
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            ("conflict-path-v1:a", "first source"),
+            ("conflict-path-v1:b", "second source"),
+        ]
+    );
+    assert_eq!(intent.job_kind(), JobKind::ConflictResolve);
+    assert_eq!(intent.root(), Some(root.as_path()));
+    assert!(!intent.confirmed());
+    assert!(intent.changes_items());
+    assert!(intent.stops_at_safe_points());
+}
+
+/// Repair locally… builds `context sync-local` of the item with the
+/// observation it was asked with, and Save resolution of a local conflict
+/// builds `context resolve-local` with the inspection's observation and
+/// every path's token and source (R-11).
+#[test]
+fn local_context_sync_and_resolve_build_their_mutations() {
+    let root = PathBuf::from("/repo");
+    let intent = Intent::LocalContextSync {
+        root: root.clone(),
+        kind: AuthoringKind::Document,
+        id: ITEM.parse().unwrap(),
+        observation: "local-sync-v1:observed".to_owned(),
+    };
+    let Ok(Mutation::LocalContextSync(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("a local synchronization builds `context sync-local`");
+    };
+    assert_eq!(input.root, root);
+    assert_eq!(input.kind, AuthoringKind::Document);
+    assert_eq!(input.id.to_string(), ITEM);
+    assert_eq!(input.observation, "local-sync-v1:observed");
+    assert_eq!(intent.job_kind(), JobKind::LocalContextSync);
+    assert!(!intent.confirmed());
+    assert!(intent.changes_items());
+    assert!(intent.stops_at_safe_points());
+
+    let operation_id = OperationId::new();
+    let intent = Intent::LocalContextResolve {
+        root: root.clone(),
+        operation_id,
+        observation: "local-sync-v1:inspected".to_owned(),
+        resolutions: vec![resolution("token-a", "the result")],
+    };
+    let Ok(Mutation::LocalContextResolve(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("a local resolution builds `context resolve-local`");
+    };
+    assert_eq!(input.root, root);
+    assert_eq!(input.operation_id, operation_id);
+    assert_eq!(input.observation, "local-sync-v1:inspected");
+    assert_eq!(input.resolutions.len(), 1);
+    assert_eq!(input.resolutions[0].token, "token-a");
+    assert_eq!(input.resolutions[0].source, "the result");
+    assert_eq!(intent.job_kind(), JobKind::LocalContextResolve);
+    assert_eq!(intent.root(), Some(root.as_path()));
+    assert!(!intent.confirmed());
+    assert!(intent.changes_items());
+    assert!(intent.stops_at_safe_points());
 }

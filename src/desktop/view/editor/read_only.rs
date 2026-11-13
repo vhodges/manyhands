@@ -38,7 +38,7 @@ use zorite_editor::{
     WordLeft, WordRight,
 };
 
-use super::{clicked_link, entered_by_pointer, open_editor, step_over_blocks};
+use super::{clicked_link, entered_by_pointer, keys::READ_ONLY, open_editor, step_over_blocks};
 use crate::desktop::{
     model::{editor_text::crlf_to_lf, links::LinkTarget},
     services::images::TabImages,
@@ -188,6 +188,7 @@ impl Render for ReadOnly {
         }
         div()
             .track_focus(&self.focus)
+            .key_context(READ_ONLY)
             .capture_action(stop::<Backspace>)
             .capture_action(stop::<Delete>)
             .capture_action(stop::<Newline>)

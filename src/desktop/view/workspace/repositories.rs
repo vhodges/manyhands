@@ -2,7 +2,7 @@
 
 use super::Workspace;
 use crate::desktop::{
-    model::stamp::{RepoKey, Stamp},
+    model::stamp::{RepoKey, Stamp, ViewScope},
     services::{
         ReadKind,
         requests::{Intent, Lane},
@@ -50,11 +50,21 @@ impl Workspace {
             .map(|rows| rows.iter().map(|entry| entry.key().clone()).collect())
     }
 
+    /// Reads every listed repository's pending operations again.
+    pub(super) fn reload_pending(&mut self, cx: &mut Context<Self>) {
+        for root in self.listed().unwrap_or_default() {
+            self.load_pending(root, cx);
+        }
+    }
+
     /// Refresh on launch once; read pending operations only for new roots.
     fn repositories_loaded(&mut self, cx: &mut Context<Self>) {
         let Some(roots) = self.listed() else {
             return;
         };
+        // The launch poll, and the schedule of a repository that came or
+        // went (D6 B6, R-16).
+        self.services.repositories_listed(&roots, cx);
         if !self.launched {
             self.launched = true;
             if self.services.launch_refresh() {
@@ -75,6 +85,22 @@ impl Workspace {
             cx.notify();
         });
         self.pending_reads.retain(|root, _| roots.contains(root));
+        self.retain_titles(&roots);
+        // A removed repository's conflict offers go, and a read of them
+        // still running lands on nothing.
+        let gone: Vec<RepoKey> = self
+            .pending_conflicts
+            .keys()
+            .chain(self.pending_conflict_reads.keys())
+            .filter(|root| !roots.contains(root))
+            .cloned()
+            .collect();
+        for root in gone {
+            self.conflict_generations
+                .next(ViewScope::PendingConflicts(root.clone()));
+            self.pending_conflicts.remove(&root);
+            self.pending_conflict_reads.remove(&root);
+        }
         for root in roots {
             if !self.pending_reads.contains_key(&root) {
                 self.load_pending(root, cx);
@@ -95,6 +121,28 @@ impl Workspace {
         self.clear_lists(cx);
         self.resolve(key, stamp, cx);
         self.load_repositories(cx);
+    }
+
+    /// The panel's pane, whose rows a test compares with the model's.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn repositories_pane(
+        &self,
+    ) -> &crate::desktop::view::repositories::RepositoriesPane {
+        &self.repositories_pane
+    }
+
+    /// Applies `list` as if a list read had answered it: the incomplete
+    /// list the library never answers today (fact 57).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn apply_repository_list(
+        &mut self,
+        list: manyhands::repository::RepositoryListDto,
+        cx: &mut Context<Self>,
+    ) {
+        let stamp = self.navigation.load_repositories();
+        self.navigation
+            .apply_repositories(stamp, crate::desktop::services::ReadResult::Ok(list));
+        cx.notify();
     }
 
     #[allow(clippy::result_large_err)]
