@@ -134,9 +134,21 @@ pub(super) fn password_is_not_eligible(window: &PollingWindow, b: &Path, cx: &mu
         .services
         .scheduler()
         .read_with(cx, |scheduler, _| scheduler.shared_copy(&root).cloned());
-    assert_eq!(copy, None, "an ineligible remote is no shared copy");
+    // Controls: the scheduler did read `b`'s remotes (so `None` is its
+    // answer, not an unread repository), and `polled_roots` is live: `a`,
+    // whose poll the drive scripts, is in it.
     assert!(
-        !window.backend.polled_roots().contains(&root),
+        window.backend.remote_read_roots().contains(&root),
+        "the scheduler read the remotes of {root}"
+    );
+    assert_eq!(copy, None, "an ineligible remote is no shared copy");
+    let polled = window.backend.polled_roots();
+    assert!(
+        polled.contains(&window.roots[0]),
+        "the first repository was polled: {polled:?}"
+    );
+    assert!(
+        !polled.contains(&root),
         "an ineligible remote is not polled"
     );
 }

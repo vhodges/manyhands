@@ -97,7 +97,7 @@ impl ShareFacts {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 impl Workspace {
     /// Every text the status items say of the listed repositories, now:
     /// Update check's text and tooltip, To share's text, its name as drawn,
