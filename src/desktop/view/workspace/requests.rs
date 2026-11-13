@@ -233,7 +233,7 @@ impl Workspace {
     /// retirement is its S1 row, R-51); with none, or one no longer listed,
     /// the first pending row of `root`, whose pending operations are read
     /// again (C3). The filter, when it hides the row, is turned off here.
-    fn show_holder(
+    pub(in crate::desktop::view) fn show_holder(
         &mut self,
         root: PathBuf,
         request: Option<DesktopRequestId>,

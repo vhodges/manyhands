@@ -15,10 +15,10 @@ use crate::desktop::{
         copy::{NOTHING_NEEDS_ATTENTION, NOTHING_YET},
         rows::{ActivityRow, RowKey},
     },
-    services::requests::Intent,
+    services::requests::{DesktopRequestId, Intent},
     test_support::fixtures::Fixture,
     view::{
-        activity_support::{drawn, highlighted, row},
+        activity_support::{drawn, highlighted, list_focused, row},
         harness::Shell,
         workspace::ToolbarButton,
     },
@@ -236,4 +236,53 @@ pub(super) fn more_open(shell: &Shell, cx: &mut TestAppContext) -> bool {
     shell
         .workspace
         .read_with(cx, |workspace, _| workspace.activity_more_open())
+}
+
+/// C3: "Show it" turns the filter off when it hides the holder's row, and
+/// highlights and focuses that row; a holder the filter does not hide leaves
+/// it as it is.
+#[gpui_kit::test]
+fn show_it_turns_the_filter_off_for_a_hidden_holder(cx: &mut TestAppContext) {
+    let rows = rows(cx);
+    let shell = &rows.shell;
+    let RowKey::Request(plain) = rows.plain.clone() else {
+        panic!("a request's row");
+    };
+    settle(shell, cx);
+    let show = |shell: &Shell, holder: Option<DesktopRequestId>, cx: &mut TestAppContext| {
+        let root = rows.root.clone();
+        shell.frame(cx, |window, cx| {
+            shell.workspace.update(cx, |workspace, cx| {
+                workspace.show_holder(root, holder, window, cx)
+            })
+        });
+        for _ in 0..3 {
+            shell.frame(cx, |_, _| ());
+            shell.run(cx);
+        }
+    };
+
+    // On, the filter hides the plain row; the pending row the fallback
+    // names needs attention, so it stays shown and the filter stays on.
+    press_filter(shell, cx);
+    assert_eq!(filter_state(shell, cx), Some(true));
+    assert!(
+        !drawn(shell, cx).iter().any(|row| row.row.key == rows.plain),
+        "the filter hides the holder's row"
+    );
+    show(shell, None, cx);
+    assert_eq!(filter_state(shell, cx), Some(true), "nothing hid the row");
+    assert!(
+        matches!(highlighted(shell, cx), Some(RowKey::Pending { .. })),
+        "the first pending row is highlighted: {:?}",
+        highlighted(shell, cx)
+    );
+
+    // The holder the filter hides: it goes off and the row is shown,
+    // highlighted, with the list focused.
+    show(shell, Some(plain), cx);
+    assert_eq!(filter_state(shell, cx), Some(false), "the filter went off");
+    assert!(drawn(shell, cx).iter().any(|row| row.row.key == rows.plain));
+    assert_eq!(highlighted(shell, cx), Some(rows.plain.clone()));
+    assert!(list_focused(shell, cx), "the list has the focus");
 }
