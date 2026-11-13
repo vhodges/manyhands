@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 04 Settings Sheet Design"
 date: 2026-11-13
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -36,7 +36,8 @@ citation below against it (U-5). After approval, a note goes on
 `01M5F3GVDYTH1Q5V5FCS9YF7V3` saying which items this Cycle takes. That is
 the planner's step 9 work, not a Document Amendment.
 
-Status: **draft**, revision 4.
+Status: **approved 2026-11-13** (revision 4; Cycle decision 14). The
+Document Amendments below were applied in the approval commit.
 
 - Revision 2 applied review round 1 (source and feasibility: 0 Blocking,
   10 Important, 9 Minor; contract and consistency: 2 Blocking, 16
@@ -1413,8 +1414,9 @@ Applied by the planner in the approval commit:
    A note: Settings is a sheet from Wave 04 Cycle 04, so it no longer
    excludes the Drafts page. A typed passphrase is emptied when Settings
    closes or leaves Sharing & keys.
-6. **Wave 03 D6's Cycle document**, where it describes Show in Activity:
-   a note that it closes Settings first (decision 5).
+6. **Wave 03 D6's design**, C1's paragraph on the pending row's link
+   (`docs/plans/2026-11-07-wave-03-desktop-06-polling-and-shutdown-design.md:840-846`):
+   a note that Show in Activity closes Settings first (decision 5).
 7. **Cycle 03a's Cycle document:**
    - decision 15 and K-8: "Done in Cycle 04" beside the panel's Settings
      button;

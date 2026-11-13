@@ -29,7 +29,7 @@ Decided for the Repositories panel on 2026-11-12 (Wave 04 Cycle 03a design, R-7 
 | Sheets | `Sheet` (right placement) via `Root::render_sheet_layer` |
 | Dialogs | `Dialog` / `AlertDialog` via `Root::render_dialog_layer` |
 | Needs attention | `Popover` anchored to the footer item |
-| Settings layout | `Settings` component or `Sidebar` + content |
+| Settings layout | `Settings` component or `Sidebar` + content. *As built, Wave 04 Cycle 04:* plain controls, not the `Settings` component (D1 ruling R-T12a) |
 | Switches, radios, selects | `Switch`, `Radio`, `Select` |
 | Spinner, loading rows | `Spinner`, `Skeleton` |
 | Empty states | `Empty` |

@@ -469,6 +469,21 @@ item, its scroll position and any draft untouched; opening Settings while
 an item details sheet is open closes that sheet first and loses no edit
 (decision 6).
 
+*Amended 2026-11-13 by Cycle 04* (its Cycle document, decisions 2, 4, 5
+and 6; design Document Amendment 1):
+
+- the sheet has a header with "Applies to this computer only." and no
+  footer, as frames 1e and 1f draw it;
+- the menu has three pages, Repositories, Sharing & keys and Checking for
+  updates; the design's General, Your name & email and Appearance pages
+  are not shown;
+- Sharing & keys follows `05`'s row layout with today's actions, without
+  the passphrase note, dates and algorithm, which the library does not
+  record;
+- there is no Pause all switch (Wave 03 D6 decision 8);
+- Show in Activity closes Settings;
+- Escape closes Settings also while a request it started is running.
+
 ### Cycle 05: Existing Sheets And Dialogs
 
 **Planned document:** `docs/Cycles/wave-04-cycle-05-sheets-and-dialogs.md`
@@ -495,6 +510,11 @@ shared tokens and frame, and the split line below is unlikely to be needed.
   existing dialog, including those the design does not draw on its own: the
   confirmation dialog (`confirm.rs`), New ticket… and New document…, New
   folder…, Move…, the close-draft dialog and the quit dialogs.
+  *Amended 2026-11-13 by Cycle 04:* the Settings sheet closes on Escape
+  also while a request runs (Cycle 04 decision 6). When the Add repository
+  sheet replaces Settings, this Cycle adds the sheet owner's case for it,
+  empties a typed passphrase, and reopens Settings at Repositories with its
+  first origin after Cancel or Add (Cycle 04, Downstream Obligations).
 - **Add repository sheet** (`05`, 1d, 470 px): today's Add an existing
   repository and Create a repository, moved out of the Settings
   Repositories page into the sheet, with the mode segmented control, the

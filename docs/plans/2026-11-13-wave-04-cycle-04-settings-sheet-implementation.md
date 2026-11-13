@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 04 Settings Sheet Implementation Plan"
 date: 2026-11-13
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -14,7 +14,10 @@ id: "01M7APBYM2T2ERVNRWDTZXTJ3W"
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task.
 >
-> **Draft**, revision 4. Revision 2 applied review round 1 and decisions
+> **Approved 2026-11-13** (revision 4; Cycle decision 14). Execution is
+> subagent-driven and serial, in a fresh session the owner starts from
+> the handoff brief `docs/plans/2026-11-13-wave-04-cycle-04-handoff.md`
+> once Cycle 03b has merged. Revision 2 applied review round 1 and decisions
 > 12 and 13; revision 3 applied round 2; revision 4 applies round 3.
 >
 > Where focus goes is a table of required outcomes (design A6, F1–F19),
@@ -75,8 +78,9 @@ Devenv. No new dependency.
 **Precondition.**
 
 - The owner has approved the three documents, authorized implementation
-  and chosen the execution method. Not yet met.
-- **Cycle 03b is closed and merged to main** (decision 1). Not yet met.
+  and chosen the execution method. Met: 2026-11-13 (Cycle decision 14).
+- **Cycle 03b is closed and merged to main** (decision 1). Not met at
+  approval; the owner starts the executing session after it is.
 - Task 0 does not start before both.
 - The design's Document Amendments are applied by the planner in the
   approval commit, not by a task.

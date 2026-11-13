@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 04: Settings Sheet"
 date: 2026-11-13
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -14,7 +14,9 @@ Ticket `01M7AMAPNHHTNECXBF4CA5WPKV`.
 [Design](../plans/2026-11-13-wave-04-cycle-04-settings-sheet-design.md) and
 [implementation plan](../plans/2026-11-13-wave-04-cycle-04-settings-sheet-implementation.md).
 
-Status: **draft**, revision 4.
+Status: **approved 2026-11-13** (revision 4). The owner wrote: "All
+approved. Subagent driven using a brief and prompt in fresh session that I
+will start after 3.3b lands on main" (decision 14).
 
 - On 2026-11-13, with Cycle 03b in implementation, the owner asked to
   create this ticket and plan the Cycle. Execution waits until Cycle 03b
@@ -325,7 +327,7 @@ decisions govern and are not repeated.
    - Add repository stays on the Repositories page until Cycle 05;
    - the menu uses plain controls, as today (R-T12a).
 
-**Proposed by the planner, awaiting confirmation:**
+**Proposed by the planner, confirmed at approval (decision 14):**
 
 7. **Test edits beyond E-1 to E-18** found by Task 0's sweep are
    pre-authorized.
@@ -376,6 +378,27 @@ decisions govern and are not repeated.
     empties a typed passphrase; other typed text is kept. The owner chose
     "Click outside closes".
 
+**Approval:**
+
+14. **Approved and authorized, 2026-11-13.** The owner answered the
+    approval message: "All approved. Subagent driven using a brief and
+    prompt in fresh session that I will start after 3.3b lands on main".
+    That covers:
+    - the three documents, revision 4, with no further independent review;
+    - the named test edits E-1 to E-18, and E-19 onward under decision 7;
+    - decisions 7–11 as proposed;
+    - subagent-driven, serial execution in a fresh session, from the
+      handoff brief `docs/plans/2026-11-13-wave-04-cycle-04-handoff.md`
+      and its prompt;
+    - implementation of Tasks 0–9, started by the owner once Cycle 03b
+      has merged to main ("3.3b" is Cycle 03b).
+
+    The design's Document Amendments 1–7 are applied in the approval
+    commit. Pushing branches is allowed (owner, 2026-11-13). Not
+    authorized without the owner at the time: a pull request, merging
+    into main, closing the ticket, worktree cleanup, native CI, or
+    creating tickets.
+
 ## Known Limits
 
 Design K-1 to K-7:
@@ -410,4 +433,5 @@ None blocking. Design U-3 is checked on screen, and U-5 in Task 0.
 | Owner, 2026-11-13, after review round 1 | Decision 3's attribution and two more items; the click outside | Owner decisions | Decisions 12 and 13 | Session, 2026-11-13 |
 | Review round 2, scoped re-review (revision 2, `2574a277`) | 0 Blocking, 5 Important, 18 Minor: task order (P3, E-13), no route for W-5 and W-6, origins not wired, module runs after Task 5. All round-1 Blocking and Important findings resolved | Important, Minor | Revision 3 (design Review Record) | Review report, 2026-11-13 |
 | Review round 2, adversarial on close and focus (revision 2, `2574a277`) | 1 Blocking, 7 Important, 8 Minor. Blocking: focus can be left behind the open sheet with no keyboard way back | Blocking, Important, Minor | Revision 3: contract 4; design A6's table, R-43 to R-56 | Review report, 2026-11-13 |
+| Owner, 2026-11-13 | Approval message: documents, named edits, decisions 7–11, no further review, execution method, authorization | Owner decisions | Decisions 7–11 confirmed; decision 14 | Session, 2026-11-13 |
 | Review round 3, scoped re-review and adversarial on A6 (revision 3, `58bee94b`) | Scoped: 1 Blocking, 3 Important, 8 Minor. Adversarial: 3 Blocking, 5 Important, 7 Minor. Every Blocking finding is in the focus mechanism: a render-time check that reads the previous frame, Kit popups and Root's context menu, a quiet close leaving the Kit sheet active | Blocking, Important, Minor | Revision 4: the third round in one mechanism. A6 is the contract (F1–F19), the mechanism a sketch, A7 its pitfalls; Task 2 test-first under a design checkpoint. Contracts 4 and 9; A4 | Review report, 2026-11-13 |

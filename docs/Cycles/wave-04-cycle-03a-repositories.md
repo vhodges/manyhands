@@ -288,7 +288,7 @@ decisions govern and are not repeated.
     dialog is today's, with its "Local files remain" note; Cycle 05
     restyles it.
 15. **The panel's Settings button stays** until Cycle 04 removes it with
-    the sheet (Wave Cycle 04).
+    the sheet (Wave Cycle 04). *Done in Cycle 04 (2026-11-13 plan).*
 16. **Check all includes paused repositories and skips those waiting on a
     key or host.** A paused repository is checked, as Settings' Check now
     does, since Check all is an explicit request; one waiting for a
@@ -318,7 +318,8 @@ decisions govern and are not repeated.
 20. **A publication remote that is not SSH shows no label.** Its sentence
     says "{remote} isn't an SSH shared copy, so Manyhands can't check or
     share it.", and its menu leads with "Set up sharing…", which opens
-    Settings › Remotes for that repository. *Alternative:* "This
+    Settings › Remotes for that repository (Settings › Repositories ›
+    Sharing from Cycle 04). *Alternative:* "This
     computer".
 21. **The reason is the menu's first line.** The menu opens with the
     state's sentence, then the state's action, then the fixed items, so a
@@ -409,7 +410,8 @@ These are visible to users; the design's Known Limits give the detail.
   (K-6).
 - "Checked for updates {ago}" is worked out when the footer is drawn
   (K-7).
-- The panel's Settings button stays until Cycle 04 (K-8).
+- The panel's Settings button stays until Cycle 04 (K-8). *Removed by
+  Cycle 04.*
 - The footer's Needs attention does not yet count Can't open, Needs
   fixing, Can't reach or the Needs attention this Cycle adds; Cycle 03b
   decides (K-9).

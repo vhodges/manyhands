@@ -843,7 +843,9 @@ poll is running is a user job, so B2 cancels that poll and Check now runs.
 Check now is disabled only while this process's own Check now for that
 repository is queued or running. While a retirement of the repository is
 pending, Check now answers `recovery_required` like a poll (Fact 32), and the
-row shows the pending row's link instead.
+row shows the pending row's link instead. *Amended 2026-11-13 by Wave 04
+Cycle 04:* Settings is a sheet, so that link, "Show in Activity", closes
+Settings before it focuses Activity (Cycle 04 decision 5).
 
 ### C2: Settings page "Checking for updates"
 
