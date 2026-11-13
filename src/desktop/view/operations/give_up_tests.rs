@@ -341,7 +341,7 @@ async fn a_give_up_left_waiting_on_unlock_offers_unlock_not_give_up(cx: &mut Tes
     // The same answer of a Give up, with the record still accepted.
     let offers = shell.operations(cx).read_with(cx, |operations, _| {
         operations
-            .share_result(id, RecordState::Accepted, true)
+            .classify_share(id, RecordState::Accepted, true)
             .unwrap()
             .offers()
     });

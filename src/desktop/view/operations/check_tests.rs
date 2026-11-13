@@ -1,7 +1,7 @@
 //! A running Check now reads its stage in words, as a share does (D6
-//! Task 6, Fact 14), and a policy verb reads none: it reports `writing`
-//! and nothing else. The requests are fabricated through
-//! `Operations::apply`; no poll runs.
+//! Task 6, Fact 14), and a policy verb reads the stage words every intent
+//! has (F3): it reports `writing` and nothing else. The requests are
+//! fabricated through `Operations::apply`; no poll runs.
 
 use gpui_kit::TestAppContext;
 use manyhands::{
@@ -10,7 +10,7 @@ use manyhands::{
     results::{Effects, Scope},
 };
 
-use super::{FINISHING, request_id};
+use super::request_id;
 use crate::desktop::{
     services::{
         requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
@@ -112,7 +112,7 @@ fn a_running_check_now_reads_its_stage_words(cx: &mut TestAppContext) {
         reach(&shell, &request, ProgressStage::Writing, cx);
         assert_eq!(
             shell.label(request_id(request.id, "state"), cx).as_deref(),
-            Some(FINISHING),
+            Some("Running: Saving…"),
             "{}",
             request.intent.label()
         );

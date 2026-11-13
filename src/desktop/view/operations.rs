@@ -6,10 +6,11 @@
 //! success or no-op is one line. A partial, blocked, failed or cancelled
 //! request stays expanded, with its message, code, effects and recovery
 //! actions, until it is dismissed. A queued request, or a running one the
-//! library has not accepted, offers Cancel; an accepted one reads
-//! "Finishing", except that an accepted command that stops at safe points,
-//! in a repository with a publication remote, offers Stop at a safe point
-//! (R-1, R-15), which reads Stopping… once pressed; a resume stops at safe
+//! library has not accepted, offers Cancel; an accepted one reads its
+//! stage in words, or "Finishing" before its first stage (F3), except that
+//! an accepted command that stops at safe points, in a repository with a
+//! publication remote, offers Stop at a safe point (R-1, R-15), which reads
+//! Stopping… once pressed; a resume stops at safe
 //! points only when it takes up a remote synchronization listed pending,
 //! so any other resume reads Finishing. A running share, post or Check now
 //! reads its stage in words ("Sharing · …", "Posting · …", "Checking · …"),
@@ -90,7 +91,7 @@ use crate::desktop::{
         operations::{
             NOT_AVAILABLE_YET, NOT_SENT_AGAIN, Progressing, RecoveryControl, ResumeOffer,
             StopOffer, abandon_offered, draft_flush_failed, drafts_unavailable, progress_words,
-            recovery_control, resume_offer_among,
+            recovery_control, resume_offer_among, stage_words,
         },
         stamp::RepoKey,
     },
@@ -140,11 +141,13 @@ pub(crate) fn outcome_label(outcome: Outcome) -> &'static str {
 pub(crate) fn state_label(state: &RequestState) -> String {
     match state {
         RequestState::Queued => QUEUED.to_owned(),
-        RequestState::Running { accepted: true, .. } => FINISHING.to_owned(),
-        RequestState::Running { stage: None, .. } => RUNNING.to_owned(),
+        // A stage's words, accepted or not (F3); an accepted request with
+        // no stage yet is finishing.
         RequestState::Running {
             stage: Some(stage), ..
-        } => format!("{RUNNING}: {}", stage.as_str()),
+        } => format!("{RUNNING}: {}", stage_words(*stage, None)),
+        RequestState::Running { accepted: true, .. } => FINISHING.to_owned(),
+        RequestState::Running { stage: None, .. } => RUNNING.to_owned(),
         RequestState::Finished(outcome, ..) => outcome_label(*outcome).to_owned(),
         RequestState::Removed => CANCELLED.to_owned(),
         RequestState::Dismissed => DISMISSED.to_owned(),

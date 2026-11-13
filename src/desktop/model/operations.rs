@@ -35,7 +35,7 @@ mod review;
 pub(crate) use pending::{ResumeOffer, abandon_offered, resume_offer};
 use pending::{check_now_left_active, takes_up_remote_work};
 pub(crate) use polls::{record_note_words, resume_offer_among};
-pub(crate) use progress::{Progressing, progress_words, stage_text, stopped_text};
+pub(crate) use progress::{Progressing, progress_words, stage_text, stage_words, stopped_text};
 #[cfg(test)]
 pub(crate) use recovery::recovery_label;
 pub(crate) use recovery::{RecoveryControl, RecoveryStep, parse_authority, recovery_control};
@@ -147,6 +147,13 @@ pub(crate) struct Operations {
     /// Each finished share's last answer, which its outcome is classified
     /// from (`share_result`).
     shares: HashMap<DesktopRequestId, Envelope<MutationDataDto>>,
+    /// Where each share's record stood, and whether its answer was a Give
+    /// up's, as the drain noted them before the share's `Finished` (F2,
+    /// R-8). A retry clears it.
+    share_attempts: HashMap<DesktopRequestId, (RecordState, bool)>,
+    /// Each finished share's outcome, classified once when it finished
+    /// from `share_attempts` (F2). A retry clears it.
+    share_results: HashMap<DesktopRequestId, SyncResult>,
     /// Each finished lifecycle's last answer, which the lifecycle dialog
     /// shows and takes its way out from (D5, A3): a promotion's or a
     /// closure's, or a resume's that answered with lifecycle data.
@@ -232,6 +239,8 @@ impl Operations {
             WorkerEvent::Queued(request) => {
                 self.stopping.remove(&request.id);
                 self.shares.remove(&request.id);
+                self.share_attempts.remove(&request.id);
+                self.share_results.remove(&request.id);
                 self.lifecycles.remove(&request.id);
                 self.reviews.remove(&request.id);
                 self.sends += 1;
@@ -286,6 +295,17 @@ impl Operations {
                     .is_some_and(|request| ShareTarget::of(&request.intent).is_some())
                 {
                     self.shares.insert(id, envelope.clone());
+                    // Classified once, from the attempt the drain noted;
+                    // a `Finished` it never noted is the worker's defaults
+                    // for a request it never ran (fact 13).
+                    let (record, after_give_up) = self
+                        .share_attempts
+                        .get(&id)
+                        .copied()
+                        .unwrap_or((RecordState::Unknown, false));
+                    if let Some(result) = self.classified(id, record, after_give_up) {
+                        self.share_results.insert(id, result);
+                    }
                 }
                 if self.request(id).is_some_and(|request| {
                     matches!(
@@ -471,21 +491,55 @@ impl Operations {
             })
     }
 
-    /// The outcome of the finished share `id`, classified from its last
-    /// answer under where its record stood (`record`) and whether that
-    /// answer was a Give up's. `None` for any other request, or a share
-    /// not finished.
-    pub(crate) fn share_result(
+    /// Notes where the record of the share `id` stood when its last
+    /// attempt finished, and whether that attempt was a Give up's. The
+    /// drain calls it before it applies the share's `Finished`, which
+    /// classifies the share once from it (F2, R-8).
+    pub(crate) fn note_share_attempt(
+        &mut self,
+        id: DesktopRequestId,
+        record: RecordState,
+        after_give_up: bool,
+    ) {
+        self.share_attempts.insert(id, (record, after_give_up));
+    }
+
+    /// The outcome of the finished share `id`, classified once when it
+    /// finished. `None` for any other request, or a share not finished.
+    pub(crate) fn share_result(&self, id: DesktopRequestId) -> Option<&SyncResult> {
+        match self.request(id)?.state {
+            RequestState::Finished(..) => self.share_results.get(&id),
+            _ => None,
+        }
+    }
+
+    /// The finished share `id`'s last answer classified again under
+    /// `record` and `after_give_up`, for the one test that re-classifies
+    /// under another record on purpose (E-1).
+    #[cfg(test)]
+    pub(crate) fn classify_share(
         &self,
         id: DesktopRequestId,
         record: RecordState,
         after_give_up: bool,
     ) -> Option<SyncResult> {
-        let request = self.request(id)?;
-        if !matches!(request.state, RequestState::Finished(..)) {
+        if !matches!(self.request(id)?.state, RequestState::Finished(..)) {
             return None;
         }
-        let target = ShareTarget::of(&request.intent)?;
+        self.classified(id, record, after_give_up)
+    }
+
+    /// The last answer of the share `id`, classified under `record` and
+    /// `after_give_up`: the one body of both the classification when a
+    /// share finishes and `classify_share`. `None` for a request that is
+    /// not a share, or holds no answer.
+    fn classified(
+        &self,
+        id: DesktopRequestId,
+        record: RecordState,
+        after_give_up: bool,
+    ) -> Option<SyncResult> {
+        let target = ShareTarget::of(&self.request(id)?.intent)?;
         let envelope = self.shares.get(&id)?;
         Some(sync_outcome(
             envelope,

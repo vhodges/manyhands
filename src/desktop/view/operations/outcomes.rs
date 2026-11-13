@@ -40,7 +40,7 @@ use crate::desktop::{
     services::{
         Services,
         requests::{DesktopRequestId, Intent, RequestState},
-        worker::{GaveUp, RecordState},
+        worker::GaveUp,
     },
     view::{item::ItemRoute, sidebar::RETRY, workspace::Workspace},
 };
@@ -92,21 +92,15 @@ pub(crate) fn offer_part(offer: SyncOffer) -> &'static str {
     }
 }
 
-/// The outcome of the finished share `id`, under where its record stood
-/// after its last attempt (unknown when the worker kept none) and whether
-/// that attempt was a Give up's.
+/// The outcome of the finished share `id`, classified once when it
+/// finished from where its record stood after its last attempt (unknown
+/// when the worker kept none) and whether that attempt was a Give up's.
 pub(crate) fn share_result(
     services: &Services,
     id: DesktopRequestId,
     cx: &App,
 ) -> Option<SyncResult> {
-    let worker = services.worker();
-    let record = worker.record_state(id).unwrap_or(RecordState::Unknown);
-    let after_give_up = worker.gave_up(id).is_some();
-    services
-        .operations()
-        .read(cx)
-        .share_result(id, record, after_give_up)
+    services.operations().read(cx).share_result(id).cloned()
 }
 
 /// Whether the last Give up of the request `id` found its record already

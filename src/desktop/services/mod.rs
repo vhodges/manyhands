@@ -56,6 +56,7 @@ use crate::desktop::model::{
     list_state::ListState,
     operations::Operations,
     polling as model_polling,
+    publication::ShareTarget,
 };
 use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
@@ -67,7 +68,7 @@ use release::Releases;
 use resolutions::{ResolutionStore, ResolutionStoreError};
 use scheduler::Scheduler;
 use submissions::Submissions;
-use worker::{WorkerEvent, WorkerHandle};
+use worker::{RecordState, WorkerEvent, WorkerHandle};
 
 pub(crate) use drafts::DraftStoreUnavailable;
 
@@ -617,6 +618,9 @@ impl Services {
                         // A retirement's answer is read from where the worker's
                         // record of the request stood (E3); `Finished` has none.
                         scheduler::note_record(&event, operations, |id| resending.record_state(id));
+                        // A share's record and Give up, noted before its
+                        // `Finished` classifies it once (F2, R-8).
+                        note_share_attempt(&event, operations, &resending);
                         // A request that reconfigures polling (R-11).
                         scheduled.extend(scheduler::heard(&event, operations));
                         let ended = match &event {
@@ -1035,6 +1039,26 @@ impl Services {
 
     pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
+    }
+}
+
+/// Tells the request model where the worker's record of a share stood when
+/// its last attempt finished, and whether that attempt was a Give up's,
+/// before `Finished` is applied: the event carries neither (F2, R-8). The
+/// drain calls this for every event.
+fn note_share_attempt(event: &WorkerEvent, operations: &mut Operations, worker: &WorkerHandle) {
+    let WorkerEvent::Finished(id, _) = event else {
+        return;
+    };
+    let shares = operations
+        .request(*id)
+        .is_some_and(|request| ShareTarget::of(&request.intent).is_some());
+    if shares {
+        operations.note_share_attempt(
+            *id,
+            worker.record_state(*id).unwrap_or(RecordState::Unknown),
+            worker.gave_up(*id).is_some(),
+        );
     }
 }
 

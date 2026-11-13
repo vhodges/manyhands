@@ -95,6 +95,23 @@ pub(crate) fn stage_text(
     Some(words.to_owned())
 }
 
+/// What a running request says at `stage`, whatever its intent: the share
+/// column of `stage_text` with no remote, except that `Writing` reads
+/// "Saving…" (F3). Integrating and Publishing name `primary`, else
+/// "main".
+pub(crate) fn stage_words(stage: ProgressStage, primary: Option<&str>) -> String {
+    if stage == ProgressStage::Writing {
+        return "Saving…".to_owned();
+    }
+    stage_text(
+        Progressing::Share,
+        stage,
+        None,
+        Some(primary.unwrap_or("main")),
+    )
+    .unwrap_or_default()
+}
+
 /// What a running share, post or Check now says: "Sharing · {stage}",
 /// "Posting · {stage}" or "Checking · {stage}". Before its first stage, or
 /// at one with no words, it says it is getting ready.

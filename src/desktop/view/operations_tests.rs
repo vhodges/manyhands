@@ -14,11 +14,11 @@ use std::{
 
 use gpui_kit::{TestAppContext, test::TestWindowExt};
 use manyhands::{
-    repository::{ItemDtoKind, LeaseKind, OperationNextAction, RepositoryService},
+    repository::{ItemDtoKind, LeaseKind, OperationNextAction, ProgressStage, RepositoryService},
     results::{Outcome, RecoveryActionKind, ResultCode},
 };
 
-use super::{DISMISS, NOTHING_PENDING, outcome_label, recovery_id, request_id};
+use super::{DISMISS, NOTHING_PENDING, outcome_label, recovery_id, request_id, state_label};
 use crate::desktop::{
     model::{
         navigation::{OpenTarget, Pane},
@@ -866,4 +866,27 @@ async fn a_recovery_dialog_gives_focus_back_to_the_action_that_opened_it(cx: &mu
         "focus is back on the recovery action"
     );
     assert!(shell.present(Region::Operations.ring_id(), cx));
+}
+
+/// A running request reads its stage, accepted or not, and only an
+/// accepted one with no stage yet reads "Finishing" (F3, P10).
+#[test]
+fn state_label_shows_stages() {
+    let running = |stage, accepted| RequestState::Running { stage, accepted };
+    assert_eq!(state_label(&running(None, false)), "Running");
+    assert_eq!(state_label(&running(None, true)), "Finishing");
+    assert_eq!(
+        state_label(&running(Some(ProgressStage::Writing), true)),
+        "Running: Saving…"
+    );
+    for stage in ProgressStage::ALL {
+        let words = crate::desktop::model::operations::stage_words(stage, None);
+        for accepted in [false, true] {
+            assert_eq!(
+                state_label(&running(Some(stage), accepted)),
+                format!("Running: {words}"),
+                "{stage:?} accepted {accepted}"
+            );
+        }
+    }
 }
