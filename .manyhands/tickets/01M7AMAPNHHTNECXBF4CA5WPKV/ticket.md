@@ -41,10 +41,14 @@ implementation. This ticket does not authorize implementation.
 1. Plan this Cycle now, while Cycle 03b is in implementation. Execution
    waits until 03b lands on main.
 
+Decisions 2–13 are recorded in the Cycle document
+(`docs/Cycles/wave-04-cycle-04-settings-sheet.md`).
+
 ## Scope Summary
 
-- The sheet frame from `05`: right side, 720 px, header, scrolling body,
-  footer, and a 214 px left nav. It opens from the footer's Settings button
+- The sheet frame from `05`: right side, 720 px, a header with "Applies to
+  this computer only.", a scrolling body and no footer (decision 4), and a
+  214 px left nav. It opens from the footer's Settings button
   and Ctrl ,. Focus is trapped, Esc closes it, and focus returns to the
   control that opened it.
 - Today's pages folded into the design's nav:
