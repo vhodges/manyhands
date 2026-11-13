@@ -1440,8 +1440,10 @@ failed**; `manyhands-cli` 317; `canonical_foundation` 65; `cli` 477;
 27; `mutation_replay` 384; `read_boundary` 20; `read_characterization` 0
 (1 ignored); `read_comments` 23; `read_contract` 73; `read_credentials` 25;
 `read_items` 82; `read_relationships` 17; `read_repository` 33;
-`read_status` 28; the remaining targets in the list passed (the log is
-`gate-fast.log`; the process exit was 101 from the two failures only).
+`read_status` 28; `recovery_foundation_gate` 52; `remote_reservation` 13;
+`repository_enablement` 103; `session_credentials` 11; `shared_key_registry`
+39 (all other targets: 0 failed; the process exit was 101 from the two
+failures only).
 
 **The two failures** were this Cycle's own new journeys, flaky under the tier's
 parallel load, not product bugs; each passed alone by exact name before and
