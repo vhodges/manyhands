@@ -21,7 +21,8 @@ reason.
 
 | Task | Status | Commit | Pushed |
 | --- | --- | --- | --- |
-| 0 | done (no source change; no reviewer, see ruling R0-1) | ledger commit | see below |
+| 0 | done (no source change; no reviewer, see ruling R0-1) | `f5e01cb9` (ledger); `a5b5ac29` (ticket comment) | yes |
+| 1 | done, review approved first time | code `ec67fea7` (base `a5b5ac29`); ledger commit follows | yes |
 
 ## Base
 
@@ -35,14 +36,17 @@ reason.
 
 ## Authority note
 
-`3367b9a7` (a docs commit on the branch) amends the Cycle document and the
-brief to allow pushing other branches. The owner's message that started this
-session still says that pushing any other branch, and `comment add` or
-`ticket save` on another ticket, are not authorized without asking.
-Ruling: the session's own instruction governs; this session pushes only the
-ticket branch and comments only on this ticket — the amendment is not relied
-on — it is the stricter reading — cost if wrong: one extra question to the
-owner.
+`3367b9a7` (a docs commit on the branch) amended the Cycle document and the
+brief to allow pushing other branches. The owner's first message of this
+session still said otherwise, so the orchestrator did not rely on the
+amendment. The owner then confirmed it in the session (2026-11-13): pushing
+branches is fine, this ticket's after each task and others when a comment on
+another ticket publishes them, naming which. A pull request, merging into
+main, closing the ticket, worktree cleanup, native CI and creating tickets
+still need the owner's go-ahead at the time.
+
+**Branches published so far:** `manyhands/ticket/01M784Y94Q3AXT6XJX38F5VK1V`
+only.
 
 ## Task 0
 
@@ -153,11 +157,28 @@ reviewer as a file.
   first; the Goal's "a menu with the rest" is loose prose — design A1 and the
   seam agree — none.
 
+## Task 1
+
+`operations.rs` 1276 → 619 lines; new files `progress.rs` 127, `recovery.rs` 313,
+`pending.rs` 213, `lifecycle.rs` 64. The reviewer compared moved lines with
+`-M --color-moved`: only imports, re-exports and three visibility widenings
+differ (`lifecycle_answered`, `takes_up_remote_work`, `check_now_left_active`,
+private → `pub(super)`).
+
+- Ruling T1-1: `RETRY_SHARING` is not re-exported and `recovery_label` is
+  re-exported under `#[cfg(test)]` only — an unused `pub(crate) use` fails
+  `-D warnings`; the only outside caller of `recovery_label` is
+  `operations_tests.rs:15` and nothing resolves `operations::RETRY_SHARING` —
+  a later task that wants either imports it from `operations::recovery`.
+- P-F14 stands: line cites into `operations.rs` elsewhere in the docs are
+  stale and are re-grepped by the task that needs one.
+
 ## Tests run
 
 | Checkpoint | Tests run |
 | --- | --- |
 | Task 0 | none (static gates only) |
+| Task 1 | `desktop::model::operations` by module: 32 passed, 0 failed (the one module run the plan names). fmt, `cargo check --features desktop` and clippy `-D warnings` clean. |
 
 ## Test edits (E-n)
 
