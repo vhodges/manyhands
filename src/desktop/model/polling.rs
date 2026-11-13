@@ -307,8 +307,10 @@ impl PollSchedule {
     /// targets, then replays the changes heard after it completed, in the
     /// order heard, so the last share or save of an item decides. An attempt
     /// with no `completed_at` counts as older than every change heard, and
-    /// than a list that has an `as_of`. Anything else (a failure, an
-    /// interruption, a cancel, a replay with no targets) leaves the list.
+    /// than a list that has an `as_of`. An older one leaves the list, and its
+    /// listed items (it is the last attempt) lose what was shared after it.
+    /// Anything else (a failure, an interruption, a cancel, a replay with no
+    /// targets) leaves the list.
     fn unshared_after(&mut self, root: &Root, summary: &AttemptSummary) {
         if summary.answer != Answer::Completed || !summary.carries_targets() {
             return;
@@ -317,20 +319,23 @@ impl PollSchedule {
             return;
         };
         let at = summary.completed_at;
-        match (at, repo.unshared.as_of) {
-            (Some(at), Some(held)) if at < held => return,
-            (None, Some(_)) => return,
-            _ => {}
-        }
-        repo.unshared = Unshared {
-            items: summary.to_share.clone(),
-            problems: summary.problems.clone(),
-            as_of: at,
+        let older = match (at, repo.unshared.as_of) {
+            (Some(at), Some(held)) => at < held,
+            (at, held) => at.is_none() && held.is_some(),
         };
+        if !older {
+            repo.unshared = Unshared {
+                items: summary.to_share.clone(),
+                problems: summary.problems.clone(),
+                as_of: at,
+            };
+        }
         let heard = self.changes.get(root).map_or(&[][..], Vec::as_slice);
         for (change, when) in heard {
             if at.is_none_or(|at| *when > at) {
-                change.apply_to(&mut repo.unshared.items);
+                if !older {
+                    change.apply_to(&mut repo.unshared.items);
+                }
                 if let Some(last) = repo.last.as_mut() {
                     change.remove_from(&mut last.listed);
                 }

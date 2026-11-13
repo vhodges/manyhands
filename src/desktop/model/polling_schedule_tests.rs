@@ -975,6 +975,64 @@ fn to_share_counts_and_finished_shares() {
     assert_eq!((held(&fx), listed(&fx).len()), (1, 1));
     assert_eq!(fx.repo("r").unshared.items[0].item_id, Some(document));
 
+    // A share heard between a newer check and an older one applied late
+    // (U13 with a share in between): the older check, rejected by rule 4, is
+    // the last attempt, and its listed items agree with the count. The share
+    // is heard after the newer check landed (25), or while it ran (15).
+    let (shared, kept) = (ItemId::generate(), ItemId::generate());
+    let both = || {
+        vec![
+            item(&shared, TargetKind::Ticket, Diverged),
+            item(&kept, TargetKind::Document, Unpublished),
+        ]
+    };
+    let at = |fx: &Fx, at: i64, targets: Vec<AttemptTarget>| PollAttempt {
+        completed_at: Some(fx.at(at)),
+        ..completed(fx, targets)
+    };
+    for (heard, newer) in [
+        (25, both()),
+        (15, vec![item(&kept, TargetKind::Document, Unpublished)]),
+    ] {
+        let mut fx = Fx::new();
+        fx.add("r", policy(None));
+        let share = |fx: &mut Fx| {
+            fx.schedule
+                .shared(&root("r"), Some(&shared), false, fx.at(heard))
+        };
+        if heard < 20 {
+            assert!(!share(&mut fx), "heard at {heard}: no list holds it");
+        }
+        fx.schedule.after(&fx.now(), &at(&fx, 20, newer));
+        if heard > 20 {
+            assert!(share(&mut fx), "heard at {heard}");
+        }
+        fx.schedule.after(&fx.now(), &at(&fx, 10, both()));
+        let repo = fx.repo("r");
+        assert_eq!(repo.unshared.as_of, Some(fx.at(20)), "heard at {heard}");
+        assert_eq!(
+            repo.last.as_ref().and_then(|last| last.completed_at),
+            Some(fx.at(10)),
+            "heard at {heard}: the older check is the last attempt"
+        );
+        let ids = |targets: &[AttemptTarget]| -> Vec<_> {
+            targets
+                .iter()
+                .map(|target| target.item_id.clone())
+                .collect()
+        };
+        assert_eq!(
+            ids(&repo.unshared.items),
+            [Some(kept.clone())],
+            "heard at {heard}: the count"
+        );
+        assert_eq!(
+            ids(&listed(&fx)),
+            ids(&repo.unshared.items),
+            "heard at {heard}: Activity's listed items agree with the count"
+        );
+    }
+
     // A root with no schedule: nothing to remove.
     assert!(
         !fx.schedule

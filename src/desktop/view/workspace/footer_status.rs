@@ -17,7 +17,7 @@ use crate::desktop::{
     view::{
         footer::{
             Control, FooterStatus, Plan, focus_after_hiding, next_to_share, to_share_name,
-            update_text,
+            to_share_text, update_text,
         },
         repositories::checking_now,
     },
@@ -31,6 +31,11 @@ struct Listed {
     parent: Option<String>,
     /// Its unshared list's items (R-24).
     items: usize,
+}
+
+/// A path's last part, a folder's name: none for `/`, so no path is shown.
+fn folder_name(path: &Path) -> Option<String> {
+    Some(path.file_name()?.to_string_lossy().into_owned())
 }
 
 /// The listed repositories as the footer reads them, at one moment.
@@ -64,7 +69,7 @@ impl ShareFacts {
     /// has the same name.
     fn display(&self, key: &RepoKey) -> String {
         let Some(this) = self.listed.iter().find(|each| &each.key == key) else {
-            return key.clone();
+            return folder_name(Path::new(key)).unwrap_or_default();
         };
         let shared = self
             .listed
@@ -92,7 +97,7 @@ impl ShareFacts {
         match (self.next(), &self.chosen) {
             (Some(next), _) => to_share_name(total, &self.display(&next), false),
             (None, Some(chosen)) => to_share_name(total, &self.display(chosen), true),
-            (None, None) => to_share_name(total, "", true),
+            (None, None) => to_share_text(total),
         }
     }
 }
@@ -104,7 +109,7 @@ impl Workspace {
     /// and its name as each repository would give it, chosen next or already
     /// chosen (Part I's sweep reads these).
     pub(crate) fn footer_texts(&self, cx: &App) -> Vec<String> {
-        use crate::desktop::view::footer::{to_share_text, update_tooltip};
+        use crate::desktop::view::footer::update_tooltip;
         let facts = self.share_facts(cx);
         let total = facts.total();
         let mut texts = vec![facts.to_share_name(), to_share_text(total)];
@@ -145,12 +150,7 @@ impl Workspace {
                 latest = latest.max(schedule.and_then(|repo| repo.last_completed));
                 Listed {
                     name: entry.name(),
-                    parent: Path::new(&key)
-                        .parent()
-                        .map(|parent| match parent.file_name() {
-                            Some(name) => name.to_string_lossy().into_owned(),
-                            None => parent.display().to_string(),
-                        }),
+                    parent: Path::new(&key).parent().and_then(folder_name),
                     items: schedule.map_or(0, |repo| repo.unshared.items.len()),
                     key,
                 }
@@ -197,9 +197,14 @@ impl Workspace {
                 continue;
             }
             if let Some(next) = focus_after_hiding(hidden, plan) {
+                // Now, not deferred: `focus_lost` fires in this draw and only focuses a region.
                 window.focus(self.footer.handle(next), cx);
             }
             return;
         }
     }
 }
+
+#[cfg(test)]
+#[path = "footer_status_tests.rs"]
+mod tests;

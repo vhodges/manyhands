@@ -35,8 +35,6 @@ pub(crate) struct ChromeColors {
     /// Links, the focus ring, in-progress.
     pub teal: Hsla,
     /// Success, ready, up to date.
-    #[cfg_attr(not(test), allow(dead_code))]
-    // Cycle 03 (the update-check and to-share footer items).
     pub green: Hsla,
     /// Failure, blocked, conflict, attention.
     pub red: Hsla,

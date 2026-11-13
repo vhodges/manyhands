@@ -683,11 +683,20 @@ fn selecting_a_repository_resolves_it_and_shows_its_configuration_and_index(
     assert_ne!(shell.label(state(0), cx).as_deref(), Some(NEEDS_FIXING));
     assert!(!needs_fixing(&shell, &shell.a, cx));
     assert_ne!(shell.label(state(0), cx).as_deref(), Some(CANT_OPEN));
+    // Valid and not scheduled: the row shows no state, and its tooltip is
+    // there, its folder first.
+    assert_eq!(shell.label(state(0), cx), None);
+    let tips = tooltip(&shell, &shell.a, cx);
+    assert_eq!(
+        tips.first(),
+        Some(&format!("Folder: {}", key(&shell.a))),
+        "{tips:?}"
+    );
 }
 
 /// Review Focus 2: the selected repository's folder is renamed away and
-/// back. Selection shows Unavailable with Retry and Remove; Retry resolves
-/// once the folder is back.
+/// back. Its row reads Can't open and its menu offers Retry and Remove; the
+/// menu's Retry resolves once the folder is back.
 #[gpui_kit::test]
 fn a_renamed_away_repository_is_unavailable_until_retry_finds_it_again(cx: &mut TestAppContext) {
     let shell = Shell::new(cx);
