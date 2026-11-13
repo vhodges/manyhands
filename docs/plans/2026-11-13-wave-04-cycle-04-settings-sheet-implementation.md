@@ -14,8 +14,11 @@ id: "01M7APBYM2T2ERVNRWDTZXTJ3W"
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task.
 >
-> **Draft**, revision 2: it applies review round 1 and decisions 12 and
-> 13. **Revision 2 has not been independently reviewed.**
+> **Draft**, revision 3: revision 2 applied review round 1 and decisions
+> 12 and 13; revision 3 applies review round 2. Where focus goes is a
+> table of required outcomes (design A6), which Task 2 writes test-first,
+> with a design checkpoint. **Revision 3 has not been independently
+> reviewed.**
 >
 > Execution waits until Cycle 03b (`01M784Y94Q3AXT6XJX38F5VK1V`) is merged
 > to main (Cycle decision 1). Re-read the design before each task, and
@@ -141,11 +144,13 @@ moves. Never rebase.
   filter is stopped at once.
 - **Between tasks,** only the tests the task wrote or changed run, by
   exact name, each named edit included, listed in full in the ledger.
-- **Two module runs** (a named doubt). The swap (Task 1) and the
-  three-entry menu (Task 5) break tests by behaviour, not by name. So at
-  the end of each, the orchestrator runs once, by module, every test file
-  the task touched and every file Task 0's sweep listed for it, and fixes
-  what fails before the commit.
+- **Module runs** (a named doubt). Tasks 1, 3, 4, 5 and 6 change
+  behaviour that tests reach without naming it: the swap, one chosen
+  repository, the hidden key forms, the menu's indices, and the routes'
+  focus. So at the end of each, the orchestrator runs once, by module,
+  every test file the task touched and every file Task 0's sweep listed
+  for it, and fixes what fails before the commit. Task 5 also reruns every
+  P test written in Tasks 1–4, since they reach pages by entry index.
 - **No whole-suite run** happens before Task 9.
 - **Limits.**
   - A command past about 15 minutes is stopped, narrowed and noted.
@@ -233,7 +238,10 @@ task named:
   - a route from the lifecycle dialog, which closes itself first (P5: the
     dialog's origin);
   - a popover row whose footer item has hidden by close time (P5);
-  - a Check host finishing after Escape (P22);
+  - Ctrl+, pressed while 03b's popover holds focus (P5);
+  - Drafts' Discard… confirmed with Enter, then Ctrl+, at once (P23: the
+    Kit's deferred restore);
+  - Add pressed, then Escape before the folder check lands (P22);
   - a route arriving after the Kit closed the sheet (P22).
 - **Task 3:** choosing the already-chosen repository with identity text
   typed (P10).
@@ -368,10 +376,12 @@ impl Workspace {
 
 - [ ] **Step 1: Write the tests, failing.** In `settings_sheet_tests.rs`:
   - P1 `settings_is_a_sheet_the_workspace_keeps`;
-  - P2 `settings_leaves_the_item_as_it_was` (the W-5 row is added in Task
-    6);
+  - P2 `settings_leaves_the_item_as_it_was` (its `AddRepository` row is
+    added in Task 6);
   - P3 `settings_replaces_the_details_sheet_and_keeps_its_edits`;
-  - P6 `settings_closes_every_way`, all five rows;
+  - P6 `settings_closes_every_way`, every row;
+  - P7 `nothing_acts_behind_settings`, by dispatched actions, with the
+    `OpenSettings` row run from a page other than Repositories;
   - P8 `settings_scrolls_on_its_own`;
   - P14 `show_in_activity_closes_settings_and_focuses_activity`;
   - P15 `settings_does_not_open_behind_a_dialog_or_while_quitting`.
@@ -381,8 +391,10 @@ impl Workspace {
   - Change `ContentArea.sheet`'s type (`workspace.rs:91`), and update
     `sync_sheet`.
   - `open_item` clears only a `Details` owner.
-  - `wait_to_quit` (`lifecycle.rs:229-233`) calls
-    `settings_closed(quiet: true)` before Quit now takes focus.
+  - Every quit path closes Settings quietly before it asks or waits
+    (R-52): `wait_to_quit` (`lifecycle.rs:229-233`) and the EditsNotKept
+    and Not saved asks (`lifecycle.rs:86-99`).
+  - `show_settings` drops a requested details sheet (R-51).
 - [ ] **Step 3: `show_settings` and `arrive`** (A2 steps 1, 4–7).
   - The builder captures the `Entity<SettingsHost>` and draws
     `frame.rs`'s frame: `.size(px(720.))`; the header (`SETTINGS_HEADING`
@@ -392,75 +404,101 @@ impl Workspace {
     function gives it (fact 10). The page methods that focus today
     (`manage_root`, `ask_again`, the Hosts check, `set_up_sharing`)
     return their handle instead of focusing.
-  - For now, `show_settings` records the focused handle as the origin.
+  - For now, `show_settings` records the focused handle as the origin,
+    and A2 step 6 is today's `set_selection`.
 - [ ] **Step 4: `settings_closed`** (A3). `hide` empties the passphrase.
   The focus step uses the origin's handle, else `Region::Content`.
 - [ ] **Step 5: Its own scroll and the page keys** (B2). Make
   `ContentScroll::region()`, the body's scroll laid over the Kit body as
   in `D/view/item/sheet.rs:251-275`, and the four handlers on the frame's
   root.
-- [ ] **Step 6: Show in Activity** (C3). The Workspace's answer to
+- [ ] **Step 6: The key** (A5). `OpenSettings` leaves `unless_dialog`
+  for its own guard, so Ctrl+, opens over the details sheet (P3) and does
+  nothing over Settings or a dialog.
+- [ ] **Step 7: Show in Activity** (C3). The Workspace's answer to
   `SettingsEvent::ShowActivity` closes Settings quietly, then focuses
   `Region::Operations`.
-- [ ] **Step 7: Wrappers.** Each of `open_settings`, `open_settings_on`,
+- [ ] **Step 8: Wrappers.** Each of `open_settings`, `open_settings_on`,
   `inspect_in_settings`, `identity_in_settings`, `check_host_in_settings`,
   `retry_generation_in_settings`, `open_remotes` and `open_hosts` builds
   its route and calls `show_settings(route, None, …)`.
-- [ ] **Step 8: Leave the content page.** Remove:
+- [ ] **Step 9: Leave the content page.** Remove:
   - `ContentPage::Settings` and its branches (fact 9);
   - `content_body`'s passphrase calls;
+  - `settings.hide` from `show_tabs` and `open_drafts` (`content.rs:56-59`,
+    `:84-86`);
   - `SettingsEvent::Closed`, `back`, the `close` handle and
     `BACK_TO_TABS`.
 
   The subscription at `workspace.rs:290-296` keeps `ShowActivity` only.
-- [ ] **Step 9: Named edits.**
+- [ ] **Step 10: Named edits.**
   - E-1 (`:73` without `:91-93`, `:137`, `:168`).
-  - E-2, E-3, E-4, E-6, E-7, E-8, E-12 and E-13.
+  - E-2, E-3, E-4, E-6, E-7, E-8 and E-12.
+  - E-13: the Remotes test opens through the route and closes by Escape,
+    still expecting "Settings keeps b" until Task 3; the scroll test reads
+    Settings' own scroll.
   - E-5's walk: `open_settings_and_each_page` closes by Escape, and focus
     returns to the control that opened it.
   - The page helpers keep today's indices: five entries until Task 5.
-- [ ] **Step 10: Verify.**
+- [ ] **Step 11: Verify.**
   - Run Step 1's tests and every E-test above by exact name.
   - Then the module run of every touched test file and every file the
     Task 0 sweep listed for Task 1.
   - Then the last Verify lines.
 
-**Rulings:** R-1, R-2, R-3, R-5, R-7, R-9, R-10, R-12, R-20, R-25, R-26,
-R-28, R-29, R-30, R-31, R-33, R-37, R-40.
+**Rulings:** R-1, R-2, R-3, R-5, R-7, R-8, R-9, R-10, R-12, R-20, R-25,
+R-26, R-28, R-29, R-30, R-31, R-33, R-40, R-51, R-52.
 
 ---
 
-## Task 2: Focus And Guards (A2 steps 2–3 and 5, A3's fallbacks, A4, A5)
+## Task 2: Where Focus Goes (A2's origin and steps 2–3 and 5, A3, A4, A5; design checkpoint on A6)
 
 **Files:** `D/view/workspace/settings_sheet.rs`,
-`settings_sheet_tests.rs`, `content.rs`, `render.rs`, the files of 03b's
-`choose_activity` and footer (Task 0's record), `D/view/settings/hosts.rs`
-and `keys/commands.rs` (landing guards).
+`settings_sheet_tests.rs`, `content.rs`, `render.rs`, `focus.rs`,
+`workspace.rs` (`settings_origin`, `settings_return`); the file of 03b's
+`choose_activity` (Task 0's record); `D/view/settings/mod.rs`,
+`repositories.rs`, `hosts.rs`, `keys/commands.rs` (the `open` flag and
+landing gates).
 
-- [ ] **Step 1: Write the tests, failing:**
-  - P5 `focus_returns_to_what_opened_settings`, all seven rows;
-  - P7 `nothing_acts_behind_settings`, by dispatched actions, with the
-    `OpenSettings` row run from a page other than Repositories;
+- [ ] **Step 1: Check U-6 and U-7** with scratch tests (discarded): a focus
+  change by a timer brings a Workspace render; a handle tracked on the div
+  around the sheet layer contains the sheet's focus, the Kit's close
+  button included. Record the answers. If U-6 fails, the Workspace
+  observes the window's focus and notifies itself.
+- [ ] **Step 2: Write A6's table as tests, failing** (design checkpoint):
+  - P5 `focus_returns_to_what_opened_settings`, one row per A6 row F4 to
+    F10, with the rows the design lists;
   - P22 `late_work_moves_no_focus`;
-  - P23 `focus_stays_inside_settings`.
-- [ ] **Step 2: Origins** (R-6; Part D's origins).
-  - `show_settings` closes a details sheet before it records the origin.
-  - 03b's Activity row and popover actions pass their handle as origin
-    when they open Settings. Use the path Task 0 recorded.
-- [ ] **Step 3: Fallbacks** (A3). When the origin's control is not drawn,
-  focus falls to `focus_lost` with 03b's popover rule, and to
-  `keep_focus_in_footer`. When the handle is gone, `Region::Content`.
-- [ ] **Step 4: The key** (A5). `OpenSettings` leaves `unless_dialog` for
-  its own guard.
-- [ ] **Step 5: Mid-close and already open** (A2 steps 2–3; R-36).
-- [ ] **Step 6: Nothing behind** (R-34, R-35).
-  - `focus_content` does nothing while Settings is open.
-  - `apply_review`'s `refocus` waits for no sheet.
-  - Page handlers that focus on a landing (`refocus_gone`, `ask_again`)
-    check that Settings is open.
-- [ ] **Step 7: Verify,** then the ticket checkpoint.
+  - P23 `focus_stays_inside_settings`, with the deferred-restore row
+    (advance the test clock 250 ms).
 
-**Rulings:** R-6, R-8, R-34, R-35, R-36.
+  Every row of A6 must be a row of these tests, or of P3, P4, P6 or P14,
+  as A6's Test column says. If a row cannot be expressed against the
+  code, stop and report to the orchestrator, who settles it with the
+  owner before the mechanism is written.
+- [ ] **Step 3: The origin** (A2, "The origin"; R-6, R-43, R-44).
+  - Add `settings_origin`. 03b's `choose_activity` sets it to its
+    `origin` around each handler call and clears it after.
+  - A Workspace layer holding focus (03b's popover, a row menu, a dock
+    menu) gives its `restore` handle, and closes.
+  - `show_settings` closes a details sheet before it records the origin,
+    then focuses the origin before `open_sheet`.
+- [ ] **Step 4: The region fallback** (A3; R-45). `settings_return`, set
+  by `settings_closed` and taken by `focus_lost`, cleared at the end of
+  the next frame.
+- [ ] **Step 5: The sheet keeps focus** (A3; R-46). Track `sheet_layer` on
+  the div around Root's sheet layer; on each render, while Settings is
+  open and no dialog is, focus found outside it goes to the page's entry.
+- [ ] **Step 6: Mid-close and already open** (A2 steps 2–3; R-36).
+- [ ] **Step 7: Late landings** (A4; R-47, R-48). The `open` flag, shared
+  with each page; `resume_submit`, `refocus_gone` and the focus by key ID
+  gated on it; `submit_pending` cleared on hide and by `inspect_root`.
+- [ ] **Step 8: Nothing behind** (A5; R-34). `focus_content` does nothing
+  while Settings is open; `apply_review`'s `refocus` is dropped while the
+  owner is Settings.
+- [ ] **Step 9: Verify,** then the ticket checkpoint.
+
+**Rulings:** R-6, R-34, R-35, R-36, R-43, R-44, R-45, R-46, R-47, R-48.
 
 ---
 
@@ -492,10 +530,16 @@ and `keys/commands.rs` (landing guards).
 - [ ] **Step 5: Read again** (R-32). Add `RepositoriesPage::opened`, which
   calls `load_registrations` (`manage.rs:230`). `SettingsHost::open` calls
   `opened` on every page.
-- [ ] **Step 6: E-9 and E-14.**
-- [ ] **Step 7: Verify.**
+- [ ] **Step 6: Inspect and unchoosing.** `Inspect` leaves `chosen`
+  alone (R-55). The Repositories page's `forget_root` emits
+  `RepositoriesEvent::Forgot(root)`, and the host answers with
+  `choose(None)` for every page (R-56). Every open records the panel's
+  selection it saw (R-14).
+- [ ] **Step 7: E-9, E-14, and E-13's Task 3 half** (the Remotes test
+  follows R-14).
+- [ ] **Step 8: Verify,** with the module run.
 
-**Rulings:** R-14, R-15, R-32, R-42 (item 5).
+**Rulings:** R-14, R-15, R-32, R-42 (item 5), R-55, R-56.
 
 ---
 
@@ -525,15 +569,16 @@ and `keys/commands.rs` (landing guards).
   - Stop using this key sits under the list.
   - After a removal, focus goes to the next key by key ID.
 - [ ] **Step 4: The forms** (C2.2). Neither is shown at first; one at a
-  time; hiding the Generate form empties its passphrase fields.
-  `ask_again` shows the Generate form.
+  time; hiding the Generate form, by either button, empties its
+  passphrase fields. The Generate form is shown whenever the page is
+  retrying (R-54).
 - [ ] **Step 5: The info box** (C2.3), and fields filling the body up to
   480 px (R-39).
 - [ ] **Step 6: E-10 and E-15.**
-- [ ] **Step 7: Verify.**
+- [ ] **Step 7: Verify,** with the module run.
 
 **Rulings:** R-4 (`nav`), R-13, R-16, R-17, R-18, R-19, R-38, R-39, R-42
-(item 4).
+(item 4), R-54.
 
 ---
 
@@ -553,8 +598,8 @@ sites; `mod_tests.rs` (E-1 `:91-93`).
   - `remotes` opens entry 0, then Manage.
 - [ ] **Step 4: E-16 and E-1's `:91-93`.**
 - [ ] **Step 5: Verify.** Run every caller of the E-5 helpers by exact
-  name, as listed in Task 0's ledger entry. Then the module run of every
-  touched file.
+  name, as listed in Task 0's ledger entry, and every P test written in
+  Tasks 1–4. Then the module run of every touched file.
 
 **Rulings:** R-4, R-27.
 
@@ -576,16 +621,19 @@ Merge `origin/main` first.
   - P20 `routes_by_keyboard`;
   - P2's W-5 row.
 - [ ] **Step 2: `arrive`** applies each route as Part D says:
-  - the focus targets (R-24);
+  - the focus targets (R-24), returning only handles the page draws in
+    the next frame;
   - the key-list target, with its one retarget when the read lands
     (R-22);
-  - `hosts-check` for `Hosts(root)`.
+  - `hosts-check` for every `Hosts(root)` (R-53).
+
+  W-5 and W-6 call `show_settings(AddRepository, None, …)`.
 - [ ] **Step 3: W-25 and W-33** (R-23). Approve host… with no server named
   passes the attention row's repository.
 - [ ] **Step 4: E-17 and E-18.**
-- [ ] **Step 5: Verify,** then the ticket checkpoint.
+- [ ] **Step 5: Verify,** with the module run, then the ticket checkpoint.
 
-**Rulings:** R-22, R-23, R-24.
+**Rulings:** R-22, R-23, R-24, R-53.
 
 ---
 
@@ -669,8 +717,11 @@ devenv shell -- cargo test --all-features --locked --no-fail-fast --lib --bins \
 
   Native CI is dispatched only with the owner's approval, after merge.
 - [ ] **Step 3: Fix what the fast tier finds.**
-  - Each failure is fixed under the named-edit rules, as E-19 onward.
-  - Rerun the failed tests by exact name, not the whole tier.
+  - A production bug is fixed in the code. A test that pins old behaviour
+    this Cycle changes is edited under the named-edit rules, as E-19
+    onward.
+  - Rerun the failed tests by exact name, then the module run of each
+    touched file, then the static gates.
   - If a failure would change the contract, stop for the owner.
 - [ ] **Step 4: Fill in the evidence.** Fill the Cycle's Acceptance Status
   from the tests by exact name and the ledger. On-screen rows wait for the
@@ -691,7 +742,7 @@ devenv shell -- cargo test --all-features --locked --no-fail-fast --lib --bins \
 | A6 | 3 (P10), 4 (P13), 5 (P16) |
 | A7 | 4 (P12); 1–8 (the named edits) |
 | A8 | 8 (P17) |
-| A9 | 1 (P15), 2 (P7, P22, P23) |
+| A9 | 1 (P7, P15), 2 (P22, P23) |
 | A10 | 7 (P18) |
 | A11 | 1 (P6), 4 (P9) |
 | A12 | 1 (P14) |
@@ -701,24 +752,25 @@ devenv shell -- cargo test --all-features --locked --no-fail-fast --lib --bins \
 
 **Rulings by task:**
 
-- **Task 1:** R-1, R-2, R-3, R-5, R-7, R-9, R-10, R-12, R-20, R-25, R-26,
-  R-28, R-29, R-30, R-31, R-33, R-37, R-40.
-- **Task 2:** R-6, R-8, R-34, R-35, R-36.
-- **Task 3:** R-14, R-15, R-32, R-42 (item 5).
+- **Task 1:** R-1, R-2, R-3, R-5, R-7, R-8, R-9, R-10, R-12, R-20, R-25,
+  R-26, R-28, R-29, R-30, R-31, R-33, R-40, R-51, R-52.
+- **Task 2:** R-6, R-34, R-35, R-36, R-43, R-44, R-45, R-46, R-47, R-48.
+- **Task 3:** R-14, R-15, R-32, R-42 (item 5), R-55, R-56.
 - **Task 4:** R-4 (`nav`), R-13, R-16, R-17, R-18, R-19, R-38, R-39, R-42
-  (item 4).
+  (item 4), R-54.
 - **Task 5:** R-4, R-27.
-- **Task 6:** R-22, R-23, R-24.
+- **Task 6:** R-22, R-23, R-24, R-53.
 - **Task 7:** R-24 (copy).
 - **Task 8:** R-21.
 - **All tasks:** R-41.
-- **R-11:** superseded by R-40.
+- **R-11:** superseded by R-40. **R-37:** superseded by R-51. **R-49,
+  R-50:** not used.
 
 **Named edits by task:**
 
 - **Task 1:** E-1 (`:73`, `:137`, `:168`), E-2, E-3, E-4, E-6, E-7, E-8,
-  E-12, E-13, and E-5's walk.
-- **Task 3:** E-9, E-14.
+  E-12, E-13 (first half), and E-5's walk.
+- **Task 3:** E-9, E-14, E-13 (second half).
 - **Task 4:** E-10, E-15.
 - **Task 5:** E-5's helpers, E-16, E-1 (`:91-93`).
 - **Task 6:** E-17, E-18.
@@ -728,8 +780,8 @@ devenv shell -- cargo test --all-features --locked --no-fail-fast --lib --bins \
 
 **Required outcomes by task:**
 
-- **Task 1:** P1, P2, P3, P6, P8, P14, P15.
-- **Task 2:** P5, P7, P22, P23.
+- **Task 1:** P1, P2, P3, P6, P7, P8, P14, P15.
+- **Task 2:** P5, P22, P23, written from design A6 first.
 - **Task 3:** P10, P11, P25.
 - **Task 4:** P9, P12, P13, P19, P24.
 - **Task 5:** P16.
@@ -737,8 +789,8 @@ devenv shell -- cargo test --all-features --locked --no-fail-fast --lib --bins \
 - **Task 7:** P18, P21.
 - **Task 8:** P17.
 
-**Unverified facts by task:** U-5 in Task 0; U-3 in Task 9 (on screen).
-U-1, U-2 and U-4 were settled in review round 1.
+**Unverified facts by task:** U-5 in Task 0; U-6 and U-7 in Task 2; U-3
+in Task 9 (on screen). U-1, U-2 and U-4 were settled in review round 1.
 
 **Placeholders:** none. Every test, file and interface the tasks name is
 in the design or written out above.

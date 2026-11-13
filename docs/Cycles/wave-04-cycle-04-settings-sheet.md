@@ -14,7 +14,7 @@ Ticket `01M7AMAPNHHTNECXBF4CA5WPKV`.
 [Design](../plans/2026-11-13-wave-04-cycle-04-settings-sheet-design.md) and
 [implementation plan](../plans/2026-11-13-wave-04-cycle-04-settings-sheet-implementation.md).
 
-Status: **draft**, revision 2.
+Status: **draft**, revision 3.
 
 - On 2026-11-13, with Cycle 03b in implementation, the owner asked to
   create this ticket and plan the Cycle. Execution waits until Cycle 03b
@@ -33,8 +33,15 @@ Revision history:
 - Review round 1 read revision 1 at `65c898a5`:
   - source and feasibility: 0 Blocking, 10 Important, 9 Minor;
   - contract and consistency: 2 Blocking, 16 Important, 17 Minor.
-- Revision 2 applies both, and decisions 12 and 13. **Revision 2 has not
-  been independently reviewed.**
+- Revision 2 applied both, and decisions 12 and 13.
+- Review round 2 read revision 2 at `2574a277`:
+  - scoped re-review: 0 Blocking, 5 Important, 18 Minor;
+  - adversarial review of the close and focus mechanics: 1 Blocking, 7
+    Important, 8 Minor.
+- Revision 3 applies both. Most of round 2 sits in where focus goes, so
+  that contract is now a table of required outcomes (design A6), which
+  Task 2 writes test-first. **Revision 3 has not been independently
+  reviewed.**
 - The plan has 10 tasks (0–9). There is no split line: the Wave defines
   none for this Cycle.
 
@@ -191,14 +198,16 @@ Settings, footer, content-area or keymap files (planning sweep,
 3. **The details sheet gives way.** Settings opened while an item's
    details sheet is open closes that sheet first and loses no edit (Wave
    decision 6).
-4. **Focus is trapped and returns.**
-   - Tab stays inside the sheet, and Escape closes it.
-   - Focus returns to the control that opened it.
-   - When that control is no longer drawn, the workspace's own rules
-     place focus. Cycle 03b's footer rules apply first (R-49, R-50), then
-     the nearest region.
-   - A quiet close (quitting, Show in Activity) moves no focus back.
-   - (`05`; RFC 343–345.)
+4. **Focus is trapped and returns** (`05`; RFC 343–345), as the design's
+   table A6 sets out:
+   - Tab stays inside the sheet, and focus never stays behind it while it
+     is open;
+   - Escape closes it;
+   - focus returns to the control that opened it. For an Activity row
+     that is the list, and for a popover row the footer item (Cycle 03b);
+   - when that control is no longer drawn, focus goes to its region, and
+     for a hidden footer item to the next footer control (03b R-49);
+   - a quiet close (quitting, Show in Activity) moves no focus back.
 5. **Every way in lands.** Each existing route into Settings opens the
    sheet at its page and control, by keyboard as well as pointer (Wave;
    design Part D).
@@ -212,7 +221,12 @@ Settings, footer, content-area or keymap files (planning sweep,
    - routes land on fields (decision 8);
    - Approve host… uses the row's repository (decision 9);
    - a click outside closes Settings (decision 13);
+   - Show in Activity closes Settings (decision 5);
    - Drafts stays shown under the sheet (R-31);
+   - a typed passphrase is kept across the Keys and Trusted servers parts
+     of Sharing & keys (B3);
+   - Add pressed and then Settings closed before the folder check lands
+     adds nothing (R-48);
    - the folded-in fixes (Part G).
 7. **R-60 holds** (Wave 03 D3). Nothing in the workspace acts behind
    Settings, and nothing pulls focus behind it. The one exception is
@@ -238,8 +252,8 @@ reports.
 | A1 | Settings opens as a sheet from the footer and Ctrl ,, and the workspace keeps it (Wave scope; contract 1) | `settings_is_a_sheet_the_workspace_keeps` (P1); `each_route_lands_on_its_page_and_control` (P4); E-18's footer tests | Planned |
 | A2 | Opening and closing Settings leaves the open item, its scroll position and any draft untouched (Wave exit; contract 2) | `settings_leaves_the_item_as_it_was` (P2) | Planned |
 | A3 | Opening Settings while a details sheet is open closes it first and loses no edit (Wave exit; contract 3) | `settings_replaces_the_details_sheet_and_keeps_its_edits` (P3); E-2 | Planned |
-| A4 | Focus trapped, Escape closes, focus returns to the invoking control (Wave scope; contract 4) | `focus_returns_to_what_opened_settings` (P5); `settings_closes_every_way` (P6); `focus_stays_inside_settings` (P23) | Planned |
-| A5 | Every existing settings journey and recovery route passes through the sheet by keyboard (Wave exit; contract 5) | `routes_by_keyboard` (P20); `sharing_and_keys_by_keyboard` (P19); P4; E-18; the keyboard journeys in `D/view/keyboard_tests/settings.rs` and `polling_keyboard`, edited only as E-5, E-12, E-14 and E-15 say | Planned |
+| A4 | Focus trapped, Escape closes, focus returns to the invoking control (Wave scope; contract 4) | Design A6 rows F1–F17, through `focus_returns_to_what_opened_settings` (P5), `settings_closes_every_way` (P6), `focus_stays_inside_settings` (P23) and `late_work_moves_no_focus` (P22) | Planned |
+| A5 | Every existing settings journey and recovery route passes through the sheet by keyboard (Wave exit; contract 5) | `routes_by_keyboard` (P20); `sharing_and_keys_by_keyboard` (P19); P4; E-18; the keyboard journeys in `D/view/keyboard_tests/settings.rs` and `polling_keyboard`, edited only as E-5, E-12, E-14, E-15 and E-16 say | Planned |
 | A6 | The pages folded into the design's menu (Wave scope) | `settings_has_three_pages` (P16); `one_repository_is_chosen` (P10); `the_key_forms_open_from_their_buttons` (P13) | Planned |
 | A7 | Behaviour unchanged, with contract 6's exceptions | `key_rows_send_what_todays_controls_sent` (P12); today's page tests pass, edited only as the named edits say | Planned |
 | A8 | Settings removed from the content region and the sidebar (Wave scope) | `the_old_settings_places_are_gone` (P17) | Planned |
@@ -380,3 +394,5 @@ None blocking. Design U-3 is checked on screen, and U-5 in Task 0.
 | Review round 1, source and feasibility (revision 1, `65c898a5`) | 0 Blocking, 10 Important, 9 Minor: quitting and `open_item` bypass the close; the chip origin; route focus lost to `open_sheet`; the passphrase wiped on Hosts routes; the page keys' handler; unnamed test breaks; a missing way in (W-33); `focus_content` and async refocus; test accessors | Important, Minor | Revision 2 (design Review Record) | Review report, 2026-11-13 |
 | Review round 1, contract and consistency (revision 1, `65c898a5`) | 2 Blocking, 16 Important, 17 Minor. Blocking: no keyboard proof of the routes; Cycle 03b's triggers missing from Part D. Important: 03b's focus fallbacks, quit focus, the passphrase predicate, Cycle 05's dependency, Escape against `05`, interruptions, contract 6's exceptions, decision 3's attribution, privacy and focus-trap proof, scroll leak, named edits, Task 1's size, pushes, a pending details request, decisions 9 and 11 | Blocking, Important, Minor; owner questions | Revision 2: contracts 4, 6, 7, 9; A4, A5, A9, A11, A13, A14; Downstream Obligations; decisions 7–11 revised; decisions 12, 13 | Review report, 2026-11-13 |
 | Owner, 2026-11-13, after review round 1 | Decision 3's attribution and two more items; the click outside | Owner decisions | Decisions 12 and 13 | Session, 2026-11-13 |
+| Review round 2, scoped re-review (revision 2, `2574a277`) | 0 Blocking, 5 Important, 18 Minor: task order (P3, E-13), no route for W-5 and W-6, origins not wired, module runs after Task 5. All round-1 Blocking and Important findings resolved | Important, Minor | Revision 3 (design Review Record) | Review report, 2026-11-13 |
+| Review round 2, adversarial on close and focus (revision 2, `2574a277`) | 1 Blocking, 7 Important, 8 Minor. Blocking: focus can be left behind the open sheet with no keyboard way back | Blocking, Important, Minor | Revision 3: contract 4; design A6's table, R-43 to R-56 | Review report, 2026-11-13 |
