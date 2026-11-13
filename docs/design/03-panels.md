@@ -43,7 +43,7 @@ Every panel distinguishes **four states**, as the RFC requires:
 
 ## Tickets (flat, dense, sortable)
 
-**Toolbar:** `plus` New ticket (Ctrl N) · `ellipsis` More.
+**Toolbar:** `plus` New ticket (Ctrl N, or the platform's New key) · `ellipsis` More.
 
 **Filter bar** (padding 6 8, bottom border):
 - A segmented control: `Open 8 | Closed 4 | All 12`, counts in `muted`. The active segment is `border`-colored with `text`. The default is **Open** (RFC). Closure means lifecycle closure, not the status text.
@@ -55,14 +55,14 @@ Every panel distinguishes **four states**, as the RFC requires:
 | Column | Width | Content |
 | --- | --- | --- |
 | (type) | 14 px | type icon 13 px: cycle `repeat`, defect `bug`, feature `sparkles`, task `list-checks`, missing `triangle-alert` (amber) |
-| Code | 78 px | short code, mono 11 px, `secondary`; `—` when none |
+| Code | 78 px | short code as stored, in lowercase (Wave 04 Cycle 02 decision 3), mono 11 px, `secondary`; `—` when none |
 | Title | flex | ellipsis. After it, inline markers: `pencil` (amber, "You're editing this. Saved on this computer, not shared yet."), `circle-alert` (red, conflict) |
 | Status | 92 px | pill: 11 px, padding 1 7, radius 9, tinted bg + colored text (table below) |
 | Upd. | 30 px | right-aligned age `12m`, `5h`, `3d` (`muted`) |
 
 The default sort is **Updated, newest first**. Closed tickets use `secondary` title color.
 
-**Status pill colors.** Status is a free-form project value. These are the known values; unknown values fall back to neutral.
+**Status pill colors.** Status is a free-form project value. These are the known values; unknown values fall back to neutral. *The desktop uses one mapping for the list's pill and the item header's status chip: the header's, with "ready" added (Wave 04 Cycle 02 decision 20, 2026-11-11).*
 
 | Status | Text | Background |
 | --- | --- | --- |

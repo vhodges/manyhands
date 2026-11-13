@@ -234,7 +234,7 @@ fn read_ticket(
 /// item the binding read, before any preview or record. The domain
 /// operation refuses a new row's write as well, under the lease and from
 /// the branch tips (C5); the closure operation and repair are not refused.
-fn refuse_closed(item: &ItemDto) -> Result<(), Answer> {
+pub(super) fn refuse_closed(item: &ItemDto) -> Result<(), Answer> {
     if item
         .closure
         .as_ref()

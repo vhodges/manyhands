@@ -196,6 +196,11 @@ pub struct ResolveSynchronizationRequest {
     pub(super) observation: ConflictObservation,
     pub(super) resolutions: Vec<(ConflictPathToken, RedactedConflictBytes)>,
     pub identity: Option<ConfirmedCommitIdentity>,
+    /// The attempt is to be the synchronization's only unfinished one: one
+    /// is not recorded beside another (fact 71), as checked under the
+    /// conflict's reservation. `conflict resolve` sets it; a direct call of
+    /// the library does not, and is answered as before.
+    pub(super) alone: bool,
 }
 
 impl ResolveSynchronizationRequest {
@@ -214,7 +219,16 @@ impl ResolveSynchronizationRequest {
             observation,
             resolutions,
             identity,
+            alone: false,
         }
+    }
+
+    /// The same request, refused with `RecoveryRequired` when another
+    /// attempt of the synchronization is unfinished once its conflict is
+    /// reserved, before this attempt is recorded (fact 71).
+    pub(crate) fn alone(mut self) -> Self {
+        self.alone = true;
+        self
     }
 }
 

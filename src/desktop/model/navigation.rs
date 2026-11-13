@@ -141,7 +141,7 @@ impl ItemLocator {
     }
 }
 
-/// The navigation region's pane.
+/// The list used last: Documents or Tickets (R-8).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum Pane {
     #[default]

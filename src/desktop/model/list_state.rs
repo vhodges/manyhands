@@ -124,6 +124,113 @@ impl<T: Rows> ListState<T> {
     }
 }
 
+/// A list's state with the rows of its last ready read kept (ruling R-17).
+///
+/// A reload shows the kept rows until it lands; a read that stays busy
+/// over kept rows keeps them and says so; a failure replaces them, as D1's
+/// ruling R-B5 says. `clear` drops them, as a change of repository does.
+#[derive(Clone, Debug)]
+pub(crate) struct KeptList<T> {
+    state: ListState<T>,
+    /// The last `Ready` state, while the list is `Loading` over it.
+    kept: Option<ListState<T>>,
+    busy_over_kept: bool,
+}
+
+impl<T> Default for KeptList<T> {
+    fn default() -> Self {
+        Self {
+            state: ListState::Loading,
+            kept: None,
+            busy_over_kept: false,
+        }
+    }
+}
+
+impl<T> KeptList<T> {
+    /// Loading again, keeping the ready rows. A list that has none keeps
+    /// none.
+    pub(crate) fn reload(&mut self) {
+        self.busy_over_kept = false;
+        if matches!(self.state, ListState::Ready { .. }) {
+            self.kept = Some(std::mem::replace(&mut self.state, ListState::Loading));
+        } else {
+            self.state = ListState::Loading;
+            // A `Loading` list keeps what it kept; any other state had none.
+        }
+    }
+
+    /// Loading with nothing kept.
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Applies a finished state. `Ready` replaces. `Busy` over kept rows
+    /// keeps them; `Busy` with none, and `Failed`, replace.
+    pub(crate) fn apply_state(&mut self, state: ListState<T>) {
+        match state {
+            ListState::Busy => {
+                if let Some(kept) = self.kept.take() {
+                    self.state = kept;
+                    self.busy_over_kept = true;
+                } else if matches!(self.state, ListState::Ready { .. }) {
+                    self.busy_over_kept = true;
+                } else {
+                    self.state = ListState::Busy;
+                    self.busy_over_kept = false;
+                }
+            }
+            state => {
+                self.state = state;
+                self.kept = None;
+                self.busy_over_kept = false;
+            }
+        }
+    }
+
+    /// Applies a finished read through `apply_state`.
+    pub(crate) fn apply<V>(
+        &mut self,
+        result: ReadResult<V>,
+        ready: impl FnOnce(V) -> ListState<T>,
+    ) {
+        self.apply_state(ListState::from_read(result, ready));
+    }
+
+    pub(crate) fn state(&self) -> &ListState<T> {
+        &self.state
+    }
+
+    /// The ready rows, or the kept rows while loading over them.
+    pub(crate) fn rows(&self) -> Option<&T> {
+        self.state
+            .rows()
+            .or_else(|| self.kept.as_ref().and_then(ListState::rows))
+    }
+
+    /// Changes the ready rows, or the kept rows while loading over them:
+    /// what `rows` would give.
+    pub(crate) fn map_rows(&mut self, change: impl FnOnce(&mut T)) {
+        let state = match &mut self.state {
+            ListState::Ready { .. } => Some(&mut self.state),
+            _ => self.kept.as_mut(),
+        };
+        if let Some(ListState::Ready { rows, .. }) = state {
+            change(rows);
+        }
+    }
+
+    /// Loading over kept rows.
+    pub(crate) fn reloading(&self) -> bool {
+        matches!(self.state, ListState::Loading) && self.kept.is_some()
+    }
+
+    /// The last read stayed busy and the rows shown are the earlier ones.
+    pub(crate) fn busy_over_kept(&self) -> bool {
+        self.busy_over_kept
+    }
+}
+
 /// An index state in fixed text.
 pub(crate) fn index_label(index: &IndexStateDto) -> &'static str {
     match index.state {

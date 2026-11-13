@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 synchronization conflict",
+  "description": "What conflict show reads of a remote synchronization's conflict: where it stands, what it needs next, and, while it is live, its observation and each conflicted path. A requested read: the sides are content. Nothing is written by the read.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "operation_id",
+    "comment_operation_id",
+    "target",
+    "item_id",
+    "stage",
+    "state",
+    "next_action",
+    "request_id",
+    "eligibility",
+    "local_parent",
+    "incoming_parent",
+    "observation",
+    "historical",
+    "paths"
+  ],
+  "properties": {
+    "operation_id": {
+      "description": "The synchronization's ID, whichever ID was asked for: the synchronization's own, or the operation of a comment it publishes.",
+      "type": "string"
+    },
+    "comment_operation_id": {
+      "description": "The operation of the comment the synchronization publishes, or null when it publishes none.",
+      "type": ["string", "null"]
+    },
+    "target": {
+      "description": "The branch the synchronization synchronizes: primary, or a document's or a ticket's editing branch.",
+      "type": "string",
+      "enum": ["primary", "document", "ticket"]
+    },
+    "item_id": {
+      "description": "The item whose editing branch it synchronizes, or null for primary.",
+      "type": ["string", "null"]
+    },
+    "stage": {
+      "description": "The merge the conflict is in: the item's remote branch into its editing branch (context), or primary into the branch (primary).",
+      "type": "string",
+      "enum": ["context", "primary"]
+    },
+    "state": {
+      "description": "Where the conflict stands.",
+      "type": "string",
+      "enum": [
+        "conflict_pending",
+        "resolution_prepared",
+        "resolved",
+        "repaired",
+        "repair_refused",
+        "cancelled",
+        "complete"
+      ]
+    },
+    "next_action": {
+      "description": "What the conflict needs next. resolve only when the set is not empty and every path is eligible canonical content; external_repair when the merge is finished in Git outside Manyhands; retry_resolution when the request named by request_id may continue its attempt; resume when operation resume finishes the operation; synchronize when a new synchronization publishes what a cancelled one left; none once it is published.",
+      "type": "string",
+      "enum": [
+        "resolve",
+        "retry_resolution",
+        "external_repair",
+        "resume",
+        "synchronize",
+        "none"
+      ]
+    },
+    "request_id": {
+      "description": "The request whose resolution attempt is unfinished, or null.",
+      "type": ["string", "null"]
+    },
+    "eligibility": {
+      "description": "Whether the live conflict's set can be resolved in Manyhands, one value for the whole set; null when no conflict is live.",
+      "type": ["string", "null"],
+      "enum": ["eligible_canonical", "external_resolution_required", null]
+    },
+    "local_parent": {
+      "description": "The commit the merge began from on the local branch.",
+      "type": "string"
+    },
+    "incoming_parent": {
+      "description": "The commit the merge took in.",
+      "type": "string"
+    },
+    "observation": {
+      "description": "conflict-v1: and a digest of the live conflict, which a resolution presents; null when no conflict is live. It is re-derived on every read and is valid only while the conflict is unchanged.",
+      "type": ["string", "null"]
+    },
+    "historical": {
+      "description": "True when a resolution attempt has written paths: the sides are the recorded conflict's, and the worktree may already hold results.",
+      "type": "boolean"
+    },
+    "paths": {
+      "description": "The live conflict's paths, ordered by raw path bytes; empty when no conflict is live.",
+      "type": "array",
+      "items": { "$ref": "conflict_path.schema.json" }
+    }
+  }
+}

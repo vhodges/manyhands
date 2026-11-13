@@ -96,8 +96,10 @@ async fn read_tab(reader: Reader, target: OpenTarget) -> ItemReads {
 }
 
 impl ItemPane {
-    /// Reload keeps the shown state until the replacement arrives.
+    /// Reload keeps the shown state until the replacement arrives. The
+    /// tab's images are cleared, so each is read again as it is now.
     pub(crate) fn reload(&mut self, cx: &mut Context<Self>) -> Stamp {
+        self.images.clear(cx);
         let stamp = self.model.reload();
         self.read(stamp.clone(), cx);
         stamp
@@ -105,15 +107,34 @@ impl ItemPane {
 
     pub(super) fn read(&mut self, stamp: Stamp, cx: &mut Context<Self>) {
         let target = self.model.target().clone();
+        // A read begun once the item's share has finished speaks for its
+        // outcome (`share`).
+        let after_share = self.share_before_read(cx);
         self.read = Some(self.services.read_job(
             stamp,
             move |reader| read_tab(reader, target),
             cx,
-            |this: &mut Self, stamp, reads, cx| {
+            move |this: &mut Self, stamp, reads, cx| {
+                let landed = stamp.clone();
                 if this.model.apply_reads(stamp, reads) {
+                    let observation = this
+                        .model
+                        .item()
+                        .rows()
+                        .map(|item| item.observation.clone());
+                    this.read_after_share(after_share, observation);
                     // An attached draft is classified against the new read;
                     // its text and base stay as they are.
                     this.draft.reads_landed();
+                    // While Loading, the edit editor opens from this read;
+                    // after a save, a clean one reloads a body that differs.
+                    let found = this.model.item().rows().is_some();
+                    this.edit.read_landed(found);
+                    // Late results: a clean edit editor takes a newer read.
+                    if !this.post_save_read_landed(&landed, cx) {
+                        this.late_read_landed(cx);
+                    }
+                    this.locate_images(cx);
                     cx.notify();
                 }
             },
@@ -136,7 +157,19 @@ impl ItemPane {
 
     /// Finished requests trigger Workspace's tab reload; unsent/cancelled ones
     /// reload here. A missing request is still queued in the worker channel.
+    /// An Edit's prepare and its saves go on as their requests do
+    /// (`edit`), and so does a repair (`repair`).
     pub(super) fn operations_changed(&mut self, cx: &mut Context<Self>) {
+        self.repair_progressed(cx);
+        self.prepare_progressed(cx);
+        self.save_progressed(cx);
+        self.follow_done(cx);
+        self.follow_close_save(cx);
+        self.share_progressed(cx);
+        self.posts_progressed(cx);
+        // The lifecycle lock reads the request model (D5 A2).
+        self.lock_changed(cx);
+        cx.notify();
         let Some(id) = self.refreshing else {
             return;
         };

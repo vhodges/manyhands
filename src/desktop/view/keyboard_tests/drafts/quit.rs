@@ -63,6 +63,11 @@ async fn a_draft_not_saved_on_quit_by_keyboard(cx: &mut TestAppContext) {
     use crate::desktop::view::operations::draft_flush_id;
 
     let shell = Shell::open(Fixture::new(), cx);
+    // 400 px wider (E-11): the draft-flush entry's text is a single unwrapped
+    // line (`operations.rs`, not editable in this Cycle), so in the Activity
+    // dock's width its Retry sits outside the clip. Wrapping the entry is for
+    // the Activity rebuild.
+    shell.resize_keeping_content(1840., 1400., cx);
     let id = shell.unsaved_draft(cx).await;
     // Clones share the failure point: the window's store fails too.
     let _failing = shell.fixture.draft_store().with_failure_point_for_testing(

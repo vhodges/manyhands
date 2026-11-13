@@ -22,6 +22,7 @@ use super::{QuitPhase, REGIONS, Region, Workspace};
 use crate::desktop::{
     keys::{self, Quit},
     model::{
+        layout::PanelKind,
         list_state::{LABEL_BUSY, index_label},
         navigation::Resolution,
     },
@@ -195,6 +196,7 @@ mod saving_drafts {
 
     use super::QuitPhase;
     use crate::desktop::{
+        model::layout::PanelKind,
         services::ReadKind,
         test_support::{drafts::stored_body, fixtures::Fixture},
         view::{
@@ -530,6 +532,56 @@ mod saving_drafts {
         assert_eq!(phase(&shell, cx), QuitPhase::Quit);
         std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
+
+    /// The same failure with Activity hidden (P27): Retry is not on screen,
+    /// so Cancel focuses the item area, and Needs attention counts the
+    /// failure. The layout is as the person left it.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    async fn drafts_not_saved_with_activity_hidden_focuses_the_item_area(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::desktop::view::{
+            footer::Control,
+            footer::tests::support::{focused, layout, read},
+            workspace::Region,
+        };
+
+        let shell = Shell::open(Fixture::new(), cx);
+        unsaved(&shell, cx).await;
+        let folder = shell.fixture.data_dir().join("drafts");
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+        shell.click(Control::Panel(PanelKind::Activity).id(), cx);
+        let hidden = layout(&shell, cx);
+        assert!(!hidden.is_displayed(PanelKind::Activity));
+
+        shell.keys("secondary-q", cx);
+        assert!(shell.present("drafts-not-saved-message", cx));
+        assert_eq!(phase(&shell, cx), QuitPhase::Running);
+        // Read before any frame is drawn: the next draw would put focus
+        // back by itself, hiding a Cancel that moved it to a Retry not drawn.
+        let (item_area, last) = shell.frame(cx, |window, cx| {
+            window.click("drafts-not-saved-cancel", cx);
+            (
+                window.find(Region::Content.id()).focused(),
+                shell.workspace.read(cx).last_region,
+            )
+        });
+        shell.run(cx);
+        assert_eq!(item_area, Some(true), "the item area");
+        assert_eq!(last, Some(Region::Content));
+        assert!(!shell.present("drafts-not-saved-message", cx));
+        assert_eq!(phase(&shell, cx), QuitPhase::Running);
+
+        assert!(focused(&shell, Region::Content.id(), cx), "the item area");
+        assert!(!shell.present(Region::Operations.id(), cx));
+        assert_eq!(layout(&shell, cx), hidden, "no panel is revealed");
+        assert_eq!(
+            read(&shell, Control::Attention, cx),
+            Some(("1 needs attention".to_owned(), None))
+        );
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
 }
 
 /// A window over a fixture with two repositories, `a` and `b`, whose
@@ -796,6 +848,50 @@ fn a_list_reload_after_a_second_actor_removes_the_selection_shows_unavailable(
     }));
 }
 
+/// A selection that goes, as when its repository is removed, drops a held
+/// ID read, whatever loaded before: after a reload that was no change of
+/// repository, the read must still land on nothing and open no tab.
+#[gpui_kit::test]
+fn a_selection_that_goes_drops_a_held_id_read(cx: &mut TestAppContext) {
+    use crate::desktop::model::find::FindState;
+
+    let shell = Shell::new(cx);
+    shell.click(row(0), cx);
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.reload_lists(cx));
+    shell.visual(cx).run_until_parked();
+
+    let held = shell.backend.hold_read(ReadKind::Item);
+    shell.frame(cx, |window, cx| {
+        shell.workspace.update(cx, |workspace, cx| {
+            workspace.set_filter_text("01ARZ3NDEKTSV4RRFFQ69G5FK9", window, cx);
+            workspace.submit_filter(window, cx);
+        })
+    });
+    shell.visual(cx).run_until_parked();
+    let state = |cx: &mut TestAppContext| {
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.find_state().clone())
+    };
+    assert_eq!(state(cx), FindState::Searching);
+
+    shell.workspace.update(cx, |workspace, cx| {
+        assert!(workspace.navigation.forget(&key(&shell.a)));
+        workspace.clear_lists(cx);
+    });
+    assert_eq!(state(cx), FindState::Idle, "dropped with the selection");
+    let _ = held.send(());
+    shell.visual(cx).run_until_parked();
+    assert_eq!(state(cx), FindState::Idle, "and never lands");
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.tab_keys().is_empty())
+    );
+}
+
 /// A list reload that stays busy keeps the rows of the last good read
 /// shown, labeled busy and as the last list read, with Retry; the
 /// sidebar does not collapse to "Busy". Retry, once the lease is let go,
@@ -898,9 +994,11 @@ fn f6_cycles_the_regions_and_secondary_digits_focus_each(cx: &mut TestAppContext
     let shell = Shell::new(cx);
     assert_eq!(focused_region(&shell, cx), Region::Repositories);
 
+    // Decision 9's order: Documents and Tickets sit either side of Content.
     for expected in [
-        Region::Navigation,
+        Region::Documents,
         Region::Content,
+        Region::Tickets,
         Region::Operations,
         Region::Repositories,
     ] {
@@ -909,18 +1007,25 @@ fn f6_cycles_the_regions_and_secondary_digits_focus_each(cx: &mut TestAppContext
     }
     for expected in [
         Region::Operations,
+        Region::Tickets,
         Region::Content,
-        Region::Navigation,
+        Region::Documents,
         Region::Repositories,
     ] {
         shell.keys("shift-f6", cx);
         assert_eq!(focused_region(&shell, cx), expected);
     }
+    // `secondary-2` focuses the list used last: Documents, then Tickets once
+    // F6 has taken focus there.
     for (keystroke, expected) in [
         ("secondary-3", Region::Content),
         ("secondary-1", Region::Repositories),
         ("secondary-4", Region::Operations),
-        ("secondary-2", Region::Navigation),
+        ("secondary-2", Region::Documents),
+        ("f6", Region::Content),
+        ("f6", Region::Tickets),
+        ("secondary-1", Region::Repositories),
+        ("secondary-2", Region::Tickets),
     ] {
         shell.keys(keystroke, cx);
         assert_eq!(focused_region(&shell, cx), expected, "{keystroke}");
@@ -1055,6 +1160,101 @@ fn a_repository_rows_selected_state_has_one_meaning(cx: &mut TestAppContext) {
         Some(SELECTED)
     );
     assert!(!shell.present(("repo-selected", 1usize), cx));
+}
+
+/// Whether `region` holds focus. `focused_region` looks up every region,
+/// so it cannot be used while a panel is hidden.
+fn holds_focus(shell: &Shell, region: Region, cx: &mut TestAppContext) -> bool {
+    shell.frame(cx, |window, _| {
+        window.find(region.id()).focused() == Some(true)
+    })
+}
+
+/// A quit that waits with Activity hidden changes nothing (P26, R-20):
+/// no panel is revealed, no layout is saved, and focus stays in the item
+/// area, since Quit now is not on screen to take it. `secondary-4` then
+/// reveals Activity, which says what the quit waits for, with Quit now.
+#[gpui_kit::test]
+async fn a_waiting_quit_with_activity_hidden_changes_nothing(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let shell = Shell::new(cx);
+    shell.click("footer-panel-activity", cx);
+    let layout = |shell: &Shell, cx: &mut TestAppContext| {
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.layout().clone())
+    };
+    let hidden = layout(&shell, cx);
+    assert!(!hidden.is_displayed(PanelKind::Activity));
+    assert!(!shell.present(Region::Operations.id(), cx));
+
+    let held = shell.backend.hold_job(JobKind::IndexRefresh);
+    let intent = Intent::IndexRefresh {
+        root: shell.a.clone(),
+    };
+    let label = intent.label();
+    let id = shell.workspace.read_with(cx, |workspace, _| {
+        workspace
+            .services()
+            .worker()
+            .submit(intent, Lane::User, None, None)
+    });
+    held.wait_reached();
+    shell.keys("secondary-3", cx);
+    assert!(holds_focus(&shell, Region::Content, cx));
+    let last = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.last_region);
+    assert_eq!(last, Some(Region::Content));
+    let saves = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.layout_saves());
+
+    // Read before any frame is drawn: the next draw would put the last
+    // region and focus back by itself (`focus_lost`), hiding a quit that
+    // moved them.
+    let (focus_moved, in_flight) = shell.frame(cx, |window, cx| {
+        let before = window.focused(cx);
+        shell
+            .workspace
+            .update(cx, |workspace, cx| workspace.request_quit(window, cx));
+        let moved = window.focused(cx) != before;
+        let last = shell.workspace.read(cx).last_region;
+        (moved, last)
+    });
+    shell.visual(cx).run_until_parked();
+    assert!(!focus_moved, "focus is not moved to a control not drawn");
+    assert_eq!(in_flight, last, "the last region is kept");
+    assert_eq!(phase(&shell.workspace, cx), QuitPhase::Finishing(id));
+    assert_eq!(layout(&shell, cx), hidden, "the layout is unchanged");
+    assert_eq!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.layout_saves()),
+        saves,
+        "no save is scheduled"
+    );
+    assert!(!shell.present(Region::Operations.id(), cx));
+    assert!(!shell.present("quit-now", cx), "Quit now is not displayed");
+    assert!(
+        holds_focus(&shell, Region::Content, cx),
+        "focus stays in the item area"
+    );
+
+    shell.keys("secondary-4", cx);
+    assert!(layout(&shell, cx).is_displayed(PanelKind::Activity));
+    assert_eq!(
+        shell.label("quit-finishing", cx),
+        Some(format!("Finishing {label}"))
+    );
+    assert!(shell.present("quit-now", cx));
+    assert_eq!(phase(&shell.workspace, cx), QuitPhase::Finishing(id));
+
+    held.release();
+    wait_until(cx, &shell.workspace, |workspace, _| {
+        workspace.quit_phase() == QuitPhase::Quit
+    })
+    .await;
 }
 
 /// Quitting while a job runs and a dialog is open: the dialog closes,

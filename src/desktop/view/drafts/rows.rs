@@ -3,22 +3,24 @@
 //!
 //! A row is a focusable stop of its own, then its actions, each a Kit
 //! button in a focus-tracking wrapper with the content region's scroll
-//! marker. Show and Retry act here; Restore, Export…, Export raw… and
-//! Discard… are the page's `row_actions`, and Inspect opens its panel under
-//! the row. What the last of them came to is said on the row.
+//! marker. Show and Retry act here; Restore, Open, Export…, Export raw…
+//! and Discard… are the page's `row_actions`, and Inspect opens its panel under
+//! the row. What the last of them came to is said on the row. Discard… is
+//! disabled while a save of its draft is in flight (R-71), and Restore,
+//! with why, while a tab of this window edits its item (Part C fix 2, D).
 
 use std::{rc::Rc, sync::Arc};
 
 use gpui_kit::{
     AnyElement, ClickEvent, Context, ElementId, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, StatefulInteractiveElement, Styled, TestSupportExt, Window,
-    component::{ActiveTheme, button::Button, h_flex, v_flex},
+    component::{ActiveTheme, Disableable, button::Button, h_flex, v_flex},
     div,
 };
 use manyhands::drafts::{DraftError, DraftId, Held, TargetState};
 
 use super::{
-    ACTIONS, CANNOT_READ, CHECKING, COMMENT_LATER, DraftsPage, LOADING_DRAFTS, NO_DRAFTS,
+    ACTIONS, CANNOT_READ, CHECKING, CONTINUE_IN_TAB, DraftsPage, LOADING_DRAFTS, NO_DRAFTS,
     OPEN_ELSEWHERE, RESTORED_HERE, SAVED_AT, Slot, row_id,
 };
 use crate::desktop::{
@@ -60,6 +62,7 @@ fn offered(row: &DraftRow, part: &str) -> bool {
     let readable = matches!(row.state, RowState::Readable { .. });
     match part {
         "restore" => actions.restore,
+        "open" => actions.open,
         "show" => actions.show,
         "inspect" => actions.inspect,
         "export" => readable,
@@ -139,19 +142,9 @@ impl DraftsPage {
                 .text_color(muted),
             );
         }
-        let comment = slot
-            .draft
-            .as_ref()
-            .is_some_and(|draft| draft.target.comment.is_some());
-        let note = (comment && matches!(row.state, RowState::Readable { held: Held::No, .. }))
-            .then(|| {
-                text(row_id(id, "note"), COMMENT_LATER)
-                    .text_xs()
-                    .text_color(muted)
-            });
         // Show only where there is a tab to show: a draft held here whose
         // session has no tab (one begun by the editor) offers none.
-        let tab = self.services.drafts().read(cx).tab_of(id).is_some();
+        let tab = self.services.drafts().read(cx).tab_holding(id).is_some();
         // Nothing would be lost: Discard comes first.
         let mut order: Vec<usize> = (0..ACTIONS.len()).collect();
         if matches!(row.target(), Some(TargetState::AlreadySaved)) {
@@ -190,7 +183,6 @@ impl DraftsPage {
             .border_color(border)
             .child(details)
             .child(text(row_id(id, "state"), state_label(row)).text_sm())
-            .children(note)
             .child(h_flex().gap_2().flex_wrap().children(actions))
             .children(notice)
             .children(inspect)
@@ -219,22 +211,36 @@ impl DraftsPage {
             "show" => Rc::new(move |this, _, cx| this.show_tab_of(id, cx)),
             "retry" => Rc::new(move |this, _, cx| this.retry(id, cx)),
             "restore" => Rc::new(move |this, _, cx| this.restore(id, cx)),
+            "open" => Rc::new(move |this, _, cx| this.open_item_of(id, cx)),
             "inspect" => Rc::new(move |this, window, cx| this.inspect(id, window, cx)),
             "export" | "export-raw" => Rc::new(move |this, window, cx| this.export(id, window, cx)),
             "discard" => Rc::new(move |this, window, cx| this.discard(id, window, cx)),
             _ => Rc::new(|_, _, _| {}),
         };
         let pressed = act.clone();
+        // Discard waits while a save of the draft is in flight (R-71);
+        // Restore, while a tab of this window edits the item, and says why
+        // (Part C fix 2, D; R-35).
+        let in_tab = part == "restore" && self.edited_in_its_tab(id, cx);
+        let disabled = (part == "discard" && self.saving(id, cx)) || in_tab;
         let button = Button::new(ElementId::NamedChild(
             Arc::new(wrapper.clone()),
             "button".into(),
         ))
         .label(label)
+        .disabled(disabled)
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| act(this, window, cx)));
-        div()
-            .id(wrapper)
-            .test_support()
-            .aria_label(label)
+        let why = in_tab.then(|| {
+            text(row_id(id, "restore-note"), CONTINUE_IN_TAB)
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+        });
+        let wrapper = div().id(wrapper).test_support().aria_label(label);
+        let wrapper = match in_tab {
+            true => wrapper.aria_description(CONTINUE_IN_TAB),
+            false => wrapper,
+        };
+        let action = wrapper
             .relative()
             .track_focus(focus)
             // Only the keyboard: a pointer's click is the button's.
@@ -249,8 +255,11 @@ impl DraftsPage {
                 focus
                     .is_focused(window)
                     .then(|| focus_ring(row_id(id, &format!("{part}-focus-ring")), ring)),
-            )
-            .into_any_element()
+            );
+        match why {
+            Some(why) => v_flex().child(action).child(why).into_any_element(),
+            None => action.into_any_element(),
+        }
     }
 }
 

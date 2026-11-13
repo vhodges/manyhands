@@ -13,6 +13,7 @@ pub struct LocalContextSyncInput {
     pub id: ItemId,
     pub observation: String,
 }
+#[derive(Clone)]
 pub struct LocalConflictResolutionInput {
     pub token: String,
     pub source: String,

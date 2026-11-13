@@ -1,12 +1,14 @@
-//! The Drafts page's row actions: Restore, Export…, Export raw… and
+//! The Drafts page's row actions: Restore, Open, Export…, Export raw… and
 //! Discard…, the last three through the `actions` the tab shares.
 //!
 //! Restore leaves the page through its host, which opens the item's tab
-//! (ruling R25); the page never hides itself. What an action came to is
+//! (ruling R25); the page never hides itself. A comment draft's Open does
+//! the same at once, claiming nothing: the item's composer adopts the
+//! draft. What an action came to is
 //! said on its row. A row Discard removes gives the focus to the next
 //! row, else the previous one, else the page's first control.
 
-use gpui_kit::{Context, Task, Window};
+use gpui_kit::{App, Context, Task, Window};
 use manyhands::{
     canonical::ItemId,
     drafts::{DraftError, DraftId, DraftTarget, ItemKind, markdown},
@@ -23,7 +25,7 @@ use crate::desktop::{
         tabs::TabKey,
     },
     services::drafts::RestoreRefused,
-    view::item::{NOT_DISCARDED, refused_label},
+    view::item::{NOT_DISCARDED, locked_text, refused_label},
 };
 
 /// The desktop's item kind of a draft's.
@@ -54,13 +56,48 @@ pub(super) fn action_ix(part: &str) -> usize {
 }
 
 impl DraftsPage {
+    /// Whether a tab of this window edits the item of the draft `id`, live
+    /// or kept, or is getting a session ready: Restore waits, as a second
+    /// session would be attached over the first (Part C fix 2, D; R-35).
+    pub(super) fn edited_in_its_tab(&self, id: DraftId, cx: &App) -> bool {
+        let Some(draft) = self.slot(id).and_then(|slot| slot.draft.as_ref()) else {
+            return false;
+        };
+        let tab = TabKey::for_target(&open_target(&draft.target));
+        self.services.edit_tabs().read(cx).editing(&tab, cx)
+    }
+
     /// Restore: claims the draft and attaches it to its item's tab, which
-    /// the host then opens and focuses. A refusal is said on the row.
+    /// the host then opens and focuses. A refusal is said on the row. Not
+    /// while a tab of this window edits the item.
     pub(super) fn restore(&mut self, id: DraftId, cx: &mut Context<Self>) {
+        if self.edited_in_its_tab(id, cx) {
+            return;
+        }
         let Some(draft) = self.slot(id).and_then(|slot| slot.draft.as_ref()) else {
             return;
         };
         let target = open_target(&draft.target);
+        // While the item's close or merge is unfinished, or its local copy
+        // is being retired, its draft is not restored into its tab (D5 A2,
+        // R-23; D6 decision 19).
+        let kind = dto_kind(draft.target.item_kind);
+        let lock = self.services.lock(
+            &draft.target.repository,
+            kind,
+            &draft.target.item_id.to_string(),
+            cx,
+        );
+        if draft.target.comment.is_none() && lock.blocks() {
+            let words = locked_text(lock, kind);
+            let notice = Notice {
+                text: words.to_owned(),
+                restore: false,
+            };
+            self.notices.insert(id, notice);
+            cx.notify();
+            return;
+        }
         if !self.restoring.insert(id) {
             return;
         }
@@ -97,6 +134,23 @@ impl DraftsPage {
             }
         })
         .detach();
+    }
+
+    /// Open: the host opens and focuses the tab of a comment draft's item,
+    /// whose composer adopts the draft. Nothing is claimed here.
+    pub(super) fn open_item_of(&mut self, id: DraftId, cx: &mut Context<Self>) {
+        let Some(Slot {
+            row,
+            draft: Some(draft),
+            ..
+        }) = self.slot(id)
+        else {
+            return;
+        };
+        if !row.actions.open {
+            return;
+        }
+        cx.emit(DraftsEvent::Open(open_target(&draft.target)));
     }
 
     /// Export… or Export raw…: a draft restored here exports its newest
@@ -141,8 +195,12 @@ impl DraftsPage {
         .detach();
     }
 
-    /// Discard…: asks first, naming the draft as its row does.
+    /// Discard…: asks first, naming the draft as its row does. Not while a
+    /// save of it is in flight.
     pub(super) fn discard(&mut self, id: DraftId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.saving(id, cx) {
+            return;
+        }
         let (Some(slot), Some(focus)) = (self.slot(id), self.focus.get(&id)) else {
             return;
         };
@@ -163,7 +221,7 @@ impl DraftsPage {
         let drafts = self.services.drafts().clone();
         let held_here = drafts.read(cx).session(id).is_some();
         let discard = drafts.update(cx, |registry, cx| match held_here {
-            true => registry.discard(id, cx),
+            true => registry.discard_held(id, cx),
             false => registry.discard_stored(id, readable, cx),
         });
         self.notices.remove(&id);

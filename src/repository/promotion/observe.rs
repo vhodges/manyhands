@@ -732,21 +732,38 @@ pub(in super::super) fn remote_facts(
     }))
 }
 
-/// D5: whether an absent tracking context was once published.
+/// D5 and decision 35: what an absent tracking context says of the remote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum RemoteContextHistory {
+    /// No fetch has seen it published: a first publication will make it.
     NeverPublished,
+    /// A fetch saw it published and a later one saw it gone.
     Deleted,
+    /// Published, or its history unknown, with no fetch that saw it gone:
+    /// the branch may stand, and a poll reads it.
     Unknown,
+    /// The evidence says the history is unknown (a repository whose cache
+    /// was lost or whose remote changed): a poll can't read it, and only
+    /// the owner's repair settles it.
+    Unresolved,
 }
+/// What an absent tracking context says of the remote. Published and then
+/// seen gone by a fetch is `Deleted`. Published with no fetch that saw it
+/// gone (a first push makes no tracking ref, decision 29) is `Unknown`: the
+/// branch may stand, and a poll reads it (decision 35).
 pub(in super::super) fn remote_context_history(
     snapshot: &RemoteSnapshot,
     kind: LifecycleKind,
     item: &ItemId,
 ) -> RemoteContextHistory {
     match snapshot.fetch_publication_evidence_for(kind.authoring(), item) {
-        RemotePublicationEvidence::ObservedPublished => RemoteContextHistory::Deleted,
-        RemotePublicationEvidence::HistoryUnknown => RemoteContextHistory::Unknown,
+        RemotePublicationEvidence::ObservedPublished
+            if snapshot.context_deletion_observed(kind.authoring(), item) =>
+        {
+            RemoteContextHistory::Deleted
+        }
+        RemotePublicationEvidence::ObservedPublished => RemoteContextHistory::Unknown,
+        RemotePublicationEvidence::HistoryUnknown => RemoteContextHistory::Unresolved,
         RemotePublicationEvidence::NeverPublished => RemoteContextHistory::NeverPublished,
     }
 }
@@ -928,6 +945,9 @@ fn observe_git(
             }
             RemoteContextHistory::Unknown => {
                 blockers.insert(PromotionBlocker::HistoryUnknown);
+            }
+            RemoteContextHistory::Unresolved => {
+                blockers.insert(PromotionBlocker::HistoryUnresolved);
             }
             RemoteContextHistory::NeverPublished => {}
         }

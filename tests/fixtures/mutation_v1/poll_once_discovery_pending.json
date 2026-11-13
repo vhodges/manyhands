@@ -1,0 +1,50 @@
+{
+  "code": "discovery_pending",
+  "command": "poll once",
+  "data": {
+    "completed_at": "<completed_at>",
+    "completion": "completed",
+    "next_eligible_at": "<next_eligible_at>",
+    "operation_id": "<operation>",
+    "targets": [
+      {
+        "after_oid": "<oid>",
+        "before_oid": "<oid>",
+        "disposition": "fast_forwarded",
+        "item_id": null,
+        "kind": null,
+        "target": "refs/heads/main"
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "pending",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The change is recorded; the index has not been updated yet.",
+  "operation_id": "<operation>",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "index.refresh",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FP1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

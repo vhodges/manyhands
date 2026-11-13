@@ -13,9 +13,11 @@
 //! content region. Show asks the host to show a tab, as an event; it never
 //! hides the page itself (a later dock may keep it in view). Restore, once
 //! the draft is claimed, asks the host to open its item's tab, which the
-//! host does through `open_item`, leaving the page. Inspect opens a panel
-//! under its row; Restore, Export… and Discard… are `row_actions`, the
-//! last two through the `actions` shared with the tab.
+//! host does through `open_item`, leaving the page. A comment draft's Open
+//! asks the same of the host, claiming nothing: its item's composer adopts
+//! the draft. Inspect opens a panel under its row; Restore, Open, Export…
+//! and Discard… are `row_actions`, the last two through the `actions`
+//! shared with the tab.
 
 pub(crate) mod actions;
 mod inspect;
@@ -42,6 +44,7 @@ use super::{confirm::local_time, scroll::ContentScroll, sidebar::RETRY};
 use crate::desktop::{
     model::{
         drafts::DraftRow,
+        editor_text::normalized,
         navigation::OpenTarget,
         stamp::{Generations, Stamp, ViewScope},
         tabs::TabKey,
@@ -56,9 +59,13 @@ pub(crate) const CHECKING: &str = "Checking the item";
 pub(crate) const OPEN_ELSEWHERE: &str = "Open in another Manyhands window";
 pub(crate) const RESTORED_HERE: &str = "Restored in this window";
 pub(crate) const CANNOT_READ: &str = "This draft cannot be read";
-pub(crate) const COMMENT_LATER: &str = "The comment composer arrives in a later release.";
 pub(crate) const SAVED_AT: &str = "Saved for recovery at";
 pub(crate) const RESTORE: &str = "Restore";
+/// A comment draft's: opens its item, whose composer adopts the draft.
+pub(crate) const OPEN: &str = "Open";
+/// Why Restore is disabled for a draft whose item a tab of this window edits
+/// (Part C fix 2, D; R-35): the tab's banner gives no reason of its own.
+pub(crate) const CONTINUE_IN_TAB: &str = "Open in its tab to continue editing";
 pub(crate) const SHOW: &str = "Show";
 pub(crate) const INSPECT: &str = "Inspect";
 pub(crate) const DISCARD: &str = "Discard…";
@@ -67,8 +74,9 @@ pub(crate) use actions::{EXPORT, EXPORT_RAW};
 
 /// A row's actions, by element part and label, in the order a row shows
 /// them (an already saved draft shows Discard first).
-pub(crate) const ACTIONS: [(&str, &str); 7] = [
+pub(crate) const ACTIONS: [(&str, &str); 8] = [
     ("restore", RESTORE),
+    ("open", OPEN),
     ("show", SHOW),
     ("inspect", INSPECT),
     ("export", EXPORT),
@@ -86,7 +94,8 @@ pub(crate) fn row_id(id: DraftId, part: &str) -> String {
 pub(crate) enum DraftsEvent {
     /// Show and focus this tab: a draft restored here.
     Show(TabKey),
-    /// Open and focus this item's tab: its draft was restored into it.
+    /// Open and focus this item's tab: its draft was restored into it,
+    /// or it is a comment draft's item, whose composer adopts it.
     Open(OpenTarget),
 }
 
@@ -298,9 +307,21 @@ impl DraftsPage {
         self.slots.iter().find(|slot| slot.row.id == id)
     }
 
-    /// Show: the host shows and focuses the tab the draft is restored in.
+    /// Whether a save of the draft `id` is in flight, held by this
+    /// process's session of it: its Discard waits, as the tab's does, so a
+    /// discard never races a commit (design, Done and leaving; R-71).
+    fn saving(&self, id: DraftId, cx: &gpui_kit::App) -> bool {
+        self.services
+            .drafts()
+            .read(cx)
+            .session(id)
+            .is_some_and(|session| session.saving().is_some())
+    }
+
+    /// Show: the host shows and focuses the tab the draft is restored in,
+    /// or, a comment's, the tab whose composer holds it.
     fn show_tab_of(&mut self, id: DraftId, cx: &mut Context<Self>) {
-        if let Some(tab) = self.services.drafts().read(cx).tab_of(id) {
+        if let Some(tab) = self.services.drafts().read(cx).tab_holding(id) {
             cx.emit(DraftsEvent::Show(tab));
         }
     }
@@ -343,9 +364,16 @@ async fn read_target(reader: Reader, draft: Draft) -> (TargetState, Option<Strin
         Err(code) => return (classify(&draft, Err(code)), None),
     };
     let id = &draft.target.item_id;
-    let item = reader
+    // Classified as the base holds the item, its body as the editor loads
+    // it and its `deps` in ID order (R-11, R-72); a comment's draft is
+    // checked against the same read.
+    let item = match reader
         .call(ReadKind::Item, |service| service.show_item(repo, id))
-        .await;
+        .await
+    {
+        ReadResult::Ok(item) => ReadResult::Ok(normalized(&item)),
+        other => other,
+    };
     let title = match &item {
         ReadResult::Ok(item) => item.title.clone(),
         _ => None,

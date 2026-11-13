@@ -1,10 +1,10 @@
-//! Find's query and its stamps: text that parses as a ULID is an ID,
-//! anything else not blank is a short code, and a result for an earlier
-//! search, or for a repository no longer searched, is dropped.
+//! The ID read behind the filter input's Enter: text that parses as a
+//! ULID is an ID, and a result for an earlier read, or for a repository
+//! no longer selected, is dropped.
 
-use manyhands::{repository::ItemListDto, results::ResultCode};
+use manyhands::{repository::ItemDto, results::ResultCode};
 
-use super::{Find, FindQuery, FindResult, FindState};
+use super::{Find, FindResult, FindState, parse_id};
 use crate::desktop::{
     model::navigation::OpenTarget,
     services::{ReadFailure, ReadResult},
@@ -13,57 +13,36 @@ use crate::desktop::{
 
 const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
 
+/// E-5: what is an ID. Trimmed, and in either case: a ULID's letters are
+/// not case-sensitive. Anything else is not an ID, and is no longer a
+/// short code to look up: it filters the list.
 #[test]
-fn a_ulid_is_an_id_and_anything_else_is_a_short_code() {
-    assert_eq!(
-        FindQuery::parse(TICKET),
-        Some(FindQuery::Id(item_id(TICKET)))
-    );
-    // Trimmed, and in either case: a ULID's letters are not case-sensitive.
-    assert_eq!(
-        FindQuery::parse(&format!("  {}\n", TICKET.to_ascii_lowercase())),
-        Some(FindQuery::Id(item_id(TICKET)))
-    );
-    assert_eq!(
-        FindQuery::parse(" ae-k9x2b "),
-        Some(FindQuery::Slug("ae-k9x2b".to_owned()))
-    );
-    // Not quite a ULID: one character short, or one Crockford excludes.
-    assert_eq!(
-        FindQuery::parse(&TICKET[1..]),
-        Some(FindQuery::Slug(TICKET[1..].to_owned()))
-    );
+fn parse_id_reads_a_trimmed_ulid_in_either_case() {
+    let lower = TICKET.to_ascii_lowercase();
+    let short = &TICKET[1..];
+    // One character short, one Crockford excludes, one too many.
     let excluded = format!("{}U", &TICKET[..25]);
-    assert_eq!(
-        FindQuery::parse(&excluded),
-        Some(FindQuery::Slug(excluded.clone()))
-    );
-    assert_eq!(FindQuery::parse(""), None);
-    assert_eq!(FindQuery::parse(" \t "), None);
+    let long = format!("{TICKET}0");
+    let spaced = format!("  {lower}\n");
+    let tabbed = format!("\t{TICKET} ");
+    let table: [(&str, Option<&str>); 10] = [
+        (TICKET, Some(TICKET)),
+        (&lower, Some(TICKET)),
+        (&spaced, Some(TICKET)),
+        (&tabbed, Some(TICKET)),
+        (" ae-k9x2b ", None),
+        (short, None),
+        (&excluded, None),
+        (&long, None),
+        ("", None),
+        (" \t ", None),
+    ];
+    for (text, id) in table {
+        assert_eq!(parse_id(text), id.map(item_id), "{text:?}");
+    }
 }
 
-fn found(fixture: &Fixture, slug: &str) -> ItemListDto {
-    let root = fixture.create_repository("a");
-    fixture.create_ticket(&root, TICKET, "Found", "open");
-    fixture.refresh(&root);
-    let service = fixture.service();
-    let repo = service.resolve_repository(&root).unwrap();
-    service.find_tickets_by_slug(&repo, slug).unwrap()
-}
-
-#[test]
-fn matches_are_the_librarys_and_none_says_so() {
-    let fixture = Fixture::new();
-    let none = found(&fixture, "zz-zzzzz");
-    let mut find = Find::default();
-    let stamp = find.start("/a".to_owned());
-    assert!(matches!(find.state(), FindState::Searching));
-    assert!(find.apply_matches(stamp, ReadResult::Ok(none)));
-    assert_eq!(find.state(), &FindState::Done(FindResult::None));
-}
-
-#[test]
-fn an_id_found_opens_by_its_id_and_one_not_found_is_no_match() {
+fn found() -> (ItemDto, String) {
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
     fixture.create_ticket(&root, TICKET, "Found", "open");
@@ -71,10 +50,16 @@ fn an_id_found_opens_by_its_id_and_one_not_found_is_no_match() {
     let service = fixture.service();
     let repo = service.resolve_repository(&root).unwrap();
     let item = service.show_item(&repo, &item_id(TICKET)).unwrap();
-    let a = root.to_str().unwrap().to_owned();
+    (item, root.to_str().unwrap().to_owned())
+}
+
+#[test]
+fn an_id_found_opens_by_its_id_and_one_not_found_is_no_match() {
+    let (item, a) = found();
 
     let mut find = Find::default();
     let stamp = find.start(a.clone());
+    assert_eq!(find.state(), &FindState::Searching);
     assert_eq!(
         find.apply_item(stamp, ReadResult::Ok(item.clone())),
         Some(OpenTarget::for_item(&a, &item))
@@ -89,7 +74,10 @@ fn an_id_found_opens_by_its_id_and_one_not_found_is_no_match() {
     assert_eq!(find.apply_item(stamp, missing), None);
     assert_eq!(find.state(), &FindState::Done(FindResult::None));
 
-    // Any other failure is shown by its code.
+    // Busy is its own state, and any other failure is shown by its code.
+    let stamp = find.start(a.clone());
+    assert_eq!(find.apply_item(stamp, ReadResult::Busy), None);
+    assert_eq!(find.state(), &FindState::Busy);
     let stamp = find.start(a);
     let failure = ReadFailure {
         code: ResultCode::IndexUnavailable,
@@ -102,22 +90,28 @@ fn an_id_found_opens_by_its_id_and_one_not_found_is_no_match() {
     assert_eq!(find.state(), &FindState::Failed(failure));
 }
 
-/// Review Focus 1: a search's result lands only while it is the last one
-/// made, and not after Find was cleared for another repository.
+/// Review Focus 4: a read lands only while it is the last one made, and
+/// not after Find was cleared for another repository.
 #[test]
 fn an_earlier_search_is_dropped() {
-    let fixture = Fixture::new();
-    let none = found(&fixture, "zz-zzzzz");
+    let (item, a) = found();
     let mut find = Find::default();
-    let first = find.start("/a".to_owned());
-    let second = find.start("/a".to_owned());
-    assert!(!find.apply_matches(first, ReadResult::Ok(none.clone())));
-    assert!(matches!(find.state(), FindState::Searching));
-    assert!(find.apply_matches(second, ReadResult::Ok(none.clone())));
+    let first = find.start(a.clone());
+    let second = find.start(a.clone());
+    assert_eq!(
+        find.apply_item(first, ReadResult::Ok(item.clone())),
+        None,
+        "an earlier read opens nothing"
+    );
+    assert_eq!(find.state(), &FindState::Searching);
+    assert!(
+        find.apply_item(second, ReadResult::Ok(item.clone()))
+            .is_some()
+    );
 
-    let third = find.start("/a".to_owned());
+    let third = find.start(a);
     find.clear();
     assert_eq!(find.state(), &FindState::Idle);
-    assert!(!find.apply_matches(third, ReadResult::Ok(none)));
+    assert_eq!(find.apply_item(third, ReadResult::Ok(item)), None);
     assert_eq!(find.state(), &FindState::Idle);
 }

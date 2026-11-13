@@ -215,6 +215,7 @@ pub fn json(run: &CliRun) -> Value {
 }
 
 pub const CLI_CASES: &[&str] = &[
+    "context_retire_index_pending",
     "document_repair_preview",
     "ticket_repair_preview",
     "document_repair_ok",
@@ -297,6 +298,65 @@ pub const CLI_CASES: &[&str] = &[
     "cli_host_inspect",
     "cli_index_status",
     "cli_poll_status",
+    "context_observe_local",
+    "context_observe_local_unknown",
+    "context_observe_local_no_context",
+    "context_show_local",
+    "context_show_local_unknown",
+    "context_show_local_remote_operation",
+    "context_show_local_token_tampered",
+    "context_sync_local_noop",
+    "context_resolve_local",
+    "context_resolve_local_cancelled",
+    "context_resolve_local_unknown_token",
+    "context_resolve_local_external_only",
+    "context_resolve_local_after_partial",
+    "context_resolve_local_request_mismatch",
+    "context_resolve_local_incomplete",
+    "context_resolve_local_stale",
+    "context_operation_resume_original_request_required",
+    "context_resolve_local_input_failure",
+    "context_operation_abandon_refused",
+    "help_context_resolve_local",
+    "context_sync_local_unrelated",
+    "context_sync_local_closures",
+    "context_sync_local_unsupported",
+    "context_sync_local_discovery_pending",
+    "context_sync_local_fast_forward",
+    "context_sync_local_merge",
+    "context_sync_local_request_mismatch",
+    "context_sync_local_malformed",
+    "context_sync_local_stale",
+    "context_sync_local_dirty",
+    "context_sync_local_identity_required",
+    "context_sync_local_conflict",
+    "context_sync_local_external_only",
+    "context_sync_local_busy",
+    "context_sync_local_cancelled",
+    "context_sync_local_closure_past_closing",
+    "context_sync_local_input_failure",
+    "help_context_observe_local",
+    "help_context_show_local",
+    "help_context_sync_local",
+    "poll_once_fast_forward_and_materialize",
+    "poll_once_dirty",
+    "poll_once_diverged",
+    "poll_once_malformed",
+    "poll_once_remotely_deleted",
+    "poll_once_closed_ticket",
+    "poll_once_host_stop",
+    "poll_once_unlock_stop",
+    "poll_once_no_remote",
+    "poll_once_request_mismatch",
+    "poll_once_busy",
+    "help_poll_once",
+    "help_poll_configure",
+    "help_poll_pause",
+    "help_poll_resume",
+    "poll_pause_usage",
+    "poll_pause_request_mismatch",
+    "poll_resume_suspended",
+    "poll_configure_out_of_range",
     "cli_operation_list",
     "cli_operation_show",
     "cli_id_new",
@@ -317,8 +377,8 @@ pub const CLI_CASES: &[&str] = &[
     "help_resource_ticket",
     "help_root",
     "help_ticket_close",
+    "help_document_promote",
     "help_ticket_list",
-    "unavailable_ticket_close",
     "cli_ticket_ready",
     "cli_ticket_blocked",
     "cli_ticket_deps",
@@ -330,8 +390,72 @@ pub const CLI_CASES: &[&str] = &[
     "usage_unknown_command",
     "usage_unknown_option",
     "version",
+    "repo_sync_publication_remote_required",
+    "item_sync_item_not_found",
+    "operation_resume_operation_not_found",
+    "operation_resume_ok",
+    "operation_abandon_preview",
+    "operation_abandon_ok",
+    "comment_add_ok",
+    "comment_add_ticket_closed",
+    "comment_add_invalid_input",
+    "conflict_show_operation_not_found",
+    "conflict_show_invalid_input",
+    "conflict_resolve_invalid_input",
+    "item_republish_publication_remote_required",
+    "item_sync_ok",
+    "repo_sync_ok",
+    "operation_resume_comment_ok",
+    "conflict_show_ok",
+    "conflict_resolve_ok",
+    "item_republish_preview",
+    "item_republish_ok",
+    "document_promote_preview",
+    "ticket_close_preview",
+    "document_promote_local_only",
+    "ticket_close_local_only",
+    "ticket_close_made_ready",
+    "document_promote_blocked",
+    "ticket_close_blocked",
+    "document_promote_identity_required",
+    "ticket_close_identity_required",
+    "document_promote_invalid_id",
+    "ticket_close_invalid_id",
+    "document_promote_already_contained",
+    "ticket_close_already_contained",
+    "document_promote_request_mismatch",
+    "ticket_close_request_mismatch",
+    "ticket_close_checkpoint_merge_refused",
+    "ticket_close_prepare_held",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
+    "poll_once_retirement_stopped_text",
+    "context_observe_local_text",
+    "context_observe_local_unknown_text",
+    "context_observe_local_no_context_text",
+    "context_show_local_text",
+    "context_show_local_unknown_text",
+    "context_show_local_remote_operation_text",
+    "context_show_local_token_human",
+    "context_sync_local_noop_text",
+    "context_resolve_local_text",
+    "context_resolve_local_external_only_text",
+    "context_resolve_local_unknown_token_text",
+    "context_resolve_local_after_partial_text",
+    "context_resolve_local_incomplete_text",
+    "context_resolve_local_stale_text",
+    "context_sync_local_unrelated_text",
+    "context_sync_local_closures_text",
+    "context_sync_local_unsupported_text",
+    "context_sync_local_merge_text",
+    "context_sync_local_request_mismatch_text",
+    "context_sync_local_malformed_text",
+    "context_sync_local_stale_text",
+    "context_sync_local_dirty_text",
+    "context_sync_local_identity_required_text",
+    "context_sync_local_conflict_text",
+    "context_sync_local_external_only_text",
+    "context_sync_local_input_failure_text",
     "document_repair_text",
     "ticket_repair_text",
     "ticket_create_text",
@@ -353,11 +477,110 @@ pub const CLI_TEXT_CASES: &[&str] = &[
     "version_text",
     "ticket_list_text",
     "item_not_found_text",
+    "item_sync_text",
+    "repo_sync_text",
+    "operation_resume_text",
+    "operation_abandon_text",
+    "comment_add_text",
+    "item_republish_text",
+    "conflict_resolve_text",
+    "conflict_show_text",
+    "poll_once_fast_forward_text",
+    "poll_once_dirty_text",
+    "poll_once_malformed_text",
+    "poll_once_host_stop_text",
+    "poll_once_unlock_stop_text",
+    "poll_once_no_remote_text",
+    "poll_once_request_mismatch_text",
+    "poll_once_busy_text",
+    "poll_pause_text",
+    "poll_pause_noop_text",
+    "poll_pause_request_mismatch_text",
+    "poll_resume_noop_text",
+    "poll_resume_suspended_text",
+    "poll_configure_text",
+    "poll_configure_invalid_text",
+    "poll_configure_out_of_range_text",
+    "document_promote_preview_text",
+    "ticket_close_preview_text",
+    "document_promote_local_only_text",
+    "ticket_close_local_only_text",
+    "ticket_close_made_ready_text",
+    "document_promote_blocked_text",
+    "ticket_close_blocked_text",
+    "document_promote_identity_required_text",
+    "ticket_close_identity_required_text",
+    "document_promote_request_mismatch_text",
+    "ticket_close_request_mismatch_text",
+    "ticket_close_checkpoint_merge_refused_text",
+    "ticket_close_prepare_conflict_text",
+    "document_promote_prepare_conflict_text",
+    "document_promote_already_contained_text",
+    "ticket_close_prepare_context_missing_text",
+    "document_promote_prepare_context_missing_text",
+    "ticket_close_prepare_held_text",
+    "ticket_close_prepare_primary_missing_text",
+    "ticket_close_prepare_primary_ahead_text",
+    "ticket_close_prepare_remote_unknown_text",
 ];
 pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"];
 
 pub fn cli_fixture_directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_v1")
+}
+
+/// A run's stdout, as text.
+pub fn stdout(run: &CliRun) -> &str {
+    std::str::from_utf8(&run.stdout).unwrap()
+}
+
+/// A run's stderr, as text.
+pub fn stderr(run: &CliRun) -> &str {
+    std::str::from_utf8(&run.stderr).unwrap()
+}
+
+/// A run as a text golden holds it: stdout, stderr, then the exit status.
+pub fn run_text(run: &CliRun) -> String {
+    format!(
+        "{}--- stderr\n{}--- exit {}\n",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+        run.status
+    )
+}
+
+/// `text` with each word replaced by what `word` makes of it. A word is a run
+/// of alphanumerics and `joining` characters.
+pub fn scrub_text(text: &str, joining: &[char], word: impl Fn(&str) -> String) -> String {
+    let mut out = String::new();
+    let mut current = String::new();
+    for character in text.chars() {
+        if character.is_alphanumeric() || joining.contains(&character) {
+            current.push(character);
+        } else {
+            out.push_str(&word(&current));
+            current.clear();
+            out.push(character);
+        }
+    }
+    out.push_str(&word(&current));
+    out
+}
+
+/// The text golden `name` of `run`: its text with each `(value, label)` of
+/// `replaced` put in, then its words scrubbed as `scrub_text` does.
+pub fn text_golden_scrubbed(
+    name: &str,
+    run: &CliRun,
+    replaced: &[(&str, &str)],
+    joining: &[char],
+    word: impl Fn(&str) -> String,
+) {
+    let mut text = run_text(run);
+    for (value, label) in replaced {
+        text = text.replace(value, label);
+    }
+    assert_cli_text_golden(name, &scrub_text(&text, joining, word), &[]);
 }
 
 pub fn assert_cli_golden(name: &str, value: &Value, placeholders: &[(&str, &str)]) {

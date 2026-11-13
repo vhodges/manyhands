@@ -724,6 +724,40 @@ fn the_page_lists_the_selected_repository_or_the_one_chosen(cx: &mut TestAppCont
     assert_eq!(shell.rows("remote-name", cx), ["origin"]);
 }
 
+/// Share… of another repository opens the page on that one, though the
+/// page already works on the last: a publication remote is never chosen
+/// for the wrong repository. The normal open keeps what it works on.
+#[gpui_kit::test]
+fn opening_remotes_on_a_repository_shows_that_repository_even_after_another(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    let b = fixture.create_repository("b");
+    fixture.add_remote(&a, "origin", HTTPS_URL);
+    fixture.add_remote(&b, "upstream", SSH_URL);
+    let shell = remotes(fixture, &a, cx);
+    assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&a))));
+    shell.click("settings-close", cx);
+
+    shell.select(&b, cx);
+    let host = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.settings().clone());
+    shell.visual(cx).update(|window, cx| {
+        host.update(cx, |host, cx| host.open_remotes_on(b.clone(), window, cx))
+    });
+    shell.run(cx);
+    assert!(shell.present("settings-remotes", cx));
+    assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
+    assert_eq!(shell.rows("remote-name", cx), ["upstream"]);
+
+    // The sidebar's open keeps the repository the page works on.
+    shell.select(&a, cx);
+    shell.click(("settings-page", 1usize), cx);
+    assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
+}
+
 /// While a dialog is open, the page's handlers do nothing: no add,
 /// selection, choice or second dialog.
 #[gpui_kit::test]

@@ -14,10 +14,7 @@ use manyhands::{
     repository::ItemDtoKind,
 };
 
-use super::{
-    ANOTHER_OPEN, DRAFT_ACTIONS, DRAFT_KEPT, EDITOR_LATER, NO_LONGER_KEPT, NOT_YET_SAVED, RESTORE,
-    SAVED_FOR_RECOVERY,
-};
+use super::{ANOTHER_OPEN, DRAFT_KEPT, NO_LONGER_KEPT, NOT_YET_SAVED, RESTORE, SAVED_FOR_RECOVERY};
 use crate::desktop::{
     model::{drafts::IDLE, navigation::OpenTarget, tabs::TabKey},
     services::{ReadKind, drafts::DraftRegistry},
@@ -118,8 +115,9 @@ fn a_claimed_draft_shows_no_banner(cx: &mut TestAppContext) {
 }
 
 /// Restore attaches the draft: its section shows its fields, that it is
-/// saved for recovery and that the item is unchanged, with Edit and Save
-/// unavailable. The repository's files and refs are as they were.
+/// saved for recovery and that the item is unchanged, with Continue
+/// editing and Save (E-8). The repository's files and refs are as they
+/// were.
 #[gpui_kit::test]
 fn restore_attaches_the_draft_and_writes_nothing_to_the_repository(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -143,17 +141,15 @@ fn restore_attaches_the_draft_and_writes_nothing_to_the_repository(cx: &mut Test
     assert!(recovery.starts_with(SAVED_FOR_RECOVERY), "{recovery}");
     assert_eq!(label(&shell, "draft-target", cx).as_deref(), Some(CURRENT));
     assert!(!shell.present("draft-compare", cx), "nothing to compare");
-    assert_eq!(shell.rows("draft-later", cx), DRAFT_ACTIONS);
-    let notes = shell.rows("draft-later-note", cx);
-    assert_eq!(notes, [EDITOR_LATER, EDITOR_LATER]);
+    assert_eq!(
+        label(&shell, "draft-continue", cx).as_deref(),
+        Some("Continue editing")
+    );
+    assert_eq!(label(&shell, "draft-save", cx).as_deref(), Some("Save"));
     assert!(!shell.present("draft-banner", cx), "the draft is restored");
 
-    // Edit and Save are buttons that take no input: pressed, nothing
-    // changes, and the store still holds the draft, claimed here.
-    for ix in 0..DRAFT_ACTIONS.len() {
-        assert!(shell.inert_button(("draft-later-button", ix), cx));
-        shell.click(("draft-later-button", ix), cx);
-    }
+    // Neither is pressed: the text is as it was, the store still holds the
+    // draft, claimed here, and nothing is written.
     assert_eq!(
         label(&shell, "draft-body", cx).as_deref(),
         Some("Draft body")

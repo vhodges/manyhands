@@ -478,7 +478,7 @@ fn history_unknown() {
     f.db()
         .execute("UPDATE remote_polling_state SET history_unknown=1", [])
         .unwrap();
-    f.blocked(&[ClosureBlocker::HistoryUnknown]);
+    f.blocked(&[ClosureBlocker::HistoryUnresolved]);
 }
 #[test]
 fn already_closed() {
@@ -571,10 +571,12 @@ fn every_blocker_is_reported_in_fixed_order() {
 #[test]
 fn every_blocker_has_a_distinct_fixed_position() {
     let all = super::super::record::CLOSURE_BLOCKERS;
-    assert_eq!(all.len(), 21);
+    assert_eq!(all.len(), 22);
     assert!(all.windows(2).all(|w| w[0] < w[1]));
     assert_eq!(all[0], ClosureBlocker::NotATicket);
     assert_eq!(all[20], ClosureBlocker::IdentityRequired);
+    // Appended last, so the stored blocker masks keep their bits.
+    assert_eq!(all[21], ClosureBlocker::HistoryUnresolved);
 }
 #[test]
 fn identity_required_only_when_nothing_else_blocks() {

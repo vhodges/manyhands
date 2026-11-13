@@ -123,6 +123,7 @@ fn a_draft_no_one_holds_follows_the_restore_policy() {
             actions(&draft, Held::No, target),
             RowActions {
                 restore: allowed,
+                open: false,
                 show: false,
                 inspect: true,
                 discard: true,
@@ -139,6 +140,7 @@ fn a_comment_draft_is_never_restored_in_d2() {
         let failed = matches!(target, TargetState::ReadFailed(_));
         let offered = actions(&draft, Held::No, target);
         assert!(!offered.restore);
+        assert!(offered.open, "a comment draft's row opens its item");
         assert_eq!(offered.retry, failed);
         assert!(offered.inspect && offered.discard && !offered.show);
     }
@@ -149,6 +151,7 @@ fn a_draft_held_here_offers_show_inspect_and_discard_never_restore() {
     let draft = draft(ItemKind::Document, false);
     let expected = RowActions {
         restore: false,
+        open: false,
         show: true,
         inspect: true,
         discard: true,

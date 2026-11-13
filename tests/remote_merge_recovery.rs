@@ -54,6 +54,20 @@ const CASES: &[ssh_harness::Case] = &[
         "confirmed_identity_completes_a_divergent_primary_merge",
         confirmed_identity_completes_a_divergent_primary_merge,
     ),
+    ("c5_identity_resolution_bracketed", || {
+        c5_identity_resolution_refused(C5_BRACKETED)
+    }),
+    ("c5_identity_resolution_trimmed", || {
+        c5_identity_resolution_refused(C5_TRIMMED)
+    }),
+    (
+        "c5_identity_resolution_confirmed_unusable",
+        c5_identity_resolution_confirmed_unusable,
+    ),
+    (
+        "c5_identity_resolution_control",
+        c5_identity_resolution_control,
+    ),
     (
         "confirmed_identity_completes_a_canonical_resolution",
         confirmed_identity_completes_a_canonical_resolution,
@@ -1375,12 +1389,12 @@ fn two_clone_clean_ticket_divergence() -> Result<(), FixtureError> {
             (TICKET_REF.to_owned(), Some(merged))
         ]
     );
-    // Exact local ref scope: the context branch moved to the merge and its
-    // tracking ref records what Fetch observed, never this clone's own push.
+    // Exact local ref scope: the context branch moved to the merge, and its
+    // tracking ref to the push the remote was verified to hold (E-22).
     scope_after(
         &b_repo,
         &refs_before,
-        &[(TICKET_REF, merged), (TICKET_TRACKING, a_tip)],
+        &[(TICKET_REF, merged), (TICKET_TRACKING, merged)],
         Some(&linked),
     )?;
     assert_eq!(fixed(b_repo.refname_to_id(MAIN))?, base);
@@ -1441,7 +1455,7 @@ fn two_clone_clean_document_divergence() -> Result<(), FixtureError> {
     scope_after(
         &b_repo,
         &refs_before,
-        &[(DOCUMENT_REF, merged), (DOCUMENT_TRACKING, a_tip)],
+        &[(DOCUMENT_REF, merged), (DOCUMENT_TRACKING, merged)],
         Some(&p.b.linked(DOCUMENT)?),
     )?;
     let expected = document_source("Alpha title", BETA);
@@ -1504,11 +1518,12 @@ fn two_clone_primary_divergence() -> Result<(), FixtureError> {
         assert_eq!(fixed(std::fs::read(p.b.root.join(name)))?, bytes);
     }
     assert!(fixed(b_repo.statuses(None))?.is_empty());
-    // The primary branch moved to the merge; its tracking ref is A's tip.
+    // The primary branch moved to the merge, and so did its tracking ref
+    // once the push was verified (E-22).
     scope_after(
         &b_repo,
         &refs_before,
-        &[(MAIN, merged), (MAIN_TRACKING, a_tip)],
+        &[(MAIN, merged), (MAIN_TRACKING, merged)],
         None,
     )?;
     let n = p.server.receive_updates().len();
@@ -1550,14 +1565,15 @@ fn two_clone_context_then_primary_ordered_merges() -> Result<(), FixtureError> {
     assert_eq!(merge_commits(&b_repo)?, 2);
     one_update(&p.server, n, TICKET_REF, a_context, merged);
     // The context target never moves the local primary branch: the context
-    // branch moved, and both tracking refs record what Fetch observed.
+    // branch and its tracking ref moved to the verified push (E-22), and
+    // primary's tracking ref records what Fetch observed.
     assert_eq!(fixed(b_repo.refname_to_id(MAIN))?, base);
     scope_after(
         &b_repo,
         &refs_before,
         &[
             (TICKET_REF, merged),
-            (TICKET_TRACKING, a_context),
+            (TICKET_TRACKING, merged),
             (MAIN_TRACKING, a_primary),
         ],
         Some(&p.b.linked(TICKET)?),
@@ -1857,6 +1873,108 @@ fn confirmed_identity_completes_a_canonical_resolution() -> Result<(), FixtureEr
         candidate,
     );
     one_update(&p.server, n, TICKET_REF, conflict.incoming, candidate);
+    Ok(())
+}
+
+// Decision 23: a resolution's identity is held to what a merge's is.
+
+const C5_BRACKETED: &str = "Example <example@example.invalid>";
+/// Git drops a trailing comma: the commit would carry another name.
+const C5_TRIMMED: &str = "Example Person,";
+const C5_EMAIL: &str = "example@example.invalid";
+
+fn c5_configure(side: &Side, name: &str) -> Result<(), FixtureError> {
+    let mut config = fixed(side.repo()?.config())?;
+    fixed(config.set_str("user.name", name))?;
+    fixed(config.set_str("user.email", C5_EMAIL))
+}
+
+/// A ticket conflict on `p.b`, and a request resolving it.
+fn c5_resolution(
+    p: &Pair,
+    conflict: &Conflict,
+) -> Result<
+    (
+        SynchronizationConflictInspection,
+        ResolveSynchronizationRequest,
+    ),
+    FixtureError,
+> {
+    let operation = conflict.request.operation_id;
+    let inspection = p.inspect(&p.b, operation)?;
+    let results = p
+        .sides(&p.b, &inspection)?
+        .iter()
+        .map(|sides| resolution_of(sides.local.as_ref().unwrap(), BETA, "Resolved title"))
+        .collect::<Vec<_>>();
+    let request = resolution_request(&p.b, operation, OperationId::new(), &inspection, results);
+    Ok((inspection, request))
+}
+
+/// A configured identity no commit can carry counts as none: the typed answer,
+/// no commit and nothing written.
+fn c5_identity_resolution_refused(name: &str) -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let conflict = ticket_conflict(&p)?;
+    let worktree = p.b.worktree(TICKET);
+    c5_configure(&p.b, name)?;
+    let (_, request) = c5_resolution(&p, &conflict)?;
+    let pending = physical(&p.b.root, &worktree)?;
+    let commits = commit_inventory(&p.b.repo()?)?;
+    assert_eq!(
+        fixed(p.resolve(&p.b.service, request))?,
+        ResolveSynchronizationOutcome::IdentityRequired
+    );
+    assert!(physical(&p.b.root, &worktree)? == pending);
+    assert_eq!(commit_inventory(&p.b.repo()?)?, commits);
+    conflict_installed(&worktree, TICKET_REF, &conflict, &[TICKET_PATH])
+}
+
+/// The same of a confirmation: it is no confirmation, as one bound to another
+/// observation is not on this path.
+fn c5_identity_resolution_confirmed_unusable() -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let conflict = ticket_conflict(&p)?;
+    let worktree = p.b.worktree(TICKET);
+    without_identity(&p.b)?;
+    let (inspection, mut request) = c5_resolution(&p, &conflict)?;
+    let config = fixed(std::fs::read(p.b.repo()?.path().join("config")))?;
+    let pending = physical(&p.b.root, &worktree)?;
+    let commits = commit_inventory(&p.b.repo()?)?;
+    for name in [C5_BRACKETED, C5_TRIMMED] {
+        let mut confirmed = confirmed_identity(inspection.observation.expected_configuration());
+        confirmed.identity.name = name.into();
+        request.identity = Some(confirmed);
+        assert_eq!(
+            fixed(p.resolve(&p.b.service, request.clone()))?,
+            ResolveSynchronizationOutcome::IdentityRequired
+        );
+        assert!(physical(&p.b.root, &worktree)? == pending);
+        assert_eq!(commit_inventory(&p.b.repo()?)?, commits);
+        assert_eq!(
+            fixed(std::fs::read(p.b.repo()?.path().join("config")))?,
+            config
+        );
+    }
+    Ok(())
+}
+
+/// The control: a plain configured identity signs the resolution.
+fn c5_identity_resolution_control() -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let conflict = ticket_conflict(&p)?;
+    c5_configure(&p.b, "Example Person")?;
+    let (_, request) = c5_resolution(&p, &conflict)?;
+    let ResolveSynchronizationOutcome::LocalCheckpointComplete {
+        commit_oid: candidate,
+    } = fixed(p.resolve(&p.b.service, request))?
+    else {
+        return Err(FixtureError);
+    };
+    assert_eq!(
+        author(&p.b.linked(TICKET)?, candidate)?,
+        ("Example Person".into(), C5_EMAIL.into())
+    );
     Ok(())
 }
 

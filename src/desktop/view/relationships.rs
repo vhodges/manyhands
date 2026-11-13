@@ -1,15 +1,18 @@
-//! A ticket tab's relationships panel (design, Item Inspection,
-//! Relationships): four groups, Dependencies, Dependents, Parent and
-//! Children, then the ticket's relationship problems.
+//! A ticket's relationships (design, Item Inspection, Relationships),
+//! drawn in its details sheet (R-54): four groups, Dependencies,
+//! Dependents, Parent and Children, then the ticket's relationship
+//! problems. The sheet places each group in its own row, under its label
+//! (Waiting on, Dependents, Parent, Children), so a group names itself to
+//! assistive tech only.
 //!
 //! Each row gives the related ticket's short code and title, as the
 //! library returned them, its lifecycle and its resolution, each in text,
 //! and its ID. A row with a resolved target is a tab stop, so Tab within
-//! the content region reaches it; a click, Enter or Space on it opens the
-//! ticket by its ID in the tab's repository. An unresolved target shows
-//! the ID it names and says, in fixed text, that it cannot be opened; it
-//! offers no action and no focus. A document's tab, and a nonconforming
-//! entry's, have no panel.
+//! the sheet reaches it; a click, Enter or Space on it opens the ticket by
+//! its ID in the tab's repository, which closes the sheet. An unresolved
+//! target shows the ID it names and says, in fixed text, that it cannot be
+//! opened; it offers no action and no focus. A document, and a
+//! nonconforming entry, have no relationships.
 
 use std::collections::{HashMap, HashSet};
 
@@ -28,8 +31,8 @@ use super::{
 use crate::desktop::model::{
     navigation::OpenTarget,
     relationships::{
-        CANNOT_OPEN, CHILDREN, DEPENDENCIES, DEPENDENTS, NONE, PARENT, PROBLEMS, RELATIONSHIPS,
-        RelatedRow, resolution_label,
+        CANNOT_OPEN, CHILDREN, DEPENDENCIES, DEPENDENTS, NONE, PARENT, PROBLEMS, RelatedRow,
+        resolution_label,
     },
 };
 
@@ -37,8 +40,21 @@ use crate::desktop::model::{
 /// and which row of that ID in the group it is.
 pub(crate) type RowKey = (&'static str, String, usize);
 
-/// A row of the panel was activated: open its ticket, by ID, in a tab.
+/// A row of the relationships was activated, or the details sheet's
+/// Inspect link: open its target, a ticket by ID or the item's file by its
+/// path, in a tab.
 pub(crate) struct OpenRelated(pub OpenTarget);
+
+/// The relationships, each part for its row of the ticket's details
+/// sheet.
+pub(in crate::desktop::view) struct Groups {
+    pub dependencies: AnyElement,
+    pub dependents: AnyElement,
+    pub parent: AnyElement,
+    pub children: AnyElement,
+    /// The ticket's problems with its `deps` and `parent`, when it has any.
+    pub problems: Option<AnyElement>,
+}
 
 impl EventEmitter<OpenRelated> for ItemPane {}
 
@@ -96,14 +112,14 @@ fn summary(row: &RelatedRow) -> String {
 }
 
 impl ItemPane {
-    /// The panel, for a ticket whose item read has landed; `None` for a
+    /// The groups, for a ticket whose item read has landed; `None` for a
     /// document or a nonconforming entry. The focus of a row not drawn
     /// in this frame is dropped.
-    pub(super) fn relationships_panel(
+    pub(super) fn relationship_groups(
         &mut self,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    ) -> Option<Groups> {
         let relationships = self.model.relationships()?;
         let dependency_rows = relationships.dependency_rows();
         let dependent_rows = relationships.dependent_rows();
@@ -158,26 +174,21 @@ impl ItemPane {
             cx,
         );
         self.row_focus.retain(|key, _| drawn.contains(key));
-        Some(
-            v_flex()
-                .id("relationships")
-                .test_support()
-                .aria_label(RELATIONSHIPS)
-                .gap_2()
-                .child(div().text_sm().child(RELATIONSHIPS))
-                .child(dependencies)
-                .child(dependents)
-                .child(parent)
-                .child(children)
-                .children(self.relationship_problems(&problems, cx))
-                .into_any_element(),
-        )
+        Some(Groups {
+            dependencies: dependencies.into_any_element(),
+            dependents: dependents.into_any_element(),
+            parent: parent.into_any_element(),
+            children: children.into_any_element(),
+            problems: self
+                .relationship_problems(&problems, cx)
+                .map(IntoElement::into_any_element),
+        })
     }
 
-    /// One group: its name, the state of its read when it has one, then
-    /// its rows, or None once it is known to have none. Each row that can
-    /// be opened is keyed by its ticket's ID and which row of that ID in
-    /// the group it is, and recorded in `drawn`.
+    /// One group, named for assistive tech: the state of its read when it
+    /// has one, then its rows, or None once it is known to have none. Each
+    /// row that can be opened is keyed by its ticket's ID and which row of
+    /// that ID in the group it is, and recorded in `drawn`.
     #[allow(clippy::too_many_arguments)]
     fn group(
         &mut self,
@@ -211,15 +222,14 @@ impl ItemPane {
             .test_support()
             .aria_label(group.name)
             .gap_1()
-            .child(div().text_xs().text_color(muted).child(group.name))
             .children(status)
             .children(rows)
             .children(empty)
     }
 
     /// One related ticket, drawn at `ix`. A resolved one is a tab stop,
-    /// its focus kept under `key`, and opens its ticket when activated;
-    /// the focused one is outlined.
+    /// its focus kept under `key`, revealed in the sheet's scroll, and opens
+    /// its ticket when activated; the focused one is outlined.
     #[allow(clippy::too_many_arguments)]
     fn related_row(
         &mut self,
@@ -280,7 +290,7 @@ impl ItemPane {
                 }
                 element
                     .relative()
-                    .child(self.scroll.marker(&focus))
+                    .child(self.sheet_scroll.marker(&focus))
                     .role(Role::Button)
                     .track_focus(&focus)
                     .cursor_pointer()
