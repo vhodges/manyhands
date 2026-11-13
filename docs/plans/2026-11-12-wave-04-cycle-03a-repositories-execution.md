@@ -1487,3 +1487,34 @@ worktree cleanup, no native CI, no new tickets, no comment on any other ticket
 (the closing notes on `01M654G5VGQMXTH3BX9GKE7JEY` and `01M5CS4MH25QQ769HV61ZRKHXG`
 await the owner). Observation: `cargo clippy --tests --features desktop` (without
 `desktop-test-support`) fails with 51 compile errors in untouched files (Task 9).
+
+## After review-ready: an external review of the branch (2026-11-13)
+
+A review of the branch (main...branch, no verify pass) listed ten findings.
+The orchestrator checked each against the code; the owner asked for a small
+fix wave for the two real ones.
+
+- **Fixed, `5f1f9c0b`:** `Scheduler::reread` now calls `cx.notify()` after
+  clearing the failed read, so Retry on an unreadable repository is felt at
+  once. Test: `scheduler::entity_tests::the_stored_outcome_and_shared_copy_are_kept`
+  asserts exactly one scheduler notification right after `reread` (red `0`
+  against `1`, then green). The four repository journeys and the scheduler
+  test pass by exact name; fmt, check and clippy exit 0.
+- **Not fixed, a correction:** the title retry finding (`titles.rs:208`). The
+  orchestrator's brief said the notify at the end of `apply_titles` lets the next
+  read start. That is wrong: it notifies the Workspace, and the next read starts
+  only from the Scheduler's observer (`workspace.rs:222`). A landing cannot start
+  the next read, and `titles_of_what_is_not_shared` already shows a held Busy read
+  costing one job. What remains true is narrower: every scheduler notify (polls,
+  ticks) is a trigger, so three Busy answers across a few busy seconds can spend
+  an item's three tries, and spacing them needs a clock — a design change to K-3,
+  left for the owner.
+- Ruling: the one-line fix was reviewed by the orchestrator from its diff, with
+  no separate reviewer — a notify and its test, nothing else — cost if wrong: an
+  unreviewed two-line production change.
+- **Known limits, unchanged:** a publishing save or comment stays in the list
+  until the next check (K-1); a share heard between a poll's observation and its
+  completion is dropped by the replay rule (U table); label "Can't reach" with
+  the sentence "Checking soon" after an unreachable then busy answer is the
+  design's row 7 (open question for the owner). The others were already
+  Minor follow-ups; the "held repository" test finding was a false positive.
