@@ -1,9 +1,9 @@
 //! The attempt entry in the operation area (D6 Task 9, A2, A4, R-20, R-23,
 //! W-6): one entry per repository for its latest attempt, replaced by the
 //! next, absent for a quiet one; each disposition listed with its text and
-//! calling no mutation; and Share… on `Unpublished` alone, reachable by a
-//! click at the default window and by Tab. The attempts reach the schedule
-//! as the scheduler hands them (`PollSchedule::after`).
+//! calling no mutation; and Share… on `Unpublished` alone, reachable by the
+//! arrows and Tab and pressed by a click on its drawn button. The attempts
+//! reach the schedule as the scheduler hands them (`PollSchedule::after`).
 
 use gpui_kit::TestAppContext;
 use manyhands::{

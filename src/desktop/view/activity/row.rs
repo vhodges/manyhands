@@ -96,12 +96,7 @@ pub(crate) fn choice_of(row: &ActivityRow, offer: &Offer) -> ActivityMenuChoice 
 }
 
 /// One drawn row.
-pub(super) fn element(
-    drawn: Drawn,
-    row: &ActivityRow,
-    window: &mut Window,
-    cx: &mut App,
-) -> AnyElement {
+pub(super) fn element(drawn: Drawn, row: &ActivityRow, cx: &mut App) -> AnyElement {
     let colors = chrome_colors(cx);
     let Drawn {
         ix,
@@ -120,18 +115,11 @@ pub(super) fn element(
     let opened = key.clone();
     let hooked = workspace.clone();
     let pressed = workspace.clone();
-    let button = row.row.button.as_ref().map(|offer| {
-        action_button(
-            ix,
-            row,
-            offer,
-            highlighted,
-            button_focus,
-            pressed,
-            window,
-            cx,
-        )
-    });
+    let button = row
+        .row
+        .button
+        .as_ref()
+        .map(|offer| action_button(ix, row, offer, highlighted, button_focus, pressed, cx));
     let tag = row.row.repo.clone().map(|repo| {
         div()
             .id(("activity-tag", ix))
@@ -246,7 +234,6 @@ pub(super) fn element(
 /// so Tab reaches it, Enter and Space press it there, and a dialog it
 /// opens gives focus back to the list (C3); every other button is no tab
 /// stop (R-33). A disabled button takes no focus and does nothing.
-#[allow(clippy::too_many_arguments)]
 fn action_button(
     ix: usize,
     row: &ActivityRow,
@@ -254,7 +241,6 @@ fn action_button(
     highlighted: bool,
     focus: FocusHandle,
     workspace: WeakEntity<Workspace>,
-    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let id = ElementId::from(("activity-button", ix));
@@ -283,7 +269,6 @@ fn action_button(
                 }
             });
     }
-    let _ = window;
     wrapper
         .child(
             Button::new(ElementId::NamedChild(

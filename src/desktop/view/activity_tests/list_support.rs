@@ -200,32 +200,13 @@ pub(super) fn relist(shell: &Shell, listed: &[&str], cx: &mut TestAppContext) {
     );
 }
 
-/// The log's row for `key` takes a newer revision while the pane still has
-/// the one it drew: the pending operation has nothing to do, so its
-/// Resume goes. Run inside the update that then presses, so no frame
-/// shows the new row before the press. Returns the revision the pane
-/// drew and the log's.
-pub(super) fn change_row(
-    shell: &Shell,
-    operations: &Entity<Operations>,
-    operation: &str,
-    cx: &mut App,
-) -> (Option<u64>, Option<u64>) {
-    let key = pending_key(operation);
-    operations.update(cx, |operations, cx| {
-        let stamp = operations.load_pending(PENDING_ROOT.to_owned());
-        let mut next = save(operation);
-        next.next_action = None;
-        assert!(operations.apply_pending(stamp, listing(vec![next])));
-        cx.notify();
-    });
-    shell
-        .workspace
-        .update(cx, |workspace, cx| workspace.refresh_activity_now(cx));
+/// The revision the pane drew for `key` and the log's: what a press built
+/// from the drawn row carries, and what it is checked against (R-55).
+fn revisions(shell: &Shell, key: &RowKey, cx: &mut App) -> (Option<u64>, Option<u64>) {
     shell.workspace.read_with(cx, |workspace, _| {
         let revision = |rows: &[ActivityRow]| {
             rows.iter()
-                .find(|row| row.row.key == key)
+                .find(|row| &row.row.key == key)
                 .map(|row| row.revision)
         };
         (
@@ -233,4 +214,86 @@ pub(super) fn change_row(
             revision(workspace.activity().rows()),
         )
     })
+}
+
+/// The pending operation `operation`'s row goes A, B, A inside one update:
+/// its Resume goes (the operation has nothing to do) and comes back. Each
+/// step refreshes the log, so the log's row takes a newer revision while it
+/// ends offering exactly what the pane drew: a press built from the drawn
+/// row is refused by its revision alone, not by a missing offer. No frame
+/// draws between, so the pane still holds the row it drew. Returns the
+/// revision the pane drew and the log's.
+pub(super) fn change_row(
+    shell: &Shell,
+    operations: &Entity<Operations>,
+    operation: &str,
+    cx: &mut App,
+) -> (Option<u64>, Option<u64>) {
+    let key = pending_key(operation);
+    for resumable in [false, true] {
+        operations.update(cx, |operations, cx| {
+            let stamp = operations.load_pending(PENDING_ROOT.to_owned());
+            let mut next = save(operation);
+            if !resumable {
+                next.next_action = None;
+            }
+            assert!(operations.apply_pending(stamp, listing(vec![next])));
+            cx.notify();
+        });
+        shell
+            .workspace
+            .update(cx, |workspace, cx| workspace.refresh_activity_now(cx));
+    }
+    let offers_resume = shell.workspace.read_with(cx, |workspace, _| {
+        workspace
+            .activity()
+            .rows()
+            .iter()
+            .find(|row| row.row.key == key)
+            .is_some_and(|row| {
+                row.row
+                    .menu
+                    .iter()
+                    .any(|o| o.label == "Resume" && o.enabled)
+            })
+    });
+    assert!(offers_resume, "the log's row offers Resume again");
+    revisions(shell, &key, cx)
+}
+
+/// The finished request `id`'s row goes A, B, A inside one update, as a
+/// retry does: it is queued again (a new attempt, offering Cancel) and
+/// finishes the same way. The row ends with the same offers and a newer
+/// revision, which the pane has not drawn.
+pub(super) fn retry_request(
+    shell: &Shell,
+    operations: &Entity<Operations>,
+    id: DesktopRequestId,
+    cx: &mut App,
+) -> (Option<u64>, Option<u64>) {
+    let key = RowKey::Request(id);
+    let mut again = operations
+        .read_with(cx, |operations, _| operations.request(id).cloned())
+        .expect("the request");
+    again.state = RequestState::Queued;
+    again.attempt += 1;
+    operations.update(cx, |operations, cx| {
+        operations.apply(WorkerEvent::Queued(again));
+        cx.notify();
+    });
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.refresh_activity_now(cx));
+    operations.update(cx, |operations, cx| {
+        operations.apply(WorkerEvent::Started(id));
+        operations.apply(WorkerEvent::Finished(
+            id,
+            Box::new(answered("comment add", ResultCode::Ok)),
+        ));
+        cx.notify();
+    });
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.refresh_activity_now(cx));
+    revisions(shell, &key, cx)
 }

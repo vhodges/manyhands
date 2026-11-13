@@ -315,7 +315,6 @@ impl ActivityPane {
                                 workspace: workspace.clone(),
                             },
                             row,
-                            window,
                             cx,
                         ))
                     })

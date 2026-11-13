@@ -256,8 +256,10 @@ fn activity_by_keyboard(cx: &mut TestAppContext) {
         "the highlight is on a row now"
     );
 
-    // T8: a row drawn before the log's took a newer revision runs nothing
-    // on Enter, though the choice is built and refused.
+    // T8 (R-55): a row drawn before the log's took a newer revision runs
+    // nothing on Enter, though the choice is built and refused. The log's
+    // row went A, B, A in one update: it offers what the pane drew, so only
+    // its revision refuses the choice.
     let rows = self::rows(cx);
     let shell = &rows.shell;
     settle(shell, cx);
@@ -279,6 +281,40 @@ fn activity_by_keyboard(cx: &mut TestAppContext) {
         "and refused: nothing ran"
     );
     assert_eq!(resumes(shell, OP_D, cx), 0);
+
+    // T8 on a row with no button: Enter opens its item, unless the log's row
+    // took a newer revision since it was drawn (it was retried, A, B, A,
+    // and finished as it had). The first Enter opens nothing; once the pane
+    // has drawn the row again, Enter opens the item.
+    let rows = self::rows(cx);
+    let shell = &rows.shell;
+    settle(shell, cx);
+    shell.keys("secondary-4", cx);
+    arrow_to(shell, &rows.item, cx);
+    let RowKey::Request(item) = rows.item.clone() else {
+        panic!("a request's row");
+    };
+    let opened = |cx: &mut TestAppContext| {
+        shell.workspace.read_with(cx, |workspace, _| {
+            workspace
+                .tab_keys()
+                .iter()
+                .any(|tab| matches!(tab, TabKey::Item { id, .. } if id == TICKET))
+        })
+    };
+    assert!(!opened(cx), "no tab yet");
+    let operations = shell.operations(cx);
+    shell.frame(cx, |window, cx| {
+        let (drawn, current) = retry_request(shell, &operations, item, cx);
+        assert!(drawn.is_some() && current.is_some(), "the row is in both");
+        assert_ne!(drawn, current, "the log's row took a newer revision");
+        press_in(window, "enter", cx);
+    });
+    shell.run(cx);
+    assert!(!opened(cx), "the stale Enter opened nothing");
+    settle(shell, cx);
+    shell.keys("enter", cx);
+    assert!(opened(cx), "Enter on the row as it now stands opens it");
 }
 
 /// P16: a left click on a row highlights it, focuses the list and sends
@@ -346,8 +382,9 @@ fn rows_by_pointer(cx: &mut TestAppContext) {
     assert_eq!(pressed(shell, cx), before + 1);
     assert_eq!(highlight.as_ref(), Some(&a), "its row was highlighted");
 
-    // T8: the log's row took a newer revision after the pane drew it. The
-    // click is the drawn button's: built, refused, nothing sent.
+    // T8 (R-55): the log's row took a newer revision after the pane drew it
+    // (A, B, A in one update: it offers what the pane drew). The click is the
+    // drawn button's: built, refused by its revision, nothing sent.
     let rows = self::rows(cx);
     let shell = &rows.shell;
     settle(shell, cx);

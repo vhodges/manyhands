@@ -128,8 +128,9 @@ fn retirements(rig: &Rig, cx: &mut TestAppContext) -> Vec<DesktopRequest> {
 /// E4, E3, A19, W-6: Retire… shows on every reported `Closed` or `Promoted`
 /// item the loop did not retire (skipped, refused, not reached), with the
 /// item's short code and the words of its kind, never a title; not on one
-/// retired, retiring or pending. Pressed where a click reaches it at the
-/// default window, it submits `Intent::ContextRetire` on the user lane under
+/// retired, retiring or pending (the one marked keeps a disabled row).
+/// Reached by the arrows and Tab and pressed by a click on its drawn
+/// button, it submits `Intent::ContextRetire` on the user lane under
 /// a new request ID, recorded in the in-flight record first, and takes the
 /// item out of the refused set.
 #[gpui_kit::test]
@@ -192,14 +193,19 @@ async fn retire_left_offer(cx: &mut TestAppContext) {
             at.row.title
         );
     }
-    // Not for the four the loop retired, retires, left pending or marked.
-    for item in [&done, &pending, &running, &marked] {
+    // No row at all for the three the loop retired, is retiring or left
+    // pending. The one marked "Retiring…" keeps its row, with Retire…
+    // disabled (S7): that row existing is what makes the absences above
+    // not vacuous.
+    for item in [&done, &pending, &running] {
         assert!(
-            offered(&rig.shell, &retire_key(&rig, item), RETIRE, cx)
-                .is_none_or(|offer| !offer.enabled),
-            "{item}"
+            row(&rig.shell, &retire_key(&rig, item), cx).is_none(),
+            "{item} has no Retire… row"
         );
     }
+    let marked_offer = offered(&rig.shell, &retire_key(&rig, &marked), RETIRE, cx)
+        .expect("the marked item keeps its row");
+    assert!(!marked_offer.enabled, "its Retire… is disabled");
 
     // The arrows reach the row and Tab its button; a click on the button
     // reaches it too.
