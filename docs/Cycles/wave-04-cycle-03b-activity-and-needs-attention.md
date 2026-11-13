@@ -14,7 +14,7 @@ Ticket `01M784Y94Q3AXT6XJX38F5VK1V` (`vh-dt0aq`).
 [Design](../plans/2026-11-12-wave-04-cycle-03b-activity-and-needs-attention-design.md) and
 [implementation plan](../plans/2026-11-12-wave-04-cycle-03b-activity-and-needs-attention-implementation.md).
 
-**Status: draft, revision 2.** On 2026-11-12 the owner asked to plan this
+**Status: draft, revision 3.** On 2026-11-12 the owner asked to plan this
 Cycle while Cycle 03a was in its final review ("substantially complete").
 The owner answered decisions 4–12 in that session and accepted the
 planner's outline with decision 13 ("write the documents"). Decisions
@@ -23,8 +23,12 @@ ticket. Decisions 14–20 are the planner's proposals, each with its
 reason, for the owner to confirm. The owner answered decisions 21–24 on
 2026-11-13, after review round 1. Those marked **(owner's eye)** change
 something people see today or depart from an authority. Revision 2
-applies review round 1 (4 Blocking, 39 Important, 25 Minor across two
-reviewers) and decisions 21–24; not yet re-reviewed.
+applied review round 1 (4 Blocking, 39 Important, 25 Minor across two
+reviewers) and decisions 21–24. Revision 3 applies review round 2
+(scoped re-review 1 Blocking, 7 Important, 13 Minor; adversarial 1
+Blocking, 12 Important, 9 Minor); not yet re-reviewed. The log and the
+attention count are stated as tables of required outcomes (design A3,
+A4), and Task 5 writes them test-first with a design checkpoint.
 
 - Drafted on the ticket branch at `b37d2c2b`. That commit merges Cycle
   03a's published head `3086666f` into this ticket's base, origin/main
@@ -32,9 +36,12 @@ reviewers) and decisions 21–24; not yet re-reviewed.
 - Review round 1 read revision 1 at `74c9aabb`:
   - contract and consistency: 3 Blocking, 24 Important, 14 Minor;
   - source and feasibility: 1 Blocking, 15 Important, 11 Minor.
+- Review round 2 read revision 2 at `b830e8e3`:
+  - scoped re-review: 1 Blocking, 7 Important, 13 Minor;
+  - adversarial: 1 Blocking (the same), 12 Important, 9 Minor.
 - The plan has 14 tasks (0–13). If the owner splits the Cycle, 03b-1 is
   Tasks 0–10 and 03b-2 is Tasks 11–13 (design Risks).
-- Revision 2 has not yet been re-reviewed.
+- Revision 3 has not yet been re-reviewed.
 
 ## Purpose And Authority
 
@@ -202,8 +209,11 @@ A2), not the log.
 6. **Colour is never the only signal.** Every row has an icon and words.
 7. **No secret.** Rows, tooltips, menus, tags and the popover hold only
    what design Part G lists. A title may appear there (decisions 12 and
-   21), never a draft's own title. A body, comment, conflict side, URL,
-   file path, key or passphrase never does (`MH-NFR-003`).
+   21), never a draft's own title. A body, comment, conflict side, remote
+   URL or address, file path (a repository's folder path included), key
+   or passphrase never does (`MH-NFR-003`). A repository row's detail
+   names its shared copy by name only, not as Cycle 03a's tooltip does
+   (design R-48).
 8. **R-60 holds.** Nothing in Activity, the menus, the footer item or
    the popover acts behind a dialog or sheet.
 9. **Activity can be hidden.** The rows, times, count and popover do not
@@ -395,8 +405,10 @@ decisions govern and are not repeated.
     - D6 decision 13 says each row D6 adds wraps. Instead every row is one
       line: the message ends in an ellipsis, and the button never leaves
       the row.
-    - The full text is in the tooltip, the row menu's first lines and the
-      accessible description.
+    - The full message (title, then description) opens the tooltip, then
+      the time and the detail; the accessible description is the same
+      text. The row menu's first lines are the full message, then the
+      detail.
 
     *Alternative:* wrap to at most two lines.
 23. **After a dialog, focus returns to the row (owner's eye).**
@@ -437,8 +449,9 @@ These are visible to users; the design's Known Limits give the detail.
   - A busy share's "May be waiting for …" can change while shown (K-12).
 - **Times** are UTC where the local offset cannot be read, which today is
   only off Unix (K-5).
-- **Tooltips** show on hover only. The detail is also the row's accessible
-  description and its menu's first lines (K-8).
+- **Tooltips** show on hover only. The full message and the detail are
+  also the row's accessible description and its menu's first lines
+  (K-8).
 - **Edge cases:**
   - A pending conflict with no pending row loaded has no Activity row
     (K-9).
@@ -450,16 +463,18 @@ These are visible to users; the design's Known Limits give the detail.
 ## Open Questions
 
 None for the owner beyond confirming decisions 14–20. Decisions 21–24
-were answered on 2026-11-13. The design's U-1 to U-7 are checked by the
-tasks that first rely on them.
+were answered on 2026-11-13. The design's U-1, U-2 and U-4 to U-8 are
+checked by the tasks that first rely on them; U-3 is settled (design
+fact 47).
 
 ## Review Record
 
 | Source | Concern | Classification | Resolution | Evidence |
 | --- | --- | --- | --- | --- |
 | Owner, 2026-11-12 | "Wave 4 Cycle 3a is in step 10 (final review) … substantially complete … start planning for Wave 4 Cycle 3b now on that basis" | Owner direction | Research, then questions; decision 4 | Session, 2026-11-12 |
-| Planning research | No row has a time; the footer count and the panel's Needs attention disagree (3a K-9); the Kit `Popover` cannot be driven and the Kit `List` presses Confirm on click; shares are classified on every render; "Finishing" hides the stage; D5 bars titles from the operation area; 494 test lines in 54 files reach the area by element id | Facts; owner questions; rulings | Design facts 1–46; decisions 4–13; design R-8, R-10, R-21, R-36 | Design |
+| Planning research | No row has a time; the footer count and the panel's Needs attention disagree (3a K-9); the Kit `Popover` does not fit the app's layer rules (R-10) and the Kit `List` presses Confirm on click; shares are classified on every render; "Finishing" hides the stage; D5 bars titles from the operation area; 494 test lines in 54 files reach the area by element id | Facts; owner questions; rulings | Design facts 1–46; decisions 4–13; design R-8, R-10, R-21, R-36 | Design |
 | Owner, 2026-11-12 | Base; resolved rows; the count; checks; extra actions; clearing; problem items; Enter; the outline; titles | Owner decisions | Decisions 4–13 | Session, 2026-11-12 |
 | Review round 1, contract and consistency (revision 1, `74c9aabb`) | 3 Blocking, 24 Important, 14 Minor: titles under D6's rule; paths in rows; popover actions by keyboard; the seam; the attention table; copy rules; focus; task numbering | Blocking, Important, Minor | Revision 2; decisions 21–24 | Change list, 2026-11-13 |
 | Review round 1, source and feasibility (revision 1, `74c9aabb`) | 1 Blocking, 15 Important, 11 Minor: how the seam acts; inputs to the derivation; handler names and signatures; the Kit `Popover`; tests the inventory missed; counts and line references | Blocking, Important, Minor | Revision 2; design R-40 to R-45 | Change list, 2026-11-13 |
 | Owner, 2026-11-13 | Titles under D6's rule; one-line rows; focus after a dialog; at most one action and counted failures | Owner decisions | Decisions 21–24 | Session, 2026-11-13 |
+| Review round 2, scoped re-review and adversarial (revision 2, `b830e8e3`) | Scoped: 1 Blocking, 7 Important, 13 Minor. Adversarial: 1 Blocking (the same), 12 Important, 9 Minor: a repository row's detail carried the folder path and the remote's address (Blocking); the log and the attention post-pass; focus after the popover; the seam; inputs the derivation lacked | Blocking, Important, Minor | Revision 3; design A3 and A4 as tables of required outcomes (N1–N21, T1–T13); design R-46 to R-50 | Change list, 2026-11-13 |
