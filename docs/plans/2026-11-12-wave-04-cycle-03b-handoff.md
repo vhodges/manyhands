@@ -21,9 +21,9 @@ Activity And Needs Attention.
 - **Branch:** `manyhands/ticket/01M784Y94Q3AXT6XJX38F5VK1V`, pushed to
   `origin`.
 - **HEAD at handoff:** the branch's latest commit. The approval commit
-  ("docs: approve Wave 04 Cycle 03b …") adds this file. After it come only
-  the approval's ticket comment, and the comment's checkpoint commit. Confirm
-  with `git log --oneline -6`.
+  `95ba3535` adds this file. After it come the approval's ticket comment
+  (`ff381f35`), the amendment allowing branch pushes (`3367b9a7`), and this
+  line's correction. Confirm with `git log --oneline -6`.
 - **Main at handoff:** `origin/main` at `ba95e1b7`, where Cycle 03a
   (`01M784Y8C73B39GR4JWENXE5D0`) was closed and merged.
   - The branch merged Cycle 03a's published head at `b37d2c2b` while 03a
