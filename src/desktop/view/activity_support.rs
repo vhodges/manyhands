@@ -142,6 +142,30 @@ pub(crate) fn pending_key(
     found.remove(0)
 }
 
+/// Waits until the pending list of repository `root` holds an operation whose
+/// command is `action`, and returns its row's key.
+pub(crate) async fn until_pending(
+    shell: &Shell,
+    root: &str,
+    action: &str,
+    cx: &mut TestAppContext,
+) -> RowKey {
+    shell
+        .until_drawn(cx, "the pending row", |shell, cx| {
+            shell.operations(cx).read_with(cx, |operations, _| {
+                operations
+                    .pending_shown()
+                    .into_iter()
+                    .filter(|(listed, _)| listed == root)
+                    .filter_map(|(_, state)| state.rows().map(|list| list.items.clone()))
+                    .flatten()
+                    .any(|operation| operation.action.as_str() == action)
+            })
+        })
+        .await;
+    pending_key(shell, root, action, cx)
+}
+
 /// Chooses the offer of the row `key` labelled `label`.
 ///
 /// It cannot pass vacuously: the log is refreshed first, and it panics

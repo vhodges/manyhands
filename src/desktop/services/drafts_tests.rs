@@ -209,11 +209,16 @@ fn stored_for_answers_none_before_the_listing_lands(cx: &mut TestAppContext) {
 #[cfg(unix)]
 #[gpui_kit::test]
 fn a_store_that_cannot_be_protected_still_opens_the_window(cx: &mut TestAppContext) {
-    use gpui_kit::ElementId;
-
     use crate::desktop::{
-        model::operations::DRAFTS_UNAVAILABLE,
-        view::{harness::Shell, operations::DISMISS},
+        model::{
+            activity::rows::{Kind, RowKey},
+            operations::DRAFTS_UNAVAILABLE,
+        },
+        view::{
+            activity_support::{offered, refresh, row},
+            harness::Shell,
+            operations::DISMISS,
+        },
     };
 
     let fixture = Fixture::new();
@@ -221,24 +226,17 @@ fn a_store_that_cannot_be_protected_still_opens_the_window(cx: &mut TestAppConte
     std::os::unix::fs::symlink(elsewhere.path(), fixture.data_dir().join("drafts")).unwrap();
     let shell = Shell::open(fixture, cx);
 
-    let expected = format!("{DRAFTS_UNAVAILABLE}: The drafts folder could not be protected.");
-    assert_eq!(shell.label("drafts-unavailable", cx), Some(expected));
-    // Every control the "This session" section draws is labeled: the
-    // entry is drawn there, and nothing there reads Dismiss.
-    let section = ElementId::from("session-section");
-    let labels: Vec<String> = shell.frame(cx, |window, _| {
-        gpui_kit::base::test_support::snapshots(window)
-            .iter()
-            .filter(|snapshot| snapshot.path().contains(&section))
-            .filter_map(|snapshot| snapshot.label().map(str::to_owned))
-            .collect()
-    });
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.starts_with(DRAFTS_UNAVAILABLE))
+    // Activity lists the entry, with the fixed reason, and nothing there
+    // offers Dismiss.
+    refresh(&shell, cx);
+    let entry = row(&shell, &RowKey::DraftStore, cx).expect("the store's entry is listed");
+    assert_eq!(entry.row.kind, Kind::Failure);
+    assert_eq!(entry.row.title, DRAFTS_UNAVAILABLE);
+    assert_eq!(
+        entry.row.description.as_deref(),
+        Some("The drafts folder could not be protected.")
     );
-    assert!(!labels.iter().any(|label| label == DISMISS));
+    assert!(offered(&shell, &RowKey::DraftStore, DISMISS, cx).is_none());
     assert_eq!(shell.backend.reads_seen(ReadKind::Drafts), 0);
 
     let drafts = shell
@@ -493,8 +491,18 @@ async fn a_failed_flush_shows_an_entry_with_retry_and_no_draft_text(cx: &mut Tes
     use std::os::unix::fs::PermissionsExt;
 
     use crate::desktop::{
-        model::operations::draft_flush_failed, view::harness::Shell,
-        view::operations::draft_flush_id,
+        model::{
+            activity::{
+                copy::{flush_title, item_name},
+                rows::{ItemRef, Kind, RowKey},
+            },
+            list_view::RETRY,
+        },
+        view::{
+            activity_support::{act, offered, refresh, row, rows},
+            harness::Shell,
+            workspace::Region,
+        },
     };
 
     const SENTINEL: &str = "SENTINEL-9b1e";
@@ -533,29 +541,54 @@ async fn a_failed_flush_shows_an_entry_with_retry_and_no_draft_text(cx: &mut Tes
     cx.executor().advance_clock(IDLE);
     shell.run(cx);
 
-    let expected = draft_flush_failed("Item title", DraftErrorKind::Access);
+    // The entry names the item by its title as read, gives the store's fixed
+    // reason and offers Retry.
+    let entry = RowKey::Flush(id);
+    refresh(&shell, cx);
+    let failed = row(&shell, &entry, cx).expect("the failed flush's entry is listed");
+    assert_eq!(failed.row.kind, Kind::Failure);
+    let ItemRef { kind, id: item, .. } = failed.row.item.clone().expect("the entry names its item");
     assert_eq!(
-        expected,
-        "Recovery copy of Item title not saved: Access to the drafts folder was denied."
+        failed.row.title,
+        flush_title(&item_name(Some("Item title"), kind, &item))
     );
-    assert_eq!(shell.label(draft_flush_id(id, "entry"), cx), Some(expected));
-    assert!(shell.present(draft_flush_id(id, "retry"), cx));
+    assert_eq!(
+        failed.row.description.as_deref(),
+        Some("Access to the drafts folder was denied.")
+    );
+    assert!(offered(&shell, &entry, RETRY, cx).is_some_and(|offer| offer.enabled));
+    // Draft text is in no row, and in no label the window draws.
+    for listed in rows(&shell, cx) {
+        let texts = [
+            Some(listed.row.title.as_str()),
+            listed.row.description.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .chain(listed.row.detail.iter().map(String::as_str));
+        for text in texts {
+            assert!(!text.contains(SENTINEL), "the draft's text is in {text:?}");
+        }
+    }
+    assert!(
+        shell.present(Region::Operations.id(), cx),
+        "Activity is drawn"
+    );
     let labels: Vec<String> = shell.frame(cx, |window, _| {
         gpui_kit::base::test_support::snapshots(window)
             .iter()
             .filter_map(|snapshot| snapshot.label().map(str::to_owned))
             .collect()
     });
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.starts_with("Recovery copy of"))
-    );
     assert!(!labels.iter().any(|label| label.contains(SENTINEL)));
 
     std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
-    shell.click(draft_flush_id(id, "retry"), cx);
-    assert!(!shell.present(draft_flush_id(id, "entry"), cx));
+    act(&shell, &entry, RETRY, cx);
+    refresh(&shell, cx);
+    assert!(
+        row(&shell, &entry, cx).is_none(),
+        "Retry wrote, so the entry goes"
+    );
     assert!(matches!(state(&drafts, id, cx), RecoveryState::Saved(_)));
     assert_eq!(
         stored(&shell.fixture.draft_store(), id),

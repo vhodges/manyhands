@@ -39,6 +39,7 @@ use super::{
 };
 use crate::desktop::{
     model::{
+        activity::rows::{ActivityAction, RowKey},
         lifecycle_lock::{LockSource, LockState, Untidied},
         list_state::ListState,
     },
@@ -48,6 +49,7 @@ use crate::desktop::{
     },
     test_support::fixtures::{Fixture, NoPassphrase, item_id},
     view::{
+        activity_support::{act, offered, refresh, rows, until_pending},
         harness::{Shell, key},
         item::LIFECYCLE_ACTION,
         operations::RESUME,
@@ -339,24 +341,16 @@ async fn p5_a_close_stranded_at_closing_resumes_after_relaunch(cx: &mut TestAppC
     assert!(working_copy.exists(), "the context's working copy is kept");
     assert_eq!(step(&shell, &root).as_deref(), Some("closing"));
     until_lock(&shell, &root, LockState::Locked(LockSource::Record), cx).await;
-    let close = OperationAction::Close.as_str().to_owned();
-    let wanted = close.clone();
-    shell
-        .until_drawn(cx, "the close's row", move |shell, cx| {
-            shell.rows("pending-command", cx).contains(&wanted)
-        })
-        .await;
-    let row = shell
-        .rows("pending-command", cx)
-        .iter()
-        .position(|listed| *listed == close)
-        .expect("listed");
-    assert_eq!(
-        shell.label(("pending-resume", row), cx).as_deref(),
-        Some(RESUME)
-    );
+    let pending = until_pending(&shell, &key(&root), OperationAction::Close.as_str(), cx).await;
+    refresh(&shell, cx);
+    let resume = offered(&shell, &pending, RESUME, cx).expect("the close's row offers Resume");
+    assert!(resume.enabled);
+    assert!(matches!(
+        resume.action,
+        ActivityAction::ResumeLifecycle { .. }
+    ));
 
-    shell.click(("pending-resume", row), cx);
+    act(&shell, &pending, RESUME, cx);
     let resumes = sent(&shell, cx, |intent| {
         matches!(intent, Intent::OperationResume { .. })
     });
@@ -436,11 +430,26 @@ async fn a_close_lost_before_settlement_is_complete_and_stays_accepted(cx: &mut 
         })
         .await;
     shell.frame(cx, |_, _| ());
+    refresh(&shell, cx);
+    let items = shell.operations(cx).read_with(cx, |operations, _| {
+        operations
+            .pending()
+            .get(&key(&root))
+            .and_then(|state| state.rows())
+            .map(|list| list.items.clone())
+            .expect("the repository's pending list is read")
+    });
     assert!(
-        !shell
-            .rows("pending-command", cx)
-            .contains(&OperationAction::Close.as_str().to_owned()),
-        "no Close row"
+        items
+            .iter()
+            .all(|operation| operation.action != OperationAction::Close),
+        "no Close row: {items:?}"
+    );
+    assert!(
+        rows(&shell, cx)
+            .iter()
+            .all(|row| !matches!(&row.row.key, RowKey::Pending { root: listed, .. } if *listed == key(&root))),
+        "Activity lists no pending row of the repository"
     );
     assert_eq!(lock(&shell, &root, cx), LockState::Open, "no lock");
     open(&shell, ticket(&root), cx);

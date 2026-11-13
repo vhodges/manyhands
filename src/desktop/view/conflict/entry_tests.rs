@@ -48,7 +48,7 @@ use crate::desktop::{
     },
     test_support::fixtures::{Fixture, item_id},
     view::{
-        activity_support::{act, offered, pending_key, refresh, row, until_offered},
+        activity_support::{act, offered, refresh, row, until_offered, until_pending},
         harness::{Shell, key},
         item::OpenedFolders,
         lifecycle::RESOLVE_CONFLICT,
@@ -204,21 +204,7 @@ pub(super) async fn row_of(
     command: &str,
     cx: &mut TestAppContext,
 ) -> RowKey {
-    let root = key(root);
-    shell
-        .until_drawn(cx, "the pending row", |shell, cx| {
-            shell.operations(cx).read_with(cx, |operations, _| {
-                operations
-                    .pending_shown()
-                    .into_iter()
-                    .filter(|(listed, _)| *listed == root)
-                    .filter_map(|(_, state)| state.rows().map(|list| list.items.clone()))
-                    .flatten()
-                    .any(|operation| operation.action.as_str() == command)
-            })
-        })
-        .await;
-    pending_key(shell, &root, command, cx)
+    until_pending(shell, &key(root), command, cx).await
 }
 
 /// B5, E-7, canned (decision 9): a share of the item stopped on a conflict

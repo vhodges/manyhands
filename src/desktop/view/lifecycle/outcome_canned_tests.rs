@@ -34,7 +34,10 @@ use super::{
     tests::{DOCUMENT, TICKET, closes, request, saved_ticket, shell, ticket, until_present},
 };
 use crate::desktop::{
-    model::stamp::SettingsPage,
+    model::{
+        activity::rows::{ActivityAction, RowKey},
+        stamp::SettingsPage,
+    },
     services::{
         JobKind,
         requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
@@ -42,9 +45,10 @@ use crate::desktop::{
     },
     test_support::fixtures::item_id,
     view::{
+        activity_support::{act, offered, refresh, row},
         harness::{Shell, key},
         item::LIFECYCLE_ACTION,
-        operations::{recovery_id, request_id},
+        operations::OPEN_LIFECYCLE,
         settings::Shown,
     },
 };
@@ -220,7 +224,7 @@ pub(super) fn finished(
 
 /// Opens the dialog on the finished request `id` from its entry's Open….
 pub(super) async fn reopen(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) {
-    shell.click(request_id(id, "open"), cx);
+    act(shell, &RowKey::Request(id), OPEN_LIFECYCLE, cx);
     until_present(shell, "lifecycle-ending", cx).await;
 }
 
@@ -609,11 +613,24 @@ async fn a_lifecycle_entry_keeps_the_recovery_its_dialog_does_not_own(cx: &mut T
         ),
         cx,
     );
-    assert!(shell.present(request_id(id, "open"), cx));
-    assert!(shell.present(recovery_id(id, 0), cx), "Set identity");
-    assert!(!shell.present(recovery_id(id, 1), cx), "no raw Retry");
+    let entry = RowKey::Request(id);
+    refresh(&shell, cx);
+    let menu = row(&shell, &entry, cx)
+        .expect("the close's entry is listed")
+        .row
+        .menu;
+    let has = |action: ActivityAction| menu.iter().any(|offer| offer.action == action);
     assert!(
-        !shell.present(recovery_id(id, 2), cx),
+        offered(&shell, &entry, OPEN_LIFECYCLE, cx).is_some_and(|offer| offer.enabled),
+        "{menu:?}"
+    );
+    assert!(
+        has(ActivityAction::Recovery(id, 0)),
+        "Set identity: {menu:?}"
+    );
+    assert!(!has(ActivityAction::Recovery(id, 1)), "no raw Retry");
+    assert!(
+        !has(ActivityAction::Recovery(id, 2)),
         "no raw Prepare again"
     );
 }

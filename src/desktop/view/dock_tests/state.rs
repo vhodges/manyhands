@@ -7,12 +7,17 @@ use gpui_kit::{TestAppContext, test::TestWindowExt};
 use super::support::*;
 use crate::desktop::{
     model::{
+        activity::rows::{Kind, RowKey},
         layout::PanelKind,
         navigation::{OpenTarget, Pane},
     },
-    services::{JobKind, requests::Intent},
+    services::{
+        JobKind,
+        requests::{Intent, RequestState},
+    },
     test_support::fixtures::{Fixture, item_id},
     view::{
+        activity_support::{refresh, row},
         harness::{Shell, key},
         item::ItemRoute,
         operations::request_id,
@@ -116,10 +121,10 @@ async fn a_request_finishes_while_activity_is_hidden(cx: &mut TestAppContext) {
     let id = shell.requests(cx, |request| {
         matches!(request.intent, Intent::IndexRefresh { .. })
     })[0];
-    assert!(
-        shell.present(request_id(id, "entry"), cx),
-        "its entry shows while it runs"
-    );
+    let entry = RowKey::Request(id);
+    refresh(&shell, cx);
+    let running = row(&shell, &entry, cx).expect("its entry is listed while it runs");
+    assert_eq!(running.row.kind, Kind::Working);
     let (jobs, tabs) = (shell.backend.jobs_seen(), shell.rows("tab-title", cx));
     assert_eq!(tabs.len(), 1, "setup: a tab is open");
 
@@ -137,21 +142,28 @@ async fn a_request_finishes_while_activity_is_hidden(cx: &mut TestAppContext) {
     gate.release();
     shell.until_ended(id, cx).await;
     shell.run(cx);
-    assert!(
-        !shell.present(request_id(id, "entry"), cx),
-        "hidden, so not drawn"
-    );
+    assert!(!layout(&shell, cx).is_displayed(Activity), "hidden");
+    refresh(&shell, cx);
+    let finished = row(&shell, &entry, cx).expect("hidden, but its entry is not pruned");
+    assert_eq!(finished.row.kind, Kind::Success);
+    assert!(matches!(
+        shell
+            .operations(cx)
+            .read_with(cx, |operations, _| operations
+                .request(id)
+                .map(|request| request.state.clone())),
+        Some(RequestState::Finished(..))
+    ));
     let (reads, jobs) = (shell.backend.reads_in_order(), shell.backend.jobs_seen());
 
     toggle_panel(&shell, Activity, cx);
-    assert!(
-        shell.present(request_id(id, "entry"), cx),
-        "its entry shows with Activity"
-    );
-    assert!(
-        shell
-            .label(request_id(id, "state"), cx)
-            .is_some_and(|state| !state.is_empty())
+    assert!(layout(&shell, cx).is_displayed(Activity), "shown");
+    assert!(shell.present(Region::Operations.id(), cx), "drawn");
+    refresh(&shell, cx);
+    assert_eq!(
+        row(&shell, &entry, cx).expect("its entry is listed with Activity"),
+        finished,
+        "the entry is as it was when hidden"
     );
     assert_eq!(
         shell.rows("tab-title", cx),
