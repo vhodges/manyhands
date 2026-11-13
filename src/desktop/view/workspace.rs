@@ -6,6 +6,7 @@ mod docks;
 mod find;
 mod focus;
 mod footer;
+mod footer_status;
 mod layout_notices;
 mod lifecycle;
 mod lists;

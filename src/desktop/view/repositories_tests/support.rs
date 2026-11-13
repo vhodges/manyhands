@@ -29,11 +29,11 @@ use crate::desktop::{
     view::{harness::Shell, settings::Shown as Page},
 };
 
-pub(super) const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5RA1";
-pub(super) const SECOND: &str = "01ARZ3NDEKTSV4RRFFQ69G5RA2";
-pub(super) const THIRD: &str = "01ARZ3NDEKTSV4RRFFQ69G5RA3";
+pub(in crate::desktop::view) const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5RA1";
+pub(in crate::desktop::view) const SECOND: &str = "01ARZ3NDEKTSV4RRFFQ69G5RA2";
+pub(in crate::desktop::view) const THIRD: &str = "01ARZ3NDEKTSV4RRFFQ69G5RA3";
 
-pub(super) fn id(text: &str) -> ItemId {
+pub(in crate::desktop::view) fn id(text: &str) -> ItemId {
     text.parse().unwrap()
 }
 
@@ -44,7 +44,9 @@ pub(super) fn child(name: &'static str, part: &'static str) -> ElementId {
 /// A poll the library says is not due for an hour: it records no attempt
 /// and changes no state a row shows, only when the next poll is due. The
 /// stand-in for every poll nothing is queued for.
-pub(super) fn not_due(clock: &TestClock) -> impl Fn() -> Library + Send + 'static {
+pub(in crate::desktop::view) fn not_due(
+    clock: &TestClock,
+) -> impl Fn() -> Library + Send + 'static {
     let next = clock.utc() + time::Duration::hours(1);
     move || Library::NotEligible {
         reason: PollIneligibility::NotDue,
@@ -54,7 +56,7 @@ pub(super) fn not_due(clock: &TestClock) -> impl Fn() -> Library + Send + 'stati
 }
 
 /// A poll that completed now and reported no target: it sets no list.
-pub(super) fn completed(clock: &TestClock) -> Library {
+pub(in crate::desktop::view) fn completed(clock: &TestClock) -> Library {
     let now = clock.utc();
     Library::Polled {
         parts: ReportParts {
@@ -68,7 +70,7 @@ pub(super) fn completed(clock: &TestClock) -> Library {
     }
 }
 
-pub(super) fn item(text: &str) -> AttemptTarget {
+pub(in crate::desktop::view) fn item(text: &str) -> AttemptTarget {
     AttemptTarget {
         item_id: Some(id(text)),
         kind: Some(TargetKind::Ticket),
@@ -156,7 +158,7 @@ pub(super) async fn finish(shell: &Shell, intent: Intent, cx: &mut TestAppContex
 /// A completed check of `root` that reported `targets`, as the schedule's
 /// own transition takes it; the scheduler notifies, as it does when a poll
 /// is answered.
-pub(super) fn checked(
+pub(in crate::desktop::view) fn checked(
     services: &Services,
     clock: &TestClock,
     root: &str,
@@ -186,7 +188,7 @@ pub(super) fn notify(services: &Services, cx: &mut TestAppContext) {
 
 /// A Check now's answer, in place of the library's: nothing reaches a
 /// transport.
-pub(super) fn polled() -> Envelope<MutationDataDto> {
+pub(in crate::desktop::view) fn polled() -> Envelope<MutationDataDto> {
     Envelope::mutation(
         "poll once",
         Scope::default(),

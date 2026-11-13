@@ -163,7 +163,7 @@ pub(crate) fn check_all_roots(workspace: &Workspace, cx: &App) -> Vec<RepoKey> {
 }
 
 /// This process's own Check now of `root` is queued or running.
-fn checking_now(services: &Services, root: &Path) -> bool {
+pub(in crate::desktop::view) fn checking_now(services: &Services, root: &Path) -> bool {
     services
         .worker()
         .in_flight(|intent| matches!(intent, Intent::PollOnce { root: asked } if asked == root))
