@@ -392,7 +392,9 @@ These are visible to users; the design's Known Limits give the detail.
   completed check sets it whole; another process's or the CLI's work, a
   resumed share, a comment's publication, a conflict resolution's share
   and the save a resolution of a local-context conflict makes show at the
-  next check (K-1).
+  next check (K-1): five minutes at most by default while checking is on
+  (the interval is each repository's setting), and only at a Check now
+  while it is paused or off. The owner accepted this on 2026-11-13.
 - After a relaunch a stored outcome stands until this app checks (K-2).
 - An unshared item is named by its ID until its title is read, for the
   session after three failed tries, and when a local conflict resolution

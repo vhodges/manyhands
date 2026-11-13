@@ -1518,3 +1518,16 @@ fix wave for the two real ones.
   the sentence "Checking soon" after an unreachable then busy answer is the
   design's row 7 (open question for the owner). The others were already
   Minor follow-ups; the "held repository" test finding was a false positive.
+
+**Owner answers, 2026-11-13.**
+- Title retry backoff: file a ticket and leave it. Filed as
+  `01M7ABM6E76TATZ5CYF8J4VYGN` ("Back off the retries that name an unshared
+  item"), created on the main checkout at the owner's word; K-3 is unchanged
+  here.
+- K-1 stays as approved. A completed check sets the unshared list whole, and the
+  default check interval is 300 seconds (a per-repository setting), so a
+  publishing save or comment shows within about five minutes while checking is on,
+  and only at a Check now while a repository is paused or off. The Cycle
+  document's K-1 now says so.
+- The "Can't reach" label with the sentence "Checking soon" stays as the
+  design's row 7 reads.
