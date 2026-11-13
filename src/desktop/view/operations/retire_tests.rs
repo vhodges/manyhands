@@ -15,10 +15,11 @@ use manyhands::{
 
 use crate::desktop::{
     model::{
+        activity::rows::RowKey,
         operations::Entered,
         polling::{
             Answer, AttemptTarget, Clock, Disposition, Policy, PollAttempt, TargetKind,
-            entry::{RetireOffer, offer_text, short_code},
+            entry::{RETIRE, RetireOffer, offer_text, short_code},
             retire::Verdict,
         },
         tabs::TabKey,
@@ -34,6 +35,7 @@ use crate::desktop::{
         retire::{answer, original_request, pending_row},
     },
     view::{
+        activity_support::act,
         confirm::CANCEL,
         retire_asks::{RETIRE_CHOICE, SHOW_TAB, kept_message, unkept_message},
         settings::polling_support::Rig,
@@ -113,6 +115,14 @@ fn report(rig: &Rig, targets: Vec<(ItemId, TargetKind)>, cx: &mut TestAppContext
 /// The element of the action Retire… of `item` in repository `a`'s entry.
 fn action(rig: &Rig, item: &ItemId) -> String {
     format!("attempt-{}-retire-{}", rig.key(0), short_code(item))
+}
+
+/// The log's Retire… row of `item` in repository `a`, for the seam.
+fn retire_key(rig: &Rig, item: &ItemId) -> RowKey {
+    RowKey::RetireOffer {
+        root: rig.key(0),
+        item: item.clone(),
+    }
 }
 
 fn words(rig: &Rig, item: &ItemId) -> String {
@@ -335,10 +345,10 @@ async fn retire_left_unkept_ask(cx: &mut TestAppContext) {
     let rig = rig(cx);
     report(&rig, vec![(ticket(), TargetKind::Ticket)], cx);
     unkept_tab(&rig, cx);
-    let button = action(&rig, &ticket());
+    let button = retire_key(&rig, &ticket());
     rig.shell.frame(cx, |_, _| ());
 
-    rig.shell.click(button.clone(), cx);
+    act(&rig.shell, &button, RETIRE, cx);
     assert!(rig.shell.present("retire-unkept-dialog", cx), "it asks");
     assert_eq!(
         rig.shell.label("retire-unkept-message", cx),
@@ -367,7 +377,7 @@ async fn retire_left_unkept_ask(cx: &mut TestAppContext) {
     assert!(!tab_open(&rig, cx));
 
     // Again: Enter takes the default, Show tab.
-    rig.shell.click(button, cx);
+    act(&rig.shell, &button, RETIRE, cx);
     assert!(
         rig.shell.present("retire-unkept-dialog", cx),
         "pressed again"
@@ -463,7 +473,7 @@ async fn retire_left_kept_draft_ask(cx: &mut TestAppContext) {
         )
     });
     assert!(drafts.read_with(cx, |registry, _| registry.unsaved()));
-    let button = action(&rig, &ticket());
+    let button = retire_key(&rig, &ticket());
     rig.shell.frame(cx, |_, _| ());
     let asked = |rig: &Rig, cx: &mut TestAppContext| {
         rig.shell
@@ -486,8 +496,8 @@ async fn retire_left_kept_draft_ask(cx: &mut TestAppContext) {
 
     // A second press while the fresh listing is awaited starts nothing.
     let listing = rig.shell.backend.hold_read(ReadKind::Drafts);
-    rig.shell.click(button.clone(), cx);
-    rig.shell.click(button.clone(), cx);
+    act(&rig.shell, &button, RETIRE, cx);
+    act(&rig.shell, &button, RETIRE, cx);
     assert!(
         !rig.shell.present("retire-kept-dialog", cx),
         "still listing"
@@ -528,7 +538,7 @@ async fn retire_left_kept_draft_ask(cx: &mut TestAppContext) {
     assert_eq!(asked(&rig, cx), 0, "the press is over");
 
     // Retire, by keyboard.
-    rig.shell.click(button, cx);
+    act(&rig.shell, &button, RETIRE, cx);
     rig.shell
         .until_drawn(cx, "the question again", |shell, cx| {
             shell.present("retire-kept-dialog", cx)
@@ -736,7 +746,7 @@ async fn retire_flush_failure_submits_nothing(cx: &mut TestAppContext) {
     let _read_only = FolderMode::set(&rig.shell.fixture.data_dir().join("drafts"), 0o500);
 
     rig.shell.frame(cx, |_, _| ());
-    rig.shell.click(action(&rig, &ticket()), cx);
+    act(&rig.shell, &retire_key(&rig, &ticket()), RETIRE, cx);
     rig.shell
         .until_drawn(cx, "the kept drafts question", |shell, cx| {
             shell.present("retire-kept-dialog", cx)
@@ -772,7 +782,7 @@ async fn retire_unkept_text_is_asked_before_drafts(cx: &mut TestAppContext) {
     rig.shell.frame(cx, |_, _| ());
     let listed = rig.shell.backend.reads_seen(ReadKind::Drafts);
 
-    rig.shell.click(action(&rig, &ticket()), cx);
+    act(&rig.shell, &retire_key(&rig, &ticket()), RETIRE, cx);
     for _ in 0..20 {
         rig.shell.run(cx);
         cx.executor()
@@ -855,9 +865,9 @@ async fn retire_after_a_quit_closed_its_question(cx: &mut TestAppContext) {
         )
     });
     let _read_only = FolderMode::set(&rig.shell.fixture.data_dir().join("drafts"), 0o500);
-    let button = action(&rig, &ticket());
+    let button = retire_key(&rig, &ticket());
     rig.shell.frame(cx, |_, _| ());
-    rig.shell.click(button.clone(), cx);
+    act(&rig.shell, &button, RETIRE, cx);
     assert!(shows(&rig, "retire-kept-dialog", cx).await, "the question");
 
     // Quitting closes it with no answer, and asks about the draft that
@@ -878,7 +888,7 @@ async fn retire_after_a_quit_closed_its_question(cx: &mut TestAppContext) {
 
     // Retire… asks again.
     rig.shell.frame(cx, |_, _| ());
-    rig.shell.click(button, cx);
+    act(&rig.shell, &button, RETIRE, cx);
     assert!(
         shows(&rig, "retire-kept-dialog", cx).await,
         "Retire… is not ignored"

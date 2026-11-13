@@ -21,26 +21,38 @@ use manyhands::{
 };
 
 use super::{
-    REPUBLISH, REPUBLISHING,
+    REPUBLISH, REPUBLISHING, STOP_AND_REPUBLISH,
     stop_tests::{resume_of_operation, resumes, shown, under_a_resume},
     tests::{
         TICKET, branch_deleted, finished, finished_deleted_share, is_republish, republish_preview,
-        republished, requests_of, ticket_shell, until_present,
+        republished, requests_of, ticket_shell, until_not_offered, until_offered, until_present,
     },
 };
 use crate::desktop::{
-    model::operations::BRANCH_DELETED,
+    model::{
+        activity::rows::{ActivityAction, RowKey},
+        operations::BRANCH_DELETED,
+        publication::SyncOffer,
+    },
     services::{
         JobKind,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
     },
     test_support::fixtures::item_id,
     view::{
+        activity_support::{act, label_of, offered, refresh},
         harness::{Shell, key},
         lifecycle::REPUBLISH_STOPPED,
-        operations::{recovery_id, request_id, resume::tests as resume},
+        operations::{DISMISS, OPEN_LIFECYCLE, resume::tests as resume},
     },
 };
+
+/// Presses the recovery action `n` of the request `id`'s row.
+fn press_recovery(shell: &Shell, id: DesktopRequestId, n: usize, cx: &mut TestAppContext) {
+    let entry = RowKey::Request(id);
+    let label = label_of(shell, &entry, &ActivityAction::Recovery(id, n), cx);
+    act(shell, &entry, &label, cx);
+}
 
 /// A republish answered `code` as `outcome`, offering `recovery`.
 fn republish_answer(
@@ -116,7 +128,7 @@ async fn a_republish_prepared_again_still_sends_its_lifecycle_on(cx: &mut TestAp
     shell
         .backend
         .answer_next_prepare("item republish", republish_preview(&shell, &root));
-    shell.click(recovery_id(republish, 0), cx);
+    press_recovery(&shell, republish, 0, cx);
     until_present(&shell, "confirm-ok", cx).await;
     shell
         .backend
@@ -242,7 +254,7 @@ async fn a_stopped_republish_retried_still_sends_its_lifecycle_on(cx: &mut TestA
         .backend
         .hold_job_return_answering(JobKind::ItemRepublish, republished())
         .release();
-    shell.click(recovery_id(republish, 0), cx);
+    press_recovery(&shell, republish, 0, cx);
     shell
         .until(cx, move |operations| {
             operations
@@ -294,8 +306,8 @@ async fn a_waiting_republish_hides_republish_until_dismissed(cx: &mut TestAppCon
         Some(REPUBLISH_STOPPED)
     );
     shell.keys("escape", cx);
-    shell.click(request_id(republish, "dismiss"), cx);
-    shell.click(request_id(run, "open"), cx);
+    act(&shell, &RowKey::Request(republish), DISMISS, cx);
+    act(&shell, &RowKey::Request(run), OPEN_LIFECYCLE, cx);
     until_present(&shell, "lifecycle-republish", cx).await;
 }
 
@@ -311,7 +323,7 @@ async fn a_waiting_republish_hides_republish_until_dismissed(cx: &mut TestAppCon
 #[gpui_kit::test]
 async fn the_whole_chain_is_followed_and_read_again_on_reopening(cx: &mut TestAppContext) {
     let (shell, root, holder) = resume::stranded(cx);
-    resume::close_row(&shell, cx).await;
+    resume::close_row(&shell, &root, cx).await;
     let service = shell.fixture.service();
     let repo = service.resolve_repository(&root).unwrap();
     let operation = service
@@ -363,7 +375,7 @@ async fn the_whole_chain_is_followed_and_read_again_on_reopening(cx: &mut TestAp
         id: item_id(resume::TICKET),
     };
     let run = finished(&shell, 1, close, answer, cx);
-    shell.click(request_id(run, "open"), cx);
+    act(&shell, &RowKey::Request(run), OPEN_LIFECYCLE, cx);
     until_present(&shell, "lifecycle-republish", cx).await;
     republish_answered(&shell, &root, republished(), cx).await;
 
@@ -439,8 +451,13 @@ async fn the_whole_chain_is_followed_and_read_again_on_reopening(cx: &mut TestAp
 async fn a_share_offers_no_republish_while_one_runs(cx: &mut TestAppContext) {
     let (shell, root) = ticket_shell(cx);
     let id = finished_deleted_share(&shell, &root, cx).await;
-    let offer = request_id(id, "republish");
-    assert_eq!(shell.label(offer.clone(), cx).as_deref(), Some(REPUBLISH));
+    let entry = RowKey::Request(id);
+    refresh(&shell, cx);
+    assert!(
+        offered(&shell, &entry, REPUBLISH, cx)
+            .expect("Republish…")
+            .enabled
+    );
     assert_eq!(
         shell.label("item-pill", cx).as_deref(),
         Some(BRANCH_DELETED)
@@ -461,26 +478,19 @@ async fn a_share_offers_no_republish_while_one_runs(cx: &mut TestAppContext) {
         None,
     );
     held.wait_reached();
-    let hidden = offer.clone();
-    shell
-        .until_drawn(cx, "no Republish… while it runs", move |shell, cx| {
-            !shell.present(hidden.clone(), cx)
-        })
-        .await;
+    until_not_offered(&shell, &entry, REPUBLISH, cx).await;
+    let running = offered(&shell, &entry, REPUBLISHING, cx).expect("it says Republishing…");
+    assert!(!running.enabled, "no second press while it runs");
     assert_eq!(
-        shell.label(request_id(id, "outcome"), cx).as_deref(),
-        Some(REPUBLISHING)
+        running.action,
+        ActivityAction::Offer(id, SyncOffer::Republish)
     );
     assert_eq!(shell.label("item-pill", cx).as_deref(), Some(REPUBLISHING));
     assert_eq!(requests_of(&shell, cx, is_republish).len(), 1);
 
     held.release();
     shell.until_ended(republish, cx).await;
-    shell
-        .until_drawn(cx, "Republish… again", move |shell, cx| {
-            shell.present(offer.clone(), cx)
-        })
-        .await;
+    until_offered(&shell, &entry, REPUBLISH, cx).await;
 }
 
 /// R-30, last review 1, canned as above: while a lifecycle's republish of
@@ -525,9 +535,11 @@ async fn a_waiting_republish_hides_republish_elsewhere(cx: &mut TestAppContext) 
         false,
     );
     let shared = finished(&shell, 2, share, deleted, cx);
-    assert!(shell.present(request_id(shared, "dismiss"), cx));
-    assert!(!shell.present(request_id(shared, "republish"), cx));
-    assert!(!shell.present(request_id(shared, "stop-and-republish"), cx));
+    let entry = RowKey::Request(shared);
+    refresh(&shell, cx);
+    assert!(offered(&shell, &entry, DISMISS, cx).is_some_and(|offer| offer.enabled));
+    assert!(offered(&shell, &entry, REPUBLISH, cx).is_none());
+    assert!(offered(&shell, &entry, STOP_AND_REPUBLISH, cx).is_none());
 
     let other = finished(
         &shell,
@@ -539,7 +551,7 @@ async fn a_waiting_republish_hides_republish_elsewhere(cx: &mut TestAppContext) 
         branch_deleted(&root, manyhands::repository::RequestId::new()),
         cx,
     );
-    shell.click(request_id(other, "open"), cx);
+    act(&shell, &RowKey::Request(other), OPEN_LIFECYCLE, cx);
     until_present(&shell, "lifecycle-ending", cx).await;
     assert!(!shell.present("lifecycle-stop-and-republish", cx));
     assert!(!shell.present("lifecycle-republish", cx));

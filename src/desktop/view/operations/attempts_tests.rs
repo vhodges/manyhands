@@ -13,14 +13,18 @@ use manyhands::{
 
 use crate::desktop::{
     model::{
+        activity::rows::{ActivityRow, Kind, RowKey, Target},
         lifecycle_lock::LockKey,
         polling::{
-            Answer, AttemptTarget, Clock, Disposition, PollAttempt, TargetKind,
-            entry::{SHARE, UNPUBLISHED},
+            Answer, AttemptTarget, Clock, Disposition, PollAttempt, TargetKind, entry::SHARE,
         },
     },
     services::{JobKind, requests::Intent},
-    view::{item::lock_words, settings::polling_support::Rig},
+    view::{
+        activity_support::{act, act_refused, offered, refresh, rows},
+        item::lock_words,
+        settings::polling_support::Rig,
+    },
 };
 
 const TABS: usize = 60;
@@ -67,8 +71,44 @@ fn id(rig: &Rig, ix: usize, part: &str) -> String {
     format!("attempt-{}-{part}", rig.key(ix))
 }
 
-fn line(rig: &Rig, n: usize, i: usize, cx: &mut TestAppContext) -> Option<String> {
-    rig.shell.label(id(rig, n, &format!("line-{i}")), cx)
+/// The rows that list `ix`'s repository's latest attempt: its problems and
+/// its unshared items, in the log's order.
+fn entry(rig: &Rig, ix: usize, cx: &mut TestAppContext) -> Vec<ActivityRow> {
+    let root = rig.key(ix);
+    rows(&rig.shell, cx)
+        .into_iter()
+        .filter(|row| match &row.row.key {
+            RowKey::Problem { root: of, .. } | RowKey::Unshared { root: of, .. } => *of == root,
+            _ => false,
+        })
+        .collect()
+}
+
+fn problem(rig: &Rig, ix: usize, id: &ItemId) -> RowKey {
+    RowKey::Problem {
+        root: rig.key(ix),
+        target: Target::Item(id.clone()),
+    }
+}
+
+fn unshared(rig: &Rig, ix: usize, id: &ItemId) -> RowKey {
+    RowKey::Unshared {
+        root: rig.key(ix),
+        target: Target::Item(id.clone()),
+    }
+}
+
+fn keys(rows: &[ActivityRow]) -> Vec<RowKey> {
+    rows.iter().map(|row| row.row.key.clone()).collect()
+}
+
+/// The repository's Brought rows (S2): what the checks brought in.
+fn brought(rig: &Rig, ix: usize, cx: &mut TestAppContext) -> usize {
+    let root = rig.key(ix);
+    rows(&rig.shell, cx)
+        .iter()
+        .filter(|row| matches!(&row.row.key, RowKey::Brought { root: of, .. } if *of == root))
+        .count()
 }
 
 #[gpui_kit::test]
@@ -77,20 +117,20 @@ async fn dispositions_listed(cx: &mut TestAppContext) {
     let rig = Rig::new(&[("a", true), ("b", true)], cx);
     rig.schedule(0, cx);
     rig.schedule(1, cx);
-    assert!(
-        !rig.shell.present(id(&rig, 0, "repository"), cx),
-        "no attempt, no entry"
+    assert!(entry(&rig, 0, cx).is_empty(), "no attempt, no entry");
+
+    // A quiet attempt lists nothing that needs a look: its one item ahead of
+    // the shared copy is a reminder to share, not a problem.
+    let quiet = attempt(&rig, 0, &[Current, LocalAhead], cx);
+    assert_eq!(
+        keys(&entry(&rig, 0, cx)),
+        [unshared(&rig, 0, &quiet[1])],
+        "quiet: no problem"
     );
 
-    // A quiet attempt shows no entry.
-    attempt(&rig, 0, &[Current, LocalAhead], cx);
-    assert!(
-        !rig.shell.present(id(&rig, 0, "repository"), cx),
-        "quiet: no entry"
-    );
-
-    // Everything the poll leaves alone is listed, in the poll's order, and
-    // only the unpublished one offers Share….
+    // Everything the poll leaves alone is listed, in the poll's order. The
+    // problems keep their order among themselves, the unshared ones follow,
+    // and only the unpublished one is checked for Share….
     let left_alone = [
         Dirty,
         Diverged,
@@ -105,63 +145,79 @@ async fn dispositions_listed(cx: &mut TestAppContext) {
         Unpublished,
         NotReached,
     ];
-    attempt(&rig, 0, &left_alone, cx);
-    assert!(rig.shell.present(id(&rig, 0, "repository"), cx));
-    assert!(
-        !rig.shell.present(id(&rig, 1, "repository"), cx),
-        "one entry per repository"
-    );
-    let expected = [
-        PollDisposition::Dirty.guidance(),
-        PollDisposition::Diverged.guidance(),
-        PollDisposition::Conflicted.guidance(),
-        PollDisposition::Inaccessible.guidance(),
-        PollDisposition::BlockedByLocalState.guidance(),
-        PollDisposition::MaterializationIncomplete.guidance(),
-        PollDisposition::Nonconforming.guidance(),
-        PollDisposition::Malformed.guidance(),
-        PollDisposition::RemotelyDeleted.guidance(),
-        PollDisposition::HistoryUnknown.guidance(),
-        UNPUBLISHED,
-        PollDisposition::NotReached.guidance(),
-    ];
-    for (i, words) in expected.into_iter().enumerate() {
-        assert_eq!(line(&rig, 0, i, cx).as_deref(), Some(words), "line {i}");
-        let action = rig.shell.label(id(&rig, 0, &format!("action-{i}")), cx);
-        match i {
-            10 => assert_eq!(action.as_deref(), Some(SHARE)),
-            _ => assert_eq!(action, None, "line {i} offers nothing"),
+    let ids = attempt(&rig, 0, &left_alone, cx);
+    assert!(entry(&rig, 1, cx).is_empty(), "one entry per repository");
+    let listed = entry(&rig, 0, cx);
+    let mut expected: Vec<RowKey> = Vec::new();
+    for (&disposition, id) in left_alone.iter().zip(&ids) {
+        if !matches!(disposition, Diverged | Unpublished) {
+            expected.push(problem(&rig, 0, id));
         }
     }
-    assert!(!rig.shell.present(id(&rig, 0, "line-12"), cx));
-    assert_eq!(rig.shell.label(id(&rig, 0, "brought-in"), cx), None);
+    expected.push(unshared(&rig, 0, &ids[1]));
+    expected.push(unshared(&rig, 0, &ids[10]));
+    assert_eq!(keys(&listed), expected, "twelve lines, in the poll's order");
+    let guidance = [
+        (0, PollDisposition::Dirty),
+        (2, PollDisposition::Conflicted),
+        (3, PollDisposition::Inaccessible),
+        (4, PollDisposition::BlockedByLocalState),
+        (5, PollDisposition::MaterializationIncomplete),
+        (6, PollDisposition::Nonconforming),
+        (7, PollDisposition::Malformed),
+        (8, PollDisposition::RemotelyDeleted),
+        (9, PollDisposition::HistoryUnknown),
+        (11, PollDisposition::NotReached),
+    ];
+    for (i, disposition) in guidance {
+        let key = problem(&rig, 0, &ids[i]);
+        let row = listed
+            .iter()
+            .find(|row| row.row.key == key)
+            .expect("listed");
+        assert_eq!(row.row.kind, Kind::Failure, "line {i}");
+        assert!(
+            row.row.detail[0].ends_with(disposition.guidance()),
+            "line {i} carries the library's guidance: {:?}",
+            row.row.detail
+        );
+        assert!(
+            offered(&rig.shell, &key, SHARE, cx).is_none(),
+            "line {i} offers no Share"
+        );
+    }
+    let unpublished = unshared(&rig, 0, &ids[10]);
+    let share = offered(&rig.shell, &unpublished, SHARE, cx).expect("Share… on Unpublished");
+    assert!(share.enabled);
+    assert_eq!(brought(&rig, 0, cx), 0, "nothing brought in");
 
-    // A disposition is only text: nothing was sent.
+    // A disposition is only a row: nothing was sent.
     assert!(rig.sent(cx, |_| true).is_empty(), "no request, no mutation");
 
-    // The next attempt replaces the entry; a quiet one removes it.
-    attempt(&rig, 0, &[Dirty, FastForwarded], cx);
-    assert_eq!(
-        rig.shell.label(id(&rig, 0, "brought-in"), cx).as_deref(),
-        Some("Brought in 1 change")
-    );
-    assert_eq!(
-        line(&rig, 0, 0, cx).as_deref(),
-        Some(PollDisposition::Dirty.guidance())
-    );
-    assert!(!rig.shell.present(id(&rig, 0, "line-1"), cx), "replaced");
-    attempt(&rig, 0, &[Current], cx);
+    // The next attempt replaces the entry; a quiet one removes it. What it
+    // brought in stays as a row of its own.
+    let next = attempt(&rig, 0, &[Dirty, FastForwarded], cx);
+    assert_eq!(brought(&rig, 0, cx), 1, "Brought in 1 change");
+    let listed = entry(&rig, 0, cx);
+    assert_eq!(keys(&listed), [problem(&rig, 0, &next[0])], "replaced");
     assert!(
-        !rig.shell.present(id(&rig, 0, "repository"), cx),
-        "quiet again: no entry"
+        listed[0].row.detail[0].ends_with(PollDisposition::Dirty.guidance()),
+        "{:?}",
+        listed[0].row.detail
     );
+    attempt(&rig, 0, &[Current], cx);
+    assert!(entry(&rig, 0, cx).is_empty(), "quiet again: no entry");
 
     // Another repository's entry is its own.
-    attempt(&rig, 1, &[Malformed], cx);
-    assert_eq!(
-        line(&rig, 1, 0, cx).as_deref(),
-        Some(PollDisposition::Malformed.guidance())
+    let other = attempt(&rig, 1, &[Malformed], cx);
+    let listed = entry(&rig, 1, cx);
+    assert_eq!(keys(&listed), [problem(&rig, 1, &other[0])]);
+    assert!(
+        listed[0].row.detail[0].ends_with(PollDisposition::Malformed.guidance()),
+        "{:?}",
+        listed[0].row.detail
     );
+    assert!(entry(&rig, 0, cx).is_empty());
     assert!(rig.sent(cx, |_| true).is_empty(), "still no mutation");
 }
 
@@ -240,25 +296,43 @@ async fn attempt_entry_share_waits_for_the_lock(cx: &mut TestAppContext) {
     let rig = Rig::new(&[("a", true)], cx);
     rig.schedule(0, cx);
     let ids = attempt(&rig, 0, &[Unpublished], cx);
+    let key = unshared(&rig, 0, &ids[0]);
     let action = id(&rig, 0, "action-0");
-    assert_eq!(rig.shell.label(action.clone(), cx).as_deref(), Some(SHARE));
+    assert!(
+        offered(&rig.shell, &key, SHARE, cx)
+            .expect("Share…")
+            .enabled
+    );
 
     lock(&rig, 0, &ids[0], true, cx);
-    let shown = rig.shell.label(action.clone(), cx).expect("it says why");
+    refresh(&rig.shell, cx);
+    let waiting = offered(&rig.shell, &key, SHARE, cx).expect("the row still offers Share…");
+    assert!(!waiting.enabled, "it waits");
+    let held = lock_words(ItemDtoKind::Ticket);
+    let row = rows(&rig.shell, cx)
+        .into_iter()
+        .find(|row| row.row.key == key)
+        .expect("the row stays");
     assert!(
-        shown.starts_with(SHARE) && shown.contains(lock_words(ItemDtoKind::Ticket)),
-        "{shown}"
+        row.row.detail.iter().any(|line| line.contains(held)),
+        "it says why: {:?}",
+        row.row.detail
     );
     assert!(
         !rig.shell.tab_reaches(action.clone(), 20, cx),
         "not focusable"
     );
-    rig.shell.click(action.clone(), cx);
+    act_refused(&rig.shell, &key, SHARE, cx);
     assert!(rig.sent(cx, |_| true).is_empty(), "nothing is sent");
 
     lock(&rig, 0, &ids[0], false, cx);
-    assert_eq!(rig.shell.label(action.clone(), cx).as_deref(), Some(SHARE));
-    rig.shell.click(action, cx);
+    refresh(&rig.shell, cx);
+    assert!(
+        offered(&rig.shell, &key, SHARE, cx)
+            .expect("Share…")
+            .enabled
+    );
+    act(&rig.shell, &key, SHARE, cx);
     assert_eq!(rig.sent(cx, |_| true).len(), 1);
 }
 

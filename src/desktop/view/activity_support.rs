@@ -18,7 +18,10 @@ use super::{
 };
 use crate::desktop::{
     keys::ActivityMenuChoice,
-    model::activity::rows::{ActivityAction, ActivityRow, Offer, RowKey},
+    model::{
+        activity::rows::{ActivityAction, ActivityRow, Offer, RowKey},
+        publication::SyncOutcome,
+    },
     services::requests::{DesktopRequest, DesktopRequestId, RequestState},
 };
 
@@ -60,6 +63,38 @@ pub(crate) fn request(
         .unwrap_or_else(|| panic!("the model holds no request {id:?}"))
 }
 
+/// The `SyncOutcome` of the finished share `id`. It panics unless it has one.
+pub(crate) fn share_outcome(
+    shell: &Shell,
+    id: DesktopRequestId,
+    cx: &mut TestAppContext,
+) -> SyncOutcome {
+    shell
+        .operations(cx)
+        .read_with(cx, |operations, _| operations.share_result(id).cloned())
+        .unwrap_or_else(|| panic!("{id:?} is no finished share"))
+        .outcome
+}
+
+/// The label of the offer on the row `key` that runs `action`, as the log
+/// stands after a refresh. It panics unless the row offers it.
+pub(crate) fn label_of(
+    shell: &Shell,
+    key: &RowKey,
+    action: &ActivityAction,
+    cx: &mut TestAppContext,
+) -> String {
+    refresh(shell, cx);
+    row(shell, key, cx)
+        .unwrap_or_else(|| panic!("no row {key:?}"))
+        .row
+        .menu
+        .into_iter()
+        .find(|offer| &offer.action == action)
+        .unwrap_or_else(|| panic!("{key:?} does not offer {action:?}"))
+        .label
+}
+
 /// The key of the pending row of repository `root` whose command is `action`.
 /// It panics unless exactly one is listed.
 pub(crate) fn pending_key(
@@ -99,6 +134,16 @@ pub(crate) fn pending_key(
 /// menu holds every offer, the button's included, so the button is not
 /// counted twice.
 pub(crate) fn act(shell: &Shell, key: &RowKey, label: &str, cx: &mut TestAppContext) {
+    press(shell, key, label, true, cx);
+}
+
+/// `act` without the run that follows the choice, for a test that asserts
+/// what has not happened yet, inside the choice's own handler.
+pub(crate) fn act_unsettled(shell: &Shell, key: &RowKey, label: &str, cx: &mut TestAppContext) {
+    press(shell, key, label, false, cx);
+}
+
+fn press(shell: &Shell, key: &RowKey, label: &str, settle: bool, cx: &mut TestAppContext) {
     refresh(shell, cx);
     let row = row(shell, key, cx).unwrap_or_else(|| panic!("no row {key:?} to choose {label} on"));
     let enabled: Vec<&Offer> = row
@@ -119,7 +164,7 @@ pub(crate) fn act(shell: &Shell, key: &RowKey, label: &str, cx: &mut TestAppCont
         shown: label.to_owned(),
         revision: row.revision,
     };
-    choose(shell, choice, cx);
+    choose(shell, choice, settle, cx);
 }
 
 /// Asserts the row `key` has no enabled offer labelled `label`, and that
@@ -145,7 +190,7 @@ pub(crate) fn act_refused(shell: &Shell, key: &RowKey, label: &str, cx: &mut Tes
             shown: offer.label,
             revision: row.as_ref().expect("the row offers it").revision,
         };
-        choose(shell, choice, cx);
+        choose(shell, choice, true, cx);
     }
     assert_eq!(
         footprint(shell, cx),
@@ -163,14 +208,16 @@ pub(crate) fn refresh(shell: &Shell, cx: &mut TestAppContext) {
 
 /// Calls `choose_activity` with `choice`, inside `workspace.update`, with the
 /// origin today's control would have given.
-fn choose(shell: &Shell, choice: ActivityMenuChoice, cx: &mut TestAppContext) {
+fn choose(shell: &Shell, choice: ActivityMenuChoice, settle: bool, cx: &mut TestAppContext) {
     shell.frame(cx, |window, cx| {
         shell.workspace.update(cx, |workspace, cx| {
             let origin = origin_of(workspace, &choice.action, cx);
             workspace.choose_activity(&choice, origin, window, cx)
         })
     });
-    shell.run(cx);
+    if settle {
+        shell.run(cx);
+    }
 }
 
 /// The handle of today's control for `action`, where one has focus to give

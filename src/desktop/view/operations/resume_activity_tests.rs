@@ -10,6 +10,7 @@ use crate::desktop::{
     model::activity::rows::{ActivityRow, RowKey},
     services::JobKind,
     view::{
+        activity_support::act,
         harness::{Shell, key},
         lifecycle::STILL_RUNNING,
         operations::RESUME,
@@ -40,14 +41,14 @@ fn pending(shell: &Shell, root: &std::path::Path, cx: &mut TestAppContext) -> Ac
 #[gpui_kit::test]
 async fn a_running_resume_makes_the_stranded_row_still_running(cx: &mut TestAppContext) {
     let (shell, root, _) = stranded(cx);
-    let row = close_row(&shell, cx).await;
+    let entry = close_row(&shell, &root, cx).await;
     let idle = pending(&shell, &root, cx);
     let button = idle.row.button.clone().expect("a button");
     assert_eq!((button.label.as_str(), button.enabled), (RESUME, true));
     assert!(idle.row.attention, "an idle stranded row counts");
 
     let held = shell.backend.hold_job(JobKind::OperationResume);
-    shell.click(("pending-resume", row), cx);
+    act(&shell, &entry, RESUME, cx);
     held.wait_reached();
     let running = pending(&shell, &root, cx);
     let button = running.row.button.clone().expect("a button");
