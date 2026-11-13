@@ -530,9 +530,20 @@ async fn the_stored_outcome_and_shared_copy_are_kept(cx: &mut TestAppContext) {
         .iter()
         .filter(|root| **root == a)
         .count();
+    // The row's facts changed as Retry was chosen, so the scheduler tells
+    // its observers at once, before the read lands.
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+    let observing = cx.update(|cx| {
+        let notified = notified.clone();
+        cx.observe(world.services.scheduler(), move |_, _| {
+            notified.set(notified.get() + 1)
+        })
+    });
     world.services.scheduler().update(cx, |scheduler, cx| {
         scheduler.reread(a.clone(), cx);
     });
+    assert_eq!(notified.get(), 1, "Retry is felt at once");
+    drop(observing);
     World::settle(cx, "the read to land", |cx| !failed(cx)).await;
     World::quiet(cx).await;
     let after = world
