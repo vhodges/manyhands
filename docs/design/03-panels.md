@@ -104,6 +104,8 @@ The default sort is **Updated, newest first**. Closed tickets use `secondary` ti
 - Newest first. Persistent for the session at least; failures remain until resolved (RFC: failures must not exist only in transient notifications).
 - Icon colors: info `secondary`, success green, sharing teal, failure red, locked amber.
 
+*Amended 2026-11-13 by Wave 04 Cycle 03b (its design Part C): the filter shows the rows Needs attention counts (decision 6); `ellipsis` holds "Clear finished" (decision 9); each row has a menu (right click, `shift-f10` or `menu`) whose first lines are the full message, then the detail (decisions 8 and 22); Enter presses the row's button (decision 11); two more kinds, "to share" (amber) and "working" (teal spinner); the layout notices and the quit row sit above the list; rows are one line, the message ending in an ellipsis (decision 22).*
+
 Example copy (use this register):
 - "Checked manyhands for updates. Brought in 2 changes from Jo Smith."
 - "Saved "Wave 03 D3: Rich-text editor integration" on this computer"

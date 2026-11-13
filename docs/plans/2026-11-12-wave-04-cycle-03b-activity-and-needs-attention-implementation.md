@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 03b Activity And Needs Attention Implementation Plan"
 date: 2026-11-12
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -13,25 +13,27 @@ id: "01M79CDMK18N4YHMWP1TV498D0"
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task.
-> **Draft, revision 5.** Revision 2 applied review round 1 and decisions
-> 21–24. Revision 3 applied review round 2 (scoped re-review and
-> adversarial review of `b830e8e3`): the log and the attention count are
-> tables of required outcomes (design A3, A4), which Task 5 writes
-> test-first with a design checkpoint. Revision 4 applied review round 3
-> (scoped re-review and adversarial review of `4c596645`) and decision
-> 25: retirements are redesigned, with no row derived from the attempt's
-> retirement lines (R-51), and a fixed failure stops counting (N22).
-> Revision 5 applies review round 4 (scoped re-review and adversarial
-> review of `05246630`): "fixed" and "followed" are latched per attempt
-> (R-56), subjects are exact (R-57), and the plan is re-grounded on Cycle
-> 03a's merged code at `81789331`. **Revision 5 had no independent
-> review.** The attention count's contract is the N-table with its
-> precedence, latches and T-rows; Task 5 writes it test-first, and a row
-> its implementer cannot express goes back to the orchestrator and the
-> owner. Not approved; Task 0 does not start before the owner approves
-> it, authorizes implementation and chooses the execution method. Re-read
-> the design before each task and record every checkpoint on ticket
-> `01M784Y94Q3AXT6XJX38F5VK1V`. Steps use checkbox (`- [ ]`) syntax.
+> **Approved 2026-11-13** (revision 5). Execution is subagent-driven and
+> serial, in a fresh session from the handoff brief
+> `docs/plans/2026-11-12-wave-04-cycle-03b-handoff.md` (Cycle decision 26).
+> Revision 2 applied review round 1 and decisions 21–24. Revision 3
+> applied review round 2 (scoped re-review and adversarial review of
+> `b830e8e3`): the log and the attention count are tables of required
+> outcomes (design A3, A4), which Task 5 writes test-first with a design
+> checkpoint. Revision 4 applied review round 3 (scoped re-review and
+> adversarial review of `4c596645`) and decision 25: retirements are
+> redesigned, with no row derived from the attempt's retirement lines
+> (R-51), and a fixed failure stops counting (N22). Revision 5 applies
+> review round 4 (scoped re-review and adversarial review of
+> `05246630`): "fixed" and "followed" are latched per attempt (R-56),
+> subjects are exact (R-57), and the plan is re-grounded on Cycle 03a's
+> merged code at `81789331`. **Revision 5 had no independent review.**
+> The attention count's contract is the N-table with its precedence,
+> latches and T-rows; Task 5 writes it test-first, and a row its
+> implementer cannot express goes back to the orchestrator and the
+> owner. Re-read the design before each task and record every checkpoint
+> on ticket `01M784Y94Q3AXT6XJX38F5VK1V`. Steps use checkbox (`- [ ]`)
+> syntax.
 
 **Goal:** Rebuild Activity to `03-panels.md` as one timed log of one-line
 rows, each with the time the app learned of it, a plain-language message,
@@ -83,11 +85,12 @@ popover", `02` Footer item 5 and `06`.
 **Precondition.**
 
 - The owner has approved the three documents, authorized implementation
-  and chosen the execution method.
+  and chosen the execution method. This is met: approved and authorized
+  on 2026-11-13 (Cycle decision 26).
 - Cycle 03a (`01M784Y8C73B39GR4JWENXE5D0`) is closed and merged to main.
   This is met: main `ba95e1b7`, merged into the ticket branch at
   `81789331`. Task 0 still merges main and re-checks.
-- Task 0 does not start before both.
+- Task 0 does not start before both; both are met.
 - The design's Document Amendments are applied by the planner in the
   approval commit, not by a task.
 

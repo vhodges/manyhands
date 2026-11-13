@@ -130,11 +130,11 @@ Shown on first SSH use per session (including the first poll), or from Needs att
 
 ## Needs attention popover (2f) · 440 px
 
-Anchored above the footer's attention item (bottom 34 px, right-aligned to it). Click outside or Esc closes it.
+Anchored above the footer's attention item (bottom 34 px, right-aligned to it). Click outside or Esc closes it. *Amended 2026-11-13 by Wave 04 Cycle 03b (decisions 11, 18 and 24; its design Parts E2 and H): the arrows, Home and End move the highlight; Enter runs the highlighted row's button, or opens its item when it has none, and activates the link; Tab and Shift+Tab cycle the list, the highlighted row's button and the link, and focus stays inside the popover; Escape closes it and returns focus to the footer item. It also closes when its count reaches zero, when a dialog or sheet opens, and when another menu opens. A press outside closes it and also reaches what is under it, unless it is the footer item itself.*
 - Header: "Needs attention" / "Your work is safe on this computer. Nothing here happens until you choose."
 - **One row per unresolved recovery state:** icon (colored) · title (500) · description (12 px `secondary`) · action button · repo tag. The tooltip has the Git detail. Examples:
   - `circle-alert` red: "You and Jo Smith both changed "Footer toggles for dock panels"". "Choose what to keep. Nothing is shared until you do." [Review changes]
   - `lock` amber: "Your key is locked". "Sharing from manyhands is waiting for the passphrase." [Unlock…]
-  - `wifi-off` red: "Couldn't reach zorite's shared copy". "Last tried 7 minutes ago. Your work is safe, and Manyhands tries again in 5 minutes." [Retry now]
+  - `wifi-off` red: "Couldn't reach zorite's shared copy". "Last tried 7 minutes ago. Your work is safe, and Manyhands tries again in 5 minutes." [Retry now] *Amended 2026-11-13 by Wave 04 Cycle 03b (its design K-7): "tries again" carries no fixed minutes, since retries back off.*
 - Footer link: "Show everything in Activity" (opens and shows the Activity panel).
 - The same items also appear in Activity. The popover is a filtered view, not a separate store.

@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 03b Activity And Needs Attention Design"
 date: 2026-11-12
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -33,18 +33,21 @@ merging or closing. After approval, a note goes on each folded-in ticket
 `01M5CS4MH25QQ769HV61ZRKHXG`) saying which items this Cycle takes. That is
 the planner's step 9 work, not a Document Amendment.
 
-**Draft, revision 5.** Revision 2 applied review round 1 (two reviewers)
-and decisions 21–24. Revision 3 applied review round 2 (a scoped
-re-review and an adversarial review of `b830e8e3`). Revision 4 applied
-review round 3 (a scoped re-review and an adversarial review of
-`4c596645`) and decision 25, and redesigned retirements: no row is
-derived from the attempt's retirement lines (R-51). Revision 5 applies
-review round 4 (a scoped re-review and an adversarial review of
-`05246630`) and re-grounds on Cycle 03a's merged code.
+**Approved 2026-11-13** by the owner (revision 5), with Cycle decision
+26; the Document Amendments below were applied in the approval commit.
+Revision 5 had no independent review.
 
-**Revision 5 had no independent review.** Round 4 was the fourth round to
-find Blocking issues in the attention count. So that contract is A3's
-N-table with its precedence and latches (R-56), and A4's T-rows. Task 5
+Revision 2 applied review round 1 (two reviewers) and decisions 21–24.
+Revision 3 applied review round 2 (a scoped re-review and an adversarial
+review of `b830e8e3`). Revision 4 applied review round 3 (a scoped
+re-review and an adversarial review of `4c596645`) and decision 25, and
+redesigned retirements: no row is derived from the attempt's retirement
+lines (R-51). Revision 5 applies review round 4 (a scoped re-review and
+an adversarial review of `05246630`) and re-grounds on Cycle 03a's
+merged code.
+
+Round 4 was the fourth round to find Blocking issues in the attention
+count. So that contract is A3's N-table with its precedence and latches (R-56), and A4's T-rows. Task 5
 writes them test-first with a design checkpoint. A row its implementer
 cannot express goes back to the orchestrator and the owner.
 
@@ -2826,7 +2829,7 @@ tests and production code. Any other site is recorded as a further edit
 Applied by the planner in the approval commit, not by an implementation
 task:
 
-1. **Wave 04, Cycle 03b section.** "Amended 2026-11-12 by Cycle 03b":
+1. **Wave 04, Cycle 03b section.** "Amended 2026-11-13 by Cycle 03b":
    - the count includes every attention row once (decision 6);
    - checks that changed something get rows (decision 7);
    - titles appear in Activity and the popover, under D5's and D6's rules
@@ -2868,7 +2871,7 @@ task:
    - D6's design (`docs/plans/2026-11-07-wave-03-desktop-06-polling-and-shutdown-design.md:1095`
      and its Privacy section, `:1520-1528`).
 
-   Each reads: "Amended 2026-11-12 by Wave 04 Cycle 03b decisions 12 and
+   Each reads: "Amended 2026-11-13 by Wave 04 Cycle 03b decisions 12 and
    21: a title may appear in an Activity row, its tooltip and menu, and
    the Needs attention popover; no body, comment, side, result text or
    path does."
@@ -3070,3 +3073,4 @@ click) is settled: fact 47.
 | Owner, 2026-11-13, after review round 3 | Should a fixed failure stop counting by itself? | Owner decision | Decision 25: it stops counting once fixed and stays as history (N22 and N23) | Session, 2026-11-13 |
 | Review round 3, scoped re-review and adversarial (revision 3, `4c596645`) | Scoped: 0 Blocking, 6 Important, 8 Minor. Adversarial: 6 Blocking, 7 Important, 4 Minor. Most sit in how retirements became rows (the S8 starts, kept rows, R-42) and when a failed request stops counting. Others: a lifecycle's Resume on its pending row; L3's offers; a Busy read; the revision; T10's owner; `clearable` and Open…; the sentinels | Blocking, Important, Minor | Revision 4: retirements redesigned (A1, A2 S1 and S8, B0, B4, B5; R-51); the kept rows, the fourth log rule, T7, T8, N20, R-19 and R-42 withdrawn; the subject and N2, N4, N9, N21–N24 with their precedence (R-52, R-53); S9's lifecycle Resume; L3, L3b (R-54), the revisions and the drawn revision (R-46, R-55); new T7 and T8; T5, T9–T11, T13; P1–P3, P10, P15–P19, P28; `outcome_lines`' moves; `repository_detail`; Testing (`act`, T11); Document Amendments 2 and 11. Scoped findings 1–3 (the S8 starts, kept counting, N20 against N21) are resolved by the redesign | Change list, 2026-11-13 |
 | Review round 4, scoped re-review with re-grounding and adversarial (revision 4, `05246630`) | Scoped: 1 Blocking, 5 Important, 8 Minor, and 11 moved citations. Adversarial: 5 Blocking, 6 Important, 3 Minor. Almost all Blocking findings sit in decision 25's "fixed" rule: rows that fixed a failure leaving, a retry, the subject, the operation, a later check, a retirement event. Others: `check_applied`, `clearable` for fixed rows, S8's information events, S9's lifecycle row while in flight, the popover's focus and revision check, dead code, `retire_rows_hit`, `outcome_lines`' constants, L3b's trigger, stale text. Cycle 03a merged in between (main `ba95e1b7`) | Blocking, Important, Minor | Revision 5, **with no independent review**: the latch (`settled` per attempt, R-56); exact subjects with `target` (R-57); N22's five clauses; N2 by operation; N23 undone; N25; `check_applied` recorded by `check_failed` (R-58); `superseded`; `clearable` for settled failures (A1, R-47, T9, P19); S8's `RetireNote` (R-59); the Owed copy; `LifecycleRow::new`; L3b's trigger and `pending_held`; T5, T7, T14–T18; E2's focus and revision check (P23, P25); F4's dead code; E-7; `outcome_lines`' constants; R-41; Document Amendment 11. Re-grounded at `81789331`: facts 19, 21, 28, 30, 41 and 46, A2, R-51, P32, E-4, E-13, U-6 and Risks | Change list, 2026-11-13 |
+| Owner, 2026-11-13 | Approval message: documents, named edits, decisions 14–20, no further review, execution method, authorization | Owner decisions | Decisions 14–20 confirmed; decision 26 | Session, 2026-11-13 |

@@ -697,6 +697,10 @@ No title, body, comment, side or result text enters an operation entry,
 log or error. Paths appear only in the dialog and the sheet. Sentinel tests
 seed each.
 
+*Amended 2026-11-13 by Wave 04 Cycle 03b decisions 12 and 21: a title may
+appear in an Activity row, its tooltip and menu, and the Needs attention
+popover; no body, comment, side, result text or path does.*
+
 ## Testing (Decision 9)
 
 Desktop tests use real local repositories for local-only runs and local

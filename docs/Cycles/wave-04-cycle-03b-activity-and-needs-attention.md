@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 03b: Activity And Needs Attention"
 date: 2026-11-12
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -14,17 +14,18 @@ Ticket `01M784Y94Q3AXT6XJX38F5VK1V` (`vh-dt0aq`).
 [Design](../plans/2026-11-12-wave-04-cycle-03b-activity-and-needs-attention-design.md) and
 [implementation plan](../plans/2026-11-12-wave-04-cycle-03b-activity-and-needs-attention-implementation.md).
 
-**Status: draft, revision 5.** On 2026-11-12 the owner asked to plan this
+Status: **approved 2026-11-13** (revision 5). The owner wrote: "All
+approved." (decision 26). On 2026-11-12 the owner asked to plan this
 Cycle while Cycle 03a was in its final review ("substantially complete").
 Cycle 03a has since closed and merged (main `ba95e1b7`). The owner
 answered decisions 4–12 in that session and accepted the planner's
 outline with decision 13 ("write the documents"). Decisions 1–3 were
 made during Cycle 03a's planning and are recorded on this ticket.
-Decisions 14–20 are the planner's proposals, each with its reason, for
-the owner to confirm. The owner answered decisions 21–24 on 2026-11-13,
-after review round 1, and decision 25 the same day, after review round
-3. Those marked **(owner's eye)** change something people see today or
-depart from an authority. Revision 2 applied review round 1 (4 Blocking,
+Decisions 14–20 were the planner's proposals, each with its reason; the
+owner confirmed them at approval. The owner answered decisions 21–24 on
+2026-11-13, after review round 1, and decision 25 the same day, after
+review round 3. Those marked **(owner's eye)** change something people
+see today or depart from an authority. Revision 2 applied review round 1 (4 Blocking,
 39 Important, 25 Minor across two reviewers) and decisions 21–24.
 Revision 3 applied review round 2 (scoped re-review 1 Blocking, 7
 Important, 13 Minor; adversarial 1 Blocking, 12 Important, 9 Minor).
@@ -36,7 +37,8 @@ attempt's retirement lines (R-51).
 Revision 5 applies review round 4 (scoped re-review 1 Blocking, 5
 Important, 8 Minor; adversarial 5 Blocking, 6 Important, 3 Minor) and
 re-grounds on Cycle 03a's merged code (`81789331`). **Revision 5 had no
-independent review.** Round 4 was the fourth to find Blocking issues in
+independent review**; the owner approved it without one, as recommended
+(decision 26). Round 4 was the fourth to find Blocking issues in
 the attention count. As the planning skill directs, that contract is the
 N-table with its precedence, latches and T-rows (design A3, A4). Task 5
 writes it test-first with a design checkpoint, and any row its
@@ -64,6 +66,8 @@ implementer cannot express goes back to the orchestrator and the owner.
 - The plan has 14 tasks (0–13). If the owner splits the Cycle, 03b-1 is
   Tasks 0–10 and 03b-2 is Tasks 11–13 (design Risks).
 - **Revision 5 had no independent review.**
+- Approved 2026-11-13 (decision 26); the design's Document Amendments
+  1–12 were applied in the approval commit.
 
 ## Purpose And Authority
 
@@ -367,7 +371,7 @@ decisions govern and are not repeated.
     - every request kind gets a row, including those the app sends
       itself, such as launch refreshes and Prepare to edit.
 
-**Proposed by the planner, for the owner to confirm:**
+**Proposed by the planner and confirmed by the owner at approval (2026-11-13):**
 
 14. **Existing-test edits.** The named edits E-1 to E-16 are part of
     approving the design; those marked **Removes** are named there. Any
@@ -475,6 +479,33 @@ decisions govern and are not repeated.
 
     *Alternative:* count until dismissed, as today.
 
+**Answered by the owner at approval (2026-11-13):**
+
+26. **Approved, and implementation authorized, subagent-driven and
+    serial, in a fresh session.** The owner wrote "All approved." in
+    answer to the approval message, which asked the owner to:
+    - approve the three documents (revision 5);
+    - approve the named test edits E-1 to E-16, including the removals
+      marked;
+    - confirm decisions 14–20 as proposed;
+    - skip, as recommended, a further independent review of revision 5;
+    - choose the execution method, recommended subagent-driven and
+      serial, in a fresh session from a handoff brief, as on Cycles 02
+      and 03a;
+    - authorize implementation of Tasks 0–13 and pushing this ticket
+      branch.
+
+    One implementer per task, then a fresh reviewer, one at a time,
+    following `.agents/skills/implementing-a-cycle/SKILL.md` and
+    `superpowers:subagent-driven-development`. The fresh session works
+    from the brief `docs/plans/2026-11-12-wave-04-cycle-03b-handoff.md`.
+    Authorized: Tasks 0–13, the named test edits E-1 to E-16 and further
+    edits under decision 14, and pushing this ticket branch after each
+    task. Not authorized without the owner's go-ahead at the time: a push
+    of any other branch, a pull request, the merge, closing the ticket,
+    worktree cleanup, native CI, creating tickets, and `ticket save` or
+    `comment add` on any other ticket.
+
 ## Known Limits
 
 These are visible to users; the design's Known Limits give the detail.
@@ -507,11 +538,10 @@ These are visible to users; the design's Known Limits give the detail.
 
 ## Open Questions
 
-None for the owner beyond confirming decisions 14–20. Decisions 21–25
-were answered on 2026-11-13. The design's U-1, U-2, U-4, U-5, U-7 and
-U-8 are checked by the tasks that first rely on them. U-6 was re-read at
-`81789331`, and Task 0 re-checks only what changes after that. U-3 is
-settled (design fact 47).
+None from the owner: decisions 1–26 are settled. The design's U-1, U-2,
+U-4, U-5, U-7 and U-8 are checked by the tasks that first rely on them.
+U-6 was re-read at `81789331`, and Task 0 re-checks only what changes
+after that. U-3 is settled (design fact 47).
 
 ## Review Record
 
@@ -527,3 +557,4 @@ settled (design fact 47).
 | Owner, 2026-11-13, after review round 3 | Should a fixed failure stop counting by itself? | Owner decision | Decision 25; design N22 and N23; Document Amendment 11 cites decisions 6 and 25 | Session, 2026-11-13 |
 | Review round 3, scoped re-review and adversarial (revision 3, `4c596645`) | Scoped: 0 Blocking, 6 Important, 8 Minor. Adversarial: 6 Blocking, 7 Important, 4 Minor. Most sit in how retirements became rows (the S8 starts, kept rows, R-42) and when a failed request stops counting; others: a lifecycle's Resume on its pending row, L3's offers, a Busy read, the revision, `clearable` and Open…, the sentinels | Blocking, Important, Minor | Revision 4: retirements redesigned, with no rows derived from the attempt's retirement lines (design R-51); the subject, N2, N4, N9 and N21–N24 with their precedence (decision 25); design R-52 to R-55; N20, R-19 and R-42 withdrawn, T7 and T8 replaced. Scoped findings 1–3 (the S8 starts, kept counting, N20 against N21) are resolved by the redesign | Change list, 2026-11-13 |
 | Review round 4, scoped re-review with re-grounding and adversarial (revision 4, `05246630`) | Scoped: 1 Blocking, 5 Important, 8 Minor, and 11 moved citations. Adversarial: 5 Blocking, 6 Important, 3 Minor. Almost all Blocking findings sit in decision 25's "fixed" rule, the fourth round to find Blocking issues in the attention count; others: `check_applied`, clearing fixed rows, S8's information events, S9's lifecycle row, the popover's focus and revision check, dead code, stale text. Cycle 03a merged in between | Blocking, Important, Minor | Revision 5, **with no independent review**: the latch and exact subjects (design R-56, R-57), N22's five clauses, N2 by operation, N23 undone, N25, T14–T18; `check_applied` recorded (R-58); settled failures clearable; S8's information events per item (R-59); re-grounded on Cycle 03a's merged code at `81789331`. The contract is the N-table with its precedence, latches and T-rows, written test-first in Task 5; a row its implementer cannot express goes back to the orchestrator and the owner | Change list, 2026-11-13 |
+| Owner, 2026-11-13 | Approval message: documents, named edits, decisions 14–20, no further review, execution method, authorization | Owner decisions | Decisions 14–20 confirmed; decision 26 | Session, 2026-11-13 |
