@@ -1,7 +1,8 @@
 //! Activity's window tests that belong to the log (Wave 04 Cycle 03b): the
 //! footer's count against the log's attention rows through a journey
 //! (`count_and_popover_agree`, P13's count half) and the coalescing of
-//! refreshes (`refreshes_are_coalesced`, P3's T10).
+//! refreshes (`refreshes_are_coalesced`, P3's T10), and each action's
+//! handler through `choose_activity` (`each_action_runs_its_handler`, P18).
 
 use gpui_kit::TestAppContext;
 use manyhands::{
@@ -207,4 +208,40 @@ fn refreshes_are_coalesced(cx: &mut TestAppContext) {
         vec![RowKey::Request(DesktopRequestId(1))],
         "a request the model heard of shows its row"
     );
+}
+
+#[path = "activity_tests/cases.rs"]
+mod cases;
+#[path = "activity_tests/pending.rs"]
+mod pending_cases;
+#[path = "activity_tests/refused.rs"]
+mod refused_cases;
+#[path = "activity_tests/states.rs"]
+mod state_cases;
+
+/// P18: each `ActivityAction` kind, `ResumeLifecycle` included, chosen
+/// through `choose_activity` from the row that offers it, runs its handler
+/// and sends exactly what today's control sends: read from the request
+/// model, the recording backend, or the dialog, sheet or page it opens. A
+/// choice made against an older revision of its row (T11) and one of a
+/// disabled or absent offer (T12) run nothing.
+#[gpui_kit::test]
+async fn each_action_runs_its_handler(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    // Cancel, Stop, Offer, Recovery, Open and Dismiss of a request.
+    cases::requests(cx).await;
+    // Review.
+    cases::review(cx).await;
+    // Resume, ResumeLifecycle, Abandon and RetryPendingList.
+    pending_cases::pending(cx).await;
+    // ReviewPending.
+    pending_cases::review_pending(cx).await;
+    // Share, Share main, OpenItem, Retire, Attend and Dismiss of a key.
+    state_cases::states(cx).await;
+    // Repository.
+    state_cases::repository(cx).await;
+    // ReviewDrafts, DismissRecovered, DismissNote and RetryFlush.
+    state_cases::drafts(cx).await;
+    // The stale revision (T11) and the refused offers (T12).
+    refused_cases::refused(cx).await;
 }

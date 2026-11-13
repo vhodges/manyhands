@@ -24,16 +24,17 @@ use manyhands::{
 };
 
 use super::{
-    offer_part, share_result, share_route,
+    busy_holder, offer_label, offer_part, share_result, share_route,
     tests::{
         TICKET, answer, assert_row, chosen_line, host_problem, open, open_with, outcome,
-        real_share, shared, submit_main,
+        outcome_of, real_share, shared, submit_main,
     },
 };
 use crate::desktop::{
     model::{
-        operations::{ANOTHER_SHARE_HOLDS, KEY_LOCKED, may_be_waiting_for},
-        publication::SyncOffer,
+        activity::rows::RowKey,
+        operations::may_be_waiting_for,
+        publication::{SyncOffer, SyncOutcome},
         stamp::SettingsPage,
     },
     services::{
@@ -42,6 +43,7 @@ use crate::desktop::{
     },
     test_support::fixtures::item_id,
     view::{
+        activity_support::{act, offered, rows},
         harness::{Shell, WAIT, key, wait_until},
         item::ItemRoute,
         operations::request_id,
@@ -58,8 +60,10 @@ fn no_selected_key_opens_sharing_and_keys(cx: &mut TestAppContext) {
     let (shell, root) = open(false, cx);
     let envelope = answer(ResultCode::NoSelectedKey, Effects::not_requested());
     let id = shared(&shell, &root, 1, envelope, cx);
-    shell.click(
-        request_id(id, offer_part(SyncOffer::OpenSharingAndKeys)),
+    act(
+        &shell,
+        &RowKey::Request(id),
+        offer_label(SyncOffer::OpenSharingAndKeys),
         cx,
     );
     shell.run(cx);
@@ -102,7 +106,12 @@ async fn a_host_code_checks_the_host_with_its_authority(cx: &mut TestAppContext)
     ));
 
     let held = shell.backend.hold_job(JobKind::ObserveHost);
-    shell.click(request_id(id, offer_part(SyncOffer::CheckHost)), cx);
+    act(
+        &shell,
+        &RowKey::Request(id),
+        offer_label(SyncOffer::CheckHost),
+        cx,
+    );
     held.wait_reached();
     assert!(shell.present("settings-hosts", cx));
     assert_eq!(
@@ -238,7 +247,7 @@ async fn unlock_clears_the_declined_key_and_retries_the_same_request(cx: &mut Te
     assert_row(
         &shell,
         id,
-        Some(KEY_LOCKED),
+        SyncOutcome::NeedsUnlock,
         &[SyncOffer::GiveUp, SyncOffer::Unlock],
         cx,
     );
@@ -248,7 +257,12 @@ async fn unlock_clears_the_declined_key_and_retries_the_same_request(cx: &mut Te
         .unwrap();
 
     let held = shell.backend.hold_job(JobKind::SynchronizeRepo);
-    shell.click(request_id(id, offer_part(SyncOffer::Unlock)), cx);
+    act(
+        &shell,
+        &RowKey::Request(id),
+        offer_label(SyncOffer::Unlock),
+        cx,
+    );
     held.wait_reached();
     let retried = shell
         .operations(cx)
@@ -275,10 +289,21 @@ async fn share_after_a_finished_locked_key_clears_its_declined_key(cx: &mut Test
     let (shell, root) = open(false, cx);
     let key_id = SharedKeyId::new();
     let id = declined_share(&shell, &root, key_id, cx).await;
-    assert_row(&shell, id, Some(KEY_LOCKED), &[SyncOffer::Share], cx);
+    assert_row(
+        &shell,
+        id,
+        SyncOutcome::NeedsUnlock,
+        &[SyncOffer::Share],
+        cx,
+    );
 
     let held = shell.backend.hold_job(JobKind::SynchronizeRepo);
-    shell.click(request_id(id, offer_part(SyncOffer::Share)), cx);
+    act(
+        &shell,
+        &RowKey::Request(id),
+        offer_label(SyncOffer::Share),
+        cx,
+    );
     held.wait_reached();
     let mains = shell.requests(cx, |request| {
         matches!(request.intent, Intent::RepoSync { .. })
@@ -338,21 +363,33 @@ fn busy_without_a_known_holder_points_to_pending_operations(cx: &mut TestAppCont
         answer(ResultCode::Busy, Effects::not_requested()),
         cx,
     );
+    assert_eq!(outcome_of(&shell, id, cx), SyncOutcome::Busy);
+    let services = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().clone());
     assert_eq!(
-        outcome(&shell, id, cx).as_deref(),
-        Some(ANOTHER_SHARE_HOLDS)
+        cx.read(|cx| busy_holder(&services, id, cx)),
+        None,
+        "no request of this session may hold the repository"
     );
     let before = shell.backend.reads_seen(ReadKind::Operations);
-    shell.click(request_id(id, offer_part(SyncOffer::ShowHolder)), cx);
+    act(
+        &shell,
+        &RowKey::Request(id),
+        offer_label(SyncOffer::ShowHolder),
+        cx,
+    );
     shell.run(cx);
     assert!(shell.present(Region::Operations.ring_id(), cx));
     assert!(
         shell.backend.reads_seen(ReadKind::Operations) > before,
         "the pending operations were read again"
     );
-    assert_eq!(
-        shell.label("pending-empty", cx).as_deref(),
-        Some(super::super::NOTHING_PENDING)
+    assert!(
+        !rows(&shell, cx)
+            .iter()
+            .any(|row| matches!(row.row.key, RowKey::Pending { .. } | RowKey::PendingList(_))),
+        "nothing is pending"
     );
 }
 
@@ -372,6 +409,23 @@ async fn a_final_failure_on_a_finished_record_offers_share_not_retry(cx: &mut Te
         cx,
     )
     .await;
-    assert_row(&shell, id, None, &[SyncOffer::Share], cx);
-    assert!(!shell.present(request_id(id, offer_part(SyncOffer::Retry)), cx));
+    assert_row(
+        &shell,
+        id,
+        SyncOutcome::Failed {
+            code: ResultCode::PushRejected,
+            retry: false,
+        },
+        &[SyncOffer::Share],
+        cx,
+    );
+    assert!(
+        offered(
+            &shell,
+            &RowKey::Request(id),
+            offer_label(SyncOffer::Retry),
+            cx
+        )
+        .is_none()
+    );
 }

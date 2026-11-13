@@ -19,7 +19,7 @@ use crate::desktop::{
         activity::{
             Inputs, derive,
             log::{ActivityLog, pending_held},
-            rows::{ItemRef, Target},
+            rows::{ItemRef, RowKey, Target},
             states::{DraftsInput, RepositoryInput, ShareState, target_of},
         },
         lifecycle_lock::LockKey,
@@ -78,6 +78,18 @@ impl Workspace {
             this.update(cx, |this, cx| this.refresh_activity_now(cx))
                 .ok();
         });
+    }
+
+    /// S2's and S8's Dismiss (L6): the log forgets the row, and the next
+    /// refresh does not show it again. A request goes through
+    /// `dismiss_request`.
+    pub(in crate::desktop::view) fn dismiss_activity_row(
+        &mut self,
+        key: &RowKey,
+        cx: &mut Context<Self>,
+    ) {
+        self.activity.log.dismiss(key);
+        self.refresh_activity(cx);
     }
 
     /// Derives the rows and refreshes the log now: the deferred refresh, and

@@ -66,10 +66,10 @@ pub(in crate::desktop::view) enum RetireStep {
 
 /// The item a Retire… is for, in the shape the tabs and the lock know it.
 #[derive(Clone)]
-struct Subject {
-    root: Root,
-    kind: TargetKind,
-    item: ItemId,
+pub(in crate::desktop::view) struct Subject {
+    pub root: Root,
+    pub kind: TargetKind,
+    pub item: ItemId,
 }
 
 impl Subject {
@@ -129,7 +129,12 @@ impl Workspace {
     }
 
     /// Retire… was pressed (E4, steps 1 and 2).
-    fn retire_chosen(&mut self, subject: Subject, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::desktop::view) fn retire_chosen(
+        &mut self,
+        subject: Subject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let key = (subject.root.clone(), subject.item.to_string());
         let dto = dto_kind(subject.kind);
         if self.services().worker().quitting()

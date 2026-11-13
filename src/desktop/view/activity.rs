@@ -2,6 +2,8 @@
 //! For now this holds only its window tests, which read the count and the
 //! refreshes (Task 5); the panel itself comes with Task 9.
 
+mod actions;
+
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "activity_tests.rs"]
 mod tests;

@@ -24,7 +24,7 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::{AnyElement, App, ClickEvent, Context, Window};
+use gpui_kit::{AnyElement, App, ClickEvent, Context, FocusHandle, Window};
 
 use super::{
     button,
@@ -243,13 +243,14 @@ impl Workspace {
     ) -> AnyElement {
         let part = request_id(id, offer_part(offer));
         let focus = self.control_focus_for(part.clone(), cx);
+        let origin = focus.clone();
         button(
             part,
             offer_label(offer),
             Some(&focus),
             cx,
             cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.run_share_offer(id, offer, window, cx)
+                this.run_share_offer(id, offer, origin.clone(), window, cx)
             }),
         )
     }
@@ -267,11 +268,13 @@ impl Workspace {
         }
     }
 
-    /// Runs the offer `offer` of the finished share `id`.
+    /// Runs the offer `offer` of the finished share `id`. Republish…'s
+    /// dialog gives focus back to `origin`.
     pub(in crate::desktop::view) fn run_share_offer(
         &mut self,
         id: DesktopRequestId,
         offer: SyncOffer,
+        origin: FocusHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -303,7 +306,6 @@ impl Workspace {
                 let Some(target) = self.share_republished(id, cx) else {
                     return;
                 };
-                let origin = self.control_focus_for(request_id(id, offer_part(offer)), cx);
                 if offer == SyncOffer::Republish {
                     self.republish(target, origin, window, cx);
                 } else {

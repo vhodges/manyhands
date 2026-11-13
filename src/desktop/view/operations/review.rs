@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::{AnyElement, App, ClickEvent, Context, Window, component::WindowExt};
+use gpui_kit::{AnyElement, App, ClickEvent, Context, FocusHandle, Window, component::WindowExt};
 
 use super::{button, request_id};
 use crate::desktop::{
@@ -75,20 +75,24 @@ impl Workspace {
     ) -> Option<AnyElement> {
         self.entry_of(id, cx)?;
         let focus = self.control_focus_for(request_id(id, "review"), cx);
+        let origin = focus.clone();
         Some(button(
             request_id(id, "review"),
             REVIEW_CHANGES,
             Some(&focus),
             cx,
             cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.review_request(id, window, cx)
+                this.review_request(id, origin.clone(), window, cx)
             }),
         ))
     }
 
-    fn review_request(
+    /// Review changes on the finished request `id`: the sheet on its
+    /// conflict, giving focus back to `origin` when it closes.
+    pub(in crate::desktop::view) fn review_request(
         &mut self,
         id: DesktopRequestId,
+        origin: FocusHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -103,7 +107,6 @@ impl Workspace {
             .to_str()
             .map(|root| self.known(root))
             .unwrap_or_default();
-        let origin = self.control_focus_for(request_id(id, "review"), cx);
         let services = self.services().clone();
         entry.open(known, origin, &services, window, cx);
     }
@@ -120,6 +123,7 @@ impl Workspace {
         let operation_id = operation_id?;
         self.pending_conflict(root, operation_id)?;
         let focus = self.control_focus_for(format!("review:{root}:{operation_id}"), cx);
+        let origin = focus.clone();
         let (root, operation) = (root.clone(), operation_id.to_owned());
         Some(button(
             (PENDING_REVIEW, index),
@@ -127,15 +131,18 @@ impl Workspace {
             Some(&focus),
             cx,
             cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.review_pending(&root, &operation, window, cx)
+                this.review_pending(&root, &operation, origin.clone(), window, cx)
             }),
         ))
     }
 
-    fn review_pending(
+    /// Review changes on the pending row `operation_id` of `root`, giving
+    /// focus back to `origin` when the sheet closes.
+    pub(in crate::desktop::view) fn review_pending(
         &mut self,
         root: &RepoKey,
         operation_id: &str,
+        origin: FocusHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -147,7 +154,6 @@ impl Workspace {
         };
         let entry = Entry::of_pending(PathBuf::from(root), &conflict);
         let known = self.known(root);
-        let origin = self.control_focus_for(format!("review:{root}:{operation_id}"), cx);
         let services = self.services().clone();
         entry.open(known, origin, &services, window, cx);
     }

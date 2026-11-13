@@ -15,7 +15,7 @@ use crate::desktop::{
     view::{
         confirm::{confirm, prepare_again},
         item::ItemRoute,
-        operations::{recovery_id, request_id},
+        operations::request_id,
     },
 };
 use gpui_kit::{
@@ -585,6 +585,7 @@ impl Workspace {
         &mut self,
         id: DesktopRequestId,
         n: usize,
+        origin: FocusHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -600,11 +601,6 @@ impl Workspace {
             };
             operations.recovery_step(id, action)
         };
-        let origin = self
-            .control_focus
-            .get(&recovery_id(id, n))
-            .cloned()
-            .unwrap_or_else(|| self.regions[Region::Operations.index()].clone());
         window.focus(&origin, cx);
         self.last_region = Some(Region::Operations);
         match step {

@@ -85,7 +85,7 @@ impl Workspace {
 
     /// Resume on the lifecycle row `row` of `root`: its operation resumed,
     /// and the lifecycle dialog on that resume.
-    fn resume_lifecycle(
+    pub(in crate::desktop::view) fn resume_lifecycle(
         &mut self,
         root: &RepoKey,
         row: &LifecycleRow,

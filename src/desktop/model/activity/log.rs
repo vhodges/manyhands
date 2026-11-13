@@ -222,7 +222,7 @@ impl ActivityLog {
     }
 
     /// The rows, newest first.
-    #[allow(dead_code)] // Used from Task 6
+    #[allow(dead_code)] // Used from Task 9
     pub(crate) fn rows(&self) -> &[ActivityRow] {
         &self.rows
     }
@@ -234,7 +234,6 @@ impl ActivityLog {
 
     /// S2's and S8's Dismiss (L6): the row is not shown again, and its time is
     /// forgotten. A request goes through `dismiss_request` instead.
-    #[allow(dead_code)] // Used from Task 6
     pub(crate) fn dismiss(&mut self, key: &RowKey) {
         let sent = self
             .rows
@@ -246,7 +245,7 @@ impl ActivityLog {
     }
 
     /// The rows "Clear finished" takes (L8).
-    #[allow(dead_code)] // Used from Task 6
+    #[allow(dead_code)] // Used from Task 9
     pub(crate) fn clearable(&self) -> Vec<RowKey> {
         self.rows
             .iter()
@@ -258,7 +257,6 @@ impl ActivityLog {
     /// Whether a choice made against the row `key` at `revision` may still
     /// run: the row's revision is the same, and it still has that offer,
     /// enabled (T11, T12).
-    #[allow(dead_code)] // Used from Task 6
     pub(crate) fn still_offered(
         &self,
         key: &RowKey,

@@ -226,7 +226,7 @@ impl Workspace {
     }
 
     /// The state's action of the repository at `root` (Part B).
-    fn row_action(
+    pub(in crate::desktop::view) fn row_action(
         &mut self,
         action: &RowAction,
         root: RepoKey,
@@ -257,7 +257,7 @@ impl Workspace {
 
     /// Whether the repository at `root`, listed or kept, names a
     /// publication remote.
-    fn publication_remote(&self, root: &RepoKey) -> bool {
+    pub(in crate::desktop::view) fn publication_remote(&self, root: &RepoKey) -> bool {
         let navigation = &self.navigation;
         navigation
             .repositories()

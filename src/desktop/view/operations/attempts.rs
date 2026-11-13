@@ -208,7 +208,11 @@ impl Workspace {
     /// header sends (`item sync`), on the user lane, unless one is already
     /// queued or running. A poll runs only with a publication remote, so
     /// there is no remote to set up here.
-    fn share_unpublished(&mut self, share: Intent, cx: &mut Context<Self>) {
+    pub(in crate::desktop::view) fn share_unpublished(
+        &mut self,
+        share: Intent,
+        cx: &mut Context<Self>,
+    ) {
         if self.sharing(&share) {
             return;
         }

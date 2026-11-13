@@ -79,9 +79,11 @@ mod resume;
 mod retire;
 mod review;
 
-pub(in crate::desktop::view) use retire::RetireStep;
+pub(in crate::desktop::view) use retire::{RetireStep, Subject as RetireSubject};
 
 use outcomes::ALREADY_FINISHED;
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(in crate::desktop::view) use outcomes::offer_part;
 pub(in crate::desktop::view) use outcomes::{already_finished, facts_words, shown_offers};
 pub(crate) use outcomes::{share_result, share_words};
 
@@ -279,10 +281,12 @@ impl Workspace {
     }
 
     /// Open… on a lifecycle's entry: its dialog again, on that request
-    /// (D5, A3). Focus goes back to Open… when it closes.
-    fn open_lifecycle(
+    /// (D5, A3). Focus goes back to `origin`, the control or the list that
+    /// chose it, when it closes.
+    pub(in crate::desktop::view) fn open_lifecycle(
         &mut self,
         id: DesktopRequestId,
+        origin: FocusHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -299,7 +303,6 @@ impl Workspace {
             .and_then(|root| root.to_str())
             .map(|root| self.known(root))
             .unwrap_or_default();
-        let origin = self.control_focus_for(request_id(id, "open"), cx);
         let services = self.services().clone();
         lifecycle::reopen(&request, known, origin, &services, window, cx);
     }
@@ -411,13 +414,14 @@ impl Workspace {
                 // A lifecycle's dialog shows its outcome and way out.
                 if lifecycle::item_of(&request.intent).is_some() {
                     let focus = self.control_focus_for(request_id(id, "open"), cx);
+                    let origin = focus.clone();
                     controls = controls.child(button(
                         request_id(id, "open"),
                         OPEN_LIFECYCLE,
                         Some(&focus),
                         cx,
                         cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            this.open_lifecycle(id, window, cx)
+                            this.open_lifecycle(id, origin.clone(), window, cx)
                         }),
                     ));
                 }
@@ -546,13 +550,14 @@ impl Workspace {
         };
         if runnable {
             let focus = self.control_focus_for(recovery_id(id, n), cx);
+            let origin = focus.clone();
             button(
                 recovery_id(id, n),
                 label,
                 Some(&focus),
                 cx,
                 cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.run_recovery(id, n, window, cx)
+                    this.run_recovery(id, n, origin.clone(), window, cx)
                 }),
             )
             .into_any_element()

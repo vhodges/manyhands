@@ -18,20 +18,20 @@ use manyhands::{
     repository::{
         AuthoringKind, OperationDto, OperationFamily, OperationId, RequestState as RecordDtoState,
     },
-    results::{Effects, Envelope, PublicationEffect, ResultCode, Scope},
+    results::{Effects, Envelope, Outcome, PublicationEffect, ResultCode, Scope},
 };
 
 use super::{
-    ALREADY_FINISHED, offer_part,
+    offer_label,
     tests::{TICKET, answer, assert_row, open, real_share, shared, submit_main},
 };
 use crate::desktop::{
     model::{
-        operations::{
-            CHOOSE_A_KEY, KEY_LOCKED, NEEDS_IDENTITY, STOPPED_AFTER_PART, STOPPED_BEFORE_SENDING,
-            check_host_text, main_branch_deleted,
+        activity::{
+            copy::{CANCEL, FINISHING, STOP, STOPPING},
+            rows::RowKey,
         },
-        publication::SyncOffer,
+        publication::{SyncOffer, SyncOutcome},
     },
     services::{
         JobKind,
@@ -40,8 +40,8 @@ use crate::desktop::{
     },
     test_support::fixtures::{Fixture, item_id},
     view::{
+        activity_support::{act, offered, request},
         harness::{Shell, WAIT},
-        operations::{CANCELLED, STOP, STOPPING, request_id},
     },
 };
 
@@ -97,9 +97,12 @@ fn record(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> Optio
         .map(|request| request.state)
 }
 
-/// The finished request `id`'s code.
+/// The finished request `id`'s code, as the request model holds it.
 fn code(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> Option<String> {
-    shell.label(request_id(id, "code"), cx)
+    match request(shell, id, cx).state {
+        RequestState::Finished(_, code, ..) => Some(code.as_str().to_owned()),
+        _ => None,
+    }
 }
 
 /// A share of main that reserved the repository and failed its
@@ -173,23 +176,31 @@ async fn held_resume(
 /// that attempt.
 async fn give_up(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) {
     let returned = shell.backend.hold_job_return(JobKind::SynchronizeRepo);
-    shell.click(request_id(id, offer_part(SyncOffer::GiveUp)), cx);
+    act(
+        shell,
+        &RowKey::Request(id),
+        offer_label(SyncOffer::GiveUp),
+        cx,
+    );
     returned.wait_reached();
     returned.release();
     shell.until_ended(id, cx).await;
 }
 
-/// The fixed words of the rows the Give up tests answer with; a failure
-/// shows the library's message instead.
-fn words_of(code: ResultCode) -> Option<String> {
+/// Where a share answered `code` stands when its record is `record`, as the
+/// request model classifies it: a failure with no outcome of its own can be
+/// sent again by the same request only while its record is not finished.
+fn outcome_for(code: ResultCode, record: RecordState) -> SyncOutcome {
     match code {
-        // These shares are of main (E-6; review M3).
-        ResultCode::RemoteBranchDeleted => Some(main_branch_deleted("main")),
-        ResultCode::UnlockRequired => Some(KEY_LOCKED.to_owned()),
-        ResultCode::NoSelectedKey => Some(CHOOSE_A_KEY.to_owned()),
-        ResultCode::HostApprovalRequired => Some(check_host_text(None)),
-        ResultCode::IdentityRequired => Some(NEEDS_IDENTITY.to_owned()),
-        _ => None,
+        ResultCode::RemoteBranchDeleted => SyncOutcome::BranchDeleted,
+        ResultCode::UnlockRequired => SyncOutcome::NeedsUnlock,
+        ResultCode::NoSelectedKey => SyncOutcome::NeedsKey,
+        ResultCode::HostApprovalRequired => SyncOutcome::NeedsHost { authority: None },
+        ResultCode::IdentityRequired => SyncOutcome::NeedsIdentity,
+        code => SyncOutcome::Failed {
+            code,
+            retry: record != RecordState::Finished,
+        },
     }
 }
 
@@ -212,7 +223,7 @@ async fn give_up_is_offered_exactly_when_the_record_is_accepted(cx: &mut TestApp
     assert_row(
         &shell,
         accepted,
-        Some(KEY_LOCKED),
+        SyncOutcome::NeedsUnlock,
         &[SyncOffer::GiveUp, SyncOffer::Unlock],
         cx,
     );
@@ -223,10 +234,22 @@ async fn give_up_is_offered_exactly_when_the_record_is_accepted(cx: &mut TestApp
         worker(&shell, cx).record_state(finished),
         Some(RecordState::Finished)
     );
-    assert_row(&shell, finished, Some(KEY_LOCKED), &[SyncOffer::Share], cx);
+    assert_row(
+        &shell,
+        finished,
+        SyncOutcome::NeedsUnlock,
+        &[SyncOffer::Share],
+        cx,
+    );
 
     let unknown = shared(&shell, &root, 1, locked(), cx);
-    assert_row(&shell, unknown, Some(KEY_LOCKED), &[SyncOffer::Unlock], cx);
+    assert_row(
+        &shell,
+        unknown,
+        SyncOutcome::NeedsUnlock,
+        &[SyncOffer::Unlock],
+        cx,
+    );
 }
 
 /// Decision 8: every row a share can stop on with its record accepted
@@ -293,7 +316,13 @@ async fn give_up_is_offered_on_exactly_the_rows_that_name_it(cx: &mut TestAppCon
             Some(RecordState::Accepted),
             "{code:?}"
         );
-        assert_row(&shell, id, words_of(code).as_deref(), offers, cx);
+        assert_row(
+            &shell,
+            id,
+            outcome_for(code, RecordState::Accepted),
+            offers,
+            cx,
+        );
     }
 
     let (shell, root) = open(false, cx);
@@ -304,7 +333,13 @@ async fn give_up_is_offered_on_exactly_the_rows_that_name_it(cx: &mut TestAppCon
             Some(RecordState::Finished),
             "{code:?}"
         );
-        assert_row(&shell, id, words_of(code).as_deref(), offers, cx);
+        assert_row(
+            &shell,
+            id,
+            outcome_for(code, RecordState::Finished),
+            offers,
+            cx,
+        );
     }
 }
 
@@ -322,7 +357,7 @@ async fn a_give_up_left_waiting_on_unlock_offers_unlock_not_give_up(cx: &mut Tes
     assert_row(
         &shell,
         id,
-        Some(KEY_LOCKED),
+        SyncOutcome::NeedsUnlock,
         &[SyncOffer::GiveUp, SyncOffer::Unlock],
         cx,
     );
@@ -330,13 +365,24 @@ async fn a_give_up_left_waiting_on_unlock_offers_unlock_not_give_up(cx: &mut Tes
     let held = shell
         .backend
         .hold_job_return_answering(JobKind::SynchronizeRepo, locked());
-    shell.click(request_id(id, offer_part(SyncOffer::GiveUp)), cx);
+    act(
+        &shell,
+        &RowKey::Request(id),
+        offer_label(SyncOffer::GiveUp),
+        cx,
+    );
     held.wait_reached();
     held.release();
     shell.until_ended(id, cx).await;
+    // A Give up that re-sent says nothing of a finished record.
     assert_eq!(worker(&shell, cx).gave_up(id), Some(GaveUp::Resent));
-    assert!(!shell.present(request_id(id, "gave-up"), cx));
-    assert_row(&shell, id, Some(KEY_LOCKED), &[SyncOffer::Share], cx);
+    assert_row(
+        &shell,
+        id,
+        SyncOutcome::NeedsUnlock,
+        &[SyncOffer::Share],
+        cx,
+    );
 
     // The same answer of a Give up, with the record still accepted.
     let offers = shell.operations(cx).read_with(cx, |operations, _| {
@@ -358,10 +404,18 @@ async fn giving_up_a_finished_record_says_already_finished(cx: &mut TestAppConte
     cx.executor().allow_parking();
     let (shell, root) = open(true, cx);
     let share = accepted_share(&shell, &root, cx).await;
-    assert!(shell.present(request_id(share, offer_part(SyncOffer::GiveUp)), cx));
+    assert!(
+        offered(
+            &shell,
+            &RowKey::Request(share),
+            offer_label(SyncOffer::GiveUp),
+            cx
+        )
+        .is_some_and(|offer| offer.enabled)
+    );
     let operation = remote_row(&shell, &root, "fetch_prepared");
     let (resume, release) = held_resume(&shell, &root, &operation, cx).await;
-    shell.click(request_id(resume, "stop"), cx);
+    act(&shell, &RowKey::Request(resume), STOP, cx);
     drop(release);
     shell.until_ended(resume, cx).await;
     assert_eq!(record(&shell, share, cx), Some(RecordDtoState::Finished));
@@ -371,15 +425,11 @@ async fn giving_up_a_finished_record_says_already_finished(cx: &mut TestAppConte
         worker(&shell, cx).gave_up(share),
         Some(GaveUp::AlreadyFinished)
     );
-    assert_eq!(
-        shell.label(request_id(share, "gave-up"), cx).as_deref(),
-        Some(ALREADY_FINISHED)
-    );
     assert_eq!(code(&shell, share, cx).as_deref(), Some("cancelled"));
     assert_row(
         &shell,
         share,
-        Some(STOPPED_BEFORE_SENDING),
+        SyncOutcome::Stopped { completed: false },
         &[SyncOffer::Share],
         cx,
     );
@@ -411,9 +461,10 @@ async fn stop_is_not_offered_without_a_remote(cx: &mut TestAppContext) {
     );
     reached.recv_timeout(WAIT).expect("the post was accepted");
     until_accepted(&shell, id, cx).await;
-    assert!(!shell.present(request_id(id, "stop"), cx));
-    assert!(!shell.present(request_id(id, "cancel"), cx));
-    assert!(shell.present(request_id(id, "finishing"), cx));
+    let at = RowKey::Request(id);
+    assert!(offered(&shell, &at, STOP, cx).is_none());
+    assert!(offered(&shell, &at, CANCEL, cx).is_none());
+    assert!(offered(&shell, &at, FINISHING, cx).is_some_and(|offer| !offer.enabled));
     drop(release);
     shell.until_ended(id, cx).await;
 }
@@ -429,15 +480,10 @@ async fn a_stopped_resume_over_an_unsettled_push_reads_not_confirmed(cx: &mut Te
     accepted_share(&shell, &root, cx).await;
     let operation = remote_row(&shell, &root, "fetch_prepared");
     let (resume, release) = held_resume(&shell, &root, &operation, cx).await;
-    assert_eq!(
-        shell.label(request_id(resume, "stop"), cx).as_deref(),
-        Some(STOP)
-    );
-    shell.click(request_id(resume, "stop"), cx);
-    assert_eq!(
-        shell.label(request_id(resume, "stop"), cx).as_deref(),
-        Some(STOPPING)
-    );
+    let at = RowKey::Request(resume);
+    assert!(offered(&shell, &at, STOP, cx).is_some_and(|offer| offer.enabled));
+    act(&shell, &at, STOP, cx);
+    assert!(offered(&shell, &at, STOPPING, cx).is_some_and(|offer| !offer.enabled));
 
     let unsettled = Envelope::classified_mutation(
         "operation resume",
@@ -461,15 +507,22 @@ async fn a_stopped_resume_over_an_unsettled_push_reads_not_confirmed(cx: &mut Te
         code(&shell, resume, cx).as_deref(),
         Some("recovery_required")
     );
-    let state = shell.label(request_id(resume, "state"), cx);
-    assert_eq!(state.as_deref(), Some("Blocked"));
-    assert_ne!(state.as_deref(), Some(CANCELLED));
-    let outcome = shell.label(request_id(resume, "outcome"), cx);
+    assert!(matches!(
+        request(&shell, resume, cx).state,
+        RequestState::Finished(Outcome::Blocked, ..)
+    ));
+    // A resume is no share: nothing classifies its answer as a stop the
+    // library did not confirm.
     assert!(
-        ![Some(STOPPED_BEFORE_SENDING), Some(STOPPED_AFTER_PART)].contains(&outcome.as_deref()),
+        shell
+            .operations(cx)
+            .read_with(cx, |operations, _| operations
+                .share_result(resume)
+                .is_none()),
         "a stop the library did not confirm is not said"
     );
-    assert!(!shell.present(request_id(resume, "stop"), cx));
+    assert!(offered(&shell, &at, STOP, cx).is_none());
+    assert!(offered(&shell, &at, STOPPING, cx).is_none());
 }
 
 /// U-5, and what it leaves of K-5: a resume of a share's operation and
@@ -499,7 +552,7 @@ async fn a_stopped_resume_that_then_fails_the_transport_reports_the_reservation(
         Some(operation.as_str())
     );
     let (resume, release) = held_resume(&shell, &root, &operation, cx).await;
-    shell.click(request_id(resume, "stop"), cx);
+    act(&shell, &RowKey::Request(resume), STOP, cx);
     let job = worker(&shell, cx).running_job().expect("the resume runs");
     assert_eq!(job.id, resume);
     assert!(job.cancelled, "Stop cancelled its token");
@@ -526,18 +579,13 @@ async fn a_stopped_resume_that_then_fails_the_transport_reports_the_reservation(
     );
 
     // The share's own Give up.
-    // Pressed as the entry's control runs it: the area has scrolled it
-    // out of view.
     let returned = shell.backend.hold_job_return(JobKind::SynchronizeRepo);
-    let workspace = shell.workspace.clone();
-    shell
-        .window
-        .update(cx, |_, window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.run_share_offer(second, SyncOffer::GiveUp, window, cx)
-            })
-        })
-        .unwrap();
+    act(
+        &shell,
+        &RowKey::Request(second),
+        offer_label(SyncOffer::GiveUp),
+        cx,
+    );
     returned.wait_reached();
     returned.release();
     shell.until_ended(second, cx).await;

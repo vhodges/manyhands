@@ -41,17 +41,12 @@ pub(crate) use recovery::recovery_label;
 pub(crate) use recovery::{RecoveryControl, RecoveryStep, parse_authority, recovery_control};
 pub(crate) use review::{Review, ReviewOf};
 
-#[cfg(test)]
-pub(crate) use outcomes::main_branch_deleted;
 pub(crate) use outcomes::{
     ANOTHER_SHARE_HOLDS, CONFLICT_BANNER, HISTORY_UNRESOLVED_BLOCKER, HISTORY_UNRESOLVED_GUIDANCE,
     may_be_waiting_for, primary_name, primary_subject, share_text,
 };
 #[cfg(test)]
-pub(crate) use outcomes::{
-    BRANCH_DELETED, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, NEEDS_ATTENTION, NEEDS_IDENTITY,
-    NOWHERE_TO_SHARE, SHARED, check_host_text,
-};
+pub(crate) use outcomes::{BRANCH_DELETED, NEEDS_ATTENTION, SHARED};
 
 use super::{
     lifecycle_lock::LifecycleLocks,

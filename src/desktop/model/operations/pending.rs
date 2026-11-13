@@ -93,7 +93,6 @@ pub(crate) struct LifecycleRow {
 
 impl LifecycleRow {
     /// `ResumeLifecycle` rebuilds the row it was made from.
-    #[allow(dead_code)] // Used from Task 6
     pub(crate) fn new(kind: ItemDtoKind, item: String, operation: String) -> Self {
         Self {
             kind,

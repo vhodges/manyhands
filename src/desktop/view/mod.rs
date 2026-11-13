@@ -1,6 +1,8 @@
 //! GPUI views.
 
 pub(crate) mod activity;
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) mod activity_support;
 pub(crate) mod close_draft;
 pub(crate) mod confirm;
 pub(crate) mod conflict;

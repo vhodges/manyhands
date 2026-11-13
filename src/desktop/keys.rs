@@ -4,6 +4,7 @@
 use gpui_kit::{App, KeyBinding, NoAction};
 
 use crate::desktop::model::{
+    activity::rows::{ActivityAction, RowKey},
     layout::{PanelKind, Side},
     repository_state::{MenuChoice, RowAction},
     stamp::RepoKey,
@@ -162,6 +163,21 @@ pub(crate) struct RepositoryMenuChoice {
     pub root: RepoKey,
     pub choice: MenuChoice,
     pub shown: Shown,
+}
+
+/// An Activity row's choice (Wave 04 Cycle 03b, Part D): the offer `action`
+/// of the row `key`, as it was labelled `shown` and at the row's `revision`
+/// when it was chosen, so the choice is checked against what the row offers
+/// now (T11, T12; R-46). Data for the menu's items and the test seam; no key
+/// and no keymap file name it, hence `no_json`.
+#[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
+#[action(namespace = manyhands, no_json)]
+#[allow(dead_code)] // Used from Task 9
+pub(crate) struct ActivityMenuChoice {
+    pub key: RowKey,
+    pub action: ActivityAction,
+    pub shown: String,
+    pub revision: u64,
 }
 
 /// The key context of the Repositories region and its toolbar: `menu` and
