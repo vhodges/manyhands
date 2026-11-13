@@ -107,7 +107,6 @@ impl Workspace {
             cx.propagate();
             return;
         }
-        self.activity.pane.start_highlight();
         let Some(row) = self.activity.pane.highlighted().cloned() else {
             return;
         };

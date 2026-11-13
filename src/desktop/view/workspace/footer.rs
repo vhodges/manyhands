@@ -195,6 +195,7 @@ impl Workspace {
         };
         self.activity.menu = None;
         self.activity.more = None;
+        self.repository_menu = None;
         self.footer.menu = Some(DockMenu::open(
             kind, current, toggle, placement, restore, window, cx,
         ));
@@ -275,6 +276,11 @@ impl Workspace {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 impl Workspace {
+    /// Whether a dock menu is open.
+    pub(crate) fn dock_menu_open(&self) -> bool {
+        self.footer.menu.is_some()
+    }
+
     /// A footer control's focus handle.
     pub(crate) fn footer_focus(&self, control: Control) -> gpui_kit::FocusHandle {
         self.footer.handle(control).clone()
