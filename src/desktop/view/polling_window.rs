@@ -117,6 +117,7 @@ pub(crate) fn reported(
                     TargetKind::Ticket => Disposition::Closed,
                     TargetKind::Document => Disposition::Promoted,
                 },
+                main: false,
             })
             .collect(),
         index_pending: false,

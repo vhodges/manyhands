@@ -34,6 +34,7 @@ use crate::desktop::{
         editor::host::EditorHost,
         harness::{Shell, WAIT, key},
         item::{NOT_REFRESHED, NOT_SAVED, PublicationRemote, tokens::colors},
+        sidebar::SELECTED,
         workspace::{REGIONS, Region},
     },
 };
@@ -195,7 +196,12 @@ fn opening_a_tab_does_not_change_the_selection(cx: &mut TestAppContext) {
         workspace.navigation().selected().cloned()
     });
     assert_eq!(selected, Some(key(&b)));
-    assert_eq!(shell.label("selection-name", cx).as_deref(), Some("b"));
+    // `b`'s row, the second, carries the chosen repository's mark.
+    assert_eq!(
+        shell.label(("repo-selected", 1usize), cx).as_deref(),
+        Some(SELECTED)
+    );
+    assert!(!shell.present(("repo-selected", 0usize), cx));
 }
 
 /// Refresh of `a` reads every open tab of `a` again, once, in place: the

@@ -16,7 +16,9 @@
 //!   tooltip and a description, neither of which the test snapshot reads
 //!   (E-15), and which a retirement of the document could be tempted to name;
 //! - `PASSPHRASE`: typed into the passphrase dialog an Unlock… raises;
-//! - `PRIVATE`: the content of the private key file the unlock asks for.
+//! - `PRIVATE`: the content of the private key file the unlock asks for;
+//! - `PASSWORD`: the password in the URL of a second repository's publication
+//!   remote (Cycle 03a Part I, U-3).
 //!
 //! The drive: an automatic poll of a repository that reports a closed ticket
 //! (retired, its in-flight record read while the library holds it), two
@@ -47,6 +49,12 @@
 //!   entries, the pending rows, the asks, the passphrase dialog, the Settings
 //!   page and the quit's words; and no notification.
 //!
+//! The Repositories panel (rows, toolbar) and the footer are read like the
+//! rest, `region-repositories` no longer being allowed, and `repositories`
+//! reads what no snapshot does, through the functions that build it, for
+//! every repository: tooltips, menus, More's menu and the footer's names,
+//! against every sentinel but the title (unshared items are named by it).
+//!
 //! The sentinels' appearances inside `ALLOWED`, and in the data the desktop
 //! read them from, are collected first, so the sweep is shown to read text
 //! that holds them.
@@ -69,7 +77,9 @@ use manyhands::{
     results::{Envelope, ResultCode as Code},
 };
 
-use super::{harness::Shell, polling_window::PollingWindow};
+mod repositories;
+
+use super::{harness::Shell, polling_window::PollingWindow, repositories::tests::support::not_due};
 use crate::desktop::{
     model::{
         navigation::OpenTarget,
@@ -97,7 +107,10 @@ const EDIT: &str = "SENTINEL-D6-EDIT-a3b6";
 const PATH: &str = "sentinel-d6-path-3c91";
 const PASSPHRASE: &str = "SENTINEL-D6-PASSPHRASE-e27d";
 const PRIVATE: &str = "SENTINEL-D6-PRIVATE-4f08";
-const SENTINELS: [&str; 8] = [TITLE, BODY, COMMENT, DRAFT, EDIT, PATH, PASSPHRASE, PRIVATE];
+const PASSWORD: &str = "sentinel-password-03a";
+const SENTINELS: [&str; 9] = [
+    TITLE, BODY, COMMENT, DRAFT, EDIT, PATH, PASSPHRASE, PRIVATE, PASSWORD,
+];
 
 /// A closed ticket that is free, one being edited, one with kept drafts, a
 /// promoted document with a kept draft, a closed ticket the library
@@ -124,7 +137,7 @@ const DRAFTED_COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB3";
 /// sweeps (`lifecycle/privacy_tests.rs`, `editing_privacy_tests.rs`), which
 /// read them with the item's text in hand. D6 puts nothing there, and this
 /// drive opens an item tab only to hold an edit session.
-const ALLOWED: [&str; 12] = [
+const ALLOWED: [&str; 11] = [
     "tab-strip",
     "item-title",
     "item-read",
@@ -133,7 +146,6 @@ const ALLOWED: [&str; 12] = [
     "comment-body",
     "region-tickets",
     "region-documents",
-    "region-repositories",
     "toolbar-link-popover",
     "item-banners",
     "item-pill",
@@ -141,7 +153,7 @@ const ALLOWED: [&str; 12] = [
 
 /// Where a text is read, by the id of the element that draws it, for the
 /// surfaces the test asserts it read: `(prefix, contains, surface)`.
-const SURFACES: [(&str, &str, &str); 15] = [
+const SURFACES: [(&str, &str, &str); 17] = [
     ("attempt-", "-offer-", "retire offer"),
     ("attempt-", "-retire-", "retire action"),
     ("attempt-", "-retirement-", "retirement line"),
@@ -157,6 +169,8 @@ const SURFACES: [(&str, &str, &str); 15] = [
     ("edits-not-kept", "", "quit ask"),
     ("confirm-", "", "confirmation"),
     ("request-", "", "operation entry"),
+    ("repo-", "", "repository row"),
+    ("footer-", "", "footer"),
 ];
 
 /// The name of an element ID, its index aside.
@@ -191,6 +205,8 @@ struct Seen {
     allowed: BTreeSet<(&'static str, &'static str)>,
     /// How many times the in-flight record had bytes to read.
     records: usize,
+    /// The Repositories panel's and the footer's functions' texts.
+    repositories: repositories::Texts,
 }
 
 impl Seen {
@@ -271,6 +287,7 @@ impl Seen {
                 }
             }
         }
+        self.repositories.extend(repositories::read(window, cx));
         let notifications = shell.frame(cx, |window, cx| window.notifications(cx).len());
         assert_eq!(notifications, 0, "the desktop shows no notification");
         self.holds_none();
@@ -278,6 +295,7 @@ impl Seen {
 
     /// No surface read holds a sentinel.
     fn holds_none(&self) {
+        repositories::holds_none(&self.repositories);
         for (surface, text) in &self.read {
             for sentinel in SENTINELS {
                 assert!(
@@ -339,6 +357,7 @@ fn report(clock: &TestClock, items: &[(&str, bool)]) -> Library {
                     } else {
                         PollDisposition::Closed
                     },
+                    main: false,
                 })
                 .collect(),
             outcome: None,
@@ -436,6 +455,15 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     );
     fixture.publish_over_ssh(&a);
     fixture.refresh(&a);
+    // A second repository whose publication remote's URL gains a password
+    // (U-3, `repositories::password_is_not_eligible`).
+    let b = fixture.create_repository("b");
+    fixture.publish_over_ssh(&b);
+    fixture.set_remote_url(
+        &b,
+        "origin",
+        &format!("ssh://git:{PASSWORD}@example.invalid/r.git"),
+    );
     let root = crate::desktop::view::harness::key(&a);
 
     // Kept drafts: a ticket's and a comment's on it, a comment being
@@ -492,6 +520,10 @@ async fn polling_privacy(cx: &mut TestAppContext) {
         assert!(holds(sentinel, &on_disk), "{sentinel} is in the repository");
     }
     assert!(
+        holds(PASSWORD, &files_under(&b)),
+        "{PASSWORD} is in the second repository's remote"
+    );
+    assert!(
         a.join(format!("docs/{PATH}.md")).exists() || holds(PATH, &on_disk),
         "{PATH} is the document's path"
     );
@@ -517,8 +549,11 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     // listing has landed and the edited tab is open).
     let (window, (held, poll)) = PollingWindow::over(
         fixture,
-        std::slice::from_ref(&a),
+        &[a.clone(), b.clone()],
         |backend, clock| {
+            // Every poll the drive does not script (the second repository's,
+            // if it is polled at all) gets a "not due" and never the network.
+            backend.answer_unanswered_polls(not_due(clock));
             let inner = backend.inner();
             let held = inner.hold_job(JobKind::ContextRetire);
             inner.answer_job(
@@ -923,6 +958,8 @@ async fn polling_privacy(cx: &mut TestAppContext) {
         "quit",
         "quit ask",
         "operation entry",
+        "repository row",
+        "footer",
         "answer",
         "schedule",
         "retirement entries",
@@ -934,6 +971,8 @@ async fn polling_privacy(cx: &mut TestAppContext) {
         assert!(seen.surfaces(surface) > 0, "{surface} was read");
     }
     seen.holds_none();
+    repositories::was_read(&seen.repositories);
+    repositories::password_is_not_eligible(&window, &b, cx);
     for (surface, words) in [
         ("retire offer", "is closed"),
         ("retire offer", "was promoted"),

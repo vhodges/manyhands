@@ -38,7 +38,8 @@ pub(crate) use clock::SystemClock;
 use entry::{RetireLine, RetireState};
 use manyhands::{canonical::ItemId, repository::OperationId};
 use state::PREEMPTIONS_BEFORE_INTERVAL;
-pub(crate) use state::{Phase, Policy, Reason, RepoSchedule, Why};
+pub(crate) use state::{Phase, Policy, Reason, RepoSchedule, Unshared, Why};
+use table::Change;
 use time::OffsetDateTime;
 
 /// How far the two clocks may drift apart before it is a suspend or a jump
@@ -74,6 +75,11 @@ pub(crate) struct PollSchedule {
     /// the poll goes on, so it still holds the one-at-a-time slot until it
     /// answers (R-7). Nothing else of the repository is kept.
     orphans: BTreeSet<Root>,
+    /// This session's finished shares and saves, per repository, each with
+    /// the time the scheduler heard it, in the order heard (rule 1 of the
+    /// unshared list). A completed check that landed later replays those
+    /// heard after it completed.
+    changes: BTreeMap<Root, Vec<(Change, OffsetDateTime)>>,
 }
 
 /// Registration and reads.
@@ -92,6 +98,7 @@ impl PollSchedule {
             self.orphans.insert(root.clone());
         }
         self.repos.remove(root);
+        self.changes.remove(root);
         self.refused.forget_root(root);
         self.refused_kinds.retain(|(held, _), _| held != root);
     }
@@ -229,6 +236,114 @@ impl PollSchedule {
     }
 }
 
+/// What is not shared yet (Part A, rules 1 to 5). Pure and synchronous, like
+/// the rest: the caller passes the time it heard each change.
+impl PollSchedule {
+    /// A share finished and was heard at `at`: its item leaves the unshared
+    /// list and the last attempt's listed items at once, and main with it
+    /// when `main` (rules 1 and 2). True when one went. A root with no
+    /// schedule has no list and keeps nothing.
+    pub fn shared(
+        &mut self,
+        root: &Root,
+        item: Option<&ItemId>,
+        main: bool,
+        at: OffsetDateTime,
+    ) -> bool {
+        let Some(repo) = self.repos.get_mut(root) else {
+            return false;
+        };
+        let change = Change::Shared {
+            item: item.cloned(),
+            main,
+        };
+        let mut gone = change.apply_to(&mut repo.unshared.items);
+        if let Some(last) = repo.last.as_mut() {
+            gone |= change.remove_from(&mut last.listed);
+        }
+        self.changes
+            .entry(root.clone())
+            .or_default()
+            .push((change, at));
+        gone
+    }
+
+    /// A save finished and was heard at `at`: its item joins the unshared
+    /// list at once, `Unpublished` when `new` and else `LocalAhead`, unless
+    /// it is there, also before any completed check (rules 1 and 2). True
+    /// when it joined. False for a root with no schedule: nothing is kept.
+    pub fn saved(
+        &mut self,
+        root: &Root,
+        item: ItemId,
+        kind: Option<TargetKind>,
+        new: bool,
+        at: OffsetDateTime,
+    ) -> bool {
+        self.record(root, Change::Saved { item, kind, new }, at)
+    }
+
+    /// A merge that did not publish was heard at `at`: main joins the
+    /// unshared list as `LocalAhead`, since it is ahead of the shared copy.
+    pub fn main_ahead(&mut self, root: &Root, at: OffsetDateTime) -> bool {
+        self.record(root, Change::MainAhead, at)
+    }
+
+    /// Logs `change` and applies it to the list at once.
+    fn record(&mut self, root: &Root, change: Change, at: OffsetDateTime) -> bool {
+        let Some(repo) = self.repos.get_mut(root) else {
+            return false;
+        };
+        let changed = change.apply_to(&mut repo.unshared.items);
+        self.changes
+            .entry(root.clone())
+            .or_default()
+            .push((change, at));
+        changed
+    }
+
+    /// An attempt was applied (rules 3 to 5). A completed attempt that
+    /// carries targets and is not older than the list sets it from its own
+    /// targets, then replays the changes heard after it completed, in the
+    /// order heard, so the last share or save of an item decides. An attempt
+    /// with no `completed_at` counts as older than every change heard, and
+    /// than a list that has an `as_of`. An older one leaves the list, and its
+    /// listed items (it is the last attempt) lose what was shared after it.
+    /// Anything else (a failure, an interruption, a cancel, a replay with no
+    /// targets) leaves the list.
+    fn unshared_after(&mut self, root: &Root, summary: &AttemptSummary) {
+        if summary.answer != Answer::Completed || !summary.carries_targets() {
+            return;
+        }
+        let Some(repo) = self.repos.get_mut(root) else {
+            return;
+        };
+        let at = summary.completed_at;
+        let older = match (at, repo.unshared.as_of) {
+            (Some(at), Some(held)) => at < held,
+            (at, held) => at.is_none() && held.is_some(),
+        };
+        if !older {
+            repo.unshared = Unshared {
+                items: summary.to_share.clone(),
+                problems: summary.problems.clone(),
+                as_of: at,
+            };
+        }
+        let heard = self.changes.get(root).map_or(&[][..], Vec::as_slice);
+        for (change, when) in heard {
+            if at.is_none_or(|at| *when > at) {
+                if !older {
+                    change.apply_to(&mut repo.unshared.items);
+                }
+                if let Some(last) = repo.last.as_mut() {
+                    change.remove_from(&mut last.listed);
+                }
+            }
+        }
+    }
+}
+
 /// A poll's life.
 impl PollSchedule {
     /// The scheduler submitted a poll.
@@ -274,7 +389,9 @@ impl PollSchedule {
     /// the repository changed and starts Part E's loop from it.
     pub fn after(&mut self, now: &Now, attempt: &PollAttempt) -> Option<AttemptSummary> {
         let repo = self.repos.get_mut(&attempt.root)?;
-        Some(repo.apply(&attempt.root, now, attempt))
+        let summary = repo.apply(&attempt.root, now, attempt);
+        self.unshared_after(&attempt.root, &summary);
+        Some(summary)
     }
 
     /// A Check now completed (C1, E1): its answer is the repository's latest
@@ -283,15 +400,19 @@ impl PollSchedule {
     /// `None` for a repository that is not scheduled.
     pub fn checked_now(&mut self, now: &Now, attempt: &PollAttempt) -> Option<AttemptSummary> {
         let repo = self.repos.get_mut(&attempt.root)?;
-        if !repo.in_flight() {
-            return Some(repo.apply(&attempt.root, now, attempt));
-        }
-        let summary = AttemptSummary::of(attempt);
-        repo.last_completed = Some(attempt.completed_at.unwrap_or(now.utc));
-        if summary.is_recorded() {
-            repo.last = Some(summary.clone());
-            repo.retirements.clear();
-        }
+        let summary = if repo.in_flight() {
+            let summary = AttemptSummary::of(attempt);
+            repo.last_completed = Some(attempt.completed_at.unwrap_or(now.utc));
+            if summary.is_recorded() {
+                repo.last = Some(summary.clone());
+                repo.retirements.clear();
+            }
+            summary
+        } else {
+            repo.apply(&attempt.root, now, attempt)
+        };
+        // Both branches follow the same rules for the unshared list (rule 5).
+        self.unshared_after(&attempt.root, &summary);
         Some(summary)
     }
 

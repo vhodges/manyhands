@@ -164,17 +164,21 @@ impl Count {
     }
 }
 
-/// The count the header shows (R-22, R-11, R-36): repositories listed,
-/// tickets listed under the filters (nonconforming ones included),
+/// The count the header shows (R-22, R-11, R-36): the repository rows
+/// drawn, the kept row included (Cycle 03a R-20), tickets listed under the
+/// filters (nonconforming ones included),
 /// documents listed. While a list reloads over the rows it kept, it says
 /// "Updating…"; on a first load, and for Activity, there is none.
 pub(super) fn count(workspace: &Workspace, kind: PanelKind) -> Option<Count> {
     match kind {
-        PanelKind::Repositories => workspace
-            .navigation()
-            .repositories()
-            .rows()
-            .map(|rows| Count::Rows(rows.len())),
+        PanelKind::Repositories => {
+            let navigation = workspace.navigation();
+            let kept = usize::from(navigation.kept().is_some());
+            navigation
+                .repositories()
+                .rows()
+                .map(|rows| Count::Rows(rows.len() + kept))
+        }
         PanelKind::Tickets => {
             let tickets = workspace.tickets();
             if tickets.list().reloading() {

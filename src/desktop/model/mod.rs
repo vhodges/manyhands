@@ -26,6 +26,7 @@ pub(crate) mod publication;
 pub(crate) mod read_state;
 pub(crate) mod relations_edit;
 pub(crate) mod relationships;
+pub(crate) mod repository_state;
 pub(crate) mod resources;
 pub(crate) mod review;
 pub(crate) mod stamp;

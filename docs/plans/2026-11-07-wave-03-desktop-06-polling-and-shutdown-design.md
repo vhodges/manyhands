@@ -561,6 +561,8 @@ Per repository (`RepoSchedule`), in memory:
   lane empties, no time), `Attention`, `Retiring`, `Stopped`.
 - `last`: the last `AttemptSummary` (time, outcome, counts of brought-in items,
   problem dispositions), restored at launch from `remote_snapshot`.
+  *Amended 2026-11-12 by Wave 04 Cycle 03a (design fact 33): `last` is not
+  restored at launch; only `last_completed` is, from `latest_observed_at`.*
 - `preempted`: how many times in a row the repository's poll was preempted
   (R-34).
 
@@ -638,7 +640,12 @@ The summary's counts come from the attempt's targets:
 - `FastForwarded` and `Materialized` count as brought in, also in a cancelled
   or interrupted attempt that reports them, and mark the repository changed.
 - `Current` and `LocalAhead` are counted as up to date; `LocalAhead` adds
-  "N not shared yet".
+  "N not shared yet". *Amended 2026-11-12 by Wave 04 Cycle 03a (decisions
+  10, 19, 24): "N not shared yet" counts the repository's unshared list, the
+  `LocalAhead`, `Unpublished` and `Diverged` targets of the last completed
+  check that carried targets, kept across failed checks and followed by this
+  app's saves and shares; an item this app shared also leaves the attempt
+  entry's `listed`.*
 - `Dirty`, `Diverged`, `Conflicted`, `Inaccessible`, `BlockedByLocalState`,
   `MaterializationIncomplete`, `Nonconforming`, `Malformed`,
   `RemotelyDeleted`, `HistoryUnknown`, `Unpublished` and `NotReached` are
@@ -916,8 +923,10 @@ through `attention()` (A3).
 
 ### C4: Status truthfulness (R-9)
 
-Text comes from the model's `last` and `phase`. At launch `last` is restored
-from the library (U-3). The page says "Checking…" only while this process's
+Text comes from the model's `last` and `phase`. At launch only
+`last_completed` is restored; the stored outcome speaks until this process
+checks (amended 2026-11-12 by Wave 04 Cycle 03a, decision 10; the text's
+sources also include the stored outcome and the unshared list). The page says "Checking…" only while this process's
 worker runs a poll; it does not infer that another process is polling. A poll
 by `manyhands-cli` appears only through the stored latest attempt.
 

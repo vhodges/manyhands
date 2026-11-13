@@ -18,9 +18,10 @@ use crate::desktop::{
     },
     view::{
         footer::{
-            Control, FOOTER_HEIGHT, Face, SETTINGS, attention_text, control, dock_toggle_name,
+            Control, FOOTER_HEIGHT, Face, FooterStatus, SETTINGS, attention_text, control,
+            dock_toggle_name,
             menu::{DockMenu, Placement},
-            panel_toggle_name, plan, separator,
+            panel_toggle_name, plan, separator, to_share_text,
         },
         shell::tokens::chrome_colors,
     },
@@ -43,8 +44,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let colors = chrome_colors(cx);
-        let attention = self.attention(cx);
-        let plan = plan(&self.layout, attention);
+        let facts = self.share_facts(cx);
+        let status = facts.status(self.attention(cx));
+        let share_name = facts.to_share_name();
+        let plan = plan(&self.layout, &status);
+        self.keep_focus_in_footer(&plan, window, cx);
         let mut bar = StatusBar::new()
             .h(px(FOOTER_HEIGHT))
             .w_full()
@@ -57,7 +61,7 @@ impl Workspace {
                 bar = bar.left(separator(cx));
             }
             for control in group {
-                bar = bar.left(self.footer_control(*control, attention, window, cx));
+                bar = bar.left(self.footer_control(*control, &status, &share_name, window, cx));
             }
         }
         for (ix, group) in plan.right.iter().enumerate() {
@@ -65,7 +69,7 @@ impl Workspace {
                 bar = bar.right(separator(cx));
             }
             for control in group {
-                bar = bar.right(self.footer_control(*control, attention, window, cx));
+                bar = bar.right(self.footer_control(*control, &status, &share_name, window, cx));
             }
         }
         bar
@@ -74,7 +78,8 @@ impl Workspace {
     fn footer_control(
         &mut self,
         which: Control,
-        attention: usize,
+        status: &FooterStatus,
+        share_name: &str,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -98,8 +103,23 @@ impl Workspace {
                     on: Some(displayed),
                 }
             }
+            Control::UpdateCheck => {
+                let text = status.update.clone().unwrap_or_default();
+                Face {
+                    control: which,
+                    name: text.clone(),
+                    text: Some(text),
+                    on: None,
+                }
+            }
+            Control::ToShare => Face {
+                control: which,
+                name: share_name.to_owned(),
+                text: Some(to_share_text(status.to_share)),
+                on: None,
+            },
             Control::Attention => {
-                let text = attention_text(attention).unwrap_or_default();
+                let text = attention_text(status.attention).unwrap_or_default();
                 Face {
                     control: which,
                     name: text.clone(),
@@ -152,6 +172,8 @@ impl Workspace {
             Control::Dock(side) => self.toggle_dock(side, window, cx),
             Control::Attention => self.reveal_and_focus(PanelKind::Activity, window, cx),
             Control::Settings => self.open_settings(SettingsPage::Repositories, window, cx),
+            Control::UpdateCheck => self.open_settings(SettingsPage::Polling, window, cx),
+            Control::ToShare => self.choose_next_to_share(cx),
         }
     }
 

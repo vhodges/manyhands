@@ -39,8 +39,10 @@ use crate::desktop::{
 };
 use manyhands::{
     canonical::ItemId,
-    repository::{MutationDataDto, OperationId, RequestId},
-    results::{Envelope, Outcome, ResultCode},
+    repository::{AuthoringKind, MutationDataDto, OperationId, RequestId},
+    results::{
+        CheckpointEffect, Envelope, IntegrationEffect, Outcome, PublicationEffect, ResultCode,
+    },
 };
 
 /// When the request was heard.
@@ -99,6 +101,29 @@ pub(crate) enum Heard {
     /// A request that only moved the stored policy of this repository
     /// finished: the policy is read again, nothing is cancelled.
     PolicyMoved(Root),
+    /// A share finished: the drain's own "item shared" (an `ItemSync` or
+    /// `ItemRepublish`, a close or an approval), or a `RepoSync`, whose
+    /// publication is `Published` or `Current`. The item leaves the unshared
+    /// list, and main with it when `main`.
+    Shared {
+        root: Root,
+        item: Option<ItemId>,
+        main: bool,
+    },
+    /// A request that made a checkpoint and did not publish finished, and
+    /// its envelope names its item: the item joins the unshared list, as
+    /// `Unpublished` when `new`.
+    Saved {
+        root: Root,
+        item: ItemId,
+        kind: Option<TargetKind>,
+        new: bool,
+    },
+    /// A close or an approval merged into main and did not publish: main is
+    /// ahead of the shared copy.
+    MainAhead {
+        root: Root,
+    },
     /// A Check now finished with success, or with `discovery_pending`: a
     /// completed poll, which clears the attention of its repository however
     /// the cause was fixed (C3), and proves the key it used unlocked. Its
@@ -274,6 +299,69 @@ fn settled_retirement(
     })
 }
 
+/// What a finished request's effects say of sharing: a share, a save or a
+/// merge that did not publish (Part A). Before `scope_of`, since none of
+/// these reconfigures polling.
+fn sharing(intent: &Intent, envelope: &Envelope<MutationDataDto>) -> Option<Heard> {
+    let root = root_of(intent)?;
+    let effects = &envelope.effects;
+    let published = matches!(
+        effects.publication,
+        PublicationEffect::Published | PublicationEffect::Current
+    );
+    let shared = |item: Option<&ItemId>, main| Heard::Shared {
+        root: root.clone(),
+        item: item.cloned(),
+        main,
+    };
+    match intent {
+        Intent::ItemSync { id, .. } | Intent::ItemRepublish { id, .. } if published => {
+            return Some(shared(Some(id), false));
+        }
+        Intent::TicketClose { id, .. } | Intent::DocumentPromote { id, .. } if published => {
+            return Some(shared(Some(id), true));
+        }
+        Intent::RepoSync { .. } if published => return Some(shared(None, true)),
+        Intent::TicketClose { .. } | Intent::DocumentPromote { .. } => {
+            let merged = effects.integration == IntegrationEffect::Complete
+                && effects.publication == PublicationEffect::Pending;
+            return merged.then_some(Heard::MainAhead { root });
+        }
+        _ => {}
+    }
+    if published || effects.checkpoint != CheckpointEffect::Committed {
+        return None;
+    }
+    let (kind, new) = match intent {
+        Intent::DocumentSave { .. } | Intent::DocumentMove { .. } => {
+            (Some(TargetKind::Document), false)
+        }
+        Intent::TicketSave { .. } => (Some(TargetKind::Ticket), false),
+        Intent::DocumentCreate { .. } => (Some(TargetKind::Document), true),
+        Intent::TicketCreate { .. } => (Some(TargetKind::Ticket), true),
+        Intent::CommentAdd { kind, .. } | Intent::LocalContextSync { kind, .. } => {
+            (Some(kind_of(*kind)), false)
+        }
+        // Its intent names no item and no kind (U-7).
+        Intent::LocalContextResolve { .. } => (None, false),
+        _ => return None,
+    };
+    let item = envelope.scope.item_id.as_deref()?.parse().ok()?;
+    Some(Heard::Saved {
+        root,
+        item,
+        kind,
+        new,
+    })
+}
+
+fn kind_of(kind: AuthoringKind) -> TargetKind {
+    match kind {
+        AuthoringKind::Ticket => TargetKind::Ticket,
+        AuthoringKind::Document => TargetKind::Document,
+    }
+}
+
 /// What `event` means to the scheduler, if anything. Called by the drain
 /// for each event before the request model applies it, so a finished
 /// request is still there to read.
@@ -287,6 +375,9 @@ pub(crate) fn heard(event: &WorkerEvent, operations: &Operations) -> Option<Hear
             .map(|scope| Heard::Reconfiguration(Moment::Submitted, scope)),
         WorkerEvent::Finished(id, envelope) => {
             let intent = &operations.request(*id)?.intent;
+            if let Some(sharing) = sharing(intent, envelope) {
+                return Some(sharing);
+            }
             if let Intent::OperationResume { root, operation_id }
             | Intent::OperationAbandon { root, operation_id } = intent
             {
@@ -444,6 +535,358 @@ mod tests {
         assert_eq!(finished(resume(operation), refused()), None);
         assert_eq!(finished(abandon(operation), refused()), None);
         assert_eq!(finished(abandon(operation), original_request(named)), None);
+    }
+
+    /// Part A: a finished request that shared, saved or merged is heard, in
+    /// the order the drain hands the events over, with what the scheduler
+    /// needs to change its unshared list: a share of an item, an item and
+    /// main, or main; a save, a create or a repair that made a checkpoint
+    /// and did not publish; a close or an approval that merged and did not
+    /// publish. By the drain's own predicate (decision 24; R-3, R-30, R-45).
+    #[test]
+    fn finished_shares_and_saves_are_heard() {
+        use crate::desktop::services::requests::{CommentBody, DesktopRequest, Lane, RequestState};
+        use manyhands::{
+            repository::{AuthoringKind, RelationshipWrite},
+            results::{CheckpointEffect, Effects, IntegrationEffect, PublicationEffect},
+        };
+
+        const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
+        const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG1";
+        let item: ItemId = ITEM.parse().unwrap();
+        let root = PathBuf::from("/r");
+        let id = || -> ItemId { ITEM.parse().unwrap() };
+        let effects = |checkpoint, publication, integration| Effects {
+            checkpoint,
+            publication,
+            integration,
+            ..Effects::not_requested()
+        };
+        let share = |item: Option<ItemId>, main| {
+            Some(Heard::Shared {
+                root: "/r".to_owned(),
+                item,
+                main,
+            })
+        };
+        let saved = |kind, new| {
+            Some(Heard::Saved {
+                root: "/r".to_owned(),
+                item: item.clone(),
+                kind,
+                new,
+            })
+        };
+
+        let mut operations = Operations::default();
+        let mut n = 0;
+        // `named`: the envelope's scope names the item.
+        let mut finished = |intent: Intent,
+                            (outcome, code): (Outcome, ResultCode),
+                            effects: Effects,
+                            named: bool| {
+            n += 1;
+            let request = DesktopRequestId(n);
+            operations.apply(WorkerEvent::Queued(DesktopRequest {
+                id: request,
+                request_id: RequestId::new(),
+                intent,
+                confirmation: None,
+                lane: Lane::User,
+                attempt: 1,
+                state: RequestState::Queued,
+            }));
+            let scope = manyhands::results::Scope {
+                item_id: named.then(|| ITEM.to_owned()),
+                ..Default::default()
+            };
+            let mut answer = Envelope::mutation("command", scope, outcome, code);
+            answer.effects = effects;
+            heard(
+                &WorkerEvent::Finished(request, Box::new(answer)),
+                &operations,
+            )
+        };
+        let done = (Outcome::Success, ResultCode::Ok);
+        let partial = (Outcome::Partial, ResultCode::DiscoveryPending);
+        let refused = (Outcome::Error, ResultCode::RecoveryRequired);
+        use CheckpointEffect::{Committed, Unchanged};
+        use PublicationEffect::{Current, NotRequested, Pending, Published};
+        let none = IntegrationEffect::NotRequested;
+        let sync = |kind| Intent::ItemSync {
+            root: root.clone(),
+            kind,
+            id: id(),
+        };
+
+        // Shares: by the drain's predicate, `Published` or `Current`.
+        let shares = [
+            (
+                "ItemSync, success",
+                sync(AuthoringKind::Ticket),
+                done,
+                Published,
+                share(Some(id()), false),
+            ),
+            (
+                "ItemSync, discovery pending",
+                sync(AuthoringKind::Document),
+                partial,
+                Published,
+                share(Some(id()), false),
+            ),
+            (
+                "ItemSync, an error that did not publish",
+                sync(AuthoringKind::Ticket),
+                refused,
+                NotRequested,
+                None,
+            ),
+            (
+                "ItemSync, nothing to publish",
+                sync(AuthoringKind::Ticket),
+                done,
+                NotRequested,
+                None,
+            ),
+            (
+                "ItemRepublish, current",
+                Intent::ItemRepublish {
+                    root: root.clone(),
+                    kind: AuthoringKind::Ticket,
+                    id: id(),
+                },
+                done,
+                Current,
+                share(Some(id()), false),
+            ),
+            (
+                "TicketClose, published",
+                Intent::TicketClose {
+                    root: root.clone(),
+                    id: id(),
+                },
+                done,
+                Published,
+                share(Some(id()), true),
+            ),
+            (
+                "DocumentPromote, published",
+                Intent::DocumentPromote {
+                    root: root.clone(),
+                    id: id(),
+                },
+                done,
+                Published,
+                share(Some(id()), true),
+            ),
+            (
+                "RepoSync, published",
+                Intent::RepoSync { root: root.clone() },
+                done,
+                Published,
+                share(None, true),
+            ),
+            (
+                "RepoSync, current",
+                Intent::RepoSync { root: root.clone() },
+                done,
+                Current,
+                share(None, true),
+            ),
+            (
+                "RepoSync, not requested",
+                Intent::RepoSync { root: root.clone() },
+                done,
+                NotRequested,
+                None,
+            ),
+        ];
+        for (name, intent, answer, publication, expected) in shares {
+            let effects = effects(Committed, publication, none);
+            assert_eq!(finished(intent, answer, effects, true), expected, "{name}");
+        }
+
+        // Saves: a checkpoint that did not publish, an item the envelope names.
+        let kinds = |kind| Some(kind);
+        let authoring = vec![
+            (
+                "DocumentSave",
+                Intent::DocumentSave {
+                    root: root.clone(),
+                    id: id(),
+                    title: "T".to_owned(),
+                    body: "B".to_owned(),
+                    observation: None,
+                },
+                kinds(TargetKind::Document),
+                false,
+            ),
+            (
+                "TicketSave",
+                Intent::TicketSave {
+                    root: root.clone(),
+                    id: id(),
+                    title: "T".to_owned(),
+                    ticket_type: "task".to_owned(),
+                    status: "open".to_owned(),
+                    project: None,
+                    team: None,
+                    body: "B".to_owned(),
+                    deps: RelationshipWrite::Unchanged,
+                    parent: RelationshipWrite::Unchanged,
+                    observation: "o".to_owned(),
+                },
+                kinds(TargetKind::Ticket),
+                false,
+            ),
+            (
+                "DocumentCreate",
+                Intent::DocumentCreate {
+                    root: root.clone(),
+                    id: id(),
+                    path: PathBuf::from("docs/a.md"),
+                    title: "T".to_owned(),
+                    body: "B".to_owned(),
+                },
+                kinds(TargetKind::Document),
+                true,
+            ),
+            (
+                "TicketCreate",
+                Intent::TicketCreate {
+                    root: root.clone(),
+                    id: id(),
+                    title: "T".to_owned(),
+                    ticket_type: "task".to_owned(),
+                    status: "open".to_owned(),
+                    project: None,
+                    team: None,
+                    body: "B".to_owned(),
+                    deps: Vec::new(),
+                    parent: None,
+                },
+                kinds(TargetKind::Ticket),
+                true,
+            ),
+            (
+                "DocumentMove",
+                Intent::DocumentMove {
+                    root: root.clone(),
+                    id: id(),
+                    observation: None,
+                    destination_path: PathBuf::from("docs/b.md"),
+                    destination_observation: "absent".to_owned(),
+                },
+                kinds(TargetKind::Document),
+                false,
+            ),
+            (
+                "CommentAdd",
+                Intent::CommentAdd {
+                    root: root.clone(),
+                    kind: AuthoringKind::Document,
+                    id: id(),
+                    comment_id: OTHER.parse().unwrap(),
+                    parent_id: None,
+                    body: CommentBody::new("C".to_owned()),
+                },
+                kinds(TargetKind::Document),
+                false,
+            ),
+            (
+                "LocalContextSync",
+                Intent::LocalContextSync {
+                    root: root.clone(),
+                    kind: AuthoringKind::Ticket,
+                    id: id(),
+                    observation: "o".to_owned(),
+                },
+                kinds(TargetKind::Ticket),
+                false,
+            ),
+        ];
+        for (name, intent, kind, new) in &authoring {
+            for publication in [NotRequested, Pending] {
+                let effects = effects(Committed, publication, none);
+                assert_eq!(
+                    finished(intent.clone(), done, effects.clone(), true),
+                    saved(*kind, *new),
+                    "{name}, {publication:?}"
+                );
+            }
+            // One that published is shared already; one that changed nothing,
+            // or whose envelope names no item, saved nothing to count.
+            for (why, effects, named) in [
+                ("published", effects(Committed, Published, none), true),
+                ("current", effects(Committed, Current, none), true),
+                ("unchanged", effects(Unchanged, NotRequested, none), true),
+                (
+                    "no item named",
+                    effects(Committed, NotRequested, none),
+                    false,
+                ),
+            ] {
+                assert_eq!(
+                    finished(intent.clone(), done, effects, named),
+                    None,
+                    "{name}, {why}"
+                );
+            }
+        }
+
+        // A local conflict's resolution names no item in the library's
+        // envelope (U-7, K-1), so it counts nothing; one that named its item
+        // would join with no kind.
+        let resolve = Intent::LocalContextResolve {
+            root: root.clone(),
+            operation_id: OperationId::new(),
+            observation: "o".to_owned(),
+            resolutions: Vec::new(),
+        };
+        let committed = effects(Committed, NotRequested, none);
+        assert_eq!(
+            finished(resolve.clone(), done, committed.clone(), false),
+            None
+        );
+        assert_eq!(finished(resolve, done, committed, true), saved(None, false));
+
+        // A close or an approval that merged and did not publish leaves main
+        // ahead of the shared copy.
+        let merged = |publication| effects(Committed, publication, IntegrationEffect::Complete);
+        for intent in [
+            Intent::TicketClose {
+                root: root.clone(),
+                id: id(),
+            },
+            Intent::DocumentPromote {
+                root: root.clone(),
+                id: id(),
+            },
+        ] {
+            let ahead = Some(Heard::MainAhead {
+                root: "/r".to_owned(),
+            });
+            assert_eq!(finished(intent.clone(), done, merged(Pending), true), ahead);
+            assert_eq!(
+                finished(intent.clone(), done, merged(NotRequested), true),
+                None
+            );
+            let incomplete = effects(Committed, Pending, IntegrationEffect::Pending);
+            assert_eq!(finished(intent, done, incomplete, true), None);
+        }
+
+        // A Check now is unchanged: a completed poll, with no data here.
+        let poll = Intent::PollOnce { root: root.clone() };
+        assert_eq!(
+            finished(
+                poll,
+                done,
+                effects(CheckpointEffect::NotRequested, NotRequested, none),
+                false
+            ),
+            Some(Heard::CheckedNow("/r".to_owned(), None))
+        );
     }
 
     /// R-11's list, and what each reaches.

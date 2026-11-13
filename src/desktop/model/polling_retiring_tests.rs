@@ -19,6 +19,7 @@ fn closed(fx: &Fx, name: &str) -> PollAttempt {
             item_id: Some(ITEM.parse::<ItemId>().unwrap()),
             kind: Some(TargetKind::Ticket),
             disposition: Disposition::Closed,
+            main: false,
         }],
         index_pending: false,
     }
@@ -265,6 +266,7 @@ fn retire_offers_follow_the_attempt_and_the_refused_set() {
         item_id: Some(item.clone()),
         kind: Some(kind),
         disposition,
+        main: false,
     };
     let attempt = PollAttempt {
         targets: vec![

@@ -18,7 +18,6 @@ pub(crate) const LABEL_READY: &str = "Up to date";
 pub(crate) const LABEL_EMPTY: &str = "Nothing to show";
 pub(crate) const LABEL_NEVER_REFRESHED: &str = "Index never refreshed";
 pub(crate) const LABEL_STALE: &str = "Index out of date";
-pub(crate) const LABEL_CURRENT: &str = "Index current";
 pub(crate) const LABEL_INCOMPLETE: &str = "List incomplete";
 pub(crate) const LABEL_BUSY: &str = "Busy";
 pub(crate) const LABEL_FAILED: &str = "Could not load";
@@ -228,15 +227,6 @@ impl<T> KeptList<T> {
     /// The last read stayed busy and the rows shown are the earlier ones.
     pub(crate) fn busy_over_kept(&self) -> bool {
         self.busy_over_kept
-    }
-}
-
-/// An index state in fixed text.
-pub(crate) fn index_label(index: &IndexStateDto) -> &'static str {
-    match index.state {
-        IndexState::Current => LABEL_CURRENT,
-        IndexState::Stale => LABEL_STALE,
-        IndexState::NeverRefreshed => LABEL_NEVER_REFRESHED,
     }
 }
 

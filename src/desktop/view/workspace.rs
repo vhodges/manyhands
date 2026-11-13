@@ -6,12 +6,15 @@ mod docks;
 mod find;
 mod focus;
 mod footer;
+mod footer_status;
 mod layout_notices;
 mod lifecycle;
 mod lists;
 mod render;
 mod repositories;
+mod repository_menu;
 mod requests;
+mod titles;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -36,8 +39,8 @@ use super::{
     footer::Footer,
     item::{ChipField, ItemPane},
     passphrase::PassphraseDialog,
+    repositories::{RepositoriesPane, RepositoryMenu},
     settings::{SettingsEvent, SettingsHost},
-    sidebar::RepositoriesPane,
     tabs::TabContent,
     tickets::TicketsPane,
 };
@@ -132,7 +135,7 @@ pub(crate) struct Workspace {
     /// The panel toolbars' buttons, in `ToolbarButton::ALL` order. The
     /// Workspace owns them, so a dock `load` or move, which changes the
     /// header's element paths, keeps them (R-37).
-    toolbar_focus: [FocusHandle; 4],
+    toolbar_focus: [FocusHandle; ToolbarButton::ALL.len()],
     _find_events: Subscription,
     content: ContentArea,
     /// The operation area's scroll: a control in it that takes focus is
@@ -182,9 +185,9 @@ pub(crate) struct Workspace {
     /// The folders the person opens and closes in the tree.
     _tree_events: Subscription,
     repositories_pane: RepositoriesPane,
+    /// The open repository menu (Part D).
+    repository_menu: Option<RepositoryMenu>,
     _repository_events: Subscription,
-    remove_focus: FocusHandle,
-    retry_focus: FocusHandle,
     /// Each change gives the open tabs their repository's publication
     /// remote from `navigation` (`TabContent::share_remotes`).
     _remotes: Subscription,
@@ -195,6 +198,8 @@ pub(crate) struct Workspace {
     /// was open, waiting for it to close (R-32).
     pub(in crate::desktop::view) republish_deferred:
         Vec<(super::operations::republish::Republishing, FocusHandle)>,
+    /// The titles of what a repository has not shared yet, and their reads.
+    share_titles: titles::ShareTitles,
 }
 
 impl Workspace {
@@ -212,8 +217,11 @@ impl Workspace {
         let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
         // What the scheduler holds back for the person is drawn in Activity
         // (D6 C3): its entries change with its answers, not with a request.
-        cx.observe(services.scheduler(), |_, _, cx| cx.notify())
-            .detach();
+        cx.observe(services.scheduler(), |this, _, cx| {
+            cx.notify();
+            this.read_share_titles(cx);
+        })
+        .detach();
         let focus_lost = cx.on_focus_lost(window, |this, window, cx| this.focus_lost(window, cx));
         let activation = cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
@@ -263,7 +271,7 @@ impl Workspace {
                 _ => {}
             },
         );
-        let repositories_pane = RepositoriesPane::new(window, cx);
+        let repositories_pane = RepositoriesPane::new(cx.entity().downgrade(), window, cx);
         let repository_events = cx.subscribe(repositories_pane.list(), |this, list, event, cx| {
             if let ListEvent::Confirm(ix) = event {
                 let key = list.read(cx).delegate().row(*ix).map(|row| row.key.clone());
@@ -335,12 +343,7 @@ impl Workspace {
             choice_focus: super::tickets::choice_ids()
                 .map(|id| (id, cx.focus_handle().tab_stop(true)))
                 .collect(),
-            toolbar_focus: [
-                cx.focus_handle(),
-                cx.focus_handle(),
-                cx.focus_handle(),
-                cx.focus_handle(),
-            ],
+            toolbar_focus: std::array::from_fn(|_| cx.focus_handle()),
             _find_events: find_events,
             operations_scroll,
             content: ContentArea {
@@ -379,13 +382,13 @@ impl Workspace {
             _ticket_events: ticket_events,
             _tree_events: tree_events,
             repositories_pane,
+            repository_menu: None,
             _repository_events: repository_events,
-            remove_focus: cx.focus_handle(),
-            retry_focus: cx.focus_handle(),
             _remotes: cx
                 .observe_self(|this, cx| this.content.tabs.share_remotes(&this.navigation, cx)),
             stopping_to_republish: Vec::new(),
             republish_deferred: Vec::new(),
+            share_titles: Default::default(),
         };
         workspace.load_repositories(cx);
         workspace
@@ -475,18 +478,8 @@ impl Workspace {
     }
 
     #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn repositories_list_focus(&self, cx: &App) -> FocusHandle {
-        gpui_kit::Focusable::focus_handle(self.repositories_pane.list().read(cx), cx)
-    }
-
-    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn tickets_list_focus(&self, cx: &App) -> FocusHandle {
         gpui_kit::Focusable::focus_handle(self.tickets_pane.list().read(cx), cx)
-    }
-
-    #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn remove_focus(&self) -> FocusHandle {
-        self.remove_focus.clone()
     }
 }
 

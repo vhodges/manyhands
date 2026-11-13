@@ -71,6 +71,7 @@ async fn retire_rows_hit(cx: &mut TestAppContext) {
                 item_id: Some(id.clone()),
                 kind: Some(TargetKind::Ticket),
                 disposition: Disposition::Closed,
+                main: false,
             })
             .collect(),
         index_pending: false,

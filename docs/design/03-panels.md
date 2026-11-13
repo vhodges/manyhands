@@ -17,21 +17,27 @@ Every panel distinguishes **four states**, as the RFC requires:
 
 ## Repositories
 
-- **Toolbar:** `plus` "Add or create a repository" (opens the Add repository sheet) · `refresh-cw` "Check all for updates now" · `ellipsis` More (rebuild index, remove…).
+- **Toolbar:** `plus` "Add or create a repository" (opens the Add repository sheet) · `refresh-cw` "Check all for updates now" · `ellipsis` More (Refresh, Rebuild the search index, Remove from Manyhands…). *More's items are named as in Wave 04 Cycle 03a's design, Part E (2026-11-12).*
 - **Row:** `folder-git-2` (14 px, `secondary`) · name (ellipsis) · right-aligned state (11.5 px, icon 12 px + label).
 
 | State | Label | Color | Icon |
 | --- | --- | --- | --- |
-| Unpublished checkpoints | `2 to share` | amber | `cloud-upload` |
+| Folder or registration can't be opened | `Can't open` | red | `circle-alert` |
+| Configuration invalid or missing | `Needs fixing` | amber | `triangle-alert` |
+| Checking now | `Checking…` | teal | spinner |
+| Key locked | `Locked` | amber | `lock` |
+| Checking waits on the person (key, host, recovery hold, conflict), or a check listed problems | `Needs attention` | red | `circle-alert` |
+| Poll/auth/network failure | `Can't reach` | red | `circle-alert` |
+| Items not shared yet | `2 to share` | amber | `cloud-upload` |
+| Paused | `Paused` | muted | `pause` |
 | In sync | `Up to date` | green | `circle-check` |
 | No publication remote | `This computer` | secondary | `hard-drive` |
-| Poll/auth/network failure | `Can't reach` | red | `circle-alert` |
-| Paused | `Paused` | muted | `pause` |
-| Checking now | `Checking…` | teal | spinner |
 
-- **Tooltip:** path · main branch · remote URL · numeric detail ("2 checkpoint commits not pushed"). This is where Git vocabulary lives.
+*The desktop shows the first state that holds, in this table's order. Can't open, Needs fixing, Locked and Needs attention were added (Wave 04 Cycle 03a decision 4), and Checking… comes before Locked, Needs attention and Can't reach (decision 8). "N to share" counts items not shared yet (ahead of the shared copy, never shared, or diverged, since sharing merges them), main counting as one, not checkpoint commits (decisions 2 and 19); any other problem a check lists shows Needs attention (decision 19). A publication remote that is not SSH shows no label, and its tooltip says why (decision 20). (Wave 04 Cycle 03a, 2026-11-12.)*
+
+- **Tooltip:** path · main branch · remote URL · numeric detail (the items not shared yet, by title). This is where Git vocabulary lives. *Items, not commits (Wave 04 Cycle 03a decision 2, 2026-11-12).*
 - **Click:** scope = this repository.
-- **Context menu:** Check now, Share main, Open folder, Settings…, Remove from Manyhands… (confirm; explain that the files stay).
+- **Context menu:** Check now, Share main, Open folder, Settings…, Remove from Manyhands… (confirm; explain that the files stay). *The menu opens with the state's sentence and then its action, before these items, so a keyboard user reads why (Wave 04 Cycle 03a decision 21, 2026-11-12).*
 
 ## Projects and Teams
 

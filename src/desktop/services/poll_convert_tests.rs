@@ -353,6 +353,7 @@ fn poll_attempt_conversion() {
                 item_id: item.map(item_id),
                 kind,
                 disposition: *disposition,
+                main: false,
             });
         }
         report
@@ -372,6 +373,7 @@ fn poll_attempt_conversion() {
                 _ => None,
             },
             disposition: *disposition,
+            main: false,
         })
         .collect();
     // A cancelled or interrupted attempt reports what it brought in too
@@ -485,10 +487,34 @@ fn check_now_attempt_reads_the_report() {
                 item_id: item,
                 kind,
                 disposition: *disposition,
+                main: false,
             }
         })
         .collect();
     assert_eq!(attempt.targets, expected, "in report order");
+
+    // Main is the target that names a ref and no kind (fact 51); a null kind
+    // with no ref, or a ref with a kind, is not.
+    let mut main = data(PollMutationCompletion::Completed);
+    main.targets = vec![
+        manyhands::repository::PollTargetDto {
+            target: Some("main".to_owned()),
+            kind: None,
+            item_id: None,
+            ..target(0, Dto::LocalAhead)
+        },
+        manyhands::repository::PollTargetDto {
+            target: Some("manyhands/ticket/x".to_owned()),
+            ..target(0, Dto::LocalAhead)
+        },
+        manyhands::repository::PollTargetDto {
+            kind: None,
+            ..target(0, Dto::LocalAhead)
+        },
+    ];
+    let attempt = check_now_attempt(&root(), &main, false).expect("a completed Check now");
+    let mains: Vec<bool> = attempt.targets.iter().map(|target| target.main).collect();
+    assert_eq!(mains, [true, false, false], "main by its ref and no kind");
 
     // The index still catching up is the attempt's too (R-10).
     let pending = check_now_attempt(&root(), &data(PollMutationCompletion::Completed), true)

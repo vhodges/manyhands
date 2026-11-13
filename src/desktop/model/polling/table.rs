@@ -1,12 +1,93 @@
 //! After an attempt (D6 design A4): one match arm per row of the table.
 
+use manyhands::canonical::ItemId;
+
 use super::{
     attempt::{
-        Answer, AttemptSummary, CancelCause, NotEligible, PollAttempt, Root, TransportFailure,
+        Answer, AttemptSummary, AttemptTarget, CancelCause, Disposition, NotEligible, PollAttempt,
+        Root, TargetKind, TransportFailure,
     },
     clock::Now,
     state::{Phase, RESTART_DELAYS, Reason, RepoSchedule, Why},
 };
+
+/// A finished share or save, as the scheduler heard it: the unshared list's
+/// rules 1 to 3 keep these per repository, each with the time it was heard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Change {
+    /// A share removes its item, and main when `main`.
+    Shared { item: Option<ItemId>, main: bool },
+    /// A save adds its item, `Unpublished` when `new`, else `LocalAhead`.
+    Saved {
+        item: ItemId,
+        kind: Option<TargetKind>,
+        new: bool,
+    },
+    /// A merge that did not publish adds main as `LocalAhead`.
+    MainAhead,
+}
+
+impl Change {
+    /// Whether a share takes `target` away.
+    fn removes(&self, target: &AttemptTarget) -> bool {
+        match self {
+            Self::Shared { item, main } => {
+                (*main && target.main)
+                    || item
+                        .as_ref()
+                        .is_some_and(|item| target.item_id.as_ref() == Some(item))
+            }
+            Self::Saved { .. } | Self::MainAhead => false,
+        }
+    }
+
+    /// Applies the change to a list of unshared items. Whether it changed.
+    pub(super) fn apply_to(&self, items: &mut Vec<AttemptTarget>) -> bool {
+        let added = match self {
+            Self::Shared { .. } => {
+                let before = items.len();
+                items.retain(|target| !self.removes(target));
+                return items.len() != before;
+            }
+            Self::Saved { item, kind, new } => {
+                if items.iter().any(|held| held.item_id.as_ref() == Some(item)) {
+                    return false;
+                }
+                AttemptTarget {
+                    item_id: Some(item.clone()),
+                    kind: *kind,
+                    disposition: if *new {
+                        Disposition::Unpublished
+                    } else {
+                        Disposition::LocalAhead
+                    },
+                    main: false,
+                }
+            }
+            Self::MainAhead => {
+                if items.iter().any(|held| held.main) {
+                    return false;
+                }
+                AttemptTarget {
+                    item_id: None,
+                    kind: None,
+                    disposition: Disposition::LocalAhead,
+                    main: true,
+                }
+            }
+        };
+        items.push(added);
+        true
+    }
+
+    /// Takes what a share removed out of an attempt's listed items too, so
+    /// the attempt's entry agrees with the count. Whether one went.
+    pub(super) fn remove_from(&self, listed: &mut Vec<AttemptTarget>) -> bool {
+        let before = listed.len();
+        listed.retain(|target| !self.removes(target));
+        listed.len() != before
+    }
+}
 
 impl RepoSchedule {
     /// Moves the phase from the attempt and returns what the attempt

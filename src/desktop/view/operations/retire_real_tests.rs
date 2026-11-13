@@ -163,6 +163,7 @@ fn reported_closed(rig: &Rig, cx: &mut TestAppContext) {
             item_id: Some(item()),
             kind: Some(TargetKind::Ticket),
             disposition: Disposition::Closed,
+            main: false,
         }],
         index_pending: false,
     };

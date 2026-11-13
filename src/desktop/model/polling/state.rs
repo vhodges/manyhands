@@ -6,7 +6,7 @@ use manyhands::repository::OperationId;
 use time::OffsetDateTime;
 
 use super::{
-    attempt::{AttemptSummary, Authority, KeyId, Root},
+    attempt::{AttemptSummary, AttemptTarget, Authority, KeyId, Root},
     clock::Now,
 };
 
@@ -96,11 +96,28 @@ pub(super) const RESTART_DELAYS: [Duration; 3] = [
 /// R-34.
 pub(super) const PREEMPTIONS_BEFORE_INTERVAL: u8 = 3;
 
+/// What a repository has not shared yet, as the last completed check with
+/// targets found it, changed since by this app's saves and shares (Part A,
+/// rules 1 to 5). A failed, interrupted or cancelled check never replaces
+/// it, and neither does a replay with no targets.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Unshared {
+    /// Every `LocalAhead`, `Unpublished` and `Diverged` item, main included.
+    pub items: Vec<AttemptTarget>,
+    /// What needs a look.
+    pub problems: Vec<AttemptTarget>,
+    /// When the check that set the list completed; `None` before any did.
+    pub as_of: Option<OffsetDateTime>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RepoSchedule {
     pub policy: Policy,
     pub phase: Phase,
     pub last: Option<AttemptSummary>,
+    /// What is not shared yet: what rows, the footer and Settings read,
+    /// not `last`.
+    pub unshared: Unshared,
     /// The last completed attempt's time, for fairness (R-7). Only a
     /// `Completed` answer moves it (R-9).
     pub last_completed: Option<OffsetDateTime>,
@@ -129,6 +146,7 @@ impl RepoSchedule {
             policy,
             phase: Phase::Idle,
             last: None,
+            unshared: Unshared::default(),
             last_completed,
             preempted: 0,
             streak: 0,

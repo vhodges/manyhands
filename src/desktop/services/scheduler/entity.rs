@@ -36,13 +36,13 @@ use std::{
 };
 
 use gpui_kit::{Context, Task, WeakEntity};
-use manyhands::repository::OperationId;
+use manyhands::repository::{OperationId, PollingOutcome};
 use time::OffsetDateTime;
 
 use super::{
     Holding, holding,
     reconfigure::{Heard, Moment},
-    registration::{self, Read},
+    registration::{self, Read, SharedCopy},
     start,
 };
 use crate::desktop::{
@@ -108,6 +108,13 @@ pub(crate) struct Scheduler {
     /// at, as the last read showed it (`None` when it did not say). Its
     /// keys are the scheduled repositories.
     pub(super) authorities: BTreeMap<Root, Option<Authority>>,
+    /// How the library's latest check of each scheduled repository ended,
+    /// as the last registration read or answer's status showed it. It
+    /// speaks for a repository this process has not checked (Part A).
+    pub(super) stored: BTreeMap<Root, PollingOutcome>,
+    /// The publication remote each scheduled repository is checked
+    /// against, from the same read as `authorities`.
+    pub(super) shared_copies: BTreeMap<Root, SharedCopy>,
     /// Repositories whose Check now waits for the change the person was
     /// sent to make (Choose a key…, Approve host…, Open remote settings…):
     /// it is sent when a reconfiguration reaching them finishes (C3).
@@ -163,6 +170,8 @@ impl Scheduler {
             armed_for: None,
             failed_reads: BTreeSet::new(),
             authorities: BTreeMap::new(),
+            stored: BTreeMap::new(),
+            shared_copies: BTreeMap::new(),
             check_after: BTreeSet::new(),
             edit_tabs,
             drafts,
@@ -211,6 +220,16 @@ impl Scheduler {
         self.reading.contains_key(root)
             || (!self.failed_reads.contains(root)
                 && self.schedule.repo(root).is_some_and(|repo| repo.stale))
+    }
+
+    /// How the library's latest check of `root` ended, as stored.
+    pub(crate) fn stored(&self, root: &Root) -> Option<PollingOutcome> {
+        self.stored.get(root).copied()
+    }
+
+    /// The publication remote `root` is checked against.
+    pub(crate) fn shared_copy(&self, root: &Root) -> Option<&SharedCopy> {
+        self.shared_copies.get(root)
     }
 
     /// The wall time by the scheduler's clock, for a status line's "ago".
@@ -294,6 +313,20 @@ impl Scheduler {
         self.tick(cx);
     }
 
+    /// Reads `root`'s registration again, for Retry on a repository the
+    /// scheduler could not read (R-19): it leaves the failed ones, which the
+    /// tick does not read, and asks for its own read. A root the scheduler
+    /// never listed is ignored (R-41).
+    pub(crate) fn reread(&mut self, root: Root, cx: &mut Context<Self>) {
+        if !self.known.contains(&root) {
+            return;
+        }
+        self.failed_reads.remove(&root);
+        // The row's facts changed: it is no longer a failed read.
+        cx.notify();
+        self.read_registrations(vec![root], cx);
+    }
+
     /// Tries the in-flight lock. True when it was taken now, which also
     /// reconciles the entries (it reads their lists).
     fn acquire(&mut self, cx: &mut Context<Self>) -> bool {
@@ -356,8 +389,15 @@ impl Scheduler {
                     policy,
                     last_completed,
                     authority,
+                    outcome,
+                    shared_copy,
                 } => {
                     self.authorities.insert(root.clone(), authority);
+                    self.keep_stored(&root, outcome);
+                    match shared_copy {
+                        Some(copy) => self.shared_copies.insert(root.clone(), copy),
+                        None => self.shared_copies.remove(&root),
+                    };
                     if self.schedule.repo(&root).is_some() {
                         self.schedule.set_policy(&root, policy);
                     } else {
@@ -375,6 +415,14 @@ impl Scheduler {
         self.tick(cx);
     }
 
+    /// The latest stored outcome a status read showed for `root`.
+    pub(super) fn keep_stored(&mut self, root: &Root, outcome: Option<PollingOutcome>) {
+        match outcome {
+            Some(outcome) => self.stored.insert(root.clone(), outcome),
+            None => self.stored.remove(root),
+        };
+    }
+
     /// The repository leaves the list or the registry.
     pub(super) fn forget(&mut self, root: &Root, cx: &mut Context<Self>) {
         self.reading.remove(root);
@@ -388,6 +436,8 @@ impl Scheduler {
         self.schedule.remove(root);
         self.check_after.remove(root);
         self.authorities.remove(root);
+        self.stored.remove(root);
+        self.shared_copies.remove(root);
         if let Some(op) = self.store.poll_entry(root) {
             self.store.poll_withdrawn(root, op);
         }
@@ -483,8 +533,29 @@ impl Scheduler {
         if !self.on() {
             return;
         }
+        let mut changed = false;
         for heard in heard {
             match heard {
+                // A finished share or save changes the unshared list at
+                // once, timed when heard, in the order the drain heard them
+                // (rules 1 and 2), before any older answer applied later.
+                Heard::Shared { root, item, main } => {
+                    let at = self.clock.utc();
+                    changed |= self.schedule.shared(&root, item.as_ref(), main, at);
+                }
+                Heard::Saved {
+                    root,
+                    item,
+                    kind,
+                    new,
+                } => {
+                    let at = self.clock.utc();
+                    changed |= self.schedule.saved(&root, item, kind, new, at);
+                }
+                Heard::MainAhead { root } => {
+                    let at = self.clock.utc();
+                    changed |= self.schedule.main_ahead(&root, at);
+                }
                 Heard::Retirement(retiring) => self.retiring(retiring, cx),
                 Heard::Reconfiguration(Moment::Submitted, scope) => {
                     let reached = self.reached(&scope);
@@ -514,6 +585,9 @@ impl Scheduler {
                     authority,
                 } => self.check_failed(&root, request, code, authority, cx),
             }
+        }
+        if changed {
+            cx.notify();
         }
         self.answers.extend(self.inbox.take());
         self.next_answer(cx);

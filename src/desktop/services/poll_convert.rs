@@ -41,6 +41,8 @@ pub(crate) struct TargetParts {
     pub item_id: Option<ItemId>,
     pub kind: Option<AuthoringKind>,
     pub disposition: PollDisposition,
+    /// The primary branch: a target with a target and no kind.
+    pub main: bool,
 }
 
 /// What the conversion reads of a `RemotePollReport`.
@@ -67,6 +69,7 @@ impl ReportParts {
                     item_id: target.item_id().cloned(),
                     kind: target.kind(),
                     disposition: target.disposition(),
+                    main: target.target().is_some() && target.kind().is_none(),
                 })
                 .collect(),
             outcome: report.outcome(),
@@ -253,6 +256,7 @@ pub(crate) fn check_now_attempt(
                     ItemDtoKind::Document => TargetKind::Document,
                 }),
                 disposition: target_disposition(target.disposition),
+                main: target.target.is_some() && target.kind.is_none(),
             })
             .collect(),
         index_pending,
@@ -464,6 +468,7 @@ fn target(parts: &TargetParts) -> AttemptTarget {
             AuthoringKind::Document => TargetKind::Document,
         }),
         disposition: disposition(parts.disposition),
+        main: parts.main,
     }
 }
 

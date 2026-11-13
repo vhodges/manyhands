@@ -61,6 +61,7 @@ fn closed(reported: &[usize]) -> Vec<TargetParts> {
             item_id: Some(IDS[n].parse().unwrap()),
             kind: Some(AuthoringKind::Ticket),
             disposition: PollDisposition::Closed,
+            main: false,
         })
         .collect()
 }
@@ -73,6 +74,7 @@ fn targets(reported: &[usize]) -> Vec<AttemptTarget> {
             item_id: Some(IDS[n].parse().unwrap()),
             kind: Some(TargetKind::Ticket),
             disposition: Disposition::Closed,
+            main: false,
         })
         .collect()
 }

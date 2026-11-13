@@ -63,11 +63,11 @@ mod source;
 mod status;
 pub(crate) mod tokens;
 
-use std::{collections::HashMap, path::PathBuf, rc::Rc};
+use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, Render, Styled, Subscription, Task, TestSupportExt, Window,
+    Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    Render, Styled, Subscription, Task, TestSupportExt, Window,
     component::{input::TextareaState, v_flex},
 };
 use manyhands::repository::transport::SshAuthority;
@@ -120,12 +120,6 @@ pub(crate) const COPY_SLUG: &str = "Copy short code";
 pub(crate) const NOT_REFRESHED: &str = "Could not refresh";
 /// The discussion header's way back to the page (`item_view/04-comments.md`).
 pub(crate) const BACK_TO_TOP: &str = "Back to top";
-
-/// Builds what ends the item's scroll region, after the discussion: the
-/// workspace's details of the selected repository, revealed by the region
-/// it is given. It is built as the pane is drawn, so it is always the
-/// frame's own.
-pub(crate) type RegionEnd = Rc<dyn Fn(&ContentScroll, &mut Window, &mut App) -> Option<AnyElement>>;
 
 /// A place in the workspace a share's or a post's control opens (design,
 /// Lane B, Outcomes and routes): the item tab asks, and the workspace,
@@ -231,8 +225,6 @@ pub(crate) struct ItemPane {
     /// The comments being posted, drawn pending in their threads
     /// (`posting`).
     posting: posting::Posting,
-    /// Set by the workspace when it opens the tab.
-    region_end: Option<RegionEnd>,
     draft: draft::TabDraft,
     /// What the last link clicked here came to, when it opened nothing
     /// or opened the nearest match; the next link clears it.
@@ -330,7 +322,6 @@ impl ItemPane {
             primary_branch: None,
             composers: composer::Composers::default(),
             posting,
-            region_end: None,
             draft: draft::TabDraft::default(),
             link_note: None,
             link_read: None,
@@ -365,7 +356,10 @@ impl ItemPane {
 
     /// The read view's editor.
     #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn read_editor(&self, cx: &App) -> Option<Entity<zorite_editor::EditorState>> {
+    pub(crate) fn read_editor(
+        &self,
+        cx: &gpui_kit::App,
+    ) -> Option<Entity<zorite_editor::EditorState>> {
         Some(self.page.read()?.read(cx).editor().clone())
     }
 
@@ -394,11 +388,6 @@ impl ItemPane {
     /// is shown.
     pub(super) fn region(&self) -> &ContentScroll {
         &self.scroll
-    }
-
-    /// What ends the item's scroll region, after the discussion.
-    pub(super) fn end_region_with(&mut self, end: RegionEnd) {
-        self.region_end = Some(end);
     }
 
     /// Back to top: the region at its top, and the page focused.
@@ -542,10 +531,6 @@ impl Render for ItemPane {
         let viewing = !inspect && self.edit.phase() == Phase::Viewing && self.repair.is_none();
         let page = self.page.render(content, &self.scroll, viewing, window, cx);
         let discussion = self.discussion_section(window, cx);
-        let end = self
-            .region_end
-            .clone()
-            .and_then(|end| end(&self.scroll, window, cx));
         let over = self.over_region(cx);
         // No zero minimum: the pane is never shorter than its header, so a
         // window too short for the header scrolls the content column.
@@ -579,7 +564,7 @@ impl Render for ItemPane {
             .w_full()
             .child(header)
             .children(self.toolbar_view())
-            .child(page::region(&self.scroll, page, discussion, end, over, cx))
+            .child(page::region(&self.scroll, page, discussion, over, cx))
     }
 }
 

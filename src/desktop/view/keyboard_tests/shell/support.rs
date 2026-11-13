@@ -101,6 +101,11 @@ pub(super) fn said(control: Control, layout: &Layout, attention: usize) -> (Stri
         }
         Control::Attention => (attention_text(attention).unwrap_or_default(), None),
         Control::Settings => ("Settings".to_owned(), None),
+        // Shown only where something is scheduled: the windows `said` serves
+        // schedule nothing, and `status_items_say_and_choose` reads them.
+        Control::UpdateCheck | Control::ToShare => {
+            panic!("{control:?} is not shown in a window with nothing scheduled")
+        }
     }
 }
 
