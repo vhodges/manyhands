@@ -14,19 +14,23 @@ Ticket `01M784Y94Q3AXT6XJX38F5VK1V` (`vh-dt0aq`).
 [Design](../plans/2026-11-12-wave-04-cycle-03b-activity-and-needs-attention-design.md) and
 [implementation plan](../plans/2026-11-12-wave-04-cycle-03b-activity-and-needs-attention-implementation.md).
 
-**Status: draft, revision 3.** On 2026-11-12 the owner asked to plan this
+**Status: draft, revision 4.** On 2026-11-12 the owner asked to plan this
 Cycle while Cycle 03a was in its final review ("substantially complete").
 The owner answered decisions 4–12 in that session and accepted the
 planner's outline with decision 13 ("write the documents"). Decisions
 1–3 were made during Cycle 03a's planning and are recorded on this
 ticket. Decisions 14–20 are the planner's proposals, each with its
 reason, for the owner to confirm. The owner answered decisions 21–24 on
-2026-11-13, after review round 1. Those marked **(owner's eye)** change
-something people see today or depart from an authority. Revision 2
-applied review round 1 (4 Blocking, 39 Important, 25 Minor across two
-reviewers) and decisions 21–24. Revision 3 applies review round 2
-(scoped re-review 1 Blocking, 7 Important, 13 Minor; adversarial 1
-Blocking, 12 Important, 9 Minor); not yet re-reviewed. The log and the
+2026-11-13, after review round 1, and decision 25 the same day, after
+review round 3. Those marked **(owner's eye)** change something people
+see today or depart from an authority. Revision 2 applied review round 1
+(4 Blocking, 39 Important, 25 Minor across two reviewers) and decisions
+21–24. Revision 3 applied review round 2 (scoped re-review 1 Blocking, 7
+Important, 13 Minor; adversarial 1 Blocking, 12 Important, 9 Minor).
+Revision 4 applies review round 3 (scoped re-review 0 Blocking, 6
+Important, 8 Minor; adversarial 6 Blocking, 7 Important, 4 Minor) and
+decision 25. Retirements are redesigned: no rows derived from the
+attempt's retirement lines (R-51). Not yet re-reviewed. The log and the
 attention count are stated as tables of required outcomes (design A3,
 A4), and Task 5 writes them test-first with a design checkpoint.
 
@@ -39,9 +43,12 @@ A4), and Task 5 writes them test-first with a design checkpoint.
 - Review round 2 read revision 2 at `b830e8e3`:
   - scoped re-review: 1 Blocking, 7 Important, 13 Minor;
   - adversarial: 1 Blocking (the same), 12 Important, 9 Minor.
+- Review round 3 read revision 3 at `4c596645`:
+  - scoped re-review: 0 Blocking, 6 Important, 8 Minor;
+  - adversarial: 6 Blocking, 7 Important, 4 Minor.
 - The plan has 14 tasks (0–13). If the owner splits the Cycle, 03b-1 is
   Tasks 0–10 and 03b-2 is Tasks 11–13 (design Risks).
-- Revision 3 has not yet been re-reviewed.
+- Revision 4 has not yet been re-reviewed.
 
 ## Purpose And Authority
 
@@ -194,8 +201,9 @@ A2), not the log.
    number (RFC 40–55; `05`).
 2. **Failures stay until resolved.** A failure or recovery state stays
    until its source no longer holds it, and an event until the person
-   dismisses it (decision 5). Nothing exists only in a transient
-   notification (RFC).
+   dismisses it (decision 5). A failed request stops counting once it is
+   fixed, and its row stays as history until dismissed (decision 25).
+   Nothing exists only in a transient notification (RFC).
 3. **Nothing new is sent.** Every row action runs the handler today's
    control runs. Moving the highlight, filtering and opening a menu or
    the popover send nothing (tested: P31). Enter runs only the row's own
@@ -237,7 +245,7 @@ reports.
 | A4 | No secret in a row, tooltip or popover (Wave exit; contract 7) | `polling_privacy` and D5's three sweeps with the title-only allowance (E-12, E-14, P28) | Planned |
 | A5 | Rows of time, icon, message, tag and at most one action, Git detail in the tooltip, newest first, the filter (Wave scope) | `request_copy_table`, `share_copy_table`, `state_copy_table`, `activity_time_formats` (P4–P7); `rows_draw_from_the_log_and_filter` (P14) | Planned |
 | A6 | Today's operations-area content is carried into rows, not dropped (Wave scope) | `each_source_makes_its_rows` against design A2's table and B0's map; the tests moved by E-5 and E-6 pass unchanged in meaning | Planned |
-| A7 | The count includes the Wave's repository states, each thing once (Wave scope; decision 6) | `attention_counts_each_thing_once` (P2, test-first); `count_and_popover_agree` (P13) | Planned |
+| A7 | The count includes the Wave's repository states, each thing once, and a fixed failure stops counting (Wave scope; decisions 6 and 25) | `attention_counts_each_thing_once` (P2, test-first); `count_and_popover_agree` (P13) | Planned |
 | A8 | The three K-19 rows fit Activity (Wave, D6's amendment; decision 22) | `rows_fit_a_narrow_activity` (P21) | Planned |
 | A9 | Repository state is read from Cycle 03a's function (obligation) | Cycle 03a's panel tests, run by name after `RepoFacts` building moves (P12) | Planned |
 | A10 | Activity and its row menu work by keyboard (contract 5) | `activity_by_keyboard` (P15); `rows_by_pointer` (P16); `the_row_menu_by_pointer_and_keyboard` (P17); `a_dialog_from_a_row_returns_focus_to_its_row` (P20); the rewritten keyboard tests (E-7) | Planned |
@@ -430,6 +438,27 @@ decisions govern and are not repeated.
 
     *Alternative:* give every row an action.
 
+**Answered by the owner on 2026-11-13, after review round 3:**
+
+25. **A fixed failure stops counting by itself (owner's eye).**
+    - **When it stops counting.** A failed request no longer counts, and
+      leaves the popover, once any of these happens:
+      - a later request about the same thing succeeded;
+      - its operation finished;
+      - a resend took it over.
+    - **What stays.** Its row stays in Activity as history until
+      dismissed or cleared.
+    - **What it changes.** Cycle 01's "until dismissed" rule changes
+      (design Document Amendment 11); the Wave and design `03` say
+      "failures persist until resolved". The owner was asked: "Today a
+      failed request counts in Needs attention until you dismiss it, even
+      after the problem was fixed another way… Should a fixed failure
+      stop counting by itself?" and chose "Stop counting once fixed".
+
+    The design states it as N22 and N23 (A3).
+
+    *Alternative:* count until dismissed, as today.
+
 ## Known Limits
 
 These are visible to users; the design's Known Limits give the detail.
@@ -462,7 +491,7 @@ These are visible to users; the design's Known Limits give the detail.
 
 ## Open Questions
 
-None for the owner beyond confirming decisions 14–20. Decisions 21–24
+None for the owner beyond confirming decisions 14–20. Decisions 21–25
 were answered on 2026-11-13. The design's U-1, U-2 and U-4 to U-8 are
 checked by the tasks that first rely on them; U-3 is settled (design
 fact 47).
@@ -478,3 +507,5 @@ fact 47).
 | Review round 1, source and feasibility (revision 1, `74c9aabb`) | 1 Blocking, 15 Important, 11 Minor: how the seam acts; inputs to the derivation; handler names and signatures; the Kit `Popover`; tests the inventory missed; counts and line references | Blocking, Important, Minor | Revision 2; design R-40 to R-45 | Change list, 2026-11-13 |
 | Owner, 2026-11-13 | Titles under D6's rule; one-line rows; focus after a dialog; at most one action and counted failures | Owner decisions | Decisions 21–24 | Session, 2026-11-13 |
 | Review round 2, scoped re-review and adversarial (revision 2, `b830e8e3`) | Scoped: 1 Blocking, 7 Important, 13 Minor. Adversarial: 1 Blocking (the same), 12 Important, 9 Minor: a repository row's detail carried the folder path and the remote's address (Blocking); the log and the attention post-pass; focus after the popover; the seam; inputs the derivation lacked | Blocking, Important, Minor | Revision 3; design A3 and A4 as tables of required outcomes (N1–N21, T1–T13); design R-46 to R-50 | Change list, 2026-11-13 |
+| Owner, 2026-11-13, after review round 3 | Should a fixed failure stop counting by itself? | Owner decision | Decision 25; design N22 and N23; Document Amendment 11 cites decisions 6 and 25 | Session, 2026-11-13 |
+| Review round 3, scoped re-review and adversarial (revision 3, `4c596645`) | Scoped: 0 Blocking, 6 Important, 8 Minor. Adversarial: 6 Blocking, 7 Important, 4 Minor. Most sit in how retirements became rows (the S8 starts, kept rows, R-42) and when a failed request stops counting; others: a lifecycle's Resume on its pending row, L3's offers, a Busy read, the revision, `clearable` and Open…, the sentinels | Blocking, Important, Minor | Revision 4: retirements redesigned, with no rows derived from the attempt's retirement lines (design R-51); the subject, N2, N4, N9 and N21–N24 with their precedence (decision 25); design R-52 to R-55; N20, R-19 and R-42 withdrawn, T7 and T8 replaced. Scoped findings 1–3 (the S8 starts, kept counting, N20 against N21) are resolved by the redesign | Change list, 2026-11-13 |

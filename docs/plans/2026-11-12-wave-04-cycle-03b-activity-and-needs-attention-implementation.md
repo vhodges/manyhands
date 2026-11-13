@@ -13,11 +13,15 @@ id: "01M79CDMK18N4YHMWP1TV498D0"
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task.
-> **Draft, revision 3.** Revision 2 applied review round 1 and decisions
-> 21–24. Revision 3 applies review round 2 (scoped re-review and
+> **Draft, revision 4.** Revision 2 applied review round 1 and decisions
+> 21–24. Revision 3 applied review round 2 (scoped re-review and
 > adversarial review of `b830e8e3`): the log and the attention count are
 > tables of required outcomes (design A3, A4), which Task 5 writes
-> test-first with a design checkpoint. Not yet re-reviewed. Not
+> test-first with a design checkpoint. Revision 4 applies review round 3
+> (scoped re-review and adversarial review of `4c596645`) and decision
+> 25: retirements are redesigned, with no row derived from the attempt's
+> retirement lines (R-51), and a fixed failure stops counting (N22). Not
+> yet re-reviewed. Not
 > approved; Task 0 does not start before the owner approves it,
 > authorizes implementation and chooses the execution method, and Cycle
 > 03a has closed. Re-read the design before each task
@@ -41,7 +45,8 @@ operations split, a share classified once, and the running stage shown.
   B).
 - **The log.** The Workspace's `ActivityLog` gives each row the time it
   was first learned and a revision. It keeps events, lets states go when
-  they resolve, and holds a repository row through a check. Last, it
+  they resolve, holds a repository row through a check and a pending row
+  through a Busy read. Last, it
   marks the attention rows (`assign_attention`), each thing once (A3,
   A4). Refreshes are coalesced, one per effect cycle.
 - **The panel.** Activity draws the log in its own `uniform_list`, with a
@@ -171,9 +176,10 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 - Focus assertions read focus inside the same update that causes the
   change (Cycle 01 ledger).
 - **Task 5 has a design checkpoint.** Its implementer writes
-  `attention_counts_each_thing_once` from the design's table N1–N21 and
-  `the_log_keeps_times_and_events` from its table T1–T13, over `derive`
-  and `ActivityLog::refresh`, before any of their code. If a row cannot
+  `attention_counts_each_thing_once` from the design's table N1–N24 (N20
+  withdrawn) and `the_log_keeps_times_and_events` from its table T1–T13
+  less T8 and T10, which are window tests, over `derive` and
+  `ActivityLog::refresh`, before any of their code. If a row cannot
   be expressed against the code, the implementer stops and reports to the
   orchestrator. The orchestrator settles it with the design before
   implementation goes on.
@@ -201,7 +207,8 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   no `chmod` fixtures.
 - **The seam.** From Task 6, `D/view/activity_support.rs`'s functions.
   `act` refreshes the log synchronously (`refresh_activity_now`), panics
-  unless exactly one enabled offer on the row has the label, and calls
+  unless exactly one enabled offer in `row.menu` (every offer, the
+  button's included) has the label, and calls
   `Workspace::choose_activity` directly inside `workspace.update`, with
   the row's revision; it does not dispatch a window action. `act_refused`
   asserts a refusal (design Testing; R-45).
@@ -278,12 +285,25 @@ person, each pinned by a test in the task named:
    closed, lands on E1's control (R-49; Task 11,
    `popover_actions_by_keyboard`, and `the_popover_closes` with the
    hidden-item case).
-6. **A row menu choice after the row changed.** Nothing runs (T11;
-   R-46; Tasks 5, 6 and 9: `the_log_keeps_times_and_events`,
-   `each_action_runs_its_handler`, `the_row_menu_by_pointer_and_keyboard`).
+6. **A row menu choice, click or Enter after the row changed.** Nothing
+   runs; a running request's Stop stays choosable while its stage words
+   change (T8, T11; R-46, R-55; Tasks 5, 6 and 9:
+   `the_log_keeps_times_and_events`, `each_action_runs_its_handler`,
+   `activity_by_keyboard`, `rows_by_pointer`,
+   `the_row_menu_by_pointer_and_keyboard`).
 7. **A title sentinel in a row.** It is allowed, while a body sentinel
    in the same row is not (Task 9, the D5 sweeps' title allowance; Task
    12, the positive control).
+8. **A failure fixed another way.** A failed share followed by a later
+   share of the same item that succeeds, a Resume answered
+   `original_request_required` and resent, and a Can't reach row that
+   leaves after it absorbed a failed Check now: each failure stops
+   counting and stays shown (decision 25; Task 5,
+   `attention_counts_each_thing_once`, N22 and N23).
+9. **A retirement.** While it runs it is its request's row, with Cancel
+   or Stop; a dismissed answer is one event, never counted; any other
+   answer keeps the request's row, counted (R-51; Tasks 3, 4 and 5:
+   `each_source_makes_its_rows`, `attention_counts_each_thing_once`).
 
 ## File Map And Dependency Order
 
@@ -292,9 +312,9 @@ person, each pinned by a test in the task named:
 | 0 | — | Merge main (with 03a), baseline gates, re-check facts, E-sweep, ledger; checkpoint |
 | 1 | F1 | Split `model/operations.rs`; re-exports; no behaviour change |
 | 2 | F2, F3 | A share classified once (`classify_share`, the new getter); the stage shown (`stage_words -> String`); E-1, E-2 |
-| 3 | A1, B0–B3, B5, B6 | Row types (`Group`, `Derived`, `ActivityRow`, `ItemRef`, `Target`), request rows and their copy; the pure text helpers and `SHARE_MAIN` move into the model (R-41) |
-| 4 | A2, A5, A7, B4 | State rows, `RepoState.cause`, `repository_detail`, the brought-in history, the S8 key's start, `each_repository`; Cycle 03a's panel tests by name (P12) |
-| 5 | A2, A3, A4, A6 | `derive`, the log with `assign_attention` last, revisions, coalesced refresh and its points, `Resends::waits_on`, the count; creates `D/view/activity.rs`; E-3, E-4; checkpoint |
+| 3 | A1, B0–B3, B5, B6 | Row types (`Group`, `Subject`, `Derived`, `ActivityRow`, `ItemRef`, `Target`), request rows and their copy; the pure text helpers, `outcome_lines` with `Reach`, and `SHARE_MAIN` move into the model (R-41) |
+| 4 | A2, A5, A7, B4 | State rows, `RepoState.cause`, `repository_detail`, the brought-in history, the retirement events (R-51), S9's lifecycle Resume, `each_repository`; Cycle 03a's panel tests by name (P12) |
+| 5 | A2, A3, A4, A6 | `derive`, the log with `assign_attention` last, L3b, revisions, coalesced refresh and its points, `Resends::waits_on`, the count; creates `D/view/activity.rs`; E-3, E-4; checkpoint |
 | 6 | A1 actions, Testing | `ActivityMenuChoice`, `choose_activity`, `run_activity_action`, handler signatures, the seam; E-5 part 1 |
 | 7 | Testing | E-5 part 2 onto the seam |
 | 8 | Testing | The other files onto the seam; E-6; checkpoint |
@@ -487,8 +507,11 @@ pub(crate) fn stage_words(stage: ProgressStage, primary: Option<&str>) -> String
   `activity/rows.rs`, `activity/requests.rs`, `activity/copy.rs`.
 - Modify:
   - `D/view/operations.rs`, `D/view/lifecycle/outcome.rs` and
-    `D/view/sidebar.rs` (the pure text helpers, `outcome_lines` and
-    `SHARE_MAIN` move out, re-exported from their old paths; R-41).
+    `D/view/sidebar.rs` (the pure text helpers, `outcome_lines` with what
+    it needs, and `SHARE_MAIN` move out, re-exported from their old
+    paths; R-41);
+  - `D/model/operations/retire.rs` (the read-only getters
+    `running_operation` and `poll_runs`, design A2).
 - Tests: `D/model/activity_tests.rs`.
 
 **Interfaces** (design A1, A2):
@@ -501,8 +524,18 @@ pub(crate) struct Group {
     pub operation: Option<String>,
     pub roots: Vec<RepoKey>,
     pub check: bool,
-    pub resuming: bool,
+    pub check_applied: bool,
+    pub subject: Option<Subject>,
+    pub sent: Option<u64>,
+    pub outcome: Option<Outcome>,
+    pub running_operation: Option<String>,
+    pub followed: bool,
 }
+pub(crate) enum Subject {
+    Operation(String),
+    Intent { family: Family, root: Option<RepoKey>, item: Option<ItemId> },
+}
+pub(crate) enum Family { ItemShare, MainShare, Check, Retire, Save, Own(JobKind) }
 pub(crate) struct Derived {
     pub key: RowKey,
     pub kind: Kind,
@@ -515,7 +548,6 @@ pub(crate) struct Derived {
     pub attention: bool,
     pub item: Option<ItemRef>,
     pub clearable: bool,
-    pub kept: bool,
     pub at: Option<OffsetDateTime>,
     pub group: Group,
 }
@@ -528,6 +560,12 @@ pub(crate) struct RequestFacts {
     pub review: bool,
     pub recoveries: Vec<(usize, String, bool)>,
     pub resend_waits: bool,
+    pub followed: bool,
+    pub check_applied: bool,
+}
+impl Operations {
+    pub(crate) fn running_operation(&self, id: DesktopRequestId) -> Option<&str>; // is_running's first source
+    pub(crate) fn poll_runs(&self, operation: &str) -> bool;                       // is_running's second source
 }
 pub(crate) struct RequestInputs<'a> {
     pub operations: &'a Operations,
@@ -553,9 +591,17 @@ written there.
   `outcome_label`, `effects_text`, `scope_name`, the lifecycle outcome
   lines (`outcome_lines`, `D/view/lifecycle/outcome.rs:364`) and
   `SHARE_MAIN` (`D/view/sidebar.rs:12`) into `D/model/activity/copy.rs`
-  (or `model/operations`), with no GPUI import, and re-export each from
-  its old path. No caller and no test changes. `cargo check` and
-  `clippy`.
+  (or `model/operations`), and re-export each from its old path.
+  - With `outcome_lines` go, from `outcome.rs`: `Reach` with `Reach::of`
+    (`:252-341`), `Ending` and `StepState` (which `Reach::states` reads),
+    `StepKey`, `lifecycle_data`, `blocked_step`, the line words
+    (`merged`, `not_merged`, `SHARED`, `ALREADY_SHARED`,
+    `SHARING_PENDING`, `TIDIED_UP`) and `publication_reason` and
+    `cleanup_reason` (design A1).
+  - The model then depends on no view module (layering).
+    `D/view/lifecycle/outcome.rs` and `D/view/sidebar.rs` import no GPUI.
+
+  No caller and no test changes. `cargo check` and `clippy`.
 - [ ] **Step 3: Write the request tables.**
   - `request_copy_table` (P4): every intent of B2 in each state, with
     the templates that do not repeat the subject, and no path.
@@ -569,19 +615,29 @@ written there.
       code, never the draft's own title (B1); the detail holds no time
       line (B5);
     - Cancel for Queued and for Running not accepted; Stop or the
-      disabled "Stopping…" or "Finishing" once accepted (B2);
+      disabled "Stopping…" or "Finishing" once accepted (B2; P1);
+    - a ContextRetire Queued or Running is its own S1 row, with Cancel
+      or Stop (R-51); an Owed answer's row carries "The lists are still
+      catching up." in its detail when its lists are behind (B5);
     - a lifecycle entry's shown recovery action, one its dialog does not
       own, outranks Open… (B2);
-    - the lifecycle outcome lines, from `lifecycle_answer(id)`;
+    - the lifecycle outcome lines, from `lifecycle_answer(id)` with
+      `Reach::of(envelope, None)`;
     - `clearable` withheld when `resend_waits` is set, or when an enabled
-      offer other than Dismiss remains (R-47);
-    - a Running OperationResume's `group.resuming` and operation.
+      offer other than Dismiss remains, Open… aside: a cancelled close is
+      clearable (R-47);
+    - `group`: `subject` by A3's families (R-52), `sent` and `outcome`,
+      `operation` (an OperationResume's own when `operation_of` gives
+      none), `running_operation` for a Running request whose progress
+      named an operation and for an operation an automatic poll runs
+      (N21), `followed` (N23) and `check_applied` (N4).
 
   All fail.
 - [ ] **Step 4: Implement.**
   - The types of design A1.
   - `request_rows`, following B1, B2's table and rules, B3 and B5, with
-    each row's `Group` (A1).
+    each row's `Group` (A1). It hides no request (R-51).
+  - The getters `running_operation` and `poll_runs` (design A2), read-only.
   - The title and primary lookups are closures the Workspace supplies in
     Task 5. The tests pass their own.
   - `activity_time`.
@@ -596,8 +652,13 @@ written there.
 - Create: `D/model/activity/states.rs`.
 - Modify:
   - `D/model/polling.rs` (`Brought`, `brought()`), `after`,
-    `checked_now`; the S8 start counter in `set_retire_line`
-    (`:601-629`) and `retire_start`;
+    `checked_now`;
+  - `D/model/operations/retire.rs` (`RetireEvent`, `retire_events()`) and
+    `D/model/operations.rs` (`apply(Finished)` appends the event just
+    before its dismissal, `:366-368`; R-51). `PollSchedule`'s retirement
+    lines do not change;
+  - `D/view/operations/resume.rs` (`LifecycleRow` and its `of` move to the
+    model, re-exported, for S9);
   - `D/model/repository_state.rs` (`AttentionCause`, `RepoState.cause`);
   - `D/model/activity/copy.rs` (`repository_detail`, R-48);
   - `D/view/repositories.rs` (`each_repository`).
@@ -639,11 +700,20 @@ pub(crate) struct StateInputs<'a> {
     pub title: &'a dyn Fn(&RepoKey, AuthoringKind, &ItemId) -> Option<String>,
     pub primary: &'a dyn Fn(&RepoKey) -> Option<String>,
     pub unlock_target: &'a dyn Fn(&KeyId) -> bool,
+    pub lifecycle_running: &'a dyn Fn(&RepoKey, &ItemId) -> bool,
 }
 pub(crate) fn state_rows(inputs: &StateInputs<'_>) -> Vec<Derived>;
-pub(crate) fn repository_detail(state: &RepoState, primary: Option<&str>, remote: Option<&str>) -> Vec<String>;
-impl PollSchedule {
-    pub fn retire_start(&self, root: &Root, item: &ItemId) -> Option<u64>;
+pub(crate) fn repository_detail(primary: Option<&str>, remote: Option<&str>) -> Vec<String>;
+pub(crate) struct RetireEvent {
+    pub seq: u64,
+    pub root: RepoKey,
+    pub kind: AuthoringKind,
+    pub item: ItemId,
+    pub verdict: Verdict,
+    pub changed: bool,
+}
+impl Operations {
+    pub(crate) fn retire_events(&self) -> &[RetireEvent];
 }
 pub(crate) fn each_repository<R>(workspace: &Workspace, cx: &App, f: impl FnMut(&RepoFacts<'_>) -> R) -> Vec<R>;
 ```
@@ -679,10 +749,10 @@ pub(crate) fn each_repository<R>(workspace: &Workspace, cx: &App, f: impl FnMut(
   They pass unchanged.
 - [ ] **Step 5: Write the state tables.**
   - `state_copy_table` (P6): each row of B4, the dispositions, the total
-    pending-action table, the next actions, and `repository_detail`: the
-    state's sentence lines, "Main branch: {primary}" when known, "Shared
-    copy: {remote}" by name only, and never the folder or the location
-    (R-48).
+    pending-action table, the next actions, and `repository_detail`:
+    starting at "Main branch: {primary}" when known, without the state's
+    sentence, which is the description, then "Shared copy: {remote}" by
+    name only, and never the folder or the location (R-48).
   - The S2–S14 rows of `each_source_makes_its_rows` (P1), including:
     - each S4 state and cause that makes a row and each that does not
       (R-14, R-15, R-40), with Locked split by its `RowAction`:
@@ -692,19 +762,26 @@ pub(crate) fn each_repository<R>(workspace: &Workspace, cx: &App, f: impl FnMut(
     - S5 and S6 from the unshared list, keyed by `Target` (R-17);
     - S6's `ShareState` (Sharing… and locked, disabled), S7 from
       `retire_offers`, and S7's `retiring`;
-    - S8's key with `retire_start`, a later retirement of the same item
-      a new start (T8); `kept` once final (R-19); `clearable` on its
-      "Retired" and "Finished" lines only; "didn't finish" a candidate
-      with its retirement's operation (N20);
+    - S8 from `retire_events()`, through `Operations::apply(Finished)`
+      for each verdict: Retired, Attention, Unreachable and Retry each
+      append one event, keyed `Retired(seq)`, a later retirement of the
+      same item a new key; Retired a success row, clearable; the others
+      information rows, never candidates; Owed, refused, preserved and
+      failed append none; nothing read from `PollSchedule`'s retirement
+      lines (R-51);
+    - S9's lifecycle parent (`LifecycleRow::of`): Resume as
+      `ResumeLifecycle`, or a disabled "Still running…" while
+      `lifecycle_running` holds;
     - S11 named by B1's rule from `item_title()`, "the ticket {short}"
       when it is the ID;
     - S13's and S14's Dismiss as `DismissRecovered` and `DismissNote`.
 
   All fail.
 - [ ] **Step 6: Implement `state_rows`.** Implement it from design A2 and
-  B4, with `repository_detail` and the S8 start counter (design A2, the
-  S8 key; `RetireLine` unchanged). Run the tests by name. Verify lines,
-  commit, push.
+  B4, with `repository_detail`, the retirement events (`RetireEvent`,
+  appended by `apply`; no `PollSchedule` change; R-51) and S9's
+  lifecycle Resume, with `LifecycleRow` moved to the model. Run the
+  tests by name. Verify lines, commit, push.
 
 ---
 
@@ -716,7 +793,8 @@ pub(crate) fn each_repository<R>(workspace: &Workspace, cx: &App, f: impl FnMut(
   - `D/model/activity/log.rs`;
   - `D/view/workspace/activity.rs`;
   - `D/view/activity.rs`, declared in `D/view/mod.rs`, with its test file
-    `D/view/activity_tests.rs`, for `count_and_popover_agree`.
+    `D/view/activity_tests.rs`, for `count_and_popover_agree` and
+    `refreshes_are_coalesced`.
 - Modify:
   - `D/model/activity.rs` (`Inputs`, `derive`);
   - `D/services/resends.rs` (`Resends::waits_on`, read-only; design A2);
@@ -729,9 +807,10 @@ pub(crate) fn each_repository<R>(workspace: &Workspace, cx: &App, f: impl FnMut(
 - Delete: `D/model/attention.rs` with its tests (E-3).
 - Tests:
   - `D/model/activity_tests.rs`: `attention_counts_each_thing_once` (P2,
-    the N-table) and `the_log_keeps_times_and_events` (P3, the T-table);
+    the N-table) and `the_log_keeps_times_and_events` (P3, the T-table
+    less T8 and T10);
   - `D/view/activity_tests.rs`: `count_and_popover_agree` (P13, its
-    count half);
+    count half) and `refreshes_are_coalesced` (P3's T10);
   - E-3, E-4.
 
 **Interfaces:**
@@ -747,6 +826,7 @@ pub(crate) struct Inputs<'a> {
     pub title: &'a dyn Fn(&RepoKey, AuthoringKind, &ItemId) -> Option<String>,
     pub primary: &'a dyn Fn(&RepoKey) -> Option<String>,
     pub unlock_target: &'a dyn Fn(&KeyId) -> bool,
+    pub lifecycle_running: &'a dyn Fn(&RepoKey, &ItemId) -> bool,
 }
 pub(crate) fn derive(inputs: &Inputs<'_>) -> Vec<Derived>;
 // log.rs: called only by `refresh`, last, over the final rows (design A3).
@@ -766,18 +846,25 @@ impl Workspace {
     pub(in crate::desktop::view) fn refresh_activity(&mut self, cx: &mut Context<Self>);
     pub(in crate::desktop::view) fn refresh_activity_now(&mut self, cx: &mut Context<Self>);
     pub(crate) fn activity(&self) -> &ActivityLog;
+    #[cfg(test)]
+    pub(in crate::desktop::view) fn activity_derivations(&self) -> usize; // T10's counter
 }
 ```
 
 - [ ] **Step 1: Design checkpoint: both tables' tests first.**
-  - Write `attention_counts_each_thing_once` from N1–N21, one table row
-    per N-row, with an N4 row for each failure class, over `derive` and
-    `ActivityLog::refresh`.
-  - Write `the_log_keeps_times_and_events` (P3) from T1–T13, one table
-    row per T-row, over `ActivityLog::refresh` with an injected `now`.
-    T9 includes a stopped share whose record is Accepted and a stopped
-    republish a lifecycle waits on (R-47); T11 and T12 run through the
-    log's `still_offered`, which `choose_activity` calls in Task 6.
+  - Write `attention_counts_each_thing_once` from N1–N24 (N20
+    withdrawn), one table row per N-row, with an N4 row for each failure
+    class, over `derive` and `ActivityLog::refresh`. It includes A3's
+    precedence, N22's three ways a failure is fixed (decision 25), N23's
+    resent Resume, N24, and N9's repository row beside its problems.
+  - Write `the_log_keeps_times_and_events` (P3) from T1–T13 less T8 and
+    T10, one table row per T-row, over `ActivityLog::refresh` with an
+    injected `now`. T5 and T7 (L3b) check every offer disabled; T9
+    includes a stopped share whose record is Accepted, a stopped
+    republish a lifecycle waits on (R-47), an S8 Retired event and a
+    cancelled close; T11 and T12 run through the log's `still_offered`,
+    which `choose_activity` calls in Task 6, and T11 includes a Stop
+    whose stage words changed (the revision holds).
 
   If a row of either table cannot be expressed against the code, stop
   and report to the orchestrator. Both fail.
@@ -785,13 +872,13 @@ impl Workspace {
   reported row with the design before Step 3, and records each in the
   ledger.
 - [ ] **Step 3: Implement the derivation and the log.**
-  - `derive`: `request_rows` plus `state_rows`, dropping the S1 row of a
-    ContextRetire whose "Retiring…" line is listed or, once finished,
-    whose classified answer makes an S8 line (R-42). It assigns no
-    attention.
-  - `ActivityLog`, by A4's rules L1–L9, the revisions (R-46), then
+  - `derive`: `request_rows` plus `state_rows`. It hides no row (R-51)
+    and assigns no attention.
+  - `ActivityLog`, by A4's rules L1–L9, L3b included (R-54), with the
+    log-wide revisions (R-46) and `absorbed` per key life, then
     `assign_attention` last over the final rows, reading each row's
-    `Group` (N1–N21), then `clearable`'s first condition (R-47).
+    `Group` (N1–N24, in A3's precedence; R-52, R-53), then
+    `clearable`'s first condition (R-47).
   - `Resends::waits_on(id)`: whether `forget(id)` would drop a chain link
     or a waiting republish (design A2; `D/services/resends.rs:173-178`).
 - [ ] **Step 4: Wire the Workspace.**
@@ -802,10 +889,14 @@ impl Workspace {
     notifications derives once (R-43; T10).
   - `refresh_activity_now` builds `Inputs`: `RequestFacts` from Services
     and the worker, with the Busy words and republish state worked out
-    here (R-9) and `resend_waits` from `Services::resends().waits_on(id)`;
+    here (R-9), `resend_waits` from `Services::resends().waits_on(id)`,
+    `followed` from `Services::resends().follow(id)` (N23) and
+    `check_applied` from `check_now_failure` (N4; R-53);
     titles from an open item's `last_title()` and `share_title`;
     `each_repository`; `conflict_waits` from `pending_conflicts`;
-    `unlock_target` from `Scheduler::unlock_target`; the clock's `utc()`.
+    `unlock_target` from `Scheduler::unlock_target`; `lifecycle_running`
+    from `worker.in_flight` with `lifecycle_of` (S9); the clock's `utc()`.
+    It counts its derivations in a test-only counter (T10).
   - It is called from every refresh point of A4, including pending
     conflicts landing and an open item's title loading.
   - `attention()` returns `attention_count()`.
@@ -816,11 +907,13 @@ impl Workspace {
   calls `refresh`, and reads `attention_count()`. Apply
   E-4 to every reader it names, recording any changed count with its
   N-row.
-- [ ] **Step 6: Write the count journey.** `count_and_popover_agree`
+- [ ] **Step 6: Write the window tests.** `count_and_popover_agree`
   (P13), for now comparing the footer count with the log's attention rows
   through a journey of each counted kind, each then resolved. Each step
   asserts the expected list of attention `RowKey`s, written from the
-  N-table, as well as the count. It runs alone first.
+  N-table, as well as the count. Then `refreshes_are_coalesced` (T10):
+  a burst of notifications in one effect cycle makes one derivation,
+  read through `activity_derivations()`. Each runs alone first.
 - [ ] **Step 7: Run** the new tests and every E-3 and E-4 test by name.
   Verify lines, commit, push.
 - [ ] **Step 8: Checkpoint.** Ticket comment: Tasks 1–5, the N-table, the
@@ -841,7 +934,9 @@ impl Workspace {
     `abandon` already takes an origin, `:498-503`),
     `D/view/operations/outcomes.rs` (`run_share_offer`, whose Republish…
     origin comes today from `control_focus_for`, `:317`),
-    `D/view/operations/retire.rs` (`retire_chosen`) and
+    `D/view/operations/retire.rs` (`retire_chosen`),
+    `D/view/operations/resume.rs` (`resume_lifecycle`, which already takes
+    an origin, made reachable) and
     `D/view/workspace/repository_menu.rs` (`row_action`);
   - `D/view/activity.rs` (`mod actions;`);
   - `D/view/mod.rs` (`activity_support`).
@@ -878,11 +973,16 @@ pub(crate) fn pending_key(shell: &Shell, root: &str, action: &str, cx: &mut Test
 ```
 
 - [ ] **Step 1: Write the seam test.** `each_action_runs_its_handler`
-  covers each `ActivityAction` kind through `choose_activity`. Each sends
-  exactly what today's control sends, read from the recording backend or
-  the dialog or sheet it opens. It also has a choice whose revision is
-  stale (T11) and one whose offer is gone or disabled (T12), through
-  `act_refused`: nothing runs. It fails.
+  covers each `ActivityAction` kind through `choose_activity`,
+  `ResumeLifecycle` included. Each sends exactly what today's control
+  sends, read from the recording backend or the dialog or sheet it opens.
+  It also has:
+  - a choice whose revision is stale (T11): an `ActivityMenuChoice`
+    built with an old revision and passed to `choose_activity` directly,
+    not through `act_refused`;
+  - one whose offer is gone or disabled (T12), through `act_refused`.
+
+  Nothing runs for either. It fails.
 - [ ] **Step 2: Implement the choice.**
   - `choose_activity` checks the row again (design D) through
     `ActivityLog::still_offered`: the same revision, and an enabled offer
@@ -899,8 +999,9 @@ pub(crate) fn pending_key(shell: &Shell, root: &str, action: &str, cx: &mut Test
   vacuously:
   - it first refreshes the log synchronously, calling
     `refresh_activity_now` directly;
-  - it panics unless exactly one enabled offer on that row has that
-    label;
+  - it panics unless exactly one enabled offer in `row.menu` has that
+    label. `row.menu` holds every offer, the button's included, so the
+    button is not counted twice;
   - it builds the `ActivityMenuChoice` for the offer, with the row's
     current revision, and calls `choose_activity` inside
     `workspace.update`.
@@ -931,7 +1032,9 @@ nothing here.)
 
 - [ ] **Step 1: Move the tests.** Move E-5 part 2's tests file by file,
   as in Task 6 Step 4, with the function lists and removed drawn-text
-  assertions in the ledger.
+  assertions in the ledger. `resume_tests.rs`' lifecycle Resume presses
+  become `act(.., "Resume")` on the pending row (S9's
+  `ResumeLifecycle`); their meaning is unchanged.
 - [ ] **Step 2: Run** every E-5 part 2 test by name. All pass. Verify
   lines, commit, push.
 
@@ -946,6 +1049,9 @@ nothing here.)
   assertions in the ledger.
   - `settings/repositories_tests.rs`' literal id (`:569`) goes with the
     rest.
+  - `p5_a_close_stranded_at_closing_resumes_after_relaunch` presses
+    Resume with `act(.., "Resume")` on the pending row (S9's
+    `ResumeLifecycle`); its meaning is unchanged.
   - D5's sweeps keep reading the drawn area until Task 9.
   - Every E-7 test is left out.
 - [ ] **Step 2: Run** every E-6 test by name. All pass. Verify lines,
@@ -974,8 +1080,9 @@ The largest task. Before it, merge `origin/main`.
     `unless_dialog`, calls `choose_activity` with the list's handle);
   - `D/view/workspace/activity.rs` (the row menu, focus);
   - `D/view/workspace/requests.rs`, `D/view/workspace/lifecycle.rs`,
-    `D/view/operations/review.rs` and `D/view/operations/outcomes.rs`
-    (origins: C3, `run_share_offer`'s Republish… included);
+    `D/view/operations/review.rs`, `D/view/operations/outcomes.rs` and
+    `D/view/operations/resume.rs` (origins: C3, `run_share_offer`'s
+    Republish… and `resume_lifecycle` included);
   - `D/view/activity_support.rs` (the seam's origins become the list's
     handle);
   - `D/view/operations.rs` and its submodules (the drawing goes: F4);
@@ -1009,10 +1116,12 @@ The largest task. Before it, merge `origin/main`.
   filter; the tooltip text through `tooltip_lines`), P15 (without its Tab
   clause; including Enter on the focused row button running its action
   once, with the list's `enter` not also firing, and Enter doing nothing
-  on a disabled button or a row with neither), P16 and P20 (Republish…, a
-  recovery that confirms and Open… from the button, the menu and Enter;
-  Abandon… from the menu; decision 23). Each runs alone first. They
-  fail.
+  on a disabled button or a row with neither), P16, the drawn revision in
+  both (T8: a click or Enter on a row drawn before the log's row took a
+  newer revision runs nothing; R-55) and P20 (Republish…, a recovery that
+  confirms, Open… and a lifecycle's Resume from the button, the menu and
+  Enter; Abandon… from the menu; decision 23). Each runs alone first.
+  They fail.
 - [ ] **Step 3: Build the pane and rows** (C1, C2).
   - One-line rows, 28 px; the message and the tag end in an ellipsis,
     and the button never leaves the row (decision 22).
@@ -1020,8 +1129,9 @@ The largest task. Before it, merge `origin/main`.
     message, the time line (B6), then the detail (B5).
   - The rows are applied after the frame, and the highlight follows the
     key, else the row now at its position, else the last row; moving it
-    calls `scroll_to_item`. Enter builds its choice from the log's
-    current row, with its revision (C2).
+    calls `scroll_to_item`. A click or Enter builds its choice from the
+    drawn row, the pane's applied one, with its key and revision, not
+    the log's current row (C2; R-55).
   - The empty state "Nothing yet this session".
   - The container keeps `"operation-area"` (R-20).
   - Mount it in `activity_region` below the notices and the quit row
@@ -1050,7 +1160,8 @@ The largest task. Before it, merge `origin/main`.
   - `polling_privacy`: the same title allowance; `SURFACES` updated
     explicitly; the model-rows surface, which keeps `read_at`'s
     `("operation entry", "worktree_not_clean")` pair, now from the row's
-    detail (`:997`); the folder and remote sentinels (P28).
+    detail (`:997`); the folder sentinel and the remote URL's path and
+    user-info sentinel (P28).
   - The drafts sweeps expect S11's title, `D/view/drafts_entry_tests.rs:207-212`
     included (E-11).
 - [ ] **Step 8: Edit E-7, E-8, E-9's Activity part and E-16.** For E-7,
@@ -1088,8 +1199,9 @@ The largest task. Before it, merge `origin/main`.
 - [ ] **Step 1: Write the tests.** Write P14's filter part, P15's Tab
   clause, P19 (a success, a stopped share whose record is Accepted, a
   stopped republish a lifecycle waits on, a failure, an attention row, a
-  state and a kept S8 "Retired" line: only the success and the "Retired"
-  line go; R-47), P21 (Activity moved into the right dock and set to 320
+  state, an S8 Retired event and a cancelled close, which offers Open…:
+  only the success, the Retired event and the cancelled close go; R-47),
+  P21 (Activity moved into the right dock and set to 320
   px with the layout model's API, as Cycle 01's dock tests do, with the
   longest message of each kind, a long repository name and "+N", each
   row scrolled into view with `scroll_to_item` before its bounds are
@@ -1149,9 +1261,11 @@ The largest task. Before it, merge `origin/main`.
   a layer first moves focus to the footer item (R-50).
 - [ ] **Step 2: Write the popover tests.**
   - P22: by click, twice; by Enter, then Escape; by Space, then Escape.
-  - P23: a table over design P23's sources and buttons, driven through
-    the scheduler `World`, `PollingBackend` answers and fabricated
-    `WorkerEvent`s, not a journey per action.
+  - P23: a table over design P23's sources and buttons, a lifecycle's
+    Resume (`ResumeLifecycle`) included, driven through the scheduler
+    `World`, `PollingBackend` answers and fabricated `WorkerEvent`s, not
+    a journey per action. A click or Enter on a row drawn before the
+    log's row took a newer revision runs nothing (T8; R-55).
   - P25, each case of design P25: a full click on the footer item while
     the popover is open leaves it closed (fact 47); a press outside keeps
     the focus it gave, else the footer item; a dialog from the popover
@@ -1172,8 +1286,9 @@ The largest task. Before it, merge `origin/main`.
   - the ids `"needs-attention-…"`;
   - the header, rows and link;
   - keys, with Tab's three stops inside (R-12), and Enter on the link;
-  - the cursor following its `RowKey`, and Enter building its choice from
-    the log's current row with its revision;
+  - the cursor following its `RowKey`, and a click or Enter building its
+    choice from the drawn row, the popover's applied one, with its key and
+    revision (R-55);
   - running an action after closing, through `choose_activity` with the
     footer item's handle as origin; an action that places focus itself
     wins, and otherwise focus goes to the footer item if shown, else E1's
@@ -1206,8 +1321,8 @@ The largest task. Before it, merge `origin/main`.
   - **The positive control:** the title sentinel is seen in an Activity
     row, and a body sentinel planted in the same item is not.
   - **The folder and remote sentinels** of E-12 (a repository root's
-    parent folder name; a remote URL's host and path), swept through the
-    popover.
+    parent folder name; a remote URL's path and user-info, since host
+    names are allowed), swept through the popover.
 - [ ] **Step 2: Run** `polling_privacy` and D5's four `a16_` tests by name.
   Verify lines, commit, push.
 
@@ -1292,15 +1407,20 @@ devenv shell -- cargo test --all-features --locked --no-fail-fast --lib --bins \
 - **Task 1:** R-34.
 - **Task 2:** R-8, R-9, R-35, R-39.
 - **Task 3:** R-3, R-26, R-30, R-31, R-41, R-44, R-47 (the source's
-  conditions).
-- **Task 4:** R-4, R-5, R-14, R-15, R-16, R-17, R-19, R-32, R-40, R-44,
-  R-48.
-- **Task 5:** R-1, R-2, R-6, R-7, R-9, R-22, R-23, R-24, R-28, R-42,
-  R-43, R-46 (the log's revisions), R-47 (the log's condition).
+  conditions, Open… aside), R-51 (a running retirement is its S1 row),
+  R-52 (the subject, set by S1).
+- **Task 4:** R-4, R-5, R-14, R-15, R-16, R-17, R-32, R-40, R-44, R-48,
+  R-51 (the retirement events).
+- **Task 5:** R-1, R-2, R-6, R-7, R-9, R-22, R-23, R-24, R-28, R-43,
+  R-46 (the log's revisions), R-47 (the log's condition), R-52 (N2,
+  N22), R-53, R-54.
 - **Task 6:** R-21, R-45, R-46 (the choice's check).
-- **Task 9:** decision 23 (C3), R-13, R-18, R-20, R-27, R-29, R-33, R-36.
+- **Task 9:** decision 23 (C3), R-13, R-18, R-20, R-27, R-29, R-33, R-36,
+  R-55 (the pane's drawn revision).
 - **Task 10:** R-13, R-23, R-47 ("Clear finished").
-- **Task 11:** R-10, R-11, R-12, R-13, R-37, R-38, R-49, R-50.
+- **Task 11:** R-10, R-11, R-12, R-13, R-37, R-38, R-49, R-50, R-55 (the
+  popover's drawn revision).
+- **Withdrawn in revision 4:** R-19 and R-42 (replaced by R-51).
 
 **Named edits by task:**
 
@@ -1317,14 +1437,17 @@ devenv shell -- cargo test --all-features --locked --no-fail-fast --lib --bins \
 - E-15: any task.
 
 **Required outcomes by task:** P1 in Tasks 3 and 4; P2, P3 and P13 in
-Task 5 (P13 extended in 11); P4, P5 and P7 in Task 3; P6, P8 and P12 in
-Task 4; P9 and P10 in Task 2; P11 in Task 1; P14 in Tasks 9 and 10; P15
-in Tasks 9 and 10 (its Tab clause); P16, P17 and P20 in Task 9; P18 in
-Tasks 6 and 9; P19, P21, P29, P30 and P32 in Task 10; P22–P27 in Task
-11; P28 in Tasks 9 and 12; P31 in Tasks 10 and 11.
+Task 5 (P3's T8 in Task 9; P13 extended in 11); P4, P5 and P7 in Task
+3; P6, P8 and P12 in Task 4; P9 and P10 in Task 2; P11 in Task 1; P14
+in Tasks 9 and 10; P15 in Tasks 9 and 10 (its Tab clause); P16, P17 and
+P20 in Task 9; P18 in Tasks 6 and 9; P19, P21, P29, P30 and P32 in Task
+10; P22–P27 in Task 11; P28 in Tasks 9 and 12; P31 in Tasks 10 and 11.
 
-**Tables by task:** N1–N21 and T1–T13 in Task 5, test-first, under its
-design checkpoint; T11 and T12 also through `choose_activity` in Task 6.
+**Tables by task:** N1–N24 (N20 withdrawn) and T1–T13 in Task 5,
+test-first, under its design checkpoint, except two window tests: T10,
+`refreshes_are_coalesced`, also in Task 5, and T8 in Task 9 (P15–P17).
+T11 also through `choose_activity` with an old revision, and T12
+through `act_refused`, in Task 6.
 
 **Unverified facts by task:** U-1 and U-7 in Task 3; U-5 in Task 4; U-2
 and U-4 in Task 9; U-8 in Task 11; U-6 in Task 0. U-3 is settled (fact
