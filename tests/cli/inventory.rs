@@ -80,6 +80,9 @@ const NO_INPUT: &[&str] = &[
     "item sync",
     "repo sync",
     "item republish",
+    "item resolve-history",
+    "remote history",
+    "remote resolve-history",
     "conflict show",
     "operation resume",
     "operation abandon",
@@ -91,6 +94,7 @@ const NO_INPUT: &[&str] = &[
     "poll resume",
     "context observe-local",
     "context show-local",
+    "context retire",
 ];
 
 /// The output schemas a verb's `data` is published by: a read's, a mutation's
@@ -185,6 +189,21 @@ const DATA: &[(&str, &[&str])] = &[
     ),
     // A republish's result is its effects; only its preview has data.
     ("item republish", &["item_republish_preview"]),
+    (
+        "item resolve-history",
+        &[
+            "item_resolve_history_preview",
+            "history_resolution_mutation",
+        ],
+    ),
+    ("remote history", &["remote_history"]),
+    (
+        "remote resolve-history",
+        &[
+            "remote_resolve_history_preview",
+            "history_resolution_mutation",
+        ],
+    ),
     ("conflict show", &["conflict"]),
     ("conflict resolve", &["conflict_resolution_mutation"]),
     (
@@ -194,6 +213,7 @@ const DATA: &[(&str, &[&str])] = &[
             "synchronization_conflict_mutation",
             "local_context_sync_mutation",
             "lifecycle_mutation",
+            "context_retirement_mutation",
         ],
     ),
     (
@@ -217,7 +237,14 @@ const DATA: &[(&str, &[&str])] = &[
         ],
     ),
     // A first call's host stop carries the synchronization's host data.
-    ("poll once", &["poll_mutation", "synchronization_mutation"]),
+    (
+        "poll once",
+        &[
+            "poll_mutation",
+            "poll_retirement_mutation",
+            "synchronization_mutation",
+        ],
+    ),
     ("poll configure", &["poll_policy_mutation"]),
     ("poll pause", &["poll_policy_mutation"]),
     ("poll resume", &["poll_policy_mutation"]),
@@ -231,6 +258,10 @@ const DATA: &[(&str, &[&str])] = &[
     ),
     ("context sync-local", &["local_context_sync_mutation"]),
     ("context resolve-local", &["local_context_sync_mutation"]),
+    (
+        "context retire",
+        &["context_retirement_mutation", "synchronization_mutation"],
+    ),
 ];
 
 fn manifest() -> &'static Path {
@@ -346,7 +377,7 @@ fn every_bound_mutation_is_a_catalogued_mutating_verb_less_the_two_exempt() {
     }
     let expected = set(bound.difference(&set(EXEMPT.iter().copied())).copied());
     assert_eq!(mutating, expected);
-    assert_eq!(mutating.len(), 41);
+    assert_eq!(mutating.len(), 44);
 }
 
 #[test]
@@ -364,7 +395,7 @@ fn the_catalog_and_the_rfc_taxonomies_name_the_same_verbs() {
         extra.is_empty(),
         "in an RFC table, not catalogued: {extra:?}"
     );
-    assert_eq!(catalogued.len(), 77);
+    assert_eq!(catalogued.len(), 81);
 }
 
 #[test]

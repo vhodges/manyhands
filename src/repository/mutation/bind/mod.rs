@@ -45,13 +45,17 @@ pub(crate) mod key;
 pub(crate) mod lifecycle;
 pub(crate) mod local_sync;
 pub(crate) mod poll;
+pub(crate) mod poll_retirement;
 pub(crate) mod remote;
+pub(crate) mod remote_resolve_history;
 pub(crate) mod repair;
 pub(crate) mod repo;
 pub(crate) mod repo_identity;
 pub(crate) mod repo_remove;
 pub(crate) mod republish;
+pub(crate) mod resolve_history;
 pub(crate) mod resume;
+pub(crate) mod retire;
 pub(crate) mod save;
 pub(crate) mod sync;
 pub(crate) mod ticket;
@@ -298,6 +302,18 @@ pub(crate) struct Answer {
 }
 
 impl Answer {
+    /// Retirement cancellation after an owned/possible removal is partial,
+    /// not an empty cancelled refusal. Other commands retain their old rule.
+    pub(crate) fn cancelled_outcome(&self) -> bool {
+        self.code == ResultCode::Cancelled
+            && !(self.local_change
+                && matches!(
+                    self.data,
+                    Some(
+                        MutationDataDto::ContextRetirement(_) | MutationDataDto::PollRetirement(_)
+                    )
+                ))
+    }
     /// A request that stopped having done nothing.
     pub(crate) fn stopped(code: ResultCode) -> Self {
         Self {
@@ -793,6 +809,18 @@ pub(crate) trait OneTransaction {
 }
 
 pub(crate) trait Binding {
+    fn admission_root(&self) -> Option<&Path> {
+        None
+    }
+    fn admit(
+        &self,
+        _service: &RepositoryService,
+        tx: &rusqlite::Transaction<'_>,
+        accepted: &Accepted,
+    ) -> Result<(), ReadError> {
+        super::super::context_retirement::pass::require_unreserved(tx, accepted.request_id)
+            .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))
+    }
     /// The command. Its name is what the envelope gives.
     fn command(&self) -> Command;
 
@@ -1067,6 +1095,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::RepoIdentitySet) => Recorded::nothing(),
         // Answered above, from the pin store: this is not reached.
         Some(Command::HostApprove | Command::HostReplace) => Recorded::nothing(),
+        // A history resolution is one registry transaction: nothing of it
+        // is ever done with work remaining.
+        Some(Command::ItemResolveHistory | Command::RemoteResolveHistory) => Recorded::nothing(),
         // A directory is shown by no effect, and nothing records that
         // the request made one: its one row is its refresh's, and a
         // refresh in flight has made no durable effect. A directory at
@@ -1085,6 +1116,10 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::ContextRelease) => Recorded {
             effects: Effects::not_requested(),
             local_change: context::released_and_unfinished(journal.as_ref()),
+        },
+        Some(Command::ContextRetire) => Recorded {
+            effects: Effects::not_requested(),
+            local_change: retire::recorded_change(service, &accepted),
         },
         Some(Command::DocumentRepair | Command::TicketRepair) => {
             Recorded::of(repair::recorded_effects(record, &accepted))

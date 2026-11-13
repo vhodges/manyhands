@@ -764,7 +764,6 @@ fn comment_dialog(seen: &mut Seen, shell: &Shell, dialog: &'static str, cx: &mut
 /// answer's rendering. The pending row is drawn in the discussion only.
 #[gpui_kit::test]
 async fn comment_text_never_reaches_an_entry_quit_dialog_or_message(cx: &mut TestAppContext) {
-    use gpui_kit::{px, size};
     use manyhands::results::{CheckpointEffect, Effects, Envelope, Scope, WriteEffect};
 
     use super::quit::QuitPhase;
@@ -776,7 +775,7 @@ async fn comment_text_never_reaches_an_entry_quit_dialog_or_message(cx: &mut Tes
     fixture.commit_ticket(&a, DISCUSSED, "Discussed", "");
     fixture.refresh(&a);
     let shell = Shell::open(fixture, cx);
-    shell.visual(cx).simulate_resize(size(px(1440.), px(1400.)));
+    shell.resize_keeping_content(1440., 1400., cx);
     shell.run(cx);
     open(&shell, ticket(&a, DISCUSSED), cx);
     let mut seen = Seen::default();

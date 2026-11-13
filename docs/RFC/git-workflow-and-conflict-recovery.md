@@ -290,9 +290,91 @@ branch and deterministic worktree for that context. It then invokes the
 non-mutating index refresh.
 
 Polling MUST NOT push, checkpoint, merge, rebase, force-update, stash,
-overwrite, discard, or clean up state. A dirty, divergent, conflicted,
+overwrite or discard. Default and automatic polling MUST NOT clean up state.
+Only explicit `poll once --retire-completed` may perform the guarded local
+retirement below (owner D7/D8, 2026-11-04; D15, 2026-11-06).
+A dirty, divergent, conflicted,
 malformed, inaccessible, renamed, unrecognized, unmaterialized, or remotely
-deleted context remains locally preserved and visible with recovery guidance.
+deleted context otherwise remains locally preserved and visible with recovery guidance.
+
+Amended 2026-11-09 by Wave 03 D6 (decision 16): the desktop also follows each
+completed poll with one ordinary `context retire` per reported `closed` or
+`promoted` item, held back by any edit or draft of that item. No other
+background cleanup.
+
+### Explicit Peer-Context Retirement
+
+**Amendment, 2026-11-06:** the owner-approved
+[Cycle](../Cycles/wave-03-completed-context-retirement.md), D1–D14
+(2026-11-04) and D15 (2026-11-06), adds `context retire` and explicit
+`poll once --retire-completed`. This is local retirement after another clone's
+completion, not a new close/promote lifecycle, synchronization or force option.
+The [CLI contract](cli-contract.md#completed-context-retirement) specifies
+delivered data, numeric exits and item-owned recovery.
+
+- **Recognition is not deletion authority.** A complete authenticated Fetch
+  advertisement must establish that a previously Fetch-known published context
+  is now absent. Missing tracking refs, push-only evidence and unknown history
+  do not establish deletion. Stale tracking refs may remain; retirement neither
+  treats them as live server refs nor prunes them. With a valid same-ID ticket
+  closure on committed local primary, poll may report `closed` even when dirt
+  or unmatched content prevents retirement. For a document, `promoted` requires
+  the matching primary document **and** preservation proof, not mere presence
+  or a document completion marker (none exists).
+- **Fresh input and cost.** Standalone `context retire` makes an additional
+  authenticated read-only observation even after a preceding poll. It transfers
+  no objects and does not fast-forward or otherwise update primary; if local
+  primary lacks completion, first poll/synchronize it deliberately. An opted-in
+  pass reuses its ONE authoritative Fetch input for all initial children, not
+  N fresh child observations. This is a provenance/observation guarantee, not
+  a one-wire-connection promise: current Fetch authentication and reconnect use
+  two `git-upload-pack` commands for an ordinary poll and for the measured
+  two-child opted-in pass. No transport refactor or latency guarantee is implied.
+- **Positive preservation proof.** The local tip equal to or an ancestor of
+  committed local primary is sufficient, subject to positive completion and
+  safety checks. Otherwise require one unique merge base and exact primary
+  representation of the full base→local changed-entry set, including code,
+  comments, deletions, object kind and Git mode; a rename is delete plus add.
+  Only the target ticket file may compare canonically with `closed_at` and
+  `closed_by` cleared, and only for an older open copy versus valid closed
+  primary with equal regular-file modes and all other fields/unknown metadata/
+  body equal. No comment, status, relationship or executable-bit exception.
+  Shallow, missing-object, unrelated/multiple-base or unmatched evidence refuses.
+- **Independent local safety.** Primary must be checked out at the registered
+  root and its item file must match committed proof. Recheck current
+  configuration/endpoint/observation, frozen tip, registered-instance nonce,
+  complete checkout inventory and cleanup cleanliness, including ignored and
+  untracked content and unsafe submodules. Mixed, malformed, redirected,
+  inaccessible, locked or changed resources refuse; matching OIDs alone do not
+  establish lifetime. The admin nonce ends with worktree removal. A later
+  executor MUST NOT delete a surviving tokenless/branch-only branch under an
+  old request, even at the same tip (R-7). Existing cooperative-writer and
+  external-filesystem limitations remain; no atomicity with later server writes.
+- **Effects and settlement.** Guarded worktree removal precedes local branch
+  deletion. No remote branch deletion/push, checkpoint, implicit merge, canonical
+  source or draft mutation is permitted. Consume only the exact captured old
+  completed materialization intent when owned local absence is proved; preserve
+  a new/foreign intent and current observation/tracking state. Initial all-absent
+  state is an index-settled `already_absent` no-op, not evidence of an earlier
+  owned deletion. Existing promotion/closure cleanup is not changed here.
+
+The original uninterrupted eligible opted-in pass is a sequential loop of
+ordinary `context retire` requests: one stable request/local operation per item,
+each ordinary index handoff completed before the next. Settled refusals continue;
+real cleanup/index/integration debt stops later items without rolling back prior
+success. All selected same-pass outcomes settled, success **or** refusal, means
+completed mixed success, exit 0. A settled prefix with not-reached items is a
+non-success stopped report. The parent may be Final while its child remains Owed.
+
+An old selected pass settles/replays an immutable as-of-cut report only: no fresh
+observation, reselection, child acceptance or loop restart. Current child recovery
+does not rewrite that report or run another item. A durably selected original
+present worktree may use ordinary fresh-observation/proof/nonce reentry where
+allowed; owned absence/index debt is metadata/index-only. A reserved unaccepted
+child is not reached, and acceptance proved never locally claimed settles only
+metadata. Missing companion evidence fails closed. Real pending item debt has
+the confirmed preserving `operation abandon` escape; a completed child is not a
+whole-pass abandon handle. A new explicit pass handles remaining current contexts.
 
 ## Promotion, Closure, and Cleanup
 

@@ -35,7 +35,12 @@ pub use closure::{
 };
 mod comment_publication;
 mod context_release;
+mod context_retirement;
 pub use context_release::{ContextReleaseOutcome, ReleaseContextRequest};
+pub use context_retirement::{
+    ContextRetirementOutcome, ContextRetirementReport, ReenterContextRetirementRequest,
+    RetireContextRequest, RetirementAbandonMetadata, RetirementDisposition, RetirementRemoval,
+};
 mod coordination;
 pub use comment_publication::*;
 #[cfg(test)]
@@ -85,6 +90,8 @@ pub use keys::{
     UnregisterSharedKeyOutcome,
 };
 pub use local_sync::LocalContextSyncObservationDto;
+#[cfg(test)]
+pub(crate) use mutation::Accepted as RetirementAccepted;
 pub use mutation::*;
 pub use promotion::*;
 pub use read::*;
@@ -104,7 +111,8 @@ pub use remote::{
     ExpectedConfiguration, ObservePublicationRemoteRequest, PollCompletion, PollDisposition,
     PollIneligibility, PollPublicationRemoteRequest, PollTargetReport, PollingInterval,
     PublishPendingReason, RedactedConflictBytes, RemoteContextSnapshot, RemoteContextState,
-    RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
+    RemoteHistoryChoices, RemoteHistoryEntry, RemoteHistoryError, RemoteHistoryRelation,
+    RemoteHistoryReport, RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
     RemoteOperationInspection, RemoteOperationPhase, RemoteOperationPriority,
     RemoteOperationSafePoint, RemoteOperationTarget, RemoteOperationTargetError,
     RemoteOutcomeCategory, RemotePollError, RemotePollInvocation, RemotePollOutcome,
@@ -413,7 +421,7 @@ impl IndexOwnerHeartbeat {
     ) -> Self {
         Self::beating(heartbeat_hook, move || {
             // Heartbeats use their own brief cache guard so scans remain unguarded.
-            let _ = touch_refresh_index_owner(&registry_path, owner, &root);
+            let _ = touch_refresh_index_owner(&registry_path, owner.clone(), &root);
         })
     }
 
@@ -937,6 +945,12 @@ pub enum FailurePoint {
     AfterCompletion,
     RefreshFailure,
     PollBeforeTarget,
+    /// Inside the owned observation batch transaction, after advertisement and
+    /// capture writes and the old disposition DELETE, before the first INSERT.
+    PollBeforeDispositionInsert,
+    /// Inside the owned local-target transaction, after Git effects and target
+    /// capture, immediately before its disposition UPDATE. Refresh debt is durable.
+    PollBeforeDispositionWrite,
     PollBeforeDiscovery,
     PollAfterCompletion,
     PollAfterMaterializationIntent,
@@ -1076,6 +1090,7 @@ pub enum RepositoryOperation {
     SetPublicationRemote,
     PrepareContext,
     ReleaseContext,
+    RetireContext,
     SaveDocument,
     SaveTicket,
     SubmitComment,
@@ -1402,7 +1417,7 @@ impl RepositoryService {
         };
         let heartbeat = IndexOwnerHeartbeat::start(
             self.registry_path.clone(),
-            owner,
+            owner.clone(),
             root.clone(),
             self.take_index_owner_heartbeat_hook(),
         );
@@ -1415,8 +1430,12 @@ impl RepositoryService {
             ));
         }
         self.run_refresh_claim_hook();
-        let result =
-            self.refresh_repository_claimed(&repository, root.clone(), repository_id, owner);
+        let result = self.refresh_repository_claimed(
+            &repository,
+            root.clone(),
+            repository_id,
+            owner.clone(),
+        );
         drop(heartbeat);
         if result
             .as_ref()
@@ -1437,8 +1456,12 @@ impl RepositoryService {
         repository_id: i64,
         owner: IndexOwner,
     ) -> Result<RefreshOutcome, RepositoryError> {
-        let first =
-            self.refresh_repository_observed(repository, root.clone(), repository_id, owner);
+        let first = self.refresh_repository_observed(
+            repository,
+            root.clone(),
+            repository_id,
+            owner.clone(),
+        );
         if !first
             .as_ref()
             .is_err_and(|e| e.kind == RepositoryErrorKind::RecoveryRequired)
@@ -1462,12 +1485,16 @@ impl RepositoryService {
         // prompt or transport is performed while holding the claim guards.
         let heartbeat = IndexOwnerHeartbeat::start(
             self.registry_path.clone(),
-            fresh,
+            fresh.clone(),
             root.clone(),
             self.take_index_owner_heartbeat_hook(),
         );
-        let result =
-            self.refresh_repository_observed(repository, root.clone(), repository_id, fresh);
+        let result = self.refresh_repository_observed(
+            repository,
+            root.clone(),
+            repository_id,
+            fresh.clone(),
+        );
         drop(heartbeat);
         if result
             .as_ref()
@@ -1513,7 +1540,7 @@ impl RepositoryService {
             hook();
         }
         let after = observe_root(repository, &root);
-        touch_refresh_index_owner(&self.registry_path, owner, &root)?;
+        touch_refresh_index_owner(&self.registry_path, owner.clone(), &root)?;
         if let Some(hook) = self
             .refresh_persist_hook
             .lock()
@@ -1540,7 +1567,7 @@ impl RepositoryService {
             persist_context_refresh(
                 &self.registry_path,
                 repository_id,
-                owner,
+                owner.clone(),
                 &before,
                 &before.context,
                 &before.head,
@@ -1555,7 +1582,7 @@ impl RepositoryService {
                 persist_context_refresh(
                     &self.registry_path,
                     repository_id,
-                    owner,
+                    owner.clone(),
                     &before,
                     &active.context,
                     &active.head,
@@ -1567,7 +1594,13 @@ impl RepositoryService {
             }
         }
         if let Some(context) = changed.pop_first() {
-            persist_retry_problem(&self.registry_path, repository_id, &context, owner, &root)?;
+            persist_retry_problem(
+                &self.registry_path,
+                repository_id,
+                &context,
+                owner.clone(),
+                &root,
+            )?;
             return Ok(RefreshOutcome::RetryRequired {
                 root,
                 context: Some(context),
@@ -3453,7 +3486,12 @@ impl RepositoryService {
                 _ => None,
             };
             remote::state::with_transaction(self, root, |tx, id| {
-                remote::state::configure(tx, id, plan.as_ref(), false)
+                remote::state::configure(
+                    tx,
+                    id,
+                    plan.as_ref(),
+                    remote::state::ConfigurationChange::Plan,
+                )
             })?;
         }
         Ok(())
@@ -3643,6 +3681,8 @@ impl RepositoryService {
             // A release's steps follow a removal, and no write of an item.
             | LocalStep::ContextWorktreeReleased
             | LocalStep::ContextBranchReleased
+            | LocalStep::ContextRetirementAbsent
+            | LocalStep::ContextRetirementPreserved
             | LocalStep::AuthoritativeObserved
             | LocalStep::RemoteChanged
             | LocalStep::PublicationConfigurationWritten
@@ -3849,7 +3889,7 @@ impl RepositoryService {
         };
         let heartbeat = IndexOwnerHeartbeat::start(
             self.registry_path.clone(),
-            owner,
+            owner.clone(),
             root.to_owned(),
             self.take_index_owner_heartbeat_hook(),
         );
@@ -3857,14 +3897,14 @@ impl RepositoryService {
         let refresh = (|| {
             let repository_id = registered_repository_id(&self.registry_path, root, operation)?;
             let (repository, root) = canonical_repository_root(root, operation)?;
-            self.refresh_repository_claimed(&repository, root, repository_id, owner)
+            self.refresh_repository_claimed(&repository, root, repository_id, owner.clone())
         })();
         drop(heartbeat);
         if refresh
             .as_ref()
             .is_err_and(|error| error.kind != RepositoryErrorKind::RepositoryNotRegistered)
         {
-            let _ = set_refresh_operation(&self.registry_path, owner, "failed", None, root);
+            let _ = set_refresh_operation(&self.registry_path, owner.clone(), "failed", None, root);
         }
         match refresh {
             Ok(RefreshOutcome::Refreshed { .. }) => Ok(true),
@@ -3924,7 +3964,7 @@ impl RepositoryService {
         Ok(claim_indexing(
             &connection,
             record.id,
-            OffsetDateTime::now_utc().unix_timestamp() - INDEX_OWNER_STALE_AFTER,
+            self.clock.now().unix_timestamp() - INDEX_OWNER_STALE_AFTER,
         )
         .map_err(|error| error.for_operation(operation, root))?
         .map(|owner| (record, owner)))
@@ -4074,7 +4114,8 @@ impl RepositoryService {
         let availability =
             match open_registry(&registry_path, &mut observer).and_then(|mut connection| {
                 migrate_registry(&mut connection)?;
-                remote::state::audit_registry(&mut connection)
+                remote::state::audit_registry(&mut connection)?;
+                context_retirement::record::audit_registry(&mut connection)
             }) {
                 Ok(()) => IndexAvailability::Ready,
                 Err(error) if is_structural_sqlite_corruption(&error) => {
@@ -6204,7 +6245,7 @@ fn persist_context_refresh(
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
-    require_index_owner(&transaction, owner, root)?;
+    require_index_owner(&transaction, owner.clone(), root)?;
     transaction
         .execute(
             "DELETE FROM contexts WHERE repository_id = ?1 AND worktree_path = ?2",
@@ -6300,7 +6341,7 @@ fn persist_retry_problem(
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
-    require_index_owner(&transaction, owner, root)?;
+    require_index_owner(&transaction, owner.clone(), root)?;
     let context_id: Option<i64> = transaction
         .query_row(
             "SELECT id FROM contexts WHERE repository_id = ?1 AND worktree_path = ?2",
@@ -6350,7 +6391,7 @@ fn reconcile_disappeared_contexts(
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
-    require_index_owner(&transaction, owner, root)?;
+    require_index_owner(&transaction, owner.clone(), root)?;
     let paths = std::iter::once(observation.context.worktree.clone())
         .chain(
             observation
@@ -6398,8 +6439,15 @@ fn reconcile_disappeared_contexts(
     // transaction, and records the time from which the refresh observed.
     // A refresh that fails or must be retried never reaches it.
     transaction.execute("UPDATE repositories SET accessibility = 'accessible', refresh_required = 0, refreshed_at = ?2 WHERE id = ?1", params![repository_id, observed_from]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-    if !transition_indexing(&transaction, owner, "completed", None)
-        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
+    let retirement_completed = context_retirement::record::finalize_index(
+        &transaction,
+        owner.clone(),
+        repository_id,
+        root,
+    )?;
+    if !retirement_completed
+        && !transition_indexing(&transaction, owner, "completed", None)
+            .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
     {
         return Err(nonowner_error(root));
     }

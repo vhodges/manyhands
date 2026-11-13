@@ -25,12 +25,11 @@ use windows_sys::Win32::{
     System::Threading::{GetCurrentProcess, OpenProcessToken},
 };
 
-const DRAFTS: &str = "drafts";
-
 impl Folder {
-    pub(crate) fn open(data: &Path) -> Result<Folder, DraftError> {
+    /// `<data>/<folder>`, made or checked; `folder` is a single entry name.
+    pub(crate) fn open_named(data: &Path, folder: &str) -> Result<Folder, DraftError> {
         let folder = Folder {
-            path: data.join(DRAFTS),
+            path: data.join(entry_name(folder)?),
         };
         open_folder(data, &folder.path)?;
         Ok(folder)

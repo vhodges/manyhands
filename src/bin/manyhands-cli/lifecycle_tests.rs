@@ -463,6 +463,32 @@ fn an_unknown_remote_context_names_the_poll() {
     }
 }
 
+/// Lost history is the owner's to resolve: the way out is the repair read, and
+/// the poll that settles push-proof unknown is not named.
+#[test]
+fn unresolved_history_names_the_repair_read_and_not_the_poll() {
+    for command in ["ticket close", "document promote"] {
+        let out = prepare(&blocked(
+            command,
+            ResultCode::RecoveryRequired,
+            vec![LifecycleBlocker::HistoryUnresolved],
+            vec![inspect()],
+        ));
+        assert_eq!(out.status, 3);
+        let text = stderr(&out);
+        assert_eq!(
+            next_lines(text),
+            [
+                format!("next: manyhands-cli remote history --repo '{ROOT}'"),
+                format!("next: repo.inspect root={ROOT}"),
+            ],
+            "{text}"
+        );
+        assert!(!text.contains("poll once"), "{text}");
+        assert!(text.contains("item resolve-history"), "{text}");
+    }
+}
+
 #[test]
 fn a_missing_context_names_the_save_verb_by_kind() {
     for (command, save) in [

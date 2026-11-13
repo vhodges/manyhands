@@ -10,6 +10,10 @@
 //!   R-13, R-17).
 //! - Retry sends the same request again; Stop trying to share gives it up
 //!   (decision 8).
+//! - An item whose shared copy was deleted offers Republish…, confirmed,
+//!   or, while the share's record is accepted, Stop and republish…, which
+//!   gives the share up and then opens Republish… (D5 Part C,
+//!   `republish.rs`).
 //! - The rest open a place in the workspace (`ItemRoute`): Open Sharing &
 //!   keys, Check host (the host the outcome names, or the repository's
 //!   Hosts page, K-3), Set identity, Set up sharing (Remotes), and Show it,
@@ -22,16 +26,20 @@ use std::path::PathBuf;
 
 use gpui_kit::{AnyElement, App, ClickEvent, Context, Window};
 
-use super::{button, request_id};
+use super::{
+    button,
+    republish::{REPUBLISH, REPUBLISHING, Republishing, STOP_AND_REPUBLISH},
+    request_id,
+};
 use crate::desktop::{
     model::{
         item::SHARE,
-        operations::sync_text,
+        operations::share_text,
         publication::{ShareTarget, SyncOffer, SyncOutcome, SyncResult},
     },
     services::{
         Services,
-        requests::{DesktopRequestId, RequestState},
+        requests::{DesktopRequestId, Intent, RequestState},
         worker::{GaveUp, RecordState},
     },
     view::{item::ItemRoute, sidebar::RETRY, workspace::Workspace},
@@ -61,6 +69,8 @@ pub(crate) fn offer_label(offer: SyncOffer) -> &'static str {
         SyncOffer::SetIdentity => SET_IDENTITY,
         SyncOffer::ShowHolder => SHOW_IT,
         SyncOffer::SetUpSharing => SET_UP_SHARING,
+        SyncOffer::Republish => REPUBLISH,
+        SyncOffer::StopAndRepublish => STOP_AND_REPUBLISH,
     }
 }
 
@@ -77,6 +87,8 @@ pub(crate) fn offer_part(offer: SyncOffer) -> &'static str {
         SyncOffer::SetIdentity => "set-identity",
         SyncOffer::ShowHolder => "show-holder",
         SyncOffer::SetUpSharing => "set-up-sharing",
+        SyncOffer::Republish => "republish",
+        SyncOffer::StopAndRepublish => "stop-and-republish",
     }
 }
 
@@ -117,20 +129,62 @@ pub(crate) fn busy_holder(
         .busy_holder(id, |holder| worker.record_state(holder))
 }
 
-/// What the finished share `id`, of outcome `result`, says; `None` for a
-/// failure, whose message and code the entry shows.
-pub(crate) fn share_words(
+/// Whether the share `id` is of an item a republish of which is queued or
+/// running, or, with `waiting`, waits to be done from a lifecycle's way out
+/// (R-30; review 4).
+fn republishing(services: &Services, id: DesktopRequestId, waiting: bool, cx: &App) -> bool {
+    match services
+        .operations()
+        .read(cx)
+        .request(id)
+        .map(|request| &request.intent)
+    {
+        Some(Intent::ItemSync { root, id, .. }) if waiting => services.republishing(root, id),
+        Some(Intent::ItemSync { root, id, .. }) => services.republish_running(root, id),
+        _ => false,
+    }
+}
+
+/// The offers the finished share `id`, of outcome `result`, shows: its
+/// own, but for Republish… and Stop and republish… while a republish of
+/// its item is queued, running, or waits to be done (R-30; review 4).
+pub(crate) fn shown_offers(
     services: &Services,
     id: DesktopRequestId,
     result: &SyncResult,
     cx: &App,
+) -> Vec<SyncOffer> {
+    let republishing = republishing(services, id, true, cx);
+    result
+        .offers()
+        .into_iter()
+        .filter(|offer| {
+            !(republishing && matches!(offer, SyncOffer::Republish | SyncOffer::StopAndRepublish))
+        })
+        .collect()
+}
+
+/// What the finished share `id`, of outcome `result`, says; `None` for a
+/// failure, whose message and code the entry shows. A deleted branch
+/// whose republish is queued or running says so, on the entry and the
+/// item's pill. A share of the primary branch names it `primary`, when
+/// known (R-35).
+pub(crate) fn share_words(
+    services: &Services,
+    id: DesktopRequestId,
+    result: &SyncResult,
+    primary: Option<&str>,
+    cx: &App,
 ) -> Option<String> {
+    if result.outcome == SyncOutcome::BranchDeleted && republishing(services, id, false, cx) {
+        return Some(REPUBLISHING.to_owned());
+    }
     let holder = matches!(result.outcome, SyncOutcome::Busy)
         .then(|| busy_holder(services, id, cx))
         .flatten()
         .and_then(|holder| services.operations().read(cx).request(holder))
         .map(|holder| holder.intent.label());
-    sync_text(&result.outcome, holder)
+    share_text(&result.outcome, result.attempt.target, holder, primary)
 }
 
 /// Where the offer `offer` of the finished share `id` goes in the
@@ -168,7 +222,12 @@ pub(crate) fn share_route(
             root: root()?,
             request: busy_holder(services, id, cx),
         },
-        SyncOffer::Share | SyncOffer::Retry | SyncOffer::GiveUp | SyncOffer::Unlock => {
+        SyncOffer::Share
+        | SyncOffer::Retry
+        | SyncOffer::GiveUp
+        | SyncOffer::Unlock
+        | SyncOffer::Republish
+        | SyncOffer::StopAndRepublish => {
             return None;
         }
     })
@@ -199,10 +258,24 @@ impl Workspace {
             part,
             offer_label(offer),
             Some(&focus),
+            cx,
             cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.run_share_offer(id, offer, window, cx)
             }),
         )
+    }
+
+    /// The item the share `id` is of, to republish: no lifecycle follows.
+    fn share_republished(&self, id: DesktopRequestId, cx: &App) -> Option<Republishing> {
+        match &self.services().operations().read(cx).request(id)?.intent {
+            Intent::ItemSync { root, kind, id } => Some(Republishing {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+                after: None,
+            }),
+            _ => None,
+        }
     }
 
     /// Runs the offer `offer` of the finished share `id`.
@@ -216,7 +289,7 @@ impl Workspace {
         let Some(result) = self.finished_share(id, cx) else {
             return;
         };
-        if !result.offers().contains(&offer) {
+        if !shown_offers(self.services(), id, &result, cx).contains(&offer) {
             return;
         }
         let worker = self.services().worker().clone();
@@ -236,6 +309,17 @@ impl Workspace {
             }
             SyncOffer::GiveUp => {
                 worker.give_up(id);
+            }
+            SyncOffer::Republish | SyncOffer::StopAndRepublish => {
+                let Some(target) = self.share_republished(id, cx) else {
+                    return;
+                };
+                let origin = self.control_focus_for(request_id(id, offer_part(offer)), cx);
+                if offer == SyncOffer::Republish {
+                    self.republish(target, origin, window, cx);
+                } else {
+                    self.stop_and_republish(id, target, origin, None, cx);
+                }
             }
             _ => {
                 if let Some(route) = share_route(self.services(), id, &result, offer, cx) {

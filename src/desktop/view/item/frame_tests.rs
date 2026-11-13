@@ -5,7 +5,7 @@
 //! the discussion's Back to top returns to the page.
 
 use gpui_kit::{
-    Bounds, Modifiers, MouseButton, Pixels, TestAppContext, point, px, size, test::TestWindowExt,
+    Bounds, Modifiers, MouseButton, Pixels, TestAppContext, point, px, test::TestWindowExt,
 };
 use manyhands::repository::ItemDtoKind;
 
@@ -46,9 +46,7 @@ fn shell(height: f32, open: &str, cx: &mut TestAppContext) -> Shell {
     }
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
-    shell
-        .visual(cx)
-        .simulate_resize(size(px(1440.), px(height)));
+    shell.resize_keeping_content(1440., height, cx);
     shell.run(cx);
     let target = OpenTarget::Item {
         repo: key(&root),
@@ -215,9 +213,7 @@ fn the_page_fills_the_region_and_the_discussion_starts_below_it(cx: &mut TestApp
     };
     let region = check(&shell, cx);
 
-    shell
-        .visual(cx)
-        .simulate_resize(size(px(1440.), px(TALL_WINDOW + 200.)));
+    shell.resize_keeping_content(1440., TALL_WINDOW + 200., cx);
     shell.run(cx);
     let grown = check(&shell, cx);
     assert!(

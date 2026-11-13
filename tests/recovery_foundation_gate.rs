@@ -802,6 +802,7 @@ fn pending_lifecycle_records_block_differently_identified_mutations_without_side
         "remove_remote",
         "refresh",
         "rebuild",
+        "retire_context",
     ] {
         let fixture = support::born_repository();
         let data = tempfile::tempdir().unwrap();
@@ -1130,10 +1131,14 @@ fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
     assert_eq!(
         committed_markers,
         [
+            "closure_refusal_blockers_v2",
             "cycle_09_context_publication_evidence",
             "cycle_09_document_promotions",
             "cycle_09_retired_contexts",
             "cycle_10_ticket_closures",
+            "promotion_refusal_blockers_v2",
+            "remote_history_per_context_v1",
+            "remote_poll_dispositions_unpublished_v1",
         ]
     );
     let legacy_columns = connection

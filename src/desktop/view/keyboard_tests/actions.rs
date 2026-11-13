@@ -1,7 +1,7 @@
 //! Core actions the walk does not take, each by keyboard alone in a
 //! window of its own: Copy, each relationship group, Resume, Cancel on a
-//! queued request, Retry and Remove on an unavailable repository, and a
-//! nonconforming entry opened from the tree.
+//! queued request, Retry and Remove from Manyhands… in an unavailable
+//! repository's menu, and a nonconforming entry opened from the tree.
 
 use std::{fs, path::PathBuf};
 
@@ -10,7 +10,11 @@ use manyhands::results::{Outcome, ResultCode};
 
 use super::Walk;
 use crate::desktop::{
-    model::navigation::OpenTarget,
+    model::{
+        list_view::RETRY,
+        navigation::{OpenTarget, Resolution},
+        repository_state::{CANT_OPEN, REMOVE_FROM_MANYHANDS},
+    },
     services::{
         JobKind,
         requests::{Intent, RequestState},
@@ -19,6 +23,7 @@ use crate::desktop::{
     view::{
         harness::{Shell, key},
         operations::request_id,
+        repositories::tests::support::{highlight, menu_labels, press_and_hold},
         workspace::Region,
     },
 };
@@ -170,43 +175,72 @@ async fn cancel_a_queued_request_by_keyboard(cx: &mut TestAppContext) {
     walk.shell.until_ended(running, cx).await;
 }
 
-/// `a`'s folder, renamed away: the selection is unavailable.
+/// `a`'s folder, renamed away: the chosen repository's row reads Can't
+/// open, and `shift-f10` in the Repositories list opens its menu, with
+/// Retry and Remove from Manyhands….
 fn unavailable(cx: &mut TestAppContext) -> (Walk, PathBuf) {
     let walk = walk(cx, |_, _| {});
     let away = walk.a.with_file_name("a-away");
     fs::rename(&walk.a, &away).unwrap();
     walk.select_a_repository(cx);
-    assert!(walk.shell.present("selection-unavailable-state", cx));
-    walk.keys("secondary-3", cx);
-    walk.region(Region::Content, cx);
+    assert_eq!(
+        walk.shell.label(("repo-state", 0usize), cx).as_deref(),
+        Some(CANT_OPEN)
+    );
+    walk.region(Region::Repositories, cx);
+    walk.keys("shift-f10", cx);
+    let items = walk.shell.frame(cx, |window, _| menu_labels(window));
+    assert!(items.iter().any(|item| item == RETRY), "{items:?}");
+    assert!(
+        items.iter().any(|item| item == REMOVE_FROM_MANYHANDS),
+        "{items:?}"
+    );
     (walk, away)
 }
 
-/// Retry on an unavailable repository, reached by Tab from the content
-/// region: once the folder is back, it resolves.
+/// The Repositories list's focus handle.
+fn list(walk: &Walk, cx: &mut TestAppContext) -> gpui_kit::FocusHandle {
+    walk.shell
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.repositories_list_focus(cx))
+}
+
+/// Retry in an unavailable repository's menu, reached by the arrows and
+/// pressed by Enter: once the folder is back, it resolves.
 #[gpui_kit::test]
 fn retry_an_unavailable_repository_by_keyboard(cx: &mut TestAppContext) {
     let (walk, away) = unavailable(cx);
-    walk.tab_to("tab", "selection-retry", cx);
-    walk.on("selection-retry", Region::Content, cx);
+    let list = list(&walk, cx);
+    highlight(&mut walk.shell.visual(cx), RETRY);
     fs::rename(&away, &walk.a).unwrap();
-    walk.enter(cx);
-    assert!(!walk.shell.present("selection-unavailable-state", cx));
-    assert!(walk.shell.present("selection-configuration", cx));
-    // Retry went with the unavailable state; focus stays in the region.
-    walk.region(Region::Content, cx);
+    // Focus goes back to the list the menu was opened from.
+    assert!(press_and_hold(&walk.shell, "enter", &list, cx), "the list");
+    let resolution = walk.shell.workspace.read_with(cx, |workspace, _| {
+        workspace
+            .navigation()
+            .selected_entry()
+            .map(|entry| entry.resolution.clone())
+    });
+    assert!(
+        matches!(resolution, Some(Resolution::Resolved(_))),
+        "{resolution:?}"
+    );
+    assert_ne!(
+        walk.shell.label(("repo-state", 0usize), cx).as_deref(),
+        Some(CANT_OPEN)
+    );
+    walk.region(Region::Repositories, cx);
 }
 
-/// Remove on an unavailable repository, reached by Tab and pressed by
-/// Enter, opens its confirmation; Enter confirms. The registration goes
-/// and the folder is left as it was.
+/// Remove from Manyhands… in an unavailable repository's menu, reached by
+/// the arrows and pressed by Enter, opens its confirmation; Enter
+/// confirms. The registration goes and the folder is left as it was.
 #[gpui_kit::test]
 async fn remove_an_unavailable_repository_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let (walk, away) = unavailable(cx);
-    walk.tab_to("tab", "selection-remove", cx);
-    walk.on("selection-remove", Region::Content, cx);
-    walk.enter(cx);
+    highlight(&mut walk.shell.visual(cx), REMOVE_FROM_MANYHANDS);
+    walk.keys("enter", cx);
     assert!(walk.shell.present("confirm-ok", cx));
     walk.keys("enter", cx);
     let ended = walk
@@ -227,11 +261,12 @@ fn a_nonconforming_entry_opens_by_keyboard(cx: &mut TestAppContext) {
     });
     walk.select_a_repository(cx);
     walk.keys("secondary-2", cx);
-    walk.region(Region::Navigation, cx);
+    walk.region(Region::Documents, cx);
     let nodes = walk.shell.rows("doc-node", cx);
+    // A nonconforming file is labeled by its file name (E-9).
     let at = nodes
         .iter()
-        .position(|node| node == MARKER)
+        .position(|node| node == MARKER.rsplit('/').next().unwrap())
         .expect("the file is listed");
     let mut presses = 0;
     while !walk.shell.selected(("doc-node", at), cx) {
@@ -245,5 +280,5 @@ fn a_nonconforming_entry_opens_by_keyboard(cx: &mut TestAppContext) {
     };
     assert_eq!((repo, path.as_str()), (key(&walk.a), MARKER));
     assert_eq!(walk.shell.label("item-path", cx).as_deref(), Some(MARKER));
-    walk.region(Region::Navigation, cx);
+    walk.region(Region::Documents, cx);
 }

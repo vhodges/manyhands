@@ -25,6 +25,7 @@ impl Workspace {
                     "recovered-drafts-review",
                     REVIEW,
                     Some(&review),
+                    cx,
                     cx.listener(|this, _: &ClickEvent, window, cx| {
                         this.open_drafts(None, window, cx)
                     }),
@@ -33,6 +34,7 @@ impl Workspace {
                     "recovered-drafts-dismiss",
                     DISMISS,
                     Some(&dismiss),
+                    cx,
                     cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.services()
                             .drafts()

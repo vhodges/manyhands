@@ -242,32 +242,24 @@ enum Named {
 
 /// How a parent stands for a resume, from what its record holds. A complete
 /// parent is complete, whoever holds it, and one that ended or was
-/// superseded has nothing left to continue, whoever holds it.
+/// superseded, or that a consent refusal ended, has nothing left to
+/// continue, whoever holds it. Which parents are left to continue is
+/// `promotion::lifecycle::resumable`'s, which the operation list shares
+/// (D5 decision 10).
 fn lifecycle_standing(
     connection: &rusqlite::Connection,
     root: &str,
     operation_id: OperationId,
     command: Command,
     record: &impl LifecycleRecord,
-    ended_by_refusal: bool,
 ) -> rusqlite::Result<Named> {
-    Ok(match record.step() {
-        ParentStep::Complete => Named::Complete {
+    Ok(if record.step() == ParentStep::Complete {
+        Named::Complete {
             command,
             item_id: record.item_id().clone(),
-        },
-        ParentStep::Abandoned | ParentStep::Superseded => Named::NotResumable,
-        _ if ended_by_refusal => Named::NotResumable,
-        ParentStep::Confirmed
-        | ParentStep::ContextSynchronized
-        | ParentStep::Integrating
-        | ParentStep::Integrated
-        | ParentStep::Published
-        | ParentStep::PublicationPending
-        | ParentStep::RemoteDeleted
-        | ParentStep::WorktreeRemoving
-        | ParentStep::WorktreeRemoved
-        | ParentStep::BranchDeleted => left_to_its_request(
+        }
+    } else if promotion::lifecycle::resumable(record) {
+        left_to_its_request(
             connection,
             OperationFamily::Remote,
             root,
@@ -276,7 +268,9 @@ fn lifecycle_standing(
                 command,
                 item_id: record.item_id().clone(),
             },
-        )?,
+        )?
+    } else {
+        Named::NotResumable
     })
 }
 
@@ -311,7 +305,6 @@ fn found_lifecycle(
             operation_id,
             Command::DocumentPromote,
             &record,
-            record.refusal().is_some(),
         )?));
     }
     if recovery::has_table(connection, closure::record::TABLE)?
@@ -323,7 +316,6 @@ fn found_lifecycle(
             operation_id,
             Command::TicketClose,
             &record,
-            record.refusal().is_some(),
         )?));
     }
     Ok(None)
@@ -704,6 +696,10 @@ fn found_local(
     let Some(row) = recovery::local_row(connection, root, operation_id)? else {
         return Ok(Named::NotFound);
     };
+    if row.action == "retire_context" {
+        super::super::super::context_retirement::record::audit_connection(connection)
+            .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
+    }
     if !row.is_well_formed() {
         return Err(unreadable());
     }
@@ -1023,6 +1019,10 @@ impl OperationResumeBinding {
     /// all the row owes.
     fn hand_off(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
         let service = call.service;
+        if let Some(ran) = super::retire::resume_handoff(call, &accepted.root(), self.operation_id)
+        {
+            return self.kept(ran);
+        }
         if let Err(answer) = Self::owner(
             service,
             &accepted.scope,

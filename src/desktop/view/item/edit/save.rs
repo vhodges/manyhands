@@ -114,6 +114,10 @@ pub(super) struct TabSave {
     /// A Save that Continue editing's steps carry out waits for the open's
     /// relationship check (`restored`, Task 27 fix 2, N1).
     pub(super) continued: bool,
+    /// A lifecycle's save first continues a stored or restored draft, and
+    /// waits for Continue editing's steps until a save starts
+    /// (`save_first`, R-17).
+    pub(super) first: bool,
 }
 
 impl TabSave {
@@ -130,6 +134,7 @@ impl TabSave {
             read: None,
             remotes: None,
             continued: false,
+            first: false,
         }
     }
 
@@ -160,6 +165,11 @@ impl ItemPane {
         if self.shown_session().is_none() {
             return false;
         }
+        // While the item's close or merge is unfinished, or nothing is
+        // known of it yet, Save waits (R-23, R-21).
+        if self.edits_wait(cx) {
+            return true;
+        }
         if !window.has_active_dialog(cx) {
             self.start_save(cx);
         }
@@ -174,6 +184,11 @@ impl ItemPane {
     /// in the tab and in the details sheet, a restored draft's Save and
     /// the close dialog's come here.
     pub(super) fn start_save(&mut self, cx: &mut Context<Self>) -> bool {
+        // A lifecycle's save first waits no longer: this is its save, or
+        // why it has none (`save_first`). Its dialog hears either way.
+        if std::mem::take(&mut self.edit.save.first) {
+            cx.notify();
+        }
         let Some(session) = self.shown_session() else {
             return false;
         };
@@ -397,7 +412,9 @@ impl ItemPane {
     /// request ID.
     pub(super) fn retry_save(&mut self, cx: &mut Context<Self>) {
         // Not while the review is open: only its Use or Cancel leaves it.
-        if self.edit.phase == Phase::Review {
+        // Nor while the item's close or merge is unfinished: the commit
+        // would land in a context the merge has finished with (R-23, P23).
+        if self.edit.phase == Phase::Review || self.edits_wait(cx) {
             return;
         }
         let Some(request) = self.edit.save.run.as_ref().and_then(|run| run.request) else {
@@ -412,7 +429,7 @@ impl ItemPane {
     /// Resume of a save's owed hand-off: the operation it names resumed, or
     /// else the same request again.
     pub(super) fn resume_save(&mut self, cx: &mut Context<Self>) {
-        if self.edit.phase == Phase::Review {
+        if self.edit.phase == Phase::Review || self.edits_wait(cx) {
             return;
         }
         let Some(answer) = &self.edit.save.answer else {

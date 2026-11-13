@@ -594,7 +594,8 @@ fn after_a_give_up_give_up_is_not_offered_again() {
         (ResultCode::UnlockRequired, vec![S::Unlock]),
         (ResultCode::KeyRejected, vec![S::OpenSharingAndKeys]),
         (ResultCode::TransportUnavailable, vec![S::Retry]),
-        (ResultCode::RemoteBranchDeleted, vec![]),
+        // E-6: Republish… after a Give up (D5 Part C).
+        (ResultCode::RemoteBranchDeleted, vec![S::Republish]),
     ];
     for (code, expected) in cases {
         let result = sync_outcome(&share(code, nothing()), share_given_up);
@@ -759,6 +760,9 @@ fn sync_conflict_data_is_a_conflict_with_no_action() {
     assert!(sync_offers(&envelope, ShareTarget::Item, RecordState::Finished).is_empty());
 }
 
+/// E-6 (D5 Part C): an item's deleted shared branch offers Stop and
+/// republish… beside Give up while its record is accepted, Republish… once
+/// it is not, and never Share. A share of main has no item to republish.
 #[test]
 fn sync_a_deleted_branch_offers_give_up_and_no_share() {
     let envelope = share(ResultCode::RemoteBranchDeleted, nothing());
@@ -768,9 +772,33 @@ fn sync_a_deleted_branch_offers_give_up_and_no_share() {
     );
     assert_eq!(
         sync_offers(&envelope, ShareTarget::Item, RecordState::Accepted),
+        [S::StopAndRepublish, S::GiveUp]
+    );
+    assert_eq!(
+        sync_offers(&envelope, ShareTarget::Item, RecordState::Finished),
+        [S::Republish]
+    );
+    // R-30: an unreadable record is neither accepted nor finished, so
+    // neither Stop and republish… nor Republish… (it answers `busy` while
+    // the share holds the reservation) is offered: Give up alone, once.
+    assert_eq!(
+        sync_offers(&envelope, ShareTarget::Item, RecordState::Unknown),
         [S::GiveUp]
     );
-    assert!(sync_offers(&envelope, ShareTarget::Item, RecordState::Finished).is_empty());
+    let after = sync_outcome(
+        &envelope,
+        ShareAttempt {
+            target: ShareTarget::Item,
+            record: RecordState::Unknown,
+            after_give_up: true,
+        },
+    );
+    assert_eq!(after.offers(), [S::Republish], "after a Give up");
+    assert_eq!(
+        sync_offers(&envelope, ShareTarget::Main, RecordState::Accepted),
+        [S::GiveUp]
+    );
+    assert!(sync_offers(&envelope, ShareTarget::Main, RecordState::Finished).is_empty());
 }
 
 #[test]
@@ -805,6 +833,39 @@ fn sync_a_key_problem_needs_a_key() {
             [S::OpenSharingAndKeys, S::GiveUp]
         );
     }
+}
+
+/// `recovery_required` with a `remote.history` action is its own outcome
+/// and offers no Retry (it would refuse again); other recovery_required
+/// answers stay generic failures.
+#[test]
+fn sync_unresolved_history_is_not_retried() {
+    let history =
+        share(ResultCode::RecoveryRequired, nothing()).with_recovery(vec![RecoveryAction::new(
+            RecoveryActionKind::RemoteHistory,
+            [("root", "/fixture/repo".into())],
+        )]);
+    for target in [ShareTarget::Item, ShareTarget::Main] {
+        for (record, expected) in [
+            (RecordState::Accepted, vec![S::GiveUp]),
+            (RecordState::Finished, vec![]),
+        ] {
+            assert_eq!(
+                sync(&history, target, record),
+                SyncOutcome::HistoryUnresolved
+            );
+            assert_eq!(
+                sync_offers(&history, target, record),
+                expected,
+                "{target:?} {record:?}"
+            );
+        }
+    }
+    let plain = share(ResultCode::RecoveryRequired, nothing());
+    assert!(matches!(
+        sync(&plain, ShareTarget::Item, RecordState::Finished),
+        SyncOutcome::Failed { .. }
+    ));
 }
 
 #[test]

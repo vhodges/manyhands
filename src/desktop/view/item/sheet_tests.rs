@@ -27,6 +27,7 @@ use super::{
 use crate::desktop::{
     model::{
         item::{KIND_PRIMARY, NOT_REPRESENTABLE, metadata_value},
+        layout::{PanelKind, Side},
         navigation::OpenTarget,
         relationships::{CHILDREN, DEPENDENCIES, DEPENDENTS, NONE, PARENT, RELATIONSHIPS},
     },
@@ -39,6 +40,7 @@ use crate::desktop::{
         snapshot::RepositorySnapshot,
     },
     view::{
+        footer::Control,
         harness::{Shell, key},
         settings::Shown,
         tickets::{LIFECYCLE_CLOSED, LIFECYCLE_OPEN},
@@ -667,8 +669,10 @@ fn escape_done_and_close_return_focus_to_the_chip(cx: &mut TestAppContext) {
 
 /// R-60: while the sheet is open, no workspace key acts behind it: the
 /// region keys, Find, the tab keys, Refresh and Rebuild, Settings,
-/// Drafts and the page keys leave the sheet open and focused, the tabs as
-/// they were, and submit nothing.
+/// Drafts, the dock keys and the page keys leave the sheet open and
+/// focused, the tabs as they were, and submit nothing. Documents is off and
+/// the bottom dock closed, so a region key or a dock key that acted would
+/// reveal a panel or toggle a dock: the layout is unchanged after each key.
 #[gpui_kit::test]
 fn no_workspace_key_acts_behind_the_sheet(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
@@ -678,6 +682,17 @@ fn no_workspace_key_acts_behind_the_sheet(cx: &mut TestAppContext) {
     shell.select(&root, cx);
     open(&shell, ticket(&root, FIRST), cx);
     open(&shell, ticket(&root, MAIN), cx);
+    // Documents off and the bottom dock closed, by the footer (before the
+    // sheet: a click on the footer behind it closes it, fact 33).
+    shell.click(Control::Panel(PanelKind::Documents).id(), cx);
+    shell.click(Control::Dock(Side::Bottom).id(), cx);
+    let layout = |shell: &Shell, cx: &mut TestAppContext| {
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.layout().clone())
+    };
+    let hidden = layout(&shell, cx);
+    assert!(!hidden.is_displayed(PanelKind::Documents) && !hidden.is_open(Side::Bottom));
     shell.click(ChipField::Status.id(), cx);
     assert!(focused(&shell, "sheet-status", cx));
     let requests = shell.requests(cx, |_| true).len();
@@ -700,6 +715,9 @@ fn no_workspace_key_acts_behind_the_sheet(cx: &mut TestAppContext) {
         "secondary-shift-r",
         "secondary-,",
         "secondary-shift-d",
+        "secondary-b",
+        "secondary-alt-b",
+        "secondary-j",
         "pageup",
         "pagedown",
         "home",
@@ -707,6 +725,7 @@ fn no_workspace_key_acts_behind_the_sheet(cx: &mut TestAppContext) {
     ] {
         shell.keys(key, cx);
         assert!(has_sheet(&shell, cx), "{key}: the sheet stays open");
+        assert_eq!(layout(&shell, cx), hidden, "{key}: the layout is as it was");
         assert!(focused(&shell, "sheet-status", cx), "{key}: focus stays");
         assert_eq!(opened(&shell, cx), Some(ticket(&root, MAIN)), "{key}");
         assert_eq!(tabs(&shell, cx), 2, "{key}");

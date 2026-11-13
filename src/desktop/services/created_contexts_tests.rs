@@ -237,3 +237,49 @@ fn a_committed_comment_keeps_its_context_from_release() {
         "a committed comment takes it out, shared or not"
     );
 }
+
+/// D5 A4: a close whose tidy-up is complete retired the ticket's context,
+/// so it no longer counts as made here; one whose tidy-up is pending
+/// leaves it in.
+#[test]
+fn a_tidied_close_takes_its_context_out() {
+    use manyhands::repository::{
+        LifecycleCleanupPendingReason, LifecycleCleanupState, LifecycleMutationDto,
+        LifecycleMutationType,
+    };
+    let close = Intent::TicketClose {
+        root: PathBuf::from(ROOT),
+        id: item_id(TICKET),
+    };
+    let lifecycle = |cleanup: LifecycleCleanupState| {
+        let mut envelope = answer(Outcome::Success, ResultCode::Ok, None);
+        let pending = cleanup == LifecycleCleanupState::Pending;
+        envelope.data = Some(MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
+            r#type: LifecycleMutationType::Lifecycle,
+            kind: ItemDtoKind::Ticket,
+            item_id: TICKET.to_owned(),
+            recording: None,
+            checkpoint_oid: None,
+            integration: None,
+            integration_oid: None,
+            publication: None,
+            publication_oid: None,
+            publication_pending: None,
+            cleanup: Some(cleanup),
+            cleanup_pending: pending.then_some(LifecycleCleanupPendingReason::ContextChanged),
+            blockers: Vec::new(),
+            made_ready: None,
+            made_ready_state: None,
+        })));
+        envelope
+    };
+    let mut created = CreatedContexts::default();
+    created.finished(
+        &prepare(),
+        &answer(Outcome::Success, ResultCode::Ok, Some(true)),
+    );
+    created.finished(&close, &lifecycle(LifecycleCleanupState::Pending));
+    assert!(created.contains(&key()), "a pending tidy-up keeps it");
+    created.finished(&close, &lifecycle(LifecycleCleanupState::Complete));
+    assert!(!created.contains(&key()), "a complete one takes it out");
+}

@@ -88,6 +88,8 @@ mod repository;
 mod republish;
 #[path = "cli/requests.rs"]
 mod requests;
+#[path = "cli/retirement.rs"]
+mod retirement;
 
 #[path = "cli/relationships.rs"]
 mod relationships;

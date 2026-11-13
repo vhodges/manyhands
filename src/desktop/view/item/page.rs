@@ -355,32 +355,21 @@ impl ItemPane {
 /// `scroll_to_top_of_item` (fact 80).
 pub(super) const DISCUSSION_CHILD: usize = 1;
 
-/// The item's scroll region, holding `page`, then `discussion`, then
-/// `end`, the selected repository's details, with the Kit's scrollbar
-/// over it, and then `over`, laid over the region after it. A press on
-/// what it scrolls is noted for the editors' caret reveals (`scroll`).
+/// The item's scroll region, holding `page`, then `discussion`, which ends
+/// it (nothing of the repository follows, Cycle 03a Part F), with the
+/// Kit's scrollbar over it, and then `over`, laid over the region after
+/// it. A press on what it scrolls is noted for the editors' caret reveals
+/// (`scroll`).
 pub(super) fn region<P: IntoElement, D: IntoElement>(
     scroll: &ContentScroll,
     page: P,
     discussion: Option<D>,
-    end: Option<AnyElement>,
     over: Vec<AnyElement>,
     cx: &App,
 ) -> impl IntoElement + use<P, D> {
     // One light thumb at rest, under the pointer and while dragged, so it
     // stays light against the page in either theme.
     let thumb = item_colors(cx).page_border_strong;
-    // The content region's padding is gone around an item tab, so the
-    // details keep their own inset from its border.
-    let end = end.map(|end| {
-        div()
-            .id("item-region-end")
-            .w_full()
-            .px_2()
-            .pt_3()
-            .pb_3()
-            .child(end)
-    });
     let pressed = scroll.clone();
     div()
         .id("item-region")
@@ -398,8 +387,7 @@ pub(super) fn region<P: IntoElement, D: IntoElement>(
                 .track_scroll(scroll.handle())
                 .capture_any_mouse_down(move |_, window, _| pressed.note_press(window))
                 .child(page)
-                .children(discussion)
-                .children(end),
+                .children(discussion),
         )
         .child(
             div()

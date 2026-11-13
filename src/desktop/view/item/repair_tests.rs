@@ -1045,7 +1045,8 @@ async fn a_removal_counts_edited_repair_text(cx: &mut TestAppContext) {
     type_at_line(&shell, 0, "x", cx);
     shell.frame(cx, |window, cx| {
         shell.workspace.update(cx, |workspace, cx| {
-            workspace.remove_repository(key(&root), window, cx)
+            let restore = workspace.repositories_list_focus(cx);
+            workspace.remove_repository(key(&root), restore, window, cx)
         })
     });
     previewed(&shell, cx).await;

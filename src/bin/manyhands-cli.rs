@@ -25,6 +25,8 @@ mod discussion;
 mod dispatch;
 #[path = "manyhands-cli/fill.rs"]
 mod fill;
+#[path = "manyhands-cli/history.rs"]
+mod history;
 #[path = "manyhands-cli/human.rs"]
 mod human;
 #[path = "manyhands-cli/human_admin.rs"]
@@ -57,6 +59,8 @@ mod progress;
 mod prompt;
 #[path = "manyhands-cli/render.rs"]
 mod render;
+#[path = "manyhands-cli/retirement.rs"]
+mod retirement;
 #[path = "manyhands-cli/startup.rs"]
 mod startup;
 #[path = "manyhands-cli/terminal.rs"]

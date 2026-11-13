@@ -36,12 +36,12 @@ use crate::desktop::{
     },
 };
 
-const EDITED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX0";
+pub(super) const EDITED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX0";
 const STARTED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX1";
 
 /// The edited ticket's body: "two" on its first line is what the inline
 /// controls format, and its list's second item is what Tab indents.
-const BODY: &str = "One two three\nFour five\n\n- one\n- two\n";
+pub(super) const BODY: &str = "One two three\nFour five\n\n- one\n- two\n";
 const ADDRESS: &str = "https://example.test";
 
 /// A ticket's source with `body` in place of the fixture's own.
@@ -51,7 +51,7 @@ fn ticket_with_body(id: &str, title: &str, body: &str) -> String {
 
 /// A window over `a` holding the tickets `ids`, each titled by its place
 /// and with `BODY`.
-fn editable(ids: &[&str], cx: &mut TestAppContext) -> Walk {
+pub(super) fn editable(ids: &[&str], cx: &mut TestAppContext) -> Walk {
     let fixture = Fixture::new();
     let a = fixture.create_repository("a");
     for (ix, id) in ids.iter().enumerate() {
@@ -80,7 +80,7 @@ impl Walk {
     }
 
     /// Escape, from an editor: focus moves to the header's Done.
-    fn escape_to_done(&self, cx: &mut TestAppContext) {
+    pub(super) fn escape_to_done(&self, cx: &mut TestAppContext) {
         self.step("escape", "item-done", Region::Content, cx);
     }
 
@@ -99,7 +99,7 @@ impl Walk {
     }
 }
 
-fn text(host: &Entity<EditorHost>, cx: &mut TestAppContext) -> String {
+pub(super) fn text(host: &Entity<EditorHost>, cx: &mut TestAppContext) -> String {
     host.read_with(cx, |host, cx| host.text(cx))
 }
 
@@ -187,7 +187,7 @@ async fn edit_the_mode_key_save_and_done_by_keyboard_alone(cx: &mut TestAppConte
 
     // F6 leaves the editor; the region keys come back to the tab.
     walk.keys("f6", cx);
-    walk.region(Region::Operations, cx);
+    walk.region(Region::Tickets, cx);
     walk.keys("secondary-3", cx);
     walk.region(Region::Content, cx);
     walk.tab_to("tab", "item-page", cx);
@@ -211,7 +211,11 @@ async fn edit_the_mode_key_save_and_done_by_keyboard_alone(cx: &mut TestAppConte
 
 /// `e` on the read view of the ticket `id`, found by Find and reached by
 /// Tab: the edit editor opens, focused, and the letter is not typed.
-async fn edit_by_e(walk: &Walk, id: &str, cx: &mut TestAppContext) -> Entity<EditorHost> {
+pub(super) async fn edit_by_e(
+    walk: &Walk,
+    id: &str,
+    cx: &mut TestAppContext,
+) -> Entity<EditorHost> {
     walk.find(id, cx);
     walk.keys("secondary-3", cx);
     walk.tab_to("tab", "item-page", cx);
@@ -698,17 +702,20 @@ async fn create_by_keyboard_alone(cx: &mut TestAppContext) {
     let walk = listed(cx);
     walk.select_a_repository(cx);
 
-    for (pane, kind) in [("pane-documents", "document"), ("pane-tickets", "ticket")] {
+    // Documents is the list used last, so `secondary-2` reaches it; the
+    // second pass starts in the edit tab, from which F6 reaches Tickets.
+    for (reach, region, kind) in [
+        ("secondary-2", Region::Documents, "document"),
+        ("f6", Region::Tickets, "ticket"),
+    ] {
         let button: &'static str = if kind == "document" {
             "new-document-button"
         } else {
             "new-ticket-button"
         };
         // `secondary-n` from the list; Escape gives focus back to it.
-        walk.keys("secondary-2", cx);
-        walk.choose(pane, cx);
-        walk.keys("secondary-2", cx);
-        walk.region(Region::Navigation, cx);
+        walk.keys(reach, cx);
+        walk.region(region, cx);
         let list = focused_handle(&walk, cx);
         walk.keys("secondary-n", cx);
         create_dialog_open(&walk, cx);
@@ -716,16 +723,17 @@ async fn create_by_keyboard_alone(cx: &mut TestAppContext) {
         walk.keys("escape", cx);
         assert!(!walk.shell.present("create-dialog", cx), "{kind}: Escape");
         assert_eq!(focused_handle(&walk, cx), list, "{kind}: back to the list");
-        walk.region(Region::Navigation, cx);
+        walk.region(region, cx);
 
-        // Its button, by Tab and Enter; Escape gives focus back to it.
+        // Its button, in the panel's header, by Shift-Tab and Enter (E-7);
+        // Escape gives focus back to it.
         walk.tab_to("shift-tab", button, cx);
-        walk.on(button, Region::Navigation, cx);
+        walk.on(button, region, cx);
         walk.enter(cx);
         create_dialog_open(&walk, cx);
         walk.keys("escape", cx);
         assert!(!walk.shell.present("create-dialog", cx));
-        walk.on(button, Region::Navigation, cx);
+        walk.on(button, region, cx);
 
         // Filled and created by key.
         walk.enter(cx);
@@ -838,9 +846,9 @@ async fn move_and_new_folder_by_keyboard_alone(cx: &mut TestAppContext) {
 
     // New folder…: Escape.
     walk.keys("secondary-2", cx);
-    walk.region(Region::Navigation, cx);
+    walk.region(Region::Documents, cx);
     walk.tab_to("shift-tab", "new-folder-button", cx);
-    walk.on("new-folder-button", Region::Navigation, cx);
+    walk.on("new-folder-button", Region::Documents, cx);
     walk.enter(cx);
     walk.dialog_open("new-folder-dialog", cx);
     assert!(
@@ -852,7 +860,7 @@ async fn move_and_new_folder_by_keyboard_alone(cx: &mut TestAppContext) {
         !walk.shell.present("new-folder-dialog", cx),
         "Escape closed it"
     );
-    walk.on("new-folder-button", Region::Navigation, cx);
+    walk.on("new-folder-button", Region::Documents, cx);
 
     // Made, by key.
     walk.enter(cx);
@@ -876,13 +884,16 @@ async fn move_and_new_folder_by_keyboard_alone(cx: &mut TestAppContext) {
             shell.rows("doc-node", cx).contains(&"notes".to_owned())
         })
         .await;
-    walk.on("new-folder-button", Region::Navigation, cx);
+    walk.on("new-folder-button", Region::Documents, cx);
 }
 
 const ADOPTED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX8";
 const READABLE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX9";
 const MARKER: &str = "docs/marker.md";
 const NOTES: &str = "docs/notes.md";
+/// What the tree labels the two files by (E-9): their file names.
+const MARKER_FILE: &str = "marker.md";
+const NOTES_FILE: &str = "notes.md";
 
 /// A window over `a`: a marker-only document, which needs fixing; a file
 /// under `docs/` with no front matter, unmanaged; and a conforming
@@ -936,7 +947,7 @@ async fn repair_and_adopt_by_keyboard_alone(cx: &mut TestAppContext) {
     walk.select_a_repository(cx);
 
     // Repair…, from "Needs fixing".
-    walk.open_document(MARKER, cx);
+    walk.open_document(MARKER_FILE, cx);
     walk.keys("secondary-3", cx);
     walk.tab_to("tab", "item-repair-button", cx);
     walk.on("item-repair-button", Region::Content, cx);
@@ -980,7 +991,7 @@ async fn repair_and_adopt_by_keyboard_alone(cx: &mut TestAppContext) {
     walk.region(Region::Content, cx);
 
     // Adopt…, and the close prompt.
-    walk.open_document(NOTES, cx);
+    walk.open_document(NOTES_FILE, cx);
     walk.keys("secondary-3", cx);
     let shown = walk.shown_tab(cx);
     walk.tab_to("tab", "item-repair-button", cx);
@@ -1102,9 +1113,9 @@ async fn a_refused_create_by_key_leaves_focus_on_create(cx: &mut TestAppContext)
     cx.executor().allow_parking();
     let (walk, _elsewhere) = without_a_store(cx);
     walk.select_a_repository(cx);
-    walk.keys("secondary-2", cx);
-    walk.choose("pane-tickets", cx);
-    walk.keys("secondary-2", cx);
+    // After selecting, focus is in Repositories: F6 three times reaches Tickets.
+    walk.keys("f6 f6 f6", cx);
+    walk.region(Region::Tickets, cx);
     walk.keys("secondary-n", cx);
     create_dialog_open(&walk, cx);
     walk.type_text("No store", cx);

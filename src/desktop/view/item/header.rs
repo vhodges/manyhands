@@ -8,34 +8,42 @@
 //! pane, and still come first in the tab order (strip, header actions,
 //! chips, page). After the pill, Comments {n} jumps to the discussion
 //! (`discussion`), then Edit while viewing, or Done while editing
-//! (`edit`), then Share (`share`). The primary action is not available yet
-//! (decision 16): it is disabled, with "Available in a later release" as
-//! its tooltip and its accessible description.
+//! (`edit`), then Share (`share`), then the item's lifecycle action: Close
+//! ticket… on a ticket the lifecycle has not closed, Approve and merge… on a
+//! document (D5, A1). It opens the lifecycle dialog (`view::lifecycle`,
+//! A2), the tab's unsaved edits saved first; on a tab whose item has no ID,
+//! a new item not created yet or a nonconforming file, it is disabled and
+//! says why.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::{
-    AnyElement, App, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Role,
-    StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    AnyElement, App, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
-        ActiveTheme, Disableable, Icon, Sizable,
+        ActiveTheme, Disableable, Icon, Sizable, WindowExt,
         button::{Button, ButtonVariants},
         h_flex, v_flex,
     },
     div, px, relative,
 };
-use manyhands::repository::{ItemDto, ItemDtoKind};
+use manyhands::{
+    canonical::ItemId,
+    repository::{ClosureState, ItemDto, ItemDtoKind},
+};
 use time::OffsetDateTime;
 
-use super::{ItemPane, chips::chips, pill, text, tokens::item_colors};
+use super::{ItemPane, SaveFirst, chips::chips, pill, text, tokens::item_colors};
 use crate::desktop::{
     assets::icon_path,
     model::{
         edit::Phase,
-        item::{APPROVE_AND_MERGE, CLOSE_TICKET, LATER, LATER_NOTE},
+        item::{APPROVE_AND_MERGE, CLOSE_TICKET},
         navigation::OpenTarget,
         tabs::TabKey,
     },
+    services::requests::Intent,
+    view::lifecycle::{self, Heading, Opening},
 };
 
 /// The block's padding, vertical and horizontal.
@@ -53,9 +61,33 @@ const TITLE_BASIS: f32 = 300.;
 pub(crate) const CRUMB_SEPARATOR: &str = " › ";
 /// A ticket's section in the breadcrumb.
 pub(crate) const TICKETS: &str = "Tickets";
+/// The header's lifecycle action: Close ticket… or Approve and merge….
+pub(crate) const LIFECYCLE_ACTION: &str = "item-lifecycle-action";
+/// The lifecycle action's wrapper, which tracks its focus.
+const LIFECYCLE_FOCUS: &str = "item-lifecycle-focus";
+/// Why the lifecycle action is disabled, as an element that carries it as
+/// its label.
+pub(crate) const LIFECYCLE_NOTE: &str = "item-lifecycle-note";
+/// A new item not created yet has no ID to close or merge.
+pub(crate) const NOT_CREATED: &str = "Save this new item first: it is not created yet.";
+/// A nonconforming file has no ID until it is repaired.
+pub(crate) const NO_ID: &str = "This file has no ID until it is repaired.";
+
+/// What the lifecycle action acts on.
+enum LifecycleTarget {
+    /// The item as read, by its ID.
+    Ready {
+        intent: Box<Intent>,
+        heading: Heading,
+    },
+    /// No ID: why.
+    NoId(&'static str),
+    /// Not read yet.
+    NotRead,
+}
 
 /// The repository's name, as the tab strip names it: its folder.
-fn repository_name(repo: &str) -> String {
+pub(super) fn repository_name(repo: &str) -> String {
     Path::new(repo)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -93,46 +125,22 @@ pub(crate) fn crumbs(target: &OpenTarget, item: Option<&ItemDto>) -> (Option<Str
     }
 }
 
-/// A later action: `label`, one of `LATER`, disabled, drawn as the
-/// warning (amber) button, the `ix`th of the tab's later actions, with
-/// "Available in a later release" as its tooltip.
-///
-/// Its `("later-action", ix)` group carries the role, so assistive tech
-/// reaches the label and the note as its description; the Kit's button
-/// takes no description of its own. The `("later-note", ix)` element holds
-/// the note for the tab's rows of notes.
-fn later_action(ix: usize, label: &'static str) -> AnyElement {
-    debug_assert!(LATER.contains(&label), "{label} is not a later action");
-    let button = Button::new(("later-button", ix))
-        .label(label)
-        .small()
-        .disabled(true)
-        .warning();
-    div()
-        .id(("later-action", ix))
-        .test_support()
-        .role(Role::Group)
-        .aria_label(label)
-        .aria_description(LATER_NOTE)
-        .flex_none()
-        .child(
-            div()
-                .id(("later-note", ix))
-                .test_support()
-                .aria_label(LATER_NOTE)
-                .child(button.tooltip(LATER_NOTE)),
-        )
-        .into_any_element()
-}
-
-/// The header's later actions for an item of `kind`: the primary action
-/// of its kind, when the kind is known. Edit is available (E-6), and Share
-/// is the share slot's (`share`).
-pub(crate) fn header_later(kind: Option<ItemDtoKind>) -> Vec<&'static str> {
-    match kind {
-        Some(ItemDtoKind::Ticket) => vec![CLOSE_TICKET],
-        Some(ItemDtoKind::Document) => vec![APPROVE_AND_MERGE],
-        None => Vec::new(),
+/// The header's lifecycle action for an item of `kind`, as `item` reads:
+/// Close ticket… for a ticket, unless the lifecycle closed it (its closure,
+/// not its status text, says `closed`), and Approve and merge… for a
+/// document. None while the kind is not known.
+pub(crate) fn lifecycle_action(
+    kind: Option<ItemDtoKind>,
+    item: Option<&ItemDto>,
+) -> Option<&'static str> {
+    match kind? {
+        ItemDtoKind::Ticket => {
+            let closed = item
+                .and_then(|item| item.closure.as_ref())
+                .is_some_and(|closure| closure.state == ClosureState::Closed);
+            (!closed).then_some(CLOSE_TICKET)
+        }
+        ItemDtoKind::Document => Some(APPROVE_AND_MERGE),
     }
 }
 
@@ -157,7 +165,6 @@ impl ItemPane {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let colors = item_colors(cx);
-        let later = header_later(self.shown_kind(read));
         // What is unsaved is what the strip marks (`unsaved`): edited repair
         // text, while its repair runs too, in the editing words (Part E
         // review, I1), and a draft kept or stored in the viewing words.
@@ -168,7 +175,12 @@ impl ItemPane {
         // The read is borrowed; only a new item's stand-in is built.
         let built = read.is_none().then(|| self.new_item_shown(cx)).flatten();
         let item = read.or(built.as_ref());
-        let progress = self.share_progress(cx);
+        // A run of the item, or its record, says so first (D5 A2); its
+        // dialog, open in front of the tab, says so itself.
+        let progress = self
+            .shows_lock_progress(cx)
+            .then(|| self.refused_words(cx).to_owned())
+            .or_else(|| self.share_progress(cx));
         let pill = item.map(|item| {
             // A running share or post of the item says its stage.
             if let Some(words) = progress {
@@ -205,13 +217,7 @@ impl ItemPane {
             .children(self.comments_button(window, cx))
             .children(self.edit_action(read, window, cx))
             .children(self.share_button(window, cx))
-            .children(
-                later
-                    .iter()
-                    .enumerate()
-                    .map(|(ix, label)| later_action(ix, label))
-                    .collect::<Vec<_>>(),
-            );
+            .children(self.lifecycle_button(item, cx));
         let title = item.and_then(|item| item.title.clone()).map(|title| {
             text("item-title", title)
                 .text_size(px(TITLE_SIZE))
@@ -273,6 +279,130 @@ impl ItemPane {
             .child(row)
             .children(slot)
             .into_any_element()
+    }
+
+    /// The lifecycle action's button, when the item offers one: live once
+    /// the item is read with its ID. A new item not created yet, and a
+    /// nonconforming file, have no ID: the action is drawn disabled, saying
+    /// why. While the item is not read yet it waits, disabled.
+    fn lifecycle_button(
+        &self,
+        item: Option<&ItemDto>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let label = lifecycle_action(self.shown_kind(item), item)?;
+        let target = self.lifecycle_target(cx);
+        let ready = matches!(target, LifecycleTarget::Ready { .. }) && !self.lifecycle_busy(cx);
+        let mut button = Button::new(LIFECYCLE_ACTION)
+            .label(label)
+            .small()
+            .warning()
+            .disabled(!ready)
+            .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                pane.open_lifecycle(window, cx);
+            }));
+        let note = match target {
+            LifecycleTarget::NoId(reason) => {
+                button = button.tooltip(reason);
+                Some(reason)
+            }
+            _ => None,
+        };
+        // The wrapper tracks the action's focus, so its dialog gives focus
+        // back here (A2, A21), as the operation area's buttons do. Focused,
+        // it shows a ring, and Enter or Space opens the dialog again; Tab
+        // goes on to the Kit button inside. A pointer's click is the
+        // button's only.
+        let ring = cx.theme().ring;
+        let wrapper = div()
+            .id(LIFECYCLE_FOCUS)
+            .flex_none()
+            .rounded_sm()
+            .track_focus(&self.lifecycle_focus)
+            .focus(move |style| style.border_2().border_color(ring))
+            .on_click(cx.listener(|pane, event: &ClickEvent, window, cx| {
+                if event.is_keyboard() {
+                    pane.open_lifecycle(window, cx);
+                }
+            }));
+        let wrapper = match note {
+            Some(reason) => wrapper.child(
+                div()
+                    .id(LIFECYCLE_NOTE)
+                    .test_support()
+                    .aria_label(reason)
+                    .child(button),
+            ),
+            None => wrapper.child(button),
+        };
+        Some(wrapper.into_any_element())
+    }
+
+    /// The header's lifecycle action's focus, where its dialog gives focus
+    /// back.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn lifecycle_focus(&self) -> gpui_kit::FocusHandle {
+        self.lifecycle_focus.clone()
+    }
+
+    /// What the lifecycle action acts on: the item as read, by its ID.
+    fn lifecycle_target(&self, cx: &App) -> LifecycleTarget {
+        if self.shows_new_item(cx) {
+            return LifecycleTarget::NoId(NOT_CREATED);
+        }
+        let Some(item) = self.model.item().rows() else {
+            return LifecycleTarget::NotRead;
+        };
+        let Some(id) = item.id.as_deref().and_then(|id| id.parse::<ItemId>().ok()) else {
+            return LifecycleTarget::NoId(NO_ID);
+        };
+        let root = PathBuf::from(self.repo());
+        let intent = match item.kind {
+            ItemDtoKind::Ticket => Intent::TicketClose { root, id },
+            ItemDtoKind::Document => Intent::DocumentPromote { root, id },
+        };
+        let mut heading = Heading::of(
+            item,
+            item.id.as_deref().unwrap_or_default(),
+            repository_name(self.repo()),
+        );
+        // R-35: the dialog names the primary branch before a preview does.
+        heading.primary = self.primary_branch().map(str::to_owned);
+        LifecycleTarget::Ready {
+            intent: Box::new(intent),
+            heading,
+        }
+    }
+
+    /// Close ticket… or Approve and merge… pressed: the tab saves its
+    /// unsaved edits first, then the lifecycle dialog prepares (D5, A2). A
+    /// tab whose item has no ID opens nothing; neither does a save that
+    /// could not start, the tab saying why.
+    fn open_lifecycle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let LifecycleTarget::Ready { intent, heading } = self.lifecycle_target(cx) else {
+            return;
+        };
+        if self.lifecycle_busy(cx) {
+            return;
+        }
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        let saving = match self.start_save_first(cx) {
+            Some(SaveFirst::Failed) => return,
+            Some(_) => Some(cx.entity().downgrade()),
+            None => None,
+        };
+        let origin = self.lifecycle_focus.clone();
+        let opening = Opening {
+            intent: *intent,
+            heading,
+            origin,
+            saving,
+            following: None,
+            repaired: false,
+        };
+        lifecycle::open(opening, &self.services, window, cx);
     }
 
     /// `folder-git-2`, then repository › section › file, at 12 px, with no

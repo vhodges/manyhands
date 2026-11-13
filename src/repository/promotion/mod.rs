@@ -215,6 +215,8 @@ pub enum PromotionBlocker {
     RemoteContextDeleted,
     HistoryUnknown,
     DocumentInvalidAfterIntegration,
+    /// Last, so the stored blocker masks keep their bits.
+    HistoryUnresolved,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -462,16 +464,18 @@ impl RepositoryService {
         request: PromoteDocumentRequest,
         session: &mut SessionCredentials<P>,
     ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
-        run::promote(self, request, session, None)
+        run::promote(self, request, session, None, &mut run::Unobserved)
     }
-    /// `promote_document`, stopping at each safe point when `probe` says so.
+    /// `promote_document`, stopping at each safe point when `probe` says so,
+    /// and telling `progress` of its steps (D5 decision 11).
     pub(super) fn promote_document_observed<P: SessionCredentialProvider>(
         &self,
         request: PromoteDocumentRequest,
         session: &mut SessionCredentials<P>,
         probe: lifecycle::CancellationProbe,
+        progress: &mut dyn run::RunObserver,
     ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
-        run::promote(self, request, session, Some(probe))
+        run::promote(self, request, session, Some(probe), progress)
     }
     pub fn cancel_document_promotion(
         &self,
