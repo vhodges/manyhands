@@ -28,7 +28,8 @@ reason.
 | 4 | done, review approved with Minors parked | code `94c7faab` (base `f487e094`); ledger `3b377441` | yes |
 | 5 | done, two reviewers, approved after fix round 1; checkpoint 2 posted | code `110aff6f` (base `3b377441`), fix `484b0f60`; ledger `8830224f` | yes |
 | 6 | done, review approved first time, Minors parked | code `35bdd07f` (base `8b960272`); ledger `fe6ced71` | yes |
-| 7 | done, review approved first time, Minors parked | code `f6559d70` (base `fe6ced71`); ledger commit follows | yes |
+| 7 | done, review approved first time, Minors parked | code `f6559d70` (base `fe6ced71`); ledger `32eba29f` | yes |
+| 8 | done in two parts, review approved after fix round 1; checkpoint 3 posted | part A `1b3081e4` and fix `386b179b`, part B `2eb033d7` (base `32eba29f`); ledger commit follows | yes |
 
 ## Base
 
@@ -541,6 +542,252 @@ Problem rows; `retiring_tests.rs` was out of the list (ruling P-F11).
   `RowKey::RetireOffer`. No drawn-text assertion removed; dialog reads
   (`retire-unkept-message` and the like) stay, since those dialogs are not Activity.
 
+## Task 8 (the other files onto the seam; E-6)
+
+- Ruling T8-1: Task 8 was run as two commits, part A (`D/view/conflict/*`, `confirm_tests.rs`,
+  `find_tests.rs`, `tabs_tests.rs`, `D/view/item/*`) and part B (`D/view/lifecycle/*`,
+  `lifecycle_tests.rs`, `dock_tests/state.rs`, `drafts_entry_tests.rs`, `D/services/*`,
+  `D/view/settings/*`), reviewed by two fresh reviewers — E-6 spans ~25 files and one pass would not
+  have been reviewable — the plan says one commit per task — none.
+- Ruling T8-2: a test E-6 names whose body presses or reads nothing in Activity needs no
+  conversion and stays unchanged. Applied to `item/posting_tests/review.rs`
+  `an_operation_area_retry_is_followed_and_posts_one_comment` (it calls `worker.retry` directly, and
+  decision 26 hides Retry for that unsaved post), the two `a17_` tests of `privacy_consent_tests.rs`
+  and the two tests of `drafts_entry_tests.rs` that read no Activity — E-6's counts ("two a17_ tests",
+  "its two tests") name the ones that do — none.
+- Ruling T8-3: `services/drafts_tests.rs::a_failed_flush_shows_an_entry_with_retry_and_no_draft_text`
+  had a drawn whole-window scan for "Recovery copy of" that E-11 does not name; it was converted to
+  model row reads, and the drawn SENTINEL-absence scan over all window labels is kept, guarded by
+  `Region::Operations.id()` (also `remotes_tests.rs`), plus a model scan of every row's title,
+  description and detail. **Task 9 must keep or update the `Region::Operations.id()` guards** — the
+  sweep would pass vacuously once the area is renamed.
+- Fix round 1 (part A, `386b179b`, scoped re-review: addressed, no breakage): `no_stop` in
+  `item/share_tests.rs` now rejects any offer labelled STOP or STOPPING (enabled or not) across the
+  menu and button; a new `no_stop_action` rejects any `ActivityAction::Stop` once the share has ended.
+  The post-without-a-remote site checks labels only, since a running accepted post with no safe point
+  legitimately offers a disabled "Finishing" carrying a Stop action (the old drawn check allowed it).
+- Seam additions (test-only): `until_offered` (part A), `until_pending(shell, root, action, cx) ->
+  RowKey` (part B; `conflict/entry_tests.rs::row_of` is a one-line wrapper over it). The duplicate
+  `republish_tests::until_offered`/`until_not_offered` (Task 7) is not folded.
+- **Accepted loss to look at in the review:** the disabled Retry's reason text "Not sent again after
+  a later Edit or release" (`NOT_SENT_AGAIN`, `model/operations.rs:73`, used only by the old view,
+  `view/operations.rs:546-547`) is no longer shown or asserted anywhere once Task 9 removes the old
+  view — the model's `Offer` carries no reason and the design has no such copy. The behaviour
+  (disabled Retry, `attempt == 1`, `operations.not_sent_again`) is still tested. If the new Activity
+  should explain a disabled Retry, that is a design gap.
+- **Parked Minors:** (A) the row title's stage suffix is not pinned for a post-kind request or for
+  share stages other than Fetching (`each_stage_shows_its_text_for_share_and_post`); the model's
+  `stages_are_shown` pins `stage_words` for all stages; (A) `a_stopped_share_says_what_completed...` builds
+  its expected label from `offer_label(SyncOffer::Share)` (saved by the next `act` on the literal
+  label); (A) duplicate `until_offered`; (B) `drafts_tests.rs:239-250`'s kept drawn scan is guarded only
+  by `Region::Operations` being drawn (the old guard proved the entry's own text was among the labels
+  swept; Task 9 should guard on a label containing the row's title); (B) `outcome_tests.rs:1154-1164`: the
+  removed command label ("Close ticket") and item short id have no model replacement (assert
+  `running.row.item` is the ticket and the intent is `TicketClose`); (B) `dock_tests/state.rs:466-499`:
+  the drawn "hidden, so not drawn" check after the finish is now only the layout flag; add
+  `assert!(!shell.present(Region::Operations.id(), cx))`, and the "row equal to its hidden-time self"
+  check pins that derivation is stable, not that Show leaves the log intact (both reads follow a forced
+  `refresh_activity_now`); it rests on the log keeping the row's revision while nothing changes — loosen
+  to key and kind if a later task moves the revision.
+
+**Part A: test-function lists, before and after:**
+
+| file | tests | helpers |
+| --- | --- | --- |
+| `conflict/entry_tests.rs` | equal (7) | `row_of` kept by name, now `row_of(shell, root, command, cx) -> RowKey` (was `(shell, command, cx) -> usize`); waits on `Operations::pending_shown` and returns `pending_key` |
+| `conflict/repair_tests.rs` | equal (5) | none |
+| `confirm_tests.rs` | equal (10) | added `abandon(shell, root, cx)` = `act(pending_key(.., "save_ticket"), ABANDON)`; `stranded` unchanged (the E-7 escape test still uses `("pending-abandon", 0)`) |
+| `find_tests.rs` | equal (14) | none |
+| `tabs_tests.rs` | equal (39) | none |
+| `item/share_tests.rs` | equal (16) | added `entry`, `no_stop`, `says_shared`, `assert_staged` |
+| `item/edit_release_tests.rs` | equal (30) | `retry_control` kept by name; now returns the log's `Offer` (was the element id `String`); const `NOT_SENT_AGAIN` removed |
+| `posting_tests/outside.rs` | equal (5) | `recovery_labels` kept by name; reads the row's offers |
+| `posting_tests/decisions.rs` | equal (3) | none |
+| `posting_tests/extras.rs` | equal (10) | none |
+| `posting_tests/recovery.rs` | equal (10) | none |
+| `posting_tests/review.rs` | unchanged (see concern) | none |
+
+**Part A: Removes (drawn-text assertions) and what replaced them, per file:**
+
+Presses by id became `act(.., LABEL)` with the label constant; presence checks became `offered` or
+`row`; every absence check is made on a row that is proved listed. Only differences from a plain
+mapping are listed.
+
+- `conflict/entry_tests.rs`
+  - `the_banner_offers_review_changes`: `label(request_id(share,"review")) == REVIEW_CHANGES` is now
+    `offered(Request(share), REVIEW_CHANGES)` with action `Review(share)` (after `until_offered`).
+    `present(entry)` is `row(..).is_some()`; `!present(review)` on main is `offered(..).is_none()`
+    (row listed). Banner reads (`item-conflict`, `item-review-changes`) stay: item pane, not Activity.
+  - `a_pending_resolve_row_offers_review_changes_after_restart`: `label(pending-review) ==
+    REVIEW_CHANGES` is now `offered(.., REVIEW_CHANGES)` with action `ReviewPending{..}`. No text removed.
+  - `a_local_synchronization_offers_resume`: `present(pending-resume)` and `!present(pending-resume-unavailable)`
+    are now `offered(RESUME)` enabled with action `Resume{..}` (disabled is the "unavailable" case).
+  - `resolve_conflict_opens_the_childs_sheet`: review label is `offered` with action `Review(close)`;
+    `click(open)` is `act(OPEN_LIFECYCLE)`.
+  - `an_applied_resolution_clears_the_banner_and_its_review` and
+    `a_resume_that_settles_the_conflict_clears_its_review`: `!present(request_id(share,"review"))` is
+    `row(entry).is_some()` and `offered(.., REVIEW_CHANGES).is_none()`; the earlier presence is
+    `until_offered`/`offered(..).enabled`; Dismiss is `act(DISMISS)`.
+- `conflict/repair_tests.rs` (three tests: `repair_locally_syncs...`, `a_refused_local_sync...`,
+  `repair_locally_waits_for_a_queued_sync`): same mappings; the close's row `!present(pending-review)`
+  is `row(close).is_some()` plus `offered(REVIEW_CHANGES).is_none()`. No text removed.
+- `confirm_tests.rs`, `find_tests.rs`, `tabs_tests.rs`: only the press of `("pending-abandon", 0)` became
+  `act(pending_key(.., "save_ticket"), ABANDON)` (so the row is looked up by key, not index). Dialog
+  assertions untouched. No text removed.
+- `item/share_tests.rs` (the nine tests that read or press the entry):
+  - `each_stage_shows_its_text_for_share_and_post`: REMOVED the drawn `label(request_id(id,"state")) ==
+    "Sharing · {stage text}"` / `"Posting · ..."` for each stage. Replaced by `assert_staged`: the request's
+    state is `Running { stage: Some(stage) }`, and the log entry is a `Kind::Working` row whose title opens
+    with "Sharing" / "Posting". The model row's title is "Sharing “Shared”… · Connecting…" (a different
+    copy from the old drawn "Sharing · Connecting to origin…"), so equating the words is not possible;
+    the entry's stage copy is P4-P7's (`stages_are_shown`). The pill's `"Sharing · {text}"` assertion
+    stays (item pane).
+  - `a_post_without_a_remote_never_says_sharing`: the drawn state label `starts_with("Posting · ")` and
+    `!contains("Sharing")` is now the entry's title `starts_with("Posting")` and `!contains("Sharing")`;
+    `!present(stop)` is `no_stop` (no enabled `Stop` offer on a listed entry).
+  - `an_accepted_share_offers_stop_and_stopping_signals_it`: STOP label is `offered(STOP) ==
+    Offer(Stop(id), STOP, true)`; `!present(cancel)` is `offered(CANCEL).is_none()`; STOPPING label is
+    `offered(STOPPING) == Offer(Stop(id), STOPPING, false)` (and no STOP); `!present(stop)` is `no_stop`.
+    REMOVED the code label `"cancelled"` (now `Finished(_, ResultCode::Cancelled, ..)`) and the
+    `STOPPED_BEFORE_SENDING` outcome words (now `share_outcome == Stopped { completed: false }`).
+  - `a_stopped_share_says_what_completed_and_offers_share`: REMOVED `STOPPED_BEFORE_SENDING` and
+    `STOPPED_AFTER_PART` outcome words, now `share_outcome == Stopped { completed }` (false, then true);
+    Share label is `offered(SHARE) == Offer(Offer(id, SyncOffer::Share), ..., true)`; the press is `act(SHARE)`.
+  - `the_conflict_banner_says_work_is_safe_and_offers_review_changes`: Dismiss is `act(DISMISS)`. No text
+    removed.
+  - `a_finished_share_says_its_outcome_in_the_pill`, `a_kept_draft_after_a_shared_outcome_reads_draft_kept`,
+    `a_shared_outcome_leaves_the_pill_once_the_item_reads_otherwise`,
+    `sharing_private_work_shows_shared_until_the_item_reads_differently`: REMOVED the entry's drawn
+    outcome label `== SHARED`; now `says_shared`: the entry is listed and `share_outcome ==
+    SyncOutcome::Published`. Pill reads stay.
+- `item/edit_release_tests.rs` (`retry_control` and its three tests): REMOVED the drawn disabled-Retry
+  label `"Retry (Not sent again after a later Edit or release)"` (`NOT_SENT_AGAIN`), asserted three
+  times, and the click on the unavailable text. Now `retry_control` is `("Retry", enabled)` on the
+  entry's `Recovery(id, n)` offer: `("Retry", true)` when offered; `("Retry", false)` after the later
+  prepare/release (listed, disabled), and `act_refused(.., "Retry")` (which asserts no enabled offer and
+  an unchanged footprint). `attempt == 1` and the worker's refusal are kept. The "not sent again"
+  reason text exists only in the old view (`view/operations.rs:546`); the model's rows and the design do
+  not carry it, so nothing replaces the words.
+- `posting_tests/outside.rs` (`recovery_labels` and three tests): `recovery_labels` now lists every offer
+  label on the post's entry (asserting the entry is listed and offers Dismiss, so an empty list cannot
+  mean "no entry"); "no Retry/Resume/Prepare" and "Retry sharing, not Retry" assertions are unchanged
+  in meaning. No text removed.
+- `posting_tests/decisions.rs`: Dismiss is `act(DISMISS)`. No text removed.
+- `posting_tests/extras.rs` `quitting_during_an_accepted_post_leaves_it_saved_and_cancelled`:
+  `!present(("pending-resume", 0))` is now: the post's entry is listed and NO row in the log offers
+  RESUME. No text removed.
+- `posting_tests/recovery.rs` `p3_a_stopped_post_offers_share_not_retry`: `click(stop)` is `offered(STOP)`
+  enabled then `act(STOP)`. No text removed (the chip reads are the item pane's).
+
+**Part B: test-function lists, before and after:**
+
+| file | tests | helpers |
+| --- | --- | --- |
+| `lifecycle/outcome_tests.rs` | equal (8) | equal (`at_stage`'s inner `use RequestState` dropped, the module imports it now) |
+| `lifecycle/outcome_canned_tests.rs` | equal (5) | equal; `reopen(shell, id, cx)` keeps its signature, now presses with `act(.., Open…)` |
+| `lifecycle/interruption_tests.rs` | equal (4) | equal |
+| `lifecycle/made_ready_tests.rs` | equal (6) | `entry_texts` kept by name and signature; now the log row's title, description, repo tag and detail lines (was the drawn snapshot labels under the entry's id) |
+| `lifecycle/privacy_consent_tests.rs` | equal (4) | equal |
+| `lifecycle/privacy_promote_tests.rs` | equal (1) | equal |
+| `lifecycle_tests.rs` | equal (8) | equal |
+| `dock_tests/state.rs` | equal (3) | equal |
+| `drafts_entry_tests.rs` | equal (4) | equal |
+| `services/drafts_tests.rs` | equal (14) | equal |
+| `services/drafts/save_tests.rs` | equal (25) | equal |
+| `settings/keys_tests.rs` | equal (18) | equal |
+| `settings/remotes_tests.rs` | equal (18) | equal (local `row` (remote name -> index) is unrelated to the seam's, which is imported `as log_row`) |
+| `settings/repositories_tests.rs` | equal (17) | equal |
+| `settings/repositories_manage_tests.rs` | equal (20) | equal |
+| `conflict/entry_tests.rs` (Part A file, `row_of` only) | equal (7) | `row_of` body folded into `until_pending` |
+| `activity_support.rs` | n/a | + `until_pending` |
+
+**Part B: Removes (drawn-text assertions) and what replaced them, per file:**
+
+Presses by id became `act(.., LABEL)`; presence checks became `offered` / `row(..).is_some()`; every absence check is made on a row proved listed in the same test.
+
+- `lifecycle/outcome_tests.rs` `the_operation_entry_reopens_the_dialog`:
+  - REMOVED drawn entry words: command `"Close ticket"`, item `short_id(TICKET)`, state `"Closing · Merging into main…"`.
+    Replaced by: the entry row is listed with `Kind::Working`, and the request's state is
+    `Running { stage: Some(Integrating), accepted: true }`. The stage copy is P4-P7's.
+  - `!present(open)` "not while running" is `offered(.., OPEN_LIFECYCLE).is_none()` on the listed running row.
+  - After the run: the `open` label read is `offered(..).action == Open(id)`; "no raw recovery action 0..4" is: no offer on the
+    (listed) row has a `Recovery(..)` action; `click(open)` is `act(.., OPEN_LIFECYCLE)`.
+- `lifecycle/outcome_canned_tests.rs`:
+  - `reopen`: `click(request_id(id,"open"))` is `act(shell, &RowKey::Request(id), OPEN_LIFECYCLE, cx)` (so
+    `each_way_out_offers_its_button` and `busy_after_the_merge_is_failed_not_still_running` change only through it; no text removed).
+  - `a_lifecycle_entry_keeps_the_recovery_its_dialog_does_not_own`: `present(open)` is Open… offered and enabled; `present(recovery 0)`
+    ("Set identity") is an offer with action `Recovery(id, 0)`; `!present(recovery 1)` / `!present(recovery 2)` are no offer with
+    `Recovery(id,1)` / `Recovery(id,2)`; all on the proved-listed row. Labels are not asserted (they were not before).
+- `lifecycle/interruption_tests.rs`:
+  - `p5_a_close_stranded_at_closing_resumes_after_relaunch`: pending row by drawn `pending-command` position is
+    `until_pending(.., "close")` (the pending key); the `RESUME` label read is `offered(..)` enabled with action
+    `ResumeLifecycle { .. }` (S9); `click(pending-resume)` is `act(.., "Resume")`. No text removed.
+  - `a_close_lost_before_settlement_is_complete_and_stays_accepted`: `!rows("pending-command").contains(close)` is: the repository's
+    pending list is `Ready` (read as the model's `pending()` rows, which must exist) with no `close` operation, and Activity lists no
+    `RowKey::Pending` row of that repository. (The old test never asserted the list was non-empty; the Ready wait is kept.)
+- `lifecycle/made_ready_tests.rs` `done_lists_made_ready_with_slug_and_title` (via `entry_texts`): the drawn snapshot scan of the
+  entry (no `DEPENDENT_TITLE`, non-empty) is the same two assertions over the log row's title, description, repo tag and detail.
+  No assertion removed; the source of the texts is now the model row.
+- `lifecycle/privacy_consent_tests.rs`: `a17_a_stranded_close_...`: the drawn wait for the close's `pending-command` row is
+  `until_pending`. `a17_a_conflict_waiting_...`: row + `present(pending-resume)` wait is `until_pending` then `until_offered(RESUME)`;
+  "still listed" is `row(..).is_some()`; "still offered" is `offered(..)` enabled. No text removed.
+- `lifecycle/privacy_promote_tests.rs` `a16_...`: `click(request_id(retried,"open"))` is `act(.., OPEN_LIFECYCLE)`. D5's `Seen`
+  sweeps (`seen.window`, `holds_none`) still read the drawn area, untouched (Task 9). No text removed.
+- `lifecycle_tests.rs` `a_blocked_prepare_lists_blockers_and_way_out`: REMOVED drawn command label `"Share trunk"` on the share's
+  entry (`request_id(share,"command")`). Replaced by: the share's entry row is listed and its first detail line (the model's
+  `"{intent label} · {scope}"`) starts with `"Share trunk"`, so the R-35b fact (the entry names trunk) is still asserted, from the model.
+- `dock_tests/state.rs` `a_request_finishes_while_activity_is_hidden`:
+  - `present(entry)` while running is the entry row listed with `Kind::Working`.
+  - `!present(entry)` "hidden, so not drawn" is REMOVED as an id read (it would pass vacuously once Task 9 renames the id). Replaced
+    by `!layout.is_displayed(Activity)` (the model's hidden state) AND the row still listed (the P28 carried check "nothing pruned
+    while hidden"), with `Kind::Success` and the request `Finished(..)`.
+  - After Show: `present(entry)` and the drawn state label non-empty are REMOVED. Replaced by `is_displayed(Activity)`, the
+    `Region::Operations` panel drawn, and the row equal to its hidden-time self (same row, same revision).
+  - `show_it_reveals_a_hidden_activity` (E-7, same file) untouched and not run (shares no changed helper).
+- `drafts_entry_tests.rs`:
+  - `the_launch_offers_its_recovered_drafts_and_restores_nothing`: drawn label `recovered-drafts == "Recovered drafts: 2"` REMOVED
+    (the `recovered_drafts(2)` string assert on the model fn stays); replaced by `RowKey::Recovered` listed with title
+    `recovered_title(2)`, Review offered enabled with action `ReviewDrafts`. `click(review)` / `click(dismiss)` are
+    `act(REVIEW)` / `act(DISMISS)`. `!present("recovered-drafts")` after dismiss, and again after `reload_listing` ("for the session"),
+    are `row(Recovered).is_none()` (the row was proved listed earlier in the test).
+  - `an_operation_entry_names_the_item_never_the_draft`: drawn labels `draft_flush_failed("One"|TWO, Access)` REMOVED; replaced by,
+    for each of the two sessions, the `RowKey::Flush(id)` row: `Kind::Failure`, title
+    `flush_title(item_name(Some("One") | None, Ticket, id))`, description `DraftError{Access}`, Retry offered; plus no row's title,
+    description or detail contains the SENTINEL. The `"operation-area"` scan is left (E-11).
+- `services/drafts_tests.rs`:
+  - `a_store_that_cannot_be_protected_still_opens_the_window`: drawn `drafts-unavailable == "{DRAFTS_UNAVAILABLE}: The drafts folder
+    could not be protected."` REMOVED; replaced by the `DraftStore` row: `Kind::Failure`, title `DRAFTS_UNAVAILABLE`, description
+    `"The drafts folder could not be protected."` (the fixed reason is still pinned). The `session-section` label scan ("entry drawn,
+    nothing reads Dismiss") is REMOVED; replaced by `offered(DraftStore, DISMISS).is_none()` on the listed row.
+  - `a_failed_flush_shows_an_entry_with_retry_and_no_draft_text`: drawn entry text `"Recovery copy of Item title not saved: Access to the
+    drafts folder was denied."` (and its literal pin) REMOVED; replaced by the `Flush(id)` row: `Kind::Failure`, title
+    `flush_title(item_name(Some("Item title"), kind, id))`, description `"Access to the drafts folder was denied."`, Retry offered
+    enabled. The drawn scan "some label starts with `Recovery copy of`" REMOVED (replaced by the row reads above); the SENTINEL scans:
+    all rows' texts (model) and all drawn labels (kept, with the Activity panel asserted drawn). Retry is `act(RETRY)` and the
+    entry gone is `row(Flush).is_none()` (listed before).
+- `services/drafts/save_tests.rs`: `click(request_id(request,"dismiss"))` is `act(Request(request), DISMISS)`. No text removed.
+- `settings/keys_tests.rs`: `click(recovery_id(id, retry))` is `act` with the label read from the row's offer
+  (`label_of(Recovery(id, retry))`). No text removed.
+- `settings/remotes_tests.rs`:
+  - `an_added_url_with_a_password_is_kept_out_of_everything_shown`: drawn command label `== Intent::RemoteAdd.label()` REMOVED; replaced
+    by the request's intent is `RemoteAdd` and the entry row is listed; its title, description and detail hold no SENTINEL (new, model);
+    the drawn `window_text` SENTINEL scan stays, with `Region::Operations` asserted drawn.
+  - `selecting_a_remote_that_is_not_eligible_shows_its_typed_failure`: drawn `request_id(id,"code") == code` is the row's detail has
+    a line starting `"invalid_remote: "` (the model's `"{code}: {message}"` line). Not a removal of the fact.
+  - `a_partial_add_is_completed_by_retry_under_the_same_request`: drawn code and effects labels are the row's detail lines
+    `"{code}: .."` and `"Effects: {effects}"` (effects text from the model's `copy::effects_text`); `present(recovery)` is the retry
+    offer enabled (label from `label_of`); `click` is `act`.
+- `settings/repositories_tests.rs` `a_partial_create_is_completed_by_retry_under_the_same_request`: the literal
+  `format!("request-{}-code")` read (and `recovery_id`) goes: the row's detail has a `"{code}: .."` line, retry offered enabled,
+  `act` for the press.
+- `settings/repositories_manage_tests.rs` `a_release_that_failed_during_removal_...`: `present(retry)` is the `Flush(draft)` row listed
+  and Retry offered enabled; `click` is `act(RETRY)`; `!present(entry)` is `row(Flush).is_none()` after it was proved listed.
+
+Sentences no longer asserted anywhere (drawn-only copy; model tests P4-P7 own the new copy): `"Closing · Merging into main…"`,
+`"Recovery copy of {title} not saved: {reason}"` as one string (title and reason are asserted separately, in the S11 form),
+`"Recovered drafts: 2"` as a drawn label (the model fn string is still asserted), `"{DRAFTS_UNAVAILABLE}: {reason}"` as one string
+(the two parts asserted separately), the drawn `"Share trunk"` command label (the model's detail line is asserted instead).
+
 ## Tests run
 
 | Checkpoint | Tests run |
@@ -553,6 +800,8 @@ Problem rows; `retiring_tests.rs` was out of the list (ruling P-F11).
 | Task 5 | Each alone, count 1, ok: `desktop::model::activity::tests::logs::attention::attention_counts_each_thing_once` (97 rows) and `...::logs::log::the_log_keeps_times_and_events` (written first, every row red on stubs); `...::s1::a_share_title_that_begins_with_its_subject_is_capitalised`; `desktop::model::polling::tests::brought::completed_attempts_are_counted_per_root` (red first); `desktop::services::scheduler::attention_answer_tests::a_failed_check_now_is_recorded_when_its_answer_applies` (red first, then red for the retry row); `desktop::services::resends::tests::waits_on_says_when_forgetting_would_drop_something`; `desktop::view::activity::tests::count_and_popover_agree`; `desktop::view::activity::tests::refreshes_are_coalesced` (red with coalescing off: 6 derivations vs 4); `desktop::view::operations::resume::activity_tests::a_running_resume_makes_the_stranded_row_still_running`; changed: `each_source_makes_its_rows`, `request_copy_table`, `share_copy_table`, `activity_time_formats`, `brought_in_is_kept_for_the_session`; E-3 `retire_resume_resends_original`; the nine E-4 tests above. fmt, check and clippy clean after each commit. |
 | Task 6 | Each alone, count 1, ok (35 tests): `desktop::view::activity::tests::each_action_runs_its_handler` (new; 21 kinds, T11, T12); the six E-5 `desktop::view::operations::tests::*` tests; the seven `desktop::view::operations::outcomes::give_up_tests::*`; the thirteen `...::outcomes::tests::*`; the six `...::outcomes::route_tests::*` plus the untouched E-7 `show_it_focuses_the_entry_of_the_possible_holder` (it shares the changed helpers; green); `desktop::view::operations::check_tests::a_running_check_now_reads_its_stage_words`; `desktop::view::operations::record_tests::an_unreadable_record_is_reported_once_in_activity`. (Full names in the Task 6 test lists above.) fmt, check and clippy clean. |
 | Task 7 | Each alone, count 1, ok: the 31 E-5 part 2 tests (exact paths in the Task 7 report: `attempts_tests` 2, `attention_tests` 4, `republish::follow_tests` 7, `republish::stop_tests` 4, `republish::tests` 7, `resume::tests` 7, `retire_tests` 5 — Task 7 ran them by `desktop::view::operations::…` paths); sharing a changed helper and green: E-7 `attention_actions_hit`, `attention_actions_by_keyboard`, `attempt_entry_actions_hit`, `attempt_entry_ids_follow_the_repository`, `retire_left_offer`, `retire_pending_row_by_keyboard`; `resume::activity_tests::a_running_resume_makes_the_stranded_row_still_running`; `activity::tests::each_action_runs_its_handler`. fmt, check and clippy clean. |
+| Task 8 part A | All via `devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands <path> -- --exact`. 35 converted tests, each 1 passed, 0 failed (the one first-run failure, `each_stage_shows_its_text_...`, was my assertion on the row's words; fixed as above and rerun green):  - `desktop::view::conflict::entry_tests::` `the_banner_offers_review_changes`,   `a_pending_resolve_row_offers_review_changes_after_restart`, `a_local_synchronization_offers_resume`,   `resolve_conflict_opens_the_childs_sheet`, `an_applied_resolution_clears_the_banner_and_its_review`,   `a_resume_that_settles_the_conflict_clears_its_review` (6) - `desktop::view::conflict::repair_tests::` `repair_locally_syncs_and_opens_the_sheet_on_conflict`,   `a_refused_local_sync_shows_its_answer_and_resume`, `repair_locally_waits_for_a_queued_sync` (3) - `desktop::view::confirm::tests::` `pressing_enter_twice_on_confirm_submits_one_request`,   `region_and_refresh_keys_do_not_escape_the_dialog`, `quit_works_while_a_dialog_is_open`,   `a_stale_preview_is_shown_with_prepare_again`, `a_busy_preview_offers_retry_which_prepares_again`,   `an_answer_to_an_earlier_attempt_is_not_shown_after_prepare_again` (6) - `desktop::view::find::tests::find_does_nothing_while_a_dialog_is_open` (1) - `desktop::view::tabs::tests::the_tab_keys_do_nothing_while_a_dialog_is_open` (1) - `desktop::view::item::share::tests::` `each_stage_shows_its_text_for_share_and_post`,   `a_post_without_a_remote_never_says_sharing`, `an_accepted_share_offers_stop_and_stopping_signals_it`,   `a_stopped_share_says_what_completed_and_offers_share`,   `the_conflict_banner_says_work_is_safe_and_offers_review_changes`,   `a_finished_share_says_its_outcome_in_the_pill`, `a_kept_draft_after_a_shared_outcome_reads_draft_kept`,   `a_shared_outcome_leaves_the_pill_once_the_item_reads_otherwise`,   `sharing_private_work_shows_shared_until_the_item_reads_differently` (9) - `desktop::view::item::edit_tests::release::` `a_release_is_not_retried_once_the_item_is_prepared_again`,   `a_refused_release_lets_the_earlier_prepare_resume`,   `a_prepare_is_not_sent_again_once_its_context_is_released` (3) - `desktop::view::item::posting::tests::outside::` `an_unsaved_posts_operation_entry_offers_no_retry`,   `a_saved_unshared_posts_operation_entry_offers_retry_sharing`,   `an_unsaved_posts_operation_entry_offers_no_resume_or_prepare` (3) - `desktop::view::item::posting::tests::decisions::a_post_stopped_on_a_conflict_raises_the_items_banner` (1) - `desktop::view::item::posting::tests::extras::quitting_during_an_accepted_post_leaves_it_saved_and_cancelled` (1) - `desktop::view::item::posting::tests::recovery::p3_a_stopped_post_offers_share_not_retry` (1)  Helper-sharing or untouched-by-conversion tests run (green, 1 passed each): - E-7 `desktop::view::confirm::tests::escape_closes_the_dialog_with_no_request_and_focus_returns_to_abandon`   (shares `stranded`; still presses by id) - `desktop::view::item::posting::tests::review::an_operation_area_retry_is_followed_and_posts_one_comment`   (the unchanged E-6 name, see concern)  `row_of` is used only by `entry_tests` and `repair_tests` (all callers converted and run); `retry_control` only by the three release tests; `recovery_labels` only by the three outside tests. No whole-module or whole-suite runs.  Verify lines (all pass): `devenv shell -- cargo fmt --check`; `devenv shell -- cargo check --locked --features desktop`; `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`. Fix round: `an_accepted_share_offers_stop_and_stopping_signals_it` and `a_post_without_a_remote_never_says_sharing`, 1 passed each. fmt, check, clippy clean. |
+| Task 8 part B | `devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands <path> -- --exact`. No failures; no reruns needed.  Converted (23): - `desktop::view::lifecycle::outcome_tests::the_operation_entry_reopens_the_dialog` - `desktop::view::lifecycle::outcome_canned_tests::` `each_way_out_offers_its_button`, `busy_after_the_merge_is_failed_not_still_running`,   `a_lifecycle_entry_keeps_the_recovery_its_dialog_does_not_own` - `desktop::view::lifecycle::interruption_tests::` `p5_a_close_stranded_at_closing_resumes_after_relaunch`,   `a_close_lost_before_settlement_is_complete_and_stays_accepted` - `desktop::view::lifecycle::made_ready_tests::done_lists_made_ready_with_slug_and_title` - `desktop::view::lifecycle::privacy_consent_tests::` `a17_a_stranded_close_is_not_resumed_without_consent`,   `a17_a_conflict_waiting_after_a_restart_is_not_resumed_or_resolved` - `desktop::view::lifecycle::privacy_promote_tests::a16_a_promotion_stopped_untidied_and_done_shows_no_item_text` - `desktop::view::lifecycle::tests::a_blocked_prepare_lists_blockers_and_way_out` - `desktop::view::dock::tests::state::a_request_finishes_while_activity_is_hidden` - `desktop::view::drafts::entry_tests::` `the_launch_offers_its_recovered_drafts_and_restores_nothing`, `an_operation_entry_names_the_item_never_the_draft` - `desktop::services::drafts::tests::` `a_store_that_cannot_be_protected_still_opens_the_window`, `a_failed_flush_shows_an_entry_with_retry_and_no_draft_text` - `desktop::services::drafts::save::tests::dismissing_a_pending_save_in_the_operation_area_lets_another_be_sent` - `desktop::view::settings::keys::tests::the_operation_area_retry_of_a_protected_generation_asks_on_the_page` - `desktop::view::settings::remotes::tests::` `an_added_url_with_a_password_is_kept_out_of_everything_shown`,   `selecting_a_remote_that_is_not_eligible_shows_its_typed_failure`, `a_partial_add_is_completed_by_retry_under_the_same_request` - `desktop::view::settings::repositories::tests::a_partial_create_is_completed_by_retry_under_the_same_request` - `desktop::view::settings::repositories::manage_tests::a_release_that_failed_during_removal_completes_once_retry_stores_the_text`  Helper-sharing, not E-6-named (6, all passed): callers of the changed `reopen` and `row_of`/`until_pending`: - `desktop::view::lifecycle::made_ready_tests::index_pending_says_the_list_may_be_incomplete` - `desktop::view::lifecycle::credential_tests::a_refused_key_offers_unlock_and_sharing_and_keys` - `desktop::view::lifecycle::credential_tests::enter_on_a_locked_key_unlocks` - `desktop::view::conflict::entry_tests::a_pending_resolve_row_offers_review_changes_after_restart` - `desktop::view::conflict::entry_tests::a_local_synchronization_offers_resume` - `desktop::view::conflict::repair_tests::a_refused_local_sync_shows_its_answer_and_resume`  Not run (unchanged, touch no Activity): the other two `a17_` tests, `review_in_drafts_opens_the_page_on_the_drafts_row`, `review_in_drafts_waits_for_an_open_dialog`. No whole-module or whole-suite runs.  Verify (all pass): `devenv shell -- cargo fmt --check` (exit 0); `devenv shell -- cargo check --locked --features desktop`; `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`. fmt, check, clippy clean. |
 
 ## Test edits (E-n)
 
@@ -569,3 +818,4 @@ Problem rows; `retiring_tests.rs` was out of the list (ruling P-F11).
 - Candidates E-17 (`dock_tests/toolbars.rs:323`) and E-18 (`keyboard_tests/shell/support.rs:102`) are still unassigned: Task 10 and Task 11.
 - E-5 part 1 (Task 6): `operations_tests.rs`, `give_up_tests.rs`, `outcomes_tests.rs`, `outcomes_route_tests.rs`, `check_tests.rs`, `record_tests.rs` moved onto the seam; the test-function lists are equal in all six; the removed drawn-text assertions are listed under Task 6 above. No E-17+ outside these files.
 - E-5 part 2 (Task 7): the seven files above moved onto the seam; test lists equal; Removes listed under Task 7. E-17 (above).
+- E-6 (Task 8): the files above moved onto the seam; test lists equal; Removes listed under Task 8. E-17 candidates: `republish_tests::until_offered`/`until_not_offered` duplicate the seam's; `conflict/entry_tests.rs::row_of` became a wrapper over `until_pending` (no assertion removed).
