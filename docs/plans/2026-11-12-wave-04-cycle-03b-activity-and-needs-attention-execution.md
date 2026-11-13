@@ -22,7 +22,8 @@ reason.
 | Task | Status | Commit | Pushed |
 | --- | --- | --- | --- |
 | 0 | done (no source change; no reviewer, see ruling R0-1) | `f5e01cb9` (ledger); `a5b5ac29` (ticket comment) | yes |
-| 1 | done, review approved first time | code `ec67fea7` (base `a5b5ac29`); ledger commit follows | yes |
+| 1 | done, review approved first time | code `ec67fea7` (base `a5b5ac29`); ledger `df8fa9cf` | yes |
+| 2 | done, review approved first time | code `879da113` (base `df8fa9cf`); ledger commit follows | yes |
 
 ## Base
 
@@ -173,13 +174,38 @@ private → `pub(super)`).
 - P-F14 stands: line cites into `operations.rs` elsewhere in the docs are
   stale and are re-grepped by the task that needs one.
 
+## Task 2
+
+F2 (a share classified once) and F3 (the stage shown). The drain's
+`note_share_attempt` (`services/mod.rs`, now 1150 lines, was 1126) runs before
+`apply`; `Queued` clears `share_attempts` and `share_results`; one private
+`classified()` serves `apply(Finished)` and the `cfg(test)` `classify_share`.
+
+- Ruling T2-1: `stage_words` falls back to "main" for Integrating and Publishing
+  (F3, P10, the plan), while `stage_text` keeps "the primary branch" for the
+  lifecycle copy that has a primary — the design says so — `state_label` has no
+  primary, so a generic running row reads "Merging into main…" even where the
+  primary has another name; reachable only through that fallback.
+- Ruling T2-2: the P9 table has a fourth row (a share noted after a give up) and
+  asserts the private maps are empty after the retry — a pin on R-39 — none.
+- Tests were first seen failing as compile errors, not assertions (the whole test
+  binary shares one build).
+
 ## Tests run
 
 | Checkpoint | Tests run |
 | --- | --- |
 | Task 0 | none (static gates only) |
 | Task 1 | `desktop::model::operations` by module: 32 passed, 0 failed (the one module run the plan names). fmt, `cargo check --features desktop` and clippy `-D warnings` clean. |
+| Task 2 | By exact path, 1 passed each: `desktop::model::operations::tests::shares_are_classified_once`; `desktop::model::operations::tests::stages_are_shown`; `desktop::view::operations::tests::state_label_shows_stages`; E-1 `desktop::view::operations::outcomes::give_up_tests::a_give_up_left_waiting_on_unlock_offers_unlock_not_give_up`; E-2 `desktop::view::operations::check_tests::a_running_check_now_reads_its_stage_words`. fmt, check and clippy clean. |
 
 ## Test edits (E-n)
 
-None yet.
+- E-1 (Task 2): `a_give_up_left_waiting_on_unlock_offers_unlock_not_give_up`
+  (`view/operations/outcomes/give_up_tests.rs:344`) calls `classify_share`
+  instead of `share_result`: it re-classifies under another record on purpose.
+  No assertion removed.
+- E-2 (Task 2): `a_running_check_now_reads_its_stage_words`
+  (`view/operations/check_tests.rs`) expects "Running: Saving…" instead of
+  `FINISHING` at the Writing stage (F3); the unused `FINISHING` import and the
+  module header comment were reworded. No assertion removed.
