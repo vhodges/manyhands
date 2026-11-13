@@ -294,8 +294,14 @@ async fn an_added_url_with_a_password_is_kept_out_of_everything_shown(cx: &mut T
         texts.iter().all(|text| !text.contains(SENTINEL)),
         "{texts:?}"
     );
+    // The list draws the row once the pane has applied it.
+    crate::desktop::view::activity_support::drawn(&shell, cx);
     let shown = window_text(&shell, cx);
     assert!(!shown.is_empty());
+    assert!(
+        shown.iter().any(|text| text.contains(&entry.row.title)),
+        "the add's row is drawn, so the scan reads it: {shown:?}"
+    );
     assert!(
         shown.iter().all(|text| !text.contains(SENTINEL)),
         "{shown:?}"

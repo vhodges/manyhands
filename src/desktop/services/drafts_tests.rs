@@ -574,12 +574,19 @@ async fn a_failed_flush_shows_an_entry_with_retry_and_no_draft_text(cx: &mut Tes
         shell.present(Region::Operations.id(), cx),
         "Activity is drawn"
     );
+    // The list draws the row once the pane has applied it.
+    crate::desktop::view::activity_support::drawn(&shell, cx);
     let labels: Vec<String> = shell.frame(cx, |window, _| {
         gpui_kit::base::test_support::snapshots(window)
             .iter()
             .filter_map(|snapshot| snapshot.label().map(str::to_owned))
             .collect()
     });
+    // The scan reads the entry's own row: a drawn label holds its title.
+    assert!(
+        labels.iter().any(|label| label.contains(&failed.row.title)),
+        "the failed flush's row is drawn: {labels:?}"
+    );
     assert!(!labels.iter().any(|label| label.contains(SENTINEL)));
 
     std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();

@@ -255,7 +255,7 @@ async fn an_operation_entry_names_the_item_never_the_draft(cx: &mut TestAppConte
     assert!(
         labels
             .iter()
-            .any(|label| label.starts_with("Recovery copy of"))
+            .any(|label| label.starts_with("The recovery copy of"))
     );
     assert!(!labels.iter().any(|label| label.contains(SENTINEL)));
 }

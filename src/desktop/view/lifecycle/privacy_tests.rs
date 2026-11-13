@@ -84,6 +84,10 @@ const ALLOWED: [&str; 10] = [
     "conflict-result",
 ];
 
+/// Activity's list, by the id of its container (R-20): the one place outside
+/// `ALLOWED` where an item's title, and only its title, may show.
+const ACTIVITY: &str = "operation-area";
+
 /// Where a drawn text is read, by the container it is drawn in.
 const SURFACES: [(&str, &str); 8] = [
     ("operation-area", "operation area"),
@@ -204,6 +208,18 @@ impl Seen {
                         .filter(|sentinel| text.contains(sentinel))
                         .map(|sentinel| (at, sentinel)),
                 ),
+                // The operation area names an item by its title as read
+                // (decisions 12 and 21): TITLE and READY, both titles, may
+                // show there; every other sentinel stays forbidden.
+                None if surface == "operation area" => {
+                    for sentinel in [TITLE, READY] {
+                        if text.contains(sentinel) {
+                            self.allowed.insert((ACTIVITY, sentinel));
+                        }
+                    }
+                    let scrubbed = text.replace(TITLE, "{title}").replace(READY, "{title}");
+                    self.read.insert((surface, scrubbed));
+                }
                 None => {
                     self.read.insert((surface, text));
                 }
@@ -233,8 +249,14 @@ impl Seen {
     }
 
     /// Each of `surfaces` was read, and no surface read holds a sentinel,
-    /// nor any answer's rendering.
+    /// nor any answer's rendering. The title was seen in Activity's list,
+    /// which is the scan's positive control: the sentinels that stay forbidden
+    /// there (the body, the comment, the sides) were planted in the same item.
     pub(super) fn holds_none(&self, surfaces: &[&str]) {
+        assert!(
+            self.allowed_holding(ACTIVITY, TITLE),
+            "the title showed in Activity's list (decision 21)"
+        );
         for surface in surfaces {
             assert!(
                 self.read.iter().any(|(at, _)| at == surface),

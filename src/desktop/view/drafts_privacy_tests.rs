@@ -271,7 +271,7 @@ async fn a_draft_body_is_in_no_entry_message_notification_dialog_or_error(cx: &m
     assert!(
         seen.0
             .iter()
-            .any(|(at, text)| *at == "drawn" && text.starts_with("Recovery copy of")),
+            .any(|(at, text)| *at == "drawn" && text.starts_with("The recovery copy of")),
         "the flush failure's entry in the operation area was read"
     );
     for (surface, text) in &seen.0 {
