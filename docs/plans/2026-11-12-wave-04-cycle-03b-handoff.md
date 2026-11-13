@@ -103,16 +103,19 @@ The approval commit applied the design's Document Amendments 1–12:
 - implementation of Tasks 0–13, including the test edits above;
 - pushing this ticket branch after each task's commit (owner, 2026-11-11:
   "changes on the branch should be being pushed to origin so others who
-  are not local can review").
+  are not local can review");
+- pushing other branches, including through `ticket save` or `comment add`
+  on another ticket, which publishes that ticket's branch and checkpoints
+  into its worktree (owner, 2026-11-13: "pushing is how people and agents
+  will collaborate in manyhands so it's okay to push branches"). Say in
+  the ledger and the next ticket comment which branches were published.
 
 **Not authorized.** Each needs the owner's own go-ahead, asked at the time:
 
-- a push of any branch other than this ticket's;
-- a pull request, a merge, closing the ticket, or worktree cleanup;
+- a pull request, a merge into main, closing the ticket, or worktree
+  cleanup;
 - dispatching native CI;
-- creating a ticket, for example for a library gap;
-- `ticket save` or `comment add` on any other ticket. `comment add`
-  publishes the target ticket's branch and checkpoints into its worktree.
+- creating a ticket, for example for a library gap.
 
 ## Read First, In Order
 
@@ -350,7 +353,8 @@ test (design A4, T1-T18) before any code. Revision 5 of the design had no
 independent review, so if a row cannot be expressed against the code, or the
 code would answer it differently, stop and bring it to me.
 
-Not authorized without asking me at the time: pushing any other branch, a
-pull request, merging, closing the ticket, worktree cleanup, native CI,
-creating tickets, or commenting on any other ticket.
+Pushing branches is fine, this one after each task and others when a
+comment on another ticket publishes them; say which. Not authorized without
+asking me at the time: a pull request, merging into main, closing the
+ticket, worktree cleanup, native CI, or creating tickets.
 ```

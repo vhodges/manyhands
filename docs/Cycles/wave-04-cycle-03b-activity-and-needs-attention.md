@@ -501,10 +501,12 @@ decisions govern and are not repeated.
     from the brief `docs/plans/2026-11-12-wave-04-cycle-03b-handoff.md`.
     Authorized: Tasks 0–13, the named test edits E-1 to E-16 and further
     edits under decision 14, and pushing this ticket branch after each
-    task. Not authorized without the owner's go-ahead at the time: a push
-    of any other branch, a pull request, the merge, closing the ticket,
-    worktree cleanup, native CI, creating tickets, and `ticket save` or
-    `comment add` on any other ticket.
+    task. Not authorized without the owner's go-ahead at the time: a pull
+    request, the merge, closing the ticket, worktree cleanup, native CI and
+    creating tickets. Amended the same day by the owner: "pushing is how
+    people and agents will collaborate in manyhands so it's okay to push
+    branches", so pushing other branches, including through `ticket save`
+    or `comment add` on another ticket, needs no separate go-ahead.
 
 ## Known Limits
 
