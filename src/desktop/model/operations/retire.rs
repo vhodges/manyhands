@@ -226,6 +226,23 @@ impl Operations {
                 .is_ok_and(|operation| self.retirements.polls.contains(&operation))
     }
 
+    /// The operation the Running request `id`'s first progress event named,
+    /// the first of `is_running`'s two sources (Activity, N21).
+    pub(crate) fn running_operation(&self, id: DesktopRequestId) -> Option<&str> {
+        self.retirements
+            .running
+            .get(&id)
+            .filter(|_| self.is_active(id))
+            .map(String::as_str)
+    }
+
+    /// Whether one of this app's automatic polls runs `operation`, the second
+    /// of `is_running`'s two sources (Activity, N21).
+    pub(crate) fn poll_runs(&self, operation: &str) -> bool {
+        OperationId::parse(operation)
+            .is_ok_and(|operation| self.retirements.polls.contains(&operation))
+    }
+
     fn is_active(&self, id: DesktopRequestId) -> bool {
         self.request(id)
             .is_some_and(|request| matches!(request.state, RequestState::Running { .. }))

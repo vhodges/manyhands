@@ -43,14 +43,14 @@ pub(crate) use review::{Review, ReviewOf};
 
 #[cfg(test)]
 pub(crate) use outcomes::main_branch_deleted;
+pub(crate) use outcomes::{
+    ANOTHER_SHARE_HOLDS, CONFLICT_BANNER, HISTORY_UNRESOLVED_BLOCKER, HISTORY_UNRESOLVED_GUIDANCE,
+    primary_name, primary_subject, share_text,
+};
 #[cfg(test)]
 pub(crate) use outcomes::{
-    ANOTHER_SHARE_HOLDS, BRANCH_DELETED, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, NEEDS_ATTENTION,
-    NEEDS_IDENTITY, NOWHERE_TO_SHARE, SHARED, check_host_text, may_be_waiting_for,
-};
-pub(crate) use outcomes::{
-    CONFLICT_BANNER, HISTORY_UNRESOLVED_BLOCKER, HISTORY_UNRESOLVED_GUIDANCE, primary_name,
-    primary_subject, share_text,
+    BRANCH_DELETED, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, NEEDS_ATTENTION, NEEDS_IDENTITY,
+    NOWHERE_TO_SHARE, SHARED, check_host_text, may_be_waiting_for,
 };
 
 use super::{
@@ -215,6 +215,13 @@ impl Operations {
     /// This session's requests, newest first.
     pub(crate) fn requests(&self) -> &[DesktopRequest] {
         &self.requests
+    }
+
+    /// Where the request `id`'s last attempt stands in the order every attempt
+    /// was queued in (R-78; Activity's `Group.sent`). `None` for a request this
+    /// model never saw queued.
+    pub(crate) fn sent(&self, id: DesktopRequestId) -> Option<u64> {
+        self.sent.get(&id).copied()
     }
 
     pub(crate) fn request(&self, id: DesktopRequestId) -> Option<&DesktopRequest> {

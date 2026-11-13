@@ -66,7 +66,7 @@ use gpui_kit::{
 };
 use manyhands::{
     drafts::DraftId,
-    results::{Effects, Outcome, RecoveryAction},
+    results::{Outcome, RecoveryAction},
 };
 
 mod attempts;
@@ -101,41 +101,22 @@ use crate::desktop::{
     },
 };
 
+// The pure text helpers live in the model, where Activity's rows read them
+// (R-41); each keeps its old path.
+pub(crate) use crate::desktop::model::activity::copy::{
+    CANCEL, CANCELLED, DISMISS, FINISHING, NOT_SENT, OPEN_LIFECYCLE, QUEUED, RUNNING, STOP,
+    STOPPING, effects_text, outcome_label, scope_name,
+};
+
 pub(crate) const THIS_SESSION: &str = "This session";
 pub(crate) const PENDING: &str = "Pending in repositories";
 pub(crate) const NOTHING_PENDING: &str = "No pending operations";
 pub(crate) const NO_REQUESTS: &str = "No requests yet";
-pub(crate) const QUEUED: &str = "Queued";
-pub(crate) const RUNNING: &str = "Running";
-pub(crate) const FINISHING: &str = "Finishing";
-pub(crate) const CANCELLED: &str = "Cancelled";
-pub(crate) const NOT_SENT: &str = "Not sent";
-pub(crate) const CANCEL: &str = "Cancel";
-/// An accepted share's Stop (R-1).
-pub(crate) const STOP: &str = "Stop at a safe point";
-/// Stop, once pressed.
-pub(crate) const STOPPING: &str = "Stopping…";
-pub(crate) const DISMISS: &str = "Dismiss";
 pub(crate) const DISMISSED: &str = "Dismissed";
 pub(crate) const RESUME: &str = "Resume";
 pub(crate) const ABANDON: &str = "Abandon";
-pub(crate) const APPLICATION: &str = "Application";
 pub(crate) const NO_NEXT_ACTION: &str = "Nothing to do";
 pub(crate) const NO_OPERATION_ID: &str = "No operation ID";
-/// A lifecycle's entry, once failed or stopped: its dialog again (D5, A3).
-pub(crate) const OPEN_LIFECYCLE: &str = "Open\u{2026}";
-
-/// An outcome in fixed text.
-pub(crate) fn outcome_label(outcome: Outcome) -> &'static str {
-    match outcome {
-        Outcome::Success => "Done",
-        Outcome::Noop => "No change",
-        Outcome::Partial => "Partly done",
-        Outcome::Blocked => "Blocked",
-        Outcome::Cancelled => "Cancelled",
-        Outcome::Error => "Failed",
-    }
-}
 
 /// A request's state in fixed text.
 pub(crate) fn state_label(state: &RequestState) -> String {
@@ -157,41 +138,6 @@ pub(crate) fn state_label(state: &RequestState) -> String {
         RequestState::NotSent(NotSent::KeyStoreUnavailable) => {
             format!("{NOT_SENT}: {KEY_STORE_UNAVAILABLE}")
         }
-    }
-}
-
-/// What a request or operation is about: its repository's directory
-/// name, or the application for a key command.
-pub(crate) fn scope_name(root: Option<&Path>) -> String {
-    match root {
-        Some(root) => root
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| root.to_string_lossy().into_owned()),
-        None => APPLICATION.to_owned(),
-    }
-}
-
-/// The effects a request reports, each one it was asked for, in the
-/// contract's names.
-pub(crate) fn effects_text(effects: &Effects) -> String {
-    let named = [
-        ("write", effects.write.as_str()),
-        ("checkpoint", effects.checkpoint.as_str()),
-        ("discovery", effects.discovery.as_str()),
-        ("publication", effects.publication.as_str()),
-        ("integration", effects.integration.as_str()),
-        ("cleanup", effects.cleanup.as_str()),
-    ];
-    let shown: Vec<String> = named
-        .into_iter()
-        .filter(|(_, value)| *value != "not_requested")
-        .map(|(name, value)| format!("{name}: {value}"))
-        .collect();
-    if shown.is_empty() {
-        "No effects".to_owned()
-    } else {
-        shown.join(", ")
     }
 }
 

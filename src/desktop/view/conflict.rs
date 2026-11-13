@@ -72,8 +72,8 @@ use crate::desktop::{
 
 pub(crate) const SAVE_RESOLUTION: &str = "Save resolution";
 /// The sheet's entry points (B5): the conflict banner's, the operation
-/// area's and a pending row's.
-pub(crate) const REVIEW_CHANGES: &str = "Review changes";
+/// area's and a pending row's. The words live in the model (R-44).
+pub(crate) use crate::desktop::model::activity::copy::REVIEW_CHANGES;
 pub(crate) const RETRY: &str = "Retry";
 pub(crate) const RESUME: &str = "Resume";
 pub(crate) const CANCEL: &str = "Cancel";

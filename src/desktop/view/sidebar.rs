@@ -7,9 +7,9 @@ use manyhands::repository::ConfigurationState;
 pub(crate) const RETRY: &str = "Retry";
 /// The chosen repository's row says so in text: its mark's label.
 pub(crate) const SELECTED: &str = "Selected";
-/// The repository menu's Share main: `repo sync` (design, Lane B, Share
-/// controls).
-pub(crate) const SHARE_MAIN: &str = "Share main";
+/// The repository menu's Share main: `repo sync`. The words live in the
+/// model, where Activity's rows read them (R-41).
+pub(crate) use crate::desktop::model::activity::copy::SHARE_MAIN;
 /// Share main with no publication remote: it opens Settings › Remotes, as
 /// the item header's Share… does.
 pub(crate) const SHARE_MAIN_SET_UP: &str = "Share main…";

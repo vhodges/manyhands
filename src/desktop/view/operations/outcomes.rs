@@ -28,12 +28,11 @@ use gpui_kit::{AnyElement, App, ClickEvent, Context, Window};
 
 use super::{
     button,
-    republish::{REPUBLISH, REPUBLISHING, Republishing, STOP_AND_REPUBLISH},
+    republish::{REPUBLISHING, Republishing},
     request_id,
 };
 use crate::desktop::{
     model::{
-        item::SHARE,
         operations::share_text,
         publication::{ShareTarget, SyncOffer, SyncOutcome, SyncResult},
     },
@@ -42,37 +41,12 @@ use crate::desktop::{
         requests::{DesktopRequestId, Intent, RequestState},
         worker::GaveUp,
     },
-    view::{item::ItemRoute, sidebar::RETRY, workspace::Workspace},
+    view::{item::ItemRoute, workspace::Workspace},
 };
 
-pub(crate) const UNLOCK: &str = "Unlock…";
-/// Give up (decision 8).
-pub(crate) const GIVE_UP: &str = "Stop trying to share";
-/// A Give up that found its request's record already finished: nothing
-/// was cancelled, and the entry shows the stored answer (decision 8).
-pub(crate) const ALREADY_FINISHED: &str = "Already finished";
-pub(crate) const OPEN_SHARING_AND_KEYS: &str = "Open Sharing & keys";
-pub(crate) const CHECK_HOST: &str = "Check host";
-pub(crate) const SET_IDENTITY: &str = "Set identity";
-pub(crate) const SHOW_IT: &str = "Show it";
-pub(crate) const SET_UP_SHARING: &str = "Set up sharing";
-
-/// An offer's label.
-pub(crate) fn offer_label(offer: SyncOffer) -> &'static str {
-    match offer {
-        SyncOffer::Share => SHARE,
-        SyncOffer::Retry => RETRY,
-        SyncOffer::GiveUp => GIVE_UP,
-        SyncOffer::Unlock => UNLOCK,
-        SyncOffer::OpenSharingAndKeys => OPEN_SHARING_AND_KEYS,
-        SyncOffer::CheckHost => CHECK_HOST,
-        SyncOffer::SetIdentity => SET_IDENTITY,
-        SyncOffer::ShowHolder => SHOW_IT,
-        SyncOffer::SetUpSharing => SET_UP_SHARING,
-        SyncOffer::Republish => REPUBLISH,
-        SyncOffer::StopAndRepublish => STOP_AND_REPUBLISH,
-    }
-}
+// The offers' words live in the model, where Activity's rows read them
+// (R-44); each keeps its old path.
+pub(crate) use crate::desktop::model::activity::copy::{ALREADY_FINISHED, offer_label};
 
 /// The part of an entry's element ids an offer's control takes. Share's
 /// is the stopped share's (design, Outcomes and routes).
