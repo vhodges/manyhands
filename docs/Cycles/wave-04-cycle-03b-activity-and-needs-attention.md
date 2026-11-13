@@ -14,19 +14,27 @@ Ticket `01M784Y94Q3AXT6XJX38F5VK1V` (`vh-dt0aq`).
 [Design](../plans/2026-11-12-wave-04-cycle-03b-activity-and-needs-attention-design.md) and
 [implementation plan](../plans/2026-11-12-wave-04-cycle-03b-activity-and-needs-attention-implementation.md).
 
-**Status: draft, revision 1.** On 2026-11-12 the owner asked to plan this
+**Status: draft, revision 2.** On 2026-11-12 the owner asked to plan this
 Cycle while Cycle 03a was in its final review ("substantially complete").
 The owner answered decisions 4–12 in that session and accepted the
 planner's outline with decision 13 ("write the documents"). Decisions
 1–3 were made during Cycle 03a's planning and are recorded on this
 ticket. Decisions 14–20 are the planner's proposals, each with its
-reason, for the owner to confirm. Those marked **(owner's eye)** change
-something people see today or depart from an authority.
+reason, for the owner to confirm. The owner answered decisions 21–24 on
+2026-11-13, after review round 1. Those marked **(owner's eye)** change
+something people see today or depart from an authority. Revision 2
+applies review round 1 (4 Blocking, 39 Important, 25 Minor across two
+reviewers) and decisions 21–24; not yet re-reviewed.
 
 - Drafted on the ticket branch at `b37d2c2b`. That commit merges Cycle
   03a's published head `3086666f` into this ticket's base, origin/main
   `37be101d` (decision 4).
-- Revision 1 has not yet been reviewed.
+- Review round 1 read revision 1 at `74c9aabb`:
+  - contract and consistency: 3 Blocking, 24 Important, 14 Minor;
+  - source and feasibility: 1 Blocking, 15 Important, 11 Minor.
+- The plan has 14 tasks (0–13). If the owner splits the Cycle, 03b-1 is
+  Tasks 0–10 and 03b-2 is Tasks 11–13 (design Risks).
+- Revision 2 has not yet been re-reviewed.
 
 ## Purpose And Authority
 
@@ -38,7 +46,7 @@ After this Cycle, Activity is one timed log. Each line says:
 - when the app learned of it;
 - what happened, or what is wrong, in plain words;
 - which repository it concerns;
-- the one thing to do about it.
+- the one thing to do about it, when there is one (decision 24).
 
 The Git detail is a hover, or a menu, away. Failures and recovery states
 stay until they are resolved, and the footer's Needs attention opens a
@@ -79,9 +87,11 @@ Authorities, in order:
    - frames `screenshots/1a` and `2f`.
 6. **Predecessors:**
    - Wave 03 D5: the lifecycle and conflict entries, and its privacy rule
-     (amended by decision 12);
-   - D6: holds, checks, Quit's "still stopping";
-   - Cycle 01: the Activity panel, the footer, the count's rules, K-19;
+     (amended by decisions 12 and 21);
+   - D6: holds, checks, Quit's "still stopping", its privacy rule
+     (decision 21) and its wrapping rows (decision 22);
+   - Cycle 01: the Activity panel, the footer, the count's rules
+     (decision 3, superseded by decision 6), K-19;
    - Cycle 03a: repository state, the footer order, the unshared list,
      the menu layer.
 
@@ -93,7 +103,7 @@ Authorities, in order:
 | Latest main merged into the ticket branch | Created from origin/main `37be101d`; nothing newer on main at planning |
 | Cycle 03a merged | **No.** In final review. Its published head `3086666f` is merged into this branch (decision 4); its later final-review commits are not. Implementation does not start before 03a closes: Task 0 merges main and re-grounds (design U-6) |
 | Wave 03 D6 merged | Yes: main `48653d01` |
-| GPUI Kit 0.6.6 names verified | `List`, `Popover`, `PopupMenu`, `Button`, `uniform_list`, read from the locked source during planning (design facts 31–34; U-2) |
+| GPUI Kit 0.6.6 names read | `List`, `Popover`, `PopupMenu` and `Button` read from the locked source during planning (design facts 31–34). `uniform_list` read during planning; U-2 is checked in Task 9 |
 | Required checks at baseline | Not run during planning; Task 0 runs them |
 | Testers | Linux (Wayland): the product owner. macOS and Windows: native CI after merge |
 
@@ -181,8 +191,9 @@ A2), not the log.
    notification (RFC).
 3. **Nothing new is sent.** Every row action runs the handler today's
    control runs. Moving the highlight, filtering and opening a menu or
-   the popover send nothing. Enter runs only the row's own button
-   (decision 11).
+   the popover send nothing (tested: P31). Enter runs only the row's own
+   button (decision 11), and does nothing on a row with no action
+   (decision 24).
 4. **Each thing counts once** (design A3).
 5. **Keyboard.** Every row action, the row menu, the filter, ⋯, the
    footer item and every popover action work by keyboard. Each has an
@@ -190,9 +201,9 @@ A2), not the log.
    (RFC 344–351; `MH-NFR-005`).
 6. **Colour is never the only signal.** Every row has an icon and words.
 7. **No secret.** Rows, tooltips, menus, tags and the popover hold only
-   what design Part G lists. A title may appear there (decision 12). A
-   body, comment, conflict side, URL, key or passphrase never does
-   (`MH-NFR-003`).
+   what design Part G lists. A title may appear there (decisions 12 and
+   21), never a draft's own title. A body, comment, conflict side, URL,
+   file path, key or passphrase never does (`MH-NFR-003`).
 8. **R-60 holds.** Nothing in Activity, the menus, the footer item or
    the popover acts behind a dialog or sheet.
 9. **Activity can be hidden.** The rows, times, count and popover do not
@@ -210,20 +221,22 @@ reports.
 
 | # | Wave exit evidence / contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | Failures persist until resolved and appear in both Activity and the popover (Wave exit; contract 2) | `each_source_makes_its_rows` (P1); `the_log_keeps_times_and_events` (P3); `count_and_popover_agree` (P13) | Planned |
-| A2 | Every popover action works by keyboard (Wave exit) | `popover_actions_by_keyboard` (P23); `the_popover_opens_lists_and_closes` (P22) | Planned |
+| A1 | Failures persist until resolved and appear in both Activity and the popover, every counted failure (Wave exit; contract 2; decision 24) | `each_source_makes_its_rows` (P1); `the_log_keeps_times_and_events` (P3); `count_and_popover_agree` (P13); `clear_finished_keeps_failures_and_states` (P19); `a_checking_repository_keeps_its_row` (P30) | Planned |
+| A2 | Every popover action works by keyboard (Wave exit) | `popover_actions_by_keyboard` (P23); `the_popover_opens_lists_and_closes` (P22); `the_popover_closes` (P25); `status_items_say_and_choose`' status table (P26) | Planned |
 | A3 | Activity can be hidden and the popover still works (Wave exit; contract 9) | `the_popover_works_with_activity_hidden` (P24); `activity_hidden_keeps_the_log` (P29) | Planned |
-| A4 | No secret in a row, tooltip or popover (Wave exit; contract 7) | `polling_privacy` and D5's three sweeps with the title-only allowance (E-14, P28) | Planned |
+| A4 | No secret in a row, tooltip or popover (Wave exit; contract 7) | `polling_privacy` and D5's three sweeps with the title-only allowance (E-12, E-14, P28) | Planned |
 | A5 | Rows of time, icon, message, tag and at most one action, Git detail in the tooltip, newest first, the filter (Wave scope) | `request_copy_table`, `share_copy_table`, `state_copy_table`, `activity_time_formats` (P4–P7); `rows_draw_from_the_log_and_filter` (P14) | Planned |
-| A6 | Today's operations-area content is carried into rows, not dropped (Wave scope) | `each_source_makes_its_rows` against design A2's table; the tests moved by E-5 and E-6 pass unchanged in meaning | Planned |
+| A6 | Today's operations-area content is carried into rows, not dropped (Wave scope) | `each_source_makes_its_rows` against design A2's table and B0's map; the tests moved by E-5 and E-6 pass unchanged in meaning | Planned |
 | A7 | The count includes the Wave's repository states, each thing once (Wave scope; decision 6) | `attention_counts_each_thing_once` (P2, test-first); `count_and_popover_agree` (P13) | Planned |
-| A8 | The three K-19 rows fit Activity (Wave, D6's amendment) | `rows_fit_a_narrow_activity` (P21) | Planned |
-| A9 | Repository state is read from Cycle 03a's function (obligation) | Cycle 03a's panel tests unchanged; P12 in `each_source_makes_its_rows` | Planned |
-| A10 | Activity and its row menu work by keyboard (contract 5) | `activity_by_keyboard` (P15); `the_row_menu_by_pointer_and_keyboard` (P17); the rewritten keyboard tests (E-7) | Planned |
-| A11 | Nothing new is sent; each action runs its handler (contracts 3, 10) | `each_action_runs_its_handler` (P18); the moved tests (E-5, E-6) | Planned |
+| A8 | The three K-19 rows fit Activity (Wave, D6's amendment; decision 22) | `rows_fit_a_narrow_activity` (P21) | Planned |
+| A9 | Repository state is read from Cycle 03a's function (obligation) | Cycle 03a's panel tests, run by name after `RepoFacts` building moves (P12) | Planned |
+| A10 | Activity and its row menu work by keyboard (contract 5) | `activity_by_keyboard` (P15); `rows_by_pointer` (P16); `the_row_menu_by_pointer_and_keyboard` (P17); `a_dialog_from_a_row_returns_focus_to_its_row` (P20); the rewritten keyboard tests (E-7) | Planned |
+| A11 | Nothing new is sent; each action runs its handler (contracts 3, 10) | `each_action_runs_its_handler` (P18); `navigation_sends_nothing` (P31); the moved tests (E-5, E-6) | Planned |
 | A12 | Nothing acts behind a dialog or sheet (contract 8) | `nothing_acts_behind_a_dialog_or_sheet` (P27) | Planned |
-| A13 | The folded-in work | The operations model tests unchanged (P11); `shares_are_classified_once` (P9); `stages_are_shown` (P10) | Planned |
+| A13 | The folded-in work | The operations model tests unchanged (P11); `shares_are_classified_once` (P9); `stages_are_shown` (P10); `D/view/operations.rs` below 500 lines (checked in Task 9) | Planned |
 | A14 | Activity, the popover and the footer item match the design in the dark theme | On screen: the owner, against frames 1a and 2f | Planned |
+| A15 | Activity agrees with Cycle 03a's "to share" and repository rows (obligation) | Cycle 03a's panel tests, run by name (P12); `reminders_match_to_share` (P32) | Planned |
+| A16 | Colour is never the only signal (contract 6) | `each_source_makes_its_rows` (every row has a kind and a title); `rows_draw_from_the_log_and_filter` | Planned |
 
 ## Product-Owner Decisions (2026-11-12)
 
@@ -308,6 +321,8 @@ decisions govern and are not repeated.
 
     *Alternative:* short codes only.
 
+    Decision 21 extends this to D6's rule.
+
 **Proposed by the planner in the outline and accepted when the owner said
 "write the documents" (2026-11-12):**
 
@@ -328,9 +343,14 @@ decisions govern and are not repeated.
     - is called out in the review-ready summary when it removes an
       assertion.
 
-    Tasks 6 and 7 move about 170 existing tests onto a seam (design,
+    Tasks 6 to 8 move about 170 existing tests onto a seam (design,
     Testing). They are green before and after, and keep each assertion's
-    meaning.
+    meaning. Converted tests act through the seam, not the drawn control,
+    so they no longer prove their control is drawn; P18 and P23 prove each
+    action kind from a drawn button, the menu and the popover (design
+    R-21). Label reads that compared today's words become reads of model
+    state, so the copy is asserted by the copy tables (P4–P7) instead;
+    these are **Removes**, listed per file in the ledger.
 15. **Test runs follow `AGENTS.md`.** Between tasks, only the tests a task
     wrote or changed run, by exact name. The fast tier runs once, at
     review-ready, with `--no-fail-fast`.
@@ -345,17 +365,58 @@ decisions govern and are not repeated.
       same list.
     - They are never counted.
 18. **A press outside the popover closes it and also acts** on what was
-    pressed, unless it is the footer item itself, which closes it. Tab
-    stays inside the popover; Escape leaves it.
+    pressed, unless it is the footer item itself, which closes it (owner's
+    eye). Tab stays inside the popover; Escape leaves it. This departs
+    from the mockup, whose full-window click-catcher swallows a press
+    outside (`docs/design/mockups/source/Workspace.dc.html:485`). It
+    matches the app's dock and repository menus, which also let the press
+    through.
 19. **A repository's row stays while a retry checks it** (owner's eye).
     Checking… outranks Can't reach on the panel's row (3a decision 8), but
     the Activity row and the count hold until the check answers, so they
     do not flicker every retry.
-20. **A pending conflict makes no repository row.** The conflict's own
-    row (its pending operation, or the request that stopped on it)
-    offers Review changes. After a relaunch, before the pending list is
-    read, Activity may not show why checking waits; the panel's row
-    still says Needs attention.
+20. **A pending conflict makes no repository row (owner's eye).** The
+    conflict's own row (its pending operation, or the request that
+    stopped on it) offers Review changes. After a relaunch, before the
+    pending list is read, Activity may not show why checking waits; the
+    panel's row still says Needs attention.
+
+**Answered by the owner on 2026-11-13, after review round 1:**
+
+21. **Titles under D6's rule too.** Decision 12's amendment also covers
+    Wave 03 D6's privacy rule. D6's contract 10 bars titles from operation
+    entries and status lines. *Alternative:* D6's rows stay title-free.
+
+    Two limits stay regardless:
+    - a save or a create names its item by the item's title as read,
+      never by the draft's own title (Wave 03 D2's rule);
+    - file paths never appear in a row.
+22. **One-line rows; D6's decision 13 amended.**
+    - D6 decision 13 says each row D6 adds wraps. Instead every row is one
+      line: the message ends in an ellipsis, and the button never leaves
+      the row.
+    - The full text is in the tooltip, the row menu's first lines and the
+      accessible description.
+
+    *Alternative:* wrap to at most two lines.
+23. **After a dialog, focus returns to the row (owner's eye).**
+    - When a dialog or sheet opened from an Activity row closes, focus
+      returns to the Activity list with the same row highlighted, whether
+      the action came from the button, the menu or Enter.
+    - The row counts as the invoking control (RFC 344–351; Cycle 05's
+      rule).
+    - Today focus returns to the exact button.
+
+    *Alternative:* back to the button when it was used.
+24. **At most one action; failures once in the popover.**
+    - The Wave's "its single action" becomes "at most one action". A row
+      with none still counts and says what is wrong, and Enter does
+      nothing on it.
+    - "Failures … appear in both Activity and the popover" means every
+      counted failure. Repeats about one operation show once in the
+      popover and all in Activity.
+
+    *Alternative:* give every row an action.
 
 ## Known Limits
 
@@ -366,7 +427,8 @@ These are visible to users; the design's Known Limits give the detail.
     the stores keep returns, timed by the new session (K-1).
   - Nothing is capped within a session (K-4).
 - **Wording:**
-  - An item with no title known is named by its short code (K-2).
+  - An item with no title known is named by its short code (K-2). A new
+    item reads so until a list read gives its title.
   - A failure's reason is the library's fixed sentence, which sometimes
     names a CLI command (K-3).
   - No names: "Brought in N changes" names no one, and a conflict says
@@ -382,11 +444,14 @@ These are visible to users; the design's Known Limits give the detail.
     (K-9).
   - A pending row with no operation ID can change its time (K-10).
   - A press outside the popover also acts (K-11).
+  - An unreachable repository with problems from an earlier check shows
+    the problems, not Can't reach, as its panel row does (K-13).
 
 ## Open Questions
 
-None for the owner beyond confirming decisions 14–20. The design's U-1 to
-U-7 are checked by the tasks that first rely on them.
+None for the owner beyond confirming decisions 14–20. Decisions 21–24
+were answered on 2026-11-13. The design's U-1 to U-7 are checked by the
+tasks that first rely on them.
 
 ## Review Record
 
@@ -395,3 +460,6 @@ U-7 are checked by the tasks that first rely on them.
 | Owner, 2026-11-12 | "Wave 4 Cycle 3a is in step 10 (final review) … substantially complete … start planning for Wave 4 Cycle 3b now on that basis" | Owner direction | Research, then questions; decision 4 | Session, 2026-11-12 |
 | Planning research | No row has a time; the footer count and the panel's Needs attention disagree (3a K-9); the Kit `Popover` cannot be driven and the Kit `List` presses Confirm on click; shares are classified on every render; "Finishing" hides the stage; D5 bars titles from the operation area; 494 test lines in 54 files reach the area by element id | Facts; owner questions; rulings | Design facts 1–46; decisions 4–13; design R-8, R-10, R-21, R-36 | Design |
 | Owner, 2026-11-12 | Base; resolved rows; the count; checks; extra actions; clearing; problem items; Enter; the outline; titles | Owner decisions | Decisions 4–13 | Session, 2026-11-12 |
+| Review round 1, contract and consistency (revision 1, `74c9aabb`) | 3 Blocking, 24 Important, 14 Minor: titles under D6's rule; paths in rows; popover actions by keyboard; the seam; the attention table; copy rules; focus; task numbering | Blocking, Important, Minor | Revision 2; decisions 21–24 | Change list, 2026-11-13 |
+| Review round 1, source and feasibility (revision 1, `74c9aabb`) | 1 Blocking, 15 Important, 11 Minor: how the seam acts; inputs to the derivation; handler names and signatures; the Kit `Popover`; tests the inventory missed; counts and line references | Blocking, Important, Minor | Revision 2; design R-40 to R-45 | Change list, 2026-11-13 |
+| Owner, 2026-11-13 | Titles under D6's rule; one-line rows; focus after a dialog; at most one action and counted failures | Owner decisions | Decisions 21–24 | Session, 2026-11-13 |

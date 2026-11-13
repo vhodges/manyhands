@@ -28,10 +28,14 @@ existing work:
 
 Approval covers the mechanisms, rulings, named test edits and task order.
 It does not authorize implementation, pushes beyond the ticket branch,
-merging or closing.
+merging or closing. After approval, a note goes on each folded-in ticket
+(`01M6H7VXJJHRYHTW9S8TJ88921`, `01M6RAS63EWVHWWVBSZ836RXG2`,
+`01M5CS4MH25QQ769HV61ZRKHXG`) saying which items this Cycle takes. That is
+the planner's step 9 work, not a Document Amendment.
 
-**Draft, revision 1.** Grounded at the ticket branch `b37d2c2b`, which
-holds:
+**Draft, revision 2.** Revision 2 applies review round 1 (two reviewers)
+and decisions 21–24; not yet re-reviewed. Grounded at the ticket branch
+`b37d2c2b`, which holds:
 
 - origin/main `37be101d` (Cycle 01, Cycle 02 and Wave 03 D6 merged);
 - Cycle 03a's published head `3086666f`, merged in on 2026-11-12 by
@@ -78,7 +82,8 @@ Conventions:
   - "The repository state" is Cycle 03a's `repository_state(&RepoFacts)`
     (fact 23).
 - **Item titles:**
-  - "The title" is an item's title, read from the places fact 25 names.
+  - "The title" is an item's title as read, from the places B1 names
+    (fact 25), never a draft's own title (decision 21).
   - "The short code" is the desktop's `short_code(&ItemId)`: the ULID's
     last eight characters (fact 20).
 
@@ -204,7 +209,7 @@ Conventions:
       attention 157, outcomes 344, record 49, recovered 47, republish 247,
       resume 174, retire 334, review 150, and the test support
       attention_support 142.
-    - `D/view/workspace.rs` is 488 lines; `D/model/repository_state.rs` 497.
+    - `D/view/workspace.rs` is 488 lines; `D/model/repository_state.rs` 496.
 
 **Requests, shares and stages.**
 
@@ -255,8 +260,12 @@ Conventions:
     (`scheduler::note_record`, in the drain loop of `D/services/mod.rs`
     at about `:619`; `D/services/scheduler/retire.rs:47-61`).
 
-    About 36 lines in 21 test files build `WorkerEvent::Finished(…)`
-    themselves.
+    `git grep -c 'WorkerEvent::Finished('` over `D/` finds 51 lines in 26
+    files: 36 lines in 21 test files, and 15 lines in 5 production files
+    (`D/services/mod.rs` 7, `D/services/scheduler/reconfigure.rs` 5, and
+    one each in `D/model/operations.rs`, `D/services/scheduler/retire.rs`
+    and `D/services/worker.rs`). Some of these lines match the event
+    rather than build it.
 14. **Stage words.**
     - **Which intents have them:**
       - `Progressing::of` (`D/model/operations.rs:738-750`) gives words to
@@ -280,15 +289,17 @@ Conventions:
       - `stop_is_not_offered_without_a_remote` asserts the button is
         present (`give_up_tests.rs:390-418`).
 15. **Intents.**
-    - **Variants:** 45 (`D/services/requests.rs:69-351`).
+    - **Variants:** 43 (`D/services/requests.rs:69-351`).
     - **`label()`** (`:418-466`) is "Fixed text: no value the user
       typed".
     - **`root()`** (`:469-515`) is `None` for the key intents, which today
       show the scope "Application".
     - **Titles:** DocumentSave, TicketSave, DocumentCreate and
-      TicketCreate carry the title being saved.
+      TicketCreate carry the draft's title, which a row never shows (D2;
+      decision 21).
     - **Item IDs:** the other item intents carry `id: ItemId`, apart from
-      DocumentRepair and TicketRepair, which carry a path.
+      DocumentRepair and TicketRepair, which carry a path. No row shows a
+      path (decision 21).
     - **Sent by the app, not the person:**
       - IndexRefresh, at launch for each listed repository
         (`D/view/workspace/repositories.rs:72`) and after a create, an
@@ -339,6 +350,11 @@ Conventions:
       - `abandon_offered` is at `:1205`.
     - **`pending_shown`** (`D/model/operations/retire.rs:236`) leaves out
       the worker's running work.
+    - **`operation_of`** (`D/model/operations/retire.rs:269`) names the
+      operation an answered request is about, so a request and the pending
+      row of one operation count once today (N2).
+    - **`entered_operations()`** (`D/model/operations/retire.rs:195`) is
+      read beside the pending rows (`D/view/operations.rs:740-746`).
     - **Lists are loaded** when:
       - repositories load;
       - a finished request changed a root;
@@ -448,10 +464,13 @@ Conventions:
         (`D/view/workspace/titles.rs:78`) is a map lookup, filled from
         the selected repository's Tickets and Documents reads and from
         Cycle 03a's reads of unshared items;
-      - an open tab's `tab_title()` (`D/view/item.rs:447`) comes from
-        `ItemModel::last_title()` (`D/model/item.rs:259`);
-      - save and create intents carry their title (fact 15).
-    - **Nothing else** maps an `ItemId` to a title synchronously.
+      - an open item's `ItemModel::last_title()` (`D/model/item.rs:259`)
+        is an `Option`, `None` until a read gives a title. The tab's
+        `tab_title()` (`D/view/item.rs:447-458`) falls back to the full ID,
+        so it is not a source.
+    - **Nothing else** maps an `ItemId` to a title synchronously. A save's
+      or create's own title is the draft's text, which no row shows
+      (fact 15).
 26. **No names.**
     - A check records counts only (fact 20), so "Brought in N changes
       from {name}" cannot name anyone.
@@ -512,8 +531,14 @@ Conventions:
     - **Row size:** it measures one row and gives every row that size.
     - **Each item's wrapper** carries `aria_selected`.
 32. **The Kit `Popover`** (`C/popover.rs`; `B/popover.rs`):
-    - its trigger must be `Selectable`, which the footer's wrapper is not;
-    - its open state is keyed element state that the app cannot reach.
+    - **A controlled mode:** `.open(bool)` plus `on_open_change`
+      (`C/popover.rs:190-211`, forwarded at `:315`).
+    - **Its trigger** must be `Selectable`. Kit `Button` is
+      (`C/button/button.rs:521`), and the footer's face is a Kit `Button`
+      (`D/view/footer.rs:371`).
+    - **Its own rules:** it keeps its state in element state, reports no
+      open change for a controlled transition, and moves and restores
+      focus its own way.
     - No app code uses it.
 33. **Every Kit `PopupMenu`** has element id `"popup-menu"`
     (`C/menu/popup_menu.rs:1464`) and binds `enter`, `escape` and the
@@ -561,7 +586,12 @@ Conventions:
       - three tests assert a control lies inside the area's bounds:
         `retire_left_offer`, `retire_pending_row_by_keyboard` and
         `retire_rows_hit`;
-      - four resize the window to bring a control into view.
+      - four resize the window to bring a control into view:
+        `attention_actions_hit` (`D/view/operations/attention_tests.rs:371`),
+        `attempt_entry_actions_hit` (`D/view/operations/attempts_tests.rs:181`),
+        `a_draft_not_saved_on_quit_by_keyboard`
+        (`D/view/keyboard_tests/drafts/quit.rs:70`) and `polling_keyboard`
+        (`D/view/keyboard_tests/shell/polling_journey.rs:133`).
 39. **The harness** (`D/view/harness.rs`, on `Shell`) has:
     - `click` (`:296`), `press` (`:324`), `label` (`:336`);
     - `tab_reaches` (`:365`), `present` (`:382`), `rows` (`:409`);
@@ -588,16 +618,27 @@ Conventions:
     - **The drafts sweep** asserts that drawn text starts with "Recovery
       copy of" (`D/view/drafts_privacy_tests.rs:272-276`).
 41. **Tests that pin the Needs attention count or press:**
-    - in `D/model/attention_tests.rs`: `counts_what_awaits_the_person`
-      (`:172`) and `retire_rows_dismissed` (`:143`);
+    - `counts_what_awaits_the_person` (`D/model/attention_tests.rs:172`)
+      and `retire_rows_dismissed`
+      (`D/model/attention_retire_tests.rs:143`);
+    - `retire_resume_resends_original`, which calls `needs_attention`
+      (`D/services/scheduler_retire_tests.rs:691`);
     - in `D/view/footer_tests/mod.rs`:
       `needs_attention_counts_and_leads_to_activity` (`:279`),
       `footer_controls_do_nothing_behind_a_dialog` (`:334`),
       `toggle_names_follow_their_state` (`:426`) and
-      `status_items_say_and_choose` (`:488`);
+      `status_items_say_and_choose` (`:488`), whose journey reads the
+      control at `D/view/footer_tests/status.rs:351` and whose status
+      table asserts `focus_after_hiding(Attention)` at
+      `D/view/footer_tests/status_table.rs:211`;
     - `needs_attention_works_by_enter` and
       `footer_controls_are_reached_by_tab`
-      (`D/view/keyboard_tests/shell.rs:377`, `:409`);
+      (`D/view/keyboard_tests/shell.rs:377`, `:409`), and
+      `arrange_the_workspace_by_keyboard_alone`, through its `dismiss`
+      helper (`D/view/keyboard_tests/shell/journey.rs:104`);
+    - `a_file_that_cannot_be_read_restores_the_default_and_says_so`
+      (`D/view/dock/restore_tests.rs:209`, `:219`) and
+      `a_failed_write_shows_the_save_notice` (`:366`);
     - `drafts_not_saved_with_activity_hidden_focuses_the_item_area`
       (`D/view/workspace_tests.rs:537`).
 42. **How desktop tests run.** They are unit tests of the `manyhands` bin
@@ -642,11 +683,35 @@ Conventions:
       - `:44-49`: operations name their repository, item, operation and
         stage; recovery uses typed actions, not raw remote text;
       - `:188-190`: "still stopping" sits in the quit's Activity entry.
-    - **PRD:** `MH-UX-001` (`docs/PRD/mvp.md:549`), `MH-NFR-003` (`:601`)
-      and `MH-NFR-005` (`:622-623`). The PRD header reads version 0.7.
-45. **D5's privacy rule** (`docs/plans/2026-11-03-wave-03-desktop-05-recovery-and-completion-design.md:694-698`):
-    "No title, body, comment, side or result text enters an operation
-    entry, log or error." Decision 12 amends it for titles.
+    - **PRD:** `MH-UX-001` (`docs/PRD/mvp.md:549`), `MH-NFR-003` (`:601`),
+      `MH-NFR-004` (`:611-612`, work that takes time does not block the
+      desktop) and `MH-NFR-005` (`:622-623`). The PRD header reads version
+      0.7.
+45. **The privacy rules that bar titles today.**
+    - **D5's design** (`docs/plans/2026-11-03-wave-03-desktop-05-recovery-and-completion-design.md:694-698`):
+      "No title, body, comment, side or result text enters an operation
+      entry, log or error."
+    - **D5's Cycle contract 10**
+      (`docs/Cycles/wave-03-desktop-05-recovery-and-completion.md:197-198`):
+      "No item title, body, comment or conflict text enters an operation
+      entry, log or error message."
+    - **D6's Cycle contract 10**
+      (`docs/Cycles/wave-03-desktop-06-polling-and-shutdown.md:353-354`):
+      "No item title, body, comment or key material enters an operation
+      entry, status line, log or error message."
+    - **D6's design** (`docs/plans/2026-11-07-wave-03-desktop-06-polling-and-shutdown-design.md`):
+      - `:1095`: a retirement row's `{item}` "is never a title";
+      - Privacy (`:1520-1528`): "None holds a title, body, comment or key
+        material" (`:1525`), and a sentinel test fails "if a title or a
+        passphrase appears in an operation entry, a Retire offer, ask or
+        answer, status text or the in-flight record" (`:1527-1528`).
+    - **D2's rule, as the test states it** (`D/view/drafts_entry_tests.rs:122-124`):
+      "An operation entry names a draft's item by its title as read when
+      the draft began, or by its ID when that read failed, never by the
+      draft's own title."
+
+    Decisions 12 and 21 amend the first four for titles (Document
+    Amendment 6). D2's rule stands (B1).
 46. **What Cycle 03a hands on.**
     - Read repository state from `repository_state`; decide the count
       (3a K-9); the footer order; the K-19 rows; Activity and "to share"
@@ -669,7 +734,12 @@ New module `D/model/activity.rs`, declared in `D/model/mod.rs`, with:
 - `activity/requests.rs` for S1;
 - `activity/states.rs` for S2–S14;
 - `activity/log.rs` for A4;
-- `activity/copy.rs` for Part B's texts.
+- `activity/copy.rs` for Part B's texts, and the pure text helpers the
+  rows need: `outcome_label`, `effects_text`, `scope_name` and the
+  lifecycle outcome lines. Task 3 moves these from GPUI-importing view
+  modules (`D/view/operations.rs`, `D/view/lifecycle/outcome.rs`) and
+  re-exports them from their old paths, so view callers do not change
+  (R-41).
 
 It has no GPUI dependency.
 
@@ -680,8 +750,8 @@ pub(crate) enum RowKey {
     Brought { root: RepoKey, seq: u64 },
     Hold(String),                                   // hold_key(&Reason), R-3
     Repository(RepoKey),
-    Problem { root: RepoKey, item: Option<ItemId> }, // None is main
-    Unshared { root: RepoKey, item: Option<ItemId> },
+    Problem { root: RepoKey, target: Target },
+    Unshared { root: RepoKey, target: Target },
     RetireOffer { root: RepoKey, item: ItemId },
     Retirement { root: RepoKey, item: ItemId },
     Pending { root: RepoKey, operation: String },    // R-4
@@ -692,6 +762,13 @@ pub(crate) enum RowKey {
     Note(Report),
 }
 
+/// A target of the unshared list. An item whose ID did not parse also has
+/// `item_id: None` (`D/model/polling/attempt.rs:134-140`), so it is
+/// `Unnamed(n)`, its position among that list's targets with no ID.
+pub(crate) enum Target { Main, Item(ItemId), Unnamed(u32) }
+
+pub(crate) struct ItemRef { pub root: RepoKey, pub kind: AuthoringKind, pub id: ItemId }
+
 pub(crate) enum Kind { Info, Success, Sharing, ToShare, Failure, Locked, Working }
 
 pub(crate) struct Offer {
@@ -700,9 +777,9 @@ pub(crate) struct Offer {
     pub enabled: bool,
 }
 
-pub(crate) struct ActivityRow {
+/// A row as derived: everything but its time.
+pub(crate) struct Derived {
     pub key: RowKey,
-    pub at: OffsetDateTime,
     pub kind: Kind,
     pub title: String,
     pub description: Option<String>,
@@ -712,13 +789,23 @@ pub(crate) struct ActivityRow {
     pub detail: Vec<String>,
     pub attention: bool,
     pub item: Option<ItemRef>,
-    pub finished: bool,
+    pub clearable: bool,
+    pub kept: bool,
+}
+
+/// A row of the log: a `Derived` and the time the app first learned of it.
+pub(crate) struct ActivityRow {
+    pub at: OffsetDateTime,
+    pub row: Derived,
 }
 ```
 
+No field is unset at any point.
+
 **Deriving.**
 
-- `RowKey` derives `Clone, PartialEq, Eq, PartialOrd, Ord, Debug`.
+- `RowKey` and `Target` derive `Clone, PartialEq, Eq, PartialOrd, Ord,
+  Debug`.
 - `Report` (`D/services/inflight.rs:185`) gains `PartialOrd, Ord`.
 - `Reason` cannot derive `Ord`: it holds the library's `SharedKeyId`,
   which has no order. So a hold's key is the string `hold_key(&Reason)`
@@ -726,26 +813,37 @@ pub(crate) struct ActivityRow {
 
 **Fields.**
 
-- **`kind`** sets the icon and its colour (`03`):
-  - info, secondary;
-  - success, green;
-  - sharing, teal `refresh-cw`;
-  - to share, amber `cloud-upload` (`06`);
-  - failure, red;
-  - locked, amber `lock`;
-  - working, a teal spinner (`06`).
-- **`title`** and **`description`:** Activity draws
-  `title` + " " + `description` on one line, with an ellipsis. The
-  popover draws them on two lines (`05`).
+- **`kind`** sets the icon's colour (`03`) and, with the source, the
+  icon:
+  - info: secondary `info`;
+  - success: green `circle-check`;
+  - sharing: teal; `cloud-upload` for a share that published (as the
+    mockup's "Shared"), `refresh-cw` for a check;
+  - to share: amber `cloud-upload` (`06`);
+  - failure: red; `wifi-off` for Can't reach, `circle-alert` otherwise;
+  - locked: amber `lock`;
+  - working: a teal spinner, `loader-circle` (`06`).
+- **`title`** and **`description`:** Activity draws the title, then ". "
+  and the description when there is one, on one line ending in an
+  ellipsis (decision 22). The popover draws them on two lines (`05`).
 - **`repo`** is the tag: `{repo}`, or `{repo} +{n}` for a hold over more
   than one repository (decision 13).
-- **`button`** is at most one offer (decision 8). `menu` holds every
-  offer, the button's first, then Dismiss when the row can be dismissed.
-- **`detail`** holds the tooltip's lines (Part B5); its first line is the
-  menu's first line (Part D).
-- **`item`** is `(root, AuthoringKind, ItemId)` when the row is about one
-  item. Enter opens it when the row has no button (decision 11).
-- **`finished`** means "Clear finished" may take the row (A4, rule L8).
+- **`button`** is at most one offer (decisions 8 and 24), chosen as B2
+  says. `menu` holds the button's offer first, then the others in
+  today's control order (B2), then Dismiss when the row can be
+  dismissed.
+- **`detail`** holds the tooltip's lines after the time (Part B5); the
+  view prepends the time line at draw (B6). The detail is also the
+  menu's first lines (Part D).
+- **`item`** is an `ItemRef` when the row is about one item. Enter opens
+  it when the row has no button (decision 11). A row with neither does
+  nothing on Enter (decision 24).
+- **`clearable`** means "Clear finished" may take the row (A4, rule L8).
+  It is set for:
+  - S1 rows that ended Success, Noop, Cancelled or Removed;
+  - S2 rows;
+  - S8's "Retired" and "Finished" lines, never its "didn't finish" line.
+- **`kept`** marks an S8 line once final (L4).
 
 ```rust
 pub(crate) enum ActivityAction {
@@ -755,12 +853,14 @@ pub(crate) enum ActivityAction {
     Review(DesktopRequestId),                   // the conflict sheet
     Offer(DesktopRequestId, SyncOffer),
     Recovery(DesktopRequestId, usize),          // run_recovery(id, n)
-    Dismiss(RowKey),
+    Dismiss(RowKey),                            // S1, S2 and S8 only
+    DismissRecovered,                           // S13
+    DismissNote(Report),                        // S14
     Attend(Action, Reason),                     // a hold's action
     Repository(RepoKey, RowAction),             // Cycle 03a's row action
     OpenItem(ItemRef),
     Share { root: RepoKey, item: Option<(AuthoringKind, ItemId)> },
-    Retire { root: RepoKey, item: ItemId },
+    Retire { root: RepoKey, kind: TargetKind, item: ItemId },
     Resume { root: RepoKey, operation: String },
     ReviewPending { root: RepoKey, operation: String },
     Abandon { root: RepoKey, operation: String },
@@ -780,59 +880,138 @@ pub(crate) enum ActivityAction {
 | Review | `review_request` |
 | Offer | `run_share_offer` |
 | Recovery | `run_recovery(id, n)` |
-| Dismiss | `dismiss_request`, or the log (A4) |
+| Dismiss | `dismiss_request` for a request; the log's `dismissed` for S2 and S8 (A4) |
+| DismissRecovered | `DraftRegistry::dismiss_recovered` (`D/services/drafts.rs:319`) |
+| DismissNote | `Operations::dismiss_record_note` (fact 27) |
 | Attend | `attend` |
-| Repository | `row_action` |
+| Repository | `row_action` (private, `D/view/workspace/repository_menu.rs:229`) |
 | OpenItem | opening a tab, as a list row does |
 | Share | today's Share…, or Share main |
-| Retire | `retire_chosen` |
+| Retire | `retire_chosen`, with `Subject { root, kind: TargetKind, item }` (`D/view/operations/retire.rs:69-73`, `:132`) |
 | Resume | `resume` |
-| ReviewPending | `pending_review` |
+| ReviewPending | `review_pending` (private, `D/view/operations/review.rs:131`; not `pending_review`, which draws) |
 | Abandon | `abandon` |
 | RetryPendingList | `load_pending` |
 | RetryFlush | `retry_draft_flush` |
 | ReviewDrafts | `open_drafts` |
 
+**Signature changes** (Task 6). `open_lifecycle`, `review_request`,
+`review_pending`, `run_recovery`, `abandon`, `retire_chosen` and
+`row_action` each gain an `origin: FocusHandle` parameter, or are made
+reachable (`pub(in crate::desktop::view)`), as each needs. The Workspace
+runs an action through:
+
+- `choose_activity(&ActivityMenuChoice, origin: FocusHandle, window,
+  cx)`, which re-checks the row as a menu choice does (Part D), then
+- `run_activity_action(&ActivityAction, origin: FocusHandle, window,
+  cx)`, which calls the handler above.
+
 ### A2. Sources
 
 Every row comes from exactly one row of this table. The derivation is
-`derive(&Inputs) -> Vec<Derived>`: a pure function over the models listed.
-A `Derived` is a row without its time, plus a `kept` flag (S8). Abandon is
-never the button (decision 8).
+`derive(&Inputs) -> Vec<Derived>`, a pure function over the inputs below
+and the one entry point: `request_rows` (S1) plus `state_rows` (S2–S14),
+then the attention post-pass `assign_attention(&mut [Derived])`, which
+applies N1–N17 over all rows (A3). Abandon and the other risky actions
+are never the button (decision 8; B2).
 
 | S | Source (fact) | Key | Kind | Event or state | Button | Menu after the button | Attention |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| S1 | Each request not Dismissed (6) | `Request` | **Working:** Queued, Running. **Success:** Success, Noop; a share that published is **sharing**. **Failure:** Partial, Blocked, Error, NotSent; a share that needs unlocking is **locked**. **Info:** Cancelled, Removed | Event | **Queued:** Cancel. **Running:** Stop at a safe point when offered, else a disabled "Stopping…" or "Finishing" (fact 14; F3). **Finished, not Success:** the first share offer, else the first recovery action the row shows, else Open… (lifecycle), else Review changes. **Success:** none | Dismiss when finished; the other share offers and recovery actions, Open… and Review changes, as today's entry shows them | N1–N4 |
+| S1 | Each request not Dismissed (6), except a ContextRetire whose retirement has an S8 line (R-42) | `Request` | **Working:** Queued, Running. **Success:** Success, Noop; a share that published is **sharing**. **Failure:** Partial, Blocked, Error, NotSent; a share that needs unlocking is **locked**. **Info:** Cancelled, Removed | Event | **Queued:** Cancel. **Running:** Stop at a safe point when offered, else a disabled "Stopping…" or "Finishing" (fact 14; F3). **Finished, not Success:** B2's precedence. **Success:** none | Today's control order (B2): Open…, Review changes, the share offers, the recovery actions; then Dismiss once it has ended (any state but Queued or Running) | N1–N4 |
 | S2 | Checks that brought something in (A5) | `Brought` | Sharing | Event | None | Dismiss | Never |
 | S3 | Each checking hold (19) | `Hold` | Locked for `KeyLocked`, else failure | State | The hold's action; Unlock… disabled, with its reason in the detail, when it has no target | — | Always |
-| S4 | Each listed repository and the kept row (23; A7) | `Repository` | By state (Part B4) | State | The state's `RowAction` | — | N5–N11 |
+| S4 | Each listed repository and the kept row (23; A7) | `Repository` | By state (Part B4) | State | The state's `RowAction` | — | N5–N11, N17 |
 | S5 | The unshared list's problems (21) | `Problem` | Failure | State | Open, when the target has an ID and a kind | — | Always (N9) |
-| S6 | The unshared list's items, main included (21) | `Unshared` | To share | State | Share… for an item with a kind; Share main for main | — | Never |
-| S7 | Retire… offers (20) | `RetireOffer` | Info | State | Retire… | — | Never |
+| S6 | The unshared list's items, main included (21) | `Unshared` | To share | State | Share… for an item with a kind, disabled while the item's share runs (label "Sharing…") or while the item is locked (today's lock words in the detail), as today's attempt entry does; Cycle 03a's `SHARE_MAIN` for main | — | Never |
+| S7 | Retire… offers (20) | `RetireOffer` | Info | State | Retire…, disabled while the item is retiring (`D/view/operations/retire.rs:132-140`) | — | Never |
 | S8 | Retirement lines (20) | `Retirement` | **Working:** Retiring. **Success:** Retired, Finished. **Failure:** didn't finish | Event, `kept` once final | None | Dismiss once final | Never |
-| S9 | Pending rows, `pending_shown()` (18) | `Pending` | Failure with a next action, else info | State | Resume when offered, else Review changes when offered, else none | Resume, Review changes and Abandon… as offered; a Resume that is unavailable, disabled, with its reason | N12 |
+| S9 | Pending rows, `pending_shown()` (18) | `Pending` | Failure with a next action, else info | State | Resume when offered, else Review changes when offered, else none | Resume, Review changes and Abandon… as offered; a Resume that is unavailable, disabled, with its reason | N1, N12 |
 | S10 | A pending list that is Failed or Busy (3) | `PendingList` | Failure (Failed), info (Busy) | State | Retry | — | Failed only (N13) |
 | S11 | Each recovery copy not saved (27) | `Flush` | Failure | State | Retry | — | Always |
 | S12 | The draft store unavailable (27) | `DraftStore` | Failure | State | None | — | Always |
-| S13 | Recovered drafts (27) | `Recovered` | Info | State | Review | Dismiss | Never |
-| S14 | Record notes (27) | `Note` | Info | State | None | Dismiss | Never |
+| S13 | Recovered drafts (27) | `Recovered` | Info | State | Review | Dismiss (`DismissRecovered`) | Never |
+| S14 | Record notes (27) | `Note` | Info | State | None | Dismiss (`DismissNote`) | Never |
 
-**S4 makes a row only for these states:**
+**One retirement, one row** (R-42). A ContextRetire request whose
+retirement has an S8 line is not shown as an S1 row: the line is its row.
+Without this, one retirement could show as three rows; with it, the table
+gives each thing exactly one row.
+
+**S4 makes a row by Cycle 03a's state and its `cause`** (A7; R-40):
 
 - **Attention rows:**
   - Can't open;
   - Needs fixing;
   - Can't reach;
   - Locked from a stored outcome;
-  - Needs attention from a held shape with no reason in its phase,
-    `Waiting { Failed }`, an unreadable registration, a `Transport` answer
-    or a stored outcome (fact 23, causes 2 and 4–7).
+  - Needs attention with cause `Held` (no reason in its phase),
+    `WaitingFailed`, `Unreadable`, `Transport` or `Stored`.
+- **Covered elsewhere, no repository row:**
+  - `Phase(_)`, and `Held` with `RecoveryHeld` in its phase: the holds
+    (S3; N5, N6);
+  - `Conflict`: the conflict's own row (N10);
+  - `Problems`: the problem rows (S5; N9, N17).
 - **Information rows, never counted:**
-  - This computer: "{repo} has no shared copy, so changes stay on this
-    computer", with Set up sharing (`03`'s example);
-  - the non-SSH remote of 3a decision 20.
+  - This computer: "`{repo}` has no shared copy, so changes stay on this
+    computer", with Set up sharing… (`03`'s example);
+  - the non-SSH remote of 3a decision 20, with Set up sharing….
 - **No row** for Checking…, To share, Paused, Up to date, a busy opening
   and Unknown. Their facts are elsewhere (S6), or they need nothing.
+
+**Inputs.** The Workspace builds them at each refresh (A4). The model
+reads nothing else:
+
+```rust
+pub(crate) struct Inputs<'a> {
+    pub operations: &'a Operations,
+    pub schedule: &'a PollSchedule,
+    pub repositories: &'a [RepositoryInput],
+    pub drafts: DraftsInput,
+    pub requests: &'a dyn Fn(DesktopRequestId) -> RequestFacts,
+    pub conflict_waits: &'a dyn Fn(&RepoKey, &str) -> bool,
+    pub title: &'a dyn Fn(&RepoKey, AuthoringKind, &ItemId) -> Option<String>,
+    pub primary: &'a dyn Fn(&RepoKey) -> Option<String>,
+}
+
+/// Precomputed by the Workspace from Services and the worker.
+pub(crate) struct RequestFacts {
+    pub stop_offer: StopOffer,                   // stop_offer(id, remote.is_some())
+    pub shown_offers: Vec<SyncOffer>,
+    pub share_words: Option<String>,             // the Busy holder, the republish state (R-9)
+    pub already_finished: bool,
+    pub review: bool,
+    pub recoveries: Vec<(usize, String, bool)>,  // today's shown recovery actions: label, enabled
+    pub lifecycle_lines: Vec<String>,
+}
+
+pub(crate) struct RepositoryInput {
+    pub root: RepoKey,
+    pub name: String,
+    pub state: RepoState,                        // with `cause` (A7)
+    pub tooltip: Vec<String>,
+    pub checking: bool,
+    pub primary: Option<String>,
+    pub unshared: Unshared,                      // items and problems
+    pub sharing: BTreeMap<Target, ShareState>,   // per unshared item (S6)
+    pub retiring: BTreeSet<ItemId>,              // Retire… offers whose item is retiring (S7)
+}
+
+pub(crate) enum ShareState { Ready, Sharing, Locked(String) }
+
+pub(crate) struct DraftsInput {
+    pub flush_failures: Vec<(DraftId, String, DraftErrorKind)>,
+    pub unavailable: Option<DraftStoreUnavailable>,
+    pub recovered: Option<usize>,
+}
+```
+
+- **`ShareState`** follows today's attempt entry (`D/view/operations/attempts.rs:138-217`).
+- **The pending rows' inputs:** `conflict_waits` reads the Workspace's
+  `pending_conflicts` (`D/view/workspace.rs:408-417`;
+  `D/view/operations/review.rs:109-131`), and `operations` gives
+  `entered_operations()` (fact 18).
+- **`RequestInputs` and `StateInputs`** are the request and state parts
+  of `Inputs`, which `request_rows` and `state_rows` take (Tasks 3 and 4).
 
 **Pinned above the list, never rows** (C1 decision 5): the layout notices
 and the quit row.
@@ -841,15 +1020,21 @@ and the quit row.
 
 The footer's count is the number of attention rows not dismissed. The
 popover lists exactly those rows (decision 6). This table is the required
-outcome. Task 5 writes its test `attention_counts_each_thing_once` first,
-row by row, with a design checkpoint (Plan, Test-first).
+outcome. `assign_attention` applies it over all derived rows (A2). Task 5
+writes its test `attention_counts_each_thing_once` first, row by row, over
+`derive`, with a design checkpoint (Plan, Test-first).
+
+Attention follows N1–N17 and the request's outcome, not B3's kind: a
+Stopped or NoRemote share that failed by its envelope still counts under
+N1–N3. NotSent stays uncounted (R-22). S8's "didn't finish" line is not
+counted, since the hold or the Retire… offer carries it.
 
 | N | Situation | Rows shown | Counted |
 | --- | --- | --- | --- |
-| N1 | A request finished Partial, Blocked or Error, and its operation has a pending row shown | The request row and the pending row | Once, as the pending row |
+| N1 | A request finished Partial, Blocked or Error, and its operation has a pending row shown | The request row and the pending row | Once: as the pending row when that row is counted; when it is not (N12), as the newest request of the operation |
 | N2 | Two or more failed requests about one operation (`operation_of`, fact 18) | Each request row | Once, as the newest |
 | N3 | A failed request that names no operation | Its row | Once |
-| N4 | A failed Check now (PollOnce) | Its request row, and its repository's row or hold | Once, as the repository row or the hold |
+| N4 | A failed Check now (PollOnce), for each failure class | Its request row, and its repository's row or hold when `check_failed` made one | Once: as the repository row or the hold when one exists; otherwise as the request |
 | N5 | A repository Locked by a live `KeyLocked` | The key's hold row, no repository row | Once per key, however many repositories it holds |
 | N6 | A repository whose phase is `Attention(reason)`, or held with `RecoveryHeld` in its phase | The reason's hold row, no repository row | Once per hold |
 | N7 | A repository held (`Shape::Held`) with no reason in its phase | A repository row with Resume checking | Once |
@@ -860,15 +1045,20 @@ row by row, with a design checkpoint (Plan, Test-first).
 | N12 | A pending row with no next action ("Nothing to do") | The row | No |
 | N13 | A pending list Failed; Busy; Loading | A row; a row; nothing | Once; no; no |
 | N14 | Recovery copies not saved; the draft store unavailable | One row each; one row | Once each; once |
-| N15 | Requests that succeeded, were cancelled or not sent; brought-in rows; reminders; Retire… offers; retirement lines; recovered drafts; record notes; This computer; the non-SSH remote; layout notices; the quit row | As the sources say | Never |
+| N15 | Requests that succeeded, were cancelled or not sent; brought-in rows; reminders; Retire… offers; retirement lines, "didn't finish" included; recovered drafts; record notes; This computer; the non-SSH remote; layout notices; the quit row | As the sources say | Never |
 | N16 | Any row dismissed | Not shown | No |
+| N17 | A repository that cannot be reached, and whose kept problems make it Needs attention under Cycle 03a's order | Problem rows, no Can't reach row | Once per item (K-13) |
 
 **N4 counts no double failure.** A failed Check now applies its answer to
 the repository through `check_failed` (fact 21), so the repository's state
-says it.
+says it when a row follows. `check_failed` applies nothing for a code with
+no row, or while a poll is in flight (`D/services/scheduler/attention.rs:74-80`,
+`:104-122`); then the request counts. The test has an N4 row for each
+failure class.
 
-**N5–N7 are 3a's attention causes.** They are covered by the hold rows,
-which give the one action today's attention entry gives.
+**N5–N7 are 3a's attention causes.** N5 and N6 are covered by the hold
+rows, which give the one action today's attention entry gives. N7's cause
+is `Held` with no reason, which makes a repository row (A2).
 
 **N10 relies on the conflict's own row.** That is a pending synchronize
 row with Review changes, or the request that stopped on the conflict. A
@@ -890,7 +1080,8 @@ row changed:
 
 - **L1, first seen.** A key seen for the first time gets `at = now`. A key
   seen again keeps its time, so a retry keeps its row's time and place
-  (fact 6).
+  (fact 6). L1 applies to all rows except S2's, which carry `Brought.at`,
+  the time the check was applied (A5).
 - **L2, a state leaves.** A state key no longer derived is forgotten, time
   included. If it returns, it is new.
 - **L3, checking keeps the row.** A `Repository(root)` row whose root is
@@ -902,32 +1093,45 @@ row changed:
 - **L5, requests.** A request row leaves only when its request is
   dismissed (fact 6). S1 then no longer derives it.
 - **L6, dismissing.** Rows whose key is in `dismissed` are not shown.
-  - **Another row's Dismiss** adds its key to `dismissed`.
+  - **S2's and S8's Dismiss** adds the row's key to `dismissed`.
   - **A request's Dismiss** goes through `dismiss_request`, which sets the
     request Dismissed and forgets its resends and draft (fact 6). It does
     not use `dismissed`.
+  - **S13's and S14's Dismiss** are `DismissRecovered` and
+    `DismissNote(Report)`, through `dismiss_recovered` and
+    `dismiss_record_note` (fact 27). Their sources then no longer derive
+    the row.
 - **L7, order.** Rows are sorted newest `at` first. Equal times keep
   derivation order: sources in S order, and within a source, the source's
   own order (`requests()` newest first; repositories in list order).
-- **L8, "Clear finished".** It dismisses every row that has `finished`
-  set and is not an attention row:
+- **L8, "Clear finished".** It dismisses every row that has `clearable`
+  set (A1) and is not an attention row:
   - requests that ended Success, Noop, Cancelled or Removed, through
     `dismiss_request`;
-  - brought-in rows and final retirement lines, through `dismissed`.
+  - brought-in rows (S2) and S8's "Retired" and "Finished" lines, through
+    `dismissed`.
 
   Failures, attention rows and states stay (decision 9).
 - **L9, no cap** (decision 13).
 
 **Refresh points.**
 
-- `Workspace::refresh_activity(&mut self, cx)` derives, then refreshes
-  with `now` from `scheduler.utc()` (fact 22). It notifies only when
-  `refresh` reports a change.
+- `Workspace::refresh_activity(&mut self, cx)` marks the log dirty. One
+  refresh runs per effect cycle (`cx.defer`), so a burst of notifications
+  derives once (R-43). That refresh builds the inputs (A2), derives, and
+  refreshes the log with `now` from `scheduler.utc()` (fact 22). It
+  notifies only when `refresh` reports a change.
+- **Cost** (`MH-NFR-004`, fact 44). The derivation is linear in the rows.
+  Nothing derives per frame, and `uniform_list` draws only the visible
+  rows (C2).
 - **It is called from:**
   - the Workspace's operations observer (`D/view/workspace.rs:214`);
   - its scheduler observer (`:220`);
   - its drafts observer (`:217`);
   - after the repository list or a resolution is applied;
+  - after pending conflicts land (`D/view/workspace/requests.rs:110-117`);
+  - after an open item's title loads (the item pane's model change, or an
+    observer of the panes);
   - after `ShareTitles` learns titles;
   - after any dismissal.
 - **Never from render.** The rows are ready before any frame draws them
@@ -953,10 +1157,12 @@ pub(crate) struct Brought {
   when the summary they return has `brought_in > 0`. They take `at` from
   their `&Now`'s `utc` (`D/model/polling/clock.rs:29-32`).
 - The list lasts for the session and is never pruned (K-4).
-- An automatic one reads "Checked {repo} for updates. Brought in {n}
-  change(s)." A Check now's reads "Brought in {n} change(s) to {repo}.",
-  because its request row already says "Checked {repo} for updates."
-  (Part B).
+- Its row's time is `at` (rule L1).
+- An automatic one has the title "Checked `{repo}` for updates" and the
+  description "Brought in 1 change." or "Brought in {n} changes." A Check
+  now's has the title "Brought in 1 change to `{repo}`" or "Brought in {n}
+  changes to `{repo}`", because its request row already says "Checked
+  `{repo}` for updates" (Part B).
 
 Quiet checks add nothing (decision 7).
 
@@ -985,8 +1191,27 @@ pub(crate) fn each_repository<R>(
 
 - It visits the listed repositories in list order, then the kept row.
 - `rows()` becomes `each_repository(.., |facts| row_of(facts))`.
-- Activity calls it for each repository's `repository_state(facts)`,
-  `repository_tooltip(facts, &state)`, `checking()` and schedule.
+- Activity calls it to build each `RepositoryInput` (A2):
+  `repository_state(facts)` with its `cause`, `repository_tooltip(facts,
+  &state)`, `checking()`, the primary branch, the unshared list and its
+  share states.
+
+**The attention cause.** Cycle 03a's `RepoState` gains `pub cause:
+Option<AttentionCause>`, set by `attention_cause` (fact 23):
+
+```rust
+pub(crate) enum AttentionCause {
+    Phase(Reason), Held, Conflict, WaitingFailed, Unreadable, Transport, Stored, Problems,
+}
+```
+
+- One variant per cause of fact 23, in its order.
+- The change is in `D/model/repository_state.rs`, owned by Cycle 03a's
+  code. It is safe: Cycle 03a's tests compare `RepoState` field by field
+  (`D/model/repository_state_tests.rs:110-111`), so no edit follows. Task
+  4 checks that, and records any edit it does need as E-17 onward.
+- Activity filters repository rows by `kind` and `cause`, never by
+  re-reading the schedule (R-40).
 
 So Activity reads the same state through the same function, with no
 second derivation (Cycle 03a's obligation; R-5).
@@ -1003,21 +1228,65 @@ compare these. The register is `06`'s:
 - real counts;
 - a failure says the work is safe.
 
-This part is the copy the owner reviews. It maps every row and action of
-today's operations area to the log (the ticket's planning item).
+This part is the copy the owner reviews.
+
+**Copy rules for the tables below.**
+
+- Backticks mark placeholders and are not copy: `{repo}` is the
+  repository's name.
+- Parenthesized source citations are not copy. They sit in a sentence
+  below each table, not in its cells.
+- A title never ends with a full stop.
+- Activity's line is the title, then ". " and the description when there
+  is one. A description ends with a full stop.
+- Counts have explicit singular and plural forms ("1 change", "{n}
+  changes"), never "(s)".
+- **Labels** (R-44). Today's offer and recovery labels are kept verbatim,
+  even where they open a page without "…" ("Open Sharing & keys", "Set
+  identity", "Set up sharing"). New labels follow the "…" rule.
+
+### B0. Today's Area, Mapped
+
+Every element of today's area (facts 2–4 and 9) becomes a source row, is
+pinned, or goes. This is the ticket's planning item.
+
+| Today's element | Becomes |
+| --- | --- |
+| The layout notices | Pinned above the list |
+| The quit row | Pinned above the list |
+| The session heading "This session" and "No requests yet" | Go; the empty states replace them (C1) |
+| A checking hold (attention entry) | S3, `Hold` |
+| An attempt entry's brought-in line | S2, `Brought` |
+| An attempt entry's Unpublished lines | S6, `Unshared`: every unshared item now (decision 17) |
+| An attempt entry's problem lines | S5, `Problem` |
+| An attempt entry's retirement lines | S8, `Retirement` |
+| An attempt entry's Retire… offers | S7, `RetireOffer` |
+| "Recovery copies are unavailable: …" | S12, `DraftStore` |
+| "Recovered drafts: {n}", with Review and Dismiss | S13, `Recovered` |
+| Record notes | S14, `Note` |
+| Recovery copies not saved, with Retry | S11, `Flush` |
+| A request entry | S1, `Request`; every control maps to an `ActivityAction` (A1) |
+| The pending heading and "No pending operations" | Go |
+| A pending repository whose list is not Ready | S10, `PendingList`; Loading makes no row |
+| A pending row | S9, `Pending`, with Resume, Review changes and Abandon… |
 
 ### B1. Naming
 
 - **An item:** “{title}”, in the typographic quotes the desktop already
   uses (`D/view/drafts/actions.rs:201`).
   - **The title comes from**, first found:
-    1. the intent's own title (a save or create, fact 15);
-    2. an open tab's `tab_title()`;
-    3. `share_title(root, id)` (fact 25).
+    1. an open item's `ItemModel::last_title()` (`D/model/item.rs:259`, an
+       `Option`; not `tab_title()`, which returns the full ID when no
+       title has loaded, `D/view/item.rs:447-458`);
+    2. `share_title(root, id)` (fact 25).
   - **Without one:** "the ticket {short}" or "the document {short}", with
     the short code (fact 20; K-2).
+  - **Never the intent's own title.** A save's or create's title is the
+    draft's text (Wave 03 D2's rule; fact 15). So a new item reads by its
+    short code until a list read gives its title.
   - A title is allowed in a row, its tooltip, its menu and the popover
-    (decision 12). A body, comment or conflict side never is.
+    (decisions 12 and 21). A body, comment, conflict side or file path
+    never is.
 - **A repository:** `{repo}`, the folder name: the same as
   `RepositoryEntry::name()` and today's `scope_name`.
 - **Main:** `{primary}`, the repository's main branch when known, else
@@ -1027,20 +1296,22 @@ today's operations area to the log (the ticket's planning item).
 
 ### B2. Requests (S1)
 
-- **Running:** "{Doing} {subject}…". When a stage is known it adds " ·
-  {stage words}" (F3).
-- **Queued:** "Waiting to {verb} {subject}".
-- **Cancelled:** "Stopped {doing, lower case} {subject}".
-- **Removed:** "Cancelled: {verb} {subject}".
+The templates do not repeat the subject: Doing, Done and Verb already
+contain it.
+
+- **Running:** "{Doing}…". When a stage is known it adds " · {stage
+  words}" (F3).
+- **Queued:** "Waiting to {verb}".
+- **Cancelled:** "Stopped {doing, first letter lower case}".
+- **Removed:** "Cancelled: {verb}".
 - **NotSent:**
-  - "Didn't {verb} {subject}: your key's passphrase is needed again.";
-  - "Didn't {verb} {subject}: Manyhands could not find your SSH key
-    store.".
+  - "Didn't {verb}: your key's passphrase is needed again";
+  - "Didn't {verb}: Manyhands could not find your SSH key store".
 - **Success:** the Done column.
-- **Noop:** the Done column with " Nothing needed to change." added,
-  unless the table says otherwise.
+- **Noop:** the Done column, with the description "Nothing needed to
+  change.", unless the table says otherwise.
 - **Partial, Blocked and Error:**
-  - title "Couldn't {verb} {subject}";
+  - title "Couldn't {verb}";
   - description "{envelope message} Your work is safe on this computer."
     The message is the library's fixed sentence for the code (fact 16;
     K-3).
@@ -1051,28 +1322,42 @@ today's operations area to the log (the ticket's planning item).
     as the dialog builds them (`D/view/lifecycle/outcome.rs:362-455`);
   - not succeeded: their button is Open… (fact 16).
 
+**The button and the menu** (decision 8; R-44).
+
+- **Risky actions are never the button:** Abandon…, Stop trying to share
+  (Give up) and Stop and republish….
+- **A finished request that did not succeed** takes, first found:
+  1. Review changes, when it stopped on a conflict;
+  2. the first share offer not in the risky set;
+  3. the first shown recovery action not in the risky set;
+  4. Open… (lifecycle).
+- **A running request:** Cancel (Queued), Stop at a safe point (when
+  offered), else the disabled "Stopping…" or "Finishing".
+- **The menu's order** after the button is today's control order: Open…,
+  Review changes, the share offers, the recovery actions, then Dismiss.
+
 | Intent | Subject | Doing | Done | Verb |
 | --- | --- | --- | --- | --- |
 | RepoCreate | `{repo}` | Creating `{repo}` | Created `{repo}` | create `{repo}` |
 | RepoEnable | `{repo}` | Adding `{repo}` | Added `{repo}` to Manyhands | add `{repo}` |
-| RepoRemove | `{repo}` | Removing `{repo}` from Manyhands | Removed `{repo}` from Manyhands. Its files are unchanged. | remove `{repo}` from Manyhands |
+| RepoRemove | `{repo}` | Removing `{repo}` from Manyhands | Removed `{repo}` from Manyhands | remove `{repo}` from Manyhands |
 | RepoIdentitySet | `{repo}` | Setting your name for `{repo}` | Set your name for `{repo}` | set your name for `{repo}` |
 | RemoteAdd | remote name, `{repo}` | Adding the shared copy {remote} to `{repo}` | Added the shared copy {remote} to `{repo}` | add the shared copy {remote} |
 | RemoteRemove | remote name, `{repo}` | Removing the shared copy {remote} | Removed the shared copy {remote} from `{repo}` | remove the shared copy {remote} |
 | RemoteSelect | remote name or none, `{repo}` | Choosing how `{repo}` shares | `{repo}` now shares through {remote}; with none, "`{repo}` no longer shares" | choose how `{repo}` shares |
 | IndexRefresh | `{repo}` | Refreshing `{repo}` | Refreshed `{repo}` | refresh `{repo}` |
 | IndexRebuild | `{repo}` | Rebuilding the search index for `{repo}` | Rebuilt the search index for `{repo}` | rebuild the search index for `{repo}` |
-| PollOnce | `{repo}` | Checking `{repo}` for updates | Checked `{repo}` for updates. | check `{repo}` for updates |
+| PollOnce | `{repo}` | Checking `{repo}` for updates | Checked `{repo}` for updates | check `{repo}` for updates |
 | PollConfigure | `{repo}` | Changing how often `{repo}` is checked | Changed how often `{repo}` is checked | change how often `{repo}` is checked |
 | PollPause | `{repo}` | Pausing checks of `{repo}` | Paused checking `{repo}` for updates | pause checking `{repo}` |
 | PollResume | `{repo}` | Resuming checks of `{repo}` | Resumed checking `{repo}` for updates | resume checking `{repo}` |
 | RepoSync | `{primary}`, `{repo}` | Sharing {primary} | B3 | share {primary} |
-| FolderCreate | the folder's path | Creating the folder {path} | Created the folder {path} | create the folder {path} |
+| FolderCreate | `{repo}` | Creating a folder in `{repo}` | Created a folder in `{repo}` | create a folder in `{repo}` |
 | KeyGenerate | your key | Creating a key | Created a key for sharing | create a key |
 | KeyImport | your key | Adding a key | Added a key for sharing | add the key |
 | KeySelect | your key | Choosing the key for sharing | Chose the key used for sharing | choose the key |
 | KeyClear | your key | Clearing the key choice | No key is chosen for sharing now | clear the key choice |
-| KeyRemove | your key | Removing a key from Manyhands | Removed a key from Manyhands. Its files are unchanged. | remove the key from Manyhands |
+| KeyRemove | your key | Removing a key from Manyhands | Removed a key from Manyhands | remove the key from Manyhands |
 | KeyDelete | your key | Deleting a key | Deleted a key | delete the key |
 | HostApprove | {host} | Trusting {host} | Trusted {host} for sharing | trust {host} |
 | HostReplace | {host} | Updating the trusted key for {host} | Updated the trusted key for {host} | update the trusted key for {host} |
@@ -1080,24 +1365,34 @@ today's operations area to the log (the ticket's planning item).
 | OperationAbandon | `{repo}` | Abandoning an operation in `{repo}` | Abandoned an operation in `{repo}` | abandon the operation in `{repo}` |
 | ConflictResolve | `{repo}` | Saving your choices in `{repo}` | Resolved a conflict in `{repo}` | resolve the conflict in `{repo}` |
 | LocalContextResolve | `{repo}` | Saving your choices in `{repo}` | Resolved a conflict on this computer in `{repo}` | resolve the conflict in `{repo}` |
-| DocumentSave, TicketSave | item | Saving “{title}” | Saved “{title}” on this computer (`06`) | save “{title}” |
+| DocumentSave, TicketSave | item | Saving “{title}” | Saved “{title}” on this computer | save “{title}” |
 | DocumentCreate, TicketCreate | item | Creating “{title}” | Created “{title}” on this computer | create “{title}” |
 | DocumentMove | item | Moving “{title}” | Moved “{title}” | move “{title}” |
 | DocumentPromote | item | Approving and merging “{title}” | Approved and merged “{title}” | approve and merge “{title}” |
 | TicketClose | item | Closing “{title}” | Closed “{title}” | close “{title}” |
-| ContextPrepare | item | Getting a private copy of “{title}” ready (`06`) | A private copy of “{title}” is ready | get a private copy of “{title}” ready |
+| ContextPrepare | item | Getting a private copy of “{title}” ready | A private copy of “{title}” is ready | get a private copy of “{title}” ready |
 | ContextRelease | item | Putting away the private copy of “{title}” | Put away the private copy of “{title}” | put away the private copy of “{title}” |
 | ContextRetire | item | Retiring the copy of “{title}” | Retired the copy of “{title}” on this computer | retire the copy of “{title}” |
 | CommentAdd | item | Posting a comment on “{title}” | Posted a comment on “{title}” | post the comment on “{title}” |
 | ItemSync | item | Sharing “{title}” | B3 | share “{title}” |
 | ItemRepublish | item | Republishing “{title}” | Republished “{title}” | republish “{title}” |
 | LocalContextSync | item | Repairing “{title}” on this computer | Repaired “{title}” on this computer | repair “{title}” |
-| DocumentRepair, TicketRepair | the path | Repairing {path} | Repaired {path} | repair {path} |
+| DocumentRepair | `{repo}` | Repairing a document in `{repo}` | Repaired a document in `{repo}` | repair a document in `{repo}` |
+| TicketRepair | `{repo}` | Repairing a ticket in `{repo}` | Repaired a ticket in `{repo}` | repair a ticket in `{repo}` |
+
+- **Descriptions:** RepoRemove's and KeyRemove's Done rows add the
+  description "Its files are unchanged."
+- **Sources, not copy:** DocumentSave's and TicketSave's Done and
+  ContextPrepare's Doing follow `06`.
+- **No path** appears in any row (decision 21): FolderCreate,
+  DocumentRepair and TicketRepair name the repository.
+- **Subject** says what each row names; "item" is “{title}” as B1 says.
 
 ### B3. A Finished Share
 
 The classification is made once (F2). Words that exist today are kept
 (fact 17). The subject is “{title}” for an item, or {primary} for main.
+Attention follows A3, not this table's kind (decision 24).
 
 | `SyncOutcome` | Kind | Title | Description |
 | --- | --- | --- | --- |
@@ -1105,33 +1400,37 @@ The classification is made once (F2). Words that exist today are kept
 | Current | success | {subject} is the same as the shared copy | — |
 | Stopped { completed: false } | info | Stopped sharing {subject} | Stopped before anything was sent. Your saved work is still on this computer. |
 | Stopped { completed: true } | info | Stopped sharing {subject} | Stopped after part of the work finished. Your saved work is on this computer; Share sends the rest. |
-| Conflict | failure | You and someone else both changed {subject} | Choose what to keep. Nothing is shared until you do. (`05`; fact 26) |
-| BranchDeleted | failure | The shared copy of {subject} was deleted | Republish it to share it again. A republish running reads "Republishing…". |
+| Conflict | failure | You and someone else both changed {subject} | Choose what to keep. Nothing is shared until you do. |
+| BranchDeleted | failure | The shared copy of {subject} was deleted | Republish it to share it again. |
 | HistoryUnresolved | failure | Couldn't confirm the shared history of {subject} | Today's sentence |
 | NeedsUnlock | locked | Couldn't share {subject}: your key is locked | Unlock it, then share again. |
 | NeedsKey | failure | Couldn't share {subject}: choose a key to share with | — |
 | NeedsHost | failure | Couldn't share {subject}: check {host} before sharing | — |
 | NeedsIdentity | failure | Couldn't share {subject}: set your name first | — |
-| Busy | failure | Couldn't share {subject} yet | "May be waiting for {label}", or "Another share may be holding this repository" (read at render, R-9) |
-| NoRemote | info | {repo} has nowhere to share {subject} to | — |
+| Busy | failure | Couldn't share {subject} yet | "May be waiting for {label}.", or "Another share may be holding this repository." |
+| NoRemote | info | `{repo}` has nowhere to share {subject} to | — |
 | NothingToShare | info | Nothing to share in {subject} yet | It has no saved changes. |
 | Failed | failure | Couldn't share {subject} | The envelope message, as B2 |
 
-- **The button** is the first of `shown_offers` (fact 12), in today's
-  order.
-- **The menu** holds the rest. Today's labels are kept: "Share", "Retry",
-  "Stop trying to share", "Unlock…", "Open Sharing & keys", "Check host",
-  "Set identity", "Show it", "Set up sharing", "Republish…" and "Stop and
-  republish…".
+- **Sources, not copy:** Conflict's description is `05`'s (fact 26).
+  Busy's words are worked out at render (R-9). While a republish runs,
+  BranchDeleted's Republish… reads "Republishing…".
+- **The button** follows B2's precedence: Review changes when the share
+  stopped on a conflict, else the first of `shown_offers` (fact 12), in
+  today's order, that is not in the risky set.
+- **The menu** holds the rest, in today's order. Today's labels are kept
+  verbatim (R-44): "Share", "Retry", "Stop trying to share", "Unlock…",
+  "Open Sharing & keys", "Check host", "Set identity", "Show it", "Set up
+  sharing", "Republish…" and "Stop and republish…".
 - **"Already finished"** (a Give up's replayed answer) goes in the detail.
 
 ### B4. States (S2–S14)
 
 | S | Title | Description | Button |
 | --- | --- | --- | --- |
-| S2 automatic | Checked `{repo}` for updates. Brought in {n} change(s). | — | — |
-| S2 Check now | Brought in {n} change(s) to `{repo}`. | — | — |
-| S3 KeyLocked | Your key is locked (`05`) | Checking `{repos}` is waiting for the passphrase. | Unlock… |
+| S2 automatic | Checked `{repo}` for updates | Brought in 1 change. / Brought in {n} changes. | — |
+| S2 Check now | Brought in 1 change to `{repo}` / Brought in {n} changes to `{repo}` | — | — |
+| S3 KeyLocked | Your key is locked | Checking `{repos}` is waiting for the passphrase. | Unlock… |
 | S3 KeyProblem, NoKeySelected | Checking needs a key to be chosen | Holding back `{repos}`. | Choose a key… |
 | S3 HostUnapproved | {host} needs your approval | Checking `{repos}` waits until you approve it. | Approve host… |
 | S3 HostUnidentified | A server needs your approval | Checking `{repo}` waits until you approve it. | Approve host… |
@@ -1139,26 +1438,41 @@ The classification is made once (F2). Words that exist today are kept
 | S3 RecoveryHeld | Checking `{repo}` is held until recovery | Your work is safe. | Resume checking |
 | S4 Can't open | Can't open `{repo}` | 3a's sentence | Retry |
 | S4 Needs fixing | `{repo}` needs fixing | 3a's sentence | Settings… |
-| S4 Can't reach | Couldn't reach `{repo}`'s shared copy (`05`) | Your work is safe, and Manyhands tries again. | Retry now |
+| S4 Can't reach | Couldn't reach `{repo}`'s shared copy | Your work is safe, and Manyhands tries again. | Retry now |
 | S4 Locked, stored | Checking `{repo}` needs your key's passphrase | Check now asks for it. | Check now |
 | S4 Needs attention | Checking `{repo}` needs attention | 3a's sentence for the cause | 3a's action for the cause |
-| S4 This computer | `{repo}` has no shared copy, so changes stay on this computer (`03`) | — | Set up sharing… |
-| S4 non-SSH | 3a's sentence (3a decision 20) | — | Set up sharing… |
+| S4 This computer | `{repo}` has no shared copy, so changes stay on this computer | — | Set up sharing… |
+| S4 non-SSH | 3a's sentence | — | Set up sharing… |
 | S5 | “{title}” needs a look, or "{primary} in `{repo}` needs a look" | The disposition's sentence below | Open |
-| S6 | “{title}” isn't shared yet, or "{primary} in `{repo}` isn't shared yet" | — | Share…, or Share {primary} (3a's label) |
+| S6 | “{title}” isn't shared yet, or "{primary} in `{repo}` isn't shared yet" | — | Share… (disabled as A2 says), or "Share main" for main |
 | S7 | “{title}” is closed, but its copy is still on this computer; a promoted document reads "is approved, but …" | — | Retire… |
-| S8 | Today's retirement lines with “{title}” in place of the code: "Retiring “{title}”…", "Retired the copy of “{title}” on this computer.", "Finished retiring “{title}”.", "Retiring “{title}” didn't finish." | " The lists are still catching up." when today's adds it | — |
+| S8 | Today's retirement lines with “{title}” in place of the code: "Retiring “{title}”…", "Retired the copy of “{title}” on this computer", "Finished retiring “{title}”", "Retiring “{title}” didn't finish" | "The lists are still catching up." when today's adds it | — |
 | S9 | "{action words} didn't finish in `{repo}`", or "{action words} “{title}” didn't finish" when the item is known | the next action's sentence below | Resume, or Review changes |
 | S10 Failed | Couldn't read the unfinished operations of `{repo}` | — | Retry |
 | S10 Busy | Manyhands was busy reading the unfinished operations of `{repo}` | — | Retry |
-| S11 | The recovery copy of “{title}” wasn't saved | {reason} (today's `DraftError` words) | Retry |
+| S11 | The recovery copy of “{title}” wasn't saved | {reason} | Retry |
 | S12 | Recovery copies are unavailable | {reason} | — |
-| S13 | {n} draft(s) recovered from an earlier session | — | Review |
+| S13 | 1 draft recovered from an earlier session / {n} drafts recovered from an earlier session | — | Review |
 | S14 | Today's record-note sentences | — | — |
+
+- **Sources, not copy:** S3 KeyLocked's and S4 Can't reach's titles are
+  `05`'s; S4 This computer's is `03`'s example; S4 non-SSH's sentence is
+  3a decision 20's; "Share main" is Cycle 03a's `SHARE_MAIN`
+  (`D/view/sidebar.rs`), not "Share {primary}"; S11's and S12's `{reason}`
+  is today's `DraftError` words.
+- **Labels:** S4 This computer's and non-SSH's button is "Set up
+  sharing…", Cycle 03a's label for the same action. S13's Review stays
+  "Review", today's (R-44).
+- **S6's lock state:** while the item is locked, Share… is disabled and
+  today's lock words are in the detail, as today's attempt entry does
+  (`attempt_entry_share_waits_for_the_lock`). While its share runs, the
+  disabled button reads "Sharing…".
+- **S7's Retire…** is disabled while the item is retiring.
 
 **The repository rows.**
 
-- **Description:** the state's own `sentence` lines from
+- **Description:** an explicit description cell wins. "3a's sentence" is
+  used only where the cell says so: the state's own `sentence` lines from
   `repository_state` (fact 23), joined, when they say more than the
   title.
 - **Tooltip:** `repository_tooltip`.
@@ -1226,11 +1540,12 @@ available yet".
 
 ### B5. Tooltip And Detail
 
-`detail` lines, in order:
+The tooltip's lines, in order:
 
 1. The time in full: "{YYYY-MM-DD HH:MM}", local, or UTC followed by
-   " UTC" when the offset is unknown (B6).
-2. By source:
+   " UTC" when the offset is unknown (B6). The view prepends this line at
+   draw; the model's `detail` holds no time.
+2. The model's `detail`, by source:
    - **A request:**
      - "{intent label} · {scope}" (today's fixed label and scope);
      - the outcome label ("Done", "Failed" …);
@@ -1242,30 +1557,39 @@ available yet".
    - **A hold:** today's headline and "Holding back {names}".
    - **A repository:** `repository_tooltip`.
    - **A problem:** "{disposition}: {library guidance}" (fact 20).
-   - **A reminder:** "Not shared yet: {disposition}".
+   - **A reminder:** "Not shared yet: {disposition}", and the lock's words
+     while the item is locked (S6).
    - **A pending row:** its raw action, state, completed step, operation
      ID, next action and `updated_at`.
    - **A draft or note row:** its kind.
 
+**No detail line carries a path.** Today's request scope is the
+repository's folder name, which stays (decision 21).
+
 **What a row never holds** (Part G): a body, a comment, a conflict side,
-a remote URL, a key's label or path, a passphrase, or a server's own
-text.
+a remote URL, a file path, a key's label or path, a passphrase, or a
+server's own text.
 
 ### B6. Time
 
 The row shows "HH:MM".
 
 - `activity_time(at: OffsetDateTime, offset: Option<UtcOffset>) ->
-  (String, String)` gives the row's time and the detail's first line.
-- The view passes `local_offset(at.unix_timestamp())` (fact 37).
-- With no offset (non-Unix today, fact 37), both are UTC and the detail
+  (String, String)`, in the model, gives the row's time and the
+  tooltip's first line.
+- The view calls it at draw with `activity_time(row.at,
+  local_offset(row.at.unix_timestamp()))`. `local_offset` is view-scoped
+  (`D/view/confirm.rs:583`, fact 37), so the model never reads it.
+- With no offset (non-Unix today, fact 37), both are UTC and the tooltip
   says " UTC" (K-5).
 
 ## Part C: The Activity Panel
 
 New module `D/view/activity.rs`, with `activity/row.rs`, `activity/menu.rs`
-and `activity/actions.rs`, declared in `D/view/mod.rs`. It replaces the
-session and pending columns (fact 2, fact 3).
+and `activity/actions.rs`, declared in `D/view/mod.rs`. Task 5 creates and
+declares `D/view/activity.rs`, for `count_and_popover_agree`'s test file;
+Task 9 fills it. It replaces the session and pending columns (fact 2,
+fact 3).
 
 ### C1. Layout
 
@@ -1284,26 +1608,29 @@ becomes `[ActivityFilter, ActivityMore]` (fact 34).
   as `aria_toggled` on a wrapper, like the footer toggles.
 - **ActivityMore** shows `ellipsis`. It opens a Workspace-owned menu,
   like Cycle 03a's More, with one item, "Clear finished", disabled when
-  no row is `finished` (rule L8).
+  no row is `clearable` (rule L8).
 - **The filter** is `Workspace.activity_filter: bool`. It is off at
   launch and lasts for the session. When on, the list shows only
   attention rows.
 
-**One row**, one line, at least 24 px high (`03`), in this order:
+**One row**, one line, 28 px high (Wave decision 7), which meets `03`'s
+minimum of 24, in this order:
 
 - the time (B6), 40 px, monospace, muted;
 - the kind's icon;
-- the message, `title` then `description`, with an ellipsis, taking the
-  free width (`flex_1`, `min_w_0`);
-- the tag;
+- the message, the title, then ". " and the description, ending in an
+  ellipsis, taking the free width (`flex_1`, `min_w_0`);
+- the tag, which shrinks with an ellipsis after the message, at a fixed
+  maximum width;
 - the button.
 
-The button never leaves the row: the message shrinks first. That fixes
-K-19's rows at any width (fact 7).
+The button never leaves the row: the message shrinks first (decision 22).
+That fixes K-19's rows at any width (fact 7).
 
-- **Row tooltip:** `detail` joined with newlines. That is also the row's
-  accessible description, and its accessible name is the message (as
-  Cycle 03a's rows, fact 30).
+- **Row tooltip:** the time line (B6), then `detail`, joined with
+  newlines. That is also the row's accessible description, and its
+  accessible name is the message (as Cycle 03a's rows, fact 30). The full
+  text is also the row menu's first lines (Part D).
 - **Ids:** `("activity-row", ix)` for a row and `("activity-button", ix)`
   for its button. The pane maps an index to a `RowKey`.
 
@@ -1325,7 +1652,7 @@ and binds its keys in a new context, `ACTIVITY_CONTEXT = "Activity"`, in
 | --- | --- |
 | `up`, `down` | Moves the highlight; stops at the ends, with no wrap |
 | `home`, `end` | Highlights the first or last row |
-| `enter` | Runs the highlighted row's button when enabled; with no button, opens the row's item; otherwise nothing (decision 11) |
+| `enter` | Runs the highlighted row's button when enabled; with no button, opens the row's item; with a disabled button, or with neither, nothing (decisions 11 and 24) |
 | `shift-f10`, `menu` | Opens the highlighted row's menu (Part D) |
 | A left click on a row | Highlights it and focuses the list |
 | A left click on its button | Runs the button |
@@ -1336,6 +1663,12 @@ and binds its keys in a new context, `ACTIVITY_CONTEXT = "Activity"`, in
   now at its position, or the last row. Rows are applied to the pane
   after the frame (`window.defer`, as fact 30). Nothing notifies during
   render.
+- **Drawing.** `uniform_list` draws only the visible rows. Moving the
+  highlight calls `scroll_to_item`. Tests find rows through the seam
+  (Testing), not by drawn index.
+- **Enter on a focused row button** runs its action once (P15). The
+  `enter` binding in `ACTIVITY_CONTEXT` must not also fire: it is bound on
+  the list's own element only, or the button handles its own Enter.
 - **Focus.**
   - The list has its own focus handle, inside the `Region::Operations`
     region, so the region's ring and F6 behave as today. Focusing the
@@ -1349,9 +1682,11 @@ and binds its keys in a new context, `ACTIVITY_CONTEXT = "Activity"`, in
 
 - **An action that opens a dialog or sheet from a row** (Abandon…,
   Republish…, a recovery that confirms, Open…, Review changes) passes the
-  list's focus handle as the origin or restore. When the dialog closes,
-  focus returns to the list, still highlighting the row's key (R-25).
-  This replaces the focus maps of fact 8, which go with the old columns.
+  list's focus handle as the origin or restore, whether it came from the
+  button, the menu or Enter. When the dialog closes, focus returns to the
+  list, still highlighting the row's key (decision 23). The row counts as
+  the invoking control (RFC 344–351). This replaces the focus maps of
+  fact 8, which go with the old columns.
 - **"Show it"** reveals Activity, turns the filter off when the holder's
   row is hidden by it, and highlights and focuses the holder's row.
   `show_holder`'s fallback to the pending rows highlights the first
@@ -1382,16 +1717,21 @@ pub(crate) struct ActivityMenu {
   1. the row's `detail` lines after the time, each as a disabled item
      (decision 8; R-27);
   2. a separator;
-  3. the row's offers, the button's first, each enabled or disabled as
-     the row says;
+  3. the row's offers, the button's first, then today's control order
+     (B2), each enabled or disabled as the row says;
   4. Dismiss, when the row can be dismissed.
 - **The choice** is a Kit `Action`, `ActivityMenuChoice { key: RowKey,
   action: ActivityAction, shown: String }`, in `D/keys.rs` beside
   `RepositoryMenuChoice`.
-  - When chosen, the Workspace finds the row by `key` in the log, and runs
-    the action only if the row still offers an enabled offer with the
-    same action and label.
-  - Otherwise nothing runs, and the menu is still marked chosen (3a R5-7).
+  - The menu's action handler (Task 9) calls
+    `Workspace::choose_activity(&ActivityMenuChoice, origin, window, cx)`
+    with the list's handle as origin (A1). The test seam calls the same
+    function directly (Testing).
+  - `choose_activity` finds the row by `key` in the log, and runs the
+    action only if the row still offers an enabled offer with the same
+    action and label.
+  - Otherwise nothing runs, and the menu is still marked chosen (Cycle
+    03a's execution ledger, Task 5 ruling R5-8).
 - **Opening:**
   - by a right press on a row (`capture_any_mouse_down`,
     `prevent_default`, as fact 30), anchored at the pointer;
@@ -1401,9 +1741,12 @@ pub(crate) struct ActivityMenu {
   - It is dropped while a dialog or sheet is open, and when its row
     leaves the log (focus to the list).
   - Escape restores focus to where it was.
-  - Opening it closes the popover (R-13).
+  - Opening it closes the other layers (R-13).
 - **Test accessors:** `activity_menu_key()` and `activity_menu_open()`.
-  Every Kit menu has the same element id (fact 33).
+  Every Kit menu has the same element id `"popup-menu"` (fact 33), so the
+  sweeps read the row menu through `activity_menu_open()` and the menu
+  entity, never by that id. The title allowance never extends to the
+  dock, repository or More menus (Part G).
 
 ## Part E: The Needs Attention Popover
 
@@ -1416,11 +1759,12 @@ pub(crate) struct ActivityMenu {
   `D/view/footer.rs:399-412`). The popover anchors to them.
 - **Tooltip:** "Things that need you. Your work is safe until you act."
   (fact 43).
-- **Hiding while focused:** when it hides because the count reached 0,
-  focus moves to the control before it in its group: To share, else
-  Update check, else the right dock's first panel toggle. So
-  `focus_after_hiding(Attention, ..)` names that control, and
-  `keep_focus_in_footer` covers Attention (R-37).
+- **Hiding while focused:** it follows the existing rule's direction,
+  right (`D/view/footer.rs:265-283`; 3a R-38). When Needs attention hides
+  because the count reached 0, focus moves to the next shown control to
+  its right: the right dock group's first control, else Settings.
+  `focus_after_hiding(Attention, ..)` returns that, where it returns
+  `None` today, and `keep_focus_in_footer` covers Attention (R-37).
 - **Label:** unchanged ("1 needs attention", "{n} need attention").
 
 ### E2. The Layer
@@ -1437,8 +1781,9 @@ Workspace as `Option<AttentionPopover>`, with:
 - `Workspace::render` mounts it after the dock menu and the repository
   menu (fact 29). It is a `deferred(anchored()…)` at `POPUP_PRIORITY`,
   positioned at the footer item's bounds' top right, with
-  `Anchor::BottomRight` and an 8 px margin, so it opens above the item,
-  right-aligned to it (`05`).
+  `Anchor::BottomRight`. Its bottom edge sits 6 px above the footer's top
+  edge (`05`: "bottom 34 px" over a 28 px footer), right-aligned to the
+  item (R-38).
 - It is 440 px wide. It is no taller than the window less the title bar
   and footer, and scrolls.
 - **Contents:**
@@ -1448,25 +1793,33 @@ Workspace as `Option<AttentionPopover>`, with:
     description, button and tag, with the row's detail as its tooltip
     and accessible description;
   - the link "Show everything in Activity".
-- **Ids:** `"attention-popover"`, `("attention-row", ix)`,
-  `("attention-button", ix)`, `"attention-show-all"`.
+- **Ids:** `"needs-attention-popover"`, `("needs-attention-row", ix)`,
+  `("needs-attention-button", ix)`, `"needs-attention-show-all"`. An
+  `"attention-…"` id would match `polling_privacy`'s `("attention", …)`
+  prefix (fact 40).
 
 **Keys,** in a new context `ATTENTION_POPOVER_CONTEXT`:
 
 | Key | Does |
 | --- | --- |
 | `up`, `down`, `home`, `end` | Moves the highlight, with no wrap |
-| `enter` | Runs the highlighted row's button, or opens its item when it has none |
-| `tab`, `shift-tab` | Cycles the highlighted row's button and the link, staying inside the popover (R-12) |
+| `enter` | On the list: runs the highlighted row's button, or opens its item when it has none; nothing on a disabled button. On the link: activates it |
+| `tab`, `shift-tab` | Three stops, wrapping: the popover's list (its own focus, holding the highlight), the highlighted row's button, and the link; Shift+Tab reversed. Focus stays inside the popover (R-12) |
 | `escape` | Closes it, with focus back to the footer item |
 
 **Opening and closing.**
 
-- **Opening** focuses the popover, with the highlight on its first row.
+- **Opening** focuses the popover's list, with the highlight on its first
+  row.
 - **Running a row's action** closes the popover first, then runs the
-  action with the footer item's handle as origin or restore. A dialog or
-  sheet it opens returns focus there. If the item has hidden by then, E1's
-  rule applies.
+  action through `choose_activity` with the footer item's handle as
+  origin or restore.
+  - **An action that opens no dialog** (Retry now, Resume and so on):
+    focus goes to the footer item if shown, else by E1's rule.
+  - **A dialog or sheet** it opens returns focus to the footer item. If
+    the item has hidden by the time it closes, focus falls back as Cycle
+    01's `focus_lost` does (the last region). `the_popover_closes` pins
+    this.
 - **"Show everything in Activity"** closes the popover, turns the filter
   off, reveals Activity, and focuses its list with the highlight on the
   first row.
@@ -1477,7 +1830,8 @@ Workspace as `Option<AttentionPopover>`, with:
   - when the count reaches 0, with focus moved by E1's rule if it was
     inside;
   - when a dialog or sheet opens (dropped, as the menus are, fact 29);
-  - when a row menu, the dock menu or the repository menu opens (R-13).
+  - when another layer opens: the row menu, ⋯ (the Activity More menu),
+    the dock menu, the repository menu or Cycle 03a's More menu (R-13).
 - **With Activity hidden,** the popover reads the log, which does not
   depend on Activity being drawn (A4), so it works (exit evidence).
 
@@ -1520,37 +1874,47 @@ This folds in item 1 of ticket `01M6H7VXJJHRYHTW9S8TJ88921`.
   request the worker never ran (fact 13).
 - **Clearing.** `apply(Queued)` for a retry clears both maps, as it clears
   `shares`.
-- **Reading.** `share_result(&self, id) -> Option<&SyncResult>` returns
-  the stored result while the request is Finished. The view's
-  `share_result`, `finished_share`, the item tab's `share_outcome` and
-  `run_share_offer` read it.
+- **Reading.** The new getter `share_result(&self, id) ->
+  Option<&SyncResult>` returns the stored result while the request is
+  Finished. The view's `share_result`, `finished_share`, the item tab's
+  `share_outcome` and `run_share_offer` read it. The view's
+  `share_result(&services, id, cx)` keeps its signature and now returns
+  the stored result.
+- **A test-only form.** Today's three-argument
+  `Operations::share_result(id, record, after_give_up)`
+  (`D/model/operations.rs:477`) is renamed `classify_share(id, record,
+  after_give_up)` and kept as `#[cfg(test)]`: a pure re-classification of
+  the stored envelope, for the one test that re-classifies under another
+  record on purpose (E-1).
 - **Still read at render:** `share_words`' Busy holder and
   `shown_offers`' republish state, which describe other requests now
   (R-9).
-- **This is R-8.** The `Finished` event keeps its shape, so the 36 test
-  sites that build it (fact 13) do not change.
+- **This is R-8.** The `Finished` event keeps its shape, so the 51 lines
+  in 26 files that name it, 36 of them in 21 test files (fact 13), do not
+  change.
 
 ### F3. The Running Stage Is Shown
 
 This folds in an item of ticket `01M5CS4MH25QQ769HV61ZRKHXG`.
 
 - **New stage words.** `stage_words(stage: ProgressStage, primary:
-  Option<&str>) -> &'static str`, in `model/operations/progress.rs`,
-  gives words to every intent outside `Progressing`. They are
-  `stage_text`'s share column with no remote (fact 14), except that
-  Writing reads "Saving…".
+  Option<&str>) -> String`, in `model/operations/progress.rs`, gives
+  words to every intent outside `Progressing`. They are `stage_text`'s
+  share column with no remote (fact 14), except that Writing reads
+  "Saving…". Integrating and Publishing name `{primary}`, else "main".
 - **`state_label`.**
   - `Running { stage: Some(s), .. }` reads "Running: {words}", whether
     accepted or not.
   - `Running { accepted: true, stage: None }` still reads "Finishing".
-  - Settings' key page, which also uses `state_label` (fact 14), follows.
-- **A running request row** reads "{Doing} {subject}… · {words}" (B2).
+  - Settings' key page, which also uses `state_label` (fact 14), follows,
+    and shows the stage (Document Amendment 13).
+- **A running request row** reads "{Doing}… · {words}" (B2).
 - **The disabled "Finishing" control is kept.** It becomes the row's
   disabled button, for an accepted request with no Stop on offer.
 
 ### F4. The Old Columns Go
 
-Task 8 removes the drawing code:
+Task 9 removes the drawing code:
 
 - `session_section`, `pending_section` and the entry, pending, attempt,
   attention, record and recovered drawing in `D/view/operations.rs` and
@@ -1558,11 +1922,12 @@ Task 8 removes the drawing code:
 - the focus maps of fact 8, with `prune_abandon_focus`.
 
 Every handler of A1's table stays, now called from
-`Workspace::run_activity_action(&ActivityAction, origin: FocusHandle,
-window, cx)` in `D/view/activity/actions.rs`. `D/view/operations.rs`
-keeps the handlers and the id-free helpers (`outcome_label`,
-`state_label`, `scope_name`, `effects_text`) that other code uses (fact
-14), and drops below 500 lines.
+`Workspace::choose_activity` and `Workspace::run_activity_action(&ActivityAction,
+origin: FocusHandle, window, cx)` in `D/view/activity/actions.rs`.
+`D/view/operations.rs` keeps the handlers and `state_label` (fact 14). The
+pure helpers `outcome_label`, `scope_name` and `effects_text` live in the
+model from Task 3 and are re-exported from it (R-41). It drops below 500
+lines, which Task 9 checks.
 
 ## Part G: Privacy
 
@@ -1570,7 +1935,7 @@ keeps the handlers and the id-free helpers (`outcome_label`,
 menu, its tag and a popover row hold only:
 
 - the desktop's fixed copy;
-- titles (decision 12);
+- titles as read (decisions 12 and 21), never a draft's own title (B1);
 - repository, remote, host and branch names;
 - result codes and the library's fixed messages (fact 16);
 - effect values;
@@ -1581,33 +1946,49 @@ They never hold:
 
 - a body, a comment or a conflict side;
 - a remote URL (`RemoteAdd`'s is never shown);
+- a file path;
 - a key's label or path;
 - a passphrase;
 - a server's text.
 
-**Sweeps** (Task 10):
+**Sweeps at the swap** (Task 9, E-11, E-12). The drawn area changes in
+Task 9, so its sweeps change with it:
 
 - **D5's sweeps** (`D/view/lifecycle/privacy_tests.rs`,
   `privacy_promote_tests.rs` and `privacy_remote_tests.rs`):
   - They gain a title-only allowance: the `TITLE` and `READY` sentinels
-    (both titles) may appear inside `"operation-area"`, `"attention-popover"`
-    and a row menu.
+    (both titles) may appear inside `"operation-area"`.
   - `BODY`, `COMMENT_TEXT`, `BASE` and `THEIRS` stay forbidden
     everywhere they are today.
-  - The four tests still assert that the operation area was read
+  - The four `a16_` tests still assert that the operation area was read
     (fact 40).
 - **`polling_privacy`:**
-  - Its surfaces follow the new ids. Its `read_at` pairs keep their
-    meaning: a hold row's "Unlock…", a pending row's "Resume" and its
-    menu's "Abandon…", the quit row's words, and a request row's code in
-    its detail.
+  - It gains the same title allowance (decision 21).
+  - Its `SURFACES` are updated explicitly for the new ids. Its `read_at`
+    pairs keep their meaning: a hold row's "Unlock…", a pending row's
+    "Resume" and its menu's "Abandon…", the quit row's words.
   - It adds a surface for the log's rows read from the model: every
     title, description, detail line, offer label and tag, so tooltips
-    are swept without hovering.
-- **The drafts sweep** expects the new S11 title.
+    are swept without hovering. `read_at`'s `("operation entry",
+    "worktree_not_clean")` pair (`D/view/polling_privacy_tests.rs:997`)
+    is now read from that surface, from the row's detail.
+- **The drafts sweeps** expect the new S11 title: `D/view/drafts_privacy_tests.rs`
+  (`:272-276`) and `D/view/drafts_entry_tests.rs` (`:207-212`, which
+  scans `"operation-area"` for a label starting "Recovery copy of").
 
-**Document amendment.** D5's privacy rule gets a dated amendment
-(Document Amendment 6).
+Task 9 runs `polling_privacy` and D5's four `a16_` tests.
+
+**Sweeps of the new layers** (Task 12, E-14):
+
+- the popover (`"needs-attention-popover"`) and the row menu, read
+  through `activity_menu_open()` and the menu entity, not the shared
+  `"popup-menu"` id (fact 33), so the title allowance never extends to
+  the dock, repository or More menus;
+- the positive control: the title sentinel is seen in an Activity row,
+  and a body sentinel planted in the same item is not.
+
+**Document amendments.** D5's and D6's privacy rules get one dated
+amendment (Document Amendment 6).
 
 ## Part H: Keyboard And Focus
 
@@ -1616,20 +1997,21 @@ They never hold:
 | Activity | `secondary-4` or F6 to the list; arrows, Home and End; Enter presses the button or opens the item; `shift-f10` or `menu` opens the row menu; Tab reaches the filter, ⋯, the list and the highlighted row's button |
 | Row menu | The Kit menu's keys; Escape returns focus |
 | ⋯ menu | As Cycle 03a's More |
-| Footer Needs attention | A tab stop; Enter or Space toggles the popover |
-| Popover | Arrows, Home, End and Enter; Tab cycles inside; Escape returns to the footer item |
-| After a dialog | From Activity: the list, the row still highlighted. From the popover: the footer item, or E1's fallback |
+| Footer Needs attention | A tab stop; Enter or Space toggles the popover; hiding while focused, focus moves right (E1) |
+| Popover | Arrows, Home, End and Enter; Tab cycles the list, the highlighted row's button and the link; Enter on the link activates it; Escape returns to the footer item |
+| After a dialog | From Activity: the list, the row still highlighted (decision 23). From the popover: the footer item, or Cycle 01's `focus_lost` fallback when it has hidden (E2) |
 | Behind a dialog or sheet | Nothing acts: every new action goes through `unless_dialog`, and every layer is dropped (R-60, fact 36) |
 
 Every control has an accessible name and visible focus (RFC 344-349).
-Color is never the only signal: every row has an icon and words.
+Colour is never the only signal: every row has an icon and words
+(contract 6).
 
 ## Required Outcomes
 
 | # | Situation | Required outcome |
 | --- | --- | --- |
-| P1 | Each source S1–S14, in each of its states | Its rows, with key, kind, title, description, button, menu and attention as A2 and B2–B4 say |
-| P2 | Each row of A3's table, N1–N16 | The rows shown and the count it says, read from the log and from the footer |
+| P1 | Each source S1–S14, in each of its states, and a ContextRetire with an S8 line | Its rows, with key, kind, title, description, button, menu, `clearable` and attention as A2 and B2–B4 say; every row has a kind and a title; one row per retirement (R-42) |
+| P2 | Each row of A3's table, N1–N17, with an N4 row for each failure class | The rows shown and the count it says, read from the log and from the footer |
 | P3 | A4's rules L1–L9: a first sighting, a retry, a state that leaves and returns, a repository that starts and ends a check, a final retirement line that goes, a dismissal, equal times, "Clear finished", many rows | Each rule's result; a retried request keeps its time and place; a dismissed request that is retried comes back (fact 6) |
 | P4 | Every intent of B2's table, in each request state | Its title and description |
 | P5 | Each `SyncOutcome`, with a record Accepted, Finished and Unknown, and after a Give up | B3's words; the button is the first offer, the menu holds the rest in today's order |
@@ -1639,25 +2021,42 @@ Color is never the only signal: every row has an icon and words.
 | P9 | A finished share whose worker record later changes; a retry; a fabricated `Finished` with no noted attempt | The result classified when it finished is the one shown; the retry clears it; `Unknown` and no Give up |
 | P10 | A running request with a stage, of an intent with stage words and of one without; accepted with no stage; accepted with no Stop | Its words; "Finishing"; the disabled "Finishing" button |
 | P11 | The operations model split | Every existing test of `D/model/operations*` passes unchanged |
-| P12 | `each_repository` | Cycle 03a's panel tests pass unchanged; a repository row's state equals `repository_state` of the same facts |
+| P12 | `each_repository` | Cycle 03a's panel tests pass unchanged after `RepoFacts` building moves (run by name in Task 4) |
 | P13 | A journey with one row of each counted kind, then each resolved | The footer's count, the popover's rows and the attention rows agree at every step |
 | P14 | Activity with rows; with the filter on; with none | The rows newest first; only attention rows; the two empty texts |
-| P15 | Activity by keyboard | Up and down stop at the ends; Home and End; Enter presses the button, opens the item when there is none, or does nothing; `shift-f10` and `menu` open the menu; Tab runs filter, ⋯, list, highlighted row's button |
+| P15 | Activity by keyboard | Up and down stop at the ends; Home and End; Enter presses the button, opens the item when there is none, or does nothing (a disabled button, or neither); Enter on the focused row button runs its action once, and the list's `enter` does not also fire; `shift-f10` and `menu` open the menu; Tab runs filter, ⋯, list, highlighted row's button |
 | P16 | A left click on a row; on its button; a right click | Highlights only; runs the button once; opens the menu for that row |
 | P17 | The row menu by pointer and by keyboard; a choice whose row changed in between | The detail lines (disabled), the offers, Dismiss; nothing runs, and the menu closes |
-| P18 | Each `ActivityAction` kind, from a row's button and from its menu | Its handler of A1's table, sending exactly what today's control sends |
+| P18 | Each `ActivityAction` kind, through `choose_activity` (Task 6), then from a row's drawn button and from its menu (Task 9) | Its handler of A1's table, sending exactly what today's control sends |
 | P19 | "Clear finished" with finished successes, a failure, an attention row and a state | Only the finished rows that need nothing go; disabled when there are none |
-| P20 | Abandon…, a recovery that confirms, and Open… chosen from a row, then cancelled | Focus back in the list, the same row highlighted |
-| P21 | Activity at 320 px wide, with the longest message of each kind | Every row's button lies inside the list's bounds |
-| P22 | The footer item by click, Enter and Space, twice | The popover opens with the attention rows, newest first, then closes |
-| P23 | The popover by keyboard, for each action kind it offers (Unlock…, Retry now, Retry, Review changes, Resume, Approve host…, Resume checking, Open) | Arrows, Home and End move; Enter runs the action after closing the popover; Tab stays inside; Escape returns to the footer item |
+| P20 | Abandon…, a recovery that confirms, and Open… chosen from a row's button, its menu and Enter, then cancelled | Focus back in the list, the same row highlighted (decision 23) |
+| P21 | Activity moved into the right dock and set to 320 px with the layout model's API, as Cycle 01's dock tests do, with the longest message of each kind, a long repository name and "+N" | Every row's button lies inside the list's bounds |
+| P22 | The footer item by click, twice; by Enter, then Escape; by Space, then Escape | The popover opens with the attention rows, newest first, then closes |
+| P23 | The popover by keyboard, for every attention source and each button it can carry (the table below) | Opened by keyboard, the row highlighted by arrows, Enter runs the button through `choose_activity` with the footer item's handle as origin, after closing the popover; Home and End move; Tab stays inside; Escape returns to the footer item |
 | P24 | The popover with Activity hidden; "Show everything in Activity" | It works; Activity is shown with the filter off and its list focused |
-| P25 | The count reaching 0 while the popover is open; a dialog or sheet opening; another layer opening; a press outside; a press on the footer item | It closes each time; focus moves by E1's rule when it was inside; the footer press closes it once and does not reopen it |
-| P26 | The focused footer item hiding | Focus moves to To share, else Update check, else the right dock's first toggle |
+| P25 | The count reaching 0 while the popover is open; a dialog or sheet opening; another layer opening; a press outside; a press on the footer item; a dialog from the popover closing after the item hid | It closes each time; focus moves by E1's rule when it was inside; the footer press closes it once and does not reopen it; the dialog's focus falls back as Cycle 01's `focus_lost` does |
+| P26 | The focused footer item hiding | Focus moves to the next shown control to its right: the right dock group's first control, else Settings |
 | P27 | The toolbar, the row menu keys, Enter in the list, the footer item and the popover keys behind a dialog; behind a sheet | Nothing acts |
 | P28 | Sentinels in a title, body, comment, conflict side, remote URL, key label and passphrase, through every surface | Only the title appears, and only where Part G allows |
 | P29 | Rows arriving while Activity is hidden, then Activity shown | The same rows and times as if it had been shown |
 | P30 | A check that answers while the repository's row is shown, and a retry that starts | The row stays through the check (rule L3) and leaves or stays by the answer |
+| P31 | Moving the highlight, toggling the filter, opening and closing the row menu, ⋯ and the popover, and "Show everything in Activity" | Nothing is sent (contract 3) |
+| P32 | S6's reminder rows, and Cycle 03a's "N to share" for the same repository and moment | Exactly the items Cycle 03a counts, main as one |
+
+**P23's table.** For each source and button, the popover is opened by
+keyboard, the row highlighted by arrows, and Enter runs it through
+`choose_activity` with the footer item's origin. Together with P18, which
+maps every `ActivityAction` to its handler, every popover action is proved
+by keyboard.
+
+| Source | Buttons |
+| --- | --- |
+| S1, a counted failed request | Review changes; each share offer that can be a button (Share, Retry, Unlock…, Open Sharing & keys, Check host, Set identity, Show it, Set up sharing, Republish…); each recovery action that can be a button; Open… (lifecycle) |
+| S3 | Each `Reason`'s action |
+| S4 | Each attention state's `RowAction`: Retry, Reread, Settings…, Retry now, Check now, Resume checking, and Attend's |
+| S5 | Open |
+| S9 | Resume, Review changes |
+| S10, S11 | Retry |
 
 ## Testing
 
@@ -1670,6 +2069,8 @@ Color is never the only signal: every row has an icon and words.
     `the_log_keeps_times_and_events` (P3), `request_copy_table` (P4),
     `share_copy_table` (P5), `state_copy_table` (P6) and
     `activity_time_formats` (P7);
+  - `reminders_match_to_share` (P32), in `D/model/activity_tests.rs`,
+    using Cycle 03a's count function;
   - `brought_in_is_kept_for_the_session` (P8) in the polling model's
     tests;
   - `shares_are_classified_once` (P9) and `stages_are_shown` (P10) in the
@@ -1685,7 +2086,9 @@ Color is never the only signal: every row has an icon and words.
       `rows_fit_a_narrow_activity` (P21),
       `activity_hidden_keeps_the_log` (P29),
       `a_checking_repository_keeps_its_row` (P30),
-      `count_and_popover_agree` (P13).
+      `navigation_sends_nothing` (P31, with the recording backend),
+      `count_and_popover_agree` (P13). Task 5 creates the file, for
+      `count_and_popover_agree`.
   - **`D/view/needs_attention_tests.rs`:**
     - `the_popover_opens_lists_and_closes` (P22),
       `popover_actions_by_keyboard` (P23);
@@ -1693,7 +2096,11 @@ Color is never the only signal: every row has an icon and words.
       `the_popover_closes` (P25),
       `nothing_acts_behind_a_dialog_or_sheet` (P27).
   - **Other:** P26 is in the footer's status table (E-13); P28 is the
-    sweeps (E-14).
+    sweeps (E-12, E-14).
+- **P23 without a journey per action.** `popover_actions_by_keyboard` is
+  a table: it drives its fixtures through the scheduler `World`,
+  `PollingBackend` answers and fabricated `WorkerEvent`s, so it does not
+  need one journey per action.
 - **Test-first:**
   - `attention_counts_each_thing_once` is written from A3's table before
     any of its code (Plan, Test-first);
@@ -1715,13 +2122,52 @@ not element id:
 - `request(shell, DesktopRequestId) -> DesktopRequest`
 - `pending_key(shell, root, action) -> RowKey`
 
-`act` dispatches `ActivityMenuChoice` for that offer: the same action and
-the same path a menu choice takes (Part D). Tasks 6 and 7 move the tests
-of fact 38 onto the seam while the old columns are still drawn. They pass
-before and after, and assert the same behaviour (E-5, E-6). Task 8 then
-swaps the drawing without touching them. Keyboard and focus steps stay on
-the drawn controls and are rewritten in Task 8 (E-7). P18 proves that
-each action kind is reachable from a drawn button and from the menu.
+**How `act` works** (R-45). `act` does not dispatch a window action.
+
+- **The seam.** `act(shell, key, label, cx)` builds the
+  `ActivityMenuChoice` for that offer and calls
+  `Workspace::choose_activity(&ActivityMenuChoice, origin: FocusHandle,
+  window, cx)` directly, inside `workspace.update`. It runs the same
+  re-check a menu choice runs (Part D).
+- **The reason.** `Window::dispatch_action` goes to the focused node (or
+  the root when nothing is focused) and runs deferred
+  (`gpui-pre-0.3.6/src/window.rs:2442-2454`, `:6244-6252`).
+  `FocusHandle::dispatch_action` does nothing for an undrawn handle
+  (`:628-636`). A Kit menu choice focuses `action_context` first
+  (`C/menu/popup_menu.rs:892-902`).
+- **The menu's action handler** (Task 9) calls the same
+  `choose_activity`, with the list's handle.
+- **Origins during Tasks 6–8.** `run_activity_action` receives an origin.
+  The seam passes today's control handle for that action
+  (`control_focus_for` and `abandon_focus_for` by the old id), so
+  converted tests that also read focus stay green until Task 9 replaces
+  the origins with the list's handle (C3; decision 23).
+
+**The migration.** Tasks 6 to 8 move the tests of fact 38 onto the seam
+while the old columns are still drawn. They pass before and after, and
+assert the same behaviour (E-5, E-6). Task 9 then swaps the drawing
+without touching them.
+
+- **Excluded from conversion.** Every test in E-7 is left out of E-5 and
+  E-6. Those tests keep pressing by element id until Task 9 rewrites them
+  to Part H's keys.
+- **The read conversion rule** (E-5, E-6). A label read that compared
+  today's words becomes a read of model state:
+
+  | Today's read | Becomes |
+  | --- | --- |
+  | state | `request(..).state` |
+  | outcome words | `share_result(id)`'s `SyncOutcome` |
+  | offers | `offered(..)` returning `Offer`s whose actions are compared |
+  | code, message, effects | `request(..).state`'s `Finished` fields |
+  | command | `request(..).intent` |
+  | pending command, next | the pending row's `RowKey` and the model's `OperationDto` |
+
+  These are **Removes** of drawn-text assertions. The copy is asserted by
+  P4–P7. The ledger lists each removed text assertion per file.
+- **What proves the drawn controls.** A converted test no longer proves
+  its control is drawn. P18 proves each action kind from a drawn button
+  and the menu, and P23 from the popover (R-21).
 
 **Window rules** (Cycles 01, 02 and 03a ledgers):
 
@@ -1742,22 +2188,22 @@ tests and production code. Any other site is recorded as a further edit
 
 | E | Tests | Edit | Task |
 | --- | --- | --- | --- |
-| E-1 | `D/view/operations/give_up_tests.rs` `a_give_up_left_waiting_on_unlock_offers_unlock_not_give_up` (`:344`); `D/view/operations/outcomes_route_tests.rs` `a_host_code_checks_the_host_with_its_authority` (`:91`) | The direct `share_result(id, record, gave_up)` calls note the attempt (`note_share_attempt`), then read the stored `share_result(id)` (F2) | 2 |
+| E-1 | `D/view/operations/give_up_tests.rs` `a_give_up_left_waiting_on_unlock_offers_unlock_not_give_up` (`:340-347`) | Its direct three-argument `share_result(id, record, gave_up)` call becomes `classify_share(id, record, gave_up)`, the `#[cfg(test)]` form, since it re-classifies under another record on purpose (F2). `D/view/operations/outcomes_route_tests.rs:91` calls the view's `share_result(&services, id, cx)`, which keeps its signature and now returns the stored result: no edit | 2 |
 | E-2 | `D/view/operations/check_tests.rs` `a_running_check_now_reads_its_stage_words` (`:111-118`) | The poll policy verbs at the Writing stage read "Running: Saving…", not `FINISHING` (F3) | 2 |
-| E-3 | `D/model/attention_tests.rs` `counts_what_awaits_the_person` (`:172`); `D/model/attention_retire_tests.rs` `retire_rows_dismissed` (`:143`); the helpers of `D/model/attention_polling_tests.rs`; `D/services/scheduler_retire_tests.rs` `retire_resume_resends_original` (`:691`) | `needs_attention` goes (A6). Each case of the first two becomes a row of `attention_counts_each_thing_once`, named in the ledger. The third test reads `attention_count()`. **Removes** the module | 5 |
-| E-4 | `D/view/footer_tests/mod.rs` `needs_attention_counts_and_leads_to_activity` (`:279`); `D/view/keyboard_tests/shell.rs` `needs_attention_works_by_enter` (`:377`); `D/view/workspace_tests.rs` `drafts_not_saved_with_activity_hidden_focuses_the_item_area` (`:537`) | A count they assert changes only where N1–N16 count their fixture differently; each change is recorded in the ledger with its N row | 5 |
-| E-5 | Under `D/view/operations/` and `D/view/operations_tests.rs`. **`operations_tests.rs`:** `launch_refreshes_each_repository_in_the_background_and_a_manual_refresh_runs_first`, `a_failed_refresh_and_rebuild_stay_until_dismissed_and_retry_succeeds` and its helper `recovery_of`, `a_lease_held_by_another_process_is_the_refreshs_typed_answer`, `a_pending_local_operation_offers_resume_and_abandon_confirms_it`, `resume_finishes_a_pending_local_operation`, `an_abandon_by_a_second_actor_is_answered_and_the_row_goes`. **`attempts_tests.rs`:** `dispositions_listed`, `attempt_entry_share_waits_for_the_lock`. **`attention_tests.rs`:** `attention_locked_key`, `attention_host`, `attention_actions_by_reason`, `attention_recovery_held`. **`give_up_tests.rs`:** helpers `code`, `accepted_share`, `give_up`; `give_up_is_offered_exactly_when_the_record_is_accepted`, `give_up_is_offered_on_exactly_the_rows_that_name_it`, `a_give_up_left_waiting_on_unlock_offers_unlock_not_give_up`, `giving_up_a_finished_record_says_already_finished`, `stop_is_not_offered_without_a_remote`, `a_stopped_resume_over_an_unsettled_push_reads_not_confirmed`, `a_stopped_resume_that_then_fails_the_transport_reports_the_reservation`. **`outcomes_tests.rs`:** helpers `offered`, `outcome`, `assert_row`, and its 13 tests. **`outcomes_route_tests.rs`:** `no_selected_key_opens_sharing_and_keys`, `a_host_code_checks_the_host_with_its_authority`, `unlock_clears_the_declined_key_and_retries_the_same_request`, `share_after_a_finished_locked_key_clears_its_declined_key`, `busy_without_a_known_holder_points_to_pending_operations`, `a_final_failure_on_a_finished_record_offers_share_not_retry`. **`record_tests.rs`:** `an_unreadable_record_is_reported_once_in_activity`. **`republish_follow_tests.rs`:** all seven tests. **`republish_stop_tests.rs`:** `under_a_resume` and its callers, and `a_stop_that_cannot_be_queued_says_so`. **`republish_tests.rs`:** `a_deleted_branch_offers_republish`, `republish_confirms_then_shares`, `a_stopped_republish_sends_the_same_request`, `an_item_shares_stop_and_republish_opens_republish`, `republish_waits_for_another_dialog_to_close`, `an_unreadable_record_offers_give_up_and_it_sends_the_give_up`, `republish_opens_when_the_dialog_it_waits_for_is_cancelled`. **`resume_tests.rs`:** `close_row` and the six tests that press Resume, plus `a_lifecycle_row_offers_resume_after_restart`. **`retire_tests.rs`:** `retire_left_unkept_ask`, `retire_left_kept_draft_ask`, `retire_flush_failure_submits_nothing`, `retire_unkept_text_is_asked_before_drafts`, `retire_after_a_quit_closed_its_question`. **`check_tests.rs`:** the state read of E-2 | A press by element id becomes `act(shell, key, LABEL)`. A presence check becomes `offered`. A read of a state, code, message, outcome, command, effects, next action or scope becomes a model read through the seam: `request`, `share_result`, or the row's detail. A pending row by index becomes `pending_key`. Keyboard and focus steps stay as they are until E-7. Every assertion keeps its meaning; the ledger lists each file's test functions before and after | 6 |
-| E-6 | Outside `D/view/operations/`, with the same edit as E-5. **`D/view/conflict/entry_tests.rs`:** `row_of`, `the_banner_offers_review_changes`, `a_pending_resolve_row_offers_review_changes_after_restart`, `a_local_synchronization_offers_resume`, `resolve_conflict_opens_the_childs_sheet`, `an_applied_resolution_clears_the_banner_and_its_review`, `a_resume_that_settles_the_conflict_clears_its_review`. **`D/view/conflict/repair_tests.rs`:** its three tests. **`D/view/confirm_tests.rs`:** the seven that press Abandon. **`D/view/find_tests.rs`:** `find_does_nothing_while_a_dialog_is_open`. **`D/view/tabs_tests.rs`:** `the_tab_keys_do_nothing_while_a_dialog_is_open`. **`D/view/passphrase_tests.rs`:** `a_prompt_above_the_confirmation_dialog_is_answered_by_its_own_dialog`. **`D/view/item/share_tests.rs`:** its nine tests of fact 38. **`D/view/item/edit_release_tests.rs`:** `retry_control` and its three tests. **`D/view/item/posting_tests/`:** `outside.rs` `recovery_labels` and its three tests; `decisions.rs` `a_post_stopped_on_a_conflict_raises_the_items_banner`; `extras.rs` `quitting_during_an_accepted_post_leaves_it_saved_and_cancelled`; `recovery.rs` `p3_a_stopped_post_offers_share_not_retry`; `review.rs` `an_operation_area_retry_is_followed_and_posts_one_comment`. **`D/view/lifecycle/`:** `outcome_tests.rs` `the_operation_entry_reopens_the_dialog`; `outcome_canned_tests.rs` `reopen` with `each_way_out_offers_its_button`, `busy_after_the_merge_is_failed_not_still_running` and `a_lifecycle_entry_keeps_the_recovery_its_dialog_does_not_own`; `interruption_tests.rs` `p5_a_close_stranded_at_closing_resumes_after_relaunch` and `a_close_lost_before_settlement_is_complete_and_stays_accepted`; `made_ready_tests.rs` `entry_texts` and `done_lists_made_ready_with_slug_and_title`; `privacy_consent_tests.rs` (two `a17_` tests); `privacy_promote_tests.rs` `a16_a_promotion_stopped_untidied_and_done_shows_no_item_text`. **`D/view/lifecycle_tests.rs`:** `a_blocked_prepare_lists_blockers_and_way_out`. **`D/view/dock_tests/state.rs`:** `a_request_finishes_while_activity_is_hidden`. **`D/view/drafts_entry_tests.rs`:** its two tests. **`D/view/workspace_tests.rs`:** `a_draft_that_cannot_be_saved_asks_before_quitting`. **`D/services/drafts_tests.rs`:** its two tests. **`D/services/drafts/save_tests.rs`:** `dismissing_a_pending_save_in_the_operation_area_lets_another_be_sent`. **`D/view/settings/keys_tests.rs`:** `the_operation_area_retry_of_a_protected_generation_asks_on_the_page`. **`D/view/settings/remotes_tests.rs`:** its three tests. **`D/view/settings/repositories_tests.rs`:** `a_partial_create_is_completed_by_retry_under_the_same_request`, including its literal `format!("request-{}-code")` (`:569`). **`D/view/settings/repositories_manage_tests.rs`:** `a_release_that_failed_during_removal_completes_once_retry_stores_the_text` | As E-5 | 7 |
-| E-7 | Keyboard and focus steps, rewritten to Part H's keys. **`operations_tests.rs`:** `operations_keep_focus`, `dismiss_and_retry_from_the_keyboard_leave_focus_in_the_operation_area`, `a_recovery_dialog_gives_focus_back_to_the_action_that_opened_it`. **`attention_tests.rs`:** `attention_actions_hit`, `attention_actions_by_keyboard`. **`attempts_tests.rs`:** `attempt_entry_actions_hit`, `attempt_entry_ids_follow_the_repository`. **`retire_tests.rs`:** `retire_left_offer`, `retire_pending_row_by_keyboard`. **`retiring_tests.rs`:** `retire_rows_hit`. **`outcomes_route_tests.rs`:** `show_it_focuses_the_entry_of_the_possible_holder`. **`keyboard_tests.rs`:** `Walk::open_the_operation_area` and `Walk::start_a_confirmed_action_and_escape`, in `every_core_action_works_by_keyboard_alone`. **`keyboard_tests/actions.rs`:** `resume_by_keyboard`, `cancel_a_queued_request_by_keyboard`. **`keyboard_tests/confirm.rs`:** `open_abandon` and its four tests. **`keyboard_tests/conflict.rs`:** `resolve_a_local_conflict_by_keyboard`, with its own copy of `PENDING_REVIEW`. **`keyboard_tests/conflict/sheet.rs`:** `body_sheet` and its two tests. **`keyboard_tests/drafts/quit.rs`:** `a_draft_not_saved_on_quit_by_keyboard`. **`keyboard_tests/shell/polling_journey.rs`:** `polling_keyboard`. **`confirm_tests.rs`:** `escape_closes_the_dialog_with_no_request_and_focus_returns_to_abandon`, `:156`. **`passphrase_tests.rs`:** `:334`. **`dock_tests/state.rs`:** `show_it_reveals_a_hidden_activity` | A control is reached by focusing Activity, moving the highlight to its row, then Enter, or `shift-f10` and the menu. "Focus returns to the control" becomes "focus returns to the list, the row highlighted" (C3). `Workspace::abandon_focus` goes | 8 |
-| E-8 | The bounds assertions of `retire_left_offer` (`:209-217`), `retire_pending_row_by_keyboard` (`:620-631`) and `retire_rows_hit` (`:129-138`), and the window resizes made to reach a control in `attention_actions_hit` and `attempt_entry_actions_hit` | Containment is P21's test, `rows_fit_a_narrow_activity`, for every row kind. **Removes** the per-test bounds checks | 8 |
-| E-9 | `D/keys_tests.rs` `each_key_is_bound_to_its_action` | Gains each binding Parts C2 and E2 add; its fixed length follows | 8, 9 |
-| E-10 | `D/view/dock_tests/toolbars.rs` `panel_toolbars_work_by_tab_and_enter` | Activity's filter and ⋯ join the loop; `ToolbarButton::ALL`'s length follows | 8 |
-| E-11 | `D/view/drafts_privacy_tests.rs` (`:272-276`) | Expects S11's title, "The recovery copy of" | 8 |
-| E-12 | `D/view/polling_privacy_tests.rs` `polling_privacy` | `SURFACES` and `read_at` follow the new ids, with the same pairs (Part G), so the sweep stays green at Task 8 | 8 |
-| E-13 | `D/view/footer_tests/mod.rs`: `needs_attention_counts_and_leads_to_activity` becomes `needs_attention_counts_and_opens_the_popover`, and `status_items_say_and_choose`' status table (`focus_after_hiding(Attention, ..)`); `D/view/keyboard_tests/shell.rs` `needs_attention_works_by_enter` | A press and Enter open the popover, not Activity (E1); the hidden item's focus goes to the control before it (P26) | 9 |
-| E-14 | D5's three sweeps (`D/view/lifecycle/privacy_tests.rs` `ALLOWED` and `Seen`, used by `privacy_promote_tests.rs` and `privacy_remote_tests.rs`); `polling_privacy` | The title-only allowance and the model rows' surface, popover and row menu (Part G) | 10 |
+| E-3 | `D/model/attention_tests.rs` `counts_what_awaits_the_person` (`:172`); `D/model/attention_retire_tests.rs` `retire_rows_dismissed` (`:143`); the helpers of `D/model/attention_polling_tests.rs`; `D/services/scheduler_retire_tests.rs` `retire_resume_resends_original` (its `needs_attention` call at `:691`) | `needs_attention` goes (A6). Each case of the first two becomes a row of `attention_counts_each_thing_once`, named in the ledger. `retire_resume_resends_original` is a scheduler `World` test with no Workspace, so it builds the count from the pure `derive` over the `World`'s operations and schedule, with no repository inputs. **Removes** the module | 5 |
+| E-4 | `D/view/footer_tests/mod.rs` `needs_attention_counts_and_leads_to_activity` (`:279`); `D/view/keyboard_tests/shell.rs` `needs_attention_works_by_enter` (`:377`) and `footer_controls_are_reached_by_tab` (`:409`); `D/view/workspace_tests.rs` `drafts_not_saved_with_activity_hidden_focuses_the_item_area` (`:537`); every other reader of the count or the Attention control (fact 41): `D/view/dock/restore_tests.rs` (`:209`, `:219`, `:366`), `D/view/keyboard_tests/shell/journey.rs:104`, `D/view/footer_tests/status.rs:351` (the `status_items_say_and_choose` journey) and `D/view/footer_tests/status_table.rs:211` | A count they assert changes only where N1–N17 count their fixture differently; each change is recorded in the ledger with its N row. Task 5 runs all of them by name | 5 |
+| E-5 | Under `D/view/operations/` and `D/view/operations_tests.rs`, leaving out every E-7 test. **Part 1 (Task 6):** **`operations_tests.rs`:** `launch_refreshes_each_repository_in_the_background_and_a_manual_refresh_runs_first`, `a_failed_refresh_and_rebuild_stay_until_dismissed_and_retry_succeeds` and its helper `recovery_of`, `a_lease_held_by_another_process_is_the_refreshs_typed_answer`, `a_pending_local_operation_offers_resume_and_abandon_confirms_it`, `resume_finishes_a_pending_local_operation`, `an_abandon_by_a_second_actor_is_answered_and_the_row_goes`. **`give_up_tests.rs`:** helpers `code`, `accepted_share`, `give_up`; `give_up_is_offered_exactly_when_the_record_is_accepted`, `give_up_is_offered_on_exactly_the_rows_that_name_it`, `a_give_up_left_waiting_on_unlock_offers_unlock_not_give_up`, `giving_up_a_finished_record_says_already_finished`, `stop_is_not_offered_without_a_remote`, `a_stopped_resume_over_an_unsettled_push_reads_not_confirmed`, `a_stopped_resume_that_then_fails_the_transport_reports_the_reservation`. **`outcomes_tests.rs`:** helpers `offered`, `outcome`, `assert_row`, and its 13 tests. **`outcomes_route_tests.rs`:** `no_selected_key_opens_sharing_and_keys`, `a_host_code_checks_the_host_with_its_authority`, `unlock_clears_the_declined_key_and_retries_the_same_request`, `share_after_a_finished_locked_key_clears_its_declined_key`, `busy_without_a_known_holder_points_to_pending_operations`, `a_final_failure_on_a_finished_record_offers_share_not_retry`. **`check_tests.rs`:** the state read of E-2. **`record_tests.rs`:** `an_unreadable_record_is_reported_once_in_activity`. **Part 2 (Task 7), their tests outside E-7 only:** **`attempts_tests.rs`:** `dispositions_listed`, `attempt_entry_share_waits_for_the_lock`. **`attention_tests.rs`:** `attention_locked_key`, `attention_host`, `attention_actions_by_reason`, `attention_recovery_held`. **`republish_follow_tests.rs`:** all seven tests. **`republish_stop_tests.rs`:** `under_a_resume` and its callers, and `a_stop_that_cannot_be_queued_says_so`. **`republish_tests.rs`:** `a_deleted_branch_offers_republish`, `republish_confirms_then_shares`, `a_stopped_republish_sends_the_same_request`, `an_item_shares_stop_and_republish_opens_republish`, `republish_waits_for_another_dialog_to_close`, `an_unreadable_record_offers_give_up_and_it_sends_the_give_up`, `republish_opens_when_the_dialog_it_waits_for_is_cancelled`. **`resume_tests.rs`:** `close_row` and the six tests that press Resume, plus `a_lifecycle_row_offers_resume_after_restart`. **`retire_tests.rs`:** `retire_left_unkept_ask`, `retire_left_kept_draft_ask`, `retire_flush_failure_submits_nothing`, `retire_unkept_text_is_asked_before_drafts`, `retire_after_a_quit_closed_its_question`. **`retiring_tests.rs`:** none (its one test, `retire_rows_hit`, is in E-7) | A press by element id becomes `act(shell, key, LABEL)`. A presence check becomes `offered`. A read of today's words becomes a read of model state, by Testing's read conversion rule: `request`, `share_result`, `offered`, or the pending row's key and `OperationDto`. These are **Removes** of drawn-text assertions: the copy is asserted by P4–P7, and the ledger lists each removed text assertion per file. A pending row by index becomes `pending_key`. The seam passes today's control handle as origin (R-45). Keyboard and focus steps stay as they are until E-7. Every other assertion keeps its meaning; the ledger lists each file's test functions before and after | 6, 7 |
+| E-6 | Outside `D/view/operations/`, with the same edit as E-5, leaving out every E-7 test. **`D/view/conflict/entry_tests.rs`:** `row_of`, `the_banner_offers_review_changes`, `a_pending_resolve_row_offers_review_changes_after_restart`, `a_local_synchronization_offers_resume`, `resolve_conflict_opens_the_childs_sheet`, `an_applied_resolution_clears_the_banner_and_its_review`, `a_resume_that_settles_the_conflict_clears_its_review`. **`D/view/conflict/repair_tests.rs`:** its three tests. **`D/view/confirm_tests.rs`:** the six that press Abandon other than `escape_closes_the_dialog_with_no_request_and_focus_returns_to_abandon` (E-7). **`D/view/find_tests.rs`:** `find_does_nothing_while_a_dialog_is_open`. **`D/view/tabs_tests.rs`:** `the_tab_keys_do_nothing_while_a_dialog_is_open`. **`D/view/item/share_tests.rs`:** its nine tests of fact 38. **`D/view/item/edit_release_tests.rs`:** `retry_control` and its three tests. **`D/view/item/posting_tests/`:** `outside.rs` `recovery_labels` and its three tests; `decisions.rs` `a_post_stopped_on_a_conflict_raises_the_items_banner`; `extras.rs` `quitting_during_an_accepted_post_leaves_it_saved_and_cancelled`; `recovery.rs` `p3_a_stopped_post_offers_share_not_retry`; `review.rs` `an_operation_area_retry_is_followed_and_posts_one_comment`. **`D/view/lifecycle/`:** `outcome_tests.rs` `the_operation_entry_reopens_the_dialog`; `outcome_canned_tests.rs` `reopen` with `each_way_out_offers_its_button`, `busy_after_the_merge_is_failed_not_still_running` and `a_lifecycle_entry_keeps_the_recovery_its_dialog_does_not_own`; `interruption_tests.rs` `p5_a_close_stranded_at_closing_resumes_after_relaunch` and `a_close_lost_before_settlement_is_complete_and_stays_accepted`; `made_ready_tests.rs` `entry_texts` and `done_lists_made_ready_with_slug_and_title`; `privacy_consent_tests.rs` (two `a17_` tests); `privacy_promote_tests.rs` `a16_a_promotion_stopped_untidied_and_done_shows_no_item_text`. **`D/view/lifecycle_tests.rs`:** `a_blocked_prepare_lists_blockers_and_way_out`. **`D/view/dock_tests/state.rs`:** `a_request_finishes_while_activity_is_hidden`. **`D/view/drafts_entry_tests.rs`:** its two tests. **`D/services/drafts_tests.rs`:** its two tests. **`D/services/drafts/save_tests.rs`:** `dismissing_a_pending_save_in_the_operation_area_lets_another_be_sent`. **`D/view/settings/keys_tests.rs`:** `the_operation_area_retry_of_a_protected_generation_asks_on_the_page`. **`D/view/settings/remotes_tests.rs`:** its three tests. **`D/view/settings/repositories_tests.rs`:** `a_partial_create_is_completed_by_retry_under_the_same_request`, including its literal `format!("request-{}-code")` (`:569`). **`D/view/settings/repositories_manage_tests.rs`:** `a_release_that_failed_during_removal_completes_once_retry_stores_the_text` | As E-5. **Removes** drawn-text assertions as E-5 does | 8 |
+| E-7 | Keyboard and focus steps, rewritten to Part H's keys. Left out of E-5 and E-6: these keep pressing by element id until Task 9. **`operations_tests.rs`:** `operations_keep_focus`, `dismiss_and_retry_from_the_keyboard_leave_focus_in_the_operation_area`, `a_recovery_dialog_gives_focus_back_to_the_action_that_opened_it`. **`attention_tests.rs`:** `attention_actions_hit`, `attention_actions_by_keyboard`. **`attempts_tests.rs`:** `attempt_entry_actions_hit`, `attempt_entry_ids_follow_the_repository`. **`retire_tests.rs`:** `retire_left_offer`, `retire_pending_row_by_keyboard`. **`retiring_tests.rs`:** `retire_rows_hit`. **`outcomes_route_tests.rs`:** `show_it_focuses_the_entry_of_the_possible_holder`. **`keyboard_tests.rs`:** `Walk::open_the_operation_area` and `Walk::start_a_confirmed_action_and_escape`, in `every_core_action_works_by_keyboard_alone`. **`keyboard_tests/actions.rs`:** `resume_by_keyboard`, `cancel_a_queued_request_by_keyboard`. **`keyboard_tests/confirm.rs`:** `open_abandon` and its four tests. **`keyboard_tests/conflict.rs`:** `resolve_a_local_conflict_by_keyboard`, with its own copy of `PENDING_REVIEW`. **`keyboard_tests/conflict/sheet.rs`:** `body_sheet` and its two tests. **`keyboard_tests/drafts/quit.rs`:** `a_draft_not_saved_on_quit_by_keyboard`. **`keyboard_tests/shell/polling_journey.rs`:** `polling_keyboard`. **`confirm_tests.rs`:** `escape_closes_the_dialog_with_no_request_and_focus_returns_to_abandon` (`:145-159`). **`passphrase_tests.rs`:** `a_prompt_above_the_confirmation_dialog_is_answered_by_its_own_dialog` (its step at `:334`). **`workspace_tests.rs`:** `a_draft_that_cannot_be_saved_asks_before_quitting` (`:475`, which asserts focus on `draft_flush_id(id, "retry")`). **`dock_tests/state.rs`:** `show_it_reveals_a_hidden_activity` | A control is reached by focusing Activity, moving the highlight to its row, then Enter, or `shift-f10` and the menu. "Focus returns to the control" becomes "focus returns to the list, the row highlighted" (C3; decision 23). `Workspace::abandon_focus` goes | 9 |
+| E-8 | The bounds assertions of `retire_left_offer` (`:209-217`), `retire_pending_row_by_keyboard` (`:620-631`) and `retire_rows_hit` (`:129-138`), and the four window resizes made to reach a control (fact 38): `attention_actions_hit` (`attention_tests.rs:371`), `attempt_entry_actions_hit` (`attempts_tests.rs:181`), `a_draft_not_saved_on_quit_by_keyboard` (`keyboard_tests/drafts/quit.rs:70`) and `polling_keyboard` (`keyboard_tests/shell/polling_journey.rs:133`) | Containment is P21's test, `rows_fit_a_narrow_activity`, for every row kind. **Removes** the per-test bounds checks and resizes | 9 |
+| E-9 | `D/keys_tests.rs` `each_key_is_bound_to_its_action` | Gains each binding Parts C2 and E2 add: Activity's in Task 10, the popover's in Task 11; its fixed length follows | 10, 11 |
+| E-10 | `D/view/dock_tests/toolbars.rs` `panel_toolbars_work_by_tab_and_enter` | Activity's filter and ⋯ join the loop; `ToolbarButton::ALL`'s length follows | 10 |
+| E-11 | `D/view/drafts_privacy_tests.rs` (`:272-276`); `D/view/drafts_entry_tests.rs` (`:207-212`, which scans `"operation-area"` for a label starting "Recovery copy of") | Expect S11's title, "The recovery copy of" | 9 |
+| E-12 | D5's three sweeps (`D/view/lifecycle/privacy_tests.rs` `ALLOWED` and `Seen`, used by `privacy_promote_tests.rs` and `privacy_remote_tests.rs`); `D/view/polling_privacy_tests.rs` `polling_privacy` | The sweeps at the swap (Part G): the title-only allowance (`TITLE` and `READY` inside `"operation-area"`) in D5's sweeps and in `polling_privacy` (decision 21); `SURFACES` updated explicitly for the new ids; `polling_privacy`'s model-rows surface, which keeps `read_at`'s `("operation entry", "worktree_not_clean")` pair, now from the row's detail (`:997`). Task 9 runs `polling_privacy` and D5's four `a16_` tests | 9 |
+| E-13 | `D/view/footer_tests/mod.rs`: `needs_attention_counts_and_leads_to_activity` becomes `needs_attention_counts_and_opens_the_popover`, and `status_items_say_and_choose`' status table (`focus_after_hiding(Attention, ..)` at `D/view/footer_tests/status_table.rs:211`) and journey (`D/view/footer_tests/status.rs:351`); `D/view/keyboard_tests/shell.rs` `needs_attention_works_by_enter` (`:377`) and `footer_controls_are_reached_by_tab` (`:409`); `D/view/keyboard_tests/shell/journey.rs:104`; `D/view/dock/restore_tests.rs` (`:209`, `:219`, `:366`) | A press and Enter open the popover, not Activity (E1); the hidden item's focus moves right (P26). Task 11 runs all of them by name | 11 |
+| E-14 | D5's three sweeps and `polling_privacy`, as E-12 left them | The popover (`"needs-attention-popover"`) and row-menu surfaces, the row menu read through `activity_menu_open()` and the menu entity, not `"popup-menu"`; the positive control (Part G) | 12 |
 | E-15 | Appearance tests broken by the deliberate redesign, found in any task | Deleted, not updated (Wave Testing), and named in the ledger with what they asserted; the task's reviewer confirms each. A test that checks a control is visible in order to reach it is behaviour, and stops for the owner. **Removes** | — |
-| E-16 | `D/assets_tests.rs` `every_item_view_icon_loads` and its `ICONS` array | Each icon Parts A and C use is checked first (`list-filter`, `ellipsis`, `refresh-cw`, `cloud-upload`, `circle-check`, `circle-alert`, `wifi-off`, `lock`, `info`, `loader-circle`); a missing one is added, and the array's length follows | 8 |
+| E-16 | `D/assets_tests.rs` `every_item_view_icon_loads` and its `ICONS` array | Each icon Parts A and C use is checked first (`list-filter`, `ellipsis`, `refresh-cw`, `cloud-upload`, `circle-check`, `circle-alert`, `wifi-off`, `lock`, `info`, `loader-circle`); a missing one is added, and the array's length follows | 9 |
 
 ## Document Amendments
 
@@ -1767,8 +2213,12 @@ task:
 1. **Wave 04, Cycle 03b section.** "Amended 2026-11-12 by Cycle 03b":
    - the count includes every attention row once (decision 6);
    - checks that changed something get rows (decision 7);
-   - titles appear in Activity and the popover (decision 12);
-   - the K-19 rows are one-line rows.
+   - titles appear in Activity and the popover, under D5's and D6's rules
+     (decisions 12 and 21);
+   - the K-19 rows are one-line rows (decision 22);
+   - "its single action" becomes "at most one action" (decision 24);
+   - "failures appear in both Activity and the popover" means every
+     counted failure (decision 24).
 
    The Risks row "Needs attention misses the attention states D6 adds" is
    marked settled.
@@ -1789,22 +2239,48 @@ task:
    - "tries again" carries no fixed minutes.
 4. **`02-layout-and-docking.md`, Footer item 5:**
    - its tooltip;
-   - when it hides while focused, focus moves to the item before it.
+   - when it hides while focused, focus moves to the next shown control to
+     its right (E1).
 5. **`06-language-and-states.md`:** a row for retirement ("Retired the
    copy of … on this computer", Activity), and a note that Activity's
    full copy is Cycle 03b's design Part B.
-6. **D5's design, Privacy** (`docs/plans/2026-11-03-wave-03-desktop-05-recovery-and-completion-design.md:694`):
-   "Amended 2026-11-12 by Wave 04 Cycle 03b decision 12: a title may
-   appear in an Activity row, its tooltip and menu, and the Needs
-   attention popover; no body, comment, side or result text does."
+6. **The privacy rules of D5 and D6** (fact 45). One dated amendment,
+   applied to four texts:
+   - D5's design, Privacy (`docs/plans/2026-11-03-wave-03-desktop-05-recovery-and-completion-design.md:694`);
+   - D5's Cycle contract 10 (`docs/Cycles/wave-03-desktop-05-recovery-and-completion.md:197-198`);
+   - D6's Cycle contract 10 (`docs/Cycles/wave-03-desktop-06-polling-and-shutdown.md:353-354`);
+   - D6's design (`docs/plans/2026-11-07-wave-03-desktop-06-polling-and-shutdown-design.md:1095`
+     and its Privacy section, `:1520-1528`).
+
+   Each reads: "Amended 2026-11-12 by Wave 04 Cycle 03b decisions 12 and
+   21: a title may appear in an Activity row, its tooltip and menu, and
+   the Needs attention popover; no body, comment, side, result text or
+   path does."
 7. **Cycle 01's design, K-19:** "Fixed by Wave 04 Cycle 03b's one-line
    rows."
 8. **Cycle 03a's Cycle document and design, K-9:** "Decided by Cycle 03b
    decision 6."
 9. **`08-gpui-kit-mapping.md`:**
-   - Needs attention is a Workspace-owned layer, since the locked Kit
-     `Popover` cannot be opened from the footer's control (fact 32);
+   - Needs attention is a Workspace-owned layer, following the app's dock
+     and repository menus, not the Kit `Popover`, whose controlled mode
+     would split its rules across two mechanisms (R-10; fact 32);
    - Activity's list is GPUI's `uniform_list` (R-36).
+10. **D6's decision 13 and design W-6** (`docs/Cycles/wave-03-desktop-06-polling-and-shutdown.md:459`,
+    and the scope line at `:184`;
+    `docs/plans/2026-11-07-wave-03-desktop-06-polling-and-shutdown-design.md:1249`,
+    and the "Rows wrap inside Activity" sentence at `:1095`): "Amended
+    2026-11-13 by Wave 04 Cycle 03b decision 22: Activity's rows are one
+    line; the message ends in an ellipsis and the button never leaves the
+    row; the full text is the row's tooltip, accessible description and
+    menu."
+11. **Cycle 01's decision 3** (`docs/Cycles/wave-04-cycle-01-workspace-shell.md:315-321`):
+    "Superseded 2026-11-12 by Cycle 03b decision 6: the count is the
+    popover's rows; a pending row with nothing to do no longer counts."
+12. **Cycle 03a's design R-38** (the footer's focus after hiding):
+    "Extended by Cycle 03b: Needs attention follows the same rule."
+13. **Wave 04, Cycle 04 section.** The Settings key page also uses
+    `state_label` (fact 14), which F3 changes: "Cycle 03b changed
+    `state_label`'s running words; the key page shows the stage."
 
 ## Rulings
 
@@ -1814,15 +2290,15 @@ task:
 | R-2 | The log lives in the Workspace and is refreshed at A4's refresh points, never in render | A change that reaches no refresh point leaves a row stale until the next one; P13 and P29 cover each source |
 | R-3 | A hold's key is `hold_key(&Reason)`: the variant's name and its key ID, authority or root. `Reason` has no order (fact 19), and adding one would need the library's `SharedKeyId` to change | None while the string names the variant and its value |
 | R-4 | A pending row's key is its operation ID, or "#{n}", its position in its repository's list, when it has none | A pending row with no ID can take a new time when an earlier one leaves (K-10) |
-| R-5 | `RepoFacts` building moves, unchanged, into `each_repository` (A7) | None: one function, and Cycle 03a's tests pass unchanged (P12) |
+| R-5 | `RepoFacts` building moves, unchanged, into `each_repository` (A7). Cycle 03a's `RepoState` gains `cause: Option<AttentionCause>`, set by `attention_cause` | None: one function, and Cycle 03a's tests, which compare `RepoState` field by field, pass unchanged (P12) |
 | R-6 | A pending conflict makes no repository row (N10; decision 20) | After a relaunch with the pending list unread, nothing in Activity says why checking waits; the panel's row still reads Needs attention (K-9) |
 | R-7 | A failed Check now counts as its repository's row or hold, not as a request (N4) | None: `check_failed` applies its answer to the schedule (fact 21) |
 | R-8 | A share is classified once by the drain noting its record and Give up before `apply` (F2), not by changing `WorkerEvent::Finished` | Wrong if a later attempt's record could be read for an earlier `Finished`; a retry is queued only after the drain applied it (fact 13) |
 | R-9 | The Busy holder's words and the republish state stay worked out at render | They change while the row is shown, which is what they describe (K-12) |
-| R-10 | The popover is a Workspace-owned layer, not the Kit `Popover` (fact 32) | — |
+| R-10 | The popover is a Workspace-owned layer, not the Kit `Popover` (fact 32). The app's own layer pattern (the dock and repository menus) already holds the rules this popover needs: dropped under a modal, one layer at a time, focus restore, the anchor from recorded bounds, and its own key context for the list. The controlled Kit `Popover` keeps its state in element state, reports no open change for a controlled transition, and moves and restores focus its own way, so those rules would be split across two mechanisms | — |
 | R-11 | A press outside the popover closes it and still reaches what is under it, except the footer item, which toggles (decision 18) | One press both closes and acts (K-11) |
 | R-12 | Tab cycles inside the popover; Escape leaves it (decision 18) | Tab cannot reach the footer while it is open |
-| R-13 | One layer at a time: opening a row menu, the dock menu, the repository menu or ⋯ closes the popover, and opening the popover closes them | — |
+| R-13 | One layer at a time: the row menu, ⋯ (the Activity More menu), the dock menu, the repository menu and Cycle 03a's More menu. Opening any of them closes the popover, and opening the popover closes them (E2) | — |
 | R-14 | Checking…, To share, Paused, Up to date, a busy opening and Unknown make no repository row | Their facts are elsewhere: Checking… keeps a row through rule L3, and To share has its reminders |
 | R-15 | This computer and the non-SSH remote make an information row, never counted, with Set up sharing… (decision 16) | A row per local-only repository stays all session; the filter hides it |
 | R-16 | Both automatic checks and Check now add brought-in rows, with different sentences (A5) | — |
@@ -1830,11 +2306,11 @@ task:
 | R-18 | The layout notices and the quit row stay above the list, with today's ids and texts; F3 applies to request rows, and the quit row's "Finishing {label}" names its job | — |
 | R-19 | A final retirement line stays as a kept row when the next check clears it (L4) | — |
 | R-20 | The list's container keeps the id `"operation-area"`, so D5's sweeps keep their surface (fact 40) | — |
-| R-21 | Converted tests act through `ActivityMenuChoice` (the seam), not the drawn control | A converted test no longer proves its control is drawn; P18 proves each action kind from a drawn button and from the menu |
-| R-22 | A request not sent is a failure row, but not counted, as today (N15) | A request waiting for the passphrase again is not in the popover; its row says so |
+| R-21 | Converted tests act through the seam, `choose_activity` with an `ActivityMenuChoice` (R-45), not the drawn control | A converted test no longer proves its control is drawn; P18 and P23 prove each action kind from a drawn button, the menu and the popover |
+| R-22 | A request not sent is a failure row, but not counted, as today (N15). Its kinds are a key generation's passphrase needed again and a missing key store (`D/services/requests.rs:805-811`). It is not the Unlock dialog, which is S3's hold | A key generation waiting for its passphrase again, or a missing key store, is not in the popover; its row says so |
 | R-23 | "Clear finished" takes only the rows L8 names | — |
 | R-24 | `needs_attention` is deleted; the log's count replaces it (A6) | — |
-| R-25 | A dialog or sheet opened from a row returns focus to the list with the row highlighted, replacing the focus maps of fact 8 | Focus returns to the row, not to the exact button |
+| R-25 | Decision 23 (the owner's): see C3 | — |
 | R-26 | Times show "HH:MM" local, or UTC with " UTC" in the detail when the offset is unknown | Two rows from different days can show the same time; the detail has the date (K-5) |
 | R-27 | The row menu's first items are the detail lines, disabled (decision 8) | A long detail makes a long menu |
 | R-28 | A repository row stays through a check of its repository (L3; decision 19) | A row may say Can't reach for a few seconds after the shared copy is back |
@@ -1846,9 +2322,15 @@ task:
 | R-34 | F1's moves re-export every item, so no path changes | — |
 | R-35 | Intents outside `Progressing` get stage words from `stage_words` (F3) | Some stages read generically ("Getting ready…") |
 | R-36 | Activity's list is GPUI's `uniform_list` with its own keys, not the Kit `List`, whose click presses Confirm (C2) | U-2 |
-| R-37 | The footer item, hiding while focused, passes focus to the control before it (E1) | — |
-| R-38 | The popover anchors at the footer item's top right, `Anchor::BottomRight`, 440 px wide | — |
+| R-37 | The footer item, hiding while focused, passes focus to the next shown control to its right: the right dock group's first control, else Settings, as 3a R-38's rule (E1) | — |
+| R-38 | The popover anchors at the footer item's top right, `Anchor::BottomRight`, its bottom edge 6 px above the footer's top edge, 440 px wide (`05`: "bottom 34 px" over a 28 px footer) | — |
 | R-39 | A retry clears a share's stored result and noted attempt (F2) | — |
+| R-40 | Activity filters repository rows by `kind` and `cause`, never by re-reading the schedule (A2, A7) | A new cause needs a variant and an S4 decision |
+| R-41 | The pure text helpers the rows need (`outcome_label`, `effects_text`, `scope_name`, the lifecycle outcome lines) move to the model and are re-exported from their old paths, so the model stays free of GPUI and view callers do not change (A1) | — |
+| R-42 | One retirement, one row: a ContextRetire request whose retirement has an S8 line is not shown as an S1 row (A2) | The request's own detail is not a separate row while the line exists |
+| R-43 | Refreshes are coalesced: `refresh_activity` marks the log dirty, and one refresh runs per effect cycle (A4; `MH-NFR-004`) | A row appears one effect cycle after its model changes |
+| R-44 | Today's offer and recovery labels are kept verbatim; new labels follow the "…" rule (Part B) | Some labels that open a page lack "…" ("Open Sharing & keys", "Set identity", "Set up sharing") |
+| R-45 | The seam calls `choose_activity` directly, with today's control handle as origin until Task 9 (Testing) | — |
 
 ## Known Limits
 
@@ -1857,7 +2339,7 @@ task:
   unshared list come back from their own stores, timed by the new
   session (decision 2).
 - **K-2.** An item is named by its short code when no title is known
-  (B1).
+  (B1). A new item reads so until a list read gives its title.
 - **K-3.** A failure's reason is the library's fixed sentence for its
   code, and some name CLI commands (fact 16).
 - **K-4.** Nothing is capped or pruned within a session; "Clear finished"
@@ -1876,42 +2358,49 @@ task:
 - **K-11.** A press outside the popover also acts (R-11).
 - **K-12.** A Busy share's "May be waiting for …" can change while shown
   (R-9).
+- **K-13.** An unreachable repository with problems from an earlier check
+  shows the problems, not Can't reach, as its panel row does (N17).
 
 ## Unverified
 
 - **U-1.** `ActivityMenuChoice` derives the Kit `Action`. That needs
   `Clone`, `PartialEq` and `Debug` on `RowKey`, `ActivityAction` and
   their fields (`SyncOffer`, the polling `Action`, `RowAction`,
-  `ItemRef`). Task 3 checks each, and adds a derive to a desktop type
-  that lacks one.
+  `ItemRef`, `Target`, `TargetKind`, `Report`). Task 3 checks each, and
+  adds a derive to a desktop type that lacks one.
 - **U-2.** `uniform_list` (`gpui-pre-0.3.6/src/elements/uniform_list.rs:22`,
   re-exported by `gpui_kit::*`) draws and scrolls the rows with a tracked
-  scroll handle, as C2 needs. Task 8 checks first with a scratch test. If
+  scroll handle, as C2 needs. Task 9 checks first with a scratch test. If
   it fails, the fallback is the Kit's `VirtualList`, with the same keys,
   recorded as an amendment.
 - **U-3.** The popover's `on_mouse_down_out` fires before the footer
-  item's own click. Task 9 checks the order, and makes a press on the
+  item's own click. Task 11 checks the order, and makes a press on the
   item close the popover once (P25).
 - **U-4.** Keys bound in `ACTIVITY_CONTEXT` reach the handlers while the
-  list's focus handle holds focus. Task 8 checks first.
+  list's focus handle holds focus. Task 9 checks first.
 - **U-5.** `PollSchedule::checked_now`'s in-flight branch returns a
   summary to append from (A5). Task 4 checks.
 - **U-6.** Cycle 03a's final review, merged before Task 0, leaves facts
   20–23, 28–30 and 46 true. Task 0 re-reads each and corrects this design
   first.
-- **U-7.** An open tab is found from `(root, kind, id)` for B1's title
-  (`TabContent::find`, `TabKey::Item`). Task 3 checks.
+- **U-7.** An open item's model is found from `(root, kind, id)` for
+  B1's title, `ItemModel::last_title()` (`TabContent::find`,
+  `TabKey::Item`). Task 3 checks.
 
 ## Alternatives Rejected
 
 - **A log stored on disk:** the owner chose this session only (decision
   2).
-- **The Kit `Popover`** cannot be opened from the footer's wrapper or by
-  the app (fact 32).
+- **The Kit `Popover`.** Its controlled mode could be driven from the
+  footer's Kit `Button`, but it keeps its state in element state, reports
+  no open change for a controlled transition, and moves and restores
+  focus its own way. The app's dock and repository menus already hold the
+  rules this popover needs, which would otherwise be split across two
+  mechanisms (R-10; fact 32).
 - **The Kit `List`** presses Confirm on a click (C2).
 - **Adding the record to `WorkerEvent::Finished`,** as ticket
-  `01M6H7VXJJHRYHTW9S8TJ88921` suggested, would touch 36 test sites
-  (R-8).
+  `01M6H7VXJJHRYHTW9S8TJ88921` suggested, would touch the 51 lines in 26
+  files that name it, 36 of them in 21 test files (fact 13; R-8).
 - **Deriving rows in render:** times would be when a frame was drawn,
   and a hidden Activity would learn nothing (R-2).
 - **Converting tests straight to the new drawing** would make one task
@@ -1923,11 +2412,11 @@ task:
 
 | Risk | Control |
 | --- | --- |
-| The test migration loses or weakens an assertion | Tasks 6 and 7 are pure moves onto the seam, green before and after; the ledger lists each file's test functions before and after; the reviewer checks each converted assertion keeps its meaning |
+| The test migration loses or weakens an assertion | Tasks 6 to 8 are pure moves onto the seam, green before and after; the ledger lists each file's test functions before and after, and each removed drawn-text assertion; the reviewer checks each converted assertion keeps its meaning |
 | A model change reaches no refresh point, so a row is stale | P13 and P29 drive every source; each refresh point is named in A4 |
-| The copy is wrong for a case | Pure copy tables (P4–P7); the owner checks rows on screen (Task 11's checklist) |
+| The copy is wrong for a case | Pure copy tables (P4–P7); the owner checks rows on screen (Task 13's checklist) |
 | Cycle 03a's final review changes what this design cites | Task 0 merges main after 03a closes and re-reads facts 20–23, 28–30 and 46 (U-6) |
-| The Cycle does not fit one review | 12 tasks (0–11), as large as 03a's. The split line: 03b-1 is Tasks 0–8 (model, copy, the panel and its row menu, the footer count); 03b-2 is Tasks 9–11 (popover, privacy, gates) |
+| The Cycle does not fit one review | 14 tasks (0–13), larger than 03a's 11. The split line: 03b-1 is Tasks 0–10 (model, copy, the footer count, the test migration, the panel, its row menu and toolbar); 03b-2 is Tasks 11–13 (popover, privacy surfaces, gates) |
 | Window tests flake under load | New window tests run alone first; the ledger names any flake (Cycles 01, 02, 03a) |
 
 ## Review Record
@@ -1935,5 +2424,8 @@ task:
 | Source | Concern | Classification | Resolution | Evidence |
 | --- | --- | --- | --- | --- |
 | Owner, 2026-11-12 | Plan 03b now, 03a being substantially complete | Owner direction | Decision 4; 03a's published head merged | Session, 2026-11-12 |
-| Planning research | No row has a time; the count and the panel disagree (3a K-9); the Kit `Popover` and `List` do not fit; shares classified on render; "Finishing" hides the stage; titles barred by D5; 494 test lines reach the area by id | Facts; owner questions; rulings | Facts 1–46; decisions 5–13; R-8, R-10, R-21, R-36 | This document |
+| Planning research | No row has a time; the count and the panel disagree (3a K-9); the Kit `Popover` and `List` do not fit; shares classified on render; "Finishing" hides the stage; titles barred by D5; 494 test lines reach the area by id | Facts; owner questions; rulings | Facts 1–46; decisions 4–13; R-8, R-10, R-21, R-36 | This document |
 | Owner, 2026-11-12 | Resolved rows, the count, checks, extra actions, clearing, problem items, Enter, the outline, titles | Owner decisions | Decisions 4–13 | Session, 2026-11-12 |
+| Review round 1, contract and consistency (revision 1, `74c9aabb`) | 3 Blocking, 24 Important, 14 Minor: titles under D6's rule (B1); paths in rows (B2); popover actions by keyboard (B3); copy rules; attention table; focus; task numbering | Blocking, Important, Minor | Revision 2: facts 15, 25, 45; B0–B5; N1, N4, N17; P23, P31, P32; Document Amendments 6 and 10–13; decisions 21–24 | Change list, 2026-11-13 |
+| Review round 1, source and feasibility (revision 1, `74c9aabb`) | 1 Blocking, 15 Important, 11 Minor: how `act` reaches the handlers; inputs to the derivation; the attention cause; handler names and signatures; the Kit `Popover`; tests the inventory missed; counts and line references | Blocking, Important, Minor | Revision 2: A1, A2, A7, Testing, E-1 to E-16; facts 10, 13, 15, 18, 32, 41, 44; R-40 to R-45; 14 tasks | Change list, 2026-11-13 |
+| Owner, 2026-11-13 | Titles under D6's rule; one-line rows; focus after a dialog; at most one action and counted failures | Owner decisions | Decisions 21–24 | Session, 2026-11-13 |
