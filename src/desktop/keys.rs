@@ -149,6 +149,28 @@ gpui_kit::actions!(
         /// "Clear finished", the one item of Activity's ⋯ menu (C1, L8). No
         /// key is bound to it: the menu's item dispatches it.
         ClearFinished,
+        /// Move the Needs attention popover's highlight to the row above; it
+        /// stops at the first (E2).
+        AttentionUp,
+        /// Move the popover's highlight to the row below; it stops at the
+        /// last.
+        AttentionDown,
+        /// Highlight the popover's first row.
+        AttentionHome,
+        /// Highlight the popover's last row.
+        AttentionEnd,
+        /// Enter on the popover's list: press the highlighted row's button,
+        /// or open its item when it has none. On the button or the link,
+        /// the control's own Enter.
+        AttentionEnter,
+        /// Tab in the popover: the list, the highlighted row's button, the
+        /// link, wrapping (R-12).
+        AttentionNext,
+        /// Shift-Tab in the popover, the other way round.
+        AttentionPrevious,
+        /// Escape in the popover: close it, with focus back to the footer
+        /// item.
+        CloseAttention,
     ]
 );
 
@@ -205,6 +227,12 @@ pub(crate) const REPOSITORIES_CONTEXT: &str = "Repositories";
 /// a row's menu. It is the list element's own, inside the region's
 /// `"Operations"` context.
 pub(crate) const ACTIVITY_CONTEXT: &str = "Activity";
+
+/// The key context of the Needs attention popover (Wave 04 Cycle 03b, E2):
+/// the arrows, Home, End, Enter, Tab and Escape work in it, on its list, its
+/// highlighted row's button and its link. It is the popover element's own, so
+/// no key outside the popover reaches it.
+pub(crate) const ATTENTION_POPOVER_CONTEXT: &str = "NeedsAttention";
 
 /// The key context of the Documents and Tickets regions (the tickets list
 /// with its filter bar): `secondary-n` opens the focused list's
@@ -341,6 +369,20 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("enter", ActivityEnter, Some(ACTIVITY_CONTEXT)),
         KeyBinding::new("menu", OpenActivityMenu, Some(ACTIVITY_CONTEXT)),
         KeyBinding::new("shift-f10", OpenActivityMenu, Some(ACTIVITY_CONTEXT)),
+        // In the Needs attention popover: the highlight, Enter, Tab's three
+        // stops and Escape.
+        KeyBinding::new("up", AttentionUp, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("down", AttentionDown, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("home", AttentionHome, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("end", AttentionEnd, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("enter", AttentionEnter, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("tab", AttentionNext, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new(
+            "shift-tab",
+            AttentionPrevious,
+            Some(ATTENTION_POPOVER_CONTEXT),
+        ),
+        KeyBinding::new("escape", CloseAttention, Some(ATTENTION_POPOVER_CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
         // The first and last row of a list; the Workspace handles them in
         // the document tree as in the ticket list (`view::documents`).

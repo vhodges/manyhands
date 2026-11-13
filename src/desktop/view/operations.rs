@@ -135,7 +135,7 @@ pub(in crate::desktop::view) mod attention_support;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "operations/attention_tests.rs"]
-mod attention_tests;
+pub(in crate::desktop::view) mod attention_tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "operations/attempts_tests.rs"]

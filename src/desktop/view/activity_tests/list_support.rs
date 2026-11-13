@@ -31,20 +31,20 @@ use crate::desktop::{
 
 /// The four pending operations: each test step presses its own, since a
 /// press sends a request that changes its row.
-pub(super) const OP_A: &str = OPERATION;
-pub(super) const OP_B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAX";
-pub(super) const OP_C: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAY";
-pub(super) const OP_D: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAZ";
+pub(in crate::desktop::view) const OP_A: &str = OPERATION;
+pub(in crate::desktop::view) const OP_B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAX";
+pub(in crate::desktop::view) const OP_C: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAY";
+pub(in crate::desktop::view) const OP_D: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAZ";
 
-pub(super) fn save(operation: &str) -> OperationDto {
+pub(in crate::desktop::view) fn save(operation: &str) -> OperationDto {
     waiting(OperationAction::SaveTicket, operation, None)
 }
 
-pub(super) fn waiting_close(operation: &str, item: &str) -> OperationDto {
+pub(in crate::desktop::view) fn waiting_close(operation: &str, item: &str) -> OperationDto {
     waiting(OperationAction::Close, operation, Some(item))
 }
 
-pub(super) fn pending_key(operation: &str) -> RowKey {
+pub(in crate::desktop::view) fn pending_key(operation: &str) -> RowKey {
     RowKey::Pending {
         root: PENDING_ROOT.to_owned(),
         operation: operation.to_owned(),
@@ -59,16 +59,16 @@ pub(super) fn pending_key(operation: &str) -> RowKey {
 /// - a finished refresh, which has neither a button nor an item;
 /// - a finished comment, which has an item and no button;
 /// - a refresh that was accepted and cannot be stopped: a disabled button.
-pub(super) struct Rows {
-    pub(super) shell: Shell,
-    pub(super) root: std::path::PathBuf,
-    pub(super) pending: [RowKey; 4],
-    pub(super) plain: RowKey,
-    pub(super) item: RowKey,
-    pub(super) disabled: RowKey,
+pub(in crate::desktop::view) struct Rows {
+    pub(in crate::desktop::view) shell: Shell,
+    pub(in crate::desktop::view) root: std::path::PathBuf,
+    pub(in crate::desktop::view) pending: [RowKey; 4],
+    pub(in crate::desktop::view) plain: RowKey,
+    pub(in crate::desktop::view) item: RowKey,
+    pub(in crate::desktop::view) disabled: RowKey,
 }
 
-pub(super) fn rows(cx: &mut TestAppContext) -> Rows {
+pub(in crate::desktop::view) fn rows(cx: &mut TestAppContext) -> Rows {
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
     fixture.commit_ticket(&root, TICKET, "Local ticket", "");
@@ -115,7 +115,7 @@ pub(super) fn rows(cx: &mut TestAppContext) -> Rows {
 
 /// A request `n` of `intent` that has reached a stage, so it is accepted:
 /// a refresh offers no Stop, and reads a disabled "Finishing".
-pub(super) fn running_accepted(
+pub(in crate::desktop::view) fn running_accepted(
     shell: &Shell,
     n: u64,
     intent: Intent,
@@ -150,7 +150,7 @@ pub(super) fn running_accepted(
 }
 
 /// Draws until the pane shows what the log holds.
-pub(super) fn settle(shell: &Shell, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn settle(shell: &Shell, cx: &mut TestAppContext) {
     for _ in 0..3 {
         shell.frame(cx, |_, _| ());
         shell.run(cx);
@@ -164,13 +164,17 @@ pub(super) fn settle(shell: &Shell, cx: &mut TestAppContext) {
     assert_eq!(pane, log, "the pane shows the log's rows");
 }
 
-pub(super) fn pressed(shell: &Shell, cx: &mut TestAppContext) -> usize {
+pub(in crate::desktop::view) fn pressed(shell: &Shell, cx: &mut TestAppContext) -> usize {
     shell
         .workspace
         .read_with(cx, |workspace, _| workspace.activity_pressed())
 }
 
-pub(super) fn resumes(shell: &Shell, operation: &str, cx: &mut TestAppContext) -> usize {
+pub(in crate::desktop::view) fn resumes(
+    shell: &Shell,
+    operation: &str,
+    cx: &mut TestAppContext,
+) -> usize {
     sent(shell, cx, |intent| {
         matches!(intent, Intent::OperationResume { operation_id, .. }
             if operation_id.to_string() == operation)
@@ -179,7 +183,7 @@ pub(super) fn resumes(shell: &Shell, operation: &str, cx: &mut TestAppContext) -
 }
 
 /// Presses and releases `key` inside one update, as a keyboard does.
-pub(super) fn press_in(window: &mut Window, key: &str, cx: &mut App) {
+pub(in crate::desktop::view) fn press_in(window: &mut Window, key: &str, cx: &mut App) {
     let keystroke = Keystroke::parse(key).unwrap();
     let down = KeyDownEvent {
         keystroke: keystroke.clone(),
@@ -191,7 +195,7 @@ pub(super) fn press_in(window: &mut Window, key: &str, cx: &mut App) {
 }
 
 /// The pending list read again with only `listed`.
-pub(super) fn relist(shell: &Shell, listed: &[&str], cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn relist(shell: &Shell, listed: &[&str], cx: &mut TestAppContext) {
     read_pending(
         shell,
         PENDING_ROOT,
@@ -223,7 +227,7 @@ fn revisions(shell: &Shell, key: &RowKey, cx: &mut App) -> (Option<u64>, Option<
 /// row is refused by its revision alone, not by a missing offer. No frame
 /// draws between, so the pane still holds the row it drew. Returns the
 /// revision the pane drew and the log's.
-pub(super) fn change_row(
+pub(in crate::desktop::view) fn change_row(
     shell: &Shell,
     operations: &Entity<Operations>,
     operation: &str,
@@ -265,7 +269,7 @@ pub(super) fn change_row(
 /// retry does: it is queued again (a new attempt, offering Cancel) and
 /// finishes the same way. The row ends with the same offers and a newer
 /// revision, which the pane has not drawn.
-pub(super) fn retry_request(
+pub(in crate::desktop::view) fn retry_request(
     shell: &Shell,
     operations: &Entity<Operations>,
     id: DesktopRequestId,

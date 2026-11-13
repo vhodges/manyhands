@@ -22,7 +22,10 @@ use crate::desktop::{
         polling::{PollSchedule, TargetKind, TestClock},
         stamp::{RepoKey, SettingsPage},
     },
-    services::{JobKind, Services, requests::Intent},
+    services::{
+        JobKind, Services,
+        requests::{DesktopRequestId, Intent},
+    },
     test_support::fixtures::{Fixture, item_id},
     view::{
         footer::Control,
@@ -355,6 +358,27 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
     assert!(
         focused(&shell, Control::Attention.id(), cx),
         "focus moved to Needs attention"
+    );
+
+    // Needs attention hiding while it has focus passes focus on to the
+    // right, as the others do (P26, R-37): the right dock group's first
+    // control.
+    focus(&shell, Control::Attention, cx);
+    assert!(focused(&shell, Control::Attention.id(), cx));
+    shell.operations(cx).update(cx, |operations, cx| {
+        operations.dismiss(DesktopRequestId(1));
+        cx.notify();
+    });
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    assert!(
+        !shell.present(Control::Attention.id(), cx),
+        "Needs attention is hidden at 0"
+    );
+    assert!(
+        focused(&shell, Control::Panel(Tickets).id(), cx),
+        "focus moved to the next shown control to its right"
     );
 
     // Two folders of the same name: the name carries the parent. `sub/a`

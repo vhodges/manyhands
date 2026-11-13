@@ -211,7 +211,7 @@ fn refreshes_are_coalesced(cx: &mut TestAppContext) {
 }
 
 #[path = "activity_tests/cases.rs"]
-mod cases;
+pub(in crate::desktop::view) mod cases;
 #[path = "activity_tests/clear.rs"]
 mod clear;
 #[path = "activity_tests/drawn.rs"]
@@ -225,13 +225,13 @@ mod layers;
 #[path = "activity_tests/list.rs"]
 mod list;
 #[path = "activity_tests/list_support.rs"]
-mod list_support;
+pub(in crate::desktop::view) mod list_support;
 #[path = "activity_tests/menu.rs"]
 mod menu;
 #[path = "activity_tests/narrow.rs"]
 mod narrow;
 #[path = "activity_tests/pending.rs"]
-mod pending_cases;
+pub(in crate::desktop::view) mod pending_cases;
 #[path = "activity_tests/refused.rs"]
 mod refused_cases;
 #[path = "activity_tests/states.rs"]

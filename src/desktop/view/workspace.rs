@@ -15,6 +15,7 @@ mod footer_status;
 mod layout_notices;
 mod lifecycle;
 mod lists;
+mod needs_attention;
 mod render;
 mod repositories;
 mod repository_menu;
@@ -197,6 +198,8 @@ pub(crate) struct Workspace {
     share_titles: titles::ShareTitles,
     /// Activity's log, refreshed at each point that changes a row (A4).
     activity: activity::ActivityState,
+    /// The Needs attention popover (E2).
+    attention: needs_attention::AttentionState,
 }
 
 impl Workspace {
@@ -385,6 +388,7 @@ impl Workspace {
             republish_deferred: Vec::new(),
             share_titles: Default::default(),
             activity: activity::ActivityState::new(cx),
+            attention: needs_attention::AttentionState::new(cx),
         };
         workspace.load_repositories(cx);
         workspace

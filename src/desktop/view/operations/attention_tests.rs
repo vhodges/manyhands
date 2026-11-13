@@ -54,7 +54,7 @@ fn offers(rig: &Rig, reason: &Reason, label: &str, cx: &mut TestAppContext) {
     assert!(offer.enabled, "{label} is enabled");
 }
 
-fn shown(rig: &Rig, cx: &mut TestAppContext) -> Shown {
+pub(in crate::desktop::view) fn shown(rig: &Rig, cx: &mut TestAppContext) -> Shown {
     rig.shell
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx))
@@ -334,7 +334,7 @@ async fn attention_recovery_held(cx: &mut TestAppContext) {
 
 /// A repository for each reason, held back at once: the five actions of the
 /// operation area, in the order of the repositories.
-async fn every_reason(cx: &mut TestAppContext) -> Rig {
+pub(in crate::desktop::view) async fn every_reason(cx: &mut TestAppContext) -> Rig {
     use SshTransportErrorKind as Kind;
     let rig = Rig::new(
         &[
@@ -376,7 +376,10 @@ async fn every_reason(cx: &mut TestAppContext) -> Rig {
 
 /// The hold rows the list draws, in its order, each with its button's
 /// label.
-fn hold_rows(rig: &Rig, cx: &mut TestAppContext) -> Vec<(RowKey, String)> {
+pub(in crate::desktop::view) fn hold_rows(
+    rig: &Rig,
+    cx: &mut TestAppContext,
+) -> Vec<(RowKey, String)> {
     drawn(&rig.shell, cx)
         .into_iter()
         .filter(|row| matches!(row.row.key, RowKey::Hold(_)))
@@ -388,7 +391,11 @@ fn hold_rows(rig: &Rig, cx: &mut TestAppContext) -> Vec<(RowKey, String)> {
 }
 
 /// The row of the hold whose button reads `label`.
-fn hold_with(rig: &Rig, label: &str, cx: &mut TestAppContext) -> RowKey {
+pub(in crate::desktop::view) fn hold_with(
+    rig: &Rig,
+    label: &str,
+    cx: &mut TestAppContext,
+) -> RowKey {
     hold_rows(rig, cx)
         .into_iter()
         .find(|(_, shown)| shown == label)

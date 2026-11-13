@@ -165,7 +165,7 @@ impl Workspace {
         match which {
             Control::Panel(kind) => self.toggle_panel(kind, window, cx),
             Control::Dock(side) => self.toggle_dock(side, window, cx),
-            Control::Attention => self.reveal_and_focus(PanelKind::Activity, window, cx),
+            Control::Attention => self.toggle_attention_popover(window, cx),
             Control::Settings => self.open_settings(SettingsPage::Repositories, window, cx),
             Control::UpdateCheck => self.open_settings(SettingsPage::Polling, window, cx),
             Control::ToShare => self.choose_next_to_share(cx),

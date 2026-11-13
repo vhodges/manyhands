@@ -353,4 +353,4 @@ impl ActivityPane {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "activity_tests.rs"]
-mod tests;
+pub(in crate::desktop::view) mod tests;

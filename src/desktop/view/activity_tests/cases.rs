@@ -36,12 +36,15 @@ use crate::desktop::{
     },
 };
 
-pub(super) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FA0";
-pub(super) const OPERATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+pub(in crate::desktop::view) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FA0";
+pub(in crate::desktop::view) const OPERATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 /// Fabricated requests stand far above the worker's own numbering.
 const FABRICATED: u64 = 5_000_000;
 
-pub(super) fn answered(command: &str, code: ResultCode) -> Envelope<MutationDataDto> {
+pub(in crate::desktop::view) fn answered(
+    command: &str,
+    code: ResultCode,
+) -> Envelope<MutationDataDto> {
     Envelope::classified_mutation(
         command,
         Scope::default(),
@@ -54,7 +57,7 @@ pub(super) fn answered(command: &str, code: ResultCode) -> Envelope<MutationData
 
 /// The request `n` of `intent`, fabricated through the model, finished with
 /// `envelope`.
-pub(super) fn fabricate(
+pub(in crate::desktop::view) fn fabricate(
     shell: &Shell,
     n: u64,
     intent: Intent,
@@ -82,7 +85,7 @@ pub(super) fn fabricate(
 }
 
 /// The label of the one offer of the row `at` whose action `pick` picks.
-pub(super) fn label_of(
+pub(in crate::desktop::view) fn label_of(
     shell: &Shell,
     at: &RowKey,
     pick: impl Fn(&ActivityAction) -> bool,
@@ -99,7 +102,7 @@ pub(super) fn label_of(
     picked[0].label.clone()
 }
 
-pub(super) fn sent(
+pub(in crate::desktop::view) fn sent(
     shell: &Shell,
     cx: &mut TestAppContext,
     pick: impl Fn(&Intent) -> bool,
@@ -107,13 +110,13 @@ pub(super) fn sent(
     shell.requests(cx, |request| pick(&request.intent))
 }
 
-pub(super) fn dialog_open(shell: &Shell, cx: &mut TestAppContext) -> bool {
+pub(in crate::desktop::view) fn dialog_open(shell: &Shell, cx: &mut TestAppContext) -> bool {
     shell
         .visual(cx)
         .update(|window, cx| window.has_active_dialog(cx))
 }
 
-pub(super) fn settings(shell: &Shell, cx: &mut TestAppContext) -> Shown {
+pub(in crate::desktop::view) fn settings(shell: &Shell, cx: &mut TestAppContext) -> Shown {
     shell
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx))
@@ -138,7 +141,7 @@ fn remote_shell(cx: &mut TestAppContext) -> (Shell, PathBuf) {
 }
 
 /// Cancel, Stop, Open, Offer, Recovery and Dismiss of a request's row.
-pub(super) async fn requests(cx: &mut TestAppContext) {
+pub(in crate::desktop::view) async fn requests(cx: &mut TestAppContext) {
     let (shell, root) = remote_shell(cx);
     let worker = shell
         .workspace
@@ -332,7 +335,7 @@ pub(super) async fn requests(cx: &mut TestAppContext) {
     ));
 }
 
-pub(super) fn item_sync(root: &Path) -> Intent {
+pub(in crate::desktop::view) fn item_sync(root: &Path) -> Intent {
     Intent::ItemSync {
         root: root.to_owned(),
         kind: AuthoringKind::Ticket,
@@ -342,7 +345,7 @@ pub(super) fn item_sync(root: &Path) -> Intent {
 
 /// Holds the next request after its acceptance, before its domain call; the
 /// receiver hears it is held, and dropping the sender lets it go on.
-pub(super) fn hold_after_acceptance(
+pub(in crate::desktop::view) fn hold_after_acceptance(
     shell: &Shell,
 ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
     let (reached_tx, reached) = std::sync::mpsc::channel();
@@ -358,7 +361,7 @@ pub(super) fn hold_after_acceptance(
 }
 
 /// Review changes, on a share stopped on a conflict, opens the sheet.
-pub(super) async fn review(cx: &mut TestAppContext) {
+pub(in crate::desktop::view) async fn review(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");

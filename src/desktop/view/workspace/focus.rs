@@ -290,6 +290,18 @@ impl Workspace {
             }
             return;
         }
+        // A dialog or menu opened from the popover gave focus back to one of
+        // its handles, which are no longer drawn: focus goes to the footer
+        // item, or E1's control when it has hidden (R-50, U-8). The
+        // Workspace keeps the handles, so the lost focus is still known.
+        if window
+            .focused(cx)
+            .is_some_and(|focused| self.attention.handles.owns(&focused))
+        {
+            let item = self.attention_restore_target(cx);
+            window.focus(&item, cx);
+            return;
+        }
         // A region that is not displayed cannot take focus: the last
         // region, else the item area (R-9).
         let region = target

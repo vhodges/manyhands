@@ -28,7 +28,11 @@ use crate::desktop::{
 
 const CLOSING: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
 
-pub(super) fn waiting(action: OperationAction, id: &str, item: Option<&str>) -> OperationDto {
+pub(in crate::desktop::view) fn waiting(
+    action: OperationAction,
+    id: &str,
+    item: Option<&str>,
+) -> OperationDto {
     OperationDto {
         operation_id: Some(id.to_owned()),
         family: OperationFamily::Local,
@@ -46,7 +50,7 @@ pub(super) fn waiting(action: OperationAction, id: &str, item: Option<&str>) -> 
 }
 
 /// `root`'s pending list, read as `result`.
-pub(super) fn read_pending(
+pub(in crate::desktop::view) fn read_pending(
     shell: &Shell,
     root: &str,
     result: ReadResult<OperationListDto>,
@@ -62,7 +66,7 @@ pub(super) fn read_pending(
     shell.run(cx);
 }
 
-pub(super) fn listing(items: Vec<OperationDto>) -> ReadResult<OperationListDto> {
+pub(in crate::desktop::view) fn listing(items: Vec<OperationDto>) -> ReadResult<OperationListDto> {
     ReadResult::Ok(OperationListDto {
         items,
         complete: true,
@@ -78,7 +82,7 @@ fn pending_shell(operations: Vec<OperationDto>, cx: &mut TestAppContext) -> Shel
     shell
 }
 
-pub(super) const PENDING_ROOT: &str = "/fixture/a";
+pub(in crate::desktop::view) const PENDING_ROOT: &str = "/fixture/a";
 
 /// The `operation resume` requests of `operation`.
 fn resumes(shell: &Shell, operation: &str, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
@@ -89,7 +93,7 @@ fn resumes(shell: &Shell, operation: &str, cx: &mut TestAppContext) -> Vec<Deskt
 }
 
 /// Abandon, Retry of a list, Resume, and a lifecycle's Resume.
-pub(super) async fn pending(cx: &mut TestAppContext) {
+pub(in crate::desktop::view) async fn pending(cx: &mut TestAppContext) {
     let save = || vec![waiting(OperationAction::SaveTicket, OPERATION, None)];
     let key_of = |shell: &Shell, action: OperationAction, cx: &mut TestAppContext| {
         pending_key(shell, PENDING_ROOT, action.as_str(), cx)
@@ -146,7 +150,7 @@ pub(super) async fn pending(cx: &mut TestAppContext) {
 }
 
 /// Review changes on a pending row whose conflict waits to be resolved.
-pub(super) async fn review_pending(cx: &mut TestAppContext) {
+pub(in crate::desktop::view) async fn review_pending(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
