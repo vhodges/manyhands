@@ -27,7 +27,7 @@ reason.
 | 4 | done, review approved first time | code `02bd0015` (base `64d92f09`); ledger commit follows | yes |
 | 5 | done, review approved after fix round 1; checkpoint comment follows | code `caa23a81` (base `94f5abbd`), fix `ba2a24bc`; ledger commit follows | yes |
 | 6 | done, review approved after fix round 1 | code `b8044b60` (base `9cc1a4a0`), fix `c0ab728a`; ledger commit follows | yes |
-| 7 | not started | | |
+| 7 | done, review approved first time | code `6899a165` (base `19800b2d`); ledger commit follows | yes |
 | 8 | not started | | |
 | 9 | not started | | |
 | 10 | not started | | |
@@ -949,3 +949,208 @@ unconditional; `close_menu` keys on an open menu through the new
    Task 10 (AGENTS.md).
 7. **Task 9's privacy sweep must cover the toolbar and More menu strings** (all
    constants; no repository data reaches them).
+
+## Task 7: the details block leaves the item area (Part F)
+
+**Commit.** Code `6899a165` (base `19800b2d`; trailer "Claude Sonnet 5.5").
+Boundary command prints nothing. Production: `sidebar.rs` 295 → 27 (the block,
+`selection`, `retry`, `remove`, `resolved`, `ShareMain`, `UNAVAILABLE`,
+`RESOLVING`, `REMOVE`, `SHARE_MAIN_BUTTON`, `NOTHING_SELECTED` and the unused
+imports go; `RETRY`, `SELECTED`, `SHARE_MAIN`, `SHARE_MAIN_SET_UP`, `SHARING`,
+`configuration_label` stay, fact 6); `content.rs` 772 → 761 (`NOTHING_SELECTED`
+and `OPEN_FROM_THE_LISTS` live here with an `empty_pane()` element, id
+`item-area-empty`; `repository_details` and the `end_region_with` calls go);
+`render.rs` 359 → 346; `item.rs` 620 → 605 (`RegionEnd`, `end_region_with`);
+`item/page.rs` (`region` loses its `end` parameter and the `item-region-end`
+wrapper); `workspace.rs` 491 → 487 (`remove_focus`, `retry_focus` and the test
+accessor go); `model/list_state.rs` (`index_label`, `LABEL_CURRENT` deleted as
+unused). The Task 0 sweep's first command now finds no production site; its
+only hits are the 12 absence ids in the new test.
+
+**Tests run** (exact names; final run 23 ran, 23 passed, 25.4 s):
+`desktop::view::workspace::tests::the_item_area_holds_nothing_of_the_repository`
+(new, P14); E-1 ×6 `selecting_a_repository_resolves_it_and_shows_its_configuration_and_index`,
+`a_renamed_away_repository_is_unavailable_until_retry_finds_it_again`,
+`a_registration_removed_by_a_second_actor_shows_unavailable`,
+`a_list_reload_after_a_second_actor_removes_the_selection_shows_unavailable`,
+`a_held_resolution_of_a_never_replaces_b`,
+`reselecting_or_retry_shows_a_configuration_refreshed_by_a_second_actor`; E-2
+`a_busy_list_reload_keeps_the_last_rows_with_a_label`; E-3
+`the_repository_selector_selects_with_arrows_and_enter`; E-4
+`desktop::view::tabs::tests::opening_a_tab_does_not_change_the_selection`; E-5
+`keyboard_tests::actions::{retry,remove}_an_unavailable_repository_by_keyboard`;
+E-6 `settings::repositories::manage_tests::{removing_a_registration_whose_folder_was_renamed_away_succeeds,
+the_sidebar_remove_of_a_registration_already_gone_lets_the_entry_go}`; E-7 ×5
+`item::share::tests::{share_main_in_the_repository_detail_submits_repo_sync,
+share_main_without_a_remote_reads_share_main_and_opens_remotes,
+an_accepted_share_offers_stop_and_stopping_signals_it,
+a_stopped_share_says_what_completed_and_offers_share,
+share_opens_remotes_on_its_own_repository_after_another}`; E-8
+`keyboard_tests::discussion::tab_order_runs_header_share_chips_page_discussion_composer`;
+three `select_a_repository` users `copy_by_keyboard`,
+`frame::the_discussion_is_reached_by_its_key_walked_and_left`,
+`every_core_action_works_by_keyboard_alone`; and a named doubt (Tab from Write a
+comment… now leaves the item) `item::discussion_tests::an_empty_new_comment_composer_is_one_tab_stop`
+(1 passed). Red run: 20 names, 17 passed, 3 failed (the new test, E-8 in its
+first form, and an E-6 assertion the implementer had written wrong); the 17 had
+their replacement readings from Tasks 3-6, so they pass either way — the block's
+absence is pinned by the new P14 test and by E-8. Mutation check (reverted): the
+menu's Remove given the Content region's handle instead of `opened_from` makes
+both E-6 tests fail at their focus reads. Verify lines, each exit 0: `cargo fmt
+--check`, `cargo check --locked --features desktop`, `cargo clippy --all-targets
+--all-features --locked -- -D warnings`.
+
+**REMOVED ASSERTIONS** (this is the durable record; every one is authorized by
+the named E-n and reviewed: the reviewer went through the diff's `-` lines and
+found none outside this list; the only test function lost is E-7's named one).
+- E-1 `selecting_a_repository_resolves_it_and_shows_its_configuration_and_index`:
+  `selection-name == "a"` → the chosen row's mark `== SELECTED` and the other
+  mark absent; **"Configuration valid" (`selection-configuration`)** → the row's
+  state is not Needs fixing and no `NEEDS_FIXING_SENTENCE` tooltip line (the
+  `configuration.state == Valid` oracle line kept; Part F: nothing for a valid
+  configuration); **`selection-index == index_label(…)`** — no longer in the
+  product (Part F, index row: the lists' states); `!present(selection-unavailable)`
+  → `("repo-state", 0) != CANT_OPEN`.
+- E-1 `a_renamed_away_repository_is_unavailable_until_retry_finds_it_again`:
+  `selection-unavailable == InvalidPath.message()` → `CANT_OPEN` plus the
+  tooltip's first line starting with that message; `selection-retry` /
+  `selection-remove` present → the menu (`secondary-1`, `shift-f10`) lists
+  `RETRY` and `REMOVE_FROM_MANYHANDS`; `!selection-configuration` while
+  unavailable → `Resolution::Unavailable(InvalidPath)` and `CANT_OPEN` (kept);
+  the step `click(selection-retry)` → the menu's Retry by arrows and Enter
+  (`choose_by_keys`, which asserts the list holds focus in the update of the
+  Enter); the after-Retry checks → `Resolution::Resolved`, state `!= CANT_OPEN`,
+  tooltip no longer starting with the message.
+- E-1 `a_registration_removed_by_a_second_actor_shows_unavailable` and
+  `a_list_reload_after_a_second_actor_removes_the_selection_shows_unavailable`:
+  `selection-configuration` before / absent after → `Resolution::Resolved` before
+  and the kept row; `selection-unavailable == RepositoryNotRegistered.message()`
+  → the kept row drawn after `b` (`row_of == 1`), `("repo-state", 1) == CANT_OPEN`
+  and tooltip[0] `== kept_sentence("a")` (decision 22; stronger than before);
+  **`selection-index` absent** (first test) — no longer in the product.
+- E-1 `a_held_resolution_of_a_never_replaces_b`: `selection-name == "b"` → the
+  mark on `b`, none on `a`.
+- E-1 `reselecting_or_retry_shows_a_configuration_refreshed_by_a_second_actor`:
+  **`selection-configuration == valid` (×2 per root)** → state `!= NEEDS_FIXING`
+  and no Needs-fixing tooltip line at both points; `selection-configuration ==
+  invalid` → state `== NEEDS_FIXING`, tooltip[0] starts with
+  `NEEDS_FIXING_SENTENCE` and contains each current problem's `guidance()`, and
+  the read gives at least one problem; **`selection-index`** — no longer in the
+  product.
+- E-2 `a_busy_list_reload_keeps_the_last_rows_with_a_label` and E-3
+  `the_repository_selector_selects_with_arrows_and_enter`: `selection-name` →
+  the mark (E-3's was already redundant with the mark lines that follow).
+- E-4 `opening_a_tab_does_not_change_the_selection`: `selection-name == "b"` →
+  mark `b`, none on `a`.
+- E-5 helper `unavailable` and `retry_/remove_an_unavailable_repository_by_keyboard`:
+  `selection-unavailable-state`, `selection-configuration`, the steps
+  `secondary-3`, `tab_to(selection-retry|selection-remove)`, `on(…, Content)` →
+  `CANT_OPEN`, `region(Repositories)`, `shift-f10`, the menu's items, highlight
+  Retry/Remove then Enter (`press_and_hold` reads the list in the same update),
+  `Resolution::Resolved`; the confirmation, success, the registration gone and
+  the folder untouched are kept.
+- E-6 `removing_a_registration_whose_folder_was_renamed_away_succeeds`: the Tab
+  loop reading `workspace.remove_focus()` and `selection-remove` → `CANT_OPEN`,
+  `secondary-1 shift-f10`, `open_root == root`, highlight Remove, Enter; the
+  dialog is opened twice, Escape the first time with `press_and_hold("escape",
+  list)` (list holds focus in the same update, mutation-checked); end: `!selection-unavailable`
+  → `rows("repo-row")` is empty. `the_sidebar_remove_of_a_registration_already_gone_lets_the_entry_go`:
+  `click(selection-remove)` → the kept row alone (`rows == ["a"]`, Can't open),
+  `secondary-1 shift-f10`, `open_root == root`, Remove, Enter; end → no rows, and
+  Close in the same update gives the list focus (mutation-checked);
+  `AlreadyApplied` and selection `None` kept.
+- E-7 five tests: `label(SHARE_MAIN_BUTTON) == SHARE_MAIN | SHARING |
+  SHARE_MAIN_SET_UP` and `click(SHARE_MAIN_BUTTON)` → `menu_items` offers the
+  label (`items_of`) and the item is chosen from the menu by label; while held it
+  offers `SHARING` and not `SHARE_MAIN`; every other assertion kept.
+  **Deleted test `item::share::tests::share_main_at_the_end_of_an_item_tab_submits_repo_sync`**
+  (its tab shown, End reaching `SHARE_MAIN`, `repo_syncs == 1`, `SHARING`,
+  `item_syncs == 0`) — no tab carries the details any more (Part F, "Share main
+  → the menu"); Share main by the menu sending `RepoSync` is pinned by the E-7
+  tests, and that nothing of the repository ends a tab by the P14 test and E-8.
+- E-8 `tab_order_runs_header_share_chips_page_discussion_composer`: the
+  `SHARE_MAIN` constant and `holds_focus(SHARE_MAIN)` after the Tab from
+  `new-comment-start` → Tab from there leaves the Content region
+  (`held_region != Some(Content)`) and Shift-Tab comes back; and a **second site
+  the Task 0 sweep missed** (`discussion.rs:367`, the constant used, not the
+  literal): `tab_to("shift-tab", SHARE_MAIN)` + `step("shift-tab",
+  "new-comment-start")` → `tab_to("shift-tab", "new-comment-start")` and
+  `on("new-comment-start", Content)`.
+
+**Needed edits (no assertion removed by any of them).**
+- **E-19:** `repositories_tests/support.rs` (426 lines): `items_of` and
+  `right_click` widened to `pub(in crate::desktop::view)`; `labels` and
+  `press_and_hold` delegate to new `menu_labels` and `press_and_hold_in`; new
+  `highlight` (presses `down` until the Kit item reads `aria_selected`, bounded
+  at 16) — shared by the workspace tests' own `Shell` and the harness `Shell`.
+- **E-20:** `workspace_tests.rs` 1335 → 1274: its two-repository `Shell`, `key`,
+  `row` and `alert_action` move unchanged (`pub(super)` added) to the new child
+  `workspace_tests/shell.rs` (243 lines) with the new readings (`mark`, `state`,
+  `row_of`, `tooltip`, `needs_fixing`, `open_menu`, `choose_by_keys`,
+  `details_block`); test functions and paths unchanged.
+- **E-21:** E-8's second site (`discussion.rs:367`), above.
+- **E-22:** E-6 test 1 gains the Escape round — Confirm keeps the dialog open
+  ("Submitted") until the request finishes, so focus after OK cannot be read in
+  the update that causes it, and a read after a draw could be satisfied by
+  `Workspace::focus_lost`'s fallback.
+- Test functions before/after: `workspace_tests.rs` 28 → 29 (adds the P14 test);
+  `item/share_tests.rs` 17 → 16 (E-7's named deletion only); `tabs_tests.rs` 39,
+  `keyboard_tests/actions.rs` 7, `repositories_manage_tests.rs` 20,
+  `keyboard_tests/discussion.rs` 2 — identical. Sizes: `repositories_manage_tests.rs`
+  876 → 918 (+42, already over 500), `tabs_tests.rs` +6.
+
+**Rulings (implementer's, reviewed).**
+1. `index_label` and `LABEL_CURRENT` are deleted — nothing used them once the
+   block went (the reviewer's grep: no user in src, tests or plans); an allow
+   would keep dead copy; `LABEL_STALE` and `LABEL_NEVER_REFRESHED` stay (the
+   lists use them) — cost: "Index current" would be re-added if a later Cycle
+   wants it.
+2. The empty pane is `div#item-area-empty` with `test_support` and `aria_label`
+   set to its text — cost: a rename if Cycle 05 chooses another id.
+3. "Chosen" is `navigation.selected_entry().is_some()`, the old block's own
+   condition, so the kept row counts as chosen and shows `OPEN_FROM_THE_LISTS`.
+4. `page::region` loses its `end` parameter instead of receiving `None`.
+5. E-8 becomes a positive check (Tab from Write a comment… leaves Content)
+   instead of just dropping the steps, which would have passed whether or not
+   the details were drawn; a single Shift-Tab from the strip cannot reach the
+   composer (Tab order spans the window), so the second site keeps `tab_to` —
+   cost: it must change if a later Cycle adds a Tab stop after the discussion
+   inside the item.
+6. The menu is driven by keyboard in E-1, E-5 and E-6 (`highlight`, Enter) and by
+   pointer in E-7 (right click, `choose`) — `highlight` relies on the Kit marking
+   its highlighted item `aria_selected` (0.6.6, `menu_item.rs:101`).
+7. `RepositoryRow::tooltip()` is gated `all(test, feature =
+   "desktop-test-support")` and its `// Used from Task 9` allow is gone (window
+   tests use it now); `menu()` keeps its Task 9 allow.
+
+**Review** (fresh reviewer, opus, `19800b2d..6899a165`): spec compliant; Part F
+holds, E-1 to E-8 applied as written; removed-assertions audit: no removal
+without authority, none missing from the table, no test lost beyond E-7's; every
+production deletion confirmed unused; the new P14 test asserts the absence of
+every id the old block drew; the kept row correctly gets `OPEN_FROM_THE_LISTS`;
+no Critical, no Important.
+
+**Deferred findings (Minor).**
+1. Focus after a successful Confirm (OK) is not pinned: Escape, Cancel and
+   success all call `close()` on the same `origin` (`confirm.rs:537-545`, `:255`,
+   `:883-886`) and the mutation on `opened_from` breaks both E-6 tests; the
+   reviewer found no cheap discriminating read for OK (the fallback also lands
+   on the list). Task 5's menu journey pins Cancel, not OK.
+2. **Triage at the final review (cheap fixes):** E-1 test 1's configuration
+   checks are weak (`assert_ne!(state, NEEDS_FIXING/CANT_OPEN)` and
+   `!needs_fixing` pass if the tooltip is empty or the state element is missing;
+   assert a non-empty tooltip such as a "Folder:" line, or the exact state);
+   E-8 passes if focus is lost entirely (`assert_ne!(region, Some(Content))` also
+   holds when `held_region` is `None`; add `assert!(region.is_some())`); E-1 test
+   2's `open_menu` does not assert `open_root == a`.
+3. A `list_focus` helper is copied in three places
+   (`repositories_manage_tests.rs:606`, `workspace_tests/shell.rs:190`,
+   `keyboard_tests/actions.rs:202`): one in `repositories_tests/support.rs`
+   beside `press_and_hold` would trim `repositories_manage_tests.rs`.
+4. A stale doc comment in `workspace_tests.rs:688-690` ("Selection shows
+   Unavailable with Retry and Remove").
+5. The P14 test's `no_details` assertions were never seen failing against the old
+   tree (its red run failed at the first text check), and E-8's final form was
+   not run red; both were traced by reading.
+6. Unedited tests that `tab_to` across an item tab's end now skip one stop;
+   `tab_to` tolerates it, and the fast tier at Task 10 runs them.
