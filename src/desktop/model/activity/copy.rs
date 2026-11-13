@@ -126,6 +126,15 @@ pub(crate) fn effects_text(effects: &Effects) -> String {
 /// Nothing in the list yet: Activity's empty state (C1).
 pub(crate) const NOTHING_YET: &str = "Nothing yet this session";
 
+/// Activity's empty state with the filter on (C1).
+pub(crate) const NOTHING_NEEDS_ATTENTION: &str = "Nothing needs attention";
+
+/// The filter button's accessible name and tooltip (`03`, C1).
+pub(crate) const SHOW_ONLY_ATTENTION: &str = "Show only things that need attention";
+
+/// The one item of Activity's ⋯ menu (C1, L8).
+pub(crate) const CLEAR_FINISHED: &str = "Clear finished";
+
 /// A row's full message (B5): its title, then ". " and its description when
 /// it has one. Activity draws it on one line, and the row menu's first item
 /// is it.

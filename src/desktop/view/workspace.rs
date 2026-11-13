@@ -4,6 +4,7 @@
 mod activity;
 mod activity_facts;
 mod activity_menu;
+mod activity_more;
 mod activity_panel;
 mod content;
 mod docks;

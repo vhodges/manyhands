@@ -123,26 +123,37 @@ impl ActivityMenu {
     /// position and kept inside the window, with focus in it, as the dock
     /// menu is.
     pub(crate) fn layer(&self, window: &mut Window, cx: &mut App) -> AnyElement {
-        let focus = self.view.focus_handle(cx);
-        if !focus.contains_focused(window, cx) {
-            focus.focus(window, cx);
-        }
-        deferred(
-            anchored().child(
-                div()
-                    .w(window.bounds().size.width)
-                    .h(window.bounds().size.height)
-                    .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-                    .child(
-                        anchored()
-                            .position(self.at)
-                            .snap_to_window_with_margin(px(8.))
-                            .anchor(Anchor::TopLeft)
-                            .child(self.view.clone()),
-                    ),
-            ),
-        )
-        .with_priority(gpui_kit::base::POPUP_PRIORITY)
-        .into_any_element()
+        popup_layer(&self.view, self.at, window, cx)
     }
+}
+
+/// A Kit menu drawn above everything but tooltips at `at`, kept inside the
+/// window, with focus in it: the row menu's layer and the ⋯ menu's.
+pub(super) fn popup_layer(
+    view: &Entity<PopupMenu>,
+    at: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let focus = view.focus_handle(cx);
+    if !focus.contains_focused(window, cx) {
+        focus.focus(window, cx);
+    }
+    deferred(
+        anchored().child(
+            div()
+                .w(window.bounds().size.width)
+                .h(window.bounds().size.height)
+                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .child(
+                    anchored()
+                        .position(at)
+                        .snap_to_window_with_margin(px(8.))
+                        .anchor(Anchor::TopLeft)
+                        .child(view.clone()),
+                ),
+        ),
+    )
+    .with_priority(gpui_kit::base::POPUP_PRIORITY)
+    .into_any_element()
 }

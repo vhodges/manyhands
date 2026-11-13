@@ -5,12 +5,12 @@ use super::{Region, Workspace};
 use crate::desktop::{
     keys::{
         ActivityDown, ActivityEnd, ActivityEnter, ActivityHome, ActivityMenuChoice, ActivityUp,
-        CloseTab, DockPanel, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
-        FocusRepositories, JumpToDiscussion, NewItem, NextRegion, NextTab, OpenActivityMenu,
-        OpenDockMenu, OpenDrafts, OpenRepositoryMenu, OpenSelected, OpenSettings, PreviousRegion,
-        PreviousTab, Quit, QuitNow, Rebuild, Refresh, RepositoryMenuChoice, ScrollPageDown,
-        ScrollPageUp, ScrollToBottom, ScrollToTop, ToggleBottomDock, ToggleLeftDock,
-        ToggleRightDock,
+        ClearFinished, CloseTab, DockPanel, Find as FindKey, FocusContent, FocusNavigation,
+        FocusOperations, FocusRepositories, JumpToDiscussion, NewItem, NextRegion, NextTab,
+        OpenActivityMenu, OpenDockMenu, OpenDrafts, OpenRepositoryMenu, OpenSelected, OpenSettings,
+        PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, RepositoryMenuChoice,
+        ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, ToggleBottomDock,
+        ToggleLeftDock, ToggleRightDock,
     },
     model::{
         layout::{PanelKind, Side},
@@ -197,6 +197,7 @@ impl Render for Workspace {
         let footer = self.footer(window, cx);
         let dock_menu = self.dock_menu_layer(window, cx);
         let activity_menu = self.activity_menu_layer(window, cx);
+        let activity_more = self.activity_more_layer(window, cx);
         // Root's first child draws its dialog and notification layers.
         v_flex()
             .id("workspace")
@@ -335,6 +336,9 @@ impl Render for Workspace {
                     this.activity_menu_chosen(action, window, cx)
                 },
             ))
+            .on_action(unless_dialog(cx, |this, _: &ClearFinished, _, cx| {
+                this.clear_finished(cx)
+            }))
             .on_action(unless_dialog(
                 cx,
                 |this, _: &OpenRepositoryMenu, window, cx| {
@@ -356,6 +360,7 @@ impl Render for Workspace {
             .children(dock_menu)
             .children(repository_menu)
             .children(activity_menu)
+            .children(activity_more)
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }

@@ -194,6 +194,7 @@ impl Workspace {
             (None, Placement::Toggle(_)) => None,
         };
         self.activity.menu = None;
+        self.activity.more = None;
         self.footer.menu = Some(DockMenu::open(
             kind, current, toggle, placement, restore, window, cx,
         ));

@@ -44,6 +44,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.activity.pane.start_highlight();
         let Some(key) = self.activity.pane.highlighted_key().cloned() else {
             return;
         };
@@ -76,6 +77,7 @@ impl Workspace {
         self.activity.pane.highlight(&key);
         self.repository_menu = None;
         self.footer.menu = None;
+        self.activity.more = None;
         self.activity.menu = Some(ActivityMenu::open(
             &row, context, anchor, restore, window, cx,
         ));

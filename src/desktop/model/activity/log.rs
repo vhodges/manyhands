@@ -244,7 +244,6 @@ impl ActivityLog {
     }
 
     /// The rows "Clear finished" takes (L8).
-    #[allow(dead_code)] // Used from Task 10
     pub(crate) fn clearable(&self) -> Vec<RowKey> {
         self.rows
             .iter()

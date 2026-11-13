@@ -7,7 +7,7 @@
 
 use gpui_kit::{TestAppContext, point, px, test::TestWindowExt};
 
-use super::{cases::TICKET, list_support::*};
+use super::{cases::TICKET, list_support::*, toolbar};
 use crate::desktop::{
     model::{
         activity::{activity_time, copy::NOTHING_YET, rows::RowKey},
@@ -91,6 +91,9 @@ fn rows_draw_from_the_log_and_filter(cx: &mut TestAppContext) {
             );
         }
     }
+    // The filter shows only the rows that need attention (C1).
+    toolbar::filter_shows_attention_rows(&rows, cx);
+    toolbar::filter_empty_states(cx);
     // A row's button is drawn on its row: the pending row's Resume.
     let at = index_of(&rows.shell, &rows.pending[0], cx);
     assert!(rows.shell.present(("activity-button", at), cx));
@@ -281,6 +284,10 @@ fn activity_by_keyboard(cx: &mut TestAppContext) {
         "and refused: nothing ran"
     );
     assert_eq!(resumes(shell, OP_D, cx), 0);
+
+    // Tab runs the filter, ⋯, the list and the highlighted row's button; a
+    // Tab into the list starts the highlight (ruling T9-2).
+    toolbar::tab_order(cx);
 
     // T8 on a row with no button: Enter opens its item, unless the log's row
     // took a newer revision since it was drawn (it was retried, A, B, A,

@@ -3,9 +3,13 @@
 //! which gives them times, keeps what it must and says what counts. A burst
 //! of notifications makes one refresh per effect cycle (R-43).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet, HashMap},
+    rc::Rc,
+};
 
-use gpui_kit::{App, Context, Entity, EntityId};
+use gpui_kit::{App, Bounds, Context, Entity, EntityId, Pixels};
 use manyhands::{
     canonical::ItemId,
     drafts::ItemKind,
@@ -30,7 +34,7 @@ use crate::desktop::{
     },
     services::{lifecycle_of, requests::Intent},
     view::{
-        activity::{ActivityPane, menu::ActivityMenu},
+        activity::{ActivityPane, menu::ActivityMenu, more::ActivityMore},
         item::{ItemPane, locked_text},
         repositories::each_repository,
     },
@@ -46,6 +50,12 @@ pub(in crate::desktop::view) struct ActivityState {
     pub(super) pane: ActivityPane,
     /// The open row menu (Part D).
     pub(super) menu: Option<ActivityMenu>,
+    /// The open ⋯ menu (C1), and where its button was drawn last.
+    pub(super) more: Option<ActivityMore>,
+    pub(super) more_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Whether the list shows only the rows that need attention (C1). Off at
+    /// launch; it lasts for the session.
+    pub(super) filter: bool,
     #[cfg(test)]
     derivations: usize,
     /// How many choices the list's buttons and Enter made (P15, P16).
@@ -66,6 +76,9 @@ impl ActivityState {
                 cx.focus_handle().tab_stop(true),
             ),
             menu: None,
+            more: None,
+            more_bounds: Rc::default(),
+            filter: false,
             #[cfg(test)]
             derivations: 0,
             #[cfg(test)]

@@ -12,6 +12,7 @@
 
 mod actions;
 pub(crate) mod menu;
+pub(crate) mod more;
 pub(crate) mod row;
 
 use std::{
@@ -30,7 +31,7 @@ use super::{shell::tokens::chrome_colors, workspace::Workspace};
 use crate::desktop::{
     keys::ACTIVITY_CONTEXT,
     model::activity::{
-        copy::NOTHING_YET,
+        copy::{NOTHING_NEEDS_ATTENTION, NOTHING_YET},
         rows::{ActivityRow, RowKey},
     },
 };
@@ -123,15 +124,20 @@ impl ActivityPane {
         self.start_highlight();
     }
 
-    fn start_highlight(&mut self) {
+    /// A list with rows and no highlight starts on the first: whichever way
+    /// it came to hold focus. An existing highlight is left alone.
+    pub(crate) fn start_highlight(&mut self) {
         if self.highlight.is_none() {
             self.highlight = self.rows.first().map(|row| row.row.key.clone());
         }
     }
 
-    /// Whether the pane already shows `rows`.
-    pub(crate) fn shows(&self, rows: &[ActivityRow]) -> bool {
-        self.rows.as_slice() == rows
+    /// Whether the pane already shows the log's `rows`, or only the ones
+    /// that need attention when the filter is on (C1).
+    pub(crate) fn shows(&self, rows: &[ActivityRow], filtered: bool) -> bool {
+        self.rows
+            .iter()
+            .eq(rows.iter().filter(|row| !filtered || row.row.attention))
     }
 
     /// Shows `rows`, the log's now. The highlight stays on its key; when
@@ -147,7 +153,7 @@ impl ActivityPane {
         window: &mut Window,
         cx: &mut App,
     ) -> bool {
-        if self.shows(&rows) {
+        if self.rows.as_slice() == rows.as_slice() {
             return false;
         }
         let held = self.button_focus.contains_focused(window, cx);
@@ -265,7 +271,12 @@ impl ActivityPane {
     /// The list: a container that keeps the id `"operation-area"` (R-20),
     /// the list's key context and handle, and in it the rows, one line each,
     /// or the empty state.
-    pub(crate) fn render(&self, workspace: WeakEntity<Workspace>, cx: &App) -> AnyElement {
+    pub(crate) fn render(
+        &self,
+        workspace: WeakEntity<Workspace>,
+        filtered: bool,
+        cx: &App,
+    ) -> AnyElement {
         let colors = chrome_colors(cx);
         let drawn = self.list_bounds.clone();
         let bounds = self.bounds.clone();
@@ -286,14 +297,19 @@ impl ActivityPane {
                 |_, (), _, _| {},
             ));
         let body = if self.rows.is_empty() {
+            let empty = if filtered {
+                NOTHING_NEEDS_ATTENTION
+            } else {
+                NOTHING_YET
+            };
             div()
                 .id("activity-empty")
                 .test_support()
-                .aria_label(NOTHING_YET)
+                .aria_label(empty)
                 .p_2()
                 .text_sm()
                 .text_color(colors.muted)
-                .child(NOTHING_YET)
+                .child(empty)
                 .into_any_element()
         } else {
             let (rows, highlight) = (self.rows.clone(), self.highlight.clone());

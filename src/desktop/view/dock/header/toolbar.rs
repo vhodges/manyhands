@@ -1,6 +1,7 @@
 //! A panel's toolbar, drawn in its header (Part G, R-13): Tickets' New
 //! ticket…; Documents' New document…, New folder… and Collapse all;
-//! Repositories' Add or create a repository…, Check all and More.
+//! Repositories' Add or create a repository…, Check all and More;
+//! Activity's filter and ⋯.
 //!
 //! The buttons are the base Kit's, tracking handles the Workspace owns, so a
 //! dock `load` or move, which changes the header's element paths, keeps
@@ -13,7 +14,7 @@
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, StatefulInteractiveElement, Styled, Window,
+    ParentElement, StatefulInteractiveElement, Styled, TestSupportExt, Toggled, Window,
     base::Button,
     canvas,
     component::{ActiveTheme, Icon, h_flex, tooltip::Tooltip},
@@ -25,7 +26,10 @@ use gpui_kit::{
 use crate::desktop::{
     assets::icon_path,
     keys::{NAVIGATION_CONTEXT, NewItem, REPOSITORIES_CONTEXT},
-    model::{layout::PanelKind, navigation::Pane, stamp::SettingsPage},
+    model::{
+        activity::copy::SHOW_ONLY_ATTENTION, layout::PanelKind, navigation::Pane,
+        stamp::SettingsPage,
+    },
     view::{
         create::{NEW_DOCUMENT, NEW_TICKET},
         documents::{COLLAPSE_ALL, NEW_FOLDER},
@@ -51,7 +55,8 @@ impl ToolbarButton {
             Self::CollapseAll => COLLAPSE_ALL,
             Self::AddRepository => ADD_OR_CREATE,
             Self::CheckAll => CHECK_ALL,
-            Self::RepositoriesMore => MORE,
+            Self::RepositoriesMore | Self::ActivityMore => MORE,
+            Self::ActivityFilter => SHOW_ONLY_ATTENTION,
         }
     }
 
@@ -63,7 +68,8 @@ impl ToolbarButton {
             Self::CollapseAll => "chevrons-down-up",
             Self::AddRepository => "plus",
             Self::CheckAll => "refresh-cw",
-            Self::RepositoriesMore => "ellipsis",
+            Self::RepositoriesMore | Self::ActivityMore => "ellipsis",
+            Self::ActivityFilter => "list-filter",
         }
     }
 
@@ -80,7 +86,7 @@ impl ToolbarButton {
             PanelKind::Repositories => {
                 &[Self::AddRepository, Self::CheckAll, Self::RepositoriesMore]
             }
-            PanelKind::Activity => &[],
+            PanelKind::Activity => &[Self::ActivityFilter, Self::ActivityMore],
         }
     }
 }
@@ -101,6 +107,8 @@ impl Workspace {
         let colors = chrome_colors(cx);
         let ring = cx.theme().ring;
         let more_bounds = self.more_bounds_cell();
+        let activity_more_bounds = self.activity_more_bounds_cell();
+        let filtered = self.activity_filter();
         let buttons = buttons.iter().map(|button| {
             let button = *button;
             let enabled = self.toolbar_enabled(button, cx);
@@ -111,7 +119,11 @@ impl Workspace {
                     this.release_check_all(window, cx)
                 });
             }
-            let more_bounds = more_bounds.clone();
+            let bounds = match button {
+                ToolbarButton::RepositoriesMore => Some(more_bounds.clone()),
+                ToolbarButton::ActivityMore => Some(activity_more_bounds.clone()),
+                _ => None,
+            };
             let tooltip = move |window: &mut Window, cx: &mut gpui_kit::App| {
                 let tip = Tooltip::new(button.name());
                 if button.has_key() {
@@ -148,16 +160,30 @@ impl Workspace {
                         .w(px(ICON_SIZE))
                         .h(px(ICON_SIZE)),
                 );
-            if button != ToolbarButton::RepositoriesMore {
-                return element.into_any_element();
+            if button == ToolbarButton::ActivityFilter {
+                // The state is the wrapper's, as the footer toggles' are.
+                return div()
+                    .id("activity-filter")
+                    .test_support()
+                    .flex_none()
+                    .aria_toggled(if filtered {
+                        Toggled::True
+                    } else {
+                        Toggled::False
+                    })
+                    .child(element)
+                    .into_any_element();
             }
-            // Where More's menu opens: below the button, as drawn.
+            let Some(bounds) = bounds else {
+                return element.into_any_element();
+            };
+            // Where a menu opens: below the button, as drawn.
             div()
                 .relative()
                 .flex_none()
                 .child(element)
                 .child(
-                    canvas(move |at, _, _| more_bounds.set(Some(at)), |_, (), _, _| {})
+                    canvas(move |at, _, _| bounds.set(Some(at)), |_, (), _, _| {})
                         .absolute()
                         .top_0()
                         .left_0()
@@ -165,16 +191,19 @@ impl Workspace {
                 )
                 .into_any_element()
         });
+        // Activity's buttons have no key of their own: `NewItem` makes the
+        // focused list's kind, and Activity is no list of items.
         let context = match kind {
-            PanelKind::Repositories => REPOSITORIES_CONTEXT,
-            _ => NAVIGATION_CONTEXT,
+            PanelKind::Repositories => Some(REPOSITORIES_CONTEXT),
+            PanelKind::Activity => None,
+            _ => Some(NAVIGATION_CONTEXT),
         };
         Some(
             h_flex()
                 .flex_none()
                 .gap_1()
                 .pr(px(6.))
-                .key_context(context)
+                .when_some(context, |this, context| this.key_context(context))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .children(buttons)
                 .into_any_element(),
@@ -192,7 +221,10 @@ impl Workspace {
                 self.documents().repo().is_some()
             }
             ToolbarButton::CollapseAll => self.documents().any_folder_open(),
-            ToolbarButton::AddRepository | ToolbarButton::RepositoriesMore => true,
+            ToolbarButton::AddRepository
+            | ToolbarButton::RepositoriesMore
+            | ToolbarButton::ActivityFilter
+            | ToolbarButton::ActivityMore => true,
             ToolbarButton::CheckAll => !check_all_roots(self, cx).is_empty(),
         }
     }
@@ -219,6 +251,8 @@ impl Workspace {
             }
             ToolbarButton::CheckAll => self.check_all(window, cx),
             ToolbarButton::RepositoriesMore => self.open_more_menu(window, cx),
+            ToolbarButton::ActivityFilter => self.toggle_activity_filter(cx),
+            ToolbarButton::ActivityMore => self.open_activity_more(window, cx),
         }
     }
 }

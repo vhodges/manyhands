@@ -28,18 +28,38 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if !self.activity.pane.shows(self.activity.log.rows()) {
+        // The list holds focus, however it came to: it starts on its first
+        // row (an existing highlight stays).
+        if self.activity.pane.list_focus().contains_focused(window, cx) {
+            self.activity.pane.start_highlight();
+        }
+        let filtered = self.activity.filter;
+        if !self.activity.pane.shows(self.activity.log.rows(), filtered) {
             cx.defer_in(window, |this, window, cx| {
                 this.apply_activity_rows(window, cx)
             });
         }
-        self.activity.pane.render(cx.entity().downgrade(), cx)
+        self.activity
+            .pane
+            .render(cx.entity().downgrade(), filtered, cx)
     }
 
-    /// Applies the log's rows to the pane, and draws once more when they
-    /// differ from those shown.
+    /// The log's rows the list shows: all of them, or with the filter on
+    /// only those that need attention (C1).
+    fn shown_activity_rows(&self) -> Vec<ActivityRow> {
+        self.activity
+            .log
+            .rows()
+            .iter()
+            .filter(|row| !self.activity.filter || row.row.attention)
+            .cloned()
+            .collect()
+    }
+
+    /// Applies the log's rows, filtered, to the pane, and draws once more
+    /// when they differ from those shown.
     fn apply_activity_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let rows = self.activity.log.rows().to_vec();
+        let rows = self.shown_activity_rows();
         if self.activity.pane.apply(rows, window, cx) {
             cx.notify();
         }
@@ -87,6 +107,7 @@ impl Workspace {
             cx.propagate();
             return;
         }
+        self.activity.pane.start_highlight();
         let Some(row) = self.activity.pane.highlighted().cloned() else {
             return;
         };

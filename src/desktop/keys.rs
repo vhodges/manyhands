@@ -146,6 +146,9 @@ gpui_kit::actions!(
         ActivityEnter,
         /// Open the highlighted Activity row's menu (Part D).
         OpenActivityMenu,
+        /// "Clear finished", the one item of Activity's ⋯ menu (C1, L8). No
+        /// key is bound to it: the menu's item dispatches it.
+        ClearFinished,
     ]
 );
 

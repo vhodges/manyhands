@@ -232,8 +232,7 @@ impl Workspace {
     /// request of this session that may hold the repository (a running
     /// retirement is its S1 row, R-51); with none, or one no longer listed,
     /// the first pending row of `root`, whose pending operations are read
-    /// again (C3). Task 10's filter, when it hides the row, is turned off
-    /// here.
+    /// again (C3). The filter, when it hides the row, is turned off here.
     fn show_holder(
         &mut self,
         root: PathBuf,
@@ -262,6 +261,7 @@ impl Workspace {
                     .cloned()
             });
         if let Some(key) = &holder {
+            self.show_row_through_filter(key);
             self.activity.pane.highlight_when_shown(key);
         }
         if request.is_none_or(|id| holder != Some(RowKey::Request(id)))

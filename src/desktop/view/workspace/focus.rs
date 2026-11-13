@@ -117,10 +117,14 @@ pub(in crate::desktop::view) enum ToolbarButton {
     AddRepository,
     CheckAll,
     RepositoriesMore,
+    /// Activity's filter (C1).
+    ActivityFilter,
+    /// Activity's ⋯ menu (C1).
+    ActivityMore,
 }
 
 impl ToolbarButton {
-    pub(in crate::desktop::view) const ALL: [Self; 7] = [
+    pub(in crate::desktop::view) const ALL: [Self; 9] = [
         Self::NewTicket,
         Self::NewDocument,
         Self::NewFolder,
@@ -128,6 +132,8 @@ impl ToolbarButton {
         Self::AddRepository,
         Self::CheckAll,
         Self::RepositoriesMore,
+        Self::ActivityFilter,
+        Self::ActivityMore,
     ];
 
     /// The element's id: the body buttons' ids for the three New buttons.
@@ -140,6 +146,8 @@ impl ToolbarButton {
             Self::AddRepository => "add-repository-button",
             Self::CheckAll => "check-all-button",
             Self::RepositoriesMore => "repositories-more-button",
+            Self::ActivityFilter => "activity-filter-button",
+            Self::ActivityMore => "activity-more-button",
         }
     }
 
@@ -157,6 +165,7 @@ impl ToolbarButton {
             Self::NewTicket => Region::Tickets,
             Self::NewDocument | Self::NewFolder | Self::CollapseAll => Region::Documents,
             Self::AddRepository | Self::CheckAll | Self::RepositoriesMore => Region::Repositories,
+            Self::ActivityFilter | Self::ActivityMore => Region::Operations,
         }
     }
 }
