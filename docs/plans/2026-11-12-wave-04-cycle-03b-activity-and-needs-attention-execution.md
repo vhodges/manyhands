@@ -27,7 +27,8 @@ reason.
 | 3 | done, review approved with Minors parked | code `bbaa6663` (base `622dfaa5`); ledger `f487e094` | yes |
 | 4 | done, review approved with Minors parked | code `94c7faab` (base `f487e094`); ledger `3b377441` | yes |
 | 5 | done, two reviewers, approved after fix round 1; checkpoint 2 posted | code `110aff6f` (base `3b377441`), fix `484b0f60`; ledger `8830224f` | yes |
-| 6 | done, review approved first time, Minors parked | code `35bdd07f` (base `8b960272`); ledger commit follows | yes |
+| 6 | done, review approved first time, Minors parked | code `35bdd07f` (base `8b960272`); ledger `fe6ced71` | yes |
+| 7 | done, review approved first time, Minors parked | code `f6559d70` (base `fe6ced71`); ledger commit follows | yes |
 
 ## Base
 
@@ -400,6 +401,146 @@ Before and after lists were captured by `fn` name per file. The tests (`#[test]`
 
 Keyboard and focus steps were left alone (`Region::Operations.ring_id()` assertions in the pending abandon test and the busy test stay; they stay green because the seam passes today's control handle).
 
+## Task 7 (the rest of `D/view/operations/` onto the seam; E-5 part 2)
+
+Seven test files converted (`attempts_tests.rs`, `attention_tests.rs`, `republish_follow_tests.rs`,
+`republish_stop_tests.rs`, `republish_tests.rs`, `resume_tests.rs`, `retire_tests.rs`); no production file
+changed. The old attempt entry is now Problem and Unshared rows (design S4–S6, R-17), so
+`dispositions_listed` pins exact `RowKey` lists and Share only on the Unpublished row and none on the
+Problem rows; `retiring_tests.rs` was out of the list (ruling P-F11).
+
+- Ruling T7-1: seam additions `act_unsettled`, `share_outcome`, `label_of` (test-only,
+  `activity_support.rs`, 249 → 296 lines). `act_unsettled` skips the settle after the choice so
+  `attention_recovery_held` keeps its "library call not inside the handler" assertion — plain `act`
+  would hide it — the exactly-one-enabled-offer rule is shared with `act` — none.
+- E-17: `resume_activity_tests.rs` `a_running_resume_makes_the_stranded_row_still_running` (Task 5's fix
+  round test): `close_row` now takes the root and returns a `RowKey`, so its one press became `act`; no
+  assertion removed.
+- **Parked Minors:** (1) `dispositions_listed` no longer pins which rows offer Share beyond
+  Problem rows and the Unpublished row: an enabled Share on the Diverged and the quiet LocalAhead
+  Unshared row would pin decision 17 and R-17; (2) its message "twelve lines, in the poll's order" is
+  inaccurate (problems in poll order, then the two Unshared); (3) `resume_tests.rs` "the row is gone"
+  checks `row(&entry).is_none()` for that pending key; confirm `RowKey::Pending` keys the operation,
+  not a per-render value; (4) `attempt_entry_share_waits_for_the_lock`: `!tab_reaches(action, 20)` could
+  pass vacuously if the drawn element disappeared; add `assert!(rig.shell.present(action.clone(), cx))`
+  before it, until E-7 removes the step; (5) `republish_confirms_then_shares` no longer touches the row
+  itself (it reads the request model only); (6) the `until_not_offered` doc comment says "enabled" but it
+  waits for no such offer at all.
+
+**Test seam additions:**
+
+- `act_unsettled`: `act` without the final `shell.run`; `act` and `act_unsettled` share a private
+  `press`, and `choose` takes a `settle` flag. Needed by `attention_recovery_held`, whose "not
+  inside the click" assertion (the library call is made on a background task, not in the
+  handler) cannot be seen after `act`'s run.
+- `share_outcome(shell, id)`: the finished share's `SyncOutcome` (panics if none).
+- `label_of(shell, key, &ActivityAction)`: the label of the offer that runs an action, after a
+  refresh (for Recovery offers, whose labels come from the library).
+
+**Test-function lists, before and after:**
+
+- `attempts_tests.rs`: tests equal (4). Helpers: added `brought`, `entry`, `keys`, `problem`,
+  `unshared`; removed `line`.
+- `attention_tests.rs`: tests equal (6). Helpers: added `hold`, `holds`, `offers`; removed `names`;
+  consts `ENTRY` and `ROOTS` removed (unused); `TestWindowExt` import dropped (unused).
+- `republish_follow_tests.rs`: tests equal (7). Helper added: `press_recovery`.
+- `republish_stop_tests.rs`: tests equal (7). Helpers unchanged (`under_a_resume` body edited).
+- `republish_tests.rs`: tests equal (8). Helpers added: `until_offered`, `until_not_offered`.
+- `resume_tests.rs`: tests equal (7). Helpers added: `listed_close`, `offer`; `close_row` kept by
+  name but now `close_row(shell, root, cx) -> RowKey` (was `(shell, cx) -> usize`).
+- `retire_tests.rs`: tests equal (7). Helper added: `retire_key`.
+
+**Removes (drawn-text assertions) and what replaced them, per file:**
+
+- `attempts_tests.rs`
+  - `dispositions_listed`:
+    - `present(attempt-..-repository)` (entry exists/absent) is now the rows of Problem or
+      Unshared keys for the root (`entry`).
+    - `line-i` label == `PollDisposition::X.guidance()` is now the Problem row's `detail[0]`
+      ends with the same `guidance()` for the ten problem dispositions, with kind Failure.
+    - The `line-10` label == UNPUBLISHED text and the Diverged line's text are removed; the
+      model copy (`unshared_detail`) is P-test territory. Their rows are asserted to exist, in
+      order.
+    - `action-i` labels are now `offered(.., SHARE)`: none on a problem row, enabled on the
+      Unpublished row.
+    - `!present(line-12)` is now the entry's key list being exactly the twelve expected keys.
+    - `label(brought-in) == None` is now zero Brought rows; `"Brought in 1 change"` is now one
+      Brought row.
+    - `!present(line-1)` ("replaced") is now the key list being exactly `[Problem(new id)]`.
+  - `attempt_entry_share_waits_for_the_lock`:
+    - Share label == SHARE is now `offered(..).enabled`.
+    - The drawn "Share… plus lock words" label is now the offer present and disabled, and the
+      row's `detail` contains `lock_words(Ticket)`.
+    - Click on the waiting Share… sending nothing is now `act_refused` (which asserts the row
+      is there, no enabled offer, and an unchanged footprint) plus the old `sent().is_empty()`.
+    - After unlock: offered enabled, then `act`. The drawn `tab_reaches(.., "not focusable")`
+      check is kept (a keyboard step).
+- `attention_tests.rs`
+  - `attention_locked_key`: `label(ENTRY) == headline(KeyLocked)` is now the Hold row's kind
+    `Locked` (headline copy is P-tested); `label(ROOTS) == "Holding back a, b"` is now
+    `row.group.roots == roots`; `label(ACTION) == UNLOCK` is now `offers(.., UNLOCK)` enabled;
+    `!present(ENTRY 1)` is now exactly one Hold row.
+  - `attention_host`: label APPROVE_HOST is now `offers`; I added "not Unlock…" as
+    `offered(UNLOCK).is_none()` (the old doc said it; nothing asserted it); click is now `act`;
+    `!present(ENTRY 0)` is now zero Hold rows and the host's row is None.
+  - `attention_actions_by_reason`: labels CHOOSE_A_KEY and OPEN_REMOTE_SETTINGS are now `offers`
+    on each reason's Hold row; clicks are now `act` on the row chosen by reason.
+  - `attention_recovery_held`: `label(ENTRY) == "Checking is held until recovery"` is removed
+    (copy is P-tested); label RESUME_CHECKING is now `offers`; the click is now `act_unsettled`
+    and the "not inside the choice" assertion is kept.
+- `republish_tests.rs`
+  - `a_deleted_branch_offers_republish`: outcome label == BRANCH_DELETED is now
+    `share_outcome == SyncOutcome::BranchDeleted`; the "later release" assertion on the const
+    stays; Republish… label is now `offered(..).enabled`; the stop-and-republish and share
+    presence checks are now `offered(..).is_none()` (the row exists, the Republish… offer
+    proved it).
+  - `republish_confirms_then_shares`: drawn "Done" state and "Republish" command labels are
+    removed. The `Finished(Success, Ok)` assertion that was already there carries "Done"; the
+    command word is now `done[0].intent.label() == "Republish"`.
+  - `a_stopped_republish_sends_the_same_request`: waits and presses the Recovery(id, 0) offer
+    (`label_of` then `act`) instead of the element.
+  - `an_item_shares_stop_and_republish_opens_republish`, `republish_waits_for_another_dialog_to_close`,
+    `republish_opens_when_the_dialog_it_waits_for_is_cancelled`,
+    `an_unreadable_record_offers_give_up_and_it_sends_the_give_up`: presence and label reads of
+    the row's controls are now `until_offered` / `offered`; presses are `act`. In the last,
+    Give up is waited for, then Republish… and Stop and republish… are `is_none()` with the row
+    existing.
+- `republish_follow_tests.rs`
+  - `a_share_offers_no_republish_while_one_runs`: `label(request_id(id,"republish")) == REPUBLISH`
+    is now `offered(..).enabled`. `!present(republish)` is now `until_not_offered` (the row must
+    still exist). `label(outcome) == REPUBLISHING` is now `offered(REPUBLISHING)` that is disabled
+    and whose action is `Offer(id, Republish)`. "Republish… again" is now `until_offered`.
+    `item-pill` label reads stay (item pane, not Activity).
+  - `a_waiting_republish_hides_republish_elsewhere`: presence of dismiss, republish and
+    stop-and-republish on the share are now `offered` (Dismiss enabled, the other two `None`).
+    `lifecycle-republish-stopped` and dialog reads stay.
+  - Presses by id (recovery 0, dismiss, open) are now `act` through `press_recovery`, `DISMISS`
+    and `OPEN_LIFECYCLE`.
+  - `a_removed_republish_offers_republish_again` needed no edit: its controls are the lifecycle
+    dialog's (`lifecycle-republish`), not rows.
+- `republish_stop_tests.rs`: `under_a_resume` and `a_stop_that_cannot_be_queued_says_so` press
+  Open… with `act(OPEN_LIFECYCLE)`. No assertion removed. Dialog labels (`lifecycle-stop-refused`,
+  `lifecycle-code`) stay.
+- `resume_tests.rs`
+  - `close_row` waits until the close is listed in `Operations::pending_shown` and returns
+    `pending_key(.., "close")`.
+  - `a_lifecycle_row_offers_resume_after_restart`:
+    - `label(pending-next) == "resume"` is now the pending `OperationDto.next_action`.
+    - `label(pending-resume) == RESUME` is now `offered(RESUME)`, enabled, with action
+      `ResumeLifecycle`.
+    - `!present(pending-resume-unavailable)` and `!present(pending-still-running)` are now
+      `offered(STILL_RUNNING).is_none()` and "every offer on the row is enabled".
+  - `resume_is_not_offered_while_in_flight_and_busy_reads_still_running` and
+    `a_running_resume_counts_as_in_flight`: `present`/`label(pending-still-running)` is now
+    `offered(STILL_RUNNING)` that is disabled; `!present(pending-resume)` is now
+    `offered(RESUME).is_none()` with the row existing.
+  - `resume_resends_the_named_request_and_opens_running`: "the row is gone" (`pending-command`
+    rows lack "close") is now `row(key).is_none()`.
+  - All Resume presses are `act(.., RESUME)`.
+- `retire_tests.rs`: presses of `attempt-..-retire-..` in the five tests are `act(RETIRE)` on
+  `RowKey::RetireOffer`. No drawn-text assertion removed; dialog reads
+  (`retire-unkept-message` and the like) stay, since those dialogs are not Activity.
+
 ## Tests run
 
 | Checkpoint | Tests run |
@@ -411,6 +552,7 @@ Keyboard and focus steps were left alone (`Region::Operations.ring_id()` asserti
 | Task 4 | 1 passed each: `desktop::model::polling::tests::brought::brought_in_is_kept_for_the_session` (red on stubs first); `desktop::model::activity::tests::each_source_makes_its_rows` (S1 + S2–S14); `desktop::model::activity::tests::states::copy::state_copy_table`; `desktop::model::repository_state::tests::causes::each_attention_cause_is_set`; Cycle 03a, unchanged and green: `desktop::model::repository_state::tests::{each_state_and_its_precedence, tooltips_say_the_state_and_the_facts, menu_items_follow_the_state, check_all_takes_each_repository_that_can_check}` and `desktop::view::repositories::tests::{rows_and_list_states, titles_of_what_is_not_shared, the_menu_by_pointer_and_keyboard, check_all_checks_each_repository (one flake in a combined run, then green alone twice), the_more_menu_acts_on_the_chosen_repository}`. fmt, check, clippy clean. |
 | Task 5 | Each alone, count 1, ok: `desktop::model::activity::tests::logs::attention::attention_counts_each_thing_once` (97 rows) and `...::logs::log::the_log_keeps_times_and_events` (written first, every row red on stubs); `...::s1::a_share_title_that_begins_with_its_subject_is_capitalised`; `desktop::model::polling::tests::brought::completed_attempts_are_counted_per_root` (red first); `desktop::services::scheduler::attention_answer_tests::a_failed_check_now_is_recorded_when_its_answer_applies` (red first, then red for the retry row); `desktop::services::resends::tests::waits_on_says_when_forgetting_would_drop_something`; `desktop::view::activity::tests::count_and_popover_agree`; `desktop::view::activity::tests::refreshes_are_coalesced` (red with coalescing off: 6 derivations vs 4); `desktop::view::operations::resume::activity_tests::a_running_resume_makes_the_stranded_row_still_running`; changed: `each_source_makes_its_rows`, `request_copy_table`, `share_copy_table`, `activity_time_formats`, `brought_in_is_kept_for_the_session`; E-3 `retire_resume_resends_original`; the nine E-4 tests above. fmt, check and clippy clean after each commit. |
 | Task 6 | Each alone, count 1, ok (35 tests): `desktop::view::activity::tests::each_action_runs_its_handler` (new; 21 kinds, T11, T12); the six E-5 `desktop::view::operations::tests::*` tests; the seven `desktop::view::operations::outcomes::give_up_tests::*`; the thirteen `...::outcomes::tests::*`; the six `...::outcomes::route_tests::*` plus the untouched E-7 `show_it_focuses_the_entry_of_the_possible_holder` (it shares the changed helpers; green); `desktop::view::operations::check_tests::a_running_check_now_reads_its_stage_words`; `desktop::view::operations::record_tests::an_unreadable_record_is_reported_once_in_activity`. (Full names in the Task 6 test lists above.) fmt, check and clippy clean. |
+| Task 7 | Each alone, count 1, ok: the 31 E-5 part 2 tests (exact paths in the Task 7 report: `attempts_tests` 2, `attention_tests` 4, `republish::follow_tests` 7, `republish::stop_tests` 4, `republish::tests` 7, `resume::tests` 7, `retire_tests` 5 — Task 7 ran them by `desktop::view::operations::…` paths); sharing a changed helper and green: E-7 `attention_actions_hit`, `attention_actions_by_keyboard`, `attempt_entry_actions_hit`, `attempt_entry_ids_follow_the_repository`, `retire_left_offer`, `retire_pending_row_by_keyboard`; `resume::activity_tests::a_running_resume_makes_the_stranded_row_still_running`; `activity::tests::each_action_runs_its_handler`. fmt, check and clippy clean. |
 
 ## Test edits (E-n)
 
@@ -426,3 +568,4 @@ Keyboard and focus steps were left alone (`Region::Operations.ring_id()` asserti
 - E-4 (Task 5): nine readers of the count, one edit: `needs_attention_counts_and_leads_to_activity` expects "1 needs attention" (N2). The others unedited.
 - Candidates E-17 (`dock_tests/toolbars.rs:323`) and E-18 (`keyboard_tests/shell/support.rs:102`) are still unassigned: Task 10 and Task 11.
 - E-5 part 1 (Task 6): `operations_tests.rs`, `give_up_tests.rs`, `outcomes_tests.rs`, `outcomes_route_tests.rs`, `check_tests.rs`, `record_tests.rs` moved onto the seam; the test-function lists are equal in all six; the removed drawn-text assertions are listed under Task 6 above. No E-17+ outside these files.
+- E-5 part 2 (Task 7): the seven files above moved onto the seam; test lists equal; Removes listed under Task 7. E-17 (above).
