@@ -260,6 +260,7 @@ impl Workspace {
             }
             Region::Tickets if self.tickets.repo().is_some() => self.tickets_pane.focus(window, cx),
             Region::Content => self.focus_content(window, cx),
+            Region::Operations => self.activity.pane.focus(window, cx),
             _ => window.focus(&self.regions[region.index()], cx),
         }
         self.last_region = Some(region);

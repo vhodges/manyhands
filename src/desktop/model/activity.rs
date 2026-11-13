@@ -67,7 +67,6 @@ pub(crate) fn derive(inputs: &Inputs<'_>) -> Vec<Derived> {
 /// A row's time and its tooltip's time line (B6): "HH:MM", and
 /// "YYYY-MM-DD HH:MM" in the same zone. With no offset both are UTC and the
 /// tooltip says so.
-#[allow(dead_code)] // Used from Task 9
 pub(crate) fn activity_time(at: OffsetDateTime, offset: Option<UtcOffset>) -> (String, String) {
     let local = at.to_offset(offset.unwrap_or(UtcOffset::UTC));
     let clock = format!("{:02}:{:02}", local.hour(), local.minute());

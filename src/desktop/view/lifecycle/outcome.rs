@@ -43,10 +43,7 @@ pub(crate) use crate::desktop::model::activity::lifecycle_lines::{
     Ending, Reach, StepKey, StepState, cleanup_reason, lifecycle_data, outcome_lines,
 };
 use crate::desktop::{
-    model::{
-        operations::{Progressing, stage_text},
-        publication::{HOST_CODES, KEY_CODES},
-    },
+    model::publication::{HOST_CODES, KEY_CODES},
     services::requests::Intent,
 };
 
@@ -204,27 +201,6 @@ impl Credential {
             _ => None,
         }
     }
-}
-
-/// What a running lifecycle's operation area entry says: "Closing · …" or
-/// "Merging · …", by its latest stage, naming the primary branch `primary`
-/// when known. `None` for any other request.
-pub(crate) fn progress_words(
-    intent: &Intent,
-    stage: Option<ProgressStage>,
-    primary: Option<&str>,
-) -> Option<String> {
-    let prefix = match intent {
-        Intent::TicketClose { .. } => "Closing",
-        Intent::DocumentPromote { .. } => "Merging",
-        _ => return None,
-    };
-    // A lifecycle's stages have the words a share's have.
-    let words = stage
-        .and_then(|stage| stage_text(Progressing::Share, stage, None, primary))
-        .or_else(|| stage_text(Progressing::Share, ProgressStage::Accepted, None, primary))
-        .unwrap_or_default();
-    Some(format!("{prefix} \u{b7} {words}"))
 }
 
 /// The item's ID a lifecycle request names, for its entry.

@@ -576,6 +576,23 @@ impl Walk {
         self.on(("tab", shown), Region::Content, cx);
     }
 
+    /// `secondary-4`, the arrows to the pending row of `a` whose command is
+    /// `action`, and Tab to its button, which holds focus. Waits for the row
+    /// to be listed and drawn. Gives its key.
+    async fn to_pending_button(
+        &self,
+        action: &str,
+        cx: &mut TestAppContext,
+    ) -> crate::desktop::model::activity::rows::RowKey {
+        let row =
+            super::activity_support::until_pending(&self.shell, &key(&self.a), action, cx).await;
+        super::activity_support::to_row(&self.shell, &row, cx);
+        self.keys("tab", cx);
+        let button = super::activity_support::button_focus(&self.shell, cx);
+        self.on_handle(&button, Region::Operations, cx);
+        row
+    }
+
     /// `secondary-4` focuses the operation area, which lists this
     /// session's refresh and `b`'s pending operation.
     fn open_the_operation_area(&self, cx: &mut TestAppContext) {

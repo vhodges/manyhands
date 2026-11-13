@@ -15,6 +15,7 @@ use manyhands::{
 };
 
 pub(crate) use self::states::*;
+use super::rows::Derived;
 use crate::desktop::model::{
     item::SHARE,
     list_view::RETRY,
@@ -120,6 +121,28 @@ pub(crate) fn effects_text(effects: &Effects) -> String {
     } else {
         shown.join(", ")
     }
+}
+
+/// Nothing in the list yet: Activity's empty state (C1).
+pub(crate) const NOTHING_YET: &str = "Nothing yet this session";
+
+/// A row's full message (B5): its title, then ". " and its description when
+/// it has one. Activity draws it on one line, and the row menu's first item
+/// is it.
+pub(crate) fn message_of(row: &Derived) -> String {
+    match &row.description {
+        Some(description) => format!("{}. {description}", row.title),
+        None => row.title.clone(),
+    }
+}
+
+/// A row's tooltip, line by line (B5): the full message, the time in full,
+/// then the row's detail. `time` is B6's tooltip time. The same text is the
+/// row's accessible description.
+pub(crate) fn tooltip_lines(row: &Derived, time: &str) -> Vec<String> {
+    let mut lines = vec![message_of(row), time.to_owned()];
+    lines.extend(row.detail.iter().cloned());
+    lines
 }
 
 /// An offer's label.

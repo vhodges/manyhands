@@ -3,6 +3,7 @@
 
 mod activity;
 mod activity_facts;
+mod activity_panel;
 mod content;
 mod docks;
 mod find;
@@ -18,10 +19,7 @@ mod repository_menu;
 mod requests;
 mod titles;
 
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
+use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
     AppContext, Context, Entity, FocusHandle, Subscription, Task, WeakEntity, Window,
@@ -140,9 +138,6 @@ pub(crate) struct Workspace {
     toolbar_focus: [FocusHandle; ToolbarButton::ALL.len()],
     _find_events: Subscription,
     content: ContentArea,
-    /// The operation area's scroll: a control in it that takes focus is
-    /// brought into view (E-2), sharing the focus the content region saw.
-    operations_scroll: super::scroll::ContentScroll,
     _settings_events: Subscription,
     _drafts_events: Subscription,
     /// Fallback when the control holding focus is no longer drawn.
@@ -166,10 +161,9 @@ pub(crate) struct Workspace {
     /// Each repository's read of them; a newer read drops the last.
     pending_conflict_reads: HashMap<RepoKey, Task<()>>,
     conflict_generations: Generations,
+    #[cfg(all(test, feature = "desktop-test-support"))]
     abandon_focus: HashMap<(RepoKey, String), FocusHandle>,
-    abandon_drawn: HashSet<(RepoKey, String)>,
     control_focus: HashMap<String, FocusHandle>,
-    control_drawn: HashSet<String>,
     /// The items a Retire… press is in progress for, by repository and item
     /// ID: a second press waits (E4), unless the press is waiting on a
     /// question that no longer stands.
@@ -289,7 +283,6 @@ impl Workspace {
             }
         });
         let tabs = TabContent::default();
-        let operations_scroll = tabs.scroll().region();
         let settings = {
             let services = services.clone();
             let scroll = tabs.scroll().clone();
@@ -353,7 +346,6 @@ impl Workspace {
                 .collect(),
             toolbar_focus: std::array::from_fn(|_| cx.focus_handle()),
             _find_events: find_events,
-            operations_scroll,
             content: ContentArea {
                 tabs,
                 settings,
@@ -378,10 +370,9 @@ impl Workspace {
             pending_conflicts: HashMap::new(),
             pending_conflict_reads: HashMap::new(),
             conflict_generations: Generations::default(),
+            #[cfg(all(test, feature = "desktop-test-support"))]
             abandon_focus: HashMap::new(),
-            abandon_drawn: HashSet::new(),
             control_focus: HashMap::new(),
-            control_drawn: HashSet::new(),
             retire_asked: HashMap::new(),
             _operations: operations,
             _drafts: drafts,
@@ -397,7 +388,7 @@ impl Workspace {
             stopping_to_republish: Vec::new(),
             republish_deferred: Vec::new(),
             share_titles: Default::default(),
-            activity: Default::default(),
+            activity: activity::ActivityState::new(cx),
         };
         workspace.load_repositories(cx);
         workspace
@@ -405,9 +396,6 @@ impl Workspace {
 
     pub(crate) fn services(&self) -> &Services {
         &self.services
-    }
-    pub(in crate::desktop::view) fn operations_scroll(&self) -> &super::scroll::ContentScroll {
-        &self.operations_scroll
     }
     pub(crate) fn navigation(&self) -> &Navigation {
         &self.navigation

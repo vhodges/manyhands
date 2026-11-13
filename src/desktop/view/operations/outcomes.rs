@@ -24,13 +24,9 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::{AnyElement, App, ClickEvent, Context, FocusHandle, Window};
+use gpui_kit::{App, Context, FocusHandle, Window};
 
-use super::{
-    button,
-    republish::{REPUBLISHING, Republishing},
-    request_id,
-};
+use super::republish::{REPUBLISHING, Republishing};
 use crate::desktop::{
     model::{
         operations::{may_be_waiting_for, share_text},
@@ -45,11 +41,13 @@ use crate::desktop::{
 };
 
 // The offers' words live in the model, where Activity's rows read them
-// (R-44); each keeps its old path.
-pub(crate) use crate::desktop::model::activity::copy::{ALREADY_FINISHED, offer_label};
+// (R-44); each keeps its old path where a test still names it.
+#[cfg(test)]
+pub(crate) use crate::desktop::model::activity::copy::offer_label;
 
 /// The part of an entry's element ids an offer's control takes. Share's
 /// is the stopped share's (design, Outcomes and routes).
+#[cfg(test)]
 pub(crate) fn offer_part(offer: SyncOffer) -> &'static str {
     match offer {
         SyncOffer::Share => "share",
@@ -232,27 +230,6 @@ impl Workspace {
             return None;
         }
         share_result(self.services(), id, cx)
-    }
-
-    /// An offer's control on the entry of the finished share `id`.
-    pub(super) fn share_offer(
-        &mut self,
-        id: DesktopRequestId,
-        offer: SyncOffer,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let part = request_id(id, offer_part(offer));
-        let focus = self.control_focus_for(part.clone(), cx);
-        let origin = focus.clone();
-        button(
-            part,
-            offer_label(offer),
-            Some(&focus),
-            cx,
-            cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.run_share_offer(id, offer, origin.clone(), window, cx)
-            }),
-        )
     }
 
     /// The item the share `id` is of, to republish: no lifecycle follows.

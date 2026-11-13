@@ -169,19 +169,6 @@ impl Operations {
         }
     }
 
-    /// Whether `action`, offered on the request `id`, is a Retry that R-78
-    /// forbids: the operation area says so.
-    pub(crate) fn retry_not_sent_again(
-        &self,
-        id: DesktopRequestId,
-        action: &RecoveryAction,
-    ) -> bool {
-        recovery_control(action.action) == RecoveryControl::Retry
-            && self
-                .named(id, action)
-                .is_some_and(|named| self.not_sent_again(named))
-    }
-
     /// What the recovery action `action`, offered on the request `id`,
     /// runs; `None` when D1 does not offer it, it names nothing this
     /// session can act on, or it is a Retry that R-78 forbids.

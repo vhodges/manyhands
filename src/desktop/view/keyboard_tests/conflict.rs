@@ -27,7 +27,8 @@ use crate::desktop::{
     },
     test_support::fixtures::{Fixture, ticket_path},
     view::{
-        conflict::{KEEPING_MINE, KEEPING_THEIRS, REVIEW_CHANGES},
+        activity_support::{list_focused, refresh, row as activity_row},
+        conflict::{KEEPING_MINE, KEEPING_THEIRS},
         harness::Shell,
         workspace::Region,
     },
@@ -36,8 +37,6 @@ use crate::desktop::{
 const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FT0";
 /// The synchronization the canned share answer names.
 const SYNCHRONIZATION: &str = "01M4CC0VN1KTQFSVR99378TDHV";
-/// A pending row's Review changes (`view/operations/review.rs`).
-const PENDING_REVIEW: &str = "pending-review";
 /// How long a real resolution may take under the whole suite, as
 /// `view/conflict_tests.rs`'s `RESOLVING`.
 const RESOLVING: Duration = Duration::from_secs(90);
@@ -117,9 +116,10 @@ impl Walk {
 }
 
 /// A1, A21, real: a local synchronization stopped on a conflict, after a
-/// restart. `secondary-4` and Tab reach its pending row's Review changes,
-/// and Enter opens the sheet; Escape closes it with nothing sent and gives
-/// focus back, and Enter opens it again. Save resolution is disabled until
+/// restart. `secondary-4` and the arrows reach its pending row, Tab its
+/// Review changes button, and Enter opens the sheet; Escape closes it with
+/// nothing sent and gives focus back to the list, the row still highlighted,
+/// and Enter opens it again. Save resolution is disabled until
 /// the title is chosen: Tab and Enter keep theirs, then Tab and Enter on
 /// Save resolution send the resolution, which applies. The sheet closes,
 /// the row goes, and the work context holds theirs.
@@ -131,16 +131,7 @@ async fn resolve_a_local_conflict_by_keyboard(cx: &mut TestAppContext) {
     fixture.conflict_locally(&a, TICKET, "Mine", "Theirs");
     let walk = Walk::over(Shell::open(fixture, cx), a.clone());
 
-    walk.keys("secondary-4", cx);
-    walk.region(Region::Operations, cx);
-    walk.until_drawn((PENDING_REVIEW, 0usize), cx).await;
-    let review = ElementId::from((PENDING_REVIEW, 0usize));
-    assert_eq!(
-        walk.shell.label(review.clone(), cx).as_deref(),
-        Some(REVIEW_CHANGES)
-    );
-    walk.tab_to("tab", review.clone(), cx);
-    walk.on(review.clone(), Region::Operations, cx);
+    let review = walk.to_pending_button("context_sync_local", cx).await;
 
     walk.enter(cx);
     walk.until_drawn("conflict-save", cx).await;
@@ -149,7 +140,13 @@ async fn resolve_a_local_conflict_by_keyboard(cx: &mut TestAppContext) {
         !walk.shell.present("conflict-sheet", cx),
         "Escape closes it"
     );
-    walk.on(review.clone(), Region::Operations, cx);
+    walk.region(Region::Operations, cx);
+    assert!(list_focused(&walk.shell, cx), "focus is back on the list");
+    assert_eq!(
+        crate::desktop::view::activity_support::highlighted(&walk.shell, cx),
+        Some(review.clone()),
+        "its row is still highlighted"
+    );
     walk.enter(cx);
 
     walk.choose_by_keyboard("conflict-keep-theirs", KEEPING_THEIRS, cx)
@@ -183,7 +180,12 @@ async fn resolve_a_local_conflict_by_keyboard(cx: &mut TestAppContext) {
         "the resolution applied"
     );
     walk.region(Region::Operations, cx);
-    walk.until_drawn("pending-empty", cx).await;
+    walk.shell
+        .until_drawn(cx, "the pending row goes", |shell, cx| {
+            refresh(shell, cx);
+            activity_row(shell, &review, cx).is_none()
+        })
+        .await;
 
     let context = walk.shell.fixture.context_worktree(&a, TICKET);
     let file = std::fs::read_to_string(context.join(ticket_path(TICKET))).unwrap();

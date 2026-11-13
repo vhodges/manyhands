@@ -16,7 +16,7 @@ use crate::desktop::{
         navigation::OpenTarget,
         operations::LifecycleRow,
     },
-    services::requests::Intent,
+    services::requests::{Intent, Lane},
     view::{operations::RetireSubject, workspace::Workspace},
 };
 
@@ -33,7 +33,6 @@ impl Workspace {
     /// row's revision is the one the choice carries (T11), and the row still
     /// offers that action with that label, enabled (T12). Otherwise nothing
     /// runs, and the person chooses again.
-    #[allow(dead_code)] // Used from Task 9
     pub(in crate::desktop::view) fn choose_activity(
         &mut self,
         choice: &ActivityMenuChoice,
@@ -141,5 +140,38 @@ impl Workspace {
             ActivityAction::RetryFlush(draft) => self.retry_draft_flush(*draft, cx),
             ActivityAction::ReviewDrafts => self.open_drafts(None, window, cx),
         }
+    }
+
+    /// Whether `share` is queued, waiting out `busy` or running: the
+    /// worker's own account, as the item header's Share reads it.
+    fn sharing(&self, share: &Intent) -> bool {
+        let Intent::ItemSync { root, kind, id } = share else {
+            return false;
+        };
+        self.services().worker().in_flight(|intent| {
+            matches!(
+                intent,
+                Intent::ItemSync { root: asked, kind: asked_kind, id: asked_id }
+                    if asked == root && asked_kind == kind && asked_id == id
+            )
+        })
+    }
+
+    /// Share… on an unshared item: sends the share the item's header sends
+    /// (`item sync`), on the user lane, unless one is already queued or
+    /// running. A poll runs only with a publication remote, so there is no
+    /// remote to set up here.
+    pub(in crate::desktop::view) fn share_unpublished(
+        &mut self,
+        share: Intent,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sharing(&share) {
+            return;
+        }
+        self.services()
+            .worker()
+            .submit(share, Lane::User, None, None);
+        cx.notify();
     }
 }

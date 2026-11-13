@@ -20,22 +20,13 @@
 //! update: a scheduler update that read a pane from inside that pane's
 //! update would panic.
 
-use gpui_kit::{
-    AnyElement, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Styled,
-    Window,
-    component::{WindowExt, h_flex},
-    div,
-};
+use gpui_kit::{Context, Window, component::WindowExt};
 use manyhands::{canonical::ItemId, drafts::DraftErrorKind, repository::ItemDtoKind};
 
-use super::{button, text};
 use crate::desktop::{
     model::{
         navigation::OpenTarget,
-        polling::{
-            Root, TargetKind,
-            entry::{RETIRE, RetireOffer, short_code},
-        },
+        polling::{Root, TargetKind},
         tabs::TabKey,
     },
     services::drafts::{Fresh, Kept},
@@ -83,51 +74,6 @@ impl Subject {
 }
 
 impl Workspace {
-    /// The row of one item Retire… is offered for: its short code and
-    /// words, and the action, in one row that wraps so the action stays
-    /// inside the area at the default window (W-6). The ids are keyed by
-    /// the repository and the item, not the place, so a focused action
-    /// stays on its own item when an earlier one goes.
-    pub(super) fn retire_offer(
-        &mut self,
-        root: &Root,
-        offer: &RetireOffer,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let short = short_code(&offer.item);
-        let element = format!("attempt-{root}-retire-{short}");
-        let focus = self.control_focus_for(element.clone(), cx);
-        // The action scrolls into view when focus reaches it (E-2).
-        let marker = self.operations_scroll().marker_within(&focus);
-        let subject = Subject {
-            root: root.clone(),
-            kind: offer.kind,
-            item: offer.item.clone(),
-        };
-        let control = button(
-            element.clone(),
-            RETIRE,
-            Some(&focus),
-            cx,
-            cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.retire_chosen(subject.clone(), window, cx)
-            }),
-        );
-        h_flex()
-            .gap_2()
-            .flex_wrap()
-            .items_center()
-            .child(text(format!("attempt-{root}-offer-{short}"), offer.text()))
-            .child(
-                div()
-                    .id(format!("{element}-slot"))
-                    .relative()
-                    .child(control)
-                    .child(marker),
-            )
-            .into_any_element()
-    }
-
     /// Retire… was pressed (E4, steps 1 and 2).
     pub(in crate::desktop::view) fn retire_chosen(
         &mut self,

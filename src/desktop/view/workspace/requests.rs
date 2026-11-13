@@ -524,6 +524,9 @@ impl Workspace {
         );
     }
 
+    /// Where an Abandon press gave focus back to (test seam until the swap
+    /// ends the focus maps, milestone 2).
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(in crate::desktop::view) fn abandon_focus_for(
         &mut self,
         root: &RepoKey,
@@ -531,7 +534,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> FocusHandle {
         let key = (root.clone(), operation_id.to_owned());
-        self.abandon_drawn.insert(key.clone());
         self.abandon_focus
             .entry(key)
             .or_insert_with(|| cx.focus_handle())
@@ -543,19 +545,10 @@ impl Workspace {
         id: String,
         cx: &mut Context<Self>,
     ) -> FocusHandle {
-        self.control_drawn.insert(id.clone());
         self.control_focus
             .entry(id)
             .or_insert_with(|| cx.focus_handle())
             .clone()
-    }
-
-    /// Dropped controls restore focus through the workspace's focus-lost handler.
-    pub(super) fn prune_abandon_focus(&mut self) {
-        let drawn = std::mem::take(&mut self.abandon_drawn);
-        self.abandon_focus.retain(|key, _| drawn.contains(key));
-        let drawn = std::mem::take(&mut self.control_drawn);
-        self.control_focus.retain(|key, _| drawn.contains(key));
     }
 
     #[cfg(all(test, feature = "desktop-test-support"))]

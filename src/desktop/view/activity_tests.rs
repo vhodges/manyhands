@@ -212,6 +212,10 @@ fn refreshes_are_coalesced(cx: &mut TestAppContext) {
 
 #[path = "activity_tests/cases.rs"]
 mod cases;
+#[path = "activity_tests/list.rs"]
+mod list;
+#[path = "activity_tests/list_support.rs"]
+mod list_support;
 #[path = "activity_tests/pending.rs"]
 mod pending_cases;
 #[path = "activity_tests/refused.rs"]

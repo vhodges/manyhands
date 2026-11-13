@@ -25,6 +25,74 @@ use crate::desktop::{
     services::requests::{DesktopRequest, DesktopRequestId, RequestState},
 };
 
+/// The key of the highlighted row of the list, as drawn.
+pub(crate) fn highlighted(shell: &Shell, cx: &mut TestAppContext) -> Option<RowKey> {
+    shell.workspace.read_with(cx, |workspace, _| {
+        workspace.activity_pane().highlighted_key().cloned()
+    })
+}
+
+/// The list's focus handle.
+pub(crate) fn list_focus(shell: &Shell, cx: &mut TestAppContext) -> FocusHandle {
+    shell.workspace.read_with(cx, |workspace, _| {
+        workspace.activity_pane().list_focus().clone()
+    })
+}
+
+/// The highlighted row's button's focus handle.
+pub(crate) fn button_focus(shell: &Shell, cx: &mut TestAppContext) -> FocusHandle {
+    shell.workspace.read_with(cx, |workspace, _| {
+        workspace.activity_pane().button_focus().clone()
+    })
+}
+
+/// Whether the list holds focus, read in a frame.
+pub(crate) fn list_focused(shell: &Shell, cx: &mut TestAppContext) -> bool {
+    let list = list_focus(shell, cx);
+    shell.frame(cx, |window, _| list.is_focused(window))
+}
+
+/// The rows the pane draws: what a person sees and presses.
+pub(crate) fn drawn(shell: &Shell, cx: &mut TestAppContext) -> Vec<ActivityRow> {
+    shell.frame(cx, |_, _| ());
+    shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.activity_pane().rows().to_vec())
+}
+
+/// Where the row `key` is drawn, its element ids' index.
+pub(crate) fn index_of(shell: &Shell, key: &RowKey, cx: &mut TestAppContext) -> usize {
+    drawn(shell, cx)
+        .iter()
+        .position(|row| &row.row.key == key)
+        .unwrap_or_else(|| panic!("{key:?} is not drawn"))
+}
+
+/// Moves the highlight to `key` with the arrow keys, from wherever it is.
+/// The list holds focus.
+pub(crate) fn arrow_to(shell: &Shell, key: &RowKey, cx: &mut TestAppContext) {
+    let target = index_of(shell, key, cx);
+    for _ in 0..drawn(shell, cx).len() {
+        let at = highlighted(shell, cx).map(|current| index_of(shell, &current, cx));
+        match at {
+            Some(at) if at == target => return,
+            Some(at) => shell.keys(if at < target { "down" } else { "up" }, cx),
+            None => shell.keys("down", cx),
+        }
+    }
+    assert_eq!(highlighted(shell, cx).as_ref(), Some(key));
+}
+
+/// Focuses Activity's list, as a person does (`secondary-4`), and moves to
+/// the row `key` with the arrows, letting the pane draw it first.
+pub(crate) fn to_row(shell: &Shell, key: &RowKey, cx: &mut TestAppContext) {
+    refresh(shell, cx);
+    drawn(shell, cx);
+    shell.keys("secondary-4", cx);
+    arrow_to(shell, key, cx);
+    assert!(list_focused(shell, cx), "the list holds focus on {key:?}");
+}
+
 /// The log's row `key`, as it stands.
 pub(crate) fn row(shell: &Shell, key: &RowKey, cx: &mut TestAppContext) -> Option<ActivityRow> {
     rows(shell, cx).into_iter().find(|row| &row.row.key == key)

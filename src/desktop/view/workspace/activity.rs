@@ -30,21 +30,45 @@ use crate::desktop::{
     },
     services::{lifecycle_of, requests::Intent},
     view::{
+        activity::ActivityPane,
         item::{ItemPane, locked_text},
         repositories::each_repository,
     },
 };
 
 /// What the Workspace keeps for Activity: the log, whether a refresh waits
-/// for the end of the effect cycle, and the title each open item pane last
-/// had, so a pane's other changes refresh nothing.
-#[derive(Default)]
+/// for the end of the effect cycle, the title each open item pane last
+/// had, so a pane's other changes refresh nothing, and the panel's list.
 pub(in crate::desktop::view) struct ActivityState {
-    log: ActivityLog,
+    pub(super) log: ActivityLog,
     dirty: bool,
     titles: HashMap<EntityId, Option<String>>,
+    pub(super) pane: ActivityPane,
     #[cfg(test)]
     derivations: usize,
+    /// How many choices the list's buttons and Enter made (P15, P16).
+    #[cfg(test)]
+    pub(super) pressed: usize,
+}
+
+impl ActivityState {
+    pub(in crate::desktop::view) fn new(cx: &mut Context<Workspace>) -> Self {
+        Self {
+            log: ActivityLog::default(),
+            dirty: false,
+            titles: HashMap::new(),
+            // Both are tab stops: Tab runs from the list to the highlighted
+            // row's button (C2).
+            pane: ActivityPane::new(
+                cx.focus_handle().tab_stop(true),
+                cx.focus_handle().tab_stop(true),
+            ),
+            #[cfg(test)]
+            derivations: 0,
+            #[cfg(test)]
+            pressed: 0,
+        }
+    }
 }
 
 fn dto_kind(kind: AuthoringKind) -> ItemDtoKind {

@@ -28,7 +28,7 @@ use crate::desktop::{
 
 const CLOSING: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
 
-fn waiting(action: OperationAction, id: &str, item: Option<&str>) -> OperationDto {
+pub(super) fn waiting(action: OperationAction, id: &str, item: Option<&str>) -> OperationDto {
     OperationDto {
         operation_id: Some(id.to_owned()),
         family: OperationFamily::Local,
@@ -46,7 +46,7 @@ fn waiting(action: OperationAction, id: &str, item: Option<&str>) -> OperationDt
 }
 
 /// `root`'s pending list, read as `result`.
-fn read_pending(
+pub(super) fn read_pending(
     shell: &Shell,
     root: &str,
     result: ReadResult<OperationListDto>,
@@ -62,7 +62,7 @@ fn read_pending(
     shell.run(cx);
 }
 
-fn listing(items: Vec<OperationDto>) -> ReadResult<OperationListDto> {
+pub(super) fn listing(items: Vec<OperationDto>) -> ReadResult<OperationListDto> {
     ReadResult::Ok(OperationListDto {
         items,
         complete: true,
@@ -78,7 +78,7 @@ fn pending_shell(operations: Vec<OperationDto>, cx: &mut TestAppContext) -> Shel
     shell
 }
 
-const PENDING_ROOT: &str = "/fixture/a";
+pub(super) const PENDING_ROOT: &str = "/fixture/a";
 
 /// The `operation resume` requests of `operation`.
 fn resumes(shell: &Shell, operation: &str, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {

@@ -19,7 +19,7 @@ use crate::desktop::{
         operations::Entered,
         polling::{
             Answer, AttemptTarget, Clock, Disposition, Policy, PollAttempt, TargetKind,
-            entry::{RETIRE, RetireOffer, offer_text, short_code},
+            entry::{RETIRE, short_code},
             retire::Verdict,
         },
         tabs::TabKey,
@@ -35,7 +35,7 @@ use crate::desktop::{
         retire::{answer, original_request, pending_row},
     },
     view::{
-        activity_support::act,
+        activity_support::{act, button_focus, index_of, offered, refresh, row, to_row},
         confirm::CANCEL,
         retire_asks::{RETIRE_CHOICE, SHOW_TAB, kept_message, unkept_message},
         settings::polling_support::Rig,
@@ -112,21 +112,12 @@ fn report(rig: &Rig, targets: Vec<(ItemId, TargetKind)>, cx: &mut TestAppContext
     rig.shell.run(cx);
 }
 
-/// The element of the action Retire… of `item` in repository `a`'s entry.
-fn action(rig: &Rig, item: &ItemId) -> String {
-    format!("attempt-{}-retire-{}", rig.key(0), short_code(item))
-}
-
 /// The log's Retire… row of `item` in repository `a`, for the seam.
 fn retire_key(rig: &Rig, item: &ItemId) -> RowKey {
     RowKey::RetireOffer {
         root: rig.key(0),
         item: item.clone(),
     }
-}
-
-fn words(rig: &Rig, item: &ItemId) -> String {
-    format!("attempt-{}-offer-{}", rig.key(0), short_code(item))
 }
 
 /// The retirements the person's actions sent, oldest first.
@@ -186,52 +177,47 @@ async fn retire_left_offer(cx: &mut TestAppContext) {
     rig.shell.run(cx);
     rig.shell.frame(cx, |_, _| ());
 
-    // Offered for the three the loop left, in the poll's order, in words
-    // that name the short code and no title.
-    for (item, kind) in [
-        (&refused, TargetKind::Ticket),
-        (&skipped, TargetKind::Ticket),
-        (&document, TargetKind::Document),
-    ] {
-        assert!(rig.shell.present(action(&rig, item), cx), "{item}");
-        assert_eq!(
-            rig.shell.label(words(&rig, item), cx),
-            Some(
-                RetireOffer {
-                    kind,
-                    item: item.clone()
-                }
-                .text()
-            ),
+    // Offered for the three the loop left, with the item's short code and no
+    // title in the row's words.
+    for item in [&refused, &skipped, &document] {
+        let key = retire_key(&rig, item);
+        let at = row(&rig.shell, &key, cx).unwrap_or_else(|| panic!("{item} has a row"));
+        assert!(
+            offered(&rig.shell, &key, RETIRE, cx).is_some_and(|offer| offer.enabled),
+            "{item}"
+        );
+        assert!(
+            at.row.title.contains(&short_code(item)),
+            "{item}: {}",
+            at.row.title
         );
     }
-    assert_eq!(
-        rig.shell.label(words(&rig, &skipped), cx),
-        Some(offer_text(TargetKind::Ticket, &short_code(&skipped)))
-    );
+    // Not for the four the loop retired, retires, left pending or marked.
     for item in [&done, &pending, &running, &marked] {
-        assert!(!rig.shell.present(action(&rig, item), cx), "{item}");
+        assert!(
+            offered(&rig.shell, &retire_key(&rig, item), RETIRE, cx)
+                .is_none_or(|offer| !offer.enabled),
+            "{item}"
+        );
     }
 
-    // The action is inside the area, and a click reaches it.
-    let area = rig
-        .shell
-        .frame(cx, |window, _| window.find("operation-area").bounds());
-    let button = action(&rig, &refused);
-    assert!(rig.shell.tab_reaches(button.clone(), TABS, cx));
-    let bounds = rig
-        .shell
-        .frame(cx, |window, _| window.find(button.clone()).bounds());
+    // The arrows reach the row and Tab its button; a click on the button
+    // reaches it too.
+    let key = retire_key(&rig, &refused);
+    to_row(&rig.shell, &key, cx);
+    rig.shell.keys("tab", cx);
+    let focus = button_focus(&rig.shell, cx);
     assert!(
-        bounds.left() >= area.left() && bounds.right() <= area.right(),
-        "Retire… wraps inside the area: {bounds:?} in {area:?}"
+        rig.shell.frame(cx, |window, _| focus.is_focused(window)),
+        "Tab reaches Retire…"
     );
+    let button = ("activity-button", index_of(&rig.shell, &key, cx));
     // The new retirement's entry is in the record before the library answers.
     let in_library = rig.shell.backend.hold_job(JobKind::ContextRetire);
     rig.shell
         .backend
         .answer_job(JobKind::ContextRetire, retired());
-    rig.shell.click(button.clone(), cx);
+    rig.shell.click(button, cx);
     rig.shell
         .until(cx, |operations| {
             operations
@@ -283,15 +269,20 @@ async fn retire_left_offer(cx: &mut TestAppContext) {
     // Retired, it is no longer offered; the others still are.
     rig.shell.run(cx);
     rig.shell.frame(cx, |_, _| ());
-    assert!(!rig.shell.present(action(&rig, &refused), cx));
-    assert!(rig.shell.present(action(&rig, &skipped), cx));
+    refresh(&rig.shell, cx);
+    assert!(row(&rig.shell, &retire_key(&rig, &refused), cx).is_none());
+    assert!(
+        offered(&rig.shell, &retire_key(&rig, &skipped), RETIRE, cx)
+            .is_some_and(|offer| offer.enabled)
+    );
 
     // A second Retire… is a new request again, not the first one's ID.
     let in_library = rig.shell.backend.hold_job(JobKind::ContextRetire);
     rig.shell
         .backend
         .answer_job(JobKind::ContextRetire, retired());
-    rig.shell.click(action(&rig, &skipped), cx);
+    let at = index_of(&rig.shell, &retire_key(&rig, &skipped), cx);
+    rig.shell.click(("activity-button", at), cx);
     in_library.wait_reached();
     let both = retirements(&rig, cx);
     assert_eq!(both.len(), 2);

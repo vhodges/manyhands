@@ -16,7 +16,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use manyhands::{
-    drafts::{DraftError, DraftErrorKind},
     repository::{HostObservationDto, MutationDataDto, OperationId, OperationListDto},
     results::{Envelope, Outcome, ResultCode},
 };
@@ -65,12 +64,6 @@ use crate::desktop::services::{
 /// Why Resume is unavailable for a pending synchronization that no
 /// `operation resume` here takes up (D5).
 pub(crate) const SYNCHRONIZATION_UNAVAILABLE: &str = "Synchronization is not available yet";
-/// Why a recovery action that names nothing this session can act on is
-/// unavailable.
-pub(crate) const NOT_AVAILABLE_YET: &str = "Not available yet";
-/// Why the Retry of a context request is unavailable once a later request
-/// of its item was sent (R-78).
-pub(crate) const NOT_SENT_AGAIN: &str = "Not sent again after a later Edit or release";
 /// A share stopped at a safe point before anything was sent.
 pub(crate) const STOPPED_BEFORE_SENDING: &str =
     "Stopped before anything was sent. Your saved work is still on this computer.";
@@ -86,17 +79,9 @@ pub(crate) fn drafts_unavailable(reason: DraftStoreUnavailable) -> String {
 }
 
 /// The launch's entry: how many drafts it found that no one here holds.
+#[cfg(test)] // Only a test names the old entry's words (F4).
 pub(crate) fn recovered_drafts(count: usize) -> String {
     format!("Recovered drafts: {count}")
-}
-
-/// A failing session's entry text: its item's title as read, never the
-/// draft's (ruling R25), and the store's fixed reason.
-pub(crate) fn draft_flush_failed(title: &str, kind: DraftErrorKind) -> String {
-    format!(
-        "Recovery copy of {title} not saved: {}",
-        DraftError { kind }
-    )
 }
 
 impl Rows for OperationListDto {

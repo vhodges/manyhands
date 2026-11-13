@@ -146,6 +146,7 @@ impl PollSchedule {
     /// Each repository's last recorded attempt and the retirements since,
     /// in the order of the roots: what the attempt entries of the operation
     /// area are made from (R-23, E3).
+    #[cfg(test)] // Only tests list the attempts now (F4).
     pub fn attempts(&self) -> impl Iterator<Item = (&Root, &AttemptSummary, &[RetireLine])> {
         self.repos.iter().filter_map(|(root, repo)| {
             Some((root, repo.last.as_ref()?, repo.retirements.as_slice()))

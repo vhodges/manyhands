@@ -6,7 +6,7 @@
 //! chosen through the seam; the click and keyboard tests keep the drawn
 //! controls until Task 9. No test reads fonts, colours or layout.
 
-use gpui_kit::{TestAppContext, px, size};
+use gpui_kit::TestAppContext;
 use manyhands::repository::transport::{HostKeyIdentity, SshAuthority, SshTransportErrorKind};
 
 use super::attention_support::Rig;
@@ -27,12 +27,12 @@ use crate::desktop::{
     services::scheduler::{Heard, Moment, Scope},
     test_support::polling::transport_error,
     view::{
-        activity_support::{act, act_unsettled, offered, row, rows},
+        activity_support::{
+            act, act_unsettled, button_focus, drawn, index_of, offered, row, rows, to_row,
+        },
         settings::Shown,
     },
 };
-
-const ACTION: &str = "attention-action";
 
 /// The log's row of the hold `reason`.
 fn hold(reason: &Reason) -> RowKey {
@@ -45,10 +45,6 @@ fn holds(rig: &Rig, cx: &mut TestAppContext) -> usize {
         .iter()
         .filter(|row| matches!(row.row.key, RowKey::Hold(_)))
         .count()
-}
-
-fn label(rig: &Rig, id: &'static str, ix: usize, cx: &mut TestAppContext) -> Option<String> {
-    rig.shell.label((id, ix), cx)
 }
 
 /// Asserts the hold `reason` is listed and offers `label`, enabled.
@@ -378,18 +374,35 @@ async fn every_reason(cx: &mut TestAppContext) -> Rig {
     rig
 }
 
-/// W-6, decision 13, E-2: every action of the operation area is where a
-/// click reaches it at the default window (1280 by 840), and does what it
-/// says. Five entries do not fit the 260 px area, so the area scrolls; Tab
-/// to the fifth action brings it into view, and it is then clickable at its
-/// position. A click on a clipped or covered action does nothing.
+/// The hold rows the list draws, in its order, each with its button's
+/// label.
+fn hold_rows(rig: &Rig, cx: &mut TestAppContext) -> Vec<(RowKey, String)> {
+    drawn(&rig.shell, cx)
+        .into_iter()
+        .filter(|row| matches!(row.row.key, RowKey::Hold(_)))
+        .map(|row| {
+            let label = row.row.button.map(|offer| offer.label).unwrap_or_default();
+            (row.row.key, label)
+        })
+        .collect()
+}
+
+/// The row of the hold whose button reads `label`.
+fn hold_with(rig: &Rig, label: &str, cx: &mut TestAppContext) -> RowKey {
+    hold_rows(rig, cx)
+        .into_iter()
+        .find(|(_, shown)| shown == label)
+        .unwrap_or_else(|| panic!("no hold row offers {label}"))
+        .0
+}
+
+/// W-6, decision 13: every action of the list is where a click reaches it,
+/// and does what it says: five holds, one for each reason, each with its
+/// button drawn on its row (the rows' one-line layout keeps each button
+/// inside the list: P21, Task 10).
 #[gpui_kit::test]
 async fn attention_actions_hit(cx: &mut TestAppContext) {
     let rig = every_reason(cx).await;
-    rig.shell
-        .visual(cx)
-        .simulate_resize(size(px(1280.), px(840.)));
-    rig.shell.run(cx);
     let labels = [
         UNLOCK,
         CHOOSE_A_KEY,
@@ -397,39 +410,52 @@ async fn attention_actions_hit(cx: &mut TestAppContext) {
         OPEN_REMOTE_SETTINGS,
         RESUME_CHECKING,
     ];
-    for (ix, expected) in labels.into_iter().enumerate() {
-        assert_eq!(label(&rig, ACTION, ix, cx).as_deref(), Some(expected));
+    let listed: Vec<String> = hold_rows(&rig, cx)
+        .into_iter()
+        .map(|(_, label)| label)
+        .collect();
+    assert_eq!(listed.len(), labels.len(), "a row for each hold");
+    for expected in labels {
+        assert!(listed.iter().any(|label| label == expected), "{expected}");
     }
+    let press = |label: &str, cx: &mut TestAppContext| {
+        let at = index_of(&rig.shell, &hold_with(&rig, label, cx), cx);
+        rig.shell.click(("activity-button", at), cx);
+    };
 
-    rig.shell.click((ACTION, 0usize), cx);
+    press(UNLOCK, cx);
     assert_eq!(rig.checks(cx), [std::path::PathBuf::from(&rig.roots[0])]);
-    rig.shell.click((ACTION, 1usize), cx);
+    press(CHOOSE_A_KEY, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Keys));
-    rig.shell.click((ACTION, 2usize), cx);
+    press(APPROVE_HOST, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Hosts));
-    rig.shell.click((ACTION, 3usize), cx);
+    press(OPEN_REMOTE_SETTINGS, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Remotes));
-
-    // The fifth is below the fold until focus reaches it.
-    assert!(rig.shell.tab_reaches((ACTION, 4usize), TABS, cx));
-    rig.shell.click((ACTION, 4usize), cx);
+    press(RESUME_CHECKING, cx);
     assert_eq!(rig.backend.resumed(), [rig.roots[4].clone()]);
 }
 
-/// Every action is reachable by Tab, in order, and Enter presses it.
+/// Every action is reachable by the arrows to its row and Tab to its
+/// button, and Enter presses it.
 #[gpui_kit::test]
 async fn attention_actions_by_keyboard(cx: &mut TestAppContext) {
     let rig = every_reason(cx).await;
-    for ix in 0..5usize {
+    let rows = hold_rows(&rig, cx);
+    assert_eq!(rows.len(), 5, "a row for each hold");
+    for (key, label) in &rows {
+        to_row(&rig.shell, key, cx);
+        rig.shell.keys("tab", cx);
+        let button = button_focus(&rig.shell, cx);
         assert!(
-            rig.shell.tab_reaches((ACTION, ix), TABS, cx),
-            "Tab reaches action {ix}"
+            rig.shell.frame(cx, |window, _| button.is_focused(window)),
+            "Tab reaches the button of {label}"
         );
     }
-    // The last is Resume checking: Enter on it resumes.
+    // The last row reached is whichever the list draws last; the Resume
+    // checking row's Enter resumes.
+    let resume = hold_with(&rig, RESUME_CHECKING, cx);
+    to_row(&rig.shell, &resume, cx);
+    rig.shell.keys("tab", cx);
     rig.shell.press("enter", cx);
     assert_eq!(rig.backend.resumed(), [rig.roots[4].clone()]);
 }
-
-/// Tab presses enough to go round the whole window.
-const TABS: usize = 60;

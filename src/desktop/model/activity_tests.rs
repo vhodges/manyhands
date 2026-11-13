@@ -33,6 +33,8 @@ mod states;
 mod support;
 #[path = "activity_tests/tables.rs"]
 mod tables;
+#[path = "activity_tests/tooltip.rs"]
+mod tooltip;
 use intents::*;
 use support::*;
 use tables::{COPY, MESSAGE, RECORDS, share_rows, subjects};

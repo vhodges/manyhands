@@ -20,7 +20,7 @@ use manyhands::{
     results::{Outcome, RecoveryActionKind, ResultCode},
 };
 
-use super::{DISMISS, recovery_id, request_id, state_label};
+use super::{DISMISS, recovery_id, state_label};
 use crate::desktop::{
     model::{
         activity::rows::{ActivityAction, Kind, RowKey},
@@ -37,7 +37,10 @@ use crate::desktop::{
         git_home,
     },
     view::{
-        activity_support::{act, offered, pending_key, request, row},
+        activity_support::{
+            act, highlighted, list_focused, offered, pending_key, refresh as refresh_log, request,
+            row, to_row,
+        },
         harness::{Shell, WAIT, key},
         workspace::Region,
     },
@@ -808,7 +811,8 @@ async fn a_refresh_keeps_the_selected_document(cx: &mut TestAppContext) {
     assert_eq!(after, selected);
 }
 
-/// Whether the control wrapped as `id` holds focus.
+/// Whether the control wrapped as `id` holds focus. (Milestone 2 moves the
+/// test that still uses it to the row menu.)
 fn control_focused(shell: &Shell, id: &str, cx: &mut TestAppContext) -> bool {
     let id = id.to_owned();
     shell.frame(cx, |window, _| {
@@ -830,18 +834,19 @@ fn tab_to(shell: &Shell, id: &str, cx: &mut TestAppContext) {
     }
 }
 
-/// The operation area holds focus on a drawn control, and rings it.
-fn operations_keep_focus(shell: &Shell, cx: &mut TestAppContext) {
+/// The operation area holds focus, on the list, with `key`'s row
+/// highlighted, and rings its region (C3, decision 23).
+fn operations_keep_focus(shell: &Shell, key: &RowKey, cx: &mut TestAppContext) {
     assert!(shell.frame(cx, |window, cx| window.focused(cx).is_some()));
-    assert!(shell.frame(cx, |window, _| {
-        window.find(Region::Operations.id()).focused() == Some(true)
-    }));
+    assert!(list_focused(shell, cx), "the list holds focus");
+    assert_eq!(highlighted(shell, cx).as_ref(), Some(key), "its row");
     assert!(shell.present(Region::Operations.ring_id(), cx));
 }
 
-/// Dismiss and Retry, pressed from the keyboard, take their control away
-/// with the request's state: focus falls back to the operation area,
-/// never nowhere.
+/// Retry, pressed from the keyboard on its row (Enter on the highlighted
+/// row's button), takes its offer away with the request's state: focus stays
+/// on the list, the row still highlighted, never nowhere. (Dismiss, which
+/// is in the row's menu, is the menu test's, milestone 2.)
 #[gpui_kit::test]
 async fn dismiss_and_retry_from_the_keyboard_leave_focus_in_the_operation_area(
     cx: &mut TestAppContext,
@@ -855,24 +860,29 @@ async fn dismiss_and_retry_from_the_keyboard_leave_focus_in_the_operation_area(
     })[0];
     shell.until_ended(refresh, cx).await;
 
-    let retry = recovery_of(&shell, refresh, RecoveryActionKind::RequestRetry, cx);
-    tab_to(&shell, &retry, cx);
+    let at = RowKey::Request(refresh);
+    let retry = recovery_offer(&shell, refresh, RecoveryActionKind::RequestRetry, cx);
+    refresh_log(&shell, cx);
+    let button = row(&shell, &at, cx).expect("its row").row.button;
+    assert_eq!(
+        button.map(|offer| offer.label),
+        Some(retry.clone()),
+        "Retry is the row's button"
+    );
+    to_row(&shell, &at, cx);
     let held = shell.backend.hold_job(JobKind::IndexRefresh);
     shell.press("enter", cx);
     held.wait_reached();
+    refresh_log(&shell, cx);
     assert!(
-        !shell.present(retry.clone(), cx),
+        offered(&shell, &at, &retry, cx).is_none(),
         "Retry went with the attempt"
     );
-    operations_keep_focus(&shell, cx);
+    operations_keep_focus(&shell, &at, cx);
     held.release();
     shell.until_ended(refresh, cx).await;
-
-    let dismiss = request_id(refresh, "dismiss");
-    tab_to(&shell, &dismiss, cx);
-    shell.press("enter", cx);
-    assert!(!shell.present(request_id(refresh, "entry"), cx));
-    operations_keep_focus(&shell, cx);
+    refresh_log(&shell, cx);
+    operations_keep_focus(&shell, &at, cx);
 }
 
 /// A recovery action that opens the confirmation dialog, here Abandon of

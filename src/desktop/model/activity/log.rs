@@ -222,7 +222,6 @@ impl ActivityLog {
     }
 
     /// The rows, newest first.
-    #[allow(dead_code)] // Used from Task 9
     pub(crate) fn rows(&self) -> &[ActivityRow] {
         &self.rows
     }
@@ -245,13 +244,21 @@ impl ActivityLog {
     }
 
     /// The rows "Clear finished" takes (L8).
-    #[allow(dead_code)] // Used from Task 9
+    #[allow(dead_code)] // Used from Task 10
     pub(crate) fn clearable(&self) -> Vec<RowKey> {
         self.rows
             .iter()
             .filter(|row| row.row.clearable)
             .map(|row| row.row.key.clone())
             .collect()
+    }
+
+    /// Whether the row `key` is shown and still at `revision`: what Enter
+    /// on a row with no button checks before it opens the row's item (T8).
+    pub(crate) fn is_current(&self, key: &RowKey, revision: u64) -> bool {
+        self.rows
+            .iter()
+            .any(|row| &row.row.key == key && row.revision == revision)
     }
 
     /// Whether a choice made against the row `key` at `revision` may still

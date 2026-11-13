@@ -132,6 +132,20 @@ gpui_kit::actions!(
         /// Escape in the sheet's Result editor: back to its tab stop, the
         /// sheet left open (R-31).
         LeaveResult,
+        /// Move Activity's highlight to the row above; it stops at the first
+        /// (C2).
+        ActivityUp,
+        /// Move Activity's highlight to the row below; it stops at the last.
+        ActivityDown,
+        /// Highlight Activity's first row.
+        ActivityHome,
+        /// Highlight Activity's last row.
+        ActivityEnd,
+        /// Enter on Activity's list: press the highlighted row's button, or
+        /// open its item when it has none (C2).
+        ActivityEnter,
+        /// Open the highlighted Activity row's menu (Part D).
+        OpenActivityMenu,
     ]
 );
 
@@ -172,7 +186,6 @@ pub(crate) struct RepositoryMenuChoice {
 /// and no keymap file name it, hence `no_json`.
 #[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
 #[action(namespace = manyhands, no_json)]
-#[allow(dead_code)] // Used from Task 9
 pub(crate) struct ActivityMenuChoice {
     pub key: RowKey,
     pub action: ActivityAction,
@@ -183,6 +196,12 @@ pub(crate) struct ActivityMenuChoice {
 /// The key context of the Repositories region and its toolbar: `menu` and
 /// `shift-f10` open a repository's menu there (Part H).
 pub(crate) const REPOSITORIES_CONTEXT: &str = "Repositories";
+
+/// The key context of Activity's list (Wave 04 Cycle 03b, C2): the arrows,
+/// Home, End and Enter move and press in it, and `menu` and `shift-f10` open
+/// a row's menu. It is the list element's own, inside the region's
+/// `"Operations"` context.
+pub(crate) const ACTIVITY_CONTEXT: &str = "Activity";
 
 /// The key context of the Documents and Tickets regions (the tickets list
 /// with its filter bar): `secondary-n` opens the focused list's
@@ -311,6 +330,14 @@ pub(crate) fn bind(cx: &mut App) {
         // list binds neither key, so they reach this context (U-1).
         KeyBinding::new("menu", OpenRepositoryMenu, Some(REPOSITORIES_CONTEXT)),
         KeyBinding::new("shift-f10", OpenRepositoryMenu, Some(REPOSITORIES_CONTEXT)),
+        // In Activity's list: the highlight, Enter on its row, and its menu.
+        KeyBinding::new("up", ActivityUp, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("down", ActivityDown, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("home", ActivityHome, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("end", ActivityEnd, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("enter", ActivityEnter, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("menu", OpenActivityMenu, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("shift-f10", OpenActivityMenu, Some(ACTIVITY_CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
         // The first and last row of a list; the Workspace handles them in
         // the document tree as in the ticket list (`view::documents`).
