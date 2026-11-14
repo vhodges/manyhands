@@ -21,7 +21,7 @@ use crate::desktop::{
     keys::ActivityMenuChoice,
     model::activity::{
         activity_time,
-        copy::{cant_reach_title, message_of, tooltip_lines},
+        copy::{message_of, tooltip_lines},
         rows::{ActivityRow, Kind, Offer, RowKey},
     },
     view::{
@@ -71,15 +71,7 @@ pub(crate) fn kind_icon(row: &ActivityRow, colors: &ChromeColors) -> (&'static s
         }
         Kind::Sharing => ("cloud-upload", colors.teal),
         Kind::ToShare => ("cloud-upload", colors.accent),
-        Kind::Failure
-            if matches!(derived.key, RowKey::Repository(_))
-                && derived
-                    .repo
-                    .as_deref()
-                    .is_some_and(|repo| derived.title == cant_reach_title(repo)) =>
-        {
-            ("wifi-off", colors.red)
-        }
+        Kind::Failure if derived.unreachable => ("wifi-off", colors.red),
         Kind::Failure => ("circle-alert", colors.red),
         Kind::Locked => ("lock", colors.accent),
         Kind::Working => ("loader-circle", colors.teal),

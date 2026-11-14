@@ -207,6 +207,7 @@ impl<'a> Row<'a> {
             attention: false,
             item: self.item.clone(),
             clearable,
+            unreachable: false,
             at: None,
             group: self.group(),
         }

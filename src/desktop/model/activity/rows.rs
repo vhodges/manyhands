@@ -200,6 +200,8 @@ pub(crate) struct Derived {
     pub item: Option<ItemRef>,
     /// "Clear finished" may take the row (A1, R-47).
     pub clearable: bool,
+    /// S4 only: the repository can't be reached, which its row's icon says.
+    pub unreachable: bool,
     /// S2 only: `Brought.at` (L1, T1).
     pub at: Option<OffsetDateTime>,
     pub group: Group,
@@ -221,6 +223,7 @@ impl Derived {
             attention: false,
             item: None,
             clearable: false,
+            unreachable: false,
             at: None,
             group: Group::default(),
         }

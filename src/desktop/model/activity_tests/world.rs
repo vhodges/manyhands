@@ -252,6 +252,7 @@ pub(in super::super) struct Want {
     detail: Vec<String>,
     item: Option<ItemRef>,
     clearable: bool,
+    unreachable: bool,
     at: Option<OffsetDateTime>,
     group: Group,
 }
@@ -268,6 +269,7 @@ pub(in super::super) fn want(key: RowKey, kind: Kind, title: &str) -> Want {
         detail: Vec::new(),
         item: None,
         clearable: false,
+        unreachable: false,
         at: None,
         group: Group::default(),
     }
@@ -329,6 +331,12 @@ impl Want {
         self
     }
 
+    /// The row says its repository can't be reached (its icon).
+    pub fn unreachable(mut self) -> Self {
+        self.unreachable = true;
+        self
+    }
+
     pub fn at(mut self, at: OffsetDateTime) -> Self {
         self.at = Some(at);
         self
@@ -356,6 +364,10 @@ impl Want {
         assert_eq!(row.detail, self.detail, "{case}: detail");
         assert_eq!(row.item, self.item, "{case}: item");
         assert_eq!(row.clearable, self.clearable, "{case}: clearable");
+        assert_eq!(
+            row.unreachable, self.unreachable,
+            "{case}: the repository can't be reached"
+        );
         assert_eq!(row.at, self.at, "{case}: at");
         assert_eq!(row.group, self.group, "{case}: group");
         assert!(

@@ -104,13 +104,16 @@ fn repo_cases() -> Vec<Repo> {
                 &["Couldn't reach it"],
                 None,
             ),
-            row: Some(attention(
-                Kind::Failure,
-                "Couldn't reach demo's shared copy",
-                "Your work is safe, and Manyhands tries again.",
-                RowAction::RetryNow,
-                "Retry now",
-            )),
+            row: Some(
+                attention(
+                    Kind::Failure,
+                    "Couldn't reach demo's shared copy",
+                    "Your work is safe, and Manyhands tries again.",
+                    RowAction::RetryNow,
+                    "Retry now",
+                )
+                .unreachable(),
+            ),
         },
         Repo {
             name: "locked by a stored outcome",

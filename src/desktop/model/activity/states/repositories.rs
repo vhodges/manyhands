@@ -130,6 +130,7 @@ fn row(repository: &RepositoryInput) -> Option<Derived> {
         menu: menu_of(button.as_ref(), Vec::new()),
         button,
         detail: repository_detail(repository.primary.as_deref(), repository.remote.as_deref()),
+        unreachable: state.kind == StateKind::CantReach,
         group: Group {
             candidate: counted,
             roots: vec![repository.root.clone()],
