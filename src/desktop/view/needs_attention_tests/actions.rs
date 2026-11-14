@@ -141,7 +141,7 @@ async fn holds(cx: &mut TestAppContext) {
     // Each lands on the control Wave 04 Cycle 04's Part D names.
     press_from_popover(shell, &hold_with(&rig, CHOOSE_A_KEY, cx), CHOOSE_A_KEY, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Keys));
-    assert!(shell.holds_focus("keys-make", cx), "W-23, no key");
+    assert!(shell.holds_keys_focus("keys-make", cx), "W-23, no key");
     shell.keys("escape", cx);
     press_from_popover(shell, &hold_with(&rig, APPROVE_HOST, cx), APPROVE_HOST, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Hosts));

@@ -129,6 +129,9 @@ fn shares(cx: &mut TestAppContext) {
         match effect {
             Effect::Page(page, control) => {
                 assert_eq!(settings(&shell, cx), Shown::Settings(page), "{label}");
+                if page == SettingsPage::Keys {
+                    shell.keys_landed(cx);
+                }
                 assert!(shell.holds_focus(control, cx), "{label}: {control}");
             }
             Effect::Holder => {

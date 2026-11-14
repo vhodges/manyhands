@@ -106,6 +106,9 @@ pub(super) fn land(
         page == Shown::Settings(wanted.page),
         &format!("Settings({:?}), not {page:?},", wanted.page),
     );
+    if wanted.page == SettingsPage::Keys {
+        shell.keys_landed(cx);
+    }
     let held = holds(shell, wanted.focus.clone(), cx);
     table.row(shell, row, held, &format!("{:?}", wanted.focus), cx);
     let chosen = shell
@@ -207,7 +210,7 @@ fn keys(table: &mut Table, rig: &Rig, cx: &mut TestAppContext) {
         cx,
     );
     drop(held);
-    shell.run(cx);
+    shell.keys_landed(cx);
     let held = holds(shell, ("key-radio", 0usize), cx);
     table.row(
         shell,
@@ -231,7 +234,7 @@ fn keys(table: &mut Table, rig: &Rig, cx: &mut TestAppContext) {
     });
     select_key_through(shell.fixture.service(), k2);
     drop(read);
-    shell.run(cx);
+    shell.keys_landed(cx);
     let held = holds(shell, entry(1), cx);
     table.row(
         shell,

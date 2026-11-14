@@ -260,6 +260,9 @@ async fn attention_actions_by_reason(cx: &mut TestAppContext) {
         };
         act(&rig.shell, &hold(reason), label, cx);
         assert_eq!(shown(&rig, cx), page);
+        if page == Shown::Settings(SettingsPage::Keys) {
+            rig.shell.keys_landed(cx);
+        }
         assert!(rig.shell.holds_focus(control, cx), "{label}: {control}");
         // Settings is a sheet: it closes before the next row's action.
         rig.shell.keys("escape", cx);
@@ -451,7 +454,7 @@ async fn attention_actions_hit(cx: &mut TestAppContext) {
     // Escape closes it between them.
     press(CHOOSE_A_KEY, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Keys));
-    assert!(rig.shell.holds_focus("keys-make", cx), "W-23, no key");
+    assert!(rig.shell.holds_keys_focus("keys-make", cx), "W-23, no key");
     rig.shell.keys("escape", cx);
     press(APPROVE_HOST, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Hosts));

@@ -33,7 +33,7 @@ use crate::desktop::{
     },
     open_test_window_over,
     services::{
-        Backend,
+        BUSY_RETRY_DELAYS, Backend,
         prompts::{PromptReply, PromptRequest},
         requests::{DesktopRequest, DesktopRequestId, Intent},
     },
@@ -392,6 +392,31 @@ impl Shell {
         self.frame(cx, |window, _| {
             window.try_find(id).and_then(|element| element.focused()) == Some(true)
         })
+    }
+
+    /// Lets the Keys page's reads land: draws once, so the page has started
+    /// them, then runs them. A read answered `busy` waits out its retry
+    /// delay on the test clock, which `run` never moves, so each delay is
+    /// advanced here: no real time passes (E-35). A read a test holds does
+    /// not land.
+    pub(crate) fn keys_landed(&self, cx: &mut TestAppContext) {
+        self.frame(cx, |_, _| ());
+        self.run(cx);
+        for delay in BUSY_RETRY_DELAYS {
+            cx.executor().advance_clock(delay);
+            self.run(cx);
+        }
+    }
+
+    /// `holds_focus` for where a Keys route landed (R-22): the control the
+    /// key list gives, read once the keys' reads have landed.
+    pub(crate) fn holds_keys_focus(
+        &self,
+        id: impl Into<ElementId>,
+        cx: &mut TestAppContext,
+    ) -> bool {
+        self.keys_landed(cx);
+        self.holds_focus(id, cx)
     }
 
     /// Whether the element `id` is drawn.

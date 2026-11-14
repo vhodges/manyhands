@@ -78,7 +78,10 @@ async fn settings_polling_attention_actions(cx: &mut TestAppContext) {
             .read_with(cx, |workspace, cx| workspace.settings_shown(cx)),
         Shown::Settings(SettingsPage::Keys)
     );
-    assert!(rig.shell.holds_focus("keys-make", cx), "W-32 Choose a key…");
+    assert!(
+        rig.shell.holds_keys_focus("keys-make", cx),
+        "W-32 Choose a key…"
+    );
 
     // Resume checking is reached by Tab and pressed by Enter; the library's
     // hold is released, and the row no longer says held. Ctrl+, with

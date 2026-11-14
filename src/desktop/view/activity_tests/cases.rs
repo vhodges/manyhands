@@ -236,7 +236,7 @@ pub(in crate::desktop::view) async fn requests(cx: &mut TestAppContext) {
     );
     assert_eq!(settings(&shell, cx), Shown::Settings(SettingsPage::Keys));
     assert!(
-        shell.holds_focus("keys-make", cx),
+        shell.holds_keys_focus("keys-make", cx),
         "W-12 lands on the key list, with no key Make a new key"
     );
     // Settings is a sheet: it closes before the next row's action.

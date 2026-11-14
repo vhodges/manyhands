@@ -55,6 +55,9 @@ fn landed(
         &format!("Settings({page:?}), not {at:?},"),
     );
     let focus = focus.into();
+    if page == SettingsPage::Keys {
+        shell.keys_landed(cx);
+    }
     let held = holds(shell, focus.clone(), cx);
     table.row(shell, row, held, &format!("{focus:?}"), cx);
 }
