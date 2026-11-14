@@ -27,7 +27,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 3 | done, review approved after fix round 1 | code `29ef847d` (base `e514fa9b`), fix `1b3ca49a`; ledger `00a179d5` | yes |
 | 4 | done, review approved first time (Minors parked) | code `a7dda502` (base `00a179d5`); ledger `86b51214` | yes |
 | 5 | done, review approved first time (Minors parked) | code `d9327047` (base `86b51214`); ledger `16f7746b` | yes |
-| 6 | done, review approved after fix round 1 | code `4a9a0dd7` (base `16f7746b`), fix `4fd65ef0`; ledger commit follows | with the ledger commit |
+| 6 | done, review approved after fix round 1 | code `4a9a0dd7` (base `16f7746b`), fix `4fd65ef0`; ledger `6d86c8f7`; ticket comment (Tasks 3 to 6) `e4d4bd56` | yes |
+| 7 | done, review approved first time (Minors parked) | code `cbf1f207` (base `e4d4bd56`); ledger commit follows | with the ledger commit |
 
 ## Branches published
 
@@ -1775,3 +1776,103 @@ row titles in `services/requests.rs`.
 P4 and P20 now pin every route by real focus. R-23: Approve host… with no
 server named uses the row's repository, not the panel's. W-4 stays until Task 8.
 Fix round 1/5: one round, a file-size move only.
+
+## Task 7: copy (Part E)
+
+Implementer: one fresh Sonnet agent. Base `e4d4bd56`, code `cbf1f207`.
+Reviewer: one fresh Sonnet agent, spec compliant, quality approved first time,
+no Critical or Important findings. Boundary diff prints nothing; `Cargo.lock`
+untouched; trailer Sonnet 5.5.
+
+### Rulings (Task 7)
+
+Ruling 49: Ruling 38 is decided (it said "Task 7 or the owner decides"): the
+"Selected key: …" / "No key is selected." line (`keys-selection`) stays — this
+task is copy only, the line uses no replaced term, and removing it needs test
+removals no named edit allows. It goes on the owner's list in the Task 9
+summary — cost if wrong: the owner removes one line and its assertions.
+
+Ruling 50 (accepted): `services::KEY_STORE_UNAVAILABLE` "Manyhands could not find
+your SSH key store." became "…your key store." ("SSH key" is a replaced term and
+the Keys page shows it, `keys/render.rs:184`). It is shared, so the lifecycle
+dialogs and the operation area now say "key store" too. Activity's own copy
+(`model/activity/requests.rs:263`, test literal `model/activity_tests.rs:234`)
+still says "SSH key store": Activity copy, Ruling 10. The same condition now
+reads differently in Activity — cost if wrong: one more constant and one test
+literal, to the owner's call with the Activity row titles.
+
+Ruling 51 (accepted): `copy_tests.rs` is declared inside `repositories.rs`
+(`#[path]`), not `mod.rs`, because `repositories::manage` is private and holds
+ten constants P18 must name. The one-line alternative is `mod manage;`
+`pub(super)`; the file is 461 lines. `copy_secret_tests.rs` is declared in
+`settings/mod.rs`.
+
+No test edit: E-11's sweep found no test comparing a literal Settings string,
+and E-22's `hosts_tests` lines read `confirm::PINNED_KEY` by constant and pass
+unedited. No E-34 or later number is used (the next free one is **E-34**).
+
+### Rewritten constants (old to new; Task 7's rows; "…" is U+2026)
+
+`settings/remotes.rs`:
+- `NO_REPOSITORY` "Choose a repository to see its remotes." to "Manage a repository above to see how it shares."
+- `ELIGIBLE` "Eligible for publication" to "Can be the shared copy"
+- `NOT_ELIGIBLE` "Not eligible for publication: publishing needs a remote reached over SSH" to "Can't be the shared copy: sharing needs a remote reached over SSH"
+- `SELECTED` "Selected for publication" to "The shared copy"
+- `SELECTION_NONE` "No remote is selected for publication." to "No shared copy is chosen, so changes stay on this computer."
+- `SELECT` "Select for publication" to "Use as the shared copy"
+- `SELECT_NONE` "Publish to no remote" to "Keep changes on this computer"
+- `selection_line(name)` "Publication remote: {name}" to "Shared copy: {name}"
+- `REMOVE` "Remove remote" to "Remove remote…"
+
+`settings/hosts.rs`:
+- `READING_PINS` "Reading the host pins" to "Reading the trusted servers"
+- `NO_PINS` "No host is pinned yet." to "No server is trusted yet."
+- `REAPPROVAL` "The host pin registry was lost: every host must be approved again." to "The list of trusted servers was lost: approve each server again."
+- `NO_REPOSITORY` "Choose a repository in the sidebar to check the host it publishes to." to "Manage a repository on the Repositories page to check the server it shares through."
+- `NO_SSH_PUBLICATION` "Check host is unavailable: this repository has no publication remote reached over SSH. Choose one on the Remotes page." to "Check host is unavailable: this repository's shared copy is not reached over SSH. Choose one under Repositories › Sharing."
+- `CHECK_NOTE` "Check host connects to the host the publication remote fetches from and shows the key it presents. It pins nothing." to "Check host connects to the server this repository's shared copy is on and shows the key it presents. It trusts nothing yet."
+- `NOT_PINNED` "This host is not pinned." to "This server is not trusted yet."
+- `MATCHES` "The host presents the key it is pinned to." to "The server presents the key you trusted."
+- `DIFFERENT` "The host presents another key than the one it is pinned to." to "The server presents a different key from the one you trusted."
+- `PINNED` "Pinned key" to "Trusted key"
+- `APPROVE` "Approve host" to "Approve host…"; `REPLACE` "Replace host key" to "Replace host key…"
+
+Others: `settings/repositories/manage.rs` `REMOVE` "Remove repository" to "Remove repository…"; `view/confirm.rs` `PINNED_KEY` (Ruling 9) "Pinned key" to "Trusted key"; `services/mod.rs` `KEY_STORE_UNAVAILABLE` (Ruling 50). `SETTINGS_NOTE` already existed (`mod.rs:55`). Module doc and the `submit_select` doc in `remotes.rs` follow the new button names. Left alone, no replaced term or not Settings copy: Activity row titles (`services/requests.rs:424-442`, `model/operations/recovery.rs:296-297`; Ruling 10), `OPEN_REMOTE_SETTINGS` "Open remote settings…", `UNPUBLISHED`, `confirm.rs:720` "Last published", `keys.rs` `SELECTION_NONE`/`selection_line` (Ruling 49).
+
+### P18 and P21
+
+- P18 `desktop::view::settings::repositories::copy_tests::settings_copy_uses_the_vocabulary`: a table of about 150 constants and functions (Settings, plus the polling status words and attention labels in `model/polling/`, `services::KEY_STORE_UNAVAILABLE`, `confirm::PINNED_KEY`), matched by whole words, with the design's terms plus inflections (publishes, published, publishing, pinning). It also walks the Settings sources and fails for a `pub(crate)`/`pub(super)` `&str` constant or `-> String` function absent from the table, and for any inline non-comment literal using a replaced term. RED before the copy change for the right reason; GREEN after.
+- P21 `desktop::view::settings::copy_secret_tests::settings_copy_names_no_secret`: a key whose label, path and fingerprint are sentinels; asserts the new constants, tooltip and the radio's accessible name hold no path, passphrase or private-key marker, and that no text on the window does. GREEN from its first run (Task 4 had already produced those constants); a mutation (" /x" on `use_key`) fails it.
+
+### Parked review Minors (Task 7)
+
+1. `services/mod.rs:210` against `model/activity/requests.rs:263`: the key-store
+   condition reads differently (Ruling 50); align Activity in a follow-up.
+2. P18's "is this an element ID" test is "all chars `[a-z0-9-]`", so a one-word
+   lowercase copy (a tooltip "pin") passes both the missing check and the literal
+   scan; multi-line inline literals are never scanned; the missing check skips
+   `&'static str` constants and `SharedString` functions (no current example).
+3. `copy_tests.rs` is declared inside `repositories.rs` (Ruling 51); the 150-row
+   table costs upkeep (the missing check backstops it).
+4. `OPEN_REMOTE_SETTINGS` "Open remote settings…" now leads to Sharing & keys: the
+   owner may want "Open sharing settings…" (not a replaced term, so unchanged).
+5. P21's constant loop is largely static (a compile-time constant cannot hold a
+   runtime path); the `/` and `\` assertion and the window scan carry the check.
+6. P18's "missing" path was never shown to fail (RED covers the "stale" path only).
+
+### Tests that ran (Task 7)
+
+- P18 RED (right reason), P18 and P21 GREEN, each by exact name.
+- Module runs, one command per module, all passing: `settings::` 110,
+  `keyboard_tests` 61, `workspace::settings_sheet` 14, `polling_privacy_tests` 1,
+  `needs_attention::` 12, `repositories::tests` 5, `confirm` 10, `lifecycle` 106,
+  `operations` 94, `drafts::routing_tests` 5, `item::` 456 (400 s; run because
+  `KEY_STORE_UNAVAILABLE` and `PINNED_KEY` are shared), `services::` 318 (214 s).
+- Static gates: `cargo fmt --check`, `cargo check --locked --features desktop`,
+  `cargo clippy --all-targets --all-features --locked -- -D warnings` clean.
+
+### Owner-visible, for the Task 9 summary
+
+- The key-store wording mismatch between Settings and Activity (Ruling 50).
+- "Open remote settings…" (Minor 4).
+- The kept "Selected key: …" line (Ruling 49).
