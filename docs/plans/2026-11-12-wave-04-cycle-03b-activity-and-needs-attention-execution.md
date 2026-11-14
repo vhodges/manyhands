@@ -869,6 +869,25 @@ Sentences no longer asserted anywhere (drawn-only copy; model tests P4-P7 own th
 - Final-review items left, for the owner and the close: m-2 (the owner-approved rulings C1 to C7 and C9, T9-2, T10-1 and T11-1 to T11-3 are recorded only here, not in the design or Cycle documents; the ledger said "to be listed as document amendments at close"; not edited at first because those documents are the owner's; **done 2026-11-14 at the owner's request**: design Document Amendment 13 and a Cycle note and Review Record row), m-3 (duplicated helpers `sharing`/`item_sharing`, `dto_kind`, the `TargetKind` match), m-4 (`model/repository_state/menu.rs` imports three constants from `view::sidebar`), m-5 (F4's dead drawing code kept under `cfg(test)`), m-6 (P13's journey covers three counted kinds, not every kind), m-7 (file sizes: `model/operations.rs` 668, `footer_tests/mod.rs` 518, `lifecycle/privacy_tests.rs` 526, `workspace/lists.rs` 502).
 - Acceptance Status filled in the Cycle document (`47306e39`): A1 to A13, A15 and A16 proven by tests by exact name (A9 and A15 with the noted flake); A14 awaits the owner.
 
+## Task 13, addendum (a `/code-review` fix wave, 2026-11-14)
+
+- A reader-only `/code-review high` of the branch gave ten findings (the owner pasted them and asked for them to be fixed). One implementer verified each by reading, fixed seven test-first or with the existing tests, and left three; one scoped re-review: all addressed, no new Critical or Important breakage.
+- Fixed (commits `5ad7abd2`, `3d7a8004`, `1d55946f`, `bbb576b8`, `bc5f6a7a`, `88748a24`, `f3b6a57f`, base `6489f810`):
+  - 1: the settled latch compared `sent.unwrap_or_default()` with an `Option`, so a request with no attempt number lost its latch at every refresh. A new T14 row was seen failing. In production `sent` is always `Some` (every request enters through `Queued`), so it was a latent defect.
+  - 2: `rows()` in `states/retired.rs` indexes each item's last information event once (was a scan per event). Nothing is pruned.
+  - 3: `pending_shown()` is read once per refresh and `Operations::request` looks a request up by slot. The index relies on requests only ever being inserted at the front and never removed (one insert site, a `debug_assert`).
+  - 5: `Derived.unreachable`, set in `states/repositories.rs`, replaces the icon's title comparison.
+  - 6: one `share_in_flight`, one `dto_kind`, one `TargetKind` conversion.
+  - 9: the read-only menu lines are disabled items with no action.
+  - 10: all 38 remaining `Intent` variants are listed in `Progressing::of`; a new variant fails to compile.
+- Left, with rulings:
+  - Ruling T15-1 (finding 4): `rows_fit_a_narrow_activity` stays. It pins owner decision 22 and is Acceptance A8's proof; it conflicts with AGENTS.md's no-layout-tests rule. No clean model-level pin exists (`button: Option<Offer>` already limits a row to one button). The owner may delete it. Cost if wrong: a layout test that breaks on a deliberate visual change.
+  - Finding 7 (not real): the wording is the D5 dialog's `outcome_lines`, which the design says to reuse; real close and promote answers always carry integration data.
+  - Finding 8 (not real): `activity.titles` is only a change-detection cache, never read for display; the leak is one small entry per opened item pane.
+  - Findings 2's other sets (`dismissed`, `checks_applied`, `checks_heard`, `brought`, retire events) stay unpruned (K-4); each is session-bounded and pruning would change a row or a count.
+- Tests after the fix wave: exact names and module filters during the work; then the whole desktop binary once (`--bin manyhands`, `--no-fail-fast`) at `f3b6a57f`: 1,913 passed, 1 failed, `desktop::view::repositories::tests::the_more_menu_acts_on_the_chosen_repository` (`harness.rs:501`, "the removal's preview did not happen": `until_drawn`'s real-time `WAIT` ran out). It passed alone three times and in the module filter twice. Ruling T15-2: a load flake of the same family as T13-1 (a third Cycle 03a repositories-panel window test to time out in the full run; the branch does not edit that test or the harness). Cost if wrong: the branch adds load-sensitivity. The final review judged each Activity derivation's extra work "plausibly" makes these races likelier, and finding 3's fix reduces that work. Not hardened further; the owner may want these three tests' waits or `WAIT` reviewed.
+- Static gates at `f3b6a57f`: check, fmt, clippy `-D warnings` clean. Boundary diff prints nothing; `git merge-tree` clean against `origin/main` (`ba95e1b7`).
+
 ## Tests run
 
 | Checkpoint | Tests run |
