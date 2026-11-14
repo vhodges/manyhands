@@ -47,7 +47,7 @@ use manyhands::{
     results::{Outcome, ResultCode},
 };
 
-use super::{RepositoriesPage, text};
+use super::{Form, RepositoriesPage, text};
 use crate::desktop::{
     model::{
         list_state::LABEL_BUSY,
@@ -387,6 +387,12 @@ impl RepositoriesPage {
     /// recovery's route focuses (Settings' `arrive`).
     pub(crate) fn name_focus(&self, cx: &App) -> FocusHandle {
         self.inputs[NAME_FIELD].read(cx).focus_handle(cx)
+    }
+
+    /// The Add folder field's focus, where the Add and Inspect routes land
+    /// (design Part D; R-24): always drawn.
+    pub(crate) fn add_path_focus(&self, cx: &App) -> FocusHandle {
+        self.inputs[Form::Add.path()].read(cx).focus_handle(cx)
     }
 
     fn choose_initials(&mut self, initials: Initials, cx: &mut Context<Self>) {
