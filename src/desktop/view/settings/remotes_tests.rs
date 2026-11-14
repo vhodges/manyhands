@@ -66,6 +66,17 @@ fn page(shell: &Shell, cx: &mut TestAppContext) -> Entity<RemotesPage> {
         .expect("the Remotes page is made")
 }
 
+/// Chooses `root` by its row's Manage on the Repositories page, which the
+/// Remotes page is drawn in (R-15).
+fn manage(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
+    let ix = shell
+        .rows("managed-row", cx)
+        .iter()
+        .position(|row| *row == key(root))
+        .expect("the repository is listed");
+    shell.click(("managed-choose", ix), cx);
+}
+
 fn input(shell: &Shell, id: &str, cx: &mut TestAppContext) -> Entity<InputState> {
     let page = page(shell, cx);
     page.read_with(cx, |page, _| page.input(id))
@@ -738,7 +749,7 @@ async fn a_partial_add_is_completed_by_retry_under_the_same_request(cx: &mut Tes
 }
 
 /// The page works on the selected repository; another registration can
-/// be chosen, and its remotes are listed.
+/// be chosen by Manage, and its remotes are listed.
 #[gpui_kit::test]
 fn the_page_lists_the_selected_repository_or_the_one_chosen(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -752,19 +763,15 @@ fn the_page_lists_the_selected_repository_or_the_one_chosen(cx: &mut TestAppCont
         Some(NO_REMOTES)
     );
 
-    let rows = shell.rows("remotes-registration", cx);
-    let ix = rows
-        .iter()
-        .position(|root| *root == key(&b))
-        .expect("b is listed");
-    shell.click(("remotes-choose", ix), cx);
+    manage(&shell, &b, cx);
     assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
     assert_eq!(shell.rows("remote-name", cx), ["origin"]);
 }
 
 /// Share… of another repository opens the page on that one, though the
 /// page already works on the last: a publication remote is never chosen
-/// for the wrong repository. The normal open keeps what it works on.
+/// for the wrong repository. A later open follows a panel selection made
+/// since (R-14).
 #[gpui_kit::test]
 fn opening_remotes_on_a_repository_shows_that_repository_even_after_another(
     cx: &mut TestAppContext,
@@ -790,14 +797,16 @@ fn opening_remotes_on_a_repository_shows_that_repository_even_after_another(
     assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
     assert_eq!(shell.rows("remote-name", cx), ["upstream"]);
 
-    // The sidebar's open keeps the repository the page works on.
+    // A reopen after the panel's selection changed follows it (R-14).
+    shell.keys("escape", cx);
     shell.select(&a, cx);
+    shell.keys("secondary-,", cx);
     shell.click(("settings-page", 1usize), cx);
-    assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
+    assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&a))));
 }
 
 /// While a dialog is open, the page's handlers do nothing: no add,
-/// selection, choice or second dialog.
+/// selection, choice (Manage, on the Repositories page) or second dialog.
 #[gpui_kit::test]
 fn the_page_acts_on_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -811,14 +820,19 @@ fn the_page_acts_on_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     assert!(shell.present("confirm-ok", cx));
 
     let page = page(&shell, cx);
+    let repositories = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.settings().clone())
+        .read_with(cx, |host, _| host.repositories.clone())
+        .expect("the Repositories page is made");
     shell.visual(cx).update(|window, cx| {
         page.update(cx, |page, cx| {
             page.submit_add(window, cx);
             page.submit_select(root.clone(), Some("backup".to_owned()), window, cx);
             page.submit_select(root.clone(), None, window, cx);
             page.submit_remove(root.clone(), "backup".to_owned(), 0, window, cx);
-            page.choose_root(b.clone(), window, cx);
-        })
+        });
+        repositories.update(cx, |page, cx| page.manage(b.clone(), window, cx));
     });
     shell.run(cx);
     assert!(shell.requests(cx, |_| true).is_empty());
@@ -847,12 +861,7 @@ fn choosing_another_repository_never_shows_the_last_ones_remotes(cx: &mut TestAp
     assert_eq!(shell.rows("remote-name", cx), ["origin"]);
 
     let held = shell.backend.hold_read(ReadKind::Remotes);
-    let ix = shell
-        .rows("remotes-registration", cx)
-        .iter()
-        .position(|root| *root == key(&b))
-        .expect("b is listed");
-    shell.click(("remotes-choose", ix), cx);
+    manage(&shell, &b, cx);
     assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
     assert!(!shell.present(("remote-select", 0usize), cx));
     assert!(!shell.present(("remote-remove", 0usize), cx));
@@ -881,10 +890,7 @@ fn a_row_of_another_repository_acts_on_nothing(cx: &mut TestAppContext) {
     fixture.add_remote(&b, "origin", HTTPS_URL);
     let shell = remotes(fixture, &a, cx);
     let page = page(&shell, cx);
-    shell
-        .visual(cx)
-        .update(|window, cx| page.update(cx, |page, cx| page.choose_root(b.clone(), window, cx)));
-    shell.run(cx);
+    manage(&shell, &b, cx);
     assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
 
     shell.visual(cx).update(|window, cx| {

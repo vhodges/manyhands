@@ -23,6 +23,7 @@ use crate::desktop::{
         requests::{Intent, Lane},
     },
     view::{
+        harness::key,
         settings::{Shown, page_title},
         workspace::Region,
     },
@@ -335,12 +336,11 @@ async fn settings_polling_states(cx: &mut TestAppContext) {
         Shown::Settings(SettingsPage::Remotes)
     );
     assert!(rig.shell.present("settings-remotes", cx));
-    let chosen = rig.shell.rows("remotes-registration", cx);
-    let ix = chosen
-        .iter()
-        .position(|root| *root == rig.key(0))
-        .expect("the repository is listed");
-    assert!(rig.shell.present(("remotes-chosen", ix), cx), "worked on");
+    let chosen = rig
+        .shell
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.settings_chosen(cx));
+    assert_eq!(chosen.as_deref().map(key), Some(rig.key(0)), "worked on");
 }
 
 /// A repository waiting for an unfinished operation links to its pending

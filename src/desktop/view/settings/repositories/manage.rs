@@ -10,24 +10,31 @@
 //! and email; its initials are left as they are, cleared, or set, which
 //! is the library's `InitialsChange`. Set identity builds
 //! `Intent::RepoIdentitySet` and opens the confirmation dialog; once a
-//! request of it finishes, the identity is read again and shown.
+//! request of it finishes, the identity is read again and shown. The
+//! first read for a newly chosen root fills only the fields still empty,
+//! so a slow read never overwrites typing (Wave 04 Cycle 04 Part G item 5).
+//!
+//! **Manage** asks the settings host to choose the row's repository, the
+//! one choice every page that works on one repository shares (design C1).
 //!
 //! **Remove** builds `Intent::RepoRemove` for the chosen root and opens
 //! the confirmation dialog, which says local files remain. What a
 //! removal (succeeded, or `already_applied`) does to the tabs and the
 //! selection, the workspace does, for a removal started from anywhere
 //! (`Workspace::operations_changed`). Here the list is read again, and
-//! a chosen root the list no longer gives is let go.
+//! a chosen root the list no longer gives is let go, which the host hears
+//! (`RepositoriesEvent::Forgot`; R-56).
 //!
-//! The list is read when the page is made and again whenever a request
-//! that registers, removes or sets an identity finishes, whoever started
-//! it. Text is fixed strings, the library's own values, and
+//! The list is read whenever the page is shown (R-32) and whenever a
+//! request that registers, removes or sets an identity finishes, whoever
+//! started it. Text is fixed strings, the library's own values, and
 //! `ResultCode::message()` with its code.
 
 use std::{collections::HashSet, path::PathBuf};
 
 use gpui_kit::{
-    ClickEvent, Context, FocusHandle, Focusable, IntoElement, ParentElement, Styled, Window,
+    App, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement,
+    Styled, Window,
     component::{
         ActiveTheme, WindowExt,
         button::{Button, ButtonVariants},
@@ -91,6 +98,18 @@ pub(super) const CONTROLS: [&str; 5] = [
     "identity-initials-set",
 ];
 
+/// What the page asks of the settings host, which keeps the one chosen
+/// repository (design C1).
+pub(crate) enum RepositoriesEvent {
+    /// Manage on a row: choose its repository (R-15).
+    Manage(PathBuf),
+    /// The chosen repository was let go: removed, or no longer listed
+    /// (R-56).
+    Forgot(PathBuf),
+}
+
+impl EventEmitter<RepositoriesEvent> for RepositoriesPage {}
+
 /// What becomes of the repository's initials.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Initials {
@@ -140,9 +159,10 @@ pub(super) struct Managed {
     identity_generations: Generations,
     identity_read: Option<gpui_kit::Task<()>>,
     initials: Initials,
-    /// The first identity read for a newly chosen root fills the form.
+    /// The first identity read for a newly chosen root fills the form's
+    /// empty fields.
     prefill: bool,
-    /// The name and email it fills it with, at the next frame, which has
+    /// The name and email it fills them with, at the next frame, which has
     /// the window a field needs.
     pending: Option<(String, String)>,
     /// The focus of each row's Manage, by row.
@@ -208,12 +228,45 @@ impl RepositoriesPage {
         }
     }
 
-    /// Lets the chosen root go.
-    fn forget_root(&mut self) {
-        self.managed.root = None;
+    /// The page is shown: it reads the registrations again (R-32), so one
+    /// made while Settings was closed is listed.
+    pub(crate) fn opened(&mut self, cx: &mut Context<Self>) {
+        self.load_registrations(cx);
+    }
+
+    /// Manage on `root`'s row: the host chooses it (R-15). Nothing under a
+    /// dialog.
+    pub(in crate::desktop::view::settings) fn manage(
+        &mut self,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !window.has_active_dialog(cx) {
+            cx.emit(RepositoriesEvent::Manage(root));
+        }
+    }
+
+    /// Lets the chosen root go, and tells the host, which chooses no
+    /// repository for any page (R-56).
+    fn forget_root(&mut self, cx: &mut Context<Self>) {
+        if let Some(root) = self.release_root() {
+            cx.emit(RepositoriesEvent::Forgot(root));
+        }
+    }
+
+    /// The host chose no repository: the chosen root is let go.
+    pub(crate) fn let_go(&mut self, cx: &mut Context<Self>) {
+        self.release_root();
+        cx.notify();
+    }
+
+    /// Lets the chosen root go, and gives it.
+    fn release_root(&mut self) -> Option<PathBuf> {
         self.managed.identity = Read::None;
         self.managed.identity_read = None;
         self.managed.identity_generations.next(SCOPE);
+        self.managed.root.take()
     }
 
     /// The shown identity's name line.
@@ -252,7 +305,7 @@ impl RepositoriesPage {
                     && matches!(this.managed.registrations, Read::Ready(_))
                     && !this.managed.listed_root()
                 {
-                    this.forget_root();
+                    this.forget_root(cx);
                 }
                 cx.notify();
             },
@@ -295,23 +348,30 @@ impl RepositoriesPage {
         cx.notify();
     }
 
-    /// The form is filled from the first identity read for its root.
+    /// The first identity read for its root fills each of the form's fields
+    /// that is still empty: text typed while the read was slow stays
+    /// (decision 12).
     pub(super) fn apply_prefill(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((name, email)) = self.managed.pending.take() {
-            self.inputs[NAME_FIELD].update(cx, |input, cx| input.set_value(name, window, cx));
-            self.inputs[EMAIL_FIELD].update(cx, |input, cx| input.set_value(email, window, cx));
+            for (id, value) in [(NAME_FIELD, name), (EMAIL_FIELD, email)] {
+                self.inputs[id].update(cx, |input, cx| {
+                    if input.value().is_empty() {
+                        input.set_value(value, window, cx);
+                    }
+                });
+            }
         }
     }
 
-    /// Chooses `root` for the identity form and Remove. Gives the name
-    /// field's focus, which the `repo.identity_set` recovery's route focuses
-    /// (Settings' `arrive`); this moves none.
+    /// Manages `root`, the repository Settings chose (`SettingsHost::
+    /// choose`): the identity form, emptied, is filled from its identity's
+    /// read, and Remove acts on it.
     pub(crate) fn manage_root(
         &mut self,
         root: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> FocusHandle {
+    ) {
         self.managed.root = Some(root);
         self.managed.initials = Initials::Unchanged;
         self.managed.prefill = true;
@@ -321,6 +381,11 @@ impl RepositoriesPage {
         }
         self.load_identity(cx);
         cx.notify();
+    }
+
+    /// The identity form's name field's focus, which the `repo.identity_set`
+    /// recovery's route focuses (Settings' `arrive`).
+    pub(crate) fn name_focus(&self, cx: &App) -> FocusHandle {
         self.inputs[NAME_FIELD].read(cx).focus_handle(cx)
     }
 
@@ -415,7 +480,7 @@ impl RepositoriesPage {
             list = true;
         }
         if removed {
-            self.forget_root();
+            self.forget_root(cx);
         } else if identity {
             self.load_identity(cx);
         }
@@ -464,9 +529,7 @@ impl RepositoriesPage {
             let button = Button::new(("managed-choose-button", ix))
                 .label(MANAGE)
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    if !window.has_active_dialog(cx) {
-                        this.manage_root(target.clone(), window, cx);
-                    }
+                    this.manage(target.clone(), window, cx)
                 }));
             body = body.child(
                 h_flex()

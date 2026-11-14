@@ -326,7 +326,7 @@ impl HostsPage {
 
     /// Works on `root` from now on. Another repository's publication and
     /// Check host are never left on show.
-    fn choose(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
+    pub(super) fn choose(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
         if root != self.root {
             self.publication = Read::Loading;
             self.remote_read = None;

@@ -14,13 +14,15 @@
 //! A page arrives by adding it to `PAGES`, a field and an arm in `page`.
 //! Checking for updates (`polling`) is the fifth, in a module of its own so
 //! Wave 04 Cycle 04 can fold it into the settings sheet.
-//! The host keeps the repository selected when the settings were last
-//! opened, for a page that works on one repository (Remotes).
+//! The host keeps one chosen repository, which the Repositories page, its
+//! Sharing section (the Remotes page) and Trusted servers' Check host work
+//! on (`chosen`; Wave 04 Cycle 04 design C1).
 
 use std::{cell::Cell, path::PathBuf, rc::Rc};
 
 mod arrive;
 mod attention;
+mod chosen;
 mod frame;
 mod hosts;
 mod keys;
@@ -41,7 +43,7 @@ pub(crate) use hosts::HostsPage;
 pub(crate) use keys::KeysPage;
 pub(crate) use polling::{PollingEvent, PollingPage};
 pub(crate) use remotes::RemotesPage;
-pub(crate) use repositories::RepositoriesPage;
+pub(crate) use repositories::{RepositoriesEvent, RepositoriesPage};
 
 use super::scroll::ContentScroll;
 use crate::desktop::{model::stamp::SettingsPage, services::Services};
@@ -132,10 +134,16 @@ pub(crate) struct SettingsHost {
     polling: Option<Entity<PollingPage>>,
     /// What the Checking for updates page asks of the host.
     _polling_events: Option<Subscription>,
-    /// The repository selected when the settings were last opened: the
-    /// one the Remotes page works on until another is chosen there, and
-    /// the one the Hosts page works on.
-    selection: Option<PathBuf>,
+    /// What the Repositories page asks of the host: Manage, and a
+    /// repository it let go.
+    _repositories_events: Option<Subscription>,
+    /// The repository the Repositories page (its identity form, Remove and
+    /// Sharing) and Trusted servers' Check host work on (design C1). Every
+    /// choice goes through `choose`.
+    chosen: Option<PathBuf>,
+    /// The Repositories panel's selection the last open saw: an open
+    /// follows the panel only when it has changed since (R-14).
+    seen: Option<PathBuf>,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsHost {}
@@ -161,7 +169,9 @@ impl SettingsHost {
             hosts: None,
             polling: None,
             _polling_events: None,
-            selection: None,
+            _repositories_events: None,
+            chosen: None,
+            seen: None,
         }
     }
 
@@ -170,10 +180,10 @@ impl SettingsHost {
         self.shown
     }
 
-    /// The repository a page that works on one starts on.
+    /// The repository the pages that work on one work on.
     #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn selection(&self) -> Option<&PathBuf> {
-        self.selection.as_ref()
+    pub(crate) fn chosen(&self) -> Option<&PathBuf> {
+        self.chosen.as_ref()
     }
 
     /// The vertical offset of the scroll the pages are drawn in.
@@ -187,49 +197,33 @@ impl SettingsHost {
         matches!(self.shown, Shown::Settings(_))
     }
 
-    /// Shows `page`, making it the first time.
+    /// Shows `page`, making it the first time, and reads again what it
+    /// shows (R-32). Repositories and Remotes draw one page: the
+    /// registrations, then the chosen repository's remotes under Sharing.
     pub(crate) fn open(&mut self, page: SettingsPage, window: &mut Window, cx: &mut Context<Self>) {
         self.shown = Shown::Settings(page);
         self.page(page, window, cx);
-        if page == SettingsPage::Remotes {
-            let selection = self.selection.clone();
-            self.remotes(window, cx)
-                .update(cx, |page, cx| page.opened(selection, cx));
-        }
-        if page == SettingsPage::Keys {
-            self.keys(window, cx).update(cx, |page, cx| page.opened(cx));
-        }
-        if page == SettingsPage::Hosts {
-            let selection = self.selection.clone();
-            self.hosts(window, cx)
-                .update(cx, |page, cx| page.opened(selection, cx));
-        }
-        if page == SettingsPage::Polling {
-            self.polling(window, cx)
-                .update(cx, |page, cx| page.opened(cx));
+        match page {
+            SettingsPage::Repositories | SettingsPage::Remotes => {
+                self.repositories(window, cx)
+                    .update(cx, |page, cx| page.opened(cx));
+                self.remotes(window, cx)
+                    .update(cx, |page, cx| page.opened(cx));
+            }
+            SettingsPage::Keys => {
+                self.keys(window, cx).update(cx, |page, cx| page.opened(cx));
+            }
+            SettingsPage::Hosts => {
+                let chosen = self.chosen.clone();
+                self.hosts(window, cx)
+                    .update(cx, |page, cx| page.opened(chosen, cx));
+            }
+            SettingsPage::Polling => {
+                self.polling(window, cx)
+                    .update(cx, |page, cx| page.opened(cx));
+            }
         }
         cx.notify();
-    }
-
-    /// Share… and Share main…: the Remotes page on `root`, even when it
-    /// already works on another repository, so a publication remote is
-    /// chosen for the repository shared.
-    pub(crate) fn open_remotes_on(
-        &mut self,
-        root: PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.shown = Shown::Settings(SettingsPage::Remotes);
-        self.remotes(window, cx)
-            .update(cx, |page, cx| page.open_on(root, cx));
-        cx.notify();
-    }
-
-    /// The repository selected in the main window: a page that works on
-    /// one repository starts on it.
-    pub(crate) fn set_selection(&mut self, selection: Option<PathBuf>) {
-        self.selection = selection;
     }
 
     /// Empties the Keys page's masked inputs unless that page is the shown
@@ -287,33 +281,43 @@ impl SettingsHost {
         Some(self.entries[ix].clone())
     }
 
-    /// The Repositories page, made the first time it is asked for.
+    /// The Repositories page, made the first time it is asked for, with the
+    /// Remotes page drawn in it under Sharing (design C1).
     pub(crate) fn repositories(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<RepositoriesPage> {
-        let (services, scroll) = (self.services.clone(), self.scroll.clone());
-        let open = self.open.clone();
-        self.repositories
-            .get_or_insert_with(|| {
-                cx.new(|cx| RepositoriesPage::new(services, scroll, open, window, cx))
-            })
-            .clone()
+        if self.repositories.is_none() {
+            let sharing = self.remotes(window, cx).into();
+            let (services, scroll) = (self.services.clone(), self.scroll.clone());
+            let open = self.open.clone();
+            let page =
+                cx.new(|cx| RepositoriesPage::new(services, scroll, open, sharing, window, cx));
+            self._repositories_events = Some(cx.subscribe_in(
+                &page,
+                window,
+                |this, _, event: &RepositoriesEvent, window, cx| {
+                    this.repositories_event(event, window, cx)
+                },
+            ));
+            self.repositories = Some(page);
+        }
+        self.repositories.clone().expect("the page was just made")
     }
 
     /// The Remotes page, made the first time it is asked for, on the
-    /// selected repository.
+    /// chosen repository.
     pub(crate) fn remotes(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<RemotesPage> {
         let (services, scroll) = (self.services.clone(), self.scroll.clone());
-        let selection = self.selection.clone();
+        let chosen = self.chosen.clone();
         self.remotes
             .get_or_insert_with(|| {
-                cx.new(|cx| RemotesPage::new(services, scroll, selection, window, cx))
+                cx.new(|cx| RemotesPage::new(services, scroll, chosen, window, cx))
             })
             .clone()
     }
@@ -327,7 +331,7 @@ impl SettingsHost {
             .clone()
     }
 
-    /// The Hosts page, made the first time it is asked for, on the selected
+    /// The Hosts page, made the first time it is asked for, on the chosen
     /// repository.
     pub(crate) fn hosts(
         &mut self,
@@ -336,10 +340,10 @@ impl SettingsHost {
     ) -> Entity<HostsPage> {
         let (services, scroll) = (self.services.clone(), self.scroll.clone());
         let open = self.open.clone();
-        let selection = self.selection.clone();
+        let chosen = self.chosen.clone();
         self.hosts
             .get_or_insert_with(|| {
-                cx.new(|cx| HostsPage::new(services, scroll, open, selection, window, cx))
+                cx.new(|cx| HostsPage::new(services, scroll, open, chosen, window, cx))
             })
             .clone()
     }
@@ -369,17 +373,17 @@ impl SettingsHost {
         self.polling.clone().expect("the page was just made")
     }
 
-    /// Set up sharing…, inside the sheet (W-31): the Remotes page on
-    /// `root`, as its route arrives, so the person is where a publication
-    /// remote is chosen.
+    /// Set up sharing…, inside the sheet (W-31): `root` chosen, and the
+    /// Remotes page on it, as its route arrives, so the person is where a
+    /// publication remote is chosen.
     fn set_up_sharing(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.selection = Some(root.clone());
+        self.choose(Some(root.clone()), window, cx);
         self.arrive_focused(&SettingsRoute::Remotes(root), window, cx);
     }
 
-    /// Approve host… on the host a poll named, inside the sheet (W-32): the
-    /// Hosts page on `root`, checking the host `authority`, with focus on
-    /// Check host, as its route arrives.
+    /// Approve host… on the host a poll named, inside the sheet (W-32):
+    /// `root` chosen, and the Hosts page on it, checking the host
+    /// `authority`, with focus on Check host, as its route arrives.
     pub(super) fn check_host(
         &mut self,
         root: PathBuf,
@@ -387,11 +391,14 @@ impl SettingsHost {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.choose(Some(root.clone()), window, cx);
         self.arrive_focused(&SettingsRoute::CheckHost(root, authority), window, cx);
     }
 
     /// The view of `page`, made the first time it is asked for. A view,
-    /// not an element: `open` asks for it outside a frame.
+    /// not an element: `open` asks for it outside a frame. Remotes is drawn
+    /// in the Repositories page, under Sharing (design C1), so both show
+    /// that page until the menu has its three entries (Task 5).
     fn page(
         &mut self,
         page: SettingsPage,
@@ -399,8 +406,9 @@ impl SettingsHost {
         cx: &mut Context<Self>,
     ) -> Option<AnyView> {
         match page {
-            SettingsPage::Repositories => Some(self.repositories(window, cx).into()),
-            SettingsPage::Remotes => Some(self.remotes(window, cx).into()),
+            SettingsPage::Repositories | SettingsPage::Remotes => {
+                Some(self.repositories(window, cx).into())
+            }
             SettingsPage::Keys => Some(self.keys(window, cx).into()),
             SettingsPage::Hosts => Some(self.hosts(window, cx).into()),
             SettingsPage::Polling => Some(self.polling(window, cx).into()),
@@ -461,3 +469,7 @@ mod polling_real_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "attention_tests.rs"]
 mod attention_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "chosen_tests.rs"]
+mod chosen_tests;

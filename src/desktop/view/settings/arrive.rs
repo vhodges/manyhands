@@ -40,13 +40,14 @@ pub(crate) enum SettingsRoute {
 }
 
 impl SettingsHost {
-    /// Switches to the route's page and applies it: manages the
-    /// repository, checks a folder or a host, asks again for a passphrase.
-    /// Moves no focus. Gives the control to focus, which the page draws in
-    /// the next frame; `None` means the page's menu entry. Until the routes
-    /// name their fields (Task 6), each gives the focus today's entry
-    /// function gave (design fact 10). The repository a route works on is
-    /// the host's selection, which the caller sets first.
+    /// Switches to the route's page and applies it: checks a folder or a
+    /// host, asks again for a passphrase. Moves no focus. Gives the control
+    /// to focus, which the page draws in the next frame; `None` means the
+    /// page's menu entry. Until the routes name their fields (Task 6), each
+    /// gives the focus today's entry function gave (design fact 10). The
+    /// repository a route works on is the host's chosen one, which the
+    /// caller chooses first (`choose_on_open`, or `choose` inside the
+    /// sheet).
     pub(crate) fn arrive(
         &mut self,
         route: &SettingsRoute,
@@ -58,14 +59,8 @@ impl SettingsHost {
                 self.open(*page, window, cx);
                 None
             }
-            SettingsRoute::AddRepository => {
+            SettingsRoute::AddRepository | SettingsRoute::Manage(_) => {
                 self.open(SettingsPage::Repositories, window, cx);
-                None
-            }
-            SettingsRoute::Manage(root) => {
-                self.open(SettingsPage::Repositories, window, cx);
-                self.repositories(window, cx)
-                    .update(cx, |page, cx| page.manage_root(root.clone(), window, cx));
                 None
             }
             SettingsRoute::Inspect(root) => {
@@ -74,15 +69,12 @@ impl SettingsHost {
                     .update(cx, |page, cx| page.inspect_root(root.clone(), window, cx));
                 None
             }
-            SettingsRoute::Identity(root) => {
+            SettingsRoute::Identity(_) => {
                 self.open(SettingsPage::Repositories, window, cx);
-                let name = self
-                    .repositories(window, cx)
-                    .update(cx, |page, cx| page.manage_root(root.clone(), window, cx));
-                Some(name)
+                Some(self.repositories(window, cx).read(cx).name_focus(cx))
             }
-            SettingsRoute::Remotes(root) => {
-                self.open_remotes_on(root.clone(), window, cx);
+            SettingsRoute::Remotes(_) => {
+                self.open(SettingsPage::Remotes, window, cx);
                 None
             }
             SettingsRoute::Keys => {

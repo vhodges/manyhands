@@ -2,12 +2,13 @@
 //! repository's remotes, as `list_remotes_redacted` lists them, with
 //! Add, Select for publication, Select none and Remove.
 //!
-//! The page works on the repository selected when the settings were
-//! opened; the registered repositories are listed above, and another can
-//! be chosen there. Each remote shows its name, its fetch and push
-//! locations as the library redacts them, whether publication can use it
-//! and whether it is the one selected, each in words. A raw location is
-//! never shown: the only locations drawn are the library's redacted ones.
+//! The page works on the repository Settings chose (Manage on the
+//! Repositories page, or a route), and is drawn on that page under Sharing
+//! (Wave 04 Cycle 04 design C1): it lists no repositories of its own
+//! (R-15). Each remote shows its name, its fetch and push locations as the
+//! library redacts them, whether publication can use it and whether it is
+//! the one selected, each in words. A raw location is never shown: the
+//! only locations drawn are the library's redacted ones.
 //!
 //! **Add** takes a name and a location and submits `Intent::RemoteAdd` as
 //! a user job. Adding writes the remote to Git's configuration and
@@ -28,13 +29,12 @@
 //! preview: the dialog shows the refusal's code and message, with no
 //! Confirm, and both remotes stay.
 //!
-//! The remotes are read again whenever a remote request of the chosen
-//! repository finishes, whoever started it, and the registrations
-//! whenever one that registers or removes a repository does. The page's
-//! own latest add or selection is answered under the form, by its
-//! outcome, the envelope's message and its code. Every handler does
-//! nothing while a dialog is open. Text is fixed strings, the library's
-//! own values, and the envelope's message with its code.
+//! The remotes are read again whenever the page is shown (R-32) and
+//! whenever a remote request of the chosen repository finishes, whoever
+//! started it. The page's own latest add or selection is answered under
+//! the form, by its outcome, the envelope's message and its code. Every
+//! handler does nothing while a dialog is open. Text is fixed strings, the
+//! library's own values, and the envelope's message with its code.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -71,12 +71,9 @@ use crate::desktop::{
 };
 
 pub(crate) const REPOSITORY_HEADING: &str = "Repository";
-pub(crate) const REMOTES_HEADING: &str = "Remotes";
+/// The section the Repositories page draws the page under (design C1).
+pub(crate) const SHARING_HEADING: &str = "Sharing";
 pub(crate) const ADD_HEADING: &str = "Add a remote";
-pub(crate) const READING_REGISTRATIONS: &str = "Reading the registered repositories";
-pub(crate) const NO_REGISTRATIONS: &str = "No repository is registered yet.";
-pub(crate) const CHOOSE: &str = "Choose";
-pub(crate) const CHOSEN: &str = "Chosen";
 pub(crate) const NO_REPOSITORY: &str = "Choose a repository to see its remotes.";
 pub(crate) const READING_REMOTES: &str = "Reading the remotes";
 pub(crate) const NO_REMOTES: &str = "This repository has no remotes.";
@@ -127,14 +124,6 @@ struct Listed {
     items: Vec<RemoteDto>,
 }
 
-/// The requests whose finishing can change the registrations listed.
-fn registers(intent: &Intent) -> bool {
-    matches!(
-        intent,
-        Intent::RepoCreate { .. } | Intent::RepoEnable { .. } | Intent::RepoRemove { .. }
-    )
-}
-
 /// The requests whose finishing can change a repository's remotes.
 fn remote_command(intent: &Intent) -> bool {
     matches!(
@@ -148,11 +137,7 @@ const SCOPE: ViewScope = ViewScope::Settings(SettingsPage::Remotes);
 pub(crate) struct RemotesPage {
     services: Services,
     scroll: ContentScroll,
-    /// The roots `list_repositories` last gave.
-    registrations: Read<Vec<String>>,
-    list_generations: Generations,
-    list_read: Option<Task<()>>,
-    /// The repository the page works on.
+    /// The repository the page works on: the one Settings chose.
     root: Option<PathBuf>,
     /// The remotes last read, with the root they were read from.
     remotes: Read<Listed>,
@@ -168,14 +153,12 @@ pub(crate) struct RemotesPage {
     submitted: Option<DesktopRequestId>,
     /// The finished requests already answered, by attempt.
     seen: HashSet<(DesktopRequestId, u32)>,
-    /// The removals the session had recorded when the list was last read
-    /// for them (`Operations::removals`).
-    removals: u64,
     _inputs: Vec<Subscription>,
     _operations: Subscription,
 }
 
 impl RemotesPage {
+    /// The page on `root`, which it reads when it is shown (`opened`).
     pub(crate) fn new(
         services: Services,
         scroll: ContentScroll,
@@ -215,14 +198,10 @@ impl RemotesPage {
             .filter(|request| matches!(request.state, RequestState::Finished(..)))
             .map(|request| (request.id, request.attempt))
             .collect();
-        let removals = services.operations().read(cx).removals();
-        let mut page = Self {
+        Self {
             services,
             scroll,
-            registrations: Read::Loading,
-            list_generations: Generations::default(),
-            list_read: None,
-            root: None,
+            root,
             remotes: Read::Loading,
             remote_generations: Generations::default(),
             remote_read: None,
@@ -231,13 +210,9 @@ impl RemotesPage {
             message: None,
             submitted: None,
             seen,
-            removals,
             _inputs: subscriptions,
             _operations: operations,
-        };
-        page.load_registrations(cx);
-        page.choose(root, cx);
-        page
+        }
     }
 
     #[cfg(all(test, feature = "desktop-test-support"))]
@@ -276,32 +251,21 @@ impl RemotesPage {
         }
     }
 
-    /// The page is shown again: it starts on `selection` when it works on
-    /// no repository yet, and reads what it shows again.
-    pub(crate) fn opened(&mut self, selection: Option<PathBuf>, cx: &mut Context<Self>) {
-        self.load_registrations(cx);
-        if self.root.is_none() && selection.is_some() {
-            self.choose(selection, cx);
-        } else {
-            self.load_remotes(cx);
-        }
+    /// The page is shown: it reads the remotes it shows again (R-32).
+    pub(crate) fn opened(&mut self, cx: &mut Context<Self>) {
+        self.load_remotes(cx);
     }
 
-    /// The page is shown on `root`, whatever repository it worked on: it
-    /// reads the registrations again and works on `root` from now on.
-    pub(crate) fn open_on(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        self.load_registrations(cx);
-        self.choose(Some(root), cx);
-    }
-
-    /// Works on `root` from now on, and reads its remotes.
-    fn choose(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
-        // Another repository's remotes are never left on show, not even
-        // while this one's are read: their rows would seem to be its own.
-        if root != self.root {
-            self.remotes = Read::Loading;
-            self.remote_read = None;
+    /// Works on `root`, which Settings chose (design C1), from now on, and
+    /// reads its remotes; `None`, on none. Another repository's remotes are
+    /// never left on show, not even while this one's are read: their rows
+    /// would seem to be its own.
+    pub(crate) fn open_on(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
+        if root == self.root {
+            return;
         }
+        self.remotes = Read::Loading;
+        self.remote_read = None;
         self.root = root;
         self.submitted = None;
         self.load_remotes(cx);
@@ -316,45 +280,6 @@ impl RemotesPage {
 
     fn text(&self, id: &str, cx: &Context<Self>) -> String {
         self.inputs[id].read(cx).value().trim().to_owned()
-    }
-
-    /// Reads the registered repositories.
-    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-    fn load_registrations(&mut self, cx: &mut Context<Self>) {
-        let stamp = self.list_generations.next(SCOPE);
-        if !matches!(self.registrations, Read::Ready(_)) {
-            self.registrations = Read::Loading;
-        }
-        self.list_read = Some(self.services.read(
-            ReadKind::Repositories,
-            stamp,
-            |service| service.list_repositories(),
-            cx,
-            |this: &mut Self, stamp, result, cx| {
-                if !this.list_generations.is_current(&stamp) {
-                    return;
-                }
-                let listed = this.listed_root();
-                this.registrations = Read::from_result(result, |list| {
-                    list.items.into_iter().map(|summary| summary.root).collect()
-                });
-                // A root the list gave and gives no more is gone from the
-                // registry: the page lets it go.
-                if listed && matches!(this.registrations, Read::Ready(_)) && !this.listed_root() {
-                    this.choose(None, cx);
-                }
-                cx.notify();
-            },
-        ));
-        cx.notify();
-    }
-
-    /// Whether the root worked on is among the listed registrations.
-    fn listed_root(&self) -> bool {
-        let (Read::Ready(roots), Some(root)) = (&self.registrations, &self.root) else {
-            return false;
-        };
-        roots.iter().any(|listed| Path::new(listed) == root)
     }
 
     /// Reads the remotes of the repository worked on.
@@ -482,19 +407,10 @@ impl RemotesPage {
         confirm(intent, origin, &self.services, window, cx);
     }
 
-    /// Choose: works on `root` from now on.
-    fn choose_root(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        if window.has_active_dialog(cx) {
-            return;
-        }
-        self.choose(Some(root), cx);
-    }
-
     /// A request finished: a remote request of the repository worked on
-    /// reads its remotes again; one that registers or removes a repository
-    /// reads the registrations again.
+    /// reads its remotes again.
     fn operations_changed(&mut self, cx: &mut Context<Self>) {
-        let (mut remotes, mut list) = (false, false);
+        let mut remotes = false;
         let operations = self.services.operations().clone();
         for request in operations.read(cx).requests() {
             if !matches!(request.state, RequestState::Finished(..)) {
@@ -503,22 +419,10 @@ impl RemotesPage {
             let ours = remote_command(&request.intent)
                 && self.root.is_some()
                 && request.intent.root() == self.root.as_deref();
-            let registration = registers(&request.intent);
-            if !(ours || registration) || !self.seen.insert((request.id, request.attempt)) {
+            if !ours || !self.seen.insert((request.id, request.attempt)) {
                 continue;
             }
-            remotes |= ours;
-            list |= registration;
-        }
-        // A removal this session recorded, a preview answered
-        // `already_applied` among them, changes the registrations.
-        let removals = operations.read(cx).removals();
-        if removals != self.removals {
-            self.removals = removals;
-            list = true;
-        }
-        if list {
-            self.load_registrations(cx);
+            remotes = true;
         }
         if remotes {
             self.load_remotes(cx);
@@ -605,50 +509,6 @@ impl RemotesPage {
         }
     }
 
-    /// The registrations, each with Choose; the chosen one says so.
-    fn registration_rows(&mut self, cx: &mut Context<Self>) -> gpui_kit::Div {
-        let body = v_flex()
-            .gap_1()
-            .child(heading("remotes-repository-heading", REPOSITORY_HEADING));
-        if let Some(state) = Self::state_line(
-            "remotes-registrations-state",
-            &self.registrations,
-            READING_REGISTRATIONS,
-            cx,
-        ) {
-            return body.child(state);
-        }
-        let Read::Ready(roots) = &self.registrations else {
-            return body;
-        };
-        if roots.is_empty() {
-            return body.child(text("remotes-registrations-state", NO_REGISTRATIONS));
-        }
-        let roots = roots.clone();
-        let chosen = self.root.clone();
-        let mut body = body;
-        for (ix, root) in roots.into_iter().enumerate() {
-            let target = PathBuf::from(&root);
-            let chosen = chosen.as_deref() == Some(target.as_path());
-            let choose = self.button(
-                ("remotes-choose", ix),
-                format!("remotes-choose-{ix}"),
-                CHOOSE,
-                move |this, window, cx| this.choose_root(target.clone(), window, cx),
-                cx,
-            );
-            body = body.child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(text(("remotes-registration", ix), root))
-                    .children(chosen.then(|| text(("remotes-chosen", ix), CHOSEN)))
-                    .child(choose),
-            );
-        }
-        body
-    }
-
     /// One remote: its name, locations, eligibility and selection in
     /// words, with Select and Remove.
     fn remote_row(
@@ -720,7 +580,7 @@ impl RemotesPage {
     fn remote_rows(&mut self, cx: &mut Context<Self>) -> gpui_kit::Div {
         let body = v_flex()
             .gap_2()
-            .child(heading("remotes-heading", REMOTES_HEADING));
+            .child(heading("remotes-heading", SHARING_HEADING));
         let Some(root) = self.root.clone() else {
             return body.child(text("remotes-state", NO_REPOSITORY));
         };
@@ -824,14 +684,12 @@ impl RemotesPage {
 
 impl Render for RemotesPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let registrations = self.registration_rows(cx);
         let remotes = self.remote_rows(cx);
         let add = self.add_form(cx);
         v_flex()
             .id("settings-remotes")
             .test_support()
             .gap_4()
-            .child(registrations)
             .child(remotes)
             .children(add)
     }

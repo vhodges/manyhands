@@ -1,6 +1,8 @@
 //! The Repositories settings page (design, Settings / Repositories): the
 //! registered repositories, with a chosen one's identity and Remove
-//! (`manage`), then Add an existing repository and Create a repository.
+//! (`manage`), then its remotes under Sharing (the Remotes page's view,
+//! Wave 04 Cycle 04 design C1), then Add an existing repository and Create
+//! a repository.
 //!
 //! **Add existing** takes the folder of a Git repository that is not yet
 //! a Manyhands repository, its primary branch and an optional short code
@@ -39,9 +41,9 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
-    AnyWindowHandle, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement, PathPromptOptions, Render, StatefulInteractiveElement, Styled,
-    Subscription, Task, TestSupportExt, Window,
+    AnyView, AnyWindowHandle, AppContext, ClickEvent, Context, Entity, FocusHandle,
+    InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render,
+    StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable,
         button::{Button, ButtonVariants},
@@ -57,6 +59,8 @@ use manyhands::{
 };
 
 mod manage;
+
+pub(crate) use manage::RepositoriesEvent;
 
 use super::{OpenFlag, field_column, wrapped};
 use crate::desktop::{
@@ -238,6 +242,8 @@ pub(crate) struct RepositoriesPage {
     /// The registered repositories, their identity and their removal
     /// (`manage`).
     managed: manage::Managed,
+    /// The Remotes page, drawn under Sharing for the chosen repository.
+    sharing: AnyView,
     _inputs: Vec<Subscription>,
     _operations: Subscription,
 }
@@ -247,6 +253,7 @@ impl RepositoriesPage {
         services: Services,
         scroll: ContentScroll,
         open: OpenFlag,
+        sharing: AnyView,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -302,7 +309,8 @@ impl RepositoriesPage {
             this.operations_changed(cx)
         });
         let managed = manage::Managed::new(&services, cx);
-        let mut page = Self {
+        // The list is read when the page is shown (`opened`).
+        Self {
             services,
             scroll,
             inputs,
@@ -319,11 +327,10 @@ impl RepositoriesPage {
             open,
             window: window.window_handle(),
             managed,
+            sharing,
             _inputs: subscriptions,
             _operations: operations,
-        };
-        page.load_registrations(cx);
-        page
+        }
     }
 
     #[cfg(all(test, feature = "desktop-test-support"))]
@@ -802,6 +809,7 @@ impl Render for RepositoriesPage {
             .test_support()
             .gap_4()
             .child(self.managed_section(cx))
+            .child(self.sharing.clone())
             .child(self.add_form(cx))
             .child(self.create_form(cx))
             .children(unavailable)

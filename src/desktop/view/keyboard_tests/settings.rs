@@ -78,13 +78,21 @@ async fn add_an_existing_repository_by_keyboard(cx: &mut TestAppContext) {
     walk.region(Region::Content, cx);
 }
 
-/// Remotes: a name and a URL typed, Add pressed: the remote is added to
-/// the selected repository.
+/// Remotes: the repository chosen by its Manage on the Repositories page,
+/// then a name and a URL typed under Sharing, Add pressed: the remote is
+/// added to the chosen repository (R-15).
 #[gpui_kit::test]
 async fn add_a_remote_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
-    let walk = selected(Fixture::new(), cx);
-    open_page(&walk, 1, cx);
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.refresh(&a);
+    let walk = Walk::over(Shell::open(fixture, cx), a);
+    open_page(&walk, 0, cx);
+    let manage = ("managed-choose", 0usize);
+    walk.tab_to("tab", manage, cx);
+    walk.on(manage, Region::Content, cx);
+    walk.enter(cx);
     walk.type_into("remote-add-name", "backup", Region::Content, cx);
     walk.type_into(
         "remote-add-url",

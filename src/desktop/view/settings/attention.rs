@@ -22,7 +22,7 @@ impl SettingsHost {
                     self.check_host(attend.root.clone(), authority.clone(), window, cx)
                 }
                 None => {
-                    self.selection = Some(attend.root.clone());
+                    self.choose(Some(attend.root.clone()), window, cx);
                     self.open(SettingsPage::Hosts, window, cx);
                 }
             },

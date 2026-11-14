@@ -128,25 +128,12 @@ impl Workspace {
         {
             self.settings_closed(true, window, cx);
         }
-        // The repository the route works on (A2 step 6): until one chosen
-        // repository (C1), the selection today's entry functions set.
-        let selection = match &route {
-            SettingsRoute::Page(_) | SettingsRoute::Keys | SettingsRoute::AddRepository => {
-                Some(self.navigation.selected().map(PathBuf::from))
-            }
-            SettingsRoute::Manage(root)
-            | SettingsRoute::Remotes(root)
-            | SettingsRoute::Hosts(root) => Some(Some(root.clone())),
-            SettingsRoute::Inspect(_)
-            | SettingsRoute::Identity(_)
-            | SettingsRoute::CheckHost(..)
-            | SettingsRoute::RetryGeneration(_) => None,
-        };
-        if let Some(selection) = selection {
-            self.content
-                .settings
-                .update(cx, |settings, _| settings.set_selection(selection));
-        }
+        // The repository Settings works on (A2 step 6; C1, R-14): the
+        // route's, else a panel selection made since the last open.
+        let panel = self.navigation.selected().map(PathBuf::from);
+        self.content.settings.update(cx, |settings, cx| {
+            settings.choose_on_open(&route, panel, window, cx)
+        });
         if self.settings_open(window, cx) {
             self.content.settings.update(cx, |settings, cx| {
                 settings.arrive_focused(&route, window, cx)
@@ -388,9 +375,8 @@ impl Workspace {
 
     /// The repository Settings works on.
     #[cfg(all(test, feature = "desktop-test-support"))]
-    #[allow(dead_code)] // Used from Task 3
     pub(crate) fn settings_chosen(&self, cx: &gpui_kit::App) -> Option<PathBuf> {
-        self.content.settings.read(cx).selection().cloned()
+        self.content.settings.read(cx).chosen().cloned()
     }
 
     /// Settings' own scroll offset.
