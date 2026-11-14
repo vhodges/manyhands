@@ -1,7 +1,6 @@
 //! The settings, a sheet over the main window (Wave 04 Cycle 04):
-//! `secondary-,` and the sidebar's Settings entry show them, the tabs are
-//! kept as they were behind them, Escape closes them, and an open dialog
-//! keeps both keys from acting.
+//! `secondary-,` shows them, the tabs are kept as they were behind them,
+//! Escape closes them, and an open dialog keeps the key from acting.
 
 use std::path::PathBuf;
 
@@ -111,21 +110,8 @@ fn the_settings_key_shows_the_settings_and_back_keeps_the_tabs(cx: &mut TestAppC
     assert_eq!(opened, Some(ticket(&root, TWO)));
 }
 
-/// The sidebar's Settings entry shows the settings too.
-#[gpui_kit::test]
-fn the_sidebar_entry_shows_the_settings(cx: &mut TestAppContext) {
-    let (shell, _) = with_tabs(cx);
-    assert!(shell.present("sidebar-settings", cx));
-    shell.click("sidebar-settings", cx);
-    assert_eq!(
-        shown(&shell, cx),
-        Shown::Settings(SettingsPage::Repositories)
-    );
-    assert!(shell.present("settings-repositories", cx));
-}
-
-/// While a dialog is open, neither `secondary-,` nor anything behind it
-/// shows the settings (I2 follow-up).
+/// While a dialog is open, `secondary-,` does not show the settings (I2
+/// follow-up).
 #[gpui_kit::test]
 fn the_settings_key_does_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     let (shell, _) = with_tabs(cx);
@@ -189,4 +175,34 @@ fn settings_has_three_pages(cx: &mut TestAppContext) {
 
     // The shown page's view is the entry's: Sharing & keys draws the keys.
     assert!(shell.present("settings-keys", cx));
+}
+
+/// P17 (Part F). The panel's Settings button and the content page's Close
+/// are gone, and the item area never shows Settings: closed, open and closed
+/// again, Settings is the sheet and nothing in the item area, whose tab and
+/// strip stay as they were.
+#[gpui_kit::test]
+fn the_old_settings_places_are_gone(cx: &mut TestAppContext) {
+    let (shell, _) = with_tabs(cx);
+    let gone = |shell: &Shell, cx: &mut TestAppContext| {
+        assert!(!shell.present("sidebar-settings", cx));
+        assert!(!shell.present("sidebar-settings-button", cx));
+        assert!(!shell.present("settings-close", cx));
+        assert!(!shell.present("settings-close-button", cx));
+    };
+    gone(&shell, cx);
+    assert_eq!(shown(&shell, cx), Shown::Tabs);
+
+    shell.keys("secondary-,", cx);
+    assert!(shell.present("settings", cx));
+    gone(&shell, cx);
+    // The item area still draws the tab, not Settings.
+    assert!(shell.present(("tab-active-line", 1usize), cx));
+    assert!(!shell.present("item-area-empty", cx));
+
+    shell.keys("escape", cx);
+    assert_eq!(shown(&shell, cx), Shown::Tabs);
+    assert!(!shell.present("settings", cx));
+    gone(&shell, cx);
+    assert!(shell.present(("tab-active-line", 1usize), cx));
 }

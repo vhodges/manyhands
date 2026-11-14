@@ -64,7 +64,7 @@ fn the_drafts_key_shows_the_page_and_focuses_its_first_control(cx: &mut TestAppC
 /// Settings opened over the page leaves it shown under the sheet; Escape
 /// closes Settings, and the page is still shown, not the tabs (R-31).
 #[gpui_kit::test]
-fn back_to_tabs_from_settings_over_drafts_shows_the_tabs(cx: &mut TestAppContext) {
+fn closing_settings_over_drafts_leaves_drafts_shown(cx: &mut TestAppContext) {
     let (shell, _) = with_tabs(cx);
     shell.keys("secondary-shift-d", cx);
     shell.keys("secondary-,", cx);
@@ -82,7 +82,7 @@ fn back_to_tabs_from_settings_over_drafts_shows_the_tabs(cx: &mut TestAppContext
 /// the drafts key, which does not act behind the sheet, then shows the
 /// page.
 #[gpui_kit::test]
-fn the_drafts_key_empties_a_typed_passphrase(cx: &mut TestAppContext) {
+fn escape_empties_a_typed_passphrase_and_the_drafts_key_then_shows_drafts(cx: &mut TestAppContext) {
     let shell = Shell::open(Fixture::new(), cx);
     shell.keys("secondary-,", cx);
     shell.click(("settings-page", 1usize), cx);

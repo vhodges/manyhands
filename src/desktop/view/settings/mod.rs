@@ -1,8 +1,11 @@
-//! The settings, a sheet over the main window (Wave 04 Cycle 04):
-//! `secondary-,` or the sidebar's Settings entry shows them over the
-//! tabs, which are kept as they were, and Escape closes them. A menu of
-//! three entries, Repositories, Sharing & keys and Checking for updates,
-//! down the left shows the page each opens.
+//! The settings, a sheet over the main window (Wave 04 Cycle 04). Every
+//! way in raises a `SettingsRoute` (design Part D), which the workspace
+//! shows through Root's one sheet layer and keeps open with
+//! `SheetOwner::Settings` (`workspace/settings_sheet.rs`); the item area
+//! behind it is left as it was (R-31). `secondary-,` and the footer's
+//! Settings item open it, and Escape, the Kit's close button or a click on
+//! the scrim close it. A menu of three entries, Repositories, Sharing &
+//! keys and Checking for updates, down the left shows the page each opens.
 //!
 //! `SettingsHost` is the entity the workspace holds. It draws the menu
 //! and the shown page, each page an entity of its own made the first
