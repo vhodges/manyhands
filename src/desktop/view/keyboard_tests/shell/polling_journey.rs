@@ -264,7 +264,8 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
     };
 
     // Activity, by `secondary-4`: the arrows and Tab reach Unlock… and then
-    // Retire….
+    // Retire…. Settings is a sheet: Escape closes it first.
+    walk.keys("escape", cx);
     let hold = hold_row(&walk, cx);
     to_row(&walk.shell, &hold, cx);
     walk.region(Region::Operations, cx);

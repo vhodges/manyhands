@@ -914,6 +914,14 @@ async fn a_release_that_failed_during_removal_completes_once_retry_stores_the_te
     assert!(offered(&shell, &entry, RETRY, cx).is_some_and(|offer| offer.enabled));
 
     fs::set_permissions(&folder, fs::Permissions::from_mode(mode)).unwrap();
+    // Settings is a sheet: it closes before Activity's Retry.
+    shell.keys("escape", cx);
+    assert_eq!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, cx| workspace.settings_shown(cx)),
+        crate::desktop::view::settings::Shown::Tabs
+    );
     act(&shell, &entry, RETRY, cx);
     shell.run(cx);
     assert!(!session_live(&shell, draft, cx));

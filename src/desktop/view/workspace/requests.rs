@@ -15,6 +15,7 @@ use crate::desktop::{
     view::{
         confirm::{confirm, prepare_again},
         item::ItemRoute,
+        settings::SettingsRoute,
     },
 };
 use gpui_kit::{
@@ -219,12 +220,7 @@ impl Workspace {
     /// The Hosts page on the repository at `root`, naming no host to
     /// check: a comment's host stop has no host data (K-3).
     fn open_hosts(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.content.drafts.update(cx, |drafts, cx| drafts.hide(cx));
-        self.content.settings.update(cx, |settings, cx| {
-            settings.set_selection(Some(root));
-            settings.open(SettingsPage::Hosts, window, cx)
-        });
-        self.focus_region(Region::Content, window, cx);
+        self.show_settings(SettingsRoute::Hosts(root), None, window, cx);
     }
 
     /// Show it, on `busy` (Busy repositories): reveals Activity and
@@ -276,7 +272,8 @@ impl Workspace {
     }
 
     /// Runs `f` on this workspace with its window, once the update under
-    /// way has ended: the window whose root view is this workspace.
+    /// way has ended: the window whose root view is this workspace. Root is
+    /// not updated around `f`, which may open a sheet or a dialog.
     fn in_window(
         &self,
         cx: &mut Context<Self>,
@@ -284,12 +281,11 @@ impl Workspace {
     ) {
         let id = cx.entity_id();
         let workspace = cx.entity().downgrade();
-        let Some(window) = cx.windows().into_iter().find_map(|window| {
-            let root = window.downcast::<Root>()?;
-            let ours = root
-                .read(cx)
-                .is_ok_and(|root| root.view().entity_id() == id);
-            ours.then_some(root)
+        let Some(window) = cx.windows().into_iter().find(|window| {
+            window.downcast::<Root>().is_some_and(|root| {
+                root.read(cx)
+                    .is_ok_and(|root| root.view().entity_id() == id)
+            })
         }) else {
             return;
         };
@@ -300,21 +296,15 @@ impl Workspace {
         });
     }
 
-    /// Settings › Remotes, on the repository at `root`, in place of the
-    /// tabs, focused as Settings opened from the sidebar are.
+    /// Settings › Remotes, on the repository at `root` even when the page
+    /// works on another repository (O-1).
     pub(in crate::desktop::view) fn open_remotes(
         &mut self,
         root: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.content.drafts.update(cx, |drafts, cx| drafts.hide(cx));
-        // On `root` even when the page works on another repository (O-1).
-        self.content.settings.update(cx, |settings, cx| {
-            settings.set_selection(Some(root.clone()));
-            settings.open_remotes_on(root, window, cx)
-        });
-        self.focus_region(Region::Content, window, cx);
+        self.show_settings(SettingsRoute::Remotes(root), None, window, cx);
     }
 
     /// Whether a share of the primary branch of `root` is queued, waiting

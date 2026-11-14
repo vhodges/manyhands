@@ -417,7 +417,8 @@ impl HostsPage {
         )
     }
 
-    /// Check host: observes the host the publication remote fetches from.
+    /// Check host: observes the host the publication remote fetches from,
+    /// with focus on Check host: a prompt it raises gives focus back there.
     pub(crate) fn check(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) || self.connecting() || !self.check_offered() {
             return;
@@ -425,45 +426,40 @@ impl HostsPage {
         let Some(root) = self.root.clone() else {
             return;
         };
-        self.start(root, None, window, cx);
+        self.start(root, None, cx);
+        window.focus(&self.focus[CHECK_ID], cx);
     }
 
     /// The `host.approve` / `host.replace` recovery: works on `root` and
     /// checks the host `authority`, whose answer offers Approve or Replace.
+    /// Gives Check host's focus, for the route to focus (a prompt the check
+    /// raises gives focus back there); this moves none. `None` under a
+    /// dialog.
     pub(crate) fn check_host(
         &mut self,
         root: PathBuf,
         authority: SshAuthority,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<FocusHandle> {
         if window.has_active_dialog(cx) {
-            return;
+            return None;
         }
         self.choose(Some(root.clone()), cx);
-        if self.connecting() {
-            window.focus(&self.focus[CHECK_ID], cx);
-            return;
+        if !self.connecting() {
+            self.start(root, Some(authority), cx);
         }
-        self.start(root, Some(authority), window, cx);
+        Some(self.focus[CHECK_ID].clone())
     }
 
-    /// Starts the observation on the worker, and puts focus on Check host:
-    /// a prompt it raises gives focus back there.
-    fn start(
-        &mut self,
-        root: PathBuf,
-        authority: Option<SshAuthority>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Starts the observation on the worker.
+    fn start(&mut self, root: PathBuf, authority: Option<SshAuthority>, cx: &mut Context<Self>) {
         let id = self.services.worker().observe_host(root.clone(), authority);
         self.observing = Some(Observing {
             id,
             root,
             answer: None,
         });
-        window.focus(&self.focus[CHECK_ID], cx);
         cx.notify();
     }
 

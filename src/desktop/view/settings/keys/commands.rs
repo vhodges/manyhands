@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::{Context, Window, component::WindowExt};
+use gpui_kit::{Context, FocusHandle, Focusable, Window, component::WindowExt};
 use manyhands::{
     repository::{KeyOwnership, SharedKeyId, keys::SecretPassphrase},
     results::{Outcome, RecoveryActionKind, ResultCode},
@@ -108,31 +108,31 @@ impl KeysPage {
         answer
     }
 
+    /// Asks again for the passphrase of the protected generation `id`.
+    /// Gives the passphrase field's focus, for the caller to focus; this
+    /// moves none. `None` under a dialog, or for a request that is not one.
     pub(crate) fn ask_again(
         &mut self,
         id: DesktopRequestId,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<FocusHandle> {
         if window.has_active_dialog(cx) {
-            return;
+            return None;
         }
         let label = {
             let operations = self.services.operations().read(cx);
-            let Some(label) = operations
+            let label = operations
                 .request(id)
-                .and_then(|request| protected_generation(&request.intent))
-            else {
-                return;
-            };
+                .and_then(|request| protected_generation(&request.intent))?;
             label.to_owned()
         };
         self.retrying = Some(Retrying { id, label });
         self.submitted = Some(id);
         self.generate_message = None;
         self.clear(&[PASSPHRASE_FIELD, CONFIRMATION_FIELD], window, cx);
-        self.inputs[PASSPHRASE_FIELD].update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
+        Some(self.inputs[PASSPHRASE_FIELD].read(cx).focus_handle(cx))
     }
 
     pub(super) fn cancel_retry(&mut self, window: &mut Window, cx: &mut Context<Self>) {

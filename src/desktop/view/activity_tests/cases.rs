@@ -235,6 +235,8 @@ pub(in crate::desktop::view) async fn requests(cx: &mut TestAppContext) {
         cx,
     );
     assert_eq!(settings(&shell, cx), Shown::Settings(SettingsPage::Keys));
+    // Settings is a sheet: it closes before the next row's action.
+    shell.keys("escape", cx);
 
     // Recovery: a failed refresh offers its own recovery actions, in order.
     let mut abandon = RecoveryAction::new(

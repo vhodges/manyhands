@@ -272,7 +272,7 @@ async fn a_check_of_another_repository_is_never_shown(cx: &mut TestAppContext) {
     shell.click("hosts-check", cx);
     held.wait_reached();
 
-    shell.click("settings-close", cx);
+    shell.keys("escape", cx);
     shell.select(&b, cx);
     shell.keys("secondary-,", cx);
     shell.click(("settings-page", 3usize), cx);

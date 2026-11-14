@@ -136,13 +136,18 @@ async fn holds(cx: &mut TestAppContext) {
     let page = |cx: &mut TestAppContext| shown(&rig, cx);
     press_from_popover(shell, &hold_with(&rig, UNLOCK_KEY, cx), UNLOCK_KEY, cx);
     assert_eq!(rig.checks(cx), [std::path::PathBuf::from(&rig.roots[0])]);
+    // Settings is a sheet, behind which the footer item cannot be pressed:
+    // Escape closes it after each press that opens it.
     press_from_popover(shell, &hold_with(&rig, CHOOSE_A_KEY, cx), CHOOSE_A_KEY, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Keys));
+    shell.keys("escape", cx);
     press_from_popover(shell, &hold_with(&rig, APPROVE_HOST, cx), APPROVE_HOST, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Hosts));
+    shell.keys("escape", cx);
     let remote = hold_with(&rig, OPEN_REMOTE_SETTINGS, cx);
     press_from_popover(shell, &remote, OPEN_REMOTE_SETTINGS, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Remotes));
+    shell.keys("escape", cx);
     let resume = hold_with(&rig, RESUME_CHECKING, cx);
     press_from_popover(shell, &resume, RESUME_CHECKING, cx);
     assert_eq!(rig.backend.resumed(), [rig.roots[4].clone()]);

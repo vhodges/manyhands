@@ -831,7 +831,7 @@ fn share_opens_remotes_on_its_own_repository_after_another(cx: &mut TestAppConte
         shell.label("remotes-root", cx),
         Some(format!("Repository: {}", key(&a)))
     );
-    shell.click("settings-close", cx);
+    shell.keys("escape", cx);
 
     open_ticket(&shell, &b, cx);
     assert_eq!(shell.label(SHARE_BUTTON, cx).as_deref(), Some(SHARE_SET_UP));

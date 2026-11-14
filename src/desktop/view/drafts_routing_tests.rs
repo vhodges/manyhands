@@ -1,7 +1,8 @@
 //! The Drafts page in the content router (ruling R23): `secondary-shift-d`
-//! shows it and focuses its first control; Settings opened over it and
-//! then left shows the tabs; leaving Keys for it empties a typed
-//! passphrase; `secondary-w` closes no tab while it is shown; and tab
+//! shows it and focuses its first control; Settings opened over it leaves
+//! it shown under the sheet and after it closes (Wave 04 Cycle 04, R-31);
+//! closing Settings empties a typed passphrase, and the drafts key then
+//! shows the page; `secondary-w` closes no tab while it is shown; and tab
 //! stepping shows the tabs.
 
 use gpui_kit::{TestAppContext, test::TestWindowExt};
@@ -60,25 +61,26 @@ fn the_drafts_key_shows_the_page_and_focuses_its_first_control(cx: &mut TestAppC
     assert!(shell.present(Region::Content.ring_id(), cx));
 }
 
-/// Settings opened over the page hides it; Back to tabs shows the tabs,
-/// not the page.
+/// Settings opened over the page leaves it shown under the sheet; Escape
+/// closes Settings, and the page is still shown, not the tabs (R-31).
 #[gpui_kit::test]
 fn back_to_tabs_from_settings_over_drafts_shows_the_tabs(cx: &mut TestAppContext) {
     let (shell, _) = with_tabs(cx);
     shell.keys("secondary-shift-d", cx);
     shell.keys("secondary-,", cx);
-    assert!(!drafts_shown(&shell, cx));
+    assert!(drafts_shown(&shell, cx));
     assert!(matches!(settings_shown(&shell, cx), Shown::Settings(_)));
-    assert!(!shell.present("drafts", cx));
+    assert!(shell.present("drafts", cx));
 
-    shell.click("settings-close", cx);
+    shell.keys("escape", cx);
     assert_eq!(settings_shown(&shell, cx), Shown::Tabs);
-    assert!(!drafts_shown(&shell, cx));
-    assert!(shell.present(("tab", 1usize), cx));
+    assert!(drafts_shown(&shell, cx));
+    assert!(!shell.present(("tab", 1usize), cx));
 }
 
-/// A passphrase typed on the Keys page is emptied when Drafts is shown in
-/// its place, as when the tabs are.
+/// A passphrase typed on the Keys page is emptied when Settings closes;
+/// the drafts key, which does not act behind the sheet, then shows the
+/// page.
 #[gpui_kit::test]
 fn the_drafts_key_empties_a_typed_passphrase(cx: &mut TestAppContext) {
     let shell = Shell::open(Fixture::new(), cx);
@@ -101,10 +103,10 @@ fn the_drafts_key_empties_a_typed_passphrase(cx: &mut TestAppContext) {
     });
     shell.run(cx);
 
+    shell.keys("escape", cx);
+    assert_eq!(settings_shown(&shell, cx), Shown::Tabs);
     shell.keys("secondary-shift-d", cx);
     assert!(drafts_shown(&shell, cx));
-    // The next frame of the content region empties them.
-    shell.frame(cx, |_, _| ());
     for input in inputs {
         assert_eq!(
             input.read_with(cx, |input, _| input.value().to_string()),

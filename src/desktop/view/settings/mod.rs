@@ -19,7 +19,9 @@
 
 use std::path::PathBuf;
 
+mod arrive;
 mod attention;
+mod frame;
 mod hosts;
 mod keys;
 mod polling;
@@ -27,29 +29,26 @@ mod remotes;
 mod repositories;
 
 use gpui_kit::{
-    AnyElement, AnyView, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
-    InteractiveElement, IntoElement, ParentElement, Render, Role, StatefulInteractiveElement,
-    Styled, Subscription, TestSupportExt, Window,
-    component::{ActiveTheme, button::Button, h_flex, v_flex},
-    div,
+    AnyView, AppContext, Context, Entity, EventEmitter, FocusHandle, InteractiveElement,
+    IntoElement, ParentElement, StatefulInteractiveElement, Styled, Subscription, TestSupportExt,
+    WeakFocusHandle, Window, div,
 };
 
 use manyhands::repository::transport::SshAuthority;
 
+pub(crate) use arrive::SettingsRoute;
 pub(crate) use hosts::HostsPage;
 pub(crate) use keys::KeysPage;
 pub(crate) use polling::{PollingEvent, PollingPage};
 pub(crate) use remotes::RemotesPage;
 pub(crate) use repositories::RepositoriesPage;
 
-use super::{scroll::ContentScroll, tabs::SHOWN};
-use crate::desktop::{
-    model::stamp::SettingsPage,
-    services::{Services, requests::DesktopRequestId},
-};
+use super::scroll::ContentScroll;
+use crate::desktop::{model::stamp::SettingsPage, services::Services};
 
 pub(crate) const SETTINGS_HEADING: &str = "Settings";
-pub(crate) const BACK_TO_TABS: &str = "Back to tabs";
+/// The sheet header's description (design B1; frames 1e and 1f).
+pub(crate) const SETTINGS_NOTE: &str = "Applies to this computer only.";
 
 /// The pages there are, in the order the page list shows them.
 pub(crate) const PAGES: [SettingsPage; 5] = [
@@ -71,7 +70,8 @@ pub(crate) fn page_title(page: SettingsPage) -> &'static str {
     }
 }
 
-/// What the content region shows.
+/// Whether Settings is closed (`Tabs`, R-3), or the page entity the sheet
+/// last arrived at.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Shown {
     Tabs,
@@ -80,21 +80,23 @@ pub(crate) enum Shown {
 
 /// What the settings ask of the workspace.
 pub(crate) enum SettingsEvent {
-    /// Back to tabs: the tabs are to be shown and focused.
-    Closed,
     /// A row of Checking for updates points at the pending operation that
-    /// holds it: the operation area, which lists it, takes focus.
+    /// holds it: Settings closes, and the operation area, which lists it,
+    /// takes focus (design C3).
     ShowActivity,
 }
 
 pub(crate) struct SettingsHost {
     services: Services,
+    /// The sheet body's own scroll, a region of the content column's (B2):
+    /// every page reveals its focused control in it.
     scroll: ContentScroll,
     shown: Shown,
     /// The focus of each page's entry in the page list, in `PAGES` order.
     entries: Vec<FocusHandle>,
-    /// Around Back to tabs, whose own focus is the Kit's.
-    close: FocusHandle,
+    /// What held focus when the sheet opened, where focus returns when it
+    /// closes (design A3).
+    origin: Option<WeakFocusHandle>,
     repositories: Option<Entity<RepositoriesPage>>,
     remotes: Option<Entity<RemotesPage>>,
     keys: Option<Entity<KeysPage>>,
@@ -111,16 +113,18 @@ pub(crate) struct SettingsHost {
 impl EventEmitter<SettingsEvent> for SettingsHost {}
 
 impl SettingsHost {
-    pub(crate) fn new(services: Services, scroll: ContentScroll, cx: &mut Context<Self>) -> Self {
+    /// `column` is the content region's column: the host scrolls a region
+    /// of its own that shares the column's focus reveal (B2).
+    pub(crate) fn new(services: Services, column: ContentScroll, cx: &mut Context<Self>) -> Self {
         Self {
             services,
-            scroll,
+            scroll: column.region(),
             shown: Shown::Tabs,
             entries: PAGES
                 .iter()
                 .map(|_| cx.focus_handle().tab_stop(true))
                 .collect(),
-            close: cx.focus_handle(),
+            origin: None,
             repositories: None,
             remotes: None,
             keys: None,
@@ -136,7 +140,19 @@ impl SettingsHost {
         self.shown
     }
 
-    /// Whether a settings page is shown in place of the tabs.
+    /// The repository a page that works on one starts on.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn selection(&self) -> Option<&PathBuf> {
+        self.selection.as_ref()
+    }
+
+    /// The vertical offset of the scroll the pages are drawn in.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn scroll_offset(&self) -> gpui_kit::Pixels {
+        self.scroll.handle().offset().y
+    }
+
+    /// Whether the host shows a page: Settings is open, or closing.
     pub(crate) fn is_shown(&self) -> bool {
         matches!(self.shown, Shown::Settings(_))
     }
@@ -196,14 +212,24 @@ impl SettingsHost {
         }
     }
 
-    /// Shows the tabs again. The pages are kept, with what they hold,
-    /// except the Keys page's typed passphrase, which the next draw of
-    /// the workspace empties (`forget_passphrase`).
-    pub(crate) fn hide(&mut self, cx: &mut Context<Self>) {
+    /// Settings closed. The pages are kept, with what they hold, except
+    /// the Keys page's typed passphrase, emptied now (design B3).
+    pub(crate) fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_shown() {
             self.shown = Shown::Tabs;
             cx.notify();
         }
+        self.forget_passphrase(window, cx);
+    }
+
+    /// Where focus returns when Settings closes: `origin`, held weakly.
+    pub(crate) fn set_origin(&mut self, origin: Option<&FocusHandle>) {
+        self.origin = origin.map(FocusHandle::downgrade);
+    }
+
+    /// The origin set when Settings opened, if it still exists; taken.
+    pub(crate) fn take_origin(&mut self) -> Option<FocusHandle> {
+        self.origin.take().and_then(|origin| origin.upgrade())
     }
 
     /// The focus of the shown page's entry in the page list: the
@@ -293,43 +319,25 @@ impl SettingsHost {
         self.polling.clone().expect("the page was just made")
     }
 
-    /// Set up sharing…: the Remotes page on `root`, with focus on the page
-    /// list as when the settings open, so the person is where a
-    /// publication remote is chosen.
+    /// Set up sharing…, inside the sheet (W-31): the Remotes page on
+    /// `root`, as its route arrives, so the person is where a publication
+    /// remote is chosen.
     fn set_up_sharing(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.selection = Some(root.clone());
-        self.open_remotes_on(root, window, cx);
-        if let Some(focus) = self.first_focus() {
-            window.focus(&focus, cx);
-        }
+        self.arrive_focused(&SettingsRoute::Remotes(root), window, cx);
     }
 
-    /// The `host.approve` and `host.replace` recovery: the Hosts page on
-    /// `root`, checking the host `authority`, with focus on Check host.
-    pub(crate) fn check_host(
+    /// Approve host… on the host a poll named, inside the sheet (W-32): the
+    /// Hosts page on `root`, checking the host `authority`, with focus on
+    /// Check host, as its route arrives.
+    pub(super) fn check_host(
         &mut self,
         root: PathBuf,
         authority: SshAuthority,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open(SettingsPage::Hosts, window, cx);
-        self.hosts(window, cx)
-            .update(cx, |page, cx| page.check_host(root, authority, window, cx));
-    }
-
-    /// The operation area's Retry of a protected key generation: the Keys
-    /// page, asking for the passphrase of the request `id` again, with
-    /// focus in its field.
-    pub(crate) fn retry_generation(
-        &mut self,
-        id: DesktopRequestId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open(SettingsPage::Keys, window, cx);
-        self.keys(window, cx)
-            .update(cx, |page, cx| page.ask_again(id, window, cx));
+        self.arrive_focused(&SettingsRoute::CheckHost(root, authority), window, cx);
     }
 
     /// The view of `page`, made the first time it is asked for. A view,
@@ -348,129 +356,17 @@ impl SettingsHost {
             SettingsPage::Polling => Some(self.polling(window, cx).into()),
         }
     }
-
-    /// The `repo.inspect` recovery: the Repositories page, with `root`
-    /// checked in its Add folder.
-    pub(crate) fn inspect(
-        &mut self,
-        root: std::path::PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open(SettingsPage::Repositories, window, cx);
-        self.repositories(window, cx)
-            .update(cx, |page, cx| page.inspect_root(root, window, cx));
-    }
-
-    /// The `repo.identity_set` recovery: the Repositories page, with the
-    /// identity form of `root` and focus in its name field.
-    pub(crate) fn identity(
-        &mut self,
-        root: std::path::PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open(SettingsPage::Repositories, window, cx);
-        self.repositories(window, cx)
-            .update(cx, |page, cx| page.manage_root(root, true, window, cx));
-    }
-
-    fn back(&mut self, cx: &mut Context<Self>) {
-        self.hide(cx);
-        cx.emit(SettingsEvent::Closed);
-    }
-
-    /// The page list: one entry per page, the shown one saying so in text.
-    fn entries(&self, shown: SettingsPage, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let (ring, border) = (theme.ring, theme.border);
-        let mut list = h_flex().id("settings-pages").gap_1().flex_wrap();
-        for (ix, page) in PAGES.iter().copied().enumerate() {
-            let focus = &self.entries[ix];
-            let active = page == shown;
-            let mut entry =
-                div()
-                    .id(("settings-page", ix))
-                    .test_support()
-                    .role(Role::Tab)
-                    .aria_label(page_title(page))
-                    .aria_selected(active)
-                    .relative()
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(border)
-                    .track_focus(focus)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.open(page, window, cx)
-                    }))
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .child(div().text_sm().child(page_title(page)))
-                            .children(active.then(|| {
-                                div()
-                                    .id(("settings-page-shown", ix))
-                                    .test_support()
-                                    .aria_label(SHOWN)
-                                    .text_xs()
-                                    .child(SHOWN)
-                            })),
-                    )
-                    .child(self.scroll.marker(focus));
-            if focus.is_focused(window) {
-                entry = entry.border_2().border_color(ring);
-            }
-            list = list.child(entry);
-        }
-        list.into_any_element()
-    }
 }
 
-impl Render for SettingsHost {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.forget_passphrase(window, cx);
-        let Shown::Settings(shown) = self.shown else {
-            return div().id("settings-hidden").into_any_element();
-        };
-        let page = self.page(shown, window, cx);
-        let entries = self.entries(shown, window, cx);
-        let close = wrapped(
-            "settings-close",
-            BACK_TO_TABS,
-            &self.close,
-            &self.scroll,
-            Button::new("settings-close-button")
-                .label(BACK_TO_TABS)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.back(cx))),
-        );
-        div()
-            .id("settings")
-            .test_support()
-            .child(
-                v_flex()
-                    .gap_3()
-                    .child(
-                        h_flex()
-                            .gap_3()
-                            .items_center()
-                            .child(
-                                div()
-                                    .id("settings-heading")
-                                    .test_support()
-                                    .aria_label(SETTINGS_HEADING)
-                                    .text_lg()
-                                    .font_weight(gpui_kit::FontWeight::BOLD)
-                                    .child(SETTINGS_HEADING),
-                            )
-                            .child(close),
-                    )
-                    .child(entries)
-                    .children(page),
-            )
-            .into_any_element()
-    }
+/// The widest a text field is drawn (fact 17).
+const FIELD_WIDTH: f32 = 480.;
+
+/// A labelled field's column: it fills the sheet body's width, up to the
+/// widest a field is drawn, and its wrapped input fills it (B1; R-39).
+pub(crate) fn field_column() -> gpui_kit::Div {
+    gpui_kit::component::v_flex()
+        .w_full()
+        .max_w(gpui_kit::px(FIELD_WIDTH))
 }
 
 /// A control in its wrapper.

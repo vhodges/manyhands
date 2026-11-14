@@ -1,14 +1,14 @@
-//! The settings in the main window's content region (ruling R-B4):
+//! The settings, a sheet over the main window (Wave 04 Cycle 04):
 //! `secondary-,` and the sidebar's Settings entry show them, the tabs are
-//! kept as they were behind them, Back to tabs and opening an item show
-//! the tabs again, and an open dialog keeps both keys from acting.
+//! kept as they were behind them, Escape closes them, and an open dialog
+//! keeps both keys from acting.
 
 use std::path::PathBuf;
 
 use gpui_kit::{TestAppContext, component::WindowExt, test::TestWindowExt};
 use manyhands::repository::ItemDtoKind;
 
-use super::{BACK_TO_TABS, PAGES, SETTINGS_HEADING, Shown, page_title};
+use super::{PAGES, SETTINGS_HEADING, Shown, page_title};
 use crate::desktop::{
     model::{navigation::OpenTarget, stamp::SettingsPage, tabs::TabKey},
     test_support::fixtures::{Fixture, item_id},
@@ -65,10 +65,10 @@ fn tab_keys(shell: &Shell, cx: &mut TestAppContext) -> Vec<TabKey> {
         .read_with(cx, |workspace, _| workspace.tab_keys())
 }
 
-/// `secondary-,` shows the Repositories page in the content region, in
-/// place of the tabs, and focuses its entry in the page list, which says
-/// it is shown in text. Back to tabs shows the tabs as they were, the
-/// same tab shown, and focuses it.
+/// `secondary-,` shows the Repositories page in the Settings sheet, over
+/// the tabs, and focuses its entry in the page list, which says it is shown
+/// in text. Escape closes the sheet and leaves the tabs as they were, the
+/// same tab shown.
 #[gpui_kit::test]
 fn the_settings_key_shows_the_settings_and_back_keeps_the_tabs(cx: &mut TestAppContext) {
     let (shell, root) = with_tabs(cx);
@@ -94,8 +94,7 @@ fn the_settings_key_shows_the_settings_and_back_keeps_the_tabs(cx: &mut TestAppC
     );
     assert_eq!(PAGES[0], SettingsPage::Repositories);
     assert!(shell.present("settings-repositories", cx));
-    // The tabs are not drawn, and are kept.
-    assert!(!shell.present(("tab", 0usize), cx));
+    // The tabs are kept.
     assert_eq!(tab_keys(&shell, cx), tabs);
     // Focus is on the page's entry, inside the content region.
     assert!(shell.frame(cx, |window, _| {
@@ -103,11 +102,7 @@ fn the_settings_key_shows_the_settings_and_back_keeps_the_tabs(cx: &mut TestAppC
     }));
     assert!(shell.present(Region::Content.ring_id(), cx));
 
-    assert_eq!(
-        shell.label("settings-close", cx).as_deref(),
-        Some(BACK_TO_TABS)
-    );
-    shell.click("settings-close", cx);
+    shell.keys("escape", cx);
     assert_eq!(shown(&shell, cx), Shown::Tabs);
     assert!(!shell.present("settings", cx));
     assert_eq!(tab_keys(&shell, cx), tabs);
@@ -131,23 +126,6 @@ fn the_sidebar_entry_shows_the_settings(cx: &mut TestAppContext) {
     assert!(shell.present("settings-repositories", cx));
 }
 
-/// Opening an item while the settings are shown shows the tabs, with
-/// the item's tab shown.
-#[gpui_kit::test]
-fn opening_an_item_shows_the_tabs_again(cx: &mut TestAppContext) {
-    let (shell, root) = with_tabs(cx);
-    shell.keys("secondary-,", cx);
-    assert!(shell.present("settings", cx));
-
-    open(&shell, &root, ONE, cx);
-    assert_eq!(shown(&shell, cx), Shown::Tabs);
-    assert!(shell.present(("tab", 0usize), cx));
-    let opened = shell
-        .workspace
-        .read_with(cx, |workspace, cx| workspace.opened(cx));
-    assert_eq!(opened, Some(ticket(&root, ONE)));
-}
-
 /// While a dialog is open, neither `secondary-,` nor anything behind it
 /// shows the settings (I2 follow-up).
 #[gpui_kit::test]
@@ -160,18 +138,4 @@ fn the_settings_key_does_nothing_while_a_dialog_is_open(cx: &mut TestAppContext)
     shell.keys("secondary-,", cx);
     assert_eq!(shown(&shell, cx), Shown::Tabs);
     assert!(!shell.present("settings", cx));
-}
-
-/// `secondary-3` with the settings shown focuses the shown page's entry,
-/// so the content region's own focus is the settings.
-#[gpui_kit::test]
-fn focusing_the_content_region_focuses_the_settings(cx: &mut TestAppContext) {
-    let (shell, _) = with_tabs(cx);
-    shell.keys("secondary-,", cx);
-    shell.keys("secondary-1", cx);
-    assert!(!shell.present(Region::Content.ring_id(), cx));
-    shell.keys("secondary-3", cx);
-    assert!(shell.frame(cx, |window, _| {
-        window.find(("settings-page", 0usize)).focused() == Some(true)
-    }));
 }

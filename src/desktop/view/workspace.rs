@@ -20,6 +20,7 @@ mod render;
 mod repositories;
 mod repository_menu;
 mod requests;
+mod settings_sheet;
 mod titles;
 
 use std::{collections::HashMap, path::PathBuf};
@@ -89,9 +90,9 @@ struct ContentArea {
     /// A chip's request for its tab's details sheet, for the next frame to
     /// open.
     details: Option<(WeakEntity<ItemPane>, ChipField)>,
-    /// The tab whose details sheet is open: the sheet closes once another
-    /// is shown.
-    sheet: Option<WeakEntity<ItemPane>>,
+    /// Who keeps Root's sheet open: Settings, or the tab whose details
+    /// sheet it is, which closes once another is shown.
+    sheet: Option<content::SheetOwner>,
 }
 
 pub(crate) struct Workspace {
@@ -294,8 +295,7 @@ impl Workspace {
             &settings,
             window,
             |this, _, event: &SettingsEvent, window, cx| match event {
-                SettingsEvent::Closed => this.focus_region(Region::Content, window, cx),
-                SettingsEvent::ShowActivity => this.focus_region(Region::Operations, window, cx),
+                SettingsEvent::ShowActivity => this.settings_show_activity(window, cx),
             },
         );
         let drafts_page = {

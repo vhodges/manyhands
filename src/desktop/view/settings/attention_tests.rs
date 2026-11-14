@@ -79,8 +79,15 @@ async fn settings_polling_attention_actions(cx: &mut TestAppContext) {
     );
 
     // Resume checking is reached by Tab and pressed by Enter; the library's
-    // hold is released, and the row no longer says held.
+    // hold is released, and the row no longer says held. Ctrl+, with
+    // Settings open does nothing: the Keys page Choose a key… left stays.
     rig.shell.keys("secondary-,", cx);
+    assert_eq!(
+        rig.shell
+            .workspace
+            .read_with(cx, |workspace, cx| workspace.settings_shown(cx)),
+        Shown::Settings(SettingsPage::Keys)
+    );
     rig.shell.click(("settings-page", 4usize), cx);
     assert!(rig.shell.tab_reaches((ACTION, c), TABS, cx));
     rig.shell.press("enter", cx);

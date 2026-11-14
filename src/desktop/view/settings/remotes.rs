@@ -52,11 +52,11 @@ use gpui_kit::{
         input::{Input, InputEvent, InputState},
         v_flex,
     },
-    div, px,
+    div,
 };
 use manyhands::{repository::RemoteDto, results::Outcome};
 
-use super::{Wrapped, wrapped};
+use super::{Wrapped, field_column, wrapped};
 use crate::desktop::model::read_state::Read;
 use crate::desktop::{
     model::{
@@ -570,7 +570,7 @@ impl RemotesPage {
 
     fn field(&self, id: &'static str, label: &'static str, cx: &Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
-        v_flex()
+        field_column()
             .gap_0p5()
             .child(div().text_xs().text_color(muted).child(label))
             .child(
@@ -581,7 +581,7 @@ impl RemotesPage {
                     &self.scroll,
                     Input::new(&self.inputs[id]).aria_label(label),
                 )
-                .w(px(480.)),
+                .w_full(),
             )
     }
 

@@ -87,6 +87,7 @@ impl Workspace {
         }
         self.hold_prompt(window, cx);
         window.close_all_dialogs(cx);
+        self.close_settings_quietly(window, cx);
         let workspace = cx.entity().downgrade();
         EditsNotKept {
             count: unkept.len(),
@@ -217,15 +218,17 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Quitting waits: every dialog and the details sheet close, no sheet a
-    /// chip asked for opens over it, and Quit now takes focus. Closing the
-    /// sheet gives focus back to its chip, so Quit now is focused after it.
-    /// Quit now lives in Activity: with Activity not displayed focus stays
-    /// where the closing left it, and the layout is untouched (R-20).
+    /// Quitting waits: every dialog, Settings (quietly, R-52) and the
+    /// details sheet close, no sheet a chip asked for opens over it, and
+    /// Quit now takes focus. Closing a sheet gives focus back to what held
+    /// it as the sheet opened, so Quit now is focused after it. Quit now
+    /// lives in Activity: with Activity not displayed focus stays where the
+    /// closing left it, and the layout is untouched (R-20).
     fn wait_to_quit(&mut self, phase: QuitPhase, window: &mut Window, cx: &mut Context<Self>) {
         self.set_quit(phase, cx);
         window.close_all_dialogs(cx);
         self.content.details = None;
+        self.close_settings_quietly(window, cx);
         self.content.sheet = None;
         if window.has_active_sheet(cx) {
             window.close_sheet(cx);
@@ -274,6 +277,7 @@ impl Workspace {
         let failed: Vec<DraftId> = failed.into_iter().map(|(id, _)| id).collect();
         let workspace = cx.entity().downgrade();
         window.close_all_dialogs(cx);
+        self.close_settings_quietly(window, cx);
         DraftsNotSaved {
             count: failed.len(),
         }

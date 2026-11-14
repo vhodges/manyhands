@@ -18,8 +18,8 @@ use manyhands::{
 };
 
 use super::{
-    ELIGIBLE, NO_REMOTES, NOT_ELIGIBLE, RemotesPage, SELECTED, SELECTION_NONE, chosen_line,
-    location_line, selection_line,
+    super::SettingsRoute, ELIGIBLE, NO_REMOTES, NOT_ELIGIBLE, RemotesPage, SELECTED,
+    SELECTION_NONE, chosen_line, location_line, selection_line,
 };
 use crate::desktop::{
     model::activity::{
@@ -776,14 +776,14 @@ fn opening_remotes_on_a_repository_shows_that_repository_even_after_another(
     fixture.add_remote(&b, "upstream", SSH_URL);
     let shell = remotes(fixture, &a, cx);
     assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&a))));
-    shell.click("settings-close", cx);
+    shell.keys("escape", cx);
 
     shell.select(&b, cx);
-    let host = shell
-        .workspace
-        .read_with(cx, |workspace, _| workspace.settings().clone());
+    let workspace = shell.workspace.clone();
     shell.visual(cx).update(|window, cx| {
-        host.update(cx, |host, cx| host.open_remotes_on(b.clone(), window, cx))
+        workspace.update(cx, |workspace, cx| {
+            workspace.show_settings(SettingsRoute::Remotes(b.clone()), None, window, cx)
+        })
     });
     shell.run(cx);
     assert!(shell.present("settings-remotes", cx));

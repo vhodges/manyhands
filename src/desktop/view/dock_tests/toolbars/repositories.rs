@@ -68,6 +68,8 @@ pub(super) async fn repositories_toolbar(shell: &Shell, root: &Path, cx: &mut Te
     holds_region(shell, Region::Repositories, cx);
     shell.press("enter", cx);
     assert_eq!(page(cx), Page::Settings(SettingsPage::Repositories));
+    // Settings is a sheet: it closes before the toolbar is used again.
+    shell.keys("escape", cx);
 
     // `secondary-n` from a Repositories button opens nothing (R-14).
     tab_to(shell, ToolbarButton::AddRepository, cx);

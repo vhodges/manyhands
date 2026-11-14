@@ -971,6 +971,8 @@ async fn polling_privacy(cx: &mut TestAppContext) {
         .await;
     seen.sweep(&window, cx);
     assert!(seen.surfaces("settings row") > 0);
+    // Settings is a sheet, whose scrim would take Activity's clicks.
+    window.shell.keys("escape", cx);
 
     // Resume of the pending retirement: the library names the original
     // request, which is sent again and is pending again.

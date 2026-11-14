@@ -10,14 +10,14 @@ use gpui_kit::{
         input::Input,
         v_flex,
     },
-    div, px,
+    div,
 };
 use manyhands::{
     repository::{KeyDto, KeyOwnership, KeyPrivateSourceState, SharedKeyId},
     results::Outcome,
 };
 
-use super::super::{Wrapped, wrapped};
+use super::super::{Wrapped, field_column, wrapped};
 use super::{
     CLEAR, CLEAR_ID, CONFIRMATION, CONFIRMATION_FIELD, COPIED, COPY, Copied, DELETE, GENERATE,
     GENERATE_HEADING, GENERATE_NOTE, GENERATE_SUBMIT, IMPORT, IMPORT_HEADING, IMPORT_LABEL_FIELD,
@@ -73,7 +73,7 @@ impl KeysPage {
 
     fn field(&self, id: &'static str, label: &'static str, cx: &Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
-        v_flex()
+        field_column()
             .gap_0p5()
             .child(div().text_xs().text_color(muted).child(label))
             .child(
@@ -84,7 +84,7 @@ impl KeysPage {
                     &self.scroll,
                     Input::new(&self.inputs[id]).aria_label(label),
                 )
-                .w(px(480.)),
+                .w_full(),
             )
     }
 
@@ -238,7 +238,11 @@ impl KeysPage {
                 RETRY_OFFER_ID,
                 RETRY_OFFER_ID.to_owned(),
                 RETRY_OFFER,
-                move |this, window, cx| this.ask_again(id, window, cx),
+                move |this, window, cx| {
+                    if let Some(field) = this.ask_again(id, window, cx) {
+                        window.focus(&field, cx);
+                    }
+                },
                 cx,
             )
         });

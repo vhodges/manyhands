@@ -150,6 +150,8 @@ async fn rows_and_list_states(cx: &mut TestAppContext) {
             .read_with(cx, |workspace, cx| workspace.settings_shown(cx)),
         Shown::Settings(SettingsPage::Repositories)
     );
+    // Settings is a sheet: it closes before the panel is used again.
+    shell.keys("escape", cx);
 
     // Two repositories with a shared copy, and polling on: each launch poll
     // is answered, and sets no list.

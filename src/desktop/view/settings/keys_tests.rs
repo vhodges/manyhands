@@ -362,7 +362,7 @@ fn a_typed_passphrase_is_emptied_when_the_page_is_hidden(cx: &mut TestAppContext
 
     type_into(&shell, PASSPHRASE, SENTINEL, cx);
     type_into(&shell, CONFIRMATION, SENTINEL, cx);
-    shell.click("settings-close", cx);
+    shell.keys("escape", cx);
     assert_eq!(value(&shell, PASSPHRASE, cx), "");
     assert_eq!(value(&shell, CONFIRMATION, cx), "");
 }
@@ -852,7 +852,7 @@ async fn the_operation_area_retry_of_a_protected_generation_asks_on_the_page(
             .position(|action| action.action == RecoveryActionKind::RequestRetry)
             .expect("a busy generation offers its retry")
     });
-    shell.click("settings-close", cx);
+    shell.keys("escape", cx);
     shell.keys("secondary-4", cx);
     let entry = RowKey::Request(id);
     let retry_label = label_of(&shell, &entry, &ActivityAction::Recovery(id, retry), cx);

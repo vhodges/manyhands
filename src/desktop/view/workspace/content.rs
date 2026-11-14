@@ -1,10 +1,9 @@
-//! The single content router: the tabs, Settings or the Drafts page
-//! (ruling R23). Settings and the Drafts page each own whether they are
-//! shown; this file is the only one that changes either. The selector is
-//! Settings when Settings is shown, else Drafts when the page is shown,
-//! else the tabs, and every transition here leaves at most one shown:
-//! `open_drafts` hides Settings, each Settings entry point hides the page
-//! first, and `show_tabs` hides both.
+//! The single content router: the tabs or the Drafts page (ruling R23).
+//! The Drafts page owns whether it is shown; this file is the only one that
+//! changes it, and `show_tabs` hides it. Settings is not a page of the
+//! content region but a sheet over the window (Wave 04 Cycle 04,
+//! `settings_sheet`), which leaves whatever the region shows as it was
+//! (R-31). One sheet is open at a time, and `SheetOwner` says whose it is.
 
 use super::{ContentArea, Region, Workspace};
 use crate::desktop::{
@@ -18,12 +17,13 @@ use crate::desktop::{
         drafts::DraftsEvent,
         item::{ChipField, ItemPane, Leaving, open_details},
         scroll::ContentScroll,
+        settings::SettingsRoute,
         tabs::Keeping,
     },
 };
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    StatefulInteractiveElement, Styled, TestSupportExt, WeakEntity, Window,
     component::{WindowExt, v_flex},
     div,
 };
@@ -38,15 +38,20 @@ pub(crate) const OPEN_FROM_THE_LISTS: &str = "Open a ticket or document from the
 
 enum ContentPage {
     Tabs,
-    Settings,
     Drafts,
+}
+
+/// The sheet on Root's one sheet layer, and who keeps it open (fact 29).
+pub(super) enum SheetOwner {
+    /// The shown item's details sheet, as today.
+    Details(WeakEntity<ItemPane>),
+    /// Settings (Part B).
+    Settings,
 }
 
 impl ContentArea {
     fn page(&self, cx: &App) -> ContentPage {
-        if self.settings.read(cx).is_shown() {
-            ContentPage::Settings
-        } else if self.drafts.read(cx).is_shown() {
+        if self.drafts.read(cx).is_shown() {
             ContentPage::Drafts
         } else {
             ContentPage::Tabs
@@ -54,12 +59,6 @@ impl ContentArea {
     }
 
     fn show_tabs(&mut self, cx: &mut Context<Workspace>) {
-        self.settings.update(cx, |settings, cx| settings.hide(cx));
-        self.hide_drafts(cx);
-    }
-
-    /// A Settings entry point: Settings is shown in place of the page.
-    fn hide_drafts(&mut self, cx: &mut Context<Workspace>) {
         self.drafts.update(cx, |drafts, cx| drafts.hide(cx));
     }
 }
@@ -72,17 +71,14 @@ impl Workspace {
         &self.content.settings
     }
 
-    /// Shows the Drafts page in place of the tabs or Settings, focused on
-    /// the row of `focus` when it lists it, else its first row.
+    /// Shows the Drafts page in place of the tabs, focused on the row of
+    /// `focus` when it lists it, else its first row.
     pub(in crate::desktop::view) fn open_drafts(
         &mut self,
         focus: Option<DraftId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.content
-            .settings
-            .update(cx, |settings, cx| settings.hide(cx));
         self.content
             .drafts
             .update(cx, |drafts, cx| drafts.show(focus, window, cx));
@@ -191,18 +187,18 @@ impl Workspace {
         }
     }
 
+    /// Settings on `page` (Ctrl+, the footer and its other ways in).
     pub(in crate::desktop::view) fn open_settings(
         &mut self,
         page: SettingsPage,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selection = self.navigation.selected().map(PathBuf::from);
-        self.open_settings_at(page, selection, window, cx);
+        self.show_settings(SettingsRoute::Page(page), None, window, cx);
     }
 
-    /// Settings' `page` on the repository at `root`, not the chosen one,
-    /// as `open_remotes` does (R-21); the Repositories page manages it.
+    /// Settings' Repositories page managing the repository at `root`, not
+    /// the chosen one, as `open_remotes` does (R-21).
     pub(in crate::desktop::view) fn open_settings_on(
         &mut self,
         page: SettingsPage,
@@ -210,28 +206,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_settings_at(page, Some(root.clone()), window, cx);
-        if page == SettingsPage::Repositories {
-            self.content.settings.update(cx, |settings, cx| {
-                let page = settings.repositories(window, cx);
-                page.update(cx, |page, cx| page.manage_root(root, false, window, cx));
-            });
-        }
-    }
-
-    fn open_settings_at(
-        &mut self,
-        page: SettingsPage,
-        selection: Option<PathBuf>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.content.hide_drafts(cx);
-        self.content.settings.update(cx, |settings, cx| {
-            settings.set_selection(selection);
-            settings.open(page, window, cx)
-        });
-        self.focus_region(Region::Content, window, cx);
+        let route = match page {
+            SettingsPage::Repositories => SettingsRoute::Manage(root),
+            page => SettingsRoute::Page(page),
+        };
+        self.show_settings(route, None, window, cx);
     }
 
     pub(crate) fn inspect_in_settings(
@@ -240,11 +219,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.content.hide_drafts(cx);
-        self.content
-            .settings
-            .update(cx, |settings, cx| settings.inspect(root, window, cx));
-        self.focus_region(Region::Content, window, cx);
+        self.show_settings(SettingsRoute::Inspect(root), None, window, cx);
     }
 
     pub(crate) fn identity_in_settings(
@@ -253,11 +228,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.content.hide_drafts(cx);
-        self.last_region = Some(Region::Content);
-        self.content
-            .settings
-            .update(cx, |settings, cx| settings.identity(root, window, cx));
+        self.show_settings(SettingsRoute::Identity(root), None, window, cx);
     }
 
     pub(crate) fn check_host_in_settings(
@@ -267,11 +238,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.content.hide_drafts(cx);
-        self.last_region = Some(Region::Content);
-        self.content.settings.update(cx, |settings, cx| {
-            settings.check_host(root, authority, window, cx)
-        });
+        self.show_settings(SettingsRoute::CheckHost(root, authority), None, window, cx);
     }
 
     pub(super) fn retry_generation_in_settings(
@@ -280,11 +247,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.content.hide_drafts(cx);
-        self.last_region = Some(Region::Content);
-        self.content
-            .settings
-            .update(cx, |settings, cx| settings.retry_generation(id, window, cx));
+        self.show_settings(SettingsRoute::RetryGeneration(id), None, window, cx);
     }
 
     /// A chip asked for its tab's details sheet: the next frame, which
@@ -299,35 +262,57 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Opens the details sheet a chip asked for, while its tab is shown
-    /// and no dialog is open; and closes the sheet once its tab is not the
-    /// one shown: closed, left, or another item opened from the sheet
-    /// (fact 80). Root then gives focus back to the chip, or, when the
-    /// chip went with its tab, the content region takes it.
+    /// Keeps the sheet its owner holds open, and closes any other (design
+    /// A1). Settings is kept whatever item is shown; once the Kit has closed
+    /// it, `settings_closed` runs. A details sheet is kept while its tab is
+    /// the one shown, and closes once it is not: closed, left, or another
+    /// item opened from the sheet (fact 80); Root then gives focus back to
+    /// the chip, or, when the chip went with its tab, the content region
+    /// takes it. A details sheet a chip asked for opens while its tab is
+    /// shown and no dialog is open, and never over Settings.
     pub(super) fn sync_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let shown = self.shown_item(cx);
-        if window.has_active_sheet(cx) {
-            let owned = match (&self.content.sheet, &shown) {
-                (Some(owner), Some(pane)) => *owner == pane.downgrade(),
-                _ => false,
-            };
-            if !owned {
-                window.close_sheet(cx);
-            }
+        let active = window.has_active_sheet(cx);
+        let (keep, settings_closed) = match &self.content.sheet {
+            Some(SheetOwner::Settings) => (active, !active),
+            Some(SheetOwner::Details(owner)) => (
+                active
+                    && shown
+                        .as_ref()
+                        .is_some_and(|pane| *owner == pane.downgrade()),
+                false,
+            ),
+            None => (false, false),
+        };
+        if settings_closed {
+            self.settings_closed(false, window, cx);
+        } else if active && !keep {
+            window.close_sheet(cx);
         }
-        if !window.has_active_sheet(cx) {
+        if !window.has_active_sheet(cx)
+            && matches!(self.content.sheet, Some(SheetOwner::Details(_)))
+        {
             self.content.sheet = None;
         }
-        if !window.has_active_dialog(cx)
+        let settings = matches!(self.content.sheet, Some(SheetOwner::Settings));
+        // Defensive: the host shows a page with no sheet of its own.
+        if !settings && self.content.settings.read(cx).is_shown() {
+            self.settings_closed(true, window, cx);
+        }
+        if settings {
+            self.content.details = None;
+        } else if !window.has_active_dialog(cx)
             && let Some((pane, field)) = self.content.details.take()
             && let Some(pane) = pane.upgrade().filter(|pane| shown.as_ref() == Some(pane))
         {
             open_details(&pane, field, window, cx);
-            self.content.sheet = Some(pane.downgrade());
+            self.content.sheet = Some(SheetOwner::Details(pane.downgrade()));
         }
         // R-57: the sheet suggests the values on the tickets loaded, which
         // its tab reads as the sheet is drawn, later in this frame.
-        if let Some(pane) = self.content.sheet.as_ref().and_then(|pane| pane.upgrade()) {
+        if let Some(SheetOwner::Details(pane)) = &self.content.sheet
+            && let Some(pane) = pane.upgrade()
+        {
             let tickets = &self.tickets;
             pane.update(cx, |pane, _| pane.take_loaded_tickets(tickets));
         }
@@ -336,8 +321,11 @@ impl Workspace {
     pub(crate) fn open_item(&mut self, target: OpenTarget, cx: &mut Context<Self>) {
         // Whatever opens an item closes the details sheet at the next
         // frame: only the sheet's own rows and link can open one while it
-        // is open.
-        self.content.sheet = None;
+        // is open. Settings stays open over it, as when an item opens from
+        // a landing such as the filter's ID read (design A1).
+        if matches!(self.content.sheet, Some(SheetOwner::Details(_))) {
+            self.content.sheet = None;
+        }
         self.content.show_tabs(cx);
         self.content.tabs.open(target, &self.services, cx);
         cx.notify();
@@ -450,8 +438,8 @@ impl Workspace {
     /// the tab shown, the next frame focuses the content region, as
     /// `secondary-w` does, unless the details sheet is open then (Task 27
     /// fix 2, N2); a tab closed in the background, behind another tab or
-    /// the Drafts page or Settings, held no focus, so focus stays where the
-    /// user is (fix 3).
+    /// the Drafts page, held no focus, so focus stays where the user is (fix
+    /// 3).
     pub(in crate::desktop::view) fn close_settled(&mut self, id: TabId, cx: &mut Context<Self>) {
         let shown = matches!(self.content.page(cx), ContentPage::Tabs)
             && self.content.tabs.active() == Some(id);
@@ -583,10 +571,7 @@ impl Workspace {
     }
 
     pub(super) fn close_shown_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(
-            self.content.page(cx),
-            ContentPage::Settings | ContentPage::Drafts
-        ) {
+        if matches!(self.content.page(cx), ContentPage::Drafts) {
             return;
         }
         let Some(id) = self.content.tabs.active() else {
@@ -605,10 +590,6 @@ impl Workspace {
     pub(super) fn focus_content(&self, window: &mut Window, cx: &mut Context<Self>) {
         let region = || self.regions[Region::Content.index()].clone();
         let focus = match self.content.page(cx) {
-            ContentPage::Settings => match self.content.settings.read(cx).first_focus() {
-                Some(focus) => focus,
-                None => return,
-            },
             ContentPage::Drafts => self
                 .content
                 .drafts
@@ -620,8 +601,8 @@ impl Workspace {
         window.focus(&focus, cx);
     }
 
-    /// The content region's column: Settings, the Drafts page and the
-    /// empty pane scroll it, as in D1.
+    /// The content region's column: the Drafts page and the empty pane
+    /// scroll it, as in D1.
     pub(super) fn content_scroll(&self) -> &ContentScroll {
         self.content.tabs.scroll()
     }
@@ -630,7 +611,7 @@ impl Workspace {
     pub(super) fn shown_item(&self, cx: &App) -> Option<Entity<ItemPane>> {
         match self.content.page(cx) {
             ContentPage::Tabs => self.content.tabs.shown(),
-            ContentPage::Settings | ContentPage::Drafts => None,
+            ContentPage::Drafts => None,
         }
     }
 
@@ -659,27 +640,16 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// Leaving Settings does not replace its cached pages or scroll.
-    /// Leaving Keys for the tabs or the Drafts page empties a typed
-    /// passphrase alike. With no tab shown the empty pane says what to do
-    /// next.
+    /// The tabs, or the Drafts page. With no tab shown the empty pane says
+    /// what to do next.
     pub(super) fn content_body(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         match self.content.page(cx) {
-            ContentPage::Settings => vec![self.content.settings.clone().into_any_element()],
-            ContentPage::Drafts => {
-                self.content
-                    .settings
-                    .update(cx, |settings, cx| settings.forget_passphrase(window, cx));
-                vec![self.content.drafts.clone().into_any_element()]
-            }
+            ContentPage::Drafts => vec![self.content.drafts.clone().into_any_element()],
             ContentPage::Tabs => {
-                self.content
-                    .settings
-                    .update(cx, |settings, cx| settings.forget_passphrase(window, cx));
                 let tabs = self.content.tabs.render(
                     window,
                     self.focused_region(window, cx) == Some(Region::Content),

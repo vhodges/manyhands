@@ -27,7 +27,7 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use gpui_kit::{
-    ClickEvent, Context, FocusHandle, IntoElement, ParentElement, Styled, Window,
+    ClickEvent, Context, FocusHandle, Focusable, IntoElement, ParentElement, Styled, Window,
     component::{
         ActiveTheme, WindowExt,
         button::{Button, ButtonVariants},
@@ -303,15 +303,15 @@ impl RepositoriesPage {
         }
     }
 
-    /// Chooses `root` for the identity form and Remove; with `focus`, the
-    /// name field takes focus (the `repo.identity_set` recovery).
+    /// Chooses `root` for the identity form and Remove. Gives the name
+    /// field's focus, which the `repo.identity_set` recovery's route focuses
+    /// (Settings' `arrive`); this moves none.
     pub(crate) fn manage_root(
         &mut self,
         root: PathBuf,
-        focus: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> FocusHandle {
         self.managed.root = Some(root);
         self.managed.initials = Initials::Unchanged;
         self.managed.prefill = true;
@@ -320,10 +320,8 @@ impl RepositoriesPage {
             self.inputs[id].update(cx, |input, cx| input.set_value("", window, cx));
         }
         self.load_identity(cx);
-        if focus {
-            self.inputs[NAME_FIELD].update(cx, |input, cx| input.focus(window, cx));
-        }
         cx.notify();
+        self.inputs[NAME_FIELD].read(cx).focus_handle(cx)
     }
 
     fn choose_initials(&mut self, initials: Initials, cx: &mut Context<Self>) {
@@ -467,7 +465,7 @@ impl RepositoriesPage {
                 .label(MANAGE)
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     if !window.has_active_dialog(cx) {
-                        this.manage_root(target.clone(), false, window, cx)
+                        this.manage_root(target.clone(), window, cx);
                     }
                 }));
             body = body.child(
