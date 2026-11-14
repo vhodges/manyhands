@@ -21,7 +21,7 @@ id: "01M7D7V15PAMQPTK7QZP9Q234D"
 > implementation and chosen the execution method.
 >
 > Where focus goes around the Add sheet is a table of required outcomes
-> (design B9, G1–G20), and it is the contract. Task 4 writes its rows
+> (design B9, G1–G23), and it is the contract. Task 4 writes its rows
 > test-first under a design checkpoint. Re-read the design before each
 > task, and record every checkpoint on ticket
 > `01M7D5Z7FZTGTC1HE25KQ1MYQY`. Steps use checkbox (`- [ ]`) syntax.
@@ -330,7 +330,7 @@ git grep -n -e 'passphrase-' -e 'label_for' -e 'NOT_NOW_NOTE' -e 'open_dialog(pr
 git grep -n -e 'confirm-ok' -e 'confirm-cancel' -e 'tab_reaches' -e 'tab_to' -- $P/view/*_tests.rs $P/view/keyboard_tests
 ```
 
-  - Record each test site against its E-n, or as E-16 onward (decision 8).
+  - Record each test site against its E-n, or as E-17 onward (decision 8).
   - Confirm design A3's footer table against each dialog's code (U-3).
   - Confirm the module paths of the Unlock evidence tests (design
     Testing; U-4) and of `every_item_view_icon_loads`, and look in
