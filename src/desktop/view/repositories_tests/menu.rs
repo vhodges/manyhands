@@ -309,6 +309,19 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
     let unlocked = checks(&shell, &b, cx);
     assert_eq!(unlocked.len(), before + 1, "its Check now");
     shell.until_ended(unlocked[0], cx).await;
+    // The Check's end reads `b`'s registration, and an automatic poll may
+    // still be running: wait for both before acting on the schedule by hand.
+    shell
+        .until_drawn(cx, "b to be quiet after the Unlock", |_, cx| {
+            services.scheduler().read_with(cx, |scheduler, _| {
+                scheduler
+                    .schedule()
+                    .repo(&key_b)
+                    .is_some_and(|repo| !repo.in_flight())
+                    && !scheduler.refreshing(&key_b)
+            })
+        })
+        .await;
     schedule(cx, &|schedule| {
         schedule.clear_attention(&Reason::KeyLocked(locked));
     });
