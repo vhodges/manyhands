@@ -14,7 +14,8 @@ Ticket `01M7D5Z7FZTGTC1HE25KQ1MYQY`.
 [Design](../plans/2026-11-14-wave-04-cycle-05a-frame-add-repository-and-unlock-design.md) and
 [implementation plan](../plans/2026-11-14-wave-04-cycle-05a-frame-add-repository-and-unlock-implementation.md).
 
-Status: **draft** (revision 2).
+Status: **draft** (revision 3). **Revision 3 has not been independently
+reviewed.**
 
 - On 2026-11-14, with Cycle 04 in flight, the owner asked to plan Wave 04
   Cycle 05 "the way Cycle 04 did". Execution waits until Cycle 04 lands on
@@ -22,7 +23,8 @@ Status: **draft** (revision 2).
 - The same day the owner split the Cycle on the Wave's split line
   (decision 2), answered decisions 3 and 4, and accepted the planner's
   outline and constraints with decision 5 ("Write the documents").
-- Decisions 6–14 are the planner's proposals, awaiting confirmation.
+- Decisions 6–14, 19 and 20 are the planner's proposals, awaiting
+  confirmation.
 - After review round 1 the owner answered decisions 15–18.
 - Those marked **(owner's eye)** change something people see today or
   depart from an authority.
@@ -36,6 +38,14 @@ Revision history:
   - source and feasibility: 1 Blocking, 9 Important, 12 Minor;
   - contract and consistency: 2 Blocking, 19 Important, 22 Minor.
 - Revision 2 applied both, and decisions 15–18.
+- Review round 2 read revision 2 at `67fb6fee`:
+  - scoped re-review: 0 Blocking, 2 Important, 18 Minor;
+  - adversarial review of the add, share and focus mechanisms: 0
+    Blocking, 10 Important, 7 Minor.
+- Revision 3 applied both. Every Important finding was a missing rule in
+  the add tracking, the return to Settings or the share; each is now
+  stated (design B2, B3, B10, C2; G21–G23; R-25 to R-31). Revision 3 was
+  not reviewed again: round 2 found no Blocking issue.
 
 ## Purpose And Authority
 
@@ -208,7 +218,7 @@ sweep, 2026-11-14).
    Downstream Obligations). A typed passphrase in Settings is emptied
    when Add repository replaces it.
 4. **Focus is trapped and returns,** exactly as the design's table B9
-   (G1–G20) sets out. In short:
+   (G1–G23) sets out. In short:
    - Tab stays inside the sheet and its dialogs, and nothing pulls focus
      behind the sheet;
    - focus returns to the control that opened the sheet (for an Activity
@@ -235,7 +245,12 @@ sweep, 2026-11-14).
      registered folder (decisions 13, 18);
    - typed text is kept when the sheet closes, except after a successful
      add (decision 16);
-   - Ctrl+, does nothing while the sheet is open (design R-14);
+   - Add and Create read "Adding…" while an add from the sheet is pending
+     (decision 9);
+   - with a configuration already in the folder, the prefix field is not
+     drawn (decision 11), and sharing waits for a Git identity (decision
+     20);
+   - Ctrl+, does nothing while the sheet is open (decision 19);
    - the Unlock dialog's changes (decision 14);
    - footer button order on the Confirmation dialog and Unlock key
      (decision 15);
@@ -261,7 +276,7 @@ reports.
 | A2 | Add repository is a sheet the workspace keeps (contract 2) | `add_repository_is_a_sheet_the_workspace_keeps` (P3); `nothing_acts_behind_the_add_sheet` (P15) | Planned |
 | A3 | Every way in lands (contract 5) | `each_way_in_opens_the_add_sheet` (P4) | Planned |
 | A4 | Replacing Settings and returning to it (contract 3; Wave decision 10) | `add_from_settings_returns_to_settings` (P6) | Planned |
-| A5 | Focus trapped, Escape closes, focus returns to the invoking control (Wave exit; contract 4) | Design B9 rows G1–G20, each read after a draw, through P3, P4, P5 `focus_returns_to_what_opened_add`, P6, `the_add_sheet_closes_every_way` (P7), `late_work_moves_no_focus_after_add_closes` (P8), P9 (G20), P10 (G16) and P15 (G18, G19) | Planned |
+| A5 | Focus trapped, Escape closes, focus returns to the invoking control (Wave exit; contract 4) | Design B9 rows G1–G23, each read after a draw, through P3, P4, P5 `focus_returns_to_what_opened_add`, P6, `the_add_sheet_closes_every_way` (P7), `late_work_moves_no_focus_after_add_closes` (P8), P9 (G20), P10 (G16), P11 (G22), P15 (G18, G19) and `the_add_sheet_scrolls_on_its_own` (P23) | Planned |
 | A6 | Adding and creating a repository, including the identity step and each failed check's recovery action, by keyboard (Wave exit) | `add_and_create_by_keyboard` (P16); `folder_checks_are_rows_with_their_actions` (P9); the existing Add and Create tests, moved and edited only as the named edits say | Planned |
 | A7 | The design's Add repository layout: mode, checks, main branch, sharing, note, footer (Wave scope) | P9; `the_main_branch_is_the_checked_out_one` (P10); `add_is_enabled_only_when_it_can_go_ahead` (P11); `create_joins_location_and_name` (P12); `share_changes_through_lists_the_folders_remotes` (P13) | Planned |
 | A8 | The chosen remote is sent after the add (decision 3) | `a_chosen_remote_is_selected_after_the_add_succeeds` (P14) | Planned |
@@ -357,6 +372,12 @@ decisions govern and are not repeated.
      require the primary branch).
    - Pressing Add on a folder not yet checked checks it first and goes
      on when the check passes (D1 R-T12b).
+   - While an add from the sheet is pending, Add and Create read
+     "Adding…" and are disabled, so a second add cannot run under the
+     first (design R-27).
+   - A folder whose configuration names another main branch or a
+     non-SSH sharing remote shows why, and Add is disabled: the library
+     refuses both (design B6).
    - Today's "Enter the folder's path." and "Enter the primary branch."
      messages go, since the buttons are disabled instead.
    - *Reason:* `05` says "Disabled until the checks pass"; R-T12b's
@@ -373,7 +394,9 @@ decisions govern and are not repeated.
     it. The repository is made at Location/Name, and a line says "Empty
     folder will be created at {path}". Create keeps its optional name and
     email and its short-code prefix, and Add keeps its prefix, which `05`
-    leaves out. *Reason:* behaviour unchanged.
+    leaves out, except for a folder already set up, whose configuration
+    holds the prefix and refuses another (design R-31). *Reason:*
+    behaviour unchanged.
 12. **A successful add closes the sheet (owner's eye).**
     - It closes once the confirmation has closed itself.
     - Opened from Settings, Settings comes back at Repositories with the
@@ -435,9 +458,24 @@ decisions govern and are not repeated.
     action that closes the sheet and opens Settings › Repositories on that
     repository. Add stays disabled.
 
+**Proposed by the planner after review round 2, for confirmation at
+approval:**
+
+19. **Ctrl+, does nothing while the Add sheet is open (owner's eye).**
+    *Reason:* Settings would replace the sheet behind the person's back;
+    Escape first, then Ctrl+,. Cycle 04 lets Ctrl+, replace only the
+    details sheet (its decision 6).
+20. **Sharing waits for a Git identity (owner's eye).** For a folder
+    already set up whose Git has no name and email, "Share changes
+    through" stays on "Keep on this computer" with the line "Set your
+    name and email in Settings first, then choose how it shares."
+    *Reason:* the library's enable does not write the typed identity
+    when the folder is already set up, and choosing a remote commits, so
+    the share would fail every time.
+
 ## Known Limits
 
-Design K-1 to K-14:
+Design K-1 to K-15:
 
 - no "You can save changes here" check (no read);
 - no inline error for a wrong passphrase (decision 4);
@@ -458,7 +496,9 @@ Design K-1 to K-14:
   though the library refuses one that is not empty;
 - any of the secondary button, input background or sheet border and
   shadow the Kit theme has no key for stays the Kit's;
-- a failed share selection after an add offers no new action.
+- a failed share selection after an add offers no new action;
+- a folder already set up but with no Git identity cannot choose its
+  sharing in the sheet (decision 20).
 
 ## Open Questions
 
@@ -475,3 +515,5 @@ None blocking. Design U-1 (Cycle 04's merged names) is checked in Task 0.
 | Review round 1, source and feasibility (revision 1, `9e22c765`) | 1 Blocking, 9 Important, 12 Minor. Blocking: the Kit's segmented `ToggleGroup` has no keyboard path. Important: the success close races the confirmation's own close; an older attempt's finish drops the share; a repository with no commits; Keep over a configured remote; `apply_config` switches the mode and ignores `rgba`; task order; E-1's hidden removals; missed tests; P6 could not fail | Blocking, Important, Minor | Revision 2 (design Review Record) | Review report, 2026-11-14 |
 | Review round 1, contract and consistency (revision 1, `9e22c765`) | 2 Blocking, 19 Important, 22 Minor. Blocking: Unlock's exit evidence unproven; nothing kept focus from being pulled behind the Add sheet. Important: enablement contradictions; Create's branch; registered folders' configuration; clearing on close; success tracking; Cycle 04's origin rows; Settings opened over the sheet; Keep; the as-built note; the mode control against Cycle 02; secondary slots; Task 3's size; P16; decision 6 against decision 5; decision 12's reading; contract 1 | Blocking, Important, Minor; owner questions | Revision 2; decisions 15–18 | Review report, 2026-11-14 |
 | Owner, 2026-11-14, after review round 1 | Button order; typed text on close; the default remote and Keep; registered folders on the inspect routes | Owner decisions | Decisions 15–18 | Session, 2026-11-14 |
+| Review round 2, scoped re-review (revision 2, `67fb6fee`) | 0 Blocking, 2 Important, 18 Minor. Important: the attempt recorded after Prepare again; B7 against B10's enablement. Round 1's Blocking findings resolved | Important, Minor | Revision 3 (design Review Record) | Review report, 2026-11-14 |
+| Review round 2, adversarial on the add, share and focus mechanisms (revision 2, `67fb6fee`) | 0 Blocking, 10 Important, 7 Minor: the recorded attempt; later attempts and terminal states; a second add under the sheet; which open a success belongs to; AW-3's origin; a refused return to Settings; a check stuck in flight; the share with no identity; Add enabled where enable refuses; Create's root | Important, Minor; proposals | Revision 3, **not independently reviewed**; decisions 19 and 20 proposed | Review report, 2026-11-14 |

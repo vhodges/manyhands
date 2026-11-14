@@ -14,7 +14,8 @@ id: "01M7D7V15PAMQPTK7QZP9Q234D"
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task.
 >
-> **Draft** (revision 2: review round 1 and decisions 15–18 applied). Execution waits until Cycle 04
+> **Draft** (revision 3: review rounds 1 and 2 and decisions 15–18
+> applied; revision 3 has not been independently reviewed). Execution waits until Cycle 04
 > (`01M7AMAPNHHTNECXBF4CA5WPKV`) is merged to main (Cycle decision 1),
 > and until the owner has approved the three documents, authorized
 > implementation and chosen the execution method.
@@ -60,9 +61,10 @@ Devenv. No new dependency.
 and [design](2026-11-14-wave-04-cycle-05a-frame-add-repository-and-unlock-design.md),
 with `docs/design/05-sheets-and-dialogs.md` and `06`.
 
-- "Fact n", "A-n", "G-n", "P-n", "R-n", "E-n", "K-n" and "U-n" refer to
-  the design, except "A1"–"A13" in Self-Review, which are the Cycle's
-  acceptance rows. "AW-n" are the design's ways into the Add sheet.
+- "Fact n", "G-n", "P-n", "R-n", "E-n", "K-n" and "U-n" refer to the
+  design; "A1"–"A6" are its Part A sections, except "A1"–"A13" in
+  Self-Review, which are the Cycle's acceptance rows. "AW-n" are the
+  design's ways into the Add sheet.
   "Decision n" refers to the Cycle.
 - `D/` is `src/desktop/`.
 
@@ -187,9 +189,9 @@ renders.
 
 **Existing tests.**
 
-- They change only as E-1 to E-15 say.
+- They change only as E-1 to E-16 say.
 - Any other edit is pre-authorized (decision 8). It is recorded in the
-  ledger as E-16 onward with its reason, and checked by the task's
+  ledger as E-17 onward with its reason, and checked by the task's
   reviewer.
 - An assertion removal is called out in the ledger and the review-ready
   summary.
@@ -217,7 +219,7 @@ never on a module.
 **Ledger.** `docs/plans/2026-11-14-wave-04-cycle-05a-frame-add-repository-and-unlock-execution.md`.
 
 - It is created in Task 0 and written only by the orchestrator.
-- Only the ledger assigns E-numbers past E-15.
+- Only the ledger assigns E-numbers past E-16.
 - Rulings take the form "Ruling: decision — why — cost if wrong".
 
 **File size.** New source files stay below about 500 lines.
@@ -245,15 +247,19 @@ task named:
     footer item has hidden by close time (P4, P5);
   - a recovery in the confirmation that opens Settings (P6, G17);
   - an add's success whose finish closes the confirmation in the same
-    batch (P5, P6, G14);
+    batch (P5, P6, G14), and one that lands while an Unlock prompt is
+    open (P5, G23);
+  - a success for an earlier open of the sheet after it was reopened
+    (P8);
   - quitting with the confirmation open above the sheet (P7, G15);
   - the Kit's deferred restore landing behind the sheet (P15, G18).
 - **Task 5:** a `Confirm` naming a refused branch (P10); a check landing
   for text the person has since changed (P9: ignored); a repository with
   no commits (P10).
 - **Task 7:** the sheet closed while the add runs, then the add succeeds
-  (P14: still sent); Prepare again, then success (P14: one selection);
-  the add fails (P14: nothing sent).
+  (P14: still sent); Prepare again, then success, and a Partial then
+  Retry (P14: one selection each); the add ends (P14: nothing sent); a
+  Valid configuration with no identity (P14: the select held on Keep).
 - **Task 8:** a `list_keys` read held, then failing (P18: label only).
 
 ## File Map And Dependency Order
@@ -320,14 +326,15 @@ git grep -n -e 'inspect_in_settings' -e 'SettingsRoute::Inspect' -e 'SettingsRou
   -e 'inspect_root' -e '"add-' -e '"create-' -e 'add_form' -e 'create_form' \
   -e 'Inspection::' -e 'submit_pending' -e 'resume_submit' -e 'NEED_FOLDER' -e 'NEED_BRANCH' \
   -e 'browse-unavailable' -e 'ADD_HEADING' -e 'CREATE_HEADING' -e 'CHECKED_OUT' -e 'NOT_ADDED' -- $P
-git grep -n -e 'passphrase-' -e 'label_for' -e 'NOT_NOW_NOTE' -e 'open_dialog(prompt' -- $P
+git grep -n -e 'passphrase-' -e 'label_for' -e 'NOT_NOW_NOTE' -e 'open_dialog(prompt' -e 'Followed::Confirmed' -- $P
 git grep -n -e 'confirm-ok' -e 'confirm-cancel' -e 'tab_reaches' -e 'tab_to' -- $P/view/*_tests.rs $P/view/keyboard_tests
 ```
 
   - Record each test site against its E-n, or as E-16 onward (decision 8).
   - Confirm design A3's footer table against each dialog's code (U-3).
   - Confirm the module paths of the Unlock evidence tests (design
-    Testing; U-4) and of `every_item_view_icon_loads`.
+    Testing; U-4) and of `every_item_view_icon_loads`, and look in
+    `D/test_support/` for a read double P18 can fail (U-8).
   - List every caller of the `settings()` helper of
     `D/view/settings/repositories_tests.rs` and of Cycle 04's helpers that
     open Settings on Repositories, and every test file each task will
@@ -465,21 +472,25 @@ ViewScope::AddRepository
 pub(super) enum SheetOwner { Details(WeakEntity<ItemPane>), Settings, AddRepository }
 // D/view/workspace/add_sheet.rs
 pub(crate) enum AddRoute { New, Inspect(PathBuf) }
-pub(super) enum AddClose { Kept, Added(PathBuf), ToSettings(PathBuf), Quiet }
-struct PendingAdd { attempt: u32, root: PathBuf, share: Option<Option<String>> }
+pub(in crate::desktop::view) enum AddClose { Kept, Added(PathBuf), ToSettings(PathBuf), Quiet }
+struct PendingAdd { attempt: u32, session: u64, share: Option<Option<String>> }
 impl Workspace {
     pub(in crate::desktop::view) fn show_add_repository(&mut self, route: AddRoute,
         origin: Option<FocusHandle>, window: &mut Window, cx: &mut Context<Self>);
-    pub(super) fn add_closed(&mut self, how: AddClose, window: &mut Window, cx: &mut Context<Self>);
+    pub(in crate::desktop::view) fn add_closed(&mut self, how: AddClose, window: &mut Window, cx: &mut Context<Self>);
     #[cfg(test)] pub(crate) fn add_sheet(&self) -> Option<Entity<AddRepositorySheet>>;
 }
 // D/view/settings/arrive.rs (Cycle 04's enum)
 SettingsRoute::AddButton // renamed from AddRepository; Inspect removed
+// D/view/confirm.rs
+Followed::Confirmed { request, attempt, details } // attempt added (R-28)
+// D/services/requests.rs
+Request::registered_root: Option<PathBuf> // from the Finished envelope's scope (R-29)
 ```
 
 - [ ] **Step 1: B9's rows, first.** In `D/view/workspace/add_sheet_tests.rs`,
   write P3, P4, P5, P6, P7, P8, P15 and P23, table-driven over B9's G
-  rows except G16 (Task 5) and G20 (Task 5). Each fails.
+  rows except G16 and G22 (Task 5) and G20 (Task 6). Each fails.
 - [ ] **Step 2: Design checkpoint.** If a G row cannot be expressed, or
   Cycle 04's merged mechanism answers it differently, stop and report to
   the orchestrator, who asks the owner. Never edit a row to fit.
@@ -497,14 +508,20 @@ SettingsRoute::AddButton // renamed from AddRepository; Inspect removed
   AW-5 (`workspace/requests.rs`). Remove `SettingsRoute::Inspect` and
   `inspect_in_settings` (R-5); rename `SettingsRoute::AddRepository` to
   `AddButton` (R-6).
-- [ ] **Step 5: Adding** (B10's "Adding"): `confirm_followed` with the
-  origin closure; `pending_adds` recorded on `Followed::Confirmed` with
-  the request's attempt; handled from the Workspace's
-  `operations_changed`, deferred with `defer_in` (R-25); success closes
-  the sheet with `add_closed(Added(root))`. Shares are Task 7's; the
-  `share` field stays `None` until then.
+- [ ] **Step 5: Adding** (B10's "Adding"): `Followed::Confirmed` gains
+  `attempt` (R-28; E-16); `Request` gains `registered_root` (R-29);
+  `confirm_followed` with the origin closure, the sheet holding only the
+  subscription; `pending_adds` recorded on `Followed::Confirmed` with the
+  event's attempt and the open number (R-26); B10's states in
+  `operations_changed`, the entry taken out in that pass and handled
+  with `defer_in` (R-25); added closes the sheet of the same open with
+  `add_closed(Added(root))`, or forgets the check and clears the text;
+  the close and any return to Settings wait for dialogs (G23); "Adding…"
+  while pending (R-27). Shares are Task 7's; the `share` field stays
+  `None` until then.
 - [ ] **Step 6: Named edits** E-1 (Task 4's part: the moved tests open
-  the sheet), E-1e, E-4 (Task 4's part), E-5, E-6, E-7, E-8, E-12, E-15.
+  the sheet), E-1b (Task 4's part), E-1e, E-4 (Task 4's part), E-5, E-6,
+  E-7, E-8, E-12, E-15, E-16.
 - [ ] **Step 7: Run** P3–P8, P15, P23 and every edited test, and by module
   `desktop::view::add_repository::tests`,
   `desktop::view::settings::repositories`,
@@ -520,22 +537,25 @@ SettingsRoute::AddButton // renamed from AddRepository; Inspect removed
 
 - [ ] **Step 1: Tests first:** P9 (B6's table; `Busy` through a
   `#[cfg(test)]` accessor; G20 is Task 6's), P10 (with G16 and the
-  no-commits row), P11 (B10's table), P21 and P22 (`#[cfg(unix)]`), in
-  `D/view/add_repository_tests.rs`.
+  no-commits row), P11 (B10's table and G22), P21's Add rows and P22
+  (`#[cfg(unix)]`), in `D/view/add_repository_tests.rs`.
 - [ ] **Step 2: Header and mode** (B5): `frame::sheet_header` with the
   title and description; the mode control as Cycle 02's segments
   (`D/view/tickets/filter_bar.rs`), each a Tab stop with Enter and Space.
 - [ ] **Step 3: The folder and its checks** (B6), in
   `add_repository/checks.rs`: the rows and their actions, Open its
-  settings included; Browse… and its note line; Retry, Check again,
-  Choose another and Create one here (its focus row G20 is Task 6's).
+  settings and the two Valid-configuration rows included; the prefix not
+  drawn for a Valid configuration (R-31); Browse… and its note line;
+  Retry, Check again, Choose another and Create one here (its focus row
+  G20 is Task 6's).
 - [ ] **Step 4: The main branch** (B7): a `SelectState` whose items are
   the checked-out branch first, then the others; the delegate draws the
   Suggested tag and the greyed reason, refuses other branches in
   `on_will_change`, and ignores a `Confirm` naming one.
-- [ ] **Step 5: Enablement** (B10's table) for Add repository.
-- [ ] **Step 6: Named edits** E-1a, E-1b, E-1c (Add's part), E-1d, E-2
-  (Add's part), E-4 (the row).
+- [ ] **Step 5: Enablement** (B10's table) for Add repository, and
+  `resume_submit` going on only when the landed check enables Add (G22).
+- [ ] **Step 6: Named edits** E-1a, E-1b (Task 5's part), E-1c (Add's
+  part), E-1d, E-2 (Add's part), E-4 (the row).
 - [ ] **Step 7: Run** P9–P11, P21, P22, the edited tests, and by module
   `desktop::view::add_repository::tests`.
 - [ ] **Step 8: Verify, commit, push.**
@@ -544,7 +564,8 @@ SettingsRoute::AddButton // renamed from AddRepository; Inspect removed
 
 ## Task 6: Create A New Repository (B8)
 
-- [ ] **Step 1: Tests first:** P12, and P9's Create one here row (G20).
+- [ ] **Step 1: Tests first:** P12, P9's Create one here row (G20), and
+  P21's Create rows.
 - [ ] **Step 2:** Name, Location and its Browse…, `create-target`, the
   required branch field, the prefix, the optional identity and the note
   (B8); Create repository's enablement (B10); Create one here fills
@@ -567,8 +588,9 @@ SettingsRoute::AddButton // renamed from AddRepository; Inspect removed
 - [ ] **Step 3: The select** (C1), in `add_repository/share.rs`, with
   decision 17's default.
 - [ ] **Step 4: After the add** (C2): the `share` field of `PendingAdd`
-  filled on confirmation by C2's three cases, sent on success, dropped
-  otherwise and once a quit has started.
+  filled on confirmation by C2's three cases; sent to the registered root
+  when the add is added; not sent once the app is finishing; the select
+  held on Keep for a Valid configuration with no identity (R-30).
 - [ ] **Step 5: Run** P13, P14 and P9's registered-folder row.
 - [ ] **Step 6: Verify, commit, push, ticket comment.**
 
@@ -579,8 +601,9 @@ SettingsRoute::AddButton // renamed from AddRepository; Inspect removed
 - [ ] **Step 1: Tests first:** P18 (the key from `fixture.generate_key`,
   `D/test_support/fixtures.rs:920`; "before the read" with
   `hold_read(ReadKind::Keys)`, `D/test_support/delaying.rs:135`; a
-  failed read and a missing key), P19 (by the Unlock button), and P1's
-  and P2's Unlock rows (P2's fails).
+  failed read through U-8's seam; a missing key; a read landing after
+  the prompt was withdrawn), P19 (by the Unlock button), and P1's and
+  P2's Unlock rows (P2's fails).
 - [ ] **Step 2:** The dialog on the frame (Part D 1–7): `open_dialog`
   takes `Services` and `show_prompt` passes it; the header with the lock
   tile; the key card and its read under `ViewScope::Unlock`;
@@ -647,7 +670,7 @@ SettingsRoute::AddButton // renamed from AddRepository; Inspect removed
 | A2 | 4 | P3, P15 |
 | A3 | 4 | P4 |
 | A4 | 4 | P6 |
-| A5 | 4, 5, 6 | P3–P8, P9 (G20), P10 (G16), P15 |
+| A5 | 4, 5, 6 | P3–P8, P9 (G20), P10 (G16), P11 (G22), P15, P23 |
 | A6 | 3–6, 9 | P9, P16; moved tests |
 | A7 | 5, 6, 7 | P9–P13 |
 | A8 | 7 | P14 |
@@ -659,7 +682,8 @@ SettingsRoute::AddButton // renamed from AddRepository; Inspect removed
 
 **Rulings to tasks.** R-1, R-4, R-19: Tasks 1–2. R-2, R-3: Task 1. R-20:
 Task 2. R-8, R-9: Task 3. R-5, R-6, R-14, R-21, R-22, R-24, R-25: Task 4.
-R-10 to R-12, R-18, R-23: Task 5. R-13: Task 6. R-16, R-17: Task 8.
+R-26 to R-29: Task 4. R-10 to R-12, R-18, R-23, R-31: Task 5. R-13: Task
+6. R-30: Task 7. R-16, R-17: Task 8.
 Decisions 15–18: Tasks 1–2 (15), 4 (16), 7 (17), 5 (18).
 
 **Placeholders.** None. The interfaces marked "design A1" and "design
