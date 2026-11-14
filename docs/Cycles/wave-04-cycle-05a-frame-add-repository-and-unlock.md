@@ -14,7 +14,7 @@ Ticket `01M7D5Z7FZTGTC1HE25KQ1MYQY`.
 [Design](../plans/2026-11-14-wave-04-cycle-05a-frame-add-repository-and-unlock-design.md) and
 [implementation plan](../plans/2026-11-14-wave-04-cycle-05a-frame-add-repository-and-unlock-implementation.md).
 
-Status: **draft** (revision 1).
+Status: **draft** (revision 2).
 
 - On 2026-11-14, with Cycle 04 in flight, the owner asked to plan Wave 04
   Cycle 05 "the way Cycle 04 did". Execution waits until Cycle 04 lands on
@@ -23,6 +23,7 @@ Status: **draft** (revision 1).
   (decision 2), answered decisions 3 and 4, and accepted the planner's
   outline and constraints with decision 5 ("Write the documents").
 - Decisions 6–14 are the planner's proposals, awaiting confirmation.
+- After review round 1 the owner answered decisions 15–18.
 - Those marked **(owner's eye)** change something people see today or
   depart from an authority.
 
@@ -31,6 +32,10 @@ Revision history:
 - Drafted on the ticket branch from origin/main `ea6d899b`; ticket
   checkpoints `0698f556` (created) and `2ee459a5` (renamed 05a, decisions
   1–5).
+- Review round 1 read revision 1 at `9e22c765`:
+  - source and feasibility: 1 Blocking, 9 Important, 12 Minor;
+  - contract and consistency: 2 Blocking, 19 Important, 22 Minor.
+- Revision 2 applied both, and decisions 15–18.
 
 ## Purpose And Authority
 
@@ -109,7 +114,7 @@ Authorities, in order:
 | Cycle 04's planning approved | Yes: `ded8402f` on `manyhands/ticket/01M7AMAPNHHTNECXBF4CA5WPKV` |
 | **Cycle 04 merged (decision 1; Wave dependency)** | **No: in execution (its Task 0 is committed on its branch). Task 0 does not start before it merges** |
 | Cycle 05b split off (decision 2) | `01M7D7JK5MSY6J471JEKG3CZXR`, open, depends on this ticket |
-| GPUI Kit 0.6.6 names read | `Dialog` title and footer slots, `Sheet`, Root's layers, `SelectState` and its delegate, `ToggleGroup`, `Theme::apply_config`, `Input`, `img`, from the locked source (design facts 30–41) |
+| GPUI Kit 0.6.6 names read | `Dialog` title and footer slots, `Sheet`, Root's layers, `SelectState` and its delegate, `ToggleGroup` (no keyboard path), `apply_config`, `Input`, `img`, from the locked source (design facts 32–41) |
 | Required checks at baseline | Not run during planning; Task 0 runs them |
 | Testers | Linux (Wayland): the product owner. macOS and Windows: native CI after merge |
 
@@ -144,8 +149,9 @@ sweep, 2026-11-14).
    - from Settings it replaces Settings, and Cancel or Add brings
      Settings back at Repositories (Wave decision 10);
    - the mode control, the folder and its checks as rows with their
-     fixes, the main branch select, "Share changes through", the
-     identity step, the note and the footer;
+     fixes (Open its settings for a registered folder, decision 18), the
+     main branch select, "Share changes through", the identity step, the
+     note and the footer;
    - Create with Name and Location.
 3. **"Share changes through"** (Part C): the folder's remotes and "Keep on
    this computer"; the choice is sent after the add succeeds (decision
@@ -187,7 +193,9 @@ sweep, 2026-11-14).
    keeps its title, text, buttons, which control has focus when it
    opens, what Enter does, what Escape does, and where focus goes when it
    closes, and its buttons' order, except the Confirmation dialog and
-   Unlock key, which put the action last as `05` draws it (decision 6).
+   Unlock key, which put the action last as `05` draws it (decision 15).
+   Unlock key's own changes are decision 14's, and the details sheet's
+   description moves into its header (design A5).
    Only the layout changes: header, body, footer (Wave: "Only its frame,
    layout, copy and states change").
 2. **Add repository is a sheet.** It is a right-side 470 px sheet on
@@ -200,10 +208,12 @@ sweep, 2026-11-14).
    Downstream Obligations). A typed passphrase in Settings is emptied
    when Add repository replaces it.
 4. **Focus is trapped and returns,** exactly as the design's table B9
-   (G1–G14) sets out. In short:
-   - Tab stays inside the sheet and its dialogs;
-   - focus returns to the control that opened the sheet, or to Settings
-     when it came from Settings;
+   (G1–G20) sets out. In short:
+   - Tab stays inside the sheet and its dialogs, and nothing pulls focus
+     behind the sheet;
+   - focus returns to the control that opened the sheet (for an Activity
+     row, the list; for a popover row, the footer item, as Cycle 04), or
+     to Settings when it came from Settings;
    - when that control is no longer drawn, focus goes to its region;
    - work that lands after the sheet closed moves no focus and opens no
      dialog.
@@ -214,15 +224,21 @@ sweep, 2026-11-14).
    what today's forms send, through today's confirmation, except **(owner's
    eye)**:
    - the mode control shows one form at a time (Part B);
-   - Add is enabled only when it can go ahead (decision 9);
+   - Add is enabled only when it can go ahead, and Create needs a Main
+     branch (decision 9);
    - the main branch is chosen from the folder's branches (decision 10);
    - Create takes a Name and a Location (decision 11);
    - "Share changes through" sends the chosen remote after the add
      (decision 3);
    - a successful add closes the sheet (decision 12);
-   - the inspect routes land on the sheet (decision 13);
+   - the inspect routes land on the sheet, with Open its settings for a
+     registered folder (decisions 13, 18);
+   - typed text is kept when the sheet closes, except after a successful
+     add (decision 16);
+   - Ctrl+, does nothing while the sheet is open (design R-14);
    - the Unlock dialog's changes (decision 14);
-   - footer button order (decision 6);
+   - footer button order on the Confirmation dialog and Unlock key
+     (decision 15);
    - the folded-in fixes (Part G).
 7. **R-60 holds** (Wave 03 D3). Nothing in the workspace acts behind the
    Add sheet, and nothing pulls focus behind it.
@@ -245,11 +261,11 @@ reports.
 | A2 | Add repository is a sheet the workspace keeps (contract 2) | `add_repository_is_a_sheet_the_workspace_keeps` (P3); `nothing_acts_behind_the_add_sheet` (P15) | Planned |
 | A3 | Every way in lands (contract 5) | `each_way_in_opens_the_add_sheet` (P4) | Planned |
 | A4 | Replacing Settings and returning to it (contract 3; Wave decision 10) | `add_from_settings_returns_to_settings` (P6) | Planned |
-| A5 | Focus trapped, Escape closes, focus returns to the invoking control (Wave exit; contract 4) | Design B9 rows G1–G14, each read after a draw, through P5 `focus_returns_to_what_opened_add`, P6, `the_add_sheet_closes_every_way` (P7) and `late_work_moves_no_focus_after_add_closes` (P8) | Planned |
+| A5 | Focus trapped, Escape closes, focus returns to the invoking control (Wave exit; contract 4) | Design B9 rows G1–G20, each read after a draw, through P3, P4, P5 `focus_returns_to_what_opened_add`, P6, `the_add_sheet_closes_every_way` (P7), `late_work_moves_no_focus_after_add_closes` (P8), P9 (G20), P10 (G16) and P15 (G18, G19) | Planned |
 | A6 | Adding and creating a repository, including the identity step and each failed check's recovery action, by keyboard (Wave exit) | `add_and_create_by_keyboard` (P16); `folder_checks_are_rows_with_their_actions` (P9); the existing Add and Create tests, moved and edited only as the named edits say | Planned |
 | A7 | The design's Add repository layout: mode, checks, main branch, sharing, note, footer (Wave scope) | P9; `the_main_branch_is_the_checked_out_one` (P10); `add_is_enabled_only_when_it_can_go_ahead` (P11); `create_joins_location_and_name` (P12); `share_changes_through_lists_the_folders_remotes` (P13) | Planned |
 | A8 | The chosen remote is sent after the add (decision 3) | `a_chosen_remote_is_selected_after_the_add_succeeds` (P14) | Planned |
-| A9 | Unlocking, Not now and a refused passphrase by keyboard; focus returns (Wave exit, as decision 4 limits it) | `the_unlock_dialog_names_the_key` (P18); `a_refused_passphrase_keeps_focus_in_the_field` (P19); the existing passphrase and keyboard tests, edited only as the named edits say | Planned |
+| A9 | Unlocking, Not now (the key then waiting in Needs attention) and a refused passphrase by keyboard; focus returns; a wrong passphrase as today (Wave exit, as decision 4 limits it) | P1's and P2's Unlock rows; `the_unlock_dialog_names_the_key` (P18); `a_refused_passphrase_keeps_focus_in_the_field` (P19); the Unlock evidence tests the design's Testing names, edited only as E-9 says | Planned |
 | A10 | Copy in the `06` vocabulary | `frame_copy_uses_the_vocabulary` (P20) | Planned |
 | A11 | No passphrase or private key text reaches any label, tooltip or Git detail line (Wave exit; contract 8) | `add_sheet_names_no_secret` (P17); `a_supplied_passphrase_is_shown_or_kept_nowhere` and the polling privacy tests, unchanged in meaning | Planned |
 | A12 | The folded-in work (Part G) | P9 (Retry); `browse_says_why_beside_its_button` (P21); `a_folder_that_is_not_text_is_named` (P22) | Planned |
@@ -301,7 +317,7 @@ decisions govern and are not repeated.
      Escape as Settings does (decision 7);
    - the common frame's look: primary buttons amber everywhere, the
      footer's main button last, the teal focus ring, one scrim colour
-     (decision 6, which narrows the button order after the test sweep);
+     (decision 15 corrects the button order);
    - "Open repository details" and the inspect recovery open the Add
      sheet with the folder checked (decision 13);
    - the four folded-in items (Part G).
@@ -312,17 +328,11 @@ decisions govern and are not repeated.
    - Primary buttons are amber with dark text everywhere in the app, set
      once through the Kit theme. Cycle 05b's two surfaces and every
      panel's primary buttons change with them.
-   - Footer buttons are right-aligned. Their order stays as today,
-     since several dialogs put the safe choice first on purpose (the quit
-     asks, Discard a draft, the repair discard, Keep draft before Save).
-     The Confirmation dialog and Unlock key put the action last, as `05`
-     draws it (Cancel · Confirm, Not now · Unlock), so Tab reaches Cancel
-     first there. Which button Enter presses and which control has focus
-     on open do not change.
+   - Footer buttons are right-aligned; their order is decision 15's.
    - The Kit's focus ring and input border turn teal everywhere. The
      ring keeps the Kit's fixed 3 px at 50%, not `05`'s 2 px at 18%.
-   - Sheets and dialogs share one scrim colour, `rgba(10,11,13,.6)`; the
-     Kit has one slot.
+   - Sheets and dialogs share one scrim colour, `#0a0b0d99`; the Kit has
+     one slot.
    - *Reason:* the Wave asks that no surface stay in the old style, and
      the Kit offers these slots once for the whole app.
 7. **Escape (owner's eye).** `05` says sheets and dialogs close on Escape
@@ -340,13 +350,15 @@ decisions govern and are not repeated.
      summary.
 9. **Add is enabled only when it can go ahead (owner's eye).**
    - The footer's Add repository is enabled when the folder field is
-     filled and its last check did not fail or find the folder already
-     added. Create repository is enabled when Name and Location are
-     filled.
+     filled and its check, once landed, did not fail, found the folder
+     not yet added, found its configuration usable and found a branch
+     checked out (design B10's table). Create repository is enabled when
+     Name, Location and Main branch are filled (RFC 318: both show and
+     require the primary branch).
    - Pressing Add on a folder not yet checked checks it first and goes
      on when the check passes (D1 R-T12b).
-   - Today's "Enter the folder's path." message goes, since the button is
-     disabled instead.
+   - Today's "Enter the folder's path." and "Enter the primary branch."
+     messages go, since the buttons are disabled instead.
    - *Reason:* `05` says "Disabled until the checks pass"; R-T12b's
      check-first keeps one press enough.
 10. **The main branch is the checked-out one (owner's eye).** In Add, the
@@ -363,8 +375,11 @@ decisions govern and are not repeated.
     email and its short-code prefix, and Add keeps its prefix, which `05`
     leaves out. *Reason:* behaviour unchanged.
 12. **A successful add closes the sheet (owner's eye).**
+    - It closes once the confirmation has closed itself.
     - Opened from Settings, Settings comes back at Repositories with the
-      new repository chosen; otherwise focus returns to the origin.
+      new repository as Settings' chosen repository (Cycle 04's
+      `Manage` route); the Repositories panel's selection is unchanged.
+      Otherwise focus returns to the origin.
     - The chosen remote is sent when the add succeeds, also if the sheet
       was closed while it ran, since nothing is cancelled (decision 7).
     - *Reason:* today the forms stay filled after an add
@@ -374,9 +389,10 @@ decisions govern and are not repeated.
     repository details" in the lifecycle dialog and the `repo.inspect`
     and `remote.history` recoveries open the Add sheet with the folder
     filled and checked, as they fill and check today's Add form. A
-    registered repository reads "Already added to Manyhands" and Add is
-    disabled. *Reason:* Cycle 04 moves these routes with Add repository
-    (its W-22 and W-27); the check is what they show today.
+    registered repository reads "Already added to Manyhands" with its
+    configuration's state and problems, and Add is disabled; decision 18
+    adds Open its settings. *Reason:* Cycle 04 moves these routes with Add
+    repository (its W-22 and W-27); the check is what they show today.
 14. **The Unlock key dialog (owner's eye).**
     - A key card shows the key's label and fingerprint. The fingerprint
       comes from the key list the desktop already reads, by the key's ID;
@@ -391,9 +407,37 @@ decisions govern and are not repeated.
     - The subtitle is shown, as today, only while a share waits.
     - There is no show and hide toggle (Wave decision 9).
 
+**Answered after review round 1:**
+
+15. **Button order.** The owner chose "Keep today's order". Footers are
+    right-aligned and keep today's order, since several dialogs put the
+    safe choice first on purpose (the quit asks, Discard a draft, the
+    repair discard, Keep draft before Save). Only the Confirmation dialog
+    and Unlock key put the action last, as `05` draws them (Cancel ·
+    Confirm, Not now · Unlock). This corrects the outline of decision 5
+    ("the footer's main button last") and settles that part of decision
+    6.
+16. **Typed text on close.** The owner chose "Keep it; clear after
+    success". Cancel, Escape, the close button and a click outside keep
+    the Add sheet's typed folder, branch, name and email for its next
+    open, as Settings keeps typed text (Cycle 04 decision 13). The sheet
+    empties after a successful add; quitting loses it with the app. A
+    pending Add is always dropped.
+17. **The default remote, and Keep on this computer.** The owner chose
+    "Configured, else Keep". "Share changes through" defaults to the
+    remote the folder's settings already name, else "Keep on this
+    computer", so nothing is set up to share unless the person picks a
+    remote. Choosing Keep on a folder whose settings name a remote sends
+    today's "stop sharing" selection after the add.
+18. **Open its settings.** The owner chose "Rows plus an Open settings
+    action". For a registered folder the Add sheet shows "Already added",
+    its configuration's state and problems, and an "Open its settings"
+    action that closes the sheet and opens Settings › Repositories on that
+    repository. Add stays disabled.
+
 ## Known Limits
 
-Design K-1 to K-9:
+Design K-1 to K-14:
 
 - no "You can save changes here" check (no read);
 - no inline error for a wrong passphrase (decision 4);
@@ -405,8 +449,16 @@ Design K-1 to K-9:
   (`01M70CF14M3YC6SR8T9JJ6XQBG`);
 - "Open repository details" lands on the Add sheet's check (decision 13);
 - the mode control's two options are separate Tab stops with Enter and
-  Space, not arrow keys;
-- no File › Add repository entry (no title-bar menus).
+  Space, not arrow keys, as Cycle 02's segments are;
+- no File › Add repository entry (no title-bar menus);
+- a share choice waiting for its add is lost if the app quits first;
+- a dialog's footer scrolls with its body when the dialog is taller than
+  the window;
+- Create one here is offered on any folder that is not a repository,
+  though the library refuses one that is not empty;
+- any of the secondary button, input background or sheet border and
+  shadow the Kit theme has no key for stays the Kit's;
+- a failed share selection after an add offers no new action.
 
 ## Open Questions
 
@@ -419,3 +471,7 @@ None blocking. Design U-1 (Cycle 04's merged names) is checked in Task 0.
 | Owner, 2026-11-14 | Plan Cycle 05 now; execution after Cycle 04; no brainstorming questions | Owner direction | Decision 1; ticket created and published (`0698f556`) | Session, 2026-11-14 |
 | Planning research | The Wave's "Check first" of D5's two surfaces; the dialog inventory and the Kit's frame APIs; Add and Create today and their library inputs; the passphrase dialog and the wrong-passphrase defect; Cycle 04's sheet owner and focus contract; lessons from Cycles 02, 03a and 03b | Facts; owner questions; rulings | Design facts; decisions 2–4; rulings | Session, 2026-11-14 |
 | Owner, 2026-11-14 | Split; the remote select; the wrong passphrase; the outline | Owner decisions | Decisions 2–5; 05b ticket `01M7D7JK5MSY6J471JEKG3CZXR` created and published (`ee49a195`); this ticket renamed (`2ee459a5`) | Session, 2026-11-14 |
+| Test sweep, 2026-11-14 | Footers in the Kit's slot would break focus-gated closes and privacy sweeps; several dialogs put the safe choice first on purpose | Facts; owner question | Design R-19; decision 15 | Research report, 2026-11-14 |
+| Review round 1, source and feasibility (revision 1, `9e22c765`) | 1 Blocking, 9 Important, 12 Minor. Blocking: the Kit's segmented `ToggleGroup` has no keyboard path. Important: the success close races the confirmation's own close; an older attempt's finish drops the share; a repository with no commits; Keep over a configured remote; `apply_config` switches the mode and ignores `rgba`; task order; E-1's hidden removals; missed tests; P6 could not fail | Blocking, Important, Minor | Revision 2 (design Review Record) | Review report, 2026-11-14 |
+| Review round 1, contract and consistency (revision 1, `9e22c765`) | 2 Blocking, 19 Important, 22 Minor. Blocking: Unlock's exit evidence unproven; nothing kept focus from being pulled behind the Add sheet. Important: enablement contradictions; Create's branch; registered folders' configuration; clearing on close; success tracking; Cycle 04's origin rows; Settings opened over the sheet; Keep; the as-built note; the mode control against Cycle 02; secondary slots; Task 3's size; P16; decision 6 against decision 5; decision 12's reading; contract 1 | Blocking, Important, Minor; owner questions | Revision 2; decisions 15–18 | Review report, 2026-11-14 |
+| Owner, 2026-11-14, after review round 1 | Button order; typed text on close; the default remote and Keep; registered folders on the inspect routes | Owner decisions | Decisions 15–18 | Session, 2026-11-14 |
