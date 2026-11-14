@@ -207,7 +207,7 @@ pub(crate) enum JobKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct KeyStoreUnavailable;
 
-pub(crate) const KEY_STORE_UNAVAILABLE: &str = "Manyhands could not find your SSH key store.";
+pub(crate) const KEY_STORE_UNAVAILABLE: &str = "Manyhands could not find your key store.";
 
 /// What the desktop calls the library through.
 pub(crate) trait Backend: Send + Sync + 'static {

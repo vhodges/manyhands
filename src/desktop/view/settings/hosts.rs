@@ -67,26 +67,26 @@ use crate::desktop::{
 
 pub(crate) const PINS_HEADING: &str = "Trusted servers";
 pub(crate) const CHECK_HEADING: &str = "Check host";
-pub(crate) const READING_PINS: &str = "Reading the host pins";
-pub(crate) const NO_PINS: &str = "No host is pinned yet.";
+pub(crate) const READING_PINS: &str = "Reading the trusted servers";
+pub(crate) const NO_PINS: &str = "No server is trusted yet.";
 pub(crate) const REAPPROVAL: &str =
-    "The host pin registry was lost: every host must be approved again.";
+    "The list of trusted servers was lost: approve each server again.";
 pub(crate) const NO_REPOSITORY: &str =
-    "Choose a repository in the sidebar to check the host it publishes to.";
+    "Manage a repository on the Repositories page to check the server it shares through.";
 pub(crate) const READING_REMOTES: &str = "Reading the repository's remotes";
-pub(crate) const NO_SSH_PUBLICATION: &str = "Check host is unavailable: this repository has no \
-     publication remote reached over SSH. Choose one on the Remotes page.";
+pub(crate) const NO_SSH_PUBLICATION: &str = "Check host is unavailable: this repository's shared \
+     copy is not reached over SSH. Choose one under Repositories \u{203a} Sharing.";
 pub(crate) const CHECK: &str = "Check host";
-pub(crate) const CHECK_NOTE: &str = "Check host connects to the host the publication remote \
-     fetches from and shows the key it presents. It pins nothing.";
+pub(crate) const CHECK_NOTE: &str = "Check host connects to the server this repository's shared \
+     copy is on and shows the key it presents. It trusts nothing yet.";
 pub(crate) const CONNECTING: &str = "Connecting";
 pub(crate) const CANCEL_UNAVAILABLE: &str = "Cancel is unavailable while connecting to a host.";
-pub(crate) const NOT_PINNED: &str = "This host is not pinned.";
-pub(crate) const MATCHES: &str = "The host presents the key it is pinned to.";
-pub(crate) const DIFFERENT: &str = "The host presents another key than the one it is pinned to.";
-pub(crate) const PINNED: &str = "Pinned key";
-pub(crate) const APPROVE: &str = "Approve host";
-pub(crate) const REPLACE: &str = "Replace host key";
+pub(crate) const NOT_PINNED: &str = "This server is not trusted yet.";
+pub(crate) const MATCHES: &str = "The server presents the key you trusted.";
+pub(crate) const DIFFERENT: &str = "The server presents a different key from the one you trusted.";
+pub(crate) const PINNED: &str = "Trusted key";
+pub(crate) const APPROVE: &str = "Approve host\u{2026}";
+pub(crate) const REPLACE: &str = "Replace host key\u{2026}";
 
 const CHECK_ID: &str = "hosts-check";
 const APPROVE_ID: &str = "hosts-approve";

@@ -77,7 +77,7 @@ pub(crate) const INITIALS_CLEAR: &str = "Clear initials";
 pub(crate) const INITIALS_SET: &str = "Set initials";
 pub(crate) const CHOSEN: &str = "Chosen";
 pub(crate) const SET_IDENTITY: &str = "Set identity";
-pub(crate) const REMOVE: &str = "Remove repository";
+pub(crate) const REMOVE: &str = "Remove repository\u{2026}";
 pub(crate) const REMOVE_NOTE: &str =
     "Removing takes the repository out of Manyhands. Its files stay where they are.";
 

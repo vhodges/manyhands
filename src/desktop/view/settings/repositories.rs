@@ -823,3 +823,8 @@ mod tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "repositories_manage_tests.rs"]
 mod manage_tests;
+
+/// Settings' copy (P18); here because `manage` is private to this module.
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "copy_tests.rs"]
+mod copy_tests;

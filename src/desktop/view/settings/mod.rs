@@ -491,3 +491,7 @@ mod attention_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "chosen_tests.rs"]
 mod chosen_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "copy_secret_tests.rs"]
+mod copy_secret_tests;

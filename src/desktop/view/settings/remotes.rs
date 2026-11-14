@@ -1,6 +1,6 @@
 //! The Remotes settings page (design, Settings / Remotes): one
 //! repository's remotes, as `list_remotes_redacted` lists them, with
-//! Add, Select for publication, Select none and Remove.
+//! Add, Use as the shared copy, Keep changes on this computer and Remove.
 //!
 //! The page works on the repository Settings chose (Manage on the
 //! Repositories page, or a route), and is drawn on that page under Sharing
@@ -18,7 +18,7 @@
 //! same thing), and the operation area shows the command and the
 //! repository, never the location.
 //!
-//! **Select for publication** and **Select none** submit
+//! **Use as the shared copy** and **Keep changes on this computer** submit
 //! `Intent::RemoteSelect`. A remote that is not eligible is listed, said
 //! to be so, and may still be selected: the library answers with its
 //! typed refusal, shown here and in the operation area.
@@ -74,19 +74,20 @@ pub(crate) const REPOSITORY_HEADING: &str = "Repository";
 /// The section the Repositories page draws the page under (design C1).
 pub(crate) const SHARING_HEADING: &str = "Sharing";
 pub(crate) const ADD_HEADING: &str = "Add a remote";
-pub(crate) const NO_REPOSITORY: &str = "Choose a repository to see its remotes.";
+pub(crate) const NO_REPOSITORY: &str = "Manage a repository above to see how it shares.";
 pub(crate) const READING_REMOTES: &str = "Reading the remotes";
 pub(crate) const NO_REMOTES: &str = "This repository has no remotes.";
 pub(crate) const FETCHES_FROM: &str = "Fetches from";
 pub(crate) const PUSHES_TO: &str = "Pushes to";
-pub(crate) const ELIGIBLE: &str = "Eligible for publication";
+pub(crate) const ELIGIBLE: &str = "Can be the shared copy";
 pub(crate) const NOT_ELIGIBLE: &str =
-    "Not eligible for publication: publishing needs a remote reached over SSH";
-pub(crate) const SELECTED: &str = "Selected for publication";
-pub(crate) const SELECTION_NONE: &str = "No remote is selected for publication.";
-pub(crate) const SELECT: &str = "Select for publication";
-pub(crate) const SELECT_NONE: &str = "Publish to no remote";
-pub(crate) const REMOVE: &str = "Remove remote";
+    "Can't be the shared copy: sharing needs a remote reached over SSH";
+pub(crate) const SELECTED: &str = "The shared copy";
+pub(crate) const SELECTION_NONE: &str =
+    "No shared copy is chosen, so changes stay on this computer.";
+pub(crate) const SELECT: &str = "Use as the shared copy";
+pub(crate) const SELECT_NONE: &str = "Keep changes on this computer";
+pub(crate) const REMOVE: &str = "Remove remote\u{2026}";
 pub(crate) const NAME: &str = "Name";
 pub(crate) const URL: &str = "Location (URL)";
 pub(crate) const ADD: &str = "Add remote";
@@ -106,9 +107,9 @@ pub(crate) fn location_line(name: &str, location: &str) -> String {
     format!("{name}: {location}")
 }
 
-/// The line that names the publication remote.
+/// The line that names the shared copy.
 pub(crate) fn selection_line(name: &str) -> String {
-    format!("Publication remote: {name}")
+    format!("Shared copy: {name}")
 }
 
 /// The line that names the repository the page works on.
@@ -366,8 +367,9 @@ impl RemotesPage {
         self.root.as_deref() == Some(root)
     }
 
-    /// Select for publication, or Select none with no `name`, of `root`,
-    /// the repository the row was read from, as a user job.
+    /// Use as the shared copy, or Keep changes on this computer with no
+    /// `name`, of `root`, the repository the row was read from, as a user
+    /// job.
     fn submit_select(
         &mut self,
         root: PathBuf,
