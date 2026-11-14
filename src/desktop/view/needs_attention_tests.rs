@@ -27,4 +27,4 @@ mod open;
 #[path = "needs_attention_tests/stale.rs"]
 mod stale;
 #[path = "needs_attention_tests/support.rs"]
-mod support;
+pub(in crate::desktop::view) mod support;

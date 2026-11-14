@@ -354,4 +354,4 @@ fn row_element(
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "needs_attention_tests.rs"]
-mod tests;
+pub(in crate::desktop::view) mod tests;

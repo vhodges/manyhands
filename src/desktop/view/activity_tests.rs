@@ -23,10 +23,12 @@ use super::super::{
 use crate::desktop::{
     model::{
         activity::rows::{ActivityRow, RowKey},
+        layout::PanelKind,
         operations::Operations,
     },
     services::{ReadFailure, ReadResult, requests::DesktopRequestId},
     test_support::fixtures::Fixture,
+    view::needs_attention::tests::support as popover,
 };
 
 const OPERATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -81,8 +83,9 @@ fn attention_keys(shell: &Shell, cx: &mut TestAppContext) -> Vec<RowKey> {
     })
 }
 
-/// The footer says how many attention rows the log has, and the rows are the
-/// ones the N-table names.
+/// The footer says how many attention rows the log has, the rows are the
+/// ones the N-table names, and the popover lists those rows and no others:
+/// open while there are any, closed at 0 (P13, the popover half).
 fn agree(shell: &Shell, expected: Vec<RowKey>, step: &str, cx: &mut TestAppContext) {
     let mut expected = expected;
     expected.sort();
@@ -96,16 +99,37 @@ fn agree(shell: &Shell, expected: Vec<RowKey>, step: &str, cx: &mut TestAppConte
         attention_text(expected.len()).map(|text| (text, None)),
         "{step}: the footer says the same"
     );
+    // The popover is a filtered view of the same rows.
+    if expected.is_empty() {
+        assert!(!popover::is_open(shell, cx), "{step}: closed at 0");
+        assert!(!popover::drawn(shell, cx), "{step}: and gone");
+        return;
+    }
+    if !popover::is_open(shell, cx) {
+        popover::open_by_click(shell, cx);
+    }
+    popover::settle_popover(shell, cx);
+    let mut listed = popover::keys_of(&popover::applied(shell, cx));
+    listed.sort();
+    assert_eq!(listed, expected, "{step}: the popover lists the same rows");
+    assert!(popover::drawn(shell, cx), "{step}: and draws them");
+    assert!(
+        !shell.present(("needs-attention-row", expected.len()), cx),
+        "{step}: no more than the rows"
+    );
 }
 
-/// P13, the count half: a journey with a row of each kind the window can
-/// make here, then each resolved. At every step the footer's count is the
-/// number of the log's attention rows and their keys are the N-table's: a
-/// failed request (N3), a pending row with a next action (N1's row, counted
+/// P13: a journey with a row of each kind the window can make here, then
+/// each resolved, with Activity hidden (the popover reads the log, not the
+/// panel). At every step the footer's count is the number of the log's
+/// attention rows, their keys are the N-table's, and the popover lists them:
+/// a failed request (N3), a pending row with a next action (N1's row, counted
 /// by itself), and a pending list that failed to read (N13).
 #[gpui_kit::test]
 fn count_and_popover_agree(cx: &mut TestAppContext) {
     let shell = Shell::open(Fixture::new(), cx);
+    shell.click(Control::Panel(PanelKind::Activity).id(), cx);
+    assert!(!shell.present("operation-area", cx), "Activity is hidden");
     let (a, b) = ("/fixture/a", "/fixture/b");
     let pending = RowKey::Pending {
         root: a.to_owned(),
@@ -113,6 +137,20 @@ fn count_and_popover_agree(cx: &mut TestAppContext) {
     };
     let request = RowKey::Request(DesktopRequestId(1));
     let list = RowKey::PendingList(b.to_owned());
+    // A request that went well is a row of the log and needs no attention:
+    // the popover must not list it.
+    finish(&shell, 2, Outcome::Success, cx);
+    let quiet = RowKey::Request(DesktopRequestId(2));
+    let in_log = |shell: &Shell, cx: &mut TestAppContext| {
+        shell.workspace.read_with(cx, |workspace, _| {
+            workspace
+                .activity()
+                .rows()
+                .iter()
+                .any(|row| row.row.key == quiet && !row.row.attention)
+        })
+    };
+    assert!(in_log(&shell, cx), "a quiet row is in the log");
     agree(&shell, vec![], "nothing", cx);
 
     finish(&shell, 1, Outcome::Error, cx);
@@ -163,6 +201,10 @@ fn count_and_popover_agree(cx: &mut TestAppContext) {
     agree(&shell, vec![pending], "the list read again", cx);
     read_pending(&shell, a, ReadResult::Ok(empty()), cx);
     agree(&shell, vec![], "the pending row gone", cx);
+    assert!(
+        in_log(&shell, cx),
+        "the quiet row was in the log throughout"
+    );
 }
 
 /// T10: several notifications in one effect cycle make one derivation and one

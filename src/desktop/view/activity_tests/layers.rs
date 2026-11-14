@@ -17,7 +17,7 @@ use crate::desktop::{
     test_support::fixtures::Fixture,
     view::{
         activity_support::rows as log_rows,
-        footer::menu::Placement,
+        footer::{Control, menu::Placement},
         harness::{Shell, key},
         polling_window::PollingWindow,
         repositories::MenuAnchor,
@@ -38,14 +38,17 @@ enum Layer {
     Repository,
     /// The dock menu of a panel's footer toggle.
     Dock,
+    /// The Needs attention popover, opened by the footer item.
+    Attention,
 }
 
-const LAYERS: [Layer; 5] = [
+const LAYERS: [Layer; 6] = [
     Layer::Row,
     Layer::More,
     Layer::RepositoriesMore,
     Layer::Repository,
     Layer::Dock,
+    Layer::Attention,
 ];
 
 /// The layers the Workspace holds open now.
@@ -55,6 +58,7 @@ fn open_layers(workspace: &Workspace) -> Vec<Layer> {
         (workspace.activity_more_open(), Layer::More),
         (workspace.repository_menu_open(), Layer::Repository),
         (workspace.dock_menu_open(), Layer::Dock),
+        (workspace.attention_popover_open(), Layer::Attention),
     ]
     .into_iter()
     .filter_map(|(open, layer)| open.then_some(layer))
@@ -94,6 +98,10 @@ fn open(
                     window,
                     cx,
                 ),
+                // The footer item's press toggles: it opens the popover
+                // unless it is open, which it already is.
+                Layer::Attention if workspace.attention_popover_open() => {}
+                Layer::Attention => workspace.press(Control::Attention, window, cx),
             }
             let mut open = open_layers(workspace);
             // The two repository menus share a field: say which opened.
@@ -107,8 +115,9 @@ fn open(
     layers
 }
 
-/// R-13: one layer at a time among the row menu, ⋯, the repository menus and
-/// the dock menu, in every order: opening any of them leaves it alone open.
+/// R-13: one layer at a time among the row menu, ⋯, the repository menus, the
+/// dock menu and the Needs attention popover, in every order: opening any of
+/// them leaves it alone open.
 #[gpui_kit::test]
 fn one_layer_at_a_time_in_activity(cx: &mut TestAppContext) {
     let rows = rows(cx);
@@ -145,9 +154,10 @@ fn one_layer_at_a_time_in_activity(cx: &mut TestAppContext) {
     assert!(!more_open(shell, cx), "Escape closes ⋯");
 }
 
-/// P31, Activity's part: moving the highlight, toggling the filter, opening
-/// and closing the row menu and ⋯ send nothing, over the recording backend:
-/// no request is made and no poll is called, and the log is as it was.
+/// P31: moving the highlight, toggling the filter, opening and closing the
+/// row menu, ⋯ and the Needs attention popover, and "Show everything in
+/// Activity", send nothing, over the recording backend: no request is made
+/// and no poll is called, and the log is as it was.
 #[gpui_kit::test]
 fn navigation_sends_nothing(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -202,5 +212,34 @@ fn navigation_sends_nothing(cx: &mut TestAppContext) {
     assert!(more_open(shell, cx), "⋯ opened");
     shell.keys("escape", cx);
     assert!(!more_open(shell, cx));
+
+    // The popover (P31): opened by the footer item, its highlight moved over
+    // every row and to both ends, its three stops visited, closed by Escape;
+    // then opened again and "Show everything in Activity" chosen. Nothing is
+    // sent either way.
+    use crate::desktop::view::needs_attention::tests::support as popover;
+    let attention = popover::keys_of(&popover::attention_rows(shell, cx));
+    assert!(attention.len() >= 2, "rows to move over: {attention:?}");
+    popover::open_by_click(shell, cx);
+    assert!(popover::is_open(shell, cx) && popover::drawn(shell, cx));
+    assert_eq!(popover::keys_of(&popover::applied(shell, cx)), attention);
+    for key in ["down", "up", "end", "home", "tab", "tab", "tab"] {
+        shell.keys(key, cx);
+    }
+    assert!(popover::is_open(shell, cx), "Tab stayed inside");
+    shell.keys("escape", cx);
+    assert!(!popover::is_open(shell, cx), "Escape closed it");
+    popover::open_by_click(shell, cx);
+    shell.keys("tab", cx);
+    shell.keys("tab", cx);
+    assert_eq!(popover::spot(shell, cx), popover::Spot::Link);
+    shell.press("enter", cx);
+    assert!(!popover::is_open(shell, cx), "the link closed it");
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| !workspace.activity_filter()),
+        "and left the filter off"
+    );
     assert_eq!(footprint(cx), before, "nothing was sent, nothing changed");
 }

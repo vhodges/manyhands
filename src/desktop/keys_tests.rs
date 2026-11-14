@@ -3,17 +3,19 @@
 use gpui_kit::{Action, Keystroke, TestAppContext};
 
 use super::{
-    ActivityDown, ActivityEnd, ActivityEnter, ActivityHome, ActivityUp, CloseInspect, CloseTab,
-    Find, FocusContent, FocusNavigation, FocusOperations, FocusRepositories, NextRegion, NextTab,
-    OpenActivityMenu, OpenDockMenu, OpenDrafts, OpenRepositoryMenu, OpenSelected, OpenSettings,
-    PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, SelectFirst, SelectLast,
-    ToggleBottomDock, ToggleLeftDock, ToggleRightDock, bind,
+    ActivityDown, ActivityEnd, ActivityEnter, ActivityHome, ActivityUp, AttentionDown,
+    AttentionEnd, AttentionEnter, AttentionHome, AttentionNext, AttentionPrevious, AttentionUp,
+    CloseAttention, CloseInspect, CloseTab, Find, FocusContent, FocusNavigation, FocusOperations,
+    FocusRepositories, NextRegion, NextTab, OpenActivityMenu, OpenDockMenu, OpenDrafts,
+    OpenRepositoryMenu, OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow,
+    Rebuild, Refresh, SelectFirst, SelectLast, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
+    bind,
 };
 
 #[gpui_kit::test]
 fn each_key_is_bound_to_its_action(cx: &mut TestAppContext) {
     cx.update(bind);
-    let table: [(&str, Box<dyn Action>); 33] = [
+    let table: [(&str, Box<dyn Action>); 41] = [
         ("f6", Box::new(NextRegion)),
         ("shift-f6", Box::new(PreviousRegion)),
         ("secondary-1", Box::new(FocusRepositories)),
@@ -55,6 +57,16 @@ fn each_key_is_bound_to_its_action(cx: &mut TestAppContext) {
         ("enter", Box::new(ActivityEnter)),
         ("menu", Box::new(OpenActivityMenu)),
         ("shift-f10", Box::new(OpenActivityMenu)),
+        // In the Needs attention popover ("NeedsAttention", E2): the
+        // highlight, Enter, Tab's three stops and Escape.
+        ("up", Box::new(AttentionUp)),
+        ("down", Box::new(AttentionDown)),
+        ("home", Box::new(AttentionHome)),
+        ("end", Box::new(AttentionEnd)),
+        ("enter", Box::new(AttentionEnter)),
+        ("tab", Box::new(AttentionNext)),
+        ("shift-tab", Box::new(AttentionPrevious)),
+        ("escape", Box::new(CloseAttention)),
     ];
     cx.update(|cx| {
         for (keys, action) in &table {

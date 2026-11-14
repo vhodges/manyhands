@@ -9,27 +9,30 @@ use crate::desktop::{
 };
 
 /// The footer item's focus handle.
-pub(super) fn item(shell: &Shell, cx: &mut TestAppContext) -> FocusHandle {
+pub(in crate::desktop::view) fn item(shell: &Shell, cx: &mut TestAppContext) -> FocusHandle {
     shell.workspace.read_with(cx, |workspace, _| {
         workspace.footer_focus(Control::Attention)
     })
 }
 
 /// Whether the Workspace holds the popover open.
-pub(super) fn is_open(shell: &Shell, cx: &mut TestAppContext) -> bool {
+pub(in crate::desktop::view) fn is_open(shell: &Shell, cx: &mut TestAppContext) -> bool {
     shell
         .workspace
         .read_with(cx, |workspace, _| workspace.attention_popover_open())
 }
 
 /// The keys of `rows`, in order.
-pub(super) fn keys_of(rows: &[ActivityRow]) -> Vec<RowKey> {
+pub(in crate::desktop::view) fn keys_of(rows: &[ActivityRow]) -> Vec<RowKey> {
     rows.iter().map(|row| row.row.key.clone()).collect()
 }
 
 /// The log's attention rows, newest first: what the footer counts and the
 /// popover lists.
-pub(super) fn attention_rows(shell: &Shell, cx: &mut TestAppContext) -> Vec<ActivityRow> {
+pub(in crate::desktop::view) fn attention_rows(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+) -> Vec<ActivityRow> {
     shell.workspace.read_with(cx, |workspace, _| {
         workspace
             .activity()
@@ -42,7 +45,10 @@ pub(super) fn attention_rows(shell: &Shell, cx: &mut TestAppContext) -> Vec<Acti
 }
 
 /// The rows the popover has applied, as drawn.
-pub(super) fn applied(shell: &Shell, cx: &mut TestAppContext) -> Vec<ActivityRow> {
+pub(in crate::desktop::view) fn applied(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+) -> Vec<ActivityRow> {
     shell.frame(cx, |_, _| ());
     shell
         .workspace
@@ -50,7 +56,7 @@ pub(super) fn applied(shell: &Shell, cx: &mut TestAppContext) -> Vec<ActivityRow
 }
 
 /// The popover's highlighted row.
-pub(super) fn cursor(shell: &Shell, cx: &mut TestAppContext) -> Option<RowKey> {
+pub(in crate::desktop::view) fn cursor(shell: &Shell, cx: &mut TestAppContext) -> Option<RowKey> {
     shell
         .workspace
         .read_with(cx, |workspace, _| workspace.attention_popover_cursor())
@@ -58,7 +64,7 @@ pub(super) fn cursor(shell: &Shell, cx: &mut TestAppContext) -> Option<RowKey> {
 
 /// Where focus is, as far as the popover is concerned.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Spot {
+pub(in crate::desktop::view) enum Spot {
     /// The footer's Needs attention item.
     Item,
     /// The popover's list.
@@ -72,7 +78,7 @@ pub(super) enum Spot {
 }
 
 /// Where focus is now, read in a frame.
-pub(super) fn spot(shell: &Shell, cx: &mut TestAppContext) -> Spot {
+pub(in crate::desktop::view) fn spot(shell: &Shell, cx: &mut TestAppContext) -> Spot {
     let [list, button, link] = shell
         .workspace
         .read_with(cx, |workspace, _| workspace.attention_handles());
@@ -91,26 +97,26 @@ pub(super) fn spot(shell: &Shell, cx: &mut TestAppContext) -> Spot {
 }
 
 /// Focuses the footer item, as Tab would.
-pub(super) fn focus_item(shell: &Shell, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn focus_item(shell: &Shell, cx: &mut TestAppContext) {
     let item = item(shell, cx);
     shell.frame(cx, |window, cx| item.focus(window, cx));
     shell.run(cx);
 }
 
 /// The popover is drawn: its element is in the frame.
-pub(super) fn drawn(shell: &Shell, cx: &mut TestAppContext) -> bool {
+pub(in crate::desktop::view) fn drawn(shell: &Shell, cx: &mut TestAppContext) -> bool {
     shell.present("needs-attention-popover", cx)
 }
 
 /// Opens the popover by a click on the footer item, and lets it draw.
-pub(super) fn open_by_click(shell: &Shell, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn open_by_click(shell: &Shell, cx: &mut TestAppContext) {
     shell.click(Control::Attention.id(), cx);
     shell.frame(cx, |_, _| ());
     shell.run(cx);
 }
 
 /// Lets the popover's rows follow the log and draws them.
-pub(super) fn settle_popover(shell: &Shell, cx: &mut TestAppContext) {
+pub(in crate::desktop::view) fn settle_popover(shell: &Shell, cx: &mut TestAppContext) {
     for _ in 0..3 {
         shell.frame(cx, |_, _| ());
         shell.run(cx);
