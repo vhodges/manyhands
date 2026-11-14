@@ -24,7 +24,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 0 | done | merge `82df6942`; design citations `9f89a3bb`; ledger `003eb518`; ticket comment `e54fe9b5` | yes |
 | 1 | done, review approved first time (Minors parked) | code `0d5501e7` (base `e54fe9b5`); ledger `023ebf47` | yes |
 | 2 | done, design checkpoint passed, review approved after fix round 1 | code `5cddad28` (base `023ebf47`), fix `6894d70d`; ledger `6ae0ad14`; ticket comment `e514fa9b` | yes |
-| 3 | done, review approved after fix round 1 | code `29ef847d` (base `e514fa9b`), fix `1b3ca49a`; ledger commit follows | with the ledger commit |
+| 3 | done, review approved after fix round 1 | code `29ef847d` (base `e514fa9b`), fix `1b3ca49a`; ledger `00a179d5` | yes |
+| 4 | done, review approved first time (Minors parked) | code `a7dda502` (base `00a179d5`); ledger commit follows | with the ledger commit |
 
 ## Branches published
 
@@ -1256,3 +1257,267 @@ Result: `1 passed`.
 - `cargo fmt --check`;
 - `cargo check --locked --features desktop`;
 - `cargo clippy --all-targets --all-features --locked -- -D warnings`.
+
+## Task 4: Sharing & keys (C2, B3; Part G item 4)
+
+Implementer: one fresh Opus agent. Base `00a179d5`, code `a7dda502`. Reviewer:
+one fresh Opus agent, spec compliant, quality approved first time, no
+Critical or Important findings. Boundary diff prints nothing. 16 files,
++1739 -318.
+
+### Rulings (Task 4)
+
+Ruling 32 (accepted): the interim for the five-entry menu is Ruling 4,
+literally: entries 2 and 3 both draw the combined Sharing & keys body and the
+menu highlights by `nav()`, so entries 0 and 1 now also highlight together
+(this changes Ruling 26's by-page highlight; no test reads entry 1's
+highlight) — cost if wrong: Task 5 collapses the entries anyway.
+
+Ruling 33 (accepted): `open()` empties the passphrase at once after setting
+`shown` (B3 lists "the page change"); the render empties it too.
+
+Ruling 34 (accepted): while a retry runs, "Make a new key" stays enabled and
+does nothing (the Generate form is "shown whenever the page is retrying",
+R-54, so its own button cannot hide it), reports `aria_expanded` true, and its
+reason line names only the other button; "Use a key I already have…" is
+disabled with `RETRY_FIRST` (R-57). **For the owner's eye.**
+
+Ruling 35 (accepted): form visibility is kept across a page change and across
+closing and reopening Settings (A4: pages keep their state); "neither at
+first" is read as "when the page is first made". **For the owner's eye.**
+
+Ruling 36 (accepted): after a removal, focus moves by key ID only if it sat on
+the removed row (radio, Copy, trash or Delete key file…); the refocus runs on
+the request's success, after the confirmation closed and before the read
+lands, and checks `OpenFlag::is_open` and no dialog (R-47, F17). The
+`#[allow(dead_code)]` on the Keys page's `OpenFlag` field came off for what is
+used; the R-22 retarget stays for Task 6.
+
+Ruling 37 (accepted): the Kit buttons' element IDs are keyed by key ID
+(`"{control}-button-{key id}"`). **The review shows this only half-works:**
+the wrapper's own ID (`(control, ix)`) is the row index, so the Kit button's
+keyed state is made anew when a key changes row, and focus falls back through
+`focus_lost` to the wrapper, which has no focus ring (Minor 1). P24 passes
+through that fallback. The wrapper is still the key's row, so F17's "next key
+by key ID" holds, but the keyboard user sees no ring until Tab. **Put it on the
+on-screen checklist (Task 9)**, and key the wrappers by key ID if the owner
+sees it.
+
+Ruling 38 (accepted): the "Selected key: …" / "No key is selected." line
+(`keys-selection`) is kept between the intro and the list. C2.1's order does
+not list it and it repeats the In use tag, but removing it removes assertions
+no named edit authorizes. **Task 7 or the owner decides.**
+
+Ruling 39 (accepted): `Trash` was added to `assets.rs` (the Kit's `delete.svg`
+is a backspace glyph); `aria_expanded` on the two form buttons is not in the
+design (an accessibility state, no secret, no test reads it); `fixtures.rs`
+gained two test helpers (30 lines, file now 1046; Minor 7).
+
+E-23: no edit needed. The inputs are page entities made in `KeysPage::new`,
+whether or not the form is drawn, and `the_drafts_key_empties_a_typed_passphrase`
+reads them through `input(id)` and passed in run 1.
+
+### Parked review Minors (Task 4)
+
+1. Ruling 37's half-keyed IDs (`rows.rs:70`, `:143`); fix the `button_id` doc
+   and the P24 doc, or key the wrappers by key ID.
+2. `keys_tests/rows.rs:116-118`: the `Confirms(ix)` row compares against
+   `Intent::KeyDelete{..}.label()`, "Delete key" for every key, so the index is
+   never checked (press OK and match the intent id, as P19 does).
+3. `keys_tests/rows.rs:211-228`: the order-change row cannot separate "by key
+   ID" from "the same row index after the read" (use four keys).
+4. `keyboard_tests/settings.rs:236-243`: a hand-written poll copies
+   `Shell::until_drawn` and skips its draw.
+5. The kept selection line (Ruling 38) and Make a new key's no-op during a
+   retry (Ruling 34), for the owner's eye.
+6. `fixtures.rs` is now 1046 lines (was 1016); its new helpers belong in a
+   submodule.
+7. `keys_tests/forms.rs:106`: P9 leaves Sharing & keys only by Repositories
+   (entry 0), never by Checking for updates (entry 4); both go through `nav()`.
+8. Not verifiable from the diff: the radio's look (R-38) and the trash icon
+   are for the owner's on-screen checklist.
+
+### The interim arrangement (Ruling 4), exactly
+
+The menu still has five entries.
+
+- Entry 2 ("Shared SSH keys") and entry 3 ("Hosts") both draw the combined Sharing & keys body: the Keys page's view, then the Hosts page's view, whose first heading is "Trusted servers".
+- `shown` stays the entry's own page, `Settings(Keys)` or `Settings(Hosts)`, so `settings_shown` reads it as before (R-3).
+- `first_focus()` still gives the shown page's own entry: entry 2 for Keys, entry 3 for Hosts.
+- **The menu highlights by `nav()`.** An entry is active when `page.nav() == shown.nav()`, which drives its `aria_selected` and its "Shown" tag.
+  - While Keys or Hosts is shown, entries 2 and 3 are both active.
+  - The same now applies to entries 0 and 1 while Repositories or Remotes is shown. Task 3's interim (Ruling 26) only drew the combined page there, and its highlight went by page. No test reads entry 1's highlight; `mod_tests.rs:92` reads entry 0's "Shown" tag, and it still passes.
+- Opening either Keys or Hosts reads both pages again.
+- `page_title` is unchanged ("Shared SSH keys", "Hosts"); Part E's menu row belongs to Task 5.
+- Task 5 collapses the entries. `views()` and the highlight already go through `nav()`, so the collapse should be the menu list and its indices.
+
+### Constants added or changed (Task 7 skips these rows)
+
+All are in `settings/keys.rs` unless noted, with values verbatim from design Part E, `05` or the rulings.
+
+| Constant | Was | Now | Source |
+| --- | --- | --- | --- |
+| `KEYS_HEADING` | "Shared SSH keys" | "Key used for sharing" | Part E |
+| `KEYS_INTRO` | — (added) | "Manyhands uses one key for every repository it shares through. Your private key stays on this computer." | Part E, `05` verbatim |
+| `NO_KEYS` | "No SSH key is registered yet." | "No key is set up for sharing yet." | Part E |
+| `KIND_GENERATED` | "Generated by Manyhands" | "Made by Manyhands" | Part E |
+| `SELECTED` (the In use tag) | "Selected" | "In use" | Part E |
+| `SELECT` | "Select" | **removed** | Part E: replaced by `use_key` |
+| `use_key(label)` | — (added, a formatting function: Part E's `USE_KEY`) | "Use {label} for sharing" | Part E |
+| `CLEAR` | "Clear selection" | "Stop using this key" | Part E |
+| `UNREGISTER` (the trash's name) | "Unregister" | "Remove from Manyhands" | Part E |
+| `REMOVE_TOOLTIP` | — (added) | "Remove from Manyhands. Keeps the key file." | Part E, decision 11 |
+| `DELETE` | "Delete key" | "Delete key file…" | Part E |
+| `MAKE_KEY` | — (added) | "Make a new key" | `05` verbatim |
+| `USE_EXISTING` | — (added) | "Use a key I already have…" | `05` verbatim |
+| `RETRY_FIRST` | — (added) | "Finish or cancel the retry first." | R-57 |
+| `KEYS_NOTE` | — (added) | "If your key has a passphrase, Manyhands asks for it once each time you open the app and never stores it." | Part E, C2.3, `05` verbatim |
+| `IMPORT_NOTE` | "Importing registers the files where they are. Unregistering a key leaves its files." | "Importing uses the files where they are. Removing a key from Manyhands leaves its files." | Part E |
+| `hosts::PINS_HEADING` | "Host pins" | "Trusted servers" | Part E |
+
+- `SELECTED`, `CLEAR`, `UNREGISTER` and `DELETE` keep their names, because the tests compare them by name.
+- The private element-ID constants:
+  - `CLEAR_ID` "keys-clear" became "keys-stop";
+  - `MAKE_ID` "keys-make" and `USE_EXISTING_ID` "keys-use-existing" were added;
+  - `rows.rs` gained `RADIO` "key-radio", `COPY_ID` "key-copy", `REMOVE_ID` "key-remove" and `DELETE_ID` "key-delete-file".
+- Unchanged: `SELECTION_NONE`, `selection_line`, `page_title`, and the Hosts copy apart from `PINS_HEADING` (Task 7).
+- **No secret** (contract 8):
+  - `use_key` holds the label only;
+  - the tooltip names no path;
+  - `KEYS_INTRO` and `KEYS_NOTE` are `05`'s sentences and name no value;
+  - no new control shows or copies private material.
+
+
+### Tests that ran (Task 4): module runs
+
+**Run 1** was the brief's list, by module with no `--exact`:
+
+```
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands -- desktop::view::settings::keys::tests desktop::view::keyboard_tests::settings desktop::view::settings::hosts::tests desktop::view::settings::tests desktop::view::drafts::routing_tests desktop::view::settings::attention_tests desktop::view::workspace::settings_sheet::tests desktop::view::settings::chosen_tests desktop::view::settings::remotes::tests desktop::view::settings::repositories::tests
+```
+
+Result: `test result: ok. 104 passed; 0 failed`, 79.75 s of tests and 121 s wall.
+
+| Module | Tests |
+| --- | --- |
+| `settings::keys::tests` (P9, P12, P13, P24 included) | 22 |
+| `keyboard_tests::settings` (P19 included) | 6 |
+| `settings::hosts::tests` | 16 |
+| `settings::tests` | 3 |
+| `drafts::routing_tests` (E-23's test included) | 5 |
+| `settings::attention_tests` | 1 |
+| `workspace::settings_sheet::tests` (P3, P5, P6, P14, P22 and P23, with Task 2's A6 rows) | 13 |
+| `settings::chosen_tests` | 3 |
+| `settings::remotes::tests` | 18 |
+| `settings::repositories::tests` | 17 |
+
+No A6 focus row of Task 2 went red.
+
+**Run 2** was a named doubt: code I changed that no list names.
+
+```
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands -- desktop::assets::tests desktop::model::stamp::tests desktop::view::keyboard_tests::every_core_action_works_by_keyboard_alone desktop::view::operations::outcomes::route_tests desktop::view::needs_attention::tests::requests
+```
+
+Result: `ok. 16 passed; 0 failed`, 17.17 s.
+
+| Module | Tests | The doubt |
+| --- | --- | --- |
+| `assets::tests` | 2 | `assets.rs` changed |
+| `model::stamp::tests` | 3 | `stamp.rs` changed |
+| `keyboard_tests::every_core_action_works_by_keyboard_alone` | 1 | its walk Tabs through entries 2 and 3, which now draw the combined body |
+| `operations::outcomes::route_tests` | 8 | reads `settings-hosts` |
+| `needs_attention::tests::requests` | 2 | reads `settings-hosts` |
+
+No command came near 15 minutes. No whole suite and no SSH target ran.
+
+**The Verify lines** all exited 0 on the final tree, before the commit:
+
+- `cargo fmt --check`;
+- `cargo check --locked --features desktop`;
+- `cargo clippy --all-targets --all-features --locked -- -D warnings`.
+
+The binary now has 1933 tests: 1928 before, plus the five new ones.
+
+
+### The test edits (Task 4)
+
+No assertion was removed.
+
+#### E-10, `settings/keys_tests.rs`: the controls by their new IDs
+
+| Test | Old | New |
+| --- | --- | --- |
+| `an_imported_key_offers_no_delete_and_unregister_leaves_its_files` | `present(("key-unregister", 0))`, `!present(("key-delete", 0))`, `click(("key-unregister", 0))` | `("key-remove", 0)`, `("key-delete-file", 0)`, `("key-remove", 0)` |
+| `select_and_clear_selection` | `click(("key-select", ix))`, `click("keys-clear")` | `("key-radio", ix)`, `"keys-stop"` |
+| `deleting_a_generated_key_removes_its_files_after_confirmation` | `click(("key-delete", 0))` | `("key-delete-file", 0)` |
+| `a_key_changed_since_its_delete_preview_offers_prepare_again` | `click(("key-delete", 0))` | `("key-delete-file", 0)` |
+| `the_page_acts_on_nothing_while_a_dialog_is_open` | `click(("key-delete", 0))` | `("key-delete-file", 0)` |
+| `escape_on_a_delete_preview_leaves_the_files` | `click(("key-delete", 0))`; `control_focus("key-delete-0")` | `("key-delete-file", 0)`; `control_focus(&format!("key-delete-file-{}", key.id))` |
+| `select_unregister_and_clear_show_their_typed_failures` | `click(("key-select", 0))`, `click(("key-unregister", 1))`, `click("keys-clear")` | `("key-radio", 0)`, `("key-remove", 1)`, `"keys-stop"` |
+
+The `escape_on_a_delete_preview_leaves_the_files` focus handle is now keyed by key ID, which is Part G item 4. All its assertions are unchanged.
+
+#### E-15, `settings/keys_tests.rs`: Make a new key or Use a key I already have… pressed first
+
+Each test below gains one `shell.click(MAKE, cx)` or `shell.click(USE_EXISTING, cx)` before it first fills its form. Two private ID constants were added for this, `MAKE` ("keys-make") and `USE_EXISTING` ("keys-use-existing").
+
+- `shell.click(MAKE)` comes first in:
+  - generated_keys_are_listed_and_the_passphrase_is_kept_nowhere: once, since the form stays shown for its second generation;
+  - a_mismatched_confirmation_is_refused_before_any_job;
+  - a_typed_passphrase_is_emptied_when_the_page_is_hidden: the form stays shown when the test comes back to entry 2, because a page keeps its state;
+  - retry_of_a_protected_generation_asks_for_the_passphrase_again;
+  - a_generation_not_sent_for_its_passphrase_shows_the_fields_again;
+  - the_operation_area_retry_of_a_protected_generation_asks_on_the_page;
+  - retry_mode_entered_by_the_observer_drops_what_was_typed.
+- `shell.click(USE_EXISTING)` comes first in:
+  - copy_public_key_copies_exactly_the_public_key_text;
+  - an_imported_key_offers_no_delete_and_unregister_leaves_its_files;
+  - an_import_the_library_refuses_shows_its_typed_failure.
+- **Not applied** to `the_page_acts_on_nothing_while_a_dialog_is_open`, though it fills both forms.
+  - It fills them through the entities' `set`, and calls the handlers directly under a dialog, so neither form needs to be drawn.
+  - Only one form can be shown at a time, so pressing one button would not make it any closer to the user's path.
+
+#### E-15, `keyboard_tests/settings.rs`
+
+- **`generate_a_key_by_keyboard`:** a new step, `press_by_keys(&walk, "keys-make", cx)` (Tab to Make a new key, then Enter), before `type_into("key-generate-label", …)`. Its doc now says "Sharing & keys: Make a new key pressed, …". No assertion changed.
+
+#### E-28 (new), `select_unregister_and_clear_show_their_typed_failures`: setup only
+
+- **Old:** a and b were generated and the page opened with no key in use; the other actor unregistered a and b.
+- **New:**
+  - `select_key_through(fixture.service(), b)` before the page opens;
+  - `clear_key_through(&other)` before the two unregistrations.
+- **No assertion changed or removed.** The test still checks:
+  - `rows == ["a", "b"]` twice;
+  - Select of a gives `KeyNotFound`;
+  - Remove of b gives `KeyNotFound`;
+  - Clear under a held lease gives `Busy`.
+- **Reason:**
+  - Stop using this key is drawn only while a key is in use (C2.1). The page's stale list must show b in use for the Clear row to have its control.
+  - The library refuses to unregister the key in use (`registry.rs:610`, `SelectedKeyMustBeCleared`), so the second actor clears it first. That is the helper `clear_key_through`.
+
+#### E-29 (new), the `submit_delete` call sites
+
+- **Sites:** `a_row_of_a_key_no_longer_listed_acts_on_nothing` and `the_page_acts_on_nothing_while_a_dialog_is_open`.
+- **Old:** `page.submit_delete(id, 0, window, cx)`.
+- **New:** `page.submit_delete(id, window, cx)`.
+- **Reason:** the handler's row-index fallback goes. It is keyed by key ID now (Part G item 4).
+- No assertion changed.
+
+#### Doc comments, which are not assertions
+
+- `keys_tests.rs`'s module doc names the new controls.
+- `keyboard_tests/settings.rs`'s module doc and the doc of `generate_a_key_by_keyboard`.
+
+#### Function lists before and after the scripted edits
+
+The lists were taken with `grep -E '^\s*(pub(\([a-z]+\))? )?(async )?fn '`, from `git show HEAD:` before the edits and from the working tree after.
+
+| File | Functions | `#[gpui_kit::test]` |
+| --- | --- | --- |
+| `keys_tests.rs` | 37, identical before and after | 18 → 18 |
+| `keyboard_tests/settings.rs` | 8 → 10: `press_by_keys` (helper) and `sharing_and_keys_by_keyboard` (P19) added | 5 → 6 |
+
+No function was lost or renamed.
+
