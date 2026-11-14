@@ -23,7 +23,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | --- | --- | --- | --- |
 | 0 | done | merge `82df6942`; design citations `9f89a3bb`; ledger `003eb518`; ticket comment `e54fe9b5` | yes |
 | 1 | done, review approved first time (Minors parked) | code `0d5501e7` (base `e54fe9b5`); ledger `023ebf47` | yes |
-| 2 | done, design checkpoint passed, review approved after fix round 1 | code `5cddad28` (base `023ebf47`), fix `6894d70d`; ledger commit follows | with the ledger commit |
+| 2 | done, design checkpoint passed, review approved after fix round 1 | code `5cddad28` (base `023ebf47`), fix `6894d70d`; ledger `6ae0ad14`; ticket comment `e514fa9b` | yes |
+| 3 | done, review approved after fix round 1 | code `29ef847d` (base `e514fa9b`), fix `1b3ca49a`; ledger commit follows | with the ledger commit |
 
 ## Branches published
 
@@ -1041,3 +1042,217 @@ Summary:
    `cfg(all(test, feature = "desktop-test-support"))`).
 10. The Task 2 module-run list was taken from Task 0's ledger entry; no whole
     suite ran.
+
+## Task 3: repositories with Sharing, one chosen repository (C1; Part G items 2, 3 and 5)
+
+Implementer: one fresh Opus agent. Base `e514fa9b`, code `29ef847d`, fix round
+1 `1b3ca49a`. Reviewer: one fresh Opus agent, spec ❌ with one Important
+finding (an ambiguity in R-55); scoped re-review (Sonnet): addressed, no new
+breakage. Boundary diff prints nothing. Files: new `settings/chosen.rs` (109
+lines) and `chosen_tests.rs`; `remotes.rs` shrank by 142 lines;
+`repositories.rs` 817 to 825 lines of wiring (accepted).
+
+### Rulings (Task 3)
+
+Ruling 25: **R-55 is read literally and unconditionally: an `Inspect` open
+never changes `chosen`, whatever the panel's selection did.** The design's C1
+flow ("the route's root … except `Inspect`; else a changed panel selection")
+lets an Inspect fall through to the panel rule, which the reviewer showed
+empties another repository's typed identity text, the very hazard C1 names.
+`seen` is still recorded on every open (C1), so a newer panel choice that an
+Inspect open saw does not come back on the next open — cost if wrong: a panel
+selection swallowed by an Inspect open; pinned by a P10 row. Task 6's P4 row
+"Inspect leaving the choice alone (R-55)" is therefore unconditional.
+
+Ruling 26 (implementer's, accepted): until Task 5 collapses the menu,
+`Shown::Settings(Remotes)` and entry 1 ("Remotes") draw the combined
+Repositories page (Sharing inside it), as Ruling 4 does for Keys and Hosts —
+cost if wrong: Task 5 changes one match arm.
+
+Ruling 27 (accepted): "a changed panel selection" (R-14) is a `Some` selection
+that differs from the one the last open saw; a panel with no selection chooses
+nothing and the previous choice stays (`seen` records `None` too); a removed
+repository is unchosen by R-56 — cost if wrong: an open after the panel was
+cleared keeps the old choice.
+
+Ruling 28 (accepted): the Repositories page's registration read moved from
+`new` to `opened` (R-32); keeping both would read twice on first open. A page
+made off-screen by `choose` (Hosts or CheckHost routes, W-32) has
+`registrations: Read::None` until it is first shown — cost if wrong: a removal
+made elsewhere before then is not caught; the old page had no reread either.
+
+Ruling 29 (accepted): the routes raised inside the sheet now choose
+(`set_up_sharing` W-31, `check_host` W-32 with a server named, Approve host…
+with none): one chosen repository means the whole sheet follows. `attention.rs`
+changed by one line (the field rename `selection` to `choose`); Ruling 9 still
+gives that file to Task 6. `hosts.rs`'s `choose` is `pub(super)` so R-56's
+`choose(None)` reaches Check host. A Share… route to the already-chosen root
+no longer clears Remotes' last add/select outcome (`submitted`).
+
+Ruling 30: copy. `REMOTES_HEADING` "Remotes" became `SHARING_HEADING`
+"Sharing" now (Part E's row, forced by Step 4); `READING_REGISTRATIONS`,
+`NO_REGISTRATIONS`, `CHOOSE` and `CHOSEN` were removed with the Remotes list
+(Part E, R-15). **Task 7 skips those rows** and still owns `NO_REPOSITORY`
+("Choose a repository to see its remotes.", stale now that no Choose exists).
+
+Ruling 31: signatures changed: `RepositoriesPage::name_focus(cx)` gives the
+Identity route's handle (`manage_root` returns nothing); `RemotesPage::opened()`
+takes no argument and `open_on` takes `Option<PathBuf>`; `SettingsHost::choose`
+takes `Option<PathBuf>`; Manage emits `RepositoriesEvent::Manage(root)` and the
+host chooses.
+
+### Parked review Minors (Task 3)
+
+1. An open that changes the choice reads the remotes and Check host's
+   publication twice (`chosen.rs:85`, `:87` with `mod.rs:209-219`); the first
+   results are dropped by generation, nothing wrong shows.
+2. `chosen_tests.rs:173` comment claims coverage the row does not give.
+3. **Task 5 (E-16):** literal page indices in `chosen_tests.rs` (`:116`, `:200`,
+   `:204`, `:220`) re-index with the menu.
+4. **Task 5 (E-5):** `manage` is duplicated in `chosen_tests.rs` and
+   `remotes_tests.rs`, and the Repositories-page accessor too; the E-5
+   `remotes` helper ("choosing its root by Manage") needs the same one: move
+   them to the harness there.
+5. `keyboard_tests::every_core_action_works_by_keyboard_alone` was not in Task
+   3's list; its walk presses entry 1, which now draws the combined page. Task
+   5 reruns `keyboard_tests`.
+
+### Module runs (Step 8), once each
+
+**Run 1** is the ledger's Task 3 list plus the touched files, by module, with no `--exact`. 111 s wall time; the test run itself took 86.49 s. `test result: ok. 102 passed; 0 failed`.
+
+| Module | Tests |
+| --- | --- |
+| `settings::remotes::tests` | 18 |
+| `settings::polling_tests` | 4 |
+| `keyboard_tests::settings` | 5 |
+| `settings::repositories::tests` | 17 |
+| `settings::repositories::manage_tests` | 20 |
+| `settings::hosts::tests` | 16 |
+| `settings::attention_tests` | 1 |
+| `shell::title::tests` | 2 |
+| `settings::polling_real_tests` | 3 |
+| `workspace::settings_sheet::tests` (Tasks 1 and 2, the A6 rows included) | 13 |
+| `settings::chosen_tests` | 3 |
+
+**Run 2** is a named doubt. These are test files outside the list that raise routes now going through `choose`, or that read `remotes-root`, `managed-root`, `hosts-root` or `Shown::Settings(Remotes)`. 75 s; `test result: ok. 70 passed; 0 failed`.
+
+| Module | Tests |
+| --- | --- |
+| `item::share::tests` | 16 |
+| `create::tests` | 18 |
+| `operations::attention_tests` | 6 |
+| `operations::outcomes::tests` | 13 |
+| `operations::outcomes::route_tests` | 8 |
+| `needs_attention::tests::actions` | 1 |
+| `needs_attention::tests::requests` | 2 |
+| `needs_attention::tests::states` | 3 |
+| `settings::tests` | 3 |
+
+Two filters in run 2, `repositories::tests::menu` and `activity::tests::state_cases`, matched nothing: those files hold case functions, not tests. The tests that call them were run alone by exact name:
+- `desktop::view::repositories::tests::the_menu_by_pointer_and_keyboard`: 1 passed, 14.07 s;
+- `desktop::view::activity::tests::each_action_runs_its_handler`: 1 passed, 15.64 s.
+
+**Rerun:** `settings::chosen_tests` by module, 3 passed. Its test file changed after run 1 (the added row), and `chosen.rs` was mutated and restored.
+
+No command came near 15 minutes. No whole-suite run and no SSH target was run. No A6 focus row went red: P3, P5, P6, P14, P22, P23, `focus_on_open_survives_the_sheet_keeping_focus` and `a_landing_drawn_behind_settings_leaves_focus_inside` all passed inside `workspace::settings_sheet::tests` (13 of 13).
+
+
+### The test edits (Task 3)
+
+Removals are in bold.
+
+**E-9**, `settings/remotes_tests.rs`: the tests that clicked the Remotes page's Choose row now choose by Manage on the Repositories page. A new helper, `manage(shell, root)`, finds the root among the `managed-row` labels and clicks `("managed-choose", ix)`.
+- `the_page_lists_the_selected_repository_or_the_one_chosen`:
+  - Old: `rows("remotes-registration")`, `position(b).expect("b is listed")`, then `click(("remotes-choose", ix))`.
+  - New: `manage(&shell, &b, cx)`. Its `expect("the repository is listed")` keeps the "b is listed" check.
+  - The assertions after it are unchanged: `remotes-root` is b, and `remote-name` is `["origin"]`.
+  - The doc says "chosen by Manage".
+- `choosing_another_repository_never_shows_the_last_ones_remotes`: the same replacement, inside the held `ReadKind::Remotes` read. Its assertions are unchanged.
+
+**E-13, Task 3 half**, `opening_remotes_on_a_repository_shows_that_repository_even_after_another`:
+- **Removes** "Settings keeps b". Old:
+  ```rust
+  shell.select(&a, cx);
+  shell.click(("settings-page", 1usize), cx);
+  assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
+  ```
+- New, a reopen after the panel's selection changed follows it (R-14):
+  ```rust
+  shell.keys("escape", cx);
+  shell.select(&a, cx);
+  shell.keys("secondary-,", cx);
+  shell.click(("settings-page", 1usize), cx);
+  assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&a))));
+  ```
+- The doc's last sentence became "A later open follows a panel selection made since (R-14)".
+
+**E-14**, two tests:
+- `settings/polling_tests.rs` `settings_polling_states`:
+  - **Removes** the reads of `rows("remotes-registration")`, its `position(rig.key(0)).expect("the repository is listed")` and `assert!(present(("remotes-chosen", ix)), "worked on")`.
+  - New: `assert_eq!(settings_chosen(cx).as_deref().map(key), Some(rig.key(0)), "worked on")`.
+  - The `Shown::Settings(Remotes)` and `settings-remotes` assertions stay. `harness::key` is imported.
+- `keyboard_tests/settings.rs` `add_a_remote_by_keyboard`, which now chooses by Manage:
+  - Old setup: `selected(Fixture::new(), cx)` (the panel selects a), then `open_page(&walk, 1, cx)`.
+  - New setup: the same fixture (a, refreshed) with no panel selection. Then `open_page(&walk, 0, cx)`, then Tab to `("managed-choose", 0)`, `walk.on(…, Region::Content)`, and Enter. So Manage is what chooses.
+  - The steps after it are unchanged: type the name and URL, Add, the request ends Ok, `remote_names(&a)` contains "backup", and focus is in Content.
+  - No assertion is removed. One is added: `walk.on(("managed-choose", 0), Region::Content)`. The doc says "chosen by its Manage on the Repositories page … under Sharing (R-15)".
+
+Two further edits were needed because `RemotesPage::choose_root` is gone (R-15). They are pre-authorized by decision 7.
+
+**E-26**, `settings/remotes_tests.rs` `the_page_acts_on_nothing_while_a_dialog_is_open`:
+- **Removes** the call `page.choose_root(b.clone(), window, cx)` under the dialog.
+- New: the Repositories page's Manage handler under the same dialog, `repositories.update(cx, |page, cx| page.manage(b.clone(), window, cx))`. Manage is now the one way to choose.
+- No assertion changes. `remotes-root` is still `root` afterwards, which proves the handler emitted nothing.
+- The doc says "choice (Manage, on the Repositories page)".
+- Reason: `choose_root` is gone; Manage's handler is its replacement and keeps the dialog guard.
+
+**E-27**, `settings/remotes_tests.rs` `a_row_of_another_repository_acts_on_nothing`:
+- Old: `page.update(|page, cx| page.choose_root(b.clone(), window, cx))` followed by `shell.run`.
+- New: `manage(&shell, &b, cx)`.
+- No assertion changes: `remotes-root` is b, and a's rows then ask nothing.
+- Reason: the same as E-26.
+
+**Function lists.** These were taken with `grep '^\s*(pub…)?(async )?fn '`, before from `git show HEAD:` and after from the working tree:
+- `remotes_tests.rs`: the same 36 functions, plus the new helper `fn manage`. Tests 18 → 18.
+- `polling_tests.rs`: the same functions. Tests 4 → 4.
+- `keyboard_tests/settings.rs`: the same functions. Tests 5 → 5. `selected` is still used by `generate_a_key_by_keyboard`.
+
+No test function was lost or renamed.
+
+
+### Fix round 1 and its covering runs
+
+The new P10 Inspect row failed before the fix (5 rows: `chosen` was b, the
+typed text was replaced) and passed after. P10, P11, P25 by exact name: 3 of 3.
+## Covering runs
+
+**By module, once:**
+
+`devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands -- desktop::view::settings::chosen_tests desktop::view::settings::repositories::tests desktop::view::settings::remotes::tests`
+
+Result: `test result: ok. 38 passed; 0 failed; …; finished in 20.03s`.
+
+| Module | Tests |
+| --- | --- |
+| `chosen_tests` | 3 |
+| `repositories::tests` | 17 |
+| `remotes::tests` | 18 |
+
+`repositories::tests` holds `the_inspect_recovery_opens_the_page_with_its_root_checked`, which raises `inspect_in_settings` (E-17's site).
+
+**Task 2's focus tests.** No test in `workspace::settings_sheet::tests` raises `SettingsRoute::Inspect` or `inspect_in_settings`, so none applied. `grep` finds the route raised only in:
+- `repositories_tests.rs:705`;
+- `lifecycle/actions.rs:148` (production; W-22);
+- `workspace/requests.rs:592` (production; W-27).
+
+**The lifecycle dialog's Open repository details (W-22),** by exact name:
+
+`… --bin manyhands desktop::view::lifecycle::outcome_canned_tests::each_way_out_offers_its_button -- --exact`
+
+Result: `1 passed`.
+
+**Verify lines,** all exit 0:
+- `cargo fmt --check`;
+- `cargo check --locked --features desktop`;
+- `cargo clippy --all-targets --all-features --locked -- -D warnings`.
