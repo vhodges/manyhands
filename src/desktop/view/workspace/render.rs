@@ -171,7 +171,15 @@ impl Render for Workspace {
         self.apply_review(window, cx);
         self.open_deferred_republish(window, cx);
         self.sync_sheet(window, cx);
-        self.keep_focus_in_settings(window, cx);
+        if self.settings_open(window, cx) {
+            // After the frame, which it reads: focus a view moved while it
+            // drew is seen too, and a move this makes asks for its own frame
+            // (A3, "The sheet keeps focus"). `on_next_frame` is no hook:
+            // tests never run it.
+            cx.defer_in(window, |this, window, cx| {
+                this.keep_focus_in_settings(window, cx)
+            });
+        }
         if self.dock.queue_clamp() {
             // The area records its bounds as this frame is drawn, so the
             // clamp runs after it (R-37). `on_next_frame` is no hook: tests

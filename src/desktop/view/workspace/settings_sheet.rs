@@ -20,10 +20,10 @@
 //!   render after the close disarms it.
 //! - **The sheet keeps focus** (R-46): while Settings is open and no dialog
 //!   is, focus found on a control the workspace drew behind the sheet in
-//!   the frame drawn last goes to the shown page's entry, at each render,
-//!   and so does a lost focus with no target in the sheet. A control not
-//!   drawn yet is never taken for one behind (A7 item 1); Root's overlays
-//!   are not the workspace's (A7 item 2).
+//!   the frame just drawn goes to the shown page's entry, checked after
+//!   each frame, and so does a lost focus with no target in the sheet. A
+//!   control not drawn there is never taken for one behind (A7 item 1);
+//!   Root's overlays are not the workspace's (A7 item 2).
 
 use std::path::PathBuf;
 
@@ -302,14 +302,17 @@ impl Workspace {
                 || self.footer.focus.values().any(|handle| handle == focused))
     }
 
-    /// Each render (A3, "The sheet keeps focus"; R-46): while Settings is
-    /// open and no dialog is, focus on a control drawn behind the sheet, a
-    /// deferred restore's or a landing's (A6 F16; A7 item 4), goes to the
-    /// shown page's entry. It reads the frame drawn last, and moves only
-    /// focus it finds there behind the sheet: a route's target drawn for the
-    /// first time in this frame is left alone (A7 item 1), and so is focus in
-    /// a Kit popup inside the sheet (A7 item 3) or in Root's overlays (F19;
-    /// A7 item 2). Focus on nothing drawn is `focus_lost`'s.
+    /// After each frame drawn while Settings is open, deferred from the
+    /// workspace's render (A3, "The sheet keeps focus"; R-46): while Settings
+    /// is open and no dialog is, focus on a control drawn behind the sheet,
+    /// a deferred restore's or a landing's, also one a view behind the sheet
+    /// moved while it drew (A6 F16; A7 item 4), goes to the shown page's
+    /// entry. It reads the frame just drawn, and moves only focus it finds
+    /// there behind the sheet, so focus not drawn there is left alone (A7
+    /// item 1), and so is focus in a Kit popup inside the sheet (A7 item 3)
+    /// or in Root's overlays (F19; A7 item 2). Focus on nothing drawn is
+    /// `focus_lost`'s. Focus it moves is inside the sheet at the next check,
+    /// so it moves once.
     pub(super) fn keep_focus_in_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.settings_open(window, cx) || window.has_active_dialog(cx) {
             return;

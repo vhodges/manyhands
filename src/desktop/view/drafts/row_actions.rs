@@ -8,7 +8,7 @@
 //! said on its row. A row Discard removes gives the focus to the next
 //! row, else the previous one, else the page's first control.
 
-use gpui_kit::{App, Context, Task, Window};
+use gpui_kit::{App, Context, Task, Window, component::WindowExt};
 use manyhands::{
     canonical::ItemId,
     drafts::{DraftError, DraftId, DraftTarget, ItemKind, markdown},
@@ -258,7 +258,9 @@ impl DraftsPage {
     /// focus to the page's first control.) Not while a dialog is open or
     /// quitting waits, with Quit now holding the focus: the refocus is kept
     /// for the first frame after, and goes to a neighbour still listed then,
-    /// else the page's first control.
+    /// else the page's first control. Behind a sheet, Settings over the
+    /// page, it is dropped, never kept for the sheet's close, which gives
+    /// focus back where Settings opened from (Wave 04 Cycle 04, R-34).
     pub(super) fn apply_refocus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.refocus.is_none() || !may_open(&self.services, window, cx) {
             return;
@@ -269,6 +271,9 @@ impl DraftsPage {
         {
             let next = refocus.next.iter().find(|id| listed(self, id)).copied();
             self.refocus = None;
+            if window.has_active_sheet(cx) {
+                return;
+            }
             let focus = next
                 .and_then(|id| self.focus.get(&id).map(|focus| focus.row.clone()))
                 .or_else(|| self.first_focus());

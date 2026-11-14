@@ -50,6 +50,8 @@ use crate::desktop::{
 
 #[path = "settings_sheet_tests/arrive.rs"]
 mod arrive;
+#[path = "settings_sheet_tests/behind.rs"]
+mod behind;
 #[path = "settings_sheet_tests/inside.rs"]
 mod inside;
 #[path = "settings_sheet_tests/late.rs"]
@@ -688,4 +690,13 @@ async fn focus_on_open_survives_the_sheet_keeping_focus(cx: &mut TestAppContext)
     let mut table = table::Table::new("F1 and F2");
     arrive::rows(&mut table, cx).await;
     table.done();
+}
+
+/// Design A6 F16 (fix round 1): a landing that a view behind the open sheet
+/// applies in its own render, Drafts' Discard… focusing a neighbour row,
+/// leaves focus on the page's entry, read after GPUI's own draws only. The
+/// rows are in `behind`.
+#[gpui_kit::test]
+fn a_landing_drawn_behind_settings_leaves_focus_inside(cx: &mut TestAppContext) {
+    behind::landing(cx);
 }
