@@ -3,7 +3,7 @@ slug: vh-dt0aq
 id: 01M784Y94Q3AXT6XJX38F5VK1V
 title: 'Wave 04 Cycle 03b: Activity And Needs Attention'
 type: cycle
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
