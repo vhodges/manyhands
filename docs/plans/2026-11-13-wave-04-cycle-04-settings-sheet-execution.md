@@ -28,7 +28,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 4 | done, review approved first time (Minors parked) | code `a7dda502` (base `00a179d5`); ledger `86b51214` | yes |
 | 5 | done, review approved first time (Minors parked) | code `d9327047` (base `86b51214`); ledger `16f7746b` | yes |
 | 6 | done, review approved after fix round 1 | code `4a9a0dd7` (base `16f7746b`), fix `4fd65ef0`; ledger `6d86c8f7`; ticket comment (Tasks 3 to 6) `e4d4bd56` | yes |
-| 7 | done, review approved first time (Minors parked) | code `cbf1f207` (base `e4d4bd56`); ledger commit follows | with the ledger commit |
+| 7 | done, review approved first time (Minors parked) | code `cbf1f207` (base `e4d4bd56`); ledger `5fb61fc3` | yes |
+| 8 | done, review approved first time (Minors parked) | code `1a39ca6b` (base `5fb61fc3`); ledger commit follows | with the ledger commit |
 
 ## Branches published
 
@@ -1876,3 +1877,66 @@ Others: `settings/repositories/manage.rs` `REMOVE` "Remove repository" to "Remov
 - The key-store wording mismatch between Settings and Activity (Ruling 50).
 - "Open remote settings…" (Minor 4).
 - The kept "Selected key: …" line (Ruling 49).
+
+## Task 8: what leaves (Part F)
+
+Implementer: one fresh Sonnet agent. Base `5fb61fc3`, code `1a39ca6b`. Reviewer:
+one fresh Sonnet agent, spec compliant, quality approved first time, no
+Critical or Important findings. Boundary diff prints nothing; `Cargo.lock`
+untouched; trailer Sonnet 5.5.
+
+### What changed
+
+Task 1 had already removed most of Part F's list (`ContentPage::Settings` and its
+`content_body` branch, `SettingsEvent::Closed`, `back`, the `close` handle,
+"Back to tabs", the "Shown" tag, the `settings.hide` calls); a grep found none
+left, and the reviewer's grep agreed. This commit removes:
+- `repositories/body.rs`: the panel's Settings button (`sidebar-settings`, its
+  Button and `open_settings(Repositories)` click; W-4), its private `SETTINGS`
+  constant, and the imports only it used; the module doc clause "the Settings
+  button below it until Cycle 04" rewritten. The footer's and the repository
+  menu's `SETTINGS` constants are separate and kept.
+- `settings/mod.rs` module doc rewritten for the sheet (Ruling 19): routes from
+  the ways in, shown through Root's one sheet layer, kept by the Workspace via
+  `SheetOwner::Settings`, item area left as it was, the three-entry menu.
+- Left on purpose, still used: `focus_content` (keeps its R-34 guard), `shown_item`,
+  `content_body` (tabs and Drafts); `Workspace::open_settings`; `Shown::Tabs`.
+
+### P17
+
+`desktop::view::settings::tests::the_old_settings_places_are_gone` (in
+`settings/mod_tests.rs`): closed, open (`secondary-,`) and closed again (Escape):
+no `sidebar-settings`, `sidebar-settings-button`, `settings-close`,
+`settings-close-button`; `Shown::Tabs` closed; while open the item area still
+draws the tab (`tab-active-line`) and not `item-area-empty`. RED first for the
+right reason (`!shell.present("sidebar-settings")`), GREEN after.
+
+### The test edits (Task 8)
+
+- E-1 (`:123`): REMOVES `settings/mod_tests.rs` `the_sidebar_entry_shows_the_settings`
+  (the entry it clicks is gone; P17 covers).
+- **E-34** (Task 1 parked Minor 3; pure renames, bodies unchanged),
+  `drafts_routing_tests.rs`: `back_to_tabs_from_settings_over_drafts_shows_the_tabs`
+  to `closing_settings_over_drafts_leaves_drafts_shown`; `the_drafts_key_empties_a_typed_passphrase`
+  to `escape_empties_a_typed_passphrase_and_the_drafts_key_then_shows_drafts`.
+  The next free number is **E-35** (the implementer needed no further edit:
+  no other test used the button).
+
+### Parked review Minors (Task 8)
+
+1. `settings/mod_tests.rs` `the_settings_key_shows_the_settings_and_back_keeps_the_tabs`
+   still says "back" (a name E-4's pattern did not cover); outside the brief.
+2. The E-34 name of the second test is about 100 characters; accurate.
+3. The `settings/mod.rs` doc's claims about `SheetOwner::Settings` were not
+   checked against the code by the reviewer (the names are the ones in
+   `workspace/settings_sheet.rs`).
+
+### Tests that ran (Task 8)
+
+- P17 RED then GREEN; P17, both renamed tests and `the_settings_key_does_nothing_while_a_dialog_is_open` by exact name, 4 passed.
+- Module runs, once each: `settings::` 110, `drafts::routing_tests` 5,
+  `repositories::tests` 5, `dock::` 36, `keyboard_tests` 61, `workspace::` 44; all
+  passed. fmt, check and clippy -D warnings clean. No SSH tier, no whole suite.
+- Final grep over `src` for `sidebar-settings`, `settings-close`, "Back to tabs",
+  `BACK_TO_TABS`, `ContentPage::Settings`, `SettingsEvent::Closed`: only P17's own
+  absence assertions.
