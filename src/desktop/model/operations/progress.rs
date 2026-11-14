@@ -27,11 +27,48 @@ impl Progressing {
             Intent::CommentAdd { .. } => Some(Self::Post),
             Intent::PollOnce { .. } => Some(Self::Check),
             Intent::ContextRetire { .. } => Some(Self::Retire),
-            // The policy verbs: no stage words (Fact 2).
-            Intent::PollConfigure { .. } | Intent::PollPause { .. } | Intent::PollResume { .. } => {
-                None
-            }
-            _ => None,
+            // No stage words: the policy verbs report `writing` and nothing
+            // else (Fact 2), and every other command reads like any other
+            // local command. Each is listed, so a new `Intent` must be
+            // classified here.
+            Intent::RepoCreate { .. }
+            | Intent::RepoEnable { .. }
+            | Intent::RepoRemove { .. }
+            | Intent::RepoIdentitySet { .. }
+            | Intent::RemoteAdd { .. }
+            | Intent::RemoteRemove { .. }
+            | Intent::RemoteSelect { .. }
+            | Intent::IndexRefresh { .. }
+            | Intent::IndexRebuild { .. }
+            | Intent::PollConfigure { .. }
+            | Intent::PollPause { .. }
+            | Intent::PollResume { .. }
+            | Intent::KeyGenerate { .. }
+            | Intent::KeyImport { .. }
+            | Intent::KeySelect { .. }
+            | Intent::KeyClear
+            | Intent::KeyRemove { .. }
+            | Intent::KeyDelete { .. }
+            | Intent::HostApprove { .. }
+            | Intent::HostReplace { .. }
+            | Intent::OperationResume { .. }
+            | Intent::OperationAbandon { .. }
+            | Intent::DocumentSave { .. }
+            | Intent::TicketSave { .. }
+            | Intent::ContextPrepare { .. }
+            | Intent::ContextRelease { .. }
+            | Intent::DocumentCreate { .. }
+            | Intent::TicketCreate { .. }
+            | Intent::DocumentMove { .. }
+            | Intent::FolderCreate { .. }
+            | Intent::DocumentRepair { .. }
+            | Intent::TicketRepair { .. }
+            | Intent::ItemRepublish { .. }
+            | Intent::DocumentPromote { .. }
+            | Intent::TicketClose { .. }
+            | Intent::ConflictResolve { .. }
+            | Intent::LocalContextSync { .. }
+            | Intent::LocalContextResolve { .. } => None,
         }
     }
 }
