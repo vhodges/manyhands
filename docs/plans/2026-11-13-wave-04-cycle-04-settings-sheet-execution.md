@@ -25,7 +25,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 1 | done, review approved first time (Minors parked) | code `0d5501e7` (base `e54fe9b5`); ledger `023ebf47` | yes |
 | 2 | done, design checkpoint passed, review approved after fix round 1 | code `5cddad28` (base `023ebf47`), fix `6894d70d`; ledger `6ae0ad14`; ticket comment `e514fa9b` | yes |
 | 3 | done, review approved after fix round 1 | code `29ef847d` (base `e514fa9b`), fix `1b3ca49a`; ledger `00a179d5` | yes |
-| 4 | done, review approved first time (Minors parked) | code `a7dda502` (base `00a179d5`); ledger commit follows | with the ledger commit |
+| 4 | done, review approved first time (Minors parked) | code `a7dda502` (base `00a179d5`); ledger `86b51214` | yes |
+| 5 | done, review approved first time (Minors parked) | code `d9327047` (base `86b51214`); ledger commit follows | with the ledger commit |
 
 ## Branches published
 
@@ -1520,4 +1521,107 @@ The lists were taken with `grep -E '^\s*(pub(\([a-z]+\))? )?(async )?fn '`, from
 | `keyboard_tests/settings.rs` | 8 → 10: `press_by_keys` (helper) and `sharing_and_keys_by_keyboard` (P19) added | 5 → 6 |
 
 No function was lost or renamed.
+
+## Task 5: the three-entry menu (B1)
+
+Implementer: one fresh Sonnet agent. Base `86b51214`, code `d9327047`.
+Reviewer: one fresh Sonnet agent, spec compliant, quality approved first time,
+no Critical or Important findings. Boundary diff prints nothing.
+
+### Rulings (Task 5)
+
+Ruling 40 (accepted): the E-5 helper callers were not run as a separate pass.
+The module run (`settings::`, `keyboard_tests`, `drafts::routing_tests`,
+`polling_privacy_tests`, `workspace::settings_sheet`, `assets`, `harness`:
+191 passed) contains every caller in Task 0's list, so the plan's named pass
+would only repeat it; the reviewer compared the callers file by file — cost if
+wrong: none.
+
+Ruling 41 (accepted): `PAGES` stays, now three: the first page of each entry,
+so `PAGES[ix]` means "entry ix's first page" everywhere and no test import
+changed. A click, Enter or Space on the already-active entry opens its first
+page again (reading its pages again): after a `Hosts` route this makes `shown`
+`Keys`. It is not a regression (`open(page)` already ran on every click);
+`forget_passphrase` keeps a typed passphrase on Sharing & keys, and typed
+identity text is kept — cost if wrong: none.
+
+Ruling 42 (accepted): `Shown::Hosts` is no longer reachable from the menu:
+the `hosts` helper leaves `shown == Keys` with the Hosts view drawn (no test
+read `Shown::Hosts` after it). P16 lives in `settings/mod_tests.rs`.
+
+E-30 (further edits, decision 7: literal indices of Task 1 and 2 tests the
+sweep's E-16 does not name) and **E-31 (removes one iteration of P9's leave-
+Sharing-&-keys loop, the Hosts entry, which no longer exists)** are in the
+list below. E-1's `:91-93` **removes** the "Shown" tag assertion (the tag is
+gone; `aria_selected` is covered by P16). No other assertion was removed.
+
+### Parked review Minors (Task 5)
+
+1. `keys_tests/forms.rs:88-91` doc still says the passphrase is kept
+   "whichever of its two parts the menu names (Ruling 4)"; reword.
+2. `hosts_tests.rs:59-60`: the `hosts` helper doc still says "the Hosts page
+   shown".
+3. `remotes_tests.rs:57-58`: with E-5's Manage in the `remotes` helper,
+   `the_page_lists_the_selected_repository_or_the_one_chosen` no longer proves
+   the "selected repository" half (Manage chooses `a` explicitly); R-14 is
+   covered by `opening_remotes_on_a_repository_shows_that_repository_even_after_another`.
+4. Nothing tests that the Remotes route selects entry 0 or the Hosts route
+   entry 1 (`aria_selected` and `first_focus` for the non-first pages): add a
+   two-row check to Task 6's P4 or the F2 table.
+5. Task 4 Minor 7 stays open (P9 never leaves Sharing & keys by entry 2).
+6. `repositories_manage_tests::manage` and `repositories_tests::page` remain
+   separate copies.
+7. For the on-screen checklist (Task 9): the Kit button focus ring on the
+   entries, and the icons and background.
+
+### The test edits (Task 5)
+
+E-1 (`mod_tests.rs`, `:91-93`): REMOVES the assertion that `("settings-page-shown", 0)` has label `SHOWN`; reason: the tag is gone, `aria_selected` announces it (P16 covers selected). The `tabs::SHOWN` import goes. Doc comment reworded.
+
+E-5 (helpers): `hosts_tests.rs:67` 3->1; `keys_tests.rs:70` 2->1; `polling_support.rs:106` (`Rig::open`) 4->2; `remotes_tests.rs:56` 1->0 and `shell.manage(root, cx)` added before the `settings-remotes` assertion (the old `remotes` clicked the Remotes entry); `keyboard_tests/settings.rs` `open_page` callers `:119`, `:159` 2->1, `:270` 3->1, `:305` 4->2.
+
+E-16 (named sites): `drafts_routing_tests.rs:88` 2->1; `polling_tests.rs:70` 4->2 (doc "fifth of the list" -> "third entry of the menu"); `polling_privacy_tests.rs:965` 4->2; `hosts_tests.rs:278` 3->1; `remotes_tests.rs:804` 1->0; `keys_tests.rs:379` (was `:361`) 2->1; `settings/attention_tests.rs:91` 4->2; `polling_journey.rs:170,171,177` 4->2 (comment "fifth page" -> "third"). Parked Task 3 Minor 3 (added to E-16): `chosen_tests.rs:227`, `:247` 3->1 (`:116`, `:231` are entry 0, unchanged).
+
+E-30 (not named by E-16; literal indices in Task 1/2 tests): `workspace/settings_sheet_tests.rs:294` 4->2, `:434` 2->1; `settings_sheet_tests/arrive.rs:74` ("F2 Page(Polling)" target) 4->2; `returns.rs:275` 4->2; `support.rs:227` (`open_on_keys`) 2->1, doc comment "(until Task 5, the Keys page's own entry)" dropped. Same assertions, new index; no Task 2 row weakened.
+
+E-31 (`keys_tests/rows.rs:300` 2->1; `keys_tests/forms.rs` P9): `rows.rs` index only. In `forms.rs` the loop `[("the Keys entry", 2), ("the Hosts entry", 3)]` checking the passphrase stays emptied after the route is left becomes one check on entry 1, "the Sharing & keys entry". REMOVES one iteration (the Hosts entry): there is no longer a separate entry for it.
+
+Non-assertion edits: `harness.rs` gains `manage` and `repositories_page`; `chosen_tests.rs` and `remotes_tests.rs` lose their helper copies (`fn repositories`, two `fn manage`); unused imports trimmed.
+
+Scripted edits (line-targeted Python): test functions listed before and after for all 20 files containing `"settings-page"` (332 `fn` lines). Diff: only the three deleted helper fns (`repositories` and `manage` in chosen_tests, `manage` in remotes_tests). No test lost; one added (P16).
+
+### Tests that ran (Task 5)
+
+- Step 5 P-test rerun, one command, `--exact`, 22 names, `22 passed; 0 failed` (36 s): `settings_sheet::tests::` settings_is_a_sheet_the_workspace_keeps (P1), settings_replaces_the_details_sheet_and_keeps_its_edits (P2), settings_leaves_the_item_as_it_was, nothing_acts_behind_settings (P7), settings_scrolls_on_its_own (P8), settings_closes_every_way (P6), show_in_activity_closes_settings_and_focuses_activity (P14), settings_does_not_open_behind_a_dialog_or_while_quitting (P15), focus_returns_to_what_opened_settings (P5), late_work_moves_no_focus (P22), focus_stays_inside_settings (P23), focus_on_open_survives_the_sheet_keeping_focus, a_landing_drawn_behind_settings_leaves_focus_inside; `settings::chosen_tests::` one_repository_is_chosen (P10), every_page_is_read_again_on_open (P11), a_slow_identity_read_fills_only_empty_fields (P25); `settings::keys::tests::` forms::a_typed_passphrase_lives_only_on_sharing_and_keys (P9), rows::key_rows_send_what_todays_controls_sent (P12), forms::the_key_forms_open_from_their_buttons (P13), rows::removing_a_key_returns_focus_by_key (P24); `keyboard_tests::settings::sharing_and_keys_by_keyboard` (P19); and P16.
+- GREEN for P16 alone: `... desktop::view::settings::tests::settings_has_three_pages -- --exact` -> `test ... ok`, `1 passed; 0 failed`.
+- Helper callers by exact name: not run as a separate pass. Every caller of the five helpers lives in the modules of the module run below (settings::repositories::tests/manage_tests, hosts::tests, remotes::tests, keys::tests, polling_tests, polling_real_tests, attention_tests, keyboard_tests::settings, keyboard_tests walk, polling_privacy_tests), which ran in full, so a second exact-name pass would only repeat them.
+- Module run (once, no `--exact`): `desktop::view::settings::`, `desktop::view::keyboard_tests`, `desktop::view::drafts::routing_tests`, `desktop::view::polling_privacy_tests`, `desktop::view::workspace::settings_sheet`, `desktop::assets`, `desktop::view::harness`. `191 passed; 0 failed`, 161 s. Per module: settings::tests 4, chosen_tests 3, hosts::tests 16, keys::tests 18 + forms 2 + rows 2, remotes::tests 18, repositories::tests 17, manage_tests 20, polling_tests 4, polling_real_tests 3, attention_tests 1, keyboard_tests (all submodules, incl. the walk `every_core_action_works_by_keyboard_alone`, `settings` 6, `shell::polling_journey` 1) 61, drafts::routing_tests 5, polling_privacy_tests 1, settings_sheet::tests 13, assets::tests 2, harness::tests 1.
+- Static gates: `cargo fmt --check` clean (after one `cargo fmt`, formatting only, run after the tests), `cargo check --locked --features desktop` clean, `cargo clippy --all-targets --all-features --locked -- -D warnings` clean.
+
+### Constants added or changed (Task 7 skips these rows)
+
+`settings/mod.rs`: `REPOSITORIES_PAGE` "Repositories", `SHARING_AND_KEYS_PAGE` "Sharing & keys", `CHECKING_PAGE` "Checking for updates" (Part E's menu row, verbatim). `page_title` now maps through them. Removed: `tabs::SHOWN`. No other copy touched.
+
+### Files changed
+
+`src/desktop/assets.rs`, `view/harness.rs`, `view/tabs.rs`, `view/settings/{mod,frame}.rs`, test files: `view/drafts_routing_tests.rs`, `view/polling_privacy_tests.rs`, `view/keyboard_tests/settings.rs`, `view/keyboard_tests/shell/polling_journey.rs`, `view/settings/{attention,chosen,hosts,keys,mod,polling,remotes}_tests.rs`, `view/settings/keys_tests/{forms,rows}.rs`, `view/settings/polling_support.rs`, `view/workspace/settings_sheet_tests.rs`, `settings_sheet_tests/{arrive,returns,support}.rs`.
+
+### Implementer rulings and discrepancies
+
+- `PAGES` kept (now three: the first page of each entry) instead of a new menu type: `PAGES[ix]` in the walk, `open_page` and P16 means "entry ix's first page", so no test import changed. Cost if wrong: a rename.
+- A click, Enter or Space on the already active entry opens its first page again (reading its pages again), so after a `Hosts` route, clicking the entry makes `shown` `Keys`. B1 says "each opens its first page"; both pages draw the same body.
+- P16 lives in `settings/mod_tests.rs` (the design names no file).
+- `Shown::Hosts` is no longer reachable from the menu, so the `hosts` helper leaves `shown == Keys` with the Hosts view drawn; no test read `Shown::Hosts` after it.
+- The ledger's `chosen_tests.rs` indices `:116`, `:200`, `:204`, `:220` had moved to `:116`, `:227`, `:231`, `:247`; only 227 and 247 (3->1) change.
+- `assets_tests.rs` `ICONS` was not extended with `key-round` (it did not list Task 4's `trash` either); the icon is drawn, not tested (no appearance tests).
+
+### Self-review
+
+Entries, ids, roles, selected state and first-page opening are exactly B1/R-4/R-27; `nav()` is the one place pages map to entries; nothing unused left behind (`SHOWN`, interim comments). No `sleep`, no glob imports, GPUI only via `gpui_kit`. Files stay under 500 lines (`mod.rs` 489, `frame.rs` 185; `harness.rs` was already 771, +21).
+
+### Concerns
+
+1. Helper callers were covered by the module run, not by a separate exact-name pass (see above).
+2. P9 no longer leaves Sharing & keys by Checking for updates (parked Minor 7 stays open; `forms.rs:106` leaves by entry 0 only).
+3. The Kit button focus ring on entries and the icon/background look are not tested; owner's on-screen checklist (Task 9).
 
