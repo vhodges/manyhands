@@ -3,7 +3,9 @@
 //! a later attempt clears: `Operations::retire_events` keeps them for the
 //! session.
 
-use manyhands::results::Outcome;
+use std::collections::BTreeMap;
+
+use manyhands::{canonical::ItemId, results::Outcome};
 
 use super::{StateInputs, dismiss, item_label, name_of};
 use crate::desktop::model::{
@@ -13,6 +15,7 @@ use crate::desktop::model::{
     },
     operations::RetireEvent,
     polling::retire::Verdict,
+    stamp::RepoKey,
 };
 
 /// A Retired event is a success row keyed by its sequence number, so a later
@@ -22,15 +25,23 @@ use crate::desktop::model::{
 /// queue order tells a replaced note from the same one.
 pub(super) fn rows(inputs: &StateInputs<'_>) -> Vec<Derived> {
     let events = inputs.operations.retire_events();
+    // The last information event of each item, found once: an earlier one is
+    // replaced by it.
+    let mut last_note: BTreeMap<(&RepoKey, &ItemId), usize> = BTreeMap::new();
+    for (at, event) in events.iter().enumerate() {
+        if is_note(event) {
+            last_note.insert((&event.root, &event.item), at);
+        }
+    }
     events
         .iter()
         .enumerate()
         .filter_map(|(at, event)| match event.verdict {
             Verdict::Retired => Some(retired(inputs, event)),
             Verdict::Attention(_) | Verdict::Unreachable | Verdict::Retry { .. } => {
-                let replaced = events[at + 1..].iter().any(|later| {
-                    is_note(later) && later.root == event.root && later.item == event.item
-                });
+                let replaced = last_note
+                    .get(&(&event.root, &event.item))
+                    .is_some_and(|last| *last > at);
                 (!replaced).then(|| note(inputs, event))
             }
             _ => None,
