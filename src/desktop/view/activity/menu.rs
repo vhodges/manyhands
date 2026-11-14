@@ -13,15 +13,16 @@
 use gpui_kit::{
     Anchor, AnyElement, App, Context, DismissEvent, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Pixels, Point, Styled, Subscription, Window,
-    anchored, component::menu::PopupMenu, deferred, div, px,
+    anchored,
+    component::menu::{PopupMenu, PopupMenuItem},
+    deferred, div, px,
 };
 
 use super::row::choice_of;
 use crate::desktop::{
-    keys::ActivityMenuChoice,
     model::activity::{
         copy::message_of,
-        rows::{ActivityAction, ActivityRow, RowKey},
+        rows::{ActivityRow, RowKey},
     },
     view::{repositories::MenuAnchor, workspace::Workspace},
 };
@@ -45,18 +46,6 @@ pub(crate) struct ActivityMenu {
     _dismissed: Subscription,
 }
 
-/// The choice a read-only line stands for. Its items are disabled, so
-/// nothing dispatches it; were one dispatched, no row has revision 0, so it
-/// runs nothing.
-fn line(key: &RowKey, text: &str) -> ActivityMenuChoice {
-    ActivityMenuChoice {
-        key: key.clone(),
-        action: ActivityAction::ReviewDrafts,
-        shown: text.to_owned(),
-        revision: 0,
-    }
-}
-
 impl ActivityMenu {
     /// Builds the menu of `row`, as the pane drew it. The Workspace says what
     /// to do once it is dismissed.
@@ -76,7 +65,8 @@ impl ActivityMenu {
             let menu = lines
                 .iter()
                 .fold(menu.action_context(context.clone()), |menu, text| {
-                    menu.menu_with_disabled(text.clone(), Box::new(line(&key, text)), true)
+                    // A read-only line: disabled, and it carries no action.
+                    menu.item(PopupMenuItem::new(text.clone()).disabled(true))
                 });
             let menu = if row.row.menu.is_empty() {
                 menu
