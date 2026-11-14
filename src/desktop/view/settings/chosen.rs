@@ -3,11 +3,13 @@
 //! Remotes page) and Trusted servers' Check host all work on the host's
 //! `chosen`, and every choice goes through `choose`.
 //!
-//! - **At each open** (R-14): the route's repository, when it names one
-//!   other than `Inspect`'s folder, which may not be registered (R-55);
+//! - **At each open** (R-14): the route's repository, when it names one;
 //!   else the Repositories panel's selection, when it has changed since the
-//!   last open; else the previous choice, kept with its typed text. Every
-//!   open records the panel's selection it saw.
+//!   last open; else the previous choice, kept with its typed text. An
+//!   `Inspect` open never changes the choice: its folder may not be
+//!   registered, and choosing anything would empty another repository's
+//!   typed identity text (R-55). Every open, `Inspect`'s included, records
+//!   the panel's selection it saw.
 //! - **Manage** on a row chooses its repository (R-15).
 //! - **Choosing the chosen repository** leaves its identity form as it is,
 //!   so text being typed is kept (Cycle 03a's R5-2 lesson).
@@ -44,7 +46,9 @@ impl SettingsHost {
     /// Settings opens at `route`, the Repositories panel's selection being
     /// `panel` (A2 step 6; R-14): the route's repository is chosen, else
     /// the panel's selection when it has changed since the last open; else
-    /// the choice stays. A panel with no selection chooses nothing.
+    /// the choice stays. A panel with no selection chooses nothing, and an
+    /// `Inspect` open chooses nothing, whatever the panel did (R-55); the
+    /// selection is recorded either way.
     pub(crate) fn choose_on_open(
         &mut self,
         route: &SettingsRoute,
@@ -52,7 +56,8 @@ impl SettingsHost {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let changed = panel.is_some() && panel != self.seen;
+        let changed =
+            panel.is_some() && panel != self.seen && !matches!(route, SettingsRoute::Inspect(_));
         self.seen = panel.clone();
         if let Some(root) = route.chosen_root() {
             self.choose(Some(root.clone()), window, cx);

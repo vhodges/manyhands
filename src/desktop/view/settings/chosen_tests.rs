@@ -117,11 +117,13 @@ fn managed(shell: &Shell, cx: &mut TestAppContext) -> Option<String> {
     shell.label("managed-root", cx)
 }
 
-/// P10 (C1; R-14, R-15, R-56). Manage b shows b's remotes under Sharing;
-/// `Remotes(a)` chooses a; a footer open after the panel's selection
-/// changed to c chooses c; a footer open with no change since a route open
-/// keeps the route's choice and its typed identity text; choosing the
-/// chosen repository again, by Manage or by a route, keeps that text;
+/// P10 (C1; R-14, R-15, R-55, R-56). Manage b shows b's remotes under
+/// Sharing; `Remotes(a)` chooses a; a footer open after the panel's
+/// selection changed to c chooses c; a footer open with no change since a
+/// route open keeps the route's choice and its typed identity text;
+/// choosing the chosen repository again, by Manage or by a route, keeps
+/// that text; an `Inspect` open after the panel's selection changed keeps
+/// the choice and that text, and a later open finds no newer selection;
 /// removing the chosen repository unchooses it for Sharing and Check host.
 #[gpui_kit::test]
 async fn one_repository_is_chosen(cx: &mut TestAppContext) {
@@ -196,6 +198,31 @@ async fn one_repository_is_chosen(cx: &mut TestAppContext) {
         let found = value(&shell, "identity-name", cx);
         rows.fact(&row, found == TYPED, found);
     }
+
+    // An Inspect open never changes the choice, even after the panel's
+    // selection changed (R-55; Ruling 25). It records that selection, as
+    // every open does, so the next plain open finds nothing newer.
+    shell.keys("escape", cx);
+    shell.select(&b, cx);
+    route(&shell, SettingsRoute::Inspect(b.clone()), cx);
+    let found = chosen(&shell, cx);
+    rows.fact(
+        "Inspect(b), panel now b: chosen",
+        found == Some(a.clone()),
+        found,
+    );
+    let found = value(&shell, "identity-name", cx);
+    rows.fact("Inspect(b), panel now b: typed text", found == TYPED, found);
+    shell.keys("escape", cx);
+    shell.click(Control::Settings.id(), cx);
+    let found = chosen(&shell, cx);
+    rows.fact(
+        "footer after Inspect(b): chosen",
+        found == Some(a.clone()),
+        found,
+    );
+    let found = value(&shell, "identity-name", cx);
+    rows.fact("footer after Inspect(b): typed text", found == TYPED, found);
 
     shell.click(("settings-page", 3usize), cx);
     let found = shell.label("hosts-root", cx);
