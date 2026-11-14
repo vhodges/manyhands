@@ -68,6 +68,10 @@ implementer cannot express goes back to the orchestrator and the owner.
 - **Revision 5 had no independent review.**
 - Approved 2026-11-13 (decision 26); the design's Document Amendments
   1–12 were applied in the approval commit.
+- Amended during execution, at the owner's request (2026-11-14): design
+  Document Amendment 13 lists the Task 5 checkpoint rulings the owner
+  approved (C1–C7, C9) and four implementation rulings (T9-2/T10-1,
+  T11-1 to T11-3).
 
 ## Purpose And Authority
 
@@ -560,3 +564,4 @@ after that. U-3 is settled (design fact 47).
 | Review round 3, scoped re-review and adversarial (revision 3, `4c596645`) | Scoped: 0 Blocking, 6 Important, 8 Minor. Adversarial: 6 Blocking, 7 Important, 4 Minor. Most sit in how retirements became rows (the S8 starts, kept rows, R-42) and when a failed request stops counting; others: a lifecycle's Resume on its pending row, L3's offers, a Busy read, the revision, `clearable` and Open…, the sentinels | Blocking, Important, Minor | Revision 4: retirements redesigned, with no rows derived from the attempt's retirement lines (design R-51); the subject, N2, N4, N9 and N21–N24 with their precedence (decision 25); design R-52 to R-55; N20, R-19 and R-42 withdrawn, T7 and T8 replaced. Scoped findings 1–3 (the S8 starts, kept counting, N20 against N21) are resolved by the redesign | Change list, 2026-11-13 |
 | Review round 4, scoped re-review with re-grounding and adversarial (revision 4, `05246630`) | Scoped: 1 Blocking, 5 Important, 8 Minor, and 11 moved citations. Adversarial: 5 Blocking, 6 Important, 3 Minor. Almost all Blocking findings sit in decision 25's "fixed" rule, the fourth round to find Blocking issues in the attention count; others: `check_applied`, clearing fixed rows, S8's information events, S9's lifecycle row, the popover's focus and revision check, dead code, stale text. Cycle 03a merged in between | Blocking, Important, Minor | Revision 5, **with no independent review**: the latch and exact subjects (design R-56, R-57), N22's five clauses, N2 by operation, N23 undone, N25, T14–T18; `check_applied` recorded (R-58); settled failures clearable; S8's information events per item (R-59); re-grounded on Cycle 03a's merged code at `81789331`. The contract is the N-table with its precedence, latches and T-rows, written test-first in Task 5; a row its implementer cannot express goes back to the orchestrator and the owner | Change list, 2026-11-13 |
 | Owner, 2026-11-13 | Approval message: documents, named edits, decisions 14–20, no further review, execution method, authorization | Owner decisions | Decisions 14–20 confirmed; decision 26 | Session, 2026-11-13 |
+| Owner, 2026-11-14, after the final review | Add the document amendments for the rulings held only in the execution ledger | Owner decision | Design Document Amendment 13; Cycle "Purpose And Authority" note | Session, 2026-11-14 |

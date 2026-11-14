@@ -2899,6 +2899,59 @@ task:
     fixed, and its row stays in Activity until dismissed or cleared."
 12. **Cycle 03a's design R-38** (the footer's focus after hiding):
     "Extended by Cycle 03b: Needs attention follows the same rule."
+13. **This design's own text, amended during execution (2026-11-13 and
+    2026-11-14).** The text above was not edited; each line below
+    amends the section it names. Claude made the amendments at the owner's
+    request, after the final whole-branch review. The execution ledger
+    (`docs/plans/2026-11-12-wave-04-cycle-03b-activity-and-needs-attention-execution.md`,
+    Tasks 5, 9, 10 and 11) holds each one's cost-if-wrong and tests.
+
+    Approved by the owner on 2026-11-13 at Task 5's design checkpoint
+    ("Approve all six", and C9 after the checkpoint's review):
+    - **C1** (N22 clause 1, R-51): S1 sets `Group.outcome = None` for an
+      Owed retirement row, so N22 clause 1 never settles from it.
+    - **C2** (N19): absorption is sticky per attempt. A failure absorbed
+      while its covering row is kept stays absorbed after the poll answers
+      (count stays 1, no 1 to 2 flicker).
+    - **C3** (N22 clause 3): reads "left, or no longer covers its root" for
+      hold and repository absorbers.
+    - **C4** (N2 with clause 3): an absorbing row records itself in
+      `absorbed` for every member of an absorbed group.
+    - **C5** (N1, N21, N25, A1's `running_operation`): nothing counts for an
+      operation while its lifecycle runs elsewhere. The S9 lifecycle row
+      sets `Group.running_operation`, so N21 silences its operation, and
+      A1's comment for `running_operation` gains the S9 clause.
+    - **C6** (A4): `dismissed` is `BTreeMap<RowKey, Option<u64>>` holding
+      `Group.sent`. A `RetireNote` with a different `sent` shows again
+      (T18).
+    - **C7** (L3b): `pending_held(&Operations, listed roots)` is a model
+      function that T7 calls and the Workspace uses.
+    - **C9** (N19): absorbs by "kept" only a failure first evaluated while
+      its covering row was kept (`first_kept`, per attempt, cleared when
+      `Group.sent` changes), so a failure counted on its own keeps its
+      count through a routine poll.
+
+    Rulings of the implementation (Claude's, each reviewed; not owner
+    decisions):
+    - **T9-2 and T10-1** (Part E, the list's highlight; the design was
+      silent on the start): the highlight starts on the first shown row
+      whenever the list holds focus, by any route, without taking an
+      existing highlight. It runs at render (`ActivityPane::start_highlight`)
+      and P15's Tab clause pins it.
+    - **T11-1** (Part E, the popover's cursor, focus and restore fields):
+      the popover reuses Activity's `ActivityPane` (its own instance) as
+      its state. The cursor, focus and restore fields become the pane's
+      highlight by `RowKey`, the Workspace's handles and the footer item's
+      handle. The C2 apply rule comes with it.
+    - **T11-2**: the popover's focus is three Workspace-owned handles
+      (`AttentionHandles {list, button, link}`), kept for the window's
+      life. `focus_lost` falls back to the footer item (else E1's control)
+      when the focused handle is one of them and the popover is not
+      drawing it. Amended by the final review (I-2): while the popover is
+      still open, the fallback is the popover's list.
+    - **T11-3**: a popover choice also highlights the applied row in
+      Activity's pane, where the person lands in Activity. It also moves
+      Activity's highlight and scroll when Activity is hidden.
 
 ## Rulings
 
