@@ -21,7 +21,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 
 | Task | Status | Commit | Pushed |
 | --- | --- | --- | --- |
-| 0 | done | merge `82df6942`; design citations `9f89a3bb`; ledger commit follows | with the ledger commit |
+| 0 | done | merge `82df6942`; design citations `9f89a3bb`; ledger `003eb518`; ticket comment `e54fe9b5` | yes |
+| 1 | done, review approved first time (Minors parked) | code `0d5501e7` (base `e54fe9b5`); ledger commit follows | with the ledger commit |
 
 ## Branches published
 
@@ -568,4 +569,253 @@ the old and new assertion.
 
 ### Ticket comment, Task 0
 
-Posted after this commit: see the next commit.
+Comment `01M7D6V5B8M8DW7JXXXAF7T8R1`, published with the branch at `e54fe9b5`.
+
+## Task 1: the swap (A1, A2 without origins, A3, B1 with five entries, B2, C3, Part F)
+
+Implementer: one fresh Opus agent. Base `e54fe9b5`, code commit `0d5501e7`
+(the trailer was amended from Opus 5.5 to Sonnet 5.5 before review, unpushed;
+Ruling 1). Reviewer: one fresh Opus agent, spec compliant, quality approved,
+no Critical or Important findings. Boundary diff prints nothing. 38 files
+changed.
+
+### Rulings (Task 1)
+
+Ruling 12: **the origin lives on `SettingsHost`** (`set_origin`, `take_origin`,
+a weak handle) in Task 1. `workspace.rs` may gain only `settings_origin` and
+`settings_return`, which are Task 2's and mean something else. Task 2 may move
+it — cost if wrong: Task 2 moves a field.
+
+Ruling 13: **A2 step 3 (Settings already open) is done now, in its smallest
+form**: a route raised while Settings is open arrives in place, focuses its
+target or the entry, and keeps the origin. Without it a re-open would close
+Settings itself and record an origin inside the sheet. The selection is set
+before the already-open branch so that `Hosts(root)` arrives on its root.
+Consequence: Task 2's test for step 3 will pass on its first run, so its RED
+will not be seen; Task 2's tests for step 3 are kept as regression rows —
+cost if wrong: one test never seen red.
+
+Ruling 14: **R-39 (fields fill the body, up to 480 px) is taken early from
+Task 4.** B1's frame makes the body about 477 px wide, and today's fixed 480 px
+fields pushed Browse past the window (`browse_fills_the_field_and_a_dismissal_leaves_it_unchanged`).
+A shared `settings::field_column()` (`w_full().max_w(480)`), net 0 lines in
+`repositories.rs` and `remotes.rs`. Task 4 keeps its other R-39 work (the key
+list's fields) — cost if wrong: none; it was needed.
+
+Ruling 15: **`in_window` (`workspace/requests.rs`) was a latent production
+bug**, named by no task. It updated the workspace through
+`WindowHandle<Root>::update`, which leases Root, while `show_settings` reads
+and updates Root (`has_active_dialog`, `open_sheet`): every item route
+(Share…, posting, the composer) would have panicked. It now updates through
+`AnyWindowHandle`, which passes the root view without leasing it. Its only
+caller is `item_route`. Accepted — cost if wrong: none.
+
+Ruling 16: the page methods' signatures changed as the brief directs
+(`manage_root` loses `focus: bool` and returns the name field's handle;
+`ask_again` and `HostsPage::check_host` return `Option<FocusHandle>`),
+touching `keys/commands.rs`, `keys/render.rs`, `hosts.rs` and
+`repositories/manage.rs`, which the plan's file list omits. The wrappers stay
+where the entry functions were (`content.rs`, `requests.rs`). `open_settings_on`
+keeps its signature. `SettingsRoute::AddRepository` and `::Keys` carry
+`#[allow(dead_code)] // Used from Task 6`; `Workspace::settings_chosen` carries
+`// Used from Task 3`.
+
+Ruling 17: **F14 is read** as the focused element's key context containing
+"Dialog", after two draws, with the EditsNotKept dialog open and no other (the
+base dialog host's element is not in the snapshots). It uses a symlink for
+"recovery off", so **the EditsNotKept row is unix-only**; the Windows native
+target skips it. Recorded for the Task 9 summary and for native CI after merge
+— cost if wrong: a Windows row missing until native CI.
+
+Ruling 18: P7's RED was its owner precondition; no action row was seen to fail
+before the swap. The rows are discriminating (before the swap no modal was
+open, so each action would have moved focus or layout) but that evidence is
+inferred — cost if wrong: a P7 row that cannot fail.
+
+Ruling 19: **the stale module doc of `settings/mod.rs`** (D1's R-B4 paragraph,
+"shown in the main window's content region in place of the tabs") stays until
+Task 8 Step 2, which owns its rewrite.
+
+### Parked review Minors (Task 1)
+
+1. `settings_sheet_tests.rs` is 950 lines. Before Task 2, its helpers
+   (`:60-368`, about 310 lines) move into `settings_sheet_tests/support.rs`;
+   the tests stay at `workspace::settings_sheet::tests::<name>`. Done in Task
+   2's dispatch as its first step, as a pure move.
+2. P7's RED (Ruling 18) and F14's unix-only setup (Ruling 17), above.
+3. Two test names now say the opposite of their bodies:
+   `drafts_routing_tests.rs` `back_to_tabs_from_settings_over_drafts_shows_the_tabs`
+   (now asserts Drafts shown and the tab not) and
+   `the_drafts_key_empties_a_typed_passphrase` (Escape now does the
+   emptying). E-4 does not authorize renames; **a rename is parked for Task 8**.
+4. E-2's removed `assert_eq!(settings, Shown::Tabs)` was still true for every
+   remaining key (a free check that no workspace key opens Settings behind the
+   details sheet). Optional to restore; parked.
+5. The F-rows read after a draw in Task 1: F3 (P3), F11 (P14), F12, F13, F14 (P6).
+
+### Tests that ran (Task 1)
+
+- RED, eight single-test runs (`0 passed; 1 failed` each): P1
+  `settings_is_a_sheet_the_workspace_keeps`, P2 `settings_leaves_the_item_as_it_was`,
+  P3 `settings_replaces_the_details_sheet_and_keeps_its_edits`, P6
+  `settings_closes_every_way`, P7 `nothing_acts_behind_settings`, P8
+  `settings_scrolls_on_its_own`, P14
+  `show_in_activity_closes_settings_and_focuses_activity`, P15
+  `settings_does_not_open_behind_a_dialog_or_while_quitting`, all under
+  `desktop::view::workspace::settings_sheet::tests::`. GREEN: each alone,
+  `1 passed`.
+- The 25 E-tests by exact name, one command: 24 passed, 1 failed
+  (`desktop::view::item::share::tests::share_opens_remotes_on_its_own_repository_after_another`,
+  "cannot read Root while it is already being updated", the `in_window` fix,
+  Ruling 15); rerun alone, 1 passed. Both E-20 tests passed again after their
+  edit (2 passed).
+- Module run 1 (once, every touched file plus Task 0's Task 1 list): 305
+  tests, 303 passed, 2 failed, 380.81 s. Failures:
+  `settings::repositories::tests::browse_fills_the_field_and_a_dismissal_leaves_it_unchanged`
+  (fixed by Ruling 14) and
+  `repositories::tests::the_more_menu_acts_on_the_chosen_repository` (the
+  harness's 180 s wait exceeded under parallel load; passed alone twice at
+  2.35 s and 2.27 s; the reviewer found nothing in the diff that reaches it).
+- Module run 2 (only what changed after run 1): 101 passed, 0 failed, 62.00 s.
+- `cargo fmt --check`, `cargo check --locked --features desktop`, `cargo clippy
+  --all-targets --all-features --locked -- -D warnings`: exit 0.
+- The binary has 1920 tests: 1914 before, less 2 (E-1), plus 8.
+
+### The test edits (Task 1)
+
+Removals are in bold. Numbers E-21 to E-23 are Task 6, 7 and 4's (Task 0);
+further edits found by tasks are numbered **E-24 onward** (the Task 1
+implementer's two are E-24 and E-25).
+
+Each entry gives the E-number, the test, the old assertion, the new
+assertion and the reason. **Removals are in bold.**
+
+- **E-1**, `settings/mod_tests.rs`:
+  - `the_settings_key_shows_the_settings_and_back_keeps_the_tabs` (`:73`):
+    - **Removes** `assert!(!shell.present(("tab", 0usize), cx))`: the strip
+      stays drawn under the sheet.
+    - **Removes** the `label("settings-close") == BACK_TO_TABS` assertion.
+    - `shell.click("settings-close")` becomes `shell.keys("escape")`.
+    - The `settings-page-shown` check stays until Task 5.
+    - The doc comment was rewritten, and the `BACK_TO_TABS` import dropped.
+  - **Removes the test** `opening_an_item_shows_the_tabs_again` (`:137`).
+  - **Removes the test** `focusing_the_content_region_focuses_the_settings`
+    (`:168`).
+  - The module doc was rewritten for the sheet.
+- **E-2**, `item/sheet_tests.rs` `no_workspace_key_acts_behind_the_sheet`:
+  - **Removes** `"secondary-,"` from the refused keys.
+  - **Removes** the `workspace.settings_shown(cx)` read and
+    `assert_eq!(settings, Shown::Tabs, "{key}")`. P3 asserts the new
+    behaviour.
+  - The doc comment was updated, and the unused `Shown` import dropped.
+- **E-3**, `item/frame_tests.rs`
+  `page_keys_scroll_the_items_region_and_settings_keep_theirs`:
+  - The `column_offset` reads for Settings became `settings_offset` (a new
+    helper, `workspace.settings_offset(cx)`).
+  - Added `assert_eq!(column_offset, 0, "the column did not move")`, which
+    is the design's "not `content_offset`".
+  - `click("settings-close")` became Escape.
+  - The doc comments were updated.
+  - The window change is **E-24**.
+- **E-4**, `drafts_routing_tests.rs`:
+  - `back_to_tabs_from_settings_over_drafts_shows_the_tabs` (`:66`):
+    - **Removes** `assert!(!drafts_shown)`, `assert!(!present("drafts"))`
+      (after Ctrl+,), `assert!(!drafts_shown)` (after the close) and
+      `assert!(present(("tab", 1)))`.
+    - They are replaced by their inversions: `drafts_shown`,
+      `present("drafts")`, and after Escape `drafts_shown` and
+      `!present(("tab", 1))` (R-31).
+    - The close button became Escape.
+  - `the_drafts_key_empties_a_typed_passphrase` (`:83`):
+    - Escape now closes Settings before the drafts key.
+    - Added `assert_eq!(settings_shown, Shown::Tabs)` after the Escape.
+    - **Removed** the extra `shell.frame` and its comment ("The next frame
+      of the content region empties them").
+    - The emptiness assertions are unchanged.
+  - The module doc was updated.
+- **E-5's walk**, `keyboard_tests.rs` `Walk::open_settings_and_each_page`:
+  - The `tab_to("shift-tab", "settings-close")`,
+    `on("settings-close", Content)` and `enter` steps were replaced by
+    `keys("escape")`.
+  - **Removes** `on(("tab", shown), Content)`. It is replaced by
+    `on_handle(&origin, Content)`, where `origin` is the handle focused
+    before Ctrl+,.
+  - The doc comment was updated.
+  - The page helpers keep today's indices.
+- **E-6**, Escape instead of the close button:
+  - `keys_tests.rs`, both sites;
+  - `item/share_tests.rs`;
+  - `create_tests.rs` (`settings-close-button`);
+  - `hosts_tests.rs`;
+  - `remotes_tests.rs`, inside the E-13 test.
+- **E-7**, `operations/attention_tests.rs` `attention_actions_hit`:
+  `rig.shell.keys("escape")` after each of the three Settings-opening
+  presses, with a comment.
+- **E-8**, `settings/attention_tests.rs`
+  `settings_polling_attention_actions`: added an assertion after Ctrl+,
+  that `settings_shown == Settings(Keys)`, the page Choose a key… left.
+  The comment was updated.
+- **E-12**, Escape before the next action outside Settings:
+  - `repositories_tests.rs` `rows_and_list_states`, after the
+    Settings(Repositories) assertion;
+  - `dock_tests/toolbars/repositories.rs`, after the
+    `Page::Settings(Repositories)` assertion;
+  - `repositories_tests/menu.rs`, after the Remotes assertions and after
+    the Settings… on `b` assertions;
+  - `lifecycle/credential_tests.rs`, after
+    `matches!(shown, Settings(Keys))` in row 0;
+  - `keyboard_tests/shell/polling_journey.rs`, before the Activity steps
+    (`:266`); `:323` follows with Settings already closed;
+  - `polling_privacy_tests.rs`, after
+    `seen.surfaces("settings row") > 0`, before `press_button`;
+  - `operations/attention_tests.rs` `attention_actions_by_reason`, after
+    each `assert_eq!(shown, page)` in the loop. The second iteration's
+    Escape is harmless.
+- **E-13, first half**:
+  - `remotes_tests.rs`
+    `opening_remotes_on_a_repository_shows_that_repository_even_after_another`:
+    - `host.open_remotes_on(b)` is replaced by
+      `workspace.show_settings(SettingsRoute::Remotes(b), None)`;
+    - the close is now Escape;
+    - "Settings keeps b" is still asserted.
+  - `settings/repositories_tests.rs`
+    `a_form_control_below_the_fold_is_scrolled_into_view`:
+    - `find("content").bounds()` became `find("settings-scroll").bounds()`;
+    - `content_offset()` became `settings_offset(cx)`;
+    - the doc was updated.
+  - The window change is **E-25**.
+- **E-19**, `needs_attention_tests/actions.rs` `holds`: `shell.keys("escape")`
+  after the CHOOSE_A_KEY, APPROVE_HOST and OPEN_REMOTE_SETTINGS assertions.
+- **E-20**: both tests passed unedited (the seam bypasses `modal_open`). The
+  ledger's honest edit was made anyway:
+  - `activity_tests/cases.rs` `requests`: Escape after the Settings(Keys)
+    assertion;
+  - `repositories_manage_tests.rs`
+    `a_release_that_failed_during_removal_completes_once_retry_stores_the_text`:
+    Escape before `act(RETRY)`, plus an added
+    `assert_eq!(settings_shown, Shown::Tabs)`, so the Escape cannot silently
+    miss.
+- **E-24 (new)**, `item/frame_tests.rs`
+  `page_keys_scroll_the_items_region_and_settings_keep_theirs`:
+  - `shell(SHORT_WINDOW, …)` became `shell(SETTINGS_WINDOW, …)`, with the
+    new const `SETTINGS_WINDOW = 400.`.
+  - Added `shell.set_activity_height(SETTINGS_ACTIVITY = 100.)`.
+  - Reason: the sheet is as tall as the window. At 700 its body (about
+    927 px) holds the whole Repositories page (769 px), so Settings'
+    PageDown cannot move. Activity is shortened so the item area keeps a
+    region to page.
+  - No assertion changed.
+- **E-25 (new)**, `settings/repositories_tests.rs`
+  `a_form_control_below_the_fold_is_scrolled_into_view`: the window height
+  went from 640 to 360. Same reason: Create repository must start below the
+  sheet body's fold. No assertion changed.
+
+Scripted edits: the function lists of all 22 edited existing test files
+were compared before (from `HEAD`) and after. The only differences are the
+two E-1 removals (`opening_an_item_shows_the_tabs_again` and
+`focusing_the_content_region_focuses_the_settings`) and the new helper
+`settings_offset` in `frame_tests.rs`. Test-attribute counts per file are
+unchanged, except `settings/mod_tests.rs`, which went from 5 to 3. The
+binary has 1920 tests: 1914 before, less 2, plus 8.
+
+- **E-21, E-22 and E-23** are untouched (Tasks 6, 7 and 4).
