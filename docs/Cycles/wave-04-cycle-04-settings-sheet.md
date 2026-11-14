@@ -258,28 +258,31 @@ Settings, footer, content-area or keymap files (planning sweep,
 
 ## Acceptance And Exit Evidence
 
-Planned proof. The Status column is filled at the final task from the
-branch's own tests, by exact name, and the execution ledger. "On screen"
+Planned proof. The Status column was filled at Task 9 (2026-11-14) from the
+branch's own tests, by exact name, and the execution ledger. The fast tier ran once
+at review-ready: the desktop binary 1936 passed, 1 failed (`each_action_runs_its_handler`,
+a load-dependent read of focus, fixed in `b66827db`, which passes by exact name and
+in its module runs); every other target passed. The tier was not run a second time. "On screen"
 rows await the owner's checks; Claude records only what the owner
 reports.
 
 | # | Wave exit evidence / contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | Settings opens as a sheet from the footer and Ctrl ,, and the workspace keeps it (Wave scope; contract 1) | `settings_is_a_sheet_the_workspace_keeps` (P1); `each_route_lands_on_its_page_and_control` (P4); E-18's footer tests | Planned |
-| A2 | Opening and closing Settings leaves the open item, its scroll position and any draft untouched (Wave exit; contract 2) | `settings_leaves_the_item_as_it_was` (P2) | Planned |
-| A3 | Opening Settings while a details sheet is open closes it first and loses no edit (Wave exit; contract 3) | `settings_replaces_the_details_sheet_and_keeps_its_edits` (P3); E-2 | Planned |
-| A4 | Focus trapped, Escape closes, focus returns to the invoking control (Wave scope; contract 4) | Design A6 rows F1–F19, each read after a draw, through P3, P4, `focus_returns_to_what_opened_settings` (P5), `settings_closes_every_way` (P6), P14, `late_work_moves_no_focus` (P22) and `focus_stays_inside_settings` (P23) | Planned |
-| A5 | Every existing settings journey and recovery route passes through the sheet by keyboard (Wave exit; contract 5) | `routes_by_keyboard` (P20); `sharing_and_keys_by_keyboard` (P19); P4; E-18; the keyboard journeys in `D/view/keyboard_tests/settings.rs` and `polling_keyboard`, edited only as E-5, E-12, E-14, E-15 and E-16 say | Planned |
-| A6 | The pages folded into the design's menu (Wave scope) | `settings_has_three_pages` (P16); `one_repository_is_chosen` (P10); `the_key_forms_open_from_their_buttons` (P13) | Planned |
-| A7 | Behaviour unchanged, with contract 6's exceptions | `key_rows_send_what_todays_controls_sent` (P12); today's page tests pass, edited only as the named edits say | Planned |
-| A8 | Settings removed from the content region and the sidebar (Wave scope) | `the_old_settings_places_are_gone` (P17) | Planned |
-| A9 | Nothing acts behind Settings or pulls focus behind it; none opens behind a dialog or while quitting (contract 7) | `nothing_acts_behind_settings` (P7); `focus_stays_inside_settings` (P23); `late_work_moves_no_focus` (P22); `settings_does_not_open_behind_a_dialog_or_while_quitting` (P15) | Planned |
-| A10 | Copy in the `06` vocabulary (Wave scope) | `settings_copy_uses_the_vocabulary` (P18) | Planned |
-| A11 | A typed passphrase lives only on Sharing & keys (contract 9) | `a_typed_passphrase_lives_only_on_sharing_and_keys` (P9); `settings_closes_every_way` (P6) | Planned |
-| A12 | Show in Activity closes Settings and focuses Activity (decision 5) | `show_in_activity_closes_settings_and_focuses_activity` (P14) | Planned |
-| A13 | The folded-in work (decisions 3 and 12) | `settings_scrolls_on_its_own` (P8); `one_repository_is_chosen` (P10); `every_page_is_read_again_on_open` (P11); `removing_a_key_returns_focus_by_key` (P24); `a_slow_identity_read_fills_only_empty_fields` (P25) | Planned |
-| A14 | No secret (contract 8) | `settings_copy_names_no_secret` (P21); today's Keys privacy tests and `polling_privacy` pass unchanged in meaning | Planned |
-| A15 | The sheet matches frames 1e and 1f in the dark theme | On screen: the owner | Planned |
+| A1 | Settings opens as a sheet from the footer and Ctrl ,, and the workspace keeps it (Wave scope; contract 1) | `settings_is_a_sheet_the_workspace_keeps` (P1); `each_route_lands_on_its_page_and_control` (P4); E-18's footer tests | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A2 | Opening and closing Settings leaves the open item, its scroll position and any draft untouched (Wave exit; contract 2) | `settings_leaves_the_item_as_it_was` (P2) | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A3 | Opening Settings while a details sheet is open closes it first and loses no edit (Wave exit; contract 3) | `settings_replaces_the_details_sheet_and_keeps_its_edits` (P3); E-2 | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A4 | Focus trapped, Escape closes, focus returns to the invoking control (Wave scope; contract 4) | Design A6 rows F1–F19, each read after a draw, through P3, P4, `focus_returns_to_what_opened_settings` (P5), `settings_closes_every_way` (P6), P14, `late_work_moves_no_focus` (P22) and `focus_stays_inside_settings` (P23) | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A5 | Every existing settings journey and recovery route passes through the sheet by keyboard (Wave exit; contract 5) | `routes_by_keyboard` (P20); `sharing_and_keys_by_keyboard` (P19); P4; E-18; the keyboard journeys in `D/view/keyboard_tests/settings.rs` and `polling_keyboard`, edited only as E-5, E-12, E-14, E-15 and E-16 say | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A6 | The pages folded into the design's menu (Wave scope) | `settings_has_three_pages` (P16); `one_repository_is_chosen` (P10); `the_key_forms_open_from_their_buttons` (P13) | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A7 | Behaviour unchanged, with contract 6's exceptions | `key_rows_send_what_todays_controls_sent` (P12); today's page tests pass, edited only as the named edits say | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A8 | Settings removed from the content region and the sidebar (Wave scope) | `the_old_settings_places_are_gone` (P17) | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A9 | Nothing acts behind Settings or pulls focus behind it; none opens behind a dialog or while quitting (contract 7) | `nothing_acts_behind_settings` (P7); `focus_stays_inside_settings` (P23); `late_work_moves_no_focus` (P22); `settings_does_not_open_behind_a_dialog_or_while_quitting` (P15) | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A10 | Copy in the `06` vocabulary (Wave scope) | `settings_copy_uses_the_vocabulary` (P18) | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A11 | A typed passphrase lives only on Sharing & keys (contract 9) | `a_typed_passphrase_lives_only_on_sharing_and_keys` (P9); `settings_closes_every_way` (P6) | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A12 | Show in Activity closes Settings and focuses Activity (decision 5) | `show_in_activity_closes_settings_and_focuses_activity` (P14) | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A13 | The folded-in work (decisions 3 and 12) | `settings_scrolls_on_its_own` (P8); `one_repository_is_chosen` (P10); `every_page_is_read_again_on_open` (P11); `removing_a_key_returns_focus_by_key` (P24); `a_slow_identity_read_fills_only_empty_fields` (P25) | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A14 | No secret (contract 8) | `settings_copy_names_no_secret` (P21); today's Keys privacy tests and `polling_privacy` pass unchanged in meaning | Met on the branch: every named test passed in the fast tier of 2026-11-14 and in its task's module run (ledger Tasks 1 to 8). |
+| A15 | The sheet matches frames 1e and 1f in the dark theme | On screen: the owner, with `docs/plans/2026-11-13-wave-04-cycle-04-on-screen-checklist.md` | Awaiting the owner |
 
 ## Product-Owner Decisions (2026-11-13)
 

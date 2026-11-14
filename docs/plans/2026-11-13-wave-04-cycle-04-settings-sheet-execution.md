@@ -29,7 +29,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 5 | done, review approved first time (Minors parked) | code `d9327047` (base `86b51214`); ledger `16f7746b` | yes |
 | 6 | done, review approved after fix round 1 | code `4a9a0dd7` (base `16f7746b`), fix `4fd65ef0`; ledger `6d86c8f7`; ticket comment (Tasks 3 to 6) `e4d4bd56` | yes |
 | 7 | done, review approved first time (Minors parked) | code `cbf1f207` (base `e4d4bd56`); ledger `5fb61fc3` | yes |
-| 8 | done, review approved first time (Minors parked) | code `1a39ca6b` (base `5fb61fc3`); ledger commit follows | with the ledger commit |
+| 8 | done, review approved first time (Minors parked) | code `1a39ca6b` (base `5fb61fc3`); ledger `ef964dad` | yes |
+| 9 | gates run; one test race fixed (review approved); checklist written; on-screen rows await the owner | fix `b66827db` (base `ef964dad`); checklist and Acceptance Status in the ledger commit | with the ledger commit |
 
 ## Branches published
 
@@ -1940,3 +1941,42 @@ right reason (`!shell.present("sidebar-settings")`), GREEN after.
 - Final grep over `src` for `sidebar-settings`, `settings-close`, "Back to tabs",
   `BACK_TO_TABS`, `ContentPage::Settings`, `SettingsEvent::Closed`: only P17's own
   absence assertions.
+
+## Task 9: checklist, gates, review-ready
+
+Orchestrator ran the gates; a fresh Sonnet agent wrote the checklist; a fresh Sonnet agent fixed the one failure; a fresh Sonnet agent reviewed the fix.
+
+### The gates (on `ef964dad`, then the fix)
+
+- Static gates, whole tree: `cargo check --all-features --locked`, `cargo fmt --check`, `cargo clippy --all-targets --all-features --locked -- -D warnings`: all exit 0.
+- Fast tier once, `--no-fail-fast`, the command in AGENTS.md plus the plan's flag: 79 target results. 78 `ok`; the desktop binary `1936 passed; 1 failed` in 1355 s (the tier is no longer fast: the binary alone is about 23 minutes). No SSH target ran (desktop only).
+- CLI smoke test: `cargo run --locked --bin manyhands-cli` prints its usage and exits 0.
+- `git merge-tree --write-tree HEAD origin/main`: clean; origin/main is still `ea6d899b`. The boundary diff (`src` outside `src/desktop`, `tests`, `Cargo.toml`, `Cargo.lock`, `packaging`) prints nothing.
+
+### The failure and its fix (Step 3)
+
+`desktop::view::activity::tests::each_action_runs_its_handler` failed in the full run at `activity_tests/cases.rs:238` ("W-12 lands on the key list, with no key Make a new key"): `holds_focus("keys-make")` read focus on the entry. It passes alone (15.8 s) and passed in module run 3 of Task 6. This is a Task 6 test (E-21).
+
+Ruling 52 (accepted): the cause was not seen in the failing run. The implementer reproduced the symptom by making each Keys read answer `busy` first: `run_until_parked` never moves the test clock, so the busy-retry timers (100, 200 and 400 ms, `BUSY_RETRY_DELAYS`) never fire and the page stays `Read::Loading` with focus on the entry. Reviewer: coherent, no other deterministic candidate found — cost if wrong: another load-dependent row shows up later; an AGENTS.md stopgap rerun would find it.
+
+Fix `b66827db` (test and harness only; no production change; `BUSY_RETRY_DELAYS` was already `pub(crate)`): `Shell::keys_landed` (draw once, run, then advance the test clock by each delay with a run after each) and `Shell::holds_keys_focus` (that, then `holds_focus`) in `harness.rs`. Every Task 6 assertion of `keys-make` or a key radio after a Keys route goes through it: `activity_tests/cases.rs`, `operations/outcomes_route_tests.rs`, `lifecycle/credential_tests.rs`, `needs_attention_tests/{actions,requests}.rs`, `operations/attention_tests.rs`, `settings/attention_tests.rs`, P4 (`routes.rs`, `ways.rs`), P20 (`keyboard.rs`). **E-35** (further edit, decision 7): the same control, the same two-draw read, no assertion weakened; two P4 rows ("once the read lands", "focus moved before the read lands: it stays") now wait for the landing, the second was vacuous if the read had not landed. With every Keys read answering `busy` first, the old code failed 10 tests and the new code passes the same 10. The next free number is **E-36**.
+
+Reviewer approved, no Important findings. Parked Minors (Task 9):
+1. `keys_landed` always advances 700 ms of test clock, so an unrelated timer due in that window would fire at each Keys landing (the six module runs pass); the helper doc could say so.
+2. If a real thread held the key store's lock longer than the virtual retries, all four attempts could answer busy and the read would land `Read::Busy`, giving `keys-make`: the no-key rows pass, the radio rows would fail. Not the failure seen.
+3. `E-35` also names an edit in the Wave 03 desktop-06 plan (`scheduler_retire_tests.rs:834`); a grep is ambiguous.
+4. The `if page == Keys { keys_landed }` guard repeats at four table sites.
+
+Tests after the fix: the 10 changed tests by exact name; module runs `activity::tests` 16, `operations::` 94, `lifecycle::` 106, `needs_attention::` 12, `settings::` 110, `workspace::settings_sheet` 14, all passing; fmt, check and clippy clean. Per the plan the fast tier was not run again.
+
+### The checklist and the Cycle's Acceptance Status (Steps 1 and 4)
+
+`docs/plans/2026-11-13-wave-04-cycle-04-on-screen-checklist.md`: sections S-1 to S-11, a Minimum pass, "Before you start", "Known limits", and blank Results, Findings, Not reached and "Reported by the owner" tables. Nothing is marked passed. The Cycle document's Acceptance table: A1 to A14 "Met on the branch" with the tests named in the Proof column (all 26 names exist in the tree); A15 "Awaiting the owner".
+
+### Owner-visible summary (for the review-ready comment)
+
+- The on-screen checklist is the owner's to run on Wayland. Nothing is assumed.
+- Test rows no automated check covers: macOS and Windows native CI will not run P23's context-menu rows or F14's EditsNotKept row (unix only).
+- Rulings for the owner to see: 38/49 the kept "Selected key: …" line; 50 the key-store wording ("key store" in Settings and the dialogs, "SSH key store" in Activity); `OPEN_REMOTE_SETTINGS` still says "remote settings"; Activity row titles keep the old vocabulary; Ruling 45 (Cycle 03b had no view test for Approve host… with no server named); 52 the load race.
+- The fast tier takes about 23 minutes for the desktop binary alone.
+- Parked Minors for Tasks 1 to 9 are in this ledger for the final review.
