@@ -12,6 +12,7 @@
 //! No text here carries a key, a passphrase or a URL that is not the
 //! library's redacted one (Part I).
 
+mod cause;
 mod menu;
 mod words;
 
@@ -21,6 +22,8 @@ use manyhands::{
 };
 use time::OffsetDateTime;
 
+pub(crate) use self::cause::AttentionCause;
+use self::cause::needs_attention;
 pub(crate) use self::menu::{
     CHECK_NOW, MenuChoice, MenuItem, RETRY_NOW, SET_UP_SHARING, SETTINGS, check_all_applies,
     menu_items, more_items,
@@ -153,6 +156,9 @@ pub(crate) struct RepoState {
     /// The state's sentence, in parts: the first of the tooltip, the
     /// description and the menu. Empty when there is nothing to say.
     pub sentence: Vec<String>,
+    /// Why a Needs attention state holds; `None` for every other state, and
+    /// for Locked, which `locked()` decides before `attention_cause` runs.
+    pub cause: Option<AttentionCause>,
 }
 
 impl RepoState {
@@ -169,6 +175,7 @@ impl RepoState {
             tone: Some(tone),
             action,
             sentence,
+            cause: None,
         }
     }
 
@@ -181,6 +188,7 @@ impl RepoState {
             tone: None,
             action,
             sentence,
+            cause: None,
         }
     }
 }
@@ -314,67 +322,6 @@ fn last_answer<'a>(facts: &RepoFacts<'a>) -> Option<&'a TransportFailure> {
         Some(Answer::Transport(failure)) => Some(failure),
         _ => None,
     }
-}
-
-/// Row 6.
-fn needs_attention(facts: &RepoFacts<'_>, repo: &str) -> Option<RepoState> {
-    let (action, sentence) = attention_cause(facts, repo)?;
-    Some(RepoState::labelled(
-        StateKind::NeedsAttention,
-        look(NEEDS_ATTENTION, "circle-alert", Tone::Failure),
-        action,
-        sentence,
-    ))
-}
-
-/// What holds row 6, the first cause that does: its action and its words.
-/// A pending conflict and a check's problems have no action (Activity has
-/// them).
-fn attention_cause(facts: &RepoFacts<'_>, repo: &str) -> Option<(Option<RowAction>, Vec<String>)> {
-    use PollingOutcome::*;
-    let schedule = facts.schedule;
-    let attend = |reason: Reason| Some(RowAction::Attend(action_of(&reason), reason));
-    if let Some(Phase::Attention(reason)) = schedule.map(|schedule| &schedule.phase) {
-        return Some((attend(reason.clone()), row_sentence(facts)));
-    }
-    if facts.row().shape == Shape::Held {
-        // Held by the policy, with no reason in the phase: Resume checking
-        // releases the hold for this repository.
-        let held = Reason::RecoveryHeld(facts.entry.key().clone());
-        return Some((attend(held), row_sentence(facts)));
-    }
-    if schedule.is_some_and(|schedule| schedule.conflict_pending) {
-        return Some((None, row_sentence(facts)));
-    }
-    let failed_wait = matches!(
-        schedule.map(|schedule| &schedule.phase),
-        Some(Phase::Waiting {
-            why: Why::Failed,
-            ..
-        })
-    );
-    if failed_wait {
-        return Some((Some(RowAction::RetryNow), row_sentence(facts)));
-    }
-    if facts.unplaced == Some(Unplaced::Unreadable) {
-        return Some((Some(RowAction::Reread), vec![unreadable_sentence(repo)]));
-    }
-    if matches!(
-        last_answer(facts),
-        Some(TransportFailure::Unavailable | TransportFailure::ConfigurationRequired)
-    ) {
-        return Some((Some(RowAction::RetryNow), row_sentence(facts)));
-    }
-    let stored = match stored_outcome(facts) {
-        Some(SelectedKeyUnavailable | HostApprovalRequired) => Some(RowAction::CheckNow),
-        Some(ConfigurationRequired | RepositoryUnavailable) => Some(RowAction::RetryNow),
-        _ => None,
-    };
-    if stored.is_some() {
-        return Some((stored, row_sentence(facts)));
-    }
-    let problems = schedule?.unshared.problems.len();
-    (problems > 0).then(|| (None, vec![problems_sentence(problems)]))
 }
 
 /// Rows 7 to 12.

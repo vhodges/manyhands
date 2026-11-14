@@ -137,6 +137,18 @@ pub(super) async fn check_all(cx: &mut TestAppContext) {
             })
         })
         .await;
+    // `raise` refuses an unscheduled repository and one whose check is
+    // running: `c` is scheduled, and its launch poll has ended.
+    shell
+        .until_drawn(cx, "c to be scheduled and quiet", |_, cx| {
+            services.scheduler().read_with(cx, |scheduler, _| {
+                scheduler
+                    .schedule()
+                    .repo(&key_c)
+                    .is_some_and(|repo| !repo.in_flight())
+            })
+        })
+        .await;
 
     // `c`'s key is locked, as the scheduler says it live.
     let locked = SharedKeyId::new();

@@ -57,7 +57,7 @@ mod outcome;
 pub(crate) use confirm::KEEP_LOCAL;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use outcome::{ENDING_DONE, ENDING_STOPPED, SHARING_PENDING, TIDIED_UP, merged};
-pub(crate) use outcome::{cleanup_reason, item_of, progress_words};
+pub(crate) use outcome::{cleanup_reason, item_of};
 pub(crate) use repair::{Reopen, reopen_repaired};
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use republish::{NOT_STOPPED, REPUBLISH_STOPPED};
@@ -117,8 +117,9 @@ pub(crate) fn share_main(primary: &str) -> String {
 pub(crate) const REPAIR_LOCALLY: &str = "Repair locally\u{2026}";
 /// L1's `ResolveChildConflict` (B5).
 pub(crate) const RESOLVE_CONFLICT: &str = "Resolve conflict\u{2026}";
-/// Continue and Resume wait while the item's lifecycle runs (P22).
-pub(crate) const STILL_RUNNING: &str = "Still running\u{2026}";
+/// Continue and Resume wait while the item's lifecycle runs (P22). The
+/// words live with the outcome types in the model (R-41).
+pub(crate) use crate::desktop::model::activity::lifecycle_lines::STILL_RUNNING;
 /// A run is sent: it goes on with the dialog hidden.
 pub(crate) const STARTED: &str =
     "It continues in the background if you close this, and shows up in Activity.";

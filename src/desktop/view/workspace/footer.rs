@@ -12,7 +12,6 @@ use gpui_kit::{
 use super::Workspace;
 use crate::desktop::{
     model::{
-        attention::needs_attention,
         layout::{PanelKind, Side},
         stamp::SettingsPage,
     },
@@ -29,12 +28,8 @@ use crate::desktop::{
 
 impl Workspace {
     /// How many things await the person (decisions 3, 11 and 14).
-    pub(in crate::desktop::view) fn attention(&self, cx: &gpui_kit::App) -> usize {
-        needs_attention(
-            self.services.operations().read(cx),
-            self.services.drafts().read(cx),
-            self.services.scheduler().read(cx).schedule(),
-        )
+    pub(in crate::desktop::view) fn attention(&self, _cx: &gpui_kit::App) -> usize {
+        self.activity().attention_count()
     }
 
     /// The footer, below the dock area.
@@ -170,7 +165,7 @@ impl Workspace {
         match which {
             Control::Panel(kind) => self.toggle_panel(kind, window, cx),
             Control::Dock(side) => self.toggle_dock(side, window, cx),
-            Control::Attention => self.reveal_and_focus(PanelKind::Activity, window, cx),
+            Control::Attention => self.toggle_attention_popover(window, cx),
             Control::Settings => self.open_settings(SettingsPage::Repositories, window, cx),
             Control::UpdateCheck => self.open_settings(SettingsPage::Polling, window, cx),
             Control::ToShare => self.choose_next_to_share(cx),
@@ -198,6 +193,10 @@ impl Workspace {
             (None, Placement::Pointer(_)) => window.focused(cx),
             (None, Placement::Toggle(_)) => None,
         };
+        self.activity.menu = None;
+        self.activity.more = None;
+        self.attention.popover = None;
+        self.repository_menu = None;
         self.footer.menu = Some(DockMenu::open(
             kind, current, toggle, placement, restore, window, cx,
         ));
@@ -278,6 +277,11 @@ impl Workspace {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 impl Workspace {
+    /// Whether a dock menu is open.
+    pub(crate) fn dock_menu_open(&self) -> bool {
+        self.footer.menu.is_some()
+    }
+
     /// A footer control's focus handle.
     pub(crate) fn footer_focus(&self, control: Control) -> gpui_kit::FocusHandle {
         self.footer.handle(control).clone()

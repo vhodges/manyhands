@@ -177,7 +177,10 @@ impl Workspace {
 
     /// A status item that had focus and is not in `plan` hands focus to the
     /// next shown control to its right, before the frame loses it to a
-    /// region (R-38). A modal keeps its own trap.
+    /// region (R-38, R-37). Needs attention is one of them: it also decides
+    /// focus after a dialog that closed onto it once it hid, since this runs
+    /// in render, before `focus_lost` could act (R-49). A modal keeps its own
+    /// trap.
     pub(super) fn keep_focus_in_footer(
         &self,
         plan: &Plan,
@@ -187,7 +190,7 @@ impl Workspace {
         if window.has_active_dialog(cx) || window.has_active_sheet(cx) {
             return;
         }
-        for hidden in [Control::UpdateCheck, Control::ToShare] {
+        for hidden in [Control::UpdateCheck, Control::ToShare, Control::Attention] {
             let shown = plan
                 .right
                 .iter()

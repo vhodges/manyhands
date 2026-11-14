@@ -371,20 +371,24 @@ fn each_side_is_reached_by_the_dock_menu_keys(cx: &mut TestAppContext) {
     on_control(&walk, Control::Panel(Tickets), cx);
 }
 
-/// Needs attention takes Enter: Activity is revealed and focused, whether
-/// its panel is off or its dock is closed (P20).
+/// Needs attention takes Enter: the popover opens, with focus in its list,
+/// whether Activity's panel is off or its dock is closed, and leaves Activity
+/// hidden; Escape closes it, with focus back on the item (E1, P22; revealing
+/// Activity is the popover's link, P24).
 #[gpui_kit::test]
 fn needs_attention_works_by_enter(cx: &mut TestAppContext) {
-    let walk = plain(cx);
-    finish(&walk.shell, 1, Outcome::Error, cx);
-    assert_eq!(
-        read(&walk.shell, Control::Attention, cx),
-        Some(("1 needs attention".to_owned(), None))
-    );
     for (row, away) in [Away::Off, Away::DockClosed("secondary-j")]
         .into_iter()
         .enumerate()
     {
+        // A window for each: the popover leaves Activity where it was, so a
+        // second row would start from the first's end.
+        let walk = plain(cx);
+        finish(&walk.shell, 1, Outcome::Error, cx);
+        assert_eq!(
+            read(&walk.shell, Control::Attention, cx),
+            Some(("1 needs attention".to_owned(), None))
+        );
         match away {
             Away::DockClosed(keys) => walk.keys(keys, cx),
             _ => walk.shell.click(Control::Panel(Activity).id(), cx),
@@ -397,9 +401,24 @@ fn needs_attention_works_by_enter(cx: &mut TestAppContext) {
 
         reach(&walk, Control::Attention, cx);
         walk.shell.press("enter", cx);
-        assert!(layout_of(&walk, cx).is_displayed(Activity), "row {row}");
-        assert!(walk.shell.present(Region::Operations.id(), cx), "row {row}");
-        ringed_on(&walk, Region::Operations, cx);
+        assert!(
+            walk.shell.present("needs-attention-popover", cx),
+            "Enter opens the popover (row {row})"
+        );
+        assert!(
+            !layout_of(&walk, cx).is_displayed(Activity),
+            "and shows no Activity (row {row})"
+        );
+        assert!(
+            !walk.shell.present(Region::Operations.id(), cx),
+            "row {row}"
+        );
+        walk.keys("escape", cx);
+        assert!(
+            !walk.shell.present("needs-attention-popover", cx),
+            "Escape closes it (row {row})"
+        );
+        on_control(&walk, Control::Attention, cx);
     }
 }
 

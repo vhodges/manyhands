@@ -468,14 +468,18 @@ mod saving_drafts {
     }
 
     /// `drafts/` read-only: the dialog says how many drafts were not
-    /// saved and names none. Cancel, the default (Enter), keeps the window
-    /// and focuses the draft's Retry; Quit anyway quits.
+    /// saved and names none. Cancel, the default (Enter), keeps the window,
+    /// highlights the draft's Flush row and focuses the list; Quit anyway
+    /// quits.
     #[cfg(unix)]
     #[gpui_kit::test]
     async fn a_draft_that_cannot_be_saved_asks_before_quitting(cx: &mut TestAppContext) {
         use std::os::unix::fs::PermissionsExt;
 
-        use crate::desktop::view::operations::draft_flush_id;
+        use crate::desktop::{
+            model::activity::rows::RowKey,
+            view::activity_support::{highlighted, list_focused},
+        };
 
         assert_eq!(
             DraftsNotSaved { count: 1 }.message(),
@@ -504,12 +508,8 @@ mod saving_drafts {
         shell.press("enter", cx);
         assert!(!shell.present("drafts-not-saved-message", cx));
         assert_eq!(phase(&shell, cx), QuitPhase::Running);
-        assert_eq!(
-            shell.frame(cx, |window, _| window
-                .find(draft_flush_id(id, "retry"))
-                .focused()),
-            Some(true)
-        );
+        assert!(list_focused(&shell, cx), "the list holds focus");
+        assert_eq!(highlighted(&shell, cx), Some(RowKey::Flush(id)));
 
         // Cancel by its button does the same.
         shell.keys("secondary-q", cx);
@@ -517,12 +517,8 @@ mod saving_drafts {
         shell.click("drafts-not-saved-cancel", cx);
         assert!(!shell.present("drafts-not-saved-message", cx));
         assert_eq!(phase(&shell, cx), QuitPhase::Running);
-        assert_eq!(
-            shell.frame(cx, |window, _| window
-                .find(draft_flush_id(id, "retry"))
-                .focused()),
-            Some(true)
-        );
+        assert!(list_focused(&shell, cx), "the list holds focus");
+        assert_eq!(highlighted(&shell, cx), Some(RowKey::Flush(id)));
 
         shell.keys("secondary-q", cx);
         shell.click("drafts-not-saved-quit", cx);

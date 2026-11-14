@@ -37,6 +37,7 @@ impl Workspace {
                     }
                     this.repositories_loaded(cx);
                     cx.notify();
+                    this.refresh_activity(cx);
                 }
             },
         ));
@@ -157,6 +158,7 @@ impl Workspace {
                 if this.navigation.apply_resolution(stamp, result) {
                     this.load_lists(cx);
                     cx.notify();
+                    this.refresh_activity(cx);
                 }
             },
         ));

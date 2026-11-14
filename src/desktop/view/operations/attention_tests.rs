@@ -2,44 +2,59 @@
 //! entry each key, host or repository gets, the action it offers, what the
 //! action asks of the service, and that each is reachable by pointer at the
 //! default window and by keyboard. The reasons reach the scheduler as the
-//! transport gives them. No test reads fonts, colours or layout.
+//! transport gives them. The entries are the log's Hold rows, read and
+//! chosen through the seam; the click and keyboard tests keep the drawn
+//! controls until Task 9. No test reads fonts, colours or layout.
 
-use gpui_kit::{TestAppContext, px, size, test::TestWindowExt};
+use gpui_kit::TestAppContext;
 use manyhands::repository::transport::{HostKeyIdentity, SshAuthority, SshTransportErrorKind};
 
 use super::attention_support::Rig;
 use crate::desktop::{
     model::{
+        activity::{
+            rows::{Kind, RowKey},
+            states::hold_key,
+        },
         polling::{
             Authority, Clock, Reason,
             attention::{
-                APPROVE_HOST, CHOOSE_A_KEY, OPEN_REMOTE_SETTINGS, RESUME_CHECKING, UNLOCK, headline,
+                APPROVE_HOST, CHOOSE_A_KEY, OPEN_REMOTE_SETTINGS, RESUME_CHECKING, UNLOCK,
             },
         },
         stamp::SettingsPage,
     },
     services::scheduler::{Heard, Moment, Scope},
     test_support::polling::transport_error,
-    view::settings::Shown,
+    view::{
+        activity_support::{
+            act, act_unsettled, button_focus, drawn, index_of, offered, row, rows, to_row,
+        },
+        settings::Shown,
+    },
 };
 
-const ENTRY: &str = "attention";
-const ROOTS: &str = "attention-roots";
-const ACTION: &str = "attention-action";
+/// The log's row of the hold `reason`.
+fn hold(reason: &Reason) -> RowKey {
+    RowKey::Hold(hold_key(reason))
+}
 
-fn names(roots: &[String]) -> String {
-    let names: Vec<_> = roots
+/// How many holds the log lists.
+fn holds(rig: &Rig, cx: &mut TestAppContext) -> usize {
+    rows(&rig.shell, cx)
         .iter()
-        .map(|root| root.rsplit('/').next().unwrap().to_owned())
-        .collect();
-    format!("Holding back {}", names.join(", "))
+        .filter(|row| matches!(row.row.key, RowKey::Hold(_)))
+        .count()
 }
 
-fn label(rig: &Rig, id: &'static str, ix: usize, cx: &mut TestAppContext) -> Option<String> {
-    rig.shell.label((id, ix), cx)
+/// Asserts the hold `reason` is listed and offers `label`, enabled.
+fn offers(rig: &Rig, reason: &Reason, label: &str, cx: &mut TestAppContext) {
+    let offer = offered(&rig.shell, &hold(reason), label, cx)
+        .unwrap_or_else(|| panic!("{reason:?} offers {label}"));
+    assert!(offer.enabled, "{label} is enabled");
 }
 
-fn shown(rig: &Rig, cx: &mut TestAppContext) -> Shown {
+pub(in crate::desktop::view) fn shown(rig: &Rig, cx: &mut TestAppContext) -> Shown {
     rig.shell
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx))
@@ -92,14 +107,16 @@ async fn attention_locked_key(cx: &mut TestAppContext) {
         .update(cx, |operations, _| operations.take_prompt());
     assert!(prompt.is_none(), "a poll never prompts");
 
-    // One entry, naming the key's repositories, with Unlock….
+    // One entry, covering the key's repositories, with Unlock….
+    let reason = Reason::KeyLocked(key.key_id);
+    let held = row(&rig.shell, &hold(&reason), cx).expect("the key's hold is listed");
+    assert_eq!(held.row.kind, Kind::Locked);
     assert_eq!(
-        label(&rig, ENTRY, 0, cx).as_deref(),
-        Some(headline(&Reason::KeyLocked(key.key_id)))
+        held.row.group.roots, roots,
+        "it covers both repositories, in the order of their roots"
     );
-    assert_eq!(label(&rig, ROOTS, 0, cx), Some(names(&roots)));
-    assert_eq!(label(&rig, ACTION, 0, cx).as_deref(), Some(UNLOCK));
-    assert!(!rig.shell.present((ENTRY, 1usize), cx), "one entry per key");
+    offers(&rig, &reason, UNLOCK, cx);
+    assert_eq!(holds(&rig, cx), 1, "one entry per key");
 }
 
 /// A4, C3: a host answer holds its repository back as the host's entry,
@@ -120,13 +137,16 @@ async fn attention_host(cx: &mut TestAppContext) {
     ));
     rig.list(cx);
     rig.until_entries(1, cx).await;
-    assert_eq!(
-        rig.entries(cx),
-        [(Reason::HostUnapproved(authority.clone()), rig.roots.clone())]
+    let reason = Reason::HostUnapproved(authority.clone());
+    assert_eq!(rig.entries(cx), [(reason.clone(), rig.roots.clone())]);
+    rig.shell.run(cx);
+    offers(&rig, &reason, APPROVE_HOST, cx);
+    assert!(
+        offered(&rig.shell, &hold(&reason), UNLOCK, cx).is_none(),
+        "Approve host…, not Unlock…"
     );
-    assert_eq!(label(&rig, ACTION, 0, cx).as_deref(), Some(APPROVE_HOST));
 
-    rig.shell.click((ACTION, 0usize), cx);
+    act(&rig.shell, &hold(&reason), APPROVE_HOST, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Hosts));
 
     rig.backend.answer_poll(poll_done(&rig));
@@ -143,7 +163,9 @@ async fn attention_host(cx: &mut TestAppContext) {
         )
     });
     rig.until_entries(0, cx).await;
-    assert!(!rig.shell.present((ENTRY, 0usize), cx));
+    rig.shell.run(cx);
+    assert_eq!(holds(&rig, cx), 0, "the approval clears the entry");
+    assert!(row(&rig.shell, &hold(&reason), cx).is_none());
 }
 
 fn poll_done(rig: &Rig) -> crate::desktop::services::poll_convert::Library {
@@ -186,21 +208,20 @@ async fn attention_actions_by_reason(cx: &mut TestAppContext) {
     ));
     rig.list(cx);
     rig.until_entries(2, cx).await;
+    let reasons = [
+        Reason::KeyProblem(key),
+        Reason::ConfigurationRequired(rig.roots[1].clone()),
+    ];
     assert_eq!(
         rig.entries(cx),
         [
-            (Reason::KeyProblem(key), vec![rig.roots[0].clone()]),
-            (
-                Reason::ConfigurationRequired(rig.roots[1].clone()),
-                vec![rig.roots[1].clone()]
-            ),
+            (reasons[0].clone(), vec![rig.roots[0].clone()]),
+            (reasons[1].clone(), vec![rig.roots[1].clone()]),
         ]
     );
-    assert_eq!(label(&rig, ACTION, 0, cx).as_deref(), Some(CHOOSE_A_KEY));
-    assert_eq!(
-        label(&rig, ACTION, 1, cx).as_deref(),
-        Some(OPEN_REMOTE_SETTINGS)
-    );
+    rig.shell.run(cx);
+    offers(&rig, &reasons[0], CHOOSE_A_KEY, cx);
+    offers(&rig, &reasons[1], OPEN_REMOTE_SETTINGS, cx);
 
     // Each opens its page and sends nothing yet; Check now follows when the
     // change it was sent to make finishes, for its repository only. The
@@ -221,7 +242,11 @@ async fn attention_actions_by_reason(cx: &mut TestAppContext) {
         (0, Shown::Settings(SettingsPage::Keys), Scope::Keys),
     ];
     for (n, (entry, page, scope)) in changes.into_iter().enumerate() {
-        rig.shell.click((ACTION, entry), cx);
+        let (label, reason) = match entry {
+            0 => (CHOOSE_A_KEY, &reasons[0]),
+            _ => (OPEN_REMOTE_SETTINGS, &reasons[1]),
+        };
+        act(&rig.shell, &hold(reason), label, cx);
         assert_eq!(shown(&rig, cx), page);
         assert_eq!(rig.checks(cx).len(), n, "nothing is sent before the change");
         rig.services.scheduler().update(cx, |scheduler, cx| {
@@ -281,18 +306,10 @@ async fn attention_recovery_held(cx: &mut TestAppContext) {
     suspend(&rig, "a");
     rig.list(cx);
     rig.until_entries(1, cx).await;
-    assert_eq!(
-        rig.entries(cx),
-        [(
-            Reason::RecoveryHeld(rig.roots[0].clone()),
-            rig.roots.clone()
-        )]
-    );
-    assert_eq!(
-        label(&rig, ENTRY, 0, cx).as_deref(),
-        Some("Checking is held until recovery")
-    );
-    assert_eq!(label(&rig, ACTION, 0, cx).as_deref(), Some(RESUME_CHECKING));
+    let reason = Reason::RecoveryHeld(rig.roots[0].clone());
+    assert_eq!(rig.entries(cx), [(reason.clone(), rig.roots.clone())]);
+    rig.shell.run(cx);
+    offers(&rig, &reason, RESUME_CHECKING, cx);
     assert!(
         rig.backend.polled_roots().is_empty(),
         "a held one is not polled"
@@ -300,9 +317,8 @@ async fn attention_recovery_held(cx: &mut TestAppContext) {
 
     // The click only starts the call: it is made off the UI thread.
     rig.backend.answer_poll(poll_done(&rig));
-    rig.shell
-        .frame(cx, |window, cx| window.click((ACTION, 0usize), cx));
-    assert!(rig.backend.resumed().is_empty(), "not inside the click");
+    act_unsettled(&rig.shell, &hold(&reason), RESUME_CHECKING, cx);
+    assert!(rig.backend.resumed().is_empty(), "not inside the choice");
     rig.shell.run(cx);
     assert_eq!(rig.backend.resumed(), rig.roots);
 
@@ -318,7 +334,7 @@ async fn attention_recovery_held(cx: &mut TestAppContext) {
 
 /// A repository for each reason, held back at once: the five actions of the
 /// operation area, in the order of the repositories.
-async fn every_reason(cx: &mut TestAppContext) -> Rig {
+pub(in crate::desktop::view) async fn every_reason(cx: &mut TestAppContext) -> Rig {
     use SshTransportErrorKind as Kind;
     let rig = Rig::new(
         &[
@@ -358,18 +374,42 @@ async fn every_reason(cx: &mut TestAppContext) -> Rig {
     rig
 }
 
-/// W-6, decision 13, E-2: every action of the operation area is where a
-/// click reaches it at the default window (1280 by 840), and does what it
-/// says. Five entries do not fit the 260 px area, so the area scrolls; Tab
-/// to the fifth action brings it into view, and it is then clickable at its
-/// position. A click on a clipped or covered action does nothing.
+/// The hold rows the list draws, in its order, each with its button's
+/// label.
+pub(in crate::desktop::view) fn hold_rows(
+    rig: &Rig,
+    cx: &mut TestAppContext,
+) -> Vec<(RowKey, String)> {
+    drawn(&rig.shell, cx)
+        .into_iter()
+        .filter(|row| matches!(row.row.key, RowKey::Hold(_)))
+        .map(|row| {
+            let label = row.row.button.map(|offer| offer.label).unwrap_or_default();
+            (row.row.key, label)
+        })
+        .collect()
+}
+
+/// The row of the hold whose button reads `label`.
+pub(in crate::desktop::view) fn hold_with(
+    rig: &Rig,
+    label: &str,
+    cx: &mut TestAppContext,
+) -> RowKey {
+    hold_rows(rig, cx)
+        .into_iter()
+        .find(|(_, shown)| shown == label)
+        .unwrap_or_else(|| panic!("no hold row offers {label}"))
+        .0
+}
+
+/// W-6, decision 13: every action of the list is where a click reaches it,
+/// and does what it says: five holds, one for each reason, each with its
+/// button drawn on its row (the rows' one-line layout keeps each button
+/// inside the list: P21, Task 10).
 #[gpui_kit::test]
 async fn attention_actions_hit(cx: &mut TestAppContext) {
     let rig = every_reason(cx).await;
-    rig.shell
-        .visual(cx)
-        .simulate_resize(size(px(1280.), px(840.)));
-    rig.shell.run(cx);
     let labels = [
         UNLOCK,
         CHOOSE_A_KEY,
@@ -377,39 +417,52 @@ async fn attention_actions_hit(cx: &mut TestAppContext) {
         OPEN_REMOTE_SETTINGS,
         RESUME_CHECKING,
     ];
-    for (ix, expected) in labels.into_iter().enumerate() {
-        assert_eq!(label(&rig, ACTION, ix, cx).as_deref(), Some(expected));
+    let listed: Vec<String> = hold_rows(&rig, cx)
+        .into_iter()
+        .map(|(_, label)| label)
+        .collect();
+    assert_eq!(listed.len(), labels.len(), "a row for each hold");
+    for expected in labels {
+        assert!(listed.iter().any(|label| label == expected), "{expected}");
     }
+    let press = |label: &str, cx: &mut TestAppContext| {
+        let at = index_of(&rig.shell, &hold_with(&rig, label, cx), cx);
+        rig.shell.click(("activity-button", at), cx);
+    };
 
-    rig.shell.click((ACTION, 0usize), cx);
+    press(UNLOCK, cx);
     assert_eq!(rig.checks(cx), [std::path::PathBuf::from(&rig.roots[0])]);
-    rig.shell.click((ACTION, 1usize), cx);
+    press(CHOOSE_A_KEY, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Keys));
-    rig.shell.click((ACTION, 2usize), cx);
+    press(APPROVE_HOST, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Hosts));
-    rig.shell.click((ACTION, 3usize), cx);
+    press(OPEN_REMOTE_SETTINGS, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Remotes));
-
-    // The fifth is below the fold until focus reaches it.
-    assert!(rig.shell.tab_reaches((ACTION, 4usize), TABS, cx));
-    rig.shell.click((ACTION, 4usize), cx);
+    press(RESUME_CHECKING, cx);
     assert_eq!(rig.backend.resumed(), [rig.roots[4].clone()]);
 }
 
-/// Every action is reachable by Tab, in order, and Enter presses it.
+/// Every action is reachable by the arrows to its row and Tab to its
+/// button, and Enter presses it.
 #[gpui_kit::test]
 async fn attention_actions_by_keyboard(cx: &mut TestAppContext) {
     let rig = every_reason(cx).await;
-    for ix in 0..5usize {
+    let rows = hold_rows(&rig, cx);
+    assert_eq!(rows.len(), 5, "a row for each hold");
+    for (key, label) in &rows {
+        to_row(&rig.shell, key, cx);
+        rig.shell.keys("tab", cx);
+        let button = button_focus(&rig.shell, cx);
         assert!(
-            rig.shell.tab_reaches((ACTION, ix), TABS, cx),
-            "Tab reaches action {ix}"
+            rig.shell.frame(cx, |window, _| button.is_focused(window)),
+            "Tab reaches the button of {label}"
         );
     }
-    // The last is Resume checking: Enter on it resumes.
+    // The last row reached is whichever the list draws last; the Resume
+    // checking row's Enter resumes.
+    let resume = hold_with(&rig, RESUME_CHECKING, cx);
+    to_row(&rig.shell, &resume, cx);
+    rig.shell.keys("tab", cx);
     rig.shell.press("enter", cx);
     assert_eq!(rig.backend.resumed(), [rig.roots[4].clone()]);
 }
-
-/// Tab presses enough to go round the whole window.
-const TABS: usize = 60;

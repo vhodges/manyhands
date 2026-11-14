@@ -273,10 +273,12 @@ fn a_secondary_click_opens_the_dock_menu_with_its_side_checked(cx: &mut TestAppC
     );
 }
 
-/// Needs attention is hidden at 0, says how many, and leads to Activity,
-/// revealing it first (P20).
+/// Needs attention is hidden at 0, says how many, and opens the popover,
+/// not Activity: a press toggles it, Activity stays hidden, and the popover
+/// lists the one row that needs attention (E1, P22; `the_popover_works_with_
+/// activity_hidden` is P24).
 #[gpui_kit::test]
-fn needs_attention_counts_and_leads_to_activity(cx: &mut TestAppContext) {
+fn needs_attention_counts_and_opens_the_popover(cx: &mut TestAppContext) {
     let shell = Shell::open(Fixture::new(), cx);
     let attention = Control::Attention;
     assert_eq!(read(&shell, attention, cx), None, "hidden at 0");
@@ -289,18 +291,39 @@ fn needs_attention_counts_and_leads_to_activity(cx: &mut TestAppContext) {
     // A request that did not go wrong awaits nothing.
     finish(&shell, 2, Outcome::Success, cx);
     finish(&shell, 3, Outcome::Blocked, cx);
+    // Two failed requests of one subject count once, as the newer (N2); the
+    // plural text is `attention_text`'s own test.
     assert_eq!(
         read(&shell, attention, cx),
-        Some(("2 need attention".to_owned(), None))
+        Some(("1 needs attention".to_owned(), None))
     );
 
+    // A press opens the popover over the one row, and leaves Activity where
+    // it was: hidden.
     shell.click(Control::Panel(Activity).id(), cx);
     assert!(!shell.present(Region::Operations.id(), cx));
     shell.click(attention.id(), cx);
-    assert!(layout(&shell, cx).is_displayed(Activity));
     assert!(
-        focused(&shell, Region::Operations.id(), cx),
-        "Activity has focus"
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.attention_popover_open()),
+        "a press opens the popover"
+    );
+    assert!(shell.present("needs-attention-popover", cx), "and draws it");
+    assert!(shell.present(("needs-attention-row", 0usize), cx));
+    assert!(
+        !shell.present(("needs-attention-row", 1usize), cx),
+        "one row: the failed request"
+    );
+    assert!(
+        !layout(&shell, cx).is_displayed(Activity),
+        "Activity is still hidden"
+    );
+    assert!(!shell.present(Region::Operations.id(), cx));
+    shell.click(attention.id(), cx);
+    assert!(
+        !shell.present("needs-attention-popover", cx),
+        "a second press closes it"
     );
 }
 
@@ -350,16 +373,20 @@ fn footer_controls_do_nothing_behind_a_dialog(cx: &mut TestAppContext) {
             if !sheet {
                 shell.click(control.id(), cx);
             }
-            shell.frame(cx, |window, cx| {
+            // The popover, read in the update of the press, before a draw
+            // drops it: a press behind the modal opened none.
+            let popover = shell.frame(cx, |window, cx| {
                 shell.workspace.update(cx, |workspace, cx| {
                     workspace.press(control, window, cx);
                     if let Control::Panel(kind) = control {
                         let at = gpui_kit::point(gpui_kit::px(10.), gpui_kit::px(10.));
                         workspace.open_dock_menu(kind, menu::Placement::Pointer(at), window, cx);
                     }
+                    workspace.attention_popover_open()
                 })
             });
             shell.run(cx);
+            assert!(!popover, "{control:?}, sheet {sheet}: no popover");
             assert_eq!(layout(&shell, cx), before, "{control:?}, sheet {sheet}");
         }
         // The actions, from where the modal holds focus: the menu key and a

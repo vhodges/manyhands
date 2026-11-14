@@ -9,6 +9,7 @@ use gpui_kit::{Modifiers, MouseButton, TestAppContext, point, px, test::TestWind
 use super::support::*;
 use crate::desktop::{
     model::{
+        activity::copy::{CLEAR_FINISHED, SHOW_ONLY_ATTENTION},
         layout::PanelKind::{Documents, Tickets},
         list_view::{REBUILD_INDEX, REFRESH},
         repository_state::REMOVE_FROM_MANYHANDS,
@@ -67,6 +68,17 @@ fn holds(shell: &Shell, button: ToolbarButton, cx: &mut TestAppContext) -> bool 
     shell.frame(cx, |window, _| {
         window.try_find(button.id()).and_then(|e| e.focused()) == Some(true)
     })
+}
+
+/// Shift-Tab, at most `TAB_LIMIT` presses, to `button`.
+fn back_to(shell: &Shell, button: ToolbarButton, cx: &mut TestAppContext) {
+    for _ in 0..TAB_LIMIT {
+        if holds(shell, button, cx) {
+            return;
+        }
+        shell.keys("shift-tab", cx);
+    }
+    panic!("Shift-Tab never reached {button:?}");
 }
 
 fn tab_to(shell: &Shell, button: ToolbarButton, cx: &mut TestAppContext) {
@@ -181,7 +193,8 @@ async fn panel_toolbars_work_by_tab_and_enter(cx: &mut TestAppContext) {
 /// Each button is drawn, named as the design names it, and disabled: with no
 /// repository there is nothing to make, and no folder to collapse. The
 /// Repositories buttons: Add and More stay enabled, with More's items
-/// disabled, and Check all is disabled (P12, P13, P28, P39).
+/// disabled, and Check all is disabled (P12, P13, P28, P39). Activity's two
+/// buttons are enabled too.
 fn with_no_repository(shell: &Shell, cx: &mut TestAppContext) {
     let names = [
         (ToolbarButton::NewTicket, NEW_TICKET, false),
@@ -191,6 +204,9 @@ fn with_no_repository(shell: &Shell, cx: &mut TestAppContext) {
         (ToolbarButton::AddRepository, ADD_OR_CREATE, true),
         (ToolbarButton::CheckAll, CHECK_ALL, false),
         (ToolbarButton::RepositoriesMore, MORE, true),
+        // Activity's filter and ⋯ are always enabled (C1).
+        (ToolbarButton::ActivityFilter, SHOW_ONLY_ATTENTION, true),
+        (ToolbarButton::ActivityMore, MORE, true),
     ];
     for (button, name, on) in names {
         assert_eq!(
@@ -255,6 +271,31 @@ fn single_panels(shell: &Shell, cx: &mut TestAppContext) {
         region(shell, cx),
         (Some(Region::Operations), vec![Region::Operations])
     );
+
+    // Activity's buttons come before its list in Tab's order: Shift-Tab from
+    // the list reaches ⋯ and then the filter, each counting as Activity's
+    // region. Enter presses them: the filter turns on and off, ⋯ opens its
+    // one item and Escape gives focus back to it. They have no `secondary-n`.
+    back_to(shell, ToolbarButton::ActivityMore, cx);
+    holds_region(shell, Region::Operations, cx);
+    shell.press("enter", cx);
+    assert_eq!(menu::labels(shell, cx), [CLEAR_FINISHED], "⋯ opens");
+    let more = handle(shell, ToolbarButton::ActivityMore, cx);
+    assert!(
+        menu::press_and_hold(shell, "escape", &more, cx),
+        "Escape: back on ⋯"
+    );
+    assert!(shell.frame(cx, |window, _| window.try_find("popup-menu").is_none()));
+    back_to(shell, ToolbarButton::ActivityFilter, cx);
+    holds_region(shell, Region::Operations, cx);
+    assert_eq!(shell.checked("activity-filter", cx), Some(false));
+    shell.press("enter", cx);
+    assert_eq!(shell.checked("activity-filter", cx), Some(true), "on");
+    assert!(holds(shell, ToolbarButton::ActivityFilter, cx));
+    shell.keys("secondary-n", cx);
+    assert_eq!(dialog(shell, cx), None, "secondary-n makes nothing here");
+    shell.press("enter", cx);
+    assert_eq!(shell.checked("activity-filter", cx), Some(false), "off");
 
     // Documents: each button by Tab and Enter, with Documents' region held.
     tab_to(shell, ToolbarButton::NewDocument, cx);
@@ -326,6 +367,16 @@ fn behind_a_dialog(shell: &Shell, cx: &mut TestAppContext) {
         });
         assert_eq!(rows(shell, cx), GUIDES_OPEN, "{button:?}");
         assert_eq!(dialog(shell, cx), None, "{button:?} opened nothing");
+        // Activity's: the filter stays off and ⋯ opens no menu.
+        assert_eq!(
+            shell.checked("activity-filter", cx),
+            Some(false),
+            "{button:?}"
+        );
+        assert!(
+            shell.frame(cx, |window, _| window.try_find("popup-menu").is_none()),
+            "{button:?} opened no menu"
+        );
     }
     shell.frame(cx, |window, cx| {
         use gpui_kit::component::WindowExt;

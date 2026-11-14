@@ -66,6 +66,7 @@ icon_assets!(
         FileExclamationPoint,
         Lock,
         RefreshCw,
+        WifiOff,
     ]
 );
 

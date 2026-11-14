@@ -206,7 +206,7 @@ pub(crate) struct TabContent {
     /// own close once its unsaved work was settled, its repair's item
     /// to follow, and the workspace places its share and post controls
     /// open (`ItemRoute`).
-    related: HashMap<TabId, [Subscription; 8]>,
+    related: HashMap<TabId, [Subscription; 9]>,
     scroll: ContentScroll,
     /// The strip's own scroll handle, and the tabs the last frame saw shown
     /// and focused, so a change is scrolled into view once.
@@ -338,10 +338,12 @@ impl TabContent {
         let route = cx.subscribe(&pane, |this, _, event: &ItemRoute, cx| {
             this.item_route(event, cx)
         });
+        // An item's title loading is a refresh point of Activity (A4).
+        let titled = cx.observe(&pane, |this, pane, cx| this.pane_titled(&pane, cx));
         self.related.insert(
             id,
             [
-                related, review, discarded, details, settings, close, follow, route,
+                related, review, discarded, details, settings, close, follow, route, titled,
             ],
         );
         self.panes.insert(id, pane);

@@ -48,7 +48,11 @@ use super::{
 use crate::desktop::{
     services::{JobKind, requests::RequestState},
     test_support::fixtures::{Fixture, ticket_path, ticket_source},
-    view::{harness::Shell, item::LIFECYCLE_ACTION},
+    view::{
+        harness::Shell,
+        item::LIFECYCLE_ACTION,
+        privacy_layers_tests::{in_row_menu, popover_texts, row_menu_texts},
+    },
 };
 
 pub(super) const TITLE: &str = "SENTINEL-D5-TITLE-3e9a";
@@ -84,9 +88,23 @@ const ALLOWED: [&str; 10] = [
     "conflict-result",
 ];
 
-/// Where a drawn text is read, by the container it is drawn in.
-const SURFACES: [(&str, &str); 8] = [
+/// Activity's list, by the id of its container (R-20): with the popover's
+/// rows and the row menu below, the places outside `ALLOWED` where an item's
+/// title, and only its title, may show.
+const ACTIVITY: &str = "operation-area";
+/// The Needs attention popover's rows, which are Activity's, and a row's
+/// menu, by what it was read from (Task 12, E-14).
+pub(super) const POPOVER: &str = "needs-attention-popover";
+pub(super) const ROW_MENU: &str = "row-menu";
+pub(super) const MENU_ITEM: &str = "menu-item";
+
+/// Where a drawn text is read, by the container it is drawn in. The popover's
+/// rows are Activity's (title only, as in the operation area), its header and
+/// the rest of it are not; the row menu is by `in_row_menu`, not by id.
+const SURFACES: [(&str, &str); 10] = [
     ("operation-area", "operation area"),
+    ("needs-attention-row", "popover row"),
+    ("needs-attention-popover", "popover"),
     ("item-banners", "banner"),
     ("item-pill", "lock"),
     ("item-share-locked", "lock"),
@@ -177,17 +195,30 @@ impl Seen {
         });
         self.add("operation entry", entries);
         self.answers.extend(answers);
+        // The popover's tooltips, descriptions and copy, and the row menu's
+        // items, which no snapshot reads: here, while each is open.
+        for (surface, text) in popover_texts(shell, cx) {
+            self.title_only(surface, text);
+        }
+        for text in row_menu_texts(shell, cx) {
+            self.title_only("menu item", text);
+        }
         let drawn: Vec<(Option<&'static str>, &'static str, String)> =
-            shell.frame(cx, |window, _| {
+            shell.frame(cx, |window, cx| {
+                let row_menu = shell.workspace.read(cx).activity_menu_open();
                 gpui_kit::base::test_support::snapshots(window)
                     .iter()
                     .flat_map(|snapshot| {
                         let path = snapshot.path();
                         let at = inside(path, ALLOWED);
-                        let surface = SURFACES
-                            .iter()
-                            .find(|(container, _)| inside(path, [*container]).is_some())
-                            .map_or("drawn", |(_, surface)| *surface);
+                        let surface = if in_row_menu(path, row_menu) {
+                            "row menu"
+                        } else {
+                            SURFACES
+                                .iter()
+                                .find(|(container, _)| inside(path, [*container]).is_some())
+                                .map_or("drawn", |(_, surface)| *surface)
+                        };
                         [snapshot.label(), snapshot.value()]
                             .into_iter()
                             .flatten()
@@ -204,13 +235,36 @@ impl Seen {
                         .filter(|sentinel| text.contains(sentinel))
                         .map(|sentinel| (at, sentinel)),
                 ),
-                None => {
-                    self.read.insert((surface, text));
-                }
+                None => self.title_only(surface, text),
             }
         }
         let notifications = shell.frame(cx, |window, cx| window.notifications(cx).len());
         assert_eq!(notifications, 0, "the desktop shows no notification");
+    }
+
+    /// A text read on `surface`. The operation area, the popover's rows and
+    /// the row menu name an item by its title as read (decisions 12 and 21):
+    /// TITLE and READY, both titles, may show there and are noted as seen,
+    /// by place; every other sentinel stays forbidden, there as everywhere.
+    fn title_only(&mut self, surface: &'static str, text: String) {
+        let at = match surface {
+            "operation area" => ACTIVITY,
+            "popover row" => POPOVER,
+            "popover tooltip" | "popover description" => "popover-tooltip",
+            "row menu" => ROW_MENU,
+            "menu item" => MENU_ITEM,
+            _ => {
+                self.read.insert((surface, text));
+                return;
+            }
+        };
+        for sentinel in [TITLE, READY] {
+            if text.contains(sentinel) {
+                self.allowed.insert((at, sentinel));
+            }
+        }
+        let scrubbed = text.replace(TITLE, "{title}").replace(READY, "{title}");
+        self.read.insert((surface, scrubbed));
     }
 
     /// Whether `surface` was read, holding `text`.
@@ -233,8 +287,14 @@ impl Seen {
     }
 
     /// Each of `surfaces` was read, and no surface read holds a sentinel,
-    /// nor any answer's rendering.
+    /// nor any answer's rendering. The title was seen in Activity's list,
+    /// which is the scan's positive control: the sentinels that stay forbidden
+    /// there (the body, the comment, the sides) were planted in the same item.
     pub(super) fn holds_none(&self, surfaces: &[&str]) {
+        assert!(
+            self.allowed_holding(ACTIVITY, TITLE),
+            "the title showed in Activity's list (decision 21)"
+        );
         for surface in surfaces {
             assert!(
                 self.read.iter().any(|(at, _)| at == surface),

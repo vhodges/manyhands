@@ -21,7 +21,9 @@
 
 use manyhands::{canonical::ItemId, repository::PollDisposition};
 
-use super::{AttemptSummary, Disposition, TargetKind, status::changes};
+#[cfg(test)]
+use super::{AttemptSummary, status::changes};
+use super::{Disposition, TargetKind};
 
 /// Share…, the action `Unpublished` offers (R-20).
 pub(crate) const SHARE: &str = "Share\u{2026}";
@@ -30,6 +32,7 @@ pub(crate) const SHARE: &str = "Share\u{2026}";
 pub(crate) const UNPUBLISHED: &str =
     "This item is not shared yet. Share\u{2026} publishes it to the shared copy.";
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 /// What a listed line offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LineAction {
@@ -37,6 +40,7 @@ pub(crate) enum LineAction {
     Share,
 }
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 impl LineAction {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -45,6 +49,7 @@ impl LineAction {
     }
 }
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 /// One item the poll left alone, and what to say of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EntryLine {
@@ -101,6 +106,7 @@ pub(crate) fn short_code(item: &ItemId) -> String {
         .to_owned()
 }
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 /// What the entry says of an item whose retirement it offers: the item by
 /// its short code, never a title.
 pub(crate) fn offer_text(kind: TargetKind, item: &str) -> String {
@@ -114,27 +120,32 @@ pub(crate) fn offer_text(kind: TargetKind, item: &str) -> String {
 /// "Retire…", the action of such an item.
 pub(crate) const RETIRE: &str = "Retire\u{2026}";
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 impl RetireOffer {
     pub(crate) fn text(&self) -> String {
         offer_text(self.kind, &short_code(&self.item))
     }
 }
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 /// "Retiring {item}…".
 pub(crate) fn retiring_text(item: &str) -> String {
     format!("Retiring {item}\u{2026}")
 }
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 /// "Finished retiring {item}.", for a row a Resume finished.
 pub(crate) fn finished_text(item: &str) -> String {
     format!("Finished retiring {item}.")
 }
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 /// "Retired the copy of {item} on this computer."
 pub(crate) fn retired_text(item: &str) -> String {
     format!("Retired the copy of {item} on this computer.")
 }
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 /// "Retiring {item} didn't finish.", and, when the index is behind, "The
 /// lists are still catching up.".
 pub(crate) fn unfinished_text(item: &str, catching_up: bool) -> String {
@@ -146,6 +157,7 @@ pub(crate) fn unfinished_text(item: &str, catching_up: bool) -> String {
     }
 }
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 impl RetireLine {
     /// What the line says: the item by its short ID, the last eight
     /// characters of its ULID.
@@ -160,6 +172,7 @@ impl RetireLine {
     }
 }
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 /// A repository's attempt entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AttemptEntry {
@@ -172,6 +185,7 @@ pub(crate) struct AttemptEntry {
     pub offers: Vec<RetireOffer>,
 }
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 impl AttemptEntry {
     /// The entry with `offers` added. An attempt that had nothing else to
     /// say still has an entry once there is an item to retire.
@@ -192,7 +206,7 @@ impl AttemptEntry {
 
 /// The library's words for `disposition`; `None` for the ones this entry
 /// does not list (`Closed`, `Promoted`: Part E; the ones that are counts).
-fn text_of(disposition: Disposition) -> Option<&'static str> {
+pub(crate) fn text_of(disposition: Disposition) -> Option<&'static str> {
     use Disposition::*;
     let library = match disposition {
         Unpublished => return Some(UNPUBLISHED),
@@ -212,6 +226,7 @@ fn text_of(disposition: Disposition) -> Option<&'static str> {
     Some(library.guidance())
 }
 
+#[cfg(test)] // Only the old operation area drew it (Wave 04 Cycle 03b, F4).
 /// The entry `summary` earns, if it has anything to say: what was brought
 /// in, and a line for each item the poll left alone, in the poll's order.
 /// The retirement summary and the failure slots join the entry in Tasks 11a

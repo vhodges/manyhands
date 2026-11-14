@@ -96,11 +96,37 @@ impl RepositoryRow {
 /// the kept one (decision 22). Read from `Navigation`, the scheduler, the
 /// worker's in-flight requests and the shares of main.
 pub(crate) fn rows(workspace: &Workspace, cx: &App) -> Vec<RepositoryRow> {
+    let chosen = workspace.navigation().selected();
+    each_repository(workspace, cx, |facts| {
+        let root = facts.entry.key();
+        let state = repository_state(facts);
+        RepositoryRow {
+            key: root.clone(),
+            name: facts.entry.name(),
+            tooltip: repository_tooltip(facts, &state),
+            menu: menu_items(facts, &state),
+            checkable: check_all_applies(facts),
+            state,
+            chosen: chosen == Some(root),
+            kept: facts.kept,
+        }
+    })
+}
+
+/// Visits each listed repository in list order, then the kept one
+/// (decision 22), with the facts its state is made from, and gives what `f`
+/// makes of each. The one place `RepoFacts` is built: the panel's rows and
+/// Activity's repository inputs both read them here, so both say the same
+/// of a repository (Wave 04 Cycle 03b design A7; R-5).
+pub(crate) fn each_repository<R>(
+    workspace: &Workspace,
+    cx: &App,
+    mut f: impl FnMut(&RepoFacts<'_>) -> R,
+) -> Vec<R> {
     let navigation = workspace.navigation();
     let services = workspace.services();
     let scheduler = services.scheduler().read(cx);
     let operations = services.operations().read(cx);
-    let chosen = navigation.selected();
     let polling = services.polling();
     let now = scheduler.utc();
     let listed = navigation
@@ -136,17 +162,7 @@ pub(crate) fn rows(workspace: &Workspace, cx: &App) -> Vec<RepositoryRow> {
                 titles: &titles,
                 now,
             };
-            let state = repository_state(&facts);
-            RepositoryRow {
-                key: root.clone(),
-                name: entry.name(),
-                tooltip: repository_tooltip(&facts, &state),
-                menu: menu_items(&facts, &state),
-                checkable: check_all_applies(&facts),
-                state,
-                chosen: chosen == Some(root),
-                kept,
-            }
+            f(&facts)
         })
         .collect()
 }

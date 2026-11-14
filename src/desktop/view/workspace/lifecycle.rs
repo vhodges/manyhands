@@ -2,10 +2,9 @@
 
 use super::{QuitPhase, Region, Workspace};
 use crate::desktop::{
-    model::{layout::PanelKind, stamp::TabId},
+    model::{activity::rows::RowKey, layout::PanelKind, stamp::TabId},
     services::{prompts::PromptReply, requests::DesktopRequestId, worker::QuitState},
     view::{
-        operations::draft_flush_id,
         passphrase::open_dialog,
         quit::{DraftsNotSaved, EditsNotKept, NotSavedChoice},
     },
@@ -315,9 +314,10 @@ impl Workspace {
                 if !self.layout.is_displayed(PanelKind::Activity) {
                     self.focus_region(Region::Content, window, cx);
                 } else if let Some(id) = first {
-                    let retry = self.control_focus_for(draft_flush_id(id, "retry"), cx);
-                    window.focus(&retry, cx);
-                    self.last_region = Some(Region::Operations);
+                    // The failed draft's Flush row is highlighted, and the
+                    // list focused (C3).
+                    self.activity.pane.highlight_when_shown(&RowKey::Flush(id));
+                    self.focus_region(Region::Operations, window, cx);
                 }
                 // A prompt held meanwhile shows once this dialog has
                 // closed (the Kit closes the top one); closing it gives the

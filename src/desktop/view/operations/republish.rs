@@ -34,10 +34,10 @@ use crate::desktop::{
     },
 };
 
-pub(crate) const REPUBLISH: &str = "Republish\u{2026}";
-pub(crate) const STOP_AND_REPUBLISH: &str = "Stop and republish\u{2026}";
-/// A share's deleted branch whose republish is queued or running.
-pub(crate) const REPUBLISHING: &str = "Republishing\u{2026}";
+// The words live in the model, where Activity's rows read them (R-44).
+pub(crate) use crate::desktop::model::activity::copy::{
+    REPUBLISH, REPUBLISHING, STOP_AND_REPUBLISH,
+};
 
 /// The item to republish, and how its lifecycle goes on once it is done:
 /// `None` for a share's, which nothing follows.
