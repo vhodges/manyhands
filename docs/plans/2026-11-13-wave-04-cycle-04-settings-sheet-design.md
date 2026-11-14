@@ -68,9 +68,11 @@ Document Amendments below were applied in the approval commit.
 - Citations are at main `ba95e1b7`. This branch's `0b7a8f3d` changes only
   `ticket.md`.
 - Cycle 03b changes `D/view/operations/`, the footer, the keymap,
-  `D/view/workspace/focus.rs` and `render.rs`. Citations of 03b are to its
-  approved design on its branch ("03b design"). Task 0 re-maps every
-  citation in those files after 03b merges.
+  `D/view/workspace/focus.rs` and `render.rs`. Citations of 03b were to its
+  approved design on its branch ("03b design"). Task 0 re-mapped every
+  citation in those files after 03b merged: a moved line is corrected in
+  place, and a "03b design" citation now names the merged code at
+  `82df6942`.
 - "Fact n", "W-n" (a way in), "P-n" (a required outcome), "E-n", "R-n",
   "K-n" and "U-n" refer to this design. "Decision n" and "A-n" refer to
   the Cycle document.
@@ -100,7 +102,9 @@ Document Amendments below were applied in the approval commit.
 3. **What tests read.** `Shown` (`mod.rs:76-79`) is `Tabs |
    Settings(SettingsPage)`. Tests read it through the test-only
    `Workspace::settings_shown` (`D/view/workspace/content.rs:745-747`),
-   called from 21 test files, some through a `Page` alias.
+   called from 24 test files (21 at `ba95e1b7`; Cycle 03b adds
+   `activity_support.rs`, `activity_tests/cases.rs` and
+   `needs_attention_tests/hidden.rs`), some through a `Page` alias.
    `SettingsEvent` (`mod.rs:82-89`) is `Closed | ShowActivity`.
 4. **The host's API:**
    - `open(page)` (`mod.rs:145-169`) sets `shown` and calls `opened(…)` on
@@ -132,10 +136,10 @@ Document Amendments below were applied in the approval commit.
    (`mod.rs:482-497`) puts a control in a focus-tracking wrapper with a
    scroll marker. A control taking focus below the fold is then revealed.
 8. **Owner.** The Workspace owns the host:
-   - `ContentArea.settings: Entity<SettingsHost>` (`D/view/workspace.rs:71`)
-     is built at `:285-289` with `tabs.scroll().clone()`;
-   - `ContentArea.sheet` is typed at `:91`;
-   - the subscription at `:290-296` focuses `Region::Content` on
+   - `ContentArea.settings: Entity<SettingsHost>` (`D/view/workspace.rs:74`)
+     is built at `:288-292` with `tabs.scroll().clone()`;
+   - `ContentArea.sheet` is typed at `:94`;
+   - the subscription at `:293-299` focuses `Region::Content` on
      `Closed` and `Region::Operations` on `ShowActivity`.
 9. **The content page.** `ContentPage { Tabs, Settings, Drafts }`
    (`content.rs:39-43`) is chosen by `page()` (`:46-54`), Settings first.
@@ -163,8 +167,8 @@ Document Amendments below were applied in the approval commit.
       - `ask_again` focuses `key-generate-passphrase`
         (`keys/commands.rs:111`);
       - the Hosts check focuses `hosts-check`.
-    - `open_remotes` (`D/view/workspace/requests.rs:285-297`) and the
-      private `open_hosts` (`:217-225`) open Settings directly.
+    - `open_remotes` (`D/view/workspace/requests.rs:305-317`) and the
+      private `open_hosts` (`:220-228`) open Settings directly.
 
     That is eight entry functions, plus the save banner's deferred
     `settings_for` (`content.rs:115-120`, `:145-146`).
@@ -185,12 +189,12 @@ Document Amendments below were applied in the approval commit.
     - An item tab scrolls a region made by `ContentScroll::region()`
       (`scroll.rs:59-68`), which shares the column's focus-reveal state.
     - The column's `note_focus` runs once a frame in `item_area_region`
-      (`D/view/workspace/render.rs:121-122`).
+      (`D/view/workspace/render.rs:108-109`).
     - This is the shared offset that `01M5F3GVDYTH1Q5V5FCS9YF7V3`
       reports.
 14. **Page keys.** PageUp, PageDown, Home and End are bound in the
-    `Content` context (`D/keys.rs:308-311`). The Workspace handles them
-    through `unless_dialog` (`render.rs:286-297`), scrolling
+    `Content` context (`D/keys.rs:396-399`). The Workspace handles them
+    through `unless_dialog` (`render.rs:276-287`), scrolling
     `scroll_target` (`content.rs:639-644`): the shown item's region, else
     the column.
 
@@ -265,49 +269,56 @@ Document Amendments below were applied in the approval commit.
     - the Repositories panel's own Settings button (`sidebar-settings`,
       `D/view/repositories/body.rs:129-141`);
     - the repository menu's `RowAction::Attend`
-      (`D/view/workspace/repository_menu.rs:243`), which calls
-      `Workspace::attend` (`D/view/operations/attention.rs:119-152`).
+      (`D/view/workspace/repository_menu.rs:251`), which calls
+      `Workspace::attend` (`D/view/operations/attention.rs:27-63`).
 22. **Routes from a dialog close the dialog first.**
     - The lifecycle dialog's `in_workspace`
       (`D/view/lifecycle/actions.rs:126-140`) calls `close`
-      (`D/view/lifecycle.rs:504-507`: `close_dialog`, then focus its
+      (`D/view/lifecycle.rs:505-508`: `close_dialog`, then focus its
       `origin`) before calling the Workspace.
-    - Item routes go through `in_window` (`requests.rs:177-186`).
+    - Item routes go through `in_window` (`requests.rs:180-189`).
     - The save banner's Open Settings goes through `settings_for` and
       opens on the next frame.
-23. **The footer.** `Control::Settings` (`D/view/footer.rs:77`, id
-    `footer-settings` at `:92`, label `SETTINGS` at `:44`, tooltip action
-    `OpenSettings` at `:327`).
-    - `press` (`D/view/workspace/footer.rs:161-178`) returns early while a
+23. **The footer.** `Control::Settings` (`D/view/footer.rs:81`, id
+    `footer-settings` at `:96`, label `SETTINGS` at `:44`, tooltip action
+    `OpenSettings` at `:328`).
+    - `press` (`D/view/workspace/footer.rs:156-173`) returns early while a
       dialog or sheet is open.
     - It then sends Settings to `open_settings(Repositories)` and the
       "Checked for updates" item to `open_settings(Polling)`.
 24. **The key.** `KeyBinding::new("secondary-,", OpenSettings, None)`
-    (`D/keys.rs:281`), handled at `render.rs:262-264` inside
+    (`D/keys.rs:347`), handled at `render.rs:252-254` inside
     `unless_dialog`.
-25. **Cycle 03b's routes** (03b design, on its branch):
+25. **Cycle 03b's routes** (merged code at `82df6942`):
     - **Activity rows and the popover** run today's `attend` and
       `open_route` handlers through
-      `Workspace::choose_activity(&ActivityMenuChoice, origin, …)` (03b
-      design `:1044`, `:2269`). That covers the button, the row menu and
-      Enter.
+      `Workspace::choose_activity(&ActivityMenuChoice, origin, …)`
+      (`D/view/activity/actions.rs:32-49`, which calls
+      `run_activity_action`, `:53-140`). That covers the button
+      (`D/view/workspace/activity_panel.rs:126-143`), the row menu
+      (`activity_menu.rs:91-107`), Enter (`activity_panel.rs:101-120`) and
+      the popover's rows (`needs_attention.rs:247-283`).
     - **Repository-state rows** (S4) also offer Settings… and Set up
-      sharing… (03b design `:1936`, `:1941`).
+      sharing… (`D/model/activity/states/repositories.rs:78-83`,
+      `:114-126`; `D/model/repository_state.rs:266`, `:352`, `:357`).
     - **Origins.** A row's origin is the Activity list's focus handle; the
-      row counts as the invoking control (03b decision 23, design C3,
-      `:2218-2226`). A popover action's origin is the footer item. When
-      that item has hidden, `keep_focus_in_footer` moves focus to "E1's
+      row counts as the invoking control (03b decision 23;
+      `activity_panel.rs:140`, `activity_menu.rs:97-103`). A popover
+      action's origin is the footer item (`needs_attention.rs:278-281`).
+      When that item has hidden, `keep_focus_in_footer`
+      (`D/view/workspace/footer_status.rs:184-208`) moves focus to "E1's
       control" in render (03b R-49). A lost popover focus goes to the
-      footer item, else E1's control (03b R-50).
-    - **The popover** closes when a dialog or sheet opens (03b design
-      `:2408`).
+      footer item, else E1's control (03b R-50;
+      `D/view/workspace/focus.rs:301-312`).
+    - **The popover** closes when a dialog or sheet opens
+      (`D/view/workspace/needs_attention.rs:130-133`, at the next render).
 
 ### The sheet layer, R-60 and focus
 
 26. **Where the sheet is drawn.** `item_area_region`
-    (`render.rs:117-152`) appends `Root::render_sheet_layer` inside the
+    (`render.rs:104-139`) appends `Root::render_sheet_layer` inside the
     `Region::Content` element, deferred.
-    - Its comment (`:130-135`) says the sheet's focus "counts as the
+    - Its comment (`:117-122`) says the sheet's focus "counts as the
       region's" and its keys pass the region's context first.
     - A deferred draw keeps its parent dispatch node
       (`gpui-pre-0.3.6/src/window.rs:3739`, `:3782`, `:4338`), and
@@ -317,10 +328,10 @@ Document Amendments below were applied in the approval commit.
       the Workspace's handlers. (U-1 of revision 1, settled by review.)
 27. **R-60** (Wave 03 D3's ruling, kept by Cycle 01).
     - `modal_open` is `has_active_dialog || has_active_sheet`
-      (`render.rs:155-158`). `unless_dialog` (`:160-171`) drops every
+      (`render.rs:142-145`). `unless_dialog` (`:147-158`) drops every
       Workspace action under it except Quit and Quit now.
     - The footer, the dock menu and the toolbar check it too
-      (`footer.rs:167`; `D/view/dock/header/toolbar.rs:209`).
+      (`workspace/footer.rs:162`; `D/view/dock/header/toolbar.rs:241`).
     - The test `no_workspace_key_acts_behind_the_sheet`
       (`D/view/item/sheet_tests.rs:670-741`) asserts that `secondary-,`
       behind the details sheet leaves `Shown::Tabs`.
@@ -335,16 +346,16 @@ Document Amendments below were applied in the approval commit.
       (`D/view/item.rs:313`; `item/sheet.rs:227`).
     - Its title is 15 px semibold (`TITLE_SIZE`, `item/sheet.rs:82`).
 29. **Who owns the sheet.** `ContentArea.sheet:
-    Option<WeakEntity<ItemPane>>` (`workspace.rs:91`).
+    Option<WeakEntity<ItemPane>>` (`workspace.rs:94`).
     - `Workspace::sync_sheet` (`content.rs:307-334`), called on every
-      render (`render.rs:179`), **closes any active sheet not owned by the
+      render (`render.rs:166`), **closes any active sheet not owned by the
       shown item pane**.
     - It then opens a requested details sheet (`content.details`) while
       no dialog is open (`:321-327`).
     - `open_item` clears the owner (`content.rs:340`). It can run while
       Settings is shown, from an async landing such as the filter's ID
       read (`D/view/workspace/find.rs:104`).
-    - `wait_to_quit` (`D/view/workspace/lifecycle.rs:226-238`) clears the
+    - `wait_to_quit` (`D/view/workspace/lifecycle.rs:225-237`) clears the
       owner, closes dialogs and any sheet, then focuses Quit now's
       `quit_focus`.
 30. **Async refocus.** These move focus into the content region on a
@@ -353,8 +364,8 @@ Document Amendments below were applied in the approval commit.
       against a sheet, unlike `landed_refocus`;
     - the `close_with_draft` landing (`:515`);
     - `open_created` (`:166-168`);
-    - the retire flow's `show_item_tab` (`D/view/operations/retire.rs:208-222`).
-31. **Focus lost.** `focus_lost` (`D/view/workspace/focus.rs:275-295`):
+    - the retire flow's `show_item_tab` (`D/view/operations/retire.rs:159-172`).
+31. **Focus lost.** `focus_lost` (`D/view/workspace/focus.rs:285-325`):
     - with a modal open, it refocuses `window.focus_lost_restore_target`;
     - otherwise it moves focus to the nearest displayed region.
     - 03b adds its popover rule (fact 25).
@@ -436,12 +447,12 @@ Document Amendments below were applied in the approval commit.
     `HostPinDto` (`:294-300`): `host`, `port`, `pinned_algorithm`,
     `pinned_fingerprint`, `reapproval_required`; no date.
 41. **The design.** `05` "Settings sheet"
-    (`docs/design/05-sheets-and-dialogs.md:40-66`):
+    (`docs/design/05-sheets-and-dialogs.md:40-68`):
     - 720 px, opened from the footer gear and Ctrl ,;
     - a 214 px left nav whose designed pages are Sharing & keys, Checking
       for updates and Appearance;
-    - the key list, the info box and Trusted servers (`:46-59`);
-    - Checking for updates, with a global "Pause all" switch (`:61-66`).
+    - the key list, the info box and Trusted servers (`:48-61`);
+    - Checking for updates, with a global "Pause all" switch (`:63-68`).
 
     The common rules (`:3-5`) and frame (`:7-12`) are: Escape closes
     "unless an operation is running"; a header with title, description
@@ -452,14 +463,14 @@ Document Amendments below were applied in the approval commit.
     (`docs/design/mockups/source/Workspace.dc.html:1123`). Every page but
     keys, polling and appearance is "not mocked this round" (`:475`).
 42. **Vocabulary.** `06` (`docs/design/06-language-and-states.md:8`,
-    `:15`, `:24`, `:25`) maps:
+    `:15`, `:25`, `:26`) maps:
     - publication remote to **shared copy**;
     - SSH key to **key** / "Key used for sharing";
     - known host pin to **Trusted servers**;
     - background poll to **Checking for updates**.
 
     It asks for `…` on any action that opens a confirmation or sheet
-    (`:36`).
+    (`:39`).
 43. **Passphrases.** The credential RFC keeps a protected key's passphrase
     "only in that provider's memory for the remaining session" and asks
     for it on first use in a session
@@ -468,7 +479,7 @@ Document Amendments below were applied in the approval commit.
     never stores it", is true of today's handling.
 44. **No Pause all.** D6 decision 8 rejected a global pause switch and
     recorded the handoff's as a Known Limit
-    (`docs/Cycles/wave-03-desktop-06-polling-and-shutdown.md:428-430`).
+    (`docs/Cycles/wave-03-desktop-06-polling-and-shutdown.md:434-436`).
 45. **Key settings behaviour.** The desktop IA RFC requires generation,
     import, selection, clearing and unregistration. Generated-file
     deletion is "a separate confirmed action", and there is no
@@ -483,24 +494,24 @@ Document Amendments below were applied in the approval commit.
     previous handle 0.25 s later if the dialog count is unchanged. It does
     not look at sheets. It runs when a dialog's `on_ok` returns true:
     Drafts' Discard… (`D/view/drafts/actions.rs:248`), quit's Not saved
-    (`D/view/quit.rs:259-262`), the retire asks
-    (`D/view/operations/retire_asks.rs:159`) and the edit review
+    (`D/view/quit.rs:260-263`), the retire asks
+    (`D/view/retire_asks.rs:159`) and the edit review
     (`D/view/item/edit/review.rs:261`). The app's confirmation and passphrase
     dialogs close at once.
 47. **`focus_lost`'s target.** GPUI fires `focus_lost` when focus moves
     from something to nothing (`gpui-pre-0.3.6/src/window.rs:3360-3369`).
     `focus_lost_restore_target` is the nearest focusable ancestor on the
     previous frame's focus path (`:2291-2300`). The Workspace's
-    `focus_lost` (`D/view/workspace/focus.rs:275-295`) focuses that target
+    `focus_lost` (`D/view/workspace/focus.rs:285-325`) focuses that target
     while a dialog or sheet is open, else the nearest displayed region.
-    The quit path's EditsNotKept ask (`D/view/workspace/lifecycle.rs:86-99`)
+    The quit path's EditsNotKept ask (`D/view/workspace/lifecycle.rs:85-98`)
     opens a dialog before `wait_to_quit` runs.
 
 ## Part A: The Sheet
 
 ### A1. Who owns the sheet
 
-`ContentArea.sheet` (`workspace.rs:91`) becomes:
+`ContentArea.sheet` (`workspace.rs:94`) becomes:
 
 ```rust
 /// The sheet on Root's one sheet layer, and who keeps it open (fact 29).
@@ -591,7 +602,7 @@ impl SettingsHost {
 ```
 
 `show_settings` and `settings_closed` live in a new
-`D/view/workspace/settings_sheet.rs` (`workspace.rs` is 488 lines).
+`D/view/workspace/settings_sheet.rs` (`workspace.rs` is 485 lines).
 `workspace.rs` changes only `ContentArea.sheet`'s type, the subscription,
 two fields (`settings_origin`, `settings_return`) and the new module's
 declaration.
@@ -703,8 +714,8 @@ frame's focus path, which ran through the sheet, inside the Content region
   and focuses that region (`focus_region`). `focus_lost` and the render
   after the close each clear it.
 - A footer origin has no region. `keep_focus_in_footer` (03b R-49) runs
-  in the same render, after `sync_sheet` (`render.rs:179`, then
-  `footer.rs:51`). It moves focus to E1's control when the footer item
+  in the same render, after `sync_sheet` (`render.rs:166`, then
+  `workspace/footer.rs:46`). It moves focus to E1's control when the footer item
   has hidden. Cycle 03b's R-50 does not apply, since no origin is its
   `attention_focus` (A2, "The origin", case 3).
 - When the origin's handle was dropped, its region is focused. With no
@@ -844,12 +855,12 @@ handle; none prescribes the mechanism.
    focusable ancestor, `focus_lost_restore_target` is `None`, the
    Workspace's `focus_lost` does nothing, and nothing redraws (fact 47).
 7. **A layer's `restore` may be empty.** 03b's Activity menu keeps
-   `restore: Option<…>` (03b design `:2249`). The repository menu sets it
-   only for a pointer menu (`D/view/workspace/repository_menu.rs:272-285`),
-   and drops the menu under a modal (`:299-302`).
-8. **`region_of` defaults to Content** (`D/view/workspace/focus.rs:207-219`),
+   `restore: Option<…>` (`D/view/activity/menu.rs:43`). The repository menu sets it
+   only for a pointer menu (`D/view/workspace/repository_menu.rs:280-293`),
+   and drops the menu under a modal (`:307-310`).
+8. **`region_of` defaults to Content** (`D/view/workspace/focus.rs:216-228`),
    and `focused_region` reads the previous frame.
-9. **`on_next_frame` never runs in tests** (`render.rs` near `:181-183`),
+9. **`on_next_frame` never runs in tests** (`render.rs` near `:168-170`),
    so state cleared "at the end of the next frame" must be cleared by an
    event a test also drives.
 10. **The page `open` flag is only as fresh as the close that clears it.**
@@ -1089,25 +1100,27 @@ closes the sheet first.
 `SettingsHost::arrive(route)` switches the menu to the route's page and
 applies the route. It returns the focus target, and `None` means the
 page's entry. "Shown" is what `settings_shown` then reads (R-3). Lines are
-at `ba95e1b7`; Task 0 re-maps them after Cycle 03b merges (U-5).
+at `82df6942` (Task 0's re-map after Cycle 03b merged, U-5), except test
+references, which are at `ba95e1b7` unless Part "Named Edits" says
+otherwise.
 
 | W | Trigger | Today's call | Route | Shown | Focus |
 | --- | --- | --- | --- | --- | --- |
-| W-1 | Ctrl+, (`render.rs:262-264`) | `open_settings(Repositories)` | `Page(Repositories)` | `Settings(Repositories)` | entry |
-| W-2 | Footer Settings (`workspace/footer.rs:174`) | same | same | same | entry |
-| W-3 | Footer "Checked for updates" (`workspace/footer.rs:175`) | `open_settings(Polling)` | `Page(Polling)` | `Settings(Polling)` | entry |
+| W-1 | Ctrl+, (`render.rs:252-254`) | `open_settings(Repositories)` | `Page(Repositories)` | `Settings(Repositories)` | entry |
+| W-2 | Footer Settings (`workspace/footer.rs:169`) | same | same | same | entry |
+| W-3 | Footer "Checked for updates" (`workspace/footer.rs:170`) | `open_settings(Polling)` | `Page(Polling)` | `Settings(Polling)` | entry |
 | W-4 | Repositories panel Settings button (`repositories/body.rs:139`) | `open_settings(Repositories)` | removed (Part F) | — | — |
 | W-5 | Empty Repositories panel "Add or create a repository…" (`repositories/body.rs:113`) | `open_settings(Repositories)` | `AddRepository` | `Settings(Repositories)` | `add-path` (R-24) |
-| W-6 | Repositories toolbar Add (`dock/header/toolbar.rs:217-218`) | same | same | same | `add-path` |
-| W-7 | Repository menu Settings… (`workspace/repository_menu.rs:221-222`) | `open_settings_on(Repositories, root)` | `Manage(root)` | `Settings(Repositories)` | entry |
-| W-8 | Repository row action Settings… (Needs fixing; `repository_menu.rs:245-246`) | same | same | same | entry |
-| W-9 | Repository row action Set up sharing… (`repository_menu.rs:248`) | `open_remotes(root)` | `Remotes(root)` | `Settings(Remotes)` | `remote-add-name` |
-| W-10 | Share main… with no remote (`requests.rs:320-321`) | `open_remotes(root)` | `Remotes(root)` | `Settings(Remotes)` | `remote-add-name` |
-| W-11 | Item Share… with no remote (`item/share.rs:400` → `requests.rs:201`) | `open_remotes(root)` | `Remotes(root)` | `Settings(Remotes)` | `remote-add-name` |
-| W-12 | Share outcome Open Sharing & keys (`operations/outcomes.rs:211` → `requests.rs:202`) | `open_settings(Keys)` | `Keys` | `Settings(Keys)` | key list (R-22) |
-| W-13 | Share outcome Check host (`outcomes.rs:212` → `requests.rs:203-210`) | `check_host_in_settings` or `open_hosts` | `CheckHost(root, a)` or `Hosts(root)` | `Settings(Hosts)` | `hosts-check` |
-| W-14 | Share outcome Set identity (`outcomes.rs:219` → `requests.rs:211`) | `identity_in_settings` | `Identity(root)` | `Settings(Repositories)` | `identity-name` |
-| W-15 | Share outcome Set up sharing (`outcomes.rs:220` → `requests.rs:201`) | `open_remotes` | `Remotes(root)` | `Settings(Remotes)` | `remote-add-name` |
+| W-6 | Repositories toolbar Add (`dock/header/toolbar.rs:249-250`) | same | same | same | `add-path` |
+| W-7 | Repository menu Settings… (`workspace/repository_menu.rs:229-230`) | `open_settings_on(Repositories, root)` | `Manage(root)` | `Settings(Repositories)` | entry |
+| W-8 | Repository row action Settings… (Needs fixing; `repository_menu.rs:253-254`) | same | same | same | entry |
+| W-9 | Repository row action Set up sharing… (`repository_menu.rs:256`) | `open_remotes(root)` | `Remotes(root)` | `Settings(Remotes)` | `remote-add-name` |
+| W-10 | Share main… with no remote (`requests.rs:340-341`) | `open_remotes(root)` | `Remotes(root)` | `Settings(Remotes)` | `remote-add-name` |
+| W-11 | Item Share… with no remote (`item/share.rs:400` → `requests.rs:204`) | `open_remotes(root)` | `Remotes(root)` | `Settings(Remotes)` | `remote-add-name` |
+| W-12 | Share outcome Open Sharing & keys (`operations/outcomes.rs:179` → `requests.rs:205`) | `open_settings(Keys)` | `Keys` | `Settings(Keys)` | key list (R-22) |
+| W-13 | Share outcome Check host (`outcomes.rs:180` → `requests.rs:206-213`) | `check_host_in_settings` or `open_hosts` | `CheckHost(root, a)` or `Hosts(root)` | `Settings(Hosts)` | `hosts-check` |
+| W-14 | Share outcome Set identity (`outcomes.rs:187` → `requests.rs:214`) | `identity_in_settings` | `Identity(root)` | `Settings(Repositories)` | `identity-name` |
+| W-15 | Share outcome Set up sharing (`outcomes.rs:188` → `requests.rs:204`) | `open_remotes` | `Remotes(root)` | `Settings(Remotes)` | `remote-add-name` |
 | W-16 | Comment offer Open Sharing & keys (`item/posting.rs:366`) | `open_settings(Keys)` | `Keys` | `Settings(Keys)` | key list |
 | W-17 | Comment offer Check host (`posting.rs:367-370`; no authority) | `open_hosts(root)` | `Hosts(root)` | `Settings(Hosts)` | `hosts-check` |
 | W-18 | Comment offer Set identity (`posting.rs:371`) | `identity_in_settings` | `Identity(root)` | `Settings(Repositories)` | `identity-name` |
@@ -1115,19 +1128,19 @@ at `ba95e1b7`; Task 0 re-maps them after Cycle 03b merges (U-5).
 | W-20 | Lifecycle dialog Check host (`lifecycle/running.rs:317`) | via `open_route` | `CheckHost` or `Hosts` | `Settings(Hosts)` | `hosts-check` |
 | W-21 | Lifecycle dialog Open Sharing & keys (`running.rs:329`) | `open_settings(Keys)` | `Keys` | `Settings(Keys)` | key list |
 | W-22 | Lifecycle dialog Open repository details (`lifecycle/actions.rs:143-150`) | `inspect_in_settings` | `Inspect(root)` | `Settings(Repositories)` | `add-path` |
-| W-23 | Activity Choose a key… (`operations/attention.rs:147`) | `open_settings(Keys)` | `Keys` | `Settings(Keys)` | key list |
-| W-24 | Activity Open remote settings… (`attention.rs:148`) | `open_remotes(path)` | `Remotes(path)` | `Settings(Remotes)` | `remote-add-name` |
-| W-25 | Activity Approve host… (`attention.rs:149-151`) | `check_host_in_settings`, or **`open_settings(Hosts)` on the panel's selection** | `CheckHost(path, a)`, or `Hosts(path)` (R-23) | `Settings(Hosts)` | `hosts-check` |
-| W-26 | Recovery Retry of a protected key generation (`requests.rs:615-616`) | `retry_generation_in_settings` | `RetryGeneration(id)` | `Settings(Keys)` | `key-generate-passphrase` |
-| W-27 | Recovery `repo.inspect` / `remote.history` (`requests.rs:627`) | `inspect_in_settings` | `Inspect(root)` | `Settings(Repositories)` | `add-path` |
-| W-28 | Recovery `repo.identity_set` (`requests.rs:628`) | `identity_in_settings` | `Identity(root)` | `Settings(Repositories)` | `identity-name` |
-| W-29 | Recovery `host.approve` / `host.replace` (`requests.rs:629-630`) | `check_host_in_settings` | `CheckHost(root, a)` | `Settings(Hosts)` | `hosts-check` |
+| W-23 | Activity Choose a key… (`operations/attention.rs:54`) | `open_settings(Keys)` | `Keys` | `Settings(Keys)` | key list |
+| W-24 | Activity Open remote settings… (`attention.rs:55`) | `open_remotes(path)` | `Remotes(path)` | `Settings(Remotes)` | `remote-add-name` |
+| W-25 | Activity Approve host… (`attention.rs:56-58`) | `check_host_in_settings`, or **`open_settings(Hosts)` on the panel's selection** | `CheckHost(path, a)`, or `Hosts(path)` (R-23) | `Settings(Hosts)` | `hosts-check` |
+| W-26 | Recovery Retry of a protected key generation (`requests.rs:590-591`) | `retry_generation_in_settings` | `RetryGeneration(id)` | `Settings(Keys)` | `key-generate-passphrase` |
+| W-27 | Recovery `repo.inspect` / `remote.history` (`requests.rs:602`) | `inspect_in_settings` | `Inspect(root)` | `Settings(Repositories)` | `add-path` |
+| W-28 | Recovery `repo.identity_set` (`requests.rs:603`) | `identity_in_settings` | `Identity(root)` | `Settings(Repositories)` | `identity-name` |
+| W-29 | Recovery `host.approve` / `host.replace` (`requests.rs:604-605`) | `check_host_in_settings` | `CheckHost(root, a)` | `Settings(Hosts)` | `hosts-check` |
 | W-30 | Save banner Open Settings, initials required (`tabs.rs:329-330` → `content.rs:145-146`) | `identity_in_settings` on the next frame | `Identity(root)` | `Settings(Repositories)` | `identity-name` |
 | W-31 | Checking for updates, Set up sharing… (inside; `settings/mod.rs:284-285`) | `set_up_sharing` | `Remotes(root)` | `Settings(Remotes)` | `remote-add-name` |
 | W-32 | Checking for updates, attention actions (inside; `settings/attention.rs:11`) | `attend` | `Keys`, `CheckHost`, `Hosts(root)` or `Remotes(root)` | as their rows | as their rows |
-| W-33 | Repository row action for an attention cause: Choose a key…, Approve host…, Open remote settings… (`repository_menu.rs:243` → `attention.rs:119-152`) | `attend` | as W-23 to W-25 (R-23 applies) | as W-23 to W-25 | as W-23 to W-25 |
-| W-34 | Cycle 03b: an Activity or popover repository-state row's Settings… (S4 Needs fixing; 03b design `:1936`) | 03b's `choose_activity` → `row_action` | `Manage(root)` | `Settings(Repositories)` | entry |
-| W-35 | Cycle 03b: an Activity or popover repository-state row's Set up sharing… (S4 This computer, non-SSH; 03b design `:1941`) | same | `Remotes(root)` | `Settings(Remotes)` | `remote-add-name` |
+| W-33 | Repository row action for an attention cause: Choose a key…, Approve host…, Open remote settings… (`repository_menu.rs:251` → `attention.rs:27-63`) | `attend` | as W-23 to W-25 (R-23 applies) | as W-23 to W-25 | as W-23 to W-25 |
+| W-34 | Cycle 03b: an Activity or popover repository-state row's Settings… (S4 Needs fixing; `D/model/activity/states/repositories.rs:78-83`, `:120-126`; `D/model/repository_state.rs:266`) | 03b's `choose_activity` → `row_action` | `Manage(root)` | `Settings(Repositories)` | entry |
+| W-35 | Cycle 03b: an Activity or popover repository-state row's Set up sharing… (S4 This computer, non-SSH; `states/repositories.rs:114-126`; `repository_state.rs:352`, `:357`) | same | `Remotes(root)` | `Settings(Remotes)` | `remote-add-name` |
 
 **After Cycle 03b,** the triggers of W-12 to W-15 and W-23 to W-29 are
 Activity rows. So are 03b's S4 "Needs attention" repository rows, whose
@@ -1167,7 +1180,7 @@ Notes:
   the shared copy is still being read, so focus always goes there (R-53).
 - **W-25's fix** (decision 9; R-23). Today, Approve host… with no server
   named opens Hosts on the Repositories panel's selection, not the
-  attention row's repository (`attention.rs:151`). It now uses the row's
+  attention row's repository (`attention.rs:58`). It now uses the row's
   repository, as W-32's path does. The same holds on W-33's path.
 
 ## Part E: Copy
@@ -1367,20 +1380,20 @@ E-12 and E-13). Edits that remove assertions are marked **Removes**.
 | E-2 | `D/view/item/sheet_tests.rs` `no_workspace_key_acts_behind_the_sheet` (`:670-741`) | **Removes** `secondary-,` from the refused keys (`:719`, `:731-739`); P3 asserts the new behaviour | 1 |
 | E-3 | `D/view/item/frame_tests.rs` `page_keys_scroll_the_items_region_and_settings_keep_theirs` (`:148-178`) | Settings' PageDown moves Settings' own offset, not `content_offset`; it closes by Escape | 1 |
 | E-4 | `D/view/drafts_routing_tests.rs` (`:66`, `:83`) | `:66`: Settings no longer hides Drafts, and it closes by Escape. **Removes** `!present("drafts")` and the `!drafts_shown` and `present(("tab",1))` checks (`:70`, `:76`, `:77`), which invert. `:83`: the drafts key cannot act behind the sheet; the passphrase is emptied by closing Settings, then the drafts key opens Drafts | 1 |
-| E-5 | Helpers: `settings` (`D/view/settings/repositories_tests.rs:40`), `hosts` (`hosts_tests.rs:61`), `remotes` (`remotes_tests.rs:47`), `keys` (`keys_tests.rs:51`), `Rig::open` (`polling_support.rs:104`), `open_page` (`D/view/keyboard_tests/settings.rs:22`) and its five callers, `Walk::open_settings_and_each_page` (`D/view/keyboard_tests.rs:561-577`) | Task 1: the walk closes by Escape and finds focus on the control that opened Settings, not the shown tab (`:574-576`). Task 5: menu indices 0–2 instead of 0–4, with `remotes` choosing its root by Manage | 1, 5 |
-| E-6 | Tests that leave Settings by `settings-close` or `settings-close-button`: `keys_tests.rs` `a_typed_passphrase_is_emptied_when_the_page_is_hidden` (`:350`) and `the_operation_area_retry_of_a_protected_generation_asks_on_the_page` (`:832`); `D/view/item/share_tests.rs` `share_opens_remotes_on_its_own_repository_after_another` (`:754`, `:771`); `D/view/create_tests.rs` `initials_required_points_to_settings` (`:886`, `:930-935`); `hosts_tests.rs` (`:263`); `remotes_tests.rs` (`:731`) | Escape instead of the button | 1 |
-| E-7 | `D/view/operations/attention_tests.rs` `attention_actions_hit` (`:367`, `:387-391`) | Closes Settings by Escape between the row clicks, which the scrim would otherwise take | 1 |
+| E-5 | Helpers: `settings` (`D/view/settings/repositories_tests.rs:41`), `hosts` (`hosts_tests.rs:61`), `remotes` (`remotes_tests.rs:52`), `keys` (`keys_tests.rs:52`), `Rig::open` (`polling_support.rs:104`), `open_page` (`D/view/keyboard_tests/settings.rs:22`) and its five callers, `Walk::open_settings_and_each_page` (`D/view/keyboard_tests.rs:561-577`) | Task 1: the walk closes by Escape and finds focus on the control that opened Settings, not the shown tab (`:574-576`). Task 5: menu indices 0–2 instead of 0–4, with `remotes` choosing its root by Manage | 1, 5 |
+| E-6 | Tests that leave Settings by `settings-close` or `settings-close-button`: `keys_tests.rs` `a_typed_passphrase_is_emptied_when_the_page_is_hidden` (`:351`) and `the_operation_area_retry_of_a_protected_generation_asks_on_the_page` (`:833`); `D/view/item/share_tests.rs` `share_opens_remotes_on_its_own_repository_after_another` (`:817`, `:834`); `D/view/create_tests.rs` `initials_required_points_to_settings` (`:886`, `:930-935`); `hosts_tests.rs` (`:263`); `remotes_tests.rs` (`:769`) | Escape instead of the button | 1 |
+| E-7 | `D/view/operations/attention_tests.rs` `attention_actions_hit` (`:411`, `:436-440`) | Closes Settings by Escape between the row clicks, which the scrim would otherwise take | 1 |
 | E-8 | `D/view/settings/attention_tests.rs` `settings_polling_attention_actions` (`:34`, `:83`) | Ctrl+, with Settings open now does nothing; the assertion that follows reads the page the attention action left | 1 |
 | E-9 | `D/view/settings/remotes_tests.rs`: every test that clicks the Remotes page's Choose row | Chooses by Manage on the Repositories page (R-15) | 3 |
 | E-10 | `D/view/settings/keys_tests.rs`: tests pressing Select, Clear selection, Unregister or Delete key by element id | The radio, Stop using this key, the trash and Delete key file…, by their new ids | 4 |
 | E-11 | Tests comparing a literal Settings string rather than its constant | The new string or its constant (Part E) | 7 |
-| E-12 | Tests that act outside Settings while it is open: `D/view/repositories_tests.rs` `rows_and_list_states` (`:146`, `:213`); `D/view/dock_tests/toolbars/repositories.rs` `repositories_toolbar` (`:72`, `:76`); `D/view/repositories_tests/menu.rs` `journey` (`:393`, `:401`, `:409`); `D/view/lifecycle/credential_tests.rs` `a_refused_key_offers_unlock_and_sharing_and_keys` (`:128`; `outcome_canned_tests.rs:223`); `D/view/keyboard_tests/shell/polling_journey.rs` `polling_keyboard` (`secondary-4` at `:247`, `:305`); `D/view/polling_privacy_tests.rs` `polling_privacy` (`:824`, `:846`, `:872`); `D/view/operations/attention_tests.rs` `attention_actions_by_reason` (`:224-225`) | Close Settings by Escape before the next action outside it | 1 |
-| E-13 | `D/view/settings/remotes_tests.rs` `opening_remotes_on_a_repository_shows_that_repository_even_after_another` (`:748`, `:755-757`); `D/view/settings/repositories_tests.rs` `a_form_control_below_the_fold_is_scrolled_into_view` (`:650-668`) | Task 1: the first opens through the route, not `host.open_remotes_on`, closes by Escape, and keeps "Settings keeps b". Task 3: its last assertion follows R-14 (a reopen after the panel's selection changed follows it), a **Removes** of "Settings keeps b". Task 1: the second reads Settings' own scroll and the sheet body's bounds, not `content` and `content_offset` | 1, 3 |
+| E-12 | Tests that act outside Settings while it is open: `D/view/repositories_tests.rs` `rows_and_list_states` (`:146`, `:213`); `D/view/dock_tests/toolbars/repositories.rs` `repositories_toolbar` (`:72`, `:76`); `D/view/repositories_tests/menu.rs` `journey` (`:406`, `:414`, `:422`); `D/view/lifecycle/credential_tests.rs` `a_refused_key_offers_unlock_and_sharing_and_keys` (`:128`; `outcome_canned_tests.rs:227`, whose `reopen` now runs Activity's Open… through the test seam, not a click); `D/view/keyboard_tests/shell/polling_journey.rs` `polling_keyboard` (the Activity steps at `:266`, `:323`); `D/view/polling_privacy_tests.rs` `polling_privacy` (Settings opens at `:964`; the Activity presses at `:997`, `:1013`); `D/view/operations/attention_tests.rs` `attention_actions_by_reason` (the second `act` of its loop, `:249`, which runs through the test seam) | Close Settings by Escape before the next action outside it | 1 |
+| E-13 | `D/view/settings/remotes_tests.rs` `opening_remotes_on_a_repository_shows_that_repository_even_after_another` (`:786`, `:793-795`); `D/view/settings/repositories_tests.rs` `a_form_control_below_the_fold_is_scrolled_into_view` (`:660-678`) | Task 1: the first opens through the route, not `host.open_remotes_on`, closes by Escape, and keeps "Settings keeps b". Task 3: its last assertion follows R-14 (a reopen after the panel's selection changed follows it), a **Removes** of "Settings keeps b". Task 1: the second reads Settings' own scroll and the sheet body's bounds, not `content` and `content_offset` | 1, 3 |
 | E-14 | `D/view/settings/polling_tests.rs` `settings_polling_states` (`:338-343`); `D/view/keyboard_tests/settings.rs` `add_a_remote_by_keyboard` (`:84`) | The first reads the chosen repository through `settings_chosen`, not `remotes-registration` and `remotes-chosen`. The second chooses by Manage | 3 |
 | E-15 | `D/view/settings/keys_tests.rs`: every test that fills the Generate or Import form; `D/view/keyboard_tests/settings.rs` `generate_a_key_by_keyboard` (`:107`) | Press Make a new key or Use a key I already have… first | 4 |
-| E-16 | Literal page indices: `drafts_routing_tests.rs:86`, `polling_tests.rs:69`, `polling_privacy_tests.rs:825`, `hosts_tests.rs:278`, `remotes_tests.rs:757`, `keys_tests.rs:357`, `:360`, `settings/attention_tests.rs:84`, `polling_journey.rs:152-160` | The three-entry indices | 5 |
-| E-17 | Tests asserting a route focuses the page's entry where Part D now names a field: `repositories_tests.rs` `the_inspect_recovery_opens_the_page_with_its_root_checked` (`:705-708`), and those Task 0's sweep finds among the share, create and attention tests; Cycle 03b's handler test row for Approve host… with no server named (decision 9) | The field Part D names; for 03b's row, the attention row's repository | 6 |
-| E-18 | The existing route tests: `footer_tests/mod.rs:309`, `footer_tests/status.rs` (`:404-409`), `repositories_tests.rs:53`, `dock_tests/toolbars/repositories.rs:49`, `repositories_tests/menu.rs` (`:395`, `:404`), `item/share_tests.rs` (`:164`, `:289`, `:754`), `operations/outcomes_route_tests.rs` (`:57`, `:76`), `operations/outcomes_tests.rs:407`, `lifecycle/credential_tests.rs:54`, `lifecycle/outcome_canned_tests.rs:270`, `operations/attention_tests.rs` (`:109`, `:171`, `:367`), `keys_tests.rs:832`, `repositories_tests.rs:688`, `repositories_manage_tests.rs:616`, `hosts_tests.rs:415`, `create_tests.rs:886`, `polling_tests.rs:308`, `settings/attention_tests.rs:34` | Each gains one assertion: the focused element's id that Part D names | 6 |
+| E-16 | Literal page indices: `drafts_routing_tests.rs:86`, `polling_tests.rs:69`, `polling_privacy_tests.rs:965`, `hosts_tests.rs:278`, `remotes_tests.rs:795`, `keys_tests.rs:358`, `:361`, `settings/attention_tests.rs:84`, `polling_journey.rs:169-177` | The three-entry indices | 5 |
+| E-17 | Tests asserting a route focuses the page's entry where Part D now names a field: `repositories_tests.rs` `the_inspect_recovery_opens_the_page_with_its_root_checked` (`:715-718`), and those Task 0's sweep finds among the share, create and attention tests; Cycle 03b's handler test row for Approve host… with no server named (decision 9) | The field Part D names; for 03b's row, the attention row's repository | 6 |
+| E-18 | The existing route tests: `footer_tests/mod.rs:332`, `footer_tests/status.rs` (`:428-433`), `repositories_tests.rs:53`, `dock_tests/toolbars/repositories.rs:49`, `repositories_tests/menu.rs` (`:408`, `:417`), `item/share_tests.rs` (`:205`, `:330`, `:817`), `operations/outcomes_route_tests.rs` (`:59`, `:80`), `operations/outcomes_tests.rs:462`, `lifecycle/credential_tests.rs:54`, `lifecycle/outcome_canned_tests.rs:274`, `operations/attention_tests.rs` (`:126`, `:193`, `:411`), `keys_tests.rs:833`, `repositories_tests.rs:698`, `repositories_manage_tests.rs:616`, `hosts_tests.rs:415`, `create_tests.rs:886`, `polling_tests.rs:308`, `settings/attention_tests.rs:34` | Each gains one assertion: the focused element's id that Part D names | 6 |
 
 Further sites the sweep finds are recorded in the ledger as E-19 onward
 (decision 7).
