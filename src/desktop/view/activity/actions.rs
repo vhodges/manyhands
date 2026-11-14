@@ -4,28 +4,24 @@
 //! calls the handler the action names. Nothing new is sent: each handler is
 //! the one today's control calls.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::{Context, FocusHandle, Window};
-use manyhands::repository::{AuthoringKind, ItemDtoKind};
+use manyhands::{canonical::ItemId, repository::AuthoringKind};
 
 use crate::desktop::{
     keys::ActivityMenuChoice,
     model::{
-        activity::rows::{ActivityAction, RowKey},
+        activity::{
+            rows::{ActivityAction, RowKey},
+            states::dto_kind,
+        },
         navigation::OpenTarget,
         operations::LifecycleRow,
     },
     services::requests::{Intent, Lane},
     view::{operations::RetireSubject, workspace::Workspace},
 };
-
-fn dto_kind(kind: AuthoringKind) -> ItemDtoKind {
-    match kind {
-        AuthoringKind::Ticket => ItemDtoKind::Ticket,
-        AuthoringKind::Document => ItemDtoKind::Document,
-    }
-}
 
 impl Workspace {
     /// A choice from a row's menu, its button or the test seam. It runs only
@@ -149,11 +145,22 @@ impl Workspace {
         let Intent::ItemSync { root, kind, id } = share else {
             return false;
         };
+        self.share_in_flight(root, *kind, id)
+    }
+
+    /// Whether a share of the item is queued, waiting out `busy` or running:
+    /// the one account `sharing` and S6's Share… state both read.
+    pub(in crate::desktop::view) fn share_in_flight(
+        &self,
+        root: &Path,
+        kind: AuthoringKind,
+        id: &ItemId,
+    ) -> bool {
         self.services().worker().in_flight(|intent| {
             matches!(
                 intent,
                 Intent::ItemSync { root: asked, kind: asked_kind, id: asked_id }
-                    if asked == root && asked_kind == kind && asked_id == id
+                    if asked == root && *asked_kind == kind && asked_id == id
             )
         })
     }

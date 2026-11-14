@@ -6,15 +6,12 @@
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet, HashMap},
+    path::Path,
     rc::Rc,
 };
 
 use gpui_kit::{App, Bounds, Context, Entity, EntityId, Pixels};
-use manyhands::{
-    canonical::ItemId,
-    drafts::ItemKind,
-    repository::{AuthoringKind, ItemDtoKind},
-};
+use manyhands::{canonical::ItemId, drafts::ItemKind, repository::AuthoringKind};
 use time::OffsetDateTime;
 
 use super::Workspace;
@@ -24,7 +21,10 @@ use crate::desktop::{
             Inputs, derive,
             log::{ActivityLog, pending_held},
             rows::{ItemRef, RowKey, Target},
-            states::{DraftsInput, RepositoryInput, ShareState, target_of},
+            states::{
+                DraftsInput, RepositoryInput, ShareState, authoring as target_authoring, dto_kind,
+                target_of,
+            },
         },
         lifecycle_lock::LockKey,
         polling::{KeyId, TargetKind},
@@ -32,7 +32,7 @@ use crate::desktop::{
         stamp::RepoKey,
         tabs::TabKey,
     },
-    services::{lifecycle_of, requests::Intent},
+    services::lifecycle_of,
     view::{
         activity::{ActivityPane, menu::ActivityMenu, more::ActivityMore},
         item::{ItemPane, locked_text},
@@ -84,13 +84,6 @@ impl ActivityState {
             #[cfg(test)]
             pressed: 0,
         }
-    }
-}
-
-fn dto_kind(kind: AuthoringKind) -> ItemDtoKind {
-    match kind {
-        AuthoringKind::Ticket => ItemDtoKind::Ticket,
-        AuthoringKind::Document => ItemDtoKind::Document,
     }
 }
 
@@ -307,10 +300,7 @@ impl Workspace {
                         }
                     }
                     (Some(id), Some(kind)) => {
-                        let dto = match kind {
-                            TargetKind::Ticket => ItemDtoKind::Ticket,
-                            TargetKind::Document => ItemDtoKind::Document,
-                        };
+                        let dto = dto_kind(target_authoring(kind));
                         let lock = services.lock(&root, dto, &id.to_string(), cx);
                         if lock.blocks() {
                             ShareState::Locked(locked_text(lock, dto).to_owned())
@@ -329,10 +319,7 @@ impl Workspace {
         let retiring = retire_offers
             .iter()
             .filter(|offer| {
-                let dto = match offer.kind {
-                    TargetKind::Ticket => ItemDtoKind::Ticket,
-                    TargetKind::Document => ItemDtoKind::Document,
-                };
+                let dto = dto_kind(target_authoring(offer.kind));
                 services.retiring(&root, dto, &offer.item.to_string(), cx)
             })
             .map(|offer| offer.item.clone())
@@ -355,16 +342,6 @@ impl Workspace {
     /// Whether a share of the item is queued, waiting out `busy` or running:
     /// the worker's own account, as the item header's Share reads it.
     fn item_sharing(&self, root: &str, kind: TargetKind, id: &ItemId) -> bool {
-        let kind = match kind {
-            TargetKind::Ticket => AuthoringKind::Ticket,
-            TargetKind::Document => AuthoringKind::Document,
-        };
-        self.services.worker().in_flight(|intent| {
-            matches!(
-                intent,
-                Intent::ItemSync { root: asked, kind: asked_kind, id: asked_id }
-                    if asked.to_str() == Some(root) && *asked_kind == kind && asked_id == id
-            )
-        })
+        self.share_in_flight(Path::new(root), target_authoring(kind), id)
     }
 }

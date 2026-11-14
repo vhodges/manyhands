@@ -16,7 +16,7 @@ use std::path::Path;
 
 use manyhands::{
     canonical::ItemId,
-    repository::{AuthoringKind, OperationListDto},
+    repository::{AuthoringKind, ItemDtoKind, OperationListDto},
 };
 
 pub(crate) use self::{
@@ -124,10 +124,18 @@ fn item_label(
     item_name((inputs.title)(root, kind, id).as_deref(), kind, id)
 }
 
-fn authoring(kind: TargetKind) -> AuthoringKind {
+pub(crate) fn authoring(kind: TargetKind) -> AuthoringKind {
     match kind {
         TargetKind::Ticket => AuthoringKind::Ticket,
         TargetKind::Document => AuthoringKind::Document,
+    }
+}
+
+/// The item kind the tabs, locks and lists name an authoring kind by.
+pub(crate) fn dto_kind(kind: AuthoringKind) -> ItemDtoKind {
+    match kind {
+        AuthoringKind::Ticket => ItemDtoKind::Ticket,
+        AuthoringKind::Document => ItemDtoKind::Document,
     }
 }
 
