@@ -413,7 +413,7 @@ design puts it.
   need attention" filter. Today's operations-area content (finishing,
   session and pending sections) is carried into these rows, not dropped.
 - **Needs attention popover** (`05`, 2f), anchored above the footer item:
-  one row per unresolved recovery state with its single action, and "Show
+  one row per unresolved recovery state with at most one action, and "Show
   everything in Activity". It is a filtered view of the same store as
   Activity.
 - **Which repository states the footer's Needs attention count includes**
@@ -435,6 +435,17 @@ derivation (Cycle 03a, Explicit Exclusions).
 Activity and the popover; every popover action works by keyboard; Activity
 can be hidden and the popover still works; no secret appears in a row,
 tooltip or popover (extend the existing privacy tests).
+
+Amended 2026-11-13 by Cycle 03b (decisions 6, 7, 12, 21, 22, 24):
+
+- the count includes every attention row once (decision 6);
+- checks that changed something get rows (decision 7);
+- titles appear in Activity and the popover, under D5's and D6's rules
+  (decisions 12 and 21);
+- the K-19 rows are one-line rows (decision 22);
+- "its single action" becomes "at most one action" (decision 24);
+- "failures appear in both Activity and the popover" means every counted
+  failure (decision 24).
 
 ### Cycle 04: Settings Sheet
 
@@ -600,7 +611,7 @@ Wave 04 is complete when its Cycles have approved exit evidence and:
 | A layout file from an older build, or a removed panel, breaks startup | Versioned file; a file naming any panel other than the known ones, or missing one, restores the default, reported in Activity; one table-driven test (amended 2026-11-08, Cycle 01 decision 5). |
 | D6 lands while Cycles 01 and 03 move and rework the operations area | Cycle 01 wraps the area as the Activity panel without editing `view/operations/` or `model/operations.rs`; 03 bases its plan on whatever D6 has merged and leaves the polling states out until then. Whichever merges second merges main and adapts, per `AGENTS.md`. *Settled 2026-11-12: D6 merged at `48653d01` before Cycle 03 was planned, so 03a and 03b plan against it, polling states included.* |
 | Quit feedback ("Finishing …", Quit now, and D6's "still stopping") renders in the operations area, so a hidden Activity panel would hide it | Cycle 01 keeps the feedback in the Activity panel and changes no layout when a quit waits; a person who wonders why opens Activity (amended 2026-11-08, Cycle 01 decision 7). |
-| Needs attention misses the attention states D6 adds (key locked, host approval, recovery hold) | The footer count is one read-only function over the existing models; whichever of D6 and Cycle 01 merges second adds D6's states to it (amended 2026-11-08, Cycle 01 decision 3). |
+| Needs attention misses the attention states D6 adds (key locked, host approval, recovery hold) | The footer count is one read-only function over the existing models; whichever of D6 and Cycle 01 merges second adds D6's states to it (amended 2026-11-08, Cycle 01 decision 3). *Settled 2026-11-13: Cycle 03b's count is the popover's rows, every attention source once (Cycle 03b decision 6).* |
 | Cycle 01 or 05 grows too large to review | The split line in each. |
 | Restyling the lifecycle dialog and the resolve conflict sheet regresses D5 behavior (stale confirmations, retry reusing the operation, safe-point stop, no automatic winner) | Cycle 05 changes layout and copy only; D5's existing tests stay and must pass unchanged in what they assert about behavior. |
 | The design's list specs drop a Wave 03 behavior (Ready and Blocked, duplicate short codes, inaccessible entries) | Cycle 02's exit evidence names them; decision 5 places Ready and Blocked. |

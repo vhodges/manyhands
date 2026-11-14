@@ -34,10 +34,15 @@ use super::{
     },
 };
 use crate::desktop::{
-    services::{JobKind, requests::DesktopRequestId},
+    model::activity::rows::{ActivityAction, Kind, RowKey},
+    services::{
+        JobKind,
+        requests::{DesktopRequestId, RequestState},
+    },
     view::{
+        activity_support::{act, offered, refresh, row as log_row},
         harness::Shell,
-        operations::{OPEN_LIFECYCLE, recovery_id, request_id},
+        operations::OPEN_LIFECYCLE,
     },
 };
 
@@ -60,7 +65,6 @@ pub(super) async fn at_stage(
     stage: ProgressStage,
     cx: &mut TestAppContext,
 ) {
-    use crate::desktop::services::requests::RequestState;
     shell
         .until(cx, move |operations| {
             operations.request(id).is_some_and(|request| {
@@ -429,20 +433,19 @@ async fn the_operation_entry_reopens_the_dialog(cx: &mut TestAppContext) {
     let id = closes(&shell, cx)[0];
     at_stage(&shell, id, ProgressStage::Integrating, cx).await;
     shell.run(cx);
-    assert_eq!(
-        shell.label(request_id(id, "command"), cx).as_deref(),
-        Some("Close ticket")
-    );
-    assert_eq!(
-        shell.label(request_id(id, "item"), cx),
-        Some(short_id(TICKET))
-    );
-    assert_eq!(
-        shell.label(request_id(id, "state"), cx).as_deref(),
-        Some("Closing \u{b7} Merging into main\u{2026}")
-    );
+    let entry = RowKey::Request(id);
+    refresh(&shell, cx);
+    let running = log_row(&shell, &entry, cx).expect("the running close is listed");
+    assert_eq!(running.row.kind, Kind::Working);
+    assert!(matches!(
+        request(&shell, id, cx).state,
+        RequestState::Running {
+            stage: Some(ProgressStage::Integrating),
+            accepted: true
+        }
+    ));
     assert!(
-        !shell.present(request_id(id, "open"), cx),
+        offered(&shell, &entry, OPEN_LIFECYCLE, cx).is_none(),
         "not while running"
     );
     shell.click("lifecycle-stop", cx);
@@ -451,19 +454,23 @@ async fn the_operation_entry_reopens_the_dialog(cx: &mut TestAppContext) {
     shell.keys("escape", cx);
     assert!(!shell.present("lifecycle-dialog", cx));
 
+    refresh(&shell, cx);
     assert_eq!(
-        shell.label(request_id(id, "open"), cx).as_deref(),
-        Some(OPEN_LIFECYCLE)
+        offered(&shell, &entry, OPEN_LIFECYCLE, cx).map(|offer| offer.action),
+        Some(ActivityAction::Open(id))
     );
     // R-1: a lifecycle's recovery is its dialog's, never the raw recovery
     // actions: Prepare again here would be the generic ConfirmDialog.
-    for n in 0..4 {
-        assert!(
-            !shell.present(recovery_id(id, n), cx),
-            "the entry has no raw recovery action {n}"
-        );
-    }
-    shell.click(request_id(id, "open"), cx);
+    let menu = log_row(&shell, &entry, cx)
+        .expect("the entry is listed")
+        .row
+        .menu;
+    assert!(
+        menu.iter()
+            .all(|offer| !matches!(offer.action, ActivityAction::Recovery(..))),
+        "the entry has no raw recovery action: {menu:?}"
+    );
+    act(&shell, &entry, OPEN_LIFECYCLE, cx);
     until_present(&shell, "lifecycle-ending", cx).await;
     assert_eq!(
         dialog(cx).read_with(cx, |dialog, _| dialog.submitted()),

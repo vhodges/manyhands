@@ -15,15 +15,16 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::{
-    AnyElement, ClickEvent, Context, FocusHandle, IntoElement, Styled, Window, component::WindowExt,
-};
+use gpui_kit::{Context, FocusHandle, Window, component::WindowExt};
 use manyhands::{
     canonical::ItemId,
-    repository::{ItemDtoKind, OperationAction, OperationDto, OperationId, OperationNextAction},
+    repository::{ItemDtoKind, OperationId},
 };
 
-use super::{RESUME, button, scope_name, text};
+// The row moved to the model, where Activity's S9 reads it.
+pub(super) use crate::desktop::model::operations::LifecycleRow;
+
+use super::scope_name;
 use crate::desktop::{
     model::{lifecycle_lock::LockKey, stamp::RepoKey},
     services::{
@@ -31,85 +32,15 @@ use crate::desktop::{
         requests::{Intent, Lane},
     },
     view::{
-        lifecycle::{Heading, STILL_RUNNING, follow_resume, short_id},
+        lifecycle::{Heading, follow_resume, short_id},
         workspace::Workspace,
     },
 };
 
-/// A lifecycle row Resume takes up: its item's kind and ID, and its
-/// operation.
-struct LifecycleRow {
-    kind: ItemDtoKind,
-    item: String,
-    operation: String,
-}
-
-impl LifecycleRow {
-    /// `operation`, when it is a lifecycle's parent waiting to be resumed.
-    fn of(operation: &OperationDto) -> Option<Self> {
-        let kind = match operation.action {
-            OperationAction::Close => ItemDtoKind::Ticket,
-            OperationAction::Promote => ItemDtoKind::Document,
-            _ => return None,
-        };
-        if operation.next_action != Some(OperationNextAction::Resume) {
-            return None;
-        }
-        Some(Self {
-            kind,
-            item: operation.item_id.clone()?,
-            operation: operation.operation_id.clone()?,
-        })
-    }
-}
-
 impl Workspace {
-    /// The lifecycle row `operation` of `root`, drawn `index`th: Resume, or
-    /// that its lifecycle is still running; `None` for any other row.
-    pub(super) fn lifecycle_resume(
-        &mut self,
-        root: &RepoKey,
-        operation: &OperationDto,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let row = LifecycleRow::of(operation)?;
-        let key = LockKey::new(root, &row.item);
-        let mut held = self
-            .services()
-            .operations()
-            .read(cx)
-            .locks()
-            .operations(&key);
-        held.push(row.operation.clone());
-        if self
-            .services()
-            .worker()
-            .in_flight(|intent| lifecycle_of(intent, &key, &held))
-        {
-            return Some(
-                text(("pending-still-running", index), STILL_RUNNING)
-                    .text_xs()
-                    .into_any_element(),
-            );
-        }
-        let focus = self.control_focus_for(format!("resume:{root}:{}", row.operation), cx);
-        let origin = focus.clone();
-        let root = root.clone();
-        Some(button(
-            ("pending-resume", index),
-            RESUME,
-            Some(&focus),
-            cx,
-            cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.resume_lifecycle(&root, &row, origin.clone(), window, cx)
-            }),
-        ))
-    }
-
     /// Resume on the lifecycle row `row` of `root`: its operation resumed,
     /// and the lifecycle dialog on that resume.
-    fn resume_lifecycle(
+    pub(in crate::desktop::view) fn resume_lifecycle(
         &mut self,
         root: &RepoKey,
         row: &LifecycleRow,
@@ -172,3 +103,7 @@ impl Workspace {
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "resume_tests.rs"]
 pub(in crate::desktop::view::operations) mod tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "resume_activity_tests.rs"]
+mod activity_tests;

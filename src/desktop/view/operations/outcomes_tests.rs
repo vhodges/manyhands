@@ -28,15 +28,14 @@ use manyhands::{
     },
 };
 
-use super::{offer_label, offer_part};
+use super::offer_label;
 use crate::desktop::{
     model::{
-        operations::{
-            ANOTHER_SHARE_HOLDS, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, NEEDS_ATTENTION,
-            NEEDS_IDENTITY, NOWHERE_TO_SHARE, SHARED, STOPPED_BEFORE_SENDING, check_host_text,
-            main_branch_deleted,
+        activity::{
+            copy::DISMISS,
+            rows::{ActivityAction, RowKey},
         },
-        publication::{NOTHING_TO_SHARE, SyncOffer},
+        publication::{SyncOffer, SyncOutcome},
         stamp::SettingsPage,
     },
     services::{
@@ -45,13 +44,17 @@ use crate::desktop::{
         worker::WorkerEvent,
     },
     test_support::fixtures::{Fixture, item_id},
-    view::{harness::Shell, operations::request_id, settings::Shown},
+    view::{
+        activity_support::{act, offered as offer_on, request, row},
+        harness::Shell,
+        settings::Shown,
+    },
 };
 
-pub(super) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FS0";
+pub(in crate::desktop::view) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FS0";
 
 /// The line a settings page names the repository it works on with.
-pub(super) fn chosen_line(root: &str) -> String {
+pub(in crate::desktop::view) fn chosen_line(root: &str) -> String {
     format!("Repository: {root}")
 }
 
@@ -74,12 +77,12 @@ const OFFERS: [SyncOffer; 9] = [
 /// open window. With `committed`, the publication selection is committed,
 /// so a share is accepted. `false` dirties the configuration, so a share is
 /// refused before its acceptance.
-pub(super) fn open(committed: bool, cx: &mut TestAppContext) -> (Shell, PathBuf) {
+pub(in crate::desktop::view) fn open(committed: bool, cx: &mut TestAppContext) -> (Shell, PathBuf) {
     open_with(committed, false, cx).0
 }
 
 /// As `open`, with an empty repository `b` too when `other`.
-pub(super) fn open_with(
+pub(in crate::desktop::view) fn open_with(
     committed: bool,
     other: bool,
     cx: &mut TestAppContext,
@@ -105,7 +108,7 @@ pub(super) fn open_with(
     ((Shell::open(fixture, cx), root), other)
 }
 
-pub(super) fn item_sync(root: &Path) -> Intent {
+pub(in crate::desktop::view) fn item_sync(root: &Path) -> Intent {
     Intent::ItemSync {
         root: root.to_owned(),
         kind: AuthoringKind::Ticket,
@@ -113,7 +116,10 @@ pub(super) fn item_sync(root: &Path) -> Intent {
     }
 }
 
-pub(super) fn answer(code: ResultCode, effects: Effects) -> Envelope<MutationDataDto> {
+pub(in crate::desktop::view) fn answer(
+    code: ResultCode,
+    effects: Effects,
+) -> Envelope<MutationDataDto> {
     Envelope::classified_mutation(
         "item sync",
         Scope::default(),
@@ -133,7 +139,7 @@ fn synced(publication: PublicationEffect) -> Effects {
 
 /// Puts the request `n` of `intent` in the request model, finished with
 /// `envelope`, through `Operations::apply`.
-pub(super) fn finished(
+pub(in crate::desktop::view) fn finished(
     shell: &Shell,
     n: u64,
     intent: Intent,
@@ -161,7 +167,7 @@ pub(super) fn finished(
 }
 
 /// The item share `n`, finished with `code` and `effects`.
-pub(super) fn shared(
+pub(in crate::desktop::view) fn shared(
     shell: &Shell,
     root: &Path,
     n: u64,
@@ -171,42 +177,65 @@ pub(super) fn shared(
     finished(shell, n, item_sync(root), envelope, cx)
 }
 
-/// The labels of the offers the entry of `id` shows, in order of `OFFERS`.
-pub(super) fn offered(
+/// The labels of the share offers the row of `id` offers, enabled, in order
+/// of `OFFERS`: read from the row, not from what a column draws.
+pub(in crate::desktop::view) fn offered(
     shell: &Shell,
     id: DesktopRequestId,
     cx: &mut TestAppContext,
 ) -> Vec<&'static str> {
+    let at = RowKey::Request(id);
     let mut shown = Vec::new();
     for offer in OFFERS {
-        let part = request_id(id, offer_part(offer));
-        if shell.present(part.clone(), cx) {
-            assert_eq!(shell.label(part, cx).as_deref(), Some(offer_label(offer)));
+        if let Some(found) = offer_on(shell, &at, offer_label(offer), cx)
+            .filter(|found| found.enabled && found.action == ActivityAction::Offer(id, offer))
+        {
+            assert_eq!(found.label, offer_label(offer));
             shown.push(offer_label(offer));
         }
     }
     shown
 }
 
-pub(super) fn outcome(
+/// Where the finished share `id` stands, as the request model classified it
+/// when it finished.
+pub(in crate::desktop::view) fn outcome_of(
     shell: &Shell,
     id: DesktopRequestId,
     cx: &mut TestAppContext,
-) -> Option<String> {
-    shell.label(request_id(id, "outcome"), cx)
+) -> SyncOutcome {
+    shell
+        .operations(cx)
+        .read_with(cx, |operations, _| operations.share_result(id).cloned())
+        .expect("a finished share")
+        .outcome
 }
 
-pub(super) fn assert_row(
+/// The code the finished request `id` ended with.
+pub(in crate::desktop::view) fn code_of(
     shell: &Shell,
     id: DesktopRequestId,
-    words: Option<&str>,
+    cx: &mut TestAppContext,
+) -> ResultCode {
+    match request(shell, id, cx).state {
+        RequestState::Finished(_, code, ..) => code,
+        _ => panic!("not finished"),
+    }
+}
+
+pub(in crate::desktop::view) fn assert_row(
+    shell: &Shell,
+    id: DesktopRequestId,
+    outcome: SyncOutcome,
     offers: &[SyncOffer],
     cx: &mut TestAppContext,
 ) {
-    assert_eq!(outcome(shell, id, cx).as_deref(), words);
+    assert_eq!(outcome_of(shell, id, cx), outcome);
     let expected: Vec<&str> = offers.iter().map(|offer| offer_label(*offer)).collect();
     assert_eq!(offered(shell, id, cx), expected);
-    assert!(shell.present(request_id(id, "dismiss"), cx));
+    assert!(
+        offer_on(shell, &RowKey::Request(id), DISMISS, cx).is_some_and(|dismiss| dismiss.enabled)
+    );
 }
 
 // --- One test per `SyncOutcome` row ---
@@ -216,7 +245,7 @@ fn a_published_share_reads_shared(cx: &mut TestAppContext) {
     let (shell, root) = open(false, cx);
     let envelope = answer(ResultCode::Ok, synced(PublicationEffect::Published));
     let id = shared(&shell, &root, 1, envelope, cx);
-    assert_row(&shell, id, Some(SHARED), &[], cx);
+    assert_row(&shell, id, SyncOutcome::Published, &[], cx);
 }
 
 #[gpui_kit::test]
@@ -224,7 +253,7 @@ fn a_current_share_reads_the_same_as_the_shared_copy(cx: &mut TestAppContext) {
     let (shell, root) = open(false, cx);
     let envelope = answer(ResultCode::Ok, synced(PublicationEffect::Current));
     let id = shared(&shell, &root, 1, envelope, cx);
-    assert_row(&shell, id, Some(CURRENT), &[], cx);
+    assert_row(&shell, id, SyncOutcome::Current, &[], cx);
 }
 
 #[gpui_kit::test]
@@ -235,20 +264,25 @@ fn a_stopped_share_offers_share(cx: &mut TestAppContext) {
     assert_row(
         &shell,
         id,
-        Some(STOPPED_BEFORE_SENDING),
+        SyncOutcome::Stopped { completed: false },
         &[SyncOffer::Share],
         cx,
     );
+}
+
+/// What the conflict the canned answer names says to do next.
+fn conflict_next() -> ConflictNextDto {
+    ConflictNextDto {
+        operation_id: "01M4CC0VN1KTQFSVR99378TDHV".to_owned(),
+        next_action: ConflictNextAction::ALL[0],
+    }
 }
 
 fn conflict() -> Envelope<MutationDataDto> {
     answer(ResultCode::WorktreeConflicted, Effects::not_requested()).with_data(
         MutationDataDto::SynchronizationConflict(SynchronizationConflictMutationDto {
             r#type: SynchronizationConflictType::SynchronizationConflict,
-            conflict: ConflictNextDto {
-                operation_id: "01M4CC0VN1KTQFSVR99378TDHV".to_owned(),
-                next_action: ConflictNextAction::ALL[0],
-            },
+            conflict: conflict_next(),
         }),
     )
 }
@@ -263,8 +297,25 @@ fn a_conflicted_share_needs_attention_and_offers_nothing(cx: &mut TestAppContext
         [],
     )]);
     let id = shared(&shell, &root, 1, envelope, cx);
-    assert_row(&shell, id, Some(NEEDS_ATTENTION), &[], cx);
-    assert!(!shell.present(super::super::recovery_id(id, 0), cx));
+    assert_row(
+        &shell,
+        id,
+        SyncOutcome::Conflict {
+            next: conflict_next(),
+        },
+        &[],
+        cx,
+    );
+    let menu = row(&shell, &RowKey::Request(id), cx)
+        .expect("its row")
+        .row
+        .menu;
+    assert!(
+        !menu
+            .iter()
+            .any(|offer| matches!(offer.action, ActivityAction::Recovery(..))),
+        "no recovery action is offered"
+    );
 }
 
 #[gpui_kit::test]
@@ -281,7 +332,13 @@ fn a_locked_key_offers_unlock(cx: &mut TestAppContext) {
             answer(code, Effects::not_requested()),
             cx,
         );
-        assert_row(&shell, id, Some(KEY_LOCKED), &[SyncOffer::Unlock], cx);
+        assert_row(
+            &shell,
+            id,
+            SyncOutcome::NeedsUnlock,
+            &[SyncOffer::Unlock],
+            cx,
+        );
     }
 }
 
@@ -306,14 +363,17 @@ fn a_key_problem_offers_sharing_and_keys(cx: &mut TestAppContext) {
         assert_row(
             &shell,
             id,
-            Some(CHOOSE_A_KEY),
+            SyncOutcome::NeedsKey,
             &[SyncOffer::OpenSharingAndKeys],
             cx,
         );
     }
 }
 
-pub(super) fn host_problem(code: ResultCode, named: bool) -> Envelope<MutationDataDto> {
+pub(in crate::desktop::view) fn host_problem(
+    code: ResultCode,
+    named: bool,
+) -> Envelope<MutationDataDto> {
     let envelope = answer(code, Effects::not_requested());
     if !named {
         return envelope;
@@ -337,20 +397,15 @@ fn a_host_problem_names_the_host_and_offers_check_host(cx: &mut TestAppContext) 
         host_problem(ResultCode::HostApprovalRequired, true),
         cx,
     );
-    assert_eq!(
-        outcome(&shell, named, cx).as_deref(),
-        Some("Check git.example.com before sharing")
-    );
     assert_row(
         &shell,
         named,
-        Some(
-            check_host_text(Some(&SshAuthority {
+        SyncOutcome::NeedsHost {
+            authority: Some(SshAuthority {
                 host: "git.example.com".to_owned(),
                 port: 2222,
-            }))
-            .as_str(),
-        ),
+            }),
+        },
         &[SyncOffer::CheckHost],
         cx,
     );
@@ -364,7 +419,7 @@ fn a_host_problem_names_the_host_and_offers_check_host(cx: &mut TestAppContext) 
     assert_row(
         &shell,
         unnamed,
-        Some("Check the host before sharing"),
+        SyncOutcome::NeedsHost { authority: None },
         &[SyncOffer::CheckHost],
         cx,
     );
@@ -378,7 +433,7 @@ fn an_identity_problem_offers_set_identity_and_retry(cx: &mut TestAppContext) {
     assert_row(
         &shell,
         id,
-        Some(NEEDS_IDENTITY),
+        SyncOutcome::NeedsIdentity,
         &[SyncOffer::Retry, SyncOffer::SetIdentity],
         cx,
     );
@@ -397,7 +452,7 @@ fn a_busy_share_offers_show_it_and_retry(cx: &mut TestAppContext) {
     assert_row(
         &shell,
         id,
-        Some(ANOTHER_SHARE_HOLDS),
+        SyncOutcome::Busy,
         &[SyncOffer::Retry, SyncOffer::ShowHolder],
         cx,
     );
@@ -414,12 +469,17 @@ fn a_share_with_no_remote_offers_set_up_sharing(cx: &mut TestAppContext) {
     assert_row(
         &shell,
         id,
-        Some(NOWHERE_TO_SHARE),
+        SyncOutcome::NoRemote,
         &[SyncOffer::SetUpSharing],
         cx,
     );
 
-    shell.click(request_id(id, offer_part(SyncOffer::SetUpSharing)), cx);
+    act(
+        &shell,
+        &RowKey::Request(id),
+        offer_label(SyncOffer::SetUpSharing),
+        cx,
+    );
     shell.run(cx);
     let shown = shell
         .workspace
@@ -444,11 +504,19 @@ async fn a_deleted_branch_offers_give_up_and_no_share(cx: &mut TestAppContext) {
     assert_row(
         &shell,
         id,
-        Some(main_branch_deleted("main").as_str()),
+        SyncOutcome::BranchDeleted,
         &[SyncOffer::GiveUp],
         cx,
     );
-    assert!(!shell.present(request_id(id, offer_part(SyncOffer::Share)), cx));
+    assert!(
+        offer_on(
+            &shell,
+            &RowKey::Request(id),
+            offer_label(SyncOffer::Share),
+            cx
+        )
+        .is_none()
+    );
 }
 
 /// Share on an item that has nothing saved: the library answers
@@ -463,11 +531,8 @@ async fn an_item_with_nothing_saved_has_nothing_to_share(cx: &mut TestAppContext
         .read_with(cx, |workspace, _| workspace.services().worker().clone());
     let id = worker.submit(item_sync(&root), Lane::User, None, None);
     shell.until_ended(id, cx).await;
-    assert_eq!(
-        shell.label(request_id(id, "code"), cx).as_deref(),
-        Some("item_not_found")
-    );
-    assert_row(&shell, id, Some(NOTHING_TO_SHARE), &[], cx);
+    assert_eq!(code_of(&shell, id, cx), ResultCode::ItemNotFound);
+    assert_row(&shell, id, SyncOutcome::NothingToShare, &[], cx);
 
     let main = finished(
         &shell,
@@ -476,7 +541,13 @@ async fn an_item_with_nothing_saved_has_nothing_to_share(cx: &mut TestAppContext
         answer(ResultCode::ItemNotFound, Effects::not_requested()),
         cx,
     );
-    assert_eq!(outcome(&shell, main, cx), None);
+    assert_eq!(
+        outcome_of(&shell, main, cx),
+        SyncOutcome::Failed {
+            code: ResultCode::ItemNotFound,
+            retry: true,
+        }
+    );
 }
 
 /// Any other failure says nothing of its own: the entry shows the
@@ -487,18 +558,24 @@ fn another_failure_shows_its_message_and_offers_retry(cx: &mut TestAppContext) {
     let (shell, root) = open(false, cx);
     let envelope = answer(ResultCode::PushRejected, Effects::not_requested());
     let id = shared(&shell, &root, 1, envelope, cx);
-    assert_row(&shell, id, None, &[SyncOffer::Retry], cx);
-    assert_eq!(
-        shell.label(request_id(id, "code"), cx).as_deref(),
-        Some("push_rejected")
+    assert_row(
+        &shell,
+        id,
+        SyncOutcome::Failed {
+            code: ResultCode::PushRejected,
+            retry: true,
+        },
+        &[SyncOffer::Retry],
+        cx,
     );
+    assert_eq!(code_of(&shell, id, cx), ResultCode::PushRejected);
 }
 
 // --- Helpers shared with the route tests ---
 
 /// Runs Share main for real, held once its library call has returned,
 /// then answered `envelope`; gives its request once it has finished.
-pub(super) async fn real_share(
+pub(in crate::desktop::view) async fn real_share(
     shell: &Shell,
     root: &Path,
     envelope: Envelope<MutationDataDto>,
@@ -514,7 +591,11 @@ pub(super) async fn real_share(
     id
 }
 
-pub(super) fn submit_main(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> DesktopRequestId {
+pub(in crate::desktop::view) fn submit_main(
+    shell: &Shell,
+    root: &Path,
+    cx: &mut TestAppContext,
+) -> DesktopRequestId {
     let root = root.to_owned();
     shell.workspace.read_with(cx, |workspace, _| {
         workspace

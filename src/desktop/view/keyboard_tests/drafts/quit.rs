@@ -1,15 +1,18 @@
 //! Quitting with drafts, by keyboard alone: with a draft's write held,
 //! Quit now focused; and with a draft that cannot be saved, Cancel by
-//! Enter and by the first Tab stop, the focus on the draft's Retry
-//! wrapper (ringed, pressed by Enter or Space), and Quit anyway by Tab.
+//! Enter and by the first Tab stop, the focus on the list at the draft's
+//! Flush row (Retry pressed by Enter, or by Enter or Space on its button),
+//! and Quit anyway by Tab.
 
 use gpui_kit::{TestAppContext, test::TestWindowExt};
 
-use super::{Walk, kit_button};
+use super::Walk;
 use crate::desktop::{
+    model::activity::rows::RowKey,
     services::ReadKind,
     test_support::fixtures::Fixture,
     view::{
+        activity_support::{button_focus, highlighted, list_focused},
         harness::Shell,
         quit::{QUIT_NOW, QuitPhase, SAVING_DRAFTS},
         workspace::Region,
@@ -53,21 +56,15 @@ async fn quit_with_a_held_write_by_keyboard(cx: &mut TestAppContext) {
 }
 
 /// `secondary-q` when a draft cannot be saved: the dialog holds focus;
-/// Enter is Cancel, which focuses the draft's Retry wrapper, ringed and
-/// pressed by Enter or Space;
+/// Enter is Cancel, which highlights the draft's Flush row and focuses the
+/// list (C3); Enter on the list presses its Retry, and Tab reaches Retry's
+/// button, where Enter and Space each press it again;
 /// Quit anyway, reached by Tab and pressed by Enter, quits.
 #[gpui_kit::test]
 async fn a_draft_not_saved_on_quit_by_keyboard(cx: &mut TestAppContext) {
     use manyhands::drafts::{DraftErrorKind, FailureAction, FailurePoint};
 
-    use crate::desktop::view::operations::draft_flush_id;
-
     let shell = Shell::open(Fixture::new(), cx);
-    // 400 px wider (E-11): the draft-flush entry's text is a single unwrapped
-    // line (`operations.rs`, not editable in this Cycle), so in the Activity
-    // dock's width its Retry sits outside the clip. Wrapping the entry is for
-    // the Activity rebuild.
-    shell.resize_keeping_content(1840., 1400., cx);
     let id = shell.unsaved_draft(cx).await;
     // Clones share the failure point: the window's store fails too.
     let _failing = shell.fixture.draft_store().with_failure_point_for_testing(
@@ -81,33 +78,35 @@ async fn a_draft_not_saved_on_quit_by_keyboard(cx: &mut TestAppContext) {
             .workspace
             .read_with(cx, |workspace, _| workspace.quit_phase())
     };
+    let flush = RowKey::Flush(id);
+    // The list holds focus, on the draft's Flush row.
+    let on_the_row = |cx: &mut TestAppContext| {
+        walk.region(Region::Operations, cx);
+        assert!(list_focused(&walk.shell, cx), "the list holds focus");
+        assert_eq!(highlighted(&walk.shell, cx), Some(flush.clone()));
+    };
 
     walk.keys("secondary-q", cx);
     walk.dialog_open("drafts-not-saved-dialog", cx);
     walk.enter(cx);
     assert!(!walk.shell.present("drafts-not-saved-dialog", cx));
     assert_eq!(phase(cx), QuitPhase::Running);
-    walk.on(draft_flush_id(id, "retry"), Region::Operations, cx);
-    // The focus is Retry's wrapper: its ring shows, and Enter and Space
-    // each press Retry, which writes again.
-    let retry_ring = format!("{}-focus-ring", draft_flush_id(id, "retry"));
-    walk.ringed(retry_ring.clone(), cx);
+    on_the_row(cx);
+    // Enter on the list presses the row's button, Retry, which writes
+    // again; Tab reaches the button, where Enter and Space each press it.
+    let writes = |walk: &Walk| walk.shell.backend.reads_seen(ReadKind::DraftWrite);
+    let before = writes(&walk);
+    walk.shell.press("enter", cx);
+    walk.shell.run(cx);
+    assert!(writes(&walk) > before, "Enter on the list presses Retry");
+    walk.keys("tab", cx);
+    walk.on_handle(&button_focus(&walk.shell, cx), Region::Operations, cx);
     for key in ["enter", "space"] {
-        let writes = walk.shell.backend.reads_seen(ReadKind::DraftWrite);
+        let before = writes(&walk);
         walk.shell.press(key, cx);
         walk.shell.run(cx);
-        assert!(
-            walk.shell.backend.reads_seen(ReadKind::DraftWrite) > writes,
-            "{key} presses Retry"
-        );
-        walk.ringed(retry_ring.clone(), cx);
+        assert!(writes(&walk) > before, "{key} presses Retry");
     }
-    walk.ring_goes_for_the_button(
-        retry_ring.clone(),
-        kit_button(draft_flush_id(id, "retry")),
-        Region::Operations,
-        cx,
-    );
 
     // One Tab, Enter: the first Tab stop is Cancel; it does not quit.
     walk.keys("secondary-q", cx);
@@ -117,8 +116,7 @@ async fn a_draft_not_saved_on_quit_by_keyboard(cx: &mut TestAppContext) {
     walk.enter(cx);
     assert!(!walk.shell.present("drafts-not-saved-dialog", cx));
     assert_eq!(phase(cx), QuitPhase::Running);
-    walk.on(draft_flush_id(id, "retry"), Region::Operations, cx);
-    walk.ringed(retry_ring, cx);
+    on_the_row(cx);
 
     walk.keys("secondary-q", cx);
     walk.dialog_open("drafts-not-saved-dialog", cx);

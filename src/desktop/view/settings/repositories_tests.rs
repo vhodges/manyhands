@@ -24,15 +24,16 @@ use super::{
     ALREADY_ADDED, BROWSE_PROMPT, IDENTITY_REQUIRED, NEED_FOLDER, NOT_ADDED, RepositoriesPage,
 };
 use crate::desktop::{
+    model::activity::rows::{ActivityAction, RowKey},
     services::{
         JobKind,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
     },
     test_support::fixtures::{Fixture, enable_through, identity},
     view::{
+        activity_support::{act, label_of, offered, refresh, row},
         confirm::{CONFIRM, PREPARE_AGAIN},
         harness::{Shell, key},
-        operations::recovery_id,
     },
 };
 
@@ -564,17 +565,26 @@ async fn a_partial_create_is_completed_by_retry_under_the_same_request(cx: &mut 
             (request.request_id, retry)
         })
     };
-    assert!(shell.present(recovery_id(id, retry), cx));
-    assert_eq!(
-        shell.label(format!("request-{}-code", id.0), cx).as_deref(),
-        Some(code.as_str())
+    let entry = RowKey::Request(id);
+    refresh(&shell, cx);
+    let detail = row(&shell, &entry, cx)
+        .expect("the partial create's entry is listed")
+        .row
+        .detail;
+    assert!(
+        detail
+            .iter()
+            .any(|line| line.starts_with(&format!("{}: ", code.as_str()))),
+        "{detail:?}"
     );
+    let retry_label = label_of(&shell, &entry, &ActivityAction::Recovery(id, retry), cx);
+    assert!(offered(&shell, &entry, &retry_label, cx).is_some_and(|offer| offer.enabled));
     assert_eq!(background_refreshes(&shell, &root, cx), 0);
 
     shell
         .backend
         .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
-    shell.click(recovery_id(id, retry), cx);
+    act(&shell, &entry, &retry_label, cx);
     shell
         .until(cx, move |operations| {
             operations.request(id).is_some_and(|request| {

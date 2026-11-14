@@ -12,14 +12,17 @@ use manyhands::{
 
 use super::{
     Operations, RecoveryControl, ResumeOffer, SYNCHRONIZATION_UNAVAILABLE, StopOffer,
-    abandon_offered, recovery_control, recovery_label, resume_offer,
+    abandon_offered, recovery_control, recovery_label, resume_offer, stage_words,
 };
 use crate::desktop::{
-    model::list_state::LABEL_EMPTY,
+    model::{
+        list_state::LABEL_EMPTY,
+        publication::{SyncOffer, SyncOutcome},
+    },
     services::{
         ReadFailure, ReadResult,
         requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
-        worker::{NotSent, WorkerEvent},
+        worker::{NotSent, RecordState, WorkerEvent},
     },
 };
 
@@ -1105,4 +1108,155 @@ fn retirement_resume_needs_an_entry_or_only_a_hand_off() {
         resume_offer_among(&waiting, &other, &entered),
         ResumeOffer::NotOffered
     );
+}
+
+/// A share is classified once, when it finishes, from the attempt the drain
+/// noted before `apply` (F2, P9; R-8). A retry clears the result and the
+/// note; a `Finished` the drain never noted reads as an unknown record that
+/// was no Give up's, which offers no Give up.
+#[test]
+fn shares_are_classified_once() {
+    use SyncOffer as O;
+    /// One row: what the drain noted, whether the share is retried before
+    /// it finishes again, and the attempt and offers the result reads.
+    struct Row {
+        name: &'static str,
+        noted: Option<(RecordState, bool)>,
+        retried: bool,
+        record: RecordState,
+        after_give_up: bool,
+        offers: &'static [SyncOffer],
+    }
+    let rows = [
+        Row {
+            name: "noted accepted",
+            noted: Some((RecordState::Accepted, false)),
+            retried: false,
+            record: RecordState::Accepted,
+            after_give_up: false,
+            offers: &[O::Unlock, O::GiveUp],
+        },
+        Row {
+            name: "noted accepted after a give up",
+            noted: Some((RecordState::Accepted, true)),
+            retried: false,
+            record: RecordState::Accepted,
+            after_give_up: true,
+            offers: &[O::Unlock],
+        },
+        Row {
+            name: "a retry clears the result, and the note with it",
+            noted: Some((RecordState::Finished, false)),
+            retried: true,
+            record: RecordState::Unknown,
+            after_give_up: false,
+            offers: &[O::Unlock],
+        },
+        Row {
+            name: "fabricated, never noted",
+            noted: None,
+            retried: false,
+            record: RecordState::Unknown,
+            after_give_up: false,
+            offers: &[O::Unlock],
+        },
+    ];
+    for Row {
+        name: row,
+        noted,
+        retried,
+        record,
+        after_give_up,
+        offers,
+    } in rows
+    {
+        let mut operations = Operations::default();
+        let queued = DesktopRequest {
+            intent: Intent::RepoSync {
+                root: PathBuf::from("/fixture/a"),
+            },
+            ..request(1)
+        };
+        let id = queued.id;
+        let finish = |operations: &mut Operations| {
+            let envelope = Envelope::classified_mutation(
+                "repo sync",
+                Scope::default(),
+                false,
+                ResultCode::UnlockRequired,
+                Effects::not_requested(),
+                false,
+            );
+            operations.apply(WorkerEvent::Finished(id, Box::new(envelope)));
+        };
+        operations.apply(WorkerEvent::Queued(queued.clone()));
+        operations.apply(WorkerEvent::Started(id));
+        if retried {
+            if let Some((record, gave_up)) = noted {
+                operations.note_share_attempt(id, record, gave_up);
+            }
+            finish(&mut operations);
+            assert!(operations.share_result(id).is_some(), "{row}");
+            operations.apply(WorkerEvent::Queued(queued));
+            assert!(operations.share_result(id).is_none(), "{row}");
+            assert!(operations.share_results.is_empty(), "{row}");
+            assert!(operations.share_attempts.is_empty(), "{row}");
+            operations.apply(WorkerEvent::Started(id));
+        } else if let Some((record, gave_up)) = noted {
+            operations.note_share_attempt(id, record, gave_up);
+        }
+        finish(&mut operations);
+        let result = operations
+            .share_result(id)
+            .expect("a finished share")
+            .clone();
+        assert_eq!(result.outcome, SyncOutcome::NeedsUnlock, "{row}");
+        assert_eq!(result.attempt.record, record, "{row}");
+        assert_eq!(result.attempt.after_give_up, after_give_up, "{row}");
+        assert_eq!(result.offers(), offers, "{row}");
+        // The test-only form classifies the same answer from the same
+        // attempt, and under another record on purpose.
+        assert_eq!(
+            operations.classify_share(id, record, after_give_up),
+            Some(result),
+            "{row}"
+        );
+    }
+}
+
+/// What a running request says at each stage, whatever it is (F3, P10):
+/// the share column of the stage words, `Writing` reading "Saving…", and
+/// the primary branch named only where the stage is about it.
+#[test]
+fn stages_are_shown() {
+    let rows: [(ProgressStage, &str); 14] = [
+        (ProgressStage::Accepted, "Getting ready…"),
+        (ProgressStage::Observing, "Getting ready…"),
+        (ProgressStage::Writing, "Saving…"),
+        (ProgressStage::Connecting, "Connecting…"),
+        (ProgressStage::Fetching, "Bringing in changes…"),
+        (ProgressStage::UpdatingLocal, "Merging changes…"),
+        (ProgressStage::Pushing, "Sending your saved changes…"),
+        (ProgressStage::Verifying, "Checking it arrived…"),
+        (ProgressStage::Indexing, "Updating the list…"),
+        (ProgressStage::Recording, "Marking it closed…"),
+        (ProgressStage::Integrating, "Merging into {primary}…"),
+        (ProgressStage::Publishing, "Sharing {primary}…"),
+        (ProgressStage::CleaningUp, "Tidying up…"),
+        (ProgressStage::Stopping, "Stopping at a safe point…"),
+    ];
+    assert_eq!(
+        rows.map(|(stage, _)| stage),
+        ProgressStage::ALL,
+        "a row for every stage"
+    );
+    for (stage, words) in rows {
+        for (primary, name) in [(None, "main"), (Some("trunk"), "trunk")] {
+            assert_eq!(
+                stage_words(stage, primary),
+                words.replace("{primary}", name),
+                "{stage:?} {primary:?}"
+            );
+        }
+    }
 }

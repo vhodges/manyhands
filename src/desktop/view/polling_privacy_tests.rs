@@ -18,7 +18,8 @@
 //! - `PASSPHRASE`: typed into the passphrase dialog an Unlock… raises;
 //! - `PRIVATE`: the content of the private key file the unlock asks for;
 //! - `PASSWORD`: the password in the URL of a second repository's publication
-//!   remote (Cycle 03a Part I, U-3).
+//!   remote (Cycle 03a Part I, U-3), and `REMOTE_PATH` in that URL's path;
+//! - `FOLDER`: in the name of the folder a third repository's root lies in.
 //!
 //! The drive: an automatic poll of a repository that reports a closed ticket
 //! (retired, its in-flight record read while the library holds it), two
@@ -66,7 +67,7 @@ use std::{
     time::Duration,
 };
 
-use gpui_kit::{ElementId, TestAppContext, component::WindowExt, test::TestWindowExt};
+use gpui_kit::{ElementId, TestAppContext, component::WindowExt};
 use manyhands::{
     drafts::{CommentTarget, DraftFields, DraftTarget, ItemKind},
     repository::{
@@ -77,13 +78,21 @@ use manyhands::{
     results::{Envelope, ResultCode as Code},
 };
 
+mod layers;
 mod repositories;
 
-use super::{harness::Shell, polling_window::PollingWindow, repositories::tests::support::not_due};
+use super::{
+    activity_support::{index_of, offered, refresh, row, rows, to_row},
+    harness::Shell,
+    polling_window::PollingWindow,
+    privacy_layers_tests::{in_row_menu, popover_texts, row_menu_texts},
+    repositories::tests::support::not_due,
+};
 use crate::desktop::{
     model::{
+        activity::rows::RowKey,
         navigation::OpenTarget,
-        polling::{Clock as _, TestClock, entry::short_code, retire_loop::Held},
+        polling::{Clock as _, TestClock, retire_loop::Held},
     },
     services::{
         JobKind, ReadResult,
@@ -108,8 +117,24 @@ const PATH: &str = "sentinel-d6-path-3c91";
 const PASSPHRASE: &str = "SENTINEL-D6-PASSPHRASE-e27d";
 const PRIVATE: &str = "SENTINEL-D6-PRIVATE-4f08";
 const PASSWORD: &str = "sentinel-password-03a";
-const SENTINELS: [&str; 9] = [
-    TITLE, BODY, COMMENT, DRAFT, EDIT, PATH, PASSPHRASE, PRIVATE, PASSWORD,
+/// In the name of the folder a repository's root lies in (P28): a row names
+/// the repository by its folder's own name, never its place.
+const FOLDER: &str = "sentinel-d6-folder-61d2";
+/// In the path of a publication remote's URL (P28; the host is allowed, and
+/// the user-info is `PASSWORD`'s).
+const REMOTE_PATH: &str = "sentinel-d6-remote-path-8e5c";
+const SENTINELS: [&str; 11] = [
+    TITLE,
+    BODY,
+    COMMENT,
+    DRAFT,
+    EDIT,
+    PATH,
+    PASSPHRASE,
+    PRIVATE,
+    PASSWORD,
+    FOLDER,
+    REMOTE_PATH,
 ];
 
 /// A closed ticket that is free, one being edited, one with kept drafts, a
@@ -152,15 +177,19 @@ const ALLOWED: [&str; 11] = [
 ];
 
 /// Where a text is read, by the id of the element that draws it, for the
-/// surfaces the test asserts it read: `(prefix, contains, surface)`.
-const SURFACES: [(&str, &str, &str); 17] = [
-    ("attempt-", "-offer-", "retire offer"),
-    ("attempt-", "-retire-", "retire action"),
-    ("attempt-", "-retirement-", "retirement line"),
-    ("attempt-", "-line-", "attempt line"),
-    ("attempt-", "-repository", "attempt entry"),
-    ("attention", "", "attention"),
-    ("pending-", "", "pending row"),
+/// surfaces the test asserts it read: `(prefix, contains, surface)`. The
+/// operation area's rows are Activity's: a row's message, its tag and its
+/// button (Wave 04 Cycle 03b, Task 9). The Needs attention popover's rows and
+/// buttons are the same rows, and the rest of it (its header, list and link)
+/// is `popover` (Task 12); the row menu is not here, since its items have no
+/// id of their own (`surface`).
+const SURFACES: [(&str, &str, &str); 15] = [
+    ("activity-row", "", "activity row"),
+    ("activity-tag", "", "activity tag"),
+    ("activity-button", "", "activity button"),
+    ("needs-attention-row", "", "popover row"),
+    ("needs-attention-button", "", "popover button"),
+    ("needs-attention-", "", "popover"),
     ("retire-unkept", "", "unkept ask"),
     ("retire-kept", "", "kept ask"),
     ("passphrase-", "", "passphrase dialog"),
@@ -168,7 +197,6 @@ const SURFACES: [(&str, &str, &str); 17] = [
     ("quit-", "", "quit"),
     ("edits-not-kept", "", "quit ask"),
     ("confirm-", "", "confirmation"),
-    ("request-", "", "operation entry"),
     ("repo-", "", "repository row"),
     ("footer-", "", "footer"),
 ];
@@ -188,8 +216,13 @@ fn inside(path: &[ElementId], places: &[&'static str]) -> Option<&'static str> {
         .find_map(|at| places.iter().copied().find(|place| *place == at))
 }
 
-/// The surface the element at `path` belongs to, by its own id.
-fn surface(path: &[ElementId]) -> &'static str {
+/// The surface the element at `path` belongs to, by its own id, except an
+/// item of the row's menu, which every Kit menu shares an id with
+/// (`in_row_menu`: only while the row menu is the open menu).
+fn surface(path: &[ElementId], row_menu: bool) -> &'static str {
+    if in_row_menu(path, row_menu) {
+        return "row menu";
+    }
     let last = path.last().and_then(name).unwrap_or("");
     SURFACES
         .iter()
@@ -213,6 +246,34 @@ impl Seen {
     fn add(&mut self, surface: &'static str, texts: impl IntoIterator<Item = String>) {
         self.read
             .extend(texts.into_iter().map(|text| (surface, text)));
+    }
+
+    /// A text read on `surface`. In Activity's rows, the popover's rows and
+    /// the row menu an item's title, and only its title, may show (decisions
+    /// 12 and 21): it is noted as seen there, by the surface, and taken out,
+    /// so every other sentinel is still swept for. The drawn rows and the
+    /// model's are noted apart, so that one does not stand for the other.
+    fn activity_text(&mut self, surface: &'static str, text: String) {
+        let at = match surface {
+            "activity row" => Some("activity-row"),
+            "model row" => Some("model-row"),
+            "popover row" => Some("popover-row"),
+            "popover tooltip" | "popover description" => Some("popover-tooltip"),
+            "row menu" => Some("row-menu"),
+            "menu item" => Some("menu-item"),
+            _ => None,
+        };
+        match at {
+            Some(at) => {
+                if text.contains(TITLE) {
+                    self.allowed.insert((at, TITLE));
+                }
+                self.read.insert((surface, text.replace(TITLE, "{title}")));
+            }
+            None => {
+                self.read.insert((surface, text));
+            }
+        }
     }
 
     /// The window's surfaces as they stand now, read back.
@@ -239,6 +300,39 @@ impl Seen {
         });
         self.add("operation entry", entries);
         self.add("answer", answers);
+        // Every row the log holds, read from the model, so each tooltip and
+        // menu line is swept without hovering: its title, description,
+        // detail lines, tag and every offer's label. An item is named by its
+        // title as read (decisions 12 and 21): TITLE may show there, and
+        // nothing else of the sentinels may.
+        let rows: Vec<String> = shell.workspace.read_with(cx, |workspace, _| {
+            workspace
+                .activity()
+                .rows()
+                .iter()
+                .flat_map(|row| {
+                    let shown = &row.row;
+                    std::iter::once(shown.title.clone())
+                        .chain(shown.description.clone())
+                        .chain(shown.detail.iter().cloned())
+                        .chain(shown.repo.clone())
+                        .chain(shown.menu.iter().map(|offer| offer.label.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        });
+        for text in rows {
+            self.activity_text("model row", text);
+        }
+        // What the popover and the row menu build that no snapshot reads,
+        // while they are open: tooltips, descriptions, fixed copy, the
+        // menu's items from the row it was built from.
+        for (surface, text) in popover_texts(shell, cx) {
+            self.activity_text(surface, text);
+        }
+        for text in row_menu_texts(shell, cx) {
+            self.activity_text("menu item", text);
+        }
         // The schedule's and the record's own state, as `Debug` renders it.
         let (schedule, store) = window.services.scheduler().read_with(cx, |scheduler, _| {
             (
@@ -259,13 +353,14 @@ impl Seen {
         }
         // What is drawn.
         let drawn: Vec<(Option<&'static str>, &'static str, String)> =
-            shell.frame(cx, |window, _| {
+            shell.frame(cx, |window, cx| {
+                let row_menu = shell.workspace.read(cx).activity_menu_open();
                 gpui_kit::base::test_support::snapshots(window)
                     .iter()
                     .flat_map(|snapshot| {
                         let path = snapshot.path();
                         let at = inside(path, &ALLOWED);
-                        let surface = surface(path);
+                        let surface = surface(path, row_menu);
                         [snapshot.label(), snapshot.value()]
                             .into_iter()
                             .flatten()
@@ -282,9 +377,7 @@ impl Seen {
                         .filter(|sentinel| text.contains(sentinel))
                         .map(|sentinel| (at, sentinel)),
                 ),
-                None => {
-                    self.read.insert((surface, text));
-                }
+                None => self.activity_text(surface, text),
             }
         }
         self.repositories.extend(repositories::read(window, cx));
@@ -366,27 +459,43 @@ fn report(clock: &TestClock, items: &[(&str, bool)]) -> Library {
     }
 }
 
-/// The element of Retire… of `item` in repository `root`'s entry.
-fn retire_button(root: &str, item: &str) -> String {
-    format!("attempt-{root}-retire-{}", short_code(&item_id(item)))
+/// The row of Retire… of `item` in repository `root`.
+fn retire_key(root: &str, item: &str) -> RowKey {
+    RowKey::RetireOffer {
+        root: root.to_owned(),
+        item: item_id(item),
+    }
 }
 
-/// Retire… of `item`, reached by Tab (which scrolls it into view in
-/// Activity) and clicked where it is.
-fn press_retire(window: &PollingWindow, root: &str, item: &str, cx: &mut TestAppContext) {
-    let button = retire_button(root, item);
-    let shown = window.shell.frame(cx, |win, _| {
-        win.try_find(button.clone())
-            .is_some_and(|element| element.visible())
-    });
-    if !shown {
-        window.shell.keys("secondary-4", cx);
-        assert!(
-            window.shell.tab_reaches(button.clone(), 160, cx),
-            "{button}"
-        );
+/// The pending retirement's row.
+fn pending_row_key(root: &str) -> RowKey {
+    RowKey::Pending {
+        root: root.to_owned(),
+        operation: OPERATION.to_owned(),
     }
-    window.shell.click(button, cx);
+}
+
+/// A click on the drawn button of the row `key`, reached by the arrows
+/// first, which scroll it into view.
+fn press_button(window: &PollingWindow, key: &RowKey, cx: &mut TestAppContext) {
+    to_row(&window.shell, key, cx);
+    let at = index_of(&window.shell, key, cx);
+    window.shell.click(("activity-button", at), cx);
+}
+
+/// Retire… of `item`, clicked where it is drawn.
+fn press_retire(window: &PollingWindow, root: &str, item: &str, cx: &mut TestAppContext) {
+    press_button(window, &retire_key(root, item), cx);
+}
+
+/// The one hold the log lists: the locked key's.
+fn hold_key_of(window: &PollingWindow, cx: &mut TestAppContext) -> RowKey {
+    refresh(&window.shell, cx);
+    rows(&window.shell, cx)
+        .into_iter()
+        .map(|row| row.row.key)
+        .find(|key| matches!(key, RowKey::Hold(_)))
+        .expect("a hold row")
 }
 
 fn target(root: &str, id: &str, comment: Option<&str>, kind: ItemKind) -> DraftTarget {
@@ -462,8 +571,11 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     fixture.set_remote_url(
         &b,
         "origin",
-        &format!("ssh://git:{PASSWORD}@example.invalid/r.git"),
+        &format!("ssh://git:{PASSWORD}@example.invalid/{REMOTE_PATH}/r.git"),
     );
+    // A third repository whose root lies in a folder named by a sentinel.
+    fs::create_dir(fixture.parent().join(FOLDER)).unwrap();
+    let c = fixture.create_repository(&format!("{FOLDER}/c"));
     let root = crate::desktop::view::harness::key(&a);
 
     // Kept drafts: a ticket's and a comment's on it, a comment being
@@ -524,6 +636,14 @@ async fn polling_privacy(cx: &mut TestAppContext) {
         "{PASSWORD} is in the second repository's remote"
     );
     assert!(
+        holds(REMOTE_PATH, &files_under(&b)),
+        "{REMOTE_PATH} is in the second repository's remote's path"
+    );
+    assert!(
+        c.to_string_lossy().contains(FOLDER),
+        "{FOLDER} is in the third repository's root"
+    );
+    assert!(
         a.join(format!("docs/{PATH}.md")).exists() || holds(PATH, &on_disk),
         "{PATH} is the document's path"
     );
@@ -549,7 +669,7 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     // listing has landed and the edited tab is open).
     let (window, (held, poll)) = PollingWindow::over(
         fixture,
-        &[a.clone(), b.clone()],
+        &[a.clone(), b.clone(), c.clone()],
         |backend, clock| {
             // Every poll the drive does not script (the second repository's,
             // if it is polled at all) gets a "not due" and never the network.
@@ -671,9 +791,10 @@ async fn polling_privacy(cx: &mut TestAppContext) {
             cx,
             "the loop to stop at the pending retirement",
             |shell, cx| {
-                asked(&window, cx).len() == 3
-                    && ended(shell, cx)
-                    && shell.present(retire_button(&root, UNREACHED), cx)
+                asked(&window, cx).len() == 3 && ended(shell, cx) && {
+                    refresh(shell, cx);
+                    row(shell, &retire_key(&root, UNREACHED), cx).is_some()
+                }
             },
         )
         .await;
@@ -684,7 +805,15 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     window.shell.run(cx);
     window.shell.frame(cx, |_, _| ());
     seen.sweep(&window, cx);
-    assert!(window.shell.present(("pending-resume", 0usize), cx));
+    refresh(&window.shell, cx);
+    assert!(
+        offered(&window.shell, &pending_row_key(&root), "Resume", cx)
+            .is_some_and(|offer| offer.enabled),
+        "the pending row offers Resume"
+    );
+    // The popover lists the pending row (it needs the person: Resume), and
+    // the menu of a row that names an item opens below it: both swept open.
+    layers::visit(&window, &mut seen, Some(&retire_key(&root, UNREACHED)), cx);
 
     // Text is typed into the edited ticket after its draft folder became
     // read-only: no draft can keep it. Retire… of that ticket asks, with a
@@ -791,6 +920,10 @@ async fn polling_privacy(cx: &mut TestAppContext) {
         })
         .await;
     seen.sweep(&window, cx);
+    // The same for the second and third repositories, whose failed checks
+    // are rows that need attention and name them (P28).
+    layers::check_the_others(&window, &[&b, &c], cx).await;
+    seen.sweep(&window, cx);
 
     // Retire… of the document, whose kept draft is asked about in the
     // document's words; the library refuses `unlock_required`, which is
@@ -813,11 +946,18 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     window
         .shell
         .until_drawn(cx, "the attention entry", |shell, cx| {
-            shell.present(("attention-action", 0usize), cx)
+            refresh(shell, cx);
+            rows(shell, cx)
+                .iter()
+                .any(|row| matches!(row.row.key, RowKey::Hold(_)))
         })
         .await;
     seen.sweep(&window, cx);
-    assert!(seen.surfaces("attention") > 0);
+    assert!(seen.read_at("activity button", "Unlock\u{2026}"));
+    // The popover now lists the hold and the failed checks of the three
+    // repositories, with the hold's Unlock….
+    layers::visit(&window, &mut seen, None, cx);
+    assert!(seen.read_at("popover button", "Unlock\u{2026}"));
 
     // The Settings page, with the repository's status line (it is
     // paused and needs its key unlocked) and the controls.
@@ -854,7 +994,7 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     // (What the retirements since read of the repository's rows is as the
     // library would list them: the one pending row.)
     seed_pending(&window, &root, cx);
-    window.shell.click(("pending-resume", 0usize), cx);
+    press_button(&window, &pending_row_key(&root), cx);
     window
         .shell
         .until_drawn(cx, "the resend", |shell, cx| {
@@ -869,7 +1009,8 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     inner_answer(&window, answer(State::Retired, Code::Ok, Removal::Observed));
     let provider = window.services.worker().provider();
     window.backend.ask_in_check_now(provider, unlock);
-    window.shell.click(("attention-action", 0usize), cx);
+    let hold = hold_key_of(&window, cx);
+    press_button(&window, &hold, cx);
     window
         .shell
         .until_drawn(cx, "the passphrase dialog", |shell, cx| {
@@ -945,12 +1086,18 @@ async fn polling_privacy(cx: &mut TestAppContext) {
 
     // Every surface of the drive was read, and a sentinel reached none.
     for surface in [
-        "retire offer",
-        "retire action",
-        "retirement line",
-        "attempt entry",
-        "attention",
-        "pending row",
+        "activity row",
+        "activity tag",
+        "activity button",
+        "model row",
+        "popover row",
+        "popover button",
+        "popover",
+        "popover tooltip",
+        "popover description",
+        "popover copy",
+        "row menu",
+        "menu item",
         "unkept ask",
         "kept ask",
         "passphrase dialog",
@@ -973,28 +1120,34 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     seen.holds_none();
     repositories::was_read(&seen.repositories);
     repositories::password_is_not_eligible(&window, &b, cx);
+    // The third repository is in the log's rows by its folder's name, `c`,
+    // and the sentinel in the folder it lies in is in none (P28): the scan
+    // is shown to read rows that name it.
+    assert!(
+        seen.read.contains(&("model row", "c".to_owned())),
+        "a row's tag names the third repository"
+    );
+    layers::controls(&seen, &window, cx);
     for (surface, words) in [
-        ("retire offer", "is closed"),
-        ("retire offer", "was promoted"),
-        ("retirement line", "Retired the copy of"),
-        (
-            "retirement line",
-            "didn't finish. The lists are still catching up.",
-        ),
-        ("attention", "Unlock\u{2026}"),
-        ("attention", "Holding back a"),
+        ("model row", "is closed"),
+        ("model row", "is approved"),
+        ("model row", "Retired the copy of"),
+        ("model row", "didn't finish"),
+        ("model row", "The lists are still catching up."),
+        ("activity button", "Unlock\u{2026}"),
+        ("model row", "Your key is locked"),
         ("kept ask", "kept drafts"),
         ("kept ask", "document's drafts"),
         ("unkept ask", "not kept as a draft"),
-        ("pending row", "Resume"),
-        ("pending row", "Abandon"),
+        ("activity button", "Resume"),
+        ("model row", "Abandon"),
         ("passphrase dialog", "Passphrase for primary"),
         ("quit", "Finishing"),
         ("quit", "Still stopping"),
         ("quit ask", "Quit anyway"),
         ("settings row", "Paused"),
         ("settings row", "Needs unlocking"),
-        ("operation entry", "worktree_not_clean"),
+        ("model row", "worktree_not_clean"),
     ] {
         if rooted && matches!(surface, "unkept ask" | "quit ask") {
             continue;

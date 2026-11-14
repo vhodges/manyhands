@@ -8,8 +8,8 @@
 
 use gpui_kit::{ElementId, TestAppContext, test::TestWindowExt};
 use manyhands::{
-    drafts::{DraftErrorKind, Held},
-    repository::ItemDtoKind,
+    drafts::{DraftError, DraftErrorKind, Held},
+    repository::{AuthoringKind, ItemDtoKind},
 };
 
 use super::{
@@ -18,15 +18,24 @@ use super::{
 };
 use crate::desktop::{
     model::{
+        activity::{
+            copy::{REVIEW, flush_title, item_name, recovered_title},
+            rows::{ActivityAction, Kind, RowKey},
+        },
         drafts::IDLE,
-        operations::{draft_flush_failed, recovered_drafts},
+        list_view::RETRY,
+        operations::recovered_drafts,
         tabs::TabKey,
     },
     test_support::{
         drafts::{held, store_draft},
         fixtures::Fixture,
     },
-    view::{harness::Shell, operations::draft_flush_id},
+    view::{
+        activity_support::{act, offered, refresh, row, rows},
+        harness::Shell,
+        operations::DISMISS,
+    },
 };
 
 /// The launch's listing found two drafts: the operation area says so,
@@ -43,11 +52,14 @@ fn the_launch_offers_its_recovered_drafts_and_restores_nothing(cx: &mut TestAppC
     let shell = Shell::open(fixture, cx);
 
     assert_eq!(recovered_drafts(2), "Recovered drafts: 2");
+    let entry = RowKey::Recovered;
+    refresh(&shell, cx);
+    let recovered = row(&shell, &entry, cx).expect("the launch's entry is listed");
+    assert_eq!(recovered.row.title, recovered_title(2));
     assert_eq!(
-        shell.label("recovered-drafts", cx),
-        Some(recovered_drafts(2))
+        offered(&shell, &entry, REVIEW, cx).map(|offer| (offer.action, offer.enabled)),
+        Some((ActivityAction::ReviewDrafts, true))
     );
-    assert!(shell.present("recovered-drafts-review", cx));
     let tabs = shell
         .workspace
         .read_with(cx, |workspace, _| workspace.tab_keys());
@@ -61,17 +73,19 @@ fn the_launch_offers_its_recovered_drafts_and_restores_nothing(cx: &mut TestAppC
         ));
     }
 
-    shell.click("recovered-drafts-review", cx);
+    act(&shell, &entry, REVIEW, cx);
     assert!(drafts_shown(&shell, cx));
     assert!(shell.present(row_id(first, "row"), cx));
 
-    shell.click("recovered-drafts-dismiss", cx);
-    assert!(!shell.present("recovered-drafts", cx));
+    act(&shell, &entry, DISMISS, cx);
+    refresh(&shell, cx);
+    assert!(row(&shell, &entry, cx).is_none());
     drafts.update(cx, |registry, cx| {
         registry.reload_listing(cx);
     });
     shell.run(cx);
-    assert!(!shell.present("recovered-drafts", cx), "for the session");
+    refresh(&shell, cx);
+    assert!(row(&shell, &entry, cx).is_none(), "for the session");
 }
 
 /// The tab banner's Review in Drafts opens the page with that draft's
@@ -189,12 +203,45 @@ async fn an_operation_entry_names_the_item_never_the_draft(cx: &mut TestAppConte
     let _read_only = ReadOnly::new(shell.fixture.data_dir().join("drafts"));
     cx.executor().advance_clock(IDLE);
     shell.run(cx);
+    // The title as read when the draft began, or the item's short code when
+    // that read failed: the entry names the item, never the draft.
     let entries = [
-        (restored, draft_flush_failed("One", DraftErrorKind::Access)),
-        (unread, draft_flush_failed(TWO, DraftErrorKind::Access)),
+        (
+            restored,
+            item_name(Some("One"), AuthoringKind::Ticket, &item_id(ONE)),
+        ),
+        (
+            unread,
+            item_name(None, AuthoringKind::Ticket, &item_id(TWO)),
+        ),
     ];
-    for (id, expected) in entries {
-        assert_eq!(shell.label(draft_flush_id(id, "entry"), cx), Some(expected));
+    refresh(&shell, cx);
+    for (id, name) in entries {
+        let entry = row(&shell, &RowKey::Flush(id), cx).expect("the failing session's entry");
+        assert_eq!(entry.row.kind, Kind::Failure);
+        assert_eq!(entry.row.title, flush_title(&name));
+        assert_eq!(
+            entry.row.description,
+            Some(
+                DraftError {
+                    kind: DraftErrorKind::Access
+                }
+                .to_string()
+            )
+        );
+        assert!(offered(&shell, &RowKey::Flush(id), RETRY, cx).is_some_and(|offer| offer.enabled));
+    }
+    for entry in rows(&shell, cx) {
+        let texts = [
+            Some(entry.row.title.as_str()),
+            entry.row.description.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .chain(entry.row.detail.iter().map(String::as_str));
+        for text in texts {
+            assert!(!text.contains(SENTINEL), "the draft's text is in {text:?}");
+        }
     }
     // The draft's own text shows only in its own section of its tab.
     let section = ElementId::from("operation-area");
@@ -208,7 +255,7 @@ async fn an_operation_entry_names_the_item_never_the_draft(cx: &mut TestAppConte
     assert!(
         labels
             .iter()
-            .any(|label| label.starts_with("Recovery copy of"))
+            .any(|label| label.starts_with("The recovery copy of"))
     );
     assert!(!labels.iter().any(|label| label.contains(SENTINEL)));
 }
