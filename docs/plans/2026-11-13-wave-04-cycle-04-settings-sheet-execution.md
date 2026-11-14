@@ -22,7 +22,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | Task | Status | Commit | Pushed |
 | --- | --- | --- | --- |
 | 0 | done | merge `82df6942`; design citations `9f89a3bb`; ledger `003eb518`; ticket comment `e54fe9b5` | yes |
-| 1 | done, review approved first time (Minors parked) | code `0d5501e7` (base `e54fe9b5`); ledger commit follows | with the ledger commit |
+| 1 | done, review approved first time (Minors parked) | code `0d5501e7` (base `e54fe9b5`); ledger `023ebf47` | yes |
+| 2 | done, design checkpoint passed, review approved after fix round 1 | code `5cddad28` (base `023ebf47`), fix `6894d70d`; ledger commit follows | with the ledger commit |
 
 ## Branches published
 
@@ -819,3 +820,224 @@ unchanged, except `settings/mod_tests.rs`, which went from 5 to 3. The
 binary has 1920 tests: 1914 before, less 2, plus 8.
 
 - **E-21, E-22 and E-23** are untouched (Tasks 6, 7 and 4).
+
+## Task 2: where focus goes (A2's origin, steps 2-3 and 5, A3, A4, A5; design checkpoint on A6)
+
+Implementer: one fresh Opus agent, two phases. Phase A wrote A6's rows as
+failing tests before any focus code (the design checkpoint). Phase B built the
+mechanism. Base `023ebf47`, code `5cddad28`, fix round 1 `6894d70d`. Reviewer:
+one fresh Opus agent, spec ❌ with one Important finding; scoped re-review
+(Sonnet) of the fix: addressed, no new Critical or Important breakage.
+Boundary diff prints nothing. No existing test was edited (no E-26).
+
+### The design checkpoint (owner's gate), decision
+
+All 19 A6 rows were written as tests first and read after a draw. Nothing was
+foreseen unmeetable, and no row was edited or weakened. **One part could not
+be expressed against today's code: F2's "a field not drawn".** No route that
+exists now names a field the page does not draw in the next frame; A6's Test
+column gives F2 to P4 (Task 6, with R-22's key list while the keys are still
+being read, the plan's Review Focus for Task 6). It is a documented deferral,
+not a stop: **Task 6's P4 must carry an F2 "field not drawn" row**, and the
+review-ready summary tells the owner so. Two sub-rows cannot fail after a draw
+by their nature (the P5 save-banner F9 row; the P22 Hosts F17 after-draw
+read), and carry comments saying so. A discriminating F9 row was added (the
+tickets list gone after a removal in Settings) and stays.
+
+### Rulings (Task 2)
+
+Ruling 20: R-7 ("the close is detected in `sync_sheet`, not by `on_close`") is
+a mechanism sketch and loses to A3 rev 4 and A7.10 ("must survive"): the
+close runs `settings_closed` from the sheet's `on_close` at once (Escape, the
+close button, the scrim), and `sync_sheet` is the backstop for a direct
+`window.close_sheet` — cost if wrong: none; the owner guard keeps the double run
+idempotent (reviewer verified).
+
+Ruling 21 (accepted at the checkpoint): `settings_return` is cleared on the
+second render after it is armed, not "by the render after the close" (a render
+runs before `focus_lost` in a draw, `window.rs:3304` against `:3363`). Nothing
+uses `on_next_frame` (A7.9).
+
+Ruling 22: **Step 5's "focus found outside the sheet goes to the page's entry"
+is a post-frame check with positive containment**, not a render-time check and
+not the focus-out listener Ruling 21's plan named. GPUI empties the focus-event
+paths while the window is inactive (`gpui-pre window.rs:3354-3393`), so a
+listener never fires in the test windows and would miss a landing while the
+app is in the background. The check is deferred from render with `cx.defer_in`
+(`render.rs:174-182`, the dock clamp's pattern), so it reads the frame just
+drawn. It moves focus only when it positively finds it behind the sheet (in a
+region outside the layer, a toolbar button or a footer control), never because
+focus is merely "not in the sheet" (A7.1); Root's overlay menu and Kit popups
+are in none of those (A7.2, A7.3) — cost if wrong: a landing onto a control that
+is in no region would stay behind the sheet.
+
+Ruling 23: a menu that was already chosen returns focus to its context, not to
+its pointer `restore` (the repository menu's Settings… by pointer would
+otherwise return to wherever focus was before the right-click). A refinement
+of A2 case 3, consistent with F8; the reviewer agreed.
+
+Ruling 24: Drafts' `apply_refocus` drops its refocus while any sheet is
+active, as the Workspace's `landed_refocus` does (fix round 1). The details
+sheet is covered by the same test.
+
+### F1 to F19, as the implementer wrote them (phase A)
+
+## 3. The F1 to F19 table
+
+| F | Row(s), test | Verdict | Read after a draw | Now, and why |
+| --- | --- | --- | --- | --- |
+| F1 | Ruling 3 test: `Identity(root)` → `identity-name`, `CheckHost(root, a)` → `hosts-check`, `RetryGeneration(id)` → `key-generate-passphrase` | EXPRESSED | `holds(target)` after two draws, route raised through `show_settings` | Passes: no render-time rule yet. This guards A7 item 1 for Step 5. Task 6 folds it into P4. |
+| F2 | Ruling 3 test: `Page(Repositories)`, `Page(Polling)`, `Manage(root)` → `("settings-page", ix)` | EXPRESSED for "a route naming no field". **CANNOT BE EXPRESSED now** for "a field not drawn". | as F1 | Passes. No route that exists now names a field the page does not draw in the next frame: the identity form draws whenever a root is managed (`D/view/settings/repositories/manage.rs:559-590`), Check host always draws once a root is chosen (`hosts.rs:729-737`), and the Generate form always draws today. P4 (Task 6) owns it, with R-22's key list while it is still being read. Rows are limited to routes whose target Task 6 does not change. |
+| F3 | P3 `settings_replaces_the_details_sheet_and_keeps_its_edits` (Task 1) | EXPRESSED (Task 1) | `holds` after two draws | Passes. Rerun after the mechanism. |
+| F4 | P5: footer item; ticket list row; item header's Share… (Tab, Enter; W-11); lifecycle dialog's Open Sharing & keys (its origin, Activity's list); W-31 inside the sheet (the first origin) | EXPRESSED | `holds_handle` / `holds` after Escape and two draws | All pass: the origin is the focused handle, and the Kit gives it back. |
+| F5 | P5: by its button (focused, Enter); by its row menu; by Enter; the row dismissed while open (cursor rule) | EXPRESSED | list `holds_handle` and `highlighted` after two draws | **By button: RED.** Focus goes back to `("activity-button", 1)`, because today's origin is the focused handle, the button (`activity_panel.rs:126-143`), and nothing sets `settings_origin` (R-43). The other three pass. |
+| F6 | P5: a popover row, the item still shown | EXPRESSED | `holds_handle(item)` | Passes (`press_attention` focuses the item first, `needs_attention.rs:278-281`). |
+| F7 | P5: a popover row, the row dismissed while open so the item hides | EXPRESSED | `holds_handle(attention_restore_target)` | Passes (`keep_focus_in_footer`, `footer_status.rs:184-208`). |
+| F8 | P5: Ctrl+, in the popover; in a row menu by keyboard; in a repository menu by keyboard; in a dock menu by keyboard; in ⋯ (Ruling 8) | EXPRESSED | `holds_handle(restore, else context)` | Popover passes (`focus_lost`'s popover rule, `focus.rs:301-312`). **The four Kit menus are RED**: content region. The origin today is the menu's own PopupMenu handle. The layer drops at the next render (`activity_menu.rs:134-137`, `repository_menu.rs:307-310`, `footer.rs:270-273`, `activity_more.rs:105-108`), so both weak records, the Kit's (`K/root.rs:379-423`) and the host's (`settings/mod.rs:225-233`), fail to upgrade, and `settings_closed` falls to `Region::Content` (`settings_sheet.rs:122-125`). "If that is gone, F9" has no row of its own. |
+| F9 | P5: the save banner's Open Settings (W-30), its tab closed while open; and **(added)** a ticket list row whose list goes when the repository is removed inside Settings | EXPRESSED | `region()` after two draws | Banner passes, and **cannot fail**: its region is Content, where every fallback lands anyway. The added row is **RED**: Content, not Tickets, because `settings_return` is missing and `focus_lost`'s target comes from the closed sheet. See issue (c) for the banner's wording. |
+| F10 | P5: route raised with nothing focused (`blur` in the same update) | EXPRESSED | `region()` | Passes. |
+| F11 | P14 and P6 (Task 1) | EXPRESSED (Task 1) | `holds_handle` | Passes. |
+| F12, F13 | P6 (Task 1) | EXPRESSED (Task 1) | `holds` / `holds_handle` | Pass. |
+| F14 | P6 (Task 1; unix only, Ruling 17) | EXPRESSED (Task 1) | `in_context("Dialog")` | Passes. |
+| F15 | P23: Remove repository…'s confirmation closed by Escape; reopened, and Remove gone while it is open (a fabricated `RepoRemove` landing); a page's dialog within 0.25 s of Drafts' deferred close | EXPRESSED | `holds_handle` plus `in_context("Sheet")`; `holds(entry)` | Basic passes. **Origin gone is RED**: nothing is focused. `focus_lost`'s modal branch has no target and does nothing (`focus.rs:287-292`; A7 item 6). Within 0.25 s passes: the app's confirmation focuses its own origin on close (`confirm.rs:255`), which hides A7 item 4's pending-handle record. |
+| F16 | P23: Drafts' Discard… by Enter, a draw, Ctrl+,, clock +250 ms (`advance_clock`, no real wait), draws; and the restore firing after a page's dialog | EXPRESSED | `holds(entry)` and not `holds(drafts row)` | **Both RED**: the Kit's restore (`K/root.rs:341-363`) puts focus on the Drafts row behind the sheet. |
+| F17 | P22: Add pressed with its check held, Escape, the check lands; the Hosts `refocus_gone` landing with the page closed and focus empty; reopen rows. Key removal is P24's (Task 4). | EXPRESSED (Add row). The Hosts sub-row **cannot fail after a draw**. | `has_dialog` plus `holds_handle(origin)`; Hosts: in-update fact, then a read after two draws | **Add: RED**. A confirmation opens after the close and takes focus (`repositories.rs:420-428`, `:461-479`; no open gate). Reopen rows pass. **Hosts: the handler's own focus call is RED** (it focuses Check host in the closed sheet, `hosts.rs:576-582`). That read is in-update, so it is not an A6 proof (Testing allows it for the update's own call). The read after two draws passes and cannot fail: see issue (b). |
+| F18 | P23: `open_created` landing; a review landing (`draft_discarded`) | EXPRESSED | `holds("add-path")` after two draws | **Both RED**: focus goes to `("tab", 0)` behind the sheet (`content.rs:131-133`, `:162-164`, `:590-602`; R-34 missing). |
+| F19 | P23: interval select by Tab and Enter, then Escape; Root's context menu over Add folder by right-click, then Escape (Linux fallback overlay; not on macOS or Windows) | EXPRESSED | `in_context("List")` plus `"Sheet"`; `in_context("PopupMenu")`; `holds` afterwards | All pass. Diagnostic run: the select's list is `[Root > Workspace > Content > Sheet > Select > List]`, inside the sheet. The context menu is `[Root > PopupMenu]`, region None: outside the Workspace (A7 item 2 confirmed). |
+
+Also in P22, for A2 step 2: a route raised in the same update as a direct
+Kit `close_sheet`. **The passphrase is not emptied: RED.**
+`show_settings` does not run a quiet `settings_closed` when the owner is
+Settings but no sheet is active (`settings_sheet.rs:68-79`), and `shown`
+stays Keys, so `forget_passphrase` keeps the text (`settings/mod.rs:207-213`).
+The new origin is recorded, and that row passes.
+
+Summary:
+
+- All 19 rows are expressed (F3 and F11 to F14 by Task 1's tests).
+- One part cannot be expressed now: F2's "field not drawn", which goes to
+  Task 6.
+- Two sub-rows are written but cannot fail after a draw: the P5 banner
+  (F9) and the P22 Hosts sub-row (F17). The added F9 row and the Add row
+  discriminate instead.
+- No row is foreseen as unmeetable.
+
+### A7, how each item is met
+
+| A7 | How it is met | Code |
+| --- | --- | --- |
+| 1. Focus reads lag a frame | No check treats "not in the sheet in the last frame" as outside. The render check moves only focus it positively finds behind the sheet in the frame drawn last: in a region (outside the layer), a toolbar button or a footer control. A route's target drawn for the first time this frame is in none of them, so it is left alone. The check runs AFTER the frame, deferred from render with `cx.defer_in` (fix round 1), so it reads the frame just drawn. The F1/F2 test guards this. | `settings_sheet.rs:293-305`, `:316-325`; `render.rs:174-182` |
+| 2. Root's overlays sit outside the Workspace | Root's fallback menu (`[Root > PopupMenu]`) is in no region, toolbar button or footer control, so it is left there. | `settings_sheet.rs:293-305` |
+| 3. Kit popups move focus | A popup in the sheet is a deferred child inside the tracked layer (`[… Sheet > Select > List]`), so `drawn_behind` is false. Focus is never taken from the select's trigger while its list is open. | `render.rs:121-130`; `settings_sheet.rs:296` |
+| 4. The Kit's deferred restore | A restore onto a control drawn behind the sheet is moved to the entry at the next render (F16). A restore onto an undrawn handle goes through `focus_lost`'s Settings rule: the restore target when the layer holds it (usually the Kit sheet host, which carries the `Sheet` key context and the focus trap), else the entry (corrected by the Task 2 review). A dialog opened within 0.25 s gets back its own origin from the app's confirmation (`D/view/confirm.rs:255`). | `settings_sheet.rs:316-325`, `:328-345` |
+| 5. `close_sheet` and `close_all_dialogs` move focus | `settings_closed` closes the Kit sheet before any focus move or dialog, quiet closes included. The owner is never cleared while the Kit's Settings sheet stays active. Quit paths keep "dialogs, then Settings quietly" (R-52, Task 1). | `settings_sheet.rs:251-258` |
+| 6. `focus_lost` may have no target | While Settings is open and no dialog is: no target, or a target outside the layer, focuses the page's entry (F15 "origin gone"). | `settings_sheet.rs:328-345`; `focus.rs:287-290` |
+| 7. A layer's `restore` may be empty | Restore, else context. A chosen menu gives its context. The ⋯ menu and dock menu gained the context fields they lacked (Ruling 8). The layer is read and closed inside `show_settings`. | `settings_sheet.rs:88-90`, `:205-222`; `activity/more.rs:24`; `footer/menu.rs:57` |
+| 8. `region_of` defaults to Content | `origin_region` returns `None` outside every region and toolbar button. It is read at the open, when the origin is drawn. A footer origin then leaves the decision to `keep_focus_in_footer` (F7). | `settings_sheet.rs:166-168`, `:227-238` |
+| 9. `on_next_frame` never runs in tests | `settings_return` is disarmed by renders (the second after arming) and taken by `focus_lost`. Test frames drive both, and nothing uses `on_next_frame`. | `settings_sheet.rs:70-82`; `render.rs:168`; `focus.rs:297-301` |
+| 10. The `open` flag is only as fresh as the close | It is cleared by `settings_closed`, which runs at once in `on_close` (Escape, close button, scrim). `OpenFlag::is_open` also requires an active sheet, so a direct Kit close without `on_close` counts as closed at once. | `settings_sheet.rs:179-191`, `:259-263`; `settings/mod.rs:96-100` |
+
+### Where the code departs from the sketch (A2-A4, R-43 to R-47)
+
+## 4. Where the code departs from the sketch, and why
+
+1. **Step 5's check: phase A planned a listener; the code has a post-frame
+   check (positive containment). This departs from Ruling 21's accepted
+   plan (Ruling 22).** (First built as a check inside `render`, which the
+   review found misses a move made inside a child render; fix round 1
+   defers it to after the frame.)
+   - GPUI empties both focus paths in its focus events while the window is
+     inactive (`gpui-pre window.rs:3354-3393`). The test windows are
+     inactive, so `on_focus_out` never fired. A landing in production while
+     the app's window is in the background would be missed the same way.
+   - The render check is the brief's Step 5 sketch with one change. It
+     moves only focus it finds behind the sheet in the frame drawn last; it
+     never treats "not in the sheet" as outside. That avoids A7 item 1,
+     which was why A7 rejects a plain render check.
+   - Limit: a control drawn behind the sheet for the first time, and
+     focused in the same update, is moved only at a later render. No
+     extra frame is requested. No landing today does this: they go through
+     `focus_content` (R-34) or focus controls that are already drawn.
+   - The Kit's title-bar controls are not in the "behind" set. The
+     Workspace does not own their focus, and nothing focuses them.
+2. **`settings_return` is cleared on the second render after arming, not
+   by "the render after the close"** (A3, R-45; Ruling 21). The render runs
+   before the frame swap and before `focus_lost` (`window.rs:3304`, `:3354`,
+   `:3363-3368`).
+3. **The close runs in `on_close`; R-7 said `sync_sheet`** (Ruling 20).
+4. **A2 case 3 ("its restore, else its context")**: a menu already chosen
+   returns to its context, not to its pointer `restore`. That matches what
+   each menu's own dismissal does after a choice, and what the Kit has
+   focused (`repository_menu.rs:291`, `activity_menu.rs:120`). Without this,
+   the repository menu's Settings… opened by pointer would return focus to
+   wherever focus was before the right-click.
+5. **R-43**: `settings_origin` is set in `choose_activity`, around its one
+   `run_activity_action` call. It is not set in `run_activity_action`
+   itself, whose other direct callers (Enter on a row with no button) open
+   no Settings (ledger 3.4).
+6. **R-47**: `OpenFlag::is_open` also requires `has_active_sheet`, on top of
+   being cleared at once (A7 item 10).
+7. **The origin stays on `SettingsHost`** (Ruling 12). `workspace.rs` gains
+   only `settings_origin` and `settings_return` and their initial values.
+
+### Tests that ran (Task 2)
+
+- Phase A, each alone by exact name (all
+  `desktop::view::workspace::settings_sheet::tests::`): P5
+  `focus_returns_to_what_opened_settings` (19 rows; 6 red, F5 by button, F8 x4,
+  the added F9), P22 `late_work_moves_no_focus` (9; 5 red), P23
+  `focus_stays_inside_settings` (13; 5 red), and
+  `focus_on_open_survives_the_sheet_keeping_focus` (6; green before, as
+  expected). The helper move into `settings_sheet_tests/support.rs` is a pure
+  move: the eight Task 1 tests passed by exact name after it (8 passed).
+- Phase B GREEN, each alone: P5 19 of 19, P22 9 of 9, P23 13 of 13, the F1/F2
+  test 6 of 6; Task 1's eight tests 8 passed.
+- Module runs, once: run 1 (`keyboard_tests`, `footer::tests`,
+  `repositories::tests`, `operations::attention_tests`,
+  `operations::outcomes::tests`, `operations::outcomes::route_tests`,
+  `lifecycle::credential_tests`, `lifecycle::outcome_canned_tests`,
+  `settings::keys::tests`, `settings::repositories::manage_tests`,
+  `create::tests`, `item::share::tests`): 181 passed, 158.2 s. Run 2
+  (`settings::hosts::tests`, `settings::repositories::tests`,
+  `workspace::tests`, `tabs::tests`, `needs_attention::tests`,
+  `activity::tests`, `drafts::routing_tests`,
+  `workspace::settings_sheet::tests`): 146 passed, 147.3 s. Run 3 (a named
+  doubt: Settings-touching modules from Task 1's list): 54 passed, 59.3 s.
+- Fix round 1: new test `a_landing_drawn_behind_settings_leaves_focus_inside`
+  (`settings_sheet_tests/behind.rs`): RED before (`0 passed; 1 failed`, focus in
+  `[Root > Workspace > Content]` with the sheet open), GREEN after (`1 passed`),
+  and it reads focus with no forced draw. Its fixture holds Drafts' refocus
+  behind a probe dialog and closes the dialog in one update. It passes with
+  either the deferred check or the Drafts gate alone, so it pins the pair.
+  Covering: 13 settings_sheet tests by exact name (13 passed, 28.7 s); by
+  module `drafts::` (42), `workspace::tests::` (29), `footer::tests::` (9),
+  `item::sheet_tests::` (16): 96 passed, 69.6 s.
+- fmt, `cargo check --locked --features desktop` and clippy `-D warnings`:
+  clean at each commit. The binary has 1925 tests (1920 + 4 + 1).
+
+### Parked review Minors (Task 2) and notes for later
+
+1. `focus_lost`-moved focus asks for no redraw (`settings_sheet.rs:282-286`,
+   `:338-341`): add `cx.notify()` (cannot loop).
+2. `settings_return` lingers one extra frame after a close found by
+   `sync_sheet` (`render.rs:168` against `:173`); no production path closes the
+   sheet directly today.
+3. P5's F10 row (`returns.rs`, `no_origin`) cannot fail and is unlabelled.
+4. P5 closes every row by Escape; F4 also names the close button and the scrim,
+   with no focus read after either (they share the Kit's `close(request,
+   on_close)` path).
+5. `table.rs`'s `done` checks no expected row count (P23 has 11 rows on macOS
+   and Windows, 13 on Linux, since the context-menu rows are Linux-only,
+   `inside.rs:75`): pass a count, per platform.
+6. Untested sub-cases: F8's "if that is gone, F9"; F8 with a pointer-opened
+   menu (where `restore` is set); R-48's `inspect_root` clearing.
+7. **For the owner:** after a page dialog closes within 0.25 s of an earlier
+   deferred close, focus goes to the dialog's origin (F15) and then jumps to the
+   page's entry when the Kit's restore fires (F16). The tests assert it
+   (`inside.rs:294-305`). A6 says so; it may be unexpected on screen.
+8. **Platform gaps for native CI after merge:** F14's EditsNotKept row is
+   unix-only (Ruling 17), and P23's context-menu rows run only on Linux.
+9. `HostsPage::land_refocus_gone` is a test-only hook (`hosts.rs`, gated
+   `cfg(all(test, feature = "desktop-test-support"))`).
+10. The Task 2 module-run list was taken from Task 0's ledger entry; no whole
+    suite ran.
