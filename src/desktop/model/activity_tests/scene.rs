@@ -46,6 +46,9 @@ pub(super) struct Scene {
     /// The facts of each request, by number; a request with none has the
     /// facts of one with nothing special about it.
     pub facts: BTreeMap<u64, RequestFacts>,
+    /// Requests whose row has no attempt number (`Group.sent` is `None`),
+    /// as for one the model never saw queued.
+    pub unsent: BTreeSet<u64>,
     pub log: ActivityLog,
     /// The injected clock: no real time passes.
     pub now: OffsetDateTime,
@@ -94,6 +97,7 @@ impl Scene {
         Self {
             world: World::new(),
             facts: BTreeMap::new(),
+            unsent: BTreeSet::new(),
             log: ActivityLog::default(),
             now: start_time(),
             notes: BTreeMap::new(),
@@ -131,7 +135,7 @@ impl Scene {
                 .iter()
                 .any(|(held, running)| held == root && running == item)
         };
-        derive(&Inputs {
+        let mut rows = derive(&Inputs {
             operations: &world.operations,
             schedule: &world.schedule,
             repositories: &world.repositories,
@@ -146,7 +150,13 @@ impl Scene {
             primary: &primary,
             unlock_target: &unlock,
             lifecycle_running: &running,
-        })
+        });
+        for row in &mut rows {
+            if matches!(&row.key, RowKey::Request(request) if self.unsent.contains(&request.0)) {
+                row.group.sent = None;
+            }
+        }
+        rows
     }
 
     /// Derives, then refreshes the log with the listed repositories' checking

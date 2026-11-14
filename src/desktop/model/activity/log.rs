@@ -187,11 +187,13 @@ impl ActivityLog {
         self.absorbed.retain(|key, _| present.contains(key));
         self.first_kept.retain(|key, _| present.contains(key));
         for row in &rows {
-            // A new attempt: what settled the last one does not settle it.
+            // A new attempt: what settled the last one does not settle it. A
+            // row with no attempt number is attempt 0, as `assign_attention`
+            // latched it.
             if self
                 .settled
                 .get(&row.row.key)
-                .is_some_and(|attempt| Some(*attempt) != row.row.group.sent)
+                .is_some_and(|attempt| *attempt != row.row.group.sent.unwrap_or_default())
             {
                 self.settled.remove(&row.row.key);
             }

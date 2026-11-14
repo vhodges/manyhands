@@ -173,6 +173,30 @@ fn latches() -> Vec<Row> {
             ],
         ),
         row(
+            "T14 a request with no attempt number",
+            vec![
+                step(
+                    "a failed share the model never saw queued",
+                    |s| {
+                        s.unsent.insert(1);
+                        s.fail(1, "ItemSync");
+                    },
+                    vec![req(1)],
+                ),
+                step(
+                    "a later share succeeds: the failure is settled",
+                    |s| s.succeed(2, "ItemSync"),
+                    vec![],
+                ),
+                step(
+                    "the success is dismissed: the failure stays uncounted",
+                    |s| s.dismiss(2),
+                    vec![],
+                )
+                .check(|s| assert!(s.has(&req(1)) && !s.has(&req(2)))),
+            ],
+        ),
+        row(
             "T15",
             vec![
                 step("a failed share", |s| s.fail(1, "ItemSync"), vec![req(1)]),
