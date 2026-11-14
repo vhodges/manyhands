@@ -195,6 +195,7 @@ impl Workspace {
         };
         self.activity.menu = None;
         self.activity.more = None;
+        self.attention.popover = None;
         self.repository_menu = None;
         self.footer.menu = Some(DockMenu::open(
             kind, current, toggle, placement, restore, window, cx,

@@ -165,13 +165,21 @@ fn nothing_acts_behind_a_dialog_or_sheet(cx: &mut TestAppContext) {
         assert!(!is_open(shell, cx), "the modal closed the popover");
         let before = footprint(&world, cx);
 
-        shell.frame(cx, |window, cx| {
-            shell.workspace.update(cx, |workspace, cx| {
+        let opened = shell.frame(cx, |window, cx| {
+            // Read in the same update, before any draw drops a layer: what
+            // the presses themselves did.
+            let opened = shell.workspace.update(cx, |workspace, cx| {
                 let at = Point::default();
                 workspace.open_activity_menu_at(row.clone(), at, window, cx);
                 workspace.press_toolbar(ToolbarButton::ActivityFilter, window, cx);
                 workspace.press_toolbar(ToolbarButton::ActivityMore, window, cx);
                 workspace.press(Control::Attention, window, cx);
+                (
+                    workspace.activity_menu_open(),
+                    workspace.activity_more_open(),
+                    workspace.activity_filter(),
+                    workspace.attention_popover_open(),
+                )
             });
             window.dispatch_action(Box::new(ActivityEnter), cx);
             window.dispatch_action(Box::new(ActivityDown), cx);
@@ -188,8 +196,14 @@ fn nothing_acts_behind_a_dialog_or_sheet(cx: &mut TestAppContext) {
             window.dispatch_action(Box::new(AttentionNext), cx);
             window.dispatch_action(Box::new(AttentionPrevious), cx);
             window.dispatch_action(Box::new(CloseAttention), cx);
+            opened
         });
         shell.run(cx);
+        assert_eq!(
+            opened,
+            (false, false, false, false),
+            "no layer opened and the filter stayed off (sheet {sheet})"
+        );
         assert!(modal_open(shell, cx), "the modal stays (sheet {sheet})");
         assert_eq!(
             footprint(&world, cx),

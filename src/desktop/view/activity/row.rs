@@ -14,6 +14,8 @@ use gpui_kit::{
     px,
 };
 
+use std::rc::Rc;
+
 use super::RowBounds;
 use crate::desktop::{
     keys::ActivityMenuChoice,
@@ -53,13 +55,13 @@ pub(super) struct Drawn {
 }
 
 /// The row's tooltip, line by line, with B6's time line (B5).
-pub(super) fn tooltip(row: &ActivityRow) -> Vec<String> {
+pub(crate) fn tooltip(row: &ActivityRow) -> Vec<String> {
     let (_, full) = activity_time(row.at, local_offset(row.at.unix_timestamp()));
     tooltip_lines(&row.row, &full)
 }
 
 /// A kind's icon and colour (A1's `kind`).
-fn kind_icon(row: &ActivityRow, colors: &ChromeColors) -> (&'static str, Hsla) {
+pub(crate) fn kind_icon(row: &ActivityRow, colors: &ChromeColors) -> (&'static str, Hsla) {
     let derived = &row.row;
     match derived.kind {
         Kind::Info => ("info", colors.secondary),
@@ -228,12 +230,7 @@ pub(super) fn element(drawn: Drawn, row: &ActivityRow, cx: &mut App) -> AnyEleme
         .into_any_element()
 }
 
-/// The row's button. It is a wrapper a test finds by id, around a Kit
-/// button that draws it and takes a pointer's click. The highlighted row's
-/// enabled button tracks the pane's one button handle, which is a tab stop,
-/// so Tab reaches it, Enter and Space press it there, and a dialog it
-/// opens gives focus back to the list (C3); every other button is no tab
-/// stop (R-33). A disabled button takes no focus and does nothing.
+/// The row's button, in Activity's list: its press is the list's choice.
 fn action_button(
     ix: usize,
     row: &ActivityRow,
@@ -243,14 +240,42 @@ fn action_button(
     workspace: WeakEntity<Workspace>,
     cx: &mut App,
 ) -> AnyElement {
-    let id = ElementId::from(("activity-button", ix));
     let choice = choice_of(row, offer);
-    let press = std::rc::Rc::new(move |window: &mut Window, cx: &mut App| {
+    let press = Rc::new(move |window: &mut Window, cx: &mut App| {
         let choice = choice.clone();
         let _ = workspace.update(cx, |workspace, cx| {
             workspace.press_activity(choice, window, cx)
         });
     });
+    button(
+        ("activity-button", ix).into(),
+        offer,
+        highlighted,
+        focus,
+        press,
+        cx,
+    )
+}
+
+/// What a row's button does when pressed, by click or key.
+pub(crate) type Press = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// A row's button, here and in the Needs attention popover. It is a wrapper
+/// a test finds by `id`, around a Kit button that draws it and takes a
+/// pointer's click. The highlighted row's enabled button tracks the one
+/// button handle, which is a tab stop, so Tab reaches it, Enter and Space
+/// press it there, and a dialog it opens gives focus back to where the
+/// list's press said (C3); every other button is no tab stop (R-33). A
+/// disabled button takes no focus and does nothing.
+pub(crate) fn button(
+    id: ElementId,
+    offer: &Offer,
+    highlighted: bool,
+    focus: FocusHandle,
+    press: Press,
+    cx: &mut App,
+) -> AnyElement {
+    let press_click = press.clone();
     let mut wrapper = div()
         .id(id.clone())
         .test_support()
@@ -279,7 +304,7 @@ fn action_button(
             .small()
             .tab_stop(false)
             .disabled(!offer.enabled)
-            .on_click(move |_, window, cx| press(window, cx)),
+            .on_click(move |_, window, cx| press_click(window, cx)),
         )
         .into_any_element()
 }

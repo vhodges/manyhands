@@ -8,7 +8,7 @@
 //! log's took a newer revision, or whose offer changed, runs nothing, and
 //! the popover stays open with the row refreshed (T8, R-55).
 
-use gpui_kit::{TestAppContext, test::TestWindowExt};
+use gpui_kit::TestAppContext;
 use manyhands::{repository::OperationAction, results::ResultCode};
 
 use super::*;
@@ -17,7 +17,7 @@ use crate::desktop::{
         activity::{
             copy::{
                 OPEN_LIFECYCLE, OPEN_SHARING_AND_KEYS, REPUBLISH, REVIEW_CHANGES, SET_UP_SHARING,
-                SHOW_IT, UNLOCK,
+                SHOW_IT,
             },
             rows::RowKey,
         },
@@ -36,7 +36,7 @@ use crate::desktop::{
     view::{
         activity::tests::{
             cases::{OPERATION, TICKET, answered, dialog_open, fabricate, item_sync, settings},
-            list_support::{OP_A, OP_B, OP_D, change_row, press_in, resumes, save, waiting_close},
+            list_support::{OP_B, resumes, save, waiting_close},
             pending_cases::{PENDING_ROOT, listing, read_pending},
         },
         activity_support::{pending_key, refresh},
@@ -52,7 +52,12 @@ use crate::desktop::{
 /// Opens the popover with Enter on the footer item, moves the highlight to
 /// `key` with the arrows, says its button reads `label` and is enabled, and
 /// presses it with Enter. The action closes the popover.
-fn press_from_popover(shell: &Shell, key: &RowKey, label: &str, cx: &mut TestAppContext) {
+pub(super) fn press_from_popover(
+    shell: &Shell,
+    key: &RowKey,
+    label: &str,
+    cx: &mut TestAppContext,
+) {
     refresh(shell, cx);
     settle_popover(shell, cx);
     focus_item(shell, cx);
@@ -99,120 +104,13 @@ async fn dialog_and_back(shell: &Shell, key: &RowKey, label: &str, cx: &mut Test
 #[gpui_kit::test]
 async fn popover_actions_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
-    stale_rows(cx);
+    super::stale::keys(cx);
+    super::stale::stale_rows(cx);
     holds(cx).await;
     shares(cx);
     dialogs(cx).await;
     pending(cx).await;
     polling(cx).await;
-}
-
-/// T8, R-55: the popover's Enter and click on a row drawn before the log's
-/// row took a newer revision, or whose offer changed, run nothing and leave
-/// the popover open with the row refreshed. The log's row went A, B, A in
-/// one update, so it offers what the popover drew: only its revision refuses
-/// the choice.
-fn stale_rows(cx: &mut TestAppContext) {
-    for by_click in [false, true] {
-        let world = rows(cx);
-        let shell = &world.shell;
-        settle(shell, cx);
-        open_by_click(shell, cx);
-        let drawn_rows = keys_of(&applied(shell, cx));
-        let stale = world.pending[3].clone();
-        let at = drawn_rows
-            .iter()
-            .position(|row| row == &stale)
-            .expect("the row is listed");
-        for _ in 0..at {
-            shell.keys("down", cx);
-        }
-        assert_eq!(cursor(shell, cx).as_ref(), Some(&stale));
-        let (before, requests) = (
-            shell
-                .workspace
-                .read_with(cx, |workspace, _| workspace.attention_pressed()),
-            shell.requests(cx, |_| true).len(),
-        );
-        let operations = shell.operations(cx);
-        shell.frame(cx, |window, cx| {
-            let (drawn, current) = change_row(shell, &operations, OP_D, cx);
-            assert!(drawn.is_some() && current.is_some(), "the row is in both");
-            assert_ne!(drawn, current, "the log's row took a newer revision");
-            if by_click {
-                window.click(("needs-attention-button", at), cx);
-            } else {
-                press_in(window, "enter", cx);
-            }
-        });
-        shell.run(cx);
-        let pressed = shell
-            .workspace
-            .read_with(cx, |workspace, _| workspace.attention_pressed());
-        assert_eq!(pressed, before + 1, "the drawn choice was built");
-        assert_eq!(
-            shell.requests(cx, |_| true).len(),
-            requests,
-            "and refused: nothing ran (by click {by_click})"
-        );
-        assert_eq!(resumes(shell, OP_D, cx), 0);
-        settle_popover(shell, cx);
-        assert!(is_open(shell, cx), "the popover stays open");
-        let revisions = |shell: &Shell, cx: &mut TestAppContext| {
-            let log = attention_rows(shell, cx)
-                .into_iter()
-                .find(|row| row.row.key == stale)
-                .map(|row| row.revision);
-            let popover = applied(shell, cx)
-                .into_iter()
-                .find(|row| row.row.key == stale)
-                .map(|row| row.revision);
-            (popover, log)
-        };
-        let (popover, log) = revisions(shell, cx);
-        assert_eq!(popover, log, "with the row refreshed");
-        // Pressed again, on the refreshed row, it runs.
-        shell.press("enter", cx);
-        shell.run(cx);
-        assert_eq!(resumes(shell, OP_D, cx), 1, "the second press runs it");
-    }
-
-    // The offer changed: the row left the log with its Resume, A, B.
-    let world = rows(cx);
-    let shell = &world.shell;
-    settle(shell, cx);
-    open_by_click(shell, cx);
-    let stale = world.pending[3].clone();
-    let at = keys_of(&applied(shell, cx))
-        .iter()
-        .position(|row| row == &stale)
-        .expect("the row is listed");
-    for _ in 0..at {
-        shell.keys("down", cx);
-    }
-    let requests = shell.requests(cx, |_| true).len();
-    let operations = shell.operations(cx);
-    shell.frame(cx, |window, cx| {
-        operations.update(cx, |operations, cx| {
-            let stamp = operations.load_pending(PENDING_ROOT.to_owned());
-            let list = listing(vec![save(OP_A), save(OP_B)]);
-            assert!(operations.apply_pending(stamp, list));
-            cx.notify();
-        });
-        shell
-            .workspace
-            .update(cx, |workspace, cx| workspace.refresh_activity_now(cx));
-        press_in(window, "enter", cx);
-    });
-    shell.run(cx);
-    assert_eq!(shell.requests(cx, |_| true).len(), requests, "nothing ran");
-    assert_eq!(resumes(shell, OP_D, cx), 0);
-    settle_popover(shell, cx);
-    assert!(is_open(shell, cx), "the popover stays open");
-    assert!(
-        !keys_of(&applied(shell, cx)).contains(&stale),
-        "with the row gone"
-    );
 }
 
 /// S3: the five holds, one for each reason, each button pressed from the
@@ -248,8 +146,6 @@ async fn holds(cx: &mut TestAppContext) {
 
 /// What a share offer's button did.
 enum Effect {
-    /// The same request again: its attempt count rose.
-    Again,
     /// A Settings page opened.
     Page(SettingsPage),
     /// Activity's list took focus (Show it).
@@ -260,7 +156,6 @@ enum Effect {
 /// button: what the answer's code makes of it, and what the button does.
 fn shares(cx: &mut TestAppContext) {
     let table = [
-        (ResultCode::UnlockRequired, UNLOCK, Effect::Again),
         (
             ResultCode::NoSelectedKey,
             OPEN_SHARING_AND_KEYS,
@@ -272,7 +167,6 @@ fn shares(cx: &mut TestAppContext) {
             Effect::Page(SettingsPage::Remotes),
         ),
         (ResultCode::Busy, SHOW_IT, Effect::Holder),
-        (ResultCode::RemoteUnavailable, "Retry", Effect::Again),
     ];
     for (code, label, effect) in table {
         let fixture = Fixture::new();
@@ -284,11 +178,6 @@ fn shares(cx: &mut TestAppContext) {
         let row = RowKey::Request(id);
         press_from_popover(&shell, &row, label, cx);
         match effect {
-            Effect::Again => {
-                let attempt =
-                    crate::desktop::view::activity_support::request(&shell, id, cx).attempt;
-                assert!(attempt > 1, "{label}: the request was sent again");
-            }
             Effect::Page(page) => {
                 assert_eq!(settings(&shell, cx), Shown::Settings(page), "{label}");
             }

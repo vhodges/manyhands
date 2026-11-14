@@ -135,6 +135,17 @@ pub(crate) const SHOW_ONLY_ATTENTION: &str = "Show only things that need attenti
 /// The one item of Activity's ⋯ menu (C1, L8).
 pub(crate) const CLEAR_FINISHED: &str = "Clear finished";
 
+/// The Needs attention popover's header (E2, `05`).
+pub(crate) const NEEDS_ATTENTION_TITLE: &str = "Needs attention";
+
+/// Under the popover's header: nothing is lost, and nothing happens by
+/// itself (E2, `05`).
+pub(crate) const NEEDS_ATTENTION_SAFE: &str =
+    "Your work is safe on this computer. Nothing here happens until you choose.";
+
+/// The popover's link to Activity (E2).
+pub(crate) const SHOW_EVERYTHING: &str = "Show everything in Activity";
+
 /// A row's full message (B5): its title, then ". " and its description when
 /// it has one. Activity draws it on one line, and the row menu's first item
 /// is it.

@@ -76,6 +76,7 @@ impl Workspace {
         self.activity.pane.highlight(&key);
         self.repository_menu = None;
         self.footer.menu = None;
+        self.attention.popover = None;
         self.activity.more = None;
         self.activity.menu = Some(ActivityMenu::open(
             &row, context, anchor, restore, window, cx,

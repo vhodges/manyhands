@@ -102,6 +102,7 @@ impl Workspace {
         self.activity.menu = None;
         self.activity.more = None;
         self.footer.menu = None;
+        self.attention.popover = None;
         self.repository_menu = Some(RepositoryMenu::open(
             Some(root),
             items,
@@ -137,6 +138,7 @@ impl Workspace {
         self.activity.menu = None;
         self.activity.more = None;
         self.footer.menu = None;
+        self.attention.popover = None;
         self.repository_menu = Some(RepositoryMenu::open(
             chosen, items, None, button, anchor, None, window, cx,
         ));

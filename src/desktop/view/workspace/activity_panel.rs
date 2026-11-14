@@ -58,7 +58,7 @@ impl Workspace {
 
     /// Applies the log's rows, filtered, to the pane, and draws once more
     /// when they differ from those shown.
-    fn apply_activity_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn apply_activity_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let rows = self.shown_activity_rows();
         if self.activity.pane.apply(rows, window, cx) {
             cx.notify();

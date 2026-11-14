@@ -93,6 +93,11 @@ impl ActivityPane {
         &self.rows
     }
 
+    /// The rows as drawn, shared: a list closure holds them.
+    pub(crate) fn rows_applied(&self) -> Rc<Vec<ActivityRow>> {
+        self.rows.clone()
+    }
+
     pub(crate) fn highlighted_key(&self) -> Option<&RowKey> {
         self.highlight.as_ref()
     }
@@ -110,6 +115,12 @@ impl ActivityPane {
 
     pub(crate) fn list_focus(&self) -> &FocusHandle {
         &self.list_focus
+    }
+
+    /// The list's scroll, which the highlight follows: a list drawn from
+    /// the pane tracks it (the Needs attention popover's).
+    pub(crate) fn scroll(&self) -> &UniformListScrollHandle {
+        &self.scroll
     }
 
     #[cfg(all(test, feature = "desktop-test-support"))]

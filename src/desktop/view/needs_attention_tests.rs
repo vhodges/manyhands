@@ -24,5 +24,7 @@ mod closes;
 mod hidden;
 #[path = "needs_attention_tests/open.rs"]
 mod open;
+#[path = "needs_attention_tests/stale.rs"]
+mod stale;
 #[path = "needs_attention_tests/support.rs"]
 mod support;

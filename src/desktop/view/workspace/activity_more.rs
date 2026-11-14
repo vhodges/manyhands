@@ -64,6 +64,7 @@ impl Workspace {
         self.activity.menu = None;
         self.repository_menu = None;
         self.footer.menu = None;
+        self.attention.popover = None;
         self.activity.more = Some(ActivityMore::open(clearable, button, bounds, window, cx));
         cx.notify();
     }

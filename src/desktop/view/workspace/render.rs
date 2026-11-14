@@ -5,12 +5,13 @@ use super::{Region, Workspace};
 use crate::desktop::{
     keys::{
         ActivityDown, ActivityEnd, ActivityEnter, ActivityHome, ActivityMenuChoice, ActivityUp,
-        ClearFinished, CloseTab, DockPanel, Find as FindKey, FocusContent, FocusNavigation,
-        FocusOperations, FocusRepositories, JumpToDiscussion, NewItem, NextRegion, NextTab,
-        OpenActivityMenu, OpenDockMenu, OpenDrafts, OpenRepositoryMenu, OpenSelected, OpenSettings,
-        PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, RepositoryMenuChoice,
-        ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, ToggleBottomDock,
-        ToggleLeftDock, ToggleRightDock,
+        AttentionDown, AttentionEnd, AttentionEnter, AttentionHome, AttentionNext,
+        AttentionPrevious, AttentionUp, ClearFinished, CloseAttention, CloseTab, DockPanel,
+        Find as FindKey, FocusContent, FocusNavigation, FocusOperations, FocusRepositories,
+        JumpToDiscussion, NewItem, NextRegion, NextTab, OpenActivityMenu, OpenDockMenu, OpenDrafts,
+        OpenRepositoryMenu, OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow,
+        Rebuild, Refresh, RepositoryMenuChoice, ScrollPageDown, ScrollPageUp, ScrollToBottom,
+        ScrollToTop, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
     },
     model::{
         layout::{PanelKind, Side},
@@ -198,6 +199,7 @@ impl Render for Workspace {
         let dock_menu = self.dock_menu_layer(window, cx);
         let activity_menu = self.activity_menu_layer(window, cx);
         let activity_more = self.activity_more_layer(window, cx);
+        let attention = self.attention_layer(window, cx);
         // Root's first child draws its dialog and notification layers.
         v_flex()
             .id("workspace")
@@ -339,6 +341,32 @@ impl Render for Workspace {
             .on_action(unless_dialog(cx, |this, _: &ClearFinished, _, cx| {
                 this.clear_finished(cx)
             }))
+            // The Needs attention popover, in its own key context (E2).
+            .on_action(unless_dialog(cx, |this, _: &AttentionUp, window, cx| {
+                this.attention_step(Step::Up, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &AttentionDown, window, cx| {
+                this.attention_step(Step::Down, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &AttentionHome, window, cx| {
+                this.attention_step(Step::First, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &AttentionEnd, window, cx| {
+                this.attention_step(Step::Last, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &AttentionEnter, window, cx| {
+                this.attention_enter(window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &AttentionNext, window, cx| {
+                this.attention_cycle(true, window, cx)
+            }))
+            .on_action(unless_dialog(
+                cx,
+                |this, _: &AttentionPrevious, window, cx| this.attention_cycle(false, window, cx),
+            ))
+            .on_action(unless_dialog(cx, |this, _: &CloseAttention, window, cx| {
+                this.close_attention_popover(window, cx)
+            }))
             .on_action(unless_dialog(
                 cx,
                 |this, _: &OpenRepositoryMenu, window, cx| {
@@ -361,6 +389,7 @@ impl Render for Workspace {
             .children(repository_menu)
             .children(activity_menu)
             .children(activity_more)
+            .children(attention)
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }
