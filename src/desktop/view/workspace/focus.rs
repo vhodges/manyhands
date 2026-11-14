@@ -284,10 +284,19 @@ impl Workspace {
     /// working (A21).
     pub(super) fn focus_lost(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let target = window.focus_lost_restore_target(cx);
+        // Settings open, with no dialog over it: focus stays in the sheet.
+        if self.settings_keeps_lost_focus(target.as_ref(), window, cx) {
+            return;
+        }
         if window.has_active_dialog(cx) || window.has_active_sheet(cx) {
             if let Some(target) = target {
                 window.focus(&target, cx);
             }
+            return;
+        }
+        // Settings closed onto a control no longer drawn: its region.
+        if let Some(region) = self.settings_return.take() {
+            self.focus_region(region, window, cx);
             return;
         }
         // A dialog or menu opened from the popover gave focus back to one of

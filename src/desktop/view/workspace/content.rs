@@ -128,7 +128,11 @@ impl Workspace {
         if window.has_active_dialog(cx) {
             return;
         }
-        if std::mem::take(&mut self.content.refocus) {
+        // Dropped while Settings owns the sheet: nothing pulls focus behind
+        // it (R-34).
+        if std::mem::take(&mut self.content.refocus)
+            && !matches!(self.content.sheet, Some(SheetOwner::Settings))
+        {
             self.focus_region(Region::Content, window, cx);
         }
         // Dropped behind the details sheet, never kept for its close (N2).
@@ -587,7 +591,13 @@ impl Workspace {
         self.content.tabs.reload(changed, cx);
     }
 
+    /// Focuses the content region's shown tab, Drafts page or the region
+    /// itself; nothing while Settings is open, behind which nothing takes
+    /// focus (R-34).
     pub(super) fn focus_content(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_open(window, cx) {
+            return;
+        }
         let region = || self.regions[Region::Content.index()].clone();
         let focus = match self.content.page(cx) {
             ContentPage::Drafts => self

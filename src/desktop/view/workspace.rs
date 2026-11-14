@@ -143,6 +143,14 @@ pub(crate) struct Workspace {
     _find_events: Subscription,
     content: ContentArea,
     _settings_events: Subscription,
+    /// The origin Cycle 03b's `choose_activity` gives for the length of one
+    /// handler call: where focus goes back when that handler opens Settings
+    /// (Wave 04 Cycle 04 design A2, "The origin"; R-43).
+    settings_origin: Option<FocusHandle>,
+    /// The region of the control Settings opened from, recorded at the open
+    /// and armed by its close: a lost focus goes there when that control is
+    /// no longer drawn (design A3; R-45).
+    settings_return: settings_sheet::SettingsReturn,
     _drafts_events: Subscription,
     /// Fallback when the control holding focus is no longer drawn.
     last_region: Option<Region>,
@@ -360,6 +368,8 @@ impl Workspace {
                 sheet: None,
             },
             _settings_events: settings_events,
+            settings_origin: None,
+            settings_return: Default::default(),
             _drafts_events: drafts_events,
             last_region: Some(start),
             window_title: String::new(),

@@ -58,7 +58,7 @@ use manyhands::{
 
 mod manage;
 
-use super::{field_column, wrapped};
+use super::{OpenFlag, field_column, wrapped};
 use crate::desktop::{
     model::{
         list_state::LABEL_BUSY,
@@ -226,8 +226,12 @@ pub(crate) struct RepositoriesPage {
     /// Why Browse is unavailable, once the platform failed.
     browse_unavailable: Option<&'static str>,
     /// Add was pressed before its folder's text was checked: once the
-    /// check lands, the submit goes on (ruling R-T12b).
+    /// check lands, the submit goes on (ruling R-T12b), while Settings is
+    /// open (R-48).
     submit_pending: bool,
+    /// Whether Settings is open: a check that lands after it closed opens
+    /// no confirmation and moves no focus (design A4).
+    open: OpenFlag,
     /// The window the page is in, for going on with a submit once a read
     /// lands.
     window: AnyWindowHandle,
@@ -242,6 +246,7 @@ impl RepositoriesPage {
     pub(crate) fn new(
         services: Services,
         scroll: ContentScroll,
+        open: OpenFlag,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -311,6 +316,7 @@ impl RepositoriesPage {
             browsing: None,
             browse_unavailable: None,
             submit_pending: false,
+            open,
             window: window.window_handle(),
             managed,
             _inputs: subscriptions,
@@ -443,8 +449,16 @@ impl RepositoriesPage {
             return;
         };
         let text = text.to_owned();
+        // No Add was pressed for this folder (R-48).
+        self.submit_pending = false;
         self.inputs[Form::Add.path()].update(cx, |input, cx| input.set_value(text, window, cx));
         self.inspect(cx);
+    }
+
+    /// Settings closed: an Add waiting for its folder's check does not go on
+    /// when the check lands (R-48).
+    pub(crate) fn forget_pending_submit(&mut self) {
+        self.submit_pending = false;
     }
 
     /// Whether the Add folder's current text has been checked: what was
@@ -459,7 +473,8 @@ impl RepositoriesPage {
     /// and nothing is confirmed yet; otherwise the submit goes on. A check
     /// whose text changed meanwhile was dropped, and the wait with it.
     fn resume_submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !std::mem::take(&mut self.submit_pending) {
+        // A check that lands after Settings closed goes no further (A4).
+        if !std::mem::take(&mut self.submit_pending) || !self.open.is_open(window, cx) {
             return;
         }
         if let Some(branch) = self.pending_branch.take() {

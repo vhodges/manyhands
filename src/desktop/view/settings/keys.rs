@@ -31,7 +31,7 @@ use crate::desktop::{
         Services,
         requests::{DesktopRequestId, RequestState},
     },
-    view::scroll::ContentScroll,
+    view::{scroll::ContentScroll, settings::OpenFlag},
 };
 
 pub(crate) const KEYS_HEADING: &str = "Shared SSH keys";
@@ -123,6 +123,11 @@ pub(crate) struct KeysPage {
     retrying: Option<Retrying>,
     /// Ended requests already answered, by attempt.
     seen: HashSet<(DesktopRequestId, u32)>,
+    /// Whether Settings is open: the focus by key ID after a removal (C2.1)
+    /// and the key list's retarget (R-22) move focus only while it is
+    /// (design A4).
+    #[allow(dead_code)] // Used from Task 4 and Task 6
+    open: OpenFlag,
     _inputs: Vec<Subscription>,
     _operations: Subscription,
 }
@@ -131,6 +136,7 @@ impl KeysPage {
     pub(crate) fn new(
         services: Services,
         scroll: ContentScroll,
+        open: OpenFlag,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -204,6 +210,7 @@ impl KeysPage {
             submitted: None,
             retrying: None,
             seen,
+            open,
             _inputs: subscriptions,
             _operations: operations,
         };

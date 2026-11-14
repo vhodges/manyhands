@@ -17,7 +17,7 @@
 //! The host keeps the repository selected when the settings were last
 //! opened, for a page that works on one repository (Remotes).
 
-use std::path::PathBuf;
+use std::{cell::Cell, path::PathBuf, rc::Rc};
 
 mod arrive;
 mod attention;
@@ -78,6 +78,28 @@ pub(crate) enum Shown {
     Settings(SettingsPage),
 }
 
+/// Whether Settings is open, shared by the host with the pages it makes
+/// (design A4; R-47): set when Settings opens and cleared at once when it
+/// closes, the Kit's close included. A page's landing moves focus or opens
+/// a dialog only while it says open.
+#[derive(Clone, Default)]
+pub(crate) struct OpenFlag(Rc<Cell<bool>>);
+
+impl OpenFlag {
+    fn set(&self, open: bool) {
+        self.0.set(open);
+    }
+
+    /// Settings is open: the flag is set and the sheet is still active, so a
+    /// close the Kit made without telling the workspace yet counts as closed
+    /// too (A7 item 10).
+    pub(crate) fn is_open(&self, window: &mut Window, cx: &mut gpui_kit::App) -> bool {
+        use gpui_kit::component::WindowExt;
+
+        self.0.get() && window.has_active_sheet(cx)
+    }
+}
+
 /// What the settings ask of the workspace.
 pub(crate) enum SettingsEvent {
     /// A row of Checking for updates points at the pending operation that
@@ -97,6 +119,12 @@ pub(crate) struct SettingsHost {
     /// What held focus when the sheet opened, where focus returns when it
     /// closes (design A3).
     origin: Option<WeakFocusHandle>,
+    /// Whether Settings is open, which every page is given (A4).
+    open: OpenFlag,
+    /// The focus of the layer the sheet is drawn in, which the workspace
+    /// tracks around Root's sheet layer: focus inside it is in the sheet
+    /// (design A3, "The sheet keeps focus").
+    layer: FocusHandle,
     repositories: Option<Entity<RepositoriesPage>>,
     remotes: Option<Entity<RemotesPage>>,
     keys: Option<Entity<KeysPage>>,
@@ -125,6 +153,8 @@ impl SettingsHost {
                 .map(|_| cx.focus_handle().tab_stop(true))
                 .collect(),
             origin: None,
+            open: OpenFlag::default(),
+            layer: cx.focus_handle(),
             repositories: None,
             remotes: None,
             keys: None,
@@ -213,13 +243,28 @@ impl SettingsHost {
     }
 
     /// Settings closed. The pages are kept, with what they hold, except
-    /// the Keys page's typed passphrase, emptied now (design B3).
+    /// the Keys page's typed passphrase, emptied now (design B3), and an
+    /// Add waiting for its folder's check, which no longer goes on (R-48).
     pub(crate) fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_shown() {
             self.shown = Shown::Tabs;
             cx.notify();
         }
         self.forget_passphrase(window, cx);
+        if let Some(repositories) = &self.repositories {
+            repositories.update(cx, |page, _| page.forget_pending_submit());
+        }
+    }
+
+    /// Settings opens (`true`) or has closed (`false`): what every page's
+    /// landing reads (A4).
+    pub(crate) fn set_open(&self, open: bool) {
+        self.open.set(open);
+    }
+
+    /// The focus the workspace tracks around Root's sheet layer.
+    pub(crate) fn layer(&self) -> &FocusHandle {
+        &self.layer
     }
 
     /// Where focus returns when Settings closes: `origin`, held weakly.
@@ -249,8 +294,11 @@ impl SettingsHost {
         cx: &mut Context<Self>,
     ) -> Entity<RepositoriesPage> {
         let (services, scroll) = (self.services.clone(), self.scroll.clone());
+        let open = self.open.clone();
         self.repositories
-            .get_or_insert_with(|| cx.new(|cx| RepositoriesPage::new(services, scroll, window, cx)))
+            .get_or_insert_with(|| {
+                cx.new(|cx| RepositoriesPage::new(services, scroll, open, window, cx))
+            })
             .clone()
     }
 
@@ -273,8 +321,9 @@ impl SettingsHost {
     /// The Keys page, made the first time it is asked for.
     pub(crate) fn keys(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<KeysPage> {
         let (services, scroll) = (self.services.clone(), self.scroll.clone());
+        let open = self.open.clone();
         self.keys
-            .get_or_insert_with(|| cx.new(|cx| KeysPage::new(services, scroll, window, cx)))
+            .get_or_insert_with(|| cx.new(|cx| KeysPage::new(services, scroll, open, window, cx)))
             .clone()
     }
 
@@ -286,10 +335,11 @@ impl SettingsHost {
         cx: &mut Context<Self>,
     ) -> Entity<HostsPage> {
         let (services, scroll) = (self.services.clone(), self.scroll.clone());
+        let open = self.open.clone();
         let selection = self.selection.clone();
         self.hosts
             .get_or_insert_with(|| {
-                cx.new(|cx| HostsPage::new(services, scroll, selection, window, cx))
+                cx.new(|cx| HostsPage::new(services, scroll, open, selection, window, cx))
             })
             .clone()
     }

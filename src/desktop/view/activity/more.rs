@@ -19,6 +19,9 @@ pub(crate) struct ActivityMore {
     view: Entity<PopupMenu>,
     /// The menu's top left corner: below the button, as it was drawn.
     at: Point<Pixels>,
+    /// Where it opened from and gives focus back to: the ⋯ button (Wave 04
+    /// Cycle 04 design A2, "The origin"; Ruling 8).
+    pub(crate) button: FocusHandle,
     _dismissed: Subscription,
 }
 
@@ -51,6 +54,7 @@ impl ActivityMore {
         Self {
             view,
             at: bounds.map_or_else(Point::default, |bounds| bounds.bottom_left()),
+            button,
             _dismissed: dismissed,
         }
     }

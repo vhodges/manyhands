@@ -118,8 +118,15 @@ impl Workspace {
         // page keys first (B2). The sheet places itself over the whole window
         // (fact 61); deferred, it is painted above the rest of the window
         // and below dialogs, popups and tooltips, which are deferred higher.
-        let sheet = Root::render_sheet_layer(window, cx)
-            .map(|layer| div().absolute().child(deferred(layer)));
+        // The layer's own focus tells focus inside the sheet from focus
+        // behind it (design A3, "The sheet keeps focus").
+        let sheet_layer = self.content.settings.read(cx).layer().clone();
+        let sheet = Root::render_sheet_layer(window, cx).map(|layer| {
+            div()
+                .absolute()
+                .track_focus(&sheet_layer)
+                .child(deferred(layer))
+        });
         let content = content
             .children(self.content_body(window, cx))
             .children(sheet);
@@ -158,11 +165,13 @@ pub(in crate::desktop::view) fn unless_dialog<A: 'static>(
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.settings_return.tick();
         self.apply_filter_reset(window, cx);
         self.sync_tickets(window, cx);
         self.apply_review(window, cx);
         self.open_deferred_republish(window, cx);
         self.sync_sheet(window, cx);
+        self.keep_focus_in_settings(window, cx);
         if self.dock.queue_clamp() {
             // The area records its bounds as this frame is drawn, so the
             // clamp runs after it (R-37). `on_next_frame` is no hook: tests

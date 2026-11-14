@@ -50,7 +50,7 @@ use manyhands::{
     results::{Envelope, Outcome},
 };
 
-use super::wrapped;
+use super::{OpenFlag, wrapped};
 use crate::desktop::model::read_state::Read;
 use crate::desktop::{
     model::{
@@ -235,6 +235,9 @@ pub(crate) struct HostsPage {
     focus: HashMap<&'static str, FocusHandle>,
     /// The finished requests already acted on, by attempt.
     seen: HashSet<(DesktopRequestId, u32)>,
+    /// Whether Settings is open: a request that lands after it closed moves
+    /// no focus (design A4).
+    open: OpenFlag,
     _operations: Subscription,
 }
 
@@ -242,6 +245,7 @@ impl HostsPage {
     pub(crate) fn new(
         services: Services,
         scroll: ContentScroll,
+        open: OpenFlag,
         root: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -276,6 +280,7 @@ impl HostsPage {
             observing: None,
             focus,
             seen,
+            open,
             _operations: operations,
         };
         page.load_pins(cx);
@@ -570,7 +575,11 @@ impl HostsPage {
     /// drew them is gone: Check host takes it, the region's first control
     /// left in its place.
     fn refocus_gone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.observing.is_some() || window.has_active_dialog(cx) {
+        // A request that lands after Settings closed moves no focus (A4).
+        if self.observing.is_some()
+            || window.has_active_dialog(cx)
+            || !self.open.is_open(window, cx)
+        {
             return;
         }
         let gone = window.focused(cx).is_none()
@@ -580,6 +589,13 @@ impl HostsPage {
         if gone {
             window.focus(&self.focus[CHECK_ID], cx);
         }
+    }
+
+    /// A landing delivered to `refocus_gone` as a pinning request's does,
+    /// for a test of work that lands after Settings closed (design A6 F17).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn land_refocus_gone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refocus_gone(window, cx);
     }
 
     /// Whether `intent` pinned the host the page's answer shows, for the

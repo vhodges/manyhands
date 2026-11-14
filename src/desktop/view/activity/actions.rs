@@ -45,7 +45,11 @@ impl Workspace {
             return;
         }
         self.highlight_applied_row(&choice.key);
+        // A handler that opens Settings returns focus to `origin` when it
+        // closes (Wave 04 Cycle 04 design A2, "The origin"; R-43).
+        let pending = self.set_settings_origin(Some(origin.clone()));
         self.run_activity_action(&choice.action, origin, window, cx);
+        self.set_settings_origin(pending);
     }
 
     /// The handler `action` names (A1's table). `origin` is where focus goes
