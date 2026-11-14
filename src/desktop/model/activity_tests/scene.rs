@@ -135,8 +135,10 @@ impl Scene {
                 .iter()
                 .any(|(held, running)| held == root && running == item)
         };
+        let pending = world.operations.pending_shown();
         let mut rows = derive(&Inputs {
             operations: &world.operations,
+            pending: &pending,
             schedule: &world.schedule,
             repositories: &world.repositories,
             drafts: DraftsInput {

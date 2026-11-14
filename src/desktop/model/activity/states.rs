@@ -14,7 +14,10 @@ mod retired;
 
 use std::path::Path;
 
-use manyhands::{canonical::ItemId, repository::AuthoringKind};
+use manyhands::{
+    canonical::ItemId,
+    repository::{AuthoringKind, OperationListDto},
+};
 
 pub(crate) use self::{
     drafts::DraftsInput,
@@ -30,6 +33,7 @@ use super::{
 };
 use crate::desktop::model::polling::KeyId;
 use crate::desktop::model::{
+    list_state::ListState,
     operations::Operations,
     polling::{
         PollSchedule, Reason, TargetKind,
@@ -43,6 +47,8 @@ use crate::desktop::model::{
 /// repositories' facts, and the lookups the Workspace supplies.
 pub(crate) struct StateInputs<'a> {
     pub operations: &'a Operations,
+    /// `Operations::pending_shown`, read once for the refresh.
+    pub pending: &'a [(RepoKey, ListState<OperationListDto>)],
     pub schedule: &'a PollSchedule,
     pub repositories: &'a [RepositoryInput],
     pub drafts: &'a DraftsInput,

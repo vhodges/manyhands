@@ -93,6 +93,10 @@ impl Rows for OperationListDto {
 #[derive(Default)]
 pub(crate) struct Operations {
     requests: Vec<DesktopRequest>,
+    /// Where each request was first queued, counting from the first: a
+    /// request goes in at the front and none leaves, so its place in
+    /// `requests` is the count less one less this (`position`).
+    slots: HashMap<DesktopRequestId, usize>,
     /// When each request's last attempt was queued, in the order of every
     /// attempt (R-78), and how many have been.
     sent: HashMap<DesktopRequestId, u64>,
@@ -208,7 +212,15 @@ impl Operations {
     }
 
     pub(crate) fn request(&self, id: DesktopRequestId) -> Option<&DesktopRequest> {
-        self.requests.iter().find(|request| request.id == id)
+        self.position(id).map(|at| &self.requests[at])
+    }
+
+    /// The place of request `id` in `requests`, without a scan.
+    fn position(&self, id: DesktopRequestId) -> Option<usize> {
+        let slot = *self.slots.get(&id)?;
+        let at = self.requests.len() - 1 - slot;
+        debug_assert_eq!(self.requests[at].id, id);
+        Some(at)
     }
 
     /// The IDs the last answer to the ticket request `id` rejected it for,
@@ -219,7 +231,8 @@ impl Operations {
     }
 
     fn request_mut(&mut self, id: DesktopRequestId) -> Option<&mut DesktopRequest> {
-        self.requests.iter_mut().find(|request| request.id == id)
+        let at = self.position(id)?;
+        Some(&mut self.requests[at])
     }
 
     /// Applies what the worker said. An event for a request this model
@@ -239,7 +252,10 @@ impl Operations {
                 match self.request_mut(request.id) {
                     // A retry: the same request, in its place.
                     Some(existing) => *existing = request,
-                    None => self.requests.insert(0, request),
+                    None => {
+                        self.slots.insert(request.id, self.requests.len());
+                        self.requests.insert(0, request);
+                    }
                 }
             }
             WorkerEvent::Started(id) => self.set(

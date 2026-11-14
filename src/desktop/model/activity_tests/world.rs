@@ -127,8 +127,10 @@ impl World {
                 .iter()
                 .any(|(held, running)| held == root && running == item)
         };
+        let pending = self.operations.pending_shown();
         state_rows(&StateInputs {
             operations: &self.operations,
+            pending: &pending,
             schedule: &self.schedule,
             repositories: &self.repositories,
             drafts: &self.drafts,

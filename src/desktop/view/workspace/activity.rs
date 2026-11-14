@@ -210,13 +210,13 @@ impl Workspace {
         };
         // The pending operations of each item's close or promotion: a
         // resume in flight for one is the item's lifecycle running (S9; T4-3).
-        let lifecycles: Vec<(RepoKey, String, String)> = operations
-            .pending_shown()
-            .into_iter()
-            .filter_map(|(root, state)| Some((root, state.rows()?.items.clone())))
+        let pending = operations.pending_shown();
+        let lifecycles: Vec<(RepoKey, String, String)> = pending
+            .iter()
+            .filter_map(|(root, state)| Some((root, &state.rows()?.items)))
             .flat_map(|(root, items)| {
-                items.into_iter().filter_map(move |operation| {
-                    crate::desktop::model::operations::LifecycleRow::of(&operation)
+                items.iter().filter_map(move |operation| {
+                    crate::desktop::model::operations::LifecycleRow::of(operation)
                         .map(|row| (root.clone(), row.item, row.operation))
                 })
             })
@@ -248,6 +248,7 @@ impl Workspace {
         };
         let derived = derive(&Inputs {
             operations,
+            pending: &pending,
             schedule: scheduler.schedule(),
             repositories: &repositories,
             drafts,

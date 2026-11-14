@@ -30,13 +30,13 @@ pub(super) fn rows(inputs: &StateInputs<'_>) -> Vec<Derived> {
     let own = inputs.operations.automatic_polls();
     let entries = inputs.operations.entered_operations();
     let mut rows = Vec::new();
-    for (root, state) in inputs.operations.pending_shown() {
-        let ListState::Ready { rows: list, .. } = &state else {
+    for (root, state) in inputs.pending {
+        let ListState::Ready { rows: list, .. } = state else {
             continue;
         };
         for (at, operation) in list.items.iter().enumerate() {
             let resume = resume_offer_among(operation, own, &entries);
-            rows.push(row(inputs, &root, at, operation, resume));
+            rows.push(row(inputs, root, at, operation, resume));
         }
     }
     rows
@@ -213,11 +213,10 @@ fn detail_of(operation: &OperationDto) -> Vec<String> {
 /// make none here. Retry reads it again. Only a Failed list counts (N13).
 pub(super) fn list_rows(inputs: &StateInputs<'_>) -> Vec<Derived> {
     inputs
-        .operations
-        .pending_shown()
-        .into_iter()
+        .pending
+        .iter()
         .filter_map(|(root, state)| {
-            let repo = name_of(inputs, &root);
+            let repo = name_of(inputs, root);
             let (kind, title, counted) = match state {
                 ListState::Failed(_) => (Kind::Failure, pending_list_failed(&repo), true),
                 ListState::Busy => (Kind::Info, pending_list_busy(&repo), false),
@@ -233,7 +232,7 @@ pub(super) fn list_rows(inputs: &StateInputs<'_>) -> Vec<Derived> {
                     roots: vec![root.clone()],
                     ..Group::default()
                 },
-                ..Derived::new(RowKey::PendingList(root), kind, title)
+                ..Derived::new(RowKey::PendingList(root.clone()), kind, title)
             })
         })
         .collect()

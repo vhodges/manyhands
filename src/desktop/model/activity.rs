@@ -3,7 +3,10 @@
 //! row says (Part B). The
 //! model has no GPUI dependency and reads no view module.
 
-use manyhands::{canonical::ItemId, repository::AuthoringKind};
+use manyhands::{
+    canonical::ItemId,
+    repository::{AuthoringKind, OperationListDto},
+};
 use time::{OffsetDateTime, UtcOffset};
 
 use self::{
@@ -12,6 +15,7 @@ use self::{
     states::{DraftsInput, RepositoryInput, StateInputs, state_rows},
 };
 use super::{
+    list_state::ListState,
     operations::Operations,
     polling::{KeyId, PollSchedule},
     stamp::RepoKey,
@@ -30,6 +34,8 @@ pub(crate) mod states;
 /// model reads nothing else.
 pub(crate) struct Inputs<'a> {
     pub operations: &'a Operations,
+    /// `Operations::pending_shown`, read once for the refresh.
+    pub pending: &'a [(RepoKey, ListState<OperationListDto>)],
     pub schedule: &'a PollSchedule,
     pub repositories: &'a [RepositoryInput],
     pub drafts: DraftsInput,
@@ -52,6 +58,7 @@ pub(crate) fn derive(inputs: &Inputs<'_>) -> Vec<Derived> {
     });
     rows.extend(state_rows(&StateInputs {
         operations: inputs.operations,
+        pending: inputs.pending,
         schedule: inputs.schedule,
         repositories: inputs.repositories,
         drafts: &inputs.drafts,

@@ -692,8 +692,10 @@ async fn retire_resume_resends_original(cx: &mut TestAppContext) {
             use crate::desktop::model::activity::{
                 Inputs, derive, log::ActivityLog, requests::RequestFacts, states::DraftsInput,
             };
+            let pending = operations.pending_shown();
             let derived = derive(&Inputs {
                 operations,
+                pending: &pending,
                 schedule: scheduler.schedule(),
                 repositories: &[],
                 drafts: DraftsInput {
