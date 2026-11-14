@@ -289,8 +289,9 @@ impl HostsPage {
         page
     }
 
-    /// Around Check host, whose own focus is the Kit's.
-    #[cfg(all(test, feature = "desktop-test-support"))]
+    /// Around Check host, whose own focus is the Kit's: where a route that
+    /// names no host lands (design Part D; R-53). It is drawn whenever the
+    /// page works on a repository, unavailable when it cannot run.
     pub(crate) fn check_focus(&self) -> FocusHandle {
         self.focus[CHECK_ID].clone()
     }

@@ -431,6 +431,10 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
     assert_eq!(shown, Shown::Settings(SettingsPage::Polling));
+    assert!(
+        shell.holds_focus(("settings-page", 2usize), cx),
+        "W-3 lands on the page's entry (Part D)"
+    );
 }
 
 fn clock_now(clock: &TestClock) -> OffsetDateTime {

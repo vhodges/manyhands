@@ -16,7 +16,6 @@ pub(crate) enum SettingsRoute {
     /// A page, focused on its menu entry.
     Page(SettingsPage),
     /// The Repositories page, on its Add folder field (W-5, W-6).
-    #[allow(dead_code)] // Used from Task 6
     AddRepository,
     /// The Repositories page managing `root` (the repository menu's
     /// Settings…).
@@ -29,7 +28,6 @@ pub(crate) enum SettingsRoute {
     /// Repositories › Sharing for `root`, on the add-remote Name field.
     Remotes(PathBuf),
     /// Sharing & keys, on the key list (R-22).
-    #[allow(dead_code)] // Used from Task 6
     Keys,
     /// Sharing & keys › Trusted servers for `root`, on Check host.
     Hosts(PathBuf),
@@ -42,12 +40,11 @@ pub(crate) enum SettingsRoute {
 impl SettingsHost {
     /// Switches to the route's page and applies it: checks a folder or a
     /// host, asks again for a passphrase. Moves no focus. Gives the control
-    /// to focus, which the page draws in the next frame; `None` means the
-    /// page's menu entry. Until the routes name their fields (Task 6), each
-    /// gives the focus today's entry function gave (design fact 10). The
-    /// repository a route works on is the host's chosen one, which the
-    /// caller chooses first (`choose_on_open`, or `choose` inside the
-    /// sheet).
+    /// Part D names, only when the page draws it in the next frame; `None`
+    /// means the page's menu entry, for the `Page` and `Manage` routes and
+    /// for a control not drawn (A6 F1, F2; R-24). The repository a route
+    /// works on is the host's chosen one, which the caller chooses first
+    /// (`choose_on_open`, or `choose` inside the sheet).
     pub(crate) fn arrive(
         &mut self,
         route: &SettingsRoute,
@@ -59,15 +56,19 @@ impl SettingsHost {
                 self.open(*page, window, cx);
                 None
             }
-            SettingsRoute::AddRepository | SettingsRoute::Manage(_) => {
+            SettingsRoute::Manage(_) => {
                 self.open(SettingsPage::Repositories, window, cx);
                 None
             }
+            SettingsRoute::AddRepository => {
+                self.open(SettingsPage::Repositories, window, cx);
+                Some(self.repositories(window, cx).read(cx).add_path_focus(cx))
+            }
             SettingsRoute::Inspect(root) => {
                 self.open(SettingsPage::Repositories, window, cx);
-                self.repositories(window, cx)
-                    .update(cx, |page, cx| page.inspect_root(root.clone(), window, cx));
-                None
+                let page = self.repositories(window, cx);
+                page.update(cx, |page, cx| page.inspect_root(root.clone(), window, cx));
+                Some(page.read(cx).add_path_focus(cx))
             }
             SettingsRoute::Identity(_) => {
                 self.open(SettingsPage::Repositories, window, cx);
@@ -75,15 +76,23 @@ impl SettingsHost {
             }
             SettingsRoute::Remotes(_) => {
                 self.open(SettingsPage::Remotes, window, cx);
-                None
+                self.remotes(window, cx).read(cx).name_focus(cx)
             }
             SettingsRoute::Keys => {
                 self.open(SettingsPage::Keys, window, cx);
-                None
+                // While the keys are still read, the entry, and the one
+                // retarget when the read lands (R-22).
+                let entry = self.first_focus()?;
+                self.keys(window, cx)
+                    .update(cx, |page, cx| page.list_focus(entry, cx))
             }
             SettingsRoute::Hosts(_) => {
                 self.open(SettingsPage::Hosts, window, cx);
-                None
+                // Check host is drawn once a repository is chosen, which the
+                // route's is (R-53).
+                let chosen = self.chosen.is_some();
+                let page = self.hosts(window, cx);
+                chosen.then(|| page.read(cx).check_focus())
             }
             SettingsRoute::CheckHost(root, authority) => {
                 self.open(SettingsPage::Hosts, window, cx);

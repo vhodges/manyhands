@@ -41,7 +41,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
-    AnyView, AnyWindowHandle, AppContext, ClickEvent, Context, Entity, FocusHandle,
+    AnyView, AnyWindowHandle, App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render,
     StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Window,
     component::{
@@ -460,6 +460,12 @@ impl RepositoriesPage {
         self.submit_pending = false;
         self.inputs[Form::Add.path()].update(cx, |input, cx| input.set_value(text, window, cx));
         self.inspect(cx);
+    }
+
+    /// The Add folder field's focus, where the Add and Inspect routes land
+    /// (design Part D; R-24): always drawn.
+    pub(crate) fn add_path_focus(&self, cx: &App) -> FocusHandle {
+        self.inputs[Form::Add.path()].read(cx).focus_handle(cx)
     }
 
     /// Settings closed: an Add waiting for its folder's check does not go on

@@ -444,6 +444,10 @@ async fn the_host_recovery_checks_the_named_host_on_the_hosts_page(cx: &mut Test
     );
     let check = check_focus(&shell, cx);
     assert!(shell.frame(cx, |window, _| check.is_focused(window)));
+    assert!(
+        shell.holds_focus("hosts-check", cx),
+        "W-29 lands on Check host, after two draws (Part D)"
+    );
 }
 
 /// A provider call in flight on a plain thread, as the worker makes one.

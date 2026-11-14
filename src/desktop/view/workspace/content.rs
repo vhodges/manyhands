@@ -191,14 +191,20 @@ impl Workspace {
         }
     }
 
-    /// Settings on `page` (Ctrl+, the footer and its other ways in).
+    /// Settings on `page` (the footer and its other ways in): the Keys page
+    /// on its key list, as every Open Sharing & keys and Choose a key…
+    /// lands (design Part D; R-22).
     pub(in crate::desktop::view) fn open_settings(
         &mut self,
         page: SettingsPage,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.show_settings(SettingsRoute::Page(page), None, window, cx);
+        let route = match page {
+            SettingsPage::Keys => SettingsRoute::Keys,
+            page => SettingsRoute::Page(page),
+        };
+        self.show_settings(route, None, window, cx);
     }
 
     /// Settings' Repositories page managing the repository at `root`, not

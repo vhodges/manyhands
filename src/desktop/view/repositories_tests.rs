@@ -150,6 +150,10 @@ async fn rows_and_list_states(cx: &mut TestAppContext) {
             .read_with(cx, |workspace, cx| workspace.settings_shown(cx)),
         Shown::Settings(SettingsPage::Repositories)
     );
+    assert!(
+        shell.holds_focus("add-path", cx),
+        "W-5 lands on the Add folder (Part D)"
+    );
     // Settings is a sheet: it closes before the panel is used again.
     shell.keys("escape", cx);
 

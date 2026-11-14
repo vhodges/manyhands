@@ -629,6 +629,10 @@ fn the_identity_recovery_opens_the_form_for_its_root(cx: &mut TestAppContext) {
     assert!(shell.present("identity-submit", cx));
     let name = control_focus(&shell, "identity-name", cx);
     assert!(shell.frame(cx, |window, cx| name.contains_focused(window, cx)));
+    assert!(
+        shell.holds_focus("identity-name", cx),
+        "W-28 lands on the identity Name, after two draws (Part D)"
+    );
 }
 
 /// A repository Git finds no identity for says so.

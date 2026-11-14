@@ -68,6 +68,10 @@ pub(super) async fn repositories_toolbar(shell: &Shell, root: &Path, cx: &mut Te
     holds_region(shell, Region::Repositories, cx);
     shell.press("enter", cx);
     assert_eq!(page(cx), Page::Settings(SettingsPage::Repositories));
+    assert!(
+        shell.holds_focus("add-path", cx),
+        "W-6 lands on the Add folder (Part D)"
+    );
     // Settings is a sheet: it closes before the toolbar is used again.
     shell.keys("escape", cx);
 

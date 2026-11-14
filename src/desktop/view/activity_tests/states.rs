@@ -170,6 +170,10 @@ pub(super) async fn states(cx: &mut TestAppContext) {
         cx,
     );
     assert_eq!(settings(shell, cx), Shown::Settings(SettingsPage::Remotes));
+    assert!(
+        shell.holds_focus("remote-add-name", cx),
+        "W-24 lands on the add-remote Name"
+    );
 }
 
 /// A repository's own action, from its state's row: a repository that

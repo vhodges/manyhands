@@ -218,8 +218,14 @@ impl Workspace {
     }
 
     /// The Hosts page on the repository at `root`, naming no host to
-    /// check: a comment's host stop has no host data (K-3).
-    fn open_hosts(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    /// check: a comment's host stop has no host data (K-3), nor has a host
+    /// answer that named none (R-23).
+    pub(in crate::desktop::view) fn open_hosts(
+        &mut self,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.show_settings(SettingsRoute::Hosts(root), None, window, cx);
     }
 

@@ -55,7 +55,10 @@ impl Workspace {
                     Action::OpenRemoteSettings => self.open_remotes(path, window, cx),
                     _ => match ssh_authority(reason) {
                         Some(authority) => self.check_host_in_settings(path, authority, window, cx),
-                        None => self.open_settings(SettingsPage::Hosts, window, cx),
+                        // No server named: Check host on the entry's own
+                        // repository, not the panel's selection (Wave 04
+                        // Cycle 04 decision 9; R-23).
+                        None => self.open_hosts(path, window, cx),
                     },
                 }
             }

@@ -293,6 +293,69 @@ impl KeysPage {
         body
     }
 
+    /// Where the key list lands (R-22): the radio of the key in use, else
+    /// the first key's, else Make a new key, each drawn once the keys are
+    /// read; `None` while they are still read, when none of it is.
+    fn list_target(&mut self, cx: &mut Context<Self>) -> Option<FocusHandle> {
+        let keys = match &self.keys {
+            Read::None | Read::Loading => return None,
+            Read::Ready(keys) => keys.clone(),
+            Read::Busy | Read::Failed(_) => Vec::new(),
+        };
+        // Only a key whose ID parses has a radio (`key_row`).
+        let drawn: Vec<&KeyDto> = keys
+            .iter()
+            .filter(|key| SharedKeyId::parse(&key.id).is_ok())
+            .collect();
+        let key = drawn
+            .iter()
+            .find(|key| key.selected)
+            .or_else(|| drawn.first());
+        Some(match key {
+            Some(key) => self.row_focus(RADIO, &key.id, cx),
+            None => self.focus[MAKE_ID].clone(),
+        })
+    }
+
+    /// A key-list route (Part D; R-22): the control it lands on, drawn in
+    /// the next frame, else `None` while the keys are still read, for the
+    /// caller to focus the page's `entry`. The page reads its keys again as
+    /// it is shown; when that read lands, focus moves once to what it
+    /// gives, if what the route focused still holds focus (`land_retarget`).
+    pub(crate) fn list_focus(
+        &mut self,
+        entry: FocusHandle,
+        cx: &mut Context<Self>,
+    ) -> Option<FocusHandle> {
+        let target = self.list_target(cx);
+        self.retarget = Some(target.clone().unwrap_or(entry));
+        target
+    }
+
+    /// The keys' read landed: a key-list route's one retarget (R-22), only
+    /// while Settings is open (design A4) and focus is where the route put
+    /// it.
+    pub(super) fn land_retarget(&mut self, cx: &mut Context<Self>) {
+        let Some(held) = self.retarget.take() else {
+            return;
+        };
+        let Some(target) = self.list_target(cx).filter(|target| *target != held) else {
+            return;
+        };
+        let open = self.open.clone();
+        let _ = self.window.update(cx, |_, window, cx| {
+            if open.is_open(window, cx) && held.is_focused(window) {
+                window.focus(&target, cx);
+            }
+        });
+    }
+
+    /// A key-list route's retarget is no longer wanted: Settings closed, or
+    /// left Sharing & keys.
+    pub(crate) fn forget_retarget(&mut self) {
+        self.retarget = None;
+    }
+
     /// A key removed, or its file deleted, while its row is still listed:
     /// focus on the row, where the confirmation closed onto, goes to the
     /// next key's radio by key ID, else the previous key's, else Make a new

@@ -42,9 +42,9 @@ use std::{
 };
 
 use gpui_kit::{
-    AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt,
-    Window,
+    App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Task,
+    TestSupportExt, Window,
     component::{
         ActiveTheme, WindowExt,
         button::{Button, ButtonVariants},
@@ -254,6 +254,14 @@ impl RemotesPage {
     /// The page is shown: it reads the remotes it shows again (R-32).
     pub(crate) fn opened(&mut self, cx: &mut Context<Self>) {
         self.load_remotes(cx);
+    }
+
+    /// The add-remote Name field's focus, where the Remotes route lands
+    /// (design Part D; R-24): drawn while the page works on a repository.
+    pub(crate) fn name_focus(&self, cx: &App) -> Option<FocusHandle> {
+        self.root
+            .as_ref()
+            .map(|_| self.inputs[NAME_FIELD].read(cx).focus_handle(cx))
     }
 
     /// Works on `root`, which Settings chose (design C1), from now on, and

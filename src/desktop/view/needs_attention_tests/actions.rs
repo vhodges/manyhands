@@ -138,15 +138,19 @@ async fn holds(cx: &mut TestAppContext) {
     assert_eq!(rig.checks(cx), [std::path::PathBuf::from(&rig.roots[0])]);
     // Settings is a sheet, behind which the footer item cannot be pressed:
     // Escape closes it after each press that opens it.
+    // Each lands on the control Wave 04 Cycle 04's Part D names.
     press_from_popover(shell, &hold_with(&rig, CHOOSE_A_KEY, cx), CHOOSE_A_KEY, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Keys));
+    assert!(shell.holds_focus("keys-make", cx), "W-23, no key");
     shell.keys("escape", cx);
     press_from_popover(shell, &hold_with(&rig, APPROVE_HOST, cx), APPROVE_HOST, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Hosts));
+    assert!(shell.holds_focus("hosts-check", cx), "W-25");
     shell.keys("escape", cx);
     let remote = hold_with(&rig, OPEN_REMOTE_SETTINGS, cx);
     press_from_popover(shell, &remote, OPEN_REMOTE_SETTINGS, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Remotes));
+    assert!(shell.holds_focus("remote-add-name", cx), "W-24");
     shell.keys("escape", cx);
     let resume = hold_with(&rig, RESUME_CHECKING, cx);
     press_from_popover(shell, &resume, RESUME_CHECKING, cx);

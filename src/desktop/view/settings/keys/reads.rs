@@ -26,6 +26,7 @@ impl KeysPage {
                     return;
                 }
                 this.keys = Read::from_result(result, |list| list.items);
+                this.land_retarget(cx);
                 cx.notify();
             },
         ));

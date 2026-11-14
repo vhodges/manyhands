@@ -15,6 +15,10 @@
 //!   in use. After a key is removed or its file deleted, focus on its row
 //!   goes to the next key's radio by key ID, else the previous one's, else
 //!   Make a new key, only while Settings is open (Part G item 4; R-47).
+//! - **A key-list route** (Part D; R-22) lands on the radio of the key in
+//!   use, else the first key's, else Make a new key; while the keys are
+//!   still read, on the page's entry. When the read lands, focus moves
+//!   once to what it gives, if it is still where the route put it.
 //! - **The forms** (C2.2; R-18): Make a new key and Use a key I already
 //!   have… each show today's form, one at a time, neither at first. Hiding
 //!   the Generate form empties its passphrase fields (R-13). The Generate
@@ -36,7 +40,7 @@ mod rows;
 use std::collections::{HashMap, HashSet};
 
 use gpui_kit::{
-    AppContext, Context, Entity, FocusHandle, Subscription, Task, Window,
+    AnyWindowHandle, AppContext, Context, Entity, FocusHandle, Subscription, Task, Window,
     component::input::{InputEvent, InputState},
 };
 use manyhands::{repository::KeyDto, results::ResultCode};
@@ -172,8 +176,12 @@ pub(crate) struct KeysPage {
     /// Ended requests already answered, by attempt.
     seen: HashSet<(DesktopRequestId, u32)>,
     /// Whether Settings is open: the focus by key ID after a removal (C2.1)
-    /// moves focus only while it is (design A4), as R-22's retarget will.
+    /// and R-22's retarget move focus only while it is (design A4).
     open: OpenFlag,
+    /// What a key-list route focused, until the keys' read lands (R-22).
+    retarget: Option<FocusHandle>,
+    /// The window the page is in, for the retarget once a read lands.
+    window: AnyWindowHandle,
     _inputs: Vec<Subscription>,
     _operations: Subscription,
 }
@@ -260,6 +268,8 @@ impl KeysPage {
             retrying: None,
             seen,
             open,
+            retarget: None,
+            window: window.window_handle(),
             _inputs: subscriptions,
             _operations: operations,
         };
@@ -328,8 +338,11 @@ impl KeysPage {
         held
     }
 
+    /// The page is shown: it reads its keys again (R-32). A key-list
+    /// route's retarget from an earlier showing is no longer wanted.
     pub(crate) fn opened(&mut self, cx: &mut Context<Self>) {
         self.store_available = self.services.key_store().is_ok();
+        self.retarget = None;
         self.load(cx);
     }
 

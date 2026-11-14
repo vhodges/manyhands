@@ -346,6 +346,10 @@ fn settings_opens_the_settings_page(cx: &mut TestAppContext) {
         shown(&shell, cx),
         Shown::Settings(SettingsPage::Repositories)
     );
+    assert!(
+        shell.holds_focus(("settings-page", 0usize), cx),
+        "W-2 lands on the page's entry (Part D)"
+    );
 }
 
 /// With a dialog or the sheet open, no footer control acts: the layout is

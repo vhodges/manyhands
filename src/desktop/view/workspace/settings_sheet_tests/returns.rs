@@ -41,7 +41,7 @@ use crate::desktop::{
 };
 
 /// The item header's Share (`item::share::SHARE_BUTTON`).
-const SHARE: &str = "item-share";
+pub(super) const SHARE: &str = "item-share";
 
 /// Settings is open: it owns the sheet, and the sheet is active.
 pub(super) fn settings_open(shell: &Shell, cx: &mut TestAppContext) -> bool {
@@ -293,7 +293,7 @@ async fn inside(table: &mut Table, cx: &mut TestAppContext) {
 }
 
 /// The repository's initials, in its own Git configuration.
-fn set_initials(root: &Path, initials: &str) {
+pub(super) fn set_initials(root: &Path, initials: &str) {
     let repository = git2::Repository::open(root).unwrap();
     let mut config = repository
         .config()

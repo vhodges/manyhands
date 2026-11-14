@@ -11,7 +11,8 @@
 //! checkpoint), are tables in files of their own, run from here so that
 //! each test is named here: where focus returns (P5, `returns` and
 //! `returns_activity`), late work (P22, `late`), focus kept inside (P23,
-//! `inside`) and a route's focus on open (Ruling 3, `arrive`).
+//! `inside`), and where every way in lands (P4, `routes` and `ways`; P20
+//! by keyboard, `keyboard`).
 //!
 //! A focus that design A6 names is read after two draws (Ruling 2). Guards
 //! are tested with dispatched actions, which the scrim does not take. A
@@ -43,27 +44,31 @@ use crate::desktop::{
         footer::Control,
         harness::{Shell, key},
         item::ChipField,
-        settings::{Shown, polling_support::Rig},
+        settings::{SettingsRoute, Shown, polling_support::Rig},
         workspace::{QuitPhase, Region},
     },
 };
 
-#[path = "settings_sheet_tests/arrive.rs"]
-mod arrive;
 #[path = "settings_sheet_tests/behind.rs"]
 mod behind;
 #[path = "settings_sheet_tests/inside.rs"]
 mod inside;
+#[path = "settings_sheet_tests/keyboard.rs"]
+mod keyboard;
 #[path = "settings_sheet_tests/late.rs"]
 mod late;
 #[path = "settings_sheet_tests/returns.rs"]
 mod returns;
 #[path = "settings_sheet_tests/returns_activity.rs"]
 mod returns_activity;
+#[path = "settings_sheet_tests/routes.rs"]
+mod routes;
 #[path = "settings_sheet_tests/support.rs"]
 mod support;
 #[path = "settings_sheet_tests/table.rs"]
 mod table;
+#[path = "settings_sheet_tests/ways.rs"]
+mod ways;
 
 use support::*;
 
@@ -135,9 +140,9 @@ fn settings_is_a_sheet_the_workspace_keeps(cx: &mut TestAppContext) {
 
 /// P2 (contract 2; the Wave's exit evidence): with an item open, its region
 /// scrolled and a field edited into its draft, Ctrl+, then Tab to a control
-/// below the fold, then Escape, leave the same tab shown, the tabs as they
-/// were, the item's offset as it was, and the draft holding the edit. (Its
-/// `AddRepository` row is Task 6's.)
+/// below the fold, then the `AddRepository` route (W-6's) to the Add
+/// folder, then Escape, leave the same tab shown, the tabs as they were,
+/// the item's offset as it was, and the draft holding the edit.
 #[gpui_kit::test]
 async fn settings_leaves_the_item_as_it_was(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -167,6 +172,15 @@ async fn settings_leaves_the_item_as_it_was(cx: &mut TestAppContext) {
         "Settings scrolled to the control"
     );
     assert_eq!(item_offset(&shell, cx), offset, "the item did not move");
+    // W-6's route, raised while Settings is open, arrives in place.
+    route(&shell, cx, |workspace, window, cx| {
+        workspace.show_settings(SettingsRoute::AddRepository, None, window, cx)
+    });
+    assert!(
+        holds(&shell, "add-path", cx),
+        "the AddRepository route lands on the Add folder"
+    );
+    assert_eq!(item_offset(&shell, cx), offset, "the item still did not");
     shell.keys("escape", cx);
     closed(&shell, "Escape", cx);
 
@@ -682,13 +696,28 @@ async fn focus_stays_inside_settings(cx: &mut TestAppContext) {
     table.done();
 }
 
-/// Design A6 F1 and F2 (Ruling 3): a route's focus on open is still there
-/// after two draws. The rows are in `arrive`; Task 6 folds them into P4.
+/// P4 (design Part D; A6 F1 and F2; R-14, R-22, R-23, R-24, R-53, R-55):
+/// the ten routes through `show_settings`, and each way in no other test
+/// raises through its own handler, land on their page, with focus on the
+/// control Part D names after two draws and the repository Settings works
+/// on. The rows are in `routes` and `ways`; Ruling 3's F1 and F2 rows are
+/// among them.
 #[gpui_kit::test]
-async fn focus_on_open_survives_the_sheet_keeping_focus(cx: &mut TestAppContext) {
+async fn each_route_lands_on_its_page_and_control(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
-    let mut table = table::Table::new("F1 and F2");
-    arrive::rows(&mut table, cx).await;
+    let mut table = table::Table::new("P4");
+    routes::rows(&mut table, cx).await;
+    ways::rows(&mut table, cx).await;
+    table.done();
+}
+
+/// P20 (contract 5; design Part D): one trigger of each kind, focused and
+/// pressed with Enter, lands as Part D says. The rows are in `keyboard`.
+#[gpui_kit::test]
+async fn routes_by_keyboard(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let mut table = table::Table::new("P20");
+    keyboard::rows(&mut table, cx).await;
     table.done();
 }
 

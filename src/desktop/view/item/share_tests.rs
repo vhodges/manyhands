@@ -214,6 +214,10 @@ fn share_without_a_remote_reads_share_and_opens_remotes(cx: &mut TestAppContext)
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
     assert!(matches!(shown, Shown::Settings(SettingsPage::Remotes)));
     assert_eq!(item_syncs(&shell, &root, cx), 0, "nothing was sent");
+    assert!(
+        shell.holds_focus("remote-add-name", cx),
+        "W-11 lands on the add-remote Name (Part D)"
+    );
 }
 
 /// A remote selected for publication through the request path, as the
@@ -338,6 +342,10 @@ fn share_main_without_a_remote_reads_share_main_and_opens_remotes(cx: &mut TestA
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
     assert!(matches!(shown, Shown::Settings(SettingsPage::Remotes)));
     assert_eq!(repo_syncs(&shell, &root, cx), 0, "nothing was sent");
+    assert!(
+        shell.holds_focus("remote-add-name", cx),
+        "W-10 lands on the add-remote Name (Part D)"
+    );
 }
 
 // Task 9: stages and Stop (design, Lane B, Stage text and Stop at a safe
@@ -841,6 +849,10 @@ fn share_opens_remotes_on_its_own_repository_after_another(cx: &mut TestAppConte
         shell.label("remotes-root", cx),
         Some(format!("Repository: {}", key(&b))),
         "the Remotes page works on the item's repository"
+    );
+    assert!(
+        shell.holds_focus("remote-add-name", cx),
+        "W-11 lands on the add-remote Name (Part D)"
     );
 }
 

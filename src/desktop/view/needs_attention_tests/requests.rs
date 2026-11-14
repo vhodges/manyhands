@@ -93,8 +93,9 @@ async fn popover_actions_real_requests(cx: &mut TestAppContext) {
 
 /// What a share offer's button did.
 enum Effect {
-    /// A Settings page opened.
-    Page(SettingsPage),
+    /// A Settings page opened, focus on the control Wave 04 Cycle 04's
+    /// Part D names.
+    Page(SettingsPage, &'static str),
     /// Activity's list took focus (Show it).
     Holder,
 }
@@ -106,12 +107,13 @@ fn shares(cx: &mut TestAppContext) {
         (
             ResultCode::NoSelectedKey,
             OPEN_SHARING_AND_KEYS,
-            Effect::Page(SettingsPage::Keys),
+            // The key list: with no key, Make a new key (R-22).
+            Effect::Page(SettingsPage::Keys, "keys-make"),
         ),
         (
             ResultCode::PublicationRemoteRequired,
             SET_UP_SHARING,
-            Effect::Page(SettingsPage::Remotes),
+            Effect::Page(SettingsPage::Remotes, "remote-add-name"),
         ),
         (ResultCode::Busy, SHOW_IT, Effect::Holder),
     ];
@@ -125,8 +127,9 @@ fn shares(cx: &mut TestAppContext) {
         let row = RowKey::Request(id);
         press_from_popover(&shell, &row, label, cx);
         match effect {
-            Effect::Page(page) => {
+            Effect::Page(page, control) => {
                 assert_eq!(settings(&shell, cx), Shown::Settings(page), "{label}");
+                assert!(shell.holds_focus(control, cx), "{label}: {control}");
             }
             Effect::Holder => {
                 shell.frame(cx, |_, _| ());
@@ -308,6 +311,7 @@ async fn routes(cx: &mut TestAppContext) {
     );
     held.wait_reached();
     assert!(shell.present("settings-hosts", cx), "the Hosts page opened");
+    assert!(shell.holds_focus("hosts-check", cx), "on Check host (W-13)");
     held.release();
 
     let (shell, root) = open(true, cx);
@@ -328,5 +332,9 @@ async fn routes(cx: &mut TestAppContext) {
     assert!(
         matches!(settings(&shell, cx), Shown::Settings(_)),
         "Settings opened"
+    );
+    assert!(
+        shell.holds_focus("identity-name", cx),
+        "on the identity Name (W-14)"
     );
 }

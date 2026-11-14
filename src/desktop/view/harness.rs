@@ -379,6 +379,21 @@ impl Shell {
         })
     }
 
+    /// Whether the element `id`, or something in it, holds focus, read
+    /// after two draws with what each starts run after it: where a way into
+    /// Settings landed, read as Wave 04 Cycle 04's design A6 reads a focus,
+    /// so a rule that moves it on the first draw has had its frame.
+    pub(crate) fn holds_focus(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
+        for _ in 0..2 {
+            self.frame(cx, |_, _| ());
+            self.run(cx);
+        }
+        let id = id.into();
+        self.frame(cx, |window, _| {
+            window.try_find(id).and_then(|element| element.focused()) == Some(true)
+        })
+    }
+
     /// Whether the element `id` is drawn.
     pub(crate) fn present(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
         let id = id.into();

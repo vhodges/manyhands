@@ -240,14 +240,18 @@ impl SettingsHost {
 
     /// Empties the Keys page's masked inputs unless Sharing & keys is shown,
     /// by either of its pages (B3, R-13): a typed passphrase does not
-    /// outlive Sharing & keys, and Settings closed shows no page.
+    /// outlive Sharing & keys, and Settings closed shows no page. A
+    /// key-list route's retarget (R-22) goes with it.
     pub(crate) fn forget_passphrase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let sharing = matches!(
             self.shown,
             Shown::Settings(page) if page.nav() == SettingsNav::SharingAndKeys
         );
         if !sharing && let Some(keys) = self.keys.clone() {
-            keys.update(cx, |page, cx| page.forget_passphrase(window, cx));
+            keys.update(cx, |page, cx| {
+                page.forget_passphrase(window, cx);
+                page.forget_retarget();
+            });
         }
     }
 

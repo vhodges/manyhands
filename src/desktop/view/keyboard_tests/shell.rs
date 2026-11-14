@@ -302,6 +302,10 @@ fn a_panel_toggle_works_by_tab_and_enter(cx: &mut TestAppContext) {
         walk.settings_shown(cx),
         Shown::Settings(SettingsPage::Repositories)
     );
+    assert!(
+        walk.shell.holds_focus(("settings-page", 0usize), cx),
+        "W-2 lands on the page's entry"
+    );
 }
 
 /// `menu` and `shift-f10` open the dock menu of a focused panel toggle, with

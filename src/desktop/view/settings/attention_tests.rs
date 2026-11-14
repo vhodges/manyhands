@@ -69,7 +69,8 @@ async fn settings_polling_attention_actions(cx: &mut TestAppContext) {
     );
     assert_eq!(sent.len(), 1, "Unlock… sent Check now");
 
-    // Choose a key… shows the Keys page.
+    // Choose a key… shows the Keys page, on its key list: with no key,
+    // Make a new key (W-32; Part D, R-22).
     rig.shell.click((ACTION, b), cx);
     assert_eq!(
         rig.shell
@@ -77,6 +78,7 @@ async fn settings_polling_attention_actions(cx: &mut TestAppContext) {
             .read_with(cx, |workspace, cx| workspace.settings_shown(cx)),
         Shown::Settings(SettingsPage::Keys)
     );
+    assert!(rig.shell.holds_focus("keys-make", cx), "W-32 Choose a key…");
 
     // Resume checking is reached by Tab and pressed by Enter; the library's
     // hold is released, and the row no longer says held. Ctrl+, with

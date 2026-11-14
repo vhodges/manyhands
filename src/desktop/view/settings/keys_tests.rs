@@ -894,6 +894,10 @@ async fn the_operation_area_retry_of_a_protected_generation_asks_on_the_page(
         field.read(cx).focus_handle(cx).is_focused(window)
     });
     assert!(focused);
+    assert!(
+        shell.holds_focus(PASSPHRASE, cx),
+        "W-26 lands on the passphrase, after two draws (Part D)"
+    );
 
     shell.visual(cx).simulate_input(SENTINEL);
     type_into(&shell, CONFIRMATION, SENTINEL, cx);

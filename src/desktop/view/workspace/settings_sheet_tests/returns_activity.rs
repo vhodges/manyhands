@@ -34,19 +34,19 @@ use crate::desktop::{
 };
 
 /// The share row's button.
-fn keys_label() -> &'static str {
+pub(super) fn keys_label() -> &'static str {
     offer_label(SyncOffer::OpenSharingAndKeys)
 }
 
 /// The window and its two Activity rows.
-struct Rows {
-    shell: Shell,
+pub(super) struct Rows {
+    pub(super) shell: Shell,
     /// The failed share, Open Sharing & keys.
-    keys: RowKey,
-    id: DesktopRequestId,
+    pub(super) keys: RowKey,
+    pub(super) id: DesktopRequestId,
 }
 
-fn activity_rows(cx: &mut TestAppContext) -> Rows {
+pub(super) fn activity_rows(cx: &mut TestAppContext) -> Rows {
     let (shell, root) = shell(cx, |fixture, root| {
         fixture.commit_ticket(root, TICKET, "Ticket", "");
     });
@@ -188,7 +188,7 @@ fn attention_item(shell: &Shell, cx: &mut TestAppContext) -> gpui_kit::FocusHand
 }
 
 /// Opens the popover by Enter on the footer item, and lets its rows draw.
-fn open_popover(shell: &Shell, cx: &mut TestAppContext) {
+pub(super) fn open_popover(shell: &Shell, cx: &mut TestAppContext) {
     refresh(shell, cx);
     settle(shell, cx);
     let item = attention_item(shell, cx);
@@ -205,7 +205,7 @@ fn open_popover(shell: &Shell, cx: &mut TestAppContext) {
 }
 
 /// Presses the popover's highlighted row with Enter: it must be `row`.
-fn press_in_popover(shell: &Shell, row: &RowKey, cx: &mut TestAppContext) {
+pub(super) fn press_in_popover(shell: &Shell, row: &RowKey, cx: &mut TestAppContext) {
     let cursor = shell
         .workspace
         .read_with(cx, |workspace, _| workspace.attention_popover_cursor());

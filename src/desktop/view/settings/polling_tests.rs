@@ -341,6 +341,10 @@ async fn settings_polling_states(cx: &mut TestAppContext) {
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_chosen(cx));
     assert_eq!(chosen.as_deref().map(key), Some(rig.key(0)), "worked on");
+    assert!(
+        rig.shell.holds_focus("remote-add-name", cx),
+        "W-31 lands on the add-remote Name (Part D)"
+    );
 }
 
 /// A repository waiting for an unfinished operation links to its pending
