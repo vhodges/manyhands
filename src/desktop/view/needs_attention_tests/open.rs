@@ -1,7 +1,23 @@
 //! P22: the footer item opens the popover and closes it.
 
+use manyhands::results::ResultCode;
+
 use super::*;
-use crate::desktop::view::harness::Shell;
+use crate::desktop::{
+    model::activity::rows::RowKey,
+    services::requests::Intent,
+    test_support::fixtures::item_id,
+    view::{
+        activity::tests::{
+            cases::{TICKET, answered, fabricate},
+            list_support::{OP_A, save},
+            pending_cases::{listing, read_pending},
+        },
+        activity_support::refresh,
+        harness::Shell,
+        settings::polling_support::Rig,
+    },
+};
 
 /// P22: a click opens the popover with the attention rows, newest first, and
 /// a second click closes it; Enter opens it and Escape closes it, with focus
@@ -10,21 +26,67 @@ use crate::desktop::view::harness::Shell;
 /// and highlights the first row.
 #[gpui_kit::test]
 fn the_popover_opens_lists_and_closes(cx: &mut TestAppContext) {
-    let world = rows(cx);
-    let shell = &world.shell;
+    // Rows that arrived a minute apart, on the window's own clock, so that
+    // "newest first" is an order and not a tie: a quiet request, two failed
+    // ones and a pending operation, oldest first.
+    let rig = Rig::new(&[("a", false)], cx);
+    let shell = &rig.shell;
+    let root = rig.roots[0].clone();
+    let step = |cx: &mut TestAppContext| {
+        refresh(shell, cx);
+        rig.clock.advance(std::time::Duration::from_secs(60));
+    };
+    let quiet = RowKey::Request(fabricate(
+        shell,
+        1,
+        Intent::IndexRefresh { root: root.clone() },
+        answered("index refresh", ResultCode::Ok),
+        cx,
+    ));
+    step(cx);
+    let first = RowKey::Request(fabricate(
+        shell,
+        2,
+        Intent::IndexRefresh { root: root.clone() },
+        answered("index refresh", ResultCode::IndexUnavailable),
+        cx,
+    ));
+    step(cx);
+    let second = RowKey::Request(fabricate(
+        shell,
+        3,
+        Intent::TicketClose {
+            root: root.clone(),
+            id: item_id(TICKET),
+        },
+        answered("ticket close", ResultCode::PushRejected),
+        cx,
+    ));
+    step(cx);
+    let listed = crate::desktop::view::harness::key(&root);
+    read_pending(shell, &listed, listing(vec![save(OP_A)]), cx);
+    let pending = RowKey::Pending {
+        root: listed,
+        operation: OP_A.to_owned(),
+    };
+    step(cx);
     settle(shell, cx);
     let attention = attention_rows(shell, cx);
     let keys = keys_of(&attention);
-    assert!(keys.len() >= 4, "attention rows: {keys:?}");
-    for pending in &world.pending {
-        assert!(keys.contains(pending), "{pending:?} needs attention");
-    }
-    for quiet in [&world.plain, &world.item, &world.disabled] {
-        assert!(!keys.contains(quiet), "{quiet:?} does not need attention");
-    }
+    assert_eq!(
+        keys,
+        [pending.clone(), second, first],
+        "the attention rows, newest first"
+    );
     assert!(
-        attention.windows(2).all(|pair| pair[0].at >= pair[1].at),
-        "newest first"
+        attention.windows(2).all(|pair| pair[0].at > pair[1].at),
+        "at distinct times: {:?}",
+        attention.iter().map(|row| row.at).collect::<Vec<_>>()
+    );
+    assert!(
+        crate::desktop::view::activity_support::row(shell, &quiet, cx)
+            .is_some_and(|row| !row.row.attention),
+        "a quiet row is in the log"
     );
     assert!(!is_open(shell, cx) && !drawn(shell, cx), "closed at first");
 

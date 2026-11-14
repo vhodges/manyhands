@@ -16,7 +16,8 @@ use crate::desktop::{
     view::{
         activity::tests::{
             cases::{TICKET, answered, fabricate},
-            list_support::{OP_A, OP_B, OP_C, OP_D, pending_key, relist},
+            list_support::{OP_A, OP_B, OP_C, OP_D, pending_key, relist, save},
+            pending_cases::{PENDING_ROOT, listing},
         },
         footer::{
             menu::Placement,
@@ -67,6 +68,7 @@ fn the_popover_closes(cx: &mut TestAppContext) {
     a_dialog_from_the_popover(cx);
     a_layer_opened_while_it_had_focus(cx);
     the_highlighted_row_leaves(cx);
+    the_row_at_the_position_has_no_button(cx);
 }
 
 /// The count reaches 0 while the popover is open and has focus: it closes,
@@ -326,4 +328,77 @@ fn the_highlighted_row_leaves(cx: &mut TestAppContext) {
     shell.keys("escape", cx);
     assert!(!is_open(shell, cx), "and Escape");
     assert_eq!(spot(shell, cx), Spot::Item);
+}
+
+/// The row at the highlight's position has no enabled button while its button
+/// holds focus: the popover stays open, focus moves to its list, and the
+/// arrows, Home and End and Escape still work from there (E2, P25). The
+/// highlighted row stays in the log (so `kept`, the other half of the rule,
+/// does not move focus) but is listed as a remote synchronization now, whose
+/// Resume is disabled.
+fn the_row_at_the_position_has_no_button(cx: &mut TestAppContext) {
+    let world = rows(cx);
+    let shell = &world.shell;
+    settle(shell, cx);
+    open_by_click(shell, cx);
+    let highlighted = world.pending[3].clone();
+    let at = keys_of(&applied(shell, cx))
+        .iter()
+        .position(|row| row == &highlighted)
+        .expect("the row is listed");
+    for _ in 0..at {
+        shell.keys("down", cx);
+    }
+    assert_eq!(cursor(shell, cx).as_ref(), Some(&highlighted));
+    shell.keys("tab", cx);
+    assert_eq!(spot(shell, cx), Spot::Button, "Tab reaches the button");
+    let before = applied(shell, cx);
+    assert!(
+        before
+            .iter()
+            .find(|row| row.row.key == highlighted)
+            .and_then(|row| row.row.button.as_ref())
+            .is_some_and(|button| button.enabled),
+        "it has a button that can be pressed"
+    );
+    let mut remote = save(OP_D);
+    remote.family = manyhands::repository::OperationFamily::Remote;
+    let list = vec![save(OP_A), save(OP_B), save(OP_C), remote];
+    let operations = shell.operations(cx);
+    operations.update(cx, |operations, cx| {
+        let stamp = operations.load_pending(PENDING_ROOT.to_owned());
+        assert!(operations.apply_pending(stamp, listing(list)));
+        cx.notify();
+    });
+    shell.run(cx);
+    settle_popover(shell, cx);
+    assert!(is_open(shell, cx), "it stays open");
+    let listed = applied(shell, cx);
+    assert_eq!(
+        cursor(shell, cx).as_ref(),
+        Some(&highlighted),
+        "the row stayed"
+    );
+    assert!(
+        listed
+            .iter()
+            .find(|row| row.row.key == highlighted)
+            .and_then(|row| row.row.button.as_ref())
+            .is_some_and(|button| !button.enabled),
+        "its button cannot be pressed now"
+    );
+    assert_eq!(spot(shell, cx), Spot::List, "focus moved to its list");
+    shell.keys("home", cx);
+    let first = keys_of(&listed);
+    assert_eq!(cursor(shell, cx).as_ref(), first.first());
+    shell.keys("down", cx);
+    assert_eq!(cursor(shell, cx).as_ref(), first.get(1), "the arrows work");
+    assert_eq!(spot(shell, cx), Spot::List);
+    shell.keys("escape", cx);
+    assert!(!is_open(shell, cx), "Escape closes it");
+    assert_eq!(
+        spot(shell, cx),
+        Spot::Item,
+        "focus goes to the restore target"
+    );
 }

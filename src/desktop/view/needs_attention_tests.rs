@@ -24,7 +24,11 @@ mod closes;
 mod hidden;
 #[path = "needs_attention_tests/open.rs"]
 mod open;
+#[path = "needs_attention_tests/requests.rs"]
+mod requests;
 #[path = "needs_attention_tests/stale.rs"]
 mod stale;
+#[path = "needs_attention_tests/states.rs"]
+mod states;
 #[path = "needs_attention_tests/support.rs"]
 pub(in crate::desktop::view) mod support;

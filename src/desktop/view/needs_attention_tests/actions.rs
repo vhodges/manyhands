@@ -9,43 +9,35 @@
 //! the popover stays open with the row refreshed (T8, R-55).
 
 use gpui_kit::TestAppContext;
-use manyhands::{repository::OperationAction, results::ResultCode};
+use manyhands::{
+    repository::{ItemDtoKind, OperationAction},
+    results::ResultCode,
+};
 
 use super::*;
 use crate::desktop::{
     model::{
-        activity::{
-            copy::{
-                OPEN_LIFECYCLE, OPEN_SHARING_AND_KEYS, REPUBLISH, REVIEW_CHANGES, SET_UP_SHARING,
-                SHOW_IT,
-            },
-            rows::RowKey,
-        },
-        polling::{
-            Answer, AttemptTarget, Clock, Disposition, PollAttempt, TargetKind, TransportFailure,
-            attention::{
-                APPROVE_HOST, CHOOSE_A_KEY, OPEN_REMOTE_SETTINGS, RESUME_CHECKING,
-                UNLOCK as UNLOCK_KEY,
-            },
+        activity::{copy::REVIEW_CHANGES, rows::RowKey},
+        polling::attention::{
+            APPROVE_HOST, CHOOSE_A_KEY, OPEN_REMOTE_SETTINGS, RESUME_CHECKING, UNLOCK as UNLOCK_KEY,
         },
         stamp::SettingsPage,
-        tabs::TabKey,
     },
-    services::{ReadKind, ReadResult, requests::Intent},
+    services::{ReadKind, ReadResult},
     test_support::fixtures::{Fixture, item_id},
     view::{
         activity::tests::{
-            cases::{OPERATION, TICKET, answered, dialog_open, fabricate, item_sync, settings},
+            cases::{OPERATION, TICKET, dialog_open},
             list_support::{OP_B, resumes, save, waiting_close},
-            pending_cases::{PENDING_ROOT, listing, read_pending},
+            pending_cases::{PENDING_ROOT, listing, read_pending, waiting},
         },
         activity_support::{pending_key, refresh},
         harness::Shell,
         operations::{
             attention_tests::{every_reason, hold_with, shown},
-            republish::tests::{finished_deleted_share, republish_preview, ticket_shell},
+            republish::tests::ticket_shell,
         },
-        settings::{Shown, polling_support::Rig},
+        settings::Shown,
     },
 };
 
@@ -64,13 +56,21 @@ pub(super) fn press_from_popover(
     shell.press("enter", cx);
     assert!(is_open(shell, cx), "Enter on the item opens it ({label})");
     settle_popover(shell, cx);
-    let order = keys_of(&applied(shell, cx));
-    let target = order
-        .iter()
-        .position(|row| row == key)
-        .unwrap_or_else(|| panic!("{key:?} is not listed: {order:?}"));
-    for _ in 0..target {
-        shell.keys("down", cx);
+    // The arrows, from where the highlight is to the row, read each step: a
+    // row the schedule's polls reorder while the popover is open is still
+    // reached.
+    for _ in 0..32 {
+        let order = keys_of(&applied(shell, cx));
+        let target = order
+            .iter()
+            .position(|row| row == key)
+            .unwrap_or_else(|| panic!("{key:?} is not listed: {order:?}"));
+        let at = cursor(shell, cx).and_then(|held| order.iter().position(|row| *row == held));
+        match at {
+            Some(at) if at == target => break,
+            Some(at) if at > target => shell.keys("up", cx),
+            _ => shell.keys("down", cx),
+        }
     }
     assert_eq!(
         cursor(shell, cx).as_ref(),
@@ -91,7 +91,12 @@ pub(super) fn press_from_popover(
 
 /// The popover's Enter on `key`'s row, then Escape from the dialog it
 /// opened: focus is back on the footer item.
-async fn dialog_and_back(shell: &Shell, key: &RowKey, label: &str, cx: &mut TestAppContext) {
+pub(super) async fn dialog_and_back(
+    shell: &Shell,
+    key: &RowKey,
+    label: &str,
+    cx: &mut TestAppContext,
+) {
     press_from_popover(shell, key, label, cx);
     shell.until_drawn(cx, "the dialog", dialog_open).await;
     shell.keys("escape", cx);
@@ -100,17 +105,16 @@ async fn dialog_and_back(shell: &Shell, key: &RowKey, label: &str, cx: &mut Test
     assert_eq!(spot(shell, cx), Spot::Item, "{label}: focus is on the item");
 }
 
-/// P23: the table of sources and buttons, and the stale rows.
+/// P23, S3, S9, S10 and S11: the holds, the pending operations and the
+/// failing draft's flush. S1 is `requests.rs`, S4 and S5 `states.rs`, and
+/// the keys and the stale rows `stale.rs`.
 #[gpui_kit::test]
 async fn popover_actions_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
-    super::stale::keys(cx);
-    super::stale::stale_rows(cx);
     holds(cx).await;
-    shares(cx);
-    dialogs(cx).await;
     pending(cx).await;
-    polling(cx).await;
+    review_pending(cx).await;
+    flush(cx).await;
 }
 
 /// S3: the five holds, one for each reason, each button pressed from the
@@ -142,128 +146,6 @@ async fn holds(cx: &mut TestAppContext) {
     let resume = hold_with(&rig, RESUME_CHECKING, cx);
     press_from_popover(shell, &resume, RESUME_CHECKING, cx);
     assert_eq!(rig.backend.resumed(), [rig.roots[4].clone()]);
-}
-
-/// What a share offer's button did.
-enum Effect {
-    /// A Settings page opened.
-    Page(SettingsPage),
-    /// Activity's list took focus (Show it).
-    Holder,
-}
-
-/// S1: a failed share of each kind of answer, whose first offer is its
-/// button: what the answer's code makes of it, and what the button does.
-fn shares(cx: &mut TestAppContext) {
-    let table = [
-        (
-            ResultCode::NoSelectedKey,
-            OPEN_SHARING_AND_KEYS,
-            Effect::Page(SettingsPage::Keys),
-        ),
-        (
-            ResultCode::PublicationRemoteRequired,
-            SET_UP_SHARING,
-            Effect::Page(SettingsPage::Remotes),
-        ),
-        (ResultCode::Busy, SHOW_IT, Effect::Holder),
-    ];
-    for (code, label, effect) in table {
-        let fixture = Fixture::new();
-        let root = fixture.create_repository("a");
-        fixture.commit_ticket(&root, TICKET, "Ticket", "");
-        fixture.refresh(&root);
-        let shell = Shell::open(fixture, cx);
-        let id = fabricate(&shell, 1, item_sync(&root), answered("item sync", code), cx);
-        let row = RowKey::Request(id);
-        press_from_popover(&shell, &row, label, cx);
-        match effect {
-            Effect::Page(page) => {
-                assert_eq!(settings(&shell, cx), Shown::Settings(page), "{label}");
-            }
-            Effect::Holder => {
-                shell.frame(cx, |_, _| ());
-                assert!(
-                    crate::desktop::view::activity_support::list_focused(&shell, cx),
-                    "{label}: Activity's list took focus: the action placed it"
-                );
-            }
-        }
-    }
-}
-
-/// The buttons that open a dialog, each in a window of its own: Open…,
-/// Republish…, a recovery that confirms and a share's Review changes. The
-/// dialog's close gives focus back to the footer item.
-async fn dialogs(cx: &mut TestAppContext) {
-    use manyhands::results::{RecoveryAction, RecoveryActionKind};
-
-    use crate::desktop::model::activity::rows::ActivityAction;
-    let (shell, root) = ticket_shell(cx);
-    let deleted = RowKey::Request(finished_deleted_share(&shell, &root, cx).await);
-    let close = RowKey::Request(fabricate(
-        &shell,
-        1,
-        Intent::TicketClose {
-            root: root.clone(),
-            id: item_id(TICKET),
-        },
-        answered("ticket close", ResultCode::PushRejected),
-        cx,
-    ));
-    let prepare = RowKey::Request(fabricate(
-        &shell,
-        2,
-        Intent::OperationAbandon {
-            root: root.clone(),
-            operation_id: manyhands::repository::OperationId::parse(OPERATION).unwrap(),
-        },
-        answered("operation abandon", ResultCode::ExternalChange).with_recovery(vec![
-            RecoveryAction::new(RecoveryActionKind::RequestPrepare, []),
-        ]),
-        cx,
-    ));
-    refresh(&shell, cx);
-    let prepare_again = crate::desktop::view::activity_support::label_of(
-        &shell,
-        &prepare,
-        &ActivityAction::Recovery(
-            match &prepare {
-                RowKey::Request(id) => *id,
-                _ => unreachable!(),
-            },
-            0,
-        ),
-        cx,
-    );
-    shell
-        .backend
-        .answer_next_prepare("item republish", republish_preview(&shell, &root));
-    dialog_and_back(&shell, &deleted, REPUBLISH, cx).await;
-    dialog_and_back(&shell, &close, OPEN_LIFECYCLE, cx).await;
-    dialog_and_back(&shell, &prepare, &prepare_again, cx).await;
-
-    // Review changes, on a share stopped on a conflict.
-    let fixture = Fixture::new();
-    let root = fixture.create_repository("a");
-    fixture.commit_ticket(&root, TICKET, "Untitled", "");
-    fixture.refresh(&root);
-    fixture.save_ticket(&root, TICKET, "Mine");
-    fixture.refresh(&root);
-    let shell = Shell::open(fixture, cx);
-    let share = RowKey::Request(crate::desktop::view::conflict::entry_tests::fabricate(
-        &shell,
-        6,
-        item_sync(&root),
-        crate::desktop::view::conflict::entry_tests::share_conflict(),
-        cx,
-    ));
-    press_from_popover(&shell, &share, REVIEW_CHANGES, cx);
-    shell
-        .until_drawn(cx, "the sheet", |shell, cx| {
-            shell.present("conflict-sheet", cx)
-        })
-        .await;
 }
 
 /// S9 and S10: a pending operation's Resume, a lifecycle's Resume (which
@@ -328,71 +210,105 @@ async fn pending(cx: &mut TestAppContext) {
     );
 }
 
-/// S4 and S5: an unreachable repository's Retry now, and a problem item's
-/// Open, from the schedule's own transitions.
-async fn polling(cx: &mut TestAppContext) {
-    use manyhands::canonical::ItemId;
-    let rig = Rig::new(&[("a", true)], cx);
-    let root = rig.key(0);
-    rig.schedule(0, cx);
-    rig.answer(0, Answer::Transport(TransportFailure::Unreachable), cx);
-    let shell = &rig.shell;
-    refresh(shell, cx);
-    let state = RowKey::Repository(root.clone());
-    assert!(
-        keys_of(&attention_rows(shell, cx)).contains(&state),
-        "an unreachable repository needs attention"
-    );
-    press_from_popover(shell, &state, "Retry now", cx);
-    assert_eq!(
-        rig.sent(cx, |intent| matches!(intent, Intent::PollOnce { .. }))
-            .len(),
-        1,
-        "Retry now sent a check"
-    );
+/// S9's Review changes (`ReviewPending`), on a pending operation whose
+/// conflict waits to be resolved: the sheet opens, and closing it gives
+/// focus back to the footer item.
+async fn review_pending(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, TICKET, "Untitled", "");
+    fixture.refresh(&root);
+    fixture.conflict_locally(&root, TICKET, "Mine", "Theirs");
+    let shell = Shell::open(fixture, cx);
+    let root = crate::desktop::view::harness::key(&root);
+    let row = pending_key(&shell, &root, "context_sync_local", cx);
+    // The library lists this operation with a Resume. Listed as a remote
+    // synchronization (which Resume is not offered on: it takes the
+    // request that made it) its conflict, still waiting, is the button.
+    let RowKey::Pending { operation, .. } = row.clone() else {
+        panic!("a pending row");
+    };
+    let mut remote = waiting(OperationAction::SaveTicket, &operation, None);
+    remote.family = manyhands::repository::OperationFamily::Remote;
+    read_pending(&shell, &root, listing(vec![remote]), cx);
+    refresh(&shell, cx);
+    assert!(!shell.present("conflict-sheet", cx));
+    press_from_popover(&shell, &row, REVIEW_CHANGES, cx);
+    shell
+        .until_drawn(cx, "the sheet", |shell, cx| {
+            shell.present("conflict-sheet", cx)
+        })
+        .await;
+    // Closing the sheet gives focus back to the footer item.
+    shell.keys("escape", cx);
+    shell.frame(cx, |_, _| ());
+    assert!(!shell.present("conflict-sheet", cx), "the sheet closed");
+    assert_eq!(spot(&shell, cx), Spot::Item, "focus is on the item");
+}
 
-    // A problem item: Open takes the person to it.
-    let rig = Rig::new(&[("a", true)], cx);
-    let root = rig.key(0);
-    rig.schedule(0, cx);
-    let problem = ItemId::generate();
-    let now = rig.clock.now();
-    let attempt = PollAttempt {
-        root: root.clone(),
-        operation: manyhands::repository::OperationId::new(),
-        answer: Answer::Completed,
-        completed_at: Some(now.utc),
-        next_eligible_at: Some(now.utc + time::Duration::seconds(300)),
-        targets: vec![AttemptTarget {
-            item_id: Some(problem.clone()),
-            kind: Some(TargetKind::Ticket),
-            disposition: Disposition::Dirty,
-            main: false,
-        }],
-        index_pending: false,
+/// S11's Retry, on a draft whose flush failed: the newest text is written
+/// now. A draft session, not a request: the worker is not involved.
+async fn flush(cx: &mut TestAppContext) {
+    use manyhands::drafts::{DraftErrorKind, DraftFields, FailureAction, FailurePoint};
+
+    use crate::desktop::{
+        model::{navigation::OpenTarget, tabs::TabKey},
+        test_support::drafts::store_draft,
     };
-    rig.services.scheduler().update(cx, |scheduler, cx| {
-        scheduler.schedule_mut().after(&now, &attempt);
-        cx.notify();
-    });
-    rig.shell.run(cx);
-    let row = RowKey::Problem {
-        root: root.clone(),
-        target: crate::desktop::model::activity::rows::Target::Item(problem.clone()),
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, TICKET, "One", "");
+    fixture.refresh(&root);
+    store_draft(&fixture, &root, ItemDtoKind::Ticket, TICKET, "Mine");
+    let shell = Shell::open(fixture, cx);
+    let key = crate::desktop::view::harness::key(&root);
+    let target = OpenTarget::Item {
+        repo: key.clone(),
+        kind: ItemDtoKind::Ticket,
+        id: item_id(TICKET),
     };
-    assert!(
-        keys_of(&attention_rows(&rig.shell, cx)).contains(&row),
-        "a problem item needs attention"
-    );
-    press_from_popover(&rig.shell, &row, "Open", cx);
-    let tab = TabKey::Item {
-        repo: root,
-        kind: manyhands::repository::ItemDtoKind::Ticket,
-        id: problem.to_string(),
-    };
-    let tabs = rig
-        .shell
+    shell
         .workspace
-        .read_with(cx, |workspace, _| workspace.tab_keys());
-    assert!(tabs.contains(&tab), "its tab opened");
+        .update(cx, |workspace, cx| workspace.open_item(target, cx));
+    shell.run(cx);
+    shell.click("draft-restore-button", cx);
+    let drafts = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+    let tab = TabKey::Item {
+        repo: key,
+        kind: ItemDtoKind::Ticket,
+        id: TICKET.to_owned(),
+    };
+    let id = drafts
+        .read_with(cx, |registry, _| registry.attached(&tab))
+        .expect("the draft is restored");
+    let mut fields = drafts.read_with(cx, |registry, _| {
+        registry.session(id).expect("its session").current().clone()
+    });
+    if let DraftFields::Ticket { body, .. } = &mut fields {
+        body.push_str(" more");
+    }
+    drafts.update(cx, |registry, cx| registry.edit(id, fields, cx));
+    let failing = shell.fixture.draft_store().with_failure_point_for_testing(
+        FailurePoint::CreateTemp,
+        FailureAction::Fail(DraftErrorKind::NoSpace),
+    );
+    let flushed = drafts.update(cx, |registry, cx| registry.flush_now(id, cx));
+    shell.run(cx);
+    flushed.await.expect_err("the flush fails");
+    shell.run(cx);
+    let flush = RowKey::Flush(id);
+    assert!(
+        keys_of(&attention_rows(&shell, cx)).contains(&flush),
+        "a failed flush needs attention"
+    );
+    drop(failing);
+    let writes = shell.backend.reads_seen(ReadKind::DraftWrite);
+    press_from_popover(&shell, &flush, "Retry", cx);
+    assert!(
+        shell.backend.reads_seen(ReadKind::DraftWrite) > writes,
+        "Retry wrote the newest text now"
+    );
 }

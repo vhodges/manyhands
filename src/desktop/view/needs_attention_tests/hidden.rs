@@ -127,6 +127,14 @@ fn footprint(world: &Rows, cx: &mut TestAppContext) -> String {
 /// list keys, the footer item and the popover's keys do nothing, and a
 /// popover that was open is gone. Once the modal closes, the same presses
 /// act, so the refusal is the modal's.
+///
+/// What this pins: the popover's layer is dropped by the draw that follows a
+/// modal, so its keys have nothing to act on, and the item's press and the
+/// other presses are refused in the update that makes them. The root's
+/// `unless_dialog` guards on the popover's keys are defence in depth that no
+/// test can reach: the dialog's own opening draws a frame that drops the layer
+/// before a dispatched key runs (a mutation removing a key's guard was run
+/// against a dialog opened with no frame between, and survived).
 #[gpui_kit::test]
 fn nothing_acts_behind_a_dialog_or_sheet(cx: &mut TestAppContext) {
     cx.executor().allow_parking();

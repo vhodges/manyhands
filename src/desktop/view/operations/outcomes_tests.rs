@@ -51,10 +51,10 @@ use crate::desktop::{
     },
 };
 
-pub(super) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FS0";
+pub(in crate::desktop::view) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FS0";
 
 /// The line a settings page names the repository it works on with.
-pub(super) fn chosen_line(root: &str) -> String {
+pub(in crate::desktop::view) fn chosen_line(root: &str) -> String {
     format!("Repository: {root}")
 }
 
@@ -77,12 +77,12 @@ const OFFERS: [SyncOffer; 9] = [
 /// open window. With `committed`, the publication selection is committed,
 /// so a share is accepted. `false` dirties the configuration, so a share is
 /// refused before its acceptance.
-pub(super) fn open(committed: bool, cx: &mut TestAppContext) -> (Shell, PathBuf) {
+pub(in crate::desktop::view) fn open(committed: bool, cx: &mut TestAppContext) -> (Shell, PathBuf) {
     open_with(committed, false, cx).0
 }
 
 /// As `open`, with an empty repository `b` too when `other`.
-pub(super) fn open_with(
+pub(in crate::desktop::view) fn open_with(
     committed: bool,
     other: bool,
     cx: &mut TestAppContext,
@@ -108,7 +108,7 @@ pub(super) fn open_with(
     ((Shell::open(fixture, cx), root), other)
 }
 
-pub(super) fn item_sync(root: &Path) -> Intent {
+pub(in crate::desktop::view) fn item_sync(root: &Path) -> Intent {
     Intent::ItemSync {
         root: root.to_owned(),
         kind: AuthoringKind::Ticket,
@@ -116,7 +116,10 @@ pub(super) fn item_sync(root: &Path) -> Intent {
     }
 }
 
-pub(super) fn answer(code: ResultCode, effects: Effects) -> Envelope<MutationDataDto> {
+pub(in crate::desktop::view) fn answer(
+    code: ResultCode,
+    effects: Effects,
+) -> Envelope<MutationDataDto> {
     Envelope::classified_mutation(
         "item sync",
         Scope::default(),
@@ -136,7 +139,7 @@ fn synced(publication: PublicationEffect) -> Effects {
 
 /// Puts the request `n` of `intent` in the request model, finished with
 /// `envelope`, through `Operations::apply`.
-pub(super) fn finished(
+pub(in crate::desktop::view) fn finished(
     shell: &Shell,
     n: u64,
     intent: Intent,
@@ -164,7 +167,7 @@ pub(super) fn finished(
 }
 
 /// The item share `n`, finished with `code` and `effects`.
-pub(super) fn shared(
+pub(in crate::desktop::view) fn shared(
     shell: &Shell,
     root: &Path,
     n: u64,
@@ -176,7 +179,7 @@ pub(super) fn shared(
 
 /// The labels of the share offers the row of `id` offers, enabled, in order
 /// of `OFFERS`: read from the row, not from what a column draws.
-pub(super) fn offered(
+pub(in crate::desktop::view) fn offered(
     shell: &Shell,
     id: DesktopRequestId,
     cx: &mut TestAppContext,
@@ -196,7 +199,7 @@ pub(super) fn offered(
 
 /// Where the finished share `id` stands, as the request model classified it
 /// when it finished.
-pub(super) fn outcome_of(
+pub(in crate::desktop::view) fn outcome_of(
     shell: &Shell,
     id: DesktopRequestId,
     cx: &mut TestAppContext,
@@ -209,14 +212,18 @@ pub(super) fn outcome_of(
 }
 
 /// The code the finished request `id` ended with.
-pub(super) fn code_of(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> ResultCode {
+pub(in crate::desktop::view) fn code_of(
+    shell: &Shell,
+    id: DesktopRequestId,
+    cx: &mut TestAppContext,
+) -> ResultCode {
     match request(shell, id, cx).state {
         RequestState::Finished(_, code, ..) => code,
         _ => panic!("not finished"),
     }
 }
 
-pub(super) fn assert_row(
+pub(in crate::desktop::view) fn assert_row(
     shell: &Shell,
     id: DesktopRequestId,
     outcome: SyncOutcome,
@@ -363,7 +370,10 @@ fn a_key_problem_offers_sharing_and_keys(cx: &mut TestAppContext) {
     }
 }
 
-pub(super) fn host_problem(code: ResultCode, named: bool) -> Envelope<MutationDataDto> {
+pub(in crate::desktop::view) fn host_problem(
+    code: ResultCode,
+    named: bool,
+) -> Envelope<MutationDataDto> {
     let envelope = answer(code, Effects::not_requested());
     if !named {
         return envelope;
@@ -565,7 +575,7 @@ fn another_failure_shows_its_message_and_offers_retry(cx: &mut TestAppContext) {
 
 /// Runs Share main for real, held once its library call has returned,
 /// then answered `envelope`; gives its request once it has finished.
-pub(super) async fn real_share(
+pub(in crate::desktop::view) async fn real_share(
     shell: &Shell,
     root: &Path,
     envelope: Envelope<MutationDataDto>,
@@ -581,7 +591,11 @@ pub(super) async fn real_share(
     id
 }
 
-pub(super) fn submit_main(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> DesktopRequestId {
+pub(in crate::desktop::view) fn submit_main(
+    shell: &Shell,
+    root: &Path,
+    cx: &mut TestAppContext,
+) -> DesktopRequestId {
     let root = root.to_owned();
     shell.workspace.read_with(cx, |workspace, _| {
         workspace

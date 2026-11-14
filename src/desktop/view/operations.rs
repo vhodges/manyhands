@@ -16,7 +16,7 @@
 use gpui_kit::{Context, FocusHandle, Window, component::WindowExt};
 
 mod attention;
-mod outcomes;
+pub(in crate::desktop::view) mod outcomes;
 pub(crate) mod republish;
 mod resume;
 mod retire;

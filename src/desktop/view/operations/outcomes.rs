@@ -282,7 +282,7 @@ impl Workspace {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "outcomes_tests.rs"]
-mod tests;
+pub(in crate::desktop::view) mod tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "outcomes_route_tests.rs"]
