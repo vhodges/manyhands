@@ -1092,7 +1092,13 @@ refusals before its claim, Fact 32):
 | No `ContextRetirement` data, with the request `Finished` | The code, as for any failed request | Not in the refused set; the next completed attempt tries again |
 
 `{item}` is the short code the lists already read for that id, or the id. It
-is never a title. Rows wrap inside Activity (W-6). A request that is left
+is never a title. *Amended 2026-11-13 by Wave 04 Cycle 03b decisions 12 and
+21: a title may appear in an Activity row, its tooltip and menu, and the
+Needs attention popover; no body, comment, side, result text or path does.*
+Rows wrap inside Activity (W-6). *Amended 2026-11-13 by Wave 04 Cycle 03b
+decision 22: Activity's rows are one line; the message ends in an ellipsis
+and the button never leaves the row; the full text is the row's tooltip,
+accessible description and menu.* A request that is left
 `Accepted` whatever its answer (`busy` or `poll_yielding` after a claim, or
 no data) is handled as `pending`, never as a retry.
 
@@ -1257,6 +1263,10 @@ only, so Task 0 re-checks them.
   Open remote settings…, Share…, Resume checking, Retire… and the pending
   row's Resume and Abandon. No test measures appearance. Wave 04's Cycle 03 section
   records that it owns the three existing rows (Document Amendment 8).
+  *Amended 2026-11-13 by Wave 04 Cycle 03b decision 22: Activity's rows are
+  one line; the message ends in an ellipsis and the button never leaves the
+  row; the full text is the row's tooltip, accessible description and
+  menu.*
 - **W-7. Later quit work.** The owner's blocking quit dialog (Wave 04
   later work) replaces Quit now and Quit anyway. D6 keeps Quit now (decision
   7), and its still-stopping text is the wording that dialog inherits.
@@ -1526,6 +1536,10 @@ codes and removal flags. None holds a title, body, comment or key material.
 No type that can hold a passphrase derives `Debug` or `Display`. A sentinel
 test fails if a title or a passphrase appears in an operation entry, a Retire
 offer, ask or answer, status text or the in-flight record.
+
+*Amended 2026-11-13 by Wave 04 Cycle 03b decisions 12 and 21: a title may
+appear in an Activity row, its tooltip and menu, and the Needs attention
+popover; no body, comment, side, result text or path does.*
 
 ## Native Checklist (Linux Wayland, Release Build, Product Owner)
 

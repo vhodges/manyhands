@@ -1291,6 +1291,8 @@ After approval, also comment on D6's ticket `01M4CC0VN3VPVVQ3RNWJKXWEVX`
   repository row's Retry, and the pending controls row's later controls,
   such as Abandon. Activity scrolls vertically only. The rows are fixed
   where `operations.rs` is rebuilt (Cycle 03's Activity, or D6).
+  *Fixed by Wave 04 Cycle 03b's one-line rows (its decision 22; amended
+  2026-11-13).*
 - **K-20.** (Added 2026-11-09.) The app being killed or terminated by the
   operating system bypasses `quit_now`, so a change made after the last
   debounced save and before the kill is lost.

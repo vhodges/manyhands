@@ -133,6 +133,7 @@ impl Workspace {
                 if let (ReadResult::Ok(list), ViewScope::Documents(root)) = (&result, &stamp.scope)
                 {
                     this.learn_titles(root, list);
+                    this.refresh_activity(cx);
                 }
                 if this.documents.apply_documents(stamp, result) {
                     this.documents_changed(cx);
@@ -215,6 +216,7 @@ impl Workspace {
             |this: &mut Self, stamp, result, cx| {
                 if let (ReadResult::Ok(list), ViewScope::Tickets(root)) = (&result, &stamp.scope) {
                     this.learn_titles(root, list);
+                    this.refresh_activity(cx);
                 }
                 if this.tickets.apply(stamp, result) {
                     cx.notify();

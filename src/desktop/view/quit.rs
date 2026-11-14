@@ -150,7 +150,8 @@ impl Workspace {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum NotSavedChoice {
     QuitAnyway,
-    /// Stay, with the first failed draft's Retry focused.
+    /// Stay: the first failed draft's Flush row is highlighted in Activity
+    /// and its list focused, or the item area when Activity is hidden.
     Cancel,
 }
 

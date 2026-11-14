@@ -23,10 +23,16 @@ use super::support::{
 };
 use crate::desktop::{
     keys::Quit,
-    model::publication::CommentOutcome,
+    model::{activity::rows::RowKey, publication::CommentOutcome},
     services::{JobKind, requests::RequestState, worker::RecordState},
     test_support::fixtures::ticket_path,
-    view::{harness::WAIT, item::composer::Composer, workspace::QuitPhase},
+    view::{
+        activity_support::{refresh, row, rows},
+        harness::WAIT,
+        item::composer::Composer,
+        operations::RESUME,
+        workspace::QuitPhase,
+    },
 };
 
 /// With no publication remote a post is saved here (real library): the
@@ -308,7 +314,15 @@ async fn quitting_during_an_accepted_post_leaves_it_saved_and_cancelled(cx: &mut
         Some(CommentOutcome::SavedStopped)
     );
     assert_eq!(checkpoints(&root), 1);
-    assert!(!shell.present(("pending-resume", 0usize), cx));
+    // No Resume is offered for it: not on its entry, nor on any row.
+    refresh(&shell, cx);
+    assert!(row(&shell, &RowKey::Request(id), cx).is_some(), "its entry");
+    assert!(
+        rows(&shell, cx)
+            .iter()
+            .all(|row| row.row.menu.iter().all(|offer| offer.label != RESUME)),
+        "no Resume is offered"
+    );
 }
 
 /// Contract 1, A16: typing a comment, navigating away and back, saving and

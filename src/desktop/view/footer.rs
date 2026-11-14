@@ -43,6 +43,10 @@ pub(in crate::desktop::view) const FOOTER_HEIGHT: f32 = 28.;
 
 pub(in crate::desktop::view) const SETTINGS: &str = "Settings";
 
+/// Needs attention's tooltip (E1, fact 43): what the item is for, and that
+/// nothing is lost while it waits. Its accessible name stays its text.
+pub(crate) const ATTENTION_TOOLTIP: &str = "Things that need you. Your work is safe until you act.";
+
 /// One footer control.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Control {
@@ -265,13 +269,10 @@ pub(crate) fn plan(layout: &Layout, status: &FooterStatus) -> Plan {
 /// Where focus goes when the status item `hidden` is no longer shown: the
 /// next shown control to its right in `plan`: To share after Update check,
 /// then Needs attention, else the right dock group's first control, else
-/// Settings (R-38). `None` for any other control.
+/// Settings (R-38, R-37). `None` for any other control.
 pub(crate) fn focus_after_hiding(hidden: Control, plan: &Plan) -> Option<Control> {
     let slots = [Control::UpdateCheck, Control::ToShare, Control::Attention];
     let at = slots.iter().position(|slot| *slot == hidden)?;
-    if at == slots.len() - 1 {
-        return None;
-    }
     plan.right.iter().flatten().copied().find(|control| {
         slots
             .iter()
@@ -331,10 +332,12 @@ impl Face {
         }
     }
 
-    /// The tooltip: the name, and under Update check what the check does.
+    /// The tooltip: the name, under Update check what the check does, and
+    /// under Needs attention what it is for (E1).
     fn tooltip(&self) -> String {
         match self.control {
             Control::UpdateCheck => update_tooltip(&self.name),
+            Control::Attention => ATTENTION_TOOLTIP.to_owned(),
             _ => self.name.clone(),
         }
     }
@@ -379,7 +382,6 @@ pub(in crate::desktop::view) fn control(
     }
     button = match face.action() {
         Some(action) => button.tooltip_with_action(face.name.clone(), action.as_ref(), None),
-        None if face.control == Control::Attention => button,
         None => button.tooltip(face.tooltip()),
     };
     let mut wrapper = div()
@@ -390,16 +392,20 @@ pub(in crate::desktop::view) fn control(
         .aria_label(face.name.clone())
         .relative()
         .rounded_sm();
-    if face.control == Control::UpdateCheck {
-        wrapper = wrapper.aria_description(UPDATE_TOOLTIP);
+    match face.control {
+        Control::UpdateCheck => wrapper = wrapper.aria_description(UPDATE_TOOLTIP),
+        Control::Attention => wrapper = wrapper.aria_description(ATTENTION_TOOLTIP),
+        _ => {}
     }
     if let Some(on) = face.on {
         wrapper = wrapper.aria_toggled(if on { Toggled::True } else { Toggled::False });
     }
-    if matches!(face.control, Control::Panel(_)) {
+    // A panel toggle's bounds anchor its dock menu, Needs attention's the
+    // popover and its press-outside check (E1, fact 47).
+    if matches!(face.control, Control::Panel(_) | Control::Attention) {
         let bounds = footer.bounds.clone();
         let id = face.control.id();
-        wrapper = wrapper.key_context(PANEL_TOGGLE_CONTEXT).child(
+        wrapper = wrapper.child(
             canvas(
                 move |at, _, _| {
                     bounds.borrow_mut().insert(id, at);
@@ -409,6 +415,9 @@ pub(in crate::desktop::view) fn control(
             .absolute()
             .size_full(),
         );
+    }
+    if matches!(face.control, Control::Panel(_)) {
+        wrapper = wrapper.key_context(PANEL_TOGGLE_CONTEXT);
     }
     let ring = handle.is_focused(window).then(|| {
         div()

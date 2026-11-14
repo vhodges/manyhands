@@ -412,7 +412,7 @@ These are visible to users; the design's Known Limits give the detail.
 - The panel's Settings button stays until Cycle 04 (K-8).
 - The footer's Needs attention does not yet count Can't open, Needs
   fixing, Can't reach or the Needs attention this Cycle adds; Cycle 03b
-  decides (K-9).
+  decides (K-9). *Decided by Cycle 03b decision 6 (amended 2026-11-13).*
 - "Checked for updates {ago}" is the latest check of any repository, even
   while another cannot be reached (K-10).
 

@@ -12,6 +12,8 @@ use super::{clock::TestClock, *};
 
 #[path = "polling_attention_tests.rs"]
 mod attention;
+#[path = "polling_brought_tests.rs"]
+mod brought;
 #[path = "polling_decisions_tests.rs"]
 mod decisions;
 #[path = "polling_retiring_tests.rs"]

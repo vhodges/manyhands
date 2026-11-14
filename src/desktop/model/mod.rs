@@ -1,7 +1,7 @@
 //! View state, free of GPUI but for the discussion's avatar colour, a
 //! GPUI `Hsla` (`discussion`).
 
-pub(crate) mod attention;
+pub(crate) mod activity;
 pub(crate) mod conflict;
 pub(crate) mod create;
 pub(crate) mod discussion;

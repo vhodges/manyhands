@@ -38,7 +38,7 @@ Left to right:
 2. Spacer.
 3. **Update check status**: `refresh-cw` icon (teal) + "Checked for updates 2 min ago". Tooltip: "Background check: fetch and fast-forward only. Never shares your changes."
 4. **Unshared work**: `cloud-upload` + "2 to share" (amber). Click sets scope to the repository that has the unshared work. *The count is the total across repositories, and each activation chooses the next repository with work; when the only one is already chosen, activating it does nothing (Wave 04 Cycle 03a decisions 6 and 23, 2026-11-12).*
-5. **Needs attention**: `circle-alert` + "3 need attention" (red). Click toggles the Needs attention popover (`05-sheets-and-dialogs.md`). Hide it when the count is 0.
+5. **Needs attention**: `circle-alert` + "3 need attention" (red). Click toggles the Needs attention popover (`05-sheets-and-dialogs.md`). Hide it when the count is 0. *Amended 2026-11-13 by Wave 04 Cycle 03b (its design E1): its tooltip is "Things that need you. Your work is safe until you act."; when it hides while focused, focus moves to the next shown control to its right: the right dock group's first control, else Settings.*
 6. Separator · one toggle per panel in the right dock · **right dock toggle** (`panel-right`) · separator · **Settings** (`settings`, Ctrl ,).
 
 Toggle buttons are 26×22 px, radius 4, icon 14 px.

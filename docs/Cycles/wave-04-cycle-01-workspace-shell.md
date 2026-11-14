@@ -318,7 +318,11 @@ Answered by the owner during planning:
    operations listed under "Pending in repositories". A new read-only
    function counts them from the existing models, so `model/operations.rs`
    is not edited. D6's attention states join the count in whichever of D6
-   and this Cycle merges second.
+   and this Cycle merges second. *Superseded by Wave 04 Cycle 03b decision
+   6 (2026-11-12) and decision 25 (2026-11-13): the count is the popover's
+   rows; a pending row with nothing to do no longer counts; a failed
+   request stops counting once fixed, and its row stays in Activity until
+   dismissed or cleared.*
 4. **Find moves to the top of the Tickets panel.** It still finds tickets
    and documents. `secondary-p` shows the Tickets panel if it is hidden and
    focuses Find. *Superseded in part by Wave 04 Cycle 02 decision 2
@@ -439,7 +443,8 @@ These are visible to users; the design's Known Limits give the detail.
   later controls such as Abandon) can sit outside the visible Activity,
   which scrolls vertically only. Fixed where `operations.rs` is rebuilt
   (Cycle 03b, or D6). Accepted by the owner 2026-11-09 (K-19; added
-  2026-11-09).
+  2026-11-09). *Fixed by Wave 04 Cycle 03b's one-line rows (its decision
+  22; amended 2026-11-13).*
 - The app being killed or terminated by the operating system bypasses the
   quit's layout write, so a change made after the last debounced save and
   before the kill is lost (K-20; added 2026-11-09).

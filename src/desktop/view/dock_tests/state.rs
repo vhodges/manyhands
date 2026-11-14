@@ -2,20 +2,24 @@
 //! shows its entry when Activity does, and Show it reveals Activity (P2,
 //! P28, R-10).
 
-use gpui_kit::{TestAppContext, test::TestWindowExt};
+use gpui_kit::TestAppContext;
 
 use super::support::*;
 use crate::desktop::{
     model::{
+        activity::rows::{Kind, RowKey},
         layout::PanelKind,
         navigation::{OpenTarget, Pane},
     },
-    services::{JobKind, requests::Intent},
+    services::{
+        JobKind,
+        requests::{Intent, RequestState},
+    },
     test_support::fixtures::{Fixture, item_id},
     view::{
+        activity_support::{highlighted, list_focused, refresh, row},
         harness::{Shell, key},
         item::ItemRoute,
-        operations::request_id,
         workspace::Region,
     },
 };
@@ -116,10 +120,10 @@ async fn a_request_finishes_while_activity_is_hidden(cx: &mut TestAppContext) {
     let id = shell.requests(cx, |request| {
         matches!(request.intent, Intent::IndexRefresh { .. })
     })[0];
-    assert!(
-        shell.present(request_id(id, "entry"), cx),
-        "its entry shows while it runs"
-    );
+    let entry = RowKey::Request(id);
+    refresh(&shell, cx);
+    let running = row(&shell, &entry, cx).expect("its entry is listed while it runs");
+    assert_eq!(running.row.kind, Kind::Working);
     let (jobs, tabs) = (shell.backend.jobs_seen(), shell.rows("tab-title", cx));
     assert_eq!(tabs.len(), 1, "setup: a tab is open");
 
@@ -137,21 +141,28 @@ async fn a_request_finishes_while_activity_is_hidden(cx: &mut TestAppContext) {
     gate.release();
     shell.until_ended(id, cx).await;
     shell.run(cx);
-    assert!(
-        !shell.present(request_id(id, "entry"), cx),
-        "hidden, so not drawn"
-    );
+    assert!(!layout(&shell, cx).is_displayed(Activity), "hidden");
+    refresh(&shell, cx);
+    let finished = row(&shell, &entry, cx).expect("hidden, but its entry is not pruned");
+    assert_eq!(finished.row.kind, Kind::Success);
+    assert!(matches!(
+        shell
+            .operations(cx)
+            .read_with(cx, |operations, _| operations
+                .request(id)
+                .map(|request| request.state.clone())),
+        Some(RequestState::Finished(..))
+    ));
     let (reads, jobs) = (shell.backend.reads_in_order(), shell.backend.jobs_seen());
 
     toggle_panel(&shell, Activity, cx);
-    assert!(
-        shell.present(request_id(id, "entry"), cx),
-        "its entry shows with Activity"
-    );
-    assert!(
-        shell
-            .label(request_id(id, "state"), cx)
-            .is_some_and(|state| !state.is_empty())
+    assert!(layout(&shell, cx).is_displayed(Activity), "shown");
+    assert!(shell.present(Region::Operations.id(), cx), "drawn");
+    refresh(&shell, cx);
+    assert_eq!(
+        row(&shell, &entry, cx).expect("its entry is listed with Activity"),
+        finished,
+        "the entry is as it was when hidden"
     );
     assert_eq!(
         shell.rows("tab-title", cx),
@@ -166,10 +177,9 @@ async fn a_request_finishes_while_activity_is_hidden(cx: &mut TestAppContext) {
     assert_eq!(shell.backend.jobs_seen(), jobs, "showing it sent nothing");
 }
 
-/// R-10: Show it reveals Activity before it focuses the entry of the
-/// request that may hold the repository, or, with none, the region. The
-/// entry's focus handle was made while Activity was drawn and was not
-/// pruned while it was hidden.
+/// R-10: Show it reveals Activity before it highlights the row of the
+/// request that may hold the repository and focuses the list, or, with none,
+/// focuses the region. The row is in the log while Activity is hidden.
 #[gpui_kit::test]
 async fn show_it_reveals_a_hidden_activity(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -182,9 +192,11 @@ async fn show_it_reveals_a_hidden_activity(cx: &mut TestAppContext) {
     })[0];
     shell.until_ended(id, cx).await;
     shell.frame(cx, |_, _| ());
+    refresh(&shell, cx);
+    let holder = RowKey::Request(id);
     assert!(
-        shell.present(request_id(id, "entry"), cx),
-        "setup: the entry was drawn"
+        row(&shell, &holder, cx).is_some(),
+        "setup: the request has its row"
     );
 
     for (what, request) in [("its entry", Some(id)), ("the region", None)] {
@@ -211,18 +223,18 @@ async fn show_it_reveals_a_hidden_activity(cx: &mut TestAppContext) {
             "{what}: revealed"
         );
         assert!(shell.present(Region::Operations.id(), cx), "{what}: drawn");
-        let entry = shell.frame(cx, |window, _| {
-            window
-                .try_find(request_id(id, "entry"))
-                .and_then(|entry| entry.focused())
-        });
-        match request {
-            Some(_) => assert_eq!(entry, Some(true), "{what}: focused"),
-            None => assert_eq!(
-                focus(&shell, cx),
-                Some(Region::Operations),
-                "{what}: focused"
-            ),
+        assert_eq!(
+            focus(&shell, cx),
+            Some(Region::Operations),
+            "{what}: focused"
+        );
+        assert!(list_focused(&shell, cx), "{what}: the list has focus");
+        if request.is_some() {
+            assert_eq!(
+                highlighted(&shell, cx),
+                Some(holder.clone()),
+                "{what}: its row is highlighted"
+            );
         }
         assert_agreement(&shell, what, cx);
     }

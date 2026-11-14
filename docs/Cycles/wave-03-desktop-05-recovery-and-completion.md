@@ -196,7 +196,10 @@ D5.
 9. **Keyboard.** Every new control is reachable and operable by keyboard
    with visible focus; dialogs trap focus, Enter confirms, Esc cancels.
 10. **Privacy.** No item title, body, comment or conflict text enters an
-    operation entry, log or error message.
+    operation entry, log or error message. *Amended 2026-11-13 by Wave 04
+    Cycle 03b decisions 12 and 21: a title may appear in an Activity row,
+    its tooltip and menu, and the Needs attention popover; no body,
+    comment, side, result text or path does.*
 
 ## Acceptance And Exit Evidence
 

@@ -3,8 +3,8 @@
 //! `secondary-,` and the Checking for updates page is reached by Tab; its
 //! interval is changed, its switch turned off and on, and Check now pressed;
 //! then Activity, the bottom dock's panel, is reached with `secondary-4`,
-//! and Tab reaches Unlock… (a locked key's entry) and Retire… (the offer on
-//! a closed ticket), each pressed. Focus is shown at every step: the element
+//! and the arrows and Tab reach Unlock… (a locked key's row) and Retire…
+//! (the offer on a closed ticket), each pressed. Focus is shown at every step: the element
 //! holds focus, is on screen and its region draws the one ring (`Walk::on`).
 //!
 //! No click and no call into the workspace. The window is the harness's,
@@ -26,10 +26,9 @@ use gpui_kit::TestAppContext;
 
 use super::super::Walk;
 use crate::desktop::{
-    model::polling::{
-        TargetKind,
-        attention::UNLOCK,
-        entry::{RETIRE, short_code},
+    model::{
+        activity::rows::RowKey,
+        polling::{TargetKind, attention::UNLOCK, entry::RETIRE},
     },
     services::{
         JobKind,
@@ -41,6 +40,7 @@ use crate::desktop::{
         retire::answer,
     },
     view::{
+        activity_support::{button_focus, refresh, row as activity_row, rows, to_row},
         polling_window::{PollingWindow, reported},
         settings::Shown,
         workspace::Region,
@@ -79,6 +79,26 @@ async fn bounded(
             .timer(std::time::Duration::from_millis(10))
             .await;
     }
+}
+
+/// The one hold the log lists: the locked key's.
+fn hold_row(walk: &Walk, cx: &mut TestAppContext) -> RowKey {
+    refresh(&walk.shell, cx);
+    let holds: Vec<RowKey> = rows(&walk.shell, cx)
+        .into_iter()
+        .map(|row| row.row.key)
+        .filter(|key| matches!(key, RowKey::Hold(_)))
+        .collect();
+    assert_eq!(holds.len(), 1, "one hold: {holds:?}");
+    holds[0].clone()
+}
+
+/// The label of `key`'s button, as the log stands.
+fn button_label(walk: &Walk, key: &RowKey, cx: &mut TestAppContext) -> Option<String> {
+    activity_row(&walk.shell, key, cx)?
+        .row
+        .button
+        .map(|offer| offer.label)
 }
 
 /// A Check now answered `ok`, as the library would for a repository whose
@@ -128,9 +148,6 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
         |backend, _| backend.ask_unlock(key.clone()),
         cx,
     );
-    // Activity at the 150 px the application launches with, so that Tab has
-    // to bring an action below the fold into view for it to be on screen.
-    window.shell.set_activity_height(150., cx);
     window.start(cx);
     bounded(&window.shell, cx, "the locked key's entry", |_, cx| {
         window.entries(cx).len() == 1
@@ -241,23 +258,23 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
         vec![(ticket.clone(), TargetKind::Ticket)],
         cx,
     );
-    let offer = format!("attempt-{}-retire-{}", roots[1], short_code(&ticket));
+    let offer = RowKey::RetireOffer {
+        root: roots[1].clone(),
+        item: ticket.clone(),
+    };
 
-    // Activity, by `secondary-4`: Tab reaches Unlock… and then Retire….
-    walk.keys("secondary-4", cx);
+    // Activity, by `secondary-4`: the arrows and Tab reach Unlock… and then
+    // Retire….
+    let hold = hold_row(&walk, cx);
+    to_row(&walk.shell, &hold, cx);
     walk.region(Region::Operations, cx);
-    walk.tab_to("tab", ("attention-action", 0usize), cx);
-    walk.on(("attention-action", 0usize), Region::Operations, cx);
-    assert_eq!(
-        walk.shell
-            .label(("attention-action", 0usize), cx)
-            .as_deref(),
-        Some(UNLOCK)
-    );
-    walk.tab_to("tab", offer.clone(), cx);
-    walk.on(offer.clone(), Region::Operations, cx);
-    assert_eq!(walk.shell.label(offer.clone(), cx).as_deref(), Some(RETIRE));
-
+    walk.keys("tab", cx);
+    walk.on_handle(&button_focus(&walk.shell, cx), Region::Operations, cx);
+    assert_eq!(button_label(&walk, &hold, cx).as_deref(), Some(UNLOCK));
+    to_row(&walk.shell, &offer, cx);
+    walk.keys("tab", cx);
+    walk.on_handle(&button_focus(&walk.shell, cx), Region::Operations, cx);
+    assert_eq!(button_label(&walk, &offer, cx).as_deref(), Some(RETIRE));
     // Enter on Retire… sends one retirement on the user lane, under a new
     // request, for that item.
     inner.answer_job(
@@ -289,8 +306,9 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
         }
         _ => panic!("not a retirement"),
     }
+    refresh(&walk.shell, cx);
     assert!(
-        !walk.shell.present(offer.clone(), cx),
+        activity_row(&walk.shell, &offer, cx).is_none(),
         "the item is retired: no offer"
     );
 
@@ -302,9 +320,9 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
     // entry again.
     backend.stop_asking_unlock();
     inner.answer_job(JobKind::PollOnce, checked());
-    walk.keys("secondary-4", cx);
-    walk.tab_to("tab", ("attention-action", 0usize), cx);
-    walk.on(("attention-action", 0usize), Region::Operations, cx);
+    to_row(&walk.shell, &hold, cx);
+    walk.keys("tab", cx);
+    walk.on_handle(&button_focus(&walk.shell, cx), Region::Operations, cx);
     walk.enter(cx);
     let checks = user_sent(&walk, cx, |intent| {
         matches!(intent, Intent::PollOnce { .. })
@@ -327,7 +345,8 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
         "the newest Check now is `a`'s, the key's repository"
     );
     bounded(&walk.shell, cx, "the entry to go", |shell, cx| {
-        !shell.present(("attention-action", 0usize), cx)
+        refresh(shell, cx);
+        activity_row(shell, &hold, cx).is_none()
     })
     .await;
 }

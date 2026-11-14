@@ -24,6 +24,7 @@ use super::{
     },
 };
 use crate::desktop::{
+    model::activity::rows::RowKey,
     services::{
         BUSY_RETRY_DELAYS, JobKind,
         requests::{DesktopRequestId, Intent, RequestState},
@@ -31,10 +32,11 @@ use crate::desktop::{
     },
     test_support::fixtures::item_id,
     view::{
+        activity_support::act,
         harness::Shell,
         item::LIFECYCLE_ACTION,
         lifecycle::{NOT_STOPPED, OpenedLifecycle},
-        operations::{request_id, resume::tests::until_long},
+        operations::{OPEN_LIFECYCLE, resume::tests::until_long},
     },
 };
 
@@ -335,7 +337,7 @@ pub(super) async fn under_a_resume(
         id: item_id(TICKET),
     };
     let id = finished(shell, 1, close, answer, cx);
-    shell.click(request_id(id, "open"), cx);
+    act(shell, &RowKey::Request(id), OPEN_LIFECYCLE, cx);
     until_present(shell, "lifecycle-republish", cx).await;
     assert!(!shell.present("lifecycle-stop-and-republish", cx));
     assert!(!shell.present("lifecycle-retry", cx));
@@ -514,7 +516,7 @@ async fn a_stop_that_cannot_be_queued_says_so(cx: &mut TestAppContext) {
         branch_deleted(&root, RequestId::new()),
         cx,
     );
-    shell.click(request_id(id, "open"), cx);
+    act(&shell, &RowKey::Request(id), OPEN_LIFECYCLE, cx);
     until_present(&shell, "lifecycle-stop-and-republish", cx).await;
     shell.click("lifecycle-stop-and-republish", cx);
     until_present(&shell, "lifecycle-stop-refused", cx).await;

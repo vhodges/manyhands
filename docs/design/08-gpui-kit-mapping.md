@@ -18,7 +18,7 @@ Decided for the Repositories panel on 2026-11-12 (Wave 04 Cycle 03a design, R-7 
 | Docks, groups, tabbed groups, splits | `Dock`: `DockArea`, `DockSkin`, `DockLayout::{h_split, v_split, tabs}`, `DockPlacement`, `DockAreaState` (persist), `register_panel` |
 | Each panel | a struct implementing `BasePanel` + `Panel` (title, tab, toolbar), wrapped with `panel_handle` |
 | Panel toolbars | `Toolbar` + `Button` (ghost, icon) + `Tooltip` |
-| Repos, projects, teams, activity lists | `List` / `VirtualList` |
+| Repos, projects, teams, activity lists | `List` / `VirtualList`. *Amended 2026-11-13 by Wave 04 Cycle 03b (its design R-36): Activity's list is GPUI's `uniform_list`, since the Kit `List` presses Confirm on every click of a row.* |
 | Tickets list | `Table` / `DataTable` (sortable columns), or `VirtualList` with a custom header. Needs keyboard row navigation. Built as a Kit `List` with app rows and an app column header (2026-11-11, above). |
 | Documents tree | `Tree` (the base `Tree` with app rows, 2026-11-11) |
 | Status pills, tags | `Tag` / `Badge` |
@@ -28,7 +28,7 @@ Decided for the Repositories panel on 2026-11-12 (Wave 04 Cycle 03a design, R-7 
 | Footer | `StatusBar` |
 | Sheets | `Sheet` (right placement) via `Root::render_sheet_layer` |
 | Dialogs | `Dialog` / `AlertDialog` via `Root::render_dialog_layer` |
-| Needs attention | `Popover` anchored to the footer item |
+| Needs attention | `Popover` anchored to the footer item. *Amended 2026-11-13 by Wave 04 Cycle 03b (its design R-10 and fact 32): a Workspace-owned layer, following the app's dock and repository menus, not the Kit `Popover`, whose controlled mode would split its rules across two mechanisms.* |
 | Settings layout | `Settings` component or `Sidebar` + content |
 | Switches, radios, selects | `Switch`, `Radio`, `Select` |
 | Spinner, loading rows | `Spinner`, `Skeleton` |
