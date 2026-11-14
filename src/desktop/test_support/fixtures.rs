@@ -16,12 +16,12 @@ use manyhands::{
     drafts::{DraftError, DraftStore},
     repository::{
         CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
-        FailurePoint, FolderCreateInput, IndexRefreshInput, InitialsChange, KeyGenerateInput,
-        KeyRemoveInput, KeySelectInput, Mutation, MutationCall, MutationDataDto, NoProgress,
-        OperationAbandonInput, OperationId, OperationResumeInput, PollPauseInput, PrepareDataDto,
-        RelationshipWrite, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
-        RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId, SharedKeyId,
-        TicketCreateInput, TicketDraft, TicketSaveInput,
+        FailurePoint, FolderCreateInput, IndexRefreshInput, InitialsChange, KeyClearInput,
+        KeyGenerateInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, MutationCall,
+        MutationDataDto, NoProgress, OperationAbandonInput, OperationId, OperationResumeInput,
+        PollPauseInput, PrepareDataDto, RelationshipWrite, RemoteRemoveInput, RemoteSelectInput,
+        RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, RepositoryService,
+        RequestId, SharedKeyId, TicketCreateInput, TicketDraft, TicketSaveInput,
         keys::{
             KeyProtection, KeyStore, PassphraseResponse, SessionCredentialProvider,
             SessionCredentials, UnlockRequest,
@@ -955,6 +955,30 @@ impl Fixture {
         .unwrap();
         (private, public)
     }
+
+    /// Imports `external_key_files(label)` as the key `label`, through the
+    /// library's `key import`: a key of the user's own, which Manyhands did
+    /// not make. Gives its ID.
+    pub(crate) fn import_key(&self, label: &str) -> SharedKeyId {
+        let (private, public) = self.external_key_files(label);
+        let imported = self.execute(
+            None,
+            Mutation::KeyImport(KeyImportInput {
+                label: label.to_owned(),
+                private_key_path: private,
+                public_key_path: Some(public),
+            }),
+        );
+        assert_eq!(imported.code, ResultCode::Ok, "{}", imported.message);
+        let listed = self.service.list_keys().unwrap();
+        let key = listed
+            .items
+            .iter()
+            .rev()
+            .find(|key| key.label == label)
+            .expect("the imported key is listed");
+        SharedKeyId::parse(&key.id).unwrap()
+    }
 }
 
 /// Selects the key `id` through `service`: a second actor's `key
@@ -962,6 +986,12 @@ impl Fixture {
 pub(crate) fn select_key_through(service: &RepositoryService, id: SharedKeyId) {
     let selected = execute_through(service, None, Mutation::KeySelect(KeySelectInput { id }));
     assert_eq!(selected.code, ResultCode::Ok, "{}", selected.message);
+}
+
+/// Clears the key in use through `service`: a second actor's `key clear`.
+pub(crate) fn clear_key_through(service: &RepositoryService) {
+    let cleared = execute_through(service, None, Mutation::KeyClear(KeyClearInput {}));
+    assert_eq!(cleared.code, ResultCode::Ok, "{}", cleared.message);
 }
 
 /// Unregisters the key `id` through `service`: a second actor's `key

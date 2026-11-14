@@ -1,13 +1,14 @@
 //! The Hosts settings page (design, Settings / Hosts): the host pins
 //! `list_host_pins` lists, and Check host for the repository the page
 //! works on, which then offers Approve or Replace for the key the host
-//! presented.
+//! presented. Its view is Trusted servers, drawn under the keys on Sharing
+//! & keys (Wave 04 Cycle 04 design C2).
 //!
-//! The page works on the repository selected in the main window when the
-//! settings were last opened, or on the one a `host.approve` or
-//! `host.replace` recovery names. Check host is offered only when that
-//! repository's publication remote is reached over SSH, as
-//! `list_remotes_redacted` says; otherwise the page says why in fixed text.
+//! The page works on the repository Settings has chosen (C1), the one a
+//! `host.approve` or `host.replace` recovery names included. Check host is
+//! offered only when that repository's publication remote is reached over
+//! SSH, as `list_remotes_redacted` says; otherwise the page says why in
+//! fixed text.
 //!
 //! **Check host** runs `observe_host` on the worker, under its session,
 //! for the host the publication remote fetches from (a recovery names its
@@ -64,7 +65,7 @@ use crate::desktop::{
     view::{confirm::confirm, scroll::ContentScroll},
 };
 
-pub(crate) const PINS_HEADING: &str = "Host pins";
+pub(crate) const PINS_HEADING: &str = "Trusted servers";
 pub(crate) const CHECK_HEADING: &str = "Check host";
 pub(crate) const READING_PINS: &str = "Reading the host pins";
 pub(crate) const NO_PINS: &str = "No host is pinned yet.";

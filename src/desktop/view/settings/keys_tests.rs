@@ -1,12 +1,15 @@
-//! The Keys page over a real key store in the fixture's home: the list
-//! with label, fingerprint, kind and selection; Generate, unprotected and
-//! protected, with the passphrase kept out of everything (Review Focus 5)
-//! and both masked inputs emptied after every submit; a mismatched
-//! confirmation refused before any job; Retry of a protected generation
-//! asking for the passphrase again under the same request; Import, Copy
-//! public key, Select, Clear selection and Unregister as user jobs; and
-//! Delete of a generated key through the confirmation dialog, with Escape
-//! and a stale preview.
+//! The Keys page, Sharing & keys' key part, over a real key store in the
+//! fixture's home: the list with label, fingerprint, kind and the key in
+//! use; Generate, unprotected and protected, with the passphrase kept out
+//! of everything (Review Focus 5) and both masked inputs emptied after
+//! every submit; a mismatched confirmation refused before any job; Retry
+//! of a protected generation asking for the passphrase again under the
+//! same request; Import, Copy public key, a key's radio, Stop using this
+//! key and the trash (Remove from Manyhands) as user jobs; and Delete key
+//! file… of a generated key through the confirmation dialog, with Escape
+//! and a stale preview. A form is filled once its button shows it (Wave
+//! 04 Cycle 04, C2.2). The key rows and forms of C2 are tested in `rows`
+//! and `forms`.
 
 use std::{fs, path::Path};
 
@@ -30,7 +33,8 @@ use crate::desktop::{
         requests::{DesktopRequestId, Intent, NotSent, RequestState},
     },
     test_support::fixtures::{
-        Fixture, PRIVATE_KEY_SENTINEL, select_key_through, unregister_key_through,
+        Fixture, PRIVATE_KEY_SENTINEL, clear_key_through, select_key_through,
+        unregister_key_through,
     },
     view::{
         activity_support::{act, label_of},
@@ -38,6 +42,13 @@ use crate::desktop::{
         harness::{Shell, wait_until},
     },
 };
+
+#[path = "keys_tests/forms.rs"]
+mod forms;
+#[path = "keys_tests/rows.rs"]
+mod rows;
+#[path = "keys_tests/support.rs"]
+mod support;
 
 const SENTINEL: &str = "sentinel-passphrase-7f3a";
 
@@ -47,6 +58,10 @@ const CONFIRMATION: &str = "key-generate-confirm";
 const IMPORT_LABEL: &str = "key-import-label";
 const IMPORT_PRIVATE: &str = "key-import-private";
 const IMPORT_PUBLIC: &str = "key-import-public";
+/// Make a new key, which shows the Generate form (C2.2).
+const MAKE: &str = "keys-make";
+/// Use a key I already have…, which shows the Import form.
+const USE_EXISTING: &str = "keys-use-existing";
 
 /// The window over `fixture` with the Keys page shown.
 fn keys(fixture: Fixture, cx: &mut TestAppContext) -> Shell {
@@ -216,6 +231,7 @@ async fn generated_keys_are_listed_and_the_passphrase_is_kept_nowhere(cx: &mut T
     let shell = keys(fixture, cx);
     assert_eq!(shell.label("keys-state", cx).as_deref(), Some(NO_KEYS));
 
+    shell.click(MAKE, cx);
     generate(&shell, "plain", "", "", cx);
     let plain = generations(&shell, cx)[0];
     shell.until_ended(plain, cx).await;
@@ -304,6 +320,7 @@ fn a_mismatched_confirmation_is_refused_before_any_job(cx: &mut TestAppContext) 
     let fixture = Fixture::new();
     let shell = keys(fixture, cx);
 
+    shell.click(MAKE, cx);
     generate(&shell, "locked", SENTINEL, "sentinel-passphrase-7f3b", cx);
     assert_eq!(
         shell.label("key-generate-message", cx).as_deref(),
@@ -352,6 +369,7 @@ fn a_typed_passphrase_is_emptied_when_the_page_is_hidden(cx: &mut TestAppContext
     cx.executor().allow_parking();
     let shell = keys(Fixture::new(), cx);
 
+    shell.click(MAKE, cx);
     type_into(&shell, PASSPHRASE, SENTINEL, cx);
     type_into(&shell, CONFIRMATION, SENTINEL, cx);
     assert_eq!(value(&shell, PASSPHRASE, cx), SENTINEL);
@@ -401,6 +419,7 @@ async fn retry_of_a_protected_generation_asks_for_the_passphrase_again(cx: &mut 
     let shell = keys(fixture, cx);
     let lease = hold_registry(&shell);
 
+    shell.click(MAKE, cx);
     generate(&shell, "locked", SENTINEL, SENTINEL, cx);
     let id = generations(&shell, cx)[0];
     shell.until_ended(id, cx).await;
@@ -463,6 +482,7 @@ async fn a_generation_not_sent_for_its_passphrase_shows_the_fields_again(cx: &mu
     let fixture = Fixture::new();
     let shell = keys(fixture, cx);
     let lease = hold_registry(&shell);
+    shell.click(MAKE, cx);
     generate(&shell, "locked", SENTINEL, SENTINEL, cx);
     let id = generations(&shell, cx)[0];
     shell.until_ended(id, cx).await;
@@ -516,6 +536,7 @@ async fn copy_public_key_copies_exactly_the_public_key_text(cx: &mut TestAppCont
     fixture.generate_key("made");
     let shell = keys(fixture, cx);
     let (private, public) = shell.fixture.external_key_files("mine");
+    shell.click(USE_EXISTING, cx);
     set(&shell, IMPORT_LABEL, "mine", cx);
     set(&shell, IMPORT_PRIVATE, &private.to_string_lossy(), cx);
     set(&shell, IMPORT_PUBLIC, &public.to_string_lossy(), cx);
@@ -561,6 +582,7 @@ async fn an_imported_key_offers_no_delete_and_unregister_leaves_its_files(cx: &m
     let fixture = Fixture::new();
     let shell = keys(fixture, cx);
     let (private, public) = shell.fixture.external_key_files("mine");
+    shell.click(USE_EXISTING, cx);
     set(&shell, IMPORT_LABEL, "mine", cx);
     set(&shell, IMPORT_PRIVATE, &private.to_string_lossy(), cx);
     type_into(&shell, IMPORT_PUBLIC, &public.to_string_lossy(), cx);
@@ -580,10 +602,10 @@ async fn an_imported_key_offers_no_delete_and_unregister_leaves_its_files(cx: &m
         shell.label(("key-fingerprint", 0usize), cx),
         oracle[0].fingerprint.clone()
     );
-    assert!(shell.present(("key-unregister", 0usize), cx));
-    assert!(!shell.present(("key-delete", 0usize), cx));
+    assert!(shell.present(("key-remove", 0usize), cx));
+    assert!(!shell.present(("key-delete-file", 0usize), cx));
 
-    shell.click(("key-unregister", 0usize), cx);
+    shell.click(("key-remove", 0usize), cx);
     assert!(!shell.present("confirm-dialog", cx));
     let id = of(&shell, cx, |intent| {
         matches!(intent, Intent::KeyRemove { .. })
@@ -602,6 +624,7 @@ async fn an_import_the_library_refuses_shows_its_typed_failure(cx: &mut TestAppC
     cx.executor().allow_parking();
     let fixture = Fixture::new();
     let shell = keys(fixture, cx);
+    shell.click(USE_EXISTING, cx);
     shell.click("key-import-submit", cx);
     assert!(shell.present("key-import-message", cx));
     assert!(shell.requests(cx, |_| true).is_empty());
@@ -636,7 +659,7 @@ async fn select_and_clear_selection(cx: &mut TestAppContext) {
         Some(SELECTION_NONE)
     );
     let ix = row(&shell, "two", cx);
-    shell.click(("key-select", ix), cx);
+    shell.click(("key-radio", ix), cx);
     let id = of(&shell, cx, |intent| {
         matches!(intent, Intent::KeySelect { .. })
     })[0];
@@ -654,7 +677,7 @@ async fn select_and_clear_selection(cx: &mut TestAppContext) {
         Some(selection_line("two"))
     );
 
-    shell.click("keys-clear", cx);
+    shell.click("keys-stop", cx);
     let id = of(&shell, cx, |intent| matches!(intent, Intent::KeyClear))[0];
     shell.until_ended(id, cx).await;
     assert_eq!(finished(&shell, id, cx), (Outcome::Success, ResultCode::Ok));
@@ -678,7 +701,7 @@ async fn deleting_a_generated_key_removes_its_files_after_confirmation(cx: &mut 
     let private = Path::new(&key.private_key_path).to_owned();
     let public = Path::new(key.public_key_path.as_deref().unwrap()).to_owned();
 
-    shell.click(("key-delete", 0usize), cx);
+    shell.click(("key-delete-file", 0usize), cx);
     assert_eq!(shell.label("confirm-ok", cx).as_deref(), Some(CONFIRM));
     assert!(private.exists() && public.exists());
     let deletes = |shell: &Shell, cx: &mut TestAppContext| {
@@ -706,11 +729,13 @@ fn escape_on_a_delete_preview_leaves_the_files(cx: &mut TestAppContext) {
     fixture.generate_key("made");
     let shell = keys(fixture, cx);
     let key = listed(&shell).remove(0);
-    let delete = page(&shell, cx).read_with(cx, |page, _| page.control_focus("key-delete-0"));
+    let delete = page(&shell, cx).read_with(cx, |page, _| {
+        page.control_focus(&format!("key-delete-file-{}", key.id))
+    });
     shell
         .visual(cx)
         .update(|window, cx| window.focus(&delete, cx));
-    shell.click(("key-delete", 0usize), cx);
+    shell.click(("key-delete-file", 0usize), cx);
     assert!(shell.present("confirm-ok", cx));
 
     shell.keys("escape", cx);
@@ -731,7 +756,7 @@ async fn a_key_changed_since_its_delete_preview_offers_prepare_again(cx: &mut Te
     let id = fixture.generate_key("made");
     let shell = keys(fixture, cx);
     let key = listed(&shell).remove(0);
-    shell.click(("key-delete", 0usize), cx);
+    shell.click(("key-delete-file", 0usize), cx);
     assert!(shell.present("confirm-ok", cx));
     let other = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
     select_key_through(&other, id);
@@ -773,7 +798,7 @@ fn a_row_of_a_key_no_longer_listed_acts_on_nothing(cx: &mut TestAppContext) {
             page.copy(id, window, cx);
             page.submit_select(id, window, cx);
             page.submit_unregister(id, window, cx);
-            page.submit_delete(id, 0, window, cx);
+            page.submit_delete(id, window, cx);
         })
     });
     shell.run(cx);
@@ -792,7 +817,7 @@ fn the_page_acts_on_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     set(&shell, LABEL, "other", cx);
     set(&shell, IMPORT_LABEL, "mine", cx);
     set(&shell, IMPORT_PRIVATE, "/nowhere/key", cx);
-    shell.click(("key-delete", 0usize), cx);
+    shell.click(("key-delete-file", 0usize), cx);
     assert!(shell.present("confirm-ok", cx));
 
     let page = page(&shell, cx);
@@ -803,7 +828,7 @@ fn the_page_acts_on_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
             page.submit_select(id, window, cx);
             page.submit_clear(window, cx);
             page.submit_unregister(id, window, cx);
-            page.submit_delete(id, 0, window, cx);
+            page.submit_delete(id, window, cx);
         })
     });
     shell.run(cx);
@@ -837,6 +862,7 @@ async fn the_operation_area_retry_of_a_protected_generation_asks_on_the_page(
     let fixture = Fixture::new();
     let shell = keys(fixture, cx);
     let lease = hold_registry(&shell);
+    shell.click(MAKE, cx);
     generate(&shell, "locked", SENTINEL, SENTINEL, cx);
     let id = generations(&shell, cx)[0];
     shell.until_ended(id, cx).await;
@@ -895,9 +921,13 @@ async fn select_unregister_and_clear_show_their_typed_failures(cx: &mut TestAppC
     let fixture = Fixture::new();
     let a = fixture.generate_key("a");
     let b = fixture.generate_key("b");
+    // `b` in use, so Stop using this key is drawn (C2.1); the second actor
+    // takes it out of use before it unregisters it.
+    select_key_through(fixture.service(), b);
     let shell = keys(fixture, cx);
     assert_eq!(shell.rows("key-label", cx), ["a", "b"]);
     let other = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
+    clear_key_through(&other);
     unregister_key_through(&other, a);
     unregister_key_through(&other, b);
     let _held = [
@@ -916,7 +946,7 @@ async fn select_unregister_and_clear_show_their_typed_failures(cx: &mut TestAppC
         code
     };
 
-    shell.click(("key-select", 0usize), cx);
+    shell.click(("key-radio", 0usize), cx);
     let select = of(&shell, cx, |intent| {
         matches!(intent, Intent::KeySelect { .. })
     })[0];
@@ -924,7 +954,7 @@ async fn select_unregister_and_clear_show_their_typed_failures(cx: &mut TestAppC
     assert_eq!(shown_code(&shell, select, cx), ResultCode::KeyNotFound);
 
     assert_eq!(shell.rows("key-label", cx), ["a", "b"]);
-    shell.click(("key-unregister", 1usize), cx);
+    shell.click(("key-remove", 1usize), cx);
     let remove = of(&shell, cx, |intent| {
         matches!(intent, Intent::KeyRemove { .. })
     })[0];
@@ -932,7 +962,7 @@ async fn select_unregister_and_clear_show_their_typed_failures(cx: &mut TestAppC
     assert_eq!(shown_code(&shell, remove, cx), ResultCode::KeyNotFound);
 
     let lease = hold_registry(&shell);
-    shell.click("keys-clear", cx);
+    shell.click("keys-stop", cx);
     let clear = of(&shell, cx, |intent| matches!(intent, Intent::KeyClear))[0];
     shell.until_ended(clear, cx).await;
     assert_eq!(shown_code(&shell, clear, cx), ResultCode::Busy);
@@ -950,6 +980,7 @@ async fn retry_mode_entered_by_the_observer_drops_what_was_typed(cx: &mut TestAp
     let fixture = Fixture::new();
     let shell = keys(fixture, cx);
     let lease = hold_registry(&shell);
+    shell.click(MAKE, cx);
     generate(&shell, "earlier", SENTINEL, SENTINEL, cx);
     let id = generations(&shell, cx)[0];
     shell.until_ended(id, cx).await;

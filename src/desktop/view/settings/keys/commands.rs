@@ -8,6 +8,7 @@ use manyhands::{
     results::{Outcome, RecoveryActionKind, ResultCode},
 };
 
+use super::rows::DELETE_ID;
 use super::{
     CONFIRMATION_FIELD, IMPORT_LABEL_FIELD, KeysPage, LABEL_FIELD, MISMATCH, NEED_LABEL,
     NEED_PASSPHRASE, NEED_PRIVATE, PASSPHRASE_FIELD, PRIVATE_FIELD, PUBLIC_FIELD, REFUSED,
@@ -29,6 +30,14 @@ fn key_command(intent: &Intent) -> bool {
             | Intent::KeyRemove { .. }
             | Intent::KeyDelete { .. }
     )
+}
+
+/// The key a removal or a file deletion takes away.
+fn removed_key(intent: &Intent) -> Option<SharedKeyId> {
+    match intent {
+        Intent::KeyRemove { id } | Intent::KeyDelete { id } => Some(*id),
+        _ => None,
+    }
 }
 
 fn protected_generation(intent: &Intent) -> Option<&str> {
@@ -128,6 +137,7 @@ impl KeysPage {
             label.to_owned()
         };
         self.retrying = Some(Retrying { id, label });
+        self.show_generate();
         self.submitted = Some(id);
         self.generate_message = None;
         self.clear(&[PASSPHRASE_FIELD, CONFIRMATION_FIELD], window, cx);
@@ -188,13 +198,15 @@ impl KeysPage {
         cx.notify();
     }
 
+    /// A key's radio: the key in use sends nothing.
     pub(crate) fn submit_select(
         &mut self,
         id: SharedKeyId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if window.has_active_dialog(cx) || self.listed(id).is_none() {
+        let unused = self.listed(id).is_some_and(|key| !key.selected);
+        if window.has_active_dialog(cx) || !unused {
             return;
         }
         self.submit(Intent::KeySelect { id }, cx);
@@ -219,11 +231,11 @@ impl KeysPage {
         self.submit(Intent::KeyRemove { id }, cx);
     }
 
-    /// Confirm generated-key deletion, keeping its existing focus fallback.
+    /// Confirm generated-key deletion. The dialog gives focus back to what
+    /// held it, else to the key's Delete key file…, found by key ID.
     pub(crate) fn submit_delete(
         &mut self,
         id: SharedKeyId,
-        ix: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -237,7 +249,7 @@ impl KeysPage {
         debug_assert!(intent.confirmed());
         let origin = match window.focused(cx) {
             Some(focused) => focused,
-            None => self.focus(format!("key-delete-{ix}"), cx),
+            None => self.row_focus(DELETE_ID, &id.to_string(), cx),
         };
         confirm(intent, origin, &self.services, window, cx);
     }
@@ -245,6 +257,7 @@ impl KeysPage {
     pub(super) fn operations_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut reload = false;
         let mut ask = None;
+        let mut removed = Vec::new();
         let operations = self.services.operations().clone();
         // Newest first: ask for the first generation waiting for a secret.
         for request in operations.read(cx).requests() {
@@ -252,8 +265,14 @@ impl KeysPage {
                 continue;
             }
             match &request.state {
-                RequestState::Finished(..) => {
-                    reload |= self.seen.insert((request.id, request.attempt));
+                RequestState::Finished(outcome, ..) => {
+                    let new = self.seen.insert((request.id, request.attempt));
+                    reload |= new;
+                    if let (true, Outcome::Success, Some(id)) =
+                        (new, outcome, removed_key(&request.intent))
+                    {
+                        removed.push(id);
+                    }
                 }
                 RequestState::NotSent(NotSent::SecretRequired) => {
                     let Some(label) = protected_generation(&request.intent) else {
@@ -275,6 +294,16 @@ impl KeysPage {
             self.submitted = Some(ask.id);
             self.generate_message = None;
             self.retrying = Some(ask);
+            self.show_generate();
+        }
+        // The confirmation that submitted a deletion closes onto its origin
+        // in this same batch; once it has, and before the list is read
+        // again, the removed key's row is still listed, with what held
+        // focus on it.
+        for id in removed {
+            cx.defer_in(window, move |this, window, cx| {
+                this.refocus_removed(id, window, cx)
+            });
         }
         if reload {
             self.load(cx);

@@ -46,7 +46,10 @@ pub(crate) use remotes::RemotesPage;
 pub(crate) use repositories::{RepositoriesEvent, RepositoriesPage};
 
 use super::scroll::ContentScroll;
-use crate::desktop::{model::stamp::SettingsPage, services::Services};
+use crate::desktop::{
+    model::stamp::{SettingsNav, SettingsPage},
+    services::Services,
+};
 
 pub(crate) const SETTINGS_HEADING: &str = "Settings";
 /// The sheet header's description (design B1; frames 1e and 1f).
@@ -197,28 +200,29 @@ impl SettingsHost {
         matches!(self.shown, Shown::Settings(_))
     }
 
-    /// Shows `page`, making it the first time, and reads again what it
-    /// shows (R-32). Repositories and Remotes draw one page: the
-    /// registrations, then the chosen repository's remotes under Sharing.
+    /// Shows `page`, making the pages its menu entry draws the first time,
+    /// and reads again what they show (R-32). Repositories and Remotes draw
+    /// one page: the registrations, then the chosen repository's remotes
+    /// under Sharing (C1). Keys and Hosts draw Sharing & keys: the keys,
+    /// then Trusted servers (C2). A typed passphrase does not outlive
+    /// Sharing & keys (B3).
     pub(crate) fn open(&mut self, page: SettingsPage, window: &mut Window, cx: &mut Context<Self>) {
         self.shown = Shown::Settings(page);
-        self.page(page, window, cx);
-        match page {
-            SettingsPage::Repositories | SettingsPage::Remotes => {
+        self.forget_passphrase(window, cx);
+        match page.nav() {
+            SettingsNav::Repositories => {
                 self.repositories(window, cx)
                     .update(cx, |page, cx| page.opened(cx));
                 self.remotes(window, cx)
                     .update(cx, |page, cx| page.opened(cx));
             }
-            SettingsPage::Keys => {
+            SettingsNav::SharingAndKeys => {
                 self.keys(window, cx).update(cx, |page, cx| page.opened(cx));
-            }
-            SettingsPage::Hosts => {
                 let chosen = self.chosen.clone();
                 self.hosts(window, cx)
                     .update(cx, |page, cx| page.opened(chosen, cx));
             }
-            SettingsPage::Polling => {
+            SettingsNav::Checking => {
                 self.polling(window, cx)
                     .update(cx, |page, cx| page.opened(cx));
             }
@@ -226,12 +230,15 @@ impl SettingsHost {
         cx.notify();
     }
 
-    /// Empties the Keys page's masked inputs unless that page is the shown
-    /// one: a typed passphrase does not outlive the page being shown.
+    /// Empties the Keys page's masked inputs unless Sharing & keys is shown,
+    /// by either of its pages (B3, R-13): a typed passphrase does not
+    /// outlive Sharing & keys, and Settings closed shows no page.
     pub(crate) fn forget_passphrase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.shown != Shown::Settings(SettingsPage::Keys)
-            && let Some(keys) = self.keys.clone()
-        {
+        let sharing = matches!(
+            self.shown,
+            Shown::Settings(page) if page.nav() == SettingsNav::SharingAndKeys
+        );
+        if !sharing && let Some(keys) = self.keys.clone() {
             keys.update(cx, |page, cx| page.forget_passphrase(window, cx));
         }
     }
@@ -395,23 +402,23 @@ impl SettingsHost {
         self.arrive_focused(&SettingsRoute::CheckHost(root, authority), window, cx);
     }
 
-    /// The view of `page`, made the first time it is asked for. A view,
-    /// not an element: `open` asks for it outside a frame. Remotes is drawn
-    /// in the Repositories page, under Sharing (design C1), so both show
-    /// that page until the menu has its three entries (Task 5).
-    fn page(
+    /// The views the menu entry that shows `page` draws, in order, each made
+    /// the first time it is asked for. Remotes is drawn in the Repositories
+    /// page, under Sharing (design C1); Sharing & keys is the Keys page's
+    /// view, then the Hosts page's, Trusted servers (C2). Until the menu has
+    /// its three entries (Task 5), both pages of an entry show its views.
+    fn views(
         &mut self,
         page: SettingsPage,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<AnyView> {
-        match page {
-            SettingsPage::Repositories | SettingsPage::Remotes => {
-                Some(self.repositories(window, cx).into())
+    ) -> Vec<AnyView> {
+        match page.nav() {
+            SettingsNav::Repositories => vec![self.repositories(window, cx).into()],
+            SettingsNav::SharingAndKeys => {
+                vec![self.keys(window, cx).into(), self.hosts(window, cx).into()]
             }
-            SettingsPage::Keys => Some(self.keys(window, cx).into()),
-            SettingsPage::Hosts => Some(self.hosts(window, cx).into()),
-            SettingsPage::Polling => Some(self.polling(window, cx).into()),
+            SettingsNav::Checking => vec![self.polling(window, cx).into()],
         }
     }
 }

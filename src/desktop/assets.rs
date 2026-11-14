@@ -67,6 +67,8 @@ icon_assets!(
         Lock,
         RefreshCw,
         WifiOff,
+        // Sharing & keys' trash (Wave 04 Cycle 04, C2.1).
+        Trash,
     ]
 );
 

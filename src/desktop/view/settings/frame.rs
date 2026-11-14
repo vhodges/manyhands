@@ -36,12 +36,12 @@ impl SettingsHost {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Sheet {
-        // A typed passphrase does not outlive the Keys page being shown.
+        // A typed passphrase does not outlive Sharing & keys being shown.
         self.forget_passphrase(window, cx);
         let Shown::Settings(shown) = self.shown else {
             return sheet;
         };
-        let page = self.page(shown, window, cx);
+        let views = self.views(shown, window, cx);
         let entries = self.entries(shown, window, cx);
         let muted = cx.theme().muted_foreground;
         let handle = self.scroll.handle().clone();
@@ -105,7 +105,7 @@ impl SettingsHost {
                                     .size_full()
                                     .overflow_y_scroll()
                                     .track_scroll(&handle)
-                                    .child(div().pr_4().pb_4().children(page)),
+                                    .child(v_flex().gap_4().pr_4().pb_4().children(views)),
                             )
                             .child(
                                 div()
@@ -124,9 +124,10 @@ impl SettingsHost {
         }
     }
 
-    /// The page list: one entry per page, down the left, the shown one
-    /// saying so in text. The entries are outside the body's scroll, so they
-    /// carry none of its markers.
+    /// The page list: one entry per page, down the left, the entries of the
+    /// shown page's menu entry saying so in text (`nav`; until the menu has
+    /// its three entries, Task 5, both pages of one entry do). The entries
+    /// are outside the body's scroll, so they carry none of its markers.
     fn entries(&self, shown: SettingsPage, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let (ring, border) = (theme.ring, theme.border);
@@ -137,7 +138,7 @@ impl SettingsHost {
             .gap_1();
         for (ix, page) in PAGES.iter().copied().enumerate() {
             let focus = &self.entries[ix];
-            let active = page == shown;
+            let active = page.nav() == shown.nav();
             let mut entry =
                 div()
                     .id(("settings-page", ix))
