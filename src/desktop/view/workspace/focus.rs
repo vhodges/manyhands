@@ -294,12 +294,20 @@ impl Workspace {
         // its handles, which are no longer drawn: focus goes to the footer
         // item, or E1's control when it has hidden (R-50, U-8). The
         // Workspace keeps the handles, so the lost focus is still known.
+        // While the popover is still open, the handle was lost with its row
+        // (scrolled out of the list, or gone): focus goes to the popover's
+        // list, so its keys keep working (E2, P25). Every way it closes
+        // clears it first.
         if window
             .focused(cx)
             .is_some_and(|focused| self.attention.handles.owns(&focused))
         {
-            let item = self.attention_restore_target(cx);
-            window.focus(&item, cx);
+            let target = if self.attention.popover.is_some() {
+                self.attention.handles.list.clone()
+            } else {
+                self.attention_restore_target(cx)
+            };
+            window.focus(&target, cx);
             return;
         }
         // A region that is not displayed cannot take focus: the last

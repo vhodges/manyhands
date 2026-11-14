@@ -2,7 +2,7 @@
 //! each case: they change the model and the layers, and a case's end must
 //! not be another's start.
 
-use gpui_kit::{Point, TestAppContext, test::TestWindowExt};
+use gpui_kit::{Point, TestAppContext, px, size, test::TestWindowExt};
 use manyhands::results::{Outcome, ResultCode};
 
 use super::*;
@@ -17,16 +17,22 @@ use crate::desktop::{
         activity::tests::{
             cases::{TICKET, answered, fabricate},
             list_support::{OP_A, OP_B, OP_C, OP_D, pending_key, relist, save},
-            pending_cases::{PENDING_ROOT, listing},
+            pending_cases::{PENDING_ROOT, listing, read_pending},
         },
+        activity_support::refresh,
         footer::{
             menu::Placement,
             tests::support::{finish, focused, modal_open, open_modal, shell_with_a_ticket},
         },
         harness::Shell,
+        settings::polling_support::Rig,
         workspace::Region,
     },
 };
+
+/// Two more pending operations, for the case that needs six rows.
+const OP_E: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
+const OP_F: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
 
 /// A window with one failed request: the one attention row.
 fn one_row(cx: &mut TestAppContext) -> Shell {
@@ -69,6 +75,7 @@ fn the_popover_closes(cx: &mut TestAppContext) {
     a_layer_opened_while_it_had_focus(cx);
     the_highlighted_row_leaves(cx);
     the_row_at_the_position_has_no_button(cx);
+    the_button_scrolls_out_of_the_list(cx);
 }
 
 /// The count reaches 0 while the popover is open and has focus: it closes,
@@ -401,4 +408,76 @@ fn the_row_at_the_position_has_no_button(cx: &mut TestAppContext) {
         Spot::Item,
         "focus goes to the restore target"
     );
+}
+
+/// The highlighted row's button holds focus and the row scrolls out of the
+/// list, as a new attention row pushes it down: the popover stays open,
+/// focus moves to its list, and Escape closes it to the footer item (E2,
+/// P25, R-50). The window is short enough that three rows show; the row is
+/// the last of them, and the new row, newest first, lands above it.
+fn the_button_scrolls_out_of_the_list(cx: &mut TestAppContext) {
+    // Six pending operations, each with a Resume button, then a failed
+    // close a minute later: newest first, it is the first row.
+    let rig = Rig::new(&[("a", false), ("b", false)], cx);
+    let shell = &rig.shell;
+    let root = rig.roots[0].clone();
+    let other = rig.roots[1].clone();
+    let listed = crate::desktop::view::harness::key(&root);
+    let operations = [OP_A, OP_B, OP_C, OP_D, OP_E, OP_F];
+    read_pending(
+        shell,
+        &listed,
+        listing(operations.iter().copied().map(save).collect()),
+        cx,
+    );
+    refresh(shell, cx);
+    rig.clock.advance(std::time::Duration::from_secs(60));
+    // The popover's room is the window less the title bar, the footer, the
+    // gap and the popover's own chrome (190 px): three 46 px rows.
+    shell
+        .visual(cx)
+        .simulate_resize(size(px(1280.), px(190. + 3. * 46.)));
+    settle_popover(shell, cx);
+    open_by_click(shell, cx);
+    settle_popover(shell, cx);
+    let before = keys_of(&applied(shell, cx));
+    assert_eq!(before.len(), 6, "six rows to scroll");
+    shell.keys("down", cx);
+    shell.keys("down", cx);
+    let bottom = cursor(shell, cx).expect("a row is highlighted");
+    assert_eq!(
+        before.iter().position(|key| key == &bottom),
+        Some(2),
+        "the third row is the last that shows"
+    );
+    shell.keys("tab", cx);
+    assert_eq!(spot(shell, cx), Spot::Button, "Tab reaches the button");
+
+    fabricate(
+        shell,
+        1,
+        Intent::TicketClose {
+            root: other,
+            id: item_id(TICKET),
+        },
+        answered("ticket close", ResultCode::PushRejected),
+        cx,
+    );
+    refresh(shell, cx);
+    settle_popover(shell, cx);
+    let after = keys_of(&applied(shell, cx));
+    assert_eq!(after.len(), 7, "the new row is listed");
+    assert_eq!(
+        after.iter().position(|key| key == &bottom),
+        Some(3),
+        "the highlighted row moved below the list's three rows"
+    );
+    assert_eq!(cursor(shell, cx).as_ref(), Some(&bottom), "and is kept");
+    assert!(is_open(shell, cx), "the popover stays open");
+    assert_eq!(spot(shell, cx), Spot::List, "focus moved to its list");
+    shell.keys("up", cx);
+    assert_ne!(cursor(shell, cx).as_ref(), Some(&bottom), "the arrows work");
+    shell.keys("escape", cx);
+    assert!(!is_open(shell, cx), "Escape closes it");
+    assert_eq!(spot(shell, cx), Spot::Item, "focus goes to the item");
 }
