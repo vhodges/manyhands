@@ -22,7 +22,7 @@ Decided for the Repositories panel on 2026-11-12 (Wave 04 Cycle 03a design, R-7 
 | Tickets list | `Table` / `DataTable` (sortable columns), or `VirtualList` with a custom header. Needs keyboard row navigation. Built as a Kit `List` with app rows and an app column header (2026-11-11, above). |
 | Documents tree | `Tree` (the base `Tree` with app rows, 2026-11-11) |
 | Status pills, tags | `Tag` / `Badge` |
-| Segmented Open/Closed/All | `Tabs` (segmented variant) or a `Toggle` group (the app's own choices, 2026-11-11) |
+| Segmented Open/Closed/All | `Tabs` (segmented variant) or a `Toggle` group (the app's own choices, 2026-11-11). *Amended 2026-11-14 by Wave 04 Cycle 05a (its design fact 39): the Add repository sheet's mode control is the same app-owned segmented choice, since the Kit's `ToggleGroup` has no keyboard path.* |
 | Item tabs + split | `Dock` center tab groups, or `Tabs` with close buttons |
 | Banners, outcome boxes | `Alert` |
 | Footer | `StatusBar` |

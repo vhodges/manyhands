@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 05a Implementation Plan: Common Frame, Add Repository And Unlock Key"
 date: 2026-11-14
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -14,11 +14,12 @@ id: "01M7D7V15PAMQPTK7QZP9Q234D"
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task.
 >
-> **Draft** (revision 3: review rounds 1 and 2 and decisions 15–18
-> applied; revision 3 has not been independently reviewed). Execution waits until Cycle 04
-> (`01M7AMAPNHHTNECXBF4CA5WPKV`) is merged to main (Cycle decision 1),
-> and until the owner has approved the three documents, authorized
-> implementation and chosen the execution method.
+> **Approved 2026-11-14** (revision 3: review rounds 1 and 2 and
+> decisions 15–18 applied; **revision 3 had no independent review**).
+> Execution is subagent-driven and serial, in a fresh session from the
+> handoff brief `docs/plans/2026-11-14-wave-04-cycle-05a-handoff.md`
+> (Cycle decision 21). It waits until Cycle 04
+> (`01M7AMAPNHHTNECXBF4CA5WPKV`) is merged to main (Cycle decision 1).
 >
 > Where focus goes around the Add sheet is a table of required outcomes
 > (design B9, G1–G23), and it is the contract. Task 4 writes its rows
@@ -73,12 +74,12 @@ with `docs/design/05-sheets-and-dialogs.md` and `06`.
 **Precondition.**
 
 - The owner has approved the three documents, authorized implementation
-  and chosen the execution method.
+  and chosen the execution method (2026-11-14, decision 21).
 - **Cycle 04 is closed and merged to main** (decision 1).
 - Task 0 does not start before both.
-- The design's Document Amendments 2 and 3 are applied by the planner in
-  the approval commit. Amendment 1 is applied in Task 0, amendments 4 and
-  5 in Task 10.
+- The design's Document Amendments 2 and 3 were applied by the planner
+  in the approval commit. Amendment 1 is applied in Task 0, amendments 4
+  and 5 in Task 10.
 
 **Roles.**
 

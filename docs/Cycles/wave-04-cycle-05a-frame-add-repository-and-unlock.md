@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 05a: Common Frame, Add Repository And Unlock Key"
 date: 2026-11-14
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -14,8 +14,10 @@ Ticket `01M7D5Z7FZTGTC1HE25KQ1MYQY`.
 [Design](../plans/2026-11-14-wave-04-cycle-05a-frame-add-repository-and-unlock-design.md) and
 [implementation plan](../plans/2026-11-14-wave-04-cycle-05a-frame-add-repository-and-unlock-implementation.md).
 
-Status: **draft** (revision 3). **Revision 3 has not been independently
-reviewed.**
+Status: **approved 2026-11-14** (revision 3). The owner wrote: "The docs
+are approved. Subagent driven development using a handoff brief in a
+fresh session. Implementation is approved" (decision 21). **Revision 3
+had no independent review**; the owner approved it without one.
 
 - On 2026-11-14, with Cycle 04 in flight, the owner asked to plan Wave 04
   Cycle 05 "the way Cycle 04 did". Execution waits until Cycle 04 lands on
@@ -23,8 +25,8 @@ reviewed.**
 - The same day the owner split the Cycle on the Wave's split line
   (decision 2), answered decisions 3 and 4, and accepted the planner's
   outline and constraints with decision 5 ("Write the documents").
-- Decisions 6–14, 19 and 20 are the planner's proposals, awaiting
-  confirmation.
+- Decisions 6–14, 19 and 20 were the planner's proposals, each with its
+  reason; the owner confirmed them at approval.
 - After review round 1 the owner answered decisions 15–18.
 - Those marked **(owner's eye)** change something people see today or
   depart from an authority.
@@ -46,6 +48,10 @@ Revision history:
   the add tracking, the return to Settings or the share; each is now
   stated (design B2, B3, B10, C2; G21–G23; R-25 to R-31). Revision 3 was
   not reviewed again: round 2 found no Blocking issue.
+- Approved 2026-11-14 (decision 21). The approval commit applied the
+  design's Document Amendments 2 and 3 (`05`'s and `08`'s as-built
+  notes). Amendment 1 (the Wave) waits for Task 0, after Cycle 04's own
+  amendment of the same section merges; Amendments 4 and 5 are Task 10's.
 
 ## Purpose And Authority
 
@@ -337,7 +343,7 @@ decisions govern and are not repeated.
      sheet with the folder checked (decision 13);
    - the four folded-in items (Part G).
 
-**Proposed by the planner, for confirmation at approval:**
+**Proposed by the planner and confirmed by the owner at approval (2026-11-14):**
 
 6. **The frame's look (owner's eye).**
    - Primary buttons are amber with dark text everywhere in the app, set
@@ -458,8 +464,8 @@ decisions govern and are not repeated.
     action that closes the sheet and opens Settings › Repositories on that
     repository. Add stays disabled.
 
-**Proposed by the planner after review round 2, for confirmation at
-approval:**
+**Proposed by the planner after review round 2 and confirmed by the owner
+at approval (2026-11-14):**
 
 19. **Ctrl+, does nothing while the Add sheet is open (owner's eye).**
     *Reason:* Settings would replace the sheet behind the person's back;
@@ -472,6 +478,38 @@ approval:**
     *Reason:* the library's enable does not write the typed identity
     when the folder is already set up, and choosing a remote commits, so
     the share would fail every time.
+
+**Answered by the owner at approval (2026-11-14):**
+
+21. **Approved, and implementation authorized, subagent-driven and
+    serial, in a fresh session.** The owner wrote "The docs are approved.
+    Subagent driven development using a handoff brief in a fresh session.
+    Implementation is approved" in answer to the approval message, which
+    asked the owner to:
+    - approve the three documents (revision 3, without a further
+      independent review);
+    - approve the named test edits E-1 to E-16;
+    - confirm decisions 6–14, 19 and 20 as proposed;
+    - choose the execution method, recommended subagent-driven and
+      serial, in a fresh session from a handoff brief, as on Cycles 02 to
+      04;
+    - authorize implementation, to start once Cycle 04 is on main.
+
+    The owner did not answer the named test edits separately. They are
+    part of the approved design, and the authorized tasks make them, so
+    this record counts them as approved with the documents.
+
+    One implementer per task, then a fresh reviewer, one at a time,
+    following `.agents/skills/implementing-a-cycle/SKILL.md` and
+    `superpowers:subagent-driven-development`. The fresh session works
+    from the brief `docs/plans/2026-11-14-wave-04-cycle-05a-handoff.md`.
+    Authorized: Tasks 0–10, once Cycle 04 has merged to main (decision
+    1); the named test edits E-1 to E-16 and further edits under decision
+    8; pushing this ticket branch after each task; and pushing other
+    branches, including through `comment add` on another ticket (owner,
+    2026-11-13, Cycle 03b decision 26). Not authorized without the
+    owner's go-ahead at the time: a pull request, the merge, closing the
+    ticket, worktree cleanup, native CI and creating tickets.
 
 ## Known Limits
 
@@ -517,3 +555,4 @@ None blocking. Design U-1 (Cycle 04's merged names) is checked in Task 0.
 | Owner, 2026-11-14, after review round 1 | Button order; typed text on close; the default remote and Keep; registered folders on the inspect routes | Owner decisions | Decisions 15–18 | Session, 2026-11-14 |
 | Review round 2, scoped re-review (revision 2, `67fb6fee`) | 0 Blocking, 2 Important, 18 Minor. Important: the attempt recorded after Prepare again; B7 against B10's enablement. Round 1's Blocking findings resolved | Important, Minor | Revision 3 (design Review Record) | Review report, 2026-11-14 |
 | Review round 2, adversarial on the add, share and focus mechanisms (revision 2, `67fb6fee`) | 0 Blocking, 10 Important, 7 Minor: the recorded attempt; later attempts and terminal states; a second add under the sheet; which open a success belongs to; AW-3's origin; a refused return to Settings; a check stuck in flight; the share with no identity; Add enabled where enable refuses; Create's root | Important, Minor; proposals | Revision 3, **not independently reviewed**; decisions 19 and 20 proposed | Review report, 2026-11-14 |
+| Owner, 2026-11-14 | Approval message: documents (revision 3, no further review), named edits, decisions 6–14, 19 and 20, execution method, authorization | Owner decisions | Decisions 6–14, 19 and 20 confirmed; decision 21; Document Amendments 2 and 3 applied | Session, 2026-11-14 |

@@ -17,6 +17,14 @@ Buttons:
 
 Inputs: 32 px high, radius 6, `editor` background, 1 px `border-strong`. Focus: a teal border plus a 2 px teal 18% ring.
 
+*As built, Wave 04 Cycle 05a (2026-11-14):*
+- Footers are right-aligned and keep the button order they had before, since several dialogs put the safe choice first on purpose. Only the Confirmation dialog and Unlock key put the action last (Cancel · Confirm, Not now · Unlock).
+- Primary buttons are amber everywhere, with `07`'s `on-accent` text, set once through the Kit theme. The focus ring is the Kit's fixed 3 px at 50%, in teal; inputs get the `border-strong` border.
+- Sheets and dialogs share one scrim colour, `#0a0b0d99`, since the Kit has one slot; a dialog over a sheet draws two scrims.
+- A dialog's footer is drawn in its body, so it scrolls with the body when the dialog is taller than the window. A sheet's header and footer dividers stop short of its edges, since the Kit pads those slots.
+- Any of the secondary button, the input background, or the sheet's border and shadow that the Kit theme has no key for stays the Kit's.
+- Escape keeps each dialog's rule from before: it closes the dialog at once, except New ticket, New document, New folder and Move, which refuse it while their write runs. The Add repository sheet closes on Escape as Cancel, also while a request runs, as Settings does; nothing is cancelled.
+
 ---
 
 ## Add repository sheet (1d) · 470 px
@@ -36,6 +44,17 @@ Opens from Repositories `+`, File › Add repository, or the first-run empty sta
 6. Info box (`shield-check` teal): "Removing a repository from Manyhands later never deletes, moves or changes its files."
 7. **Footer:** Cancel · **Add repository** / **Create repository**. Disabled until the checks pass.
 8. Missing Git identity → an inline step "Your name & email" before confirming (RFC onboarding).
+
+*As built, Wave 04 Cycle 05a (2026-11-14):*
+- **Ways in:** Repositories `+`, the empty state, Settings › Repositories' "Add or create a repository…", and "Open repository details" and the inspect recoveries, which open the sheet with the folder filled and checked. There is no File › Add repository entry, since the app has no title-bar menus. Ctrl , does nothing while the sheet is open.
+- **Mode control:** the app's own segmented choice, two Tab stops with Enter and Space, as in the Tickets panel.
+- **Checks:** there is no "You can save changes here" row, since the library has no writability check. The rows read "This folder is a Git repository.", "Manyhands isn't set up here yet. …", "Manyhands is already set up here." with "It will be added to this computer.", "Manyhands' settings here need fixing." with each problem, and "No branch is checked out. Check one out, then check again." [Check again]. A folder whose settings name another main branch, or a sharing remote that isn't SSH, says so with [Check again]. Failures: "Not a Git repository." [Create one here]; another failure's message [Choose another]; "Manyhands is busy. Try the check again in a moment." [Retry]; "This folder's name can't be used here. Choose another." [Choose another].
+- **A folder already added** reads "Already added to Manyhands." with its settings' state and problems, and an "Open its settings" action that opens Settings › Repositories on it. Add stays disabled.
+- **Main branch:** the select lists the folder's branches. The checked-out one is chosen and tagged Suggested; the others are disabled with "Check it out first. Manyhands starts from the branch you have checked out.", since the library starts only from the checked-out branch. Create keeps a text field, "main" by default.
+- **Create** takes Name and Location and makes the repository at Location/Name. Create keeps its short-code prefix and optional name and email; Add keeps its prefix, except for a folder already set up, whose settings hold it.
+- **Share changes through** defaults to the remote the folder's settings name, else "Keep on this computer". The choice is sent after a successful add, as the same request as Settings › Repositories › Sharing; if it fails, the repository stays added and the failure shows in Activity. Create has no remotes, so the select is not shown there. A folder already set up whose Git has no name and email stays on Keep with "Set your name and email in Settings first, then choose how it shares."
+- **Footer:** Add repository and Create repository are enabled only when they can go ahead, and read "Adding…" while an add from the sheet runs. Add on a folder not yet checked checks it first. The confirmation opens above the sheet.
+- **Closing:** a successful add closes and empties the sheet; opened from Settings, Settings comes back on the new repository. Cancel, Escape, the close button and a click outside keep the typed text for the next open.
 
 ## Settings sheet (1e, 1f, 2b) · 720 px
 
@@ -127,6 +146,11 @@ Shown on first SSH use per session (including the first poll), or from Needs att
 - Note (`shield-check`): "Kept in memory until you quit Manyhands. It's never written to disk. If you choose Not now, you can keep working and unlock later from Needs attention."
 - Buttons: Not now · **Unlock**. A wrong passphrase shows an inline error under the field and keeps the focus there.
 - Never re-prompt modally in the background after Not now (RFC). The prompt moves into Needs attention.
+
+*As built, Wave 04 Cycle 05a (2026-11-14):*
+- The key card shows the key's label and, once the key list has it, its fingerprint. The field's label is "Passphrase", with no show/hide toggle (Wave 04 decision 9).
+- The note is always shown and promises no "until you quit", since one cached passphrase per session makes that untrue: "Kept in memory only, never written to disk. If you choose Not now, you can keep working and unlock later from Needs attention." The subtitle is shown only while a share waits.
+- A wrong passphrase has no inline error: Unlock closes the dialog, and the job fails as before (ticket `01M5E6DYJ6GN7DMW4424TH3V78`). A passphrase the dialog refuses itself (empty, or containing a NUL) shows its message under the field, and focus goes back to the field.
 
 ## Needs attention popover (2f) · 440 px
 

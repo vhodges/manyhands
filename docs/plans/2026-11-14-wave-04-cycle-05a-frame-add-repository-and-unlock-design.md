@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 05a Design: Common Frame, Add Repository And Unlock Key"
 date: 2026-11-14
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -20,9 +20,13 @@ This design moves today's dialogs onto `05`'s common frame, moves Add
 repository out of Settings into its own sheet, and restyles the Unlock
 key dialog and the empty item area. It changes `src/desktop/` only.
 
-It is a draft for the owner's approval. Approving it does not authorize
-implementation, which also waits until Cycle 04 has merged (Cycle
-decision 1).
+Approved 2026-11-14 (revision 3, Cycle decision 21), with implementation
+authorized, subagent-driven and serial, from the handoff brief
+`2026-11-14-wave-04-cycle-05a-handoff.md`. Execution still waits until
+Cycle 04 has merged (Cycle decision 1). Approval covers the mechanisms,
+rulings, named test edits and task order. It does not authorize a pull
+request, merging, closing the ticket, worktree cleanup, native CI or
+creating tickets.
 
 Planned against:
 
@@ -1233,7 +1237,7 @@ Cycle (its Part G):
 Decisions 12 and 16 also settle the ticket's "the forms are not cleared
 after a success" and its product question: the sheet clears after a
 successful add and keeps text otherwise. The ticket keeps its other
-items, with a note (Amendment 4).
+items, with a note (Amendment 5).
 
 ## Required Outcomes
 
