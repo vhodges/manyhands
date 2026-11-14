@@ -1,0 +1,376 @@
+{
+  "objects": [
+    [
+      "table",
+      "context_retirement_records",
+      "CREATE TABLE context_retirement_records (\n operation_ulid TEXT CHECK(operation_ulid IS NULL OR (typeof(operation_ulid)='text' AND length(operation_ulid)=26 AND substr(operation_ulid,1,1) BETWEEN '0' AND '7' AND operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) PRIMARY KEY NOT NULL,\n local_record_id INTEGER NOT NULL UNIQUE REFERENCES operation_records(id) ON DELETE CASCADE,\n repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,\n format_version INTEGER NOT NULL CHECK(format_version=1),\n kind TEXT NOT NULL CHECK(kind IN ('ticket','document')),\n item_id TEXT CHECK(item_id IS NULL OR (typeof(item_id)='text' AND length(item_id)=26 AND substr(item_id,1,1) BETWEEN '0' AND '7' AND item_id NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n initial_resources TEXT NOT NULL CHECK(initial_resources IN ('present','branch_only','absent','invalid')),\n expected_tip TEXT CHECK(expected_tip IS NULL OR (typeof(expected_tip)='text' AND length(expected_tip)=40 AND expected_tip NOT GLOB '*[^0-9a-f]*' AND expected_tip!='0000000000000000000000000000000000000000')),\n selection_epoch INTEGER NOT NULL CHECK(typeof(selection_epoch)='integer' AND selection_epoch>0),\n instance_nonce TEXT CHECK(instance_nonce IS NULL OR (typeof(instance_nonce)='text' AND length(instance_nonce)=26 AND substr(instance_nonce,1,1) BETWEEN '0' AND '7' AND instance_nonce NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')),\n instance_verified INTEGER NOT NULL CHECK(instance_verified IN (0,1)),\n remote_name TEXT,\n primary_branch TEXT,\n configuration_generation INTEGER CHECK(configuration_generation IS NULL OR (typeof(configuration_generation)='integer' AND configuration_generation>=0)),\n endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32)),\n initial_primary_oid TEXT CHECK(initial_primary_oid IS NULL OR (typeof(initial_primary_oid)='text' AND length(initial_primary_oid)=40 AND initial_primary_oid NOT GLOB '*[^0-9a-f]*' AND initial_primary_oid!='0000000000000000000000000000000000000000')),\n request_ulid TEXT CHECK(request_ulid IS NULL OR (typeof(request_ulid)='text' AND length(request_ulid)=26 AND substr(request_ulid,1,1) BETWEEN '0' AND '7' AND request_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) REFERENCES request_records(request_ulid) ON DELETE NO ACTION,\n batch_operation_ulid TEXT CHECK(batch_operation_ulid IS NULL OR (typeof(batch_operation_ulid)='text' AND length(batch_operation_ulid)=26 AND substr(batch_operation_ulid,1,1) BETWEEN '0' AND '7' AND batch_operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')),\n batch_ordinal INTEGER CHECK(batch_ordinal IS NULL OR (typeof(batch_ordinal)='integer' AND batch_ordinal>=0)),\n materialization_capture TEXT NOT NULL CHECK(materialization_capture IN ('unverified','absent','complete')),\n materialization_operation_ulid TEXT CHECK(materialization_operation_ulid IS NULL OR (typeof(materialization_operation_ulid)='text' AND length(materialization_operation_ulid)=26 AND substr(materialization_operation_ulid,1,1) BETWEEN '0' AND '7' AND materialization_operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')),\n materialization_oid TEXT CHECK(materialization_oid IS NULL OR (typeof(materialization_oid)='text' AND length(materialization_oid)=40 AND materialization_oid NOT GLOB '*[^0-9a-f]*' AND materialization_oid!='0000000000000000000000000000000000000000')),\n materialization_step TEXT,\n materialization_settled INTEGER NOT NULL CHECK(materialization_settled IN (0,1)),\n owner_epoch INTEGER NOT NULL CHECK(typeof(owner_epoch)='integer' AND owner_epoch>=selection_epoch),\n phase TEXT NOT NULL CHECK(phase IN ('selected','worktree_removing','worktree_removed','branch_deleting','local_absent','index_pending','complete','refused','preserving','abandoned')),\n worktree_removal TEXT NOT NULL CHECK(worktree_removal IN ('none','possible','observed')),\n branch_removal TEXT NOT NULL CHECK(branch_removal IN ('none','possible','observed')),\n absence_basis TEXT NOT NULL CHECK(absence_basis IN ('none','initial','owned_intent')),\n final_code TEXT,\n final_result TEXT CHECK(final_result IS NULL OR json_valid(final_result)),\n UNIQUE(repository_id,operation_ulid),\n CHECK((initial_resources IN ('present','branch_only'))=(expected_tip IS NOT NULL)),\n CHECK((initial_resources='present')=(instance_nonce IS NOT NULL)),\n CHECK(instance_verified=0 OR initial_resources='present'),\n CHECK((remote_name IS NULL)=(primary_branch IS NULL) AND (remote_name IS NULL)=(configuration_generation IS NULL) AND (remote_name IS NULL)=(endpoint_digest IS NULL)),\n CHECK((batch_operation_ulid IS NULL)=(batch_ordinal IS NULL)),\n CHECK(batch_operation_ulid IS NULL OR request_ulid IS NOT NULL),\n CHECK((materialization_capture='complete')=(materialization_operation_ulid IS NOT NULL) AND (materialization_capture='complete')=(materialization_oid IS NOT NULL) AND (materialization_capture='complete')=(materialization_step IS NOT NULL)),\n CHECK(materialization_step IS NULL OR materialization_step='complete'),\n CHECK(materialization_capture!='unverified' OR (phase='refused' AND worktree_removal='none' AND branch_removal='none')),\n CHECK((phase IN ('complete','refused','abandoned'))=(final_code IS NOT NULL) AND (final_code IS NULL)=(final_result IS NULL)),\n CHECK(absence_basis!='initial' OR (initial_resources='absent' AND worktree_removal='none' AND branch_removal='none')),\n CHECK(materialization_settled=0 OR absence_basis!='none')\n)"
+    ],
+    [
+      "table",
+      "context_retirement_attempts",
+      "CREATE TABLE context_retirement_attempts (\n operation_ulid TEXT CHECK(operation_ulid IS NULL OR (typeof(operation_ulid)='text' AND length(operation_ulid)=26 AND substr(operation_ulid,1,1) BETWEEN '0' AND '7' AND operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n owner_epoch INTEGER NOT NULL CHECK(typeof(owner_epoch)='integer' AND owner_epoch>0),\n repository_id INTEGER NOT NULL,\n request_attempt INTEGER CHECK(request_attempt IS NULL OR (typeof(request_attempt)='integer' AND request_attempt>0)),\n batch_attempt_epoch INTEGER CHECK(batch_attempt_epoch IS NULL OR (typeof(batch_attempt_epoch)='integer' AND batch_attempt_epoch>0)),\n observer_operation_ulid TEXT CHECK(observer_operation_ulid IS NULL OR (typeof(observer_operation_ulid)='text' AND length(observer_operation_ulid)=26 AND substr(observer_operation_ulid,1,1) BETWEEN '0' AND '7' AND observer_operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')),\n observer_owner_epoch INTEGER CHECK(observer_owner_epoch IS NULL OR (typeof(observer_owner_epoch)='integer' AND observer_owner_epoch>=0)),\n phase TEXT NOT NULL CHECK(phase IN ('active','ended','fenced')),\n PRIMARY KEY(operation_ulid,owner_epoch),\n UNIQUE(observer_operation_ulid),\n FOREIGN KEY(repository_id,operation_ulid) REFERENCES context_retirement_records(repository_id,operation_ulid) ON DELETE CASCADE,\n FOREIGN KEY(repository_id,observer_operation_ulid) REFERENCES remote_operation_records(repository_id,operation_ulid) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,\n CHECK((observer_operation_ulid IS NULL)=(observer_owner_epoch IS NULL))\n)"
+    ],
+    [
+      "table",
+      "retirement_advertisement_provenance",
+      "CREATE TABLE retirement_advertisement_provenance (\n id INTEGER PRIMARY KEY,\n repository_id INTEGER NOT NULL,\n source_operation_ulid TEXT CHECK(source_operation_ulid IS NULL OR (typeof(source_operation_ulid)='text' AND length(source_operation_ulid)=26 AND substr(source_operation_ulid,1,1) BETWEEN '0' AND '7' AND source_operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n source_owner_epoch INTEGER NOT NULL CHECK(typeof(source_owner_epoch)='integer' AND source_owner_epoch>=0),\n observation_batch_id INTEGER NOT NULL CHECK(typeof(observation_batch_id)='integer' AND observation_batch_id>0),\n observed_at INTEGER NOT NULL CHECK(typeof(observed_at)='integer' AND observed_at>=0),\n configuration_generation INTEGER NOT NULL CHECK(typeof(configuration_generation)='integer' AND configuration_generation>=0),\n remote_name TEXT NOT NULL,\n primary_branch TEXT NOT NULL,\n endpoint_digest BLOB NOT NULL CHECK(typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32),\n execution_kind TEXT NOT NULL CHECK(execution_kind IN ('local_parent','batch_gap','poll_parent')),\n execution_parent_ulid TEXT CHECK(execution_parent_ulid IS NULL OR (typeof(execution_parent_ulid)='text' AND length(execution_parent_ulid)=26 AND substr(execution_parent_ulid,1,1) BETWEEN '0' AND '7' AND execution_parent_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')),\n execution_parent_epoch INTEGER CHECK(execution_parent_epoch IS NULL OR (typeof(execution_parent_epoch)='integer' AND execution_parent_epoch>=0)),\n execution_request_ulid TEXT CHECK(execution_request_ulid IS NULL OR (typeof(execution_request_ulid)='text' AND length(execution_request_ulid)=26 AND substr(execution_request_ulid,1,1) BETWEEN '0' AND '7' AND execution_request_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) REFERENCES request_records(request_ulid) ON DELETE NO ACTION,\n execution_request_attempt INTEGER CHECK(execution_request_attempt IS NULL OR (typeof(execution_request_attempt)='integer' AND execution_request_attempt>0)),\n execution_batch_operation_ulid TEXT CHECK(execution_batch_operation_ulid IS NULL OR (typeof(execution_batch_operation_ulid)='text' AND length(execution_batch_operation_ulid)=26 AND substr(execution_batch_operation_ulid,1,1) BETWEEN '0' AND '7' AND execution_batch_operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')),\n execution_batch_attempt_epoch INTEGER CHECK(execution_batch_attempt_epoch IS NULL OR (typeof(execution_batch_attempt_epoch)='integer' AND execution_batch_attempt_epoch>0)),\n UNIQUE(repository_id,source_operation_ulid,source_owner_epoch),\n FOREIGN KEY(repository_id,source_operation_ulid) REFERENCES remote_operation_records(repository_id,operation_ulid) ON DELETE CASCADE,\n CHECK((execution_parent_ulid IS NULL)=(execution_parent_epoch IS NULL)),\n CHECK((execution_kind='batch_gap')=(execution_parent_ulid IS NULL)),\n CHECK((execution_request_ulid IS NULL)=(execution_request_attempt IS NULL)),\n CHECK((execution_batch_operation_ulid IS NULL)=(execution_batch_attempt_epoch IS NULL)),\n CHECK(execution_kind='local_parent' OR (execution_request_ulid IS NOT NULL AND execution_batch_operation_ulid IS NOT NULL))\n)"
+    ],
+    [
+      "table",
+      "retirement_observation_receipts",
+      "CREATE TABLE retirement_observation_receipts (\n id INTEGER PRIMARY KEY,\n provenance_id INTEGER NOT NULL UNIQUE REFERENCES retirement_advertisement_provenance(id) ON DELETE CASCADE,\n repository_id INTEGER NOT NULL,\n consumer_kind TEXT NOT NULL CHECK(consumer_kind IN ('single','batch')),\n consumer_operation_ulid TEXT CHECK(consumer_operation_ulid IS NULL OR (typeof(consumer_operation_ulid)='text' AND length(consumer_operation_ulid)=26 AND substr(consumer_operation_ulid,1,1) BETWEEN '0' AND '7' AND consumer_operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n consumer_request_ulid TEXT CHECK(consumer_request_ulid IS NULL OR (typeof(consumer_request_ulid)='text' AND length(consumer_request_ulid)=26 AND substr(consumer_request_ulid,1,1) BETWEEN '0' AND '7' AND consumer_request_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) REFERENCES request_records(request_ulid) ON DELETE NO ACTION,\n consumer_request_attempt INTEGER CHECK(consumer_request_attempt IS NULL OR (typeof(consumer_request_attempt)='integer' AND consumer_request_attempt>0)),\n consumer_attempt_epoch INTEGER NOT NULL CHECK(typeof(consumer_attempt_epoch)='integer' AND consumer_attempt_epoch>0),\n configuration_generation INTEGER NOT NULL CHECK(typeof(configuration_generation)='integer' AND configuration_generation>=0),\n frozen_worklist_digest BLOB CHECK(frozen_worklist_digest IS NULL OR (typeof(frozen_worklist_digest)='blob' AND length(frozen_worklist_digest)=32)),\n CHECK((consumer_request_ulid IS NULL)=(consumer_request_attempt IS NULL)),\n CHECK((consumer_kind='batch')=(frozen_worklist_digest IS NOT NULL)),\n CHECK(consumer_kind!='batch' OR consumer_request_ulid IS NOT NULL)\n)"
+    ],
+    [
+      "table",
+      "context_retirement_effect_intents",
+      "CREATE TABLE context_retirement_effect_intents (\n operation_ulid TEXT CHECK(operation_ulid IS NULL OR (typeof(operation_ulid)='text' AND length(operation_ulid)=26 AND substr(operation_ulid,1,1) BETWEEN '0' AND '7' AND operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n owner_epoch INTEGER NOT NULL,\n resource TEXT NOT NULL CHECK(resource IN ('worktree','branch')),\n receipt_id INTEGER NOT NULL REFERENCES retirement_observation_receipts(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,\n primary_oid TEXT CHECK(primary_oid IS NULL OR (typeof(primary_oid)='text' AND length(primary_oid)=40 AND primary_oid NOT GLOB '*[^0-9a-f]*' AND primary_oid!='0000000000000000000000000000000000000000')) NOT NULL,\n proof_kind TEXT NOT NULL CHECK(proof_kind IN ('ancestor','folded')),\n observation TEXT CHECK(observation IS NULL OR observation IN ('removed','already_absent','not_clean','changed','incomplete')),\n PRIMARY KEY(operation_ulid,owner_epoch,resource),\n FOREIGN KEY(operation_ulid,owner_epoch) REFERENCES context_retirement_attempts(operation_ulid,owner_epoch) ON DELETE CASCADE\n)"
+    ],
+    [
+      "table",
+      "retirement_observation_pins",
+      "CREATE TABLE retirement_observation_pins (\n provenance_id INTEGER NOT NULL REFERENCES retirement_advertisement_provenance(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,\n pin_kind TEXT NOT NULL CHECK(pin_kind IN ('source_attempt','consumer_attempt')),\n holder_operation_ulid TEXT CHECK(holder_operation_ulid IS NULL OR (typeof(holder_operation_ulid)='text' AND length(holder_operation_ulid)=26 AND substr(holder_operation_ulid,1,1) BETWEEN '0' AND '7' AND holder_operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n holder_epoch INTEGER NOT NULL CHECK(typeof(holder_epoch)='integer' AND holder_epoch>=0),\n repository_id INTEGER NOT NULL,\n observation_batch_id INTEGER NOT NULL,\n binding_id INTEGER UNIQUE REFERENCES retirement_observation_receipts(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,\n PRIMARY KEY(provenance_id,pin_kind,holder_operation_ulid,holder_epoch),\n FOREIGN KEY(repository_id,observation_batch_id) REFERENCES remote_observation_batches(repository_id,id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,\n CHECK((pin_kind='consumer_attempt')=(binding_id IS NOT NULL))\n)"
+    ],
+    [
+      "table",
+      "retirement_observation_pin_releases",
+      "CREATE TABLE retirement_observation_pin_releases (\n provenance_id INTEGER NOT NULL REFERENCES retirement_advertisement_provenance(id) ON DELETE CASCADE,\n pin_kind TEXT NOT NULL CHECK(pin_kind IN ('source_attempt','consumer_attempt')),\n holder_operation_ulid TEXT CHECK(holder_operation_ulid IS NULL OR (typeof(holder_operation_ulid)='text' AND length(holder_operation_ulid)=26 AND substr(holder_operation_ulid,1,1) BETWEEN '0' AND '7' AND holder_operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n holder_epoch INTEGER NOT NULL CHECK(typeof(holder_epoch)='integer' AND holder_epoch>=0),\n repository_id INTEGER NOT NULL,\n observation_batch_id INTEGER NOT NULL CHECK(typeof(observation_batch_id)='integer' AND observation_batch_id>0),\n binding_id INTEGER REFERENCES retirement_observation_receipts(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,\n reason TEXT NOT NULL CHECK(reason IN ('source_terminal','source_fenced','handoff_decided','consumer_terminal')),\n PRIMARY KEY(provenance_id,pin_kind,holder_operation_ulid,holder_epoch),\n CHECK((pin_kind='consumer_attempt')=(binding_id IS NOT NULL))\n)"
+    ],
+    [
+      "index",
+      "retirement_active_executor",
+      "CREATE UNIQUE INDEX retirement_active_executor ON context_retirement_attempts(operation_ulid) WHERE phase='active'"
+    ],
+    [
+      "index",
+      "retirement_pinned_batch",
+      "CREATE INDEX retirement_pinned_batch ON retirement_observation_pins(repository_id,observation_batch_id)"
+    ],
+    [
+      "trigger",
+      "retirement_record_identity",
+      "CREATE TRIGGER retirement_record_identity BEFORE UPDATE OF operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,expected_tip,selection_epoch,instance_nonce,remote_name,primary_branch,configuration_generation,endpoint_digest,request_ulid,batch_operation_ulid,batch_ordinal,materialization_capture,materialization_operation_ulid,materialization_oid,materialization_step ON context_retirement_records BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_initial_primary",
+      "CREATE TRIGGER retirement_initial_primary BEFORE UPDATE OF initial_primary_oid ON context_retirement_records WHEN OLD.initial_primary_oid IS NOT NULL BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_terminal_result",
+      "CREATE TRIGGER retirement_terminal_result BEFORE UPDATE ON context_retirement_records WHEN OLD.phase IN ('complete','refused','abandoned') BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_attempt_identity",
+      "CREATE TRIGGER retirement_attempt_identity BEFORE UPDATE OF operation_ulid,owner_epoch,repository_id,request_attempt,batch_attempt_epoch ON context_retirement_attempts BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_observer_binding",
+      "CREATE TRIGGER retirement_observer_binding BEFORE UPDATE OF observer_operation_ulid,observer_owner_epoch ON context_retirement_attempts WHEN OLD.observer_operation_ulid IS NOT NULL BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_effect_identity",
+      "CREATE TRIGGER retirement_effect_identity BEFORE UPDATE OF operation_ulid,owner_epoch,resource,receipt_id,primary_oid,proof_kind ON context_retirement_effect_intents BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_effect_observation",
+      "CREATE TRIGGER retirement_effect_observation BEFORE UPDATE OF observation ON context_retirement_effect_intents WHEN OLD.observation IS NOT NULL BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_provenance_immutable",
+      "CREATE TRIGGER retirement_provenance_immutable BEFORE UPDATE ON retirement_advertisement_provenance BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_binding_immutable",
+      "CREATE TRIGGER retirement_binding_immutable BEFORE UPDATE ON retirement_observation_receipts BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_pin_immutable",
+      "CREATE TRIGGER retirement_pin_immutable BEFORE UPDATE ON retirement_observation_pins BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_release_immutable",
+      "CREATE TRIGGER retirement_release_immutable BEFORE UPDATE ON retirement_observation_pin_releases BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_record_delete",
+      "CREATE TRIGGER retirement_record_delete BEFORE DELETE ON context_retirement_records WHEN OLD.phase NOT IN ('complete','refused','abandoned') BEGIN SELECT RAISE(ABORT,'pending retirement debt'); END"
+    ],
+    [
+      "trigger",
+      "retirement_envelope_delete",
+      "CREATE TRIGGER retirement_envelope_delete BEFORE DELETE ON operation_records WHEN OLD.action='retire_context' AND (OLD.state!='completed' OR NOT EXISTS(SELECT 1 FROM context_retirement_records c WHERE c.local_record_id=OLD.id AND c.phase IN ('complete','refused','abandoned'))) BEGIN SELECT RAISE(ABORT,'pending retirement envelope'); END"
+    ],
+    [
+      "trigger",
+      "retirement_provenance_delete",
+      "CREATE TRIGGER retirement_provenance_delete BEFORE DELETE ON retirement_advertisement_provenance WHEN EXISTS(SELECT 1 FROM retirement_observation_pins p WHERE p.provenance_id=OLD.id) BEGIN SELECT RAISE(ABORT,'pinned retirement provenance'); END"
+    ],
+    [
+      "trigger",
+      "retirement_binding_delete",
+      "CREATE TRIGGER retirement_binding_delete BEFORE DELETE ON retirement_observation_receipts WHEN EXISTS(SELECT 1 FROM retirement_observation_pins p WHERE p.binding_id=OLD.id) BEGIN SELECT RAISE(ABORT,'pinned retirement binding'); END"
+    ],
+    [
+      "trigger",
+      "retirement_no_repin",
+      "CREATE TRIGGER retirement_no_repin BEFORE INSERT ON retirement_observation_pins WHEN EXISTS(SELECT 1 FROM retirement_observation_pin_releases r WHERE r.provenance_id=NEW.provenance_id AND r.pin_kind=NEW.pin_kind AND r.holder_operation_ulid=NEW.holder_operation_ulid AND r.holder_epoch=NEW.holder_epoch) BEGIN SELECT RAISE(ABORT,'released retirement pin'); END"
+    ],
+    [
+      "trigger",
+      "retirement_pin_release_required",
+      "CREATE TRIGGER retirement_pin_release_required BEFORE DELETE ON retirement_observation_pins WHEN NOT EXISTS(SELECT 1 FROM retirement_observation_pin_releases r WHERE r.provenance_id=OLD.provenance_id AND r.pin_kind=OLD.pin_kind AND r.holder_operation_ulid=OLD.holder_operation_ulid AND r.holder_epoch=OLD.holder_epoch AND r.repository_id=OLD.repository_id AND r.observation_batch_id=OLD.observation_batch_id AND r.binding_id IS OLD.binding_id) BEGIN SELECT RAISE(ABORT,'retirement pin release receipt required'); END"
+    ],
+    [
+      "trigger",
+      "retirement_materialization_forward",
+      "CREATE TRIGGER retirement_materialization_forward BEFORE UPDATE OF materialization_settled ON context_retirement_records WHEN NEW.materialization_settled<OLD.materialization_settled BEGIN SELECT RAISE(ABORT,'settled retirement materialization'); END"
+    ],
+    [
+      "trigger",
+      "retirement_instance_verified_forward",
+      "CREATE TRIGGER retirement_instance_verified_forward BEFORE UPDATE OF instance_verified ON context_retirement_records WHEN NEW.instance_verified<OLD.instance_verified BEGIN SELECT RAISE(ABORT,'verified retirement instance history'); END"
+    ],
+    [
+      "table",
+      "context_retirement_reentries",
+      "CREATE TABLE context_retirement_reentries (\n operation_ulid TEXT CHECK(operation_ulid IS NULL OR (typeof(operation_ulid)='text' AND length(operation_ulid)=26 AND substr(operation_ulid,1,1) BETWEEN '0' AND '7' AND operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n owner_epoch INTEGER NOT NULL CHECK(typeof(owner_epoch)='integer' AND owner_epoch>1),\n previous_epoch INTEGER NOT NULL CHECK(typeof(previous_epoch)='integer' AND previous_epoch>0 AND owner_epoch=previous_epoch+1),\n purpose TEXT NOT NULL CHECK(purpose IN ('observe','resume_worktree','metadata','preserve','no_effect')),\n PRIMARY KEY(operation_ulid,owner_epoch),\n FOREIGN KEY(operation_ulid,owner_epoch) REFERENCES context_retirement_attempts(operation_ulid,owner_epoch) ON DELETE CASCADE,\n FOREIGN KEY(operation_ulid,previous_epoch) REFERENCES context_retirement_attempts(operation_ulid,owner_epoch) ON DELETE NO ACTION\n)"
+    ],
+    [
+      "table",
+      "context_retirement_absence_receipts",
+      "CREATE TABLE context_retirement_absence_receipts (\n operation_ulid TEXT CHECK(operation_ulid IS NULL OR (typeof(operation_ulid)='text' AND length(operation_ulid)=26 AND substr(operation_ulid,1,1) BETWEEN '0' AND '7' AND operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n owner_epoch INTEGER NOT NULL,\n intent_owner_epoch INTEGER NOT NULL,\n intent_resource TEXT NOT NULL CHECK(intent_resource IN ('worktree','branch')),\n intent_receipt_id INTEGER NOT NULL REFERENCES retirement_observation_receipts(id) ON DELETE NO ACTION,\n inventory TEXT NOT NULL CHECK(inventory='all_absent'),\n worktree_removal TEXT NOT NULL CHECK(worktree_removal IN ('none','possible','observed')),\n branch_removal TEXT NOT NULL CHECK(branch_removal IN ('none','possible','observed')),\n PRIMARY KEY(operation_ulid,owner_epoch),\n UNIQUE(operation_ulid),\n FOREIGN KEY(operation_ulid,owner_epoch) REFERENCES context_retirement_reentries(operation_ulid,owner_epoch) ON DELETE CASCADE,\n FOREIGN KEY(operation_ulid,intent_owner_epoch,intent_resource) REFERENCES context_retirement_effect_intents(operation_ulid,owner_epoch,resource) ON DELETE NO ACTION,\n CHECK(owner_epoch>intent_owner_epoch),\n CHECK(worktree_removal!='none' OR branch_removal!='none')\n)"
+    ],
+    [
+      "table",
+      "context_retirement_worktree_resumptions",
+      "CREATE TABLE context_retirement_worktree_resumptions (\n operation_ulid TEXT CHECK(operation_ulid IS NULL OR (typeof(operation_ulid)='text' AND length(operation_ulid)=26 AND substr(operation_ulid,1,1) BETWEEN '0' AND '7' AND operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n owner_epoch INTEGER NOT NULL,\n intent_owner_epoch INTEGER NOT NULL,\n intent_resource TEXT NOT NULL CHECK(intent_resource='worktree'),\n intent_receipt_id INTEGER NOT NULL REFERENCES retirement_observation_receipts(id) ON DELETE NO ACTION,\n PRIMARY KEY(operation_ulid,owner_epoch),\n FOREIGN KEY(operation_ulid,owner_epoch) REFERENCES context_retirement_reentries(operation_ulid,owner_epoch) ON DELETE CASCADE,\n FOREIGN KEY(operation_ulid,intent_owner_epoch,intent_resource) REFERENCES context_retirement_effect_intents(operation_ulid,owner_epoch,resource) ON DELETE NO ACTION,\n CHECK(owner_epoch>intent_owner_epoch)\n)"
+    ],
+    [
+      "table",
+      "retirement_observation_pin_releases",
+      "CREATE TABLE \"retirement_observation_pin_releases\" (\n provenance_id INTEGER NOT NULL REFERENCES retirement_advertisement_provenance(id) ON DELETE CASCADE,\n pin_kind TEXT NOT NULL CHECK(pin_kind IN ('source_attempt','consumer_attempt')),\n holder_operation_ulid TEXT CHECK(holder_operation_ulid IS NULL OR (typeof(holder_operation_ulid)='text' AND length(holder_operation_ulid)=26 AND substr(holder_operation_ulid,1,1) BETWEEN '0' AND '7' AND holder_operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n holder_epoch INTEGER NOT NULL CHECK(typeof(holder_epoch)='integer' AND holder_epoch>=0),\n repository_id INTEGER NOT NULL,\n observation_batch_id INTEGER NOT NULL CHECK(typeof(observation_batch_id)='integer' AND observation_batch_id>0),\n binding_id INTEGER REFERENCES retirement_observation_receipts(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,\n reason TEXT NOT NULL CHECK(reason IN ('source_terminal','source_fenced','handoff_decided','consumer_terminal','consumer_fenced')),\n PRIMARY KEY(provenance_id,pin_kind,holder_operation_ulid,holder_epoch),\n CHECK((pin_kind='consumer_attempt')=(binding_id IS NOT NULL))\n)"
+    ],
+    [
+      "trigger",
+      "retirement_reentry_immutable",
+      "CREATE TRIGGER retirement_reentry_immutable BEFORE UPDATE ON context_retirement_reentries BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_absence_receipt_immutable",
+      "CREATE TRIGGER retirement_absence_receipt_immutable BEFORE UPDATE ON context_retirement_absence_receipts BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "trigger",
+      "retirement_worktree_resumption_immutable",
+      "CREATE TRIGGER retirement_worktree_resumption_immutable BEFORE UPDATE ON context_retirement_worktree_resumptions BEGIN SELECT RAISE(ABORT,'immutable retirement evidence'); END"
+    ],
+    [
+      "table",
+      "context_retirement_index_claims",
+      "CREATE TABLE context_retirement_index_claims (\n operation_ulid TEXT CHECK(operation_ulid IS NULL OR (typeof(operation_ulid)='text' AND length(operation_ulid)=26 AND substr(operation_ulid,1,1) BETWEEN '0' AND '7' AND operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n repository_id INTEGER NOT NULL,\n request_ulid TEXT CHECK(request_ulid IS NULL OR (typeof(request_ulid)='text' AND length(request_ulid)=26 AND substr(request_ulid,1,1) BETWEEN '0' AND '7' AND request_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL REFERENCES request_records(request_ulid) ON DELETE NO ACTION,\n request_attempt INTEGER NOT NULL CHECK(typeof(request_attempt)='integer' AND request_attempt>0),\n index_owner_epoch INTEGER NOT NULL CHECK(typeof(index_owner_epoch)='integer' AND index_owner_epoch>0),\n PRIMARY KEY(operation_ulid,request_attempt),\n UNIQUE(operation_ulid,index_owner_epoch),\n FOREIGN KEY(repository_id,operation_ulid) REFERENCES context_retirement_records(repository_id,operation_ulid) ON DELETE CASCADE\n)"
+    ],
+    [
+      "trigger",
+      "retirement_index_claim_immutable",
+      "CREATE TRIGGER retirement_index_claim_immutable BEFORE UPDATE ON context_retirement_index_claims BEGIN SELECT RAISE(ABORT,'immutable retirement index claim'); END"
+    ],
+    [
+      "trigger",
+      "retirement_index_claim_delete",
+      "CREATE TRIGGER retirement_index_claim_delete BEFORE DELETE ON context_retirement_index_claims WHEN EXISTS(SELECT 1 FROM context_retirement_records c WHERE c.operation_ulid=OLD.operation_ulid AND c.phase NOT IN ('complete','refused','abandoned')) BEGIN SELECT RAISE(ABORT,'pending retirement index claim'); END"
+    ],
+    [
+      "table",
+      "retirement_batch_gap_attempts",
+      "CREATE TABLE retirement_batch_gap_attempts (\n operation_ulid TEXT CHECK(operation_ulid IS NULL OR (typeof(operation_ulid)='text' AND length(operation_ulid)=26 AND substr(operation_ulid,1,1) BETWEEN '0' AND '7' AND operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL,\n owner_epoch INTEGER NOT NULL CHECK(typeof(owner_epoch)='integer' AND owner_epoch>0),\n previous_epoch INTEGER NOT NULL CHECK(typeof(previous_epoch)='integer' AND previous_epoch>0 AND owner_epoch=previous_epoch+1),\n original_epoch INTEGER NOT NULL CHECK(typeof(original_epoch)='integer' AND original_epoch>0 AND previous_epoch>=original_epoch),\n repository_id INTEGER NOT NULL,\n root_path TEXT NOT NULL,\n request_ulid TEXT CHECK(request_ulid IS NULL OR (typeof(request_ulid)='text' AND length(request_ulid)=26 AND substr(request_ulid,1,1) BETWEEN '0' AND '7' AND request_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL REFERENCES request_records(request_ulid) ON DELETE NO ACTION,\n request_attempt INTEGER NOT NULL CHECK(typeof(request_attempt)='integer' AND request_attempt>0),\n next_ordinal INTEGER NOT NULL CHECK(typeof(next_ordinal)='integer' AND next_ordinal>=0),\n frozen_worklist_digest BLOB NOT NULL CHECK(typeof(frozen_worklist_digest)='blob' AND length(frozen_worklist_digest)=32),\n observer_operation_ulid TEXT CHECK(observer_operation_ulid IS NULL OR (typeof(observer_operation_ulid)='text' AND length(observer_operation_ulid)=26 AND substr(observer_operation_ulid,1,1) BETWEEN '0' AND '7' AND observer_operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL UNIQUE,\n observer_owner_epoch INTEGER NOT NULL CHECK(typeof(observer_owner_epoch)='integer' AND observer_owner_epoch>=0),\n provenance_id INTEGER UNIQUE REFERENCES retirement_advertisement_provenance(id) ON DELETE NO ACTION,\n phase TEXT NOT NULL CHECK(phase IN ('active','ended','fenced')),\n ended_kind TEXT CHECK(ended_kind IN ('completed','stopped')),\n PRIMARY KEY(operation_ulid,owner_epoch),\n UNIQUE(operation_ulid,request_attempt),\n FOREIGN KEY(repository_id,operation_ulid) REFERENCES remote_operation_records(repository_id,operation_ulid) ON DELETE NO ACTION,\n FOREIGN KEY(repository_id,observer_operation_ulid) REFERENCES remote_operation_records(repository_id,operation_ulid) ON DELETE NO ACTION,\n CHECK(operation_ulid!=observer_operation_ulid),\n CHECK(phase!='active' OR ended_kind IS NULL),\n CHECK(phase!='ended' OR ended_kind IS NOT NULL)\n)"
+    ],
+    [
+      "trigger",
+      "retirement_gap_identity",
+      "CREATE TRIGGER retirement_gap_identity BEFORE UPDATE OF operation_ulid,owner_epoch,previous_epoch,original_epoch,repository_id,root_path,request_ulid,request_attempt,next_ordinal,frozen_worklist_digest,observer_operation_ulid,observer_owner_epoch ON retirement_batch_gap_attempts BEGIN SELECT RAISE(ABORT,'immutable gap scope'); END"
+    ],
+    [
+      "trigger",
+      "retirement_gap_capture",
+      "CREATE TRIGGER retirement_gap_capture BEFORE UPDATE OF provenance_id ON retirement_batch_gap_attempts WHEN OLD.provenance_id IS NOT NULL OR OLD.phase!='active' OR NEW.provenance_id IS NULL BEGIN SELECT RAISE(ABORT,'single gap capture'); END"
+    ],
+    [
+      "trigger",
+      "retirement_gap_phase",
+      "CREATE TRIGGER retirement_gap_phase BEFORE UPDATE OF phase ON retirement_batch_gap_attempts WHEN NOT((OLD.phase='active' AND NEW.phase IN ('ended','fenced')) OR (OLD.phase='ended' AND NEW.phase='fenced')) BEGIN SELECT RAISE(ABORT,'ended gap executor'); END"
+    ],
+    [
+      "trigger",
+      "retirement_gap_end",
+      "CREATE TRIGGER retirement_gap_end BEFORE UPDATE OF ended_kind ON retirement_batch_gap_attempts WHEN OLD.ended_kind IS NOT NULL OR OLD.phase!='active' OR NEW.ended_kind IS NULL BEGIN SELECT RAISE(ABORT,'immutable gap ending'); END"
+    ],
+    [
+      "trigger",
+      "retirement_gap_delete",
+      "CREATE TRIGGER retirement_gap_delete BEFORE DELETE ON retirement_batch_gap_attempts BEGIN SELECT RAISE(ABORT,'retained gap spend'); END"
+    ]
+  ],
+  "orders": {
+    "v1": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+    ],
+    "v2": [
+      0,
+      1,
+      28,
+      29,
+      30,
+      2,
+      3,
+      4,
+      5,
+      31,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      32,
+      33,
+      34,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+    ],
+    "index": [
+      0,
+      1,
+      28,
+      29,
+      30,
+      2,
+      3,
+      4,
+      5,
+      31,
+      7,
+      8,
+      35,
+      36,
+      37,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      32,
+      33,
+      34,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+    ],
+    "gap": [
+      0,
+      1,
+      28,
+      29,
+      30,
+      2,
+      3,
+      4,
+      5,
+      31,
+      7,
+      8,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      32,
+      33,
+      34,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+    ]
+  }
+}

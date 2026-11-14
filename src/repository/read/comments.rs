@@ -95,7 +95,7 @@ fn stored_comments(
 /// its value when that is what `closed_by` may be, a non-empty string with
 /// no NUL; `Err` is any other value, which names nobody.
 fn take_author(unknown: &mut serde_yaml::Mapping) -> Result<Option<String>, ()> {
-    match unknown.remove(CREATED_BY) {
+    match unknown.shift_remove(CREATED_BY) {
         None => Ok(None),
         Some(serde_yaml::Value::String(author)) if !author.is_empty() && !author.contains('\0') => {
             Ok(Some(author))

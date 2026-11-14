@@ -1,9 +1,10 @@
 ---
+id: 01M4CGDAR5RVWK3TZ5YB6HPA2J
+item_id: 01M4CGDANTBDR4T8AGFZP8ZGP7
+created_at: 2026-10-08T01:00:29Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4CGDAR5RVWK3TZ5YB6HPA2J"
-item_id: "01M4CGDANTBDR4T8AGFZP8ZGP7"
-created_at: "2026-10-08T01:00:29Z"
 ---
 
 Planning checkpoint: the product owner reviewed the ticket-rs and Beads

@@ -1,9 +1,10 @@
 ---
+id: 01M4YHQ2W11HVSHSDJ5J4YZ8V2
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-15T01:09:37Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4YHQ2W11HVSHSDJ5J4YZ8V2"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-15T01:09:37Z"
 ---
 
 Owner authorized diagnosing and correcting the first native failures, with

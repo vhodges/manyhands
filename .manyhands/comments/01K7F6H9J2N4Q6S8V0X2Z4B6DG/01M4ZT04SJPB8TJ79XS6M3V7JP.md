@@ -1,9 +1,10 @@
 ---
+id: 01M4ZT04SJPB8TJ79XS6M3V7JP
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-15T12:53:37Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4ZT04SJPB8TJ79XS6M3V7JP"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-15T12:53:37Z"
 ---
 
 Integrated branch green. Owner authorized merging current `origin/main`

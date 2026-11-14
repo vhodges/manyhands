@@ -72,7 +72,7 @@ fn hosts(fixture: Fixture, root: Option<&Path>, cx: &mut TestAppContext) -> Shel
 fn page(shell: &Shell, cx: &mut TestAppContext) -> Entity<HostsPage> {
     let host = shell
         .workspace
-        .read_with(cx, |workspace, _| workspace.settings.clone());
+        .read_with(cx, |workspace, _| workspace.settings().clone());
     host.read_with(cx, |host, _| host.hosts.clone())
         .expect("the Hosts page is made")
 }

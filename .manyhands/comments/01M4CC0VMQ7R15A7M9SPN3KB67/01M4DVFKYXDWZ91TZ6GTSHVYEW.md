@@ -1,9 +1,10 @@
 ---
+id: 01M4DVFKYXDWZ91TZ6GTSHVYEW
+item_id: 01M4CC0VMQ7R15A7M9SPN3KB67
+created_at: 2026-10-08T13:33:13Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4DVFKYXDWZ91TZ6GTSHVYEW"
-item_id: "01M4CC0VMQ7R15A7M9SPN3KB67"
-created_at: "2026-10-08T13:33:13Z"
 ---
 
 Task 7 checkpoint (status and operation reads): complete at `52714e0`, range

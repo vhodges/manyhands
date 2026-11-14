@@ -1,9 +1,10 @@
 ---
+id: 01M4CY3YVS011KC51CDQKSHH0H
+item_id: 01M4CC0VMQ7R15A7M9SPN3KB67
+created_at: 2026-10-08T05:00:02Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4CY3YVS011KC51CDQKSHH0H"
-item_id: "01M4CC0VMQ7R15A7M9SPN3KB67"
-created_at: "2026-10-08T05:00:02Z"
 ---
 
 Task 4 checkpoint: credential reads, complete.

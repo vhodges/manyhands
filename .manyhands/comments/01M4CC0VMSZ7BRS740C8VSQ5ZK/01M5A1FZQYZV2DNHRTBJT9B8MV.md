@@ -1,9 +1,10 @@
 ---
+id: 01M5A1FZQYZV2DNHRTBJT9B8MV
+item_id: 01M4CC0VMSZ7BRS740C8VSQ5ZK
+created_at: 2026-10-19T12:17:01Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5A1FZQYZV2DNHRTBJT9B8MV"
-item_id: "01M4CC0VMSZ7BRS740C8VSQ5ZK"
-created_at: "2026-10-19T12:17:01Z"
 ---
 
 Task 2 implementation checkpoint: startup, rendering, help/version and main.

@@ -24,6 +24,7 @@ use super::{
     REFUSED, SELECTED, SELECTION_NONE, retrying_line, selection_line,
 };
 use crate::desktop::{
+    model::activity::rows::{ActivityAction, RowKey},
     services::{
         KEY_STORE_UNAVAILABLE, ReadKind,
         requests::{DesktopRequestId, Intent, NotSent, RequestState},
@@ -32,9 +33,9 @@ use crate::desktop::{
         Fixture, PRIVATE_KEY_SENTINEL, select_key_through, unregister_key_through,
     },
     view::{
+        activity_support::{act, label_of},
         confirm::{CONFIRM, PREPARE_AGAIN},
         harness::{Shell, wait_until},
-        operations::recovery_id,
     },
 };
 
@@ -59,7 +60,7 @@ fn keys(fixture: Fixture, cx: &mut TestAppContext) -> Shell {
 fn page(shell: &Shell, cx: &mut TestAppContext) -> Entity<KeysPage> {
     let host = shell
         .workspace
-        .read_with(cx, |workspace, _| workspace.settings.clone());
+        .read_with(cx, |workspace, _| workspace.settings().clone());
     host.read_with(cx, |host, _| host.keys.clone())
         .expect("the Keys page is made")
 }
@@ -824,7 +825,7 @@ fn an_unavailable_key_store_is_said_in_fixed_text(cx: &mut TestAppContext) {
     );
 }
 
-/// The operation area's Retry of a protected generation sends nothing
+/// Activity's Retry of a protected generation sends nothing
 /// without the passphrase: it shows the Keys page asking for it, with
 /// focus in the passphrase field, and the page's submit retries the same
 /// request.
@@ -853,7 +854,9 @@ async fn the_operation_area_retry_of_a_protected_generation_asks_on_the_page(
     });
     shell.click("settings-close", cx);
     shell.keys("secondary-4", cx);
-    shell.click(recovery_id(id, retry), cx);
+    let entry = RowKey::Request(id);
+    let retry_label = label_of(&shell, &entry, &ActivityAction::Recovery(id, retry), cx);
+    act(&shell, &entry, &retry_label, cx);
 
     assert!(shell.present("settings-keys", cx));
     let page = page(&shell, cx);

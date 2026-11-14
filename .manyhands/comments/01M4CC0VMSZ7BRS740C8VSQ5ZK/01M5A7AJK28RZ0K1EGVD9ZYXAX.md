@@ -1,9 +1,10 @@
 ---
+id: 01M5A7AJK28RZ0K1EGVD9ZYXAX
+item_id: 01M4CC0VMSZ7BRS740C8VSQ5ZK
+created_at: 2026-10-19T13:58:55Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5A7AJK28RZ0K1EGVD9ZYXAX"
-item_id: "01M4CC0VMSZ7BRS740C8VSQ5ZK"
-created_at: "2026-10-19T13:58:55Z"
 ---
 
 Task 8 lint blocker resolution only, base

@@ -12,15 +12,21 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui_kit::{TestAppContext, test::TestWindowExt};
+use gpui_kit::TestAppContext;
 use manyhands::{
-    repository::{ItemDtoKind, LeaseKind, OperationNextAction, RepositoryService},
+    repository::{
+        ItemDtoKind, LeaseKind, OperationDto, OperationNextAction, ProgressStage, RepositoryService,
+    },
     results::{Outcome, RecoveryActionKind, ResultCode},
 };
 
-use super::{DISMISS, NOTHING_PENDING, outcome_label, recovery_id, request_id};
+use super::{DISMISS, state_label};
 use crate::desktop::{
-    model::{navigation::OpenTarget, operations::Operations},
+    model::{
+        activity::rows::{ActivityAction, Kind, RowKey},
+        navigation::{OpenTarget, Pane},
+        operations::Operations,
+    },
     services::{
         JobKind, ReadKind,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
@@ -31,7 +37,12 @@ use crate::desktop::{
         git_home,
     },
     view::{
+        activity_support::{
+            act, choose_in_menu, highlighted, list_focused, offered, pending_key,
+            refresh as refresh_log, request, row, to_row,
+        },
         harness::{Shell, WAIT, key},
+        repositories::tests::support::press_and_hold,
         workspace::Region,
     },
 };
@@ -66,6 +77,36 @@ fn state_of(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> &'s
             Some(_) => "other",
             None => "absent",
         }
+    })
+}
+
+/// The message of the finished request `id`.
+fn message(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> String {
+    match request(shell, id, cx).state {
+        RequestState::Finished(.., message) => message,
+        _ => panic!("not finished"),
+    }
+}
+
+/// The commands the repositories list as pending, in list order, as the
+/// request model holds them.
+fn pending_commands(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
+    pending_operations(shell, cx)
+        .into_iter()
+        .map(|operation| operation.action.as_str().to_owned())
+        .collect()
+}
+
+/// The operations the repositories list as pending, as the request model
+/// holds them.
+fn pending_operations(shell: &Shell, cx: &mut TestAppContext) -> Vec<OperationDto> {
+    shell.operations(cx).read_with(cx, |operations, _| {
+        operations
+            .pending_shown()
+            .into_iter()
+            .filter_map(|(_, state)| state.rows().map(|list| list.items.clone()))
+            .flatten()
+            .collect()
     })
 }
 
@@ -171,12 +212,15 @@ async fn launch_refreshes_each_repository_in_the_background_and_a_manual_refresh
             (Outcome::Success, ResultCode::Ok),
             "{id:?}"
         );
-        // A success is one line: no message or recovery is kept open.
-        assert_eq!(
-            shell.label(request_id(id, "state"), cx).as_deref(),
-            Some(outcome_label(Outcome::Success))
-        );
-        assert!(!shell.present(request_id(id, "message"), cx));
+        // A success is one line: no recovery is kept open, and nothing in
+        // its row needs the person.
+        let RequestState::Finished(_, _, _, recovery, _) = request(&shell, id, cx).state else {
+            panic!("{id:?} finished");
+        };
+        assert!(recovery.is_empty(), "{id:?}");
+        let row = row(&shell, &RowKey::Request(id), cx).expect("its row");
+        assert_eq!(row.row.kind, Kind::Success, "{id:?}");
+        assert!(!row.row.attention, "{id:?}");
     }
     assert_eq!(shell.backend.jobs_seen().len(), 3);
 }
@@ -227,7 +271,7 @@ fn with_an_unindexed_ticket(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     );
     let shell = Shell::open(fixture, cx);
     shell.select(&root, cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.click("filter-all", cx);
     (shell, root)
 }
@@ -252,24 +296,39 @@ fn reopened(shell: &Shell) {
         .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
 }
 
-/// The recovery control of `id` for `kind`.
-fn recovery_of(
+/// Where the recovery action `kind` stands among those the finished request
+/// `id` offers.
+fn recovery_index(
+    shell: &Shell,
+    id: DesktopRequestId,
+    kind: RecoveryActionKind,
+    cx: &mut TestAppContext,
+) -> usize {
+    match request(shell, id, cx).state {
+        RequestState::Finished(_, _, _, recovery, _) => recovery
+            .iter()
+            .position(|action| action.action == kind)
+            .expect("the recovery action is offered"),
+        _ => panic!("not finished"),
+    }
+}
+
+/// The label of the offer on `id`'s row that runs its recovery action `kind`.
+fn recovery_offer(
     shell: &Shell,
     id: DesktopRequestId,
     kind: RecoveryActionKind,
     cx: &mut TestAppContext,
 ) -> String {
-    let operations = shell.operations(cx);
-    let n = operations.read_with(cx, |operations, _| {
-        match &operations.request(id).unwrap().state {
-            RequestState::Finished(_, _, _, recovery, _) => recovery
-                .iter()
-                .position(|action| action.action == kind)
-                .expect("the recovery action is offered"),
-            _ => panic!("not finished"),
-        }
-    });
-    recovery_id(id, n)
+    let action = ActivityAction::Recovery(id, recovery_index(shell, id, kind, cx));
+    row(shell, &RowKey::Request(id), cx)
+        .expect("its row")
+        .row
+        .menu
+        .into_iter()
+        .find(|offer| offer.action == action)
+        .expect("the recovery action is an offer")
+        .label
 }
 
 /// A refresh and a rebuild that fail stay in the operation area with
@@ -293,29 +352,18 @@ async fn a_failed_refresh_and_rebuild_stay_until_dismissed_and_retry_succeeds(
     shell.until_ended(refresh, cx).await;
     let (failed, code) = outcome(&shell, refresh, cx);
     assert_eq!(failed, Outcome::Error);
-    assert_eq!(
-        shell.label(request_id(refresh, "state"), cx).as_deref(),
-        Some(outcome_label(Outcome::Error))
-    );
-    assert_eq!(
-        shell.label(request_id(refresh, "code"), cx).as_deref(),
-        Some(code.as_str())
-    );
-    assert_eq!(
-        shell.label(request_id(refresh, "message"), cx).as_deref(),
-        Some(code.message())
-    );
+    assert_eq!(message(&shell, refresh, cx), code.message());
     // The list is read again and is still stale: the ticket is not there.
     assert!(tickets(&shell, cx).is_empty());
     // The failed refresh left its operation pending in the repository.
     assert_eq!(
-        shell.label(("pending-command", 0usize), cx).as_deref(),
+        pending_commands(&shell, cx).first().map(String::as_str),
         Some("refresh")
     );
 
     reopened(&shell);
-    let retry = recovery_of(&shell, refresh, RecoveryActionKind::RequestRetry, cx);
-    shell.click(retry, cx);
+    let retry = recovery_offer(&shell, refresh, RecoveryActionKind::RequestRetry, cx);
+    act(&shell, &RowKey::Request(refresh), &retry, cx);
     shell.until_ended(refresh, cx).await;
     assert_eq!(
         outcome(&shell, refresh, cx),
@@ -332,9 +380,9 @@ async fn a_failed_refresh_and_rebuild_stay_until_dismissed_and_retry_succeeds(
         1
     );
     assert_eq!(tickets(&shell, cx), ["Unindexed"]);
-    assert_eq!(
-        shell.label("pending-empty", cx).as_deref(),
-        Some(NOTHING_PENDING)
+    assert!(
+        pending_commands(&shell, cx).is_empty(),
+        "nothing is pending"
     );
 
     failing(&shell);
@@ -343,14 +391,10 @@ async fn a_failed_refresh_and_rebuild_stay_until_dismissed_and_retry_succeeds(
         matches!(request.intent, Intent::IndexRebuild { .. })
     })[0];
     shell.until_ended(rebuild, cx).await;
-    let (failed, code) = outcome(&shell, rebuild, cx);
+    let (failed, _) = outcome(&shell, rebuild, cx);
     assert_eq!(failed, Outcome::Error);
     assert_eq!(
-        shell.label(request_id(rebuild, "code"), cx).as_deref(),
-        Some(code.as_str())
-    );
-    assert_eq!(
-        shell.label(("pending-command", 0usize), cx).as_deref(),
+        pending_commands(&shell, cx).first().map(String::as_str),
         Some("rebuild")
     );
 
@@ -365,10 +409,14 @@ async fn a_failed_refresh_and_rebuild_stay_until_dismissed_and_retry_succeeds(
         )
     });
     shell.until_ended(other, cx).await;
-    assert!(shell.present(request_id(rebuild, "message"), cx));
+    assert!(matches!(
+        request(&shell, rebuild, cx).state,
+        RequestState::Finished(..)
+    ));
+    assert!(row(&shell, &RowKey::Request(rebuild), cx).is_some());
 
-    let retry = recovery_of(&shell, rebuild, RecoveryActionKind::RequestRetry, cx);
-    shell.click(retry, cx);
+    let retry = recovery_offer(&shell, rebuild, RecoveryActionKind::RequestRetry, cx);
+    act(&shell, &RowKey::Request(rebuild), &retry, cx);
     shell.until_ended(rebuild, cx).await;
     assert_eq!(
         outcome(&shell, rebuild, cx),
@@ -380,14 +428,12 @@ async fn a_failed_refresh_and_rebuild_stay_until_dismissed_and_retry_succeeds(
     // pending: it stays until dismissed.
     let (outcome_of_other, _) = outcome(&shell, other, cx);
     assert_ne!(outcome_of_other, Outcome::Success);
-    assert!(shell.present(request_id(other, "message"), cx));
-    assert_eq!(
-        shell.label(request_id(other, "dismiss"), cx).as_deref(),
-        Some(DISMISS)
-    );
-    shell.click(request_id(other, "dismiss"), cx);
-    assert!(!shell.present(request_id(other, "entry"), cx));
-    assert!(shell.present(request_id(rebuild, "entry"), cx));
+    let (other_row, rebuild_row) = (RowKey::Request(other), RowKey::Request(rebuild));
+    assert!(row(&shell, &other_row, cx).is_some());
+    assert!(offered(&shell, &other_row, DISMISS, cx).is_some_and(|offer| offer.enabled));
+    act(&shell, &other_row, DISMISS, cx);
+    assert!(row(&shell, &other_row, cx).is_none());
+    assert!(row(&shell, &rebuild_row, cx).is_some());
 }
 
 /// A refresh held on the worker thread, as it persists, holds nothing
@@ -408,7 +454,7 @@ async fn a_delayed_refresh_leaves_the_user_going_on_and_the_list_updates_on_rele
     fixture.refresh(&b);
     fixture.commit_ticket(&b, SECOND, "New in b", "");
     let shell = Shell::open(fixture, cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.select(&b, cx);
     shell.click("filter-all", cx);
     assert!(tickets(&shell, cx).is_empty());
@@ -572,25 +618,10 @@ async fn a_lease_held_by_another_process_is_the_refreshs_typed_answer(cx: &mut T
         code.as_str()
     );
     assert_eq!(code, ResultCode::Busy, "{}", code.as_str());
-    assert_eq!(
-        shell.label(request_id(refresh, "state"), cx).as_deref(),
-        Some(outcome_label(answered))
-    );
-    assert_eq!(
-        shell.label(request_id(refresh, "code"), cx).as_deref(),
-        Some(code.as_str())
-    );
-    assert_eq!(
-        shell.label(request_id(refresh, "message"), cx).as_deref(),
-        Some(code.message())
-    );
-    // Nothing in the area says the refresh succeeded: it stays
-    // expanded, with its message.
-    assert!(shell.present(request_id(refresh, "message"), cx));
-    assert_ne!(
-        shell.label(request_id(refresh, "state"), cx).as_deref(),
-        Some(outcome_label(Outcome::Success))
-    );
+    assert_eq!(message(&shell, refresh, cx), code.message());
+    // Nothing says the refresh succeeded: its row stays, a failure.
+    let row = row(&shell, &RowKey::Request(refresh), cx).expect("its row");
+    assert_ne!(row.row.kind, Kind::Success);
 }
 
 /// The pending local operation of a ticket save whose index hand-off
@@ -630,26 +661,24 @@ async fn a_pending_local_operation_offers_resume_and_abandon_confirms_it(cx: &mu
         library_pending(&shell, &root),
         std::slice::from_ref(&operation)
     );
+    let listed = pending_operations(&shell, cx);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].action.as_str(), "save_ticket");
+    assert_eq!(listed[0].operation_id.as_deref(), Some(operation.as_str()));
+    assert_eq!(listed[0].next_action, Some(OperationNextAction::Resume));
+    let pending = pending_key(&shell, &key(&root), "save_ticket", cx);
     assert_eq!(
-        shell.label(("pending-command", 0usize), cx).as_deref(),
-        Some("save_ticket")
-    );
-    assert_eq!(
-        shell.label(("pending-operation", 0usize), cx),
-        Some(operation.clone())
-    );
-    assert_eq!(
-        shell.label(("pending-next", 0usize), cx).as_deref(),
-        Some(OperationNextAction::Resume.as_str())
-    );
-    assert_eq!(
-        shell.label(("pending-scope", 0usize), cx).as_deref(),
+        row(&shell, &pending, cx)
+            .expect("its row")
+            .row
+            .repo
+            .as_deref(),
         Some("a")
     );
-    assert!(shell.present(("pending-resume", 0usize), cx));
-    assert!(!shell.present(("pending-resume-unavailable", 0usize), cx));
+    // Resume is offered and can be pressed; so is Abandon.
+    assert!(offered(&shell, &pending, "Resume", cx).is_some_and(|offer| offer.enabled));
 
-    shell.click(("pending-abandon", 0usize), cx);
+    act(&shell, &pending, "Abandon", cx);
     assert_eq!(
         shell.label("confirm-command-name", cx).as_deref(),
         Some("operation abandon")
@@ -680,10 +709,10 @@ async fn a_pending_local_operation_offers_resume_and_abandon_confirms_it(cx: &mu
     );
     assert!(!shell.present("confirm-dialog", cx));
     assert!(library_pending(&shell, &root).is_empty());
-    assert!(!shell.present(("pending-row", 0usize), cx));
-    assert_eq!(
-        shell.label("pending-empty", cx).as_deref(),
-        Some(NOTHING_PENDING)
+    assert!(row(&shell, &pending, cx).is_none());
+    assert!(
+        pending_commands(&shell, cx).is_empty(),
+        "nothing is pending"
     );
     // The dialog gave focus back to Abandon, whose row is now gone: focus
     // is on the operation area itself, not nowhere.
@@ -697,7 +726,8 @@ async fn a_pending_local_operation_offers_resume_and_abandon_confirms_it(cx: &mu
 async fn resume_finishes_a_pending_local_operation(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let (shell, root, _) = stranded(cx);
-    shell.click(("pending-resume", 0usize), cx);
+    let pending = pending_key(&shell, &key(&root), "save_ticket", cx);
+    act(&shell, &pending, "Resume", cx);
     let resume = shell.requests(cx, |request| {
         matches!(request.intent, Intent::OperationResume { .. }) && request.lane == Lane::User
     });
@@ -708,7 +738,7 @@ async fn resume_finishes_a_pending_local_operation(cx: &mut TestAppContext) {
         (Outcome::Success, ResultCode::Ok)
     );
     assert!(library_pending(&shell, &root).is_empty());
-    assert!(!shell.present(("pending-row", 0usize), cx));
+    assert!(row(&shell, &pending, cx).is_none());
 }
 
 /// Track rule 4: another service abandons the row the desktop shows.
@@ -719,9 +749,10 @@ fn an_abandon_by_a_second_actor_is_answered_and_the_row_goes(cx: &mut TestAppCon
     let (shell, root, operation) = stranded(cx);
     let other = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
     abandon_through(&other, &root, &operation);
-    assert!(shell.present(("pending-row", 0usize), cx));
+    let pending = pending_key(&shell, &key(&root), "save_ticket", cx);
+    assert!(row(&shell, &pending, cx).is_some());
 
-    shell.click(("pending-abandon", 0usize), cx);
+    act(&shell, &pending, "Abandon", cx);
     let code = shell.label("confirm-code", cx).expect("a typed answer");
     assert_ne!(code, ResultCode::Ok.as_str());
     let answered = ResultCode::ALL
@@ -733,7 +764,7 @@ fn an_abandon_by_a_second_actor_is_answered_and_the_row_goes(cx: &mut TestAppCon
         Some(answered.message())
     );
     assert!(!shell.present("confirm-ok", cx));
-    assert!(!shell.present(("pending-row", 0usize), cx));
+    assert!(row(&shell, &pending, cx).is_none());
     assert!(shell.requests(cx, |_| true).is_empty());
 
     shell.keys("escape", cx);
@@ -770,40 +801,19 @@ async fn a_refresh_keeps_the_selected_document(cx: &mut TestAppContext) {
     assert_eq!(after, selected);
 }
 
-/// Whether the control wrapped as `id` holds focus.
-fn control_focused(shell: &Shell, id: &str, cx: &mut TestAppContext) -> bool {
-    let id = id.to_owned();
-    shell.frame(cx, |window, _| {
-        window
-            .try_find(gpui_kit::ElementId::Name(id.into()))
-            .and_then(|control| control.focused())
-            == Some(true)
-    })
-}
-
-/// From the operation area, Tab until the control `id` holds focus.
-fn tab_to(shell: &Shell, id: &str, cx: &mut TestAppContext) {
-    shell.keys("secondary-4", cx);
-    let mut presses = 0;
-    while !control_focused(shell, id, cx) {
-        presses += 1;
-        assert!(presses < 30, "Tab never reached {id}");
-        shell.keys("tab", cx);
-    }
-}
-
-/// The operation area holds focus on a drawn control, and rings it.
-fn operations_keep_focus(shell: &Shell, cx: &mut TestAppContext) {
+/// The operation area holds focus, on the list, with `key`'s row
+/// highlighted, and rings its region (C3, decision 23).
+fn operations_keep_focus(shell: &Shell, key: &RowKey, cx: &mut TestAppContext) {
     assert!(shell.frame(cx, |window, cx| window.focused(cx).is_some()));
-    assert!(shell.frame(cx, |window, _| {
-        window.find(Region::Operations.id()).focused() == Some(true)
-    }));
+    assert!(list_focused(shell, cx), "the list holds focus");
+    assert_eq!(highlighted(shell, cx).as_ref(), Some(key), "its row");
     assert!(shell.present(Region::Operations.ring_id(), cx));
 }
 
-/// Dismiss and Retry, pressed from the keyboard, take their control away
-/// with the request's state: focus falls back to the operation area,
-/// never nowhere.
+/// Retry, pressed from the keyboard on its row (Enter on the highlighted
+/// row's button), takes its offer away with the request's state: focus stays
+/// on the list, the row still highlighted, never nowhere; and Dismiss, chosen
+/// from the row's menu, takes the row away and leaves focus on the list.
 #[gpui_kit::test]
 async fn dismiss_and_retry_from_the_keyboard_leave_focus_in_the_operation_area(
     cx: &mut TestAppContext,
@@ -817,29 +827,45 @@ async fn dismiss_and_retry_from_the_keyboard_leave_focus_in_the_operation_area(
     })[0];
     shell.until_ended(refresh, cx).await;
 
-    let retry = recovery_of(&shell, refresh, RecoveryActionKind::RequestRetry, cx);
-    tab_to(&shell, &retry, cx);
+    let at = RowKey::Request(refresh);
+    let retry = recovery_offer(&shell, refresh, RecoveryActionKind::RequestRetry, cx);
+    refresh_log(&shell, cx);
+    let button = row(&shell, &at, cx).expect("its row").row.button;
+    assert_eq!(
+        button.map(|offer| offer.label),
+        Some(retry.clone()),
+        "Retry is the row's button"
+    );
+    to_row(&shell, &at, cx);
     let held = shell.backend.hold_job(JobKind::IndexRefresh);
     shell.press("enter", cx);
     held.wait_reached();
+    refresh_log(&shell, cx);
     assert!(
-        !shell.present(retry.clone(), cx),
+        offered(&shell, &at, &retry, cx).is_none(),
         "Retry went with the attempt"
     );
-    operations_keep_focus(&shell, cx);
+    operations_keep_focus(&shell, &at, cx);
     held.release();
     shell.until_ended(refresh, cx).await;
+    refresh_log(&shell, cx);
+    operations_keep_focus(&shell, &at, cx);
 
-    let dismiss = request_id(refresh, "dismiss");
-    tab_to(&shell, &dismiss, cx);
-    shell.press("enter", cx);
-    assert!(!shell.present(request_id(refresh, "entry"), cx));
-    operations_keep_focus(&shell, cx);
+    // Dismiss, which is in the row's menu, takes the row away: focus falls
+    // back to the list, never nowhere.
+    choose_in_menu(&shell, &at, DISMISS, cx);
+    refresh_log(&shell, cx);
+    assert!(row(&shell, &at, cx).is_none(), "the row is gone");
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    assert!(list_focused(&shell, cx), "the list holds focus");
+    assert!(shell.present(Region::Operations.ring_id(), cx));
 }
 
 /// A recovery action that opens the confirmation dialog, here Abandon of
-/// the operation a failed refresh left pending, gives focus back to that
-/// action's control when the dialog closes, not to the region.
+/// the operation a failed refresh left pending, chosen from the row's menu
+/// (Abandon is never its button), gives focus back to the list when the
+/// dialog closes, the row still highlighted (decision 23).
 #[gpui_kit::test]
 async fn a_recovery_dialog_gives_focus_back_to_the_action_that_opened_it(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -852,15 +878,38 @@ async fn a_recovery_dialog_gives_focus_back_to_the_action_that_opened_it(cx: &mu
     shell.until_ended(refresh, cx).await;
     reopened(&shell);
 
-    let abandon = recovery_of(&shell, refresh, RecoveryActionKind::OperationAbandon, cx);
-    tab_to(&shell, &abandon, cx);
-    shell.press("enter", cx);
+    let at = RowKey::Request(refresh);
+    let abandon = recovery_offer(&shell, refresh, RecoveryActionKind::OperationAbandon, cx);
+    choose_in_menu(&shell, &at, &abandon, cx);
     assert!(shell.present("confirm-dialog", cx));
-    shell.keys("escape", cx);
-    assert!(!shell.present("confirm-dialog", cx));
+    let list = crate::desktop::view::activity_support::list_focus(&shell, cx);
     assert!(
-        control_focused(&shell, &abandon, cx),
-        "focus is back on the recovery action"
+        press_and_hold(&shell, "escape", &list, cx),
+        "focus is back on the list, in the update Escape closed the dialog"
     );
-    assert!(shell.present(Region::Operations.ring_id(), cx));
+    assert!(!shell.present("confirm-dialog", cx));
+    operations_keep_focus(&shell, &at, cx);
+}
+
+/// A running request reads its stage, accepted or not, and only an
+/// accepted one with no stage yet reads "Finishing" (F3, P10).
+#[test]
+fn state_label_shows_stages() {
+    let running = |stage, accepted| RequestState::Running { stage, accepted };
+    assert_eq!(state_label(&running(None, false)), "Running");
+    assert_eq!(state_label(&running(None, true)), "Finishing");
+    assert_eq!(
+        state_label(&running(Some(ProgressStage::Writing), true)),
+        "Running: Saving…"
+    );
+    for stage in ProgressStage::ALL {
+        let words = crate::desktop::model::operations::stage_words(stage, None);
+        for accepted in [false, true] {
+            assert_eq!(
+                state_label(&running(Some(stage), accepted)),
+                format!("Running: {words}"),
+                "{stage:?} accepted {accepted}"
+            );
+        }
+    }
 }

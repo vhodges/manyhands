@@ -1,0 +1,26 @@
+The request completed.
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX1
+operation: <id>
+effects: checkpoint=committed discovery=current publication=pending integration=complete cleanup=complete commit=<oid>
+Blockers: none
+Checkpoint oid: <oid>
+Cleanup: complete
+Cleanup pending: none
+Integration: merged
+Integration oid: <oid>
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Kind: ticket
+Made ready state: current
+Publication: pending
+Publication oid: none
+Publication pending: no_publication_remote
+Recording: record
+made ready: 01ARZ3NDEKTSV4RRFFQ69G5FC2 mh-vh-k9x2b
+--- stderr
+progress: accepted
+progress: observing
+progress: recording
+progress: integrating
+progress: cleaning_up
+note: primary is not published, because this repository has no publication remote; once one is selected, repo sync publishes it.
+--- exit 0

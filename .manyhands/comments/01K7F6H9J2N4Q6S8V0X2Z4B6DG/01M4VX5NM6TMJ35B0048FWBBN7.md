@@ -1,9 +1,10 @@
 ---
+id: 01M4VX5NM6TMJ35B0048FWBBN7
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-14T00:32:06Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4VX5NM6TMJ35B0048FWBBN7"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-14T00:32:06Z"
 ---
 
 Task 5 RED before production under owner-approved step-5-only exception.

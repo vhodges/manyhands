@@ -1,9 +1,10 @@
 ---
+id: 01M55T9XS2SXV322TXSDYD9RZG
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DJ
+created_at: 2026-10-17T20:54:24Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M55T9XS2SXV322TXSDYD9RZG"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DJ"
-created_at: "2026-10-17T20:54:24Z"
 ---
 
 Task 1 checkpoint: the lifecycle seam, with no behavior change. The details

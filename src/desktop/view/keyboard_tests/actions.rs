@@ -1,7 +1,7 @@
 //! Core actions the walk does not take, each by keyboard alone in a
 //! window of its own: Copy, each relationship group, Resume, Cancel on a
-//! queued request, Retry and Remove on an unavailable repository, and a
-//! nonconforming entry opened from the tree.
+//! queued request, Retry and Remove from Manyhands… in an unavailable
+//! repository's menu, and a nonconforming entry opened from the tree.
 
 use std::{fs, path::PathBuf};
 
@@ -10,15 +10,23 @@ use manyhands::results::{Outcome, ResultCode};
 
 use super::Walk;
 use crate::desktop::{
-    model::navigation::OpenTarget,
+    model::{
+        activity::{copy::CANCEL, rows::RowKey},
+        list_view::RETRY,
+        navigation::{OpenTarget, Resolution},
+        repository_state::{CANT_OPEN, REMOVE_FROM_MANYHANDS},
+    },
     services::{
         JobKind,
         requests::{Intent, RequestState},
     },
     test_support::fixtures::Fixture,
     view::{
+        activity_support::{
+            button_focus, list_focused, offered, pending_key, refresh, row as activity_row, to_row,
+        },
         harness::{Shell, key},
-        operations::request_id,
+        repositories::tests::support::{highlight, menu_labels, press_and_hold},
         workspace::Region,
     },
 };
@@ -54,6 +62,9 @@ fn copy_by_keyboard(cx: &mut TestAppContext) {
     assert_eq!(walk.opened(cx), Some(walk.ticket(COPIED)));
     walk.keys("secondary-3", cx);
     walk.on(("tab", 0usize), Region::Content, cx);
+    // E-23: the details sheet, opened by All details, holds the controls.
+    walk.tab_to("tab", "chip-all", cx);
+    walk.enter(cx);
     let clipboard = |cx: &mut TestAppContext| cx.read_from_clipboard().and_then(|item| item.text());
     for (control, wanted) in [("copy-slug", COPIED_SLUG), ("copy-id", COPIED)] {
         walk.tab_to("tab", control, cx);
@@ -89,6 +100,9 @@ fn each_relationship_group_is_followed_by_keyboard(cx: &mut TestAppContext) {
             walk.keys("ctrl-tab", cx);
         }
         walk.on(("tab", 0usize), Region::Content, cx);
+        // E-23: the details sheet, opened by All details, holds the rows.
+        walk.tab_to("tab", "chip-all", cx);
+        walk.enter(cx);
         walk.tab_to("tab", (row, 0usize), cx);
         walk.on((row, 0usize), Region::Content, cx);
         walk.enter(cx);
@@ -97,9 +111,9 @@ fn each_relationship_group_is_followed_by_keyboard(cx: &mut TestAppContext) {
     }
 }
 
-/// Resume on a pending local operation, reached by Tab from the
-/// operation area: the operation finishes, its row goes, and focus stays
-/// in the operation area.
+/// Resume on a pending local operation, reached by the arrows to its row
+/// and Tab to its button: the operation finishes, its row goes, and focus
+/// stays in the operation area, on the list (Part H).
 #[gpui_kit::test]
 async fn resume_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -109,9 +123,10 @@ async fn resume_by_keyboard(cx: &mut TestAppContext) {
     fixture.create_ticket(&a, STRANDED, "Stranded", "open");
     fixture.strand_ticket_save(&a, STRANDED, "Edited");
     let walk = Walk::over(Shell::open(fixture, cx), a);
-    walk.keys("secondary-4", cx);
-    walk.tab_to("tab", ("pending-resume", 0usize), cx);
-    walk.on(("pending-resume", 0usize), Region::Operations, cx);
+    let row = pending_key(&walk.shell, &key(&walk.a), "save_ticket", cx);
+    to_row(&walk.shell, &row, cx);
+    walk.keys("tab", cx);
+    walk.on_handle(&button_focus(&walk.shell, cx), Region::Operations, cx);
     walk.enter(cx);
     let ended = walk
         .ended(
@@ -120,12 +135,19 @@ async fn resume_by_keyboard(cx: &mut TestAppContext) {
         )
         .await;
     assert_eq!(ended, Some((Outcome::Success, ResultCode::Ok)));
-    walk.until_drawn("pending-empty", cx).await;
+    walk.shell
+        .until_drawn(cx, "the pending row goes", |shell, cx| {
+            refresh(shell, cx);
+            activity_row(shell, &row, cx).is_none()
+        })
+        .await;
     walk.region(Region::Operations, cx);
+    assert!(list_focused(&walk.shell, cx), "focus fell back to the list");
 }
 
-/// Cancel on a queued refresh, reached by Tab: it is removed before the
-/// library sees it, and focus stays in the operation area.
+/// Cancel on a queued refresh, reached by the arrows to its row and Tab to
+/// its button: it is removed before the library sees it, and focus stays in
+/// the operation area, on the list.
 #[gpui_kit::test]
 async fn cancel_a_queued_request_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -150,57 +172,92 @@ async fn cancel_a_queued_request_by_keyboard(cx: &mut TestAppContext) {
     };
     assert!(matches!(state(cx), Some(RequestState::Queued)));
 
-    walk.keys("secondary-4", cx);
-    let cancel = request_id(queued, "cancel");
-    walk.tab_to("tab", cancel.clone(), cx);
-    walk.on(cancel.clone(), Region::Operations, cx);
+    let row = RowKey::Request(queued);
+    to_row(&walk.shell, &row, cx);
+    walk.keys("tab", cx);
+    walk.on_handle(&button_focus(&walk.shell, cx), Region::Operations, cx);
     walk.enter(cx);
     walk.shell.until_ended(queued, cx).await;
     assert!(matches!(state(cx), Some(RequestState::Removed)));
-    assert!(!walk.shell.present(cancel, cx));
+    walk.shell
+        .until_drawn(cx, "Cancel goes", |shell, cx| {
+            refresh(shell, cx);
+            offered(shell, &row, CANCEL, cx).is_none()
+        })
+        .await;
     walk.region(Region::Operations, cx);
+    assert!(list_focused(&walk.shell, cx), "focus fell back to the list");
 
     held.release();
     walk.shell.until_ended(running, cx).await;
 }
 
-/// `a`'s folder, renamed away: the selection is unavailable.
+/// `a`'s folder, renamed away: the chosen repository's row reads Can't
+/// open, and `shift-f10` in the Repositories list opens its menu, with
+/// Retry and Remove from Manyhands….
 fn unavailable(cx: &mut TestAppContext) -> (Walk, PathBuf) {
     let walk = walk(cx, |_, _| {});
     let away = walk.a.with_file_name("a-away");
     fs::rename(&walk.a, &away).unwrap();
     walk.select_a_repository(cx);
-    assert!(walk.shell.present("selection-unavailable-state", cx));
-    walk.keys("secondary-3", cx);
-    walk.region(Region::Content, cx);
+    assert_eq!(
+        walk.shell.label(("repo-state", 0usize), cx).as_deref(),
+        Some(CANT_OPEN)
+    );
+    walk.region(Region::Repositories, cx);
+    walk.keys("shift-f10", cx);
+    let items = walk.shell.frame(cx, |window, _| menu_labels(window));
+    assert!(items.iter().any(|item| item == RETRY), "{items:?}");
+    assert!(
+        items.iter().any(|item| item == REMOVE_FROM_MANYHANDS),
+        "{items:?}"
+    );
     (walk, away)
 }
 
-/// Retry on an unavailable repository, reached by Tab from the content
-/// region: once the folder is back, it resolves.
+/// The Repositories list's focus handle.
+fn list(walk: &Walk, cx: &mut TestAppContext) -> gpui_kit::FocusHandle {
+    walk.shell
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.repositories_list_focus(cx))
+}
+
+/// Retry in an unavailable repository's menu, reached by the arrows and
+/// pressed by Enter: once the folder is back, it resolves.
 #[gpui_kit::test]
 fn retry_an_unavailable_repository_by_keyboard(cx: &mut TestAppContext) {
     let (walk, away) = unavailable(cx);
-    walk.tab_to("tab", "selection-retry", cx);
-    walk.on("selection-retry", Region::Content, cx);
+    let list = list(&walk, cx);
+    highlight(&mut walk.shell.visual(cx), RETRY);
     fs::rename(&away, &walk.a).unwrap();
-    walk.enter(cx);
-    assert!(!walk.shell.present("selection-unavailable-state", cx));
-    assert!(walk.shell.present("selection-configuration", cx));
-    // Retry went with the unavailable state; focus stays in the region.
-    walk.region(Region::Content, cx);
+    // Focus goes back to the list the menu was opened from.
+    assert!(press_and_hold(&walk.shell, "enter", &list, cx), "the list");
+    let resolution = walk.shell.workspace.read_with(cx, |workspace, _| {
+        workspace
+            .navigation()
+            .selected_entry()
+            .map(|entry| entry.resolution.clone())
+    });
+    assert!(
+        matches!(resolution, Some(Resolution::Resolved(_))),
+        "{resolution:?}"
+    );
+    assert_ne!(
+        walk.shell.label(("repo-state", 0usize), cx).as_deref(),
+        Some(CANT_OPEN)
+    );
+    walk.region(Region::Repositories, cx);
 }
 
-/// Remove on an unavailable repository, reached by Tab and pressed by
-/// Enter, opens its confirmation; Enter confirms. The registration goes
-/// and the folder is left as it was.
+/// Remove from Manyhands… in an unavailable repository's menu, reached by
+/// the arrows and pressed by Enter, opens its confirmation; Enter
+/// confirms. The registration goes and the folder is left as it was.
 #[gpui_kit::test]
 async fn remove_an_unavailable_repository_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let (walk, away) = unavailable(cx);
-    walk.tab_to("tab", "selection-remove", cx);
-    walk.on("selection-remove", Region::Content, cx);
-    walk.enter(cx);
+    highlight(&mut walk.shell.visual(cx), REMOVE_FROM_MANYHANDS);
+    walk.keys("enter", cx);
     assert!(walk.shell.present("confirm-ok", cx));
     walk.keys("enter", cx);
     let ended = walk
@@ -221,11 +278,12 @@ fn a_nonconforming_entry_opens_by_keyboard(cx: &mut TestAppContext) {
     });
     walk.select_a_repository(cx);
     walk.keys("secondary-2", cx);
-    walk.region(Region::Navigation, cx);
+    walk.region(Region::Documents, cx);
     let nodes = walk.shell.rows("doc-node", cx);
+    // A nonconforming file is labeled by its file name (E-9).
     let at = nodes
         .iter()
-        .position(|node| node == MARKER)
+        .position(|node| node == MARKER.rsplit('/').next().unwrap())
         .expect("the file is listed");
     let mut presses = 0;
     while !walk.shell.selected(("doc-node", at), cx) {
@@ -239,5 +297,5 @@ fn a_nonconforming_entry_opens_by_keyboard(cx: &mut TestAppContext) {
     };
     assert_eq!((repo, path.as_str()), (key(&walk.a), MARKER));
     assert_eq!(walk.shell.label("item-path", cx).as_deref(), Some(MARKER));
-    walk.region(Region::Navigation, cx);
+    walk.region(Region::Documents, cx);
 }

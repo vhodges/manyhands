@@ -1,9 +1,10 @@
 ---
+id: 01M46ECQP30D5WT2XA404VWTKF
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DB
+created_at: 2026-10-05T16:36:02Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M46ECQP30D5WT2XA404VWTKF"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DB"
-created_at: "2026-10-05T16:36:02Z"
 ---
 
 Planning checkpoint: Cycle 03 authenticated SSH transport is ready for review.

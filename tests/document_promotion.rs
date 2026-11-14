@@ -837,7 +837,7 @@ fn cache_loss_fresh_edit() -> Result<(), FixtureError> {
     let final_privacy = p.privacy();
     ssh_harness::observation(&[
         20,
-        matches!(publication, Err(SynchronizationError::HistoryUnknown)) as u128,
+        matches!(publication, Err(SynchronizationError::HistoryUnresolved)) as u128,
         first_privacy.is_ok() as u128,
         final_privacy.is_ok() as u128,
     ]);
@@ -851,7 +851,7 @@ fn cache_loss_fresh_edit() -> Result<(), FixtureError> {
     assert_eq!(evidence, RemotePublicationEvidence::HistoryUnknown);
     assert!(matches!(
         publication,
-        Err(SynchronizationError::HistoryUnknown)
+        Err(SynchronizationError::HistoryUnresolved)
     ));
     assert_eq!(p.server.receive_updates(), receives);
     assert_eq!(journeys::image(&p.a.worktree())?, image);
@@ -870,7 +870,8 @@ fn cache_loss_fresh_edit() -> Result<(), FixtureError> {
         &mut SessionCredentials::new(remote_world::Provider),
     );
     p.diagnostics(&format!("{replay:?}"))?;
-    assert!(matches!(replay, Err(SynchronizationError::HistoryUnknown)));
+    // The unresolved call ended its operation; the replay finds it cancelled.
+    assert!(matches!(replay, Err(SynchronizationError::Interrupted)));
     assert_eq!(p.server.receive_updates(), receives);
     assert_eq!(journeys::image(&p.a.worktree())?, image);
     first_privacy?;

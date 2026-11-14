@@ -14,19 +14,19 @@ use std::path::{Path, PathBuf};
 
 use manyhands::{
     repository::{
-        CommitIdentity, ConfirmationId, HostApproveInput, HostReplaceInput, IndexRebuildInput,
-        IndexRefreshInput, InitialsChange, KeyClearInput, KeyDeleteInput, KeyGenerateInput,
-        KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, OperationAbandonInput,
-        OperationId, OperationResumeInput, ProgressStage, RemoteAddInput, RemoteRemoveInput,
-        RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput,
-        RequestId, SharedKeyId,
-        keys::{KeyProtection, KeyStore, SecretPassphrase},
-        transport::SshAuthority,
+        AuthoringKind, ConfirmationId, ContextPrepareIntent, InitialsChange, OperationId,
+        ProgressStage, RelationshipWrite, RequestId, SharedKeyId, transport::SshAuthority,
     },
-    results::{Effects, Outcome, RecoveryAction, ResultCode},
+    results::{Effects, FailureClass, Outcome, RecoveryAction, RecoveryActionKind, ResultCode},
 };
 
-use super::{JobKind, KeyStoreUnavailable};
+use manyhands::canonical::ItemId;
+
+mod build;
+
+pub(crate) use build::NotBuilt;
+
+use super::JobKind;
 
 /// Which queue a job waits in. The worker always takes the next user job
 /// before any background job.
@@ -36,8 +36,35 @@ pub(crate) enum Lane {
     Background,
 }
 
+/// A comment's text, as the user wrote it. It derives neither `Debug` nor
+/// `Display`; `build` reads it, and a composer compares its own text with
+/// a post's (decision 27).
+#[derive(Clone)]
+pub(crate) struct CommentBody(String);
+
+impl CommentBody {
+    pub(crate) fn new(body: String) -> Self {
+        Self(body)
+    }
+
+    /// The text, for a comparison in this process only.
+    pub(crate) fn text(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One path's resolution as Save resolution sends it: the token the
+/// conflict read gave the path, and the whole text that is to be its
+/// result. It derives neither `Debug` nor `Display`: it holds item text.
+#[derive(Clone)]
+pub(crate) struct PathResolution {
+    pub token: String,
+    pub source: String,
+}
+
 /// One command the desktop can ask the library for, with the values it
-/// was asked with. One variant per command D1 offers.
+/// was asked with. One variant per command D1 offers, and the two saves
+/// of a draft.
 #[derive(Clone)]
 pub(crate) enum Intent {
     RepoCreate {
@@ -81,6 +108,27 @@ pub(crate) enum Intent {
     IndexRebuild {
         root: PathBuf,
     },
+    /// Check now (D6 C1): `poll once` of the repository's publication
+    /// remote, on the user lane. A resend of it under a request ID is what
+    /// Resume does for a Check now's row left active (L-4, U-15).
+    PollOnce {
+        root: PathBuf,
+    },
+    /// The interval between a repository's automatic polls (D6 C1): a
+    /// policy verb, one write that reports `writing` and is never accepted
+    /// (Fact 2). Sent again, last commit wins (C5 decision 15).
+    PollConfigure {
+        root: PathBuf,
+        interval_seconds: u64,
+    },
+    /// Pauses a repository's automatic polling (a policy verb).
+    PollPause {
+        root: PathBuf,
+    },
+    /// Resumes a repository's automatic polling (a policy verb).
+    PollResume {
+        root: PathBuf,
+    },
     /// Whether the key is protected, never the passphrase.
     KeyGenerate {
         label: String,
@@ -122,164 +170,187 @@ pub(crate) enum Intent {
         root: PathBuf,
         operation_id: OperationId,
     },
-}
-
-/// Why an intent could not be made into a command. Nothing was asked of
-/// the library.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum NotBuilt {
-    /// A protected key generation was given no passphrase: the user is to
-    /// enter it again.
-    MissingSecret,
-    /// A key command's store could not be found.
-    KeyStoreUnavailable,
-}
-
-impl From<KeyStoreUnavailable> for NotBuilt {
-    fn from(_: KeyStoreUnavailable) -> Self {
-        Self::KeyStoreUnavailable
-    }
-}
-
-fn identity(identity: &Option<(String, String)>) -> Option<CommitIdentity> {
-    identity.as_ref().map(|(name, email)| CommitIdentity {
-        name: name.clone(),
-        email: email.clone(),
-    })
+    /// A draft's revision saved as the document, from the observation
+    /// of the draft's base. It holds the body.
+    DocumentSave {
+        root: PathBuf,
+        id: ItemId,
+        title: String,
+        body: String,
+        observation: Option<String>,
+    },
+    /// A draft's revision saved as the ticket. `deps` and `parent` are
+    /// left as the file has them when the draft did not change them
+    /// (ruling R13).
+    TicketSave {
+        root: PathBuf,
+        id: ItemId,
+        title: String,
+        ticket_type: String,
+        status: String,
+        project: Option<String>,
+        team: Option<String>,
+        body: String,
+        deps: RelationshipWrite<Vec<String>>,
+        parent: RelationshipWrite<String>,
+        observation: String,
+    },
+    /// Prepares the work context an edit or a new item is written in. No
+    /// token: neither context command records a checkpoint, so the desktop
+    /// never sends one again across the other (R-78, `undone_by`).
+    ContextPrepare {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+        intent: ContextPrepareIntent,
+    },
+    /// Releases the work context of an item. No token: neither context
+    /// command records a checkpoint, so the desktop never sends one again
+    /// across the other (R-78, `undone_by`).
+    ContextRelease {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+    },
+    /// Retires the completed item's local copy: its work context, branch
+    /// and worktree (D6 Part E, Fact 24). Unconfirmed; every run takes a
+    /// fresh authenticated observation, so on the background lane it never
+    /// prompts (B5) and answers a locked key as `unlock_required`. The
+    /// library decides everything about safety.
+    ContextRetire {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+    },
+    /// A new document at `path`. It holds the body. No token: the ID is
+    /// fixed when the draft is written; the same request is answered from
+    /// its record, and a new one finds the item `already_applied`, an
+    /// earlier attempt's write not committed (`external_change`), or the
+    /// path occupied (`occupied_path`).
+    DocumentCreate {
+        root: PathBuf,
+        id: ItemId,
+        path: PathBuf,
+        title: String,
+        body: String,
+    },
+    /// A new ticket. It holds the body. No token: the ID is fixed when the
+    /// draft is written; the same request is answered from its record, and
+    /// a new one finds the item `already_applied`, an earlier attempt's
+    /// write not committed (`external_change`), or the path occupied
+    /// (`occupied_path`).
+    TicketCreate {
+        root: PathBuf,
+        id: ItemId,
+        title: String,
+        ticket_type: String,
+        status: String,
+        project: Option<String>,
+        team: Option<String>,
+        body: String,
+        deps: Vec<String>,
+        parent: Option<String>,
+    },
+    /// A document moved to another path.
+    DocumentMove {
+        root: PathBuf,
+        id: ItemId,
+        observation: Option<String>,
+        destination_path: PathBuf,
+        destination_observation: String,
+    },
+    /// A folder below `docs/`, by its path with forward slashes.
+    FolderCreate {
+        root: PathBuf,
+        path: String,
+    },
+    /// A nonconforming document file, given its corrected source.
+    DocumentRepair {
+        root: PathBuf,
+        path: PathBuf,
+        observation: String,
+        source: String,
+    },
+    /// A nonconforming ticket file, given its corrected source.
+    TicketRepair {
+        root: PathBuf,
+        path: PathBuf,
+        observation: String,
+        source: String,
+    },
+    /// A comment on an item, or a reply to `parent_id`. It holds the text.
+    /// The comment ID is fixed by the caller; the library takes the Git
+    /// identity as the author.
+    CommentAdd {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+        comment_id: ItemId,
+        parent_id: Option<ItemId>,
+        body: CommentBody,
+    },
+    /// An item's work shared with the publication remote.
+    ItemSync {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+    },
+    /// The primary branch shared with the publication remote.
+    RepoSync {
+        root: PathBuf,
+    },
+    /// Republish… (D5 Part C): an item's editing branch, which the remote
+    /// deleted, pushed to it again at the local commit the preview showed.
+    /// Confirmed: ordinary sharing never recreates a deleted branch.
+    ItemRepublish {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+    },
+    /// Approve and merge…: a document's work merged into the primary
+    /// branch, shared, and tidied up. No identity or input: the library
+    /// takes the configured identity (C5 decision 6).
+    DocumentPromote {
+        root: PathBuf,
+        id: ItemId,
+    },
+    /// Close ticket…: a ticket marked closed, merged into the primary
+    /// branch, shared, and tidied up. `closed_by` is the configured
+    /// identity (C5 decision 6).
+    TicketClose {
+        root: PathBuf,
+        id: ItemId,
+    },
+    /// Save resolution of a remote synchronization's conflict (D5 B3): the
+    /// synchronization, a comment's operation or a lifecycle's, as the
+    /// read was asked by; the read's observation; and every path's result.
+    /// It holds item text.
+    ConflictResolve {
+        root: PathBuf,
+        operation_id: OperationId,
+        observation: String,
+        resolutions: Vec<PathResolution>,
+    },
+    /// Repair locally… (D5 B6): main brought into the item's work context,
+    /// from the observation `observe_local_context_sync` gave.
+    LocalContextSync {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+        observation: String,
+    },
+    /// Save resolution of a local synchronization's conflict (D5 B3), with
+    /// the inspection's observation (R-11) and every path's result. It
+    /// holds item text.
+    LocalContextResolve {
+        root: PathBuf,
+        operation_id: OperationId,
+        observation: String,
+        resolutions: Vec<PathResolution>,
+    },
 }
 
 impl Intent {
-    /// The library command for one attempt. `secret` is the passphrase of
-    /// a protected key generation and is dropped by every other intent.
-    /// `store` is asked for only by the commands that need the key store.
-    pub(crate) fn build(
-        &self,
-        secret: Option<SecretPassphrase>,
-        store: impl FnOnce() -> Result<KeyStore, KeyStoreUnavailable>,
-    ) -> Result<Mutation, NotBuilt> {
-        Ok(match self {
-            Self::RepoCreate {
-                root,
-                primary_branch,
-                identity: id,
-                slug_prefix,
-            } => Mutation::RepoCreate(RepoCreateInput {
-                root: root.clone(),
-                primary_branch: primary_branch.clone(),
-                identity: identity(id),
-                slug_prefix: slug_prefix.clone(),
-            }),
-            Self::RepoEnable {
-                root,
-                primary_branch,
-                identity: id,
-                slug_prefix,
-            } => Mutation::RepoEnable(RepoEnableInput {
-                root: root.clone(),
-                primary_branch: primary_branch.clone(),
-                identity: identity(id),
-                slug_prefix: slug_prefix.clone(),
-            }),
-            Self::RepoRemove { root } => {
-                Mutation::RepoRemove(RepoRemoveInput { root: root.clone() })
-            }
-            Self::RepoIdentitySet {
-                root,
-                name,
-                email,
-                initials,
-            } => Mutation::RepoIdentitySet(RepoIdentitySetInput {
-                root: root.clone(),
-                name: name.clone(),
-                email: email.clone(),
-                initials: initials.clone(),
-            }),
-            Self::RemoteAdd { root, name, url } => Mutation::RemoteAdd(RemoteAddInput {
-                root: root.clone(),
-                name: name.clone(),
-                url: url.clone(),
-            }),
-            Self::RemoteRemove { root, name } => Mutation::RemoteRemove(RemoteRemoveInput {
-                root: root.clone(),
-                name: name.clone(),
-            }),
-            Self::RemoteSelect { root, name } => Mutation::RemoteSelect(RemoteSelectInput {
-                root: root.clone(),
-                name: name.clone(),
-            }),
-            Self::IndexRefresh { root } => {
-                Mutation::IndexRefresh(IndexRefreshInput { root: root.clone() })
-            }
-            Self::IndexRebuild { root } => {
-                Mutation::IndexRebuild(IndexRebuildInput { root: root.clone() })
-            }
-            Self::KeyGenerate { label, protected } => {
-                let protection = if *protected {
-                    KeyProtection::Passphrase(secret.ok_or(NotBuilt::MissingSecret)?)
-                } else {
-                    KeyProtection::Unencrypted
-                };
-                Mutation::KeyGenerate(KeyGenerateInput {
-                    store: store()?,
-                    label: label.clone(),
-                    protection,
-                })
-            }
-            Self::KeyImport {
-                label,
-                private_key_path,
-                public_key_path,
-            } => Mutation::KeyImport(KeyImportInput {
-                label: label.clone(),
-                private_key_path: private_key_path.clone(),
-                public_key_path: public_key_path.clone(),
-            }),
-            Self::KeySelect { id } => Mutation::KeySelect(KeySelectInput { id: *id }),
-            Self::KeyClear => Mutation::KeyClear(KeyClearInput {}),
-            Self::KeyRemove { id } => Mutation::KeyRemove(KeyRemoveInput { id: *id }),
-            Self::KeyDelete { id } => Mutation::KeyDelete(KeyDeleteInput {
-                store: store()?,
-                id: *id,
-            }),
-            Self::HostApprove {
-                root,
-                authority,
-                algorithm,
-                fingerprint,
-            } => Mutation::HostApprove(HostApproveInput {
-                root: root.clone(),
-                authority: authority.clone(),
-                algorithm: algorithm.clone(),
-                fingerprint: fingerprint.clone(),
-            }),
-            Self::HostReplace {
-                root,
-                authority,
-                algorithm,
-                fingerprint,
-                old_fingerprint,
-            } => Mutation::HostReplace(HostReplaceInput {
-                root: root.clone(),
-                authority: authority.clone(),
-                algorithm: algorithm.clone(),
-                fingerprint: fingerprint.clone(),
-                old_fingerprint: old_fingerprint.clone(),
-            }),
-            Self::OperationResume { root, operation_id } => {
-                Mutation::OperationResume(OperationResumeInput {
-                    root: root.clone(),
-                    operation_id: *operation_id,
-                })
-            }
-            Self::OperationAbandon { root, operation_id } => {
-                Mutation::OperationAbandon(OperationAbandonInput {
-                    root: root.clone(),
-                    operation_id: *operation_id,
-                })
-            }
-        })
-    }
-
     /// Whether the command needs confirmation: `prepare` previews it, and
     /// `execute` runs it only with the confirmation the preview gave. The
     /// library's own list; a test holds the two together.
@@ -293,17 +364,54 @@ impl Intent {
             | Self::KeyDelete { .. }
             | Self::HostApprove { .. }
             | Self::HostReplace { .. }
-            | Self::OperationAbandon { .. } => true,
+            | Self::OperationAbandon { .. }
+            | Self::DocumentRepair { .. }
+            | Self::TicketRepair { .. }
+            | Self::ItemRepublish { .. }
+            | Self::DocumentPromote { .. }
+            | Self::TicketClose { .. } => true,
             Self::RemoteAdd { .. }
             | Self::RemoteSelect { .. }
             | Self::IndexRefresh { .. }
             | Self::IndexRebuild { .. }
+            | Self::PollOnce { .. }
+            | Self::PollConfigure { .. }
+            | Self::PollPause { .. }
+            | Self::PollResume { .. }
             | Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
             | Self::KeyClear
             | Self::KeyRemove { .. }
-            | Self::OperationResume { .. } => false,
+            | Self::OperationResume { .. }
+            | Self::DocumentSave { .. }
+            | Self::TicketSave { .. }
+            | Self::ContextPrepare { .. }
+            | Self::ContextRelease { .. }
+            | Self::ContextRetire { .. }
+            | Self::DocumentCreate { .. }
+            | Self::TicketCreate { .. }
+            | Self::DocumentMove { .. }
+            | Self::FolderCreate { .. }
+            | Self::CommentAdd { .. }
+            | Self::ItemSync { .. }
+            | Self::RepoSync { .. }
+            | Self::ConflictResolve { .. }
+            | Self::LocalContextSync { .. }
+            | Self::LocalContextResolve { .. } => false,
+        }
+    }
+
+    /// What Activity calls the command, in a repository whose primary
+    /// branch is `primary` when known: a share of it names it (R-35b), as
+    /// the lifecycle dialog does; every other command is its `label`.
+    pub(crate) fn label_in(&self, primary: Option<&str>) -> String {
+        match self {
+            Self::RepoSync { .. } => format!(
+                "Share {}",
+                crate::desktop::model::operations::primary_name(primary)
+            ),
+            _ => self.label().to_owned(),
         }
     }
 
@@ -320,6 +428,10 @@ impl Intent {
             Self::RemoteSelect { .. } => "Select remote",
             Self::IndexRefresh { .. } => "Refresh index",
             Self::IndexRebuild { .. } => "Rebuild index",
+            Self::PollOnce { .. } => "Check now",
+            Self::PollConfigure { .. } => "Set check interval",
+            Self::PollPause { .. } => "Pause checking",
+            Self::PollResume { .. } => "Resume checking",
             Self::KeyGenerate { .. } => "Generate key",
             Self::KeyImport { .. } => "Import key",
             Self::KeySelect { .. } => "Select key",
@@ -330,6 +442,26 @@ impl Intent {
             Self::HostReplace { .. } => "Replace host key",
             Self::OperationResume { .. } => "Resume operation",
             Self::OperationAbandon { .. } => "Abandon operation",
+            Self::DocumentSave { .. } => "Save document",
+            Self::TicketSave { .. } => "Save ticket",
+            Self::ContextPrepare { .. } => "Prepare to edit",
+            Self::ContextRelease { .. } => "Release work context",
+            Self::ContextRetire { .. } => "Retire local copy",
+            Self::DocumentCreate { .. } => "Create document",
+            Self::TicketCreate { .. } => "Create ticket",
+            Self::DocumentMove { .. } => "Move document",
+            Self::FolderCreate { .. } => "Create folder",
+            Self::DocumentRepair { .. } => "Repair document",
+            Self::TicketRepair { .. } => "Repair ticket",
+            Self::CommentAdd { .. } => "Post comment",
+            Self::ItemSync { .. } => "Share item",
+            Self::RepoSync { .. } => "Share main",
+            Self::ItemRepublish { .. } => "Republish",
+            Self::DocumentPromote { .. } => "Approve and merge",
+            Self::TicketClose { .. } => "Close ticket",
+            Self::ConflictResolve { .. } => "Resolve conflict",
+            Self::LocalContextSync { .. } => "Repair locally",
+            Self::LocalContextResolve { .. } => "Resolve local conflict",
         }
     }
 
@@ -345,10 +477,34 @@ impl Intent {
             | Self::RemoteSelect { root, .. }
             | Self::IndexRefresh { root }
             | Self::IndexRebuild { root }
+            | Self::PollOnce { root }
+            | Self::PollConfigure { root, .. }
+            | Self::PollPause { root }
+            | Self::PollResume { root }
             | Self::HostApprove { root, .. }
             | Self::HostReplace { root, .. }
             | Self::OperationResume { root, .. }
-            | Self::OperationAbandon { root, .. } => Some(root),
+            | Self::OperationAbandon { root, .. }
+            | Self::DocumentSave { root, .. }
+            | Self::TicketSave { root, .. }
+            | Self::ContextPrepare { root, .. }
+            | Self::ContextRelease { root, .. }
+            | Self::ContextRetire { root, .. }
+            | Self::DocumentCreate { root, .. }
+            | Self::TicketCreate { root, .. }
+            | Self::DocumentMove { root, .. }
+            | Self::FolderCreate { root, .. }
+            | Self::DocumentRepair { root, .. }
+            | Self::TicketRepair { root, .. }
+            | Self::CommentAdd { root, .. }
+            | Self::ItemSync { root, .. }
+            | Self::RepoSync { root }
+            | Self::ItemRepublish { root, .. }
+            | Self::DocumentPromote { root, .. }
+            | Self::TicketClose { root, .. }
+            | Self::ConflictResolve { root, .. }
+            | Self::LocalContextSync { root, .. }
+            | Self::LocalContextResolve { root, .. } => Some(root),
             Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -375,15 +531,39 @@ impl Intent {
         match self {
             Self::IndexRefresh { .. }
             | Self::IndexRebuild { .. }
+            | Self::PollOnce { .. }
             | Self::OperationResume { .. }
             | Self::OperationAbandon { .. }
             | Self::RepoCreate { .. }
-            | Self::RepoEnable { .. } => true,
+            | Self::RepoEnable { .. }
+            | Self::DocumentSave { .. }
+            | Self::TicketSave { .. }
+            | Self::ContextPrepare { .. }
+            | Self::ContextRelease { .. }
+            | Self::ContextRetire { .. }
+            | Self::DocumentCreate { .. }
+            | Self::TicketCreate { .. }
+            | Self::DocumentMove { .. }
+            | Self::FolderCreate { .. }
+            | Self::DocumentRepair { .. }
+            | Self::TicketRepair { .. }
+            | Self::CommentAdd { .. }
+            | Self::ItemSync { .. }
+            | Self::RepoSync { .. }
+            | Self::ItemRepublish { .. }
+            | Self::DocumentPromote { .. }
+            | Self::TicketClose { .. }
+            | Self::ConflictResolve { .. }
+            | Self::LocalContextSync { .. }
+            | Self::LocalContextResolve { .. } => true,
             Self::RepoRemove { .. }
             | Self::RepoIdentitySet { .. }
             | Self::RemoteAdd { .. }
             | Self::RemoteRemove { .. }
             | Self::RemoteSelect { .. }
+            | Self::PollConfigure { .. }
+            | Self::PollPause { .. }
+            | Self::PollResume { .. }
             | Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -393,6 +573,143 @@ impl Intent {
             | Self::HostApprove { .. }
             | Self::HostReplace { .. } => false,
         }
+    }
+
+    /// Whether the call's cancellation token is honoured after the library
+    /// accepts the command, at a synchronization's safe points (fact 9): the
+    /// comment, the two syncs, a republish (P21), `operation resume`, Check
+    /// now (`poll once`), a retirement (Fact 24), a promotion or closure, which stops between its
+    /// steps (D5 fact 2), a local synchronization and its resolution, and a
+    /// remote resolution.
+    /// Every other command, the saves and the poll policy verbs among them
+    /// (one write, never accepted: Fact 2), cannot be stopped once accepted.
+    ///
+    /// This is not the library's `Command::stops_at_safe_points`
+    /// (`R/mutation/command.rs:407-414`), which says whether `request
+    /// cancel` reaches a stopped request between calls. The two disagree
+    /// for `ConflictResolve` (as for `OperationResume`): its continuation
+    /// looks at the call's token (`bind/conflict.rs:877-879`), but `request
+    /// cancel` never reaches it, and its record goes on any stop
+    /// (`bind/conflict.rs:1111-1114`). So it is never given up
+    /// (`can_be_given_up`; R-24).
+    pub(crate) fn stops_at_safe_points(&self) -> bool {
+        match self {
+            Self::OperationResume { .. }
+            | Self::PollOnce { .. }
+            | Self::ContextRetire { .. }
+            | Self::CommentAdd { .. }
+            | Self::ItemSync { .. }
+            | Self::RepoSync { .. }
+            | Self::ItemRepublish { .. }
+            | Self::DocumentPromote { .. }
+            | Self::TicketClose { .. }
+            | Self::ConflictResolve { .. }
+            | Self::LocalContextSync { .. }
+            | Self::LocalContextResolve { .. } => true,
+            Self::RepoCreate { .. }
+            | Self::RepoEnable { .. }
+            | Self::RepoRemove { .. }
+            | Self::RepoIdentitySet { .. }
+            | Self::RemoteAdd { .. }
+            | Self::RemoteRemove { .. }
+            | Self::RemoteSelect { .. }
+            | Self::IndexRefresh { .. }
+            | Self::IndexRebuild { .. }
+            | Self::PollConfigure { .. }
+            | Self::PollPause { .. }
+            | Self::PollResume { .. }
+            | Self::KeyGenerate { .. }
+            | Self::KeyImport { .. }
+            | Self::KeySelect { .. }
+            | Self::KeyClear
+            | Self::KeyRemove { .. }
+            | Self::KeyDelete { .. }
+            | Self::HostApprove { .. }
+            | Self::HostReplace { .. }
+            | Self::OperationAbandon { .. }
+            | Self::DocumentSave { .. }
+            | Self::TicketSave { .. }
+            | Self::ContextPrepare { .. }
+            | Self::ContextRelease { .. }
+            | Self::DocumentCreate { .. }
+            | Self::TicketCreate { .. }
+            | Self::DocumentMove { .. }
+            | Self::FolderCreate { .. }
+            | Self::DocumentRepair { .. }
+            | Self::TicketRepair { .. } => false,
+        }
+    }
+
+    /// Whether Give up may send the request again (decision 8; R-24): a
+    /// command that stops at safe points, but for a remote resolution. Its
+    /// resend after a stop may checkpoint the resolution and still read as
+    /// already finished, since no record of it stands between calls.
+    pub(crate) fn can_be_given_up(&self) -> bool {
+        self.stops_at_safe_points() && !matches!(self, Self::ConflictResolve { .. })
+    }
+
+    /// R-78 (owner, 2026-10-26): whether sending this request again, once
+    /// `later` was sent after it, would undo `later`. Neither context
+    /// command records a checkpoint, so a request sent again runs as new: a
+    /// release after a later prepare of its item would release that newer
+    /// context, and a prepare after a later release would make the context
+    /// again. Such a request is never sent again.
+    pub(crate) fn undone_by(&self, later: &Intent) -> bool {
+        match (self, later) {
+            (
+                Self::ContextRelease { root, kind, id },
+                Self::ContextPrepare {
+                    root: later_root,
+                    kind: later_kind,
+                    id: later_id,
+                    ..
+                },
+            )
+            | (
+                Self::ContextPrepare { root, kind, id, .. },
+                Self::ContextRelease {
+                    root: later_root,
+                    kind: later_kind,
+                    id: later_id,
+                },
+            ) => root == later_root && kind == later_kind && id == later_id,
+            _ => false,
+        }
+    }
+
+    /// Whether `later`, sent after this request, keeps it from being sent
+    /// again (R-78, `undone_by`), `refused` saying whether `later` was
+    /// answered with a refusal (`refused_release`). The owner narrowed
+    /// R-78 on 2026-10-28 (Task 17 review, M3): a release the library
+    /// refused, touching nothing, does not count against the earlier
+    /// prepare of its item, which may be sent again under its request ID
+    /// (R-77). A release still queued or running, one whose answer is
+    /// unknown, and one that answered `ok` still do. A release is never
+    /// sent again after a later prepare, whatever that prepare answered.
+    pub(crate) fn kept_from_again_by(&self, later: &Intent, refused: bool) -> bool {
+        self.undone_by(later) && !(refused && matches!(later, Self::ContextRelease { .. }))
+    }
+
+    /// Whether a finished request was refused, touching nothing (see
+    /// `Refusals` for a request's attempts together): the
+    /// library answered with a code that refuses (class `Blocked` or
+    /// `Input`), with no durable effect (the outcome is not `partial`) and
+    /// no record left for the same request to go on from (no
+    /// `request.retry`). An interrupted request (`internal_error`), a busy
+    /// one and one cancelled are not refusals: what they did is not known
+    /// or not final.
+    pub(crate) fn refused_answer(
+        outcome: Outcome,
+        code: ResultCode,
+        recovery: &[RecoveryAction],
+    ) -> bool {
+        matches!(
+            code.failure_class(),
+            Some(FailureClass::Blocked | FailureClass::Input)
+        ) && matches!(outcome, Outcome::Blocked | Outcome::Error)
+            && !recovery
+                .iter()
+                .any(|action| action.action == RecoveryActionKind::RequestRetry)
     }
 
     /// The kind the backend's seam knows the job by.
@@ -407,6 +724,10 @@ impl Intent {
             Self::RemoteSelect { .. } => JobKind::RemoteSelect,
             Self::IndexRefresh { .. } => JobKind::IndexRefresh,
             Self::IndexRebuild { .. } => JobKind::IndexRebuild,
+            Self::PollOnce { .. } => JobKind::PollOnce,
+            Self::PollConfigure { .. } => JobKind::PollConfigure,
+            Self::PollPause { .. } => JobKind::PollPause,
+            Self::PollResume { .. } => JobKind::PollResume,
             Self::KeyGenerate { .. } => JobKind::KeyGenerate,
             Self::KeyImport { .. } => JobKind::KeyImport,
             Self::KeySelect { .. } => JobKind::KeySelect,
@@ -417,7 +738,61 @@ impl Intent {
             Self::HostReplace { .. } => JobKind::HostReplace,
             Self::OperationResume { .. } => JobKind::OperationResume,
             Self::OperationAbandon { .. } => JobKind::OperationAbandon,
+            Self::DocumentSave { .. } => JobKind::DocumentSave,
+            Self::TicketSave { .. } => JobKind::TicketSave,
+            Self::ContextPrepare { .. } => JobKind::ContextPrepare,
+            Self::ContextRelease { .. } => JobKind::ContextRelease,
+            Self::ContextRetire { .. } => JobKind::ContextRetire,
+            Self::DocumentCreate { .. } => JobKind::DocumentCreate,
+            Self::TicketCreate { .. } => JobKind::TicketCreate,
+            Self::DocumentMove { .. } => JobKind::DocumentMove,
+            Self::FolderCreate { .. } => JobKind::FolderCreate,
+            Self::DocumentRepair { .. } => JobKind::DocumentRepair,
+            Self::TicketRepair { .. } => JobKind::TicketRepair,
+            Self::CommentAdd { .. } => JobKind::Comment,
+            Self::ItemSync { .. } => JobKind::SynchronizeItem,
+            Self::RepoSync { .. } => JobKind::SynchronizeRepo,
+            Self::ItemRepublish { .. } => JobKind::ItemRepublish,
+            Self::DocumentPromote { .. } => JobKind::DocumentPromote,
+            Self::TicketClose { .. } => JobKind::TicketClose,
+            Self::ConflictResolve { .. } => JobKind::ConflictResolve,
+            Self::LocalContextSync { .. } => JobKind::LocalContextSync,
+            Self::LocalContextResolve { .. } => JobKind::LocalContextResolve,
         }
+    }
+}
+
+/// What a request's attempts were answered, for R-78's exemption (owner,
+/// 2026-10-28): a release frees the earlier prepare of its item only when
+/// every one of its attempts was refused, touching nothing
+/// (`Intent::refused_answer`). An attempt answered otherwise (unknown,
+/// partial, `ok`) makes it block for good (Task 17 re-review, N1), and so
+/// does one still queued or running, until it is refused. The worker and
+/// the request model each keep one per request.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) struct Refusals {
+    /// The last attempt finished, and was refused.
+    last: bool,
+    /// An attempt finished and was not refused.
+    unrefused: bool,
+}
+
+impl Refusals {
+    /// An attempt was queued: it is not answered yet.
+    pub(crate) fn queued(&mut self) {
+        self.last = false;
+    }
+
+    /// The attempt finished, `refused` or not. One not refused is never
+    /// forgotten.
+    pub(crate) fn finished(&mut self, refused: bool) {
+        self.last = refused;
+        self.unrefused |= !refused;
+    }
+
+    /// Whether every attempt so far was refused, touching nothing.
+    pub(crate) fn all_refused(&self) -> bool {
+        self.last && !self.unrefused
     }
 }
 
@@ -491,3 +866,15 @@ pub(crate) enum RequestState {
 #[cfg(test)]
 #[path = "requests_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "requests_poll_tests.rs"]
+mod poll_tests;
+
+#[cfg(test)]
+#[path = "requests_retire_tests.rs"]
+mod retire_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "requests_poll_worker_tests.rs"]
+mod poll_worker_tests;

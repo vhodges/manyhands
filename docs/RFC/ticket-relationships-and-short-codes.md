@@ -130,7 +130,8 @@ not: the initials and prefix come from who created the ticket and where. That
 is why the slug is stored and not recomputed.
 
 A ticket created before this RFC has no `slug`. It stays valid and is shown by
-its ULID. A person can give it one with the explicit assign operation below,
+its ULID (in the desktop list, `—` with the ULID in the row's tooltip; Wave 04
+Cycle 02 decision 4). A person can give it one with the explicit assign operation below,
 which uses the assigning identity's initials.
 
 ## Identity, selection and collisions
@@ -236,6 +237,28 @@ complete; silent truncation is forbidden.
 A ticket closure result additionally reports the tickets that became ready
 because of it.
 
+Amended 2026-11-03 by C5 (R-4, R-37, R-38; decisions 13 and 20; the C5
+design's Made-Ready Report). Closing T can make ready only the tickets that
+depend on T directly, and none of them was ready while T was open, so the
+report is the **direct dependents of T, in ULID order, that the index reads
+as open with every dependency closed** when the report is produced. It is
+evaluated at report time, from the index's effective copy, not reconstructed
+from history: a dependent closed, reopened or re-pointed since by another
+clone reads as it is now, so the list can differ from a historical diff.
+Readiness is lifecycle closure; status text plays no part, and a dependent
+whose status text is `closed` is read by its closure metadata. A dependent
+with another open or unresolved dependency is left out. Each entry carries
+the ticket's ULID and slug, and no title.
+
+`made_ready_state` says when there is no set: `current` (the set, complete),
+`index_pending` (the index hand-off or the read is owed, and the same request
+reads again), `index_unavailable_final` (the closure is complete but the read
+failed or was incomplete; it is not recomputed, and `ticket ready` is the live
+view), `not_computed` (the closure is not yet integrated) or `not_applicable`
+(a cleanup-only or superseding run). A finished request's report is stored,
+so a replay returns it unchanged; a retry evaluates again. `ticket ready`
+remains the live view.
+
 ## CLI
 
 These verbs extend the [CLI taxonomy](cli-contract.md#command-taxonomy).
@@ -249,19 +272,43 @@ They follow its target, JSON, error and exit rules.
 | `ticket cycles` | No input. Zero cycles is success with an empty result. |
 | `ticket plan`, `ticket critical-path` | Optional list filters for plan. |
 | `ticket find` | `--slug <text>`; returns every match. No match is success with an empty result, not an error. |
+| `ticket check` | Required `--repo`, `--id` and at least one of `--deps <ULID,...>` or `--parent <ULID>`. Read-only complete proposal; rejection is in `data.rejection` with `ok`, exit 0. |
 | `ticket slug-assign` | `--id` and `observation`; adds a generated slug to a ticket that has none. Optional `initials`. |
+
+**Amended 2026-10-24 by C3:** `ticket check` is available. It takes flags only,
+with no `--input`, request ID or confirmation. Give `--deps` once as a
+comma-separated list of canonical ULIDs; repeated flags keep the last value.
+Malformed or empty ULID elements, including an empty `--parent`, are
+`invalid_id`. The selected ID need not already exist. The read checks exactly
+the supplied proposal: omitted `--deps` proposes no dependencies, omitted
+`--parent` proposes no parent. It does not fill omitted relationships from
+the stored ticket. To preview a save changing only one, supply the other's
+current value from `ticket show` too. The same complete proposal yields the
+same rejection as the write, but a check rejection remains a successful
+read (`ok`, exit 0); inspect `data.rejection`. Unknown targets are reported
+as unresolved. The check uses the index without refreshing, writing or
+contacting a remote.
 
 Existing verbs change as follows.
 
-- `ticket create` and `ticket save` accept optional `deps` (a complete list
-  that replaces the stored one; an empty list or null clears it) and `parent`
-  (a ULID, or null to clear). `ticket create` accepts optional `initials`.
-  Neither accepts `slug`.
+- **Amended 2026-10-24 by C3:** `ticket create` and `ticket save` accept
+  optional `deps` (a complete array of ULID strings or null) and `parent`
+  (a ULID string or null) in their closed `--input` objects. On create,
+  missing/null/[] deps means none, and missing/null parent means none. On
+  save, an omitted relationship stays unchanged; null or [] clears deps,
+  and null clears parent. A supplied list replaces the stored list.
+  Relationship text is validated by the library (`invalid_relationship` for
+  malformed IDs), unlike the check flags' `invalid_id`. `ticket create`
+  also accepts optional `initials`. Neither accepts `slug`. See the
+  [C3 input schemas and examples](cli-contract.md#c3-authoring-options-and-input-schemas).
 - `ticket list` and `ticket show` include `slug`, `parent`, `deps`, readiness
   and any relationship problems. `ticket list` accepts `--slug` as a
   whole-code, case-insensitive filter and `--ready` / `--blocked`.
 - `repo create` and `repo enable` accept optional `ticket_slug_prefix`, shown
   in the confirmation preview and written to the tracked configuration.
+  **Amended 2026-10-20 by C2:** the input name is `ticket_slug_prefix`; the
+  published confirmation preview names that value `slug_prefix`. This keeps
+  F2's output contract unchanged; it does not rename the input or tracked key.
 - `repo identity` reports the effective initials and their source.
   `repo identity-set` accepts optional `initials`, written to repository-local
   Git configuration and never to global configuration.
@@ -273,8 +320,10 @@ Human output shows the slug beside the ULID wherever a ticket is named.
 
 - Ticket lists and the ticket header show the slug. Copy controls offer the
   slug and the ULID separately.
-- A find-by-slug entry lists every match with its context; choosing one opens
-  that ticket by ULID.
+- The Tickets filter lists every ticket with that short code under the
+  filters chosen and says how many more match outside them, each with its
+  context in its tooltip; choosing one opens that ticket by ULID (Wave 04
+  Cycle 02 decision 2, amended 2026-11-11).
 - Ticket lists can filter to ready or blocked tickets. A blocked ticket shows
   its reasons.
 - The ticket view shows its dependencies, the tickets that depend on it, its

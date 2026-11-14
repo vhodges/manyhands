@@ -3588,8 +3588,6 @@ fn commit_primary_source(fixture: &support::TestRepository, path: &str, source: 
     let absolute = fixture.root.join(path);
     let mut index = fixture.repository.index().unwrap();
     index.read(true).unwrap();
-    // Enablement commits the configuration without refreshing this index.
-    index.add_path(Path::new(".manyhands/config.toml")).unwrap();
     match source {
         Some(source) => {
             fs::create_dir_all(absolute.parent().unwrap()).unwrap();

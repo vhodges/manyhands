@@ -17,12 +17,10 @@ use manyhands::{
 };
 
 use super::{
-    find::FIND_MATCHES,
     harness::{Shell, key},
-    lists::{SHOWING_DOCUMENTS, SHOWING_TICKETS},
     quit::QuitPhase,
     settings::{PAGES, Shown},
-    tickets::{LIFECYCLE_CLOSED, READINESS_FILTERS},
+    tickets::LIFECYCLE_CLOSED,
     workspace::{REGIONS, Region},
 };
 use crate::desktop::{
@@ -143,15 +141,23 @@ impl Walk {
     /// Exactly `region` holds focus, and it alone draws its ring, which is
     /// visible.
     fn region(&self, region: Region, cx: &mut TestAppContext) {
-        self.shell.frame(cx, |window, _| ringed(window, region));
+        self.shell.frame(cx, |window, cx| {
+            ringed(window, self.held_region(window, cx), region)
+        });
+    }
+
+    /// The region the Workspace says holds focus: a region's own element,
+    /// or the toolbar button of its panel in the header (E-14).
+    fn held_region(&self, window: &gpui_kit::Window, cx: &gpui_kit::App) -> Option<Region> {
+        self.shell.workspace.read(cx).held_region(window, cx)
     }
 
     /// The element `id` holds focus and is drawn on screen, inside
     /// `region`, whose ring shows it.
     fn on(&self, id: impl Into<ElementId>, region: Region, cx: &mut TestAppContext) {
         let id = id.into();
-        self.shell.frame(cx, |window, _| {
-            ringed(window, region);
+        self.shell.frame(cx, |window, cx| {
+            ringed(window, self.held_region(window, cx), region);
             let element = window.find(id.clone());
             assert_eq!(element.focused(), Some(true), "{id:?} holds focus");
             assert!(element.visible(), "{id:?} is on screen");
@@ -176,6 +182,23 @@ impl Walk {
         let id = id.into();
         let mut presses = 0;
         while !self.holds_focus(&id, cx) {
+            presses += 1;
+            assert!(presses <= TAB_LIMIT, "{key} never reached {id:?}");
+            self.keys(key, cx);
+        }
+    }
+
+    /// Presses `key` until `reached` holds, at most `TAB_LIMIT` times, or
+    /// fails saying `key` never reached `id`.
+    fn press_until(
+        &self,
+        key: &str,
+        id: &ElementId,
+        reached: impl Fn(&Self, &mut TestAppContext) -> bool,
+        cx: &mut TestAppContext,
+    ) {
+        let mut presses = 0;
+        while !reached(self, cx) {
             presses += 1;
             assert!(presses <= TAB_LIMIT, "{key} never reached {id:?}");
             self.keys(key, cx);
@@ -244,41 +267,39 @@ impl Walk {
         );
     }
 
-    /// From the navigation region's list, shift-Tab back to the choice
-    /// `id` and press it.
+    /// From the Tickets list, shift-Tab back to the choice `id` and press it.
     fn choose(&self, id: &'static str, cx: &mut TestAppContext) {
         self.tab_to("shift-tab", id, cx);
-        self.on(id, Region::Navigation, cx);
+        self.on(id, Region::Tickets, cx);
         self.enter(cx);
         assert!(self.shell.selected(id, cx), "{id} is chosen");
     }
 
-    /// The Documents and Tickets panes: `secondary-2`, then shift-Tab to
-    /// each pane's choice and Enter. The pane shown says so in text, and
-    /// its list takes focus.
+    /// The Documents and Tickets lists: `secondary-2` focuses the list used
+    /// last, Documents at first; F6 reaches Tickets through Content, which
+    /// makes it the list used last, and `secondary-2` follows it, then
+    /// follows Documents back.
     fn switch_panes(&self, cx: &mut TestAppContext) {
         self.keys("secondary-2", cx);
-        self.region(Region::Navigation, cx);
-        assert_eq!(
-            self.shell.label("pane-showing", cx).as_deref(),
-            Some(SHOWING_DOCUMENTS)
-        );
-        self.choose("pane-tickets", cx);
-        assert_eq!(
-            self.shell.label("pane-showing", cx).as_deref(),
-            Some(SHOWING_TICKETS)
-        );
+        self.region(Region::Documents, cx);
+        self.keys("f6 f6", cx);
         self.list_focused(
             |workspace, cx| workspace.tickets_list_focus(cx),
-            Region::Navigation,
+            Region::Tickets,
             cx,
         );
-        self.choose("pane-documents", cx);
-        assert_eq!(
-            self.shell.label("pane-showing", cx).as_deref(),
-            Some(SHOWING_DOCUMENTS)
+        self.keys("secondary-1", cx);
+        self.keys("secondary-2", cx);
+        self.list_focused(
+            |workspace, cx| workspace.tickets_list_focus(cx),
+            Region::Tickets,
+            cx,
         );
-        self.region(Region::Navigation, cx);
+        self.keys("shift-f6 shift-f6", cx);
+        self.region(Region::Documents, cx);
+        self.keys("secondary-1", cx);
+        self.keys("secondary-2", cx);
+        self.region(Region::Documents, cx);
     }
 
     /// The document tree: the arrows move to the document and Enter opens
@@ -305,48 +326,76 @@ impl Walk {
             })
         );
         assert_eq!(self.tab_count(cx), 1);
-        self.region(Region::Navigation, cx);
+        self.region(Region::Documents, cx);
     }
 
-    /// The closure and readiness filters, each by shift-Tab and Enter
-    /// from the ticket list. Each says what it shows in text; the rows
-    /// change with it. Back to Open and any readiness at the end.
+    /// In the focused document tree, the arrows move down to the row
+    /// `label` and Enter opens it.
+    fn open_tree_row(&self, label: &str, cx: &mut TestAppContext) {
+        let nodes = self.shell.rows("doc-node", cx);
+        let at = nodes
+            .iter()
+            .position(|node| node == label)
+            .expect("the document is listed");
+        let mut presses = 0;
+        while !self.shell.selected(("doc-node", at), cx) {
+            presses += 1;
+            assert!(presses <= nodes.len() + 1, "the arrows never reached it");
+            self.keys("down", cx);
+        }
+        self.enter(cx);
+    }
+
+    /// The closure segments, each by shift-Tab and Enter from the ticket
+    /// list, and the readiness menu: Tab to its button, Enter to open it,
+    /// Down to an item and Enter to choose it. The rows change with each
+    /// choice. Back to Open and any readiness at the end.
     fn change_the_filters(&self, cx: &mut TestAppContext) {
-        self.choose("pane-tickets", cx);
+        // F6 from the document tree, through Content, to the ticket list.
+        self.keys("f6 f6", cx);
+        self.list_focused(
+            |workspace, cx| workspace.tickets_list_focus(cx),
+            Region::Tickets,
+            cx,
+        );
         let rows = |cx: &mut TestAppContext| self.shell.rows("ticket-row", cx);
         assert!(!rows(cx).contains(&"Closed one".to_owned()));
 
         self.choose("filter-closed", cx);
-        assert_eq!(
-            self.shell.label("tickets-showing", cx).as_deref(),
-            Some("Showing closed tickets")
-        );
         assert_eq!(rows(cx), ["Closed one"]);
-        self.on("filter-closed", Region::Navigation, cx);
+        self.on("filter-closed", Region::Tickets, cx);
 
         self.tab_to("shift-tab", "filter-open", cx);
         self.enter(cx);
         assert!(self.shell.selected("filter-open", cx));
         assert!(rows(cx).contains(&"Waits".to_owned()));
 
-        self.tab_to("tab", "filter-blocked", cx);
-        self.enter(cx);
-        let blocked = READINESS_FILTERS
-            .iter()
-            .find(|(id, ..)| *id == "filter-blocked")
-            .map(|(_, _, showing, _)| *showing);
+        // The toolbar is first in the Tab order (Part H, E-6): Shift-Tab
+        // from the first segment reaches New ticket…, in the header, which
+        // counts as the Tickets region (E-14).
+        self.tab_to("shift-tab", "new-ticket-button", cx);
+        self.on("new-ticket-button", Region::Tickets, cx);
+
+        // The menu: Enter opens it, three Downs reach Blocked, and Enter
+        // chooses it. Focus is back on the button, which names the choice.
+        self.tab_to("tab", "filter-readiness", cx);
+        self.on("filter-readiness", Region::Tickets, cx);
+        self.keys("enter down down down enter", cx);
         assert_eq!(
-            self.shell.label("tickets-readiness-showing", cx).as_deref(),
-            blocked
+            self.shell.label("filter-readiness", cx).as_deref(),
+            Some("Readiness: blocked")
         );
         assert_eq!(rows(cx), ["Waits"]);
         assert!(self.shell.present("why-blocked", cx));
-        self.on("filter-blocked", Region::Navigation, cx);
+        self.on("filter-readiness", Region::Tickets, cx);
 
-        self.tab_to("shift-tab", "filter-any-readiness", cx);
-        self.enter(cx);
-        assert!(self.shell.selected("filter-any-readiness", cx));
+        self.keys("enter down enter", cx);
+        assert_eq!(
+            self.shell.label("filter-readiness", cx).as_deref(),
+            Some("Readiness: any")
+        );
         assert!(!self.shell.present("why-blocked", cx));
+        self.on("filter-readiness", Region::Tickets, cx);
     }
 
     /// The ticket list: `secondary-2` focuses it, the arrows move to
@@ -355,7 +404,7 @@ impl Walk {
         self.keys("secondary-2", cx);
         self.list_focused(
             |workspace, cx| workspace.tickets_list_focus(cx),
-            Region::Navigation,
+            Region::Tickets,
             cx,
         );
         let at = self
@@ -378,6 +427,9 @@ impl Walk {
     fn follow_a_relationship(&self, cx: &mut TestAppContext) {
         self.keys("secondary-3", cx);
         self.on(("tab", 1usize), Region::Content, cx);
+        // E-26: the details sheet, opened by All details, holds the row.
+        self.tab_to("tab", "chip-all", cx);
+        self.enter(cx);
         self.tab_to("tab", ("rel-dependency", 0usize), cx);
         self.on(("rel-dependency", 0usize), Region::Content, cx);
         self.enter(cx);
@@ -386,49 +438,73 @@ impl Walk {
         self.region(Region::Content, cx);
     }
 
-    /// `secondary-p` focuses Find; its text is selected and typed over.
-    fn find(&self, text: &str, cx: &mut TestAppContext) {
+    /// `secondary-p` focuses the filter input; its text is selected and
+    /// typed over. Enter is the caller's.
+    fn filter(&self, text: &str, cx: &mut TestAppContext) {
         self.keys("secondary-p", cx);
         let input = self
             .shell
             .workspace
             .read_with(cx, |workspace, _| workspace.find_input().clone());
         let focus = input.read_with(cx, gpui_kit::Focusable::focus_handle);
-        self.on_handle(&focus, Region::Navigation, cx);
+        self.on_handle(&focus, Region::Tickets, cx);
         self.keys("secondary-a backspace", cx);
         self.type_text(text, cx);
         assert_eq!(
             input.read_with(cx, |input, _| input.value().to_string()),
             text
         );
-        self.keys("enter", cx);
-        self.on_handle(&focus, Region::Navigation, cx);
     }
 
-    /// Find by short code lists both sharers; Tab reaches each Open and
-    /// Enter opens the second. Find by ULID opens the closed ticket.
+    /// Opens the item whose ID is `id` through the filter input: Enter
+    /// opens it, and focus stays in the input.
+    fn find(&self, id: &str, cx: &mut TestAppContext) {
+        self.filter(id, cx);
+        self.keys("enter", cx);
+        let input = self
+            .shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.find_input().clone());
+        let focus = input.read_with(cx, gpui_kit::Focusable::focus_handle);
+        self.on_handle(&focus, Region::Tickets, cx);
+    }
+
+    /// Enter on a short code two tickets share opens neither: focus moves
+    /// to the list with the first row selected, and Enter there opens that
+    /// row. Enter on a ULID opens the closed ticket and focus stays in the
+    /// input.
     fn find_by_short_code_and_ulid(&self, cx: &mut TestAppContext) {
-        self.find(SLUG, cx);
-        assert_eq!(
-            self.shell.label("find-state", cx).as_deref(),
-            Some(FIND_MATCHES)
+        self.filter(SLUG, cx);
+        self.keys("enter", cx);
+        assert_eq!(self.tab_count(cx), 3, "no tab opened");
+        self.list_focused(
+            |workspace, cx| workspace.tickets_list_focus(cx),
+            Region::Tickets,
+            cx,
         );
-        assert_eq!(self.shell.rows("find-match", cx).len(), 2);
-        self.keys("tab", cx);
-        self.on(("find-match-open", 0usize), Region::Navigation, cx);
-        self.keys("tab", cx);
-        self.on(("find-match-open", 1usize), Region::Navigation, cx);
-        let second = self.shell.label(("find-match-id", 1usize), cx).unwrap();
+        assert_eq!(self.shell.rows("ticket-row", cx).len(), 2);
+        assert!(self.shell.selected(("ticket-row", 0usize), cx));
+        let first = match self.shell.label(("ticket-row", 0usize), cx).as_deref() {
+            Some("First sharer") => FIRST,
+            Some("Second sharer") => SECOND,
+            other => panic!("a sharer is listed first, not {other:?}"),
+        };
         self.enter(cx);
-        assert_eq!(self.opened(cx), Some(self.ticket(&second)));
+        assert_eq!(self.opened(cx), Some(self.ticket(first)));
         assert_eq!(self.tab_count(cx), 4);
 
         self.find(CLOSED, cx);
         assert_eq!(self.opened(cx), Some(self.ticket(CLOSED)));
+        // E-30: the lifecycle is in the details sheet, opened by All
+        // details and closed before going on.
+        self.keys("secondary-3", cx);
+        self.tab_to("tab", "chip-all", cx);
+        self.enter(cx);
         assert_eq!(
             self.shell.label("item-lifecycle", cx).as_deref(),
             Some(LIFECYCLE_CLOSED)
         );
+        self.keys("escape", cx);
         assert_eq!(self.tab_count(cx), 5);
     }
 
@@ -500,22 +576,77 @@ impl Walk {
         self.on(("tab", shown), Region::Content, cx);
     }
 
+    /// `secondary-4`, the arrows to the pending row of `a` whose command is
+    /// `action`, `shift-f10`, the arrows to Review changes and Enter: the
+    /// conflict sheet opens. Waits for the row to be listed and drawn.
+    /// Gives its key.
+    async fn to_pending_review(
+        &self,
+        action: &str,
+        cx: &mut TestAppContext,
+    ) -> crate::desktop::model::activity::rows::RowKey {
+        let row =
+            super::activity_support::until_pending(&self.shell, &key(&self.a), action, cx).await;
+        super::activity_support::to_row(&self.shell, &row, cx);
+        self.choose_review(cx);
+        row
+    }
+
+    /// With the list focused on a pending row, `shift-f10`, the arrows to
+    /// Review changes and Enter.
+    fn choose_review(&self, cx: &mut TestAppContext) {
+        self.keys("shift-f10", cx);
+        super::repositories::tests::support::highlight(
+            &mut self.shell.visual(cx),
+            super::conflict::REVIEW_CHANGES,
+        );
+        self.keys("enter", cx);
+    }
+
+    /// The pending operation's row, which `b` has stranded.
+    fn pending_row(
+        &self,
+        cx: &mut TestAppContext,
+    ) -> crate::desktop::model::activity::rows::RowKey {
+        use super::activity_support::{refresh, rows};
+        use crate::desktop::model::activity::rows::RowKey;
+        refresh(&self.shell, cx);
+        let pending: Vec<RowKey> = rows(&self.shell, cx)
+            .into_iter()
+            .map(|row| row.row.key)
+            .filter(|key| matches!(key, RowKey::Pending { .. }))
+            .collect();
+        assert_eq!(pending.len(), 1, "one pending row: {pending:?}");
+        pending[0].clone()
+    }
+
     /// `secondary-4` focuses the operation area, which lists this
     /// session's refresh and `b`'s pending operation.
     fn open_the_operation_area(&self, cx: &mut TestAppContext) {
         self.keys("secondary-4", cx);
         self.region(Region::Operations, cx);
-        assert!(self.shell.present(("pending-row", 0usize), cx));
+        self.pending_row(cx);
         assert!(!self.shell.requests(cx, |_| true).is_empty());
     }
 
-    /// From the operation area, Tab reaches the pending operation's
-    /// Abandon and Enter opens its confirmation dialog, which holds focus.
-    /// Escape closes it with nothing asked, and focus is back on Abandon.
+    /// From the operation area, the arrows reach the pending operation's
+    /// row, and its menu's Abandon (`shift-f10`, the arrows and Enter) opens
+    /// its confirmation dialog, which holds focus. Escape closes it with
+    /// nothing asked, and focus is back on the list, the row highlighted.
     fn start_a_confirmed_action_and_escape(&self, cx: &mut TestAppContext) {
         let requests = self.shell.requests(cx, |_| true).len();
-        self.tab_to("tab", ("pending-abandon", 0usize), cx);
-        self.on(("pending-abandon", 0usize), Region::Operations, cx);
+        let row = self.pending_row(cx);
+        super::activity_support::to_row(&self.shell, &row, cx);
+        self.on_handle(
+            &super::activity_support::list_focus(&self.shell, cx),
+            Region::Operations,
+            cx,
+        );
+        self.keys("shift-f10", cx);
+        super::repositories::tests::support::highlight(
+            &mut self.shell.visual(cx),
+            super::operations::ABANDON,
+        );
         self.enter(cx);
         assert!(self.shell.present("confirm-dialog", cx));
         self.shell.frame(cx, |window, _| {
@@ -530,7 +661,16 @@ impl Walk {
         self.keys("escape", cx);
         assert!(!self.shell.present("confirm-dialog", cx));
         assert_eq!(self.shell.requests(cx, |_| true).len(), requests);
-        self.on(("pending-abandon", 0usize), Region::Operations, cx);
+        self.on_handle(
+            &super::activity_support::list_focus(&self.shell, cx),
+            Region::Operations,
+            cx,
+        );
+        assert_eq!(
+            super::activity_support::highlighted(&self.shell, cx),
+            Some(row),
+            "its row is highlighted"
+        );
     }
 
     /// `secondary-q` with no job running quits.
@@ -568,10 +708,13 @@ async fn every_core_action_works_by_keyboard_alone(cx: &mut TestAppContext) {
 }
 
 /// In the frame just drawn, exactly `region` holds focus, and it alone
-/// draws its ring, which is visible.
-fn ringed(window: &gpui_kit::Window, region: Region) {
+/// draws its ring, which is visible. A region holds focus when its element
+/// does, or when `held`, the Workspace's own answer, names it: the focus of
+/// a panel's toolbar button in the header counts as the panel's (E-14,
+/// decision 18).
+fn ringed(window: &gpui_kit::Window, held: Option<Region>, region: Region) {
     for each in REGIONS {
-        let focused = window.find(each.id()).focused() == Some(true);
+        let focused = window.find(each.id()).focused() == Some(true) || held == Some(each);
         assert_eq!(focused, each == region, "{each:?} holds focus");
         let ring = window.try_find(each.ring_id());
         assert_eq!(ring.is_some(), each == region, "{each:?} draws a ring");
@@ -583,4 +726,13 @@ fn ringed(window: &gpui_kit::Window, region: Region) {
 }
 
 mod actions;
+mod confirm;
+mod conflict;
+mod discussion;
+mod drafts;
+mod editing;
+mod frame;
+mod lifecycle;
+mod passphrase;
 mod settings;
+mod shell;

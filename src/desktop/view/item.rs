@@ -1,73 +1,112 @@
-//! The read-only item view: what an activated row opened, read through
-//! the library each time it loads.
+//! The read-only item view: state, construction and composition.
 //!
-//! The header gives the kind, title, short code and ID, with separate
-//! copy actions, then the lifecycle closure and the project status as
-//! separate fields; a ticket's relationships panel follows them
-//! (`relationships.rs`). Provenance names the context kind, branch, worktree
-//! and head; nothing claims the copy equals or differs from the primary.
-//! An item with a context or branch problem shows a recovery view in its
-//! place: the problem codes, their guidance and paths, and no choice of
-//! context. Unknown metadata is listed read-only; the source is shown as
-//! the file's text, never rendered. Comments follow in list order,
-//! indented by depth. The actions of later releases show, unavailable,
-//! in fixed text.
+//! An item tab is a column (R-47): the tab strip, which the workspace draws,
+//! then the header block (`header`), which stays in place, then the item's
+//! own scroll region with the page and the discussion (`page`). The region
+//! ends with the workspace's details of the selected repository, which D1
+//! drew at the end of the content column (owner, 2026-10-27). While
+//! viewing, the page holds the body in a read editor (decision 17).
 //!
-//! A tab loads in one read job: the repository is resolved once, then the
-//! item, its comments and, for a ticket, its relationships are read one
-//! after another, in the design's order. A load after the first keeps
-//! what is shown until it lands. One that stays busy keeps it still, and
-//! says "Could not refresh" with Busy's message and Retry, which loads
-//! again in place; one that fails shows the failure as a first load does,
-//! and the tab keeps its last title (ruling R-B5).
+//! The header holds the breadcrumb, the title, the `chips`, the actions
+//! with the state `pill`, and the `banners`, where D1's status lines now
+//! show, and where a link clicked in the tab's editors is followed. A chip
+//! opens the details `sheet`, which holds D1's identity details,
+//! provenance, fields, metadata, problems and, from the sibling view,
+//! relationships; a file read by its path has no sheet, so its page
+//! keeps D1's `details`. `reads` owns the ordered per-tab read and refresh
+//! job, `status` D1's loading and recovery controls, `source` the
+//! read-only textarea of a file read by its path (an Inspect tab, which
+//! the sheet's Inspect link opens: R-64), `discussion` the threads, with a
+//! read editor per comment body, the jump to them and the floating button
+//! over the region, and `draft` the banner of a stored draft and the
+//! section of one restored here, with `draft_actions` its Export… and
+//! Discard…. All children use the same entity, stamped model and
+//! subscriptions; none writes the item. Every editor of the tab draws the
+//! local images its text names from the tab's own `TabImages`
+//! (`services::images`), which a reload clears.
 //!
-//! An item the library no longer finds shows `item_not_found` with
-//! Refresh, which refreshes the repository's index through the worker and
-//! reads the item again. Every failure is shown by its code's message and
-//! the code; no error is formatted.
+//! `edit` makes the tab edit (design, Part C): Edit prepares the item's
+//! private work context, the edit editor and its toolbar replace the read
+//! view, D2's draft follows the text, Save, or `secondary-s`, saves it,
+//! and Done ends the session or keeps it while the tab views the saved
+//! copy.
+//!
+//! `repair` makes Repair work (design, Part E): Repair…, or an unmanaged
+//! document's Adopt…, opens a plain text area over the whole file in the
+//! page's place of its text; Preview prepares the repair in the one
+//! confirmation dialog; a repair made, the tab follows the item by its ID.
+//!
+//! D4's slots: `share` the header's Share, `composer` the discussion's
+//! comment composers and `posting` the comments being posted. D5's
+//! `review` is the conflict banner's Review changes.
+
+mod banners;
+mod chips;
+mod composer;
+mod details;
+mod discussion;
+mod draft;
+mod draft_actions;
+mod edit;
+mod header;
+mod lock;
+mod page;
+mod pill;
+mod posting;
+mod reads;
+mod relations_edit;
+mod repair;
+mod review;
+mod share;
+mod sheet;
+mod source;
+mod status;
+pub(crate) mod tokens;
 
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
-    AnyElement, App, AppContext, ClickEvent, ClipboardItem, Context, ElementId, Entity,
-    FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Window,
-    component::{
-        ActiveTheme, Disableable,
-        button::{Button, ButtonVariants},
-        h_flex,
-        input::{IndentInline, OutdentInline, Textarea, TextareaState},
-        v_flex,
-    },
-    div, px,
+    Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    Render, Styled, Subscription, Task, TestSupportExt, Window,
+    component::{input::TextareaState, v_flex},
 };
-use manyhands::{
-    repository::{ClosureState, CommentListDto, DependencyDirection, ItemDto, ItemDtoKind},
-    results::ResultCode,
-};
+use manyhands::repository::transport::SshAuthority;
 
-use super::{
-    relationships::RowKey,
-    scroll::ContentScroll,
-    sidebar::RETRY,
-    tickets::{LIFECYCLE_CLOSED, LIFECYCLE_OPEN},
-};
+use super::{relationships::RowKey, scroll::ContentScroll};
 use crate::desktop::{
+    keys::{Edit, ITEM_TAB_CONTEXT, Save, ShareItem, ToggleRich},
     model::{
-        item::{
-            CONTEXT_PROBLEMS, ItemReads, ItemView, LATER, LATER_NOTE, NOT_REPRESENTABLE,
-            comment_author, context_kind_label, context_problems, metadata_value, provenance_label,
-        },
-        list_state::{ListState, Rows},
-        navigation::{NotReloaded, OpenTarget},
-        relationships::{RELATIONSHIP_PROBLEMS, parent_to_read},
-        stamp::{Stamp, ViewScope},
+        edit::Phase, item::ItemView, names::TicketName, navigation::OpenTarget, stamp::ViewScope,
     },
     services::{
-        ReadKind, ReadResult, Reader, Services,
-        requests::{DesktopRequestId, Intent, Lane, RequestState},
+        Services,
+        drafts::{CommentDiscarded, DraftSaved, SessionDiscarded},
+        images::TabImages,
+        requests::DesktopRequestId,
     },
 };
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use banners::{LINK_NOT_FOUND, LINK_NOT_OPENED, NEAREST_MATCH};
+pub(crate) use chips::relative_time;
+pub(crate) use chips::{ChipField, OpenDetails};
+pub(super) use details::text;
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use draft::NOT_SAVED;
+pub(crate) use draft::{NOT_DISCARDED, ReviewInDrafts, refused_label};
+pub(crate) use draft_actions::DraftDiscarded;
+pub(crate) use edit::{CloseThisTab, InitialsInSettings, Leaving, SaveFirst};
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use header::{LIFECYCLE_ACTION, LIFECYCLE_NOTE, NO_ID, NOT_CREATED};
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use lock::OpenedFolders;
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use lock::RETIRING;
+#[cfg(test)]
+pub(crate) use lock::lock_words;
+pub(crate) use lock::locked_text;
+pub(crate) use lock::{CHECK_AGAIN, open_folder};
+pub(crate) use repair::FollowItem;
+pub(crate) use sheet::open_details;
 
 pub(crate) const NONCONFORMING_FILE: &str = "Nonconforming file";
 pub(crate) const SOURCE_NOT_UTF8: &str =
@@ -78,126 +117,141 @@ pub(crate) const REFRESHING: &str = "Refreshing the index";
 pub(crate) const RECOVERY: &str = "This item's context needs repair before it can be read from it.";
 pub(crate) const COPY_ID: &str = "Copy ID";
 pub(crate) const COPY_SLUG: &str = "Copy short code";
-/// What is shown is from an earlier load: the last one stayed busy.
 pub(crate) const NOT_REFRESHED: &str = "Could not refresh";
-/// How far each level of a reply is indented.
-const COMMENT_INDENT: f32 = 16.;
+/// The discussion header's way back to the page (`item_view/04-comments.md`).
+pub(crate) const BACK_TO_TOP: &str = "Back to top";
+
+/// A place in the workspace a share's or a post's control opens (design,
+/// Lane B, Outcomes and routes): the item tab asks, and the workspace,
+/// which subscribes to every tab, opens it.
+pub(crate) enum ItemRoute {
+    /// Share… with no publication remote, or Set up sharing: Settings ›
+    /// Remotes for the repository.
+    Remotes(PathBuf),
+    /// Open Sharing & keys: the Keys page.
+    SharingAndKeys,
+    /// Check host: the host the outcome names, or, with none, the
+    /// repository's Hosts page (K-3).
+    CheckHost {
+        root: PathBuf,
+        authority: Option<SshAuthority>,
+    },
+    /// Set identity: the repository's identity form.
+    SetIdentity(PathBuf),
+    /// Show it, on `busy`: the request of this session that may hold the
+    /// repository, or, with none, its pending operations list.
+    Holder {
+        root: PathBuf,
+        request: Option<DesktopRequestId>,
+    },
+}
+
+impl EventEmitter<ItemRoute> for ItemPane {}
+
+/// The repository's publication remote as the workspace's navigation knows
+/// it, from the repository list's summary (design, Share controls): the tab
+/// reads no remote itself (D3's fact 41).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PublicationRemote {
+    /// Navigation has not listed the repository yet.
+    #[default]
+    Unknown,
+    /// The repository has no publication remote selected.
+    Unset,
+    /// The publication remote selected, by its name.
+    Named(String),
+}
+
+impl PublicationRemote {
+    /// From a listed summary's `publication_remote`.
+    pub(crate) fn from_summary(remote: Option<&str>) -> Self {
+        match remote {
+            Some(name) => Self::Named(name.to_owned()),
+            None => Self::Unset,
+        }
+    }
+}
 
 pub(crate) struct ItemPane {
     pub(super) model: ItemView,
     services: Services,
-    /// The tab's load: one read job, its calls one after another under one
-    /// stamp. Replacing it drops the last.
+    /// Replacing the one stamped read job drops the previous task.
     read: Option<Task<()>>,
-    /// The focus of each relationship row that can be opened, by its
-    /// group's row name, its ticket's ID and which row of that ID in the
-    /// group it is, so it follows its ticket when a reload reorders the
-    /// group. Only the rows drawn in the last frame keep theirs.
+    /// Relationship focus follows row identity across reorders.
     pub(super) row_focus: HashMap<RowKey, FocusHandle>,
-    /// Around Copy short code and Copy ID, whose own focus is the Kit's.
     copy_focus: [FocusHandle; 2],
-    /// The index refresh Refresh asked for; the item is read again when it
-    /// ends.
+    /// One per chip field, so focus can return to the chip that asked for
+    /// the details sheet.
+    chip_focus: Vec<FocusHandle>,
+    /// One per chip field: the sheet's field each chip opens it on.
+    sheet_focus: Vec<FocusHandle>,
+    /// Around the sheet's Inspect link, whose own focus is the Kit's.
+    link_focus: FocusHandle,
+    /// The header's lifecycle action, where its dialog gives focus back.
+    lifecycle_focus: FocusHandle,
+    /// The conflict banner's Review changes, where its sheet gives focus
+    /// back (`review`).
+    review_focus: FocusHandle,
+    /// The details sheet's own scroll, where its focused controls are
+    /// revealed.
+    pub(super) sheet_scroll: ContentScroll,
+    /// The sheet's named controls while editing, and what it suggests.
+    fields: sheet::SheetFields,
+    /// The sheet's Waiting on and Parent while editing, and their check.
+    relations: relations_edit::RelationsEdit,
     refreshing: Option<DesktopRequestId>,
-    /// The read-only text the source is shown in, and the source it was
-    /// last given. Made at the next frame, which has the window it needs.
+    /// An Inspect tab's last source plus the same textarea entity,
+    /// preserving selection/focus.
     source: Option<(String, Entity<TextareaState>)>,
-    /// The content region's scrolling, which brings a control of this
-    /// view into view when it takes focus.
+    /// The item's own scroll region, which the page keys move while this
+    /// tab is shown, and where its controls are revealed.
     pub(super) scroll: ContentScroll,
+    page: page::Page,
+    /// The discussion's Back to top, a tab stop.
+    back_to_top: FocusHandle,
+    /// The comments' read editors, the discussion's heading and the
+    /// header's Comments {n}.
+    discussion: discussion::Discussion,
+    /// The header's Share and what it last sent (`share`).
+    share: share::ShareState,
+    /// The repository's publication remote, which the workspace sets from
+    /// its navigation as the tab opens and as the list changes.
+    publication_remote: PublicationRemote,
+    /// The repository's primary branch, as navigation last gave it (R-35):
+    /// what the lifecycle dialog and the sheet name before a preview does.
+    primary_branch: Option<String>,
+    /// The discussion's new-comment and reply composers (`composer`).
+    composers: composer::Composers,
+    /// The comments being posted, drawn pending in their threads
+    /// (`posting`).
+    posting: posting::Posting,
+    draft: draft::TabDraft,
+    /// What the last link clicked here came to, when it opened nothing
+    /// or opened the nearest match; the next link clears it.
+    link_note: Option<banners::LinkNote>,
+    /// The last link's resolution; a later link drops it.
+    link_read: Option<Task<()>>,
+    /// The local images every editor of the tab draws from (decision 9),
+    /// cleared on reload.
+    images: TabImages,
+    /// Edit: the phase, the session and what stopped a prepare.
+    edit: edit::TabEdit,
+    /// The repair view, while it is open (`repair`).
+    repair: Option<repair::Repairing>,
+    /// Adopt…'s ID for this tab's read of its file, and its making.
+    adoption: repair::Adoption,
     _operations: Subscription,
-}
-
-/// One load of a tab, in the design's order: the repository is resolved
-/// once, then `show_item` (or `show_path` for a nonconforming entry),
-/// `list_comments`, and for a ticket `ticket_dependencies`,
-/// `ticket_children` and the parent's `show_item`. A load whose
-/// resolution or item read gives nothing stops there: the reads after it
-/// give the same answer, and the parent is not read.
-///
-/// The tree is asked for in both directions to depth 1: `up` gives the
-/// tickets that depend on the ticket, and `down` the short code and title
-/// of each it depends on, from the same snapshot.
-#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-async fn read_tab(reader: Reader, target: OpenTarget) -> ItemReads {
-    let root = match &target {
-        OpenTarget::Item { repo, .. } | OpenTarget::Inspect { repo, .. } => PathBuf::from(repo),
-    };
-    let repo = match reader
-        .call(ReadKind::Resolve, |service| {
-            service.resolve_repository(&root)
-        })
-        .await
-    {
-        ReadResult::Ok(repo) => repo,
-        ReadResult::Busy => return ItemReads::stopped(&target, ReadResult::Busy),
-        ReadResult::Failed(failure) => {
-            return ItemReads::stopped(&target, ReadResult::Failed(failure));
-        }
-    };
-    let (kind, id) = match &target {
-        OpenTarget::Item { kind, id, .. } => (*kind, id),
-        OpenTarget::Inspect { worktree, path, .. } => {
-            let (worktree, path) = (PathBuf::from(worktree), PathBuf::from(path));
-            let item = reader
-                .call(ReadKind::Item, |service| {
-                    service.show_path(&repo, Some(&worktree), &path)
-                })
-                .await;
-            return ItemReads::stopped(&target, item);
-        }
-    };
-    let item = reader
-        .call(ReadKind::Item, |service| service.show_item(&repo, id))
-        .await;
-    let parent = match &item {
-        ReadResult::Ok(item) => parent_to_read(item.parent.as_ref()),
-        _ => return ItemReads::stopped(&target, item),
-    };
-    let comments = reader
-        .call(ReadKind::Comments, |service| {
-            service.list_comments(&repo, id)
-        })
-        .await;
-    if kind != ItemDtoKind::Ticket {
-        return ItemReads {
-            item,
-            comments: Some(comments),
-            dependents: None,
-            children: None,
-            parent: None,
-        };
-    }
-    let dependents = reader
-        .call(ReadKind::Dependencies, |service| {
-            service.ticket_dependencies(&repo, id, DependencyDirection::Both, Some(1))
-        })
-        .await;
-    let children = reader
-        .call(ReadKind::Children, |service| {
-            service.ticket_children(&repo, id)
-        })
-        .await;
-    let parent = match parent {
-        Some(parent) => Some(
-            reader
-                .call(ReadKind::Item, |service| service.show_item(&repo, &parent))
-                .await,
-        ),
-        None => None,
-    };
-    ItemReads {
-        item,
-        comments: Some(comments),
-        dependents: Some(dependents),
-        children: Some(children),
-        parent,
-    }
+    /// A draft listed, restored or written redraws the banner and section.
+    _drafts: Subscription,
+    /// A save of this tab's session committed (R-69).
+    _saved: Subscription,
+    /// A discard elsewhere ended this tab's session (R-71).
+    _discarded: Subscription,
+    /// The Drafts page discarded a comment draft a composer holds.
+    _comment_discarded: Subscription,
 }
 
 impl ItemPane {
-    /// The view of `target`, loading at once, its reads stamped under
-    /// `scope`.
     pub(crate) fn new(
         target: OpenTarget,
         scope: ViewScope,
@@ -208,52 +262,138 @@ impl ItemPane {
         let operations = cx.observe(services.operations(), |this, _, cx| {
             this.operations_changed(cx)
         });
+        let drafts = cx.observe(services.drafts(), |pane, _, cx| {
+            pane.sync_status(cx);
+            pane.follow_registry(cx);
+            pane.follow_post_save_read(cx);
+            pane.follow_done(cx);
+            pane.follow_close_save(cx);
+            pane.follow_continuing(cx);
+            pane.follow_unmarked(cx);
+            cx.notify()
+        });
+        let saved = cx.subscribe(services.drafts(), |pane, _, event: &DraftSaved, cx| {
+            pane.draft_saved(event, cx)
+        });
+        let discarded = cx.subscribe(
+            services.drafts(),
+            |pane, _, event: &SessionDiscarded, cx| pane.session_discarded(event, cx),
+        );
+        let comment_discarded = cx.subscribe(
+            services.drafts(),
+            |pane, _, event: &CommentDiscarded, cx| pane.comment_discarded(event, cx),
+        );
+        let images = TabImages::new(&services);
+        // The tab's images leave the windows' atlases with it, and its
+        // composers let go of the comment drafts they held.
+        cx.on_release(|pane, cx| {
+            pane.images.close(cx);
+            let tab = pane.tab_key();
+            pane.services
+                .drafts()
+                .update(cx, |registry, cx| registry.let_go_comments(&tab, cx));
+        })
+        .detach();
+        let edit = edit::TabEdit::new(scope.clone(), cx);
+        let posting = posting::Posting::new(&services, cx);
+        let relations = relations_edit::RelationsEdit::new(scope.clone(), cx);
         let mut pane = Self {
             model: ItemView::new(target, scope),
             services,
             read: None,
             row_focus: HashMap::new(),
             copy_focus: [cx.focus_handle(), cx.focus_handle()],
+            chip_focus: chips::chip_focus(cx),
+            sheet_focus: sheet::sheet_focus(cx),
+            link_focus: cx.focus_handle(),
+            lifecycle_focus: cx.focus_handle(),
+            review_focus: cx.focus_handle(),
+            fields: sheet::SheetFields::default(),
+            relations,
+            sheet_scroll: scroll.region(),
             refreshing: None,
             source: None,
-            scroll,
+            scroll: scroll.region(),
+            page: page::Page::new(cx),
+            back_to_top: cx.focus_handle().tab_stop(true),
+            discussion: discussion::Discussion::new(cx),
+            share: share::ShareState::default(),
+            publication_remote: PublicationRemote::Unknown,
+            primary_branch: None,
+            composers: composer::Composers::default(),
+            posting,
+            draft: draft::TabDraft::default(),
+            link_note: None,
+            link_read: None,
+            images,
+            edit,
+            repair: None,
+            adoption: repair::Adoption::default(),
             _operations: operations,
+            _drafts: drafts,
+            _saved: saved,
+            _discarded: discarded,
+            _comment_discarded: comment_discarded,
         };
+        pane.watch_editing(cx);
+        pane.watch_edit_tab(cx);
         let stamp = pane.model.load();
         pane.read(stamp, cx);
+        pane.share_opened(cx);
         pane
     }
 
-    /// What this view shows.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn target(&self) -> &OpenTarget {
         self.model.target()
     }
 
-    /// Loads the tab again in place, after its repository may have
-    /// changed or on Retry. What is shown, and the source's text field
-    /// with its selection and focus, stay until the load lands; a load
-    /// that gives nothing keeps what is shown and says it could not
-    /// refresh.
-    pub(crate) fn reload(&mut self, cx: &mut Context<Self>) -> Stamp {
-        let stamp = self.model.reload();
-        self.read(stamp.clone(), cx);
-        stamp
+    /// The read view of an item tab, once a read gave a body.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn read_view(&self) -> Option<Entity<super::editor::read_only::ReadOnly>> {
+        self.page.read().cloned()
     }
 
-    /// Starts the tab's load under `stamp`, as one read job.
-    fn read(&mut self, stamp: Stamp, cx: &mut Context<Self>) {
-        let target = self.model.target().clone();
-        self.read = Some(self.services.read_job(
-            stamp,
-            move |reader| read_tab(reader, target),
-            cx,
-            |this: &mut Self, stamp, reads, cx| {
-                if this.model.apply_reads(stamp, reads) {
-                    cx.notify();
-                }
-            },
-        ));
+    /// The read view's editor.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn read_editor(
+        &self,
+        cx: &gpui_kit::App,
+    ) -> Option<Entity<zorite_editor::EditorState>> {
+        Some(self.page.read()?.read(cx).editor().clone())
+    }
+
+    /// The read view of the comment `id`'s body.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn comment_view(
+        &self,
+        id: &str,
+    ) -> Option<Entity<super::editor::read_only::ReadOnly>> {
+        self.discussion.body(id).cloned()
+    }
+
+    /// The tab's images.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn images(&self) -> &TabImages {
+        &self.images
+    }
+
+    /// The vertical offset of the item's scroll region.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn region_offset(&self) -> gpui_kit::Pixels {
+        self.scroll.handle().offset().y
+    }
+
+    /// The item's scroll region, which the page keys move while this tab
+    /// is shown.
+    pub(super) fn region(&self) -> &ContentScroll {
+        &self.scroll
+    }
+
+    /// Back to top: the region at its top, and the page focused.
+    fn back_to_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.scroll.to_top();
+        self.page.focus_from_back_to_top(window, cx);
         cx.notify();
     }
 
@@ -263,659 +403,203 @@ impl ItemPane {
         }
     }
 
-    /// Refresh: refreshes the repository's index through the worker; the
-    /// item is read again when that ends.
-    fn refresh(&mut self, cx: &mut Context<Self>) {
-        if self.refreshing.is_some() {
+    /// The window's draft registry, for the tab strip.
+    pub(super) fn drafts(&self) -> &Entity<crate::desktop::services::drafts::DraftRegistry> {
+        self.services.drafts()
+    }
+
+    /// The repository's publication remote, as navigation last gave it.
+    pub(crate) fn publication_remote(&self) -> &PublicationRemote {
+        &self.publication_remote
+    }
+
+    /// The repository's primary branch, as navigation last gave it.
+    pub(crate) fn primary_branch(&self) -> Option<&str> {
+        self.primary_branch.as_deref()
+    }
+
+    /// The workspace's navigation gives the repository's primary branch
+    /// (R-35).
+    pub(crate) fn set_primary_branch(&mut self, primary: Option<String>, cx: &mut Context<Self>) {
+        if self.primary_branch != primary {
+            self.primary_branch = primary;
+            cx.notify();
+        }
+    }
+
+    /// The workspace's navigation gives the repository's publication
+    /// remote: Share follows it (`share_remote_changed`). Nothing changes
+    /// when it is the one the tab holds.
+    pub(crate) fn set_publication_remote(
+        &mut self,
+        remote: PublicationRemote,
+        cx: &mut Context<Self>,
+    ) {
+        if self.publication_remote == remote {
             return;
         }
-        let root = PathBuf::from(self.repo());
-        let id =
-            self.services
-                .worker()
-                .submit(Intent::IndexRefresh { root }, Lane::User, None, None);
-        self.refreshing = Some(id);
+        self.publication_remote = remote;
+        self.share_remote_changed(cx);
         cx.notify();
     }
 
-    /// A worker event arrived: once the refresh Refresh asked for has
-    /// ended, however it ended, the item is read again. A finished one
-    /// marked the repository's items changed, so the workspace reads every
-    /// open tab of it again, this one with them; one not sent, or removed
-    /// from the queue by a cancel or on quit, changed nothing, so this
-    /// view reads itself again, in place. A request the model does not
-    /// hold yet has not ended: its `Queued` event comes through the
-    /// worker's channel after `submit` returns, and another event can
-    /// reach the model first.
-    fn operations_changed(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.refreshing else {
-            return;
-        };
-        let state = self
-            .services
-            .operations()
-            .read(cx)
-            .request(id)
-            .map(|request| request.state.clone());
-        match state {
-            None | Some(RequestState::Queued | RequestState::Running { .. }) => {}
-            Some(RequestState::Finished(..)) => {
-                self.refreshing = None;
-                cx.notify();
-            }
-            Some(_) => {
-                self.refreshing = None;
-                self.reload(cx);
-            }
-        }
-    }
-
-    /// The tab's label: the title the item was last read with, kept when
-    /// a later load fails, else its ID, or the path of a nonconforming
-    /// entry.
+    /// Keep the last successful title after a failed refresh (ruling R-B5).
     pub(crate) fn tab_title(&self) -> String {
-        if let Some(title) = self.model.last_title() {
-            return title.to_owned();
-        }
-        match self.model.target() {
+        let fallback = match self.model.target() {
             OpenTarget::Item { id, .. } => id.to_string(),
             OpenTarget::Inspect { path, .. } => path.clone(),
-        }
-    }
-}
-
-/// A piece of text a test reads by `id`.
-pub(super) fn text(
-    id: impl Into<ElementId>,
-    value: impl Into<String>,
-) -> impl IntoElement + Styled + InteractiveElement {
-    let value = value.into();
-    div()
-        .id(id)
-        .test_support()
-        .aria_label(value.clone())
-        .child(value)
-}
-
-/// A named field: its name, then its value.
-fn field(
-    id: &'static str,
-    name: &'static str,
-    value: String,
-    cx: &App,
-) -> impl IntoElement + use<> {
-    h_flex()
-        .gap_2()
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .w(px(120.))
-                .child(name),
-        )
-        .child(text(id, value).text_sm())
-}
-
-fn kind_label(kind: ItemDtoKind) -> &'static str {
-    match kind {
-        ItemDtoKind::Document => "Document",
-        ItemDtoKind::Ticket => "Ticket",
-    }
-}
-
-impl ItemPane {
-    /// A state that is not simply ready, in text; a failure by its code's
-    /// message and its code, with Refresh for an item that is gone and
-    /// Retry otherwise.
-    pub(super) fn status<T: Rows>(
-        &self,
-        name: &'static str,
-        state: &ListState<T>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<T> {
-        let muted = cx.theme().muted_foreground;
-        let label = match state {
-            ListState::Ready { index, .. }
-                if index.as_ref().is_none_or(|index| {
-                    index.state == manyhands::repository::IndexState::Current
-                }) =>
-            {
-                None
-            }
-            _ => Some(
-                text(format!("{name}-state"), state.label())
-                    .text_xs()
-                    .text_color(muted),
-            ),
         };
-        let failure = match state {
-            ListState::Failed(failure) => Some(failure.code),
-            _ => None,
-        };
-        let failed = failure.map(|code| {
-            v_flex()
-                .gap_1()
-                .child(text(format!("{name}-failure"), code.message()).text_sm())
-                .child(
-                    text(format!("{name}-failure-code"), code.as_str())
-                        .text_xs()
-                        .text_color(muted),
-                )
-        });
-        let action = match (state, failure) {
-            (_, Some(ResultCode::ItemNotFound)) => Some(match self.refreshing {
-                Some(_) => div()
-                    .id(format!("{name}-refreshing"))
-                    .test_support()
-                    .aria_label(REFRESHING)
-                    .text_sm()
-                    .child(REFRESHING),
-                None => div().id(format!("{name}-refresh")).test_support().child(
-                    Button::new(format!("{name}-refresh-button"))
-                        .label(REFRESH)
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.refresh(cx))),
-                ),
-            }),
-            (ListState::Busy | ListState::Failed(_), _) => Some(
-                div().id(format!("{name}-retry")).test_support().child(
-                    Button::new(format!("{name}-retry-button"))
-                        .label(RETRY)
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.reload(cx);
-                        })),
-                ),
-            ),
-            _ => None,
-        };
-        v_flex()
-            .gap_1()
-            .children(label)
-            .children(failed)
-            .children(action)
-    }
-
-    /// A load that gave nothing while rows were shown: they stay, and
-    /// this says so, in fixed text, with the answer's message and code,
-    /// and Retry, which loads again in place.
-    fn not_refreshed(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let code = match self.model.not_refreshed()? {
-            NotReloaded::Busy => ResultCode::Busy,
-            NotReloaded::Failed(failure) => failure.code,
-        };
-        let muted = cx.theme().muted_foreground;
-        Some(
-            v_flex()
-                .id("item-not-refreshed")
-                .test_support()
-                .aria_label(NOT_REFRESHED)
-                .gap_1()
-                .p_2()
-                .border_1()
-                .border_color(cx.theme().border)
-                .child(div().text_sm().child(NOT_REFRESHED))
-                .child(text("item-not-refreshed-failure", code.message()).text_sm())
-                .child(
-                    text("item-not-refreshed-code", code.as_str())
-                        .text_xs()
-                        .text_color(muted),
-                )
-                .child(
-                    div().id("item-not-refreshed-retry").test_support().child(
-                        Button::new("item-not-refreshed-retry-button")
-                            .label(RETRY)
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.reload(cx);
-                            })),
-                    ),
-                ),
-        )
-    }
-
-    /// What was opened, from the target until the read gives more: the
-    /// kind and ID, or the path of a nonconforming entry.
-    fn identity(&self, item: Option<&ItemDto>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = cx.theme().muted_foreground;
-        let mut header = v_flex().gap_1();
-        let (kind, id, path) = match self.model.target() {
-            OpenTarget::Item { kind, id, .. } => (
-                Some(kind_label(*kind)),
-                Some(id.to_string()),
-                item.map(|item| item.path.clone()),
-            ),
-            OpenTarget::Inspect { path, .. } => (None, None, Some(path.clone())),
-        };
-        let mut line = h_flex().gap_2();
-        line = match kind {
-            Some(kind) => line.child(text("item-kind", kind).text_xs().text_color(muted)),
-            None => line.child(
-                text("item-nonconforming", NONCONFORMING_FILE)
-                    .text_xs()
-                    .text_color(muted),
-            ),
-        };
-        if let Some(title) = item.and_then(|item| item.title.clone()) {
-            line = line.child(text("item-title", title).text_lg());
+        TicketName {
+            slug: None,
+            title: self.model.last_title(),
         }
-        header = header.child(line);
-        let slug = item.and_then(|item| item.slug.clone());
-        let mut codes = h_flex().gap_2();
-        if let Some(slug) = slug.clone() {
-            codes = codes
-                .child(text("item-slug", slug.clone()).text_sm())
-                .child(
-                    div()
-                        .id("copy-slug")
-                        .test_support()
-                        .aria_label(COPY_SLUG)
-                        .track_focus(&self.copy_focus[0])
-                        .child(
-                            Button::new("copy-slug-button")
-                                .ghost()
-                                .label(COPY_SLUG)
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(slug.clone()))
-                                }),
-                        ),
-                );
-        }
-        if let Some(id) = id {
-            let copied = id.clone();
-            codes = codes
-                .child(text("item-id", id).text_sm().text_color(muted))
-                .child(
-                    div()
-                        .id("copy-id")
-                        .test_support()
-                        .aria_label(COPY_ID)
-                        .track_focus(&self.copy_focus[1])
-                        .child(
-                            Button::new("copy-id-button")
-                                .ghost()
-                                .label(COPY_ID)
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
-                                }),
-                        ),
-                );
-        }
-        header = header.child(codes);
-        if let Some(path) = path {
-            header = header.child(text("item-path", path).text_xs().text_color(muted));
-        }
-        header
-    }
-
-    /// Provenance, or in its place the recovery view: no context is
-    /// offered when the item's own needs repair.
-    fn provenance(&self, item: &ItemDto, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        let problems = context_problems(item);
-        if !problems.is_empty() {
-            return v_flex()
-                .id("item-recovery")
-                .test_support()
-                .aria_label(RECOVERY)
-                .gap_1()
-                .p_2()
-                .border_1()
-                .border_color(cx.theme().danger)
-                .child(div().text_sm().child(RECOVERY))
-                .children(problems.into_iter().enumerate().map(|(ix, problem)| {
-                    v_flex()
-                        .child(text(("recovery-problem", ix), problem.code.as_str()).text_sm())
-                        .child(
-                            text(("recovery-guidance", ix), problem.guidance())
-                                .text_xs()
-                                .text_color(muted),
-                        )
-                        .children(problem.path.clone().map(|path| {
-                            text(("recovery-path", ix), path)
-                                .text_xs()
-                                .text_color(muted)
-                        }))
-                }))
-                .into_any_element();
-        }
-        let context = &item.context;
-        v_flex()
-            .id("provenance-section")
-            .gap_1()
-            .child(
-                text("provenance", provenance_label(context))
-                    .text_xs()
-                    .text_color(muted),
-            )
-            .child(field(
-                "provenance-kind",
-                "Context",
-                context_kind_label(context.kind).to_owned(),
-                cx,
-            ))
-            .children(
-                context
-                    .branch
-                    .clone()
-                    .map(|branch| field("provenance-branch", "Branch", branch, cx)),
-            )
-            .child(field(
-                "provenance-worktree",
-                "Worktree",
-                context.worktree.clone(),
-                cx,
-            ))
-            .children(
-                context
-                    .head_oid
-                    .clone()
-                    .map(|head| field("provenance-head", "Head commit", head, cx)),
-            )
-            .into_any_element()
-    }
-
-    /// The fields Manyhands defines: lifecycle closure, then project
-    /// status and the rest, each its own.
-    fn fields(&self, item: &ItemDto, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let mut fields = v_flex().gap_1();
-        if let Some(closure) = &item.closure {
-            let lifecycle = match closure.state {
-                ClosureState::Closed => LIFECYCLE_CLOSED,
-                _ => LIFECYCLE_OPEN,
-            };
-            fields = fields.child(field(
-                "item-lifecycle",
-                "Lifecycle",
-                lifecycle.to_owned(),
-                cx,
-            ));
-            if let Some(at) = closure.closed_at.clone() {
-                fields = fields.child(field("item-closed-at", "Closed at", at, cx));
-            }
-            if let Some(by) = closure.closed_by.clone() {
-                fields = fields.child(field("item-closed-by", "Closed by", by, cx));
-            }
-        }
-        for (id, name, value) in [
-            ("item-status", "Status", &item.status),
-            ("item-type", "Type", &item.ticket_type),
-            ("item-project", "Project", &item.project),
-            ("item-team", "Team", &item.team),
-            ("item-changed", "Changed", &item.changed_at),
-        ] {
-            if let Some(value) = value.clone() {
-                fields = fields.child(field(id, name, value, cx));
-            }
-        }
-        fields
-    }
-
-    /// Every problem but the context ones the recovery view shows, with
-    /// its guidance and path, and for a ticket but its relationship
-    /// problems, which its panel lists.
-    fn problems(&self, item: &ItemDto, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = cx.theme().muted_foreground;
-        v_flex().gap_1().children(
-            item.problems
-                .iter()
-                .filter(|problem| !CONTEXT_PROBLEMS.contains(&problem.code))
-                // A ticket's panel lists these under its groups.
-                .filter(|problem| {
-                    self.model.relationships().is_none()
-                        || !RELATIONSHIP_PROBLEMS.contains(&problem.code)
-                })
-                .enumerate()
-                .map(|(ix, problem)| {
-                    v_flex()
-                        .child(text(("item-problem", ix), problem.code.as_str()).text_sm())
-                        .child(
-                            text(("item-problem-guidance", ix), problem.guidance())
-                                .text_xs()
-                                .text_color(muted),
-                        )
-                        .children(problem.path.clone().map(|path| {
-                            text(("item-problem-path", ix), path)
-                                .text_xs()
-                                .text_color(muted)
-                        }))
-                })
-                .collect::<Vec<_>>(),
-        )
-    }
-
-    /// Unknown metadata as read-only key and value rows.
-    fn metadata(&self, item: &ItemDto, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = cx.theme().muted_foreground;
-        v_flex().gap_1().children(
-            item.unknown_metadata
-                .iter()
-                .enumerate()
-                .map(|(ix, (key, value))| {
-                    let value = metadata_value(value);
-                    let shown = value
-                        .clone()
-                        .unwrap_or_else(|| NOT_REPRESENTABLE.to_owned());
-                    let value = text(("meta-value", ix), shown).text_sm();
-                    h_flex()
-                        .gap_2()
-                        .child(
-                            text(("meta-key", ix), key.clone())
-                                .text_xs()
-                                .text_color(muted)
-                                .w(px(120.)),
-                        )
-                        .child(value)
-                })
-                .collect::<Vec<_>>(),
-        )
-    }
-
-    /// Gives the read-only text the source the last read gave, making it
-    /// when there is none yet. Nothing the user does there reaches the
-    /// item: the text rejects every edit, and the view never writes.
-    ///
-    /// Only a read that gave the item changes it: while a read is in
-    /// flight, or after one that failed, the text field and its selection
-    /// stay, for the read that next gives the item. One whose file is not
-    /// UTF-8 has no text to keep.
-    fn sync_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(item) = self.model.item().rows() else {
-            return;
-        };
-        let Some(source) = item.source.clone() else {
-            self.source = None;
-            return;
-        };
-        match &mut self.source {
-            Some((shown, _)) if *shown == source => {}
-            Some((shown, state)) => {
-                state.update(cx, |state, cx| state.set_value(source.clone(), window, cx));
-                *shown = source;
-            }
-            None => {
-                let value = source.clone();
-                let state = cx.new(|cx| {
-                    let mut state = TextareaState::new(window, cx).default_value(value);
-                    state.set_readonly(true, cx);
-                    state
-                });
-                self.source = Some((source, state));
-            }
-        }
-    }
-
-    /// The text the source is shown in, for tests.
-    #[cfg(test)]
-    pub(crate) fn source_state(&self) -> Option<&Entity<TextareaState>> {
-        self.source.as_ref().map(|(_, state)| state)
-    }
-
-    /// The file's text in a read-only, selectable, monospaced plain-text
-    /// field: never rendered, so nothing is loaded and no link is
-    /// followed. Or why there is none.
-    fn source(&self, item: &ItemDto, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        match (&item.source, &self.source) {
-            (Some(_), Some((_, state))) => div()
-                .id("item-source")
-                .test_support()
-                // Tab and shift-Tab move focus on, as from any other
-                // control: the text takes no indent, being read-only.
-                .capture_action(|_: &IndentInline, window, cx| {
-                    window.focus_next(cx);
-                    cx.stop_propagation();
-                })
-                .capture_action(|_: &OutdentInline, window, cx| {
-                    window.focus_prev(cx);
-                    cx.stop_propagation();
-                })
-                .child(
-                    Textarea::new(state)
-                        .readonly(true)
-                        .aria_label(SOURCE)
-                        .font_family(theme.mono_font_family.clone())
-                        .text_sm()
-                        .h(px(320.)),
-                )
-                .relative()
-                .child(
-                    self.scroll
-                        .marker(&gpui_kit::Focusable::focus_handle(state.read(cx), cx)),
-                )
-                .into_any_element(),
-            // The text is made at the next frame.
-            (Some(_), None) => div().into_any_element(),
-            (None, _) => text("item-source-missing", SOURCE_NOT_UTF8.to_owned())
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .into_any_element(),
-        }
-    }
-
-    /// The comments in list order, each indented by its depth.
-    fn discussion(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let comments = self.model.comments()?;
-        let muted = cx.theme().muted_foreground;
-        let status = self.status("comments", comments, cx);
-        let rows = comments
-            .rows()
-            .map(|list: &CommentListDto| {
-                list.items
-                    .iter()
-                    .enumerate()
-                    .map(|(ix, comment)| {
-                        let mut entry = v_flex().id(("comment", ix)).test_support().gap_1().child(
-                            h_flex()
-                                .gap_2()
-                                .child(
-                                    text(("comment-author", ix), comment_author(comment)).text_sm(),
-                                )
-                                .children(comment.created_at.clone().map(|at| {
-                                    text(("comment-time", ix), at).text_xs().text_color(muted)
-                                })),
-                        );
-                        if let Some(body) = comment.body.clone() {
-                            entry = entry.child(text(("comment-body", ix), body).text_sm());
-                        }
-                        if comment.id.is_none() {
-                            entry = entry
-                                .child(text(("comment-path", ix), comment.path.clone()).text_xs())
-                                .child(
-                                    text(
-                                        ("comment-problem", ix),
-                                        comment
-                                            .problems
-                                            .iter()
-                                            .map(|problem| problem.code.as_str())
-                                            .collect::<Vec<_>>()
-                                            .join(", "),
-                                    )
-                                    .text_xs(),
-                                );
-                        }
-                        div()
-                            .pl(px(COMMENT_INDENT * comment.depth as f32))
-                            .child(entry)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        Some(
-            v_flex()
-                .id("discussion")
-                .gap_2()
-                .child(div().text_sm().child("Discussion"))
-                .child(status)
-                .children(rows),
-        )
-    }
-
-    /// The actions of later releases, each shown and unavailable.
-    fn later(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = cx.theme().muted_foreground;
-        h_flex()
-            .flex_wrap()
-            .gap_2()
-            .children(LATER.iter().enumerate().map(|(ix, action)| {
-                v_flex()
-                    .child(
-                        div()
-                            .id(("later-action", ix))
-                            .test_support()
-                            .aria_label(*action)
-                            .child(
-                                Button::new(("later-button", ix))
-                                    .label(*action)
-                                    .disabled(true),
-                            ),
-                    )
-                    .child(
-                        text(("later-note", ix), LATER_NOTE)
-                            .text_xs()
-                            .text_color(muted),
-                    )
-            }))
+        .title_or(&fallback)
+        .to_owned()
     }
 }
 
 impl Render for ItemPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_source(window, cx);
+        // An Adopt… whose ID has landed opens its view.
+        self.sync_adoption(window, cx);
+        // A picker goes once its sheet has closed (Task 21 fix 1).
+        self.picker_follows_sheet(window, cx);
+        // Before the read editor takes a new read: Edit compares the two
+        // (R-65).
+        self.sync_edit(window, cx);
+        // The review takes the read it opened on.
+        self.sync_review(window, cx);
+        self.sync_read(window, cx);
+        self.sync_discussion(window, cx);
+        self.sync_composers(window, cx);
+        self.sync_changed(cx);
         let item = self.model.item().rows().cloned();
-        let identity = self.identity(item.as_ref(), cx);
-        let status = self.status("item", self.model.item(), cx);
-        let not_refreshed = self.not_refreshed(cx);
-        // A ticket's relationships, beside its fields once it is read.
-        let relationships = match &item {
-            Some(_) => self.relationships_panel(window, cx),
-            None => None,
+        let header = self.header(item.as_ref(), window, cx);
+        // An item tab's details are in its sheet. A file read by its path
+        // has no sheet, so its page keeps D1's; a nonconforming file shows
+        // its problems in "Needs fixing".
+        let inspect = matches!(self.model.target(), OpenTarget::Inspect { .. });
+        let identity = inspect.then(|| self.identity(item.as_ref(), cx));
+        // While a session lives, kept or not, its text is the edit editor's;
+        // and a new item's draft is opening in it.
+        let section = if self.has_session() || self.opening_new_item() {
+            None
+        } else {
+            self.draft_section(window, cx)
         };
-        if relationships.is_none() {
-            // No row is drawn, so none keeps its focus.
-            self.row_focus.clear();
-        }
-        let body = item.as_ref().map(|item| {
-            v_flex()
-                .gap_3()
-                .child(self.provenance(item, cx))
-                .child(self.fields(item, cx))
-                .children(relationships)
-                .child(self.problems(item, cx))
-                .child(self.metadata(item, cx))
-                .child(self.source(item, cx))
-        });
-        let discussion = self.discussion(cx);
+        let body = match item.as_ref() {
+            Some(item) => {
+                let details = inspect.then(|| {
+                    v_flex()
+                        .gap_3()
+                        .child(self.provenance(item, cx))
+                        .child(self.fields(item, cx))
+                        .children((!banners::nonconforming(item)).then(|| self.problems(item, cx)))
+                        .child(self.metadata(item, &[], cx))
+                });
+                // An item tab reads its body in the read view (decision
+                // 17); a file read by its path keeps D1's source view
+                // (R-64). The repair view takes the place of either.
+                let text = if let Some(repairing) = self.repair_view(cx) {
+                    repairing
+                } else if inspect {
+                    self.source(item, cx)
+                } else if let Some(editing) = self.edit_view(cx) {
+                    editing
+                } else {
+                    self.read_body(item, cx)
+                };
+                Some(v_flex().gap_3().children(details).child(text))
+            }
+            // A new item not created yet has no item to read: its edit
+            // editor is the page (R-42). Repair text stays shown when a
+            // reload of its file fails.
+            None => self
+                .repair_view(cx)
+                .or_else(|| self.edit_view(cx))
+                .map(|editing| v_flex().gap_3().child(editing)),
+        };
+        // D2's restored draft at the top of the page (R-38); its banner is
+        // in the header's slot.
+        let content = v_flex()
+            .gap_3()
+            .children(identity)
+            .children(section)
+            .children(body);
+        // The repair view's text takes every key typed into it, `e` too.
+        let viewing = !inspect && self.edit.phase() == Phase::Viewing && self.repair.is_none();
+        let page = self.page.render(content, &self.scroll, viewing, window, cx);
+        let discussion = self.discussion_section(window, cx);
+        let over = self.over_region(cx);
+        // No zero minimum: the pane is never shorter than its header, so a
+        // window too short for the header scrolls the content column.
+        // The toolbar sits under the header, in the content region, so its
+        // Home and End come before the region's.
         v_flex()
             .id("item-view")
             .test_support()
-            .gap_3()
-            .child(identity)
-            .child(status)
-            .children(not_refreshed)
-            .children(body)
-            .children(discussion)
-            .child(self.later(cx))
+            .key_context(ITEM_TAB_CONTEXT)
+            .on_action(cx.listener(|pane, _: &Edit, window, cx| {
+                if !pane.edit_requested(window, cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|pane, _: &ToggleRich, _, cx| {
+                if !pane.toggle_rich(cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|pane, _: &Save, window, cx| {
+                if !pane.save_requested(window, cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|pane, _: &ShareItem, window, cx| {
+                if !pane.share_item(window, cx) {
+                    cx.propagate();
+                }
+            }))
+            .flex_1()
+            .w_full()
+            .child(header)
+            .children(self.toolbar_view())
+            .child(page::region(&self.scroll, page, discussion, over, cx))
     }
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "item_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/frame_tests.rs"]
+mod frame_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/header_tests.rs"]
+mod header_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/sheet_tests.rs"]
+mod sheet_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/page_tests.rs"]
+mod page_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/discussion_tests.rs"]
+mod discussion_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/retiring_tests.rs"]
+mod retiring_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/images_tests.rs"]
+mod images_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/edit_tests.rs"]
+mod edit_tests;

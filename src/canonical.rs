@@ -1238,8 +1238,10 @@ fn validate_optional_text(value: &Option<String>, name: &str) -> Result<(), Vali
     Ok(())
 }
 
+/// Shifts the keys after `name` up, so the keys left keep their order.
+/// `Mapping::remove` would move the last key into its place.
 fn remove_known(values: &mut Mapping, name: &str) -> Option<Value> {
-    values.remove(Value::String(name.to_owned()))
+    values.shift_remove(Value::String(name.to_owned()))
 }
 
 fn insert_known(values: &mut Mapping, name: &str, value: impl Into<Value>) {

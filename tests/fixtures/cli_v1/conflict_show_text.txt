@@ -1,0 +1,8 @@
+operation: <operation-id>
+target: primary
+stage: primary
+state: conflict_pending
+next action: resolve
+observation: <observation>
+path: kind=ticket structure=regular token=<token-1> display=.manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAW/ticket.md
+path: kind=ticket structure=regular token=<token-2> display=.manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAX/ticket.md

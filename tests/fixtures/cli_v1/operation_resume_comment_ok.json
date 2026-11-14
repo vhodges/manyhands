@@ -1,0 +1,37 @@
+{
+  "code": "ok",
+  "command": "operation resume",
+  "data": {
+    "comment_id": "01ARZ3NDEKTSV4RRFFQ69G5FC2",
+    "conflict": null,
+    "created_by": "Clone A <clone-a@example.invalid>",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "parent_id": null,
+    "pending_reason": null,
+    "publication": "published",
+    "synchronization_id": "<synchronization-id>",
+    "type": "comment"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": "<commit-oid>",
+    "discovery": "current",
+    "integration": "not_requested",
+    "publication": "published",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

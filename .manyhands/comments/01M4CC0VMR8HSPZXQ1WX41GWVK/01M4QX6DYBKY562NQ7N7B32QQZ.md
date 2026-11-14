@@ -1,9 +1,10 @@
 ---
+id: 01M4QX6DYBKY562NQ7N7B32QQZ
+item_id: 01M4CC0VMR8HSPZXQ1WX41GWVK
+created_at: 2026-10-12T11:15:33Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4QX6DYBKY562NQ7N7B32QQZ"
-item_id: "01M4CC0VMR8HSPZXQ1WX41GWVK"
-created_at: "2026-10-12T11:15:33Z"
 ---
 
 Part B checkpoint (Tasks 5–14 and 12A: the mutation boundary, replay and

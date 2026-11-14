@@ -80,8 +80,6 @@ pub const CLOSURE: &str =
 pub fn commit(fixture: &TestRepository, paths: &[&str], seconds: i64) {
     let mut index = fixture.repository.index().unwrap();
     index.read(true).unwrap();
-    // Enabling commits the configuration without refreshing this index.
-    index.add_path(Path::new(".manyhands/config.toml")).unwrap();
     for path in paths {
         index.add_path(Path::new(path)).unwrap();
     }
@@ -156,13 +154,6 @@ pub fn index(data_directory: &Path) -> Connection {
 
 /// Creates the item worktree for a new document and saves it there.
 pub fn create_document_context(service: &RepositoryService, root: &Path, id: &str, path: &str) {
-    // Enabling commits the configuration without refreshing the Git index,
-    // and a context is not prepared while that path looks changed.
-    let repository = git2::Repository::open(root).unwrap();
-    let mut index = repository.index().unwrap();
-    index.read(true).unwrap();
-    index.add_path(Path::new(".manyhands/config.toml")).unwrap();
-    index.write().unwrap();
     let outcome = service
         .save_document(SaveDocumentRequest {
             target: AuthoringTarget {

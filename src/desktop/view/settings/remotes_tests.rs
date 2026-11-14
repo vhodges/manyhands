@@ -6,7 +6,7 @@
 //! add that Retry completes under the same request; and a remote URL's
 //! credential kept out of everything shown.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use gpui_kit::{
     Entity, FocusHandle, TestAppContext,
@@ -22,15 +22,20 @@ use super::{
     location_line, selection_line,
 };
 use crate::desktop::{
+    model::activity::{
+        copy::effects_text,
+        rows::{ActivityAction, RowKey},
+    },
     services::{
         ReadKind,
         requests::{DesktopRequestId, Intent, RequestState},
     },
     test_support::fixtures::{Fixture, remote_names, remote_url, remove_remote_through},
     view::{
+        activity_support::{act, label_of, offered, refresh, request, row as log_row},
         confirm::{CONFIRM, PREPARE_AGAIN},
         harness::{Shell, key, wait_until},
-        operations::{effects_text, recovery_id, request_id},
+        workspace::Region,
     },
 };
 
@@ -56,7 +61,7 @@ fn remotes(fixture: Fixture, root: &Path, cx: &mut TestAppContext) -> Shell {
 fn page(shell: &Shell, cx: &mut TestAppContext) -> Entity<RemotesPage> {
     let host = shell
         .workspace
-        .read_with(cx, |workspace, _| workspace.settings.clone());
+        .read_with(cx, |workspace, _| workspace.settings().clone());
     host.read_with(cx, |host, _| host.remotes.clone())
         .expect("the Remotes page is made")
 }
@@ -267,19 +272,36 @@ async fn an_added_url_with_a_password_is_kept_out_of_everything_shown(cx: &mut T
         "{fields:?}"
     );
     shell.keys("secondary-4", cx);
-    assert_eq!(
-        shell.label(request_id(id, "command"), cx).as_deref(),
-        Some(
-            Intent::RemoteAdd {
-                root: PathBuf::new(),
-                name: String::new(),
-                url: String::new()
-            }
-            .label()
-        )
+    assert!(
+        shell.present(Region::Operations.id(), cx),
+        "Activity is drawn"
     );
+    refresh(&shell, cx);
+    assert!(matches!(
+        request(&shell, id, cx).intent,
+        Intent::RemoteAdd { .. }
+    ));
+    let entry = log_row(&shell, &RowKey::Request(id), cx).expect("the add's entry is listed");
+    let texts: Vec<&str> = [
+        Some(entry.row.title.as_str()),
+        entry.row.description.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(entry.row.detail.iter().map(String::as_str))
+    .collect();
+    assert!(
+        texts.iter().all(|text| !text.contains(SENTINEL)),
+        "{texts:?}"
+    );
+    // The list draws the row once the pane has applied it.
+    crate::desktop::view::activity_support::drawn(&shell, cx);
     let shown = window_text(&shell, cx);
     assert!(!shown.is_empty());
+    assert!(
+        shown.iter().any(|text| text.contains(&entry.row.title)),
+        "the add's row is drawn, so the scan reads it: {shown:?}"
+    );
     assert!(
         shown.iter().all(|text| !text.contains(SENTINEL)),
         "{shown:?}"
@@ -373,9 +395,16 @@ async fn selecting_a_remote_that_is_not_eligible_shows_its_typed_failure(cx: &mu
         shell.label("remotes-result-code", cx).as_deref(),
         Some(code.as_str())
     );
-    assert_eq!(
-        shell.label(request_id(id, "code"), cx).as_deref(),
-        Some(code.as_str())
+    refresh(&shell, cx);
+    let entry = log_row(&shell, &RowKey::Request(id), cx).expect("the select's entry is listed");
+    assert!(
+        entry
+            .row
+            .detail
+            .iter()
+            .any(|line| line.starts_with(&format!("{}: ", code.as_str()))),
+        "{:?}",
+        entry.row.detail
     );
     assert!(!listed(&shell, &root)[0].selected_for_publication);
     assert_eq!(
@@ -667,21 +696,30 @@ async fn a_partial_add_is_completed_by_retry_under_the_same_request(cx: &mut Tes
             (request.request_id, retry, effects_text(effects))
         })
     };
-    assert_eq!(
-        shell.label(request_id(id, "code"), cx).as_deref(),
-        Some(code.as_str())
+    refresh(&shell, cx);
+    let entry = RowKey::Request(id);
+    let detail = log_row(&shell, &entry, cx)
+        .expect("the partial add's entry is listed")
+        .row
+        .detail;
+    assert!(
+        detail
+            .iter()
+            .any(|line| line.starts_with(&format!("{}: ", code.as_str()))),
+        "{detail:?}"
     );
-    assert_eq!(
-        shell.label(request_id(id, "effects"), cx).as_deref(),
-        Some(effects.as_str())
+    assert!(
+        detail.contains(&format!("Effects: {effects}")),
+        "{detail:?}"
     );
-    assert!(shell.present(recovery_id(id, retry), cx));
+    let retry_label = label_of(&shell, &entry, &ActivityAction::Recovery(id, retry), cx);
+    assert!(offered(&shell, &entry, &retry_label, cx).is_some_and(|offer| offer.enabled));
     assert_eq!(remote_url(&root, "publish").as_deref(), Some(SSH_URL));
 
     shell
         .backend
         .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
-    shell.click(recovery_id(id, retry), cx);
+    act(&shell, &entry, &retry_label, cx);
     shell
         .until(cx, move |operations| {
             operations.request(id).is_some_and(|request| {
@@ -722,6 +760,40 @@ fn the_page_lists_the_selected_repository_or_the_one_chosen(cx: &mut TestAppCont
     shell.click(("remotes-choose", ix), cx);
     assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
     assert_eq!(shell.rows("remote-name", cx), ["origin"]);
+}
+
+/// Share… of another repository opens the page on that one, though the
+/// page already works on the last: a publication remote is never chosen
+/// for the wrong repository. The normal open keeps what it works on.
+#[gpui_kit::test]
+fn opening_remotes_on_a_repository_shows_that_repository_even_after_another(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    let b = fixture.create_repository("b");
+    fixture.add_remote(&a, "origin", HTTPS_URL);
+    fixture.add_remote(&b, "upstream", SSH_URL);
+    let shell = remotes(fixture, &a, cx);
+    assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&a))));
+    shell.click("settings-close", cx);
+
+    shell.select(&b, cx);
+    let host = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.settings().clone());
+    shell.visual(cx).update(|window, cx| {
+        host.update(cx, |host, cx| host.open_remotes_on(b.clone(), window, cx))
+    });
+    shell.run(cx);
+    assert!(shell.present("settings-remotes", cx));
+    assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
+    assert_eq!(shell.rows("remote-name", cx), ["upstream"]);
+
+    // The sidebar's open keeps the repository the page works on.
+    shell.select(&a, cx);
+    shell.click(("settings-page", 1usize), cx);
+    assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
 }
 
 /// While a dialog is open, the page's handlers do nothing: no add,

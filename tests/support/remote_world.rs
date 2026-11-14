@@ -126,6 +126,13 @@ pub fn advance(
     fixed(repo.reference(reference, new, true, "owned fixture advance"))?;
     Ok(new)
 }
+/// Whether a world's key asks for its passphrase.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KeyProtection {
+    Passphrase,
+    None,
+}
+
 pub struct World {
     pub server: SshRemoteFixture,
     pub service: RepositoryService,
@@ -137,19 +144,36 @@ pub struct World {
 }
 impl World {
     pub fn new() -> Result<Self, FixtureError> {
+        Self::with_key(KeyProtection::Passphrase)
+    }
+
+    /// `new`, with a key that needs no passphrase. Decrypting a protected key
+    /// is most of a row's time, so a row that doesn't ask about unlocking
+    /// needn't pay it on every connection.
+    pub fn plain_key() -> Result<Self, FixtureError> {
+        Self::with_key(KeyProtection::None)
+    }
+
+    fn with_key(protection: KeyProtection) -> Result<Self, FixtureError> {
         let server = SshRemoteFixture::start()?;
         let plain = fixed(std::fs::read(server.client_key_path()))?;
         let key = fixed(ssh_key::PrivateKey::read_openssh_file(
             server.client_key_path(),
         ))?;
-        let encrypted = fixed(
-            fixed(key.encrypt(&mut ssh_key::rand_core::OsRng, PASSWORD))?
-                .to_openssh(ssh_key::LineEnding::LF),
-        )?;
-        fixed(std::fs::write(
-            server.client_key_path(),
-            encrypted.as_bytes(),
-        ))?;
+        // Encrypting is slow, and a plain key's world has no use for the result.
+        let encrypted = if protection == KeyProtection::Passphrase {
+            let encrypted = fixed(
+                fixed(key.encrypt(&mut ssh_key::rand_core::OsRng, PASSWORD))?
+                    .to_openssh(ssh_key::LineEnding::LF),
+            )?;
+            fixed(std::fs::write(
+                server.client_key_path(),
+                encrypted.as_bytes(),
+            ))?;
+            Some(encrypted.as_bytes().to_vec())
+        } else {
+            None
+        };
         let directory = fixed(tempfile::tempdir())?;
         let root = directory.path().join("clone-a");
         let repo = clone_owned(&server, &root)?;
@@ -200,12 +224,12 @@ impl World {
             .collect::<Vec<_>>();
         let mut probes = vec![
             plain,
-            encrypted.as_bytes().to_vec(),
             PASSWORD.as_bytes().to_vec(),
             server.url().into_bytes(),
             HOSTILE.as_bytes().to_vec(),
             BODY.as_bytes().to_vec(),
         ];
+        probes.extend(encrypted);
         probes.extend(private_fragments);
         ssh_privacy::save(&probes)?;
         let world = Self {

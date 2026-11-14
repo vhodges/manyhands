@@ -22,7 +22,9 @@ use super::{
     command::Command,
     confirm::{Row, Seen},
     context::context_names,
-    dto::{HostReplacementDto, MutationDataDto, PreviewDetailsDto, PreviewEffect},
+    dto::{
+        HostReplacementDto, LifecycleBlockedDto, MutationDataDto, PreviewDetailsDto, PreviewEffect,
+    },
     evidence::{PathEvidence, Position},
     identity::{IntentDigestBuilder, RequestId, ScopeKey},
     observe::ObservationDigest,
@@ -32,17 +34,28 @@ use super::{
 };
 
 pub(crate) mod abandon;
+pub(crate) mod comment;
+pub(crate) mod conflict;
+pub(crate) mod context;
 pub(crate) mod document;
 pub(crate) mod folder;
 pub(crate) mod host;
 pub(crate) mod index;
 pub(crate) mod key;
+pub(crate) mod lifecycle;
+pub(crate) mod local_sync;
+pub(crate) mod poll;
+pub(crate) mod poll_retirement;
 pub(crate) mod remote;
+pub(crate) mod remote_resolve_history;
 pub(crate) mod repair;
 pub(crate) mod repo;
 pub(crate) mod repo_identity;
 pub(crate) mod repo_remove;
+pub(crate) mod republish;
+pub(crate) mod resolve_history;
 pub(crate) mod resume;
+pub(crate) mod retire;
 pub(crate) mod save;
 pub(crate) mod sync;
 pub(crate) mod ticket;
@@ -280,12 +293,27 @@ pub(crate) struct Answer {
     /// stopped the request.
     pub(crate) offers_nothing: bool,
     /// What a preview of `host approve` is refused with for a host that
-    /// has a pin: the one data a `prepare` gives that is no preview. No
-    /// answer of `execute` holds it.
+    /// has a pin: data a `prepare` gives that is no preview, as
+    /// `lifecycle_blocked` is. No answer of `execute` holds it.
     pub(crate) host_replacement: Option<Box<HostReplacementDto>>,
+    /// What a preview of `document promote` or `ticket close` is refused
+    /// for. An answer of `execute` holds the same blockers in its `data`.
+    pub(crate) lifecycle_blocked: Option<LifecycleBlockedDto>,
 }
 
 impl Answer {
+    /// Retirement cancellation after an owned/possible removal is partial,
+    /// not an empty cancelled refusal. Other commands retain their old rule.
+    pub(crate) fn cancelled_outcome(&self) -> bool {
+        self.code == ResultCode::Cancelled
+            && !(self.local_change
+                && matches!(
+                    self.data,
+                    Some(
+                        MutationDataDto::ContextRetirement(_) | MutationDataDto::PollRetirement(_)
+                    )
+                ))
+    }
     /// A request that stopped having done nothing.
     pub(crate) fn stopped(code: ResultCode) -> Self {
         Self {
@@ -296,6 +324,7 @@ impl Answer {
             local_change: false,
             offers_nothing: false,
             host_replacement: None,
+            lifecycle_blocked: None,
         }
     }
 
@@ -457,6 +486,24 @@ impl Accepted {
         })
     }
 
+    /// The request as the binding of a synchronization it takes up is to
+    /// see it: with that synchronization, `operation_id`, in place of its
+    /// own operation, and with nothing expected at a path. A resume and a
+    /// resolution's continuation take a synchronization up so, and a
+    /// comment's submission its child. The position stays the request's,
+    /// on the branch the synchronization synchronizes.
+    pub(crate) fn taking_up(&self, operation_id: OperationId) -> Self {
+        Self {
+            request_id: self.request_id,
+            attempt: self.attempt,
+            scope: self.scope.clone(),
+            family: Some(OperationFamily::Remote),
+            operation_id,
+            position: self.position.clone(),
+            expected: None,
+        }
+    }
+
     /// The request's operation, as its record and its results name it:
     /// none for a request that has no operation.
     pub(crate) fn operation(&self) -> Option<RequestOperation> {
@@ -518,6 +565,9 @@ impl Accepted {
         &self,
         service: &RepositoryService,
     ) -> Result<JournalRow, ReadError> {
+        if let Some(row) = super::local_control::journal(service, self.request_id)? {
+            return Ok(row);
+        }
         match self.family {
             Some(family) => service.journal_row(family, &self.scope, self.operation_id),
             None => Ok(JournalRow::Absent),
@@ -745,7 +795,32 @@ pub(crate) enum EndedWithoutCheckpoint {
     SaysNothing,
 }
 
+/// The whole effect of a request that is one write in its record's own
+/// transaction, as a policy verb's is: the boundary inserts the
+/// record, calls this and finishes the record, and commits all of it or none.
+pub(crate) trait OneTransaction {
+    /// Makes the write and answers with what it left, for the record to store.
+    /// An `Err` rolls it back, with the record.
+    fn write(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        scope: &ScopeKey,
+    ) -> Result<Answer, ReadError>;
+}
+
 pub(crate) trait Binding {
+    fn admission_root(&self) -> Option<&Path> {
+        None
+    }
+    fn admit(
+        &self,
+        _service: &RepositoryService,
+        tx: &rusqlite::Transaction<'_>,
+        accepted: &Accepted,
+    ) -> Result<(), ReadError> {
+        super::super::context_retirement::pass::require_unreserved(tx, accepted.request_id)
+            .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))
+    }
     /// The command. Its name is what the envelope gives.
     fn command(&self) -> Command;
 
@@ -798,6 +873,14 @@ pub(crate) trait Binding {
         Ok(super::confirm::scope_key(self.place()))
     }
 
+    /// Settles what the request names before its identity is taken from
+    /// `target` and `fields`, for a command whose input can name one thing
+    /// by more than one ID. Nothing changes by default. An answer refuses
+    /// the request before its record is read.
+    fn settle_target(&mut self, _service: &RepositoryService) -> Result<(), Answer> {
+        Ok(())
+    }
+
     /// The request's target within its repository.
     fn target(&self) -> String;
 
@@ -815,6 +898,13 @@ pub(crate) trait Binding {
     /// `Err` answers the request without accepting it: nothing is
     /// recorded and no domain call is made.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer>;
+
+    /// The binding as one whose request is written in one transaction with its
+    /// record. Such a binding's `run`, `reenter` and `rerun` are never reached:
+    /// its record is never left accepted. `None` for every other binding.
+    fn one_transaction(&self) -> Option<&dyn OneTransaction> {
+        None
+    }
 
     /// Makes the domain call for an accepted request, under the recorded
     /// operation ID and expectation, and reports what the repository shows
@@ -897,6 +987,9 @@ impl Recorded {
 /// row that could not be read is taken to be there: the effects still
 /// have to be shown by the repository.
 pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestRecord) -> Recorded {
+    if let Ok(Some(effects)) = super::local_control::effects(service, record.request_id) {
+        return Recorded::of(effects);
+    }
     // A host approval has no operation, so no row says an attempt of it
     // ran, and it keeps its record accepted when it stored the pin and
     // then failed: the pin store is asked instead. A pin is shown by no
@@ -912,6 +1005,20 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
     let Some(accepted) = Accepted::of_record(record, record.attempt) else {
         return Recorded::nothing();
     };
+    // A parent usually has no row, and what it did is its own to say.
+    match Command::parse(&record.command) {
+        Some(Command::DocumentPromote) => {
+            return Recorded::of(lifecycle::recorded_effects::<lifecycle::Promote>(
+                service, &accepted,
+            ));
+        }
+        Some(Command::TicketClose) => {
+            return Recorded::of(lifecycle::recorded_effects::<lifecycle::Close>(
+                service, &accepted,
+            ));
+        }
+        _ => {}
+    }
     let journal = accepted.journal_row(service);
     let ran = match journal {
         Some(JournalRow::Absent) => false,
@@ -921,6 +1028,7 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         return Recorded::nothing();
     }
     match Command::parse(&record.command) {
+        Some(Command::LocalContextSync | Command::LocalContextResolve) => Recorded::nothing(),
         Some(Command::DocumentCreate | Command::DocumentSave | Command::DocumentMove) => {
             Recorded::of(document::recorded_effects(record, &accepted))
         }
@@ -965,30 +1073,92 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // An abandon has no operation, so none is ever found to have
         // run: this is not reached, and nothing is claimed.
         Some(Command::OperationAbandon) => Recorded::nothing(),
-        Some(Command::ItemSync | Command::RepoSync) => {
+        // A republish's operation is a synchronization of the context, and
+        // what it published is shown as a synchronization's is.
+        Some(Command::ItemSync | Command::RepoSync | Command::ItemRepublish) => {
             Recorded::of(sync::recorded_effects(service, &accepted))
         }
+        // The comment's write and checkpoint, as its binding and its
+        // context show them, and what its synchronization is known to
+        // have published.
+        Some(Command::CommentAdd) => Recorded::of(comment::recorded_effects(service, &accepted)),
         // A resume has no operation, so none is ever found to have run:
         // this is not reached, and nothing is claimed. What the
         // operation it names did is that operation's request's to say.
         Some(Command::OperationResume) => Recorded::nothing(),
+        // Nor has a resolution: this is not reached, and nothing is
+        // claimed. Its durable state is its attempt, and a refusal under
+        // its request ID carries no effects (R-32).
+        Some(Command::ConflictResolve) => Recorded::nothing(),
         // An identity has no operation either: this is not reached, and
         // nothing is claimed. It is set whole or not at all.
         Some(Command::RepoIdentitySet) => Recorded::nothing(),
         // Answered above, from the pin store: this is not reached.
         Some(Command::HostApprove | Command::HostReplace) => Recorded::nothing(),
+        // A history resolution is one registry transaction: nothing of it
+        // is ever done with work remaining.
+        Some(Command::ItemResolveHistory | Command::RemoteResolveHistory) => Recorded::nothing(),
         // A directory is shown by no effect, and nothing records that
         // the request made one: its one row is its refresh's, and a
         // refresh in flight has made no durable effect. A directory at
         // the request's path may have been there before it, so none is
         // claimed for it.
         Some(Command::FolderCreate) => Recorded::nothing(),
+        // A work context is shown by no effect. The row says whether part
+        // of it was made with the operation not yet ended.
+        Some(Command::ContextPrepare) => Recorded {
+            effects: Effects::not_requested(),
+            local_change: context::changed_and_unfinished(journal.as_ref()),
+        },
+        // A context that was removed is shown by no effect either. The
+        // row says whether part of it was removed with the release not
+        // yet ended.
+        Some(Command::ContextRelease) => Recorded {
+            effects: Effects::not_requested(),
+            local_change: context::released_and_unfinished(journal.as_ref()),
+        },
+        Some(Command::ContextRetire) => Recorded {
+            effects: Effects::not_requested(),
+            local_change: retire::recorded_change(service, &accepted),
+        },
         Some(Command::DocumentRepair | Command::TicketRepair) => {
             Recorded::of(repair::recorded_effects(record, &accepted))
+        }
+        // Answered above, from the parent record: this is not reached.
+        Some(Command::DocumentPromote | Command::TicketClose) => Recorded::nothing(),
+        // A poll names refs and items in its data and has no effect to show:
+        // what it moved of an unfinished request is its report's to say.
+        Some(Command::PollOnce) => Recorded::nothing(),
+        // A policy verb's record is finished in the transaction that wrote
+        // it, so none is ever seen unfinished: this is not reached.
+        Some(Command::PollConfigure | Command::PollPause | Command::PollResume) => {
+            Recorded::nothing()
         }
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }
+}
+
+/// The position of the repository's primary branch, as a lifecycle request's
+/// own is.
+pub(super) fn primary_position(root: &Path) -> Result<Position, Answer> {
+    let configuration = match super::super::read_configuration_for(
+        root,
+        super::super::RepositoryOperation::RepositorySnapshot,
+    )
+    .map_err(refused)?
+    {
+        super::super::ConfigurationInspection::Valid(configuration) => configuration,
+        super::super::ConfigurationInspection::Missing
+        | super::super::ConfigurationInspection::Invalid(_) => {
+            return Err(Answer::stopped(ResultCode::InvalidConfiguration));
+        }
+    };
+    Position::of(
+        root,
+        &format!("refs/heads/{}", configuration.primary_branch),
+    )
+    .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))
 }
 
 #[cfg(test)]

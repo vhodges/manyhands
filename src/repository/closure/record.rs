@@ -130,7 +130,7 @@ impl From<ParentStep> for ClosureStep {
 
 pub(in super::super) type Refusal = parent::Refusal<ClosureBlocker>;
 /// The design's blocker order; bit `i` of the stored mask is entry `i`.
-pub(in super::super) const CLOSURE_BLOCKERS: [ClosureBlocker; 21] = [
+pub(in super::super) const CLOSURE_BLOCKERS: [ClosureBlocker; 22] = [
     ClosureBlocker::NotATicket,
     ClosureBlocker::ContextMissing,
     ClosureBlocker::ContextNonconforming,
@@ -152,6 +152,7 @@ pub(in super::super) const CLOSURE_BLOCKERS: [ClosureBlocker; 21] = [
     ClosureBlocker::PrimaryReopened,
     ClosureBlocker::TicketInvalidAfterClosure,
     ClosureBlocker::IdentityRequired,
+    ClosureBlocker::HistoryUnresolved,
 ];
 impl Blocker for ClosureBlocker {
     const ORDER: &'static [Self] = &CLOSURE_BLOCKERS;
@@ -223,6 +224,8 @@ impl std::fmt::Debug for ClosureRecord {
     }
 }
 
+/// The table parents are kept in.
+pub(in super::super) const TABLE: &str = "ticket_closures";
 const SCHEMA:&str="CREATE TABLE ticket_closures (
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id)=26),
@@ -244,7 +247,7 @@ const SCHEMA:&str="CREATE TABLE ticket_closures (
     cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1)),
     updated_at INTEGER NOT NULL CHECK(updated_at>=0),
     refusal_category TEXT CHECK(refusal_category IN ('blocked','external_change','reconfirmation_required')),
-    refusal_blockers INTEGER CHECK(refusal_blockers BETWEEN 1 AND 2097151),
+    refusal_blockers INTEGER CHECK(refusal_blockers BETWEEN 1 AND 4194303),
     closure_kind TEXT CHECK(closure_kind IN ('record','existing')),
     closed_at TEXT CHECK(closed_at IS NULL OR (typeof(closed_at)='text' AND length(closed_at)=20 AND closed_at GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]Z')),
     closure_oid TEXT CHECK(length(closure_oid)=40 AND closure_oid NOT GLOB '*[^0-9a-f]*' AND closure_oid!='0000000000000000000000000000000000000000'),
@@ -263,9 +266,11 @@ const SCHEMA:&str="CREATE TABLE ticket_closures (
 )";
 const INDEX: &str = "CREATE UNIQUE INDEX ticket_closures_unfinished ON ticket_closures(repository_id,item_id) WHERE step NOT IN ('complete','abandoned','superseded')";
 const MARKER: &str = "cycle_10_ticket_closures";
+const BLOCKERS_MARKER: &str = "closure_refusal_blockers_v2";
 
 /// All or nothing inside the registry-schema transaction, marked once.
 pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
+    let mut created = false;
     let marked: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
@@ -283,6 +288,26 @@ pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryEr
             .map_err(|_| state::recovery_required())?;
         tx.execute("INSERT INTO registry_migrations(name) VALUES(?1)", [MARKER])
             .map_err(|_| state::recovery_required())?;
+        created = true;
+    }
+    let widened: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [BLOCKERS_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| state::recovery_required())?;
+    if !widened {
+        // The refusal mask CHECK gained a bit; rebuild a table that predates
+        // it. The index goes first so the rename cannot carry its name along.
+        if !created {
+            tx.execute_batch(&format!("DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO ticket_closures_before_blockers; {SCHEMA}; {INDEX}; INSERT INTO ticket_closures SELECT * FROM ticket_closures_before_blockers; DROP TABLE ticket_closures_before_blockers;")).map_err(|_| state::recovery_required())?;
+        }
+        tx.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [BLOCKERS_MARKER],
+        )
+        .map_err(|_| state::recovery_required())?;
     }
     validate_schema(tx)
 }
@@ -523,6 +548,11 @@ pub(in super::super) fn save_record(
     r: &ClosureRecord,
 ) -> Result<(), RepositoryError> {
     let old = read_record(tx, id, r.operation_id)?.ok_or_else(state::recovery_required)?;
+    if r.step != old.step
+        && super::super::local_sync::record::unfinished_context(tx, id, &r.item_id)?
+    {
+        return Err(state::recovery_required());
+    }
     if old.repository_id != r.repository_id
         || old.item_id != r.item_id
         || old.expectation != r.expectation
@@ -619,6 +649,9 @@ pub(in super::super) fn adopt_written_closure(
     let Some(closure) = r.closure_oid else {
         return Err(state::recovery_required());
     };
+    if super::super::local_sync::record::unfinished_context(tx, repository_id, &r.item_id)? {
+        return Err(state::recovery_required());
+    }
     if base.is_zero() || r.closure_kind != Some(ClosureKind::Record) {
         return Err(state::recovery_required());
     }
@@ -757,6 +790,9 @@ pub(in super::super) fn context_synchronization_unfinished(
     id: i64,
     item: &ItemId,
 ) -> Result<bool, RepositoryError> {
+    if super::super::local_sync::record::unfinished_context(db, id, item)? {
+        return Ok(true);
+    }
     db.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND action='synchronize_context' AND kind='ticket' AND item_id=?2 AND phase NOT IN ('completed','interrupted','cancelled','failed'))",params![id,item.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())
 }
 pub(in super::super) fn request_cancellation(
@@ -775,6 +811,12 @@ pub(in super::super) fn clear_cancellation(
 }
 
 impl ParentRecord for ClosureRecord {
+    fn supersedable(&self) -> bool {
+        supersedable(self)
+    }
+    fn written_checkpoint(&self) -> Option<Oid> {
+        self.closure_oid
+    }
     const KIND: LifecycleKind = KIND;
     fn decode(row: &rusqlite::Row<'_>) -> Result<Self, RepositoryError> {
         decode(row)

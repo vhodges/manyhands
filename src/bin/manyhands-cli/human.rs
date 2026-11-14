@@ -21,13 +21,13 @@ fn count(value: Option<u64>) -> String {
     value.map_or_else(|| "-".to_owned(), |value| value.to_string())
 }
 
-fn incomplete(output: &mut Human, complete: bool) {
+pub(super) fn incomplete(output: &mut Human, complete: bool) {
     if !complete {
         output.notes.push("The list is incomplete.".to_owned());
     }
 }
 
-fn index_note(output: &mut Human, state: &str) {
+pub(super) fn index_note(output: &mut Human, state: &str) {
     if matches!(state, "stale" | "never_refreshed") {
         output.notes.push(format!("Index is {state}."));
     }

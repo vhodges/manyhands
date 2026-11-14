@@ -1,0 +1,393 @@
+---
+title: "Wave 03 C5: CLI Completion And One-Shot Polling"
+date: 2026-10-31
+status: "review-ready"
+author: "Claude"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M69C6RZ2K0Q8DWPXA3EY81DH"
+---
+
+# Wave 03 C5: CLI Completion And One-Shot Polling
+
+## Status
+
+**Review-ready, 2026-11-04,** at `4165e25e` (main `c2a34494` merged; merge-tree clean). Tasks 0–15 Step 3 are done; Step 4 (closure) and Step 5 (follow-ups) wait for the owner. The ticket stays **open**.
+
+- **Final gate (Task 15, AGENTS.md's tiers):** at `f59aceb6` the static gates, the fast tier and all eleven SSH-harness targets passed (mutation_remote 700 cases). After the D4 merge, the final reviews' fixes and decisions 35 and the F2 reversal, the fast tier and every SSH target those paths touch passed again (ledger, "Task 15: final gate"). `ticket_closure`, `comment_publication`, `ssh_fixture` and `--lib local_sync` were not rerun after `f59aceb6`, as no later change touches their paths.
+- **Reviews:** independent whole-branch spec and quality reviews at `f59aceb6`, then a scoped review of the last two rounds; every finding fixed or ruled.
+- **Not done here:** native CI (post-merge, with the owner's approval), the full `cargo test` suite (post-merge, per AGENTS.md), and the follow-up tickets, which need the owner's go-ahead.
+- **Known main issue:** `clippy --all-targets --features desktop` fails on main because D4's test modules need `desktop-test-support`.
+
+
+**Approved, 2026-10-31.** The owner approved the documents at `cddacc54` ("Docs are approved. Approved to proceed. Use sub agent drive development."), authorizing implementation, subagent-driven. The approval takes owner questions 1 and 3–6 at their written recommendations, named edits E-1 to E-15 and the per-command commit identity. Pushes beyond this branch, a PR, the merge, branch deletion, closure, `ticket save`, native CI and cleanup stay separately gated. Reviewed in three rounds; the edits after round 3 had no independent review.
+Implementation is in progress: Parts A and B and Part C through Task 14b (the inventory, the recovery tables and the document amendments) are on this branch; Task 15's full verification, review and handoff remain (updated 2026-11-03).
+
+- [Design](../plans/2026-10-31-wave-03-cli-05-completion-and-polling-design.md)
+- [Implementation plan](../plans/2026-10-31-wave-03-cli-05-completion-and-polling-implementation.md)
+
+Ticket: `01M4CC0VMXTNXNH78C11DYXS8H`. Worktree:
+`.manyhands/worktrees/01M4CC0VMXTNXNH78C11DYXS8H`. Branch:
+`manyhands/ticket/01M4CC0VMXTNXNH78C11DYXS8H`. The branch held only its
+ticket file, 1270 commits behind main; `origin/main` at `a52273ff` was merged
+into it as `717b664d`, without conflicts and without a rebase.
+
+## Purpose And Authority
+
+Complete the approved headless command contract. After C5 a person or an
+agent can promote a document, close a ticket, repair a refused closure
+checkpoint through local synchronization, poll once and control polling
+policy through `manyhands-cli`, and every approved command is accounted for.
+This is the CLI contract gate.
+
+C5 changes the headless library, as an exception to track rules 5 and 6
+(decision 1).
+
+Authority, in order:
+
+1. The Wave 03 document: C5's scope, exclusions and exit evidence, and track
+   rules 1–7, with the exception of decision 1.
+2. The [CLI contract RFC](../RFC/cli-contract.md), as amended by C1–C4 and by
+   this Cycle's Document Amendments.
+3. The PRD's six end-to-end journeys (`docs/PRD/mvp.md`, "End-to-End
+   Acceptance Journeys").
+4. The Wave 02 Cycle 08, 09 and 10 contracts for polling, promotion and
+   closure, and the [closure-recovery gate](wave-03-closure-recovery-gate.md)
+   for local synchronization.
+5. The [ticket relationships RFC](../RFC/ticket-relationships-and-short-codes.md)
+   for readiness, and the runtime, authentication and test strategy RFCs.
+6. The F2 Cycle and design: the mutation boundary, replay, confirmation,
+   progress and cancellation.
+7. The C1–C4 Cycles and designs.
+
+## Entry Evidence And Dependency Boundary
+
+- **Wave 02.** Cycles 08, 09 and 10 are on main, with the domain APIs the
+  design's Baseline Facts cite.
+- **Gate.** `01M57SKVF6TQ3QM6AXJ35JGGSY` is closed and merged (`a372edb`).
+- **CLI track.** F1, F2 and C1–C4 are closed. C4's merge is on main at
+  `89c8383b`.
+- **API audit.** The Wave entry gate asks for the refresh before planning. As C4
+  did under its own decision, C5 refreshes the rows in Task 0 (owner question 4).
+- **Track independence.** C5 needs no desktop code. D5 consumes the lifecycle
+  bindings after C5 merges (decision 1). Whichever of the D-track Cycles is in
+  flight may conflict with C5 in counted inventories; those conflicts are
+  additive and are resolved on merge.
+
+## Scope
+
+**Library part (decision 1), limited to the files the plan lists:**
+
+- `document promote` and `ticket close` at the shared mutation boundary:
+  prepare, confirm, the ten-minute consent lifetime, replay, safe-point
+  cancellation and continuation of an unfinished operation.
+- `operation resume` routes for an unfinished promotion or closure.
+- `poll once`, `poll configure`, `poll pause` and `poll resume` at the
+  boundary, and an atomic policy update in place of a whole-tuple overwrite.
+- The made-ready report on `ticket close`.
+- A cancellation probe on the three domain calls, since none reaches them today.
+- The identity fix of `01M5MK57JKCSQFXBNZ8DBE548K` (decision 2) and the
+  `remote select` index fix of `01M669FJR27FRHCNPWAMD6VH4V` (decision 10). Their
+  tickets' acceptance governs, and both close with this Cycle.
+
+**CLI part:**
+
+- The six planned verbs become available.
+- `context observe-local`, `context sync-local`, `context show-local` and
+  `context resolve-local` enter the catalog (decision 3).
+- Each gets input and output schemas where it has them, help, human and JSON
+  output, goldens and exit mapping, and a slug beside the ULID wherever a ticket is
+  named (relationships RFC).
+
+**Contract gate:**
+
+- A test accounts for every approved command.
+- The RFC gains the recovery tables, with a golden behind each row
+  (decision 4).
+- All six CLI journey counterparts, with real repositories and SSH.
+- The Wave's named exit evidence.
+
+## Explicit Exclusions And Downstream Obligations
+
+- No CLI background scheduling or indexing, no desktop behaviour, no automatic
+  cleanup, and no new merge or transport policy (Wave).
+- No caller-chosen `closed_by` and no identity input on either verb
+  (decision 6).
+- `poll resume` does not lift the recovery suspension. Clearing it stays with
+  D6, and `resume_remote_polling_after_recovery` gets no CLI verb
+  (decision 5).
+- No winner for incompatible closures: they stay external-only (gate).
+- No abandonment of a pending remote conflict
+  (`01M4H33R34Z7C7EEKTY1ZCT950` stays on its ticket).
+- No fix for `01M66HFV44YXNQ7ANJVA16TQ1H`. The later-publication order selects
+  the key before the remote, so it isn't reached.
+- Real CLI-against-desktop overlap stays with G1 (track rule 4). Inside C5 a
+  second actor calling the library stands in for it.
+- Native CI runs after merge, on main, with its own authorization.
+- `01M57SBA7MKR9BZR7PYECSJ05G` (internal cleanups) and the other C4 follow-up
+  tickets stay on their tickets.
+- **D5 consumes** the lifecycle bindings and the local boundary, and **D6** the
+  polling bindings, as merged here. Both wait for C5's merge.
+- `context prepare` and `context release` stay outside the CLI inventory
+  (owner question 5).
+
+## Required Contract
+
+The design's verb sections are the detailed contract. In summary:
+
+1. **`document promote`, `ticket close`.** Confirmed. `--prepare` shows the
+   exact effects: the branch, primary, remote, whole-branch path changes,
+   integration, publication, cleanup and, for closure, `closed_by`. `--confirm`
+   executes exactly what was consented to, as Wave 02 Cycle 09's D6 binds it: with a remote,
+   the item's change set and the D2 relation, not the moving OIDs. Consent expires ten minutes after
+   creation; once accepted it stands for that request.
+2. **Retry.** Sending the same request again continues an unfinished
+   operation under its operation ID, including after a cancellation
+   (decision 8), unless it stopped with no record, when a new prepare follows. After integration consent is not rechecked and only publication
+   and cleanup run. `operation resume` names the request that holds the
+   operation, and continues it itself when no request record does. Nothing
+   repeats a merge, a closure checkpoint or a push that is already done.
+3. **Local-only success.** With no publication remote, promotion and closure
+   exit 0 with publication pending, and a later `repo sync` publishes.
+4. **Made-ready.** `ticket close` reports the open tickets that depend
+   directly on the closed ticket and are ready when the report is produced.
+   Readiness is the relationships RFC's: every dependency resolves to a
+   lifecycle-closed ticket. Status text plays no part. A state says when there is
+   no set: `index_pending`, `index_unavailable_final`, `not_computed` or `not_applicable`. A finished request's
+   report is stored, so a replay returns it unchanged. A retry evaluates again.
+5. **Local synchronization.** `context observe-local` issues the observation,
+   `context sync-local` takes it, `context show-local` inspects an operation
+   and reads a conflict's sides, and `context resolve-local` submits complete
+   sources against issued tokens. All of it follows the gate's contract: no
+   network, no primary change, no implicit context, frozen parents.
+6. **Polling.** `poll once` is one explicit fetch, clean fast-forward,
+   materialization and index pass that never pushes, checkpoints, merges or
+   cleans up, and leaves nothing running. A completed poll is `ok`, with each
+   target's disposition in its data. `poll configure` sets `interval_seconds` in
+   60–3600. `poll pause` sets the pause flag. `poll resume` clears it and makes an
+   eligible poll due (decision 11), clearing any stored deadline, and leaving the
+   recovery suspension and stored backoff value alone. Each policy verb writes one field
+   in its request's own transaction, so it can't overwrite another field, and a committed
+   request replays. Last commit wins (decision 15): a request that never committed is a
+   new write when resent. A poll's transport stop is final, and a new request polls
+   again.
+7. **Identity.** Both verbs use the repository's configured identity. An
+   unusable one counts as none. With none, the verb answers
+   `identity_required` with `repo.identity_set`. What follows depends on the stage,
+   per the design's table: a new prepare at prepare or when `closed_by` changes, and
+   the same request for a promotion or a context child that has begun.
+8. **Inventory.** Every approved command has its schemas, help, documented
+   exit behaviour, and a recovery row where it has a recoverable code.
+
+## Acceptance And Exit Evidence
+
+| Wave exit evidence | Required proof |
+| --- | --- |
+| All approved commands accounted for | Tests compare the catalog, the RFC tables and the `Command` set, less the two exempt desktop commands. Nothing stays `Planned`. Every verb's `--help --json` answers, C5's verbs have goldens, and each verb has an input schema or a no-input entry and an output schema. |
+| Dirty-primary blocking | Through the binary, a dirty primary blocks both verbs at prepare, naming the blocker. No ref moves. |
+| Stale consent | The consent is Wave 02 Cycle 09's D6 rule, which closure follows (corrected 2026-11-03: this row first said any primary move). With a remote, a primary advance that leaves the item's change set unchanged is accepted, and the confirm integrates onto it; a context change that changes the item's change set, any other change to the change set, or any primary move without a remote answers `external_change` at confirm. An expired confirmation answers `confirmation_expired` with a stored clock case. |
+| Push and cleanup failures | Two-clone SSH: a primary push refused after integration is exit 4, cleanup stays pending, and the context stays. A refused remote-branch deletion leaves cleanup pending. The same request then completes. |
+| No duplicate close or merge | After every retry path, primary holds exactly one merge and one closure checkpoint, and `closed_at` and `closed_by` keep their first values. |
+| Later primary publication | Local-only: both verbs exit 0 with publication pending. After `key select` and `remote select` on that repository, `repo sync` publishes the integrated commit, with no fixture seeding (decision 10). |
+| Safe explicit polling | `poll once` over SSH fast-forwards clean refs and materializes one new context exactly once. Dirty, divergent, malformed and remotely deleted contexts stay preserved, marked, and no push, checkpoint, merge or cleanup happens. |
+| Six journeys | The design's journey table, each asserting Git objects and canonical content. |
+| No resident worker | A named test proves, after `poll once`, `ticket close` and `document promote`, that the process exited, both pipes reach EOF and no child remains. |
+
+Also required:
+
+- **Made-ready.** Direct dependents only; a ticket with another open
+  dependency is left out; a dependent whose status text is `closed` is treated
+  by its lifecycle state; replay is identical; `index_pending` is honest.
+- **Local recovery.** A real refused closure checkpoint merge is repaired
+  through the context verbs and a retry of `ticket close`, with no manual Git
+  step and with the original closure authority kept.
+- **Identity.** `01M5MK57`'s acceptance list, for synchronization, promotion
+  and closure, and the design's per-stage table.
+- **Remote selection.** `01M669FJR2`'s acceptance, through the binary.
+- **Outcome tables.** Every row of the design's required-outcome tables holds: lifecycle
+  re-entry, standing and answers, resume, made-ready, polling, policy, and local sync.
+  Each table's test is written first. A row that answers otherwise stops for a
+  ruling.
+- **Ctrl-C.** The promotion, closure, poll and context answers are recorded for
+  presses at a safe point and after the last one. For both lifecycle verbs,
+  cancel, then the same request, then a new ID, before and after integration.
+- **Recovery walk.** Every `next:` line the C5 verbs print is followed through the
+  binary until the reservation is free.
+- **Per-verb evidence.** Every cell of the design's matrix holds, or carries its
+  reason.
+- **Privacy.** Application data holds no sentinel `closed_by` or title after a
+  closure.
+- **Exit classes.** The exit table's set equality holds with C5's codes, and
+  the codes no fixture reaches carry reasons.
+- **Real repository.** Every C5 verb runs on a disposable clone of this
+  repository with fresh application data, in Task 11.
+- **Closure.** C5, `01M5MK57` and `01M669FJR2` close by canonical file edit before
+  merge (decision 9), and the two old branches are deleted with the merge (decision 14).
+- **Cache loss.** Both verbs recover through a new prepare, with the closure's fields kept.
+- **Unchanged behaviour.** C1–C4's goldens change only through named edits.
+
+## Product-Owner Decisions (2026-10-31)
+
+1. **Library part on C5's branch.** "On C5's branch (Recommended)". An
+   exception to track rules 5 and 6, as for C4. Limited to the plan's files
+   and merged as one Cycle. D5 waits for C5's merge to consume the bindings.
+2. **Fold `01M5MK57JKCSQFXBNZ8DBE548K` into C5.** Reproduce it, fix it at the
+   shared selector, and close that ticket with C5.
+3. **New context read verbs.** `context observe-local` and
+   `context show-local`; the design confirms the names. `conflict show` keeps its
+   C4 contract.
+4. **Recovery examples are an RFC table with goldens.** One table per family,
+   with each recoverable code, what to run next and the exit class, and a
+   golden behind each row. Help and its schema do not change.
+5. **The recovery suspension stays out of the CLI**, for D6. It blocks
+   automatic polls only. The owner accepted the recommendation with
+   "Approved".
+6. **Configured identity only.** The owner first approved an optional
+   `identity` input, on my statement that it would let agents close as
+   themselves. That statement was false: a configured identity wins
+   (`select_committing_identity`), a confirmed one is written to repository
+   configuration, and `closed_by` must equal the checkpoint's signature. On
+   the correction the owner chose "Configured identity only (Recommended)".
+7. **Outline approved for drafting.** "Approved". This authorizes the
+   documents, not implementation.
+
+8. **A lifecycle cancellation leaves the same request able to continue.** "Same
+   request continues (Recommended)". The answer is `cancelled`, exit 130; the record
+   stays unfinished. The RFC's "a cancellation is final" is amended for these verbs,
+   because a new ID would answer `busy` forever. I had described cancellation as
+   already reaching these calls. It does not, and the library work is in scope.
+9. **C5 closes by file edit, and real `ticket close` dogfooding follows merge.** "File
+   edit, then dogfood after (Recommended)". This corrects my outline, which proposed
+   closing C5 with `ticket close` before merge. That verb is itself the merge, push
+   and cleanup. A throwaway ticket on a disposable clone proves the verb inside C5.
+   After merge, a separate go-ahead closes a real small ticket and switches AGENTS.md.
+10. **Fold `01M669FJR27FRHCNPWAMD6VH4V` into C5.** "Fold the fix into C5
+    (Recommended)". The later-publication evidence depends on it, and C4's fixture
+    seed cannot apply to a repository that was local-only.
+11. **`poll resume` clears the pause and makes an eligible poll due.** "Clear and make
+    due (Recommended)", following the runtime RFC. My first draft said flag only.
+
+12. **A `request cancel` between automatic retries is honoured.** "Re-check before
+    retrying (Recommended)". The next attempt stops with `cancelled`. R-20 gives this
+    outcome by acknowledging the flag, with no separate driver check.
+13. **A finished close isn't held open for its report.** "Finish, state not computed
+    (Recommended)". A failed or incomplete made-ready read after a complete closure stores
+    `index_unavailable_final`, which says that it won't be recomputed.
+14. **The folded tickets' old branches are deleted with the merge.** "Delete with the merge
+    (Recommended)", after confirming that they hold only their ticket files.
+15. **Policy writes finish in the request's own transaction.** "Same-transaction record
+    (Recommended)". No observation token. This answers the former question 2. My question
+    overstated it. See owner question 6: the third review showed last commit wins.
+
+16. **Task 0's unlisted test pins (2026-10-31).** "Add E-16, others no-edit (Recommended)".
+    `startup_tests.rs:171` and `parse_tests.rs:563` move to the test-only planned spec. The other
+    hits are on record as no-edit; one that fails when its verb is bound stops for the owner.
+17. **A `FailurePoint` variant for `remote select` (2026-10-31).** "Allow a FailurePoint variant
+    (Recommended)": one variant in `src/repository.rs`, so the stop between commit and index
+    update has a real test.
+18. **A cancellation lets a stopped child go (2026-10-31).** "Runner releases the child
+    (Recommended)". When a cancellation stops the parent, the runner retires a pending unowned child
+    with no retained work. A retained conflict, or anything not proven safe, stays. No effect is
+    discarded. `request.cancel` is offered on a child's `remote_branch_deleted` (E-17).
+19. **A resume lets a stopped child go (2026-10-31).** "Resume cancels and releases
+    (Recommended)". On a stop the request can't get past, a resume with no request record asks for
+    the cancellation and calls once more, and the runner releases the child only if its guards prove it
+    safe. A kept child stays, with the answer unchanged. No new `RecoveryActionKind`: the answer offers
+    `operation.resume` and `repo.inspect`, and Task 7's human lines print the route.
+
+20. **A superseded close may report no made-ready set (2026-11-01).** "Known limit
+    (Recommended)". A close stopped on `remote_context_changed` answers `index_pending`, and
+    if a new request supersedes it, no answer may hold the set. `ticket ready` is the live view.
+21. **Synchronization's identity refusal narrows (2026-11-01).** "Narrow the ticket". It makes no
+    configuration write, no local-branch move, no merge and no push. A fetch's tracking refs and its
+    recoverable row may remain, as for a missing identity.
+22. **Two more named edits (2026-11-01).** "Approve E-18 and E-19": the index assertion at
+    `tests/repository_enablement.rs:3816`, and `identity_and_mismatch_do_not_strand_the_item`.
+23. **Conflict resolution is in C5 (2026-11-01).** "Include it in C5": `resolve_synchronization`
+    applies the same identity check before any write.
+24. **Poll overlap answers `busy` (2026-11-01).** "Answer `busy`": a poll's fetch meeting a held
+    repository lease is told apart from a protocol failure, and answers `busy`, exit 5, retryable.
+
+25. **A stop reports what its child did (2026-11-01).** "Fix the code": the answer reads the child's row
+    too, so that a merge on the context branch or a landed push is reported, and it exits 4. `parent_effects`
+    reads the child's durable state, and `recorded_effects` reads it through that.
+26. **Local synchronization's identity (2026-11-01).** "Fix it in C5": an unusable identity answers as a
+    missing one, `identity_required`, before any write in `src/repository/local_sync/run.rs`. A row first
+    establishes whether a trimmed or bracketed identity is altered there.
+27. **One verb for rows of shared code (2026-11-01).** "One verb for those rows": rows reaching only shared
+    `LifecycleBinding` code run for one verb, each noting why. A row with a verb's own branch keeps both.
+28. **The latest copy is authoritative (2026-11-02).** "Go with A": `poll once` doesn't materialize a remote
+    context branch whose tip primary already holds, as a refused deletion after `ticket close` leaves it, and
+    reports that target `current`. A branch with a commit primary lacks, diverged or not, is unchanged.
+29. **Tracking follows a confirmed push (2026-11-02).** "Update after a push", then "Advance existing refs
+    only (Recommended)": a confirmed push moves a tracking ref forward only if one already exists, never
+    creating one. Never on an ambiguous or fenced push, never backwards, and never past what the remote holds.
+    E-22 moves four `remote_merge_recovery` assertions to the pushed commit.
+30. **Add/add of a ticket file stays external-only (2026-11-02).** A ticket file that reached primary by another
+    commit, added on both sides, is `unsupported_conflict`, `external_resolution_required`. That is a known limit:
+    `context resolve-local` refuses it up front, and the way on is a repair with Git in the context, then the
+    synchronization's request again. Making a canonical add/add resolvable is a follow-up candidate.
+31. **Release timing (2026-11-02).** "Measure release, then decide". Measured on a release build:
+    promote and close about 35 s, prepares about 2 s. The profile's hot spots are local sync's image-proof
+    audits, which re-decode every stored proof at each safe point and at registry open
+    (`local_sync/image_proof.rs:237`, growing with stored syncs), and discovery's per-item history walk
+    (`discovery.rs:698-743`, up to 1024 commits for each of about 175 items). Both predate C5. A follow-up
+    ticket carries this profile, opened only with the owner's go-ahead.
+32. **Withdrawn, 2026-11-02.** The owner first ruled "Fix it in C5": the preview would plan remote-branch
+    deletion only for a published branch. Its premise, that a never-pushed context is never published,
+    came from the controller's reading of Task 11, not the owner's. The run's context child publishes such a
+    context and cleanup deletes it, so the preview's `remote_branch: true` is accurate. The owner withdrew it
+    on those facts, "Withdraw it, note the gap": a contained context whose remote branch has no tracking ref
+    keeps its remote branch (a Known Limit).
+33. **A held item refuses a new prepare (2026-11-02).** "Refuse, name the holder": while an unfinished
+    parent that a new request can't supersede holds the item, a prepare is `recovery_required`, naming
+    the holding request's `request.retry`, or `operation.resume` when no record holds it. Supersedable
+    cleanup stops still prepare.
+34. **The conflict verbs reach a lifecycle's child (2026-11-03).** "Conflict verbs reach the child":
+    `conflict show` and `conflict resolve` accept a promotion's or closure's context child, by the
+    child's ID or the parent's, through C4's read and resolution with C4's contract unchanged (the
+    library's change maps a parent's ID to its child), and the lifecycle's human
+    answer names both by the parent's ID. Then the same promote or close request finishes. The request
+    that holds the parent holds the child, so its `request cancel` stops the resolution's publication.
+    A retained conflict under a raised generation (`key select`, the domain's poll plan failure) stays
+    stuck, a Known Limit.
+    *Review (2026-11-03), within this decision:* the request finishes only when the resolved context
+    holds what was confirmed; a resolution or repair that changes the confirmed change set answers
+    `external_change` under consent, ending the request, and a new prepare is needed. An external-only
+    conflict's way on is a Git repair in the context, then the same request. A child holding a
+    resolution whose remote branch is then deleted loops on cancel and republish (`busy`), a Known
+    Limit.
+35. **An untracked published context is unknown, not deleted (2026-11-03).** "Say unknown, point to
+    poll" (Task 15's F6): with publication evidence but no tracking ref, and no fetch that has seen the
+    branch gone, both previews answer `history_unknown`, and human output prints `poll once` and then a
+    new prepare. A deletion a fetch has observed, once its tracking ref is gone (pruned), answers
+    `remote_context_deleted`.
+
+**Owner questions, approved at these recommendations on 2026-10-31.**
+
+1. `effective_identity`'s per-key cascade: keep it for C5, with a follow-up ticket (R-6).
+2. Answered by decision 15.
+3. Conflict sides through `context show-local --token` with `--json` only (R-15).
+4. Accept C4's API-audit timing departure: the audit refresh is Task 0, not before
+   planning.
+5. `context prepare` and `context release` stay outside the CLI inventory.
+6. Accept last commit wins for policy verbs: a `poll resume` that never committed, when
+   resent, clears a pause made since. The alternative is an observation token.
+
+## Review Record
+
+| Source | Concern | Classification | Resolution | Evidence |
+| --- | --- | --- | --- | --- |
+| Research | Track rules 5 and 6 route the library work to a separate ticket. | Decision | Decision 1. | Wave track rules; `command.rs:37-77`. |
+| Research | `01M5MK57` is reachable through C5's verbs. | Decision | Decision 2. | Ticket; `sync.rs:3006`. |
+| Research | No CLI read issues a local observation or inspects a local conflict. | Decision | Decision 3. | `remote/conflict_read.rs:186`; RFC. |
+| Research | "Recovery example" has no definition. | Decision | Decision 4. | Help schema; Wave C5. |
+| Research | Only one uncalled API clears the recovery suspension. | Decision | Decision 5. | `state.rs:6366`; `poll.rs` eligibility. |
+| Planning | The approved identity input could not deliver its stated benefit. | Decision | Decision 6 replaces it. | `sync.rs:3006`; `checkpoint.rs:540`. |
+| Planning | The outline's observation guard on policy verbs is weaker than a single-field update. | Decision 15 | R-7. | `state.rs:6384`; audit row "no observation token". |
+| Review round 1, source (2026-10-31, `10b77793`) | 30 findings: 7 blocking, 13 important, 5 minor, 5 suspected. Blocking: no journal row under a lifecycle, resume's route, cancellation unreachable, the `IndexPending` code, blockers lost at prepare, an impossible Task 0 step, an unbuildable inventory. | Ruling, decisions 8–9 | Design revised: re-entry, standing, answers, cancellation, inventory. | Source citations in the design's facts 29–35. |
+| Review round 1, contract (2026-10-31, `10b77793`) | 39 findings: 10 blocking, 19 important, 10 minor. Blocking: cancellation finality, resume reachability, `poll resume`, identity continuation, made-ready, later publication, inventory, missing tables, real-repository steps, closure. | Decisions 8–11, rulings | Design, Cycle and plan revised; five owner questions open. | Scoped re-review pending. |
+| Review round 2, source (2026-10-31, `63369dca`) | 4 blocking, 9 important, 8 minor. Blocking: `reenter` isn't called for a confirmed command, an unworkable `UNBOUND_COMMANDS` hold, the request flag cancelling every retry, poll stops that don't continue. | Rulings R-18 to R-20 | Facts 36–41, re-entry, Task 1 removed, cancellation. | Scoped re-review pending. |
+| Review round 2, contract and adversarial (2026-10-31, `63369dca`) | 4 blocking, 14 important, 9 minor. Blocking: no local-sync outcome table, poll continuation, a killed poll's lost ID, promotion identity against `01M5MK57`. | Decisions 12–15, rulings | Local-sync table, resume rows, domain identity check, cache-loss rows, branch deletion. | Scoped re-review pending. |
+| Review round 3, source and adversarial (2026-10-31, `8b2bdf71`) | 2 blocking, 9 important, 12 minor. Blocking: the stale-retry claim, and the first-call transport stop. Re-entry and cancellation verified as workable. | Owner question 6, rulings | Last commit wins stated; poll table frozen as required outcomes, test-first with a checkpoint. | The resulting edits had no independent review. |
+| C4 ledger | Plans named gate commands that could not pass, and recovery paths never walked. | Ruling | Global Constraints; Task 13b's walk. | C4 execution ledger. |

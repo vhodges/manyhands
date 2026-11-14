@@ -98,7 +98,10 @@ fn every_available_verb_accepts_its_minimum_inputs_and_requires_each_one() {
         AVAILABLE.len(),
         catalog::COMMANDS
             .iter()
-            .filter(|command| command.availability == Availability::Available)
+            .filter(
+                |command| matches!(command.availability, Availability::Available(_))
+                    && command.delivered_by() == "C1"
+            )
             .count()
     );
     for args in AVAILABLE {
@@ -206,33 +209,53 @@ fn version_precedes_bare_resource_planned_and_validation_but_not_clap_errors() {
     usage(&["--version", "frobnicate"], None);
 }
 
+/// E-3: no catalog verb is planned, so the test-only spec holds what a planned
+/// verb accepts.
 #[test]
-fn planned_verbs_accept_future_options_and_raw_json_and_help() {
-    for command in catalog::COMMANDS
-        .iter()
-        .filter(|command| matches!(command.availability, Availability::Planned(_)))
-    {
-        let invocation = invoke(&[
-            command.resource,
-            command.verb,
-            "--id",
-            "X",
-            "--prepare",
-            "--json",
-        ]);
-        assert!(invocation.json);
-        match invocation.action {
-            Action::Unavailable { command: actual } => assert_eq!(
-                (actual.resource, actual.verb),
-                (command.resource, command.verb)
-            ),
-            other => panic!("expected Unavailable, got {other:?}"),
-        }
+fn planned_verbs_accept_future_options_and_trailing_words() {
+    for args in [
+        vec!["future", "--id", "X", "--prepare"],
+        vec!["future", "--id", "X", "--", "--json", "--help"],
+        vec!["future"],
+    ] {
+        assert!(
+            verb_command(&catalog::PLANNED)
+                .try_get_matches_from(&args)
+                .is_ok(),
+            "{args:?}"
+        );
     }
-    help(&["ticket", "close", "--id", "X", "--help"], "ticket close");
-    let invocation = invoke(&["ticket", "close", "--id", "X", "--", "--json", "--help"]);
-    assert!(!invocation.json);
-    assert!(matches!(invocation.action, Action::Unavailable { .. }));
+    assert!(
+        !catalog::COMMANDS
+            .iter()
+            .any(|command| matches!(command.availability, Availability::Planned(_))),
+        "nothing stays planned"
+    );
+}
+
+#[test]
+fn the_poll_verbs_take_only_their_own_options() {
+    assert!(!run(&["poll", "once", "--repo", "r"]).get_flag("retire-completed"));
+    assert!(
+        run(&["poll", "once", "--repo", "r", "--retire-completed"]).get_flag("retire-completed")
+    );
+    usage(
+        &["poll", "pause", "--repo", "r", "--retire-completed"],
+        Some(("poll", "pause")),
+    );
+    usage(&["poll", "once", "--id", "X"], Some(("poll", "once")));
+    usage(&["poll", "once", "--input", "-"], Some(("poll", "once")));
+    usage(&["poll", "pause", "--id", "X"], Some(("poll", "pause")));
+    usage(
+        &["poll", "resume", "--input", "-"],
+        Some(("poll", "resume")),
+    );
+    usage(&["poll", "once"], Some(("poll", "once")));
+    usage(
+        &["poll", "configure", "--repo", "r"],
+        Some(("poll", "configure")),
+    );
+    help(&["poll", "once", "--id", "X", "--help"], "poll once");
 }
 
 #[test]
@@ -575,4 +598,201 @@ fn non_utf8_values_are_usage_errors_including_planned_arguments() {
             }
         ));
     }
+    // E-16: a planned verb's own arguments, on the test-only spec.
+    let argv = [
+        OsString::from("future"),
+        OsString::from("--id"),
+        OsString::from_vec(vec![0xff]),
+    ];
+    assert!(
+        verb_command(&catalog::PLANNED)
+            .try_get_matches_from(argv)
+            .is_err()
+    );
+}
+
+fn local_matches(spec: &CommandSpec, args: &[&str]) -> ArgMatches {
+    let mut command = Command::new(spec.verb);
+    for option in spec.options {
+        let name = option.name.strip_prefix("--").unwrap();
+        let arg = Arg::new(name).long(name);
+        command = command.arg(match option.value {
+            Some(value) => arg.value_name(value).action(ArgAction::Set),
+            None => arg.action(ArgAction::SetTrue),
+        });
+    }
+    command
+        .try_get_matches_from(std::iter::once(spec.verb).chain(args.iter().copied()))
+        .unwrap()
+}
+
+#[test]
+fn mode_rules_enforce_mutation_request_and_prepare_combinations() {
+    use catalog::{CONFIRM, INPUT, InputRule, Kind, PREPARE, REQUEST_ID};
+
+    let spec = CommandSpec {
+        resource: "test",
+        verb: "mutate",
+        summary: "Test mutation.",
+        availability: Availability::Available("C2"),
+        repo: None,
+        options: &[INPUT, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    };
+    assert_eq!(
+        spec.options
+            .iter()
+            .map(|option| (option.name, option.value, option.required))
+            .collect::<Vec<_>>(),
+        [
+            ("--input", Some("file|-"), false),
+            ("--request-id", Some("ULID"), false),
+            ("--prepare", None, false),
+            ("--confirm", Some("ULID"), false),
+        ]
+    );
+    for (args, interactive, error) in [
+        (vec![], false, Some("--request-id")),
+        (vec![], true, None),
+        (vec!["--prepare"], false, None),
+        (vec!["--request-id", "X"], false, None),
+        (vec!["--request-id", "X", "--confirm", "Y"], false, None),
+        (
+            vec!["--prepare", "--request-id", "X"],
+            false,
+            Some("--request-id"),
+        ),
+        (
+            vec!["--prepare", "--request-id", "X"],
+            true,
+            Some("--request-id"),
+        ),
+        (
+            vec!["--prepare", "--confirm", "X"],
+            false,
+            Some("--confirm"),
+        ),
+        (vec!["--prepare", "--confirm", "X"], true, Some("--confirm")),
+    ] {
+        let result = mode_rules(&spec, &local_matches(&spec, &args), interactive);
+        match error {
+            Some(option) => {
+                let detail = result.expect_err("invalid mutation mode");
+                assert!(detail.contains(option), "{args:?}: {detail}");
+                if args.contains(&"--prepare") {
+                    assert!(detail.contains("--prepare"), "{args:?}: {detail}");
+                }
+                assert!(!detail.contains('X'), "usage detail must not echo values");
+            }
+            None => assert_eq!(result, Ok(()), "{args:?}, interactive={interactive}"),
+        }
+    }
+}
+
+#[test]
+fn mode_rules_exempt_reads_including_a_request_id_selector() {
+    let spec = CommandSpec {
+        resource: "request",
+        verb: "show",
+        summary: "Test request read.",
+        availability: Availability::Available("C2"),
+        repo: None,
+        options: &[catalog::REQUEST_ID],
+        kind: catalog::Kind::Read,
+    };
+    for interactive in [false, true] {
+        for args in [vec![], vec!["--request-id", "X"]] {
+            assert_eq!(
+                mode_rules(&spec, &local_matches(&spec, &args), interactive),
+                Ok(())
+            );
+        }
+        let unlocking = CommandSpec {
+            kind: catalog::Kind::UnlockingRead,
+            options: &[],
+            ..spec
+        };
+        assert_eq!(
+            mode_rules(&unlocking, &ArgMatches::default(), interactive),
+            Ok(())
+        );
+    }
+}
+#[test]
+fn a_c3_verbs_usage_error_never_echoes_a_value() {
+    let invocation = parse(
+        [
+            "manyhands-cli",
+            "ticket",
+            "check",
+            "--repo",
+            "r",
+            "--id",
+            "X",
+            "SECRET-VALUE",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect(),
+    );
+    let Action::Usage { detail, .. } = invocation.action else {
+        panic!("expected usage error");
+    };
+    assert!(!detail.contains("SECRET-VALUE"), "{detail}");
+}
+
+#[test]
+fn the_history_verbs_take_their_choice_and_selectors() {
+    const ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let args = run(&[
+        "item",
+        "resolve-history",
+        "--repo",
+        "r",
+        "--id",
+        ID,
+        "--as",
+        "release",
+        "--prepare",
+    ]);
+    assert_eq!(
+        args.get_one::<String>("as").map(String::as_str),
+        Some("release")
+    );
+    run(&["remote", "history", "--repo", "r"]);
+    run(&[
+        "remote",
+        "resolve-history",
+        "--repo",
+        "r",
+        "--request-id",
+        ID,
+    ]);
+    // The choice is one of two words, and is required.
+    let item = Some(("item", "resolve-history"));
+    usage(
+        &[
+            "item",
+            "resolve-history",
+            "--repo",
+            "r",
+            "--id",
+            ID,
+            "--as",
+            "retire",
+        ],
+        item,
+    );
+    usage(
+        &["item", "resolve-history", "--repo", "r", "--id", ID],
+        item,
+    );
+    // A read takes no request ID.
+    usage(
+        &["remote", "history", "--repo", "r", "--request-id", ID],
+        Some(("remote", "history")),
+    );
 }

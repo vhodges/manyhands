@@ -1,9 +1,10 @@
 ---
+id: 01M5A3JMZCNDJB7EA6WJQJTZB1
+item_id: 01M4CC0VMSZ7BRS740C8VSQ5ZK
+created_at: 2026-10-19T12:53:25Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5A3JMZCNDJB7EA6WJQJTZB1"
-item_id: "01M4CC0VMSZ7BRS740C8VSQ5ZK"
-created_at: "2026-10-19T12:53:25Z"
 ---
 
 Task 4 checkpoint: CLI repository, credential and status reads.

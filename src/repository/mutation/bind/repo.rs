@@ -9,7 +9,11 @@
 //!
 //! **What its preview covers.** For `repo enable`: the checked-out
 //! branch and its commit, or that the branch is unborn; whether the
-//! worktree is clean; and whether a configuration file is there. For
+//! worktree is clean; whether a configuration file is there; and whether
+//! this data directory's registry holds the root. A repository enabled
+//! as requested that the registry does not hold, enabled through another
+//! data directory say, is registered and indexed, and nothing is
+//! written to it or committed: the result is `ok` with no commit. For
 //! `repo create`: whether the target is absent, an empty directory or
 //! occupied. For both, when the request supplies no identity: the
 //! identity Git would commit as, and the level of configuration it comes
@@ -47,7 +51,7 @@ use super::{
             EnableRepositoryOutcome, EnableRepositoryRequest, INITIALIZATION_MESSAGE,
             OperationFamily, RepositoryErrorKind, RepositoryOperation, RepositoryService,
             WorktreeState, canonical_configuration, canonical_repository_root, checked_out_branch,
-            read_configuration_for,
+            publication_remote_eligible, read_configuration_for,
             recovery::{FinalKind, JournalRow, LocalStep, PendingOperation},
             resolve_identity, validate_identity, worktree_state,
         },
@@ -196,6 +200,12 @@ enum State {
         head: Head,
         worktree: WorktreeState,
         configuration: ConfigurationInspection,
+        /// Whether this data directory's registry holds the root.
+        registered: bool,
+        /// Whether the publication remote a valid configuration names
+        /// can be published to from this clone. True when it names none,
+        /// or there is no valid configuration.
+        remote_eligible: bool,
     },
 }
 
@@ -390,6 +400,46 @@ fn enabled(commit: Option<git2::Oid>) -> Answer {
     }
 }
 
+/// The result of an enablement that registered a repository it found
+/// enabled, and committed nothing; see `outcome::registration_result`.
+fn registered(discovered: bool) -> Answer {
+    let (code, effects) = outcome::registration_result(discovered);
+    Answer {
+        effects,
+        local_change: true,
+        ..Answer::stopped(code)
+    }
+}
+
+/// Whether the registry of `service`'s data directory holds `root`.
+fn is_registered(service: &RepositoryService, root: &Path) -> Result<bool, Answer> {
+    service
+        .registration(root)
+        .map(|registration| registration.is_some())
+        .map_err(|error| Answer::of_read(&error))
+}
+
+/// Whether the request's operation registered the repository and handed
+/// off to the index on finding it enabled already: its row's last step
+/// is the hand-off's, and no step of a configuration it wrote comes
+/// before it. Only an operation that registered a root this data
+/// directory did not hold, or that took up its own row, hands off there;
+/// one that wrote the configuration keeps that step as its last. `Err`
+/// when the journal could not be read.
+///
+/// One case is not told apart. A request whose own pending row has no
+/// step recorded, because it stopped before it registered, takes that
+/// row up on its retry and hands off. If another actor registered the
+/// root in this data directory meanwhile, the request answers `ok` with
+/// a local change where `already_applied` would be right. Nothing in the
+/// journal separates the two. The answer is harmless: the registration
+/// is made once whichever answer is given.
+fn registered_by_request(service: &RepositoryService, accepted: &Accepted) -> Result<bool, ()> {
+    Ok(accepted
+        .recorded_local_step(service)?
+        .is_some_and(|step| step.is(LocalStep::AuthoritativeObserved)))
+}
+
 impl RepoBinding {
     fn operation(&self) -> RepositoryOperation {
         match self.verb {
@@ -430,10 +480,10 @@ impl RepoBinding {
 
     /// Reads what a preview covers. Nothing is written and no lease is
     /// taken. An `Err` is a root that is not one the command can work at.
-    fn observe(&self) -> Result<Observed, Answer> {
+    fn observe(&self, service: &RepositoryService) -> Result<Observed, Answer> {
         match self.verb {
             Verb::Create => self.observe_target(),
-            Verb::Enable => self.observe_repository(),
+            Verb::Enable => self.observe_repository(service),
         }
     }
 
@@ -475,7 +525,7 @@ impl RepoBinding {
         })
     }
 
-    fn observe_repository(&self) -> Result<Observed, Answer> {
+    fn observe_repository(&self, service: &RepositoryService) -> Result<Observed, Answer> {
         let operation = RepositoryOperation::Enable;
         let (repository, root) =
             canonical_repository_root(&self.root, operation).map_err(refused)?;
@@ -510,6 +560,16 @@ impl RepoBinding {
         };
         let worktree = worktree_state(&repository, &root).map_err(refused)?;
         let configuration = read_configuration_for(&root, operation).map_err(refused)?;
+        let registered = is_registered(service, &root)?;
+        let remote_eligible = match &configuration {
+            ConfigurationInspection::Valid(config) => match &config.publication_remote {
+                Some(remote) => {
+                    publication_remote_eligible(&repository, &root, remote).map_err(refused)?
+                }
+                None => true,
+            },
+            ConfigurationInspection::Missing | ConfigurationInspection::Invalid(_) => true,
+        };
         let effective = match &self.identity {
             Some(_) => None,
             None => {
@@ -523,6 +583,8 @@ impl RepoBinding {
                 head,
                 worktree,
                 configuration,
+                registered,
+                remote_eligible,
             },
             effective,
         })
@@ -565,6 +627,8 @@ impl RepoBinding {
                 head,
                 worktree,
                 configuration,
+                registered,
+                remote_eligible,
             } => {
                 let observation = match head {
                     Head::Unborn {
@@ -601,6 +665,17 @@ impl RepoBinding {
                             ConfigurationInspection::Missing => "missing",
                             ConfigurationInspection::Valid(_) => "valid",
                             ConfigurationInspection::Invalid(_) => "invalid",
+                        },
+                    )
+                    // A registration made by another between the preview
+                    // and the request changes what the request would do.
+                    .text("registered", if *registered { "yes" } else { "no" })
+                    .text(
+                        "publication_remote",
+                        if *remote_eligible {
+                            "eligible"
+                        } else {
+                            "ineligible"
                         },
                     )
             }
@@ -647,16 +722,51 @@ impl RepoBinding {
     }
 
     /// Whether the command's end state holds at `root`: a repository
-    /// whose configuration is the one the request asks for.
-    fn end_state_holds(&self, root: &Path) -> bool {
+    /// whose configuration is the one the request asks for, which this
+    /// data directory's registry holds. A registry that cannot be read
+    /// is not known to hold it.
+    ///
+    /// The registration is required for a create as for an enable. So a
+    /// create whose repository is there but not registered here does not
+    /// hold its end state in two places: `observe_again` with no journal
+    /// row compares what it observes instead of finishing as a no-op, and
+    /// `ended`, for a lost answer with no commit of the request's, does
+    /// not answer `already_applied`.
+    fn end_state_holds(&self, service: &RepositoryService, root: &Path) -> bool {
         is_repository_root(root)
             && read_configuration_for(root, self.operation())
                 .is_ok_and(|configuration| self.is_as_requested(&configuration))
+            && is_registered(service, root).unwrap_or(false)
+    }
+
+    /// Whether what was observed is a repository enabled as requested
+    /// that this data directory does not hold: the request then only
+    /// registers it and indexes it, and commits nothing.
+    fn registers_only(&self, state: &State) -> bool {
+        match state {
+            State::Enable {
+                head: _,
+                worktree: _,
+                configuration,
+                registered,
+                remote_eligible: _,
+            } => !registered && self.is_as_requested(configuration),
+            State::Create { target: _ } => false,
+        }
     }
 
     /// The checks the domain operation would refuse the request for, in
     /// the order it makes them, on what was observed. An `Err` is a
-    /// rejection, or a no-op when the repository is enabled as requested.
+    /// rejection, or a no-op when the repository is enabled as requested
+    /// and registered here.
+    ///
+    /// For a valid configuration the order is the domain's: the primary
+    /// branch it holds, then the prefix asked for, then the publication
+    /// remote it names, and only then whether the root is registered.
+    ///
+    /// A repository enabled as requested that is not registered here is
+    /// registered by the request, which commits nothing: the domain asks
+    /// for no identity then, and neither does this.
     fn check(&self, observed: &Observed) -> Result<(), Answer> {
         let stopped = |code| Err(Answer::stopped(code));
         match &observed.state {
@@ -668,6 +778,8 @@ impl RepoBinding {
                 head,
                 worktree,
                 configuration,
+                registered,
+                remote_eligible,
             } => {
                 let on_primary = match head {
                     Head::Unborn {
@@ -699,7 +811,17 @@ impl RepoBinding {
                         if !self.is_as_requested(configuration) {
                             return stopped(ResultCode::InvalidInput);
                         }
-                        return Err(enabled(None));
+                        // The domain refuses a publication remote this
+                        // clone cannot publish to before anything else it
+                        // does for an enabled repository, registered here
+                        // or not.
+                        if !remote_eligible {
+                            return stopped(ResultCode::InvalidRemote);
+                        }
+                        if *registered {
+                            return Err(enabled(None));
+                        }
+                        return Ok(());
                     }
                 }
             }
@@ -762,6 +884,8 @@ impl RepoBinding {
                     head: Head::Branch { name: _, commit },
                     worktree: _,
                     configuration: _,
+                    registered: _,
+                    remote_eligible: _,
                 } => Some(*commit),
                 State::Enable {
                     head:
@@ -772,6 +896,8 @@ impl RepoBinding {
                         | Head::Detached,
                     worktree: _,
                     configuration: _,
+                    registered: _,
+                    remote_eligible: _,
                 }
                 | State::Create { target: _ } => None,
             },
@@ -828,9 +954,23 @@ impl RepoBinding {
                 };
             }
             Ok(EnableRepositoryOutcome::AlreadyEnabled) => {
-                return match own(None) {
-                    Ok(commit) => Ran {
-                        answer: enabled(commit),
+                // The request's own commit, when it made one; otherwise
+                // the registration, when the request's operation made it;
+                // otherwise nothing is the request's.
+                let answer = match own(None) {
+                    Ok(Some(commit)) => Ok(enabled(Some(commit))),
+                    Ok(None) => registered_by_request(service, accepted).map(|registered_here| {
+                        if registered_here {
+                            registered(true)
+                        } else {
+                            enabled(None)
+                        }
+                    }),
+                    Err(()) => Err(()),
+                };
+                return match answer {
+                    Ok(answer) => Ran {
+                        answer,
                         standing: Standing::Final,
                     },
                     Err(()) => unconfirmed(),
@@ -854,15 +994,30 @@ impl RepoBinding {
             Err(error) => return self.stopped(service, accepted, &root, error.kind),
         };
         // The commit is made and the hand-off or the registration is
-        // owed: the same request completes it.
+        // owed: the same request completes it. A hand-off owed with no
+        // commit of the request's follows the registration of a
+        // repository it found enabled, which is the request's own: only
+        // its own row, or a root it registered, is handed off there.
         match own(None) {
             Ok(commit) => {
-                let (code, effects) = report.result(commit);
+                let answer = match (commit, report) {
+                    (
+                        None,
+                        SaveReport::Saved {
+                            claimed: _,
+                            discovered: false,
+                        },
+                    ) => registered(false),
+                    _ => {
+                        let (code, effects) = report.result(commit);
+                        Answer {
+                            effects,
+                            ..Answer::stopped(code)
+                        }
+                    }
+                };
                 Ran {
-                    answer: Answer {
-                        effects,
-                        ..Answer::stopped(code)
-                    },
+                    answer,
                     standing: Standing::Owed,
                 }
             }
@@ -927,14 +1082,31 @@ impl RepoBinding {
                 answer: enabled(Some(commit)),
                 standing: Standing::Final,
             },
-            // The operation found the repository enabled as requested,
-            // or its own commit is no longer on the branch and the
-            // repository is enabled all the same: nothing is the
-            // request's to report, and nothing is left to do.
-            Ok(None) if self.end_state_holds(&accepted.root()) => Ran {
-                answer: enabled(None),
-                standing: Standing::Final,
-            },
+            // The operation found the repository enabled as requested
+            // and registered it here, and the repository is so: the
+            // registration is the request's result, which was lost.
+            //
+            // Otherwise the operation found the repository enabled as
+            // requested and registered, or its own commit is no longer
+            // on the branch and the repository is enabled all the same:
+            // nothing is the request's to report, and nothing is left to
+            // do.
+            Ok(None) if self.end_state_holds(service, &accepted.root()) => {
+                match registered_by_request(service, accepted) {
+                    Ok(registered_here) => Ran {
+                        answer: if registered_here {
+                            registered(true)
+                        } else {
+                            enabled(None)
+                        },
+                        standing: Standing::Final,
+                    },
+                    Err(()) => Ran {
+                        answer: Answer::stopped(ResultCode::RepositoryInaccessible),
+                        standing: Standing::Unconfirmed,
+                    },
+                }
+            }
             // The operation ended having done nothing: for want of an
             // identity, say. Had that answer not been lost, settling
             // would have deleted the record; it is deleted now, which
@@ -950,7 +1122,7 @@ impl RepoBinding {
             //   whose one meaning to a caller is "send this again".
             Ok(None) => Ran {
                 answer: lost_refusal(
-                    self.observe().and_then(|observed| {
+                    self.observe(service).and_then(|observed| {
                         self.check(&observed)?;
                         Ok(self.digest(&observed))
                     }),
@@ -1044,9 +1216,9 @@ impl Binding for RepoBinding {
     /// preview covers: the boundary compares the digest with the
     /// confirmation's, and refuses a request whose preview is stale as
     /// `external_change`, whatever it is that has changed.
-    fn prepare(&mut self, _call: &CallContext<'_>) -> Result<Prepared, Answer> {
+    fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
         self.validate()?;
-        let observed = self.observe()?;
+        let observed = self.observe(call.service)?;
         // A root that cannot be written as text has no scope key, and no
         // record could be of a request on it.
         if scope_key(self.place()).is_none() {
@@ -1183,15 +1355,15 @@ impl Confirmed for RepoBinding {
 
     fn observe_again(
         &mut self,
-        _call: &CallContext<'_>,
+        call: &CallContext<'_>,
         accepted: &Accepted,
         journal: &JournalRow,
     ) -> Result<Seen, Ran> {
-        let holds = self.end_state_holds(&accepted.root());
+        let holds = self.end_state_holds(call.service, &accepted.root());
         if holds && *journal == JournalRow::Absent {
             return Ok(Seen::EndState(enabled(None)));
         }
-        let observed = match self.observe() {
+        let observed = match self.observe(call.service) {
             Ok(observed) => observed,
             Err(answer) => {
                 return Err(Ran {
@@ -1230,16 +1402,42 @@ impl Confirmed for RepoBinding {
         Ok(Seen::State { found, own })
     }
 
-    fn preview(&mut self, _call: &CallContext<'_>) -> Result<Previewed, Answer> {
+    fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
         self.validate()?;
-        let observed = self.observe()?;
+        let observed = self.observe(call.service)?;
         self.check(&observed)?;
         let (identity, source) = match (&self.identity, &observed.effective) {
             (Some(identity), _) => (identity.clone(), PreviewIdentitySource::Supplied),
             (None, Some((identity, source))) => (identity.clone(), *source),
-            // `check` refused a request with no identity.
+            // `check` refused a request with no identity. A request that
+            // only registers needs none, but a preview's details always
+            // name one: with none to name, it is refused all the same.
             (None, None) => return Err(Answer::stopped(ResultCode::IdentityRequired)),
         };
+        // Registration alone: the exclusion rule is written when it is
+        // not there, which is outside the worktree, and the root is
+        // registered and indexed. No identity, configuration or commit
+        // is written.
+        if self.registers_only(&observed.state) {
+            return Ok(Previewed {
+                observation: self.digest(&observed).to_stored(),
+                effects: vec![
+                    PreviewEffect::WorktreeExclusionWritten,
+                    PreviewEffect::RepositoryRegistered,
+                ],
+                details: PreviewDetailsDto::Repository(RepositoryPreviewDto {
+                    root: observed.root.to_string_lossy().into_owned(),
+                    primary_branch: self.primary_branch.clone(),
+                    identity: PreviewIdentityDto {
+                        name: identity.name,
+                        email: identity.email,
+                        source,
+                        written_locally: false,
+                    },
+                    slug_prefix: self.slug_prefix.clone(),
+                }),
+            });
+        }
         let written_locally = match self.verb {
             Verb::Create => true,
             Verb::Enable => self.identity.is_some(),
@@ -1264,6 +1462,8 @@ impl Confirmed for RepoBinding {
                 },
             worktree: _,
             configuration: _,
+            registered: _,
+            remote_eligible: _,
         } = &observed.state
             && *name != self.primary_branch
         {

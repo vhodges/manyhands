@@ -1,6 +1,6 @@
 use super::{
     catalog::CommandSpec,
-    human, parse,
+    human, human_authoring, parse,
     render::{self, Output},
 };
 use clap::ArgMatches;
@@ -9,9 +9,10 @@ use manyhands::repository::{
     ClosureFilter, CommentListDto, CycleListDto, DependencyDirection, DependencyTreeDto,
     DocumentFolderListDto, HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto, ItemDto,
     ItemDtoKind, ItemListDto, KeyDto, KeyListDto, OperationDto, OperationId, OperationListDto,
-    PlanDto, PollingStatusDto, PublicKeyDto, ReadError, ReadinessFilter, RemoteListDto,
-    RepositoryInspectionDto, RepositoryListDto, RepositoryService, ResolvedRepository, SharedKeyId,
-    TicketFilter, transport::SshAuthority,
+    PathObservationDto, PlanDto, PollingStatusDto, ProposedRelationships, PublicKeyDto, ReadError,
+    ReadinessFilter, RelationshipCheckDto, RemoteListDto, RepositoryInspectionDto,
+    RepositoryListDto, RepositoryService, ResolvedRepository, SharedKeyId, TicketFilter,
+    transport::SshAuthority,
 };
 use manyhands::results::{Envelope, ResultCode, Scope};
 use std::path::{Path, PathBuf};
@@ -19,6 +20,16 @@ use std::path::{Path, PathBuf};
 pub fn item_id(args: &ArgMatches, repo: &ResolvedRepository) -> Result<ItemId, ReadError> {
     value(args, "id")?
         .parse()
+        .map_err(|_| ReadError::invalid_id().with_scope(repo.scope()))
+}
+
+/// The operation `--operation-id` names. A malformed ID is `invalid_id` in
+/// the repository's scope.
+pub fn operation_id(
+    args: &ArgMatches,
+    repo: &ResolvedRepository,
+) -> Result<OperationId, ReadError> {
+    OperationId::parse(value(args, "operation-id")?)
         .map_err(|_| ReadError::invalid_id().with_scope(repo.scope()))
 }
 
@@ -77,7 +88,7 @@ pub fn resolve(
     service.resolve_repository(&repository_path(args)?)
 }
 
-fn read_output<T: serde::Serialize>(
+pub(crate) fn read_output<T: serde::Serialize>(
     name: &str,
     json: bool,
     result: Result<Envelope<T>, ReadError>,
@@ -185,6 +196,46 @@ fn host_inspect(
     ))
 }
 
+pub fn host_observe(
+    service: &RepositoryService,
+    session: &mut crate::mutate::Session,
+    args: &ArgMatches,
+) -> Output {
+    use crate::{admin, catalog, mutate, prompt::TerminalProvider, terminal::Terminal};
+    use manyhands::repository::keys::SessionCredentials;
+    use std::{cell::Cell, io::Write};
+    let spec = catalog::find("host", "observe").expect("host observe catalog entry");
+    let root = match admin::mutation_root(session, spec, args, None) {
+        Ok(root) => root,
+        Err(out) => return out,
+    };
+    let authority = match args
+        .get_one::<String>("authority")
+        .map(|text| parse::authority(text))
+        .transpose()
+    {
+        Ok(value) => value.map(|(host, port)| SshAuthority { host, port }),
+        Err(_) => {
+            return mutate::refusal(session, "host observe", None, ResultCode::UsageError, None);
+        }
+    };
+    if !session.json {
+        let _ = writeln!(std::io::stderr().lock(), "progress: connecting");
+    }
+    let supplied = Cell::new(false);
+    let terminal = if session.interactive {
+        session
+            .terminal
+            .as_deref_mut()
+            .map(|t| t as &mut dyn Terminal)
+    } else {
+        None
+    };
+    let mut credentials = SessionCredentials::new(TerminalProvider::new(terminal, &supplied));
+    let envelope = service.observe_host(&root, authority.as_ref(), &mut credentials);
+    render::observation_output(session.json, &envelope, supplied.get())
+}
+
 fn index_status(
     service: &RepositoryService,
     args: &ArgMatches,
@@ -226,8 +277,7 @@ fn operation_show(
     args: &ArgMatches,
 ) -> Result<Envelope<OperationDto>, ReadError> {
     let repo = resolve(service, args)?;
-    let id = OperationId::parse(value(args, "operation-id")?)
-        .map_err(|_| ReadError::invalid_id().with_scope(repo.scope()))?;
+    let id = operation_id(args, &repo)?;
     Ok(Envelope::read_success(
         "operation show",
         repo.scope(),
@@ -446,14 +496,165 @@ fn ticket_find(
     ))
 }
 
+fn path_observe(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<PathObservationDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    let context = args.get_one::<String>("context").map(PathBuf::from);
+    let data = service.observe_path(&repo, context.as_deref(), Path::new(value(args, "path")?))?;
+    Ok(Envelope::read_success("path observe", repo.scope(), data))
+}
+
+fn ticket_check(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<RelationshipCheckDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    let id = item_id(args, &repo)?;
+    let parse_id = |text: &str| {
+        text.parse::<ItemId>()
+            .map_err(|_| ReadError::invalid_id().with_scope(repo.scope()))
+    };
+    let deps = args
+        .get_one::<String>("deps")
+        .map(|text| text.split(',').map(parse_id).collect::<Result<Vec<_>, _>>())
+        .transpose()?
+        .unwrap_or_default();
+    let parent = args
+        .get_one::<String>("parent")
+        .map(|text| parse_id(text))
+        .transpose()?;
+    let data =
+        service.check_ticket_relationships(&repo, &id, &ProposedRelationships { deps, parent })?;
+    let mut scope = repo.scope();
+    scope.item_id = Some(id.to_string());
+    Ok(Envelope::read_success("ticket check", scope, data))
+}
+
 pub fn dispatch(
     command: &'static CommandSpec,
     args: &ArgMatches,
-    json: bool,
+    session: &mut crate::mutate::Session,
     service: &RepositoryService,
 ) -> Output {
+    let json = session.json;
     let name = format!("{} {}", command.resource, command.verb);
     match name.as_str() {
+        "path observe" => {
+            return read_output(
+                &name,
+                json,
+                path_observe(service, args),
+                human_authoring::path_observation,
+            );
+        }
+        "ticket check" => {
+            return read_output(
+                &name,
+                json,
+                ticket_check(service, args),
+                human_authoring::relationship_check,
+            );
+        }
+        "repo create" => return crate::admin::repo_create(service, session, command, args),
+        "index refresh" => return crate::authoring::index_refresh(service, session, command, args),
+        "index rebuild" => return crate::authoring::index_rebuild(service, session, command, args),
+        "folder create" => return crate::authoring::folder_create(service, session, command, args),
+        "document create" => {
+            return crate::authoring::document_create(service, session, command, args);
+        }
+        "document save" => return crate::authoring::document_save(service, session, command, args),
+        "document move" => return crate::authoring::document_move(service, session, command, args),
+        "document repair" => {
+            return crate::authoring::document_repair(service, session, command, args);
+        }
+        "ticket repair" => return crate::authoring::ticket_repair(service, session, command, args),
+        "ticket create" => return crate::authoring::ticket_create(service, session, command, args),
+        "ticket save" => return crate::authoring::ticket_save(service, session, command, args),
+        "ticket slug-assign" => {
+            return crate::authoring::ticket_slug_assign(service, session, command, args);
+        }
+        "comment add" => return crate::discussion::comment_add(service, session, command, args),
+        "item sync" => return crate::collaboration::item_sync(service, session, command, args),
+        "item republish" => {
+            return crate::collaboration::item_republish(service, session, command, args);
+        }
+        "item resolve-history" => {
+            return crate::history::item_resolve(service, session, command, args);
+        }
+        "remote history" => return crate::history::remote_history(service, session, command, args),
+        "remote resolve-history" => {
+            return crate::history::remote_resolve(service, session, command, args);
+        }
+        "repo sync" => return crate::collaboration::repo_sync(service, session, command, args),
+        "document promote" => {
+            return crate::lifecycle::document_promote(service, session, command, args);
+        }
+        "ticket close" => return crate::lifecycle::ticket_close(service, session, command, args),
+        "poll once" => return crate::polling::once(service, session, command, args),
+        "poll configure" => return crate::polling::configure(service, session, command, args),
+        "poll pause" => return crate::polling::pause(service, session, command, args),
+        "poll resume" => return crate::polling::resume(service, session, command, args),
+        "context retire" => return crate::retirement::retire(service, session, command, args),
+        "context observe-local" => {
+            return crate::local_sync::observe(service, session, command, args);
+        }
+        "context show-local" => return crate::local_sync::show(service, session, command, args),
+        "context sync-local" => return crate::local_sync::sync(service, session, command, args),
+        "context resolve-local" => {
+            return crate::local_sync::resolve(service, session, command, args);
+        }
+        "conflict show" => return crate::conflict::show(service, session, command, args),
+        "conflict resolve" => return crate::conflict::resolve(service, session, command, args),
+        "operation resume" => {
+            return crate::collaboration::operation_resume(service, session, command, args);
+        }
+        "operation abandon" => {
+            return crate::collaboration::operation_abandon(service, session, command, args);
+        }
+        "repo enable" => return crate::admin::repo_enable(service, session, command, args),
+        "repo remove" => return crate::admin::repo_remove(service, session, command, args),
+        "repo identity-set" => {
+            return crate::admin::repo_identity_set(service, session, command, args);
+        }
+        "remote add" => return crate::admin::remote_add(service, session, command, args),
+        "remote remove" => return crate::admin::remote_remove(service, session, command, args),
+        "remote select" => return crate::admin::remote_select(service, session, command, args),
+        "key import" => return crate::admin::key_import(service, session, command, args),
+        "key generate" => return crate::admin::key_generate(service, session, command, args),
+        "key select" => return crate::admin::key_select(service, session, command, args),
+        "key clear" => return crate::admin::key_clear(service, session, command, args),
+        "key remove" => return crate::admin::key_remove(service, session, command, args),
+        "key delete" => return crate::admin::key_delete(service, session, command, args),
+        "request show" | "request cancel" => {
+            let id = match crate::admin::request_id(session, command, args) {
+                Ok(Some(id)) => id,
+                Err(output) => return output,
+                Ok(None) => {
+                    return crate::mutate::refusal(
+                        session,
+                        &name,
+                        None,
+                        ResultCode::InvalidId,
+                        None,
+                    );
+                }
+            };
+            return if command.verb == "show" {
+                render::envelope_output(
+                    json,
+                    &service.show_request(id),
+                    crate::human_admin::request,
+                )
+            } else {
+                render::envelope_output(
+                    json,
+                    &service.cancel_request(id),
+                    crate::human_admin::cancel,
+                )
+            };
+        }
         "ticket ready" => {
             return read_output(&name, json, ticket_ready(service, args), human::item_list);
         }
@@ -541,6 +742,9 @@ pub fn dispatch(
         "key public" => {
             return read_output(&name, json, key_public(service, args), human::public_key);
         }
+        "host observe" => return host_observe(service, session, args),
+        "host approve" => return crate::admin::host_approve(service, session, command, args),
+        "host replace" => return crate::admin::host_replace(service, session, command, args),
         "host list" => return read_output(&name, json, host_list(service), human::host_list),
         "host inspect" => {
             return read_output(

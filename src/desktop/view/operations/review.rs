@@ -1,0 +1,107 @@
+//! Review changes (D5 design, B5; decision 16), offered by Activity: on
+//! the row of a request whose answer stopped on a conflict (a share, a
+//! post, a local synchronization or a lifecycle's child), and on a pending
+//! row whose conflict waits to be resolved, after a restart too. Either
+//! opens the resolve conflict sheet on that conflict; focus goes back to
+//! the button when it closes. Neither waits for an item's lifecycle lock:
+//! resolving the conflict is how a stopped lifecycle goes on (P8, P9).
+
+use std::path::PathBuf;
+
+use gpui_kit::{App, Context, FocusHandle, Window, component::WindowExt};
+
+use crate::desktop::{
+    model::stamp::RepoKey,
+    services::requests::{DesktopRequestId, Intent},
+    view::{conflict::Entry, workspace::Workspace},
+};
+
+impl Workspace {
+    /// The main branch and publication remote navigation lists for the
+    /// repository at `root`, for a sheet that may open the lifecycle
+    /// dialog again.
+    pub(super) fn known(&self, root: &str) -> (Option<String>, Option<Option<String>>) {
+        self.navigation()
+            .entry(root)
+            .map(|entry| {
+                let configuration = &entry.summary.configuration;
+                (
+                    configuration.primary_branch.clone(),
+                    Some(configuration.publication_remote.clone()),
+                )
+            })
+            .unwrap_or_default()
+    }
+
+    /// The sheet's entry of the finished request `id`, when its answer
+    /// stopped on a conflict of an item: its own, or a resume's (M3). Share
+    /// main's names none, and is not offered (a known limit).
+    pub(in crate::desktop::view) fn entry_of(
+        &self,
+        id: DesktopRequestId,
+        cx: &App,
+    ) -> Option<Entry> {
+        let operations = self.services().operations().read(cx);
+        let request = operations.request(id)?;
+        if let Some(entry) = Entry::of_request(request, operations) {
+            return Some(entry);
+        }
+        // A resumed remote synchronization's answer names no item: its
+        // pending row does, once read.
+        let Intent::OperationResume { root, .. } = &request.intent else {
+            return None;
+        };
+        let review = operations.review(id)?;
+        let root = root.to_str()?;
+        // A lifecycle child's own row offers nothing (I-2): its parent's
+        // row does, so a resume of the child finds none here.
+        let conflict = self.pending_conflict(root, &review.operation_id.to_string())?;
+        Some(Entry::of_pending(PathBuf::from(root), conflict))
+    }
+
+    /// Review changes on the finished request `id`: the sheet on its
+    /// conflict, giving focus back to `origin` when it closes.
+    pub(in crate::desktop::view) fn review_request(
+        &mut self,
+        id: DesktopRequestId,
+        origin: FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        let Some(entry) = self.entry_of(id, cx) else {
+            return;
+        };
+        let known = entry
+            .root()
+            .to_str()
+            .map(|root| self.known(root))
+            .unwrap_or_default();
+        let services = self.services().clone();
+        entry.open(known, origin, &services, window, cx);
+    }
+
+    /// Review changes on the pending row `operation_id` of `root`, giving
+    /// focus back to `origin` when the sheet closes.
+    pub(in crate::desktop::view) fn review_pending(
+        &mut self,
+        root: &RepoKey,
+        operation_id: &str,
+        origin: FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        let Some(conflict) = self.pending_conflict(root, operation_id).cloned() else {
+            return;
+        };
+        let entry = Entry::of_pending(PathBuf::from(root), &conflict);
+        let known = self.known(root);
+        let services = self.services().clone();
+        entry.open(known, origin, &services, window, cx);
+    }
+}

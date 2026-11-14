@@ -1,9 +1,10 @@
 ---
+id: 01M5BDWHYQ1PBXWSDHM2S8K9K9
+item_id: 01M4CC0VMY5RBMP70QVBXWXM6A
+created_at: 2026-10-20T01:12:50Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5BDWHYQ1PBXWSDHM2S8K9K9"
-item_id: "01M4CC0VMY5RBMP70QVBXWXM6A"
-created_at: "2026-10-20T01:12:50Z"
 ---
 
 Part A checkpoint (Tasks 1–7). The code is at `3b0e653`, with

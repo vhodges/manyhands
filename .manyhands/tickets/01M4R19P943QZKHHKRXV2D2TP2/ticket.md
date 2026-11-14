@@ -1,14 +1,14 @@
 ---
+id: 01M4R19P943QZKHHKRXV2D2TP2
+title: A registration whose directory is gone cannot be removed
+type: defect
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-19T22:33:49Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4R19P943QZKHHKRXV2D2TP2"
-title: "A registration whose directory is gone cannot be removed"
-type: "defect"
-status: "closed"
-closed_at: "2026-10-19T22:33:49Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
 ---
 
 When the directory of a registered repository no longer exists, the

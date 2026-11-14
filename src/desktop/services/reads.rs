@@ -15,7 +15,10 @@ use std::{future::Future, sync::Arc};
 
 use gpui_kit::{BackgroundExecutor, Context, Task};
 use manyhands::{
-    repository::{Mutation, PrepareDataDto, ReadError, RepositoryService},
+    repository::{
+        ConflictDto, Mutation, OperationId, PrepareDataDto, ReadError, RepositoryService,
+        ResolvedRepository,
+    },
     results::{Envelope, RecoveryAction, ResultCode},
 };
 
@@ -88,6 +91,12 @@ pub(crate) struct Reader {
 }
 
 impl Reader {
+    /// A reader of its own, outside a read job: the draft registry's
+    /// re-read after a save.
+    pub(super) fn new(backend: Arc<dyn Backend>, timers: BackgroundExecutor) -> Self {
+        Self { backend, timers }
+    }
+
     /// One call of the job: awaits the gate of `kind`, asked for now that
     /// the job has reached it, then calls `f`, retrying it on `busy` after
     /// each of `BUSY_RETRY_DELAYS`.
@@ -101,6 +110,37 @@ impl Reader {
             let _ = gate.await;
         }
         retrying(self.backend.service(), &self.timers, f).await
+    }
+
+    /// A remote conflict read (D5 B1): `show_conflict` of `operation_id`,
+    /// a call like any other. A test's canned conflict of that operation
+    /// stands in place of the library's answer (D5 decision 9).
+    #[allow(clippy::result_large_err)] // The library's `ReadError`.
+    pub(crate) async fn show_conflict(
+        &self,
+        repo: &ResolvedRepository,
+        operation_id: OperationId,
+    ) -> ReadResult<ConflictDto> {
+        self.show_conflict_as(ReadKind::Conflict, repo, operation_id)
+            .await
+    }
+
+    /// `show_conflict`, as a call of the read kind `kind`: the pending
+    /// rows' probe is a `PendingConflicts` read (Task 16, fix 5).
+    #[allow(clippy::result_large_err)] // The library's `ReadError`.
+    pub(crate) async fn show_conflict_as(
+        &self,
+        kind: ReadKind,
+        repo: &ResolvedRepository,
+        operation_id: OperationId,
+    ) -> ReadResult<ConflictDto> {
+        let read = self
+            .call(kind, |service| service.show_conflict(repo, operation_id))
+            .await;
+        match self.backend.after_conflict_read(kind, &operation_id) {
+            Some(conflict) => ReadResult::Ok(conflict),
+            None => read,
+        }
     }
 }
 
@@ -188,7 +228,9 @@ impl Services {
                 let envelope = backend.service().prepare(&mutation);
                 match delays.next() {
                     Some(delay) if envelope.code == ResultCode::Busy => timers.timer(*delay).await,
-                    _ => return envelope,
+                    // A test may put a canned answer in place of the
+                    // library's last one.
+                    _ => return backend.after_prepare(&mutation).unwrap_or(envelope),
                 }
             }
         });

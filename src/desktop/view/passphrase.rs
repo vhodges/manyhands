@@ -19,16 +19,23 @@
 //! job started from the confirmation dialog is that dialog, and through it
 //! the control that opened it.
 //!
-//! Text is fixed strings, the key's label and ID, and the library's
-//! guidance for the reason.
+//! While a share or a post waits on the prompt, the dialog names its
+//! repository ("Sharing {repository} is waiting for your passphrase.")
+//! and says what Not now leaves (design, The passphrase dialog). One
+//! worker runs one job at a time, so what waits is the request the model
+//! has running, read once the dialog has opened.
+//!
+//! Text is fixed strings, the key's label and ID, the repository's
+//! directory name, and the library's guidance for the reason.
 
 use gpui_kit::{
     App, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, TestSupportExt,
     WeakEntity, Window,
     component::{
-        ActiveTheme, WindowExt,
+        ActiveTheme, Root, WindowExt,
         button::{Button, ButtonVariants},
+        dialog::Confirm,
         h_flex,
         input::{Input, InputEvent, InputState},
         v_flex,
@@ -37,14 +44,26 @@ use gpui_kit::{
 };
 use manyhands::repository::keys::SecretPassphrase;
 
-use super::workspace::{QuitPhase, Workspace};
-use crate::desktop::services::prompts::{PromptReply, PromptRequest};
+use super::{operations::scope_name, workspace::Workspace};
+use crate::desktop::{
+    model::operations::Progressing,
+    services::prompts::{PromptReply, PromptRequest},
+};
 
 pub(crate) const TITLE: &str = "Unlock key";
 pub(crate) const UNLOCK: &str = "Unlock";
-pub(crate) const CANCEL: &str = "Cancel";
+/// Cancel, relabelled (design, The passphrase dialog).
+pub(crate) const CANCEL: &str = "Not now";
+/// What Not now leaves, while a share waits.
+pub(crate) const NOT_NOW_NOTE: &str = "If you choose Not now, your work stays saved on this \
+     computer. Unlock later from the waiting share, or stop trying to share it.";
 pub(crate) const REFUSED: &str =
     "Enter the passphrase. It cannot be empty or contain a NUL character.";
+
+/// The subtitle while a share of `repository` waits.
+pub(crate) fn waiting_subtitle(repository: &str) -> String {
+    format!("Sharing {repository} is waiting for your passphrase.")
+}
 
 /// The input's label: "Passphrase for <label>".
 pub(crate) fn label_for(label: &str) -> String {
@@ -100,6 +119,9 @@ pub(crate) struct PassphraseDialog {
     input: Option<Entity<InputState>>,
     /// The last submit was refused.
     refused: bool,
+    /// The directory name of the repository whose share or post waits on
+    /// the prompt, once found.
+    waiting: Option<String>,
     origin: Option<FocusHandle>,
     _enter: Option<Subscription>,
 }
@@ -117,6 +139,12 @@ impl PassphraseDialog {
                 this.submit(window, cx);
             }
         });
+        // The workspace that opens the dialog is being updated: what waits
+        // is read once that update has ended.
+        cx.defer_in(window, |this, window, cx| {
+            this.waiting = waiting_share(window, cx);
+            cx.notify();
+        });
         Self {
             label: label_for(&prompt.label),
             key: prompt.key_id.to_string(),
@@ -124,18 +152,19 @@ impl PassphraseDialog {
             prompt: Some(prompt),
             input: Some(input),
             refused: false,
+            waiting: None,
             origin,
             _enter: Some(enter),
         }
     }
 
     /// Whether its prompt is still unanswered.
-    fn waiting(&self) -> bool {
+    pub(super) fn waiting(&self) -> bool {
         self.prompt.is_some()
     }
 
     /// The input, while the dialog holds it.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn input(&self) -> Option<Entity<InputState>> {
         self.input.clone()
     }
@@ -181,6 +210,22 @@ impl PassphraseDialog {
         cx.notify();
     }
 
+    /// Quitting saves drafts first: empties the input, lets it go and
+    /// gives the prompt back unanswered, to be held while the drafts are
+    /// saved. The caller closes the dialog.
+    pub(crate) fn withdraw(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<PromptRequest> {
+        self._enter = None;
+        if let Some(input) = self.input.take() {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        cx.notify();
+        self.prompt.take()
+    }
+
     /// Empties the input and lets it go, then replies, once. False when
     /// the prompt was already answered.
     fn answer(&mut self, reply: PromptReply, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -207,6 +252,22 @@ impl PassphraseDialog {
     }
 }
 
+/// The repository of the share or post the window's workspace has
+/// running, by its directory name: what waits on the prompt.
+fn waiting_share(window: &Window, cx: &App) -> Option<String> {
+    let root = window.root::<Root>()??;
+    let workspace = root.read(cx).view().clone().downcast::<Workspace>().ok()?;
+    let operations = workspace.read(cx).services().operations().read(cx);
+    let request = operations.running()?;
+    // Not a Check now: it may prompt too, but it is not a share.
+    matches!(
+        Progressing::of(&request.intent)?,
+        Progressing::Share | Progressing::Post
+    )
+    .then_some(())?;
+    Some(scope_name(Some(request.intent.root()?)))
+}
+
 fn text(id: &'static str, value: impl Into<String>) -> impl IntoElement {
     let value = value.into();
     div()
@@ -216,15 +277,28 @@ fn text(id: &'static str, value: impl Into<String>) -> impl IntoElement {
         .child(value)
 }
 
+/// A dialog button. Enter on it presses it: its wrapper takes the dialog's
+/// Enter (`Confirm`, dispatched on key down) before the dialog, whose
+/// `on_ok` would submit. Enter in the input, or with no button focused,
+/// still submits.
 fn button(
     id: &'static str,
     label: &'static str,
     primary: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let button = Button::new((id, 0usize)).label(label).on_click(on_click);
+    let on_click = std::rc::Rc::new(on_click);
+    let on_enter = on_click.clone();
+    let button = Button::new((id, 0usize))
+        .label(label)
+        .on_click(move |event, window, cx| on_click(event, window, cx));
     let button = if primary { button.primary() } else { button };
-    div().id(id).test_support().aria_label(label).child(button)
+    div()
+        .id(id)
+        .test_support()
+        .aria_label(label)
+        .on_action(move |_: &Confirm, window, cx| on_enter(&ClickEvent::default(), window, cx))
+        .child(button)
 }
 
 impl Render for PassphraseDialog {
@@ -246,6 +320,11 @@ impl Render for PassphraseDialog {
             .id("passphrase-dialog")
             .test_support()
             .gap_2()
+            .children(self.waiting.as_ref().map(|repository| {
+                div()
+                    .text_sm()
+                    .child(text("passphrase-subtitle", waiting_subtitle(repository)))
+            }))
             .child(
                 div()
                     .text_sm()
@@ -273,70 +352,18 @@ impl Render for PassphraseDialog {
                 self.refused
                     .then(|| div().text_sm().child(text("passphrase-refused", REFUSED))),
             )
+            .children(self.waiting.is_some().then(|| {
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(text("passphrase-note", NOT_NOW_NOTE))
+            }))
             .child(
                 h_flex()
                     .gap_2()
                     .child(button("passphrase-ok", UNLOCK, true, unlock))
                     .child(button("passphrase-cancel", CANCEL, false, cancel)),
             )
-    }
-}
-
-impl Workspace {
-    /// Shows the prompt the running job asks, if one waits and no prompt
-    /// is open. One worker asks one thing at a time, so a prompt waits
-    /// only while the dialog of the last one is still being answered;
-    /// once it is, the next is shown. Once quitting has begun, a prompt
-    /// is answered `Unavailable` at once.
-    pub(super) fn show_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let open = self
-            .passphrase
-            .as_ref()
-            .and_then(WeakEntity::upgrade)
-            .is_some_and(|dialog| dialog.read(cx).waiting());
-        if open {
-            return;
-        }
-        let Some(prompt) = self
-            .services
-            .operations()
-            .update(cx, |operations, _| operations.take_prompt())
-        else {
-            return;
-        };
-        if self.quit != QuitPhase::Running {
-            prompt.answer(PromptReply::Unavailable);
-            return;
-        }
-        self.passphrase = Some(open_dialog(prompt, window, cx));
-        cx.notify();
-    }
-
-    /// Quitting, or the window closing: the open prompt, and one waiting
-    /// to be shown, are answered `Unavailable`, and the dialog closes.
-    pub(super) fn prompt_unavailable(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(dialog) = self.passphrase.take().and_then(|dialog| dialog.upgrade()) {
-            dialog.update(cx, |dialog, cx| dialog.unavailable(window, cx));
-        }
-        self.prompt_waiting_unavailable(cx);
-    }
-
-    /// Quitting at once: as `prompt_unavailable`, with no window.
-    pub(super) fn prompt_unavailable_now(&mut self, cx: &mut Context<Self>) {
-        if let Some(dialog) = self.passphrase.take().and_then(|dialog| dialog.upgrade()) {
-            dialog.update(cx, |dialog, cx| dialog.unavailable_now(cx));
-        }
-        self.prompt_waiting_unavailable(cx);
-    }
-
-    fn prompt_waiting_unavailable(&mut self, cx: &mut Context<Self>) {
-        let waiting = self
-            .services
-            .operations()
-            .update(cx, |operations, _| operations.take_prompt());
-        if let Some(prompt) = waiting {
-            prompt.answer(PromptReply::Unavailable);
-        }
     }
 }
 

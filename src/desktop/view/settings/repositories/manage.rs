@@ -44,6 +44,7 @@ use super::{RepositoriesPage, text};
 use crate::desktop::{
     model::{
         list_state::LABEL_BUSY,
+        read_state::Read,
         stamp::{Generations, SettingsPage, ViewScope},
     },
     services::{
@@ -127,25 +128,6 @@ impl Initials {
     }
 }
 
-/// A read's state, as the section shows it.
-enum Read<T> {
-    None,
-    Loading,
-    Ready(T),
-    Busy,
-    Failed(ResultCode),
-}
-
-impl<T> Read<T> {
-    fn from_result<U>(result: ReadResult<U>, f: impl FnOnce(U) -> T) -> Self {
-        match result {
-            ReadResult::Ok(value) => Self::Ready(f(value)),
-            ReadResult::Busy => Self::Busy,
-            ReadResult::Failed(failure) => Self::Failed(failure.code),
-        }
-    }
-}
-
 /// The section's state.
 pub(super) struct Managed {
     /// The roots `list_repositories` last gave.
@@ -218,7 +200,7 @@ const SCOPE: ViewScope = ViewScope::Settings(SettingsPage::Repositories);
 
 impl RepositoriesPage {
     /// The roots the section lists.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn registrations(&self) -> Vec<String> {
         match &self.managed.registrations {
             Read::Ready(roots) => roots.clone(),
@@ -235,7 +217,7 @@ impl RepositoriesPage {
     }
 
     /// The shown identity's name line.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn identity_shown(&self) -> Option<String> {
         match &self.managed.identity {
             Read::Ready(identity) => Some(name_line(identity)),

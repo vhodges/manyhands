@@ -1,15 +1,15 @@
 ---
+wave: '03'
+id: 01M4EWN2DK3MY6H4GBYDYXF6QH
+title: A rejected operation leaves a journal row that blocks the repository
+type: defect
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-10T03:09:52Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4EWN2DK3MY6H4GBYDYXF6QH"
-title: "A rejected operation leaves a journal row that blocks the repository"
-type: "defect"
-status: "closed"
-closed_at: "2026-10-10T03:09:52Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
-wave: "03"
 ---
 
 After an ordinary rejection, several operations return without completing

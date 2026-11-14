@@ -1,16 +1,16 @@
 ---
+cycle: '07'
+wave: '02'
+id: 01K7F6H9J2N4Q6S8V0X2Z4B6DF
+title: 'Wave 02 Cycle 07: Comment Publication'
+type: cycle
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-11T13:41:04Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01K7F6H9J2N4Q6S8V0X2Z4B6DF"
-title: "Wave 02 Cycle 07: Comment Publication"
-type: "cycle"
-status: "closed"
-closed_at: "2026-10-11T13:41:04Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
-wave: "02"
-cycle: "07"
 ---
 
 Make comment submission the required compound local checkpoint and immediate
