@@ -122,15 +122,13 @@ fn a_typed_passphrase_lives_only_on_sharing_and_keys(cx: &mut TestAppContext) {
             kept(&shell, cx),
             "the passphrase is emptied",
         );
-        for (part, entry) in [("the Keys entry", 2usize), ("the Hosts entry", 3usize)] {
-            shell.click(("settings-page", entry), cx);
-            settle(&shell, cx);
-            rows.fact(
-                &format!("{row}, then {part}"),
-                kept(&shell, cx),
-                "the passphrase is emptied",
-            );
-        }
+        shell.click(("settings-page", 1usize), cx);
+        settle(&shell, cx);
+        rows.fact(
+            &format!("{row}, then the Sharing & keys entry"),
+            kept(&shell, cx),
+            "the passphrase is emptied",
+        );
         shell.keys("escape", cx);
         rows.fact(
             &format!("{row}, then Settings closed"),

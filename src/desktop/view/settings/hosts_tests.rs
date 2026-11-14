@@ -64,7 +64,7 @@ fn hosts(fixture: Fixture, root: Option<&Path>, cx: &mut TestAppContext) -> Shel
         shell.select(root, cx);
     }
     shell.keys("secondary-,", cx);
-    shell.click(("settings-page", 3usize), cx);
+    shell.click(("settings-page", 1usize), cx);
     assert!(shell.present("settings-hosts", cx));
     shell
 }
@@ -275,7 +275,7 @@ async fn a_check_of_another_repository_is_never_shown(cx: &mut TestAppContext) {
     shell.keys("escape", cx);
     shell.select(&b, cx);
     shell.keys("secondary-,", cx);
-    shell.click(("settings-page", 3usize), cx);
+    shell.click(("settings-page", 1usize), cx);
     assert_eq!(
         shell.label("hosts-root", cx),
         Some(chosen_line(b.to_str().unwrap()))

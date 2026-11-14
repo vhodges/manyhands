@@ -219,12 +219,11 @@ pub(super) fn host(shell: &Shell, cx: &mut TestAppContext) -> Entity<SettingsHos
         .read_with(cx, |workspace, _| workspace.settings().clone())
 }
 
-/// Opens Settings by Ctrl+, and shows Sharing & keys (until Task 5, the
-/// Keys page's own entry), then types the sentinel into both masked inputs.
-/// Gives the inputs.
+/// Opens Settings by Ctrl+, and shows Sharing & keys, then types the
+/// sentinel into both masked inputs. Gives the inputs.
 pub(super) fn open_on_keys(shell: &Shell, cx: &mut TestAppContext) -> [Entity<InputState>; 2] {
     shell.keys("secondary-,", cx);
-    shell.click(("settings-page", 2usize), cx);
+    shell.click(("settings-page", 1usize), cx);
     assert!(shell.present("settings-keys", cx));
     let host = host(shell, cx);
     let inputs = shell.visual(cx).update(|window, cx| {

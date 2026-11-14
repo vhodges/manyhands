@@ -272,7 +272,7 @@ async fn inside(table: &mut Table, cx: &mut TestAppContext) {
     focus(shell, &settings, cx);
     shell.press("enter", cx);
     assert!(settings_open(shell, cx));
-    shell.click(("settings-page", 4usize), cx);
+    shell.click(("settings-page", 2usize), cx);
     shell
         .until_drawn(cx, "the page's rows", |shell, cx| {
             shell.present(("polling-name", 0usize), cx)

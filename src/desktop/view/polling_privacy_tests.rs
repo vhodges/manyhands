@@ -962,7 +962,7 @@ async fn polling_privacy(cx: &mut TestAppContext) {
     // The Settings page, with the repository's status line (it is
     // paused and needs its key unlocked) and the controls.
     window.shell.keys("secondary-,", cx);
-    window.shell.click(("settings-page", 4usize), cx);
+    window.shell.click(("settings-page", 2usize), cx);
     window
         .shell
         .until_drawn(cx, "the page's rows", |shell, cx| {

@@ -16,16 +16,27 @@ use gpui_kit::{
 use super::{PAGES, SETTINGS_HEADING, SETTINGS_NOTE, SettingsHost, Shown, page_title};
 use crate::desktop::{
     keys::{ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop},
-    model::stamp::SettingsPage,
-    view::{scroll::ContentScroll, tabs::SHOWN},
+    model::stamp::{SettingsNav, SettingsPage},
+    view::{rows::icon, scroll::ContentScroll},
 };
 
 /// The sheet's width (`05`, Settings sheet).
 const WIDTH: f32 = 720.;
 /// The page list's width (`05`'s left nav).
 const MENU_WIDTH: f32 = 214.;
+/// An entry's icon size, as the mockup's nav.
+const ICON_SIZE: f32 = 14.;
 /// The heading's size, as the details sheet's title.
 const TITLE_SIZE: f32 = 15.;
+
+/// The icon of a menu entry (`06`'s nav).
+fn nav_icon(nav: SettingsNav) -> &'static str {
+    match nav {
+        SettingsNav::Repositories => "folder-git-2",
+        SettingsNav::SharingAndKeys => "key-round",
+        SettingsNav::Checking => "refresh-cw",
+    }
+}
 
 impl SettingsHost {
     /// The sheet as this frame draws it. The builder Root keeps calls this
@@ -124,13 +135,12 @@ impl SettingsHost {
         }
     }
 
-    /// The page list: one entry per page, down the left, the entries of the
-    /// shown page's menu entry saying so in text (`nav`; until the menu has
-    /// its three entries, Task 5, both pages of one entry do). The entries
-    /// are outside the body's scroll, so they carry none of its markers.
+    /// The menu: one entry per page in `PAGES`, down the left, the one whose
+    /// page is shown, by `nav`, announced selected. The entries are outside
+    /// the body's scroll, so they carry none of its markers.
     fn entries(&self, shown: SettingsPage, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let (ring, border) = (theme.ring, theme.border);
+        let (ring, border, muted) = (theme.ring, theme.border, theme.muted_foreground);
         let mut list = v_flex()
             .id("settings-pages")
             .flex_none()
@@ -157,17 +167,14 @@ impl SettingsHost {
                     }))
                     .child(
                         h_flex()
-                            .gap_1()
-                            .child(div().text_sm().child(page_title(page)))
-                            .children(active.then(|| {
-                                div()
-                                    .id(("settings-page-shown", ix))
-                                    .test_support()
-                                    .aria_label(SHOWN)
-                                    .text_xs()
-                                    .child(SHOWN)
-                            })),
+                            .gap_2()
+                            .items_center()
+                            .child(icon(nav_icon(page.nav()), ICON_SIZE, muted))
+                            .child(div().text_sm().child(page_title(page))),
                     );
+            if active {
+                entry = entry.bg(border);
+            }
             if focus.is_focused(window) {
                 entry = entry.border_2().border_color(ring);
             }

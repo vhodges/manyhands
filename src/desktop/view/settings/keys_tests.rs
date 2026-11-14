@@ -67,7 +67,7 @@ const USE_EXISTING: &str = "keys-use-existing";
 fn keys(fixture: Fixture, cx: &mut TestAppContext) -> Shell {
     let shell = Shell::open(fixture, cx);
     shell.keys("secondary-,", cx);
-    shell.click(("settings-page", 2usize), cx);
+    shell.click(("settings-page", 1usize), cx);
     assert!(shell.present("settings-keys", cx));
     shell
 }
@@ -376,7 +376,7 @@ fn a_typed_passphrase_is_emptied_when_the_page_is_hidden(cx: &mut TestAppContext
     shell.click(("settings-page", 0usize), cx);
     assert_eq!(value(&shell, PASSPHRASE, cx), "");
     assert_eq!(value(&shell, CONFIRMATION, cx), "");
-    shell.click(("settings-page", 2usize), cx);
+    shell.click(("settings-page", 1usize), cx);
 
     type_into(&shell, PASSPHRASE, SENTINEL, cx);
     type_into(&shell, CONFIRMATION, SENTINEL, cx);

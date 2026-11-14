@@ -21,6 +21,7 @@ use manyhands::{
 
 use super::{
     editor::host::EditorHost,
+    settings::RepositoriesPage,
     workspace::{Region, Workspace},
 };
 use crate::desktop::{
@@ -410,6 +411,26 @@ impl Shell {
         (0..)
             .map_while(|index| self.label((name, index as usize), cx))
             .collect()
+    }
+
+    /// Manage on `root`'s row of the Repositories page, which chooses it
+    /// for the Sharing section and Trusted servers (Cycle 04, R-15).
+    pub(crate) fn manage(&self, root: &Path, cx: &mut TestAppContext) {
+        let rows = self.rows("managed-row", cx);
+        let ix = rows
+            .iter()
+            .position(|row| *row == key(root))
+            .unwrap_or_else(|| panic!("{} listed in {rows:?}", key(root)));
+        self.click(("managed-choose", ix), cx);
+    }
+
+    /// The Repositories page, which Settings has made.
+    pub(crate) fn repositories_page(&self, cx: &mut TestAppContext) -> Entity<RepositoriesPage> {
+        let host = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.settings().clone());
+        host.read_with(cx, |host, _| host.made_repositories())
+            .expect("the Repositories page is made")
     }
 
     /// Selects the repository at `root` and lets its reads finish.

@@ -85,7 +85,7 @@ fn back_to_tabs_from_settings_over_drafts_shows_the_tabs(cx: &mut TestAppContext
 fn the_drafts_key_empties_a_typed_passphrase(cx: &mut TestAppContext) {
     let shell = Shell::open(Fixture::new(), cx);
     shell.keys("secondary-,", cx);
-    shell.click(("settings-page", 2usize), cx);
+    shell.click(("settings-page", 1usize), cx);
     assert!(shell.present("settings-keys", cx));
     let host: gpui_kit::Entity<SettingsHost> = shell
         .workspace

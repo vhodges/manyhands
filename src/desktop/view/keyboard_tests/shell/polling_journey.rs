@@ -164,17 +164,17 @@ async fn polling_keyboard(cx: &mut TestAppContext) {
     let walk = Walk::over(shell, a.clone());
 
     // Settings by `secondary-,`: the page list is shown with focus on its
-    // first entry, and Tab and Enter choose the fifth page.
+    // first entry, and Tab and Enter choose the third.
     walk.keys("secondary-,", cx);
     walk.on(("settings-page", 0usize), Region::Content, cx);
-    walk.tab_to("tab", ("settings-page", 4usize), cx);
-    walk.on(("settings-page", 4usize), Region::Content, cx);
+    walk.tab_to("tab", ("settings-page", 2usize), cx);
+    walk.on(("settings-page", 2usize), Region::Content, cx);
     walk.enter(cx);
     assert_eq!(
         walk.settings_shown(cx),
         Shown::Settings(SettingsPage::Polling)
     );
-    walk.on(("settings-page", 4usize), Region::Content, cx);
+    walk.on(("settings-page", 2usize), Region::Content, cx);
     bounded(&walk.shell, cx, "the page's rows", |shell, cx| {
         shell.present(("polling-name", 1usize), cx)
     })

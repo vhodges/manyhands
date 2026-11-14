@@ -297,7 +297,7 @@ async fn removing_a_key_returns_focus_by_key(cx: &mut TestAppContext) {
         .frame(cx, |window, cx| window.focused(cx))
         .expect("something holds focus");
     shell.keys("secondary-,", cx);
-    press(&shell, &mut rows, row, ("settings-page", 2usize), cx);
+    press(&shell, &mut rows, row, ("settings-page", 1usize), cx);
     let held = shell.backend.hold_job(JobKind::KeyRemove);
     if tab_and_enter(&shell, &mut rows, row, ("key-remove", 1usize), cx) {
         held.wait_reached();

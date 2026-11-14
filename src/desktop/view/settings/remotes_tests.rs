@@ -48,12 +48,14 @@ fn with_password() -> String {
 }
 
 /// The window over `fixture` with `root` selected and the Remotes page
-/// shown.
+/// shown: Settings' Repositories entry, and Manage on `root`'s row, which
+/// chooses it (R-15).
 fn remotes(fixture: Fixture, root: &Path, cx: &mut TestAppContext) -> Shell {
     let shell = Shell::open(fixture, cx);
     shell.select(root, cx);
     shell.keys("secondary-,", cx);
-    shell.click(("settings-page", 1usize), cx);
+    shell.click(("settings-page", 0usize), cx);
+    shell.manage(root, cx);
     assert!(shell.present("settings-remotes", cx));
     shell
 }
@@ -64,17 +66,6 @@ fn page(shell: &Shell, cx: &mut TestAppContext) -> Entity<RemotesPage> {
         .read_with(cx, |workspace, _| workspace.settings().clone());
     host.read_with(cx, |host, _| host.remotes.clone())
         .expect("the Remotes page is made")
-}
-
-/// Chooses `root` by its row's Manage on the Repositories page, which the
-/// Remotes page is drawn in (R-15).
-fn manage(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
-    let ix = shell
-        .rows("managed-row", cx)
-        .iter()
-        .position(|row| *row == key(root))
-        .expect("the repository is listed");
-    shell.click(("managed-choose", ix), cx);
 }
 
 fn input(shell: &Shell, id: &str, cx: &mut TestAppContext) -> Entity<InputState> {
@@ -763,7 +754,7 @@ fn the_page_lists_the_selected_repository_or_the_one_chosen(cx: &mut TestAppCont
         Some(NO_REMOTES)
     );
 
-    manage(&shell, &b, cx);
+    shell.manage(&b, cx);
     assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
     assert_eq!(shell.rows("remote-name", cx), ["origin"]);
 }
@@ -801,7 +792,7 @@ fn opening_remotes_on_a_repository_shows_that_repository_even_after_another(
     shell.keys("escape", cx);
     shell.select(&a, cx);
     shell.keys("secondary-,", cx);
-    shell.click(("settings-page", 1usize), cx);
+    shell.click(("settings-page", 0usize), cx);
     assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&a))));
 }
 
@@ -820,11 +811,7 @@ fn the_page_acts_on_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     assert!(shell.present("confirm-ok", cx));
 
     let page = page(&shell, cx);
-    let repositories = shell
-        .workspace
-        .read_with(cx, |workspace, _| workspace.settings().clone())
-        .read_with(cx, |host, _| host.repositories.clone())
-        .expect("the Repositories page is made");
+    let repositories = shell.repositories_page(cx);
     shell.visual(cx).update(|window, cx| {
         page.update(cx, |page, cx| {
             page.submit_add(window, cx);
@@ -861,7 +848,7 @@ fn choosing_another_repository_never_shows_the_last_ones_remotes(cx: &mut TestAp
     assert_eq!(shell.rows("remote-name", cx), ["origin"]);
 
     let held = shell.backend.hold_read(ReadKind::Remotes);
-    manage(&shell, &b, cx);
+    shell.manage(&b, cx);
     assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
     assert!(!shell.present(("remote-select", 0usize), cx));
     assert!(!shell.present(("remote-remove", 0usize), cx));
@@ -890,7 +877,7 @@ fn a_row_of_another_repository_acts_on_nothing(cx: &mut TestAppContext) {
     fixture.add_remote(&b, "origin", HTTPS_URL);
     let shell = remotes(fixture, &a, cx);
     let page = page(&shell, cx);
-    manage(&shell, &b, cx);
+    shell.manage(&b, cx);
     assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
 
     shell.visual(cx).update(|window, cx| {

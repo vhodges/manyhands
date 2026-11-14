@@ -116,7 +116,7 @@ async fn add_a_remote_by_keyboard(cx: &mut TestAppContext) {
 async fn generate_a_key_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let walk = selected(Fixture::new(), cx);
-    open_page(&walk, 2, cx);
+    open_page(&walk, 1, cx);
     press_by_keys(&walk, "keys-make", cx);
     walk.type_into("key-generate-label", "keyboard", Region::Content, cx);
     submit(&walk, "key-generate-submit", cx);
@@ -156,7 +156,7 @@ async fn sharing_and_keys_by_keyboard(cx: &mut TestAppContext) {
     let a = fixture.create_repository("a");
     let (private, public) = fixture.external_key_files("mine");
     let walk = Walk::over(Shell::open(fixture, cx), a);
-    open_page(&walk, 2, cx);
+    open_page(&walk, 1, cx);
     walk.until_drawn(("key-radio", 1usize), cx).await;
 
     // Choose a key: Space on its radio.
@@ -267,7 +267,7 @@ async fn check_a_host_by_keyboard(cx: &mut TestAppContext) {
     fixture.refresh(&a);
     let walk = Walk::over(Shell::open(fixture, cx), a);
     walk.select_a_repository(cx);
-    open_page(&walk, 3, cx);
+    open_page(&walk, 1, cx);
     submit(&walk, "hosts-check", cx);
     walk.until_drawn("hosts-observation-code", cx).await;
     let code = walk.shell.label("hosts-observation-code", cx).unwrap();
@@ -302,7 +302,7 @@ async fn checking_for_updates_by_keyboard(cx: &mut TestAppContext) {
     });
     let walk = Walk::over(shell, a.clone());
     walk.select_a_repository(cx);
-    open_page(&walk, 4, cx);
+    open_page(&walk, 2, cx);
     walk.until_drawn(("polling-name", 0usize), cx).await;
 
     let sent = |pick: fn(&Intent) -> bool, cx: &mut TestAppContext| {

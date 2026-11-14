@@ -88,7 +88,7 @@ async fn settings_polling_attention_actions(cx: &mut TestAppContext) {
             .read_with(cx, |workspace, cx| workspace.settings_shown(cx)),
         Shown::Settings(SettingsPage::Keys)
     );
-    rig.shell.click(("settings-page", 4usize), cx);
+    rig.shell.click(("settings-page", 2usize), cx);
     assert!(rig.shell.tab_reaches((ACTION, c), TABS, cx));
     rig.shell.press("enter", cx);
     rig.shell

@@ -7,11 +7,11 @@
 //! Every open reads the Repositories page again, and a slow identity read
 //! fills only the fields still empty.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use gpui_kit::{Entity, TestAppContext, test::TestWindowExt};
+use gpui_kit::{TestAppContext, test::TestWindowExt};
 
-use super::{RepositoriesPage, SettingsRoute, hosts, remotes};
+use super::{SettingsRoute, hosts, remotes};
 use crate::desktop::{
     services::{ReadKind, requests::Intent},
     test_support::fixtures::{Fixture, identity},
@@ -55,38 +55,24 @@ fn chosen(shell: &Shell, cx: &mut TestAppContext) -> Option<PathBuf> {
         .read_with(cx, |workspace, cx| workspace.settings_chosen(cx))
 }
 
-fn repositories(shell: &Shell, cx: &mut TestAppContext) -> Entity<RepositoriesPage> {
-    let host = shell
-        .workspace
-        .read_with(cx, |workspace, _| workspace.settings().clone());
-    host.read_with(cx, |host, _| host.repositories.clone())
-        .expect("the Repositories page is made")
-}
-
 /// The field `id`'s text, after a frame: a landed read's prefill is in.
 fn value(shell: &Shell, id: &str, cx: &mut TestAppContext) -> String {
     shell.frame(cx, |_, _| ());
-    let input = repositories(shell, cx).read_with(cx, |page, _| page.input(id));
+    let input = shell
+        .repositories_page(cx)
+        .read_with(cx, |page, _| page.input(id));
     input.read_with(cx, |input, _| input.value().to_string())
 }
 
 /// Sets the field `id` to `text`, as typing it would.
 fn set(shell: &Shell, id: &str, text: &str, cx: &mut TestAppContext) {
-    let input = repositories(shell, cx).read_with(cx, |page, _| page.input(id));
+    let input = shell
+        .repositories_page(cx)
+        .read_with(cx, |page, _| page.input(id));
     shell.visual(cx).update(|window, cx| {
         input.update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
     });
     shell.run(cx);
-}
-
-/// Manage on `root`'s row of the Repositories page.
-fn manage(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
-    let rows = shell.rows("managed-row", cx);
-    let ix = rows
-        .iter()
-        .position(|row| *row == key(root))
-        .unwrap_or_else(|| panic!("{} listed in {rows:?}", key(root)));
-    shell.click(("managed-choose", ix), cx);
 }
 
 /// `route` raised through `show_settings`, as a way in raises it.
@@ -137,7 +123,7 @@ async fn one_repository_is_chosen(cx: &mut TestAppContext) {
     let mut rows = Rows::default();
 
     shell.keys("secondary-,", cx);
-    manage(&shell, &b, cx);
+    shell.manage(&b, cx);
     let found = chosen(&shell, cx);
     rows.fact("Manage b: chosen", found == Some(b.clone()), found);
     let found = sharing_root(&shell, cx);
@@ -186,7 +172,7 @@ async fn one_repository_is_chosen(cx: &mut TestAppContext) {
 
     // The chosen repository chosen again, by its Manage and by routes
     // raised inside the open sheet: the form is left as it is.
-    manage(&shell, &a, cx);
+    shell.manage(&a, cx);
     let found = value(&shell, "identity-name", cx);
     rows.fact("Manage a again: typed text", found == TYPED, found);
     for again in [
@@ -224,7 +210,7 @@ async fn one_repository_is_chosen(cx: &mut TestAppContext) {
     let found = value(&shell, "identity-name", cx);
     rows.fact("footer after Inspect(b): typed text", found == TYPED, found);
 
-    shell.click(("settings-page", 3usize), cx);
+    shell.click(("settings-page", 1usize), cx);
     let found = shell.label("hosts-root", cx);
     let wanted = hosts::chosen_line(&key(&a));
     rows.fact("Check host on a", found == Some(wanted), found);
@@ -244,7 +230,7 @@ async fn one_repository_is_chosen(cx: &mut TestAppContext) {
     );
     let held = found == (Some(remotes::NO_REPOSITORY.to_owned()), false);
     rows.fact("removed: Sharing", held, found);
-    shell.click(("settings-page", 3usize), cx);
+    shell.click(("settings-page", 1usize), cx);
     let found = (
         shell.label("hosts-check-state", cx),
         shell.present("hosts-root", cx),
@@ -281,7 +267,7 @@ fn a_slow_identity_read_fills_only_empty_fields(cx: &mut TestAppContext) {
     let shell = Shell::open(fixture, cx);
     shell.keys("secondary-,", cx);
     let held = shell.backend.hold_read(ReadKind::Identity);
-    manage(&shell, &a, cx);
+    shell.manage(&a, cx);
     set(&shell, "identity-name", TYPED, cx);
     assert_eq!(value(&shell, "identity-email", cx), "", "still being read");
 

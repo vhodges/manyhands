@@ -1,19 +1,18 @@
-//! The settings, shown in the main window's content region in place of
-//! the tabs (ruling R-B4): `secondary-,` or the sidebar's Settings entry
-//! shows them, Back to tabs, or opening an item, shows the tabs again as
-//! they were. Showing them in the main window keeps one dialog layer, the
-//! workspace's focus fallback and Quit working for every page.
+//! The settings, a sheet over the main window (Wave 04 Cycle 04):
+//! `secondary-,` or the sidebar's Settings entry shows them over the
+//! tabs, which are kept as they were, and Escape closes them. A menu of
+//! three entries, Repositories, Sharing & keys and Checking for updates,
+//! down the left shows the page each opens.
 //!
-//! `SettingsHost` is the entity the workspace holds. It draws the page
-//! list and the shown page, each page an entity of its own made the
-//! first time it is shown. A page reads and acts through `Services`
+//! `SettingsHost` is the entity the workspace holds. It draws the menu
+//! and the shown page, each page an entity of its own made the first
+//! time it is shown. A page reads and acts through `Services`
 //! only; what the workspace must do, it hears as a `SettingsEvent`. A
 //! page's controls sit in focus-tracking wrappers with a scroll marker, so
 //! one that takes focus below the fold is brought into view (`scroll`).
 //!
-//! A page arrives by adding it to `PAGES`, a field and an arm in `page`.
-//! Checking for updates (`polling`) is the fifth, in a module of its own so
-//! Wave 04 Cycle 04 can fold it into the settings sheet.
+//! A page arrives by a `SettingsPage` variant, a field, its `nav` and an
+//! arm in `views`; a new menu entry also adds its first page to `PAGES`.
 //! The host keeps one chosen repository, which the Repositories page, its
 //! Sharing section (the Remotes page) and Trusted servers' Check host work
 //! on (`chosen`; Wave 04 Cycle 04 design C1).
@@ -55,23 +54,26 @@ pub(crate) const SETTINGS_HEADING: &str = "Settings";
 /// The sheet header's description (design B1; frames 1e and 1f).
 pub(crate) const SETTINGS_NOTE: &str = "Applies to this computer only.";
 
-/// The pages there are, in the order the page list shows them.
-pub(crate) const PAGES: [SettingsPage; 5] = [
+/// The menu's entry names (design Part E).
+pub(crate) const REPOSITORIES_PAGE: &str = "Repositories";
+pub(crate) const SHARING_AND_KEYS_PAGE: &str = "Sharing & keys";
+pub(crate) const CHECKING_PAGE: &str = "Checking for updates";
+
+/// The menu's entries, in order, each as the page it opens: its first
+/// page (design B1). Repositories also shows Remotes, under Sharing, and
+/// Sharing & keys also shows Hosts, Trusted servers (`SettingsPage::nav`).
+pub(crate) const PAGES: [SettingsPage; 3] = [
     SettingsPage::Repositories,
-    SettingsPage::Remotes,
     SettingsPage::Keys,
-    SettingsPage::Hosts,
     SettingsPage::Polling,
 ];
 
-/// A page's name in the page list.
+/// The name of the menu entry that shows `page`.
 pub(crate) fn page_title(page: SettingsPage) -> &'static str {
-    match page {
-        SettingsPage::Repositories => "Repositories",
-        SettingsPage::Remotes => "Remotes",
-        SettingsPage::Keys => "Shared SSH keys",
-        SettingsPage::Hosts => "Hosts",
-        SettingsPage::Polling => "Checking for updates",
+    match page.nav() {
+        SettingsNav::Repositories => REPOSITORIES_PAGE,
+        SettingsNav::SharingAndKeys => SHARING_AND_KEYS_PAGE,
+        SettingsNav::Checking => CHECKING_PAGE,
     }
 }
 
@@ -119,7 +121,7 @@ pub(crate) struct SettingsHost {
     /// every page reveals its focused control in it.
     scroll: ContentScroll,
     shown: Shown,
-    /// The focus of each page's entry in the page list, in `PAGES` order.
+    /// The focus of each menu entry, in `PAGES` order.
     entries: Vec<FocusHandle>,
     /// What held focus when the sheet opened, where focus returns when it
     /// closes (design A3).
@@ -181,6 +183,12 @@ impl SettingsHost {
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn shown(&self) -> Shown {
         self.shown
+    }
+
+    /// The Repositories page, once it is made.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn made_repositories(&self) -> Option<Entity<RepositoriesPage>> {
+        self.repositories.clone()
     }
 
     /// The repository the pages that work on one work on.
@@ -278,13 +286,13 @@ impl SettingsHost {
         self.origin.take().and_then(|origin| origin.upgrade())
     }
 
-    /// The focus of the shown page's entry in the page list: the
-    /// settings' first control.
+    /// The focus of the shown page's menu entry: the settings' first
+    /// control.
     pub(crate) fn first_focus(&self) -> Option<FocusHandle> {
         let Shown::Settings(page) = self.shown else {
             return None;
         };
-        let ix = PAGES.iter().position(|shown| *shown == page)?;
+        let ix = PAGES.iter().position(|first| first.nav() == page.nav())?;
         Some(self.entries[ix].clone())
     }
 
@@ -405,8 +413,7 @@ impl SettingsHost {
     /// The views the menu entry that shows `page` draws, in order, each made
     /// the first time it is asked for. Remotes is drawn in the Repositories
     /// page, under Sharing (design C1); Sharing & keys is the Keys page's
-    /// view, then the Hosts page's, Trusted servers (C2). Until the menu has
-    /// its three entries (Task 5), both pages of an entry show its views.
+    /// view, then the Hosts page's, Trusted servers (C2).
     fn views(
         &mut self,
         page: SettingsPage,

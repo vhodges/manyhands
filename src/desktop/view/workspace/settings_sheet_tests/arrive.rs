@@ -71,7 +71,7 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
         (
             "F2 Page(Polling)",
             SettingsRoute::Page(SettingsPage::Polling),
-            ("settings-page", 4usize).into(),
+            ("settings-page", 2usize).into(),
         ),
         (
             "F2 Manage(root)",

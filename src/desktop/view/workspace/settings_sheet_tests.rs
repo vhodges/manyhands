@@ -291,7 +291,7 @@ async fn settings_closes_every_way(cx: &mut TestAppContext) {
     }
     // Show in Activity (F11).
     let inputs = open_on_keys(shell, cx);
-    shell.click(("settings-page", 4usize), cx);
+    shell.click(("settings-page", 2usize), cx);
     shell
         .until_drawn(cx, "the page's rows", |shell, cx| {
             shell.present(("polling-name", 0usize), cx)
@@ -431,7 +431,7 @@ fn nothing_acts_behind_settings(cx: &mut TestAppContext) {
     open(&shell, ticket(&root, OTHER), cx);
     open(&shell, ticket(&root, MAIN), cx);
     shell.keys("secondary-,", cx);
-    shell.click(("settings-page", 2usize), cx);
+    shell.click(("settings-page", 1usize), cx);
     assert_eq!(shown(&shell, cx), Shown::Settings(SettingsPage::Keys));
 
     #[derive(PartialEq, Debug)]
