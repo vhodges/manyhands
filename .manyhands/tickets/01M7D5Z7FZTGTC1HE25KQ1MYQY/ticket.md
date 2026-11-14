@@ -38,10 +38,10 @@ ticket does not authorize implementation.
 - [x] List every existing dialog and sheet the common frame applies to.
 - [x] Decide with the owner whether the Wave's split line is needed
   (decision 2).
-- [ ] Create `docs/Cycles/wave-04-cycle-05a-frame-add-repository-and-unlock.md`.
-- [ ] Carry Cycle 04's downstream obligations for the Add repository
+- [x] Create `docs/Cycles/wave-04-cycle-05a-frame-add-repository-and-unlock.md`.
+- [x] Carry Cycle 04's downstream obligations for the Add repository
   sheet (its Cycle document, "For Cycle 05").
-- [ ] Create the design and implementation plan and record their
+- [x] Create the design and implementation plan and record their
   checkpoints as ticket comments.
 
 ## Entry Gate
@@ -66,6 +66,11 @@ ticket does not authorize implementation.
    cannot tell it apart (`01M5E6DYJ6GN7DMW4424TH3V78`). The dialog's inline
    error covers the passphrases it refuses itself.
 5. The outline and its constraints: "Write the documents".
+
+Decisions 6–20 are recorded in the Cycle document
+(`docs/Cycles/wave-04-cycle-05a-frame-add-repository-and-unlock.md`):
+15–18 answered by the owner after review round 1; 6–14, 19 and 20 the
+planner's proposals.
 
 ## Scope Summary
 
