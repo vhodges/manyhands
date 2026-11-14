@@ -26,7 +26,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 2 | done, design checkpoint passed, review approved after fix round 1 | code `5cddad28` (base `023ebf47`), fix `6894d70d`; ledger `6ae0ad14`; ticket comment `e514fa9b` | yes |
 | 3 | done, review approved after fix round 1 | code `29ef847d` (base `e514fa9b`), fix `1b3ca49a`; ledger `00a179d5` | yes |
 | 4 | done, review approved first time (Minors parked) | code `a7dda502` (base `00a179d5`); ledger `86b51214` | yes |
-| 5 | done, review approved first time (Minors parked) | code `d9327047` (base `86b51214`); ledger commit follows | with the ledger commit |
+| 5 | done, review approved first time (Minors parked) | code `d9327047` (base `86b51214`); ledger `16f7746b` | yes |
+| 6 | done, review approved after fix round 1 | code `4a9a0dd7` (base `16f7746b`), fix `4fd65ef0`; ledger commit follows | with the ledger commit |
 
 ## Branches published
 
@@ -1625,3 +1626,152 @@ Entries, ids, roles, selected state and first-page opening are exactly B1/R-4/R-
 2. P9 no longer leaves Sharing & keys by Checking for updates (parked Minor 7 stays open; `forms.rs:106` leaves by entry 0 only).
 3. The Kit button focus ring on entries and the icon/background look are not tested; owner's on-screen checklist (Task 9).
 
+## Task 6: ways in (Part D)
+
+Implementer: one fresh Opus agent (risky task: the key-list retarget and R-23).
+Base `16f7746b`, code `4a9a0dd7`, fix `4fd65ef0`. Reviewer: one fresh Opus
+agent, behaviour and tests spec compliant against Part D, every carried
+deferral met; one Important, a breach of the plan's file-size rule
+(`repositories.rs` 825 to 831). Fix round 1/5 moved `add_path_focus` into
+`repositories/manage.rs` beside `name_focus`; the scoped re-review (Sonnet)
+verdict ADDRESSED, no new breakage. Boundary diff prints nothing.
+`Cargo.lock` untouched.
+
+### Rulings (Task 6)
+
+Ruling 43 (accepted, implementer): `open_settings(SettingsPage::Keys)` in
+`workspace/content.rs` now builds `SettingsRoute::Keys`, so W-12, W-16, W-21
+and W-23 land on the key list with their callers unchanged (R-5). No
+production code builds `Page(Keys)` any more; tests still do (P22's A2 step-2
+row). The reviewer thought a direct `show_settings(Keys, ..)` at the two
+callers clearer (Minor 4) — cost if wrong: a later rename.
+
+Ruling 44 (accepted, implementer): R-22 is armed on every key-list arrival. "While
+the keys are still being read" means `Read::Loading` (no list drawn): the
+route focuses the page's entry (F2's "field not drawn"). When a list is drawn
+(the page re-reads its keys on every open, R-32, and the last list stays
+drawn), the route focuses that list's target and the read that lands retargets
+once if focus has not moved and `OpenFlag::is_open`. A read answered busy or
+failed lands on Make a new key. The retarget is dropped on `opened()`, on
+close and on leaving Sharing & keys (host `forget_passphrase`) — cost if wrong:
+focus lands one control off on a stale list.
+
+Ruling 45 (accepted): E-17's "Cycle 03b's handler test row for Approve host…
+with no server named" does not exist (every 03b view test names a server;
+grep finds `HostUnidentified` only in model and services tests, which the
+reviewer confirmed). R-23 is proved by three new P4 rows instead, each with the
+panel on another repository and each RED before the change: W-25, W-33's
+Approve host…, and W-32 inside the sheet — cost if wrong: none; the Cycle
+decision 9 note "03b's handler test changes with it" had nothing to change.
+
+Ruling 46 (accepted): `settings/polling_attention.rs:85` needs no edit (Ruling
+9): it already sends the row's own `root`, and with no authority the host
+arrives at `Hosts(root)`. `settings/attention.rs` changed (Choose a key…
+arrives as `Keys`; Approve host… with none named chooses the row's repository
+and arrives as `Hosts(root)`). `operations/attention.rs`: Approve host… with
+none named calls `open_hosts(path)`, now `pub(in crate::desktop::view)`.
+
+Ruling 47 (accepted): W-4 (the panel's Settings button) still opens
+`Page(Repositories)` until Task 8 removes it; W-8 shares W-34's handler
+(`row_action(Settings)`), W-9 and W-35 `row_action(SetUpSharing)`, W-14, W-18
+and W-19 `open_route(SetIdentity)` (design P4 accepts `open_route` as "its own
+handler"). W-16 to W-20 are raised through `open_route`, not an item pane's
+emit.
+
+Ruling 48 (accepted): the commit trailer is Sonnet 5.5 (Ruling 1); the
+implementer session ran Opus 5.5 and flagged it. Not amended: Ruling 1 stands
+and the commit stays as the brief said.
+
+E-32 (further edit, decision 7): P5's helpers are reused by P20.
+`settings_sheet_tests/returns.rs` `SHARE`, `set_initials` and
+`returns_activity.rs` `keys_label`, `struct Rows` with its three fields,
+`activity_rows`, `open_popover`, `press_in_popover` became `pub(super)`. Ten
+lines, no assertion changed.
+
+E-33 (further edit; REMOVES a test name): `focus_on_open_survives_the_sheet_keeping_focus`
+and its file `settings_sheet_tests/arrive.rs` are deleted (carried deferral;
+Ruling 3). All six rows are kept in P4 with the same route, target and
+two-draw read: Identity, CheckHost, RetryGeneration, Page(Polling), Manage,
+and Page(Repositories) as two rows (the panel changed since, unchanged; R-14).
+The binary lists 1935 tests (1934 − 1 + 2).
+
+E-17 (`settings/repositories_tests.rs`, the Inspect recovery, W-27): the old
+assertion that the entry holds focus is REPLACED by `holds_focus("add-path")`
+(Part D). **E-18**: 23 sites, one added Part D assertion each (nothing removed;
+W-26, W-28, W-29 keep their in-frame check). **E-21**: 9 sites, `Effect::Page`
+gains its control. The reviewer found each follows Part D. `activity_tests/states.rs:172`
+is W-24 (a hold's Open remote settings…), not W-35 as E-21's note had it.
+A new `Shell::holds_focus(id)` in `harness.rs` reads after two draws.
+
+### Carried deferrals, all met (P4, 100 rows over two windows, about 15 s; P20, 16 rows)
+
+F2's "field not drawn" (the key-list route while both Keys reads are held:
+entry, then the radio when the read lands; the retarget moves nothing if
+focus left); `Hosts(path)` with the panel on another repository (R-23);
+Inspect leaving the choice alone even after the panel changed (R-55, Ruling
+25); a route naming no root after the panel changed and after it did not
+(R-14); `aria_selected` and `first_focus` for the non-first pages (Remotes
+entry 0, Hosts entry 1); W-36 through `choose_activity` (focus returns to the
+Activity list after Escape); a row for each W no existing test raises (W-9,
+W-14, W-16 to W-20, W-25, W-32, W-33 ×3, W-34 to W-36). P2's AddRepository row
+sits in `settings_leaves_the_item_as_it_was`. P20: eight trigger kinds by real
+keys (footer item, Activity row button, Activity menu entry, popover row,
+repository menu entry, item header Share…, lifecycle dialog, save banner).
+Both `#[allow(dead_code)]` on `SettingsRoute::AddRepository` and `::Keys` are
+gone; none is left in `settings/` or `workspace/`.
+
+### Parked review Minors (Task 6)
+
+1. The retarget's `OpenFlag::is_open` guard (`keys/rows.rs:347`) has no row
+   that fails without it (the implementer said none can; the reviewer says
+   `SettingsHost::set_open(false)` with the sheet still active could raise one).
+2. R-22's "once" is not pinned: no row lets a second read land after the
+   retarget, so a `take()` to `clone()` at `rows.rs:339` would survive.
+3. `Shell::holds_focus` (`harness.rs:386-395`) duplicates
+   `settings_sheet_tests/support.rs:161-173` `holds`; `holds` could delegate.
+4. Ruling 43's hidden mapping in `open_settings`; call `show_settings(Keys, ..)`
+   at both callers.
+5. `arrive.rs:89-96` judges Hosts' drawn state from `chosen`; Remotes judges
+   from the page's own root (`remotes.rs:261`). Read the Hosts page's own
+   repository.
+6. `arrive.rs:42` doc still says "Moves no focus"; a Keys arrival arms a later
+   move.
+7. `remotes.rs` grew 700 to 708 (`name_focus`); under 800, so the rule's
+   premise no longer holds. `manage.rs` is 686 (was 680).
+8. W-18 and W-19 raise the same `open_route(SetIdentity)`: they do not prove the
+   posting or composer code builds the route.
+9. For the on-screen checklist (Task 9): W-1 to W-36 landing, the Kit buttons'
+   key-ID element IDs, Activity row titles keep the old vocabulary (Task 7
+   owns the copy).
+
+### Tests that ran (Task 6)
+
+- RED (before the code), each by exact name: P4 `20 of 97 rows did not hold`;
+  P20 `6 of 16`; P2's AddRepository row; W-32's row RED with only
+  `settings/attention.rs` at HEAD. A mutation (the held-focus check dropped
+  from `land_retarget`) fails one P4 row. The 29 E-17, E-18 and E-21 tests were
+  run against HEAD's production code: 18 failed, 11 passed (those already
+  landed on Part D's control), all 29 GREEN with the change.
+- GREEN: P4, P20 and P2 together `3 passed`.
+- Module runs, once each (no `--exact`): run 1 `desktop::view::workspace::settings_sheet::tests desktop::view::settings::` **122 passed** (98 s);
+  run 2 footer, repositories, dock toolbars, item share, operations
+  outcomes, lifecycle credential and outcome_canned, operations attention,
+  create **84 passed** (85 s); run 3 needs_attention, activity's
+  `each_action_runs_its_handler`, `keyboard_tests::shell`, `keyboard_tests::settings`,
+  `drafts::routing_tests`, `harness::tests` **36 passed** (39 s).
+- Fix round 1: P4 `1 passed` (16 s); `settings::repositories::tests` and
+  `manage_tests` **37 passed** (15 s). Nothing else changed in the fix.
+- Static gates, on the code and again after the fix: `cargo fmt --check`, `cargo check --locked --features desktop` and `cargo clippy --all-targets --all-features --locked -- -D warnings` all exit 0.
+- No whole suite, no SSH target, no sleep added.
+
+### Constants
+
+None added or changed. P20's `MAKE = "keys-make"` is a test element ID.
+Task 7 still owns `confirm.rs` `PINNED_KEY`, `NO_REPOSITORY`, and Activity
+row titles in `services/requests.rs`.
+
+### Owner-visible, for the Task 9 summary
+
+P4 and P20 now pin every route by real focus. R-23: Approve host… with no
+server named uses the row's repository, not the panel's. W-4 stays until Task 8.
+Fix round 1/5: one round, a file-size move only.
