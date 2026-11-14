@@ -78,12 +78,14 @@ use manyhands::{
     results::{Envelope, ResultCode as Code},
 };
 
+mod layers;
 mod repositories;
 
 use super::{
     activity_support::{index_of, offered, refresh, row, rows, to_row},
     harness::Shell,
     polling_window::PollingWindow,
+    privacy_layers_tests::{in_row_menu, popover_texts, row_menu_texts},
     repositories::tests::support::not_due,
 };
 use crate::desktop::{
@@ -177,11 +179,17 @@ const ALLOWED: [&str; 11] = [
 /// Where a text is read, by the id of the element that draws it, for the
 /// surfaces the test asserts it read: `(prefix, contains, surface)`. The
 /// operation area's rows are Activity's: a row's message, its tag and its
-/// button (Wave 04 Cycle 03b, Task 9).
-const SURFACES: [(&str, &str, &str); 12] = [
+/// button (Wave 04 Cycle 03b, Task 9). The Needs attention popover's rows and
+/// buttons are the same rows, and the rest of it (its header, list and link)
+/// is `popover` (Task 12); the row menu is not here, since its items have no
+/// id of their own (`surface`).
+const SURFACES: [(&str, &str, &str); 15] = [
     ("activity-row", "", "activity row"),
     ("activity-tag", "", "activity tag"),
     ("activity-button", "", "activity button"),
+    ("needs-attention-row", "", "popover row"),
+    ("needs-attention-button", "", "popover button"),
+    ("needs-attention-", "", "popover"),
     ("retire-unkept", "", "unkept ask"),
     ("retire-kept", "", "kept ask"),
     ("passphrase-", "", "passphrase dialog"),
@@ -208,8 +216,13 @@ fn inside(path: &[ElementId], places: &[&'static str]) -> Option<&'static str> {
         .find_map(|at| places.iter().copied().find(|place| *place == at))
 }
 
-/// The surface the element at `path` belongs to, by its own id.
-fn surface(path: &[ElementId]) -> &'static str {
+/// The surface the element at `path` belongs to, by its own id, except an
+/// item of the row's menu, which every Kit menu shares an id with
+/// (`in_row_menu`: only while the row menu is the open menu).
+fn surface(path: &[ElementId], row_menu: bool) -> &'static str {
+    if in_row_menu(path, row_menu) {
+        return "row menu";
+    }
     let last = path.last().and_then(name).unwrap_or("");
     SURFACES
         .iter()
@@ -235,17 +248,31 @@ impl Seen {
             .extend(texts.into_iter().map(|text| (surface, text)));
     }
 
-    /// A text read on `surface`. In Activity's rows an item's title, and only
-    /// its title, may show (decisions 12 and 21): it is noted as seen there
-    /// and taken out, so every other sentinel is still swept for.
+    /// A text read on `surface`. In Activity's rows, the popover's rows and
+    /// the row menu an item's title, and only its title, may show (decisions
+    /// 12 and 21): it is noted as seen there, by the surface, and taken out,
+    /// so every other sentinel is still swept for. The drawn rows and the
+    /// model's are noted apart, so that one does not stand for the other.
     fn activity_text(&mut self, surface: &'static str, text: String) {
-        if matches!(surface, "activity row" | "model row") {
-            if text.contains(TITLE) {
-                self.allowed.insert(("activity-row", TITLE));
+        let at = match surface {
+            "activity row" => Some("activity-row"),
+            "model row" => Some("model-row"),
+            "popover row" => Some("popover-row"),
+            "popover tooltip" | "popover description" => Some("popover-tooltip"),
+            "row menu" => Some("row-menu"),
+            "menu item" => Some("menu-item"),
+            _ => None,
+        };
+        match at {
+            Some(at) => {
+                if text.contains(TITLE) {
+                    self.allowed.insert((at, TITLE));
+                }
+                self.read.insert((surface, text.replace(TITLE, "{title}")));
             }
-            self.read.insert((surface, text.replace(TITLE, "{title}")));
-        } else {
-            self.read.insert((surface, text));
+            None => {
+                self.read.insert((surface, text));
+            }
         }
     }
 
@@ -297,6 +324,15 @@ impl Seen {
         for text in rows {
             self.activity_text("model row", text);
         }
+        // What the popover and the row menu build that no snapshot reads,
+        // while they are open: tooltips, descriptions, fixed copy, the
+        // menu's items from the row it was built from.
+        for (surface, text) in popover_texts(shell, cx) {
+            self.activity_text(surface, text);
+        }
+        for text in row_menu_texts(shell, cx) {
+            self.activity_text("menu item", text);
+        }
         // The schedule's and the record's own state, as `Debug` renders it.
         let (schedule, store) = window.services.scheduler().read_with(cx, |scheduler, _| {
             (
@@ -317,13 +353,14 @@ impl Seen {
         }
         // What is drawn.
         let drawn: Vec<(Option<&'static str>, &'static str, String)> =
-            shell.frame(cx, |window, _| {
+            shell.frame(cx, |window, cx| {
+                let row_menu = shell.workspace.read(cx).activity_menu_open();
                 gpui_kit::base::test_support::snapshots(window)
                     .iter()
                     .flat_map(|snapshot| {
                         let path = snapshot.path();
                         let at = inside(path, &ALLOWED);
-                        let surface = surface(path);
+                        let surface = surface(path, row_menu);
                         [snapshot.label(), snapshot.value()]
                             .into_iter()
                             .flatten()
@@ -774,6 +811,9 @@ async fn polling_privacy(cx: &mut TestAppContext) {
             .is_some_and(|offer| offer.enabled),
         "the pending row offers Resume"
     );
+    // The popover lists the pending row (it needs the person: Resume), and
+    // the menu of a row that names an item opens below it: both swept open.
+    layers::visit(&window, &mut seen, Some(&retire_key(&root, UNREACHED)), cx);
 
     // Text is typed into the edited ticket after its draft folder became
     // read-only: no draft can keep it. Retire… of that ticket asks, with a
@@ -880,6 +920,10 @@ async fn polling_privacy(cx: &mut TestAppContext) {
         })
         .await;
     seen.sweep(&window, cx);
+    // The same for the second and third repositories, whose failed checks
+    // are rows that need attention and name them (P28).
+    layers::check_the_others(&window, &[&b, &c], cx).await;
+    seen.sweep(&window, cx);
 
     // Retire… of the document, whose kept draft is asked about in the
     // document's words; the library refuses `unlock_required`, which is
@@ -910,6 +954,10 @@ async fn polling_privacy(cx: &mut TestAppContext) {
         .await;
     seen.sweep(&window, cx);
     assert!(seen.read_at("activity button", "Unlock\u{2026}"));
+    // The popover now lists the hold and the failed checks of the three
+    // repositories, with the hold's Unlock….
+    layers::visit(&window, &mut seen, None, cx);
+    assert!(seen.read_at("popover button", "Unlock\u{2026}"));
 
     // The Settings page, with the repository's status line (it is
     // paused and needs its key unlocked) and the controls.
@@ -1042,6 +1090,14 @@ async fn polling_privacy(cx: &mut TestAppContext) {
         "activity tag",
         "activity button",
         "model row",
+        "popover row",
+        "popover button",
+        "popover",
+        "popover tooltip",
+        "popover description",
+        "popover copy",
+        "row menu",
+        "menu item",
         "unkept ask",
         "kept ask",
         "passphrase dialog",
@@ -1071,12 +1127,7 @@ async fn polling_privacy(cx: &mut TestAppContext) {
         seen.read.contains(&("model row", "c".to_owned())),
         "a row's tag names the third repository"
     );
-    // The title was seen in Activity's rows, where decision 21 allows it:
-    // the scan's positive control.
-    assert!(
-        seen.allowed.contains(&("activity-row", TITLE)),
-        "{TITLE} is drawn in Activity's rows, where decision 21 puts it"
-    );
+    layers::controls(&seen, &window, cx);
     for (surface, words) in [
         ("model row", "is closed"),
         ("model row", "is approved"),

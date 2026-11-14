@@ -32,6 +32,8 @@ pub(crate) mod passphrase;
 mod polling_privacy_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 mod polling_window;
+#[cfg(all(test, feature = "desktop-test-support"))]
+mod privacy_layers_tests;
 pub(crate) mod quit;
 pub(crate) mod relationships;
 pub(crate) mod repositories;
