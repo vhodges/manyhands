@@ -585,7 +585,7 @@ no inline error.
 
 ### Cycle 05b: Close Ticket And Resolve Conflict
 
-**Planned document:** `docs/Cycles/wave-04-cycle-05b-close-ticket-and-resolve-conflict.md`
+**Planned document:** `docs/Cycles/wave-04-cycle-05b-close-and-resolve.md`
 
 Amended 2026-11-14: split from Cycle 05 (Cycle 05a decision 2). Ticket
 `01M7D7JK5MSY6J471JEKG3CZXR` (`vh-qjw5e`), planned after 05a's documents
