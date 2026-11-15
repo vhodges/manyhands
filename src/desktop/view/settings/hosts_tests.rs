@@ -39,7 +39,7 @@ use crate::desktop::{
     test_support::fixtures::{Fixture, NoPassphrase, SSH_HOST, SSH_PORT},
     view::{
         confirm::{CONFIRM, PINNED_KEY, REQUESTED_KEY},
-        harness::{Shell, wait_until},
+        harness::{CHECK_HOST, Shell, wait_until},
     },
 };
 
@@ -445,8 +445,8 @@ async fn the_host_recovery_checks_the_named_host_on_the_hosts_page(cx: &mut Test
     let check = check_focus(&shell, cx);
     assert!(shell.frame(cx, |window, _| check.is_focused(window)));
     assert!(
-        shell.holds_focus("hosts-check", cx),
-        "W-29 lands on Check host, after two draws (Part D)"
+        shell.holds_control(CHECK_HOST, cx),
+        "W-29 lands on Check host itself, after two draws (Part D)"
     );
 }
 

@@ -30,7 +30,7 @@ use crate::desktop::{
     test_support::fixtures::{Fixture, item_id},
     view::{
         activity_support::{act, offered, request, row},
-        harness::{Shell, WAIT, key},
+        harness::{MAKE_A_NEW_KEY, Shell, WAIT, key},
         lifecycle::OpenedLifecycle,
         settings::Shown,
     },
@@ -236,8 +236,8 @@ pub(in crate::desktop::view) async fn requests(cx: &mut TestAppContext) {
     );
     assert_eq!(settings(&shell, cx), Shown::Settings(SettingsPage::Keys));
     assert!(
-        shell.holds_keys_focus("keys-make", cx),
-        "W-12 lands on the key list, with no key Make a new key"
+        shell.holds_keys_control(MAKE_A_NEW_KEY, cx),
+        "W-12 lands on the key list, with no key Make a new key itself"
     );
     // Settings is a sheet: it closes before the next row's action.
     shell.keys("escape", cx);

@@ -33,7 +33,7 @@ use gpui_kit::{
 };
 use manyhands::repository::{KeyDto, KeyOwnership, KeyPrivateSourceState, SharedKeyId};
 
-use super::super::{Wrapped, wrapped};
+use super::super::{Wrapped, kit_button::kit_button, wrapped};
 use super::render::{heading, text};
 use super::{
     CLEAR, CLEAR_ID, COPY, DELETE, KEYS_HEADING, KEYS_INTRO, KIND_GENERATED, KIND_IMPORTED,
@@ -64,17 +64,25 @@ fn row_key(control: &str, key: &str) -> String {
     format!("{control}-{key}")
 }
 
-/// The element ID of the Kit button inside `key`'s `control`. A Kit button
-/// keeps its focus as state keyed by its ID, so it is keyed by the key's ID
-/// too: a row that goes never hands its button's focus to the key after it.
+/// The keys whose rows draw a radio and their controls: those whose ID
+/// parses (`key_row`).
+fn drawn(keys: &[KeyDto]) -> Vec<&KeyDto> {
+    keys.iter()
+        .filter(|key| SharedKeyId::parse(&key.id).is_ok())
+        .collect()
+}
+
+/// The element ID of the Kit button inside `key`'s `control`, keyed by the
+/// key's ID, as its focus is (`row_focus`, `kit_button`): a row that goes
+/// never hands its button's focus to the key after it.
 fn button_id(control: &str, key: &str) -> gpui_kit::ElementId {
     gpui_kit::ElementId::Name(format!("{control}-button-{key}").into())
 }
 
 impl KeysPage {
     /// The focus of `key`'s `control`, made the first time it is asked for.
-    /// The radio is a tab stop of its own; the others are the wrappers of a
-    /// Kit button, whose own focus is the tab stop.
+    /// The radio is a tab stop of its own; the others are a Kit button's
+    /// own focus (`kit_button`), which its wrapper tracks too.
     pub(super) fn row_focus(
         &mut self,
         control: &str,
@@ -129,7 +137,8 @@ impl KeysPage {
     }
 
     /// The row `ix`'s Kit button `control`, `key`'s, named `label`, in its
-    /// wrapper.
+    /// wrapper: `button`, whose ID is `button_id(control, key)`, with the
+    /// row's focus as its own.
     fn row_button(
         &mut self,
         control: &'static str,
@@ -140,6 +149,7 @@ impl KeysPage {
         cx: &mut Context<Self>,
     ) -> Wrapped {
         let focus = self.row_focus(control, key, cx);
+        let button = kit_button(button_id(control, key), &focus, button);
         wrapped((control, ix), label, &focus, &self.scroll, button)
     }
 
@@ -302,11 +312,7 @@ impl KeysPage {
             Read::Ready(keys) => keys.clone(),
             Read::Busy | Read::Failed(_) => Vec::new(),
         };
-        // Only a key whose ID parses has a radio (`key_row`).
-        let drawn: Vec<&KeyDto> = keys
-            .iter()
-            .filter(|key| SharedKeyId::parse(&key.id).is_ok())
-            .collect();
+        let drawn = drawn(&keys);
         let key = drawn
             .iter()
             .find(|key| key.selected)
@@ -374,6 +380,8 @@ impl KeysPage {
             return;
         };
         let removed = removed.to_string();
+        // Only a key with a radio is one focus can go to.
+        let keys = drawn(keys);
         let Some(at) = keys.iter().position(|key| key.id == removed) else {
             return;
         };

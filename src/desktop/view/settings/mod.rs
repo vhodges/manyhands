@@ -28,6 +28,7 @@ mod chosen;
 mod frame;
 mod hosts;
 mod keys;
+mod kit_button;
 mod polling;
 mod remotes;
 mod repositories;

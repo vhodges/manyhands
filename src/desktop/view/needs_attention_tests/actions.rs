@@ -32,7 +32,7 @@ use crate::desktop::{
             pending_cases::{PENDING_ROOT, listing, read_pending, waiting},
         },
         activity_support::{pending_key, refresh},
-        harness::Shell,
+        harness::{MAKE_A_NEW_KEY, Shell},
         operations::{
             attention_tests::{every_reason, hold_with, shown},
             republish::tests::ticket_shell,
@@ -141,7 +141,7 @@ async fn holds(cx: &mut TestAppContext) {
     // Each lands on the control Wave 04 Cycle 04's Part D names.
     press_from_popover(shell, &hold_with(&rig, CHOOSE_A_KEY, cx), CHOOSE_A_KEY, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Keys));
-    assert!(shell.holds_keys_focus("keys-make", cx), "W-23, no key");
+    assert!(shell.holds_keys_control(MAKE_A_NEW_KEY, cx), "W-23, no key");
     shell.keys("escape", cx);
     press_from_popover(shell, &hold_with(&rig, APPROVE_HOST, cx), APPROVE_HOST, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Hosts));

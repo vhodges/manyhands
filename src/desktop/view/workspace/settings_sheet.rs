@@ -329,6 +329,8 @@ impl Workspace {
             Some(target) => window.focus(target, cx),
             None => self.focus_settings_entry(window, cx),
         }
+        // The control focus went to draws its ring in the next frame.
+        cx.notify();
         true
     }
 

@@ -31,7 +31,7 @@ use crate::desktop::{
     },
     view::{
         activity_support::{act, list_focus},
-        harness::{Shell, key},
+        harness::{CHECK_HOST, Shell, key},
         item::ItemRoute,
         settings::{SettingsRoute, polling_support::Rig},
     },
@@ -102,7 +102,7 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
         table,
         shell,
         "W-17 a comment offer's Check host, no host named",
-        Landing::new(SettingsPage::Hosts, "hosts-check", Some(&a)),
+        Landing::control(SettingsPage::Hosts, CHECK_HOST, Some(&a)),
         cx,
     );
     open_route(shell, ItemRoute::SetIdentity(b.clone()), cx);
@@ -191,7 +191,7 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
         table,
         shell,
         "W-25 a hold's Approve host…, no server named: its repository (R-23)",
-        Landing::new(SettingsPage::Hosts, "hosts-check", Some(&a)),
+        Landing::control(SettingsPage::Hosts, CHECK_HOST, Some(&a)),
         cx,
     );
 
@@ -243,7 +243,7 @@ async fn inside(table: &mut Table, rig: &Rig, cx: &mut TestAppContext) {
         table,
         shell,
         "W-32 Checking for updates' Approve host…, no server named: its repository (R-23)",
-        Landing::new(SettingsPage::Hosts, "hosts-check", Some(&a)),
+        Landing::control(SettingsPage::Hosts, CHECK_HOST, Some(&a)),
         cx,
     );
 }

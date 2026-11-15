@@ -33,7 +33,7 @@ use crate::desktop::{
     model::stamp::SettingsPage,
     services::JobKind,
     view::{
-        harness::{Shell, WAIT, wait_until},
+        harness::{MAKE_A_NEW_KEY, Shell, WAIT, wait_until},
         item::LIFECYCLE_ACTION,
         settings::Shown,
     },
@@ -133,8 +133,8 @@ async fn a_refused_key_offers_unlock_and_sharing_and_keys(cx: &mut TestAppContex
                     .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
                 assert!(matches!(shown, Shown::Settings(SettingsPage::Keys)));
                 assert!(
-                    shell.holds_keys_focus("keys-make", cx),
-                    "W-21 lands on the key list, with no key Make a new key (Part D)"
+                    shell.holds_keys_control(MAKE_A_NEW_KEY, cx),
+                    "W-21 lands on the key list, with no key Make a new key itself (Part D)"
                 );
                 // Settings is a sheet: it closes before the next row reopens
                 // the dialog.

@@ -51,7 +51,7 @@ use manyhands::{
     results::{Envelope, Outcome},
 };
 
-use super::{OpenFlag, wrapped};
+use super::{OpenFlag, kit_button::kit_button, wrapped};
 use crate::desktop::model::read_state::Read;
 use crate::desktop::{
     model::{
@@ -232,7 +232,7 @@ pub(crate) struct HostsPage {
     remote_generations: Generations,
     remote_read: Option<Task<()>>,
     observing: Option<Observing>,
-    /// The focus each control's wrapper tracks, by its ID.
+    /// Each control's focus, by its ID: its Kit button's own and its wrapper's.
     focus: HashMap<&'static str, FocusHandle>,
     /// The finished requests already acted on, by attempt.
     seen: HashSet<(DesktopRequestId, u32)>,
@@ -289,8 +289,7 @@ impl HostsPage {
         page
     }
 
-    /// Around Check host, whose own focus is the Kit's: where a route naming
-    /// no host lands, drawn whenever a repository is chosen (R-53).
+    /// Check host's own focus: where a route naming no host lands (R-53).
     pub(crate) fn check_focus(&self) -> FocusHandle {
         self.focus[CHECK_ID].clone()
     }
@@ -702,7 +701,7 @@ impl HostsPage {
         body
     }
 
-    /// A button in its wrapper `id`.
+    /// A Kit button with its wrapper `id`'s focus as its own (`kit_button`).
     fn button(
         &self,
         id: &'static str,
@@ -711,12 +710,14 @@ impl HostsPage {
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let button = Button::new(gpui_kit::ElementId::Name(format!("{id}-button").into()))
+        let button_id = gpui_kit::ElementId::Name(format!("{id}-button").into());
+        let button = Button::new(button_id.clone())
             .label(label)
             .disabled(disabled)
             .on_click(
                 cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)),
             );
+        let button = kit_button(button_id, &self.focus[id], button);
         wrapped(id, label, &self.focus[id], &self.scroll, button)
     }
 
@@ -743,8 +744,7 @@ impl HostsPage {
             };
             body = body.child(text("hosts-check-state", line));
         }
-        // Drawn, unavailable, whenever it cannot run, so focus put on it
-        // (a recovery's check, a prompt closing) has a place to stay.
+        // Drawn, unavailable, whenever it cannot run: focus put on it stays.
         let unavailable = !offered || self.connecting();
         body.child(self.button(
             CHECK_ID,

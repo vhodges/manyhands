@@ -30,6 +30,7 @@ use crate::desktop::{
         activity_support::{
             act, act_unsettled, button_focus, drawn, index_of, offered, row, rows, to_row,
         },
+        harness::MAKE_A_NEW_KEY,
         settings::Shown,
     },
 };
@@ -454,7 +455,10 @@ async fn attention_actions_hit(cx: &mut TestAppContext) {
     // Escape closes it between them.
     press(CHOOSE_A_KEY, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Keys));
-    assert!(rig.shell.holds_keys_focus("keys-make", cx), "W-23, no key");
+    assert!(
+        rig.shell.holds_keys_control(MAKE_A_NEW_KEY, cx),
+        "W-23, no key"
+    );
     rig.shell.keys("escape", cx);
     press(APPROVE_HOST, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Hosts));

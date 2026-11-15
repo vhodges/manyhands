@@ -44,7 +44,7 @@ use crate::desktop::{
     test_support::fixtures::item_id,
     view::{
         activity_support::{act, highlighted, list_focused, offered, refresh, row, rows, to_row},
-        harness::{Shell, WAIT, key, wait_until},
+        harness::{MAKE_A_NEW_KEY, Shell, WAIT, key, wait_until},
         item::ItemRoute,
         repositories::tests::support::highlight,
         settings::Shown,
@@ -72,8 +72,8 @@ fn no_selected_key_opens_sharing_and_keys(cx: &mut TestAppContext) {
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
     assert!(matches!(shown, Shown::Settings(SettingsPage::Keys)));
     assert!(
-        shell.holds_keys_focus("keys-make", cx),
-        "W-12 lands on the key list, with no key Make a new key (Part D; R-22)"
+        shell.holds_keys_control(MAKE_A_NEW_KEY, cx),
+        "W-12 lands on the key list, with no key Make a new key itself (Part D; R-22)"
     );
 }
 

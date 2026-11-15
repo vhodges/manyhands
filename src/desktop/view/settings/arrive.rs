@@ -39,12 +39,15 @@ pub(crate) enum SettingsRoute {
 
 impl SettingsHost {
     /// Switches to the route's page and applies it: checks a folder or a
-    /// host, asks again for a passphrase. Moves no focus. Gives the control
-    /// Part D names, only when the page draws it in the next frame; `None`
-    /// means the page's menu entry, for the `Page` and `Manage` routes and
-    /// for a control not drawn (A6 F1, F2; R-24). The repository a route
-    /// works on is the host's chosen one, which the caller chooses first
-    /// (`choose_on_open`, or `choose` inside the sheet).
+    /// host, asks again for a passphrase. Moves no focus now; a Keys route
+    /// arms the key list's one retarget, which moves it once, when the
+    /// keys' read lands, if it is still where the route put it (R-22).
+    /// Gives the control Part D names, only when the page draws it in the
+    /// next frame; `None` means the page's menu entry, for the `Page` and
+    /// `Manage` routes and for a control not drawn (A6 F1, F2; R-24). The
+    /// repository a route works on is the host's chosen one, which the
+    /// caller chooses first (`choose_on_open`, or `choose` inside the
+    /// sheet).
     pub(crate) fn arrive(
         &mut self,
         route: &SettingsRoute,

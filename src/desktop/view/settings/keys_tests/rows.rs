@@ -19,7 +19,7 @@ use super::{
 use crate::desktop::{
     services::{JobKind, requests::Intent},
     test_support::fixtures::{Fixture, select_key_through, unregister_key_through},
-    view::harness::Shell,
+    view::harness::{MAKE_A_NEW_KEY, Shell},
 };
 
 /// `made`, generated and in use; `spare`, generated; `mine`, imported.
@@ -198,9 +198,9 @@ fn labels(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
 /// its trash, or its file deleted through Delete key file…'s confirmation,
 /// gives focus to the next key's radio by key ID, even when the list's
 /// order changes on the read that follows; else to the previous key's;
-/// else to Make a new key. Focus on a row's button stays with its key when
-/// a row above it goes. A removal that lands after Settings closed moves
-/// no focus.
+/// else to Make a new key, the Kit button itself. Focus on a row's button
+/// stays with its key, on the button itself, when a row above it goes. A
+/// removal that lands after Settings closed moves no focus.
 #[gpui_kit::test]
 async fn removing_a_key_returns_focus_by_key(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -260,16 +260,21 @@ async fn removing_a_key_returns_focus_by_key(cx: &mut TestAppContext) {
         );
     }
 
+    // Make a new key, the Kit button itself, which Enter presses.
     let row = "the only key removed";
     let (shell, _) = generated(&["only"], cx);
     if tab_and_enter(&shell, &mut rows, row, ("key-remove", 0usize), cx) {
         until_count(&shell, 0, cx).await;
-        rows.fact(row, holds(&shell, "keys-make", cx), where_focus(&shell, cx));
+        let held = shell.holds_control(MAKE_A_NEW_KEY, cx);
+        rows.fact(row, held, where_focus(&shell, cx));
+        shell.press("enter", cx);
+        let shown = shell.present("key-generate-heading", cx);
+        rows.fact(&format!("{row}: Enter"), shown, "no Generate form");
     }
 
-    // A Kit button keeps its focus by its element ID: keyed by key ID, it
-    // stays with its key when a row above it goes on a read, and is not
-    // handed to the key that takes its row.
+    // A Kit button's focus is its row's, keyed by key ID (Ruling 37): it
+    // stays with its key, on the button itself, when a row above it goes
+    // on a read, and is not handed to the key that takes its row.
     let row = "focus on a row's button, a row above it gone on a read";
     let (shell, ids) = generated(&["first", "middle", "last", "after"], cx);
     if shell.tab_reaches(("key-copy", 2usize), 60, cx) {
@@ -283,6 +288,9 @@ async fn removing_a_key_returns_focus_by_key(cx: &mut TestAppContext) {
             holds(&shell, ("key-copy", 1usize), cx),
             where_focus(&shell, cx),
         );
+        let button = ElementId::Name(format!("key-copy-button-{}", ids[2]).into());
+        let held = shell.holds_control(button, cx);
+        rows.fact(&format!("{row}: the button"), held, where_focus(&shell, cx));
     } else {
         rows.fact(row, false, "Tab never reached last's Copy public key");
     }

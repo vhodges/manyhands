@@ -5,7 +5,8 @@
 //! dialog's Open Sharing & keys and the save banner's Open Settings. Each
 //! lands as Part D says: its page, and focus on its control after two
 //! draws (Ruling 2). Each row has a window of its own; the fixtures are
-//! P5's. None of them has a key, so the key list lands on Make a new key.
+//! P5's. None of them has a key, so the key list lands on Make a new key,
+//! the Kit button itself, which Enter then presses.
 
 use gpui_kit::{ElementId, TestAppContext};
 use manyhands::results::ResultCode;
@@ -13,7 +14,7 @@ use manyhands::results::ResultCode;
 use super::{
     returns::{SHARE, focus, footer, set_initials, ticket_shell},
     returns_activity::{activity_rows, keys_label, open_popover, press_in_popover},
-    routes::entry,
+    routes::{enter_acts, entry, generate_shown},
     support::{MAIN, holds, open, shell, shown, ticket},
     table::Table,
 };
@@ -29,15 +30,12 @@ use crate::desktop::{
         activity::tests::cases::{answered, fabricate},
         activity_support::{act, button_focus, to_row},
         footer::Control,
-        harness::Shell,
+        harness::{MAKE_A_NEW_KEY, Shell},
         repositories::tests::support::highlight,
         settings::Shown,
         sidebar::SHARE_MAIN_SET_UP,
     },
 };
-
-/// Make a new key: where the key list lands with no key (R-22).
-const MAKE: &str = "keys-make";
 
 /// Row `row` landed on `page`, focus on `focus` after two draws.
 fn landed(
@@ -60,6 +58,21 @@ fn landed(
     }
     let held = holds(shell, focus.clone(), cx);
     table.row(shell, row, held, &format!("{focus:?}"), cx);
+}
+
+/// Row `row` landed on the key list with no key: Make a new key, the Kit
+/// button itself after two draws (R-22), which Enter presses, showing the
+/// Generate form.
+fn landed_on_make(table: &mut Table, shell: &Shell, row: &str, cx: &mut TestAppContext) {
+    let at = shown(shell, cx);
+    table.fact(
+        &format!("{row} (its page)"),
+        at == Shown::Settings(SettingsPage::Keys),
+        &format!("Settings(Keys), not {at:?},"),
+    );
+    let held = shell.holds_keys_control(MAKE_A_NEW_KEY, cx);
+    table.row(shell, row, held, &format!("{MAKE_A_NEW_KEY:?}"), cx);
+    enter_acts(table, shell, row, generate_shown, cx);
 }
 
 pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
@@ -102,14 +115,7 @@ fn activity_row(table: &mut Table, cx: &mut TestAppContext) {
         "Tab reaches the row's button"
     );
     shell.press("enter", cx);
-    landed(
-        table,
-        shell,
-        "P20 an Activity row's button (W-12)",
-        SettingsPage::Keys,
-        MAKE,
-        cx,
-    );
+    landed_on_make(table, shell, "P20 an Activity row's button (W-12)", cx);
 
     let rows = activity_rows(cx);
     let shell = &rows.shell;
@@ -117,14 +123,7 @@ fn activity_row(table: &mut Table, cx: &mut TestAppContext) {
     shell.keys("shift-f10", cx);
     highlight(&mut shell.visual(cx), keys_label());
     shell.keys("enter", cx);
-    landed(
-        table,
-        shell,
-        "P20 an Activity row's menu entry (W-12)",
-        SettingsPage::Keys,
-        MAKE,
-        cx,
-    );
+    landed_on_make(table, shell, "P20 an Activity row's menu entry (W-12)", cx);
 }
 
 /// The same row, from the Needs attention popover opened by Enter on the
@@ -134,14 +133,7 @@ fn popover_row(table: &mut Table, cx: &mut TestAppContext) {
     let shell = &rows.shell;
     open_popover(shell, cx);
     press_in_popover(shell, &rows.keys, cx);
-    landed(
-        table,
-        shell,
-        "P20 a popover row (W-12)",
-        SettingsPage::Keys,
-        MAKE,
-        cx,
-    );
+    landed_on_make(table, shell, "P20 a popover row (W-12)", cx);
 }
 
 /// A repository row's menu, opened with `shift-f10` on the Repositories
@@ -210,12 +202,10 @@ async fn lifecycle(table: &mut Table, cx: &mut TestAppContext) {
     );
     shell.press("enter", cx);
     assert!(!shell.present("lifecycle-dialog", cx), "the dialog closed");
-    landed(
+    landed_on_make(
         table,
         &shell,
         "P20 a lifecycle dialog's Open Sharing & keys (W-21)",
-        SettingsPage::Keys,
-        MAKE,
         cx,
     );
 }

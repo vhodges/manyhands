@@ -11,6 +11,11 @@
 //! key's, else Make a new key. While the keys are still read, nothing of it
 //! is drawn, so focus goes to the page's entry (F2, a field not drawn), and
 //! moves once, when the read lands, if the entry still holds it.
+//!
+//! A landing on a Kit button, Make a new key or Check host while it can
+//! run, is read on the button itself (`Landing::control`), not on its
+//! wrapper, and Enter presses it. Check host drawn unavailable keeps focus
+//! through its wrapper (R-53) until it can run.
 
 use std::path::{Path, PathBuf};
 
@@ -27,13 +32,16 @@ use super::{
 };
 use crate::desktop::{
     model::stamp::SettingsPage,
-    services::{ReadKind, requests::Intent},
+    services::{
+        ReadKind,
+        requests::{DesktopRequestId, Intent},
+    },
     test_support::fixtures::{
         Fixture, clear_key_through, select_key_through, unregister_key_through,
     },
     view::{
         activity::tests::cases::{answered, fabricate},
-        harness::Shell,
+        harness::{CHECK_HOST, MAKE_A_NEW_KEY, Shell},
         settings::{SettingsRoute, Shown, polling_support::Rig},
     },
 };
@@ -43,6 +51,9 @@ use crate::desktop::{
 pub(super) struct Landing {
     pub(super) page: SettingsPage,
     pub(super) focus: ElementId,
+    /// Whether `focus` is a Kit button's own ID, read as the control itself
+    /// holding focus (`holds_control`), not as an element focus is in.
+    pub(super) control: bool,
     pub(super) chosen: Option<PathBuf>,
 }
 
@@ -55,7 +66,21 @@ impl Landing {
         Self {
             page,
             focus: focus.into(),
+            control: false,
             chosen: chosen.map(Path::to_owned),
+        }
+    }
+
+    /// A landing on the Kit button `control` itself, not on its wrapper: its
+    /// focus ring drawn and Enter pressing it.
+    pub(super) fn control(
+        page: SettingsPage,
+        control: impl Into<ElementId>,
+        chosen: Option<&Path>,
+    ) -> Self {
+        Self {
+            control: true,
+            ..Self::new(page, control, chosen)
         }
     }
 }
@@ -109,7 +134,11 @@ pub(super) fn land(
     if wanted.page == SettingsPage::Keys {
         shell.keys_landed(cx);
     }
-    let held = holds(shell, wanted.focus.clone(), cx);
+    let held = if wanted.control {
+        shell.holds_control(wanted.focus.clone(), cx)
+    } else {
+        holds(shell, wanted.focus.clone(), cx)
+    };
     table.row(shell, row, held, &format!("{:?}", wanted.focus), cx);
     let chosen = shell
         .workspace
@@ -160,6 +189,47 @@ fn entry_is(table: &mut Table, shell: &Shell, row: &str, ix: usize, cx: &mut Tes
         &format!("{:?}", entry(ix)),
         cx,
     );
+}
+
+/// Puts focus on the shown page's menu entry, as a person can.
+fn focus_entry(shell: &Shell, cx: &mut TestAppContext) {
+    let host = host(shell, cx);
+    shell.frame(cx, |window, cx| {
+        let entry = host.read(cx).first_focus();
+        window.focus(&entry.expect("the page's entry"), cx);
+    });
+}
+
+/// Row `row`, Enter pressed where a route landed: the control does what
+/// `acted` reads, as its click does.
+pub(super) fn enter_acts(
+    table: &mut Table,
+    shell: &Shell,
+    row: &str,
+    acted: impl FnOnce(&Shell, &mut TestAppContext) -> bool,
+    cx: &mut TestAppContext,
+) {
+    shell.press("enter", cx);
+    let done = acted(shell, cx);
+    table.fact(
+        &format!("{row} (Enter)"),
+        done,
+        "Enter pressing the control",
+    );
+}
+
+/// Make a new key's Generate form is shown (C2.2).
+pub(super) fn generate_shown(shell: &Shell, cx: &mut TestAppContext) -> bool {
+    shell.present("key-generate-heading", cx)
+}
+
+/// The Hosts page's latest Check host, if any.
+fn observing(shell: &Shell, cx: &mut TestAppContext) -> Option<DesktopRequestId> {
+    let host = host(shell, cx);
+    let page = shell
+        .visual(cx)
+        .update(|window, cx| host.update(cx, |host, cx| host.hosts(window, cx)));
+    page.read_with(cx, |page, _| page.observing_id())
 }
 
 pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
@@ -219,6 +289,20 @@ fn keys(table: &mut Table, rig: &Rig, cx: &mut TestAppContext) {
         "(key-radio, 0), k1's",
         cx,
     );
+    // Once: with focus put back on the entry, a later read of the keys, as
+    // a key command's finishing starts, moves it no more.
+    focus_entry(shell, cx);
+    let clear = answered("key clear", ResultCode::Ok);
+    fabricate(shell, 2, Intent::KeyClear, clear, cx);
+    shell.keys_landed(cx);
+    let held = holds(shell, entry(1), cx);
+    table.row(
+        shell,
+        "R-22 Keys, a second read after the retarget: focus moves once",
+        held,
+        "(settings-page, 1), where it was put back",
+        cx,
+    );
     escape(shell, row, cx);
 
     // The page reads the keys again on every open, and its last list is
@@ -267,17 +351,21 @@ fn keys(table: &mut Table, rig: &Rig, cx: &mut TestAppContext) {
         cx,
     );
 
-    // No key, once the read lands: Make a new key.
+    // No key, once the read lands: Make a new key, the Kit button itself,
+    // which Enter presses.
     unregister_key_through(shell.fixture.service(), k1);
     unregister_key_through(shell.fixture.service(), k2);
     raise(shell, SettingsRoute::Keys, cx);
-    lands(
+    let row = "F1 Keys, no key: Make a new key";
+    land(
         table,
         shell,
-        "F1 Keys, no key: Make a new key",
-        Landing::new(SettingsPage::Keys, "keys-make", None),
+        row,
+        &Landing::control(SettingsPage::Keys, MAKE_A_NEW_KEY, None),
         cx,
     );
+    enter_acts(table, shell, row, generate_shown, cx);
+    escape(shell, row, cx);
 }
 
 /// F2: the routes that name no field land on the page's entry; R-14: one
@@ -373,7 +461,7 @@ fn fields(table: &mut Table, rig: &Rig, cx: &mut TestAppContext) {
         table,
         shell,
         row,
-        &Landing::new(SettingsPage::Hosts, "hosts-check", Some(&a)),
+        &Landing::control(SettingsPage::Hosts, CHECK_HOST, Some(&a)),
         cx,
     );
     entry_is(table, shell, row, 1, cx);
@@ -386,6 +474,42 @@ fn fields(table: &mut Table, rig: &Rig, cx: &mut TestAppContext) {
         Landing::new(SettingsPage::Hosts, "hosts-check", Some(&b)),
         cx,
     );
+
+    // While `a`'s shared copy is read, Check host is drawn unavailable and
+    // focus is on it (R-53). Once the read lands it is the control itself,
+    // focus not having moved, and Enter checks.
+    let held = [(); 4].map(|_| shell.backend.hold_read(ReadKind::Remotes));
+    raise(shell, SettingsRoute::Hosts(a.clone()), cx);
+    let row = "F1 Hosts(root) while its shared copy is read: Check host, unavailable (R-53)";
+    land(
+        table,
+        shell,
+        row,
+        &Landing::new(SettingsPage::Hosts, "hosts-check", Some(&a)),
+        cx,
+    );
+    let reading = shell.present("hosts-check-state", cx);
+    table.fact(
+        &format!("{row} (read)"),
+        reading,
+        "its shared copy still read",
+    );
+    drop(held);
+    shell.run(cx);
+    let row = "R-53 Hosts(root), once its shared copy is read: Check host itself";
+    let offered = !shell.present("hosts-check-state", cx);
+    table.fact(&format!("{row} (offered)"), offered, "Check host offered");
+    let before = observing(shell, cx);
+    let held = shell.holds_control(CHECK_HOST, cx);
+    table.row(shell, row, held, CHECK_HOST, cx);
+    enter_acts(
+        table,
+        shell,
+        row,
+        |shell, cx| observing(shell, cx).is_some_and(|now| Some(now) != before),
+        cx,
+    );
+    escape(shell, row, cx);
 
     let authority = SshAuthority {
         host: "example.invalid".to_owned(),

@@ -17,7 +17,7 @@ use crate::desktop::{
         stamp::SettingsPage,
     },
     services::requests::Intent,
-    view::settings::Shown,
+    view::{harness::MAKE_A_NEW_KEY, settings::Shown},
 };
 
 const ACTION: &str = "polling-attention";
@@ -79,7 +79,7 @@ async fn settings_polling_attention_actions(cx: &mut TestAppContext) {
         Shown::Settings(SettingsPage::Keys)
     );
     assert!(
-        rig.shell.holds_keys_focus("keys-make", cx),
+        rig.shell.holds_keys_control(MAKE_A_NEW_KEY, cx),
         "W-32 Choose a key…"
     );
 

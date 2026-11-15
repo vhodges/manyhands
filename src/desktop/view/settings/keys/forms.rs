@@ -20,7 +20,7 @@ use gpui_kit::{
     div,
 };
 
-use super::super::wrapped;
+use super::super::{kit_button::kit_button, wrapped};
 use super::render::{heading, text};
 use super::{
     CONFIRMATION, CONFIRMATION_FIELD, GENERATE, GENERATE_HEADING, GENERATE_NOTE, GENERATE_SUBMIT,
@@ -82,13 +82,17 @@ impl KeysPage {
     pub(super) fn form_buttons(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
         let retrying = self.retrying.is_some();
-        let make = Button::new((MAKE_ID, 0usize))
+        // Its own focus is the page's, where a key-list route lands (R-22).
+        let id = (MAKE_ID, 0usize);
+        let make = Button::new(id)
             .primary()
             .label(MAKE_KEY)
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.toggle_form(KeyForm::Generate, window, cx)
             }));
-        let make = wrapped(MAKE_ID, MAKE_KEY, &self.focus[MAKE_ID], &self.scroll, make)
+        let focus = &self.focus[MAKE_ID];
+        let make = kit_button(id, focus, make);
+        let make = wrapped(MAKE_ID, MAKE_KEY, focus, &self.scroll, make)
             .aria_expanded(self.generate_shown());
         let existing = Button::new((USE_EXISTING_ID, 0usize))
             .label(USE_EXISTING)
