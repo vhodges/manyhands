@@ -2086,3 +2086,57 @@ The owner read the review-ready summary and accepted its "for you to decide" ite
 
 Still the owner's, not done: the on-screen checklist run, review approval, `ticket close` (which merges), native CI after merge.
 
+## External review (2026-11-14)
+
+The owner pasted two external reviews: one of the ticket branch (8 findings) and one of `ea6d899b` on main (8 findings, Cycle 03b's merged code; the review itself said it was probably not what was meant). The reviewer's line numbers were not file lines (they look like offsets into a diff); the reviewer later sent corrected locations. Every finding was verified against the code by a read-only investigator before anything changed.
+
+### The branch's eight findings
+
+| # | Finding | Verdict | Disposition |
+| --- | --- | --- | --- |
+| 1 | Switching Settings pages keeps the old scroll offset | Partly: reproduced on a later visit to a tall page and on a reopen on another entry (offset -230.5 and -132.5 px), masked on a first visit; pre-existing | **Fixed** (Ruling 56), `5329ee40` |
+| 2 | `land_retarget` calls `take()` then ignores a `window.update` error | Refuted: `take()` is R-22's "once" (Ruling 44), and the update fails only when the window is gone | One comment, `5329ee40`; no code change |
+| 3 | Deselect then reselect of the panel's repository overrides a Manage choice | Refuted as a bug: R-14 as ruled (owner's eye), Part G item 2, P10; the panel has no deselect gesture | None (Ruling 58) |
+| 4 | `kit_button.rs` writes into the Kit Button's private keyed state | Confirmed as fragile; accepted on purpose (Ruling 55, confirmed by the owner 2026-11-14); `Cargo.lock` pins the versions and 12 `holds_control` rows fail if the Kit changes | None |
+| 5 | Remotes and Trusted servers are read twice on open | Confirmed when the chosen repository changes (`choose` then `opened`); cosmetic | Not fixed; parked (about 10 lines with a `read: bool`) |
+| 6 | Per-key focus handles are never removed | Confirmed, negligible | Not fixed; already parked after the final review |
+| 7 | `open_settings_on(page, root)` ignores `root` for every page but Repositories | Confirmed, latent (the two callers pass Repositories) | **Fixed**: the `page` parameter is gone, `manage_in_settings(root)`, `5329ee40` |
+| 8 | Copy tests scan source files; a keys test polls in real time | Partly: P18 does scan sources (a vocabulary lint the design requires; its blind spots are Task 7 Minor 2); P21 does not scan sources; the real-time polls are harness helpers that pre-date the branch, plus one inline 10 ms loop in P19 | The P19 inline loop now uses the shared helper (E-43), `5329ee40`; P18 and P21 stay (required outcomes) |
+
+Ruling 56 (the orchestrator's): Settings pages "keep their state" (Cycle decision 6, Ruling 35), so a reopen of the same menu entry keeps its scroll offset, and the offset returns to the top only when the entry shown changes (`last_nav` in `SettingsHost`, kept across a close, `scroll.to_top()` in `open` before any focus move, so a field route's reveal still stands). Keys and Hosts share one entry, so a route between them does not reset. P8 rows: (a) a later visit to Sharing & keys after End on Repositories starts at 0 (RED -230.5 against 0), (b) a reopen of the same entry keeps its offset, (c) a reopen on another entry via a route is at 0 (RED -132.5 against 0), (d) the Hosts route reveals its control — cost if wrong: a reopen of the same entry is expected to start at the top; one line (`last_nav`) to change.
+
+### A defect the verification found (not in the review): a route's field below the fold
+
+While fixing #1 the implementer saw that the Remotes route's `remote-add-name` ends below the fold after the reveal, even without the change. A read-only investigator measured it in P8's short window (726 px): a Remotes route on a repository with 4 remotes ended 704 px below the visible area, a first Remotes open 860 px below, and a Hosts route on a first visit to Sharing & keys with 12 keys 1136 px below, with offset 0 and focus correct. Cause: `scroll.rs` reveals a focused control once, when focus moves; the route focuses into a provisional layout (the page's reads still drawn as short lines), and what lands above the field afterwards pushes it down with no second reveal. The mechanism pre-dates the branch (`scroll.rs` unchanged since main); the instance comes from decision 8 (routes land on a field) with the new layout. Ways W-9, W-10, W-11, W-15, W-24, W-31, W-35 (Remotes) and W-13, W-17, W-20, W-25, W-32 (Hosts) on a first open or a changed repository. Workaround for the user: Tab away and back. No test saw it: P4 reads focus only, in a 1590 by 1726 window.
+
+Ruling 57 (the orchestrator's): A6 F1, R-24 and decision 8 ("the right page and field") mean a route's field must be in view after the page's reads land, not only drawn. The Settings sheet's own scroll region (`ContentScroll::region_keeping`) re-checks its focused control each frame while focus stays put and the offset is the one its last check left; a wheel, a page key, Home or the scrollbar changes the offset and ends that until focus moves, so scrolling away is left alone. Item regions and the content column are unchanged (`keep` defaults to false; their path is the old one exactly). Fix `3e48d416` (Opus implementer; a Sonnet trailer after an amend, Ruling 1): about 40 lines in `scroll.rs` and one in `settings/mod.rs`; P8 gained (e) Hosts first visit (RED `hosts-check` at y 1830.5, offset 0, 1136.5 px below), (f) a scroll-away is left alone (a variant without the offset check fails it), (g) Remotes on a repository with 4 remotes not yet shown (RED 704.5 px below), (h) an upward reveal; E-44 (row (d) now asserts the control's bounds are inside the viewport; it was already in view before, so it guards against regression); the others are additions. A touched-modules run (settings::, workspace::settings_sheet, scroll, editor host and toolbar, item sheet/frame/page, keyboard_tests::settings, tabs, tickets, drafts, dock) passed 334 of 334. Re-reviewed by Opus: approved, no Important findings; the redraw loop, nesting and editor-caret fights were each checked. The rejected alternative, a per-read `reveal_again()` hook in each page, would snap back after a scroll whenever an operation re-reads. Cost if wrong: a keeping region follows a field until the user scrolls.
+
+Ruling 58: the review's items 2 and 3 are refuted and left as they are; item 5 and item 6 are cosmetic and stay parked; the copy tests stay (design P18 and P21, Ruling 51) — cost if wrong: the owner wants the source scan removed, which loses the only check that a new copy constant is in P18's table.
+
+### The main review's eight findings (Cycle 03b, not on this branch)
+
+The branch changes none of the files these touch (`view/footer.rs`, `workspace/needs_attention.rs`, `workspace/activity_panel.rs`, `workspace/activity.rs`, `services/scheduler/*`, `activity/row.rs`, `activity_tests/narrow.rs`); it edits `services/mod.rs` only for the `KEY_STORE_UNAVAILABLE` string, and its Settings code does not read the footer's bounds map. None was fixed here. Verified by a read-only investigator:
+1. `footer.rs:411` bounds map never cleared: partly; real staleness is one frame of the popover's x after a resize (a few pixels, self-healing); cosmetic.
+2. `services/mod.rs` share-result classification from a later attempt (`note_share_attempt`, at line 1049 as the reviewer later said, called at 621): refuted as reachable; latent only.
+3. `activity_tests/narrow.rs:156` `rows_fit_a_narrow_activity` is a layout test: confirmed; 03b's Ruling T15-1 kept it on purpose (owner decision 22, acceptance A8) and said the owner may delete it.
+4. `needs_attention.rs:247` copies `activity_panel.rs`: partly; parallel structure in `workspace/needs_attention.rs` against `activity_panel.rs`, not copy-paste; maintenance cost.
+5. `activity.rs:157` titles map never pruned: confirmed; 03b's deferred Minor 6 and its fix wave ruled "not real" (one small entry per opened pane).
+6. `scheduler/attention.rs:95` maps never pruned: partly; 03b's Minor 10 and K-4 ("nothing is capped or pruned within a session").
+7. `activity.rs:131` rebuilds every row per notification: partly; refreshes are coalesced (R-43), unmeasured.
+8. `activity/row.rs:103` looks up the timezone twice per row per frame: confirmed, microseconds; about 5 lines.
+New to the 03b record: 1, 2, 4 (as written), 7 (the per-burst re-derive) and 8. For the owner: whether any becomes a follow-up ticket or a 03b follow-on (no ticket was created); item 3 is the owner's call under T15-1.
+
+### Parked after the external review
+
+1. `settings/mod.rs` is 509 lines (501 at base) and `settings_sheet_tests.rs` 744, over the roughly 500-line guideline.
+2. Following a focused control stops after a clamp (a page shrink with the field focused at a non-zero offset); HEAD never followed, so no regression; an optional remedy compares against the clamped offset.
+3. `ContentScroll`'s struct doc (`scroll.rs:49-50`) names only `region`; the module doc is accurate.
+4. A route to a field that already holds focus, after the person scrolled away, is not revealed (HEAD behaviour: focus did not move).
+5. `settings::keys::tests::a_generation_not_sent_for_its_passphrase_shows_the_fields_again` returned (Error, Busy) once in a module run under load and passes alone twice: the repository lock under contention (same class as the flake in the final-review item 7); not reachable by these changes.
+6. Row (d) of P8 was never red; (h) is a guard.
+7. The checklist gained S-10.15 (the Remotes and Hosts routes keep their field in view after the reads land).
+
+### Gates after the external-review fixes (`3e48d416`)
+
+`cargo check --all-features --locked`, `cargo fmt --check` and `cargo clippy --all-targets --all-features --locked -- -D warnings` exit 0. The binaries ran again (`cargo test --all-features --locked --no-fail-fast --bins`): the desktop binary `1938 passed; 1 failed` in 1349 s, the CLI binary 317 passed. The one failure is again `desktop::view::repositories::tests::the_more_menu_acts_on_the_chosen_repository` ("the removal's preview did not happen", `harness.rs:589`), which passes alone in about 2 s. It has now failed in 2 of the 3 full runs of the desktop binary on this branch and once in a Task 6 module run (it passed in the first full run), so it is not a one-off. Whether this branch causes it is being investigated; the ledger's earlier "existing debt" note (final-review item 7) is provisional until then.
+
