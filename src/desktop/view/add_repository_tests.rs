@@ -837,9 +837,11 @@ fn add_pressed_at_once_checks_first_and_asks_for_the_identity(cx: &mut TestAppCo
     let root = fixture.plain_repository("plain", None);
     let shell = settings(fixture, cx);
     set(&shell, "add-path", text(&root), cx);
-    assert!(!shell.present("add-inspection", cx));
+    // No check has run before the press: no check rows are drawn (B6).
+    assert!(!shell.present("add-checks", cx));
 
     shell.click("add-submit", cx);
+    assert!(shell.present("add-checks", cx), "the press checked first");
     assert_eq!(
         shell.label("add-identity-required", cx).as_deref(),
         Some(IDENTITY_REQUIRED)

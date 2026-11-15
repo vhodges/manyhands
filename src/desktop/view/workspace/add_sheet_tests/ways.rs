@@ -239,7 +239,8 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
     let (shell, a, _) = shell_with_two(cx);
     press_plus(&shell, cx);
     lands(table, &shell, "AW-2 the toolbar's +", None, cx);
-    // Left in the new mode: the next open shows the existing folder again.
+    // Left in the new mode: the next open by `+` (B2 step 6) shows the
+    // existing folder again.
     leave_in_the_new_mode(table, &shell, "AW-2", "enter", cx);
     shell.keys("escape", cx);
     if settings_open(&shell, cx) {
@@ -249,6 +250,7 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
     // B2 step 5: an Inspect route while the sheet is open applies in place
     // and keeps the origin.
     let plus = press_plus(&shell, cx);
+    lands(table, &shell, "B2 step 6 + after the new mode", None, cx);
     leave_in_the_new_mode(table, &shell, "B2 step 5", "space", cx);
     route(&shell, cx, {
         let a = a.clone();
