@@ -3,7 +3,7 @@ slug: vh-mhs1r
 id: 01M7AMAPNHHTNECXBF4CA5WPKV
 title: 'Wave 04 Cycle 04: Settings Sheet'
 type: cycle
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
