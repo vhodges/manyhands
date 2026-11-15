@@ -3,9 +3,11 @@ slug: vh-mhs1r
 id: 01M7AMAPNHHTNECXBF4CA5WPKV
 title: 'Wave 04 Cycle 04: Settings Sheet'
 type: cycle
-status: open
+status: done
 project: manyhands
 team: core
+closed_at: 2026-11-15T09:42:52Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
