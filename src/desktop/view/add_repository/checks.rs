@@ -100,7 +100,7 @@ impl AddRepositorySheet {
         self.inspection = Inspection::None;
         self.submit_pending = false;
         self.inspect_read = None;
-        self.branches_stale = true;
+        self.choices_stale = true;
         self.generations.next(ViewScope::AddRepository);
         cx.notify();
     }
@@ -116,7 +116,7 @@ impl AddRepositorySheet {
         }
         let stamp = self.generations.next(ViewScope::AddRepository);
         self.inspection = Inspection::Checking(path.clone());
-        self.branches_stale = true;
+        self.choices_stale = true;
         let root = PathBuf::from(&path);
         self.inspect_read = Some(self.services.read(
             ReadKind::Inspect,
@@ -153,7 +153,7 @@ impl AddRepositorySheet {
                 code: failure.code,
             },
         };
-        self.branches_stale = true;
+        self.choices_stale = true;
         if self.submit_pending {
             let window = self.window;
             cx.spawn(async move |this, cx| {

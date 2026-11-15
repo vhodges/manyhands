@@ -90,7 +90,6 @@ struct PendingAdd {
     /// The sheet's open number when it was confirmed (R-26).
     session: u64,
     /// The share choice to send on success (Part C), if any.
-    #[allow(dead_code)] // Used from Task 7
     share: Option<Option<String>>,
 }
 
@@ -352,14 +351,18 @@ impl Workspace {
     /// What the sheet asks (B10).
     fn add_event(&mut self, event: &AddEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
-            AddEvent::Confirmed { request, attempt } => {
+            AddEvent::Confirmed {
+                request,
+                attempt,
+                share,
+            } => {
                 let session = self.add.session;
                 self.add.pending.insert(
                     *request,
                     PendingAdd {
                         attempt: *attempt,
                         session,
-                        share: None,
+                        share: share.clone(),
                     },
                 );
                 self.adding_changed(cx);
@@ -453,10 +456,10 @@ impl Workspace {
         self.adding_changed(cx);
     }
 
-    /// A pending add ended: added at `root`, or not (`None`). Added: the
-    /// sheet of the same open closes, or, that open closed since, forgets
-    /// its check and text; a later open forgets only a stale check of
-    /// `root`, its text and focus kept (R-26; Ruling 19 C-5; B10).
+    /// A pending add ended: added at `root`, or not (`None`). Added: its
+    /// share is sent (C2); the sheet of the same open closes, or, that open
+    /// closed since, forgets its check and text; a later open forgets only a
+    /// stale check of `root`, its text and focus kept (R-26; Ruling 19 C-5; B10).
     fn add_ended(
         &mut self,
         entry: PendingAdd,
@@ -467,6 +470,7 @@ impl Workspace {
         let Some(root) = root else {
             return;
         };
+        self.send_share(entry.share, &root);
         if entry.session != self.add.session {
             self.add
                 .sheet
@@ -489,6 +493,7 @@ impl Workspace {
     }
 }
 
+mod share;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "add_sheet_tests.rs"]
 mod tests;

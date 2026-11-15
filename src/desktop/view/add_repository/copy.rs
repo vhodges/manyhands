@@ -72,6 +72,17 @@ pub(crate) const SUGGESTED: &str = "Suggested";
 pub(crate) const CHECK_OUT_FIRST: &str =
     "Check it out first. Manyhands starts from the branch you have checked out.";
 
+/// Share changes through (Part C): its label, its help, the last item, and
+/// why a remote is greyed (C1).
+pub(crate) const SHARE_THROUGH: &str = "Share changes through";
+pub(crate) const SHARE_HELP: &str = "You can also choose \"Keep on this computer\" and set this up later. Only SSH addresses can be used for sharing.";
+pub(crate) const KEEP_LOCAL: &str = "Keep on this computer";
+pub(crate) const SSH_ONLY: &str = "Only SSH addresses can be used for sharing.";
+/// Why the select is held on Keep on this computer: a folder already set
+/// up, whose Git has no name and email (C2; R-30; decision 20).
+pub(crate) const SHARE_NEEDS_IDENTITY: &str =
+    "Set your name and email in Settings first, then choose how it shares.";
+
 /// The rest of the existing-folder mode (B6 items 5 to 7).
 pub(crate) const PREFIX: &str = "Short code prefix (optional)";
 pub(crate) const IDENTITY_HEADING: &str = "Your name & email";

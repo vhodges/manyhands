@@ -29,12 +29,20 @@ impl AddRepositorySheet {
         if self.adding {
             return;
         }
+        // A check landed since the last frame chooses its share first.
+        self.sync_choices(window, cx);
         let intent = match form {
             Form::Add => self.add_intent(window, cx),
             Form::Create => self.create_intent(cx),
         };
         if let Some(intent) = intent {
-            self.confirm(form, intent, window, cx);
+            // What the add sends once it succeeds, decided now (C2); a new
+            // repository has no remotes.
+            let share = match form {
+                Form::Add => self.share(),
+                Form::Create => None,
+            };
+            self.confirm(form, intent, share, window, cx);
         }
         cx.notify();
     }
@@ -80,8 +88,15 @@ impl AddRepositorySheet {
     }
 
     /// `intent` in the confirmation dialog, followed for the request and
-    /// attempt it queues (B10, R-28).
-    fn confirm(&mut self, form: Form, intent: Intent, window: &mut Window, cx: &mut Context<Self>) {
+    /// attempt it queues (B10, R-28), each told with `share` (C2).
+    fn confirm(
+        &mut self,
+        form: Form,
+        intent: Intent,
+        share: Option<Option<String>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         debug_assert!(intent.confirmed());
         let origin = self.focus[form.submit()].clone();
         let dialog = confirm_followed(
@@ -92,7 +107,7 @@ impl AddRepositorySheet {
             cx,
         );
         if let Some(dialog) = dialog {
-            self._followed = Some(cx.subscribe(&dialog, |_, _, followed: &Followed, cx| {
+            self._followed = Some(cx.subscribe(&dialog, move |_, _, followed: &Followed, cx| {
                 if let Followed::Confirmed {
                     request, attempt, ..
                 } = followed
@@ -100,6 +115,7 @@ impl AddRepositorySheet {
                     cx.emit(AddEvent::Confirmed {
                         request: *request,
                         attempt: *attempt,
+                        share: share.clone(),
                     });
                 }
             }));
@@ -115,7 +131,7 @@ impl AddRepositorySheet {
         if !std::mem::take(&mut self.submit_pending) || !self.open.is_open(window, cx) {
             return;
         }
-        self.sync_branches(window, cx);
+        self.sync_choices(window, cx);
         let path = self.text(Form::Add.path(), cx);
         if !self.inspection.landed_for(&path) {
             return;

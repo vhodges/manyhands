@@ -20,7 +20,9 @@
 //! first and goes on only if the landed check enables it (R-T12b; G22).
 //! Only when the check reports that Git finds no identity for it are name
 //! and email asked for, and written to its own configuration; a folder
-//! already set up keeps its own prefix, so none is asked (R-31).
+//! already set up keeps its own prefix, so none is asked (R-31). How it
+//! shares is chosen among the folder's remotes (`share`, Part C), and the
+//! workspace sends the choice once the add succeeds.
 //!
 //! **Create a new repository** (B8, `create`) takes a Name and a Location,
 //! which `create-target` shows joined as typed and the sheet does not
@@ -66,6 +68,7 @@ mod create;
 mod mode;
 mod render;
 mod rows;
+mod share;
 mod submit;
 
 pub(crate) use copy::*;
@@ -74,6 +77,7 @@ use self::{
     branch::{Branch, Branches},
     checks::Inspection,
     mode::{Mode, SEGMENTS},
+    share::{Share, Shares},
 };
 use crate::desktop::{
     model::stamp::Generations,
@@ -173,10 +177,12 @@ const CANCEL_ID: &str = "add-cancel";
 /// What the sheet asks of the workspace that keeps it (B3, B10).
 pub(crate) enum AddEvent {
     /// The confirmation queued the add `request` at `attempt` (R-28): the
-    /// workspace records it for this open, or replaces its entry.
+    /// workspace records it for this open, or replaces its entry, with the
+    /// share it sends once the add succeeds (C2).
     Confirmed {
         request: DesktopRequestId,
         attempt: u32,
+        share: Option<Option<String>>,
     },
     /// The footer's Cancel: the sheet closes, its text kept (`Kept`).
     Cancel,
@@ -202,9 +208,15 @@ pub(crate) struct AddRepositorySheet {
     /// The main branch select (B7), and the items it was given last.
     branch: Entity<SelectState<Branches>>,
     branches: Vec<Branch>,
-    /// The check changed since the select's items were made: they are made
-    /// again at the next frame, which has the window the select needs.
-    branches_stale: bool,
+    /// The check changed since the selects' items were made: they are made
+    /// again at the next frame, which has the window a select needs.
+    choices_stale: bool,
+    /// The Share changes through select (Part C), the items it was given
+    /// last, and the choice: a remote's name, or `None` for Keep on this
+    /// computer.
+    share: Entity<SelectState<Shares>>,
+    shares: Vec<Share>,
+    share_choice: Option<String>,
     /// Browse is waiting for the platform's answer.
     browsing: Option<Task<()>>,
     /// Why Browse is unavailable, once the platform failed.
@@ -273,7 +285,7 @@ impl AddRepositorySheet {
                 focus.insert(id, cx.focus_handle());
             }
         }
-        for id in [Form::Add.branch(), CANCEL_ID]
+        for id in [Form::Add.branch(), share::SHARE_ID, CANCEL_ID]
             .into_iter()
             .chain(rows::ACTION_IDS)
         {
@@ -290,6 +302,8 @@ impl AddRepositorySheet {
                 this.branch_confirmed(event, window, cx)
             },
         ));
+        let (share, confirmed) = share::share_select(window, cx);
+        subscriptions.push(confirmed);
         Self {
             services,
             scroll,
@@ -301,7 +315,12 @@ impl AddRepositorySheet {
             inspect_read: None,
             branch,
             branches: Vec::new(),
-            branches_stale: false,
+            // The first frame gives the selects their items: Keep on this
+            // computer before any check (C1).
+            choices_stale: true,
+            share,
+            shares: Vec::new(),
+            share_choice: None,
             browsing: None,
             browse_unavailable: None,
             browse_not_text: None,

@@ -5,8 +5,9 @@
 //! The workspace keeps the sheet (P3); every way in opens it on `add-path`
 //! (P4); its closes give focus back to what opened it (P5) or to Settings
 //! when it came from there (P6); it closes every way (P7); late work moves
-//! no focus (P8); nothing acts behind it (P15); it scrolls on its own
-//! (P23). B9's rows, except G16 and G22 (Task 5) and G20 (Task 6), are
+//! no focus (P8); a chosen remote is selected after the add succeeds
+//! (P14); nothing acts behind it (P15); it scrolls on its own (P23). B9's
+//! rows, except G16 and G22 (Task 5) and G20 (Task 6), and P14's are
 //! tables in files of their own, run from here so that each test is named
 //! here.
 //!
@@ -40,6 +41,10 @@ mod late;
 mod returns;
 #[path = "add_sheet_tests/settings.rs"]
 mod settings;
+#[path = "add_sheet_tests/share.rs"]
+mod share;
+#[path = "add_sheet_tests/share_attempts.rs"]
+mod share_attempts;
 #[path = "add_sheet_tests/support.rs"]
 mod support;
 #[path = "add_sheet_tests/ways.rs"]
@@ -202,6 +207,25 @@ async fn late_work_moves_no_focus_after_add_closes(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let mut table = Table::new("P8");
     late::rows(&mut table, cx).await;
+    table.done();
+}
+
+/// P14 (C2; decisions 3, 12, 17, 20; R-26, R-29, R-30; K-10, K-14): the
+/// share an add was confirmed with is sent once the add has added the
+/// repository, as today's `RemoteSelect`, for the root the library
+/// registered: one for a chosen remote, `name: None` for Keep over a
+/// configured remote, none for an unchanged choice, an ineligible
+/// configured remote or an add that ends; one after Prepare again, a
+/// Partial then Retry, and a pending discovery; also when the sheet closed
+/// meanwhile, never once the app is finishing; held on Keep with no
+/// identity; a failed selection leaves the repository registered with its
+/// Activity row. The rows are in `share` and `share_attempts`.
+#[gpui_kit::test]
+async fn a_chosen_remote_is_selected_after_the_add_succeeds(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let mut table = Table::new("P14");
+    share::rows(&mut table, cx).await;
+    share_attempts::rows(&mut table, cx).await;
     table.done();
 }
 

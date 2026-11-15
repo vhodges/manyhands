@@ -56,6 +56,8 @@ mod checks;
 mod create;
 #[path = "add_repository_tests/enablement.rs"]
 mod enablement;
+#[path = "add_repository_tests/share.rs"]
+mod share;
 #[path = "add_repository_tests/support.rs"]
 mod support;
 

@@ -195,8 +195,8 @@ impl AddRepositorySheet {
     }
 
     /// Add an existing folder (B6): the folder, its checks, the main
-    /// branch, the prefix unless the folder is set up (R-31), the identity
-    /// when Git has none, and the note.
+    /// branch, how it shares (Part C), the prefix unless the folder is set
+    /// up (R-31), the identity when Git has none, and the note.
     fn add_form(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let path = self.text(Form::Add.path(), cx);
         let identity = self.inspection.identity_required(&path).then(|| {
@@ -222,6 +222,7 @@ impl AddRepositorySheet {
             .child(self.folder(Form::Add, FOLDER, Some("folder"), cx))
             .children(self.checks(cx))
             .child(self.branch_field(cx))
+            .children(self.share_field(cx))
             .children(prefix)
             .children(identity)
             .child(remove_note("add-note", cx))
@@ -235,7 +236,7 @@ impl AddRepositorySheet {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Sheet {
-        self.sync_branches(window, cx);
+        self.sync_choices(window, cx);
         let handle = self.scroll.handle().clone();
         let submit = match self.mode {
             Mode::Existing => {

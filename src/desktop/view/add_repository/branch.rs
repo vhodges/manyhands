@@ -183,11 +183,18 @@ fn items(inspection: &Inspection) -> (Vec<Branch>, Option<usize>) {
 }
 
 impl AddRepositorySheet {
-    /// Gives the select the items of the check now, once the check changed.
-    pub(super) fn sync_branches(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !std::mem::take(&mut self.branches_stale) {
+    /// Gives the selects the items of the check now, once the check
+    /// changed: the main branch's, and Share changes through's (`share`).
+    pub(super) fn sync_choices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.choices_stale) {
             return;
         }
+        self.sync_branches(window, cx);
+        self.sync_shares(window, cx);
+    }
+
+    /// Gives the main branch select the items of the check now.
+    fn sync_branches(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (items, chosen) = items(&self.inspection);
         self.branches = items.clone();
         self.branch.update(cx, |select, cx| {
@@ -210,7 +217,6 @@ impl AddRepositorySheet {
             _ => None,
         };
         if named.as_deref() != allowed {
-            self.branches_stale = true;
             self.sync_branches(window, cx);
             cx.notify();
         }
