@@ -31,7 +31,7 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 7 | done, review approved first time (Minors parked) | code `a14e862d` (base `d7b39f62`); ledger `4fb4c234`; ticket comment `08c7752e` | yes |
 | 8 | done, review approved first time (Minors parked); a Task 7 test hang found at its boundary (below) | code `6d7734d1` (base `08c7752e`); ledger `97632b8b` | yes |
 | 9 | done, stopped once for the owner (Ruling 22), review approved first time (Minors parked) | code `0765dd28` (base `b81905cb`); ledger `221cc5ee` | yes |
-| 10 | documents `8e4479f0` to `6550f995`; gates, whole-branch review, owner review and its fix wave `060bf559` (below); review-ready comment next | docs `8e4479f0`, `6ce8e0bd`, `698404d0`, `6550f995`; fix wave `060bf559` | documents yes; the fix wave with the ledger commit |
+| 10 | documents `8e4479f0` to `6550f995`; gates, whole-branch review, owner review and its fix wave `060bf559` (below); review-ready comment next | docs `8e4479f0`, `6ce8e0bd`, `698404d0`, `6550f995`; fix wave `060bf559` | yes |
 
 ## Branches published
 
@@ -1616,3 +1616,22 @@ when `press_add` is false, and a row for R-26's reopened sheet; pinning
 `KEEP_LOCAL` substring check; duplicated test helpers; the blur read after close;
 `add_repository_tests.rs` (940 lines) split; the composer discard's empty body
 band; the half-filled identity (finding 6); the flaky library test above.
+
+**Final gate results, after the fix wave.** The whole desktop test target
+(`cargo test --all-features --locked --no-fail-fast --bin manyhands`, once, on
+`060bf559`, 24 min 10 s): **1965 passed, 0 failed**, including
+`item::frame_tests::page_keys_scroll_the_items_region_and_settings_keep_theirs`.
+The other fast-tier targets did not need a rerun: nothing outside `src/desktop/`
+changed, and the lib (1564), `manyhands-cli` (317) and integration targets ran
+green on the earlier tree except the one library flake above. Static gates,
+whole tree, on the final tree (`cfbffee0`): `cargo check --all-features
+--locked`, `cargo fmt --check`, `cargo clippy --all-targets --all-features
+--locked -- -D warnings`: all exit 0. `git merge-tree --write-tree HEAD
+origin/main` is clean (`origin/main` is `14ca0938`, an ancestor of the branch);
+the boundary diff is empty; `Cargo.lock` is unchanged. No SSH target ran: nothing
+under their paths changed. Native CI is not dispatched (the owner's approval).
+
+**Not done, not authorized:** the on-screen checklist (the owner's, results
+empty), a pull request, the merge into main, `ticket close` (its cleanup stops on
+ignored files in the worktree: `target/` and `.devenv/`; Task 10 Step 6 not run,
+Ruling 4), worktree cleanup, native CI, creating tickets.
