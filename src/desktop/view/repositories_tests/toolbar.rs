@@ -311,6 +311,14 @@ pub(super) async fn more_menu(cx: &mut TestAppContext) {
     assert!(choose_and_hold(&shell, REBUILD_INDEX, &more, cx), "focus");
     assert_eq!(intents(cx, &a, true), before + 1, "IndexRebuild of a");
     assert_eq!(intents(cx, &b, true), 0, "not b");
+    // The rebuild ends before the removal below is prepared: both take the
+    // data directory's cache lock, and a preview still busy after its
+    // retries shows Retry, not the preview.
+    for id in shell.requests(cx, |request| {
+        matches!(request.intent, Intent::IndexRebuild { .. })
+    }) {
+        shell.until_ended(id, cx).await;
+    }
 
     // A Refresh the menu showed for `b`, while `a` is chosen, does nothing.
     let stale = RepositoryMenuChoice {
@@ -326,6 +334,11 @@ pub(super) async fn more_menu(cx: &mut TestAppContext) {
     // Remove from Manyhands…: the dialog with its note; Cancel gives focus
     // back to More; OK removes `a`.
     let ready = |shell: &Shell, cx: &mut TestAppContext| {
+        // Retry is drawn only once the preview has answered busy.
+        assert!(
+            !shell.present("confirm-retry", cx),
+            "the removal's preview answered busy (Retry is drawn)"
+        );
         shell.label("confirm-ok", cx).as_deref() == Some(CONFIRM)
             && shell.present("confirm-expires", cx)
     };
