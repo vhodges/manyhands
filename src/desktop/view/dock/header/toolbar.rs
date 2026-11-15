@@ -26,14 +26,12 @@ use gpui_kit::{
 use crate::desktop::{
     assets::icon_path,
     keys::{NAVIGATION_CONTEXT, NewItem, REPOSITORIES_CONTEXT},
-    model::{
-        activity::copy::SHOW_ONLY_ATTENTION, layout::PanelKind, navigation::Pane,
-        stamp::SettingsPage,
-    },
+    model::{activity::copy::SHOW_ONLY_ATTENTION, layout::PanelKind, navigation::Pane},
     view::{
         create::{NEW_DOCUMENT, NEW_TICKET},
         documents::{COLLAPSE_ALL, NEW_FOLDER},
         repositories::{ADD_OR_CREATE, CHECK_ALL, MORE, check_all_roots},
+        settings::SettingsRoute,
         shell::tokens::chrome_colors,
         workspace::{ToolbarButton, Workspace, modal_open},
     },
@@ -246,8 +244,9 @@ impl Workspace {
             ToolbarButton::NewDocument => self.new_item(Pane::Documents, window, cx),
             ToolbarButton::NewFolder => self.new_folder(window, cx),
             ToolbarButton::CollapseAll => self.collapse_all_folders(window, cx),
+            // On the Add folder (W-6; Wave 04 Cycle 04 design Part D).
             ToolbarButton::AddRepository => {
-                self.open_settings(SettingsPage::Repositories, window, cx)
+                self.show_settings(SettingsRoute::AddRepository, None, window, cx)
             }
             ToolbarButton::CheckAll => self.check_all(window, cx),
             ToolbarButton::RepositoriesMore => self.open_more_menu(window, cx),

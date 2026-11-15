@@ -1,6 +1,8 @@
 //! The Repositories settings page (design, Settings / Repositories): the
 //! registered repositories, with a chosen one's identity and Remove
-//! (`manage`), then Add an existing repository and Create a repository.
+//! (`manage`), then its remotes under Sharing (the Remotes page's view,
+//! Wave 04 Cycle 04 design C1), then Add an existing repository and Create
+//! a repository.
 //!
 //! **Add existing** takes the folder of a Git repository that is not yet
 //! a Manyhands repository, its primary branch and an optional short code
@@ -39,9 +41,9 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
-    AnyWindowHandle, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement, PathPromptOptions, Render, StatefulInteractiveElement, Styled,
-    Subscription, Task, TestSupportExt, Window,
+    AnyView, AnyWindowHandle, AppContext, ClickEvent, Context, Entity, FocusHandle,
+    InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render,
+    StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable,
         button::{Button, ButtonVariants},
@@ -49,7 +51,7 @@ use gpui_kit::{
         input::{Input, InputEvent, InputState},
         v_flex,
     },
-    div, px,
+    div,
 };
 use manyhands::{
     repository::{ConfigurationState, IdentityAvailability, RepositoryInspectionDto},
@@ -58,7 +60,9 @@ use manyhands::{
 
 mod manage;
 
-use super::wrapped;
+pub(crate) use manage::RepositoriesEvent;
+
+use super::{OpenFlag, field_column, wrapped};
 use crate::desktop::{
     model::{
         list_state::LABEL_BUSY,
@@ -226,14 +230,20 @@ pub(crate) struct RepositoriesPage {
     /// Why Browse is unavailable, once the platform failed.
     browse_unavailable: Option<&'static str>,
     /// Add was pressed before its folder's text was checked: once the
-    /// check lands, the submit goes on (ruling R-T12b).
+    /// check lands, the submit goes on (ruling R-T12b), while Settings is
+    /// open (R-48).
     submit_pending: bool,
+    /// Whether Settings is open: a check that lands after it closed opens
+    /// no confirmation and moves no focus (design A4).
+    open: OpenFlag,
     /// The window the page is in, for going on with a submit once a read
     /// lands.
     window: AnyWindowHandle,
     /// The registered repositories, their identity and their removal
     /// (`manage`).
     managed: manage::Managed,
+    /// The Remotes page, drawn under Sharing for the chosen repository.
+    sharing: AnyView,
     _inputs: Vec<Subscription>,
     _operations: Subscription,
 }
@@ -242,6 +252,8 @@ impl RepositoriesPage {
     pub(crate) fn new(
         services: Services,
         scroll: ContentScroll,
+        open: OpenFlag,
+        sharing: AnyView,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -297,7 +309,8 @@ impl RepositoriesPage {
             this.operations_changed(cx)
         });
         let managed = manage::Managed::new(&services, cx);
-        let mut page = Self {
+        // The list is read when the page is shown (`opened`).
+        Self {
             services,
             scroll,
             inputs,
@@ -311,13 +324,13 @@ impl RepositoriesPage {
             browsing: None,
             browse_unavailable: None,
             submit_pending: false,
+            open,
             window: window.window_handle(),
             managed,
+            sharing,
             _inputs: subscriptions,
             _operations: operations,
-        };
-        page.load_registrations(cx);
-        page
+        }
     }
 
     #[cfg(all(test, feature = "desktop-test-support"))]
@@ -443,8 +456,16 @@ impl RepositoriesPage {
             return;
         };
         let text = text.to_owned();
+        // No Add was pressed for this folder (R-48).
+        self.submit_pending = false;
         self.inputs[Form::Add.path()].update(cx, |input, cx| input.set_value(text, window, cx));
         self.inspect(cx);
+    }
+
+    /// Settings closed: an Add waiting for its folder's check does not go on
+    /// when the check lands (R-48).
+    pub(crate) fn forget_pending_submit(&mut self) {
+        self.submit_pending = false;
     }
 
     /// Whether the Add folder's current text has been checked: what was
@@ -459,7 +480,8 @@ impl RepositoriesPage {
     /// and nothing is confirmed yet; otherwise the submit goes on. A check
     /// whose text changed meanwhile was dropped, and the wait with it.
     fn resume_submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !std::mem::take(&mut self.submit_pending) {
+        // A check that lands after Settings closed goes no further (A4).
+        if !std::mem::take(&mut self.submit_pending) || !self.open.is_open(window, cx) {
             return;
         }
         if let Some(branch) = self.pending_branch.take() {
@@ -602,7 +624,7 @@ impl RepositoriesPage {
     /// A labeled field: its label, then its input in its wrapper.
     fn field(&self, id: &'static str, label: &'static str, cx: &Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
-        v_flex()
+        field_column()
             .gap_0p5()
             .child(div().text_xs().text_color(muted).child(label))
             .child(
@@ -613,7 +635,7 @@ impl RepositoriesPage {
                     &self.scroll,
                     Input::new(&self.inputs[id]).aria_label(label),
                 )
-                .w(px(480.)),
+                .w_full(),
             )
     }
 
@@ -787,6 +809,7 @@ impl Render for RepositoriesPage {
             .test_support()
             .gap_4()
             .child(self.managed_section(cx))
+            .child(self.sharing.clone())
             .child(self.add_form(cx))
             .child(self.create_form(cx))
             .children(unavailable)
@@ -800,3 +823,8 @@ mod tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "repositories_manage_tests.rs"]
 mod manage_tests;
+
+/// Settings' copy (P18); here because `manage` is private to this module.
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "copy_tests.rs"]
+mod copy_tests;

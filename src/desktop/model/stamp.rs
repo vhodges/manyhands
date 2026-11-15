@@ -25,6 +25,27 @@ pub(crate) enum SettingsPage {
     Polling,
 }
 
+/// The Settings menu's three entries (Wave 04 Cycle 04 design B1; R-4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SettingsNav {
+    Repositories,
+    SharingAndKeys,
+    Checking,
+}
+
+impl SettingsPage {
+    /// The menu entry that shows this page: Repositories and Remotes under
+    /// Repositories; Keys and Hosts under Sharing & keys; Polling under
+    /// Checking for updates.
+    pub(crate) fn nav(self) -> SettingsNav {
+        match self {
+            Self::Repositories | Self::Remotes => SettingsNav::Repositories,
+            Self::Keys | Self::Hosts => SettingsNav::SharingAndKeys,
+            Self::Polling => SettingsNav::Checking,
+        }
+    }
+}
+
 /// What asked for a result.
 ///
 /// Not `Copy`: a repository's scope holds its root.
