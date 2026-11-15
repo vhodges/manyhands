@@ -29,7 +29,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 5 | done, review approved after fix round 1 (Minors parked) | code `1ff07fe3` (base `315ae043`), fix `0d14abe6`; ledger `80a39f6a` | yes |
 | 6 | done, review approved first time (Minors parked) | code `cb78fe3d` (base `80a39f6a`); ledger `d7b39f62` | yes |
 | 7 | done, review approved first time (Minors parked) | code `a14e862d` (base `d7b39f62`); ledger `4fb4c234`; ticket comment `08c7752e` | yes |
-| 8 | done, review approved first time (Minors parked); a Task 7 test hang found at its boundary (below) | code `6d7734d1` (base `08c7752e`) | with the ledger commit |
+| 8 | done, review approved first time (Minors parked); a Task 7 test hang found at its boundary (below) | code `6d7734d1` (base `08c7752e`); ledger `97632b8b` | yes |
+| 9 | done, stopped once for the owner (Ruling 22), review approved first time (Minors parked) | code `0765dd28` (base `b81905cb`) | with the ledger commit |
 
 ## Branches published
 
@@ -1368,3 +1369,127 @@ This is a second flaky-in-a-mix defect of the same family as Cycle 04's
 state while a busy retry waits on the test clock): the full fast tier at Task 10
 will run every window test in one pool, so expect to meet others; the `[0]`
 sites and the parked items 1 to 2 are the first suspects.
+
+## Task 9 (Empty Pane, Copy, Privacy, Keyboard Journeys)
+
+Base `b81905cb`; code `0765dd28`, `feat(desktop): the empty pane's icon, and
+keyboard, privacy and copy proofs for the Add sheet`. 9 files under
+`src/desktop/`. Boundary diff empty; `Cargo.lock` unchanged. Gates pass.
+
+Ruling 21 (orchestrator, P20's `…` rule): design P20 names `ADD` and `CREATE` as
+`05`'s exception to the `…` rule; `CHOOSE_ANOTHER` (opens the chooser) and
+`OPEN_SETTINGS` (opens the Settings sheet) also have no `…` while Part F gives
+them verbatim without it. Part F is the approved copy contract, so no `…` is
+added; P20 asserts the rule over every Part F constant that opens a chooser,
+confirmation or sheet except a named list: `ADD`, `CREATE`, `CHOOSE_ANOTHER`,
+`OPEN_SETTINGS` (and requires the `…` set to be exactly `{BROWSE,
+ADD_OR_CREATE}`). `06` asks for `…` on Open its settings (it opens a sheet) but
+only Part F's wording names Choose another: **a Part F against `06`
+inconsistency for the owner** — cost if wrong: add the `…` to two constants and
+drop two names from the list.
+
+**Ruling 22 (owner, 2026-11-15; stopped for, as the handoff requires): P16's
+lost-focus landing.** After a keyboard Retry, Check again, or a Choose another
+whose Browse… answered, the pressed button vanished with the check it started
+and focus fell to the Kit sheet's own handle (`sheet`): no control focused,
+Enter inert, Tab reached the sheet's close button, Escape still worked
+(`sheet_keeps_lost_focus`, `workspace/settings_sheet.rs:373-374`, restores to
+the nearest focusable ancestor, which the layer contains). Neither B6, B9 nor
+the plan named the landing; the owner chose option (b2): the Add sheet focuses
+`add-path` itself. Realised in `rows.rs` `run_action` (Retry and Check again
+focus the folder field before re-checking, as Choose another already did when
+Browse… is unavailable) and `browse.rs` `chosen` (a folder chosen through a
+Choose another that started a Browse… takes focus only while focus is still
+exactly on Choose another's handle, the sheet is open and no dialog is over it).
+`sheet_keeps_lost_focus` and Settings are untouched (option b1, rejected, would
+have changed Cycle 04's F15 path; option a, rejected, left keyboard users with
+no focused control).
+
+Ruling 23 (orchestrator): the test window is never active, so Kit inputs get no
+`Blur`; fact 10's "the check runs on blur after a change" cannot be observed by
+keystrokes and no existing test pins it; P16 keeps B10's check-first press (Add
+pressed before the check checks first, then focuses `add-name`) instead. Part E's
+12 px gap between the icon and the text is for the owner's on-screen check.
+
+**What was built:** the empty item area's icon (`workspace/content.rs`,
+`empty_pane`: `img(APP_ICON_PATH).size(px(56.)).grayscale(true).opacity(0.35)`
+served by `DesktopAssets::load`, as Part E names; the pane's id, accessible label
+and text are unchanged; the `img` has no id, label or `test_support`);
+`add_repository_tests/keyboard.rs` (491 lines, P16), `privacy.rs` (483, P17),
+`vocabulary.rs` (352) and `vocabulary_table.rs` (285) (P20); the stale
+`#[allow(dead_code)] // Used from Task 4` on `sheet_footer` (`frame.rs`) removed.
+No marker `// Used from Task N` remains under `src/desktop/`.
+
+**Tests, all new:** P16 `add_and_create_by_keyboard` (31 rows, by Tab, Enter and
+Space only, no click: Add with the identity step, Create with the identity
+typed, Open its settings (G21 and its return to `+`), Create one here (G20),
+Retry, Check again, and Choose another with and without Browse…; each press
+starts from `add-path`, Tabs to the action and asserts `add-path` again; the
+three rows that failed with focus on `sheet` hold after (b2)); P17
+`add_sheet_names_no_secret` (userinfo in `mirror`'s HTTPS fetch URL, passwords in
+`origin`'s SSH fetch and push URLs, a passphrase typed into Settings before the
+sheet opens from there (AW-3), an imported and typed key path, the key file's
+text and its "PRIVATE KEY" armour; five steps swept, including the share list
+open and the confirmation on its landed preview; the sweep primitive is
+`polling_privacy_tests`' (snapshots after `render_frame`, labels and values) plus
+model reads for what snapshots cannot see (the share items, the branch items, the
+row tooltips, the ten fields, the requests); it also proves it reads real text
+(the sheet's title, `IS_REPOSITORY`, the confirmation's `Root:` line, both
+remotes' redacted locations); no secret value can reach a failure message; a
+mutation that landed the raw HTTPS URL as `mirror`'s location was caught by the
+share-item sweep, with 0 sentinels in the failure log); P20
+`frame_copy_uses_the_vocabulary` (every Part F constant and fn pinned to its text
+character for character, including `SHARE_HELP`'s straight quotes, Unlock's
+`NOT_NOW_NOTE` and `TITLE`, `ADDING`, `SHARE_NEEDS_IDENTITY` and the fns
+`will_create`, `other_main_branch`, `not_ssh_remote`; a source scan catches a new
+const or fn; it failed under a mutation).
+
+**Tests run:**
+
+- Implementer, by exact name: P16 alone 31 of 31; P16, P20, P17 and the
+  empty-pane test together 4 of 4; the six existing tests that use the changed
+  actions (P9, P21, P22, the Browse test, `create_leaves_no_message_behind`, P8)
+  6 of 6.
+- Orchestrator's module run, once, 7 filters (all matched at least one test):
+  `desktop::view::{add_repository::tests (29), workspace::add_sheet::tests (9),
+  workspace::tests (29), polling_privacy_tests (1), editing_privacy_tests (3),
+  settings::repositories::copy_tests (1), keyboard_tests::settings (6)}` — **78
+  passed, 0 failed**. `workspace::tests` holds
+  `the_item_area_holds_nothing_of_the_repository` (the empty pane's text, unchanged).
+
+**Existing tests edited:** none; `add_repository_tests.rs` gains only three
+`#[path] mod` declarations (6 lines).
+
+**Review** (opus, with a privacy lens): spec compliant, quality approved, no
+Critical or Important; no loop. Parked Minors, for the final review:
+
+1. **P16 waits 180 s on a failed add and loses its rows**
+   (`keyboard.rs:284`, `:326`): `onboarded` runs even when `confirm` returned
+   `None` or a non-success, so it waits the full `WAIT` for an `IndexRefresh`
+   that never comes and panics with the generic "the awaited state did not
+   arrive", before `table.done()` prints the failed rows. Fix: call `onboarded`
+   and `closed_onto_plus` only when `ended == Some((Success, Ok))`. Same family as
+   the Task 7 hang.
+2. P17's "select's choice" check (`privacy.rs:417-421`) can pass without reading
+   the select: `reads(&read, "drawn", KEEP_LOCAL)` is a substring match and
+   `SHARE_HELP` (drawn as `add-share-help`) contains "Keep on this computer";
+   tighten it to `line.at == "add-share-select"` with exact text. Privacy risk is
+   low (the trigger shows `title()`, a remote name).
+3. P17's share-item sweep copies `Share::render` by hand (`privacy.rs:199-205`
+   reads `title()`, `location` and `SSH_ONLY` from the model, which is what
+   `share.rs:90-106` draws today); the Kit's open list items carry no label so
+   this is the only way in (`polling_privacy_tests` reads tooltips the same way).
+   If `Share::render` ever draws something else, the sweep will not see it.
+4. Three helpers duplicate existing ones: `keyboard.rs:199-210` `onboarded`
+   (`until_onboarded`, minus `until_listed`), `:155-161` `sent` (`of`), `:166-172`
+   `preview_landed` (a copy of `workspace/add_sheet_tests/support.rs:369`);
+   `where_focus` (`:124`) finds focus by matching Debug text
+   (`gpui_kit::base::test_support::has_observed_focus` does it without the
+   dependency, see `frame_tests.rs:89-99`); `browse.rs:49-55` `prompt(form,
+   from_action: bool, ..)` takes a bare bool (a two-case enum would read better).
+5. Coverage: P17 never switches to Create mode (the target line), never draws the
+   identity block (`shared` has an identity) and never chooses an eligible remote;
+   no secret source reaches any of these.
+6. Not verified: that the Kit `Select` trigger's snapshot exposes the chosen title
+   as a value; that GPUI's native accessibility tree gives the decorative `img`
+   a node; Part E's centring and 12 px `gap_3` (on screen).
