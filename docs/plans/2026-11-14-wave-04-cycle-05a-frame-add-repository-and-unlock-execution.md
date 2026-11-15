@@ -25,7 +25,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 1 | done, review approved first time (Minors parked) | code `ded7ca46` (base `0ac6af37`); ledger `d9533dd9` | yes |
 | 2 | done, review approved after fix round 1 (Minors parked) | code `b2618100` (base `d9533dd9`), fix `31497e0e`; ledger `92f3ba73` | yes |
 | 3 | done, review approved first time (Minors parked) | code `5f8c10b7` (base `92f3ba73`; trailer amended before publishing); ledger `2c398b03` | yes |
-| 4 | done, design checkpoint stopped for the owner (Rulings 15 to 18), review approved first time (Minors parked) | code `0d5cae5c` (base `2c398b03`); ledger `4bab2795`; merge of main `9059778f` | yes |
+| 4 | done, design checkpoint stopped for the owner (Rulings 15 to 18), review approved first time (Minors parked) | code `0d5cae5c` (base `2c398b03`); ledger `4bab2795`; merge of main `9059778f`; ledger `f4059706`; ticket comment `315ae043` | yes |
+| 5 | done, review approved after fix round 1 (Minors parked) | code `1ff07fe3` (base `315ae043`), fix `0d14abe6` | with the ledger commit |
 
 ## Branches published
 
@@ -818,3 +819,160 @@ merge source is `origin/main`, and Rulings 1 and 3's "Cycle 04's tip" mean
 sheet, the Workspace's sheet owner or the dialogs reaches main" does not fire:
 the Cycle that landed is the one already merged. Task 7 still merges
 `origin/main` — cost if wrong: a re-merge.
+
+## Task 5 (Add An Existing Folder)
+
+Base `315ae043`; code `1ff07fe3`, `feat(desktop): add an existing folder:
+mode, checks, main branch, enablement`; fix `0d14abe6`, `test(desktop): pin the
+new-mode reopen and replace a dead absence check`. 23 files under
+`src/desktop/`. Boundary diff empty; `Cargo.lock` unchanged. Gates pass.
+
+**What was built** (`D/` is `src/desktop/`): the mode control `add-mode`
+(`add_repository/mode.rs`, Cycle 02's segments, R-10: two `Role::Tab`
+segments, each a Tab stop with Enter and Space); B6's check states as rows
+(`rows.rs`: container `add-checks`, each row `("add-check", ix)`, at most one
+action as a `wrapped_kit` button: `add-open-settings`, `add-create-here`,
+`add-choose`, `add-retry`); the main-branch select (`branch.rs`: the
+checked-out branch first, Suggested or Held, the others Other with
+`CHECK_OUT_FIRST`; `on_will_change` vetoes, `branch_confirmed` ignores a
+`Confirm` naming another branch, and Add sends `allowed_branch`, never the
+select's value); `submit.rs` (Add goes ahead only when `add_enabled`; pressed
+before the check lands it checks first; `resume_submit` for G22); Part F's
+constants in `copy.rs` plus two formatting fns the design left unnamed
+(`other_main_branch`, `not_ssh_remote`); the prefix is not drawn or sent for a
+Valid configuration (R-31); Browse… and its note line; `AddEvent::OpenSettings`
+now calls `add_closed(ToSettings(root))` (its dead-code allow is removed);
+`add_ended` calls `forget_check_of(&root)` for a later open (Task 4 Minor 4).
+Production files: `add_repository.rs` shrank from 505 to 438, `add_sheet.rs` from
+501 to 494; `configuration_label` was removed from `view/sidebar.rs` (its only
+caller was the replaced "Configuration …" label).
+
+**Tests written first, each seen failing:** P9 (B6's table; `Busy` through a
+test accessor), P10 (with G16 and the no-commits row), P11 (B10's table and
+G22), P21's Add rows, P22 (`#[cfg(unix)]`), in submodules under
+`D/view/add_repository_tests/` (`checks.rs`, `branch.rs`, `enablement.rs`,
+`browse.rs`, `support.rs`; none over 400 lines). `add_repository::tests`: 17 to
+22 tests (the 17 of Task 3 plus `folder_checks_are_rows_with_their_actions`,
+`the_main_branch_is_the_checked_out_one`, `add_is_enabled_only_when_it_can_go_ahead`,
+`browse_says_why_beside_its_button`, `a_folder_that_is_not_text_is_named`); the
+other edited test files keep their function lists (checked before and after).
+
+**Tests run:**
+
+- Implementer, by exact name: P9 to P11, P21, P22, the extended Task 4 rows,
+  17 existing Add tests, the copy table, the keyboard walk and the 8 add_sheet
+  tests, all passing; mutation checks showed P23 and the below-the-fold test
+  still discriminate at their new window sizes.
+- Orchestrator's module run, once, 4 filters (all matched at least one test):
+  `desktop::view::add_repository::tests` (22),
+  `desktop::view::workspace::add_sheet::tests` (8),
+  `desktop::view::settings::repositories::copy_tests` (1),
+  `desktop::view::keyboard_tests::settings` (6) — **37 passed, 0 failed**.
+- After the fix, `add_repository::tests` and `add_sheet::tests` again: **30
+  passed, 0 failed**.
+
+**Named edits, with assertions removed (called out for the review-ready
+summary):**
+
+- E-1a `adding_a_folder_that_is_not_a_repository_shows_its_typed_failure`:
+  **removed** the preview's `confirm-code` and `confirm-message` and
+  `!present("confirm-ok")`, and `add-inspection`'s read message and
+  `add-inspection-code`'s code (B6 draws "Not a Git repository." with no code
+  shown); the code is now asserted from the library (`NotRepository`), with
+  the rows `[NOT_REPOSITORY]`, `add-create-here` reading `CREATE_HERE`, Add
+  disabled and no dialog on a press.
+- E-1b: `value("add-branch")` becomes `chosen_branch(...) == Some("main")`; no
+  assertion removed. E-1c: Add's part also asserts `!present("add-browse-note")`;
+  Create's half switches to the new mode first, its
+  `!present("browse-unavailable")` becoming `!present("create-browse-note")`.
+  E-1d / E-4: the `NOT_ADDED` and configuration label assertions become B6's
+  rows (`[IS_REPOSITORY, NOT_SET_UP]`, `[ALREADY_ADDED, ALREADY_SET_UP]`),
+  stronger; no assertion removed.
+- E-2 `submitting_with_no_folder_says_so`: **removed** Add's
+  `add-message == NEED_FOLDER`; Add's half now asserts Add disabled, nothing
+  drawn as `add-message` and no dialog after a press (that `add-message`
+  absence check can never fail: parked Minor, below). Create's half still
+  asserts `create-message == NEED_FOLDER` (Task 6's to change).
+- E-17a (continued), P18's copy table: **removed** the rows
+  `c!(add_repository, ADD_HEADING)`, `NOT_ADDED` and `CHECKED_OUT`, each for a
+  deleted constant (B6: "the 'Checked out: {branch}' line goes; the branch
+  shows in B7"); `PRIMARY_BRANCH` renamed `MAIN_BRANCH`; `CREATE_HEADING`,
+  `CREATE_FOLDER`, `NEED_FOLDER`, `NEED_BRANCH` kept (Task 6's).
+
+**Further edits (E-17 onward, decision 8):**
+
+- E-17e: the Create tests open the new mode first (a helper `new_mode`;
+  `fill_create` calls it), since B5 shows one form at a time. No assertion
+  removed.
+- E-17f: `a_form_control_below_the_fold_is_scrolled_into_view` switches to the
+  new mode and its window goes from 360 to 250 px (with one mode drawn, Create's
+  prefix was inside the viewport at 360). Still discriminates: the prefix
+  starts below the fold and the offset goes below 0 once Tab reaches it.
+- E-17g: `returns.rs::confirmation` (P5's G13 rows) chooses the new mode before
+  its Create row and the existing mode again before "a finish that ends the add"
+  (guarded with `present`). `returns.rs` is now 502 lines.
+- E-17h: P23 `the_add_sheet_scrolls_on_its_own` (C-7): the window goes from 250
+  to 150 px so the body still overflows in one mode; the mutation with the page
+  keys unbound fails both "moves the sheet's body" rows.
+- E-17i: G1 (`ways.rs`): `lands()` gains the existing-folder mode fact on every
+  AW row, and `leave_in_the_new_mode` presses the new mode by Enter (after AW-2)
+  or Space (before the in-place Inspect). Additions only.
+- E-17j: G21 (`settings.rs::open_its_settings`) presses
+  `("add-open-settings", 0)` after a real check instead of calling `add_closed`
+  directly. Additions only. P7's `closes.rs::to_settings` still calls it
+  directly.
+- E-17k: Minor 4's pin, `late.rs::earlier_open`, gains the "check kept at the
+  reopen" and "(B10, its check forgotten)" facts. Additions only.
+- E-17l (fix round 1): `ways.rs` gains the row "B2 step 6 + after the new
+  mode" after AW-2's reopen (a closed sheet left in the new mode, reopened by a
+  `New` route, shows the existing folder and G1's focus on `add-path`; with
+  `route` restricted to Inspect, P4 fails 2 of 45 rows, both the new one); and
+  `add_pressed_at_once_checks_first_and_asks_for_the_identity`'s
+  `!present("add-inspection")` (an id removed in this task, so it could never
+  fail) is replaced by `!present("add-checks")` before the press, with
+  `present("add-checks")` after it. An assertion replacement, not a removal.
+
+**Review** (opus): spec compliant; quality first ❌ on two Important
+test-evidence gaps (the B2 step 6 reopen never read the mode, and the dead
+`add-inspection` absence check), both fixed in round 1 (2 addressed, 0 open;
+scoped re-review: addressed). Parked Minors, for Task 6 and the final review:
+
+- **For Task 6 (pointers):** (a) `mode.rs:43` / `submit.rs:143`: switching mode
+  does not forget a pending Add: press Add while the check is in flight, switch
+  to "Create a new repository", and the landed check still opens Add's
+  confirmation or focuses a row action, then G13 focuses an undrawn handle:
+  `set_mode` should clear `submit_pending`, or `resume_submit` should require
+  `Mode::Existing`; (b) `browse.rs:75-90`: `chosen` no longer clears the form's
+  message, so Create's "Enter the folder's path." stays after Browse… fills the
+  folder (Task 6 deletes `NEED_FOLDER`); (c) "Create one here" is interim: it
+  switches mode, fills today's `create-path` and focuses it; G20 and
+  Name/Location are Task 6's; (d) `add_repository_tests.rs:478`'s
+  `!present("add-message")` is a dead check.
+- **Design gap for the owner:** `checks.rs:87` `not_ssh`: a Valid configuration
+  whose publication remote is not among the folder's remotes draws no row and
+  Add stays enabled; the library then refuses the preview (`InvalidRemote`,
+  `bind/repo.rs:818`). C2's text ("disables Add for an ineligible one") and
+  decision 9 ("the library refuses both … Add is disabled") differ.
+- `browse.rs:36`: `browse_not_text` is cleared when the next Browse… opens,
+  not "until the next choice"; P21 does not cover it.
+- `add_repository.rs:407` with `submit.rs:334`: Enter in `add-prefix`,
+  `add-name` or `add-email` calls `submit` directly; the `add_enabled` guard is
+  all that stops a preview on a disabled state, and P11's disabled rows click a
+  disabled button, so the keyboard path is untested.
+- `copy.rs:60`, `:63`: `CHOOSE_ANOTHER` (opens the chooser) and `OPEN_SETTINGS`
+  (opens the Settings sheet) have no `…`, against `06`'s rule; verbatim from
+  Part F. P20 (Task 9) needs a ruling or an exception, as for `ADD` and
+  `CREATE`.
+- `checks.rs:186` `Inspection::NotText(String)` is only built empty (a unit
+  variant would read better); `render.rs:195` `add-identity` has no
+  `.test_support()`; `mode.rs` draws its own focus ring instead of the filter
+  bar's `inset_ring`; `returns.rs` is 502 lines and `add_repository_tests.rs`
+  929 (a Task 3 move, not new).
+- A pressed Retry, Check again or Create one here disappears, so focus falls to
+  Task 4's lost-focus handling (by reading, to `add-path`); no G row covers it;
+  P16 (Task 9) should.
+- Readings where B6's rows meet, for the owner's eye: a registered folder shows
+  only its configuration rows and Open its settings (decision 18: "state and
+  problems"); with no branch checked out only `NO_BRANCH` is drawn.
+- P18's copy table has no rows for the new Part F constants (E-17a asks only
+  for renames and removals); P20 (Task 9) covers Part F.
