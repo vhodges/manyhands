@@ -14,8 +14,8 @@ Ticket `01M7D7JK5MSY6J471JEKG3CZXR` (`vh-qjw5e`).
 [Design](../plans/2026-11-15-wave-04-cycle-05b-close-and-resolve-design.md) and
 [implementation plan](../plans/2026-11-15-wave-04-cycle-05b-close-and-resolve-implementation.md).
 
-Status: **draft** (revision 3), for the owner's review. Nothing here is
-approved.
+Status: **draft** (revision 4), for the owner's review. Nothing here is
+approved. **Revision 4 had no independent review.**
 
 - On 2026-11-15 the owner asked to plan Cycle 05b ("Lets plan 05b
   next"), once Cycle 05a's documents were approved (05a decision 21).
@@ -47,6 +47,13 @@ Revision history:
 - Revision 3 applied both. Each Blocking finding was a missing case: a
   test fixture that offers no Retry, and a running dialog left with no
   Tab stop after Stop. Each is now stated (design P13, R-23).
+- Review round 3 read revision 3 at `3964af7c`: scoped re-review, 0
+  Blocking, 2 Important, 7 Minor; round 2's findings resolved.
+- Revision 4 applied it: a privacy test that drives the passphrase
+  prompt (design P12), and how the lifecycle dialog's ways into the
+  sheet behave under a prompt (R-24). It also reads Cycle 05a's branch
+  at `d7b39f62` (05a's Task 6), whose sheet checks it now names.
+  **Revision 4 was not independently reviewed.**
 
 ## Purpose And Authority
 
@@ -364,3 +371,4 @@ and U-9 (05a's own waiting openers) are checked in Task 0.
 | Planner, 2026-11-15 | The follow-up library ticket (decision 1) | Owner direction | `01M7FBRBN04QACSCZV6KX0WMR3` (`vh-nkp8c`) created and published at `ecb44079` | Session, 2026-11-15 |
 | Review round 2, scoped re-review (revision 2, `874bb66b`) | 1 Blocking, 4 Important, 8 Minor. Blocking: P13's fixture offers no Retry. Important: H1's Tab order; presses in the body moving focus; the scroll named reveals nothing; a task left red | Blocking, Important, Minor | Revision 3 (design Review Record) | Review report, 2026-11-15 |
 | Review round 2, adversarial (revision 2, `aaf6b475`) | 1 Blocking, 4 Important, 9 Minor. Blocking: no Tab stop after Stop. Important: H1; an answer under a dialog; a second Republish… path; focus moves behind the sheet | Blocking, Important, Minor | Revision 3; decisions 7 and 9 revised | Review report, 2026-11-15 |
+| Review round 3, scoped re-review (revision 3, `3964af7c`) | 0 Blocking, 2 Important, 7 Minor. Important: the privacy test's key never prompts; the lifecycle's way in under a prompt had no mechanism and lost Repair locally's late sheet | Important, Minor | Revision 4, **not independently reviewed** (design Review Record) | Review report, 2026-11-15 |

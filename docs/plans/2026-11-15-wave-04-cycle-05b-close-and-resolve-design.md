@@ -28,8 +28,8 @@ Behaviour, services, requests and recovery routes stay as they are. The
 named exceptions are the footer order (decision 4), the running stage's
 buttons and backdrop (decision 4), the sheet itself (decision 3) and the
 copy (decisions 5 and 12, Part C). It changes `src/desktop/` only.
-Draft, revision 3 (review rounds 1 and 2 applied, decisions 11 and
-12): nothing here is approved.
+Draft, revision 4 (review rounds 1–3 applied, decisions 11 and 12;
+revision 4 had no independent review): nothing here is approved.
 
 Planned against:
 
@@ -236,8 +236,11 @@ Planned against:
     focus target while a dialog or sheet is active. C4's
     `keep_focus_in_settings` (`settings_sheet.rs:303-313`) pulls focus back
     into Settings when something behind takes it, gated on `settings_open`
-    (`settings_sheet.rs:93-96`), which C5a widens to "Settings or Add
-    repository owns an active sheet" (C5a's ledger, Task 0).
+    (`settings_sheet.rs:93-96`). On 05a's branch (`d7b39f62`, its Task 6)
+    `settings_open` stays Settings' and a new `sheet_held` (Settings or
+    Add repository) gates the renamed `keep_focus_in_sheet`,
+    `sheet_keeps_lost_focus`, `focus_content` and `settings_key`
+    (`settings_sheet.rs:116-120`, `:347-371` there).
 22. **Ctrl+, and Settings routes.** `settings_key`
     (`settings_sheet.rs:350-360`) refuses while a dialog or Settings is
     open; `show_settings` (`:117-185`) refuses while a dialog is open, and
@@ -557,8 +560,12 @@ Two predicates, beside C4's `settings_open`, which stays Settings' alone
   `Resolve` and a sheet is active. Every refusal and wait in B2 reads it,
   so an Escape followed at once by Ctrl+, is not refused by an owner
   `sync_sheet` has not yet cleared.
-- `Workspace::workspace_sheet_open(&self, window, cx) -> bool`: Settings,
-  Add repository or Resolve owns the active sheet (R-25).
+- `Workspace::workspace_sheet_open(&self, window, cx) -> bool`: Cycle
+  05a's `sheet_held` (Settings or Add repository, `settings_sheet.rs:116-120`
+  on 05a's branch at `d7b39f62`) or `resolve_open` (R-25). 05a's
+  `keep_focus_in_sheet` and `sheet_keeps_lost_focus` (`:347-371` there)
+  do not take Resolve: they send focus to Settings' or Add's first
+  control; Resolve has its own (B3).
 
 ### B2. Opening
 
@@ -609,7 +616,7 @@ in a new `D/view/workspace/resolve_sheet.rs`. It:
 | --- | --- | --- |
 | Item banner, Review changes… | `conflict::open` in `ItemPane::review_conflict` | emits `ItemRoute::Resolve(Box<conflict::Opening>)`; `Workspace::item_route` (`D/view/workspace/requests.rs:181-190`) clones it in `owned()`, and `open_route` (`:198-217`) gains the arm that calls `show_resolve`. `conflict::Opening` derives `Clone`. The route runs a frame later (`cx.defer`, `:298`): a dialog opened meanwhile refuses it, as today's guard would have refused the press |
 | Activity row or pending row, Review changes… (and Needs attention, which runs them) | `Entry::open` from `review_request`, `review_pending` | `Entry::opening(..) -> Option<Opening>`, then `self.show_resolve(opening)` |
-| Lifecycle dialog, Repair locally… and Review changes… | `conflict::open` after `self.close` | `self.in_workspace(.., |ws, w, cx| ws.show_resolve(opening, w, cx))`; `in_workspace` (`D/view/lifecycle/actions.rs:126-140`) becomes generic over its closure's return value, so Repair locally… still gets the sheet for `reopen_after` (`repair.rs:260-262`), and `open_sheet` drops its own `self.close`, which `in_workspace` does. Before it closes anything, it checks that the lifecycle dialog is the top dialog; if another dialog (a prompt) opened over it, it does nothing (R-24) |
+| Lifecycle dialog, Repair locally… and Review changes… | `conflict::open` after `self.close` | `self.in_workspace(.., |ws, w, cx| ws.show_resolve(opening, w, cx))`; `in_workspace` (`D/view/lifecycle/actions.rs:126-140`) becomes generic over its closure's return value, so Repair locally… still gets the sheet for `reopen_after` (`repair.rs:260-262`), and `open_sheet` drops its own `self.close`, which `in_workspace` does. The Kit cannot say which dialog is on top, and `in_workspace` closes the top one, so the dialog goes on only while focus is inside it: a press checks this before `on` moves focus, and does nothing otherwise; Repair locally…'s sheet, which opens when the local synchronization answers (`repair.rs:214-227`), waits instead, kept on the dialog, until a render finds focus back inside it, that is, until the prompt over it has closed (R-24) |
 
 `conflict::open` becomes `pub(in crate::desktop::view)` and its only
 production caller is `show_resolve`. The test helper `open_sheet_in`
@@ -641,8 +648,9 @@ scrim does not close it (decision 9).
 
 - Escape and the close button are the Kit's and run `on_close`.
 - **One way to close it from the sheet.** `ResolveSheet::close`
-  (`submit.rs:428-431`), which Cancel, Resume (`:409-413`) and `applied`
-  use, calls `Workspace::close_resolve(&sheet, window, cx) -> bool`,
+  (`submit.rs:428-431`), which Resume (`:409-413`) and `applied` use, and
+  Cancel too once Task 5 re-points it (today Cancel is its own closure,
+  `render.rs:488-495`), calls `Workspace::close_resolve(&sheet, window, cx) -> bool`,
   found through Root as `in_workspace` finds it. `close_resolve` closes
   the Kit sheet and returns true only while the owner is `Resolve(this)`.
   On false, the caller does nothing more: no focus move, no lifecycle
@@ -650,9 +658,15 @@ scrim does not close it (decision 9).
   origin, as today, since `on_close` runs only on the Kit's own paths,
   and `applied` goes on to reopen the lifecycle dialog as today.
 - **An answer that lands under a dialog** (an Unlock prompt over the
-  sheet): `applied` records what it would do (close, focus, reopen) and
-  does it once no dialog is open, as `republish_deferred` waits
-  (`D/view/operations/republish.rs:220-230`) and C5a's G23 does (R-26).
+  sheet): `applied` (run from `ResolveSheet::operations_changed`,
+  `submit.rs:254-284`) keeps the answer on the sheet and records the
+  sheet in the Workspace's `resolve_waiting`; `run_waiting_resolve_close`,
+  called from `Workspace::render`, does nothing while a dialog is open,
+  and otherwise takes it and, through `cx.defer_in`, has the sheet run
+  the rest of `applied` (close, focus, reopen). This is Cycle 05a's
+  `add.waiting` and `run_waiting_add_close` (`add_sheet.rs:276-280`,
+  `:339-350` on 05a's branch at `d7b39f62`; its G23), and the deferral
+  keeps the Workspace from being entered twice (R-26).
 - **Footer presses keep focus inside.** Each footer button's press
   focuses the sheet's own handle first, as `LifecycleDialog::on` does
   (`D/view/lifecycle/view.rs:121-142`); a footer control that goes by
@@ -661,23 +675,23 @@ scrim does not close it (decision 9).
   `conflict-sheet`, its nearest tracked ancestor, through `focus_lost`.
 - **Focus moves that would land behind it.** `focus_content`
   (`D/view/workspace/content.rs:598-600`) and `apply_review`'s refocus
-  (`:127-148`), which today skip only while Settings is open, skip while
-  `workspace_sheet_open`; the moves that run through them (a discarded
+  (`:127-148`), which skip today while Settings is open and on 05a's
+  branch while `sheet_held`, skip while `workspace_sheet_open`; the moves that run through them (a discarded
   draft's `DraftDiscarded`, `close_with_draft`, `open_created`) leave
   focus where it is. `apply_review` keeps its Drafts and Settings
   requests until the sheet has closed, rather than losing them to a
   refusal (R-25).
 - **Something behind takes focus anyway:** `keep_focus_in_resolve`, run
-  from the Workspace's render as `keep_focus_in_settings` is
-  (`D/view/workspace/render.rs:173-182`, its gate widened to
-  `resolve_open`), moves focus back to the sheet's own handle; like
+  from the Workspace's render beside `keep_focus_in_settings` (05a's
+  `keep_focus_in_sheet`; `D/view/workspace/render.rs:173-182`), on
+  `resolve_open`, moves focus back to the sheet's own handle; like
   C4's, it leaves a context menu over the sheet alone (R-11).
 
 **Where focus goes** (contract; each row read after a draw; P6):
 
 | Row | Situation | Focus after |
 | --- | --- | --- |
-| H1 | Opened by any way in | the sheet's own handle (`conflict-sheet`); Tab reaches the first enabled choice; Shift+Tab reaches the Kit's close button, drawn before the body |
+| H1 | Opened by any way in | the sheet's own handle (`conflict-sheet`); Tab reaches the body's first Tab stop (the first enabled choice of a canonical set; Open folder for an external set; Read again after a failed read); Shift+Tab reaches the Kit's close button, drawn before the body |
 | H2 | Escape, not in the Result editor | the origin |
 | H3 | Escape in the Result editor | the Result stop; the sheet stays open |
 | H4 | Cancel, or the close button | the origin |
@@ -791,8 +805,9 @@ and decision 12:
    re-exported or called where the copies are today:
    - "Resume": the model's (`D/model/activity/copy/states.rs:18`); the
      copies at `D/view/lifecycle.rs:103`, `D/view/conflict.rs:78`,
-     `D/model/edit/save_state.rs:11` and the test-only
-     `D/view/operations.rs:49` re-export it;
+     `D/model/edit/save_state.rs:11`, the literal at
+     `D/model/operations/recovery.rs:293` and the test-only
+     `D/view/operations.rs:48` re-export or use it;
    - "Keep mine": new in `copy.rs`; `D/view/conflict/render.rs:43` and
      `D/model/review.rs:28` re-export it;
    - `share_main(primary)`: new in `copy.rs`; `D/view/lifecycle.rs:113-115`,
@@ -823,7 +838,7 @@ Field names (B5), as the details sheet and the header's fields name them
 
 New words, each a constant: the stage titles (A1); "Closed by {name}
 · today" and "Closed by {name}" (A4); the running lead; the two hints;
-"Stopping…" is today's; "Not now"; "Done" for the dismiss button; "Now
+"Not now"; "Done" for the dismiss button; "Now
 ready to start"; "Ticket detail", "Document detail", "Comment detail",
 "last shared copy", "Chosen" and "Edited" (B5).
 
@@ -842,7 +857,7 @@ ready to start"; "Ticket detail", "Document detail", "Comment detail",
 | P9 | Copy (Part C, A1–A7) | `close_and_resolve_copy_uses_the_vocabulary` (new copy table) |
 | P10 | No item text in the moved headers and footers (fact 33) | the existing a16 privacy tests, unchanged: the slots are swept as "drawn", and item text is allowed by id only |
 | P11 | D5's behaviour: stale confirmations, Retry reusing the operation, the safe-point stop, no automatic winner (Wave risk row) | D5's existing tests, unchanged in what they assert about behaviour |
-| P12 | No passphrase or private key text in any label or Git line of either surface (Wave exit); this Cycle adds no tooltip | `close_and_resolve_show_no_secret` (new), built as `passphrase_tests::a_supplied_passphrase_is_shown_or_kept_nowhere` (`D/view/passphrase_tests.rs:537-553`) reads every label and value: a key made with `Fixture::generate_key` (`D/test_support/fixtures.rs:920`) and a sentinel passphrase; a close on it, unlocked through the prompt, through Failed, Retry and Done; then a remote conflict's sheet. At each stage no label or value in the window, the dialog's and sheet's slots included, holds the sentinel or the key file's private text |
+| P12 | No passphrase or private key text in any label or Git line of either surface (Wave exit); this Cycle adds no tooltip | `close_and_resolve_show_no_secret` (new), reading every label and value as `passphrase_tests`' `window_text` does (`D/view/passphrase_tests.rs:537-547`): a key imported with `Fixture::import_key`, whose private file holds `PRIVATE_KEY_SENTINEL` (`D/test_support/fixtures.rs:908`, `:940-985`); a close answered `unlock_required`, then Unlock… opens the prompt, where a sentinel passphrase is typed and supplied, as `credential_tests`' `ask` and `a_resend_without_a_secret_takes_the_unlock_path` drive it (`D/view/lifecycle/credential_tests.rs:157`, `:204`); Retry, then Done, by canned answers; then a remote conflict's sheet. At each stage no label or value in the window, the dialog's and sheet's slots included, holds either sentinel |
 | P13 | A close and an approval that fail, retried by keyboard to Done, focus back on the origin (Wave exit) | `a_failed_run_is_retried_by_keyboard` (new, both commands): the library's failure point `BeforeRequestDomainCall` fails the run with `internal_error` and offers Retry, as `outcome_tests::a_stopped_run_with_no_record_offers_prepare` sets it up (`D/view/lifecycle/outcome_tests.rs:299-323`); the normal service is put back without moving the branch; Tab to Retry, Enter, then Done by Enter; focus on the origin |
 
 ## Testing
@@ -964,7 +979,8 @@ runs.
    - under the common frame's as-built notes, that the lifecycle dialog
      and Resolve conflict also put the action last (decision 4), and
      that Resolve conflict is a sheet that closes on Escape, its close
-     button and Cancel, not its scrim (decision 9);
+     button, Cancel, Resume, a save or quitting, not its scrim (decision
+     9);
    - under "Close ticket dialog": the step order and Share main (D5
      R-8); no line counts; no ready list before the close; the stage
      words as progress; the message as the cause; the Expires line; the
@@ -986,9 +1002,10 @@ runs.
 5. **Cycle 03b's copy** (the approval commit, a dated note in its
    design's Part B): "Review changes…", "Open Sharing & keys…" and
    "Check host…" (decision 12).
-6. **Cycle 05a's design** (the approval commit, a dated note under B2):
-   `show_add_repository` also refuses while Resolve conflict is open
-   (decision 9).
+6. **Cycle 05a's design** (the approval commit, a dated note under B2
+   and B3): `show_add_repository` also refuses while Resolve conflict is
+   open, and `add_closed`'s return to Settings waits while it is
+   (decision 9, U-9).
 
 ## Rulings
 
@@ -1064,21 +1081,26 @@ Each: decision — why — cost if wrong.
   Stop, "Stopping…" is an inert one — with none, Root's Tab handler lets
   focus out of the dialog, and Escape, bound inside it, stops working
   (`GC/root.rs:494-520`, `gpui-base-0.6.6/src/dialog.rs:552-559`) — none.
-- **R-24:** the lifecycle's way into the sheet does nothing unless the
-  lifecycle dialog is the top dialog — closing a prompt opened over it
-  in the same frame would drop the prompt unanswered, and the sheet would
-  then be refused — a press lost while a prompt is up.
-- **R-25:** one predicate, `workspace_sheet_open` (Settings, Add
-  repository or Resolve), gates the workspace's own focus moves
+- **R-24:** the lifecycle's way into the sheet goes on only while focus
+  is inside the lifecycle dialog: a press checks before `on` moves focus
+  and is dropped otherwise; Repair locally…'s sheet, opened when an
+  answer lands, waits on the dialog until focus is back inside it — the
+  Kit cannot name the top dialog, `in_workspace` closes whichever is on
+  top, and closing a prompt opened over the dialog would drop it
+  unanswered — a press in the frame a prompt opens is lost; the waiting
+  sheet opens late.
+- **R-25:** one predicate, `workspace_sheet_open` (05a's `sheet_held`,
+  or `resolve_open`), gates the workspace's own focus moves
   (`focus_content`, `apply_review`'s refocus); `apply_review` keeps its
   requests until the sheet closes — C4 skips for Settings alone, and
   05a's G19 and C4's F18 promise focus unchanged under their sheets —
   one more caller to keep in step.
-- **R-26:** an `applied` that lands under a dialog waits until no dialog
-  is open, then closes, focuses and reopens — closing the sheet under a
-  prompt would focus behind it, and the reopened lifecycle dialog would
-  stack above the prompt; C5a's G23 waits the same way — a close shown
-  late.
+- **R-26:** an `applied` that lands under a dialog waits in the
+  Workspace's `resolve_waiting`, drained from its render through
+  `cx.defer_in` once no dialog is open, then closes, focuses and reopens
+  — closing the sheet under a prompt would focus behind it, and the
+  reopened lifecycle dialog would stack above the prompt; 05a's
+  `add.waiting` waits the same way — a close shown late.
 - **R-27:** `close_resolve` returns whether it closed; on false, nothing
   more runs — a test holds the entity, so `applied` can run after the
   sheet closed, and production may one day hold it too — none.
@@ -1129,8 +1151,10 @@ Each: decision — why — cost if wrong.
 ## Unverified
 
 - **U-1:** Cycle 05a's names after it merges: `SheetOwner::AddRepository`,
-  the widened `settings_open` and keep-focus checks, `sheet_footer` and
-  `Tone::Accent` in use, `wrapped_kit`, `show_add_repository`. Task 0.
+  `sheet_held`, `keep_focus_in_sheet`, `sheet_keeps_lost_focus`,
+  `add.waiting` and `run_waiting_add_close`, `sheet_footer` and
+  `Tone::Accent` in use, `wrapped_kit`, `show_add_repository`. Read at
+  `d7b39f62` (05a's Task 6) for revision 4; Task 0 reads the merged code.
 - **U-6:** the named edits, from the sweep at `ac50ba1a`. Task 0
   re-checks them against 05a's merged code.
 - **U-7:** the classification of fact 31's sites (R-18, R-25), with
@@ -1140,6 +1164,8 @@ Each: decision — why — cost if wrong.
 - **U-9:** Cycle 05a's own openers that wait for no dialog (its
   `add_closed` step 3) also wait while `resolve_open`. Task 0, once 05a
   has merged.
+- **U-10:** Repair locally…'s waiting sheet (R-24) opens at the
+  lifecycle dialog's first render with focus back inside it. Task 5.
 
 Checked in review round 1 (source review, 2026-11-15) and no longer
 open: U-2 (the Result editor's Escape wins over the Kit sheet's, as over
@@ -1182,4 +1208,5 @@ under its own id).
 | Review round 1, contract and consistency (`702e569f`) | 2 Blocking: no proof for the passphrase exit item; no Failed-then-Retry keyboard journey. Important: the Git line in 2d/2e; StillRunning; "Stopping…"; A7's order as an owner decision; decision 1's follow-up; the ellipsis rule; colour alone for the choice; the close paths (quit, guarded closes, late answers); "inside the sheet"; scrolling; contract 5's proof and 05a's `show_add_repository`; amendments; unlisted test edits; privacy order; Task 5's size; P3 | Blocking, Important, Minor; owner questions | Revision 2: P12, P13; A5, A6; A7 into decision 7; K-13; decision 12; the check and "Edited" (B5); B3, H11–H13, R-22; `in_sheet`, H1–H13; R-12; P7, Amendment 6; Amendments 2–6; decision 11; fact 33; the plan's Task 5 split into Tasks 5 and 6 |
 | Owner, 2026-11-15, after review round 1 | Further test edits; the ellipsis rule | Owner decisions | Decisions 11 and 12 |
 | Review round 2, scoped re-review (revision 2, `874bb66b`) | 1 Blocking: P13's fixture offers no Retry. Important: H1's Tab order; presses in the body moving focus; the scroll named reveals nothing; E-4 left Task 2 red. Round 1's findings otherwise resolved | Blocking, Important, Minor | Revision 3: P13 on `BeforeRequestDomainCall`; H1; B3's footer-only rule; R-12, K-19; E-4 into Task 2; and the Minors (Resume, H12, copies, comment offers, "today" for an existing closure, P12, P9's words, stale text) |
-| Review round 2, adversarial on the sheet and the dialog's stages (revision 2, `aaf6b475`) | 1 Blocking: after Stop, no Tab stop is left in the dialog. Important: H1's Tab order; an answer under a dialog closing the sheet; a second Republish… path; workspace focus moves behind the sheet | Blocking, Important, Minor | Revision 3, **not independently reviewed**: R-23; H1; R-26, H14; R-18's two sites; R-25, H15; and the Minors (Resume, R-27, K-18, R-28, `resolve_open` everywhere, R-24, K-20, K-21, H10) |
+| Review round 2, adversarial on the sheet and the dialog's stages (revision 2, `aaf6b475`) | 1 Blocking: after Stop, no Tab stop is left in the dialog. Important: H1's Tab order; an answer under a dialog closing the sheet; a second Republish… path; workspace focus moves behind the sheet | Blocking, Important, Minor | Revision 3: R-23; H1; R-26, H14; R-18's two sites; R-25, H15; and the Minors (Resume, R-27, K-18, R-28, `resolve_open` everywhere, R-24, K-20, K-21, H10) |
+| Review round 3, scoped re-review (revision 3, `3964af7c`) | 0 Blocking, 2 Important, 7 Minor. Important: P12's fixture never prompts; R-24 had no mechanism and dropped Repair locally's late sheet. Round 2's findings resolved | Important, Minor | Revision 4, **not independently reviewed**: P12 on `import_key` and the prompt; R-24's focus check and wait (U-10); R-26's drain; 05a's `sheet_held`; H1 by set kind; Cancel through `close`; the copies; the Verify lines; Amendments 2 and 6 |

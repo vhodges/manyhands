@@ -14,8 +14,8 @@ id: "01M7FACCS575B9W0PRRCDW9N0A"
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task.
 >
-> **Draft, revision 3** (review rounds 1 and 2 and decisions 11 and 12
-> applied), for the owner's review. Nothing here is approved, and
+> **Draft, revision 4** (review rounds 1–3 and decisions 11 and 12
+> applied; revision 4 had no independent review), for the owner's review. Nothing here is approved, and
 > execution waits until Cycle 05a (`01M7D5Z7FZTGTC1HE25KQ1MYQY`) is
 > merged to main (the ticket's Entry Gate).
 >
@@ -373,7 +373,7 @@ git grep -n 'has_active_dialog' -- $P ':!*_tests.rs' ':!*_tests/*'
 
 ---
 
-## Task 2: Lifecycle Stages And Header (A1, A2)
+## Task 2: Lifecycle Stages, Header And Git Line (A1, A2; A5's and A6's Git line)
 
 **Interfaces.**
 
@@ -416,7 +416,8 @@ impl LifecycleDialog {
   `desktop::view::lifecycle::outcome_canned_tests`,
   `desktop::view::keyboard_tests::lifecycle`,
   `desktop::view::lifecycle::privacy_tests`,
-  `desktop::view::lifecycle::privacy_promote_tests`; the last Verify
+  `desktop::view::lifecycle::privacy_promote_tests`,
+  `desktop::view::lifecycle::privacy_remote_tests`; the last Verify
   lines.
 - [ ] **Commit:** `feat(desktop): lifecycle stages in the frame's header`.
 
@@ -538,11 +539,15 @@ impl LifecycleDialog {
   `pub(in crate::desktop::view)`.
 - The ways in (B2's table): `ItemRoute::Resolve(Box<conflict::Opening>)`
   (`Opening: Clone`; an arm in `owned()` and one in `open_route`);
-  `Entry::opening`; `in_workspace` generic over its return value, doing
-  nothing unless the lifecycle dialog is the top dialog (R-24), and
-  `open_sheet` without its own close.
-- `ResolveSheet::close` (Cancel, Resume, `applied`) calls `close_sheet`
-  for now; Task 6 guards it.
+  `Entry::opening`; `in_workspace` generic over its return value, and
+  `open_sheet` without its own close. R-24 on the lifecycle's ways in: a
+  press goes on only when focus was inside the lifecycle dialog before
+  `on` moved it; Repair locally…'s sheet, opened when the local
+  synchronization answers, waits on the dialog until a render finds
+  focus back inside it (U-10).
+- Cancel is re-pointed to `ResolveSheet::close`, which Cancel, Resume
+  and `applied` all use; it calls `close_sheet` for now, and Task 6
+  guards it.
 
 - [ ] **Step 1: P5 first.** Write
   `desktop::view::workspace::resolve_sheet::tests::resolve_is_a_sheet_the_workspace_keeps`:
@@ -550,8 +555,9 @@ impl LifecycleDialog {
   popover row, the lifecycle's Review changes… and Repair locally…), a
   sheet is active, no dialog, the owner is `Resolve`, and it survives
   renders; Escape, the close button, Cancel, Resume and a save each
-  clear the owner; the lifecycle's way in with a prompt opened over the
-  dialog does nothing. See it fail.
+  clear the owner; with a prompt opened over the lifecycle dialog, its
+  Review changes… press does nothing, and a Repair locally… answer opens
+  the sheet only once the prompt has closed. See it fail.
 - [ ] **Step 2: Owner, opening, ways in.**
 - [ ] **Step 3: Named edits** E-1, E-2, E-11 (`in_sheet`, R-19).
 - [ ] **Verify:** by exact name, P5 and the edited tests; then the
@@ -560,9 +566,9 @@ impl LifecycleDialog {
   `desktop::view::workspace::tests`,
   `desktop::view::workspace::settings_sheet::tests`,
   `desktop::view::activity::tests`, `desktop::view::needs_attention::tests`,
-  `desktop::view::lifecycle::privacy_tests`,
-  `desktop::view::lifecycle::privacy_remote_tests`; the last Verify
-  lines.
+  `desktop::view::lifecycle::{tests, outcome_canned_tests, credential_tests, privacy_tests, privacy_remote_tests}`
+  (every `in_workspace` caller), `desktop::view::operations::resume::tests`;
+  the last Verify lines.
 - [ ] **Commit:** `feat(desktop): Resolve conflict as a sheet the workspace keeps`.
 
 ---
@@ -576,15 +582,20 @@ impl LifecycleDialog {
   `ResolveSheet::close` reaches it through Root, as `in_workspace` does;
   on false nothing more runs (no focus, no lifecycle reopen, no
   `follow_resume`) (R-22, R-27).
-- An `applied` that lands while a dialog is open records its close,
-  focus and reopen and runs them once no dialog is open (R-26).
+- An `applied` that lands while a dialog is open keeps its answer on
+  the sheet and sets the Workspace's `resolve_waiting`;
+  `run_waiting_resolve_close`, called from `Workspace::render`, runs the
+  rest through `cx.defer_in` once no dialog is open, as 05a's
+  `run_waiting_add_close` does (R-26).
 - Footer presses focus the sheet's own handle first; `conflict-footer`
   tracks `footer_focus`; body presses do not move focus (B3).
 - `focus_content` and `apply_review`'s refocus skip while
-  `workspace_sheet_open`; `apply_review` keeps its Drafts and Settings
-  requests until the sheet closes (R-25).
-- `keep_focus_in_resolve`, gated in `Workspace::render` beside
-  `keep_focus_in_settings`, on `resolve_open` (R-11).
+  `workspace_sheet_open` (05a's `sheet_held`, or `resolve_open`);
+  `apply_review` keeps its Drafts and Settings requests until the sheet
+  closes (R-25).
+- `keep_focus_in_resolve`, gated in `Workspace::render` beside 05a's
+  `keep_focus_in_sheet`, on `resolve_open`; `keep_focus_in_sheet` and
+  `sheet_keeps_lost_focus` do not take Resolve (R-11).
 - `settings_key`, `show_settings` and 05a's `show_add_repository` refuse
   while `resolve_open` (decision 9); `republish_once_stopped` and
   `open_deferred_republish` wait while it, and each site Task 0 listed
@@ -612,8 +623,9 @@ impl LifecycleDialog {
   `desktop::view::workspace::settings_sheet::tests`,
   `desktop::view::workspace::tests`,
   `desktop::view::operations::republish`,
-  `desktop::view::drafts` (the discard and close-with-draft paths
-  `focus_content` serves), and the Add sheet's module (05a's
+  `desktop::view::tabs::tests`, `desktop::view::item::draft_actions::tests`
+  and `desktop::view::create::tests` (the discard, close-with-draft and
+  `open_created` paths `focus_content` serves), and the Add sheet's module (05a's
   `desktop::view::workspace::add_sheet::tests`); the last Verify lines.
 - [ ] **Commit:** `feat(desktop): Resolve conflict's closes, focus and refusals`.
 - [ ] **Ticket comment** (Tasks 5–6).
@@ -659,12 +671,16 @@ impl LifecycleDialog {
   `desktop::view::lifecycle::privacy_secret_tests::close_and_resolve_show_no_secret`
   (new `D/view/lifecycle/privacy_secret_tests.rs`), reading every label
   and value as `passphrase_tests`' `window_text` does
-  (`D/view/passphrase_tests.rs:537-547`): a key made with
-  `Fixture::generate_key` (`D/test_support/fixtures.rs:920`) and a
-  sentinel passphrase; a close on it, unlocked through the prompt,
-  through Failed, Retry and Done; then a remote conflict's sheet. At
-  each stage no label or value in the window, the dialog's and sheet's
-  slots included, holds the sentinel or the key file's private text. It
+  (`D/view/passphrase_tests.rs:537-547`): a key imported with
+  `Fixture::import_key`, whose private file holds `PRIVATE_KEY_SENTINEL`
+  (`D/test_support/fixtures.rs:908`, `:940-985`); a close answered
+  `unlock_required`; Unlock… opens the prompt, where a sentinel
+  passphrase is typed and supplied, as `credential_tests`' `ask` and
+  `a_resend_without_a_secret_takes_the_unlock_path` drive it
+  (`D/view/lifecycle/credential_tests.rs:157`, `:204`); Retry, then
+  Done, by canned answers; then a remote conflict's sheet. At each stage
+  no label or value in the window, the dialog's and sheet's slots
+  included, holds either sentinel. It
   passes on Task 7's code; record that it was seen to fail with the
   sentinel planted in a label, then the plant removed.
 - [ ] **Step 2: Run** by exact name the keyboard journeys
