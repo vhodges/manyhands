@@ -9,39 +9,57 @@
 //! click. So focus a page put on the button's wrapper, a route's or a
 //! landing's, showed no ring and Enter did nothing.
 //!
-//! `kit_button` puts the page's handle in that state, keyed as the button
+//! `wrapped_kit` puts the page's handle in that state, keyed as the button
 //! keys it, in the scope GPUI draws the button in, just before the button
 //! draws. The handle the page focuses is then the button's own: its ring is
 //! drawn and Enter presses it. While the button is disabled it tracks no
 //! focus; its wrapper tracks the same handle, so focus put on it stays
 //! there (R-53) and is on the button again, with no move, once it is
 //! enabled.
+//!
+//! A handle's tab-stop flag is shared by all its clones
+//! (`gpui-pre-0.3.6/src/window.rs:558-569`, `:584-590`, `:640-643`), and
+//! the enabled button sets it (`gpui-base-0.6.6/src/button.rs:235-241`). So
+//! the wrapper's handle is set back to no tab stop as the page draws it,
+//! before the button draws: only the button's own place is a Tab stop, so
+//! Shift+Tab moves back past it, and Tab passes it by while it is disabled.
 
 use std::any::type_name;
 
 use gpui_kit::{
-    App, ElementId, FocusHandle, IntoElement, RenderOnce, Window, component::button::Button,
+    App, ElementId, FocusHandle, IntoElement, RenderOnce, SharedString, Window,
+    component::button::Button,
 };
+
+use super::{Wrapped, wrapped};
+use crate::desktop::view::scroll::ContentScroll;
 
 /// A Kit button drawn with a focus handle its page owns.
 #[derive(IntoElement)]
-pub(crate) struct KitButton {
+struct KitButton {
     id: ElementId,
     focus: FocusHandle,
     button: Button,
 }
 
-/// `button`, whose element ID is `id`, drawn with `focus` as its own focus.
-pub(crate) fn kit_button(
+/// `button`, whose element ID is `button_id`, in the wrapper `id` named
+/// `label` (`wrapped`), with `focus` as its own focus. The wrapper tracks
+/// `focus` too, as no tab stop.
+pub(crate) fn wrapped_kit(
     id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
     focus: &FocusHandle,
+    scroll: &ContentScroll,
+    button_id: impl Into<ElementId>,
     button: Button,
-) -> KitButton {
-    KitButton {
-        id: id.into(),
+) -> Wrapped {
+    let held = focus.clone().tab_stop(false);
+    let button = KitButton {
+        id: button_id.into(),
         focus: focus.clone(),
         button,
-    }
+    };
+    wrapped(id, label, &held, scroll, button)
 }
 
 impl RenderOnce for KitButton {

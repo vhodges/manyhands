@@ -51,7 +51,7 @@ use manyhands::{
     results::{Envelope, Outcome},
 };
 
-use super::{OpenFlag, kit_button::kit_button, wrapped};
+use super::{OpenFlag, kit_button::wrapped_kit};
 use crate::desktop::model::read_state::Read;
 use crate::desktop::{
     model::{
@@ -701,7 +701,7 @@ impl HostsPage {
         body
     }
 
-    /// A Kit button with its wrapper `id`'s focus as its own (`kit_button`).
+    /// A Kit button with its wrapper `id`'s focus as its own (`wrapped_kit`).
     fn button(
         &self,
         id: &'static str,
@@ -717,8 +717,7 @@ impl HostsPage {
             .on_click(
                 cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)),
             );
-        let button = kit_button(button_id, &self.focus[id], button);
-        wrapped(id, label, &self.focus[id], &self.scroll, button)
+        wrapped_kit(id, label, &self.focus[id], &self.scroll, button_id, button)
     }
 
     /// Check host for the repository worked on, and what it answered.

@@ -20,7 +20,7 @@ use gpui_kit::{
     div,
 };
 
-use super::super::{kit_button::kit_button, wrapped};
+use super::super::{kit_button::wrapped_kit, wrapped};
 use super::render::{heading, text};
 use super::{
     CONFIRMATION, CONFIRMATION_FIELD, GENERATE, GENERATE_HEADING, GENERATE_NOTE, GENERATE_SUBMIT,
@@ -91,8 +91,7 @@ impl KeysPage {
                 this.toggle_form(KeyForm::Generate, window, cx)
             }));
         let focus = &self.focus[MAKE_ID];
-        let make = kit_button(id, focus, make);
-        let make = wrapped(MAKE_ID, MAKE_KEY, focus, &self.scroll, make)
+        let make = wrapped_kit(MAKE_ID, MAKE_KEY, focus, &self.scroll, id, make)
             .aria_expanded(self.generate_shown());
         let existing = Button::new((USE_EXISTING_ID, 0usize))
             .label(USE_EXISTING)

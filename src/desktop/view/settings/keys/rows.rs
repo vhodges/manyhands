@@ -33,7 +33,7 @@ use gpui_kit::{
 };
 use manyhands::repository::{KeyDto, KeyOwnership, KeyPrivateSourceState, SharedKeyId};
 
-use super::super::{Wrapped, kit_button::kit_button, wrapped};
+use super::super::{Wrapped, kit_button::wrapped_kit, wrapped};
 use super::render::{heading, text};
 use super::{
     CLEAR, CLEAR_ID, COPY, DELETE, KEYS_HEADING, KEYS_INTRO, KIND_GENERATED, KIND_IMPORTED,
@@ -73,7 +73,7 @@ fn drawn(keys: &[KeyDto]) -> Vec<&KeyDto> {
 }
 
 /// The element ID of the Kit button inside `key`'s `control`, keyed by the
-/// key's ID, as its focus is (`row_focus`, `kit_button`): a row that goes
+/// key's ID, as its focus is (`row_focus`, `wrapped_kit`): a row that goes
 /// never hands its button's focus to the key after it.
 fn button_id(control: &str, key: &str) -> gpui_kit::ElementId {
     gpui_kit::ElementId::Name(format!("{control}-button-{key}").into())
@@ -82,7 +82,7 @@ fn button_id(control: &str, key: &str) -> gpui_kit::ElementId {
 impl KeysPage {
     /// The focus of `key`'s `control`, made the first time it is asked for.
     /// The radio is a tab stop of its own; the others are a Kit button's
-    /// own focus (`kit_button`), which its wrapper tracks too.
+    /// own focus (`wrapped_kit`), which its wrapper tracks too.
     pub(super) fn row_focus(
         &mut self,
         control: &str,
@@ -149,8 +149,8 @@ impl KeysPage {
         cx: &mut Context<Self>,
     ) -> Wrapped {
         let focus = self.row_focus(control, key, cx);
-        let button = kit_button(button_id(control, key), &focus, button);
-        wrapped((control, ix), label, &focus, &self.scroll, button)
+        let id = button_id(control, key);
+        wrapped_kit((control, ix), label, &focus, &self.scroll, id, button)
     }
 
     fn key_row(

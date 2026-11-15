@@ -177,6 +177,23 @@ async fn key_rows_send_what_todays_controls_sent(cx: &mut TestAppContext) {
     rows.done();
 }
 
+/// Presses Shift+Tab once for each control of `back`, in order: each
+/// press puts focus on that control itself.
+fn shift_tab_walks(
+    shell: &Shell,
+    rows: &mut Rows,
+    row: &str,
+    back: &[ElementId],
+    cx: &mut TestAppContext,
+) {
+    for (step, control) in back.iter().enumerate() {
+        shell.keys("shift-tab", cx);
+        let held = shell.holds_control(control.clone(), cx);
+        let what = format!("wanted {control:?}; {}", where_focus(shell, cx));
+        rows.fact(&format!("{row}: Shift+Tab {}", step + 1), held, what);
+    }
+}
+
 /// Settings open on Sharing & keys over the keys `labels`, generated, in
 /// that order.
 fn generated(labels: &[&str], cx: &mut TestAppContext) -> (Shell, Vec<SharedKeyId>) {
@@ -199,8 +216,10 @@ fn labels(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
 /// gives focus to the next key's radio by key ID, even when the list's
 /// order changes on the read that follows; else to the previous key's;
 /// else to Make a new key, the Kit button itself. Focus on a row's button
-/// stays with its key, on the button itself, when a row above it goes. A
-/// removal that lands after Settings closed moves no focus.
+/// stays with its key, on the button itself, when a row above it goes.
+/// Shift+Tab from a row's button, or from Make a new key, goes back one
+/// control at a time. A removal that lands after Settings closed moves no
+/// focus.
 #[gpui_kit::test]
 async fn removing_a_key_returns_focus_by_key(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -270,6 +289,25 @@ async fn removing_a_key_returns_focus_by_key(cx: &mut TestAppContext) {
         shell.press("enter", cx);
         let shown = shell.present("key-generate-heading", cx);
         rows.fact(&format!("{row}: Enter"), shown, "no Generate form");
+        // Shift+Tab goes back one control at a time: the menu's entries.
+        let back = [2usize, 1, 0].map(|ix| ElementId::from(("settings-page", ix)));
+        shift_tab_walks(&shell, &mut rows, row, &back, cx);
+    }
+
+    // Shift+Tab from a row's button goes back one control at a time: its
+    // radio, then the row before's Delete key file… and trash.
+    let row = "Shift+Tab from a row's button";
+    let (shell, ids) = generated(&["first", "last"], cx);
+    if shell.tab_reaches(("key-copy", 1usize), 60, cx) {
+        let button = |control: &str| ElementId::Name(format!("{control}-button-{}", ids[0]).into());
+        let back = [
+            ElementId::from(("key-radio", 1usize)),
+            button("key-delete-file"),
+            button("key-remove"),
+        ];
+        shift_tab_walks(&shell, &mut rows, row, &back, cx);
+    } else {
+        rows.fact(row, false, "Tab never reached last's Copy public key");
     }
 
     // A Kit button's focus is its row's, keyed by key ID (Ruling 37): it

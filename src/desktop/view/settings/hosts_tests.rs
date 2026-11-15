@@ -450,6 +450,67 @@ async fn the_host_recovery_checks_the_named_host_on_the_hosts_page(cx: &mut Test
     );
 }
 
+/// Use a key I already have…'s own Kit button, the control before Check
+/// host on Sharing & keys with no key.
+const USE_EXISTING: (&str, usize) = ("keys-use-existing", 0);
+
+/// Enabled, Check host is a Tab stop like any control (Part D; R-53):
+/// Shift+Tab from it goes back to the control before it.
+#[gpui_kit::test]
+fn shift_tab_from_check_host_goes_back(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.publish_over_ssh(&root);
+    let shell = hosts(fixture, Some(&root), cx);
+    let check = check_focus(&shell, cx);
+    shell
+        .visual(cx)
+        .update(|window, cx| window.focus(&check, cx));
+    assert!(shell.holds_control(CHECK_HOST, cx), "on Check host itself");
+    shell.keys("shift-tab", cx);
+    assert!(
+        shell.holds_control(USE_EXISTING, cx),
+        "Shift+Tab from Check host goes back to Use a key I already have…"
+    );
+}
+
+/// Unavailable while it connects, Check host is no Tab stop, though it was
+/// enabled before: Tab from the control before it passes it by. Focus the
+/// check put on it stays there (R-53).
+#[gpui_kit::test]
+async fn an_unavailable_check_host_is_no_tab_stop(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.publish_over_ssh(&root);
+    let shell = hosts(fixture, Some(&root), cx);
+    assert!(
+        !shell.present("hosts-check-state", cx),
+        "Check host enabled"
+    );
+    let held = shell.backend.hold_job(JobKind::ObserveHost);
+    shell.click("hosts-check", cx);
+    held.wait_reached();
+    let check = check_focus(&shell, cx);
+    assert!(
+        shell.holds_focus("hosts-check", cx),
+        "focus stays on Check host"
+    );
+    assert!(shell.frame(cx, |window, _| check.is_focused(window)));
+    shell.keys("shift-tab", cx);
+    assert!(
+        shell.holds_control(USE_EXISTING, cx),
+        "back before Check host"
+    );
+    shell.keys("tab", cx);
+    assert!(
+        !shell.holds_focus("hosts-check", cx),
+        "Tab passes Check host by while it connects"
+    );
+    held.release();
+    until_observed(&shell, cx).await;
+}
+
 /// A provider call in flight on a plain thread, as the worker makes one.
 fn ask(shell: &Shell, label: &str, cx: &mut TestAppContext) -> mpsc::Receiver<&'static str> {
     let directory = tempfile::tempdir().unwrap();
