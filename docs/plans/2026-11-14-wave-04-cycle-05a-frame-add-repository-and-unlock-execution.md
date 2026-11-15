@@ -1279,3 +1279,92 @@ and **the identical failure occurs on the Task 7 tree** (`a14e862d`, checked out
 detached and restored), so Task 8 is not the cause. It is a defect in Task 7's
 test or the production code under it that shows only with a wider test mix.
 Task 7 fix round 1, below.
+
+## Task 7 fix round 1 (found at Task 8's boundary): the P14 hang
+
+Fix `e85e66ae`, `fix(desktop): wait for each add's preview and its follow-on
+jobs in P14` (base `97632b8b`; two test files under `src/desktop/`, test-only).
+Boundary diff empty; gates pass.
+
+**Root cause (traced by the implementer, verified by the re-review against the
+code): a fault in the test helpers, not in production.** P14's "choices" table
+made several adds in one window. In the mix, the previous add's refresh and
+share selection were still holding the data-directory cache lock when the next
+add's preview was prepared, so the library answered that prepare Busy (the
+reviewer corrected the name: `prepare` takes no repository lease; the Busy comes
+from the cache lock `read_session`/`write_records` try-lock, 250 ms, then
+`RepositoryBusy`; `confirm_tests.rs:283-310` makes the same dialog busy by
+holding `LeaseKind::CacheWrite`). A busy prepare retries on a timer that waits
+on the test clock (Cycle 04 Ruling 52), which nothing advanced between the press
+and the click, so the dialog stayed on "Preparing the preview" with a disabled
+Confirm. `press_add` and the shared `preview()` took the drawn Confirm as a
+landed preview, the press sent nothing, and `confirm_and_end` returned the
+earlier add's request instead of failing; the table's last wait then ran the full
+180 s (`harness.rs:73`). credential_tests and needs_attention only add CPU load;
+nothing is shared between tests (no `set_var` or process-global static found).
+**Production is not affected:** there the timers run in real time; after about
+100, 200 and 400 ms of retries the Busy envelope is delivered, the dialog shows
+Close and Retry, and no pending add exists until Confirm emits
+`Followed::Confirmed`; `confirm_tests.rs:283-310` pins busy, Retry, Confirm. A
+second add confirmed while the previous add's refresh holds the lock for more
+than about 1.7 s shows Busy with Retry (designed behaviour); nothing is stuck
+and no share is lost.
+
+**The fix:** each add in P14 waits, before the next preview, for its own
+selection requests and its root's background `IndexRefresh` to end (`add` calls
+`ended(shell, &[root])`; `held` and `closed_meanwhile` do the same); the wait at
+the end of the table was removed, since each root is now waited for at its own
+row; a new shared `preview_landed` (`support.rs`) calls `keys_landed` once, only
+while `confirm-state` reads PREPARING (advancing the test clock by at most 700 ms
+in total), and a preview counts as open only once it has landed; `confirm_and_end`
+returns only a request the press created, so a press that sends nothing fails
+loudly. No `sleep`, no change to `WAIT`, no P14 row weakened or removed (the
+`share_attempts.rs` rows are unchanged apart from going through the stricter
+`press_add`).
+
+**Evidence:** before the fix, the 24-test command
+(`add_sheet::tests`, `credential_tests`, `needs_attention`) failed 3 of 3 (about
+200 s each, and 2 of 2 with `item::edit_tests` added: 242 tests, 427 s). After
+it, the implementer saw 24 of 24 three times (57.7 s on the final tree), and the
+orchestrator saw **24 passed, 0 failed** twice (55.4 s and 55.3 s) on `e85e66ae`.
+P14 alone 1 of 1; `add_sheet::tests` by module 9 of 9. With the helper fix alone
+P14 failed loudly in 59 s instead of hanging, so the per-add wait is the cure.
+
+**Review** (opus, scoped re-review with a root-cause lens): addressed; no new
+Critical or Important; no production finding. Parked, for the final review:
+
+1. `add_repository_tests` is exposed to the same busy-preview weakness at
+   `add_repository_tests.rs:555-560`, `add_repository_tests/create.rs:193-196`
+   and `add_repository_tests/enablement.rs:202-209`: they check `present` or
+   `label("confirm-ok")`, then `hold_job` and `held.wait_reached()`; on a busy
+   prepare they would stall the full 180 s and panic "the worker did not reach
+   the held job" (not a fast failure). The `[0]` sites (`:297-298`, `:338-339`,
+   `:601-602`, `:818-819`) fail fast. Exposure is low: one add per window, an
+   idle worker. (The implementer's report said they would fail loudly; that part
+   was wrong.)
+2. The same weakness inside P14: `share_attempts.rs:84-96` checks Prepare again
+   with `present("confirm-ok")`, clicks, then waits on `until(attempt == 2)`; a
+   busy re-prepare would stall 180 s. Exposure is low (a stale first attempt
+   queues no follow-on jobs).
+3. Some "choices" rows can still pass vacuously: row 1 and the case loop record
+   no `(its preview)` fact when `press_add` is false (`share.rs:276-279`,
+   `:336-339`), so the kept, local and lacks rows (`wanted: &[]`) would pass if
+   their preview never landed; `ends` ignores `confirm_and_end`'s `None`
+   (`share.rs:447`). Both predate the fix.
+4. `add` waits for the onboarding of any add that was sent, whatever its outcome;
+   a sent add that does not end Ok (a worker-level Busy) would stall 180 s
+   instead of failing loudly (the old end-of-table wait behaved the same).
+5. `preview_landed`'s busy branch is exercised only under load. It could be
+   pinned deterministically: `RepositoryService::hold_lease_for_testing(..,
+   LeaseKind::CacheWrite)` works in-process (`repository.rs:1360-1390`,
+   used in `confirm_tests.rs:286-291`); the implementer's report claimed it needed
+   another process, which is false.
+6. The doc comment on `ended` (`share.rs:219-222`) says "holds the repository
+   lease"; it is the data-directory cache lock. `support.rs` is now 501 lines
+   (was 488). The report said `(its add)` is on four rows; it is on six.
+
+This is a second flaky-in-a-mix defect of the same family as Cycle 04's
+`the_more_menu_acts_on_the_chosen_repository` (a drawn button taken for a landed
+state while a busy retry waits on the test clock): the full fast tier at Task 10
+will run every window test in one pool, so expect to meet others; the `[0]`
+sites and the parked items 1 to 2 are the first suspects.
