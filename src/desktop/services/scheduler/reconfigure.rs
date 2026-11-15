@@ -473,6 +473,7 @@ mod tests {
                 lane: Lane::User,
                 attempt: 1,
                 state: RequestState::Queued,
+                registered_root: None,
             }));
             heard(&WorkerEvent::Finished(id, Box::new(answer)), &operations)
         };
@@ -595,6 +596,7 @@ mod tests {
                 lane: Lane::User,
                 attempt: 1,
                 state: RequestState::Queued,
+                registered_root: None,
             }));
             let scope = manyhands::results::Scope {
                 item_id: named.then(|| ITEM.to_owned()),

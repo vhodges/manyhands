@@ -19,8 +19,8 @@ use manyhands::{
 use super::{
     returns::{escape, focus, manage, settings_open, ticket_shell},
     support::{
-        MAIN, drafts_shown, has_dialog, holds, holds_handle, host, in_context, settle,
-        tab_to_create,
+        ADD_BUTTON, MAIN, drafts_shown, has_dialog, holds, holds_handle, host, in_context, settle,
+        tab_to_add_button,
     },
     table::Table,
 };
@@ -54,16 +54,21 @@ pub(super) fn page_focus(shell: &Shell, id: &str, cx: &mut TestAppContext) -> Fo
     })
 }
 
-/// Focuses the Add folder's input, inside the sheet.
-fn focus_add_path(shell: &Shell, cx: &mut TestAppContext) {
+/// The identity form's Name, an input inside the sheet that the chosen
+/// repository's Repositories page draws (E-17b: the Add folder was, before
+/// the forms left Settings).
+const NAME: &str = "identity-name";
+
+/// Focuses the identity form's Name, inside the sheet.
+fn focus_name(shell: &Shell, cx: &mut TestAppContext) {
     let host = host(shell, cx);
     shell.visual(cx).update(|window, cx| {
         let page = host.update(cx, |host, cx| host.repositories(window, cx));
-        let input = page.read(cx).input("add-path");
+        let input = page.read(cx).input(NAME);
         input.update(cx, |input, cx| input.focus(window, cx));
     });
     shell.run(cx);
-    assert!(holds(shell, "add-path", cx), "the Add folder holds focus");
+    assert!(holds(shell, NAME, cx), "the identity Name holds focus");
 }
 
 pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
@@ -76,16 +81,16 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
     context_menu(table, cx);
 }
 
-/// Part H: Tab from the last control, Create repository, reaches the
-/// first, the sheet's close button in its header, and Shift-Tab from it the
-/// last (the Kit's trap). Create repository's own button holds focus inside
-/// its wrapper, which is what is read.
+/// Part H: Tab from the last control, Add or create a repository…,
+/// reaches the first, the sheet's close button in its header, and Shift-Tab
+/// from it the last (the Kit's trap). The Kit button holds focus inside its
+/// wrapper, which is what is read (E-17b: Create repository was).
 fn tab_trap(table: &mut Table, cx: &mut TestAppContext) {
     use gpui_kit::test::TestWindowExt;
 
     let (shell, _) = ticket_shell(cx);
     shell.keys("secondary-,", cx);
-    tab_to_create(&shell, cx);
+    tab_to_add_button(&shell, cx);
     shell.keys("tab", cx);
     settle(&shell, cx);
     let first = shell.frame(cx, |window, _| {
@@ -103,19 +108,19 @@ fn tab_trap(table: &mut Table, cx: &mut TestAppContext) {
         cx,
     );
     shell.keys("shift-tab", cx);
-    let last = holds(&shell, "create-submit", cx);
+    let last = holds(&shell, ADD_BUTTON, cx);
     table.row(
         &shell,
         "Shift-Tab from the first control",
         last,
-        "Create repository, the last control",
+        "Add or create a repository…, the last control",
         cx,
     );
     escape(&shell, "the trap", cx);
 }
 
 /// F18: an `open_created` landing and a review landing while Settings is
-/// open leave focus where it was inside the sheet, the Add folder.
+/// open leave focus where it was inside the sheet, the identity Name.
 async fn landings(table: &mut Table, cx: &mut TestAppContext) {
     let (shell, root) = ticket_shell(cx);
     // A new ticket's draft, written, and its prepare answered: what a create
@@ -143,7 +148,7 @@ async fn landings(table: &mut Table, cx: &mut TestAppContext) {
     shell.until_ended(made.prepare, cx).await;
 
     shell.keys("secondary-,", cx);
-    focus_add_path(&shell, cx);
+    focus_name(&shell, cx);
     let created = OpenTarget::Item {
         repo: key(&root),
         kind: ItemDtoKind::Ticket,
@@ -152,26 +157,26 @@ async fn landings(table: &mut Table, cx: &mut TestAppContext) {
     super::support::route(&shell, cx, move |workspace, window, cx| {
         workspace.open_created(created, made, window, cx)
     });
-    let held = holds(&shell, "add-path", cx);
+    let held = holds(&shell, NAME, cx);
     table.row(
         &shell,
         "F18 an open_created landing",
         held,
-        "the Add folder, unchanged inside the sheet",
+        "the identity Name, unchanged inside the sheet",
         cx,
     );
 
-    focus_add_path(&shell, cx);
+    focus_name(&shell, cx);
     shell
         .workspace
         .update(cx, |workspace, cx| workspace.draft_discarded(cx));
     shell.run(cx);
-    let held = holds(&shell, "add-path", cx);
+    let held = holds(&shell, NAME, cx);
     table.row(
         &shell,
         "F18 a review landing",
         held,
-        "the Add folder, unchanged inside the sheet",
+        "the identity Name, unchanged inside the sheet",
         cx,
     );
 }
@@ -336,16 +341,16 @@ async fn select(table: &mut Table, cx: &mut TestAppContext) {
     );
 }
 
-/// F19: Root's context menu over the Add folder (the Kit's fallback menu,
-/// drawn by Root beside the workspace, A7 item 2) keeps focus until Escape
-/// closes it; focus is then back on the field.
+/// F19: Root's context menu over the identity Name (the Kit's fallback
+/// menu, drawn by Root beside the workspace, A7 item 2) keeps focus until
+/// Escape closes it; focus is then back on the field.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn context_menu(table: &mut Table, cx: &mut TestAppContext) {
     use gpui_kit::test::TestWindowExt;
 
     let (shell, _) = ticket_shell(cx);
     shell.keys("secondary-,", cx);
-    shell.frame(cx, |window, cx| window.right_click("add-path", cx));
+    shell.frame(cx, |window, cx| window.right_click(NAME, cx));
     shell.run(cx);
     let open = in_context(&shell, "PopupMenu", cx);
     table.row(
@@ -356,12 +361,12 @@ fn context_menu(table: &mut Table, cx: &mut TestAppContext) {
         cx,
     );
     shell.keys("escape", cx);
-    let held = holds(&shell, "add-path", cx) && in_context(&shell, "Sheet", cx);
+    let held = holds(&shell, NAME, cx) && in_context(&shell, "Sheet", cx);
     table.row(
         &shell,
         "F19 an input's context menu, closed",
         held,
-        "the Add folder, inside the sheet",
+        "the identity Name, inside the sheet",
         cx,
     );
 }

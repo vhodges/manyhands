@@ -69,8 +69,14 @@ icon_assets!(
         WifiOff,
         // Sharing & keys' trash (Wave 04 Cycle 04, C2.1).
         Trash,
-        // The Settings menu's Sharing & keys entry (Cycle 04, B1).
+        // The Settings menu's Sharing & keys entry (Cycle 04, B1), and the
+        // Unlock key dialog's key card (Cycle 05a, Part D).
         KeyRound,
+        // The Add repository sheet's mode control, Main branch and Share
+        // changes through (Wave 04 Cycle 05a, Part B, fact 40).
+        FolderInput,
+        GitBranch,
+        Cloud,
     ]
 );
 

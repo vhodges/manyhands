@@ -1,5 +1,7 @@
 //! One command per settings page, by keyboard alone: add an existing
-//! repository by typing its path, add a remote, generate a key, and
+//! repository by typing its path (in the Add repository sheet the
+//! toolbar's `+` opens, Wave 04 Cycle 05a E-5), add a remote, generate a
+//! key, and
 //! check a host to its typed failure (no desktop test reaches a network,
 //! ruling R11); and every key action of Sharing & keys (Wave 04 Cycle 04,
 //! P19).
@@ -47,15 +49,22 @@ fn selected(fixture: Fixture, cx: &mut TestAppContext) -> Walk {
     walk
 }
 
-/// Repositories: the path of an existing repository typed into Add, Add
-/// pressed, and the preview confirmed by Enter registers it.
+/// The Add repository sheet: the toolbar's `+` reached by Tab and pressed
+/// with Enter, the path of an existing repository typed into Add, Add
+/// pressed, and the preview confirmed by Enter registers it. The sheet
+/// closes and focus is back on `+` (E-5; G1, G7).
 #[gpui_kit::test]
 async fn add_an_existing_repository_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let fixture = Fixture::new();
     let plain = fixture.plain_repository("plain", Some(identity()));
     let walk = Walk::over(Shell::open(fixture, cx), plain.clone());
-    open_page(&walk, 0, cx);
+    walk.keys("secondary-1", cx);
+    walk.tab_to("tab", PLUS, cx);
+    walk.on(PLUS, Region::Repositories, cx);
+    walk.enter(cx);
+    assert!(walk.shell.present("add-sheet", cx), "+ opened the sheet");
+    walk.on("add-path", Region::Content, cx);
     walk.type_into("add-path", plain.to_str().unwrap(), Region::Content, cx);
     submit(&walk, "add-submit", cx);
     assert!(walk.shell.present("confirm-ok", cx));
@@ -76,8 +85,15 @@ async fn add_an_existing_repository_by_keyboard(cx: &mut TestAppContext) {
         .await;
     let listed = walk.shell.fixture.service().list_repositories().unwrap();
     assert!(listed.items.iter().any(|item| item.root == key(&plain)));
-    walk.region(Region::Content, cx);
+    assert!(
+        !walk.shell.present("add-sheet", cx),
+        "the success closed the sheet"
+    );
+    walk.on(PLUS, Region::Repositories, cx);
 }
+
+/// The Repositories toolbar's `+` (`ToolbarButton::AddRepository`).
+const PLUS: &str = "add-repository-button";
 
 /// Remotes: the repository chosen by its Manage on the Repositories page,
 /// then a name and a URL typed under Sharing, Add pressed: the remote is

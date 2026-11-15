@@ -10,7 +10,10 @@
 //!   Drafts page after it is retired but cannot all be restored. The dialog
 //!   says so, and offers Retire and Cancel, the default (Enter and Escape).
 //!
-//! Both are reached by Tab, Enter and Escape alone.
+//! Both are reached by Tab, Enter and Escape alone. Both are on the common
+//! frame (Wave 04 Cycle 05a design A3): the title in the Kit's title slot,
+//! the message in the body, and the two buttons in the footer, the body
+//! element's last child, in the order they were drawn.
 
 use std::rc::Rc;
 
@@ -21,17 +24,23 @@ use gpui_kit::{
         WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm,
-        h_flex, v_flex,
+        v_flex,
     },
     div,
 };
 
-use super::{confirm::CANCEL, quit::unkept_tabs};
+use super::{
+    confirm::CANCEL,
+    frame::{self, Footer, Header},
+    quit::unkept_tabs,
+};
 use crate::desktop::model::polling::TargetKind;
 
 pub(crate) const SHOW_TAB: &str = "Show tab";
 pub(crate) const RETIRE_CHOICE: &str = "Retire";
 const TITLE: &str = "Retire local copy";
+/// The header's title: the heading, as the Kit's title slot drew it.
+const TITLE_ID: &str = "retire-ask-title";
 
 /// What a Retire… question chose.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -149,12 +158,18 @@ fn open(
     choose: impl Fn(RetireChoice, &mut Window, &mut App) + 'static,
 ) {
     let choose: Choose = Rc::new(choose);
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let (ok, cancel) = (choose.clone(), choose.clone());
-        base.title(TITLE)
+        let header = Header {
+            icon: None,
+            title: TITLE.into(),
+            description: None,
+            ids: (TITLE_ID, None),
+        };
+        frame::dialog(base, header, cx)
             .close_button(false)
             .overlay_closable(false)
-            .child(body(&ids, &message, choices, default, &choose))
+            .child(body(&ids, &message, choices, default, &choose, cx))
             // Enter: the default; the Kit closes the dialog.
             .on_ok(move |_, window, cx| {
                 ok(default, window, cx);
@@ -174,6 +189,7 @@ fn body(
     choices: [(RetireChoice, &'static str); 2],
     default: RetireChoice,
     choose: &Choose,
+    cx: &App,
 ) -> impl IntoElement + use<> {
     let button = |id: &'static str, choice: RetireChoice, label: &'static str| {
         let choose = choose.clone();
@@ -196,22 +212,27 @@ fn body(
             .on_action(move |_: &Confirm, window, cx| enter(window, cx))
             .child(button.on_click(move |_: &ClickEvent, window, cx| press(window, cx)))
     };
+    let content = v_flex().child(
+        div()
+            .id(ids.message)
+            .test_support()
+            .aria_label(message.to_owned())
+            .text_sm()
+            .child(message.to_owned()),
+    );
+    let buttons = vec![
+        button(ids.buttons[0], choices[0].0, choices[0].1).into_any_element(),
+        button(ids.buttons[1], choices[1].0, choices[1].1).into_any_element(),
+    ];
     v_flex()
         .id(ids.dialog)
         .test_support()
-        .gap_2()
-        .child(
-            div()
-                .id(ids.message)
-                .test_support()
-                .aria_label(message.to_owned())
-                .text_sm()
-                .child(message.to_owned()),
-        )
-        .child(
-            h_flex()
-                .gap_2()
-                .child(button(ids.buttons[0], choices[0].0, choices[0].1))
-                .child(button(ids.buttons[1], choices[1].0, choices[1].1)),
-        )
+        .child(frame::body(content))
+        .child(frame::footer(
+            Footer {
+                hint: None,
+                buttons,
+            },
+            cx,
+        ))
 }

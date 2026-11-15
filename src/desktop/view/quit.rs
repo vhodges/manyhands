@@ -50,7 +50,11 @@ use gpui_kit::{
     div,
 };
 
-use super::{confirm::CANCEL, workspace::Workspace};
+use super::{
+    confirm::CANCEL,
+    frame::{self, Footer, Header},
+    workspace::Workspace,
+};
 use crate::desktop::{keys::QuitNow, services::requests::DesktopRequestId};
 
 pub(crate) const QUIT_NOW: &str = "Quit now";
@@ -218,6 +222,9 @@ pub(crate) fn unkept_tabs(count: usize) -> String {
     }
 }
 
+/// The header's title: the ask's title, as the Kit's title slot drew it.
+const TITLE_ID: &str = "quit-ask-title";
+
 /// A quit question's element IDs.
 struct AskIds {
     dialog: &'static str,
@@ -250,12 +257,18 @@ fn open_asking(
     choose: impl Fn(NotSavedChoice, &mut Window, &mut App) + 'static,
 ) {
     let choose: Choose = Rc::new(choose);
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let (ok, cancel) = (choose.clone(), choose.clone());
-        base.title(NOT_SAVED_TITLE)
+        let header = Header {
+            icon: None,
+            title: NOT_SAVED_TITLE.into(),
+            description: None,
+            ids: (TITLE_ID, None),
+        };
+        frame::dialog(base, header, cx)
             .close_button(false)
             .overlay_closable(false)
-            .child(not_saved_body(&ids, &message, &choose))
+            .child(not_saved_body(&ids, &message, &choose, cx))
             // Enter: Cancel, the default; the Kit closes the dialog.
             .on_ok(move |_, window, cx| {
                 ok(NotSavedChoice::Cancel, window, cx);
@@ -268,7 +281,12 @@ fn open_asking(
     });
 }
 
-fn not_saved_body(ids: &AskIds, message: &str, choose: &Choose) -> impl IntoElement + use<> {
+fn not_saved_body(
+    ids: &AskIds,
+    message: &str,
+    choose: &Choose,
+    cx: &App,
+) -> impl IntoElement + use<> {
     let button = |id: &'static str, label: &'static str, choice: NotSavedChoice| {
         let choose = choose.clone();
         let button = Button::new(format!("{id}-button")).label(label);
@@ -291,26 +309,31 @@ fn not_saved_body(ids: &AskIds, message: &str, choose: &Choose) -> impl IntoElem
             .on_action(move |_: &Confirm, window, cx| enter(window, cx))
             .child(button.on_click(move |_: &ClickEvent, window, cx| press(window, cx)))
     };
+    let content = v_flex().child(
+        div()
+            .id(ids.message)
+            .test_support()
+            .aria_label(message.to_owned())
+            .text_sm()
+            .child(message.to_owned()),
+    );
+    // The safe choice is the first Tab stop: one stray Tab and Enter does
+    // not quit.
+    let buttons = vec![
+        button(ids.cancel, CANCEL, NotSavedChoice::Cancel).into_any_element(),
+        button(ids.quit, QUIT_ANYWAY, NotSavedChoice::QuitAnyway).into_any_element(),
+    ];
     v_flex()
         .id(ids.dialog)
         .test_support()
-        .gap_2()
-        .child(
-            div()
-                .id(ids.message)
-                .test_support()
-                .aria_label(message.to_owned())
-                .text_sm()
-                .child(message.to_owned()),
-        )
-        .child(
-            h_flex()
-                .gap_2()
-                // The safe choice is the first Tab stop: one stray Tab and
-                // Enter does not quit.
-                .child(button(ids.cancel, CANCEL, NotSavedChoice::Cancel))
-                .child(button(ids.quit, QUIT_ANYWAY, NotSavedChoice::QuitAnyway)),
-        )
+        .child(frame::body(content))
+        .child(frame::footer(
+            Footer {
+                hint: None,
+                buttons,
+            },
+            cx,
+        ))
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]

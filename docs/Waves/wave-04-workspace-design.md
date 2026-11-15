@@ -52,8 +52,9 @@ suggested sequence. This Wave replaces it with the owner's priorities from
 | `03` Activity | Cycle 03b |
 | `05` Needs attention popover | Cycle 03b |
 | `05` Settings sheet frame, Sharing & keys | Cycle 04 |
-| `05` common sheet and dialog frame, Add repository, Unlock key, Close ticket and Approve and merge, Resolve conflict | Cycle 05 |
-| `04` empty item area | Cycle 03a (text), Cycle 05 (icon) |
+| `05` common sheet and dialog frame, Add repository, Unlock key | Cycle 05a |
+| `05` Close ticket and Approve and merge, Resolve conflict | Cycle 05b |
+| `04` empty item area | Cycle 03a (text), Cycle 05a (icon) |
 | `06` copy and state vocabulary | every Cycle, for the surfaces it touches |
 | `07` color, type, spacing tokens (both modes) | Cycle 01 (chrome tokens), then each Cycle's surfaces |
 | `08` GPUI Kit mapping | every Cycle, verified against the locked version |
@@ -185,9 +186,10 @@ Made on 2026-11-07, after the owner approved this Wave:
 
 ## Cycles
 
-Six Cycles, in priority order, Cycle 03 having been split in two on
-2026-11-12 (Cycle 03a decision 1). Each gets a Manyhands ticket before its
-plan, and its Cycle document at the path named below.
+Seven Cycles, in priority order, Cycle 03 having been split in two on
+2026-11-12 (Cycle 03a decision 1) and Cycle 05 on 2026-11-14 (Cycle 05a
+decision 2). Each gets a Manyhands ticket before its plan, and its Cycle
+document at the path named below.
 
 | Cycle | Delivers | Depends on |
 | --- | --- | --- |
@@ -196,11 +198,13 @@ plan, and its Cycle document at the path named below.
 | 03a Repositories panel and sharing status | Sharing states, the toolbar and row menu, the footer's "to share" and "Checked for updates", the repository details out of the item area | 01 (D6 merged) |
 | 03b Activity and Needs attention | The activity log, the popover, the three K-19 rows | 01, 03a |
 | 04 Settings sheet | Settings moved from the item area into a sheet | 01 |
-| 05 Existing sheets and dialogs | Add repository, Unlock key, Close ticket and Approve and merge, Resolve conflict and the other dialogs in the design's frame | 01, 04 |
+| 05a Common frame, Add repository and Unlock key | The common frame on every existing dialog, the Add repository sheet, the Unlock key dialog and the empty item area's icon | 01, 04 |
+| 05b Close ticket and Resolve conflict | The Close ticket and Approve and merge dialog and the Resolve conflict sheet in the design's frame | 01, 05a |
 
-Cycles 02, 03a and 04 each depend only on 01; 03b also depends on 03a. Cycle 05 also depends on 04,
+Cycles 02, 03a and 04 each depend only on 01; 03b also depends on 03a. Cycle 05a also depends on 04,
 because it moves Add repository out of the Settings sheet's Repositories
-page. Run them in order unless the owner asks to overlap them. 02 and 03a both touch panel headers and shared row
+page, and 05b depends on 05a, whose common frame it uses (amended
+2026-11-14, Cycle 05a decision 2). Run them in order unless the owner asks to overlap them. 02 and 03a both touch panel headers and shared row
 helpers, so overlapping them means more merging.
 
 ### Cycle 01: Workspace Shell
@@ -495,22 +499,20 @@ and 6; design Document Amendment 1):
 - Show in Activity closes Settings;
 - Escape closes Settings also while a request it started is running.
 
-### Cycle 05: Existing Sheets And Dialogs
+### Cycle 05a: Common Frame, Add Repository And Unlock Key
 
-**Planned document:** `docs/Cycles/wave-04-cycle-05-sheets-and-dialogs.md`
+**Planned document:** `docs/Cycles/wave-04-cycle-05a-frame-add-repository-and-unlock.md`
+
+Amended 2026-11-14: the owner split Cycle 05 on its split line into 05a and
+05b (Cycle 05a decision 2). 05a is ticket `01M7D5Z7FZTGTC1HE25KQ1MYQY`
+(`vh-kebv6`); 05b is ticket `01M7D7JK5MSY6J471JEKG3CZXR` (`vh-qjw5e`) and
+depends on 05a. The Check first (Cycle 05b) found that neither of Wave 03
+D5's surfaces matches the design.
 
 **Purpose:** Bring the sheets and dialogs that already exist up to the
 design, so that the Wave leaves no surface in the old style. Every one keeps
 its current behavior, services, request handling and recovery routes. Only
 its frame, layout, copy and states change.
-
-**Check first.** Wave 03 D5 built the lifecycle dialog and the resolve
-conflict sheet from the same handoff (frames 2c to 2e and 2g), and the owner
-has not yet compared the result with the design. Before planning any work
-on either, compare each with `05` and its screenshots, and record in the
-Cycle document what already matches and what differs. Only the differences
-are in scope. If both already match, they leave the Cycle apart from the
-shared tokens and frame, and the split line below is unlikely to be needed.
 
 **In scope:**
 
@@ -526,6 +528,13 @@ shared tokens and frame, and the split line below is unlikely to be needed.
   sheet replaces Settings, this Cycle adds the sheet owner's case for it,
   empties a typed passphrase, and reopens Settings at Repositories with its
   first origin after Cancel or Add (Cycle 04, Downstream Obligations).
+  *Amended 2026-11-14 by Cycle 05a* (decisions 7 and 15): each dialog keeps
+  today's Escape rule, so Escape closes it and cancels nothing, except New
+  ticket, New document, New folder and Move, which wait for their own
+  write; and each keeps today's button order, right-aligned, except the
+  Confirmation dialog and Unlock key, which put the action last. The Add
+  repository sheet closes on Escape as Cancel, also while a request runs,
+  as Settings does.
 - **Add repository sheet** (`05`, 1d, 470 px): today's Add an existing
   repository and Create a repository, moved out of the Settings
   Repositories page into the sheet, with the mode segmented control, the
@@ -536,10 +545,68 @@ shared tokens and frame, and the split line below is unlikely to be needed.
   the Repositories panel's `+`, from the Settings Repositories page
   (replacing the Settings sheet until Cancel or Add, decision 10) and from
   the empty Repositories panel.
+  *Amended 2026-11-14 by Cycle 05a* (decisions 3, 13, 17 and 18): the
+  remote select defaults to the remote the folder's settings already name,
+  else "Keep on this computer", and after a successful add the desktop
+  sends today's remote selection, the same request as Settings ›
+  Repositories › Sharing; Create has no remotes and no select. The
+  lifecycle dialog's "Open repository details" and the `repo.inspect` and
+  `remote.history` recoveries open the sheet with the folder filled and
+  checked; a folder already added shows its configuration and an "Open its
+  settings" action, which opens Settings › Repositories on it.
 - **Unlock key dialog** (`05`, 2h, 440 px): today's passphrase dialog with
   the design's header, key card, note, Not now and Unlock, the inline error
   for a wrong passphrase, and Not now moving the prompt into Needs
   attention. There is no show and hide toggle (decision 9).
+  *Amended 2026-11-14 by Cycle 05a* (decisions 4 and 14): the inline error
+  covers what the dialog refuses itself, an empty passphrase or one with a
+  NUL; a wrong passphrase fails the job as it does today
+  (`01M5E6DYJ6GN7DMW4424TH3V78`). The note, always shown, reads "Kept in
+  memory only, never written to disk. If you choose Not now, you can keep
+  working and unlock later from Needs attention."
+- **Empty item area** (`04`, "Empty pane"): the faded app icon and "Open a
+  ticket or document from the lists". The "Ctrl K to search" line waits
+  for Search. (Amended 2026-11-12, Cycle 03a decision 13: Cycle 03a shows
+  the text; this Cycle adds the icon.)
+
+**Out of scope:** New behavior in any of these surfaces, the General and
+Appearance settings pages, and theme switching; the Close ticket and
+Approve and merge dialog and the Resolve conflict sheet (Cycle 05b).
+
+**Exit evidence:** Every existing journey through these surfaces still
+passes by keyboard: adding and creating a repository, including the
+identity step and each failed check's recovery action; unlocking, Not now,
+a wrong passphrase. Focus returns to the invoking control after each. No
+passphrase or private key text reaches any label, tooltip or Git detail
+line (extend the existing privacy tests).
+*Amended 2026-11-14 by Cycle 05a* (decision 4): "a wrong passphrase" is
+today's journey, in which the job fails as `transport_unavailable`, with
+no inline error.
+
+### Cycle 05b: Close Ticket And Resolve Conflict
+
+**Planned document:** `docs/Cycles/wave-04-cycle-05b-close-and-resolve.md`
+
+Amended 2026-11-14: split from Cycle 05 (Cycle 05a decision 2). Ticket
+`01M7D7JK5MSY6J471JEKG3CZXR` (`vh-qjw5e`), planned after 05a's documents
+are approved; it depends on 05a, whose common frame it uses.
+
+**Purpose:** As Cycle 05a's: bring the two surfaces Wave 03 D5 built up to
+the design. Each keeps its current behavior, services, request handling
+and recovery routes. Only its frame, layout, copy and states change.
+
+**Check first.** Wave 03 D5 built the lifecycle dialog and the resolve
+conflict sheet from the same handoff (frames 2c to 2e and 2g), and the owner
+has not yet compared the result with the design. Before planning any work
+on either, compare each with `05` and its screenshots, and record in the
+Cycle document what already matches and what differs. Only the differences
+are in scope. If both already match, they leave the Cycle apart from the
+shared tokens and frame, and the split line below is unlikely to be needed.
+*Done 2026-11-14:* neither matches; the 05b ticket records the comparison,
+and its Cycle document records it element by element.
+
+**In scope:**
+
 - **Close ticket and Approve and merge dialog** (`05`, 2c to 2e, 580 px),
   where the check finds differences: today's lifecycle dialog laid out as
   the design's stages. Confirm shows
@@ -553,27 +620,23 @@ shared tokens and frame, and the split line below is unlikely to be needed.
   design in Wave 03 D5. This Cycle moves it onto the shared tokens and
   frame and corrects only the differences the check found, without
   changing how parts are chosen or saved.
-- **Empty item area** (`04`, "Empty pane"): the faded app icon and "Open a
-  ticket or document from the lists". The "Ctrl K to search" line waits
-  for Search. (Amended 2026-11-12, Cycle 03a decision 13: Cycle 03a shows
-  the text; this Cycle adds the icon.)
 
-**Out of scope:** New behavior in any of these surfaces, the General and
-Appearance settings pages, and theme switching.
+**Out of scope:** New behavior in either surface; the common frame, the
+Add repository sheet, the Unlock key dialog and the empty item area
+(Cycle 05a).
 
 **Exit evidence:** Every existing journey through these surfaces still
-passes by keyboard: adding and creating a repository, including the
-identity step and each failed check's recovery action; unlocking, Not now,
-a wrong passphrase; a close and an approval through confirm, running,
+passes by keyboard: a close and an approval through confirm, running,
 failed with Retry, and done, including a local-only repository; resolving
 a conflict. Focus returns to the invoking control after each. No
 passphrase or private key text reaches any label, tooltip or Git detail
 line (extend the existing privacy tests).
 
-**Split line:** if the plan does not fit one reviewable Cycle, split it into
-05a (common frame, Add repository sheet, Unlock key dialog, empty item area)
-and 05b (Close ticket and Approve and merge dialog, Resolve conflict sheet),
-and update this Wave.
+**Split line:** *Used 2026-11-14* (Cycle 05a decision 2). The original
+line: if the plan does not fit one reviewable Cycle, split it into 05a
+(common frame, Add repository sheet, Unlock key dialog, empty item area)
+and 05b (Close ticket and Approve and merge dialog, Resolve conflict
+sheet), and update this Wave.
 
 ## Testing
 
@@ -613,7 +676,7 @@ Wave 04 is complete when its Cycles have approved exit evidence and:
 | Quit feedback ("Finishing …", Quit now, and D6's "still stopping") renders in the operations area, so a hidden Activity panel would hide it | Cycle 01 keeps the feedback in the Activity panel and changes no layout when a quit waits; a person who wonders why opens Activity (amended 2026-11-08, Cycle 01 decision 7). |
 | Needs attention misses the attention states D6 adds (key locked, host approval, recovery hold) | The footer count is one read-only function over the existing models; whichever of D6 and Cycle 01 merges second adds D6's states to it (amended 2026-11-08, Cycle 01 decision 3). *Settled 2026-11-13: Cycle 03b's count is the popover's rows, every attention source once (Cycle 03b decision 6).* |
 | Cycle 01 or 05 grows too large to review | The split line in each. |
-| Restyling the lifecycle dialog and the resolve conflict sheet regresses D5 behavior (stale confirmations, retry reusing the operation, safe-point stop, no automatic winner) | Cycle 05 changes layout and copy only; D5's existing tests stay and must pass unchanged in what they assert about behavior. |
+| Restyling the lifecycle dialog and the resolve conflict sheet regresses D5 behavior (stale confirmations, retry reusing the operation, safe-point stop, no automatic winner) | Cycle 05b (Cycle 05 until the split, amended 2026-11-14) changes layout and copy only; D5's existing tests stay and must pass unchanged in what they assert about behavior. |
 | The design's list specs drop a Wave 03 behavior (Ready and Blocked, duplicate short codes, inaccessible entries) | Cycle 02's exit evidence names them; decision 5 places Ready and Blocked. |
 
 ## Owner Decisions, 2026-11-07

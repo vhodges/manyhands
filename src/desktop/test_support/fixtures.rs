@@ -960,13 +960,23 @@ impl Fixture {
     /// library's `key import`: a key of the user's own, which Manyhands did
     /// not make. Gives its ID.
     pub(crate) fn import_key(&self, label: &str) -> SharedKeyId {
+        self.import_key_with(label, true)
+    }
+
+    /// `import_key` with no public key file: a registration that records no
+    /// fingerprint, its public metadata unavailable. Gives its ID.
+    pub(crate) fn import_key_without_public_key(&self, label: &str) -> SharedKeyId {
+        self.import_key_with(label, false)
+    }
+
+    fn import_key_with(&self, label: &str, with_public: bool) -> SharedKeyId {
         let (private, public) = self.external_key_files(label);
         let imported = self.execute(
             None,
             Mutation::KeyImport(KeyImportInput {
                 label: label.to_owned(),
                 private_key_path: private,
-                public_key_path: Some(public),
+                public_key_path: with_public.then_some(public),
             }),
         );
         assert_eq!(imported.code, ResultCode::Ok, "{}", imported.message);
