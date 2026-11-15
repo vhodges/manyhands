@@ -1,12 +1,12 @@
 //! Made ready (D5 design, A3, decision 6; ruling R-20): the tickets a
 //! closure made ready, drawn on any ended closure that reached main, Done or
-//! Failed.
+//! Failed, in a teal box (A6).
 //!
-//! - **`current`.** "Now ready:", then each ticket by its short code, or its
-//!   short ID with none (R-19), and its title. The library's report holds no
-//!   title, so the dialog reads each one (`show_item`) on its own
-//!   generations; a ticket that cannot be read, deleted meanwhile, shows
-//!   without one (K-8).
+//! - **`current`.** "Now ready to start", then each ticket by its short
+//!   code, or its short ID with none (R-19), and its title. The library's
+//!   report holds no title, so the dialog reads each one (`show_item`) on
+//!   its own generations; a ticket that cannot be read, deleted meanwhile,
+//!   shows without one (K-8).
 //! - **`index_pending`.** The list, and "The list may be incomplete until
 //!   indexing finishes.": the library sends it with a Failed
 //!   `discovery_pending` or `push_rejected` answer.
@@ -30,13 +30,15 @@ use manyhands::{
     results::Envelope,
 };
 
-use super::{LifecycleDialog, Phase, button, outcome::lifecycle_data, short_id, text};
+use super::{
+    LifecycleDialog, Phase, READY_TO_START, button, outcome::lifecycle_data, rows::made_ready_box,
+    short_id, text,
+};
 use crate::desktop::{
     model::stamp::ViewScope,
     services::{ReadKind, ReadResult, requests::DesktopRequestId},
 };
 
-pub(crate) const MADE_READY_LEAD: &str = "Now ready:";
 pub(crate) const MAY_BE_INCOMPLETE: &str = "The list may be incomplete until indexing finishes.";
 pub(crate) const COULD_NOT_WORK_OUT: &str = "Could not work out which tickets are now ready.";
 pub(crate) const OPEN_READY_TICKETS: &str = "Open ready tickets";
@@ -191,7 +193,7 @@ impl LifecycleDialog {
                 let mut part = v_flex().gap_1();
                 if !tickets.is_empty() {
                     part = part
-                        .child(text("lifecycle-made-ready-lead", MADE_READY_LEAD).text_sm())
+                        .child(text("lifecycle-made-ready-lead", READY_TO_START).text_sm())
                         .children(tickets.iter().enumerate().map(|(ix, ticket)| {
                             let title = self.titles.read.get(&ticket.id).cloned().flatten();
                             text(("lifecycle-made-ready", ix), row(ticket, title.as_deref()))
@@ -205,12 +207,15 @@ impl LifecycleDialog {
                             .text_color(muted),
                     );
                 }
-                (Some(part.into_any_element()), None)
+                (Some(made_ready_box(part.into_any_element(), cx)), None)
             }
             MadeReady::Unknown => {
-                let part = text("lifecycle-made-ready-unknown", COULD_NOT_WORK_OUT)
-                    .text_sm()
-                    .into_any_element();
+                let part = made_ready_box(
+                    text("lifecycle-made-ready-unknown", COULD_NOT_WORK_OUT)
+                        .text_sm()
+                        .into_any_element(),
+                    cx,
+                );
                 let go = self.on(cx, |dialog, window, cx| {
                     if let Some(root) = dialog.root().map(Path::to_path_buf) {
                         dialog.in_workspace(window, cx, move |workspace, window, cx| {

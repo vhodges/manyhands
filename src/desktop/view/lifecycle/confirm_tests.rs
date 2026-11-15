@@ -23,6 +23,7 @@ use super::tests::{
     TICKET, closes, code, dialog, open, pane, request, saved_ticket, shell, shown, ticket,
     until_present,
 };
+use super::{closed_by, closed_by_today};
 use crate::desktop::{
     model::item::CLOSE_TICKET,
     test_support::fixtures::{identity, item_id, ticket_path, ticket_source},
@@ -276,7 +277,8 @@ async fn a_remote_preview_shares_with_origin(cx: &mut TestAppContext) {
 }
 
 /// Real: the Mark as closed step names who closes it, as the preview gives
-/// `closed_by`: the repository's identity.
+/// `closed_by`: the repository's identity, by name, to be recorded today
+/// (A4, R-3).
 #[gpui_kit::test]
 async fn closure_shows_closed_by_from_the_preview(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -290,7 +292,7 @@ async fn closure_shows_closed_by_from_the_preview(cx: &mut TestAppContext) {
     let who = identity();
     assert_eq!(
         shell.rows("lifecycle-step-note", cx)[at],
-        format!("Closed by {} <{}>", who.name, who.email)
+        closed_by_today(&who.name)
     );
 }
 
@@ -434,7 +436,7 @@ fn existing_closure_and_already_contained_read_already() {
         ]
     );
     let notes: Vec<String> = steps(&details).into_iter().map(|step| step.note).collect();
-    assert_eq!(notes[2], "Closed by Ada Example <ada@example.invalid>");
+    assert_eq!(notes[2], closed_by("Ada Example"));
     assert_eq!(
         git_line(&details),
         format!(

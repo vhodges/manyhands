@@ -70,6 +70,7 @@ mod prepare;
 mod repair;
 mod republish;
 mod resumed;
+mod rows;
 mod running;
 mod stages;
 mod view;
@@ -144,22 +145,18 @@ pub(crate) const COULDNT_CLOSE: &str = "Couldn't finish closing";
 pub(crate) const COULDNT_MERGE: &str = "Couldn't finish merging";
 
 /// The Mark as closed note when the closure is to be recorded (A4).
-#[allow(dead_code)] // Used from Task 3
 pub(crate) fn closed_by_today(name: &str) -> String {
     format!("Closed by {name} \u{b7} today")
 }
 /// The same note for a closure already recorded, which may be from an
 /// earlier day (A4).
-#[allow(dead_code)] // Used from Task 3
 pub(crate) fn closed_by(name: &str) -> String {
     format!("Closed by {name}")
 }
 /// A run's lead above its steps (A5).
-#[allow(dead_code)] // Used from Task 3
 pub(crate) const RUNNING_LEAD: &str =
     "You can keep working. This continues in the background and shows up in Activity.";
 /// The made-ready box's lead (A6).
-#[allow(dead_code)] // Used from Task 3
 pub(crate) const READY_TO_START: &str = "Now ready to start";
 
 /// The footer's hints (A7): Confirm's, and the running dialog's.
@@ -175,9 +172,6 @@ pub(crate) const DONE: &str = "Done";
 /// Continue and Resume wait while the item's lifecycle runs (P22). The
 /// words live with the outcome types in the model (R-41).
 pub(crate) use crate::desktop::model::activity::lifecycle_lines::STILL_RUNNING;
-/// A run is sent: it goes on with the dialog hidden.
-pub(crate) const STARTED: &str =
-    "It continues in the background if you close this, and shows up in Activity.";
 /// A blocked prepare's lead.
 pub(crate) const BLOCKED_LEAD: &str =
     "Nothing was changed. Each thing below stands in the way; deal with it, then prepare again.";

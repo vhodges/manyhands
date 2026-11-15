@@ -7,16 +7,23 @@
 
 use std::path::Path;
 
-use gpui_kit::TestAppContext;
+use gpui_kit::{ElementId, TestAppContext};
 use manyhands::{
-    repository::{ItemDtoKind, OperationId, ProgressStage, RequestId},
-    results::{CleanupEffect, Effects, Envelope, Outcome, ResultCode},
+    repository::{
+        ItemDtoKind, LifecycleBlocker, LifecycleRecording, OperationId, ProgressEvent,
+        ProgressStage, RequestId,
+    },
+    results::{CleanupEffect, Effects, Envelope, Outcome, ResultCode, Scope},
 };
 
 use super::{
-    CLOSED, CLOSING, COULDNT_CLOSE, COULDNT_MERGE, Heading, MERGING, STILL_RUNNING, approve_title,
-    close_title,
-    outcome::{ENDING_STOPPED, merged},
+    CLOSED, CLOSING, COULDNT_CLOSE, COULDNT_MERGE, Heading, MERGING, RUNNING_LEAD, STILL_RUNNING,
+    approve_title, close_title,
+    confirm::steps,
+    outcome::{
+        ENDING_STOPPED, STATE_DONE, STATE_FAILED, STATE_NOT_DONE, STATE_NOT_STARTED, STATE_RUNNING,
+        merged,
+    },
     outcome_canned_tests::{
         answer, finished, intent, reached, reached_effects, reopen as open_entry, retry,
         short_of_main,
@@ -26,10 +33,13 @@ use super::{
     privacy_tests::TITLE,
     short_id,
     stages::Stage,
-    tests::{DOCUMENT, SLUG, TICKET, dialog, open, saved_ticket, shell, shown, until_present},
+    tests::{
+        DOCUMENT, SLUG, TICKET, closes, dialog, open, request, saved_ticket, shell, shown,
+        until_present,
+    },
 };
 use crate::desktop::{
-    model::navigation::OpenTarget,
+    model::{navigation::OpenTarget, operations::stage_words},
     services::{
         JobKind,
         requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
@@ -416,4 +426,316 @@ async fn each_stage_has_its_title(cx: &mut TestAppContext) {
             assert!(!shell.present("lifecycle-dialog", cx), "{row}");
         }
     }
+}
+
+/// Where the failure's message is drawn.
+#[derive(Debug, PartialEq, Eq)]
+enum Home {
+    /// Under the step row `ix`, as that step's note.
+    Row(usize),
+    /// In the outcome box.
+    Box,
+}
+
+/// Where `lifecycle-message` is drawn: inside a step row, or the box.
+fn message_home(shell: &Shell, cx: &mut TestAppContext) -> Option<Home> {
+    shell.frame(cx, |window, _| {
+        let message = ElementId::from("lifecycle-message");
+        let homes: Vec<Home> = gpui_kit::base::test_support::snapshots(window)
+            .into_iter()
+            .filter(|element| element.path().last() == Some(&message))
+            .map(|element| {
+                let path = element.path();
+                let row =
+                    (0..16).find(|ix| path.contains(&ElementId::from(("lifecycle-step-row", *ix))));
+                match row {
+                    Some(ix) => Home::Row(ix),
+                    None => {
+                        assert!(path.contains(&ElementId::from("lifecycle-box")), "{path:?}");
+                        Home::Box
+                    }
+                }
+            })
+            .collect();
+        assert!(homes.len() <= 1, "the message is drawn once: {homes:?}");
+        homes.into_iter().next()
+    })
+}
+
+/// The note under each of `count` step rows: `None` where it draws none.
+fn notes(shell: &Shell, count: usize, cx: &mut TestAppContext) -> Vec<Option<String>> {
+    (0..count)
+        .map(|ix| shell.label(("lifecycle-step-note", ix), cx))
+        .collect()
+}
+
+/// The words on each step's mark.
+fn marks(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
+    shell.rows("lifecycle-step-state", cx)
+}
+
+/// The notes the preview gives its steps.
+fn own_notes(cx: &mut TestAppContext) -> Vec<Option<String>> {
+    let plan = dialog(cx)
+        .read_with(cx, |dialog, _| dialog.plan.clone())
+        .expect("the dialog holds its preview");
+    steps(&plan)
+        .into_iter()
+        .map(|step| Some(step.note))
+        .collect()
+}
+
+/// The words of a row of marks.
+fn words(states: &[&str]) -> Vec<String> {
+    states.iter().map(|state| (*state).to_owned()).collect()
+}
+
+/// A canned row of P4: a run shown without its preview, as Activity's
+/// Open… shows it (K-15).
+enum Canned {
+    /// Sent, and held at `integrating` (the stage is sent after the dialog
+    /// is open).
+    Held,
+    /// Answered, as `code` and `outcome` say, with `data`.
+    Answered(
+        ResultCode,
+        Outcome,
+        manyhands::repository::LifecycleMutationDto,
+        Effects,
+    ),
+}
+
+/// P4, A3, K-15, Review Focus 3: the step rows show their state on the mark
+/// and the progress in the note. A run held at a stage, with and without the
+/// preview, has the stage's words as the Running step's note; with the
+/// preview the other steps keep its notes, and without it they have none. A
+/// failure whose blockers name the merge shows its message under Merge, in
+/// place of the step's note; with no Failed step (Waiting, or a failure
+/// whose steps are all done) the message goes in the outcome box instead.
+#[gpui_kit::test]
+async fn steps_show_their_state_and_progress(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        saved_ticket(fixture, root, "Coded", &format!("slug: {SLUG}\n"));
+        saved_document(fixture, root);
+    });
+
+    // Real, with the preview: a promotion held at `integrating`.
+    open(
+        &shell,
+        OpenTarget::Item {
+            repo: key(&root),
+            kind: ItemDtoKind::Document,
+            id: item_id(DOCUMENT),
+        },
+        cx,
+    );
+    shell.click(LIFECYCLE_ACTION, cx);
+    until_present(&shell, "lifecycle-confirm", cx).await;
+    let gate = shell
+        .backend
+        .hold_at_stage(JobKind::DocumentPromote, ProgressStage::Integrating);
+    shell.click("lifecycle-confirm", cx);
+    gate.wait_reached();
+    let id = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::DocumentPromote { .. })
+    })[0];
+    at_stage(&shell, id, ProgressStage::Integrating, cx).await;
+    shell.run(cx);
+    assert_eq!(
+        marks(&shell, cx),
+        words(&[STATE_DONE, STATE_DONE, STATE_RUNNING, STATE_NOT_STARTED]),
+        "held, with the preview"
+    );
+    let mut expected = own_notes(cx);
+    expected[2] = Some(stage_words(ProgressStage::Integrating, Some("main")));
+    assert_eq!(notes(&shell, 4, cx), expected, "held, with the preview");
+    assert_eq!(
+        shell.label("lifecycle-state", cx).as_deref(),
+        Some(RUNNING_LEAD)
+    );
+    gate.release();
+    shell.until_ended(id, cx).await;
+    shell.keys("escape", cx);
+
+    // Without the preview, held at a stage: only the Running step has a
+    // note, and the others none. Failures, whose blockers name the merge
+    // or none, and a Waiting answer.
+    let request_id = RequestId::new();
+    let mut blocked = short_of_main(
+        ItemDtoKind::Ticket,
+        TICKET,
+        vec![LifecycleBlocker::IntegrationConflict],
+    );
+    blocked.recording = Some(LifecycleRecording::Record);
+    let rows = [
+        (
+            "held",
+            Canned::Held,
+            [
+                STATE_DONE,
+                STATE_DONE,
+                STATE_DONE,
+                STATE_RUNNING,
+                STATE_NOT_STARTED,
+            ],
+            None,
+        ),
+        (
+            "blockers name the merge",
+            Canned::Answered(
+                ResultCode::RecoveryRequired,
+                Outcome::Blocked,
+                blocked,
+                Effects::not_requested(),
+            ),
+            [
+                STATE_DONE,
+                STATE_DONE,
+                STATE_DONE,
+                STATE_FAILED,
+                STATE_NOT_DONE,
+            ],
+            Some(Home::Row(3)),
+        ),
+        (
+            "waiting",
+            Canned::Answered(
+                ResultCode::Busy,
+                Outcome::Partial,
+                short_of_main(ItemDtoKind::Ticket, TICKET, vec![]),
+                Effects::not_requested(),
+            ),
+            [
+                STATE_DONE,
+                STATE_NOT_STARTED,
+                STATE_NOT_STARTED,
+                STATE_NOT_STARTED,
+                STATE_NOT_STARTED,
+            ],
+            Some(Home::Box),
+        ),
+        (
+            "failed, every step done",
+            Canned::Answered(
+                ResultCode::RecoveryRequired,
+                Outcome::Blocked,
+                reached(ItemDtoKind::Ticket, TICKET, vec![]),
+                reached_effects(CleanupEffect::Complete),
+            ),
+            [STATE_DONE; 5],
+            Some(Home::Box),
+        ),
+    ];
+    for (n, (name, run, states, home)) in rows.into_iter().enumerate() {
+        let n = 200 + n as u64;
+        let message = match run {
+            Canned::Held => {
+                let id = fabricate(
+                    &shell,
+                    n,
+                    intent(&root, ItemDtoKind::Ticket),
+                    |id| vec![WorkerEvent::Started(id)],
+                    cx,
+                );
+                open_on(&shell, id, cx);
+                shell.operations(cx).update(cx, |operations, cx| {
+                    operations.apply(WorkerEvent::Progress(
+                        id,
+                        ProgressEvent {
+                            request_id: request_id.to_string(),
+                            operation_id: None,
+                            command: "ticket close".to_owned(),
+                            scope: Scope::default(),
+                            stage: ProgressStage::Integrating,
+                            effects: Effects::not_requested(),
+                        },
+                    ));
+                    cx.notify();
+                });
+                None
+            }
+            Canned::Answered(code, outcome, data, effects) => {
+                let envelope = answer(
+                    "ticket close",
+                    &root,
+                    code,
+                    outcome,
+                    data,
+                    effects,
+                    vec![retry(request_id)],
+                    request_id,
+                );
+                let message = envelope.message.clone();
+                let id = finished(
+                    &shell,
+                    n,
+                    intent(&root, ItemDtoKind::Ticket),
+                    request_id,
+                    envelope,
+                    cx,
+                );
+                open_entry(&shell, id, cx).await;
+                Some(message)
+            }
+        };
+        shell.run(cx);
+        assert_eq!(marks(&shell, cx), words(&states), "{name}");
+        let mut expected = vec![None; states.len()];
+        if message.is_none() {
+            expected[3] = Some(stage_words(ProgressStage::Integrating, Some("main")));
+        }
+        assert_eq!(
+            notes(&shell, states.len(), cx),
+            expected,
+            "{name}: no other notes"
+        );
+        assert_eq!(message_home(&shell, cx), home, "{name}");
+        if let Some(message) = message {
+            assert_eq!(
+                shell.label("lifecycle-message", cx),
+                Some(message),
+                "{name}"
+            );
+        }
+        assert!(!shell.present("lifecycle-git", cx), "{name}: no preview");
+        shell.keys("escape", cx);
+        assert!(!shell.present("lifecycle-dialog", cx), "{name}");
+    }
+
+    // Real, with the preview: main turns dirty after Confirm (P19), so the
+    // merge fails, and its message stands where its own note did.
+    super::confirm_tests::confirming(&shell, &root, cx).await;
+    let dirty = root.join("dirty-primary.txt");
+    shell
+        .fixture
+        .service()
+        .set_request_hook_for_testing(move || std::fs::write(dirty, b"dirty\n").unwrap());
+    shell.click("lifecycle-confirm", cx);
+    let id = closes(&shell, cx)[0];
+    shell.until_ended(id, cx).await;
+    until_present(&shell, "lifecycle-ending", cx).await;
+    let RequestState::Finished(.., message) = request(&shell, id, cx).state else {
+        panic!("the close ended");
+    };
+    assert_eq!(
+        marks(&shell, cx),
+        words(&[
+            STATE_DONE,
+            STATE_NOT_DONE,
+            STATE_NOT_DONE,
+            STATE_FAILED,
+            STATE_NOT_DONE
+        ]),
+        "failed at the merge, with the preview"
+    );
+    let mut expected = own_notes(cx);
+    expected[3] = None;
+    assert_eq!(
+        notes(&shell, 5, cx),
+        expected,
+        "the merge's own note gives way"
+    );
+    assert_eq!(message_home(&shell, cx), Some(Home::Row(3)));
+    assert_eq!(shell.label("lifecycle-message", cx), Some(message));
 }
