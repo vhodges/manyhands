@@ -44,7 +44,7 @@ use crate::desktop::{
     test_support::fixtures::item_id,
     view::{
         activity_support::{act, highlighted, list_focused, offered, refresh, row, rows, to_row},
-        harness::{Shell, WAIT, key, wait_until},
+        harness::{MAKE_A_NEW_KEY, Shell, WAIT, key, wait_until},
         item::ItemRoute,
         repositories::tests::support::highlight,
         settings::Shown,
@@ -71,6 +71,10 @@ fn no_selected_key_opens_sharing_and_keys(cx: &mut TestAppContext) {
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
     assert!(matches!(shown, Shown::Settings(SettingsPage::Keys)));
+    assert!(
+        shell.holds_keys_control(MAKE_A_NEW_KEY, cx),
+        "W-12 lands on the key list, with no key Make a new key itself (Part D; R-22)"
+    );
 }
 
 /// Check host on a host problem checks the host the outcome names, on the
@@ -117,6 +121,10 @@ async fn a_host_code_checks_the_host_with_its_authority(cx: &mut TestAppContext)
     assert_eq!(
         shell.label("hosts-root", cx),
         Some(chosen_line(&key(&root)))
+    );
+    assert!(
+        shell.holds_focus("hosts-check", cx),
+        "W-13 lands on Check host (Part D)"
     );
     held.release();
 }

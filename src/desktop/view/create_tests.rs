@@ -925,9 +925,13 @@ async fn initials_required_points_to_settings(cx: &mut TestAppContext) {
         Shown::Settings(SettingsPage::Repositories)
     );
     assert_eq!(shell.label("managed-root", cx), Some(key(&root)));
+    assert!(
+        shell.holds_focus("identity-name", cx),
+        "W-30 lands on the identity Name (Part D)"
+    );
 
     set_initials(&root, "ae");
-    shell.click("settings-close-button", cx);
+    shell.keys("escape", cx);
     shell
         .until_drawn(cx, "the tab again", |shell, cx| {
             shell.present("item-save", cx)

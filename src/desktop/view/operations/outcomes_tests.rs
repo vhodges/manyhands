@@ -485,6 +485,10 @@ fn a_share_with_no_remote_offers_set_up_sharing(cx: &mut TestAppContext) {
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
     assert!(matches!(shown, Shown::Settings(SettingsPage::Remotes)));
+    assert!(
+        shell.holds_focus("remote-add-name", cx),
+        "W-15 lands on the add-remote Name (Part D)"
+    );
 }
 
 /// A deleted shared branch offers Give up while the record is accepted,

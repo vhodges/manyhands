@@ -650,18 +650,18 @@ pub(super) fn control_focus(shell: &Shell, id: &str, cx: &mut TestAppContext) ->
 }
 
 /// In a window too short for the page, Tab reaches Create repository,
-/// below the fold, and the content region scrolls it into view: the
-/// control is a Kit button, whose own focus is private, so its wrapper
+/// below the fold, and the Settings sheet's own scroll brings it into view:
+/// the control is a Kit button, whose own focus is private, so its wrapper
 /// is revealed.
 #[gpui_kit::test]
 fn a_form_control_below_the_fold_is_scrolled_into_view(cx: &mut TestAppContext) {
     let shell = settings(Fixture::new(), cx);
-    shell.resize_keeping_content(1440., 640., cx);
+    shell.resize_keeping_content(1440., 360., cx);
     shell.run(cx);
     let bounds = |shell: &Shell, cx: &mut TestAppContext| {
         shell.frame(cx, |window, _| {
             (
-                window.find("content").bounds(),
+                window.find("settings-scroll").bounds(),
                 window.find("create-submit").bounds(),
             )
         })
@@ -686,14 +686,15 @@ fn a_form_control_below_the_fold_is_scrolled_into_view(cx: &mut TestAppContext) 
     );
     let offset = shell
         .workspace
-        .read_with(cx, |workspace, _| workspace.content_offset());
+        .read_with(cx, |workspace, cx| workspace.settings_offset(cx));
     assert!(offset < px(0.));
 }
 
 /// The `repo.inspect` recovery's entry point opens the Repositories page
-/// with the root checked, and focuses it. The model maps the action to it
-/// (`operations_tests`); no local command offers it, so it is called here
-/// as `run_recovery` calls it.
+/// with the root checked, and focuses its Add folder (Wave 04 Cycle 04
+/// Part D; R-24). The model maps the action to it (`operations_tests`); no
+/// local command offers it, so it is called here as `run_recovery` calls
+/// it.
 #[gpui_kit::test]
 fn the_inspect_recovery_opens_the_page_with_its_root_checked(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -713,9 +714,10 @@ fn the_inspect_recovery_opens_the_page_with_its_root_checked(cx: &mut TestAppCon
         Some(ALREADY_ADDED)
     );
     assert!(shell.present("add-configuration", cx));
-    assert!(shell.frame(cx, |window, _| {
-        window.find(("settings-page", 0usize)).focused() == Some(true)
-    }));
+    assert!(
+        shell.holds_focus("add-path", cx),
+        "W-27 lands on the Add folder (Part D)"
+    );
 }
 
 /// A plain repository with an identity, its folder checked in Add.

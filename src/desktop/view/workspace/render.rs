@@ -13,10 +13,7 @@ use crate::desktop::{
         Rebuild, Refresh, RepositoryMenuChoice, ScrollPageDown, ScrollPageUp, ScrollToBottom,
         ScrollToTop, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
     },
-    model::{
-        layout::{PanelKind, Side},
-        stamp::SettingsPage,
-    },
+    model::layout::{PanelKind, Side},
     view::{
         activity::Step,
         dock::Slot,
@@ -99,8 +96,8 @@ impl Workspace {
         .into_any_element()
     }
 
-    /// The content region with its tab strip, item view, Settings and Drafts
-    /// pages and Root's sheet layer.
+    /// The content region with its tab strip, item view, Drafts page and
+    /// Root's sheet layer, which draws the details sheet or Settings.
     fn item_area_region(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let item_shown = self.shown_item(cx).is_some();
         // The region's per-frame focus note, which its scroll-into-view
@@ -115,13 +112,21 @@ impl Workspace {
             .overflow_y_scroll()
             .track_scroll(self.content_scroll().handle());
         // Root's sheet layer is drawn inside the content region, whose item
-        // tab opens the sheet: its focus then counts as the region's, and
-        // its keys pass the region's context before the workspace's, where
-        // R-60 refuses them. The sheet places itself over the whole window
+        // tab opens the details sheet: a sheet's focus then counts as the
+        // region's, and its keys pass the region's context before the
+        // workspace's, where R-60 refuses them; Settings' frame takes the
+        // page keys first (B2). The sheet places itself over the whole window
         // (fact 61); deferred, it is painted above the rest of the window
         // and below dialogs, popups and tooltips, which are deferred higher.
-        let sheet = Root::render_sheet_layer(window, cx)
-            .map(|layer| div().absolute().child(deferred(layer)));
+        // The layer's own focus tells focus inside the sheet from focus
+        // behind it (design A3, "The sheet keeps focus").
+        let sheet_layer = self.content.settings.read(cx).layer().clone();
+        let sheet = Root::render_sheet_layer(window, cx).map(|layer| {
+            div()
+                .absolute()
+                .track_focus(&sheet_layer)
+                .child(deferred(layer))
+        });
         let content = content
             .children(self.content_body(window, cx))
             .children(sheet);
@@ -129,8 +134,8 @@ impl Workspace {
             .region(Region::Content, window, cx, content)
             .size_full();
         // An item tab lies flush with the region's border (owner,
-        // 2026-10-30). Settings, the Drafts page and the empty pane keep
-        // the regions' padding.
+        // 2026-10-30). The Drafts page and the empty pane keep the regions'
+        // padding.
         if item_shown {
             content.p_0().into_any_element()
         } else {
@@ -139,13 +144,14 @@ impl Workspace {
     }
 }
 
-/// Whether a dialog or the details sheet is open (R-60).
+/// Whether a dialog or a sheet, the details sheet or Settings, is open
+/// (R-60).
 pub(in crate::desktop::view) fn modal_open(window: &mut Window, cx: &mut App) -> bool {
     window.has_active_dialog(cx) || window.has_active_sheet(cx)
 }
 
 /// Except Quit, workspace actions must not escape a dialog's focus trap,
-/// nor act behind the details sheet (R-60).
+/// nor act behind a sheet (R-60). Ctrl+, has a guard of its own (A5).
 pub(in crate::desktop::view) fn unless_dialog<A: 'static>(
     cx: &mut Context<Workspace>,
     f: impl Fn(&mut Workspace, &A, &mut Window, &mut Context<Workspace>) + 'static,
@@ -159,11 +165,21 @@ pub(in crate::desktop::view) fn unless_dialog<A: 'static>(
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.settings_return.tick();
         self.apply_filter_reset(window, cx);
         self.sync_tickets(window, cx);
         self.apply_review(window, cx);
         self.open_deferred_republish(window, cx);
         self.sync_sheet(window, cx);
+        if self.settings_open(window, cx) {
+            // After the frame, which it reads: focus a view moved while it
+            // drew is seen too, and a move this makes asks for its own frame
+            // (A3, "The sheet keeps focus"). `on_next_frame` is no hook:
+            // tests never run it.
+            cx.defer_in(window, |this, window, cx| {
+                this.keep_focus_in_settings(window, cx)
+            });
+        }
         if self.dock.queue_clamp() {
             // The area records its bounds as this frame is drawn, so the
             // clamp runs after it (R-37). `on_next_frame` is no hook: tests
@@ -249,9 +265,11 @@ impl Render for Workspace {
             .on_action(unless_dialog(cx, |this, _: &FocusContent, window, cx| {
                 this.focus_region(Region::Content, window, cx)
             }))
-            .on_action(unless_dialog(cx, |this, _: &OpenSettings, window, cx| {
-                this.open_settings(SettingsPage::Repositories, window, cx)
-            }))
+            // Its own guard: Ctrl+, opens Settings over the details sheet
+            // (A5).
+            .on_action(
+                cx.listener(|this, _: &OpenSettings, window, cx| this.settings_key(window, cx)),
+            )
             .on_action(unless_dialog(cx, |this, _: &OpenDrafts, window, cx| {
                 this.open_drafts(None, window, cx)
             }))

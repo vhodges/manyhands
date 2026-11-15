@@ -383,6 +383,10 @@ fn needs_fixing(cx: &mut TestAppContext) {
         Shown::Settings(SettingsPage::Repositories)
     );
     assert_eq!(shell.label("managed-root", cx), Some(root));
+    assert!(
+        shell.holds_focus(("settings-page", 0usize), cx),
+        "W-34 lands on the page's entry (Wave 04 Cycle 04 Part D)"
+    );
 }
 
 /// S5: a problem item's Open takes the person to it.

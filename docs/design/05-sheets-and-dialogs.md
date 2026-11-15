@@ -43,6 +43,8 @@ Opens from the footer gear (Ctrl ,). Left nav 214 px, items 12.5 px with 14 px i
 
 Nav: General · Repositories · **Sharing & keys** · **Checking for updates** · Your name & email · Appearance. Only the bold three and Appearance are designed.
 
+*As built, Wave 04 Cycle 04 (2026-11-13):* a header with "Applies to this computer only." and no footer; three pages (Repositories, Sharing & keys, Checking for updates); key rows with today's actions and without the passphrase note, dates and algorithm, which the library does not record; the trash reads "Remove from Manyhands. Keeps the key file.", with "Delete key file…" on generated keys; the origin tag "Imported" in place of "From ~/.ssh"; no Pause all switch; Escape closes Settings also while a request runs.
+
 ### Sharing & keys
 
 - Intro: "Key used for sharing". "Manyhands uses one key for every repository it shares through. Your private key stays on this computer."

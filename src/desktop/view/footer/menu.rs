@@ -51,6 +51,10 @@ pub(in crate::desktop::view) struct DockMenu {
     pub(in crate::desktop::view) restore: Option<FocusHandle>,
     /// An item was chosen: its action has put focus where it belongs.
     pub(in crate::desktop::view) chosen: bool,
+    /// The panel toggle it opened from, and its action context: where a
+    /// menu opened by key gives focus back (Wave 04 Cycle 04 design A2,
+    /// "The origin"; Ruling 8).
+    pub(in crate::desktop::view) toggle: FocusHandle,
     _dismissed: Subscription,
 }
 
@@ -66,9 +70,10 @@ impl DockMenu {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) -> Self {
+        let context = toggle.clone();
         let view = PopupMenu::build(window, cx, |menu, _, _| {
             items(current).into_iter().fold(
-                menu.action_context(toggle),
+                menu.action_context(context),
                 |menu, (label, side, checked)| {
                     menu.menu_with_check(label, checked, Box::new(DockPanel { panel, side }))
                 },
@@ -88,6 +93,7 @@ impl DockMenu {
             at,
             restore,
             chosen: false,
+            toggle,
             _dismissed: dismissed,
         }
     }
