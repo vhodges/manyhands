@@ -21,7 +21,8 @@ serial (Cycle decision 13). Implementers: Task 0 on Opus, others per task.
 | Task | Status | Commits | Review | Pushed |
 | --- | --- | --- | --- | --- |
 | 0 | complete | `1fbb19b3..5be247cf` and this ledger commit | clean (Sonnet reviewer) | with this commit |
-| 1–9 | not started | | | |
+| 1 | complete | `eaf18125..30aaa015` | clean (Sonnet reviewer), 3 Minor deferred | with the ledger commit after it |
+| 2–9 | not started | | | |
 
 ## Base and merges
 
@@ -192,9 +193,9 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | E-3 (assertion removal: `lifecycle-kind` pair) | 2 | not started |
 | E-4, E-5 | 2 | not started |
 | E-6 | 3 | not started |
-| E-7, E-8, E-9, E-13 | 1 | not started |
+| E-7, E-8, E-9, E-13 | 1 | done (Task 1) |
 | E-10, E-12 | 7 | not started |
-| E-11 | 1 (part), 5 (part) | not started |
+| E-11 | 1 (part), 5 (part) | Task 1 part done (`choose_by_keyboard`, callers, import); Task 5 part open |
 | E-14 | none | no edit needed |
 | E-15 | none | no edit needed (privacy sweeps keep reading the same surfaces) |
 | E-16 onward | | none yet |
@@ -204,7 +205,20 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | Checkpoint | Tests | Result |
 | --- | --- | --- |
 | Task 0 | none (static gates only: check, fmt, clippy, all green) | |
+| Task 1, implementer | one `--exact` run of 12 names (P9 `conflict::copy_tests::close_and_resolve_copy_uses_the_vocabulary`, the `field_name` test, `assets::tests::every_item_view_icon_loads`, and the E-7, E-8, E-9, E-11 tests); fmt --check, check --features desktop, clippy -D warnings | 12 passed; static gates clean. P9 RED was a compile failure on the missing names (E0432), then green |
+| Task 1, orchestrator module run | one `cargo test` with the filters `desktop::model::activity::tests`, `view::conflict`, `view::keyboard_tests::conflict`, `view::activity::tests`, `view::needs_attention::tests`, `view::lifecycle::{credential_tests, tests, outcome_tests, outcome_canned_tests}`, `view::item::{posting::tests, edit_tests::review, share::tests}`, `desktop::assets::tests`, `desktop::model::{review::tests, conflict}` | 256 passed, 0 failed, 284 s |
+
+## Task 1: copy and constants
+
+Implementer: Sonnet. Commit `30aaa015` `feat(desktop): Close ticket and Resolve conflict copy`. Reviewer: Sonnet, spec compliant, no Critical or Important findings. Every Part C and A1–A7 constant is present with the design's words and one definition; P9 is one table over them; `field_name` has its table test with unknown keys. `choice_of` and `PartAt` are `cfg(test)`. The new lifecycle words (design A1–A7) are in `view/lifecycle.rs`, the B5 words (`TICKET_DETAIL`, `DOCUMENT_DETAIL`, `COMMENT_DETAIL`, `LAST_SHARED_COPY`) in `view/conflict.rs`, and `field_name` in `model/conflict/names.rs`, each with `#[allow(dead_code)] // Used from Task N`. `RESOLVE_CONFLICT` is gone, including `lifecycle/repair.rs:38`, `:360` (Ruling O-2).
+
+**Test edits.** E-7, E-8, E-9, E-11 (Task 1 part) and E-13 as named. No E-16 onward, no assertion removed (E-9 and E-11 swap the state-word read for `CHOSEN` and add a `choice_of` read). The scripted-edit files' test function lists are identical before and after, by the implementer's report and the reviewer's reading of the diff.
+
+**Carried to Task 3:** `MADE_READY_LEAD` ("Now ready:", `made_ready.rs:39`) is still the live lead; Task 1 staged `READY_TO_START` ("Now ready to start") beside it. Task 3 switches `made_ready.rs:194` to it, updates `made_ready_tests.rs:205` (which compares the old constant as a constant: an E-16 edit, no assertion change) and deletes `MADE_READY_LEAD`. The confirm's "Closed by {}" at `confirm.rs:125` also stays until Task 3 (E-6).
 
 ## Deferred minor findings
 
 Task 0: minor (deferred): the design's U-1 closing paragraph says "Every name above exists as named" and then lists corrections; wording polish only.
+Task 1: minor (deferred): `DONE` ("Done") is a second spelling beside `ENDING_DONE`, `STATE_DONE` and `outcome_label(Success)`; the roles differ and the design names it, so it stays.
+Task 1: minor (deferred): `choice_of` folds a field's Mine or Theirs into `BodyChoice` (R-20 as written); a future test of `Both` or `Edited` on a field would read as `None`, which cannot arise.
+Task 1: minor (deferred): `MADE_READY_LEAD` and `READY_TO_START` coexist until Task 3 retires the old one (carried to Task 3 above).
