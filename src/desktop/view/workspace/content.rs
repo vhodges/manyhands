@@ -7,6 +7,7 @@
 
 use super::{ContentArea, Region, Workspace, add_sheet::AddClose};
 use crate::desktop::{
+    assets::APP_ICON_PATH,
     model::{
         navigation::OpenTarget,
         stamp::{RepoKey, SettingsPage, TabId},
@@ -23,9 +24,9 @@ use crate::desktop::{
 };
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt, WeakEntity, Window,
+    StatefulInteractiveElement, Styled, StyledImage, TestSupportExt, WeakEntity, Window,
     component::{WindowExt, v_flex},
-    div,
+    div, img, px,
 };
 use manyhands::{drafts::DraftId, repository::transport::SshAuthority};
 use std::{collections::BTreeSet, path::PathBuf};
@@ -33,8 +34,11 @@ use std::{collections::BTreeSet, path::PathBuf};
 /// The item area with no tab shown and no repository chosen (R-15).
 pub(crate) const NOTHING_SELECTED: &str = "Select a repository.";
 /// The item area with no tab shown and a repository chosen: `04`'s empty
-/// pane, without its icon until Cycle 05 (R-15; decision 13).
+/// pane, under its icon (R-15; decision 13; Wave 04 Cycle 05a Part E).
 pub(crate) const OPEN_FROM_THE_LISTS: &str = "Open a ticket or document from the lists";
+/// The empty pane's app icon: 56 px, at 35% opacity (`04`; Part E).
+const EMPTY_ICON_SIZE: f32 = 56.;
+const EMPTY_ICON_OPACITY: f32 = 0.35;
 
 enum ContentPage {
     Tabs,
@@ -644,19 +648,32 @@ impl Workspace {
         }
     }
 
-    /// The empty pane's text, with no tab shown (Part F): nothing of the
-    /// repository is drawn in the item area, only what to do next.
+    /// The empty pane, with no tab shown (Part F): the app icon, grey and
+    /// faint, centred above the text (`04`; Wave 04 Cycle 05a Part E).
+    /// Nothing of the repository is drawn in the item area, only what to do
+    /// next.
     fn empty_pane(&self) -> AnyElement {
         let text = match self.navigation.selected_entry() {
             Some(_) => OPEN_FROM_THE_LISTS,
             None => NOTHING_SELECTED,
         };
-        div()
-            .id("item-area-empty")
-            .test_support()
-            .aria_label(text)
-            .text_sm()
-            .child(text)
+        v_flex()
+            .items_center()
+            .gap_3()
+            .child(
+                img(APP_ICON_PATH)
+                    .size(px(EMPTY_ICON_SIZE))
+                    .grayscale(true)
+                    .opacity(EMPTY_ICON_OPACITY),
+            )
+            .child(
+                div()
+                    .id("item-area-empty")
+                    .test_support()
+                    .aria_label(text)
+                    .text_sm()
+                    .child(text),
+            )
             .into_any_element()
     }
 

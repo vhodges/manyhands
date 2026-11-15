@@ -243,7 +243,6 @@ pub(crate) fn sheet_header(header: Header, cx: &App) -> impl IntoElement {
 
 /// A right-aligned footer element for a Kit `Sheet`'s footer slot. The Kit
 /// pads its footer row, so the divider stops short of the edges (K-5).
-#[allow(dead_code)] // Used from Task 4
 pub(crate) fn sheet_footer(footer: Footer, cx: &App) -> impl IntoElement {
     let colors = chrome_colors(cx);
     let (vertical, _) = FOOTER_PADDING;

@@ -56,10 +56,16 @@ mod checks;
 mod create;
 #[path = "add_repository_tests/enablement.rs"]
 mod enablement;
+#[path = "add_repository_tests/keyboard.rs"]
+mod keyboard;
+#[path = "add_repository_tests/privacy.rs"]
+mod privacy;
 #[path = "add_repository_tests/share.rs"]
 mod share;
 #[path = "add_repository_tests/support.rs"]
 mod support;
+#[path = "add_repository_tests/vocabulary.rs"]
+mod vocabulary;
 
 /// The window over `fixture`, with the Add repository sheet opened by the
 /// toolbar's `+` (AW-2; E-1).

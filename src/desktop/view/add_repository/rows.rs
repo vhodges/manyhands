@@ -20,7 +20,7 @@ use manyhands::{
 
 use super::{
     ALREADY_ADDED, ALREADY_SET_UP, AddEvent, AddRepositorySheet, BUSY, CHECK_AGAIN, CHECKING,
-    CHOOSE_ANOTHER, CREATE_HERE, Form, IS_REPOSITORY, NEEDS_FIXING, NO_BRANCH, NOT_REPOSITORY,
+    CHOOSE_ANOTHER, CREATE_HERE, IS_REPOSITORY, NEEDS_FIXING, NO_BRANCH, NOT_REPOSITORY,
     NOT_SET_UP, NOT_TEXT, OPEN_SETTINGS, RETRY, WILL_BE_ADDED,
     checks::{Inspection, allowed_branch, not_ssh},
     not_ssh_remote, other_main_branch,
@@ -242,7 +242,9 @@ impl AddRepositorySheet {
         )
     }
 
-    /// What a check's action does (B6).
+    /// What a check's action does (B6). Retry and Check again go with the
+    /// check they start, so focus is put on the folder first (Ruling 22);
+    /// Choose another's Browse… puts it there once its folder is chosen.
     fn run_action(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             Action::OpenSettings => {
@@ -251,13 +253,25 @@ impl AddRepositorySheet {
                 }
             }
             Action::CreateHere => self.create_here(window, cx),
-            Action::ChooseAnother if !self.browse_disabled() => self.browse(Form::Add, window, cx),
-            Action::ChooseAnother => {
-                let path = self.add_path_focus(cx);
-                window.focus(&path, cx);
+            Action::ChooseAnother if !self.browse_disabled() => self.choose_another(window, cx),
+            Action::ChooseAnother => self.focus_path(window, cx),
+            Action::Retry | Action::CheckAgain => {
+                self.focus_path(window, cx);
+                self.inspect(cx);
             }
-            Action::Retry | Action::CheckAgain => self.inspect(cx),
         }
+    }
+
+    /// Choose another's own handle, which focus is on when it is pressed by
+    /// keyboard (B6, B12).
+    pub(super) fn choose_focus(&self) -> &gpui_kit::FocusHandle {
+        &self.focus[Action::ChooseAnother.id()]
+    }
+
+    /// Focus on the Add folder field (B6; Ruling 22).
+    pub(super) fn focus_path(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let path = self.add_path_focus(cx);
+        window.focus(&path, cx);
     }
 
     /// The code each check row names in its tooltip (P9).

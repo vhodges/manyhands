@@ -5,10 +5,15 @@
 //! platform failure Browse… is disabled for the session, the note saying
 //! why, and the field stays usable; a choice that is not text leaves
 //! Browse… enabled and the note says so, until the next Browse….
+//!
+//! Choose another (B6) runs the same Browse… for the Add folder. Its button
+//! goes with the check of the folder chosen, so focus that was still on it
+//! goes to the folder field (Ruling 22): never when the sheet has closed,
+//! a dialog is over it, or focus has moved on meanwhile.
 
 use std::path::PathBuf;
 
-use gpui_kit::{Context, IntoElement, PathPromptOptions, Window};
+use gpui_kit::{Context, IntoElement, PathPromptOptions, Window, component::WindowExt};
 
 use super::{
     AddRepositorySheet, BROWSE_NOT_TEXT, BROWSE_PROMPT, BROWSE_UNAVAILABLE, CHOOSING, Form,
@@ -30,6 +35,24 @@ impl AddRepositorySheet {
 
     /// Browse: asks the platform for one directory.
     pub(super) fn browse(&mut self, form: Form, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt(form, false, window, cx);
+    }
+
+    /// Choose another's Browse… for the Add folder (B6): the folder chosen
+    /// takes focus from the action (Ruling 22).
+    pub(super) fn choose_another(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt(Form::Add, true, window, cx);
+    }
+
+    /// Asks the platform for one directory for `form`; `from_action` when
+    /// Choose another asked.
+    fn prompt(
+        &mut self,
+        form: Form,
+        from_action: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.browse_disabled() {
             return;
         }
@@ -47,7 +70,7 @@ impl AddRepositorySheet {
                 Ok(Err(_)) | Err(_) => Answer::Failed,
             };
             let _ = this.update_in(cx, |this, window, cx| {
-                this.answered(form, answer, window, cx)
+                this.answered(form, from_action, answer, window, cx)
             });
         }));
         cx.notify();
@@ -56,13 +79,14 @@ impl AddRepositorySheet {
     fn answered(
         &mut self,
         form: Form,
+        from_action: bool,
         answer: Answer,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.browsing = None;
         match answer {
-            Answer::Chosen(paths) => self.chosen(form, paths, window, cx),
+            Answer::Chosen(paths) => self.chosen(form, from_action, paths, window, cx),
             // Dismissed: the field stays as it was.
             Answer::Dismissed => {}
             Answer::Failed => self.browse_unavailable = Some(BROWSE_UNAVAILABLE),
@@ -71,10 +95,12 @@ impl AddRepositorySheet {
     }
 
     /// Browse chose `paths`: the first fills the form's folder, and the
-    /// Add folder is checked.
+    /// Add folder is checked. Asked by Choose another, focus still on it in
+    /// the open sheet goes to the folder (Ruling 22).
     fn chosen(
         &mut self,
         form: Form,
+        from_action: bool,
         paths: Vec<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -90,6 +116,14 @@ impl AddRepositorySheet {
         self.inputs[form.path()].update(cx, |input, cx| input.set_value(text, window, cx));
         if form == Form::Add {
             self.inspect(cx);
+        }
+        let on_action = self.choose_focus().is_focused(window);
+        if from_action
+            && on_action
+            && self.open.is_open(window, cx)
+            && !window.has_active_dialog(cx)
+        {
+            self.focus_path(window, cx);
         }
     }
 
@@ -111,6 +145,6 @@ impl AddRepositorySheet {
     /// platform cannot give (P9, P21).
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn browse_failed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.answered(Form::Add, Answer::Failed, window, cx);
+        self.answered(Form::Add, false, Answer::Failed, window, cx);
     }
 }
