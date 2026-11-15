@@ -21,12 +21,13 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 
 | Task | Status | Commit | Pushed |
 | --- | --- | --- | --- |
-| 0 | review approved after fix round 1 (Minors parked) | merge of Cycle 04's branch `f5015aab`; design `81c3c0de`; Wave `5b7771db`, fix `42f807d5` (base `f5015aab`) | no |
+| 0 | review approved after fix round 1 (Minors parked) | merge of Cycle 04's branch `f5015aab`; design `81c3c0de`; Wave `5b7771db`, fix `42f807d5` (base `f5015aab`); ledger `4c515b5b`; merge of Cycle 04's tip `edb0e920`; ticket comment `46b5a11a` | yes |
 
 ## Branches published
 
 - `manyhands/ticket/01M7D5Z7FZTGTC1HE25KQ1MYQY`, after each task (authorized,
-  owner 2026-11-11). No other branch published yet.
+  owner 2026-11-11): after Task 0 at `edb0e920`, then by its comment `46b5a11a`.
+  It carries Cycle 04's commits through the merge. No other branch published yet.
 
 ## Base and merges
 
