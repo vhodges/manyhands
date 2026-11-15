@@ -71,7 +71,7 @@ pub(crate) enum AddRoute {
 }
 
 /// How the Add repository sheet closed (B3).
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(in crate::desktop::view) enum AddClose {
     /// Escape, the close button, the scrim, Cancel: typed text is kept.
     Kept,
@@ -186,10 +186,11 @@ impl Workspace {
         if window.has_active_dialog(cx) || self.quit != QuitPhase::Running {
             return;
         }
+        // Closed by the Kit unseen: quietly, so no return to Settings follows.
         if matches!(self.content.sheet, Some(SheetOwner::AddRepository))
             && !window.has_active_sheet(cx)
         {
-            self.add_closed(AddClose::Kept, window, cx);
+            self.add_closed(AddClose::Quiet, window, cx);
         }
         // Every open records the panel's selection Settings follows, as an
         // open of Settings does (R-55; Ruling 15).
@@ -256,29 +257,35 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The Add sheet closed `how` (B3). A close that is not quiet waits,
-    /// whole, while a dialog is open (Ruling 17). One the Kit did not make
-    /// closes the Kit's sheet first; a defensive close never closes another
-    /// owner's sheet. An Add waiting for its check goes no further; after a
-    /// success the typed text and the check are cleared (decision 16).
-    /// Then, unless quiet: Open its settings opens Settings on the
-    /// repository; from Settings, Settings opens again, on the new
-    /// repository after a success, else on its Add or create a repository…;
-    /// otherwise focus goes back to the origin, else its region, else the
-    /// content region.
+    /// The Add sheet closed `how` (B3). Not quiet, it waits, whole, while a
+    /// dialog is open (Ruling 17), and moves nothing once closed already. One
+    /// the Kit did not make closes the Kit's sheet first, never another
+    /// owner's. An Add waiting for its check goes no further; a success
+    /// clears the typed text and the check (decision 16). Then, unless quiet:
+    /// Open its settings opens Settings on the repository; from Settings,
+    /// Settings opens again, on the new repository after a success, else on
+    /// its Add or create a repository…; otherwise focus goes back to the
+    /// origin, else its region, else the content region.
     pub(in crate::desktop::view) fn add_closed(
         &mut self,
         how: AddClose,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !matches!(how, AddClose::Quiet) && window.has_active_dialog(cx) {
-            self.add.waiting = Some(how);
-            cx.notify();
+        let owned = matches!(self.content.sheet, Some(SheetOwner::AddRepository));
+        let (quiet, added) = (how == AddClose::Quiet, matches!(how, AddClose::Added(_)));
+        // Closed already (two closes in one frame, or one deferred past a
+        // quiet close): nothing moves; a success still clears (B10).
+        let closed = !quiet && !owned && !self.add.open.get() && self.add.waiting.is_none();
+        if !quiet && !closed && window.has_active_dialog(cx) {
+            // A frame that finds it waiting already asks for no other.
+            if self.add.waiting.as_ref() != Some(&how) {
+                self.add.waiting = Some(how);
+                cx.notify();
+            }
             return;
         }
         self.add.waiting = None;
-        let owned = matches!(self.content.sheet, Some(SheetOwner::AddRepository));
         if owned && window.has_active_sheet(cx) {
             window.close_sheet(cx);
         }
@@ -286,13 +293,15 @@ impl Workspace {
             self.content.sheet = None;
         }
         self.add.open.set(false);
-        let added = matches!(how, AddClose::Added(_));
         self.add.sheet.update(cx, |sheet, cx| {
             sheet.forget_pending_submit();
             if added {
                 sheet.clear(window, cx);
             }
         });
+        if closed {
+            return;
+        }
         let origin = self.add.origin.take().and_then(|origin| origin.upgrade());
         let from_settings = self
             .add
@@ -301,7 +310,7 @@ impl Workspace {
             .map(|o_s| o_s.and_then(|o_s| o_s.upgrade()));
         let region = std::mem::take(&mut self.settings_return).region();
         cx.notify();
-        if matches!(how, AddClose::Quiet) || modal_open(window, cx) {
+        if quiet || modal_open(window, cx) {
             return;
         }
         let settings = match (how, from_settings) {

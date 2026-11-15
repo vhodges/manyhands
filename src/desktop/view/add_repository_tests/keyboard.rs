@@ -17,19 +17,20 @@
 //!
 //! **Each recovery action of B6** (a table): the check that offers it is
 //! made with a real folder, or landed through the test seam where a real
-//! one cannot give it (`Busy`, no branch checked out); Tab reaches the
-//! action from the folder field, Enter presses it, and after two draws
-//! focus is where the design puts it: Open its settings on Settings'
-//! Repositories entry (G21, B9's names), then `+` when Settings closes;
-//! Create one here on Name (G20); Choose another with Browse… unavailable
-//! on the folder field (B6). Where an action's button goes with the check
-//! it starts (Retry, Check again, and Choose another once the chooser
-//! answers), focus is on the folder field (Ruling 22): the sheet puts it
-//! there, where the Kit sheet's own handle would otherwise take the lost
-//! focus.
+//! one cannot give it (`Busy`, no branch checked out, a configuration that
+//! needs fixing); Tab reaches the action from the folder field, Enter
+//! presses it, and after two draws focus is where the design puts it: Open
+//! its settings on Settings' Repositories entry (G21, B9's names), then `+`
+//! when Settings closes; Create one here on Name (G20); Choose another with
+//! Browse… unavailable on the folder field (B6). Where an action's button
+//! goes with the check it starts (Retry, Check again, and Choose another
+//! once the chooser answers), focus is on the folder field (Ruling 22): the
+//! sheet puts it there, where the Kit sheet's own handle would otherwise
+//! take the lost focus.
 //!
-//! Each add waits for its landed preview, failing fast, and for its own
-//! background refresh before the next preview (Task 7's P14 fix).
+//! Each add waits for its landed preview, failing fast, and, once it has
+//! succeeded, for its own background refresh before the next preview (Task
+//! 7's P14 fix); a failed add is a row, not a wait.
 
 use std::path::{Path, PathBuf};
 
@@ -38,7 +39,9 @@ use manyhands::results::{Outcome, ResultCode};
 
 use super::{
     ada, checks, finished, focus_in, set,
-    support::{Table, browse_failed, canned, has_dialog, holds, land, settle, sheet_open},
+    support::{
+        Table, browse_failed, canned, has_dialog, holds, land, needs_fixing, settle, sheet_open,
+    },
     text,
 };
 use crate::desktop::{
@@ -268,9 +271,10 @@ async fn add(table: &mut Table, shell: &Shell, plain: &Path, cx: &mut TestAppCon
     enter(shell, cx);
     let enables = |intent: &Intent| matches!(intent, Intent::RepoEnable { .. });
     let ended = confirm(table, shell, row, enables, cx).await;
+    let added = ended == Some((Outcome::Success, ResultCode::Ok));
     table.fact(
         "Add: Confirm adds the repository",
-        ended == Some((Outcome::Success, ResultCode::Ok)),
+        added,
         &format!("a successful add (it is {ended:?})"),
     );
     let local = git2::Repository::open(plain)
@@ -281,6 +285,10 @@ async fn add(table: &mut Table, shell: &Shell, plain: &Path, cx: &mut TestAppCon
         local.ok() == Some(ada().name),
         "user.name in the repository's configuration",
     );
+    // A failed add is its row above: no refresh follows it to wait for.
+    if !added {
+        return false;
+    }
     onboarded(shell, plain, cx).await;
     closed_onto_plus(table, shell, row, cx);
     true
@@ -317,14 +325,17 @@ async fn create(table: &mut Table, shell: &Shell, made: &Path, cx: &mut TestAppC
     enter(shell, cx);
     let creates = |intent: &Intent| matches!(intent, Intent::RepoCreate { .. });
     let ended = confirm(table, shell, row, creates, cx).await;
+    let created = ended == Some((Outcome::Success, ResultCode::Ok));
     table.fact(
         "Create: Confirm makes the repository",
-        ended == Some((Outcome::Success, ResultCode::Ok))
-            && made.join(manyhands::canonical::CONFIG_PATH).is_file(),
+        created && made.join(manyhands::canonical::CONFIG_PATH).is_file(),
         &format!("a successful create (it is {ended:?})"),
     );
-    onboarded(shell, made, cx).await;
-    closed_onto_plus(table, shell, row, cx);
+    // A failed create is its row above: no refresh follows it to wait for.
+    if created {
+        onboarded(shell, made, cx).await;
+        closed_onto_plus(table, shell, row, cx);
+    }
 }
 
 /// The folder `root` typed in the field and checked by Enter there; focus
@@ -403,12 +414,19 @@ fn recovery(table: &mut Table, shell: &Shell, folders: &Folders, cx: &mut TestAp
         lost(table, shell, "Retry", cx);
     }
 
-    // Check again, on a check that found no branch checked out (canned).
+    // Check again, on a check that found no branch checked out, and on a
+    // configuration that needs fixing (canned; owner Ruling 25).
     let mut detached = canned(&folders.other);
     detached.head_branch = None;
-    land(shell, &folders.other, ReadResult::Ok(detached), cx);
-    if press_action(table, shell, "Check again", "add-retry", CHECK_AGAIN, cx) {
-        lost(table, shell, "Check again", cx);
+    let fixing = needs_fixing(&folders.other);
+    for (row, check) in [
+        ("Check again", detached),
+        ("Check again, needs fixing", fixing),
+    ] {
+        land(shell, &folders.other, ReadResult::Ok(check), cx);
+        if press_action(table, shell, row, "add-retry", CHECK_AGAIN, cx) {
+            lost(table, shell, row, cx);
+        }
     }
 
     // Choose another, Browse… available: the chooser opens, and its answer

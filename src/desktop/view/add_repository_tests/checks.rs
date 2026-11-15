@@ -155,7 +155,8 @@ pub(super) fn rows_and_actions(table: &mut Table, cx: &mut TestAppContext) {
     expect(table, &shell, row, &wanted, None, cx);
     prefix(table, &shell, row, false, cx);
 
-    // Configuration Invalid (canned).
+    // Configuration Invalid (canned): fixed outside the app, then checked
+    // again (owner Ruling 25; E-17s: B6's table had no action here).
     land(&shell, &plain, ReadResult::Ok(needs_fixing(&plain)), cx);
     let row = "Checked, configuration Invalid";
     let wanted = vec![
@@ -163,14 +164,14 @@ pub(super) fn rows_and_actions(table: &mut Table, cx: &mut TestAppContext) {
         NEEDS_FIXING.to_owned(),
         fixing_guidance(),
     ];
-    expect(table, &shell, row, &wanted, None, cx);
+    let again = Some(("add-retry", CHECK_AGAIN));
+    expect(table, &shell, row, &wanted, again, cx);
     prefix(table, &shell, row, true, cx);
 
     // No branch checked out (canned).
     let mut detached = canned(&plain);
     detached.head_branch = None;
     land(&shell, &plain, ReadResult::Ok(detached), cx);
-    let again = Some(("add-retry", CHECK_AGAIN));
     let wanted = owned(&[IS_REPOSITORY, NOT_SET_UP, NO_BRANCH]);
     expect(
         table,

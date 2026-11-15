@@ -12,7 +12,9 @@
 //!
 //! Two rows are B2's edge cases, as B9 states them (the owner's Ruling 16):
 //! Settings opened with no origin, then AW-3 (G4); and an `Inspect` route
-//! in place on a sheet opened from Settings (B2 step 5, then G4).
+//! in place on a sheet opened from Settings (B2 step 5, then G4). A third,
+//! from the review (finding 3): a way in over a sheet from Settings that the
+//! Kit closed unseen leaves the new sheet open, Settings closed.
 
 use std::path::Path;
 
@@ -97,6 +99,33 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
     open_its_settings(table, cx);
     no_settings_origin(table, cx);
     inspect_in_place(table, cx);
+    stale_owner(table, cx);
+}
+
+/// B2 with a stale owner (review finding 3): the sheet opened from
+/// Settings (AW-3), then the Kit's sheet closed with the workspace not yet
+/// told (a direct `close_sheet`, no frame between), then a way in. The
+/// stale owner closes quietly, as Cycle 04's `show_settings` does, so no
+/// return to Settings is left behind to close the sheet just opened.
+fn stale_owner(table: &mut Table, cx: &mut TestAppContext) {
+    let (shell, _, _) = plain_shell(cx);
+    open_settings(&shell, cx);
+    let row = "B2 a stale owner from Settings, then a way in";
+    if !press_add_button(table, &shell, row, cx) || !opened(table, &shell, row, cx) {
+        return;
+    }
+    route(&shell, cx, |workspace, window, cx| {
+        use gpui_kit::component::WindowExt;
+        window.close_sheet(cx);
+        workspace.show_add_repository(AddRoute::New, None, window, cx)
+    });
+    settle(&shell, cx);
+    if !opened(table, &shell, &format!("{row} (after the frames)"), cx) {
+        return;
+    }
+    let held = holds(&shell, "add-path", cx);
+    table.row(&shell, &format!("{row}: G1"), held, "add-path", cx);
+    shell.keys("escape", cx);
 }
 
 /// G3 by AW-3's button; G4 for each Kit close and Cancel; G6 after each.

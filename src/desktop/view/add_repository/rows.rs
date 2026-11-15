@@ -97,7 +97,9 @@ impl Action {
 
 /// B6's table: the rows of a landed check, and its action. A registered
 /// folder shows its configuration's state and problems, and Open its
-/// settings (decision 18).
+/// settings (decision 18); one that is not offers Check again for a
+/// configuration that needs fixing, fixed outside the app (owner Ruling
+/// 25), as for the branch and remote rows.
 fn checked_rows(check: &RepositoryInspectionDto) -> (Vec<Row>, Option<Action>) {
     let configuration = &check.configuration;
     let mut rows = vec![if check.registered {
@@ -126,7 +128,7 @@ fn checked_rows(check: &RepositoryInspectionDto) -> (Vec<Row>, Option<Action>) {
     if check.registered {
         return (rows, Some(Action::OpenSettings));
     }
-    let mut again = false;
+    let mut again = configuration.state == ConfigurationState::Invalid;
     match (&check.head_branch, allowed_branch(check)) {
         (None, _) => {
             rows.push(row(Sign::Failed, NO_BRANCH));

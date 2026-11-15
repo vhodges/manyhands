@@ -5,9 +5,10 @@
 //! The header has the `lock` tile and "Unlock your key"; its description
 //! names what waits, while a share or a post waits on the prompt. The body
 //! is the key card (`card`: the key's label and, once the key list has it,
-//! its fingerprint), the reason's guidance, the "Passphrase" field, the
-//! refusal under it, and the note. The footer is Not now, then Unlock: the
-//! action last (R-1, decision 15).
+//! its fingerprint), the reason's guidance, the "Passphrase" field (named
+//! for the key to assistive technology), the refusal under it, and the
+//! note. The footer is Not now, then Unlock: the action last (R-1,
+//! decision 15).
 //!
 //! The input is masked, with no mask toggle: the Kit's masked input
 //! refuses copy and hides its value from accessibility. Submit, by Enter
@@ -77,6 +78,13 @@ pub(crate) const UNLOCK: &str = "Unlock";
 pub(crate) const CANCEL: &str = "Not now";
 /// The field's label: the key card names the key (decision 14).
 pub(crate) const PASSPHRASE: &str = "Passphrase";
+
+/// The field's accessible name, which names the key the card shows, while
+/// the label on screen stays `PASSPHRASE` (owner Ruling 26).
+pub(crate) fn passphrase_for(label: &str) -> String {
+    format!("{PASSPHRASE} for {label}")
+}
+
 /// What the passphrase becomes and what Not now leaves, always shown
 /// (decision 14).
 pub(crate) const NOT_NOW_NOTE: &str = "Kept in memory only, never written to disk. If you \
@@ -404,11 +412,14 @@ impl Render for PassphraseDialog {
                     .child(text("passphrase-label", PASSPHRASE)),
             )
             .children(self.input.as_ref().map(|input| {
+                // Named for the key, which the label on screen leaves to
+                // the card (owner Ruling 26).
+                let name = passphrase_for(&self.label);
                 div()
                     .id("passphrase-input")
                     .test_support()
-                    .aria_label(PASSPHRASE)
-                    .child(Input::new(input).aria_label(PASSPHRASE))
+                    .aria_label(name.clone())
+                    .child(Input::new(input).aria_label(name))
             }))
             .children(self.refused.then(|| {
                 div()

@@ -6,7 +6,9 @@
 //! quitting closes the sheet quietly, as Cycle 04's F12 to F14 for
 //! Settings: Quit now with Activity displayed, the origin with it hidden,
 //! Quit now with the confirmation open above the sheet, and the EditsNotKept
-//! dialog with unkept edits.
+//! dialog with unkept edits. Then two states the review named (finding 2):
+//! the Kit's sheet gone under a dialog, whose close waits and settles; and
+//! two closes in one frame, whose second changes no focus.
 
 use std::path::Path;
 
@@ -64,6 +66,108 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
     }
     #[cfg(unix)]
     unkept_edits(table, cx).await;
+    gone_under_a_dialog(table, cx);
+    closed_twice(table, cx);
+}
+
+/// A dialog over the open sheet, as a confirmation is.
+fn probe_dialog(shell: &Shell, cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt;
+    shell
+        .visual(cx)
+        .update(|window, cx| window.open_dialog(cx, |dialog, _, _| dialog.title("Probe")));
+    shell.run(cx);
+}
+
+/// The dialog over the sheet, closed directly.
+fn close_probe(shell: &Shell, cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt;
+    shell
+        .visual(cx)
+        .update(|window, cx| window.close_dialog(cx));
+    shell.run(cx);
+}
+
+/// Review finding 2: the Kit's sheet gone (a direct `close_sheet`) while a
+/// dialog is over it and the workspace still owns it. Each frame finds the
+/// close waiting (Ruling 17) and asks for no other; once the dialog closes,
+/// it runs once, onto the origin.
+fn gone_under_a_dialog(table: &mut Table, cx: &mut TestAppContext) {
+    use std::{cell::Cell, rc::Rc};
+
+    let (shell, _, _) = plain_shell(cx);
+    let plus = press_plus(&shell, cx);
+    let row = "P7 the Kit's sheet gone under a dialog";
+    if !opened(table, &shell, row, cx) {
+        return;
+    }
+    probe_dialog(&shell, cx);
+    route(&shell, cx, |_, window, cx| {
+        use gpui_kit::component::WindowExt;
+        window.close_sheet(cx)
+    });
+    let notified = Rc::new(Cell::new(0usize));
+    let count = notified.clone();
+    let _watch =
+        cx.update(|cx| cx.observe(&shell.workspace, move |_, _| count.set(count.get() + 1)));
+    for _ in 0..4 {
+        shell.frame(cx, |_, _| ());
+        shell.run(cx);
+    }
+    let waits = owner(&shell, cx) == Some(SheetOwnerKind::AddRepository);
+    table.fact(
+        &format!("{row} (it settles)"),
+        waits && notified.get() <= 1,
+        &format!(
+            "the close waiting, the owner kept, at most one notification over four frames \
+             (owner {:?}, {} notifications)",
+            owner(&shell, cx),
+            notified.get()
+        ),
+    );
+    close_probe(&shell, cx);
+    let held = all_closed(&shell, cx) && holds_handle(&shell, &plus, cx);
+    table.row(&shell, &format!("{row}, the dialog closed"), held, "+", cx);
+}
+
+/// Review finding 2's guard: a success's close waits under a dialog; the
+/// dialog closes, the next frame defers the waiting close, and in that
+/// frame a Kept close runs first (two closes in one frame). The deferred
+/// close then finds the sheet closed: focus stays on the origin, and the
+/// success still clears the typed text (decision 16; B10).
+fn closed_twice(table: &mut Table, cx: &mut TestAppContext) {
+    use gpui_kit::{component::WindowExt, test::TestWindowExt};
+
+    let (shell, _, plain) = plain_shell(cx);
+    let plus = press_plus(&shell, cx);
+    let row = "P7 a Kept close, then a deferred Added close";
+    if !opened(table, &shell, row, cx) {
+        return;
+    }
+    set(&shell, "create-location", TYPED, cx);
+    probe_dialog(&shell, cx);
+    route(&shell, cx, move |workspace, window, cx| {
+        workspace.add_closed(AddClose::Added(plain), window, cx)
+    });
+    let workspace = shell.workspace.clone();
+    shell.visual(cx).update(|window, cx| {
+        window.close_dialog(cx);
+        // This frame's render defers the waiting close; the Kept close
+        // runs before it.
+        window.render_frame(cx);
+        workspace.update(cx, |workspace, cx| {
+            workspace.add_closed(AddClose::Kept, window, cx)
+        })
+    });
+    shell.run(cx);
+    let held = all_closed(&shell, cx) && holds_handle(&shell, &plus, cx);
+    table.row(&shell, row, held, "+, the origin, kept", cx);
+    let text = value(&shell, "create-location", cx);
+    table.fact(
+        &format!("{row} (decision 16)"),
+        text.as_deref() == Some(""),
+        &format!("the typed text cleared (it is {text:?})"),
+    );
 }
 
 /// Each Kit close and Cancel: typed text kept, the pending Add forgotten.

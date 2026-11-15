@@ -169,8 +169,9 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
 
 /// G22: Add pressed before the check landed, and the landed check disables
 /// it: focus on the row's action, a Kit button (Open its settings for a
-/// registered folder), else on the folder field (a configuration that
-/// needs fixing offers none); no confirmation.
+/// registered folder; Check again for a configuration that needs fixing,
+/// owner Ruling 25, E-17t: it offered none, and focus went to the folder
+/// field); no confirmation.
 fn g22(table: &mut Table, shell: &Shell, a: &Path, plain: &Path, cx: &mut TestAppContext) {
     super::set(shell, "add-path", &key(a), cx);
     shell.click("add-submit", cx);
@@ -190,8 +191,8 @@ fn g22(table: &mut Table, shell: &Shell, a: &Path, plain: &Path, cx: &mut TestAp
     shell.keys_landed(cx);
     table.fact(
         "G22 the landed check needs fixing",
-        !has_dialog(shell, cx) && holds(shell, "add-path", cx),
-        "focus on the folder field, no confirmation",
+        !has_dialog(shell, cx) && shell.holds_control(("add-retry", 0usize), cx),
+        "focus on Check again, no confirmation",
     );
 }
 

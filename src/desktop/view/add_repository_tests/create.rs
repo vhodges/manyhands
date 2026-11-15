@@ -140,7 +140,8 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
     // The sheet does not check the path (R-13): a Location that does not
     // exist is shown, joined as typed, and Create is still enabled.
     set(&shell, "create-location", "not/made/yet", cx);
-    let wanted = Some(will_create("not/made/yet/fresh"));
+    // Joined as `Path::join` joins it, also where the separator is `\`.
+    let wanted = Some(joined("not/made/yet", "fresh"));
     expect(table, &shell, "A Location not made yet", wanted, true, cx);
     set(&shell, "create-location", &location, cx);
 

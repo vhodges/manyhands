@@ -15,7 +15,7 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::REFUSED;
+use super::{PASSPHRASE, REFUSED};
 use crate::desktop::{
     keys::Quit,
     services::{
@@ -23,7 +23,7 @@ use crate::desktop::{
         prompts::{PromptReply, PromptRequest},
     },
     test_support::fixtures::Fixture,
-    view::{frame::tests::Table, harness::Shell, workspace::QuitPhase},
+    view::{frame::tests::Table, harness::Shell, passphrase::passphrase_for, workspace::QuitPhase},
 };
 
 /// The labels of the keys the rows register.
@@ -99,6 +99,21 @@ fn ask(
     answer
 }
 
+/// The accessible names of the element `id` and of each observed element
+/// inside it (the Kit input's own), in any order.
+fn names_within(shell: &Shell, id: &'static str, cx: &mut TestAppContext) -> Vec<String> {
+    shell.frame(cx, |window, _| {
+        let Some(scope) = window.try_find(id).map(|element| element.path().to_vec()) else {
+            return Vec::new();
+        };
+        gpui_kit::base::test_support::snapshots(window)
+            .into_iter()
+            .filter(|element| element.path().starts_with(&scope))
+            .filter_map(|element| element.label().map(str::to_owned))
+            .collect()
+    })
+}
+
 /// A window over a fixture with the key `SIGNING` generated, and its ID.
 fn signing(cx: &mut TestAppContext) -> (Shell, SharedKeyId) {
     let fixture = Fixture::new();
@@ -107,10 +122,11 @@ fn signing(cx: &mut TestAppContext) -> (Shell, SharedKeyId) {
 }
 
 /// P18: the key card names the key by its label and, once the key list has
-/// it, its fingerprint; the label alone before the list lands, when the
-/// read fails, when the list holds no such key, or when the key records no
-/// fingerprint; and a list landing after the prompt was withdrawn or
-/// answered changes nothing.
+/// it, its fingerprint, and the field names it to assistive technology
+/// while it reads "Passphrase"; the label alone before the list lands,
+/// when the read fails, when the list holds no such key, or when the key
+/// records no fingerprint; and a list landing after the prompt was
+/// withdrawn or answered changes nothing.
 #[gpui_kit::test]
 async fn the_unlock_dialog_names_the_key(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -128,6 +144,21 @@ async fn the_unlock_dialog_names_the_key(cx: &mut TestAppContext) {
             fingerprint: Some(fingerprint.clone()),
         },
         &format!("the label and the fingerprint shown (it shows {card:?})"),
+    );
+    // The field reads "Passphrase" on screen, and names the key to
+    // assistive technology: the input and its wrapper (owner Ruling 26).
+    let shown = shell.label("passphrase-label", cx);
+    table.fact(
+        "the field's label",
+        shown.as_deref() == Some(PASSPHRASE),
+        &format!("{PASSPHRASE:?} shown (it shows {shown:?})"),
+    );
+    let names = names_within(&shell, "passphrase-input", cx);
+    let named = passphrase_for(SIGNING);
+    table.fact(
+        "the field's accessible name",
+        names.len() == 2 && names.iter().all(|name| *name == named),
+        &format!("the input and its wrapper named {named:?} (they are {names:?})"),
     );
 
     // Before the read: the label only, then the fingerprint once it lands.

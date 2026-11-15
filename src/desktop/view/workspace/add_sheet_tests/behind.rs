@@ -5,7 +5,9 @@
 //! the open sheet: it goes to `add-path`. G19: an `open_created` landing
 //! and a review landing, with focus on Add's prefix field inside the sheet,
 //! leave it there; `add-path` would be G18's answer, so a landing that put
-//! focus behind the sheet first fails the row.
+//! focus behind the sheet first fails the row. A lost focus (review finding
+//! 4) keeps a target inside the Add sheet and gives `add-path` for one
+//! behind it.
 
 use std::time::Duration;
 
@@ -38,7 +40,51 @@ const NEW: &str = "01ARZ3NDEKTSV4RRFFQ69G5FW9";
 pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
     deferred(table, cx);
     drawn_behind(table, cx);
+    lost_focus(table, cx);
     landings(table, cx).await;
+}
+
+/// A lost focus over the open sheet (Cycle 04's F15, extended by R-24;
+/// review finding 4), its target decided directly: a target inside the Add
+/// sheet is honoured, from `add-path`; one behind it gives `add-path`
+/// (G18), from the prefix field.
+fn lost_focus(table: &mut Table, cx: &mut TestAppContext) {
+    use gpui_kit::Focusable;
+
+    let (shell, root) = one_repo(cx, |_, _| {});
+    shell.select(&root, cx);
+    let plus = press_plus(&shell, cx);
+    if !opened(table, &shell, "G18 a lost focus", cx) {
+        return;
+    }
+    let Some(prefix) =
+        input(&shell, "add-prefix", cx).map(|input| input.read_with(cx, Focusable::focus_handle))
+    else {
+        table.fact("G18 a lost focus (the prefix)", false, "add-prefix drawn");
+        return;
+    };
+    for (row, from, target, wanted) in [
+        (
+            "a lost focus, its target inside the Add sheet",
+            "add-path",
+            prefix,
+            "add-prefix",
+        ),
+        (
+            "G18 a lost focus, its target behind the sheet",
+            "add-prefix",
+            plus,
+            "add-path",
+        ),
+    ] {
+        focus_in(&shell, from, cx);
+        route(&shell, cx, move |workspace, window, cx| {
+            workspace.sheet_keeps_lost_focus(Some(&target), window, cx);
+        });
+        let held = add_open(&shell, cx) && holds(&shell, wanted, cx);
+        table.row(&shell, row, held, wanted, cx);
+    }
+    shell.keys("escape", cx);
 }
 
 /// Repository `a`, its tickets `MAIN` and `OTHER` and a draft of each, with

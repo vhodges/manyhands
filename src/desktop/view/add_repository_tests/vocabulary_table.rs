@@ -265,6 +265,11 @@ pub(super) fn table() -> Vec<Line> {
         // Part F, the Unlock key dialog, and what it keeps from today.
         c!(passphrase::TITLE, Words, "Unlock your key"),
         c!(passphrase::PASSPHRASE, Words, "Passphrase"),
+        // The field's accessible name, which names the key (owner Ruling 26).
+        f!(
+            passphrase::passphrase_for("primary"),
+            "Passphrase for primary"
+        ),
         c!(
             passphrase::NOT_NOW_NOTE,
             Words,

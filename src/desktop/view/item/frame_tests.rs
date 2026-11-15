@@ -176,6 +176,10 @@ fn page_keys_scroll_the_items_region_and_settings_keep_theirs(cx: &mut TestAppCo
     shell.keys("pagedown", cx);
     assert_eq!(offset(&shell, cx), paged);
 
+    // `a` chosen, so Settings' Repositories page draws its identity form
+    // and Remove and runs below the sheet's fold (E-17r: the Add forms made
+    // it tall before they moved to the Add repository sheet).
+    shell.select(&shell.fixture.parent().join("a"), cx);
     shell.keys("secondary-,", cx);
     assert_eq!(settings_offset(&shell, cx), px(0.));
     shell.keys("pagedown", cx);
