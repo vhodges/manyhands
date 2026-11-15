@@ -262,7 +262,10 @@ Planned proof. The Status column was filled at Task 9 (2026-11-14) from the
 branch's own tests, by exact name, and the execution ledger. The fast tier ran once
 at review-ready: the desktop binary 1936 passed, 1 failed (`each_action_runs_its_handler`,
 a load-dependent read of focus, fixed in `b66827db`, which passes by exact name and
-in its module runs); every other target passed. The tier was not run a second time. "On screen"
+in its module runs); every other target passed. The final whole-branch review then found
+one Important (a route landed on an inert wrapper: no ring, a dead Enter), fixed in
+`ff6b0646` and `16bc94cf`; the desktop binary ran once more: 1938 passed, 1 failed
+(`the_more_menu_acts_on_the_chosen_repository`, a load flake that passes alone). "On screen"
 rows await the owner's checks; Claude records only what the owner
 reports.
 

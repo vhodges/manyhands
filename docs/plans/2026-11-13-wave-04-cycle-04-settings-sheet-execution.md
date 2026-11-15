@@ -30,7 +30,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 6 | done, review approved after fix round 1 | code `4a9a0dd7` (base `16f7746b`), fix `4fd65ef0`; ledger `6d86c8f7`; ticket comment (Tasks 3 to 6) `e4d4bd56` | yes |
 | 7 | done, review approved first time (Minors parked) | code `cbf1f207` (base `e4d4bd56`); ledger `5fb61fc3` | yes |
 | 8 | done, review approved first time (Minors parked) | code `1a39ca6b` (base `5fb61fc3`); ledger `ef964dad` | yes |
-| 9 | gates run; one test race fixed (review approved); checklist written; on-screen rows await the owner | fix `b66827db` (base `ef964dad`); checklist and Acceptance Status in the ledger commit | with the ledger commit |
+| 9 | gates run; one test race fixed (review approved); checklist written; on-screen rows await the owner | fix `b66827db` (base `ef964dad`); checklist, Acceptance Status and Task 9 ledger `1e45d503` | yes |
+| Final review | done; one Important fixed in two rounds (review approved); Minors parked | fix `ff6b0646`, `16bc94cf` (base `1e45d503`); ledger commit follows | with the ledger commit |
 
 ## Branches published
 
@@ -1980,3 +1981,98 @@ Tests after the fix: the 10 changed tests by exact name; module runs `activity::
 - Rulings for the owner to see: 38/49 the kept "Selected key: …" line; 50 the key-store wording ("key store" in Settings and the dialogs, "SSH key store" in Activity); `OPEN_REMOTE_SETTINGS` still says "remote settings"; Activity row titles keep the old vocabulary; Ruling 45 (Cycle 03b had no view test for Approve host… with no server named); 52 the load race.
 - The fast tier takes about 23 minutes for the desktop binary alone.
 - Parked Minors for Tasks 1 to 9 are in this ledger for the final review.
+
+## Final whole-branch review
+
+Reviewer: one fresh Opus agent on `ea6d899b..1e45d503` (105 files, 36 commits;
+the production diff in full). Verdict "with fixes": no Critical, one Important.
+The reviewer checked ownership and `sync_sheet`, the origin chain, `settings_return`,
+the post-frame containment check, re-entrant leases, the passphrase rule on every
+close path, R-23 in all three paths, the boundary and `Cargo.lock`, and found them
+sound (it read the Kit 0.6.6 and gpui-pre 0.3.6 sources for close, dialog-close,
+focus-lost and keyboard-click behaviour, and ran one probe test in a scratch copy).
+
+### Important 1 (fixed): two of Part D's landing targets put focus on an inert wrapper
+
+Make a new key (`keys/rows.rs` `list_target`, `refocus_removed`; `keys/forms.rs`) and
+Check host (`arrive.rs` `check_focus()`; `hosts.rs`) landed on the `wrapped(...)` div's
+handle, not the Kit button. The Kit `Button` keeps its own handle as keyed state and
+draws its ring only when that handle is focused; the wrapper has no click, so Enter
+did nothing (one Tab reached the real button). It hit W-12, W-16, W-21, W-23 and
+W-32 when no key was usable, and every Check host route with no server named (W-13,
+W-17, W-20, W-25, W-33), which is a regression from the old landing on the menu
+entry. P4 and P20 passed regardless: `holds` and `holds_focus` accept focus "on the
+element or something in it". The Cycle document's A5 and the checklist's S-9.6 and
+S-9.8 expected a ring.
+
+Fix round 1, `ff6b0646` (Opus; test, harness and desktop view code only): the Kit
+`Button` has no public way to take a focus handle, so the new `settings/kit_button.rs`
+(about 60 lines) writes the page's existing handle into the Kit's keyed state
+(`window.with_id(type_name::<Button>())` plus `use_keyed_state(id)`) just before the
+button draws. The handle a route focuses is then the button's own: ring drawn, Enter
+presses it. Used on Make a new key, the Hosts button helper (Check host, Approve,
+Replace) and the key rows' Kit buttons. It also fixes Ruling 37 (focus stays on the
+button when its key changes row). Also: `refocus_removed` skips keys with no radio
+(a `drawn()` helper shared with `list_target`); `cx.notify()` in `focus_lost`'s
+Settings branch (Task 2 Minor 1); the stale `arrive.rs` doc; `holds_control` and
+`holds_keys_control` in `harness.rs` (a focused element must BE the control); a row
+pinning R-22's "once". E-36 (Make a new key landings read on the button),
+E-37 (Check host landings where it can run), E-38 (P24's row button), E-39 (new
+Enter, R-53 and "once" rows; nothing removed). RED first: P4, P20 and P24 failed
+on the wrapper; the 7 other switched tests failed against the old code.
+
+Scoped re-review of round 1 (Opus): the landings addressed, the mechanism matches the
+Kit source, no redraw loop, no double activation; but one new **Important**: Shift+Tab
+could no longer move back past any control drawn through `kit_button` (the enabled
+base button writes `tab_stop(true)` into the shared focus map, `FocusHandle::clone`
+reads it back, so the wrapper's `track_focus` clone became a second Tab stop on the
+same handle and `prev` landed on the same handle). Minor: a disabled Check host
+became a Tab stop once enabled. A probe showed focus stuck on the control.
+
+Ruling 53: the final-review text says there is no second fix wave. The re-review's
+Important is a regression the fix itself introduced, in keyboard navigation (contract
+5), with a one-line proven cause, so it got one further round (fix round 2) with one
+scoped re-review, not an open-ended loop — cost if wrong: the owner sees a third
+commit in the fix wave.
+
+Fix round 2, `16bc94cf`: `wrapped_kit` gives the wrapper the handle with `tab_stop(false)`
+before the button draws; every Kit-button site uses it (`keys/forms.rs`, `keys/rows.rs`,
+`hosts.rs`). **E-40** (P24's "only key removed" row: three Shift+Tab presses from
+Make a new key land on `settings-page` 2, 1, 0), **E-41** (P24: Shift+Tab from a row's
+Copy public key walks radio, Delete key file…, trash, each read with `holds_control`;
+helper `shift_tab_walks`), **E-42** (two Hosts tests: `shift_tab_from_check_host_goes_back`
+and `an_unavailable_check_host_is_no_tab_stop`). RED first against `ff6b0646` (P24 had 6
+rows failing; both Hosts tests failed). Scoped re-review (Sonnet): ADDRESSED, no new
+breakage. The next free number is **E-43**.
+
+Ruling 54 (accepted, implementer deviation; reviewer recommends accept): a
+*disabled* Check host does not send focus to the page's entry with a retarget when it
+becomes enabled. R-53 and Part D say a `Hosts(root)` route lands on Check host drawn
+unavailable, and existing P4, W-20 and W-33 rows require it; with the shared handle
+the wrapper holds the button's own handle, the Kit draws a ring on the unavailable
+button (no disabled check at `button.rs:835`), Enter is inert, Tab and Shift+Tab move
+on, and the disabled button is no Tab stop; once enabled, focus is on the control with
+no move. Cost if wrong: a ring on an unavailable control may look odd (S-10.14).
+
+Ruling 55 (for the owner): the fix reaches into Kit internals. The Kit's `Button`
+takes no focus handle (a library gap, a handoff stop-and-ask condition). No library
+or `Cargo.lock` change was made; the workaround is one 100-line file, `settings/kit_button.rs`,
+that relies on the pinned gpui-component 0.6.6 and gpui-pre 0.3.6: the keyed scope
+`type_name::<Button>()`, the key, and the shared tab-stop flag. If the Kit changes
+those, it falls back silently to the old landing (focus on the wrapper), and the
+`holds_control` rows fail in exactly that state. Whether to open a Kit ticket for a
+public `track_focus` on `Button` is the owner's call; none was created.
+
+### Parked after the final review (all "can wait" unless noted; none blocks merge)
+
+1. `rows.rs`: the per-key `focus` map gains an entry per key ID ever drawn and is never pruned.
+2. File-size rule: `settings_sheet_tests.rs` is 731 lines (a new file); `hosts.rs` and `repositories.rs` grew a little earlier (825 and 851 after Task 6's fix; mostly the OpenFlag, a test hook and `copy_tests` wiring). Split when next touched.
+3. Mixed vocabulary: "Selected key: …" / "No key is selected." beside "In use" and "Stop using this key" (Rulings 38, 49; owner's eye).
+4. Key-store wording mismatch, Settings "key store" against Activity "SSH key store" (Ruling 50; follow-up).
+5. The busy-retry hazard (Ruling 52) is generic but only Keys reads got `keys_landed`: a test reading registrations synchronously after `run` (for example P6's `rows("managed-row")` at `settings_sheet_tests.rs:340`) would show the same symptom if a read answered busy. A general `reads_landed` would close the class; follow-up.
+6. Of the earlier parked Minors, Task 1 M4, Task 2 M2 to M10, Task 3 M1 to M2, M4, Task 4 M2 to M8, Task 5 M1 to M7, Task 6 M1, M3 to M8, Task 7 M1 to M6, Task 8 M1, M3 and Task 9 M1 to M4 can wait. Task 2 M1 (`cx.notify()` after a lost-focus move), Task 4 M1 (half-keyed IDs, Ruling 37), Task 6 M2 (R-22 "once"), Task 6 M6 (the stale doc), and Task 6 M9's landing part are fixed in `ff6b0646`. Task 1 M3 was fixed in Task 8 (E-34), Task 3 M3 in E-16, Task 5 M4 by Task 6.
+7. Test flake: `desktop::view::repositories::tests::the_more_menu_acts_on_the_chosen_repository` fails under the full parallel run of the desktop binary ("the removal's preview did not happen", harness.rs:589, the harness's 180 s real-time `until_drawn` wait) and passes alone in 2.2 s. It failed once in a Task 6 module run and once in the fast tier rerun after the final fix; it passed in the first full run. This branch changed that test file only for W-5 (Task 6). It is existing debt against AGENTS.md's "no real waits"; a follow-up should inject the clock.
+
+### Gates after the fix wave
+
+`cargo check --all-features --locked`, `cargo fmt --check` and `cargo clippy --all-targets --all-features --locked -- -D warnings` exit 0 on `16bc94cf`. The fast tier's changed target, the binaries, ran again with `--bins`: the desktop binary `1938 passed; 1 failed` in 1389 s (the flake above, which passes alone); the CLI binary 317 passed. No other target changed. `git merge-tree --write-tree HEAD origin/main` is clean (origin/main is still `ea6d899b`); the boundary diff prints nothing; `Cargo.lock` and `Cargo.toml` are unchanged. The checklist gained S-10.12 to S-10.14 (landing on a Kit button, Shift Tab through the Kit buttons, Check host unavailable with focus on it). The fast tier takes about 23 minutes for the desktop binary alone.
