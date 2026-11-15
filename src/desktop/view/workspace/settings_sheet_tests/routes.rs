@@ -1,5 +1,5 @@
 //! P4, `each_route_lands_on_its_page_and_control` (design Part D; A6 F1 and
-//! F2; R-14, R-22, R-24, R-53, R-55): the ten routes, each raised through
+//! F2; R-14, R-22, R-24, R-53): the nine routes, each raised through
 //! `show_settings`. A row reads the page Settings arrived at
 //! (`settings_shown`), the control focus is on after two draws (Ruling 2)
 //! and the repository Settings works on (`settings_chosen`), then Escape
@@ -27,7 +27,7 @@ use manyhands::{
 
 use super::{
     returns::{escape, settings_open},
-    support::{holds, host, route, shown},
+    support::{ADD_BUTTON, holds, host, route, shown},
     table::Table,
 };
 use crate::desktop::{
@@ -413,26 +413,21 @@ fn pages(table: &mut Table, rig: &Rig, cx: &mut TestAppContext) {
 fn fields(table: &mut Table, rig: &Rig, cx: &mut TestAppContext) {
     let shell = &rig.shell;
     let [a, b, c] = [0, 1, 2].map(|ix| rig.roots[ix].clone());
-    raise(shell, SettingsRoute::AddRepository, cx);
+    // E-12 (Wave 04 Cycle 05a R-6): the route the Add repository sheet
+    // returns by lands on Add or create a repository…, the Kit button
+    // itself. The Add folder's routes left Settings with the forms (R-5);
+    // Inspect's R-55 row is now the Add sheet's (P4, E-17c).
+    raise(shell, SettingsRoute::AddButton, cx);
     lands(
         table,
         shell,
-        "F1 AddRepository: the Add folder",
-        Landing::new(SettingsPage::Repositories, "add-path", Some(&a)),
+        "F1 AddButton: Add or create a repository…",
+        Landing::control(SettingsPage::Repositories, ADD_BUTTON, Some(&a)),
         cx,
     );
 
-    // Inspect never chooses, even after the panel's selection changed
-    // (R-55; Ruling 25).
+    // From here the panel's selection is `c`.
     shell.select(&c, cx);
-    raise(shell, SettingsRoute::Inspect(c.clone()), cx);
-    lands(
-        table,
-        shell,
-        "F1 Inspect(root), the panel's selection changed: the choice stays (R-55)",
-        Landing::new(SettingsPage::Repositories, "add-path", Some(&a)),
-        cx,
-    );
     raise(shell, SettingsRoute::Identity(a.clone()), cx);
     lands(
         table,

@@ -21,7 +21,10 @@ use crate::desktop::{
         requests::{DesktopRequestId, Lane},
         worker::{CancelResult, GaveUp, RecordState},
     },
-    view::{item::ItemRoute, workspace::Workspace},
+    view::{
+        item::ItemRoute,
+        workspace::{AddRoute, Workspace},
+    },
 };
 
 /// What an ended run offers.
@@ -139,13 +142,13 @@ impl LifecycleDialog {
         workspace.update(cx, |workspace, cx| f(workspace, window, cx));
     }
 
-    /// Open repository details: Settings › Repositories, checking the
-    /// repository (L1's `Inspect`).
+    /// Open repository details: the Add repository sheet, checking the
+    /// repository (L1's `Inspect`; Wave 04 Cycle 05a AW-4).
     pub(super) fn inspect_button(&self, cx: &Context<Self>) -> AnyElement {
         let go = self.on(cx, |dialog, window, cx| {
             if let Some(root) = dialog.root().map(|root| root.to_path_buf()) {
                 dialog.in_workspace(window, cx, move |workspace, window, cx| {
-                    workspace.inspect_in_settings(root, window, cx)
+                    workspace.show_add_repository(AddRoute::Inspect(root), None, window, cx)
                 });
             }
         });

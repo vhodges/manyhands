@@ -837,6 +837,10 @@ pub(crate) struct DesktopRequest {
     /// the same attempt.
     pub attempt: u32,
     pub state: RequestState,
+    /// Once finished, the repository its answer's scope names: the root as
+    /// the library registered it, for an add (Wave 04 Cycle 05a R-29).
+    /// `None` until then, and for an answer that names none.
+    pub registered_root: Option<PathBuf>,
 }
 
 /// Where a request stands.

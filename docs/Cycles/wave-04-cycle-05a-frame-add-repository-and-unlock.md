@@ -278,19 +278,25 @@ reports.
 
 | # | Wave exit evidence / contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | Every dialog on the common frame keeps its keys, focus and return (contract 1) | `every_dialog_keeps_its_keys_and_focus` (P1); `footer_buttons_tab_in_drawn_order` (P2); the existing dialog tests, edited only as the named edits say | Planned |
-| A2 | Add repository is a sheet the workspace keeps (contract 2) | `add_repository_is_a_sheet_the_workspace_keeps` (P3); `nothing_acts_behind_the_add_sheet` (P15) | Planned |
-| A3 | Every way in lands (contract 5) | `each_way_in_opens_the_add_sheet` (P4) | Planned |
-| A4 | Replacing Settings and returning to it (contract 3; Wave decision 10) | `add_from_settings_returns_to_settings` (P6) | Planned |
-| A5 | Focus trapped, Escape closes, focus returns to the invoking control (Wave exit; contract 4) | Design B9 rows G1–G23, each read after a draw, through P3, P4, P5 `focus_returns_to_what_opened_add`, P6, `the_add_sheet_closes_every_way` (P7), `late_work_moves_no_focus_after_add_closes` (P8), P9 (G20), P10 (G16), P11 (G22), P15 (G18, G19) and `the_add_sheet_scrolls_on_its_own` (P23) | Planned |
-| A6 | Adding and creating a repository, including the identity step and each failed check's recovery action, by keyboard (Wave exit) | `add_and_create_by_keyboard` (P16); `folder_checks_are_rows_with_their_actions` (P9); the existing Add and Create tests, moved and edited only as the named edits say | Planned |
-| A7 | The design's Add repository layout: mode, checks, main branch, sharing, note, footer (Wave scope) | P9; `the_main_branch_is_the_checked_out_one` (P10); `add_is_enabled_only_when_it_can_go_ahead` (P11); `create_joins_location_and_name` (P12); `share_changes_through_lists_the_folders_remotes` (P13) | Planned |
-| A8 | The chosen remote is sent after the add (decision 3) | `a_chosen_remote_is_selected_after_the_add_succeeds` (P14) | Planned |
-| A9 | Unlocking, Not now (the key then waiting in Needs attention) and a refused passphrase by keyboard; focus returns; a wrong passphrase as today (Wave exit, as decision 4 limits it) | P1's and P2's Unlock rows; `the_unlock_dialog_names_the_key` (P18); `a_refused_passphrase_keeps_focus_in_the_field` (P19); the Unlock evidence tests the design's Testing names, edited only as E-9 says | Planned |
-| A10 | Copy in the `06` vocabulary | `frame_copy_uses_the_vocabulary` (P20) | Planned |
-| A11 | No passphrase or private key text reaches any label, tooltip or Git detail line (Wave exit; contract 8) | `add_sheet_names_no_secret` (P17); `a_supplied_passphrase_is_shown_or_kept_nowhere` and the polling privacy tests, unchanged in meaning | Planned |
-| A12 | The folded-in work (Part G) | P9 (Retry); `browse_says_why_beside_its_button` (P21); `a_folder_that_is_not_text_is_named` (P22) | Planned |
-| A13 | The surfaces match frames 1d and 2h, the frame `05`, and the empty pane `04`, in the dark theme | On screen: the owner | Planned |
+| A1 | Every dialog on the common frame keeps its keys, focus and return (contract 1) | `every_dialog_keeps_its_keys_and_focus` (P1); `footer_buttons_tab_in_drawn_order` (P2); the existing dialog tests, edited only as the named edits say | Tests: P1 passed at Task 2 (96 rows over the 12 dialogs, before and after the move) and with the Confirmation and Unlock rows at Tasks 1 and 8; P2 red then green for the Confirmation row (Task 1) and the Unlock row (Task 8); the dialogs' own modules passed (Task 2: 494 passed). No existing dialog test was edited by Tasks 1 and 2. The frame's look and its two hand-drawn rings: on screen (owner), awaiting (checklist V-6) |
+| A2 | Add repository is a sheet the workspace keeps (contract 2) | `add_repository_is_a_sheet_the_workspace_keeps` (P3); `nothing_acts_behind_the_add_sheet` (P15) | Tests: P3 and P15 passed in the `workspace::add_sheet::tests` runs of Tasks 4 to 9 (Task 4: 198 passed; Task 9: 78 passed); at Task 4 a mutation check failed G23, G19 and P15's Ctrl+, row as expected. Proven by tests |
+| A3 | Every way in lands (contract 5) | `each_way_in_opens_the_add_sheet` (P4) | Tests: P4 passed at Task 4, with its rows extended at Tasks 5 and 6 (E-17i, E-17l). Proven by tests |
+| A4 | Replacing Settings and returning to it (contract 3; Wave decision 10) | `add_from_settings_returns_to_settings` (P6) | Tests: P6 passed at Task 4 (G3 to G6, G17, G21), with Rulings 16 and 17 realised. The return's rings and any flicker: on screen (owner), awaiting (checklist V-3.4) |
+| A5 | Focus trapped, Escape closes, focus returns to the invoking control (Wave exit; contract 4) | Design B9 rows G1–G23, each read after a draw, through P3, P4, P5 `focus_returns_to_what_opened_add`, P6, `the_add_sheet_closes_every_way` (P7), `late_work_moves_no_focus_after_add_closes` (P8), P9 (G20), P10 (G16), P11 (G22), P15 (G18, G19) and `the_add_sheet_scrolls_on_its_own` (P23) | Tests: B9 rows G1 to G15, G17 to G19, G21 and G23 through P3 to P8, P15 and P23 at Task 4 (written first, each failed first); G16 through P10 and G22 through P11 (Task 5); G20 through P9 (Tasks 5 and 6). All passed in the module runs of Tasks 4 to 9. Known gaps, parked: R-26's earlier-open success is pinned only with the sheet closed, not reopened (Task 7 review item 2); a Kit dialog closed by its Confirm key over the sheet restores focus 0.25 s later and is not covered (Task 4). Rings on screen (owner), awaiting (checklist V-3, V-4.6, V-4.7) |
+| A6 | Adding and creating a repository, including the identity step and each failed check's recovery action, by keyboard (Wave exit) | `add_and_create_by_keyboard` (P16); `folder_checks_are_rows_with_their_actions` (P9); the existing Add and Create tests, moved and edited only as the named edits say | Tests: P16 `add_and_create_by_keyboard` passed at Task 9 (31 rows, no click); P9 passed at Task 5; the 17 moved Add and Create tests passed at Task 3 and were edited only as the named edits say (ledger, Tasks 4 to 6). Rings on screen (owner), awaiting (checklist V-9) |
+| A7 | The design's Add repository layout: mode, checks, main branch, sharing, note, footer (Wave scope) | P9; `the_main_branch_is_the_checked_out_one` (P10); `add_is_enabled_only_when_it_can_go_ahead` (P11); `create_joins_location_and_name` (P12); `share_changes_through_lists_the_folders_remotes` (P13) | Tests: P9, P10 and P11 passed at Task 5, P12 at Task 6, P13 at Task 7. Two design gaps are flagged for the owner, not failures: a Valid configuration whose remote is not among the folder's remotes draws no row and Add stays enabled (Task 5); C2's second case against R-30 (Task 7). The layout against frame 1d: on screen (owner), awaiting (checklist V-2) |
+| A8 | The chosen remote is sent after the add (decision 3) | `a_chosen_remote_is_selected_after_the_add_succeeds` (P14) | Tests: P14 passed at Task 7 (45 rows, transport-free); its helpers' hang in a wider test mix was fixed at `e85e66ae` (24 of 24 passed twice, P14 alone and by module). Proven by tests; no SSH case (K-10 covers a lost share) |
+| A9 | Unlocking, Not now (the key then waiting in Needs attention) and a refused passphrase by keyboard; focus returns; a wrong passphrase as today (Wave exit, as decision 4 limits it) | P1's and P2's Unlock rows; `the_unlock_dialog_names_the_key` (P18); `a_refused_passphrase_keeps_focus_in_the_field` (P19); the Unlock evidence tests the design's Testing names, edited only as E-9 says | Tests: P1's and P2's Unlock rows, P18 and P19 passed at Task 8 (46 passed), with the Unlock evidence tests the design names (`keyboard_tests::passphrase`, `passphrase::tests`, `route_tests`, `attention_tests`) in that run; E-9 only. A wrong passphrase is today's journey (K-2, no test added). The dialog against frame 2h, its width and `REFUSED` in red: on screen (owner), awaiting (checklist V-5) |
+| A10 | Copy in the `06` vocabulary | `frame_copy_uses_the_vocabulary` (P20) | Tests: P20 passed at Task 9 (every Part F constant pinned to its text, with a source scan). Two constants (`CHOOSE_ANOTHER`, `OPEN_SETTINGS`) carry no `…` as Part F gives them; flagged for the owner (ledger, Ruling 21). Proven by tests |
+| A11 | No passphrase or private key text reaches any label, tooltip or Git detail line (Wave exit; contract 8) | `add_sheet_names_no_secret` (P17); `a_supplied_passphrase_is_shown_or_kept_nowhere` and the polling privacy tests, unchanged in meaning | Tests: P17 passed at Task 9 (five steps swept; a mutation that landed the raw URL was caught); `a_supplied_passphrase_is_shown_or_kept_nowhere` and the polling and editing privacy sweeps passed at Tasks 8 and 9, unchanged in meaning (E-17p replaced one positive control). Proven by tests |
+| A12 | The folded-in work (Part G) | P9 (Retry); `browse_says_why_beside_its_button` (P21); `a_folder_that_is_not_text_is_named` (P22) | Tests: P9 (Retry), P21 (Add's rows at Task 5, Create's at Task 6) and P22 (Task 5, `#[cfg(unix)]`) passed. Proven by tests |
+| A13 | The surfaces match frames 1d and 2h, the frame `05`, and the empty pane `04`, in the dark theme | On screen: the owner | On screen (owner): awaiting. Checklist `docs/plans/2026-11-14-wave-04-cycle-05a-on-screen-checklist.md`; no result is recorded here |
+
+Status filled from the execution ledger at Task 10 (2026-11-15). "Passed" means
+the ledger records the test passing in its task's module run; the static gates
+and the Task 10 fast-tier run are the orchestrator's and are not recorded here.
+Native CI runs after merge, on main, and is not recorded here. Tests named under
+the row are all under `src/desktop/`; none is an SSH-harness case.
 
 ## Product-Owner Decisions (2026-11-14)
 
@@ -513,7 +519,7 @@ at approval (2026-11-14):**
 
 ## Known Limits
 
-Design K-1 to K-15:
+Design K-1 to K-15 (K-16 added during execution):
 
 - no "You can save changes here" check (no read);
 - no inline error for a wrong passphrase (decision 4);
@@ -536,7 +542,11 @@ Design K-1 to K-15:
   shadow the Kit theme has no key for stays the Kit's;
 - a failed share selection after an add offers no new action;
 - a folder already set up but with no Git identity cannot choose its
-  sharing in the sheet (decision 20).
+  sharing in the sheet (decision 20);
+- **K-16, found during execution (ledger, Ruling 19):** a confirmation
+  stacked under an Unlock prompt cannot close itself; its close reaches the
+  prompt, the topmost dialog. This predates the Cycle and affects every
+  confirmation; no library change, no ticket.
 
 ## Open Questions
 
@@ -556,3 +566,4 @@ None blocking. Design U-1 (Cycle 04's merged names) is checked in Task 0.
 | Review round 2, scoped re-review (revision 2, `67fb6fee`) | 0 Blocking, 2 Important, 18 Minor. Important: the attempt recorded after Prepare again; B7 against B10's enablement. Round 1's Blocking findings resolved | Important, Minor | Revision 3 (design Review Record) | Review report, 2026-11-14 |
 | Review round 2, adversarial on the add, share and focus mechanisms (revision 2, `67fb6fee`) | 0 Blocking, 10 Important, 7 Minor: the recorded attempt; later attempts and terminal states; a second add under the sheet; which open a success belongs to; AW-3's origin; a refused return to Settings; a check stuck in flight; the share with no identity; Add enabled where enable refuses; Create's root | Important, Minor; proposals | Revision 3, **not independently reviewed**; decisions 19 and 20 proposed | Review report, 2026-11-14 |
 | Owner, 2026-11-14 | Approval message: documents (revision 3, no further review), named edits, decisions 6–14, 19 and 20, execution method, authorization | Owner decisions | Decisions 6–14, 19 and 20 confirmed; decision 21; Document Amendments 2 and 3 applied | Session, 2026-11-14 |
+| Execution, 2026-11-14 to 2026-11-15 | Subagent-driven and serial (decision 21): one fresh implementer per task, then a fresh reviewer, on the ticket branch, tasks 0 to 9 | Process | Implementation commits `ded7ca46` (Task 1, the first, base `0ac6af37`) to `0765dd28` (Task 9, the last): 12 code commits (`git log --no-merges ded7ca46^..0765dd28`) with their ledger commits, up to the ledger's `221cc5ee`; Task 0 is `81c3c0de`, `5b7771db`, `42f807d5` and the merges `f5015aab`, `edb0e920`, `9059778f`. Owner rulings 15 to 18 (Task 4) and 22 (Task 9); K-16; the design's "As built, execution rulings" | Ledger `docs/plans/2026-11-14-wave-04-cycle-05a-frame-add-repository-and-unlock-execution.md`; design "As built, execution rulings" |

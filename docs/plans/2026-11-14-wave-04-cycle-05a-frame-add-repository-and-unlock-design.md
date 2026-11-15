@@ -803,7 +803,9 @@ a repository…" button (B11; R-6).
 
 1. **Refuses** while a dialog is open or the app is quitting, as
    `show_settings` does (fact 19).
-2. **Every open resets `add_return_to_settings`** to `None`, then, if
+2. **Every open resets `add_return_to_settings`** to `None` *(as built:
+   only when the sheet is not already open, and "from Settings" is carried
+   separately from the origin handle; see Ruling 16)*, then, if
    Settings is open (owner `Settings`), sets it to Settings' own recorded
    origin (O_s) and closes Settings quietly (`settings_closed(true)`),
    which empties a typed passphrase (fact 20). The host holds O_s weakly
@@ -853,7 +855,10 @@ The sheet closes by Escape, the header's close button, the scrim, Cancel,
 a successful add (B10), "Open its settings" (B6), a route into Settings
 (B2), or quitting. Escape, the close button and the scrim are the Kit's
 (`on_close`), which call `add_closed(Kept)`. Every other close calls
-`add_closed` directly; its step 0 closes the Kit sheet.
+`add_closed` directly; its step 0 closes the Kit sheet. *(As built: the Kit
+can run a closed sheet's close again within the same Escape, so `add_closed`
+opens Settings with `defer_in`; see the Kit fact in "As built, execution
+rulings".)*
 
 ```rust
 pub(in crate::desktop::view) enum AddClose {
@@ -883,13 +888,15 @@ Workspace:
    `Added`, also clears both modes' typed text, the check and the
    choices; on `Kept`, `ToSettings` and `Quiet`, they are kept (decision
    16). Quitting loses them with the app;
-3. unless `Quiet`, and **only once no dialog is open** (otherwise this
+3. unless `Quiet`, and **only once no dialog is open** *(as built: steps 0
+   to 4 all wait, not only this one; see Ruling 17)* (otherwise this
    step waits until the last dialog has closed, as
    `republish_deferred` waits, `D/view/operations/republish.rs:116-167`):
    - **`ToSettings(root)`:** `show_settings(Manage(root), O)`, where O is
      `add_return_to_settings` when set, else the recorded origin;
-   - **opened from Settings** (`add_return_to_settings` is set):
-     `show_settings(route, O_s)`, where `route` is `Manage(root)` after
+   - **opened from Settings** (`add_return_to_settings` is set) *(as built:
+     "from Settings" is its own field, set from `take_origin()`; see Ruling
+     16)*: `show_settings(route, O_s)`, where `route` is `Manage(root)` after
      `Added(root)` (decision 12) and `SettingsRoute::AddButton` otherwise;
    - **otherwise:** focuses the origin, else its region, else the content
      region, by Cycle 04's mechanism for an origin no longer drawn
@@ -962,10 +969,10 @@ In order:
    | `Checked`, not registered | ✓ "This folder is a Git repository." | — |
    | … then configuration Missing | ℹ "Manyhands isn't set up here yet. Adding it creates a small settings file and saves it as the first change." | — |
    | … then configuration Valid | ✓ "Manyhands is already set up here." and, when not registered, "It will be added to this computer." | — |
-   | … then configuration Invalid | ✗ "Manyhands' settings here need fixing." then each problem's guidance, as today | — |
+   | … then configuration Invalid | ✗ "Manyhands' settings here need fixing." then each problem's guidance, as today | ~~—~~ Check again (as built: owner Ruling 25) |
    | … then no branch checked out (`head_branch` is none) | ✗ "No branch is checked out. Check one out, then check again." | Check again |
    | … then configuration Valid, its `primary_branch` not the checked-out branch | ✗ "Manyhands here uses {primary} as its main branch. Check out {primary}, then check again." | Check again |
-   | … then configuration Valid, its `publication_remote` not eligible | ✗ "Manyhands here shares through {remote}, which isn't an SSH address. Fix it in the folder's Git settings, then check again." | Check again |
+   | … then configuration Valid, its `publication_remote` not eligible | ✗ "Manyhands here shares through {remote}, which isn't an SSH address. Fix it in the folder's Git settings, then check again." *(as built: no row when the remote is not among the folder's remotes; **flagged for the owner**, see "As built, execution rulings")* | Check again |
    | `Failed(NotRepository)` | ✗ "Not a Git repository." | Create one here |
    | `Failed(other)` | ✗ the code's message, with the code in the tooltip | Choose another |
    | `Busy` | ✗ "Manyhands is busy. Try the check again in a moment." | Retry |
@@ -1037,8 +1044,10 @@ In order:
 4. **Main branch** (`create-branch`): today's text field, "main" by
    default, with B7's help and tooltip. It is required (RFC 318).
 5. **Short code prefix (optional)** (`create-prefix`), as today.
-6. **Your name & email (optional)**: today's `CREATE_IDENTITY` note and
-   `create-name`, `create-email`.
+6. **Your name & email (optional)** *(as built: the block's title is Part
+   F's `IDENTITY_HEADING`, "Your name & email", without "(optional)";
+   **flagged for the owner**, see "As built, execution rulings")*: today's
+   `CREATE_IDENTITY` note and `create-name`, `create-email`.
 7. **Note**, as B6 item 7.
 
 The request is today's `RepoCreate` with `root = location.join(name)`.
@@ -1070,7 +1079,7 @@ draw when `focus_lost` or a render-time rule moves focus on the first
 | G10 | G7, the origin no longer drawn | The origin's own region | P5 |
 | G11 | G7 with no origin, or one with no region | The content region | P5 |
 | G12 | A check, a Browse answer or the add's outcome lands after the sheet closed | Unchanged; no dialog opens | P8 |
-| G13 | The confirmation opened from the sheet closes (Escape, Cancel or Close, or a finish) | Inside the sheet: the button that opened it, else `add-path` | P5 |
+| G13 | The confirmation opened from the sheet closes (Escape, Cancel or Close, or a finish) | Inside the sheet: the button that opened it, else `add-path` *(as built: while the add is pending the button is disabled and focus goes to its own handle; see Ruling 18)* | P5 |
 | G14 | A successful add whose finish closes the confirmation in the same batch | As G5 or G7, after the confirmation has closed | P5, P6 |
 | G15 | Quitting with the sheet, or the sheet and its confirmation, open | As Cycle 04's F12–F14 for Settings | P7 |
 | G16 | A select's list is open in the sheet | That list, until it closes; then its trigger | P10 |
@@ -1167,7 +1176,8 @@ struct PendingAdd {
 - **Added:** the root is the one the library registered: the `Request`
   keeps the `Finished` envelope's `scope.repository`, which the worker
   already reads (`D/services/worker.rs:1352-1361`), in a new
-  `registered_root: Option<PathBuf>` field (R-29). Then:
+  `registered_root: Option<PathBuf>` field (R-29; *as built: on
+  `DesktopRequest`, the type's name; see Ruling 19 C-1*). Then:
   - the share is sent (Part C);
   - if the sheet is open with the entry's open number,
     `add_closed(Added(root))` (B3, G5, G7, G14);
@@ -1244,7 +1254,10 @@ When the add is confirmed (B10), the entry's `share` is:
   configuration's `publication_remote`;
 - `Some(None)` when "Keep on this computer" is chosen and the
   configuration names an eligible remote among the check's remotes, so
-  the result agrees with what the sheet showed (decision 17);
+  the result agrees with what the sheet showed (decision 17) *(as built:
+  unless the select is held on Keep by R-30, when nothing is sent; **flagged
+  for the owner**, C2 and R-30 disagree; see "As built, execution
+  rulings")*;
 - `None` when the choice equals the configuration's, or when the
   configuration names a remote that is ineligible or missing (C1 then
   shows Keep, but the person did not choose to stop it; and B6's row
@@ -1396,7 +1409,7 @@ items, with a note (Amendment 5).
 | P1 | `every_dialog_keeps_its_keys_and_focus` (`frame`) | A table over A3's dialogs, Unlock key included: the control focused on open, what Enter does, what Escape does (closes, or waits while a write runs), where focus returns; and that a keyed Create, New folder and Move still close after their write (R-19). Read after a draw |
 | P2 | `footer_buttons_tab_in_drawn_order` (`frame`) | On the Confirmation dialog and Unlock key, Tab from the body reaches Cancel or Not now before the action (fails before Task 1 and Task 8) |
 | P3 | `add_repository_is_a_sheet_the_workspace_keeps` (`workspace::add_sheet`) | Owner `AddRepository` across frames and after `open_item`; G2 by a direct call |
-| P4 | `each_way_in_opens_the_add_sheet` (`workspace::add_sheet`) | AW-1 to AW-5 in a table, AW-5 raised three ways through `choose_activity`: the folder value, a check started for `Inspect`, focus on `add-path` (G1); `Inspect` leaves Settings' chosen repository alone |
+| P4 | `each_way_in_opens_the_add_sheet` (`workspace::add_sheet`) | AW-1 to AW-5 in a table, AW-5 raised three ways through `choose_activity`: the folder value, a check started for `Inspect`, focus on `add-path` (G1); `Inspect` leaves Settings' chosen repository alone *(as built: `show_add_repository` records the panel's selection as Settings' `seen`, on every open; Ruling 15)* |
 | P5 | `focus_returns_to_what_opened_add` (`workspace::add_sheet`) | G7–G11, G13, G14 and G23, one row per origin kind |
 | P6 | `add_from_settings_returns_to_settings` (`workspace::add_sheet`) | G3–G6, G17 and G21: a direct `show_add_repository` call while Sharing & keys holds a typed passphrase empties it; each close returns to Settings, success with the new repository chosen; Settings' own close returns to its first origin; a later open by `+` does not return to Settings; a direct route into Settings closes the sheet quietly |
 | P7 | `the_add_sheet_closes_every_way` (`workspace::add_sheet`) | Every close leaves owner `None`, no sheet, `open` false, no pending Add; Kept closes keep typed text and Added clears it (decision 16); quitting closes quietly (G15) |
@@ -1408,7 +1421,7 @@ items, with a note (Amendment 5).
 | P13 | `share_changes_through_lists_the_folders_remotes` (`add_repository`) | Items and greying from canned checks; decision 17's default; not drawn in the new mode or for a registered folder |
 | P14 | `a_chosen_remote_is_selected_after_the_add_succeeds` (`workspace::add_sheet`) | One `RemoteSelect` for the registered root after success; `name: None` for Keep over a configured eligible remote; none for an unchanged choice, an ineligible configured remote, or an add that ends; one after Prepare again then success, and after a Partial then Retry; one for a `DiscoveryPending` add; sent also when the sheet closed meanwhile; none once the app is finishing; the select disabled for a Valid configuration with no identity; a failed selection leaves the repository registered with its Activity row |
 | P15 | `nothing_acts_behind_the_add_sheet` (`workspace::add_sheet`) | Dispatched workspace actions, Ctrl+, among them, change nothing while it is open; G18 and G19 (a deferred restore by the test clock, `open_created`, a review landing) |
-| P16 | `add_and_create_by_keyboard` (`add_repository`) | Add with the identity step, and Create, by Tab and Enter only; each recovery action of B6 by keyboard, in a table |
+| P16 | `add_and_create_by_keyboard` (`add_repository`) | Add with the identity step, and Create, by Tab and Enter only; each recovery action of B6 by keyboard, in a table *(as built: Retry, Check again and a Choose another whose Browse… answered leave focus on `add-path`; Ruling 22)* |
 | P17 | `add_sheet_names_no_secret` (`add_repository`) | A remote whose fetch URL carries userinfo: no window text while the sheet and its confirmation are open holds the userinfo, a sentinel passphrase or a private key path |
 | P18 | `the_unlock_dialog_names_the_key` (`passphrase`) | Label and fingerprint after the read; the label alone before it (`hold_read(ReadKind::Keys)`), when it fails (U-8), with no matching key, or with no fingerprint; a read landing after the prompt was withdrawn changes nothing |
 | P19 | `a_refused_passphrase_keeps_focus_in_the_field` (`passphrase`) | An empty passphrase submitted by the Unlock button: `REFUSED` shown, focus in `passphrase-input`, no reply |
@@ -1571,7 +1584,7 @@ Applied by the planner, after the owner's approval:
 | R-26 | Each open of the sheet has a number; a success closes only the open it came from | — |
 | R-27 | Add and Create read "Adding…" and are disabled while an add from this open is pending **(owner's eye)** | A second folder waits for the first add to end |
 | R-28 | `Followed::Confirmed` carries the attempt it queued | Every match on it changes (E-16) |
-| R-29 | A finished request keeps its envelope's `scope.repository` as `registered_root` | One more field on the desktop's `Request` |
+| R-29 | A finished request keeps its envelope's `scope.repository` as `registered_root` | One more field on the desktop's `Request` *(as built: the type is `DesktopRequest`; Ruling 19 C-1)* |
 | R-30 | With a Valid configuration and no Git identity, "Share changes through" is held on Keep with a reason (decision 20) | The person sets the identity in Settings, then sharing there |
 | R-31 | With a Valid configuration the prefix field is not drawn **(owner's eye)** | A person cannot see the prefix in the sheet |
 
@@ -1605,6 +1618,9 @@ Applied by the planner, after the owner's approval:
   the person fixes it in Settings › Repositories › Sharing (C2).
 - **K-15:** a folder already set up but with no Git identity cannot
   choose its sharing in the sheet (R-30).
+- **K-16** *(added during execution; ledger Ruling 19, C-2)*: a
+  confirmation stacked under an Unlock prompt cannot close itself. See
+  "As built, execution rulings".
 
 ## Unverified
 
@@ -1691,3 +1707,135 @@ Applied by the planner, after the owner's approval:
 | Owner, 2026-11-14, after round 1 | Button order; typed text on close; the default remote and Keep; registered folders on the inspect routes | Owner decisions | Decisions 15–18 |
 | Review round 2, scoped re-review (revision 2, `67fb6fee`) | 0 Blocking, 2 Important (the attempt after Prepare again; B7 against B10), 18 Minor. Round 1's Blocking findings resolved | Important, Minor | Revision 3: B7, B10, B12, E-1a, E-1b, E-1e, E-9, E-16, U-8; plan task ownership |
 | Review round 2, adversarial on the add, share and focus mechanisms (revision 2, `67fb6fee`) | 0 Blocking, 10 Important (the recorded attempt; later attempts and terminal states; a second add under the sheet; "came from it"; AW-3's origin; a refused return to Settings; a check stuck in flight; the share with no identity; Add enabled where enable refuses; Create's root), 7 Minor | Important, Minor | Revision 3: B1, B2, B3, B6, B7, B9 (G21–G23), B10, C2; R-25 to R-31; K-10, K-15. **Not independently reviewed** |
+
+## As built, execution rulings
+
+Added 2026-11-15, after Tasks 0 to 9. The design above was approved and is
+not rewritten: where a sentence of it is wrong as built, a one-line "as
+built" pointer stands beside it. Every item cites the execution ledger
+(`2026-11-14-wave-04-cycle-05a-frame-add-repository-and-unlock-execution.md`)
+by its ruling number. Rulings 15 to 18 and 22 are the owner's; 19 is the
+orchestrator's.
+
+### Corrections the owner ruled
+
+- **B3, the whole close waits (Ruling 17).** The whole of `add_closed` (steps
+  0 to 4), not only step 3, waits while a dialog is open; the owner and the
+  open flag are kept until it runs, so G23's "Unchanged" and R-25 hold.
+  Realised as a `waiting` close that `sync_sheet` keeps and
+  `run_waiting_add_close` runs, deferred, from the render once no dialog is
+  open; a quiet close clears it.
+- **B2 step 2 and B3 step 3, "from Settings" (Ruling 16).** "From Settings" is
+  carried separately from the origin handle (`from_settings:
+  Option<Option<WeakFocusHandle>>`, set from `take_origin()` before
+  `settings_closed(true)`), so G4 holds when Settings recorded no origin, and
+  G6 then goes to the content region (Cycle 04's F10). B2 step 2's reset runs
+  only when the sheet is not already open, so an in-place route keeps the
+  return and the origin.
+- **E-17c and B2, the panel's selection (Ruling 15).** `show_add_repository`
+  records the panel's selection as Settings' `seen`
+  (`SettingsHost::saw_panel`, `settings/chosen.rs`), so Cycle 04's P10 keeps
+  its assertion and R-14's rule in `chosen.rs` is untouched. It runs on every
+  open of the Add sheet with any route (`+` included), as the ruling's text
+  reads. Side effect, for the owner's eye (ledger, Task 4 Minor 5): after `+`
+  a panel selection changed since the last Settings open is consumed, so the
+  next plain Settings open no longer follows it; restricting it to
+  `AddRoute::Inspect` is one line.
+- **B9 G13, the disabled "Adding…" button (Ruling 18).** While the add is
+  pending ("Adding…", disabled) and its confirmation closes, focus goes to the
+  button's own handle (the wrapper: no ring, no Tab stop while disabled), and
+  sits on the button, with no move, once it is enabled, as Cycle 04's Ruling
+  54 did for Check host. P5 gained the row `while_adding`.
+- **P16, the focus landing after a vanishing button (Ruling 22).** After a
+  keyboard Retry, Check again, or a Choose another whose Browse… answered, the
+  pressed button vanished and focus fell to the Kit sheet's own handle
+  (`sheet`): no control focused, Enter inert. Neither B6, B9 nor the plan named
+  the landing. The Add sheet now focuses `add-path` itself (`rows.rs`
+  `run_action`; `browse.rs` `chosen`, only while focus is still exactly on
+  Choose another's handle, the sheet is open and no dialog is over it).
+  `sheet_keeps_lost_focus` and Settings are untouched.
+
+### Corrections of fact
+
+- **R-29, the request type (Ruling 19 C-1).** The type that carries
+  `registered_root: Option<PathBuf>` is `DesktopRequest`, not `Request`; it is
+  set from the Finished envelope's scope (E-17d, 22 literals in 21 test files).
+- **The Kit runs a closed sheet's close again (ledger, "A fact for the
+  design", Task 4 phase 2).** One Escape can run a closed sheet's close
+  again, two to six times (the Sheet host's `Cancel` handler calls
+  `cx.propagate()` and then `close()`). Each repeat runs `window.close_sheet`,
+  which closes whatever sheet is active then, so Settings, opened from the Add
+  sheet's `on_close`, was closed too. Task 0's note "the Kit's close order
+  leaves Root's slot free when `on_close` opens Settings" holds for the first
+  close only. As built, `add_closed` opens Settings, for a return or for Open
+  its settings, with `cx.defer_in`, after the event, so a repeated close finds
+  no sheet and no owner and does nothing. Cycle 04 never met this because its
+  `on_close` opens nothing.
+
+### New Known Limit
+
+- **K-16 (Ruling 19 C-2).** A confirmation stacked under an Unlock prompt
+  cannot close itself: `ConfirmDialog::close` calls `window.close_dialog`
+  (`confirm.rs:565-569`) and the Kit closes the topmost dialog (Kit
+  `root.rs:325-339`), so an add's finish that lands while an Unlock prompt is
+  open above its still-open confirmation closes the prompt instead. This
+  predates the Cycle and affects every confirmation. G23's rows close the
+  confirmation first (Escape while the add runs). No library change, no
+  ticket.
+
+### Inconsistencies flagged for the owner
+
+The code follows the text named first in each; the design and Cycle document
+are not corrected until the owner chooses.
+
+- **C2's second case against R-30 (Part C; ledger, Task 7 review item 1).** C2
+  sends `Some(None)` ("stop sharing") for Keep over a configured eligible
+  remote, "so the result agrees with what the sheet showed". R-30 holds the
+  select on Keep for a Valid configuration with no identity, even when it names
+  an eligible remote. Read together the sheet would send "stop sharing", which
+  commits and fails without an identity. The code follows R-30 (`share_of`
+  returns `None` while held; P14 pins "nothing sent"). Either amend C2's second
+  case ("unless held, R-30"), or show the configured remote selected and
+  disabled in the held state instead of Keep. TODO(owner): choose.
+- **B6 and decision 9 against the code (ledger, Task 5 review).**
+  `checks.rs:87` `not_ssh`: a Valid configuration whose publication remote is
+  not among the folder's remotes draws no row and Add stays enabled; the
+  library then refuses the preview (`InvalidRemote`, `bind/repo.rs:818`). B6's
+  table, B10's enablement table and decision 9 ("the library refuses both ...
+  Add is disabled") say Add is disabled. TODO(owner): choose between the code
+  (the preview refuses it) and a row with Add disabled.
+- **B8 against Part F (ledger, Task 6 review item 4).** B8 item 6 titles the
+  identity block "Your name & email (optional)", but Part F has only
+  `IDENTITY_HEADING` "Your name & email". The code follows Part F (the copy
+  contract) plus the kept `CREATE_IDENTITY` note ("Leave both empty..."). Fix
+  B8 or Part F, not the code. TODO(owner): choose.
+- **Part F against `06` (ledger, Ruling 21).** `CHOOSE_ANOTHER` and
+  `OPEN_SETTINGS` carry no `…` although `06` asks for one on an action that
+  opens a chooser or a sheet; Part F gives both verbatim without it and P20
+  names them with `ADD` and `CREATE` as exceptions.
+  TODO(owner): choose; the fix is two constants and two names in P20's list.
+
+### As built, the final fix wave (owner review, 2026-11-15)
+
+- **B6, the Invalid row (owner Ruling 25).** A not-registered folder whose
+  configuration is Invalid offers Check again, as the branch and SSH rows do
+  (the configuration is fixed outside the app, so the only other way to re-check
+  was to retype the path or Browse). A registered folder keeps Open its settings.
+  P9's Invalid row, P11's G22 row and P16 changed with it (E-17s to E-17u).
+- **B9 G22, the fallback (note).** "Else `add-path`" no longer has a reachable
+  row: every state that disables Add now offers an action, so `resume_submit`
+  focuses that action; the fallback stays as a defensive `Option` default.
+- **Part D, the Unlock field (owner Ruling 26).** The visible label stays
+  Part F's "Passphrase"; the field's accessible label is "Passphrase for <key
+  label>" (`passphrase_for`), as before this Cycle. The key label is public (the
+  card shows it).
+- **Part A icons / fact 40 (owner Ruling 27).** `X` was added to the icon set
+  and nothing draws it (failed rows use the Kit's `circle-x`); it is removed, with
+  its entry in E-14's list.
+- **B10 / R-27 (owner Ruling 24).** "Adding…" after a confirmed add whose answer
+  offers Retry or Prepare again stays as designed; the owner judges it on screen
+  (checklist V-3.11).
+- **B3 (Ruling 28 context).** `add_closed` has an entry guard (a non-quiet close
+  with no owner, the open flag down and no waiting close returns at once) and
+  notifies only when its waiting close changes; `show_add_repository`'s stale-owner
+  branch closes `Quiet`.

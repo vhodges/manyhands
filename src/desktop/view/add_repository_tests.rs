@@ -1,10 +1,15 @@
-//! The Add repository forms over real directories and repositories, as
-//! Settings › Repositories draws them (Wave 04 Cycle 05a design B4; moved
-//! here from `settings/repositories_tests.rs` with them): Create and Add
-//! existing through the confirmation dialog, their typed refusals, a
-//! partial create that Retry completes under the same request, one
-//! repository for two presses of Confirm, Browse, a control below the
-//! fold, and the `repo.inspect` recovery.
+//! The Add repository forms over real directories and repositories, in
+//! the Add repository sheet the toolbar's `+` opens (Wave 04 Cycle 05a
+//! design B4; moved here from `settings/repositories_tests.rs` with them,
+//! E-1): Create and Add existing through the confirmation dialog, their
+//! typed refusals, a partial create that Retry completes under the same
+//! request, one repository for two presses of Confirm, Browse, a control
+//! below the fold, and the `repo.inspect` recovery.
+//!
+//! Add an existing folder's tables (design B5 to B7, B10; Part G) are in
+//! files of their own, run from here so that each test is named here: the
+//! folder's checks (P9), the main branch (P10), Add's enablement (P11), the
+//! note beside Browse… (P21) and a folder that is not text (P22).
 
 use std::{
     fs,
@@ -23,7 +28,8 @@ use manyhands::{
 };
 
 use super::{
-    ALREADY_ADDED, AddRepositorySheet, BROWSE_PROMPT, IDENTITY_REQUIRED, NEED_FOLDER, NOT_ADDED,
+    ALREADY_ADDED, ALREADY_SET_UP, AddRepositorySheet, BROWSE_PROMPT, CREATE_HERE,
+    IDENTITY_REQUIRED, IS_REPOSITORY, NOT_REPOSITORY, NOT_SET_UP,
 };
 use crate::desktop::{
     model::activity::rows::{ActivityAction, RowKey},
@@ -36,22 +42,54 @@ use crate::desktop::{
         activity_support::{act, label_of, offered, refresh, row},
         confirm::{CONFIRM, PREPARE_AGAIN},
         harness::{Shell, key},
+        workspace::AddRoute,
     },
 };
 
-/// The window over `fixture`, with the Repositories page shown, which
-/// draws the forms.
+#[path = "add_repository_tests/branch.rs"]
+mod branch;
+#[path = "add_repository_tests/browse.rs"]
+mod browse;
+#[path = "add_repository_tests/checks.rs"]
+mod checks;
+#[path = "add_repository_tests/create.rs"]
+mod create;
+#[path = "add_repository_tests/enablement.rs"]
+mod enablement;
+#[path = "add_repository_tests/keyboard.rs"]
+mod keyboard;
+#[path = "add_repository_tests/privacy.rs"]
+mod privacy;
+#[path = "add_repository_tests/share.rs"]
+mod share;
+#[path = "add_repository_tests/support.rs"]
+mod support;
+#[path = "add_repository_tests/vocabulary.rs"]
+mod vocabulary;
+
+/// The window over `fixture`, with the Add repository sheet opened by the
+/// toolbar's `+` (AW-2; E-1).
 fn settings(fixture: Fixture, cx: &mut TestAppContext) -> Shell {
     let shell = Shell::open(fixture, cx);
-    shell.keys("secondary-,", cx);
-    assert!(shell.present("settings-repositories", cx));
+    open_sheet(&shell, cx);
     shell
 }
 
-/// The forms the Repositories page draws.
+/// Opens the Add repository sheet by the toolbar's `+`.
+fn open_sheet(shell: &Shell, cx: &mut TestAppContext) {
+    shell.click("add-repository-button", cx);
+    assert!(
+        shell.present("add-sheet", cx),
+        "the Add repository sheet opened"
+    );
+}
+
+/// The Add repository sheet the workspace keeps.
 fn sheet(shell: &Shell, cx: &mut TestAppContext) -> Entity<AddRepositorySheet> {
-    let page = shell.repositories_page(cx);
-    page.read_with(cx, |page, _| page.add_sheet())
+    shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.add_sheet())
+        .expect("the workspace keeps the Add repository sheet")
 }
 
 fn input(shell: &Shell, id: &str, cx: &mut TestAppContext) -> Entity<InputState> {
@@ -71,6 +109,28 @@ fn set(shell: &Shell, id: &str, text: &str, cx: &mut TestAppContext) {
         input.update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
     });
     shell.run(cx);
+}
+
+/// The new mode, by its segment (B5): Create's form and footer are drawn
+/// only there (E-17+).
+fn new_mode(shell: &Shell, cx: &mut TestAppContext) {
+    shell.click("add-mode-new", cx);
+}
+
+/// The sentences of the folder's check rows (B6 item 2; E-1d).
+fn checks(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
+    shell.rows("add-check", cx)
+}
+
+/// What a plain repository Git has an identity for checks as (E-1d).
+fn plain_rows() -> Vec<String> {
+    vec![IS_REPOSITORY.to_owned(), NOT_SET_UP.to_owned()]
+}
+
+/// The branch the Main branch select has chosen (B7; E-1b).
+fn chosen_branch(shell: &Shell, cx: &mut TestAppContext) -> Option<String> {
+    shell.frame(cx, |_, _| ());
+    sheet(shell, cx).read_with(cx, |sheet, cx| sheet.chosen_branch(cx))
 }
 
 /// Focuses the field `id`.
@@ -215,7 +275,8 @@ async fn create_in_an_empty_directory_previews_nothing_then_creates_and_refreshe
     let fixture = Fixture::new();
     let root = fixture.empty_directory("new");
     let shell = settings(fixture, cx);
-    set(&shell, "create-path", text(&root), cx);
+    new_mode(&shell, cx);
+    create::set_target(&shell, &root, cx);
     set(&shell, "create-branch", "main", cx);
     set(&shell, "create-name", &ada().name, cx);
     set(&shell, "create-email", &ada().email, cx);
@@ -266,17 +327,14 @@ async fn adding_a_repository_without_identity_asks_for_one_and_keeps_it(cx: &mut
 
     set(&shell, "add-path", text(&root), cx);
     enter_in(&shell, "add-path", cx);
-    assert_eq!(
-        shell.label("add-inspection", cx).as_deref(),
-        Some(NOT_ADDED)
-    );
+    assert_eq!(checks(&shell, cx), plain_rows());
     assert_eq!(
         shell.label("add-identity-required", cx).as_deref(),
         Some(IDENTITY_REQUIRED)
     );
     assert!(shell.present("add-name", cx));
     assert!(shell.present("add-email", cx));
-    assert_eq!(value(&shell, "add-branch", cx), "main");
+    assert_eq!(chosen_branch(&shell, cx).as_deref(), Some("main"));
 
     set(&shell, "add-name", &ada().name, cx);
     set(&shell, "add-email", &ada().email, cx);
@@ -296,10 +354,19 @@ async fn adding_a_repository_without_identity_asks_for_one_and_keeps_it(cx: &mut
     assert_eq!(registered(&shell), [key(&root)]);
     assert_eq!(background_refreshes(&shell, &root, cx), 1);
 
-    // Checked again, it is registered.
+    // Checked again, it is registered: the success closed the sheet and
+    // cleared it (decision 16), so it is opened and the folder typed again
+    // (E-1b).
+    assert!(
+        !shell.present("add-sheet", cx),
+        "the success closed the sheet"
+    );
+    open_sheet(&shell, cx);
+    assert_eq!(value(&shell, "add-path", cx), "", "the success cleared it");
+    set(&shell, "add-path", text(&root), cx);
     enter_in(&shell, "add-path", cx);
     assert_eq!(
-        shell.label("add-inspection", cx).as_deref(),
+        checks(&shell, cx).first().map(String::as_str),
         Some(ALREADY_ADDED)
     );
 }
@@ -312,10 +379,7 @@ fn a_repository_with_an_identity_shows_no_identity_fields(cx: &mut TestAppContex
     let shell = settings(fixture, cx);
     set(&shell, "add-path", text(&root), cx);
     enter_in(&shell, "add-path", cx);
-    assert_eq!(
-        shell.label("add-inspection", cx).as_deref(),
-        Some(NOT_ADDED)
-    );
+    assert_eq!(checks(&shell, cx), plain_rows());
     assert!(!shell.present("add-identity-required", cx));
     assert!(!shell.present("add-name", cx));
 }
@@ -340,7 +404,8 @@ fn create_in_a_non_empty_directory_shows_its_typed_failure(cx: &mut TestAppConte
         .code;
     assert_ne!(expected, ResultCode::Ok);
     let shell = settings(fixture, cx);
-    set(&shell, "create-path", text(&root), cx);
+    new_mode(&shell, cx);
+    create::set_target(&shell, &root, cx);
     set(&shell, "create-name", &ada().name, cx);
     set(&shell, "create-email", &ada().email, cx);
 
@@ -360,8 +425,9 @@ fn create_in_a_non_empty_directory_shows_its_typed_failure(cx: &mut TestAppConte
 }
 
 /// Add a folder that is not a Git repository: checking it shows the
-/// read's typed failure, and submitting it the preview's. Nothing is
-/// made in the folder and nothing is registered.
+/// `NotRepository` row with its Create one here, and Add repository is
+/// disabled, as the library's preview refuses the folder (E-1a). Nothing
+/// is made in the folder and nothing is registered.
 #[gpui_kit::test]
 fn adding_a_folder_that_is_not_a_repository_shows_its_typed_failure(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -382,53 +448,49 @@ fn adding_a_folder_that_is_not_a_repository_shows_its_typed_failure(cx: &mut Tes
         }))
         .code;
     assert_ne!(prepared, ResultCode::Ok);
+    assert_eq!(inspected, ResultCode::NotRepository);
     let shell = settings(fixture, cx);
     set(&shell, "add-path", text(&root), cx);
     enter_in(&shell, "add-path", cx);
+    assert_eq!(checks(&shell, cx), [NOT_REPOSITORY]);
     assert_eq!(
-        shell.label("add-inspection", cx).as_deref(),
-        Some(inspected.message())
-    );
-    assert_eq!(
-        shell.label("add-inspection-code", cx).as_deref(),
-        Some(inspected.as_str())
+        shell.label("add-create-here", cx).as_deref(),
+        Some(CREATE_HERE)
     );
     assert!(!shell.present("add-name", cx));
 
-    set(&shell, "add-branch", "main", cx);
+    let enabled = sheet(&shell, cx).read_with(cx, |sheet, cx| sheet.add_enabled(cx));
+    assert!(!enabled, "Add repository is disabled");
     shell.click("add-submit", cx);
-    assert_eq!(
-        shell.label("confirm-code", cx).as_deref(),
-        Some(prepared.as_str())
-    );
-    assert_eq!(
-        shell.label("confirm-message", cx).as_deref(),
-        Some(prepared.message())
-    );
-    assert!(!shell.present("confirm-ok", cx));
+    assert!(!shell.present("confirm-dialog", cx));
     assert_eq!(entries(&root), [root.join("notes.txt")]);
     assert!(registered(&shell).is_empty());
     assert!(shell.requests(cx, |_| true).is_empty());
 }
 
-/// Submit with no folder says so and opens no dialog.
+/// With nothing typed Create repository and Add repository are disabled,
+/// and pressing either opens nothing; no message is drawn for what is
+/// missing (E-2; decision 9).
 #[gpui_kit::test]
 fn submitting_with_no_folder_says_so(cx: &mut TestAppContext) {
     let shell = settings(Fixture::new(), cx);
+    new_mode(&shell, cx);
+    let enabled = sheet(&shell, cx).read_with(cx, |sheet, cx| sheet.create_enabled(cx));
+    assert!(!enabled, "Create repository is disabled with nothing typed");
     shell.click("create-submit", cx);
-    assert_eq!(
-        shell.label("create-message", cx).as_deref(),
-        Some(NEED_FOLDER)
-    );
+    assert!(!shell.present("create-message", cx));
     assert!(!shell.present("confirm-dialog", cx));
+    shell.click("add-mode-existing", cx);
+    let enabled = sheet(&shell, cx).read_with(cx, |sheet, cx| sheet.add_enabled(cx));
+    assert!(!enabled, "Add repository is disabled with nothing typed");
     shell.click("add-submit", cx);
-    assert_eq!(shell.label("add-message", cx).as_deref(), Some(NEED_FOLDER));
     assert!(!shell.present("confirm-dialog", cx));
 }
 
-/// The fields of a create in an empty `name`.
+/// The fields of a create in an empty `root`, in the new mode.
 fn fill_create(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
-    set(shell, "create-path", text(root), cx);
+    new_mode(shell, cx);
+    create::set_target(shell, root, cx);
     set(shell, "create-name", &ada().name, cx);
     set(shell, "create-email", &ada().email, cx);
 }
@@ -601,7 +663,8 @@ async fn a_partial_create_is_completed_by_retry_under_the_same_request(cx: &mut 
 }
 
 /// Browse asks for one directory. A selection fills the field and checks
-/// the folder; a dismissal leaves the field as it was, and usable.
+/// the folder; a dismissal leaves the field as it was, and usable. Add's
+/// Browse and Create's are each tried in their own mode (E-1c).
 #[gpui_kit::test]
 fn browse_fills_the_field_and_a_dismissal_leaves_it_unchanged(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -620,22 +683,21 @@ fn browse_fills_the_field_and_a_dismissal_leaves_it_unchanged(cx: &mut TestAppCo
     });
     shell.run(cx);
     assert_eq!(value(&shell, "add-path", cx), text(&root));
-    assert_eq!(
-        shell.label("add-inspection", cx).as_deref(),
-        Some(NOT_ADDED)
-    );
+    assert_eq!(checks(&shell, cx), plain_rows());
+    assert!(!shell.present("add-browse-note", cx));
 
-    set(&shell, "create-path", "/typed/by/hand", cx);
+    new_mode(&shell, cx);
+    set(&shell, "create-location", "/typed/by/hand", cx);
     shell.click("create-browse", cx);
     cx.simulate_path_prompt_response(|_| None);
     shell.run(cx);
-    assert_eq!(value(&shell, "create-path", cx), "/typed/by/hand");
-    assert!(!shell.present("browse-unavailable", cx));
+    assert_eq!(value(&shell, "create-location", cx), "/typed/by/hand");
+    assert!(!shell.present("create-browse-note", cx));
     // Still usable: typing changes it, and Browse asks again.
-    focus_in(&shell, "create-path", cx);
+    focus_in(&shell, "create-location", cx);
     shell.visual(cx).simulate_input("/more");
     shell.run(cx);
-    assert_eq!(value(&shell, "create-path", cx), "/typed/by/hand/more");
+    assert_eq!(value(&shell, "create-location", cx), "/typed/by/hand/more");
     shell.click("create-browse", cx);
     cx.simulate_path_prompt_response(|_| None);
     shell.run(cx);
@@ -646,50 +708,51 @@ fn control_focus(shell: &Shell, id: &str, cx: &mut TestAppContext) -> FocusHandl
     sheet.read_with(cx, |sheet, _| sheet.control_focus(id))
 }
 
-/// In a window too short for the page, Tab reaches Create repository,
-/// below the fold, and the Settings sheet's own scroll brings it into view:
-/// the control is a Kit button, whose own focus is private, so its wrapper
-/// is revealed.
+/// In a window too short for the sheet's body, Tab reaches Create's short
+/// code prefix, below the fold, and the sheet's own scroll brings it into
+/// view (E-1e; R-8): a body control, since the footer that holds the
+/// submits is outside the body.
 #[gpui_kit::test]
 fn a_form_control_below_the_fold_is_scrolled_into_view(cx: &mut TestAppContext) {
     let shell = settings(Fixture::new(), cx);
-    shell.resize_keeping_content(1440., 360., cx);
+    new_mode(&shell, cx);
+    // Shorter than Cycle 04's 360: one mode is drawn, and Create's prefix
+    // is the fourth field (E-17m).
+    shell.resize_keeping_content(1440., 150., cx);
     shell.run(cx);
     let bounds = |shell: &Shell, cx: &mut TestAppContext| {
         shell.frame(cx, |window, _| {
             (
-                window.find("settings-scroll").bounds(),
-                window.find("create-submit").bounds(),
+                window.find("add-scroll").bounds(),
+                window.find("create-prefix").bounds(),
             )
         })
     };
-    let (viewport, submit) = bounds(&shell, cx);
+    let (viewport, prefix) = bounds(&shell, cx);
     assert!(
-        submit.top() > viewport.bottom(),
-        "Create repository starts below the fold: {submit:?} {viewport:?}"
+        prefix.top() > viewport.bottom(),
+        "Create's prefix starts below the fold: {prefix:?} {viewport:?}"
     );
 
-    let focus = control_focus(&shell, "create-submit", cx);
+    let focus = control_focus(&shell, "create-prefix", cx);
     let mut presses = 0;
     while !shell.frame(cx, |window, cx| focus.contains_focused(window, cx)) {
         presses += 1;
-        assert!(presses < 60, "Tab never reached Create repository");
+        assert!(presses < 60, "Tab never reached Create's prefix");
         shell.keys("tab", cx);
     }
-    let (viewport, submit) = bounds(&shell, cx);
+    let (viewport, prefix) = bounds(&shell, cx);
     assert!(
-        submit.intersects(&viewport),
-        "the focused button is in view: {submit:?} {viewport:?}"
+        prefix.intersects(&viewport),
+        "the focused field is in view: {prefix:?} {viewport:?}"
     );
-    let offset = shell
-        .workspace
-        .read_with(cx, |workspace, cx| workspace.settings_offset(cx));
+    let offset = sheet(&shell, cx).read_with(cx, |sheet, _| sheet.scroll_offset());
     assert!(offset < px(0.));
 }
 
-/// The `repo.inspect` recovery's entry point opens the Repositories page
-/// with the root checked, and focuses its Add folder (Wave 04 Cycle 04
-/// Part D; R-24). The model maps the action to it (`operations_tests`); no
+/// The `repo.inspect` recovery's entry point opens the Add repository sheet
+/// with the root checked, and focuses its Add folder (Wave 04 Cycle 05a
+/// AW-5, G1; E-4). The model maps the action to it (`operations_tests`); no
 /// local command offers it, so it is called here as `run_recovery` calls
 /// it.
 #[gpui_kit::test]
@@ -700,20 +763,16 @@ fn the_inspect_recovery_opens_the_page_with_its_root_checked(cx: &mut TestAppCon
     let target = root.clone();
     shell.visual(cx).update(|window, cx| {
         shell.workspace.update(cx, |workspace, cx| {
-            workspace.inspect_in_settings(target, window, cx)
+            workspace.show_add_repository(AddRoute::Inspect(target), None, window, cx)
         })
     });
     shell.run(cx);
-    assert!(shell.present("settings-repositories", cx));
+    assert!(shell.present("add-sheet", cx));
     assert_eq!(value(&shell, "add-path", cx), text(&root));
-    assert_eq!(
-        shell.label("add-inspection", cx).as_deref(),
-        Some(ALREADY_ADDED)
-    );
-    assert!(shell.present("add-configuration", cx));
+    assert_eq!(checks(&shell, cx), [ALREADY_ADDED, ALREADY_SET_UP]);
     assert!(
         shell.holds_focus("add-path", cx),
-        "W-27 lands on the Add folder (Part D)"
+        "AW-5 lands on the Add folder (G1)"
     );
 }
 
@@ -724,10 +783,7 @@ fn checked_add(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     let shell = settings(fixture, cx);
     set(&shell, "add-path", text(&root), cx);
     enter_in(&shell, "add-path", cx);
-    assert_eq!(
-        shell.label("add-inspection", cx).as_deref(),
-        Some(NOT_ADDED)
-    );
+    assert_eq!(checks(&shell, cx), plain_rows());
     (shell, root)
 }
 
@@ -790,9 +846,11 @@ fn add_pressed_at_once_checks_first_and_asks_for_the_identity(cx: &mut TestAppCo
     let root = fixture.plain_repository("plain", None);
     let shell = settings(fixture, cx);
     set(&shell, "add-path", text(&root), cx);
-    assert!(!shell.present("add-inspection", cx));
+    // No check has run before the press: no check rows are drawn (B6).
+    assert!(!shell.present("add-checks", cx));
 
     shell.click("add-submit", cx);
+    assert!(shell.present("add-checks", cx), "the press checked first");
     assert_eq!(
         shell.label("add-identity-required", cx).as_deref(),
         Some(IDENTITY_REQUIRED)
@@ -800,7 +858,7 @@ fn add_pressed_at_once_checks_first_and_asks_for_the_identity(cx: &mut TestAppCo
     assert!(!shell.present("confirm-dialog", cx));
     let name = control_focus(&shell, "add-name", cx);
     assert!(shell.frame(cx, |window, cx| name.contains_focused(window, cx)));
-    assert_eq!(value(&shell, "add-branch", cx), "main");
+    assert_eq!(chosen_branch(&shell, cx).as_deref(), Some("main"));
     assert!(shell.requests(cx, |_| true).is_empty());
 
     set(&shell, "add-name", &ada().name, cx);
@@ -826,4 +884,57 @@ fn add_pressed_at_once_on_a_repository_with_an_identity_opens_the_preview(cx: &m
     assert_eq!(shell.label("confirm-ok", cx).as_deref(), Some(CONFIRM));
     assert!(!shell.present("add-identity-required", cx));
     assert!(details(&shell, cx).contains(&"Primary branch: main".to_owned()));
+}
+
+/// P9 (design B6 item 2; R-31): each check state's rows and its one
+/// action, a registered folder with its configuration's rows, and what each
+/// action does; a check landing for text since changed is ignored. The
+/// rows are in `checks`.
+#[gpui_kit::test]
+fn folder_checks_are_rows_with_their_actions(cx: &mut TestAppContext) {
+    let mut table = support::Table::new("P9");
+    checks::rows_and_actions(&mut table, cx);
+    table.done();
+}
+
+/// P10 (B7; R-12; G16): the checked-out branch chosen and tagged, the
+/// others refused by the delegate and by a `Confirm` naming them, no
+/// commits, none checked out; an open list holds focus, then its trigger.
+/// The rows are in `branch`.
+#[gpui_kit::test]
+fn the_main_branch_is_the_checked_out_one(cx: &mut TestAppContext) {
+    let mut table = support::Table::new("P10");
+    branch::rows(&mut table, cx);
+    table.done();
+}
+
+/// P11 (B10; G22): Add repository's enablement, B10's table row by row,
+/// "Adding…" included; pressed before its check landed, it goes on only if
+/// the landed check enables it. The rows are in `enablement`.
+#[gpui_kit::test]
+async fn add_is_enabled_only_when_it_can_go_ahead(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let mut table = support::Table::new("P11");
+    enablement::rows(&mut table, cx).await;
+    table.done();
+}
+
+/// P21, Add's rows (B6 item 1; Part G): the note under Browse… while
+/// choosing, once unavailable, and after a choice that is not text. The
+/// rows are in `browse`.
+#[gpui_kit::test]
+fn browse_says_why_beside_its_button(cx: &mut TestAppContext) {
+    let mut table = support::Table::new("P21");
+    browse::rows(&mut table, cx);
+    table.done();
+}
+
+/// P22 (Part G): an `Inspect` route whose root is not text is named with a
+/// row and its action. The rows are in `checks`.
+#[cfg(unix)]
+#[gpui_kit::test]
+fn a_folder_that_is_not_text_is_named(cx: &mut TestAppContext) {
+    let mut table = support::Table::new("P22");
+    checks::not_text(&mut table, cx);
+    table.done();
 }

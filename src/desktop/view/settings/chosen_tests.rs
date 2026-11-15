@@ -18,6 +18,7 @@ use crate::desktop::{
     view::{
         footer::Control,
         harness::{Shell, key},
+        workspace::AddRoute,
     },
 };
 
@@ -185,18 +186,22 @@ async fn one_repository_is_chosen(cx: &mut TestAppContext) {
         rows.fact(&row, found == TYPED, found);
     }
 
-    // An Inspect open never changes the choice, even after the panel's
-    // selection changed (R-55; Ruling 25). It records that selection, as
-    // every open does, so the next plain open finds nothing newer.
+    // An Inspect open, now the Add repository sheet's (Wave 04 Cycle 05a
+    // R-5), never changes the choice, even after the panel's selection
+    // changed (R-55; Ruling 25). It records that selection, as every open
+    // does, so the next plain open finds nothing newer (Cycle 05a Ruling
+    // 15). E-17c: the choice at the Inspect open is asserted by the Add
+    // sheet's P4.
     shell.keys("escape", cx);
     shell.select(&b, cx);
-    route(&shell, SettingsRoute::Inspect(b.clone()), cx);
-    let found = chosen(&shell, cx);
-    rows.fact(
-        "Inspect(b), panel now b: chosen",
-        found == Some(a.clone()),
-        found,
-    );
+    let inspected = b.clone();
+    let workspace = shell.workspace.clone();
+    shell.visual(cx).update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.show_add_repository(AddRoute::Inspect(inspected), None, window, cx)
+        })
+    });
+    shell.run(cx);
     let found = value(&shell, "identity-name", cx);
     rows.fact("Inspect(b), panel now b: typed text", found == TYPED, found);
     shell.keys("escape", cx);

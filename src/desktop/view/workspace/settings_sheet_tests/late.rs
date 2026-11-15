@@ -1,7 +1,9 @@
 //! P22, `late_work_moves_no_focus` (design A6 F17; A2 step 2; A4): work
 //! that lands after Settings closed moves no focus and opens nothing, with
 //! the panel's selection unchanged throughout, and reopening shows its
-//! result. A route raised after the Kit closed the sheet but before any
+//! result (the Add forms' row moved with them to the Add repository sheet's
+//! P8, Wave 04 Cycle 05a). A route raised after the Kit closed the sheet
+//! but before any
 //! render empties a typed passphrase first and records its own origin. The
 //! key-removal row is P24's (Task 4). Each focus read is after two draws
 //! (Ruling 2).
@@ -10,95 +12,22 @@ use gpui_kit::{TestAppContext, component::WindowExt};
 
 use super::{
     returns::{escape, footer, settings_open, ticket_shell},
-    support::{emptied, has_dialog, holds_handle, host, open_on_keys, route, settle, shown},
+    support::{emptied, holds_handle, host, open_on_keys, route, settle, shown},
     table::Table,
 };
 use crate::desktop::{
     model::stamp::SettingsPage,
-    services::ReadKind,
-    test_support::fixtures::{Fixture, identity},
     view::{
         footer::Control,
-        harness::Shell,
         settings::{SettingsRoute, Shown},
     },
 };
 
 pub(super) fn rows(table: &mut Table, cx: &mut TestAppContext) {
-    pending_add(table, cx);
+    // E-12: the row of an Add waiting for its folder's check moved with
+    // the forms, to the Add repository sheet's P8 (G12).
     hosts_landing(table, cx);
     route_before_render(table, cx);
-}
-
-/// F17, R-48: a folder typed and Add pressed while its check is held, then
-/// Escape; the check lands after the close. No confirmation opens, focus is
-/// where the close put it, and reopening shows the check's result and no
-/// pending Add.
-fn pending_add(table: &mut Table, cx: &mut TestAppContext) {
-    let fixture = Fixture::new();
-    let root = fixture.create_repository("a");
-    fixture.refresh(&root);
-    let plain = fixture.plain_repository("plain", Some(identity()));
-    let shell = Shell::open(fixture, cx);
-    shell.select(&root, cx);
-    let origin = shell
-        .frame(cx, |window, cx| window.focused(cx))
-        .expect("something holds focus");
-    shell.keys("secondary-,", cx);
-    let host = host(&shell, cx);
-    shell.visual(cx).update(|window, cx| {
-        let page = host.update(cx, |host, cx| host.repositories(window, cx));
-        let input = page.read(cx).input("add-path");
-        let text = plain.to_str().expect("a UTF-8 path").to_owned();
-        input.update(cx, |input, cx| input.set_value(text, window, cx));
-    });
-    shell.run(cx);
-    let held = shell.backend.hold_read(ReadKind::Inspect);
-    shell.click("add-submit", cx);
-    assert!(!has_dialog(&shell, cx), "Add waits for its folder's check");
-    escape(&shell, "the pending Add", cx);
-    assert!(
-        holds_handle(&shell, &origin, cx),
-        "the close gave focus back"
-    );
-
-    drop(held);
-    shell.run(cx);
-    settle(&shell, cx);
-    let opened = has_dialog(&shell, cx);
-    table.fact(
-        "F17 a folder check landing after the close",
-        !opened,
-        "no confirmation opening",
-    );
-    let held = holds_handle(&shell, &origin, cx);
-    table.row(
-        &shell,
-        "F17 a folder check landing after the close",
-        held,
-        "the origin the close gave focus to, unchanged",
-        cx,
-    );
-    if opened {
-        // Today's confirmation, closed so that Settings can open again.
-        shell.keys("escape", cx);
-        assert!(!has_dialog(&shell, cx));
-    }
-
-    shell.keys("secondary-,", cx);
-    assert!(settings_open(&shell, cx), "Settings opens again");
-    settle(&shell, cx);
-    table.fact(
-        "F17 reopening after the folder check landed shows its result",
-        shell.present("add-inspection", cx),
-        "the check's result on the Add form",
-    );
-    table.fact(
-        "F17 reopening after the folder check landed opens no pending Add",
-        !has_dialog(&shell, cx),
-        "no pending Add opening its confirmation",
-    );
-    escape(&shell, "the reopened page", cx);
 }
 
 /// F17: a Check host landing delivered to the Hosts page's handler

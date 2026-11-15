@@ -72,12 +72,11 @@ icon_assets!(
         // The Settings menu's Sharing & keys entry (Cycle 04, B1), and the
         // Unlock key dialog's key card (Cycle 05a, Part D).
         KeyRound,
-        // The Add repository sheet's mode control, Main branch, Share changes
-        // through and failed checks (Wave 04 Cycle 05a, Part B, fact 40).
+        // The Add repository sheet's mode control, Main branch and Share
+        // changes through (Wave 04 Cycle 05a, Part B, fact 40).
         FolderInput,
         GitBranch,
         Cloud,
-        X,
     ]
 );
 

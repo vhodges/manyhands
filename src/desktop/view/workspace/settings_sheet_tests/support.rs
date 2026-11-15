@@ -313,15 +313,24 @@ pub(super) async fn edit_the_title(shell: &Shell, root: &Path, cx: &mut TestAppC
     id
 }
 
-/// Presses Tab until Create repository, the Repositories page's last
-/// control, holds focus.
-pub(super) fn tab_to_create(shell: &Shell, cx: &mut TestAppContext) {
+/// Add or create a repository…'s own Kit button, in its wrapper
+/// `settings-add-repository`: the Repositories page's last control (Wave 04
+/// Cycle 05a B11), where the `AddButton` route lands.
+pub(super) const ADD_BUTTON: (&str, usize) = ("settings-add-repository", 0);
+
+/// Presses Tab until Add or create a repository…, the Repositories page's
+/// last control, holds focus (E-12: Create repository was, before the
+/// forms left the page).
+pub(super) fn tab_to_add_button(shell: &Shell, cx: &mut TestAppContext) {
     let mut presses = 0;
     while !shell.frame(cx, |window, _| {
-        window.try_find("create-submit").and_then(|e| e.focused()) == Some(true)
+        window.try_find(ADD_BUTTON).and_then(|e| e.focused()) == Some(true)
     }) {
         presses += 1;
-        assert!(presses < 80, "Tab never reached Create repository");
+        assert!(
+            presses < 80,
+            "Tab never reached Add or create a repository…"
+        );
         shell.keys("tab", cx);
     }
 }

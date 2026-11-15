@@ -378,7 +378,7 @@ impl Workspace {
             prompt.answer(PromptReply::Unavailable);
             return;
         }
-        self.passphrase = Some(open_dialog(prompt, window, cx));
+        self.passphrase = Some(open_dialog(prompt, &self.services, window, cx));
         cx.notify();
     }
 

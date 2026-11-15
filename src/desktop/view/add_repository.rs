@@ -1,86 +1,89 @@
-//! The Add repository forms (Wave 04 Cycle 05a design B4): Add an existing
-//! repository and Create a repository, an entity of their own. Until the
-//! Add repository sheet holds them, Settings › Repositories draws them
-//! where they were, after Sharing: they reveal a focused control in
-//! Settings' scroll, and go on with a submit only while Settings is open
-//! (its `OpenFlag`).
+//! The Add repository sheet (Wave 04 Cycle 05a design B4 to B10): Add an
+//! existing folder and Create a new repository, an entity the workspace
+//! keeps and draws in a sheet of its own (`workspace::add_sheet`, B1 to
+//! B3). The sheet has its own scroll, which reveals a focused control, and
+//! its own open flag: a check that lands after the sheet closed opens no
+//! confirmation and moves no focus (C4 R-47's rule; G12).
 //!
-//! **Add existing** takes the folder of a Git repository that is not yet
-//! a Manyhands repository, its primary branch and an optional short code
-//! prefix. The folder is checked with `inspect_repository` (`checks`) when
-//! Enter is pressed in its field, when focus leaves the field changed, and
-//! when Browse chooses it: the check shows whether it is registered, its
-//! configuration and the branch checked out, which fills an empty primary
-//! branch. Only when the check reports that Git finds no identity for it
-//! are name and email asked for, and written to its own configuration.
-//! Add confirms only a folder whose current text was checked: pressed
-//! before, it checks first, then shows the identity fields with focus in
-//! the first when they are needed, or goes on to the preview (ruling
-//! R-T12b).
+//! **The mode** (`mode`, B5) shows one form at a time; each keeps its typed
+//! text while the other is shown, and every way in shows the existing
+//! folder. The footer holds Cancel and the shown mode's submit (B10).
 //!
-//! **Create** takes an empty or absent folder, its primary branch, an
-//! optional identity and an optional prefix.
+//! **Add an existing folder** (B6) takes the folder of a Git repository,
+//! its main branch and an optional short code prefix. The folder is checked
+//! with `inspect_repository` (`checks`) when Enter is pressed in its field,
+//! when focus leaves the field changed, when Browse… chooses it, and by a
+//! check's own Retry or Check again. What the check found is drawn as rows,
+//! each with at most one action. The main branch is the one checked out
+//! (`branch`, B7), and Add repository is enabled only when the add can go
+//! ahead (B10): pressed before the folder's text was checked, it checks
+//! first and goes on only if the landed check enables it (R-T12b; G22).
+//! Only when the check reports that Git finds no identity for it are name
+//! and email asked for, and written to its own configuration; a folder
+//! already set up keeps its own prefix, so none is asked (R-31). How it
+//! shares is chosen among the folder's remotes (`share`, Part C), and the
+//! workspace sends the choice once the add succeeds.
+//!
+//! **Create a new repository** (B8, `create`) takes a Name and a Location,
+//! which `create-target` shows joined as typed and the sheet does not
+//! check, its main branch, an optional identity and an optional prefix.
+//! Create repository is enabled when Name, Location and Main branch are
+//! filled (B10); the form draws no message about what is missing.
 //!
 //! Each submit builds `Intent::RepoEnable` or `Intent::RepoCreate` and
-//! opens the confirmation dialog, whose preview creates nothing. The
-//! library answers every refusal, a non-empty folder or a folder that is
-//! not a repository included, by its typed code; the forms refuse only a
-//! form with no folder or no branch, before anything is asked. Once a
-//! request succeeds, the workspace reads the repository list again and
-//! the worker refreshes the new repository in the background once
-//! (decision 4).
+//! opens the confirmation dialog, whose preview creates nothing (`submit`).
+//! The sheet follows it only to tell the workspace which request and
+//! attempt it queued (`AddEvent::Confirmed`; B10, R-28); the workspace
+//! keeps the add until it ends, and closes the sheet when it succeeds.
+//! While an add of this open is pending, Add repository and Create
+//! repository read "Adding…" and are disabled (R-27). Once a request
+//! succeeds, the workspace reads the repository list again and the worker
+//! refreshes the new repository in the background once (decision 4).
 //!
-//! Browse asks the platform for one directory, for both forms. A
-//! dismissal leaves the field as it was; a platform failure disables
-//! Browse, with why, and the field stays usable.
+//! Browse… asks the platform for one directory (`browse`), and the note
+//! under it says why it is waiting or unavailable (Part G).
 //!
-//! Every control sits in a focus-tracking wrapper with a scroll marker,
-//! so a control that takes focus below the fold is brought into view
-//! (`render`). Text is fixed strings, the library's own values, and
-//! `ResultCode::message()` with its code.
+//! Every body control sits in a focus-tracking wrapper with a scroll
+//! marker, so a control that takes focus below the fold is brought into
+//! view (`render`); a Kit button that focus is put on is drawn with its own
+//! handle (`wrapped_kit`, B12). Text is fixed strings, the library's own
+//! values, and `ResultCode::message()` with its code.
 
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext, Context, Entity, FocusHandle, Focusable, PathPromptOptions,
+    AnyWindowHandle, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     Subscription, Task, Window,
-    component::input::{InputEvent, InputState},
+    component::{
+        input::{InputEvent, InputState},
+        select::{SelectEvent, SelectState},
+    },
 };
 
+mod branch;
+mod browse;
 mod checks;
+mod copy;
+mod create;
+mod mode;
 mod render;
+mod rows;
+mod share;
+mod submit;
 
-use self::checks::Inspection;
+pub(crate) use copy::*;
+
+use self::{
+    branch::{Branch, Branches},
+    checks::Inspection,
+    mode::{Mode, SEGMENTS},
+    share::{Share, Shares},
+};
 use crate::desktop::{
     model::stamp::Generations,
-    services::{Services, requests::Intent},
-    view::{confirm::confirm, scroll::ContentScroll, settings::OpenFlag},
+    services::{Services, requests::DesktopRequestId},
+    view::{scroll::ContentScroll, settings::OpenFlag, workspace::AddRoute},
 };
-
-pub(crate) const ADD_HEADING: &str = "Add an existing repository";
-pub(crate) const CREATE_HEADING: &str = "Create a repository";
-pub(crate) const FOLDER: &str = "Folder";
-pub(crate) const CREATE_FOLDER: &str = "Folder (empty or not yet made)";
-pub(crate) const BROWSE: &str = "Browse";
-pub(crate) const PRIMARY_BRANCH: &str = "Primary branch";
-pub(crate) const PREFIX: &str = "Short code prefix (optional)";
-pub(crate) const CREATE_IDENTITY: &str =
-    "The name and email its commits are to carry. Leave both empty to use the ones Git finds.";
-pub(crate) const ADD: &str = "Add repository";
-pub(crate) const CREATE: &str = "Create repository";
-pub(crate) const CHECKING: &str = "Checking the folder";
-pub(crate) const ALREADY_ADDED: &str = "Already added to Manyhands";
-pub(crate) const NOT_ADDED: &str = "A Git repository, not yet added to Manyhands";
-pub(crate) const CHECKED_OUT: &str = "Checked out";
-pub(crate) const IDENTITY_REQUIRED: &str =
-    "Git has no name and email for this repository. Enter the ones its commits are to carry.";
-pub(crate) const NEED_FOLDER: &str = "Enter the folder's path.";
-pub(crate) const NEED_BRANCH: &str = "Enter the primary branch.";
-pub(crate) const BROWSE_PROMPT: &str = "Choose";
-pub(crate) const BROWSE_UNAVAILABLE: &str =
-    "The folder chooser could not be opened. Type the folder's path instead.";
-pub(crate) const BROWSE_NOT_TEXT: &str =
-    "The chosen folder's path cannot be used as text. Type the folder's path instead.";
 
 /// The branch a new repository's form starts with.
 const DEFAULT_BRANCH: &str = "main";
@@ -91,14 +94,20 @@ enum Form {
     Create,
 }
 
+/// Create's Name: the new folder's name, which Location is joined with
+/// (B8).
+const FOLDER_NAME: &str = "create-folder-name";
+
 impl Form {
+    /// The form's folder: Add's folder, or Create's Location.
     fn path(self) -> &'static str {
         match self {
             Self::Add => "add-path",
-            Self::Create => "create-path",
+            Self::Create => "create-location",
         }
     }
 
+    /// Create's branch field; Add's main branch is a select (B7).
     fn branch(self) -> &'static str {
         match self {
             Self::Add => "add-branch",
@@ -134,6 +143,15 @@ impl Form {
         }
     }
 
+    /// The note under Browse… (B6 item 1).
+    fn browse_note(self) -> &'static str {
+        match self {
+            Self::Add => "add-browse-note",
+            Self::Create => "create-browse-note",
+        }
+    }
+
+    /// The submit's wrapper; its own Kit button is `(submit, 0)`.
     fn submit(self) -> &'static str {
         match self {
             Self::Add => "add-submit",
@@ -141,75 +159,93 @@ impl Form {
         }
     }
 
-    fn message(self) -> &'static str {
+    /// The form's text fields: Add's branch is not one, Create's Name is.
+    fn fields(self) -> Vec<&'static str> {
+        let fields = [self.path(), self.prefix(), self.name(), self.email()];
         match self {
-            Self::Add => "add-message",
-            Self::Create => "create-message",
+            Self::Add => fields.to_vec(),
+            Self::Create => [&[FOLDER_NAME], &fields[..1], &[self.branch()], &fields[1..]].concat(),
         }
-    }
-
-    fn fields(self) -> [&'static str; 5] {
-        [
-            self.path(),
-            self.branch(),
-            self.prefix(),
-            self.name(),
-            self.email(),
-        ]
     }
 }
 
 const FORMS: [Form; 2] = [Form::Add, Form::Create];
 
+/// The footer's Cancel: its wrapper, and its own Kit button `(CANCEL_ID, 0)`.
+const CANCEL_ID: &str = "add-cancel";
+
+/// What the sheet asks of the workspace that keeps it (B3, B10).
+pub(crate) enum AddEvent {
+    /// The confirmation queued the add `request` at `attempt` (R-28): the
+    /// workspace records it for this open, or replaces its entry, with the
+    /// share it sends once the add succeeds (C2).
+    Confirmed {
+        request: DesktopRequestId,
+        attempt: u32,
+        share: Option<Option<String>>,
+    },
+    /// The footer's Cancel: the sheet closes, its text kept (`Kept`).
+    Cancel,
+    /// Open its settings, for the registered `root` (B6; decision 18).
+    OpenSettings(PathBuf),
+}
+
+impl EventEmitter<AddEvent> for AddRepositorySheet {}
+
 pub(crate) struct AddRepositorySheet {
     services: Services,
-    /// The scroll the forms are drawn in, which each control's wrapper
-    /// reveals it in: Settings' body region, while Settings draws them.
+    /// The sheet body's own scroll, which each control's wrapper reveals it
+    /// in (R-8).
     scroll: ContentScroll,
+    /// The form shown (B5).
+    mode: Mode,
     inputs: HashMap<&'static str, Entity<InputState>>,
     /// The focus each control's wrapper tracks, by its ID.
     focus: HashMap<&'static str, FocusHandle>,
     inspection: Inspection,
-    /// The text the failed check was of, so leaving the field unchanged
-    /// does not check it again.
-    failed_path: Option<String>,
     generations: Generations,
     inspect_read: Option<Task<()>>,
-    /// The checked-out branch a check found, for an empty primary branch:
-    /// set at the next frame, which has the window a field needs.
-    pending_branch: Option<String>,
-    /// What each form said when it asked nothing.
-    messages: HashMap<Form, &'static str>,
+    /// The main branch select (B7), and the items it was given last.
+    branch: Entity<SelectState<Branches>>,
+    branches: Vec<Branch>,
+    /// The check changed since the selects' items were made: they are made
+    /// again at the next frame, which has the window a select needs.
+    choices_stale: bool,
+    /// The Share changes through select (Part C), the items it was given
+    /// last, and the choice: a remote's name, or `None` for Keep on this
+    /// computer.
+    share: Entity<SelectState<Shares>>,
+    shares: Vec<Share>,
+    share_choice: Option<String>,
     /// Browse is waiting for the platform's answer.
     browsing: Option<Task<()>>,
     /// Why Browse is unavailable, once the platform failed.
     browse_unavailable: Option<&'static str>,
+    /// The form whose last Browse… chose a path that is not text.
+    browse_not_text: Option<Form>,
     /// Add was pressed before its folder's text was checked: once the
-    /// check lands, the submit goes on (ruling R-T12b), while Settings is
+    /// check lands, the submit goes on (ruling R-T12b), while the sheet is
     /// open (R-48).
     submit_pending: bool,
-    /// Whether Settings is open: a check that lands after it closed opens
-    /// no confirmation and moves no focus (design A4).
+    /// Whether the sheet is open, its own flag, which the workspace sets
+    /// and clears (B4): a check that lands after it closed opens no
+    /// confirmation and moves no focus (G12).
     open: OpenFlag,
+    /// An add of this open is pending: the submits read "Adding…" and are
+    /// disabled (R-27). The workspace says so.
+    adding: bool,
+    /// The confirmation opened last, followed for the request it queues;
+    /// the sheet holds the subscription only, never the dialog (B10).
+    _followed: Option<Subscription>,
     /// The window the forms are in, for going on with a submit once a read
     /// lands.
     window: AnyWindowHandle,
     _inputs: Vec<Subscription>,
 }
 
-/// The forms' inputs and the focus their wrappers track, by ID, as
-/// Settings' Repositories page gives them to Cycle 04's tests (Ruling 9;
-/// Task 4 removes it).
-#[cfg(all(test, feature = "desktop-test-support"))]
-#[derive(Clone)]
-pub(crate) struct Controls {
-    pub(crate) inputs: HashMap<&'static str, Entity<InputState>>,
-    pub(crate) focus: HashMap<&'static str, FocusHandle>,
-}
-
 impl AddRepositorySheet {
-    /// `scroll` is the region the forms are drawn in; `open` says whether
-    /// what draws them is open.
+    /// `scroll` is the sheet body's own region, `open` the sheet's own flag
+    /// (Ruling 14).
     pub(crate) fn new(
         services: Services,
         scroll: ContentScroll,
@@ -249,21 +285,49 @@ impl AddRepositorySheet {
                 focus.insert(id, cx.focus_handle());
             }
         }
+        for id in [Form::Add.branch(), share::SHARE_ID, CANCEL_ID]
+            .into_iter()
+            .chain(rows::ACTION_IDS)
+        {
+            focus.insert(id, cx.focus_handle());
+        }
+        for (_, id, ..) in SEGMENTS {
+            focus.insert(id, cx.focus_handle().tab_stop(true));
+        }
+        let branch = cx.new(|cx| SelectState::new(Branches::default(), None, window, cx));
+        subscriptions.push(cx.subscribe_in(
+            &branch,
+            window,
+            |this, _, event: &SelectEvent<Branches>, window, cx| {
+                this.branch_confirmed(event, window, cx)
+            },
+        ));
+        let (share, confirmed) = share::share_select(window, cx);
+        subscriptions.push(confirmed);
         Self {
             services,
             scroll,
+            mode: Mode::Existing,
             inputs,
             focus,
             inspection: Inspection::None,
-            failed_path: None,
             generations: Generations::default(),
             inspect_read: None,
-            pending_branch: None,
-            messages: HashMap::new(),
+            branch,
+            branches: Vec::new(),
+            // The first frame gives the selects their items: Keep on this
+            // computer before any check (C1).
+            choices_stale: true,
+            share,
+            shares: Vec::new(),
+            share_choice: None,
             browsing: None,
             browse_unavailable: None,
+            browse_not_text: None,
             submit_pending: false,
             open,
+            adding: false,
+            _followed: None,
             window: window.window_handle(),
             _inputs: subscriptions,
         }
@@ -279,21 +343,66 @@ impl AddRepositorySheet {
         self.focus[id].clone()
     }
 
+    /// Whether the sheet's open flag is set, read as the flag alone
+    /// (Wave 04 Cycle 05a P7).
     #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn controls(&self) -> Controls {
-        Controls {
-            inputs: self.inputs.clone(),
-            focus: self.focus.clone(),
-        }
+    pub(crate) fn open_flag(&self) -> bool {
+        self.open.get()
     }
 
-    /// The Add folder field's focus, where the Add and Inspect routes land
-    /// (Wave 04 Cycle 04 design Part D; R-24): always drawn.
+    /// Whether an Add waits for its folder's check (P7, P8).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn submit_pending(&self) -> bool {
+        self.submit_pending
+    }
+
+    /// The vertical offset of the scroll the sheet's body is drawn in (P23).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn scroll_offset(&self) -> gpui_kit::Pixels {
+        self.scroll.handle().offset().y
+    }
+
+    /// The Add folder field's focus, where every way in lands (G1): drawn
+    /// in the existing-folder mode, which every way in shows.
     pub(crate) fn add_path_focus(&self, cx: &App) -> FocusHandle {
         self.inputs[Form::Add.path()].read(cx).focus_handle(cx)
     }
 
-    fn text(&self, id: &str, cx: &Context<Self>) -> String {
+    /// A way in (B2 steps 5 and 6): the existing-folder mode, the new
+    /// mode's text kept; an `Inspect` fills and checks the folder.
+    pub(crate) fn route(&mut self, route: AddRoute, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_mode(Mode::Existing, cx);
+        if let AddRoute::Inspect(root) = route {
+            self.inspect_root(root, window, cx);
+        }
+    }
+
+    /// An add of this open is pending, or no longer (R-27).
+    pub(crate) fn set_adding(&mut self, adding: bool, cx: &mut Context<Self>) {
+        if self.adding != adding {
+            self.adding = adding;
+            cx.notify();
+        }
+    }
+
+    /// A successful add of this open (B3 step 2; decision 16): both forms'
+    /// typed text, the check and the choices are cleared. Create's branch
+    /// starts again from its default.
+    pub(crate) fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for (id, input) in &self.inputs {
+            let text = if *id == Form::Create.branch() {
+                DEFAULT_BRANCH
+            } else {
+                ""
+            };
+            input.update(cx, |input, cx| input.set_value(text, window, cx));
+        }
+        self.forget_inspection(cx);
+        self.browse_not_text = None;
+        cx.notify();
+    }
+
+    fn text(&self, id: &str, cx: &App) -> String {
         self.inputs[id].read(cx).value().trim().to_owned()
     }
 
@@ -320,9 +429,7 @@ impl AddRepositorySheet {
             }
             InputEvent::Blur if add_path => {
                 let text = self.text(id, cx);
-                let checked = self.inspection.path() == Some(text.as_str())
-                    || self.failed_path.as_deref() == Some(text.as_str());
-                if !checked {
+                if self.inspection.path() != Some(text.as_str()) {
                     self.inspect(cx);
                 }
             }
@@ -330,143 +437,15 @@ impl AddRepositorySheet {
         }
     }
 
-    /// Settings closed: an Add waiting for its folder's check does not go on
-    /// when the check lands (R-48).
+    /// The sheet closed: an Add waiting for its folder's check does not go
+    /// on when the check lands (R-48; B3 step 2).
     pub(crate) fn forget_pending_submit(&mut self) {
         self.submit_pending = false;
     }
 
-    /// The check Add waited for landed (ruling R-T12b). If Git has no
-    /// identity for the folder, its fields appear with focus in the first,
-    /// and nothing is confirmed yet; otherwise the submit goes on. A check
-    /// whose text changed meanwhile was dropped, and the wait with it.
-    fn resume_submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // A check that lands after Settings closed goes no further (A4).
-        if !std::mem::take(&mut self.submit_pending) || !self.open.is_open(window, cx) {
-            return;
-        }
-        if let Some(branch) = self.pending_branch.take() {
-            self.inputs[Form::Add.branch()]
-                .update(cx, |input, cx| input.set_value(branch, window, cx));
-        }
-        let path = self.text(Form::Add.path(), cx);
-        if !self.add_checked(&path) {
-            return;
-        }
-        if self.inspection.identity_required(&path) {
-            self.inputs[Form::Add.name()].update(cx, |input, cx| input.focus(window, cx));
-            cx.notify();
-            return;
-        }
-        self.submit(Form::Add, window, cx);
-    }
-
-    /// Submit: the form's intent, in the confirmation dialog. Focus goes
-    /// back to what held it when the dialog closes.
-    fn submit(&mut self, form: Form, window: &mut Window, cx: &mut Context<Self>) {
-        let path = self.text(form.path(), cx);
-        // Add confirms only a folder whose current text was checked: the
-        // check says whether it needs an identity (ruling R-T12b).
-        if form == Form::Add && !path.is_empty() && !self.add_checked(&path) {
-            self.submit_pending = true;
-            self.messages.remove(&form);
-            self.inspect(cx);
-            return;
-        }
-        let branch = self.text(form.branch(), cx);
-        let why = if path.is_empty() {
-            Some(NEED_FOLDER)
-        } else if branch.is_empty() {
-            Some(NEED_BRANCH)
-        } else {
-            None
-        };
-        if let Some(why) = why {
-            self.messages.insert(form, why);
-            cx.notify();
-            return;
-        }
-        self.messages.remove(&form);
-        let asks_identity = match form {
-            Form::Create => true,
-            Form::Add => self.inspection.identity_required(&path),
-        };
-        let identity = asks_identity
-            .then(|| (self.text(form.name(), cx), self.text(form.email(), cx)))
-            .filter(|(name, email)| !(name.is_empty() && email.is_empty()));
-        let prefix = Some(self.text(form.prefix(), cx)).filter(|prefix| !prefix.is_empty());
-        let root = PathBuf::from(path);
-        let intent = match form {
-            Form::Add => Intent::RepoEnable {
-                root,
-                primary_branch: branch,
-                identity,
-                slug_prefix: prefix,
-            },
-            Form::Create => Intent::RepoCreate {
-                root,
-                primary_branch: branch,
-                identity,
-                slug_prefix: prefix,
-            },
-        };
-        debug_assert!(intent.confirmed());
-        let origin = window
-            .focused(cx)
-            .unwrap_or_else(|| self.focus[form.submit()].clone());
-        confirm(intent, origin, &self.services, window, cx);
-        cx.notify();
-    }
-
-    /// Browse: asks the platform for one directory.
-    fn browse(&mut self, form: Form, window: &mut Window, cx: &mut Context<Self>) {
-        if self.browsing.is_some() || self.browse_unavailable.is_some() {
-            return;
-        }
-        let answer = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some(BROWSE_PROMPT.into()),
-        });
-        self.browsing = Some(cx.spawn_in(window, async move |this, cx| {
-            let answer = answer.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.browsing = None;
-                match answer {
-                    Ok(Ok(Some(paths))) => this.chosen(form, paths, window, cx),
-                    // Dismissed: the field stays as it was.
-                    Ok(Ok(None)) => {}
-                    Ok(Err(_)) | Err(_) => this.browse_unavailable = Some(BROWSE_UNAVAILABLE),
-                }
-                cx.notify();
-            });
-        }));
-        cx.notify();
-    }
-
-    /// Browse chose `paths`: the first fills the form's folder, and the
-    /// Add folder is checked.
-    fn chosen(
-        &mut self,
-        form: Form,
-        paths: Vec<PathBuf>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(path) = paths.into_iter().next() else {
-            return;
-        };
-        let Some(text) = path.to_str() else {
-            self.messages.insert(form, BROWSE_NOT_TEXT);
-            return;
-        };
-        let text = text.to_owned();
-        self.messages.remove(&form);
-        self.inputs[form.path()].update(cx, |input, cx| input.set_value(text, window, cx));
-        if form == Form::Add {
-            self.inspect(cx);
-        }
+    /// The footer's Cancel.
+    fn cancel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(AddEvent::Cancel);
     }
 }
 

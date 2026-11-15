@@ -3,9 +3,11 @@ slug: vh-kebv6
 id: 01M7D5Z7FZTGTC1HE25KQ1MYQY
 title: 'Wave 04 Cycle 05a: Common Frame, Add Repository And Unlock Key'
 type: cycle
-status: open
+status: done
 project: manyhands
 team: core
+closed_at: 2026-11-15T19:08:33Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---

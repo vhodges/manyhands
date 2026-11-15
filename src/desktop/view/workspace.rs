@@ -6,6 +6,7 @@ mod activity_facts;
 mod activity_menu;
 mod activity_more;
 mod activity_panel;
+mod add_sheet;
 mod content;
 mod docks;
 mod find;
@@ -59,6 +60,7 @@ use crate::desktop::{
     },
     services::{Services, pending_conflicts::PendingConflict},
 };
+pub(in crate::desktop::view) use add_sheet::AddRoute;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use focus::REGIONS;
 pub(crate) use focus::Region;
@@ -147,10 +149,14 @@ pub(crate) struct Workspace {
     /// handler call: where focus goes back when that handler opens Settings
     /// (Wave 04 Cycle 04 design A2, "The origin"; R-43).
     settings_origin: Option<FocusHandle>,
-    /// The region of the control Settings opened from, recorded at the open
-    /// and armed by its close: a lost focus goes there when that control is
-    /// no longer drawn (design A3; R-45).
+    /// The region of the control Settings, or the Add repository sheet,
+    /// opened from, recorded at the open and armed by its close: a lost
+    /// focus goes there when that control is no longer drawn (design A3;
+    /// R-45; Wave 04 Cycle 05a B3 step 3).
     settings_return: settings_sheet::SettingsReturn,
+    /// The Add repository sheet, its open and the adds it confirmed (Wave 04
+    /// Cycle 05a B1 to B4, B10).
+    add: add_sheet::AddState,
     _drafts_events: Subscription,
     /// Fallback when the control holding focus is no longer drawn.
     last_region: Option<Region>,
@@ -304,8 +310,13 @@ impl Workspace {
             window,
             |this, _, event: &SettingsEvent, window, cx| match event {
                 SettingsEvent::ShowActivity => this.settings_show_activity(window, cx),
+                // AW-3: the Add repository sheet in Settings' place (B11).
+                SettingsEvent::AddRepository => {
+                    this.show_add_repository(AddRoute::New, None, window, cx)
+                }
             },
         );
+        let add = add_sheet::AddState::new(services.clone(), tabs.scroll(), window, cx);
         let drafts_page = {
             let services = services.clone();
             let scroll = tabs.scroll().clone();
@@ -370,6 +381,7 @@ impl Workspace {
             _settings_events: settings_events,
             settings_origin: None,
             settings_return: Default::default(),
+            add,
             _drafts_events: drafts_events,
             last_region: Some(start),
             window_title: String::new(),

@@ -106,6 +106,8 @@ pub(crate) enum RepositoriesEvent {
     /// The chosen repository was let go: removed, or no longer listed
     /// (R-56).
     Forgot(PathBuf),
+    /// Add or create a repository…: the Add repository sheet opens (AW-3).
+    AddRepository,
 }
 
 impl EventEmitter<RepositoriesEvent> for RepositoriesPage {}

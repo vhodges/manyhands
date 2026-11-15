@@ -142,15 +142,20 @@ fn settings_is_a_sheet_the_workspace_keeps(cx: &mut TestAppContext) {
 
 /// P2 (contract 2; the Wave's exit evidence): with an item open, its region
 /// scrolled and a field edited into its draft, Ctrl+, then Tab to a control
-/// below the fold, then the `AddRepository` route (W-6's) to the Add
-/// folder, then Escape, leave the same tab shown, the tabs as they were,
-/// the item's offset as it was, and the draft holding the edit.
+/// below the fold, then, from the page's entry, the `AddButton` route to
+/// Add or create a repository… (E-12; Wave 04 Cycle 05a R-6), then Escape,
+/// leave the same tab shown, the tabs as they were, the item's offset as it
+/// was, and the draft holding the edit.
 #[gpui_kit::test]
 async fn settings_leaves_the_item_as_it_was(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let (shell, root) = shell(cx, long_and_other);
     shell.resize_keeping_content(1440., SHORT, cx);
     shell.set_activity_height(SHORT_ACTIVITY, cx);
+    // `a` chosen, so the Repositories page draws its identity form and
+    // Remove, and runs below the fold (E-12: the Add forms made it tall
+    // before they left).
+    shell.select(&root, cx);
     open(&shell, ticket(&root, OTHER), cx);
     open(&shell, ticket(&root, MAIN), cx);
     edit(&shell, cx).await;
@@ -168,19 +173,24 @@ async fn settings_leaves_the_item_as_it_was(cx: &mut TestAppContext) {
 
     shell.keys("secondary-,", cx);
     kept(&shell, SettingsPage::Repositories, cx);
-    tab_to_create(&shell, cx);
+    tab_to_add_button(&shell, cx);
     assert!(
         settings_offset(&shell, cx) < px(0.),
         "Settings scrolled to the control"
     );
     assert_eq!(item_offset(&shell, cx), offset, "the item did not move");
-    // W-6's route, raised while Settings is open, arrives in place.
+    // The AddButton route, raised while Settings is open from its entry,
+    // arrives in place.
+    let entry = host(&shell, cx).read_with(cx, |host, _| host.first_focus());
+    shell.frame(cx, |window, cx| {
+        window.focus(&entry.expect("the page's entry"), cx)
+    });
     route(&shell, cx, |workspace, window, cx| {
-        workspace.show_settings(SettingsRoute::AddRepository, None, window, cx)
+        workspace.show_settings(SettingsRoute::AddButton, None, window, cx)
     });
     assert!(
-        holds(&shell, "add-path", cx),
-        "the AddRepository route lands on the Add folder"
+        shell.holds_control(ADD_BUTTON, cx),
+        "the AddButton route lands on Add or create a repository…"
     );
     assert_eq!(item_offset(&shell, cx), offset, "the item still did not");
     shell.keys("escape", cx);
@@ -540,6 +550,10 @@ async fn settings_scrolls_on_its_own(cx: &mut TestAppContext) {
     });
     shell.resize_keeping_content(1440., SHORT, cx);
     shell.set_activity_height(SHORT_ACTIVITY, cx);
+    // `a` chosen, so the Repositories page draws its identity form and
+    // Remove above Sharing and Add or create a repository… (E-12: the Add
+    // forms made it tall before they left).
+    shell.select(&root, cx);
     open(&shell, ticket(&root, MAIN), cx);
     shell.keys("secondary-3", cx);
     shell.keys("pagedown", cx);
@@ -557,14 +571,15 @@ async fn settings_scrolls_on_its_own(cx: &mut TestAppContext) {
     assert_eq!(item_offset(&shell, cx), item, "the item stays");
     shell.keys("home", cx);
     assert_eq!(settings_offset(&shell, cx), px(0.), "Home, the top");
-    // End, from a page control in view: the Add form's Browse.
+    // End, from a page control in view: the identity form's Save (E-12: the
+    // Add form's Browse was).
     let host = host(&shell, cx);
-    let browse = shell.visual(cx).update(|window, cx| {
+    let save = shell.visual(cx).update(|window, cx| {
         let page = host.update(cx, |host, cx| host.repositories(window, cx));
-        page.read(cx).control_focus("add-browse")
+        page.read(cx).control_focus("identity-submit")
     });
-    shell.frame(cx, |window, cx| window.focus(&browse, cx));
-    assert_eq!(settings_offset(&shell, cx), px(0.), "Browse is in view");
+    shell.frame(cx, |window, cx| window.focus(&save, cx));
+    assert_eq!(settings_offset(&shell, cx), px(0.), "Save is in view");
     shell.keys("end", cx);
     let bottom = settings_offset(&shell, cx);
     assert!(bottom < px(0.), "End scrolled Settings: {bottom:?}");
@@ -574,11 +589,11 @@ async fn settings_scrolls_on_its_own(cx: &mut TestAppContext) {
     assert_eq!(settings_offset(&shell, cx), px(0.), "Home, the top");
 
     // Tab to a control below the fold: Settings brings it into view.
-    tab_to_create(&shell, cx);
+    tab_to_add_button(&shell, cx);
     let (viewport, submit) = shell.frame(cx, |window, _| {
         (
             window.find("settings-scroll").bounds(),
-            window.find("create-submit").bounds(),
+            window.find(ADD_BUTTON).bounds(),
         )
     });
     assert!(

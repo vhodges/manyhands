@@ -866,6 +866,7 @@ fn check_now_is_heard_with_its_attempt() {
             lane: crate::desktop::services::requests::Lane::User,
             attempt: 1,
             state: RequestState::Queued,
+            registered_root: None,
         }));
         let event = WorkerEvent::Finished(id, Box::new(answer));
         let seen = heard(&event, &operations);
