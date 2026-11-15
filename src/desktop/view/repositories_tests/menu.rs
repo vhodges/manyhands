@@ -432,6 +432,11 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
     // Remove from Manyhands… on `d`: the dialog with its note; Cancel gives
     // focus back to the list the menu was opened from (P11, R-12).
     let ready = |shell: &Shell, cx: &mut TestAppContext| {
+        // Retry is drawn only once the preview has answered busy.
+        assert!(
+            !shell.present("confirm-retry", cx),
+            "the removal's preview answered busy (Retry is drawn)"
+        );
         shell.label("confirm-ok", cx).as_deref() == Some(CONFIRM)
             && shell.present("confirm-expires", cx)
     };
