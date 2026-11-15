@@ -3,9 +3,11 @@
 //! lifecycle action. It is its own view over the services, not a
 //! `ConfirmDialog` arm (ruling R-1).
 //!
-//! Its header names the item: the kind's icon, the command, "{short code or
-//! short ID} · {title} · {repository}", and the item's context branch
-//! (MH-COLLAB-006, A22).
+//! Its header, in the Kit's title slot, follows the stage the dialog is at
+//! (`stages.rs`): the stage's tile and title, and "{short code or short ID}
+//! · {title} · {repository}" beneath (MH-COLLAB-006, A22). The item's
+//! context branch is in the Git line, which a stage that holds the preview
+//! draws.
 //!
 //! - **Saving.** With unsaved edits in the tab, or a draft of the item
 //!   stored or restored there (R-17), the tab saves them first (decision
@@ -69,6 +71,7 @@ mod repair;
 mod republish;
 mod resumed;
 mod running;
+mod stages;
 mod view;
 
 use std::path::Path;
@@ -92,7 +95,7 @@ use crate::desktop::{
         Services,
         requests::{DesktopRequestId, Intent},
     },
-    view::item::ItemPane,
+    view::{frame, item::ItemPane},
 };
 
 pub(crate) const SAVING_FIRST: &str = "Saving your latest edits\u{2026}";
@@ -122,29 +125,22 @@ pub(crate) use crate::desktop::model::activity::copy::REVIEW_CHANGES;
 // The stage titles (A1); Waiting and Stopped keep `STILL_RUNNING` and
 // `ENDING_STOPPED`, and Done after a promotion is `merged`.
 /// Ask: a ticket's close, naming its short code.
-#[allow(dead_code)] // Used from Task 2
 pub(crate) fn close_title(short: &str) -> String {
     format!("Close {short}?")
 }
 /// Ask: a document's promotion, naming its short ID.
-#[allow(dead_code)] // Used from Task 2
 pub(crate) fn approve_title(short: &str) -> String {
     format!("Approve and merge {short}?")
 }
 /// Running a close.
-#[allow(dead_code)] // Used from Task 2
 pub(crate) const CLOSING: &str = "Closing\u{2026}";
 /// Running a promotion.
-#[allow(dead_code)] // Used from Task 2
 pub(crate) const MERGING: &str = "Merging\u{2026}";
 /// Done, a close.
-#[allow(dead_code)] // Used from Task 2
 pub(crate) const CLOSED: &str = "Ticket closed";
 /// Failed, a close.
-#[allow(dead_code)] // Used from Task 2
 pub(crate) const COULDNT_CLOSE: &str = "Couldn't finish closing";
 /// Failed, a promotion.
-#[allow(dead_code)] // Used from Task 2
 pub(crate) const COULDNT_MERGE: &str = "Couldn't finish merging";
 
 /// The Mark as closed note when the closure is to be recorded (A4).
@@ -197,8 +193,8 @@ pub(crate) fn sharing_main(primary: &str) -> String {
 /// request's ID could not be read.
 pub(crate) const NOT_SENT: &str = "This could not be sent.";
 
-/// Who the dialog speaks of (A22): the item, its repository and its context
-/// branch. It holds the item's title, and derives no `Debug`.
+/// Who the dialog speaks of (A22): the item and its repository. It holds
+/// the item's title, and derives no `Debug`.
 #[derive(Clone)]
 pub(crate) struct Heading {
     pub kind: ItemDtoKind,
@@ -206,9 +202,6 @@ pub(crate) struct Heading {
     pub short: String,
     pub title: Option<String>,
     pub repository: String,
-    /// The item's context branch as the tab read it; a preview's names it
-    /// once one is shown.
-    pub branch: Option<String>,
     /// The repository's main branch, as the workspace knows it, for a run
     /// shown without its preview (review M-5).
     pub primary: Option<String>,
@@ -226,7 +219,6 @@ impl Heading {
             short: item.slug.clone().unwrap_or_else(|| short_id(id)),
             title: item.title.clone(),
             repository,
-            branch: item.context.branch.clone(),
             primary: None,
             remote: None,
         }
@@ -282,10 +274,12 @@ pub(crate) fn open(
     let origin = opening.origin.clone();
     let dialog = cx.new(|cx| LifecycleDialog::new(opening, services.clone(), window, cx));
     let opened = dialog.clone();
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let confirming = dialog.clone();
         let origin = origin.clone();
-        base.w(px(580.))
+        // The stage's title and tile, read at each render (A2).
+        let header = dialog.read(cx).header(cx);
+        frame::dialog(base.w(px(580.)), header, cx)
             .close_button(false)
             .overlay_closable(false)
             .child(dialog.clone())
@@ -327,7 +321,6 @@ pub(crate) fn reopen(
         short: short_id(&id.to_string()),
         title: None,
         repository: crate::desktop::view::operations::scope_name(request.intent.root()),
-        branch: None,
         primary,
         remote,
     };
@@ -682,3 +675,7 @@ mod privacy_remote_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/privacy_consent_tests.rs"]
 mod privacy_consent_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/stages_tests.rs"]
+mod stages_tests;

@@ -203,6 +203,16 @@ pub(crate) fn git_line(details: &LifecyclePreviewDto) -> String {
     format!("Git: {}", parts.join(" \u{b7} "))
 }
 
+/// The Git line, as the dialog draws it at every stage that holds the
+/// preview (A4, A5, A6).
+pub(super) fn git_row(details: &LifecyclePreviewDto, cx: &App) -> impl IntoElement + use<> {
+    let theme = cx.theme();
+    text("lifecycle-git", git_line(details))
+        .text_xs()
+        .font_family(theme.mono_font_family.clone())
+        .text_color(theme.muted_foreground)
+}
+
 /// A changed path's tag, by its path alone (R-2).
 pub(crate) fn path_tag(path: &str) -> &'static str {
     match item_path_kind(Path::new(path)) {
@@ -478,12 +488,7 @@ impl LifecycleDialog {
                     .children(code.then(|| {
                         text("lifecycle-code-note", code_note(self.heading.kind)).text_sm()
                     }))
-                    .child(
-                        text("lifecycle-git", git_line(details))
-                            .text_xs()
-                            .font_family(mono)
-                            .text_color(muted),
-                    );
+                    .child(git_row(details, cx));
         }
         body.child(
             text(

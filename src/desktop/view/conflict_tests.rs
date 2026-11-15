@@ -133,7 +133,6 @@ pub(super) fn heading() -> Heading {
         short: SHORT.to_owned(),
         title: Some("Mine".to_owned()),
         repository: "a".to_owned(),
-        branch: None,
         primary: Some("main".to_owned()),
         remote: Some(None),
     }

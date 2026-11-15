@@ -146,7 +146,6 @@ impl Entry {
                 .unwrap_or_else(|| short_id(&self.item.to_string())),
             title: None,
             repository: scope_name(Some(&self.root)),
-            branch: None,
             primary,
             remote,
         };

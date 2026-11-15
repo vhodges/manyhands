@@ -32,14 +32,14 @@ use manyhands::{
         ItemDtoKind, LifecycleMutationDto, LifecyclePublicationPendingReason, MutationDataDto,
         lifecycle_way_out,
     },
-    results::Envelope,
+    results::{Envelope, ResultCode},
 };
 
 use super::{
     LifecycleDialog, NOT_SENT, OPEN_FOLDER, PREPARE_AGAIN, RESUME, RETRY, STARTED, STILL_RUNNING,
     actions::Offers,
     button,
-    confirm::{Step, steps},
+    confirm::{Step, git_row, steps},
     outcome::{
         CANCELLATION_FINISHED, CHECK_HOST, Credential, DISMISSED, Ending, FINISHED_BEFORE_STOP,
         NO_RECORD, OPEN_SHARING_AND_KEYS, REMOVED, Reach, STOP, STOPPING, StepState, UNLOCK,
@@ -53,6 +53,19 @@ use crate::desktop::{
     services::requests::{DesktopRequestId, RequestState},
     view::item::ItemRoute,
 };
+
+/// What a sent run shows (`LifecycleDialog::shown`).
+pub(super) enum Shown<'a> {
+    /// A message only: taken off the queue, never sent, or dismissed with
+    /// its answer.
+    Message(&'static str),
+    /// Answered with lifecycle data.
+    Ended(&'a Envelope<MutationDataDto>),
+    /// A resume answered with no lifecycle data.
+    Resumed(ResultCode, &'a str),
+    /// Sent, and no answer yet.
+    Running,
+}
 
 impl LifecycleDialog {
     pub(super) fn item_word(&self) -> &'static str {
@@ -89,26 +102,36 @@ impl LifecycleDialog {
         primary_name(self.known_primary().as_deref()).to_owned()
     }
 
+    /// What a sent run shows, by where its request stands. The stage and
+    /// the body both read it, so they cannot disagree (R-1).
+    pub(super) fn shown<'a>(&self, id: DesktopRequestId, cx: &'a App) -> Shown<'a> {
+        let operations = self.services.operations().read(cx);
+        let state = operations.request(id).map(|request| &request.state);
+        match (state, operations.lifecycle_answer(id)) {
+            (Some(RequestState::Removed), _) => Shown::Message(REMOVED),
+            (Some(RequestState::NotSent(_)), _) => Shown::Message(NOT_SENT),
+            // Its answer went with its entry (review O-1).
+            (Some(RequestState::Dismissed), None) => Shown::Message(DISMISSED),
+            (_, Some(envelope)) => Shown::Ended(envelope),
+            // A resume answered with no lifecycle data (P22).
+            (Some(RequestState::Finished(_, code, _, _, message)), None) => {
+                Shown::Resumed(*code, message)
+            }
+            _ => Shown::Running,
+        }
+    }
+
     /// The body and buttons of a sent run, by where its request stands.
     pub(super) fn submitted_body(
         &self,
         id: DesktopRequestId,
         cx: &Context<Self>,
     ) -> (AnyElement, Vec<AnyElement>) {
-        let operations = self.services.operations().read(cx);
-        let state = operations.request(id).map(|request| request.state.clone());
-        let answer = operations.lifecycle_answer(id).cloned();
-        match (state, answer) {
-            (Some(RequestState::Removed), _) => (self.message(REMOVED), Vec::new()),
-            (Some(RequestState::NotSent(_)), _) => (self.message(NOT_SENT), Vec::new()),
-            // Its answer went with its entry (review O-1).
-            (Some(RequestState::Dismissed), None) => (self.message(DISMISSED), Vec::new()),
-            (_, Some(envelope)) => self.ended(id, &envelope, cx),
-            // A resume answered with no lifecycle data (P22).
-            (Some(RequestState::Finished(_, code, _, _, message)), None) => {
-                self.resume_answered(code, &message, cx)
-            }
-            _ => self.running(cx),
+        match self.shown(id, cx) {
+            Shown::Message(words) => (self.message(words), Vec::new()),
+            Shown::Ended(envelope) => self.ended(id, envelope, cx),
+            Shown::Resumed(code, message) => self.resume_answered(code, message, cx),
+            Shown::Running => self.running(cx),
         }
     }
 
@@ -153,6 +176,7 @@ impl LifecycleDialog {
                 &running_states(&keys, self.reached),
                 cx,
             ))
+            .children(self.plan.as_deref().map(|plan| git_row(plan, cx)))
             .child(
                 text("lifecycle-state", STARTED)
                     .text_xs()
@@ -274,6 +298,8 @@ impl LifecycleDialog {
                         .text_color(muted),
                 );
         }
+        // The preview this run was confirmed with names its branch (A6).
+        body = body.children(self.plan.as_deref().map(|plan| git_row(plan, cx)));
         let mut buttons = self.republish_buttons(id, envelope, &way_out, offers.waiting, cx);
         buttons.extend(self.ended_buttons(envelope, &offers, cx));
         buttons.extend(open_ready);

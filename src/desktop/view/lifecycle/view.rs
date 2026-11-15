@@ -1,27 +1,24 @@
-//! The lifecycle dialog drawn (D5 design, A2): its header, each stage's
-//! body and its buttons. Text and buttons carry their words as labels, for
-//! the tests to read.
+//! The lifecycle dialog drawn (D5 design, A2): each stage's body and its
+//! buttons; its header is `stages.rs`'s, in the Kit's title slot. Text and
+//! buttons carry their words as labels, for the tests to read.
 
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, ElementId, FontWeight, InteractiveElement, IntoElement,
+    AnyElement, App, ClickEvent, Context, ElementId, InteractiveElement, IntoElement,
     ParentElement, Render, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
-        ActiveTheme, Icon, WindowExt,
+        ActiveTheme, WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm,
         h_flex, v_flex,
     },
-    div, px,
+    div,
 };
-use manyhands::{
-    repository::{ItemDtoKind, PreviewDetailsDto},
-    results::ResultCode,
-};
+use manyhands::results::ResultCode;
 
 use super::{
     CANCEL, CLOSE, HELD_LEAD, LifecycleDialog, PREPARE_AGAIN, PREPARING, Phase, RETRY, SAVING_FIRST,
 };
-use crate::desktop::assets::icon_path;
+use crate::desktop::view::frame;
 
 /// A piece of text a test reads by `id`.
 pub(super) type Text = gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>>;
@@ -60,56 +57,6 @@ pub(super) fn button(
 }
 
 impl LifecycleDialog {
-    /// The kind's icon, the command, who it speaks of and the branch.
-    fn header(&self, cx: &App) -> impl IntoElement + use<> {
-        let muted = cx.theme().muted_foreground;
-        let (icon, kind) = match self.heading.kind {
-            ItemDtoKind::Ticket => ("ticket", "ticket"),
-            ItemDtoKind::Document => ("file-text", "document"),
-        };
-        let branch = match &self.phase {
-            Phase::Confirm { preview, .. } => match &preview.details {
-                PreviewDetailsDto::Lifecycle(lifecycle) => Some(lifecycle.branch.clone()),
-                _ => self.heading.branch.clone(),
-            },
-            // The preview the run was confirmed with names its branch.
-            Phase::Submitted(_) => self
-                .plan
-                .as_ref()
-                .map(|plan| plan.branch.clone())
-                .or_else(|| self.heading.branch.clone()),
-            _ => self.heading.branch.clone(),
-        };
-        h_flex()
-            .gap_3()
-            .items_center()
-            .child(
-                div()
-                    .id("lifecycle-kind")
-                    .test_support()
-                    .aria_label(kind)
-                    .flex_none()
-                    .child(Icon::default().path(icon_path(icon)).w(px(20.)).h(px(20.))),
-            )
-            .child(
-                v_flex()
-                    .min_w_0()
-                    .gap_1()
-                    .child(
-                        text("lifecycle-title", self.intent.label())
-                            .font_weight(FontWeight::SEMIBOLD),
-                    )
-                    .child(
-                        text("lifecycle-subtitle", self.heading.subtitle())
-                            .text_sm()
-                            .text_color(muted),
-                    )
-                    .children(branch.map(|branch| {
-                        text("lifecycle-branch", branch).text_xs().text_color(muted)
-                    })),
-            )
-    }
-
     fn cancel(&self, label: &'static str) -> AnyElement {
         let origin = self.origin.clone();
         button("lifecycle-cancel", label, false, move |_, window, cx| {
@@ -159,8 +106,7 @@ impl Render for LifecycleDialog {
             .id("lifecycle-dialog")
             .test_support()
             .track_focus(&self.focus)
-            .gap_3()
-            .child(self.header(cx));
+            .gap_3();
         let mut buttons = h_flex().gap_2();
         match &self.phase {
             Phase::Saving => {
@@ -251,6 +197,6 @@ impl Render for LifecycleDialog {
                 buttons = buttons.children(actions).child(self.cancel(CLOSE));
             }
         }
-        body.children(self.repair_line(cx)).child(buttons)
+        frame::body(body.children(self.repair_line(cx)).child(buttons))
     }
 }

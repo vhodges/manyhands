@@ -221,7 +221,10 @@ async fn stop_at_a_safe_point_names_completed_steps(cx: &mut TestAppContext) {
         shell.label("lifecycle-subtitle", cx),
         Some(format!("{} \u{b7} Stopped \u{b7} a", short_id(TICKET)))
     );
-    assert_eq!(shell.label("lifecycle-branch", cx), Some(branch));
+    // The Git line of the preview the run was confirmed with names the
+    // branch (A6).
+    let git = shell.label("lifecycle-git", cx).expect("the Git line");
+    assert!(git.contains(&branch), "{git}");
 }
 
 /// R-7, real: a local-only close whose tidy-up completes is Done: merged,
@@ -482,7 +485,7 @@ async fn the_operation_entry_reopens_the_dialog(cx: &mut TestAppContext) {
     );
     assert_eq!(
         shell.label("lifecycle-title", cx).as_deref(),
-        Some("Close ticket")
+        Some(ENDING_STOPPED)
     );
     // Review M-5: the workspace knows the repository has no remote, and its
     // main branch, so the steps are the local-only ones.

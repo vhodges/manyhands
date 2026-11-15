@@ -62,10 +62,8 @@ pub(crate) enum Tone {
     /// Amber: Unlock key's `lock` (2h).
     Accent,
     /// Red: a step that failed (2e).
-    #[allow(dead_code)] // Used from Cycle 05b
     Danger,
     /// Green: done (2c).
-    #[allow(dead_code)] // Used from Cycle 05b
     Success,
 }
 
