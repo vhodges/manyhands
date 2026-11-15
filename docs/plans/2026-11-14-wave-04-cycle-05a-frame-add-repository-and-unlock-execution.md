@@ -22,7 +22,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | Task | Status | Commit | Pushed |
 | --- | --- | --- | --- |
 | 0 | review approved after fix round 1 (Minors parked) | merge of Cycle 04's branch `f5015aab`; design `81c3c0de`; Wave `5b7771db`, fix `42f807d5` (base `f5015aab`); ledger `4c515b5b`; merge of Cycle 04's tip `edb0e920`; ticket comment `46b5a11a` | yes |
-| 1 | done, review approved first time (Minors parked) | code `ded7ca46` (base `0ac6af37`) | with the ledger commit |
+| 1 | done, review approved first time (Minors parked) | code `ded7ca46` (base `0ac6af37`); ledger `d9533dd9` | yes |
+| 2 | done, review approved after fix round 1 (Minors parked) | code `b2618100` (base `d9533dd9`), fix `31497e0e` | with the ledger commit |
 
 ## Branches published
 
@@ -424,3 +425,69 @@ Parked for the final review:
   name that click `confirm-ok` or read `confirm-*` labels
   (`operations_tests`, `passphrase_tests`, `repositories_tests`). Task 0's
   sweep found no Tab count or button-order assertion on them.
+
+Ruling 13: Task 2's P1 per-dialog set-ups live in a submodule directory
+`D/view/frame_tests/` (`dialogs.rs`, `forms.rs`, `item_dialogs.rs`), while the
+test function and its table stay in `frame_tests.rs` — `frame_tests.rs` was
+already 285 lines and the 12 dialogs would pass the ~500-line limit — cost if
+wrong: a file split reversed.
+
+## Task 2 (Every Other Dialog On The Frame)
+
+Base `d9533dd9`; code `b2618100`, `feat(desktop): every other dialog and both
+sheet headers on the frame`; fix `31497e0e`, `fix(desktop): give the New item
+header its own id`. 19 files under `src/desktop/`. Boundary diff empty;
+`Cargo.lock` unchanged. Gates pass (fmt, check, clippy).
+
+**Moved onto the frame** (header in the Kit's title slot; body and footer in
+the dialog's own view, the footer the body's last child, R-19; today's button
+order kept; hand-drawn rings travel with their buttons): New ticket and New
+document (`create.rs`, `create/form.rs`), New folder, Move, Close a tab with a
+draft, the quit asks, the retire asks, Discard a draft, the repair discard,
+the composer discard, Recovery off, Replace your edits (`review-replace-message`
+into its header, id kept); the details sheet's header
+(`frame::sheet_header`, `sheet-heading` and `sheet-description`, the
+description out of the body) and Cycle 04's Settings header (`settings-heading`
+and `settings-note` kept; R-20). The ask footers (quit, retire, close-draft,
+discard) were left-aligned and are now right-aligned, per A3.
+
+**Tests run:**
+
+- P1 `desktop::view::frame::tests::every_dialog_keeps_its_keys_and_focus` (96
+  rows over the 12 dialogs, table-driven in one test): passed on today's code
+  before any production change, passed after, and passed again after the fix.
+- Orchestrator's module run, once, 27 filters (every filter matched at least
+  one test): `desktop::view::{frame::tests, create::tests, new_folder::tests,
+  move_document::tests, tabs::tests, quit::tests, operations::retire_tests,
+  drafts::actions_tests, drafts::discard_tests, drafts::privacy_tests,
+  item::draft_actions::tests, item::repair::tests,
+  item::composer::states_tests, item::edit_tests, item::sheet_tests,
+  keyboard_tests::{frame, drafts, editing, discussion}, editing_privacy_tests,
+  lifecycle::privacy_tests, polling_privacy_tests, lifecycle::lock_gates_tests,
+  workspace::tests, workspace::settings_sheet::tests, settings::tests}`,
+  `desktop::services::drafts::create::tests` — **494 passed, 0 failed** (500 s).
+- After the fix, `desktop::view::create::tests` and
+  `desktop::view::frame::tests` again: 21 passed, 0 failed.
+
+**Existing tests edited:** none (so no E-17 onward from this task; E-11's
+files needed no edit).
+
+**Review** (sonnet): spec compliant, quality approved, one Important, fixed in
+round 1 (1 addressed, 0 open; scoped re-review: addressed): the New item
+header's id `create-heading` collided with the Repositories page's heading
+(`settings/repositories.rs:778`); it is now `create-item-heading`. Parked
+Minors, for the final review:
+
+- Every dialog title has a new element id (`Header.ids.0` is required); only
+  `review-replace-message` kept an old one. Ids are fixed constants, so no
+  private text reaches a header. `quit-ask-title` now falls under the `quit-`
+  sweep surface and `retire-ask-title` under neither retire surface.
+- The composer discard with no owner note draws an empty body (about 28 px of
+  padding between header and footer); `.children(note.map(..))` would avoid
+  it. Owner's eye.
+- `close_draft.rs` is 507 lines (483 before); the guideline covers new files.
+- `settings/frame.rs:3`'s module doc line is about 122 characters; reflow.
+- P1 never asserts footer position or order (by rule, no appearance tests); a
+  footer drawn outside the body would fail only through a keyed-close row. P1
+  runs about ten windows in one `TestAppContext` (about 35 s): the first
+  suspect if it ever flakes.
