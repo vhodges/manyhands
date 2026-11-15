@@ -26,7 +26,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 2 | done, review approved after fix round 1 (Minors parked) | code `b2618100` (base `d9533dd9`), fix `31497e0e`; ledger `92f3ba73` | yes |
 | 3 | done, review approved first time (Minors parked) | code `5f8c10b7` (base `92f3ba73`; trailer amended before publishing); ledger `2c398b03` | yes |
 | 4 | done, design checkpoint stopped for the owner (Rulings 15 to 18), review approved first time (Minors parked) | code `0d5cae5c` (base `2c398b03`); ledger `4bab2795`; merge of main `9059778f`; ledger `f4059706`; ticket comment `315ae043` | yes |
-| 5 | done, review approved after fix round 1 (Minors parked) | code `1ff07fe3` (base `315ae043`), fix `0d14abe6` | with the ledger commit |
+| 5 | done, review approved after fix round 1 (Minors parked) | code `1ff07fe3` (base `315ae043`), fix `0d14abe6`; ledger `80a39f6a` | yes |
+| 6 | done, review approved first time (Minors parked) | code `cb78fe3d` (base `80a39f6a`) | with the ledger commit |
 
 ## Branches published
 
@@ -976,3 +977,108 @@ scoped re-review: addressed). Parked Minors, for Task 6 and the final review:
   problems"); with no branch checked out only `NO_BRANCH` is drawn.
 - P18's copy table has no rows for the new Part F constants (E-17a asks only
   for renames and removals); P20 (Task 9) covers Part F.
+
+## Task 6 (Create A New Repository)
+
+Base `80a39f6a`; code `cb78fe3d`, `feat(desktop): create a new repository:
+name, location, target, enablement`. 14 files under `src/desktop/`. Boundary
+diff empty; `Cargo.lock` unchanged. Gates pass.
+
+**What was built:** `add_repository/create.rs` (new, 175 lines):
+`create_target` (Location joined with Name by `Path::join`, as typed, when both
+are filled), `create_enabled` (B10: not adding, Name, Location and Main branch
+filled, trimmed), `create_intent` (`RepoCreate`, root = the target; `None`
+unless enabled, so Enter in any Create field is guarded too), `create_here`
+(B6/G20: the new mode, Location the parent, Name the last part, focus on
+`create-folder-name`), `create_branch_field`, `create_target_line`
+(`create-target`, check icon), `create_form` (Name, Location with Browse… and
+its note, the target, Main branch, prefix, the identity block, `create-note`).
+`Form::Create.path()` is now `create-location`; the `messages` map and every
+`create-message`/`add-message`/`create-heading` are gone, so no message can go
+stale; `set_mode` clears `submit_pending` when the mode actually changes
+(Task 5 pointer a, the smaller of the two options); `remove_note` is shared by
+`add-note` and `create-note`. Copy: `NAME_FIELD`, `LOCATION` and the formatting
+fn `will_create(path)` ("Empty folder will be created at {path}") added;
+`CREATE_HEADING`, `CREATE_FOLDER`, `NEED_FOLDER`, `NEED_BRANCH` deleted.
+
+**Tests written first, each seen failing:** P12
+`add_repository::tests::create::create_joins_location_and_name` (29 rows:
+nothing, Name only, Location only, a name of spaces, both, a Location not made
+yet, an empty branch, a branch of spaces, the branch restored, pressed, Escape,
+confirmed, "Adding…"; a mutation that dropped the Main-branch condition failed
+5 of the 29), P9's Create one here row (G20), P21's Create rows, and the tests
+for pointers (a) and (b). `add_repository::tests` goes from 22 to 25 tests (the
+three in `create.rs`); the files edited by script keep their function lists
+(checked by name list).
+
+**Tests run:**
+
+- Implementer, by exact name, one command: 20 passed, 0 failed (P12, the G20
+  row, the pointer tests, the edited Create tests, the copy table and four
+  `add_sheet` tests).
+- Orchestrator's module run, once, 4 filters (all matched at least one test):
+  `desktop::view::add_repository::tests` (25),
+  `desktop::view::workspace::add_sheet::tests` (8),
+  `desktop::view::settings::repositories::copy_tests` (1),
+  `desktop::view::keyboard_tests::settings` (6) — **40 passed, 0 failed**.
+
+**Existing tests edited:**
+
+- E-1 (Create tests fill Name and Location through `create::set_target`): the
+  Create tests, `fill_create` and its users; no assertion removed ("Root:
+  {root}" still holds, the join gives the same root).
+- E-1c Create's half: `create-path` becomes `create-location` (5 places).
+- E-2 Create's part (`submitting_with_no_folder_says_so`): **assertion
+  removed:** `create-message == NEED_FOLDER`, and Add's dead
+  `!present("add-message")` (Task 5 pointer d; deleted with no replacement,
+  since a `submit_pending` or `add-checks` check would pass without the guard);
+  added: Create disabled with nothing typed, no `create-message`, no
+  confirmation after a press.
+- E-17a (continued), P18's copy table: **rows removed**, each an assertion
+  removal for a constant deleted in this task: `c!(add_repository,
+  CREATE_HEADING)` ("Create a repository"; the mode control names the form, B8
+  has no heading), `CREATE_FOLDER` ("Folder (empty or not yet made)"; Name and
+  Location replace it), `NEED_FOLDER` ("Enter the folder's path."; the button
+  is disabled instead, B10), `NEED_BRANCH` ("Enter the primary branch."; same).
+  No row for a live constant was removed; no row was added for `NAME_FIELD`,
+  `LOCATION` or `will_create` (Part F is P20's, Task 9).
+- E-17m `a_form_control_below_the_fold_is_scrolled_into_view`: the window from
+  250 to 150 px, because Create's prefix is now the fourth field and sat inside
+  the 250 px viewport; same assertions; no assertion removed.
+- E-17n `closes.rs` (P7 `the_add_sheet_closes_every_way`): `create-path`
+  becomes `create-location` (6 places; the id no longer exists).
+- E-17o `returns.rs::confirmation` (G13's refused-preview row): fills Location
+  (the fixture's parent) and Name ("full") instead of the folder in
+  `create-path`, so Create is enabled and the non-empty folder's preview is
+  refused as before. `returns.rs` stays at 502 lines.
+
+**Review** (sonnet): spec compliant, quality approved, no Critical or
+Important; no loop. Parked Minors and owner's-eye items, for the final review:
+
+1. **Windows (native follow-on):** P12's "Location not made yet" row uses the
+   literal `will_create("not/made/yet/fresh")`; on Windows `PathBuf::join`
+   displays `not/made/yet\fresh`, so that row would fail on the Windows
+   native runner. Build the expected value with the `joined()` helper. Native
+   CI runs after merge, so this is follow-on, not a gate.
+2. **Owner's eye:** `create_target` uses `Path::join`, so an absolute Name
+   replaces Location (Location `/home/me`, Name `/tmp/x` gives the root
+   `/tmp/x`): this follows B8 and R-13 ("as typed, unchecked") and
+   `create-target` shows it honestly.
+3. **Owner's eye:** Create now has two fields labelled "Name" (`NAME_FIELD` for
+   the folder, Settings' `NAME` for the identity), as B8 and Part F mandate;
+   the identity block's heading disambiguates visually, but the accessible
+   names collide.
+4. **Design inconsistency for the owner:** B8 item 6 titles the identity block
+   "Your name & email (optional)" but Part F only has `IDENTITY_HEADING` "Your
+   name & email"; the code follows Part F (the copy contract) plus the kept
+   `CREATE_IDENTITY` note ("Leave both empty…"). Fix B8 or Part F, not the code.
+5. A checked path with no last component (a filesystem root): "Create one
+   here" puts the whole path in Location and leaves Name empty and focused;
+   Create stays disabled until it is filled. B6 does not cover the case.
+6. The pointer (b) test `create_leaves_no_message_behind` presses Create with
+   nothing typed, then runs Browse…, and asserts no `create-message`: it can
+   only catch the old pattern (a message on a disabled press).
+7. `add_repository_tests.rs` is 932 lines (931 before; already over 500);
+   `returns.rs` stays at 502.
+8. Tab order on screen (Name, Location, Browse…, Main branch, prefix, Name,
+   Email) follows draw order and is not asserted (P16, Task 9).
