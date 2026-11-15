@@ -14,13 +14,13 @@ id: "01M7FACCS575B9W0PRRCDW9N0A"
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task.
 >
-> **Draft, revision 2** (review round 1 and decisions 11 and 12
+> **Draft, revision 3** (review rounds 1 and 2 and decisions 11 and 12
 > applied), for the owner's review. Nothing here is approved, and
 > execution waits until Cycle 05a (`01M7D5Z7FZTGTC1HE25KQ1MYQY`) is
 > merged to main (the ticket's Entry Gate).
 >
 > Where focus goes around the Resolve sheet is a table of required
-> outcomes (design B3, H1–H13), and it is the contract. Task 6 writes its
+> outcomes (design B3, H1–H16), and it is the contract. Task 6 writes its
 > rows test-first under a design checkpoint. Re-read the design before
 > each task, and record every checkpoint on ticket
 > `01M7D7JK5MSY6J471JEKG3CZXR`. Steps use checkbox (`- [ ]`) syntax.
@@ -37,7 +37,7 @@ id: "01M7FACCS575B9W0PRRCDW9N0A"
 **Architecture.**
 
 - **Lifecycle** (design Part A): `LifecycleDialog::stage` groups the
-  phases into Ask, Running, Done, Failed and Stopped; the dialog's
+  phases into Ask, Running, Waiting, Done, Failed and Stopped; the dialog's
   builder puts `frame::dialog`'s header in the Kit title slot at each
   render, and sets the backdrop from the stage. One step-row drawer
   serves every stage. The ended lines go into an outcome box. Footers
@@ -69,7 +69,7 @@ Devenv. No new dependency.
   and chosen the execution method.
 - **Cycle 05a is closed and merged to main** (the ticket's Entry Gate).
 - Task 0 does not start before both.
-- The design's Document Amendments 2 and 3 are applied by the planner in
+- The design's Document Amendments 2 to 6 are applied by the planner in
   the approval commit; Amendment 1 is applied in Task 0.
 
 **Roles.**
@@ -173,7 +173,7 @@ icons, tints, dividers, the header's layout or that a view renders.
   ledger as E-16 onward with its reason, checked by the task's reviewer,
   and called out to the owner at review-ready.
 - An assertion removal is called out in the ledger and the review-ready
-  summary (E-3 and E-4 are two).
+  summary (E-3 is one).
 - After any scripted edit, the ledger lists the test functions of the
   touched files before and after, so none is lost.
 
@@ -227,12 +227,15 @@ task named:
   and Unlock… (P2: both last, Retry first); Waiting (P2: Close first, no
   backdrop hide, P3).
 - **Task 5:** each way in, the lifecycle's Repair locally… returning
-  the sheet for `reopen_after` (P5).
+  the sheet for `reopen_after`, and the lifecycle's way in under a
+  prompt (P5).
 - **Task 6:** a save whose `applied` reopens the lifecycle dialog (H5);
   the origin gone by close time (H6); an Unlock prompt over the sheet
-  (H7); Save turning to Retry by itself (H8); a save answered after
-  Escape, with Settings opened since (H12, R-22); quitting (H11);
-  Ctrl+, , Add repository and a deferred Republish… (P7).
+  (H7), and a save answered under it (H14); Save turning to Retry by
+  itself (H8); a save answered after Escape with the entity held (H12);
+  quitting (H11); a draft discarded behind the sheet while typing in the
+  Result (H15); Resume (H16); Ctrl+, before and right after Escape, Add
+  repository, and Republish… on both paths (P7).
 - **Task 7:** an external set (P8: one row of actions); an unknown front
   matter key (P8: the key as written); a typed Result (P8: "Edited").
 
@@ -240,7 +243,7 @@ task named:
 
 | File | Tasks |
 | --- | --- |
-| `D/model/activity/copy.rs` (`REVIEW_CHANGES`, `OPEN_SHARING_AND_KEYS`, `CHECK_HOST`, `KEEP_MINE`, `share_main`, `CHOSEN`, `EDITED`; `RESUME` re-exported) and `D/model/activity_tests/` (E-8) | 1 |
+| `D/model/activity/copy.rs` (`REVIEW_CHANGES`, `OPEN_SHARING_AND_KEYS`, `CHECK_HOST`, `KEEP_MINE`, `share_main`, `CHOSEN`, `EDITED`; `RESUME` re-exported), its copies' files (`D/model/review.rs`, `D/model/edit/save_state.rs`, `D/view/operations.rs`, `D/services/requests.rs`, `D/view/item/posting.rs`), and `D/model/activity_tests/` (E-8) | 1 |
 | `D/model/conflict/names.rs` (new, `field_name`) | 1 |
 | `D/view/lifecycle.rs` (`RESOLVE_CONFLICT` goes; `RESUME`, `share_main` re-exported; the builder), `D/view/lifecycle/outcome.rs` (`OPEN_REPOSITORY_DETAILS`) | 1, 2, 4 |
 | `D/view/conflict.rs`, `conflict/render.rs`, `render/pieces.rs` (`KEEPING_*` go; `choice_of`) | 1, 5, 6, 7 |
@@ -250,8 +253,8 @@ task named:
 | `D/view/lifecycle/running.rs`, `confirm.rs`, `outcome.rs`, `made_ready.rs`, `rows.rs` (new) | 3, 4 |
 | `D/view/keyboard_tests/lifecycle.rs` (P13) | 4 |
 | `D/view/workspace/resolve_sheet.rs` (new), `resolve_sheet_tests.rs` (new) | 5, 6, 7 |
-| `D/view/workspace/content.rs` (`SheetOwner`, `sync_sheet`), `requests.rs` (`ItemRoute::Resolve` in `item_route`), `D/view/item.rs`, `item/review.rs`, `D/view/operations/review.rs`, `D/view/conflict/entry.rs`, `D/view/lifecycle/actions.rs` (`in_workspace`), `lifecycle/repair.rs` | 5 |
-| `D/view/workspace/settings_sheet.rs` (Ctrl+, and `show_settings`), `render.rs` (the keep-focus gate), `D/view/workspace/add_sheet.rs` (05a's `show_add_repository`), `D/view/operations/republish.rs` (R-18), `D/view/conflict/submit.rs` (`close_resolve`) | 6 |
+| `D/view/workspace/content.rs` (`SheetOwner`, `sync_sheet`, the details request), `settings_sheet.rs` (`SheetOwnerKind`), `requests.rs` (`ItemRoute::Resolve` in `owned()` and `open_route`), `D/view/item.rs`, `item/review.rs`, `D/view/operations/review.rs`, `D/view/conflict/entry.rs`, `D/view/conflict/submit.rs` (`close`), `D/view/lifecycle/actions.rs` (`in_workspace`), `lifecycle/repair.rs`; the tests of E-1, E-2, E-11 | 5 |
+| `D/view/workspace/settings_sheet.rs` (Ctrl+, and `show_settings`), `render.rs` (the keep-focus gate), `content.rs` (`focus_content`, `apply_review`), `D/view/workspace/add_sheet.rs` (05a's `show_add_repository`), `D/view/operations/republish.rs` (R-18), `D/view/conflict/submit.rs` (`close_resolve`, R-26) | 6 |
 | `D/model/conflict/merge.rs` (`PathConflict::item_kind`) | 7 |
 | `D/view/keyboard_tests/conflict.rs`, `keyboard_tests/conflict/sheet.rs` (E-11, E-12) | 1, 5, 7 |
 | `D/view/lifecycle/privacy_secret_tests.rs` (new, P12) | 8 |
@@ -327,11 +330,12 @@ git grep -n 'has_active_dialog' -- $P ':!*_tests.rs' ':!*_tests/*'
 
 - `D/model/activity/copy.rs`: `REVIEW_CHANGES` "Review changes…",
   `OPEN_SHARING_AND_KEYS` "Open Sharing & keys…", `CHECK_HOST` "Check
-  host…" (decision 12); new `KEEP_MINE`, `fn share_main(primary)`,
-  `CHOSEN` ("Chosen"), `EDITED` ("Edited"). `RESUME` is the one
-  `copy/states.rs:18` already defines and `copy.rs` re-exports: today's
-  copies (`D/view/lifecycle.rs:103`, `D/view/conflict.rs:78`) re-export
-  it, with no new definition (R-16).
+  host…" (decision 12), which a comment's offers
+  (`D/view/item/posting.rs:389-390`) now use; new `KEEP_MINE`,
+  `fn share_main(primary)`, `CHOSEN` ("Chosen"), `EDITED` ("Edited").
+  Each copy design Part C item 4 lists re-exports or calls the one
+  definition; `RESUME` is the one `copy/states.rs:18` already defines
+  (R-16).
 - `D/view/lifecycle/outcome.rs`: `OPEN_REPOSITORY_DETAILS` "Open
   repository details…".
 - `D/view/lifecycle.rs`: `RESOLVE_CONFLICT` goes; the button that used it
@@ -360,7 +364,11 @@ git grep -n 'has_active_dialog' -- $P ':!*_tests.rs' ':!*_tests/*'
   `desktop::model::activity::tests`, `desktop::view::conflict` (every
   `conflict::*` module), `desktop::view::keyboard_tests::conflict`,
   `desktop::view::activity::tests`, `desktop::view::needs_attention::tests`,
-  `desktop::view::lifecycle::credential_tests`; the last Verify lines.
+  `desktop::view::lifecycle::credential_tests`,
+  `desktop::view::item::posting::tests` (a comment's offers),
+  `desktop::view::item::edit_tests::review` (the item review's "Keep
+  mine");
+  the last Verify lines.
 - [ ] **Commit:** `feat(desktop): Close ticket and Resolve conflict copy`.
 
 ---
@@ -387,6 +395,9 @@ impl LifecycleDialog {
   at each render.
 - `render` drops the old header; `lifecycle-kind` and `lifecycle-branch`
   go. `lifecycle-ending` stays where it is until Task 3 (R-17).
+- The Git line (`lifecycle-git`, `confirm::git_line(plan)`) is drawn on
+  running and ended stages when the dialog holds the preview, so the
+  branch the old header named is still shown (A5, A6).
 - `frame::Tone::{Danger, Success}` lose their `#[allow(dead_code)]`.
 
 - [ ] **Step 1: P1 first.** Write
@@ -398,7 +409,7 @@ impl LifecycleDialog {
   `lifecycle-subtitle`. Reuse `outcome_tests::stopped_at_integrating` and
   `outcome_canned_tests::reopen`. See it fail.
 - [ ] **Step 2: The stage and the header.**
-- [ ] **Step 3: Named edits** E-3, E-5.
+- [ ] **Step 3: Named edits** E-3, E-4, E-5.
 - [ ] **Verify:** by exact name, P1 and the edited tests; then the
   module runs `desktop::view::lifecycle::tests`,
   `desktop::view::lifecycle::outcome_tests`,
@@ -411,7 +422,7 @@ impl LifecycleDialog {
 
 ---
 
-## Task 3: Lifecycle Steps, Bodies And Git Line (A3, A4, A6)
+## Task 3: Lifecycle Steps And Bodies (A3, A4, A6)
 
 **Interfaces.**
 
@@ -426,9 +437,8 @@ impl LifecycleDialog {
   message goes in the box.
 - The outcome box (A6), `lifecycle-ending` first; the made-ready box
   with "Now ready to start".
-- The Git line (`lifecycle-git`, `confirm::git_line(plan)`) on running
-  and ended stages when the dialog holds the preview.
-- Confirm: "Closed by {name} · today" (`closed_by` up to " <").
+- Confirm: "Closed by {name} · today" for a closure to record, "Closed
+  by {name}" for one already recorded (`closed_by` up to " <").
 - Running: the lead moves above the steps, with the new words
   (`lifecycle-state`).
 
@@ -437,11 +447,10 @@ impl LifecycleDialog {
   a run held at a stage shows the stage's words as the Running step's
   note and today's state words on each mark, with and without the
   preview; a failure whose blockers name the merge shows its message
-  under Merge; a Waiting answer shows it in the box; a stopped run with
-  its preview draws the Git line. See it fail.
-- [ ] **Step 2: Rows, bodies, box and Git line.**
-- [ ] **Step 3: Named edits** E-4, E-6. E-14 needs none.
-- [ ] **Verify:** by exact name, P4, E-4's and E-6's tests and
+  under Merge; a Waiting answer shows it in the box. See it fail.
+- [ ] **Step 2: Rows, bodies and box.**
+- [ ] **Step 3: Named edit** E-6. E-14 needs none.
+- [ ] **Verify:** by exact name, P4, E-6's tests and
   `desktop::view::lifecycle::outcome_tests::running_lights_each_step_from_its_stage`;
   then the module runs, all under `desktop::view::lifecycle::`,
   `outcome_tests`, `outcome_canned_tests`, `made_ready_tests`,
@@ -451,7 +460,7 @@ impl LifecycleDialog {
   `desktop::view::operations::resume::tests`,
   `desktop::view::operations::republish::follow_tests`,
   `desktop::view::keyboard_tests::lifecycle`; the last Verify lines.
-- [ ] **Commit:** `feat(desktop): lifecycle step rows, outcome box and Git line`.
+- [ ] **Commit:** `feat(desktop): lifecycle step rows and outcome box`.
 
 ---
 
@@ -466,7 +475,9 @@ impl LifecycleDialog {
   as the body's last child, by A7's table: the dismiss button
   (`lifecycle-cancel`, labelled by the stage) first, today's non-primary
   buttons in today's order, today's primary buttons in today's order; on
-  Done, Done last and primary; while running, Stop or "Stopping…" only.
+  Done, Done last and primary; while running, Stop, or after it
+  "Stopping…" as an inert Tab stop with a handle of its own, keeping the
+  id `lifecycle-stopping` (R-23).
 - `LifecycleDialog::hides_on_backdrop(&self, cx) -> bool`, true only in
   the Running stage; the builder sets `overlay_closable` from it.
 
@@ -475,16 +486,21 @@ impl LifecycleDialog {
     a row per line of A7's table and per Review Focus input; each
     asserts the ids inside `lifecycle-footer` sorted by their bounds'
     left edge (design Testing), the dismiss label and the hint; Tab
-    reaches the buttons in that order.
+    reaches the buttons in that order. The Stop-pressed row also presses
+    Tab and Shift+Tab three times each and asserts focus stays inside
+    `lifecycle-dialog`, then Escape hides the dialog and focus is on the
+    origin.
   - `::the_backdrop_hides_only_a_running_dialog`: a click outside the
     dialog, below the title bar (`simulate_click`), hides a running
     dialog, the run goes on and focus is on the origin; on confirm, on
     Waiting and on a failure it does nothing.
   - `desktop::view::keyboard_tests::lifecycle::a_failed_run_is_retried_by_keyboard`
-    (P13), for both commands: a dirty main
-    (`outcome_tests::a_dirty_primary_stop_at_execute_merges_nothing`'s
-    fixture) fails the merge; Tab to Retry and Enter fails again; main
-    cleaned, Retry by Enter, then Done by Enter; focus on the origin.
+    (P13), for both commands: the library's failure point
+    `BeforeRequestDomainCall` fails the run with `internal_error` and
+    offers Retry, set up as `outcome_tests::a_stopped_run_with_no_record_offers_prepare`
+    does (`D/view/lifecycle/outcome_tests.rs:299-323`); the normal
+    service is put back without moving the branch; Tab to Retry, Enter;
+    then Done by Enter; focus on the origin.
 
   See them fail.
 - [ ] **Step 2: Footers and backdrop.**
@@ -505,40 +521,45 @@ impl LifecycleDialog {
 
 **Interfaces.**
 
-- `SheetOwner::Resolve(WeakEntity<ResolveSheet>)`, `SheetOwnerKind::Resolve`;
-  `sync_sheet`'s two cases (B1); no details sheet while `Resolve`;
-  `Workspace::resolve_open`.
+- `SheetOwner::Resolve(WeakEntity<ResolveSheet>)`, `SheetOwnerKind::Resolve`
+  (`settings_sheet.rs:41`); `sync_sheet`'s two cases (B1); a requested
+  details sheet dropped while `resolve_open`; `Workspace::resolve_open`
+  and `Workspace::workspace_sheet_open`.
 - `Workspace::show_resolve` in `D/view/workspace/resolve_sheet.rs` (B2):
   refusals, `conflict::open`, the owner in the same update, then the
   sheet's own handle focused.
-- `conflict::open` opens a Kit sheet: `window.open_sheet`,
-  `size(px(920.))`, `overlay_closable(false)`; the title slot holds
-  today's header inside `conflict-header`; the footer slot holds today's
-  Git line and buttons inside `conflict-footer` with
-  `RESOLVE_SHEET_CONTEXT`, `SaveResolution` and `footer_focus`; the body
-  laid over the Kit's with its own scroll (`conflict-scroll`, R-12);
-  `on_close` focuses the origin. It becomes `pub(in crate::desktop::view)`.
+- `conflict::open` opens a Kit sheet: `window.open_sheet`, sized
+  `min(920 px, window width − 48 px)` (R-28), `overlay_closable(false)`;
+  the title slot holds today's header inside `conflict-header`; the
+  footer slot holds today's Git line and buttons inside `conflict-footer`
+  with `RESOLVE_SHEET_CONTEXT`, `SaveResolution` and `footer_focus`; the
+  body laid over the Kit's, keeping today's own scroll without
+  `max_h(px(720.))` (R-12); `on_close` focuses the origin. It becomes
+  `pub(in crate::desktop::view)`.
 - The ways in (B2's table): `ItemRoute::Resolve(Box<conflict::Opening>)`
-  (`Opening: Clone`, an `owned()` arm in `item_route`); `Entry::opening`;
-  `in_workspace` generic over its return value, `open_sheet` without its
-  own close.
-- Cancel and `applied` call `close_sheet` (Task 6 guards them).
-- The view drops `max_h(px(720.))` and its own `overflow_y_scroll`.
+  (`Opening: Clone`; an arm in `owned()` and one in `open_route`);
+  `Entry::opening`; `in_workspace` generic over its return value, doing
+  nothing unless the lifecycle dialog is the top dialog (R-24), and
+  `open_sheet` without its own close.
+- `ResolveSheet::close` (Cancel, Resume, `applied`) calls `close_sheet`
+  for now; Task 6 guards it.
 
 - [ ] **Step 1: P5 first.** Write
   `desktop::view::workspace::resolve_sheet::tests::resolve_is_a_sheet_the_workspace_keeps`:
   from each way in (the banner, an Activity row, a pending row, a
   popover row, the lifecycle's Review changes… and Repair locally…), a
   sheet is active, no dialog, the owner is `Resolve`, and it survives
-  renders; Escape, Cancel and a save each clear the owner. See it fail.
+  renders; Escape, the close button, Cancel, Resume and a save each
+  clear the owner; the lifecycle's way in with a prompt opened over the
+  dialog does nothing. See it fail.
 - [ ] **Step 2: Owner, opening, ways in.**
-- [ ] **Step 3: Named edits** E-1, E-2, E-11 (`in_sheet`, R-19; the
-  close button as the first Tab stop).
+- [ ] **Step 3: Named edits** E-1, E-2, E-11 (`in_sheet`, R-19).
 - [ ] **Verify:** by exact name, P5 and the edited tests; then the
   module runs `desktop::view::conflict` (every `conflict::*` module),
   `desktop::view::keyboard_tests::conflict`,
-  `desktop::view::workspace::tests`, `desktop::view::activity::tests`,
-  `desktop::view::needs_attention::tests`,
+  `desktop::view::workspace::tests`,
+  `desktop::view::workspace::settings_sheet::tests`,
+  `desktop::view::activity::tests`, `desktop::view::needs_attention::tests`,
   `desktop::view::lifecycle::privacy_tests`,
   `desktop::view::lifecycle::privacy_remote_tests`; the last Verify
   lines.
@@ -546,44 +567,54 @@ impl LifecycleDialog {
 
 ---
 
-## Task 6: Resolve: Closing, Focus And Refusals (B2, B3; design checkpoint)
+## Task 6: Resolve: Closing, Focus And Refusals (B1–B3; design checkpoint)
 
 **Interfaces.**
 
-- `Workspace::close_resolve(&Entity<ResolveSheet>, window, cx)`: closes
-  the Kit sheet only while the owner is that sheet; Cancel and `applied`
-  reach it through Root, as `in_workspace` does (R-22).
-- Every choice and footer press focuses the sheet's own handle first;
-  `conflict-footer` tracks `footer_focus` (H8).
-- `keep_focus_in_resolve`, gated in `Workspace::render` as
-  `keep_focus_in_settings` is, on `resolve_open` (R-11).
-- `settings_key`, `show_settings` and 05a's `show_add_repository`
-  refuse while `resolve_open` (decision 9); the deferred Republish…
-  waits while it, and each site Task 0 listed (R-18).
+- `Workspace::close_resolve(&Entity<ResolveSheet>, window, cx) -> bool`:
+  closes the Kit sheet only while the owner is that sheet.
+  `ResolveSheet::close` reaches it through Root, as `in_workspace` does;
+  on false nothing more runs (no focus, no lifecycle reopen, no
+  `follow_resume`) (R-22, R-27).
+- An `applied` that lands while a dialog is open records its close,
+  focus and reopen and runs them once no dialog is open (R-26).
+- Footer presses focus the sheet's own handle first; `conflict-footer`
+  tracks `footer_focus`; body presses do not move focus (B3).
+- `focus_content` and `apply_review`'s refocus skip while
+  `workspace_sheet_open`; `apply_review` keeps its Drafts and Settings
+  requests until the sheet closes (R-25).
+- `keep_focus_in_resolve`, gated in `Workspace::render` beside
+  `keep_focus_in_settings`, on `resolve_open` (R-11).
+- `settings_key`, `show_settings` and 05a's `show_add_repository` refuse
+  while `resolve_open` (decision 9); `republish_once_stopped` and
+  `open_deferred_republish` wait while it, and each site Task 0 listed
+  (R-18, U-7, U-9).
 
 - [ ] **Step 1: Design checkpoint, tests first.** Write
   `desktop::view::workspace::resolve_sheet::tests::{focus_around_the_resolve_sheet,
-  nothing_opens_over_the_resolve_sheet}` (P6 with one row per H1–H13;
+  nothing_opens_over_the_resolve_sheet}` (P6 with one row per H1–H16;
   P7) before any production code.
-  - P7: Ctrl+, does nothing; `show_settings` and `show_add_repository`
-    refuse; a details sheet asked for does not open; a workspace action
-    (a region focus key) and an Activity action are refused;
+  - P7: Ctrl+, does nothing, and opens Settings right after Escape;
+    `show_settings` and `show_add_repository` refuse; a details sheet
+    asked for does not open, then or after the sheet closes; a workspace
+    action (a region focus key) and an Activity action are refused;
     `show_resolve` refuses over a dialog and over a sheet; a share's
     Stop and republish…, its share stopped while the sheet is open,
-    opens Republish… only once it closes.
+    opens Republish… only once it closes, on each of the two paths.
   - If a row cannot be written against the code, or the code would
     answer it differently, **stop and bring it to the owner.**
   - Comment on the ticket with the rows written and any stop.
   See them fail.
-- [ ] **Step 2: Closing, presses, keep-focus.**
-- [ ] **Step 3: Refusals and R-18.**
+- [ ] **Step 2: Closing, waiting under a dialog, presses, keep-focus.**
+- [ ] **Step 3: Refusals, focus moves behind, R-18.**
 - [ ] **Verify:** by exact name, P6 and P7; then the module runs
   `desktop::view::conflict`, `desktop::view::keyboard_tests::conflict`,
   `desktop::view::workspace::settings_sheet::tests`,
   `desktop::view::workspace::tests`,
-  `desktop::view::operations::republish`, and the Add sheet's module
-  (05a's `desktop::view::workspace::add_sheet::tests`); the last Verify
-  lines.
+  `desktop::view::operations::republish`,
+  `desktop::view::drafts` (the discard and close-with-draft paths
+  `focus_content` serves), and the Add sheet's module (05a's
+  `desktop::view::workspace::add_sheet::tests`); the last Verify lines.
 - [ ] **Commit:** `feat(desktop): Resolve conflict's closes, focus and refusals`.
 - [ ] **Ticket comment** (Tasks 5–6).
 
@@ -626,13 +657,14 @@ impl LifecycleDialog {
 
 - [ ] **Step 1: P12 first.** Write
   `desktop::view::lifecycle::privacy_secret_tests::close_and_resolve_show_no_secret`
-  (new `D/view/lifecycle/privacy_secret_tests.rs`), built as
-  `passphrase_tests::a_supplied_passphrase_is_shown_or_kept_nowhere`
-  (`D/view/passphrase_tests.rs:553`): a close whose key is locked,
-  unlocked with a sentinel passphrase, through Failed, Retry and Done;
-  then a remote conflict's sheet. At each stage every label, tooltip and
-  Git line in the window, the dialog's and the sheet's slots included,
-  holds neither the sentinel nor the fixture key's private text. It
+  (new `D/view/lifecycle/privacy_secret_tests.rs`), reading every label
+  and value as `passphrase_tests`' `window_text` does
+  (`D/view/passphrase_tests.rs:537-547`): a key made with
+  `Fixture::generate_key` (`D/test_support/fixtures.rs:920`) and a
+  sentinel passphrase; a close on it, unlocked through the prompt,
+  through Failed, Retry and Done; then a remote conflict's sheet. At
+  each stage no label or value in the window, the dialog's and sheet's
+  slots included, holds the sentinel or the key file's private text. It
   passes on Task 7's code; record that it was seen to fail with the
   sentinel planted in a label, then the plant removed.
 - [ ] **Step 2: Run** by exact name the keyboard journeys
@@ -685,7 +717,8 @@ impl LifecycleDialog {
 | R-1, R-17 | 2, 3 |
 | R-2, R-3, R-4 | 3 |
 | R-5 | 4 |
-| R-8, R-9, R-12, R-19, R-21 | 5 |
-| R-11, R-18, R-22 | 6 |
+| R-8, R-9, R-12, R-19, R-21, R-24, R-28 | 5 |
+| R-11, R-18, R-22, R-25, R-26, R-27 | 6 |
+| R-23 | 4 |
 | R-13, R-14, R-15 | 7 |
 | R-16, R-20 | 1 |

@@ -14,7 +14,8 @@ Ticket `01M7D7JK5MSY6J471JEKG3CZXR` (`vh-qjw5e`).
 [Design](../plans/2026-11-15-wave-04-cycle-05b-close-and-resolve-design.md) and
 [implementation plan](../plans/2026-11-15-wave-04-cycle-05b-close-and-resolve-implementation.md).
 
-Status: **draft**, for the owner's review. Nothing here is approved.
+Status: **draft** (revision 3), for the owner's review. Nothing here is
+approved.
 
 - On 2026-11-15 the owner asked to plan Cycle 05b ("Lets plan 05b
   next"), once Cycle 05a's documents were approved (05a decision 21).
@@ -38,6 +39,14 @@ Revision history:
   - contract and consistency: 2 Blocking, 16 Important, 7 Minor.
 - Revision 2 applied both, and decisions 11 and 12. The follow-up
   library ticket (decision 1) was created and published.
+- Review round 2 read revision 2 at `874bb66b` (and `aaf6b475`, the same
+  documents with main merged):
+  - scoped re-review: 1 Blocking, 4 Important, 8 Minor;
+  - adversarial review of the sheet's closes and focus and the dialog's
+    stages: 1 Blocking, 4 Important, 9 Minor.
+- Revision 3 applied both. Each Blocking finding was a missing case: a
+  test fixture that offers no Retry, and a running dialog left with no
+  Tab stop after Stop. Each is now stated (design P13, R-23).
 
 ## Purpose And Authority
 
@@ -106,7 +115,7 @@ Read-only comparison, 2026-11-14 (recorded in the ticket), confirmed at
 | Files: icon, path, tag, `+n −m` | icon, path, tag (and a `comment` tag); no counts (D5 R-3) | no counts (decision 1) |
 | Code note | as designed | — |
 | Becomes ready to start, at confirm | none (D5 decision 6) | no (decision 2) |
-| Git line | on confirm only | yes: also running, failed and stopped, as 2d and 2e draw it (design A5, A6) |
+| Git line | on confirm only | yes: also running, waiting, failed, stopped and done, as 2d and 2e draw it, when the dialog holds the preview (design A5, A6) |
 | Footer hint, Cancel · **Close ticket** | none; **Close ticket** · Cancel, left | yes (decision 4) |
 | Local-only step 2 | as designed | — |
 | Running: lead above, ticks, spinner, numbers, progress in the step | lead below; state words; no notes | yes (A3, A5); progress as stage words (decision 1) |
@@ -192,10 +201,11 @@ merged code (design U-1).
    reusing the operation, the safe-point stop, no automatic winner. D5's
    tests pass, edited only as the named edits say.
 3. **Resolve conflict is a sheet the workspace keeps,** opened only
-   through the workspace, closed by Escape, its close button, Cancel, a
-   save or quitting, never by its scrim (decision 9). A close that lands
-   after it has gone closes nothing.
-4. **Focus is trapped and returns,** as design B3's rows H1–H13 set out,
+   through the workspace, closed by Escape, its close button, Cancel,
+   Resume, a save or quitting, never by its scrim (decision 9). A close
+   that lands after it has gone closes nothing, and one that lands under
+   a dialog waits for that dialog to close.
+4. **Focus is trapped and returns,** as design B3's rows H1–H16 set out,
    and as today for the lifecycle dialog, the backdrop's hide included.
 5. **Nothing acts behind either surface** (Wave 03 D3 R-60), and nothing
    opens Settings, Add repository or a details sheet over Resolve
@@ -215,7 +225,7 @@ rows await the owner's checks.
 | A2 | The design's stages: steps with state and progress, the outcome box, the footers (scope 1) | P2; P3 `the_backdrop_hides_only_a_running_dialog`; P4 `steps_show_their_state_and_progress` | Planned |
 | A3 | Resolving a conflict, by keyboard (Wave exit) | `keyboard_tests::conflict::{resolve_a_local_conflict_by_keyboard, resolve_a_shared_conflict_by_keyboard}` and `::sheet::*`, edited only as named | Planned |
 | A4 | Resolve conflict is a sheet the workspace keeps (contract 3) | P5 `resolve_is_a_sheet_the_workspace_keeps`; P7 `nothing_opens_over_the_resolve_sheet` | Planned |
-| A5 | Focus returned to the invoking control after each (Wave exit; contract 4) | P6 `focus_around_the_resolve_sheet` (H1–H13); P3; P13; `confirm_tests::enter_confirms_esc_cancels_and_focus_returns`; `action_tests::focus_returns_to_the_action_when_the_dialog_closes` | Planned |
+| A5 | Focus returned to the invoking control after each (Wave exit; contract 4) | P6 `focus_around_the_resolve_sheet` (H1–H16); P3; P13; `confirm_tests::enter_confirms_esc_cancels_and_focus_returns`; `action_tests::focus_returns_to_the_action_when_the_dialog_closes` | Planned |
 | A6 | Parts named in words; Chosen and Edited; nothing acts behind (Part C; contract 5) | P8 `parts_are_named_in_words`; P7 `nothing_opens_over_the_resolve_sheet` | Planned |
 | A7 | Copy (Part C) | P9 `close_and_resolve_copy_uses_the_vocabulary` | Planned |
 | A8 | No passphrase or private key text reaches any label, tooltip or Git detail line (Wave exit; contract 6) | P12 `close_and_resolve_show_no_secret`; P10: the a16 privacy tests, unchanged | Planned |
@@ -278,7 +288,9 @@ Proposed by the planner, awaiting the owner:
      dismiss button first (Cancel while asking to confirm, Close for the
      other questions and for Waiting, Not now after a failure or stop,
      Done last when done), then today's other buttons in today's order,
-     then today's primary buttons;
+     then today's primary buttons; while running, only Stop at a safe
+     point, and after it is pressed, "Stopping…" as a Tab stop that does
+     nothing, so Tab and Escape keep working;
    - today's "Done" or "Failed" word stays as the outcome box's first
      line (design R-17), the kind icon and branch line go, and the Git
      line is drawn on every stage that holds the preview.
@@ -291,9 +303,11 @@ Proposed by the planner, awaiting the owner:
 9. **Resolve conflict keeps today's rules where a sheet would differ**
    (design B2, B3): its scrim does not close it; Ctrl+, , a route into
    Settings and Cycle 05a's Add repository do nothing while it is open;
-   a Republish… that waited for its dialog waits for the sheet. *Why:*
-   each would lose the choices or cover them, and today's dialog stops
-   all of them.
+   a Republish… that waited for its dialog waits for the sheet; a focus
+   move the workspace makes behind it (a draft discarded, say) leaves
+   focus where it is, as under Settings. *Why:* each would lose the
+   choices, cover them or pull focus out of them, and today's dialog
+   stops all of them.
 10. **Field names, kinds and states** (design Part C table, B5): "Status"
     for `status` and so on, an unknown key as written, as the details
     sheet names them; "Ticket detail", "Document detail" or "Comment
@@ -319,29 +333,34 @@ After review round 1:
 
 ## Known Limits
 
-Design K-1 to K-17: no line counts; no ready list at confirm; progress as
+Design K-1 to K-21: no line counts; no ready list at confirm; progress as
 stage words; the cause names no key; "today" assumed; no author names or
 times; no base in the Git line; the Kit's selected style with a check;
 the file count in parentheses; message-only states take the Ask title;
 Resolve's scrim does nothing; shared outside actions; the library
 follow-up; the body has no kind label; a run shown without its preview
 has no Git line or step notes; Ctrl+Enter does nothing on the sheet's
-close button; the Git line has no tooltip.
+close button; the Git line has no tooltip; a backdrop click in the frame
+after a run ends; Tab to a part below the fold does not scroll it into
+view, as today; the Kit's 100-stop focus trap; quitting closes the sheet
+in the quitting window only.
 
 ## Open Questions
 
 None blocking. Design U-1 (05a's merged names), U-6 (the named edits
-against 05a's merged code) and U-7 (the dialog-only guards) are checked
-in Task 0.
+against 05a's merged code), U-7 (the dialog-only guards and focus moves)
+and U-9 (05a's own waiting openers) are checked in Task 0.
 
 ## Review Record
 
 | Source | Concern | Classification | Resolution | Evidence |
 | --- | --- | --- | --- | --- |
 | Owner, 2026-11-15 | Plan 05b now | Owner direction | Planning started; 05a's branch merged into this one (`ac50ba1a`), as the ticket's first planning step allows | Session, 2026-11-15 |
-| Planning research, 2026-11-15 | The lifecycle dialog, Resolve conflict and the library's data at `ac50ba1a`; the sheet slot; the D5 follow-ups; the test sweep | Facts; owner questions; rulings | Design facts 1–34; decisions 1–5; rulings | Research reports, 2026-11-15 |
+| Planning research, 2026-11-15 | The lifecycle dialog, Resolve conflict and the library's data at `ac50ba1a`; the sheet slot; the D5 follow-ups; the test sweep | Facts; owner questions; rulings | Design facts 1–30 (31–34 from review round 1); decisions 1–5; rulings | Research reports, 2026-11-15 |
 | Owner, 2026-11-15 | Missing data; ready list; sheet or dialog; button order; D5 follow-ups; the outline | Owner decisions | Decisions 1–6 | Session, 2026-11-15 |
 | Review round 1, source and feasibility (revision 1, `702e569f`) | 1 Blocking, 6 Important, 10 Minor. Blocking: a control gone from the Kit's footer slot leaves focus outside the sheet. Important: footer order unreadable; StillRunning in two stages; the Republish… scenario; Settings' focus check; P4's input; the Kit body's scroll | Blocking, Important, Minor | Revision 2 (design Review Record) | Review report, 2026-11-15 |
 | Review round 1, contract and consistency (revision 1, `702e569f`) | 2 Blocking, 16 Important, 7 Minor. Blocking: no proof for the passphrase exit item; no failed-then-Retry keyboard journey. Important: the Git line in 2d and 2e; StillRunning; "Stopping…"; the footer order as an owner decision; the follow-up's scope; the ellipsis rule; colour alone for the choice; quit and late closes; "inside the sheet"; scrolling; contract 5; amendments; unlisted test edits; privacy order; Task 5's size; P3 | Blocking, Important, Minor; owner questions | Revision 2; decisions 7, 9, 10 revised; decisions 11 and 12 | Review report, 2026-11-15 |
 | Owner, 2026-11-15, after review round 1 | Further test edits; the ellipsis rule | Owner decisions | Decisions 11 and 12 | Session, 2026-11-15 |
 | Planner, 2026-11-15 | The follow-up library ticket (decision 1) | Owner direction | `01M7FBRBN04QACSCZV6KX0WMR3` (`vh-nkp8c`) created and published at `ecb44079` | Session, 2026-11-15 |
+| Review round 2, scoped re-review (revision 2, `874bb66b`) | 1 Blocking, 4 Important, 8 Minor. Blocking: P13's fixture offers no Retry. Important: H1's Tab order; presses in the body moving focus; the scroll named reveals nothing; a task left red | Blocking, Important, Minor | Revision 3 (design Review Record) | Review report, 2026-11-15 |
+| Review round 2, adversarial (revision 2, `aaf6b475`) | 1 Blocking, 4 Important, 9 Minor. Blocking: no Tab stop after Stop. Important: H1; an answer under a dialog; a second Republish… path; focus moves behind the sheet | Blocking, Important, Minor | Revision 3; decisions 7 and 9 revised | Review report, 2026-11-15 |

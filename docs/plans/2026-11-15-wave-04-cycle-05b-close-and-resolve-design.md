@@ -28,8 +28,8 @@ Behaviour, services, requests and recovery routes stay as they are. The
 named exceptions are the footer order (decision 4), the running stage's
 buttons and backdrop (decision 4), the sheet itself (decision 3) and the
 copy (decisions 5 and 12, Part C). It changes `src/desktop/` only.
-Draft, revision 2 (review round 1 applied, decisions 11 and 12):
-nothing here is approved.
+Draft, revision 3 (review rounds 1 and 2 applied, decisions 11 and
+12): nothing here is approved.
 
 Planned against:
 
@@ -421,7 +421,10 @@ One row drawer serves every stage, in the bordered list `05` draws:
 
 As today (fact 6), except:
 
-- the Mark as closed note reads "Closed by {name} · today", where
+- the Mark as closed note reads "Closed by {name} · today" when the
+  closure is to be recorded (`LifecycleRecording::Record`), and "Closed
+  by {name}" when it already is ("Already marked closed",
+  `LifecycleRecording::Existing`, which may be from an earlier day);
   `{name}` is `closed_by` up to its " <" (the whole value when it has
   none) (decision 8, R-3);
 - the footer (A7): hint "Enter to confirm · Esc to cancel", then Cancel ·
@@ -439,9 +442,11 @@ No line counts (decision 1), no "Becomes ready to start" (decision 2).
 - The steps (A3), then the Git line (`lifecycle-git`, from the preview
   the dialog holds; none without it, K-15), as frame 2d draws it.
 - **Footer:** hint "Esc hides this window", then Stop at a safe point
-  (`lifecycle-stop`). Once pressed, the text "Stopping…"
-  (`lifecycle-stopping`) is drawn in the footer in Stop's place, as
-  today it replaces the button (decision 4).
+  (`lifecycle-stop`). Once pressed, "Stopping…" (`lifecycle-stopping`)
+  takes Stop's place, as today. It is drawn as an inert Tab stop with a
+  handle of its own, labelled "Stopping…", which Enter and Space do
+  nothing on, so the dialog keeps a Tab stop and Escape keeps working
+  (R-23).
 - **No dismiss button** **(owner's eye)** (decision 4).
 - **Backdrop:** clicking it hides the dialog as Escape does: `on_cancel`,
   then the close, then `on_close`, which focuses the origin
@@ -449,7 +454,8 @@ No line counts (decision 1), no "Becomes ready to start" (decision 2).
   keeps it. The builder sets
   `overlay_closable(dialog.read(cx).hides_on_backdrop(cx))`, true only in
   the Running stage (R-5). Every other stage keeps today's inert
-  backdrop.
+  backdrop. The Kit reads the flag when it draws, so a click in the one
+  frame after the run ends hides the ended dialog (K-18).
 
 ### A6. Ended (Waiting, Done, Failed, Stopped)
 
@@ -484,7 +490,8 @@ buttons in today's order; on Done, Done comes last. "Today's order" is
 fact 9's for an ended run and `render`'s for the other phases
 (`view.rs:156-255`); "primary" is today's flag on each button. The
 dismiss button keeps the id `lifecycle-cancel` and today's Cancel and
-Close behaviour (close, focus the origin).
+Close behaviour (close, focus the origin). Every stage keeps at least
+one Tab stop (R-23).
 
 | Stage: phase | Footer, in order (primary in bold) | Hint |
 | --- | --- | --- |
@@ -492,11 +499,11 @@ Close behaviour (close, focus the origin).
 | Ask: `Confirm` | Cancel · **{command}** | "Enter to confirm · Esc to cancel" |
 | Ask: `Stale` | Cancel · **Prepare again** | — |
 | Ask: `Blocked` | Close · the way-out actions, non-primary then primary · **Prepare again** (none for `ticket_closed`) | — |
-| Ask: `Held` | Close · Continue or Resume | — |
+| Ask: `Held` | Close · **Continue** or **Resume** | — |
 | Ask: `Answered` | Close · **Retry** (on `busy` only) | — |
 | Ask: `Repaired` | Close · **Prepare again** | — |
 | Ask: `Message`, a submitted message only | Close | — |
-| Running | Stop at a safe point, or "Stopping…" | "Esc hides this window" |
+| Running | Stop at a safe point, or the inert "Stopping…" stop | "Esc hides this window" |
 | Waiting | Close · today's other buttons, by the rule | — |
 | Failed, Stopped | Not now · Repair locally…, Review changes…, Prepare again (when Retry is offered), Resume, Check host…, Open Sharing & keys…, Open repository details…, Open folder, Open ready tickets (each when offered) · **Republish…** or **Stop and republish…**, **Retry**, **Prepare again** (when no Retry), **Unlock…** (each when offered) | — |
 | Done | Open ready tickets (when offered) · **Republish…** (when offered) · **Done** | — |
@@ -531,20 +538,27 @@ pub(super) enum SheetOwner {
 }
 ```
 
-and the test mirror `SheetOwnerKind` gains `Resolve`. `sync_sheet` gains
-two cases:
+and the test mirror `SheetOwnerKind` (`D/view/workspace/settings_sheet.rs:41`)
+gains `Resolve`. `sync_sheet` gains two cases:
 
 1. **Owner `Resolve`, and a sheet is active:** kept, whatever item is
    shown.
 2. **Owner `Resolve`, and no sheet is active:** the sheet closed. The
    owner is cleared. Focus is already where B3 put it.
 
-A requested details sheet never opens while the owner is `Resolve`, as
-C4's case 5 says for Settings.
+While `resolve_open`, a requested details sheet is dropped
+(`content.details = None`), as C4 does while Settings is open
+(`content.rs:307-308`), so none opens after the sheet closes.
 
-`Workspace::resolve_open(&self, window, cx) -> bool` is "the owner is
-`Resolve` and a sheet is active", beside C4's `settings_open`, which
-stays Settings' alone (R-11).
+Two predicates, beside C4's `settings_open`, which stays Settings' alone
+(R-11):
+
+- `Workspace::resolve_open(&self, window, cx) -> bool`: the owner is
+  `Resolve` and a sheet is active. Every refusal and wait in B2 reads it,
+  so an Escape followed at once by Ctrl+, is not refused by an owner
+  `sync_sheet` has not yet cleared.
+- `Workspace::workspace_sheet_open(&self, window, cx) -> bool`: Settings,
+  Add repository or Resolve owns the active sheet (R-25).
 
 ### B2. Opening
 
@@ -568,8 +582,10 @@ in a new `D/view/workspace/resolve_sheet.rs`. It:
    open (fact 21), so refusing loses nothing; C4 and C5a drop a details
    sheet instead, because their ways in can (R-21);
 2. calls `conflict::open`, which now opens a Kit sheet on the right
-   (`window.open_sheet`), `size(px(920.))`, `overlay_closable(false)`
-   (decision 9), with:
+   (`window.open_sheet`), `overlay_closable(false)` (decision 9), sized
+   `min(920 px, the window's width less 48 px)`: the Kit sheet does not
+   clamp itself (`GC/sheet.rs:176-186`) and the app sets no minimum
+   window width (R-28). It has:
    - the title slot: `frame::sheet_header` (B4) inside an element with id
      `conflict-header`;
    - the footer slot: `frame::sheet_footer` (B6) inside an element with
@@ -591,69 +607,92 @@ in a new `D/view/workspace/resolve_sheet.rs`. It:
 
 | Way | Today | After |
 | --- | --- | --- |
-| Item banner, Review changes… | `conflict::open` in `ItemPane::review_conflict` | emits `ItemRoute::Resolve(Box<conflict::Opening>)`; `Workspace::item_route` (`D/view/workspace/requests.rs:181-190`) clones it in `owned()` and calls `show_resolve`. `conflict::Opening` derives `Clone` |
+| Item banner, Review changes… | `conflict::open` in `ItemPane::review_conflict` | emits `ItemRoute::Resolve(Box<conflict::Opening>)`; `Workspace::item_route` (`D/view/workspace/requests.rs:181-190`) clones it in `owned()`, and `open_route` (`:198-217`) gains the arm that calls `show_resolve`. `conflict::Opening` derives `Clone`. The route runs a frame later (`cx.defer`, `:298`): a dialog opened meanwhile refuses it, as today's guard would have refused the press |
 | Activity row or pending row, Review changes… (and Needs attention, which runs them) | `Entry::open` from `review_request`, `review_pending` | `Entry::opening(..) -> Option<Opening>`, then `self.show_resolve(opening)` |
-| Lifecycle dialog, Repair locally… and Review changes… | `conflict::open` after `self.close` | `self.in_workspace(.., |ws, w, cx| ws.show_resolve(opening, w, cx))`; `in_workspace` (`D/view/lifecycle/actions.rs:126-140`) becomes generic over its closure's return value, so Repair locally… still gets the sheet for `reopen_after` (`repair.rs:260-262`), and `open_sheet` drops its own `self.close`, which `in_workspace` does |
+| Lifecycle dialog, Repair locally… and Review changes… | `conflict::open` after `self.close` | `self.in_workspace(.., |ws, w, cx| ws.show_resolve(opening, w, cx))`; `in_workspace` (`D/view/lifecycle/actions.rs:126-140`) becomes generic over its closure's return value, so Repair locally… still gets the sheet for `reopen_after` (`repair.rs:260-262`), and `open_sheet` drops its own `self.close`, which `in_workspace` does. Before it closes anything, it checks that the lifecycle dialog is the top dialog; if another dialog (a prompt) opened over it, it does nothing (R-24) |
 
 `conflict::open` becomes `pub(in crate::desktop::view)` and its only
 production caller is `show_resolve`. The test helper `open_sheet_in`
 (fact 14) opens through `show_resolve` (E-1).
 
 **Settings and Add repository while it is open** (decision 9).
-`settings_key` and `show_settings` refuse when the owner is `Resolve`:
-opening Settings would close the sheet and lose the choices, and today
-the Resolve dialog stops both (fact 22). Cycle 05a's
-`show_add_repository` refuses too, a defensive line added to C5a B2
-step 1 (Document Amendment 6).
+`settings_key`, `show_settings` and Cycle 05a's `show_add_repository`
+refuse while `resolve_open`: opening Settings or Add repository would
+close the sheet and lose the choices, and today the Resolve dialog
+stops them (fact 22). For `show_add_repository` this is a defensive line
+added to C5a B2 step 1 (Document Amendment 6).
 
-**What opens by itself** (fact 31, R-18). The deferred Republish… waits
-while `resolve_open`, as it waited for the dialog: a share's Stop and
-republish… whose share stops while the sheet is open opens Republish…
-only once it closes. `apply_review` is classified in Task 0 (U-7).
+**What opens by itself** (fact 31, R-18). Both sites that open
+Republish… unless a dialog is open also wait while `resolve_open`:
+`republish_once_stopped` (`D/view/operations/republish.rs:211`), reached
+when a share's Stop and republish… finds the share stopped, and
+`open_deferred_republish` (`:225`), which retries each render. A share
+that stops while the sheet is open opens Republish… only once it closes.
+`apply_review` is B3's (R-25).
 
 ### B3. Closing and focus
 
 The sheet closes by Escape (outside the Result editor), its header's
-close button (new, the Kit's), Cancel, a save that finishes it
+close button (new, the Kit's), Cancel, Resume, a save that finishes it
 (`applied`, `D/view/conflict/submit.rs:350-406`), or quitting
-(`wait_to_quit` closes every sheet, `D/view/workspace/lifecycle.rs:221-240`,
-as it closed the dialog). The scrim does not close it (decision 9).
+(`wait_to_quit` closes every sheet of its window,
+`D/view/workspace/lifecycle.rs:221-240`, as it closed the dialog). The
+scrim does not close it (decision 9).
 
 - Escape and the close button are the Kit's and run `on_close`.
-- Cancel and `applied` close it only if it is still this sheet: they
-  find the Workspace through Root, as `in_workspace` does, and call
-  `Workspace::close_resolve(&sheet, window, cx)`, which closes the Kit
-  sheet only when the owner is `Resolve(this)` (R-22). They then focus
-  the origin, as today, since `on_close` runs only on the Kit's own
-  paths. `applied`'s reopening of the lifecycle dialog is unchanged.
-- **Presses keep focus inside.** Every footer button and choice press
+- **One way to close it from the sheet.** `ResolveSheet::close`
+  (`submit.rs:428-431`), which Cancel, Resume (`:409-413`) and `applied`
+  use, calls `Workspace::close_resolve(&sheet, window, cx) -> bool`,
+  found through Root as `in_workspace` finds it. `close_resolve` closes
+  the Kit sheet and returns true only while the owner is `Resolve(this)`.
+  On false, the caller does nothing more: no focus move, no lifecycle
+  reopen, no `follow_resume` (R-22, R-27). On true, it focuses the
+  origin, as today, since `on_close` runs only on the Kit's own paths,
+  and `applied` goes on to reopen the lifecycle dialog as today.
+- **An answer that lands under a dialog** (an Unlock prompt over the
+  sheet): `applied` records what it would do (close, focus, reopen) and
+  does it once no dialog is open, as `republish_deferred` waits
+  (`D/view/operations/republish.rs:220-230`) and C5a's G23 does (R-26).
+- **Footer presses keep focus inside.** Each footer button's press
   focuses the sheet's own handle first, as `LifecycleDialog::on` does
-  (`D/view/lifecycle/view.rs:121-142`), so a control that goes with its
-  press leaves focus in `conflict-sheet`. A control that goes by itself
-  in the footer leaves focus on `footer_focus` (fact 32).
-- **Something behind takes focus:** `keep_focus_in_resolve`, run from
-  the Workspace's render as `keep_focus_in_settings` is
-  (`D/view/workspace/render.rs:173-182`, widened to `resolve_open`),
-  moves focus back to the sheet's own handle; like C4's, it leaves a
-  context menu over the sheet alone (R-11).
+  (`D/view/lifecycle/view.rs:121-142`); a footer control that goes by
+  itself leaves focus on `footer_focus` (fact 32). Body presses do not
+  move focus, as today: a body control that goes leaves focus on
+  `conflict-sheet`, its nearest tracked ancestor, through `focus_lost`.
+- **Focus moves that would land behind it.** `focus_content`
+  (`D/view/workspace/content.rs:598-600`) and `apply_review`'s refocus
+  (`:127-148`), which today skip only while Settings is open, skip while
+  `workspace_sheet_open`; the moves that run through them (a discarded
+  draft's `DraftDiscarded`, `close_with_draft`, `open_created`) leave
+  focus where it is. `apply_review` keeps its Drafts and Settings
+  requests until the sheet has closed, rather than losing them to a
+  refusal (R-25).
+- **Something behind takes focus anyway:** `keep_focus_in_resolve`, run
+  from the Workspace's render as `keep_focus_in_settings` is
+  (`D/view/workspace/render.rs:173-182`, its gate widened to
+  `resolve_open`), moves focus back to the sheet's own handle; like
+  C4's, it leaves a context menu over the sheet alone (R-11).
 
 **Where focus goes** (contract; each row read after a draw; P6):
 
 | Row | Situation | Focus after |
 | --- | --- | --- |
-| H1 | Opened by any way in | the sheet's own handle (`conflict-sheet`); Tab reaches the Kit's close button, then the first enabled choice |
+| H1 | Opened by any way in | the sheet's own handle (`conflict-sheet`); Tab reaches the first enabled choice; Shift+Tab reaches the Kit's close button, drawn before the body |
 | H2 | Escape, not in the Result editor | the origin |
 | H3 | Escape in the Result editor | the Result stop; the sheet stays open |
 | H4 | Cancel, or the close button | the origin |
 | H5 | A save that closes it | the origin, or the lifecycle dialog that `applied` reopens |
 | H6 | The origin is no longer drawn when it closes | `focus_lost`'s fallback: the origin's region, else the last region, else Content (`D/view/workspace/focus.rs:320-333`) |
 | H7 | A dialog opened over the sheet (for example Unlock key) closes | the control that held focus when it opened (Root restores it) |
-| H8 | The focused control goes: with its press (a choice disabled by Save); by itself in the footer (Save turns to Retry) | `conflict-sheet`'s handle; `footer_focus` |
-| H9 | Tab and Shift+Tab, repeatedly | never leaves `sheet-host`: the close button, the body, the footer |
-| H10 | Something behind takes focus while it is open | the sheet's own handle |
-| H11 | Quitting while it is open | it closes; Quit now takes focus, as `wait_to_quit` says |
-| H12 | A save's answer lands after the sheet closed (Escape first) | nothing moves; no sheet closes (R-22) |
+| H8 | A body control goes (a choice disabled while a save is out); a footer control goes by itself (Save turns to Retry) | `conflict-sheet`'s handle, through `focus_lost`; `footer_focus` |
+| H9 | Tab and Shift+Tab, repeatedly | never leaves `sheet-host`: the close button, the body, the footer (K-20) |
+| H10 | Something behind takes focus while it is open, the Kit's deferred restore of a dialog closed just before it opened included (`GC/root.rs:341-363`) | the sheet's own handle |
+| H11 | Quitting while it is open | it closes; Quit now takes focus when Activity is displayed, as `wait_to_quit` says |
+| H12 | A save's answer lands after the sheet closed (Escape first), with the sheet's entity still held | nothing moves; no sheet closes; no lifecycle dialog reopens (R-22, R-27) |
 | H13 | Root's context menu over the Result editor | the menu keeps focus until it closes, then the editor |
+| H14 | A save's answer lands while a dialog is over the sheet | nothing until that dialog closes; then H5 (R-26) |
+| H15 | A focus move the workspace makes while it is open (a draft discarded behind it, typing in the Result editor) | unchanged: still in the editor (R-25) |
+| H16 | Resume | the origin |
 
 Origins: the banner's `review_focus`; the Activity list, or the footer's
 Needs attention item for a popover row (as today); the lifecycle
@@ -668,12 +707,12 @@ the element `id` and the Content region holding it (fact 32, R-19).
   {title}" (or "Choose what to keep"), id `conflict-title`; description
   as today, id `conflict-description`; no tile.
 - **Body:** the `conflict-sheet` element keeps its focus,
-  `RESOLVE_SHEET_CONTEXT`, `SaveResolution` and Escape handling, drops
-  its `max_h(px(720.))`, and is laid over the Kit's body, out of its
-  flow, inside a scroll of its own (`conflict-scroll`, with
-  `track_scroll` and the Kit's vertical scrollbar), as the details sheet
-  does (`D/view/item/sheet.rs:254-278`), so Tab to a card below the fold
-  reveals it (R-12). In order: the meta line (fact 15, unchanged),
+  `RESOLVE_SHEET_CONTEXT`, `SaveResolution` and Escape handling and its
+  own vertical scroll, drops its `max_h(px(720.))`, and is laid over the
+  Kit's body, out of its flow, as the details sheet lays its body
+  (`D/view/item/sheet.rs:254-278`), so the header and footer stay put
+  (R-12). As today, Tab to a part below the fold does not scroll it into
+  view (K-19). In order: the meta line (fact 15, unchanged),
   `conflict-note` (unchanged), the status block, the cards.
 
 ### B5. Cards
@@ -740,17 +779,25 @@ and decision 12:
    "Check host…" (`OPEN_SHARING_AND_KEYS`, `CHECK_HOST`,
    `D/model/activity/copy.rs:52-53`) and "Open repository details…"
    (`OPEN_REPOSITORY_DETAILS`, `D/view/lifecycle/outcome.rs:67`),
-   wherever they appear, Activity included.
+   wherever they appear: the lifecycle dialog, Activity's rows, and a
+   comment's offers, whose literal labels (`D/view/item/posting.rs:389-390`)
+   take the constants.
 3. **Keep mine beside Yours:** the buttons keep "Keep mine", "Keep
    theirs", "Keep both" and the columns "Yours" and "Theirs", as `05`
    draws them; the state words "Keeping yours" and the like give way to
    `05`'s "Chosen", and "Edited" for a typed Result (`KEEPING_*` go).
-4. **Shared label constants:** one definition each of "Resume" (the
-   model's, `D/model/activity/copy/states.rs:18`, which
-   `D/model/activity/copy.rs` already re-exports), "Keep mine" and
-   `share_main`, in `D/model/activity/copy.rs`; today's copies
-   (`D/view/lifecycle.rs:103`, `:113-115`, `D/view/conflict.rs:78`,
-   `D/view/conflict/render.rs:43`) re-export them (R-16).
+4. **Shared label constants** (R-16), each defined once in
+   `D/model/activity/copy.rs` (or the file it already re-exports) and
+   re-exported or called where the copies are today:
+   - "Resume": the model's (`D/model/activity/copy/states.rs:18`); the
+     copies at `D/view/lifecycle.rs:103`, `D/view/conflict.rs:78`,
+     `D/model/edit/save_state.rs:11` and the test-only
+     `D/view/operations.rs:49` re-export it;
+   - "Keep mine": new in `copy.rs`; `D/view/conflict/render.rs:43` and
+     `D/model/review.rs:28` re-export it;
+   - `share_main(primary)`: new in `copy.rs`; `D/view/lifecycle.rs:113-115`,
+     the step title at `D/view/lifecycle/outcome.rs:122` and
+     `Intent::label_in` (`D/services/requests.rs:410-413`) call it.
 
 Field names (B5), as the details sheet and the header's fields name them
 (`D/view/item/details.rs:222-229`, `D/view/item/sheet/ticket.rs:35-38`):
@@ -774,27 +821,29 @@ Field names (B5), as the details sheet and the header's fields name them
 `fn field_name(key: &str) -> Cow<'static, str>` lives in a new
 `D/model/conflict/names.rs`.
 
-New lifecycle words (A1–A7): the stage titles; "Closed by {name} ·
-today"; the running lead; the two hints; "Not now"; "Done" for the
-dismiss button; "Now ready to start".
+New words, each a constant: the stage titles (A1); "Closed by {name}
+· today" and "Closed by {name}" (A4); the running lead; the two hints;
+"Stopping…" is today's; "Not now"; "Done" for the dismiss button; "Now
+ready to start"; "Ticket detail", "Document detail", "Comment detail",
+"last shared copy", "Chosen" and "Edited" (B5).
 
 ## Required Outcomes
 
 | # | Outcome | Proof |
 | --- | --- | --- |
 | P1 | Each stage's header title, for both commands (A1) | `each_stage_has_its_title` (new, table-driven) |
-| P2 | Each stage's footer: the buttons in drawn order, the dismiss label and the hint; none but Stop while running (A7) | `each_stage_orders_its_footer` (new, table-driven); Tab reaches them in that order |
+| P2 | Each stage's footer: the buttons in drawn order, the dismiss label and the hint; none but Stop while running; after Stop is pressed, Tab and Shift+Tab stay in the dialog and Escape still hides it (A5, A7, R-23) | `each_stage_orders_its_footer` (new, table-driven); Tab reaches them in that order |
 | P3 | A click on the backdrop hides the dialog only while running; the run goes on; focus returns to the origin (A5) | `the_backdrop_hides_only_a_running_dialog` (new) |
 | P4 | Step rows: state words on the marks; the running step's stage words, with and without the preview; a failed step's message; the message in the box with no failed step (A3) | `steps_show_their_state_and_progress` (new); `running_lights_each_step_from_its_stage` unchanged |
-| P5 | Resolve conflict is a sheet the workspace keeps, through every way in (B1, B2) | `resolve_is_a_sheet_the_workspace_keeps` (new) |
-| P6 | Focus rows H1–H13 (B3) | `focus_around_the_resolve_sheet` (new, table-driven, one row per H) |
-| P7 | Nothing opens over or acts behind it: Ctrl+, , `show_settings`, `show_add_repository`, a details sheet, a workspace key, an Activity action; it opens over neither a dialog nor a sheet; a deferred Republish… waits for it (B2, decision 9, R-18) | `nothing_opens_over_the_resolve_sheet` (new) |
+| P5 | Resolve conflict is a sheet the workspace keeps, through every way in; each way out clears the owner, Resume's included; the lifecycle's way in does nothing under a prompt (B1–B3, R-24) | `resolve_is_a_sheet_the_workspace_keeps` (new) |
+| P6 | Focus rows H1–H16 (B3) | `focus_around_the_resolve_sheet` (new, table-driven, one row per H) |
+| P7 | Nothing opens over or acts behind it: Ctrl+, , `show_settings`, `show_add_repository`, a details sheet (dropped, not kept for later), a workspace key, an Activity action; it opens over neither a dialog nor a sheet; Republish… waits for it on both paths; Ctrl+, right after Escape opens Settings (B1, B2, decision 9, R-18) | `nothing_opens_over_the_resolve_sheet` (new) |
 | P8 | Field names, kinds, Chosen and Edited; an external set's shared row (B5) | `parts_are_named_in_words` (new); the `field_name` unit test |
 | P9 | Copy (Part C, A1–A7) | `close_and_resolve_copy_uses_the_vocabulary` (new copy table) |
 | P10 | No item text in the moved headers and footers (fact 33) | the existing a16 privacy tests, unchanged: the slots are swept as "drawn", and item text is allowed by id only |
 | P11 | D5's behaviour: stale confirmations, Retry reusing the operation, the safe-point stop, no automatic winner (Wave risk row) | D5's existing tests, unchanged in what they assert about behaviour |
-| P12 | No passphrase or private key text in any label, tooltip or Git line of either surface (Wave exit) | `close_and_resolve_show_no_secret` (new): a close whose key is locked, unlocked with a sentinel passphrase, through Failed, Retry and Done, then a remote conflict's sheet; every label, tooltip and Git line in the window, sheet and dialog slots included, holds neither the sentinel nor the fixture key's private text. Built as `passphrase_tests::a_supplied_passphrase_is_shown_or_kept_nowhere` (`D/view/passphrase_tests.rs:553`) is |
-| P13 | A close and an approval that fail, retried by keyboard to Done, focus back on the origin (Wave exit) | `a_failed_run_is_retried_by_keyboard` (new, both commands): a dirty main (`a_dirty_primary_stop_at_execute_merges_nothing`'s fixture, `D/view/lifecycle/outcome_tests.rs:372`) fails the merge; Tab to Retry fails again; main cleaned, Retry, Done by Enter |
+| P12 | No passphrase or private key text in any label or Git line of either surface (Wave exit); this Cycle adds no tooltip | `close_and_resolve_show_no_secret` (new), built as `passphrase_tests::a_supplied_passphrase_is_shown_or_kept_nowhere` (`D/view/passphrase_tests.rs:537-553`) reads every label and value: a key made with `Fixture::generate_key` (`D/test_support/fixtures.rs:920`) and a sentinel passphrase; a close on it, unlocked through the prompt, through Failed, Retry and Done; then a remote conflict's sheet. At each stage no label or value in the window, the dialog's and sheet's slots included, holds the sentinel or the key file's private text |
+| P13 | A close and an approval that fail, retried by keyboard to Done, focus back on the origin (Wave exit) | `a_failed_run_is_retried_by_keyboard` (new, both commands): the library's failure point `BeforeRequestDomainCall` fails the run with `internal_error` and offers Retry, as `outcome_tests::a_stopped_run_with_no_record_offers_prepare` sets it up (`D/view/lifecycle/outcome_tests.rs:299-323`); the normal service is put back without moving the branch; Tab to Retry, Enter, then Done by Enter; focus on the origin |
 
 ## Testing
 
@@ -838,20 +887,22 @@ unless named. Edits the sweep missed are pre-authorized by decision 11.
   (`lifecycle_tests.rs:525-580`): the `lifecycle-title` asserts read the
   Ask titles ("Close {SLUG}?", "Approve and merge {short}?"); the
   `lifecycle-branch` assert (`:547`) reads the branch inside
-  `lifecycle-git` (Task 3 draws it on every stage with the preview; this
-  test's dialog is on confirm, where it is drawn today). The
+  `lifecycle-git` (this test's dialog is on confirm, where it is drawn
+  today). The
   `lifecycle-kind` asserts (`:538`, `:568`) go. **Assertion removal:**
   the title's command words now say the kind (A2).
-- **E-4** (Task 3) `lifecycle::outcome_tests::stop_at_a_safe_point_names_completed_steps`
+- **E-4** (Task 2) `lifecycle::outcome_tests::stop_at_a_safe_point_names_completed_steps`
   (`lifecycle/outcome_tests.rs:224`): the `lifecycle-branch` assert reads
   the branch inside `lifecycle-git`, which the stopped run now draws from
-  the preview it was confirmed with (A6).
+  the preview it was confirmed with (A6; Task 2 draws the Git line on
+  running and ended stages, as it removes the branch line).
 - **E-5** (Task 2) `lifecycle::outcome_tests::the_operation_entry_reopens_the_dialog`
   (`:484-485`): the title reads "Stopped at a safe point".
 - **E-6** (Task 3) `lifecycle::confirm_tests::closure_shows_closed_by_from_the_preview`
   (`lifecycle/confirm_tests.rs:292-293`) and
   `::existing_closure_and_already_contained_read_already` (`:437`): the
-  note reads "Closed by {name} · today".
+  first reads "Closed by {name} · today"; the second, an existing
+  closure, "Closed by Ada Example" (A4).
 - **E-7** (Task 1) `conflict::entry_tests::resolve_conflict_opens_the_childs_sheet`
   (`conflict/entry_tests.rs:406-407`): `RESOLVE_CONFLICT` becomes
   `REVIEW_CHANGES` (Part C item 1). The button's id stays.
@@ -860,7 +911,7 @@ unless named. Edits the sweep missed are pre-authorized by decision 11.
   `D/model/activity_tests/tables.rs:113-114`,
   `D/model/activity_tests/states_pending.rs:174`, `:197` and
   `D/model/activity_tests/attention_states.rs:194`; "Open Sharing & keys"
-  and "Check host" in `tables.rs:133-141` (decision 12).
+  and "Check host" in `tables.rs:133-142` (decision 12).
 - **E-9** (Task 1) `conflict::tests::save_is_disabled_until_every_part_is_chosen`
   (`conflict_tests.rs:328-329`), `::choices_wait_while_a_save_is_out`
   (`:669-675`), `conflict::stale_tests::a_stale_observation_refreshes_the_comparison`
@@ -869,15 +920,15 @@ unless named. Edits the sweep missed are pre-authorized by decision 11.
   (R-20).
 - **E-10** (Task 7) `conflict::tests::save_is_disabled_until_every_part_is_chosen`
   (`conflict_tests.rs:300`): `["title"]` becomes `["Title"]`.
-- **E-11** (Tasks 1 and 6) `keyboard_tests/conflict.rs`'s walk:
+- **E-11** (Tasks 1 and 5) `keyboard_tests/conflict.rs`'s walk:
   `choose_by_keyboard` (`:75-83`) asserts `CHOSEN` and the choice through
   `choice_of` (Task 1); `in_dialog` becomes `in_sheet` (R-19) at every
   call in `resolve_a_local_conflict_by_keyboard`,
   `resolve_a_shared_conflict_by_keyboard` and
   `sheet::{check_again_by_keyboard_keeps_focus_in_the_sheet,
   edit_the_result_by_keyboard, ctrl_enter_with_a_part_unchosen_keeps_focus_in_the_editor}`
-  (Task 5); the first Tab from the sheet's handle reaches the close
-  button (H1).
+  (Task 5). The walk's Tab loops need no other edit: Tab from the
+  sheet's handle reaches the first choice (H1).
 - **E-12** (Task 7) `keyboard_tests::conflict::sheet::edit_the_result_by_keyboard`
   (`:134-135`): Tab from the Result stop reaches `conflict-cancel`, then
   `conflict-save` (decision 4).
@@ -972,9 +1023,11 @@ Each: decision — why — cost if wrong.
   `keep_focus_in_settings`, `settings_keeps_lost_focus` and `focus_content`
   at Settings' page entry (`settings_sheet.rs:270-334`,
   `content.rs:598-600`) — none.
-- **R-12:** the body keeps a scroll of its own over the Kit's, as the
-  details sheet does — the Kit's body does not reveal the focused
-  control, and the walk asserts each focused control is visible — none.
+- **R-12:** the body keeps today's scroll of its own, laid over the
+  Kit's body as the details sheet lays its own — the header and footer
+  stay put, and nothing is lost: today's dialog does not reveal a
+  focused part below the fold either (K-19) — a `ContentScroll` region
+  with markers later, as the details sheet and Settings have.
 - **R-13:** the gutter stays inside the line's text — in mono it already
   reads as a column, and the tests read lines with it — a column of its
   own later.
@@ -1004,9 +1057,35 @@ Each: decision — why — cost if wrong.
   "Chosen" — the state word no longer says which — none.
 - **R-21:** `show_resolve` refuses over any sheet rather than dropping a
   details sheet — no way in can fire with one open — none.
-- **R-22:** Cancel and `applied` close the sheet only while the owner is
-  this sheet (`close_resolve`) — an answer that lands after Escape must
-  not close a sheet opened since — none.
+- **R-22:** `ResolveSheet::close` (Cancel, Resume, `applied`) closes the
+  sheet only while the owner is this sheet (`close_resolve`) — an answer
+  that lands after Escape must not close a sheet opened since — none.
+- **R-23:** every stage of the lifecycle dialog keeps a Tab stop; after
+  Stop, "Stopping…" is an inert one — with none, Root's Tab handler lets
+  focus out of the dialog, and Escape, bound inside it, stops working
+  (`GC/root.rs:494-520`, `gpui-base-0.6.6/src/dialog.rs:552-559`) — none.
+- **R-24:** the lifecycle's way into the sheet does nothing unless the
+  lifecycle dialog is the top dialog — closing a prompt opened over it
+  in the same frame would drop the prompt unanswered, and the sheet would
+  then be refused — a press lost while a prompt is up.
+- **R-25:** one predicate, `workspace_sheet_open` (Settings, Add
+  repository or Resolve), gates the workspace's own focus moves
+  (`focus_content`, `apply_review`'s refocus); `apply_review` keeps its
+  requests until the sheet closes — C4 skips for Settings alone, and
+  05a's G19 and C4's F18 promise focus unchanged under their sheets —
+  one more caller to keep in step.
+- **R-26:** an `applied` that lands under a dialog waits until no dialog
+  is open, then closes, focuses and reopens — closing the sheet under a
+  prompt would focus behind it, and the reopened lifecycle dialog would
+  stack above the prompt; C5a's G23 waits the same way — a close shown
+  late.
+- **R-27:** `close_resolve` returns whether it closed; on false, nothing
+  more runs — a test holds the entity, so `applied` can run after the
+  sheet closed, and production may one day hold it too — none.
+- **R-28:** the sheet is `min(920 px, window width − 48 px)` wide — the
+  Kit does not clamp a sheet, and the app sets no minimum window size,
+  so a narrow window would hide its left side — a narrower sheet than
+  `05` draws in a small window.
 
 ## Known Limits
 
@@ -1034,6 +1113,18 @@ Each: decision — why — cost if wrong.
 - K-16 Ctrl+Enter does not save while focus is on the Kit's close button,
   which sits outside `RESOLVE_SHEET_CONTEXT`.
 - K-17 The Git line is cut short with no tooltip, as today.
+- K-18 The backdrop flag is read when the dialog is drawn: a click in
+  the frame after a run ends hides the ended dialog. On Windows and
+  macOS the Kit marks the backdrop as a window-drag area, which may take
+  the click; the on-screen checklist checks it there.
+- K-19 Tab to a part below the fold does not scroll it into view, as
+  today (R-12).
+- K-20 Root's focus trap tries 100 stops: with more Tab stops than that
+  behind the sheet, a wrap from the last control can land behind it,
+  and the keep-focus check then brings focus back to the sheet's handle,
+  not to the close button.
+- K-21 Quitting closes the sheet in the window that quits, as it closed
+  the dialog; another window's sheet stays until that window quits.
 
 ## Unverified
 
@@ -1042,8 +1133,13 @@ Each: decision — why — cost if wrong.
   `Tone::Accent` in use, `wrapped_kit`, `show_add_repository`. Task 0.
 - **U-6:** the named edits, from the sweep at `ac50ba1a`. Task 0
   re-checks them against 05a's merged code.
-- **U-7:** the classification of fact 31's sites, `apply_review` among
-  them (R-18). Task 0.
+- **U-7:** the classification of fact 31's sites (R-18, R-25), with
+  `apply_review` (whose identity request `show_settings` would now
+  refuse after it is taken, `content.rs:145-147`) and `close_with_draft`
+  and `open_created` (`content.rs:166`, `:503-510`). Task 0.
+- **U-9:** Cycle 05a's own openers that wait for no dialog (its
+  `add_closed` step 3) also wait while `resolve_open`. Task 0, once 05a
+  has merged.
 
 Checked in review round 1 (source review, 2026-11-15) and no longer
 open: U-2 (the Result editor's Escape wins over the Kit sheet's, as over
@@ -1063,12 +1159,16 @@ under its own id).
 - A provisional ready list at confirm (decision 2; D5 decision 6).
 - Widening `settings_open` to cover Resolve (R-11).
 - The Kit's own sheet-body scroll (R-12).
+- A `ContentScroll` region with markers, which would reveal a focused
+  part below the fold: new behaviour beyond today's dialog (R-12, K-19).
+- Moving focus to the sheet's handle on every press, body included: Tab
+  would restart at the first choice after each choice (B3).
 
 ## Risks
 
 | Risk | Mitigation |
 | --- | --- |
-| The sheet slot's interplay (Settings, Add repository, details, dialogs over it) | B1–B3 follow C4 and C5a; P5 is written first in Task 5, P6 (H1–H13) and P7 first in Task 6, under a design checkpoint |
+| The sheet slot's interplay (Settings, Add repository, details, dialogs over it) | B1–B3 follow C4 and C5a; P5 is written first in Task 5, P6 (H1–H16) and P7 first in Task 6, under a design checkpoint |
 | A D5 behaviour test edited into meaning less | Named edits change copy, ids, order or the open helper only; the reviewer of each task checks each edit |
 | 05a's Tasks 4–10 change what this design cites | Task 0 re-maps (U-1); execution waits for 05a's merge |
 
@@ -1081,3 +1181,5 @@ under its own id).
 | Review round 1, source and feasibility (`702e569f`) | 1 Blocking: a control gone from the Kit's footer slot leaves focus on `sheet-host`. Important: P2 read no order; StillRunning in two stages; the Republish… scenario; `settings_open` would aim at Settings; P4's input; the Kit body's scroll | Blocking, Important, Minor | Revision 2: `footer_focus` and presses focusing the sheet (B3, H8); bounds order (fact 34); the Waiting stage (A1); fact 31, R-18; R-11; P4; R-12; and the Minors |
 | Review round 1, contract and consistency (`702e569f`) | 2 Blocking: no proof for the passphrase exit item; no Failed-then-Retry keyboard journey. Important: the Git line in 2d/2e; StillRunning; "Stopping…"; A7's order as an owner decision; decision 1's follow-up; the ellipsis rule; colour alone for the choice; the close paths (quit, guarded closes, late answers); "inside the sheet"; scrolling; contract 5's proof and 05a's `show_add_repository`; amendments; unlisted test edits; privacy order; Task 5's size; P3 | Blocking, Important, Minor; owner questions | Revision 2: P12, P13; A5, A6; A7 into decision 7; K-13; decision 12; the check and "Edited" (B5); B3, H11–H13, R-22; `in_sheet`, H1–H13; R-12; P7, Amendment 6; Amendments 2–6; decision 11; fact 33; the plan's Task 5 split into Tasks 5 and 6 |
 | Owner, 2026-11-15, after review round 1 | Further test edits; the ellipsis rule | Owner decisions | Decisions 11 and 12 |
+| Review round 2, scoped re-review (revision 2, `874bb66b`) | 1 Blocking: P13's fixture offers no Retry. Important: H1's Tab order; presses in the body moving focus; the scroll named reveals nothing; E-4 left Task 2 red. Round 1's findings otherwise resolved | Blocking, Important, Minor | Revision 3: P13 on `BeforeRequestDomainCall`; H1; B3's footer-only rule; R-12, K-19; E-4 into Task 2; and the Minors (Resume, H12, copies, comment offers, "today" for an existing closure, P12, P9's words, stale text) |
+| Review round 2, adversarial on the sheet and the dialog's stages (revision 2, `aaf6b475`) | 1 Blocking: after Stop, no Tab stop is left in the dialog. Important: H1's Tab order; an answer under a dialog closing the sheet; a second Republish… path; workspace focus moves behind the sheet | Blocking, Important, Minor | Revision 3, **not independently reviewed**: R-23; H1; R-26, H14; R-18's two sites; R-25, H15; and the Minors (Resume, R-27, K-18, R-28, `resolve_open` everywhere, R-24, K-20, K-21, H10) |
