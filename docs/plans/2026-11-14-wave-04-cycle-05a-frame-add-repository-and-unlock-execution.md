@@ -24,7 +24,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 0 | review approved after fix round 1 (Minors parked) | merge of Cycle 04's branch `f5015aab`; design `81c3c0de`; Wave `5b7771db`, fix `42f807d5` (base `f5015aab`); ledger `4c515b5b`; merge of Cycle 04's tip `edb0e920`; ticket comment `46b5a11a` | yes |
 | 1 | done, review approved first time (Minors parked) | code `ded7ca46` (base `0ac6af37`); ledger `d9533dd9` | yes |
 | 2 | done, review approved after fix round 1 (Minors parked) | code `b2618100` (base `d9533dd9`), fix `31497e0e`; ledger `92f3ba73` | yes |
-| 3 | done, review approved first time (Minors parked) | code `5f8c10b7` (base `92f3ba73`; trailer amended before publishing) | with the ledger commit |
+| 3 | done, review approved first time (Minors parked) | code `5f8c10b7` (base `92f3ba73`; trailer amended before publishing); ledger `2c398b03` | yes |
+| 4 | done, design checkpoint stopped for the owner (Rulings 15 to 18), review approved first time (Minors parked) | code `0d5cae5c` (base `2c398b03`) | with the ledger commit |
 
 ## Branches published
 
@@ -586,3 +587,219 @@ Minors, for Task 4 and the final review:
 - The sheet is an extra view node wrapping the forms in a flex column, with
   the inner `gap_4` reproducing the old spacing: no test covers appearance;
   the owner's on-screen check settles it.
+
+## Task 4 design checkpoint, 2026-11-15
+
+Phase 1 wrote P3, P4, P5, P6, P7, P8, P15 and P23 over B9's rows G1 to G15,
+G17 to G19, G21 and G23 (G16 and G22 are Task 5's, G20 Task 6's) before any
+production code. Every row failed first (RED) for the right reason. Four rows
+were answered differently by the merged code (B-1 to B-4) and one sub-case was
+ambiguous (B-5). The orchestrator stopped, as the handoff requires, and
+brought them to the owner, who answered each with the recommended option.
+
+Ruling 15 (owner, B-1): `show_add_repository` records the panel's selection as
+Settings' `seen` through a new `SettingsHost` method (R-55's "records the
+selection"), so E-17c's "footer after Inspect(b)" rows stay on `a` as Ruling 7
+says and Cycle 04's P10 keeps its assertion; R-14's rule in `chosen.rs` is
+untouched — cost if wrong: the footer rows expect `b`. Realised as
+`SettingsHost::saw_panel(panel)` (`settings/chosen.rs`), called on every open
+of the Add sheet with any route (see Minor 5 below).
+
+Ruling 16 (owner, B-2 and B-4): "from Settings" is carried separately from the
+origin handle (`from_settings: Option<Option<WeakFocusHandle>>`, set from
+`take_origin()` before `settings_closed(true)`), so G4 holds when Settings
+recorded no origin, and G6 then goes to the content region (Cycle 04's F10);
+B2 step 2's reset runs only when the sheet is not already open, so an in-place
+route keeps the return and the origin — cost if wrong: the two G4 edge rows
+deleted.
+
+Ruling 17 (owner, B-3): the whole `add_closed` (steps 0 to 4) waits while a
+dialog is open, the owner and the open flag kept until it runs, so G23
+"Unchanged" and R-25 hold; **B3's text is corrected**: step 0 and step 1 wait
+too, not only step 3. Realised as a `waiting` close that `sync_sheet` keeps and
+`run_waiting_add_close` runs, deferred, from the render once no dialog is open;
+a quiet close clears it — cost if wrong: focus moves behind an Unlock prompt.
+
+Ruling 18 (owner, B-5): while the add is pending ("Adding…", disabled) and its
+confirmation closes, focus goes to the button's own handle (the wrapper: no
+ring, no Tab stop while disabled), and sits on the button, with no move, once
+it is enabled, as Cycle 04's Ruling 54 did for Check host. P5 gained a row,
+`while_adding`.
+
+Ruling 19 (orchestrator, the checkpoint's other concerns): C-1 follow R-29
+(`registered_root: Option<PathBuf>` on `DesktopRequest`, set from the Finished
+envelope's scope; E-17d); C-2 a Known Limit (below); C-3 `wrapped_kit` is
+reachable from the Add sheet now, a visibility change inside `src/desktop`;
+C-5 typed text is cleared only for the same open, never for a later open
+number; C-6 `show_settings` reads `add_return_to_settings` before its
+`add_closed(Quiet)`; C-4, C-7, G21's button press and G1's mode are Task 5's.
+
+**K-16 (Known Limit, Ruling 19 on C-2).** A confirmation stacked under an
+Unlock prompt cannot close itself: `ConfirmDialog::close` calls
+`window.close_dialog` (`confirm.rs:565-569`) and the Kit closes the topmost
+dialog (Kit `root.rs:325-339`), so an add's finish that lands while an Unlock
+prompt is open above its still-open confirmation closes the prompt instead.
+This predates the Cycle and affects every confirmation. G23's rows close the
+confirmation first (Escape while the add runs). No library change, no ticket.
+
+**A fact for the design (found in phase 2).** The Kit can run a closed sheet's
+close again within the same Escape keystroke (the Sheet host's `Cancel` handler
+calls `cx.propagate()` and then `close()`; seen two to six times in three P6
+rows). Each repeat runs `window.close_sheet`, which closes whatever sheet is
+active then, so Settings, opened from the Add sheet's `on_close`, was closed
+too. Task 0's "the Kit's close order leaves Root's slot free when `on_close`
+opens Settings" holds for the first close only. Fix: `add_closed` opens
+Settings, for a return or for Open its settings, with `cx.defer_in`, after the
+event; a repeated close then finds no sheet and no owner and does nothing.
+Cycle 04 never met this because its `on_close` opens nothing. B3 and Task 0's
+note should say so (Task 10's amendments).
+
+## Task 4 (The Add Sheet)
+
+Base `2c398b03`; code `0d5cae5c`, `feat(desktop): the Add repository sheet, its
+ways in and its focus`, one commit with the phase-1 tests. 64 files under
+`src/desktop/`. Boundary diff empty; `Cargo.lock` unchanged. Gates pass.
+
+**What was built:** `SheetOwner::AddRepository` and `SheetOwnerKind`;
+`sync_sheet`'s three cases; `workspace/add_sheet.rs` (501 lines: `AddRoute`,
+`AddClose`, `PendingAdd`, `show_add_repository`, `add_closed`, `add_sheet()`);
+the sheet in a 470 px Kit `Sheet` with its own scroll and open flag (Ruling
+14) and `frame::sheet_header`/`frame::sheet_footer`; the quit paths close it
+quietly; `show_settings` closes it quietly first (R-22); the Ctrl+, handler
+refuses while it is open (R-14); R-34 and R-46 extended (G18, G19); ways in
+AW-1 to AW-5; `SettingsRoute::Inspect` and `inspect_in_settings` removed
+(R-5), `SettingsRoute::AddRepository` renamed `AddButton` (R-6) with
+`settings-add-repository` a `wrapped_kit` button; `Followed::Confirmed` gains
+`attempt` (R-28, E-16 at `item/repair.rs`); `DesktopRequest.registered_root`
+(R-29); `pending_adds` keyed by attempt and open number (R-26), handled with
+`defer_in` (R-25), "Adding…" while pending (R-27); `PendingAdd::share` stays
+`None` (`#[allow(dead_code)] // Used from Task 7`, and `AddClose::ToSettings`
+`// Used from Task 5`). Task 3's delegates are gone.
+
+**Tests run:**
+
+- Implementer, by exact name, final tree: 35 of 35 pass (the 8 Add-sheet
+  tests, the 17 moved in Task 3, the 10 edited Cycle 04 tests); a mutation
+  check failed G23, G19 and P15's Ctrl+, row as expected, and was reverted.
+- Orchestrator's module run, once, 17 filters (all matched at least one test):
+  `desktop::view::{workspace::add_sheet::tests (8), add_repository::tests (17),
+  settings::repositories (21), repositories (5), dock::tests::toolbars (1),
+  lifecycle::outcome_canned_tests (5), keyboard_tests::settings (6),
+  workspace::settings_sheet::tests (14), settings::chosen_tests (3),
+  confirm::tests (10), item::repair::tests (25), operations::republish::tests
+  (8), workspace::tests (29), quit::tests (7), item::edit_tests::quit (11),
+  activity::tests (16), needs_attention::tests (12)}` — **198 passed, 0
+  failed** (219 s).
+
+**Existing tests edited. No `#[test]` function was removed or renamed.**
+Assertion changes and removals are listed here and go into the review-ready
+summary:
+
+- E-1 (Task 4's part): `settings()` opens the sheet by clicking
+  `add-repository-button` (AW-2); `sheet()` reads `Workspace::add_sheet()`.
+  No assertion removed.
+- E-1b: additions only (the sheet closed; after reopening `add-path` is empty;
+  re-check shows `ALREADY_ADDED`).
+- E-1e `a_form_control_below_the_fold_is_scrolled_into_view`: **assertion
+  changed**, as named: reads `add-scroll` and `create-prefix` (was
+  `settings-scroll` and `create-submit`) through the sheet's
+  `scroll_offset()`.
+- E-4 `the_inspect_recovery_opens_the_page_with_its_root_checked`: calls
+  `show_add_repository(AddRoute::Inspect)` and asserts `add-sheet` is present
+  (was `settings-repositories`).
+- E-5 `add_an_existing_repository_by_keyboard`: **assertion changed**: the last
+  step expects `+` in Repositories (was `walk.region(Content)`).
+- E-6, E-7, E-8 (`rows_and_list_states`, `panel_toolbars_work_by_tab_and_enter`,
+  `each_way_out_offers_its_button`): **assertion changed**:
+  `Shown::Settings(Repositories)` becomes `Shown::Tabs` plus `add-sheet`
+  present; `holds_focus("add-path")` stays.
+- E-12, Cycle 04's P2 `settings_leaves_the_item_as_it_was`: selects `a` first
+  so the Repositories page is again taller than the short window (without the
+  forms it no longer scrolled), then raises `SettingsRoute::AddButton`;
+  **assertion changed**: reads `settings-add-repository` (was `add-path`).
+- E-12, P8 `settings_scrolls_on_its_own`: selects `a` first; End is pressed
+  from `identity-submit` (was `add-browse`); the below-the-fold control is the
+  add button (was `create-submit`); `scrolls::rows` (a) and (b) unchanged.
+- E-12, P4 `routes.rs`: "F1 AddRepository: the Add folder" becomes "F1
+  AddButton", read on the Kit button; **assertion removed:** "F1 Inspect(root),
+  the panel's selection changed: the choice stays (R-55)": the route is gone
+  (R-5); asserted through the Add sheet by this Cycle's P4 E-17c rows
+  (`ways.rs:357-376`).
+- E-12, P22 `late.rs`: **assertion removed:** the `pending_add` row (F17 with
+  R-48) and its function; moved to this Cycle's P8 (G12 `late::pending_check`),
+  which asserts the same facts, `checked() == plain` stronger than
+  `present("add-inspection")` (reviewer-verified: all six).
+- `support.rs`: `tab_to_create` becomes `tab_to_add_button` (new `ADD_BUTTON`
+  constant).
+- E-17b `inside.rs`: `tab_trap`'s last Tab stop is `settings-add-repository`
+  (was `create-submit`); `landings` (F18) and `context_menu` (F19) use
+  `identity-name` (was `add-path`); no assertion removed.
+- E-17c `chosen_tests::one_repository_is_chosen`: `route(Inspect(b))` becomes
+  `show_add_repository(AddRoute::Inspect(b))`, Escape, then the footer open;
+  **assertion removed:** "Inspect(b), panel now b: chosen" (P4's E-17c rows
+  assert it); the typed-text fact and both "footer after Inspect(b)" rows
+  stay and pass (Ruling 15).
+- E-15: no edit. E-16: production only (`item/repair.rs:321` matches
+  `{ request, details, .. }`).
+- E-17d: `registered_root: None` added to 22 `DesktopRequest` literals in 21
+  test files by script, plus two production literals in `services/worker.rs`
+  by hand; the script's first pattern also hit `-> DesktopRequest {` signatures,
+  so those 24 files were restored from git and it was rerun with signatures
+  excluded. The diff adds only `registered_root: None` lines (reviewer-verified)
+  and the files' test-function counts are the same before and after:
+  `activity_tests/states_retire` 0, `activity_tests/support` 0,
+  `operations/outcomes_tests` 2, `operations_tests` 32, `resends_tests` 8,
+  `scheduler/reconfigure` 3, `scheduler_loop_tests` 16,
+  `scheduler_retire_tests` 17, `worker_tests` 36, `activity_tests/cases` 0,
+  `activity_tests/clear` 1, `activity_tests/list_support` 0,
+  `conflict/entry_tests` 7, `footer_tests/support` 0,
+  `item/edit_release_tests` 30, `item/share_tests` 16,
+  `lifecycle/outcome_canned_tests` 5, `operations/check_tests` 1,
+  `operations/outcomes_tests` 13, `operations/republish_tests` 8,
+  `settings/keys_tests/forms` 2. `worker_tests` also gains
+  `#[allow(clippy::large_enum_variant)]` on its test enum `Seen`, as
+  `model/documents.rs` and `model/drafts/rows.rs` already allow it.
+
+**Review** (opus): spec compliant, quality approved, no Critical or Important;
+no loop. Parked Minors, for Task 5 and the final review:
+
+1. `add_sheet.rs:190-194`: when the owner is `AddRepository` but the Kit
+   already closed the sheet without telling the workspace, `show_add_repository`
+   runs `add_closed(Kept)` where Cycle 04's equivalent closes quietly; `Quiet`
+   is safer. No current path reaches it.
+2. `add_sheet.rs:284-351`: `add_closed` is not idempotent by itself (every
+   caller guards on the owner or the open flag, except `AddEvent::Cancel`,
+   unreachable in practice); an entry guard would make it so.
+3. `add_sheet.rs:290-293` with `content.rs:290-296`: if the Kit's sheet were
+   gone while a dialog is open, each render would re-enter `add_closed(Kept)`
+   and spin; notify only when `waiting` changes. Nothing does this today.
+4. **For Task 5 (pointer):** `add_sheet.rs:480-482`: a success that lands while
+   a later open is showing does nothing at all. Ruling 19 C-5 limits only the
+   clearing of text; B10 and B2 step 7 also say the kept check for that folder
+   is forgotten "so its next open checks again". The reopened sheet keeps a
+   stale "not registered" check for the folder just added; Add again
+   re-previews and the library refuses. Untested (P8 `earlier_open` asserts
+   only that the sheet stays open and focus is unchanged).
+5. **Owner's eye:** Ruling 15 is realised unconditionally (every open of the
+   Add sheet, `+` included, as the ruling's text reads); P4 and E-17c need it
+   only for `Inspect`. Side effect: after `+` (AW-2), a panel selection changed
+   since the last Settings open is consumed, so the next plain Settings open no
+   longer follows it (in Cycle 04, `+` opened Settings, which chose the panel's
+   selection). No test pins it either way; restricting it to `AddRoute::Inspect`
+   is one line.
+6. Test hygiene: the new tests copy Cycle 04's helpers (`Table`, `where_focus`,
+   `settle`, `holds`, `holds_handle`, `in_context`, `hold_a_job`, the landings
+   set-up), about 130 lines; one shared `pub(super)` support module would do.
+7. `add_sheet.rs` is 501 lines, `add_repository.rs` 505 (was 475), `workspace.rs`
+   507 (was 495); `show_add_repository` repeats `show_settings`' origin chain.
+8. Nits: `button()`'s `primary` is always false (render.rs:84); `AddClose`'s
+   `#[derive(Clone)]` is unused; `RepositoriesEvent::AddRepository` is forwarded
+   from `chosen.rs:113`.
+9. `ADDING` ("Adding…") is verbatim from B10 and R-27 but is not in Part F's
+   table; P20 (Task 9) lists it.
+
+Not covered until later: a Kit dialog closed by its Confirm key over the sheet
+restores focus 0.25 s later through `defer_close_dialog`; if the sheet's
+waiting close has run by then, that restore could land on the closed sheet's
+submit handle. G23's rows close the prompt by Escape (immediate restore).
+`adds_changed` on a Partial then Retry is covered by P14 (Task 7).
