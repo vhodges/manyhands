@@ -22,6 +22,7 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | Task | Status | Commit | Pushed |
 | --- | --- | --- | --- |
 | 0 | review approved after fix round 1 (Minors parked) | merge of Cycle 04's branch `f5015aab`; design `81c3c0de`; Wave `5b7771db`, fix `42f807d5` (base `f5015aab`); ledger `4c515b5b`; merge of Cycle 04's tip `edb0e920`; ticket comment `46b5a11a` | yes |
+| 1 | done, review approved first time (Minors parked) | code `ded7ca46` (base `0ac6af37`) | with the ledger commit |
 
 ## Branches published
 
@@ -350,3 +351,76 @@ addressed, 0 open; commit `42f807d5`), scoped re-review: addressed.
   `wave-04-workspace-design.md#cycle-05-existing-sheets-and-dialogs`, an
   anchor that no longer exists since the heading split. Tickets are canonical
   files and are not edited here.
+
+Ruling 11: Task 1 keeps `Tone::Danger` and `Tone::Success` with
+`#[allow(dead_code)] // Used from Cycle 05b`, an exception to the plan's "Used
+from Task N" marker — A1's interface lists all three tones, no task of this
+Cycle uses the other two, and Cycle 05b's two surfaces will; Cycle 05b removes
+the allow — cost if wrong: two variants deleted.
+
+Ruling 12: Task 1's extra `hover_strong` token and the secondary button's
+hover and press colours (`button.hover.background`, `button.active.background`
+= `07`'s `hover-strong`, `#353a41` dark, `#e2dfda` light) stay — `07` defines
+the token with these values, and without it the dark-mode hover gets darker
+than the resting colour — but they go to the owner's eye with decision 6: they
+change every Kit Default-variant button app-wide (two lines and the token to
+drop) — cost if wrong: remove them.
+
+## Task 1 (The Frame And Theme)
+
+Base `0ac6af37`; commit `ded7ca46`, `feat(desktop): common dialog frame and
+theme slots; Confirmation on the frame`. Nine files under `src/desktop/`
+(`frame.rs`, `frame/theme.rs`, `frame_tests.rs` new; `confirm.rs`, `assets.rs`,
+`assets_tests.rs`, `mod.rs`, `view/mod.rs`, `shell/tokens.rs`). The boundary
+diff prints nothing; `Cargo.lock` did not move. Gates (`cargo fmt --check`,
+`cargo check --locked --features desktop`, `cargo clippy --all-targets
+--all-features --locked -- -D warnings`) pass.
+
+**Tests run, by exact name (1 test each):**
+
+- P1 `desktop::view::frame::tests::every_dialog_keeps_its_keys_and_focus`
+  (Confirmation row): green on today's code, green after.
+- P2 `desktop::view::frame::tests::footer_buttons_tab_in_drawn_order`
+  (Confirmation row): red on today's code (Tab reaches `confirm-ok` before
+  `confirm-cancel`), green after.
+- `desktop::view::frame::theme::tests::applying_the_theme_keeps_its_mode`:
+  red against a naive apply order (Light flipped to Dark), green with the
+  current mode last.
+- E-14 `desktop::assets::tests::every_item_view_icon_loads`: red with the five
+  names added first (`folder-input errored`), green after the four
+  `icon_assets!` additions.
+
+**Module run, once, by the orchestrator:** `desktop::assets::tests`,
+`desktop::view::frame::tests`, `desktop::view::confirm::tests`,
+`desktop::view::keyboard_tests::confirm`,
+`desktop::view::editing_privacy_tests`,
+`desktop::view::polling_privacy_tests` — 23 passed, 0 failed.
+
+**U-6:** all five icons load. **U-7:** the secondary button has keys
+(`button.background`, with `input.border` for the border); the input
+background has none (the Kit computes it from `input.border`, so the new
+`border_strong` shifts dark inputs: owner's eye); the sheet border and shadow
+have none (global `border`, fixed `shadow_xl`); those slots stay the Kit's
+(K-13).
+
+**Existing tests edited:** E-14 only (`ICONS` 53 to 58 names, `key-round`
+included; no assertion lost). `keyboard_tests/confirm.rs` loops with `tab_to`,
+so E-10 needed no edit.
+
+**Review** (sonnet): spec compliant, quality approved, five Minors, no loop.
+Parked for the final review:
+
+- The `Tone` markers (Ruling 11).
+- The `hover_strong` addition (Ruling 12).
+- The Confirmation header's title has a new id, `confirm-title`: no
+  `confirm-` id predates it, so R-4 holds, but the `polling_privacy_tests`
+  prefix sweep (`confirm-`, `:199`) now also reads it (static `intent.label()`
+  text, which `confirm-command` already carries).
+- The body's top padding is 10, not 18, to make up the Kit's fixed 8 px gap
+  under the title; on-screen check.
+- `frame::body` takes one `content` child, so its 18 px gap does nothing
+  today; later tasks that pass one inner `v_flex` own the inner gap.
+- Not run until Task 10's full tier: tests in modules the Task 1 run does not
+  name that click `confirm-ok` or read `confirm-*` labels
+  (`operations_tests`, `passphrase_tests`, `repositories_tests`). Task 0's
+  sweep found no Tab count or button-order assertion on them.
