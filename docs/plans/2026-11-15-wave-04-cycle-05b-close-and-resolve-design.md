@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 05b Design: Close Ticket And Resolve Conflict"
 date: 2026-11-15
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -28,8 +28,13 @@ Behaviour, services, requests and recovery routes stay as they are. The
 named exceptions are the footer order (decision 4), the running stage's
 buttons and backdrop (decision 4), the sheet itself (decision 3) and the
 copy (decisions 5 and 12, Part C). It changes `src/desktop/` only.
-Draft, revision 4 (review rounds 1–3 applied, decisions 11 and 12;
-revision 4 had no independent review): nothing here is approved.
+Approved 2026-11-15 (revision 4, Cycle decision 13; revision 4 had no
+independent review), with implementation authorized, subagent-driven and
+serial, from the handoff brief `2026-11-15-wave-04-cycle-05b-handoff.md`.
+Execution waits until Cycle 05a has merged. Approval covers the
+mechanisms, rulings, named test edits and task order. It does not
+authorize a pull request, merging, closing the ticket, worktree cleanup,
+native CI or creating tickets.
 
 Planned against:
 
@@ -1002,7 +1007,8 @@ runs.
 5. **Cycle 03b's copy** (the approval commit, a dated note in its
    design's Part B): "Review changes…", "Open Sharing & keys…" and
    "Check host…" (decision 12).
-6. **Cycle 05a's design** (the approval commit, a dated note under B2
+6. **Cycle 05a's design** (Task 0, once 05a has merged: its branch is
+   still moving, so an edit now would meet its own; a dated note under B2
    and B3): `show_add_repository` also refuses while Resolve conflict is
    open, and `add_closed`'s return to Settings waits while it is
    (decision 9, U-9).
@@ -1210,3 +1216,4 @@ under its own id).
 | Review round 2, scoped re-review (revision 2, `874bb66b`) | 1 Blocking: P13's fixture offers no Retry. Important: H1's Tab order; presses in the body moving focus; the scroll named reveals nothing; E-4 left Task 2 red. Round 1's findings otherwise resolved | Blocking, Important, Minor | Revision 3: P13 on `BeforeRequestDomainCall`; H1; B3's footer-only rule; R-12, K-19; E-4 into Task 2; and the Minors (Resume, H12, copies, comment offers, "today" for an existing closure, P12, P9's words, stale text) |
 | Review round 2, adversarial on the sheet and the dialog's stages (revision 2, `aaf6b475`) | 1 Blocking: after Stop, no Tab stop is left in the dialog. Important: H1's Tab order; an answer under a dialog closing the sheet; a second Republish… path; workspace focus moves behind the sheet | Blocking, Important, Minor | Revision 3: R-23; H1; R-26, H14; R-18's two sites; R-25, H15; and the Minors (Resume, R-27, K-18, R-28, `resolve_open` everywhere, R-24, K-20, K-21, H10) |
 | Review round 3, scoped re-review (revision 3, `3964af7c`) | 0 Blocking, 2 Important, 7 Minor. Important: P12's fixture never prompts; R-24 had no mechanism and dropped Repair locally's late sheet. Round 2's findings resolved | Important, Minor | Revision 4, **not independently reviewed**: P12 on `import_key` and the prompt; R-24's focus check and wait (U-10); R-26's drain; 05a's `sheet_held`; H1 by set kind; Cancel through `close`; the copies; the Verify lines; Amendments 2 and 6 |
+| Owner, 2026-11-15 | Approval (Cycle decision 13) | Owner decision | Approved at revision 4; Amendments 2–5 applied in the approval commit, 1 and 6 in Task 0 |

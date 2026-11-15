@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 05b: Close Ticket And Resolve Conflict"
 date: 2026-11-15
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -14,16 +14,19 @@ Ticket `01M7D7JK5MSY6J471JEKG3CZXR` (`vh-qjw5e`).
 [Design](../plans/2026-11-15-wave-04-cycle-05b-close-and-resolve-design.md) and
 [implementation plan](../plans/2026-11-15-wave-04-cycle-05b-close-and-resolve-implementation.md).
 
-Status: **draft** (revision 4), for the owner's review. Nothing here is
-approved. **Revision 4 had no independent review.**
+Status: **approved 2026-11-15** (revision 4). The owner wrote:
+"Recommendations, test edits, implementation and documents are
+approved. Subagent driven development in a fresh session by a hand off
+brief and prompt." (decision 13). **Revision 4 had no independent
+review**; the owner approved it without one.
 
 - On 2026-11-15 the owner asked to plan Cycle 05b ("Lets plan 05b
   next"), once Cycle 05a's documents were approved (05a decision 21).
 - The same day the owner answered decisions 1–5 and accepted the
   planner's outline with decision 6 ("Write the documents").
 - After review round 1 the owner answered decisions 11 and 12.
-- Decisions 7–10 are the planner's proposals, each with its reason,
-  awaiting the owner.
+- Decisions 7–10 were the planner's proposals, each with its reason;
+  the owner confirmed them at approval.
 - Those marked **(owner's eye)** change something people see today or
   depart from an authority.
 
@@ -54,6 +57,10 @@ Revision history:
   sheet behave under a prompt (R-24). It also reads Cycle 05a's branch
   at `d7b39f62` (05a's Task 6), whose sheet checks it now names.
   **Revision 4 was not independently reviewed.**
+- Approved 2026-11-15 (decision 13). The approval commit applied the
+  design's Document Amendments 2–5 (`05`, `06`, `08` and Cycle 03b's
+  copy). Amendment 1 (the Wave) and Amendment 6 (Cycle 05a's design,
+  whose branch is still moving) wait for Task 0.
 
 ## Purpose And Authority
 
@@ -282,7 +289,8 @@ repeated.
    kind; D5's extra states go on the same frame; desktop-only, executed
    after 05a merges.
 
-Proposed by the planner, awaiting the owner:
+Proposed by the planner, and confirmed by the owner at approval
+(2026-11-15):
 
 7. **Stage titles, the Waiting stage, and every footer** (design A1, A7):
    - titles "Close {short}?", "Closing…", "Still running…", "Ticket
@@ -338,6 +346,27 @@ After review round 1:
     confirmation. This changes Cycle 03b's Activity copy (design Document
     Amendment 5). **(owner's eye)**
 
+At approval:
+
+13. **Approved, and implementation authorized, subagent-driven and
+    serial, in a fresh session.** The owner wrote: "Recommendations,
+    test edits, implementation and documents are approved. Subagent
+    driven development in a fresh session by a hand off brief and
+    prompt." That is:
+    - the three documents, revision 4, without a further review;
+    - the planner's recommendations: decisions 7–10 confirmed, and the
+      recommended answers the documents are written to;
+    - the named test edits E-1 to E-15, with further edits under
+      decision 11;
+    - **authorized:** Tasks 0–9 of the plan, once Cycle 05a
+      (`01M7D5Z7FZTGTC1HE25KQ1MYQY`) is closed and merged to main (the
+      ticket's Entry Gate); pushing this ticket branch, and other
+      branches where a comment on another ticket publishes them;
+    - **not authorized** without asking the owner at the time: a pull
+      request, merging into main, closing the ticket, worktree cleanup,
+      native CI, or creating tickets;
+    - the execution brief: `docs/plans/2026-11-15-wave-04-cycle-05b-handoff.md`.
+
 ## Known Limits
 
 Design K-1 to K-21: no line counts; no ready list at confirm; progress as
@@ -372,3 +401,4 @@ and U-9 (05a's own waiting openers) are checked in Task 0.
 | Review round 2, scoped re-review (revision 2, `874bb66b`) | 1 Blocking, 4 Important, 8 Minor. Blocking: P13's fixture offers no Retry. Important: H1's Tab order; presses in the body moving focus; the scroll named reveals nothing; a task left red | Blocking, Important, Minor | Revision 3 (design Review Record) | Review report, 2026-11-15 |
 | Review round 2, adversarial (revision 2, `aaf6b475`) | 1 Blocking, 4 Important, 9 Minor. Blocking: no Tab stop after Stop. Important: H1; an answer under a dialog; a second Republish… path; focus moves behind the sheet | Blocking, Important, Minor | Revision 3; decisions 7 and 9 revised | Review report, 2026-11-15 |
 | Review round 3, scoped re-review (revision 3, `3964af7c`) | 0 Blocking, 2 Important, 7 Minor. Important: the privacy test's key never prompts; the lifecycle's way in under a prompt had no mechanism and lost Repair locally's late sheet | Important, Minor | Revision 4, **not independently reviewed** (design Review Record) | Review report, 2026-11-15 |
+| Owner, 2026-11-15 | Approval message: documents (revision 4, no further review), recommendations, test edits, execution method, authorization | Owner decisions | Decisions 7–10 confirmed; decision 13; Document Amendments 2–5 applied | Session, 2026-11-15 |

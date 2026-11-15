@@ -25,6 +25,10 @@ Inputs: 32 px high, radius 6, `editor` background, 1 px `border-strong`. Focus: 
 - Any of the secondary button, the input background, or the sheet's border and shadow that the Kit theme has no key for stays the Kit's.
 - Escape keeps each dialog's rule from before: it closes the dialog at once, except New ticket, New document, New folder and Move, which refuse it while their write runs. The Add repository sheet closes on Escape as Cancel, also while a request runs, as Settings does; nothing is cancelled.
 
+*As built, Wave 04 Cycle 05b (2026-11-15):*
+- The Close ticket and Approve and merge dialog and Resolve conflict also put the action last (Cancel · Close ticket; Not now · the fixes · Retry; Done; Cancel · Save resolution).
+- Resolve conflict is a sheet the workspace keeps. It closes on Escape, its close button, Cancel, Resume, a save that finishes it, or quitting, and not on its scrim. While it is open, Ctrl+, , Settings and Add repository do nothing.
+
 ---
 
 ## Add repository sheet (1d) · 470 px
@@ -125,6 +129,16 @@ Header: a 32 px icon tile (`archive` amber; `circle-x` red when failed; `circle-
 
 A changed observation (new path, new remote state) **invalidates** the confirmation and re-renders the effect summary (RFC).
 
+*As built, Wave 04 Cycle 05b (2026-11-15):*
+- Steps in the library's order: Save your latest edits; Share with origin (or Keep on this computer); Mark as closed; Merge into main; Share main with origin, when there is a remote; Tidy up (Wave 03 D5 R-8). Approve and merge has no Mark as closed step, and its tile is `git-merge`.
+- Files show their change, path and tag (`ticket`, `document`, `comment`, `code`) and no line counts, which the library does not give; the count sits in parentheses in the heading.
+- No "Becomes ready to start" before the close. A closure that reached main, done or failed, shows "Now ready to start".
+- "Closed by {name} · today" for a close to record, "Closed by {name}" for one already recorded. The confirmation's expiry is shown under the Git line.
+- The running step's description is the stage's words ("Sending your saved changes…"), not counts. A failed step's description is the library's message, which names no key.
+- A sixth stage, "Still running…", when another call holds the item: Close and the offered actions.
+- The dismiss button reads Cancel while asking, Close for the other questions, Not now after a failure or stop, and Done last when done. While running, Stop at a safe point is the only button, and after it, "Stopping…" stays a Tab stop. The backdrop hides the dialog only while running.
+- The outcome box keeps the run's ending word ("Done", "Failed") as its first line. A run reopened without its preview shows no Git line and no step descriptions but the running step's.
+
 ## Resolve conflict sheet (2g) · 920 px
 
 Opens from the conflict banner, the Needs attention popover, or the Activity "Review" action.
@@ -138,6 +152,15 @@ Opens from the conflict banner, the Needs attention popover, or the Activity "Re
 - Footer: the Git detail (mono, ellipsis: `Git: conflict in … · base … · ours … · theirs …`) · Cancel · **Save resolution**, enabled only when every part is chosen.
 - Saving validates, checkpoints and clears the banner. There is **no automatic winner** (RFC).
 - Noncanonical conflicts (code, binary, rename/delete) get a different card: "This file needs fixing outside Manyhands" + Open folder + Check again (RFC external recovery). Not designed visually; reuse the card frame.
+
+*As built, Wave 04 Cycle 05b (2026-11-15):*
+- 920 px wide, narrower in a window under about 970 px. The scrim does not close it.
+- No author names or times, which the library does not give: "Keep theirs" and "Theirs". The Git line names ours and theirs, not the base, and is cut short with no tooltip.
+- The body is one part, "Description", with no kind label; a field part's kind is "Ticket detail", "Document detail" or "Comment detail", and its name is in words ("Status").
+- The state reads "Choose one", "Chosen", or "Edited" once the Result is typed in. The chosen button keeps the Kit's selected style, with a check.
+- Each body keeps an editable Result with the note "You can still edit it in the item afterwards." (Wave 03 D5 R-27, R-34), not one live preview. Line marks stay inside the line's text.
+- Files that need fixing outside Manyhands get a card each; Open folder and Check again are one row for the set.
+- Tab to a part below the fold does not scroll it into view.
 
 ## Unlock key dialog (2h) · 440 px
 
@@ -159,7 +182,7 @@ Shown on first SSH use per session (including the first poll), or from Needs att
 Anchored above the footer's attention item (bottom 34 px, right-aligned to it). Click outside or Esc closes it. *Amended 2026-11-13 by Wave 04 Cycle 03b (decisions 11, 18 and 24; its design Parts E2 and H): the arrows, Home and End move the highlight; Enter runs the highlighted row's button, or opens its item when it has none, and activates the link; Tab and Shift+Tab cycle the list, the highlighted row's button and the link, and focus stays inside the popover; Escape closes it and returns focus to the footer item. It also closes when its count reaches zero, when a dialog or sheet opens, and when another menu opens. A press outside closes it and also reaches what is under it, unless it is the footer item itself.*
 - Header: "Needs attention" / "Your work is safe on this computer. Nothing here happens until you choose."
 - **One row per unresolved recovery state:** icon (colored) · title (500) · description (12 px `secondary`) · action button · repo tag. The tooltip has the Git detail. Examples:
-  - `circle-alert` red: "You and Jo Smith both changed "Footer toggles for dock panels"". "Choose what to keep. Nothing is shared until you do." [Review changes]
+  - `circle-alert` red: "You and Jo Smith both changed "Footer toggles for dock panels"". "Choose what to keep. Nothing is shared until you do." [Review changes…]
   - `lock` amber: "Your key is locked". "Sharing from manyhands is waiting for the passphrase." [Unlock…]
   - `wifi-off` red: "Couldn't reach zorite's shared copy". "Last tried 7 minutes ago. Your work is safe, and Manyhands tries again in 5 minutes." [Retry now] *Amended 2026-11-13 by Wave 04 Cycle 03b (its design K-7): "tries again" carries no fixed minutes, since retries back off.*
 - Footer link: "Show everything in Activity" (opens and shows the Activity panel).

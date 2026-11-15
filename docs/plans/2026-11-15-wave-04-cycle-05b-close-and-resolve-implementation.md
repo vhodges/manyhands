@@ -1,7 +1,7 @@
 ---
 title: "Wave 04 Cycle 05b Implementation Plan: Close Ticket And Resolve Conflict"
 date: 2026-11-15
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -14,10 +14,12 @@ id: "01M7FACCS575B9W0PRRCDW9N0A"
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task.
 >
-> **Draft, revision 4** (review rounds 1–3 and decisions 11 and 12
-> applied; revision 4 had no independent review), for the owner's review. Nothing here is approved, and
-> execution waits until Cycle 05a (`01M7D5Z7FZTGTC1HE25KQ1MYQY`) is
-> merged to main (the ticket's Entry Gate).
+> **Approved 2026-11-15** (revision 4; **revision 4 had no independent
+> review**). Execution is subagent-driven and serial, in a fresh session
+> from the handoff brief `docs/plans/2026-11-15-wave-04-cycle-05b-handoff.md`
+> (Cycle decision 13). It waits until Cycle 05a
+> (`01M7D5Z7FZTGTC1HE25KQ1MYQY`) is merged to main (the ticket's Entry
+> Gate).
 >
 > Where focus goes around the Resolve sheet is a table of required
 > outcomes (design B3, H1–H16), and it is the contract. Task 6 writes its
@@ -66,11 +68,11 @@ Devenv. No new dependency.
 **Precondition.**
 
 - The owner has approved the three documents, authorized implementation
-  and chosen the execution method.
+  and chosen the execution method (2026-11-15, decision 13).
 - **Cycle 05a is closed and merged to main** (the ticket's Entry Gate).
 - Task 0 does not start before both.
-- The design's Document Amendments 2 to 6 are applied by the planner in
-  the approval commit; Amendment 1 is applied in Task 0.
+- The design's Document Amendments 2 to 5 were applied in the approval
+  commit; Amendments 1 and 6 are applied in Task 0.
 
 **Roles.**
 
@@ -294,9 +296,9 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
     owner.
   - If `Cargo.lock` moved `gpui-kit`, `gpui-base` or `gpui-component`,
     stop for the owner.
-- [ ] **Step 4: Wave amendment.** Apply the design's Document Amendment 1
-  to `docs/Waves/wave-04-workspace-design.md`'s Cycle 05b section, in a
-  commit of its own.
+- [ ] **Step 4: Amendments.** Apply the design's Document Amendment 1
+  to `docs/Waves/wave-04-workspace-design.md`'s Cycle 05b section, and
+  Amendment 6 to Cycle 05a's merged design, in a commit of their own.
 - [ ] **Step 5: Sweep the E-list (U-6) and the dialog-only guards
   (U-7),** over tests and production code alike:
 
