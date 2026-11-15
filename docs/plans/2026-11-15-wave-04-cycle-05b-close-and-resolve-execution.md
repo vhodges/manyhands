@@ -25,7 +25,8 @@ serial (Cycle decision 13). Implementers: Task 0 on Opus, others per task.
 | 2 | complete | `ec6a3110..25335162` | clean (Sonnet reviewer), 3 Minor deferred | with the ledger commit after it |
 | 3 | complete | `1df89a09..9a9a6e30` | clean (Sonnet reviewer), 5 Minor deferred | with the ledger commit after it |
 | 4 | complete | `aa66a5ab..5f729d5d` (feature `4401609c`, fix `5f729d5d`) | clean (Opus reviewer, Sonnet re-review of the fix), 7 Minor deferred | with the ledger commit after it |
-| 5–9 | not started | | | |
+| 5 | complete | `c0cd4df8..c22ae1ae` | clean (Opus reviewer), 7 Minor deferred | with the ledger commit after it |
+| 6–9 | not started | | | |
 
 ## Base and merges
 
@@ -125,7 +126,7 @@ Each task's own text against itself:
   (Ask, with "Still running…" kept in the body). They are named by function
   in the task text. Cost if wrong: a reviewer queries an off-map file.
 - **Ruling O-3** (Task 8's helpers): Task 8 widens `window_text` and `ask`
-  to `pub(super)` where needed, recorded as E-20 and E-21 (visibility only,
+  to `pub(super)` where needed, recorded as E-21 and E-22 (visibility only,
   no assertion changes), in preference to copying them. Why: decision 11
   pre-authorizes edits with no assertion change, and a copy would drift.
   Cost if wrong: the edit is reverted and a copy used.
@@ -191,6 +192,8 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 - **Ruling O-6** (Task 4, P13): after Done on a closed ticket the origin control no longer exists (a closed ticket does not offer Close ticket…), so D5's `focus_lost` fallback puts focus on the closed ticket's tab in the content region (unchanged behaviour, design A8). P13 asserts focus on the action for Approve and merge… and, for Close ticket…, that the action is gone and focus is on its tab, with a comment saying why. The Wave's "focus returned to the invoking control" cannot hold literally for a close. Flag at review-ready. Cost if wrong: a production change outside A7 to keep focus on a control that is gone.
 - **Ruling O-7** (Task 4, the footer wraps): the blocked prepare's footer holds five buttons (about 730 px) in a 580 px dialog with 538 px free. Without a fix the frame's right-aligned row spilled past the dialog's left edge: Close sat at x 337–407 (hidden) and Check now at 415–524 (its middle outside the dialog at 506), so a click on it hit the backdrop (`check_now_tests::way_out_check_now` failed, found by the orchestrator's module run, not by the implementer). Fix `5f729d5d`: the lifecycle footer (`lifecycle/view.rs`) wraps onto a second line, buttons still in A7's order with the action last; `frame.rs` unchanged, so no other dialog changes. Also ruled: the hint gets the id `frame-hint` in `frame.rs` (no collision: the 14 other `Footer` sites pass `hint: None`); "Still running…" stays in the footer after Close, as today. Flag at review-ready and in the on-screen checklist: the owner's eye on a two-line footer in the blocked state (frame 2e shows one line). Cost if wrong: the owner wants the dialog wider or the buttons shorter, a visual change.
 
+- **Ruling O-8** (Task 5, one rule of B3 pulled forward): two E-11 keyboard walks (`resolve_a_local_conflict_by_keyboard`, `resolve_a_shared_conflict_by_keyboard`) assert `in_sheet("conflict-sheet")` right after Save is pressed. Save now sits in the Kit's footer slot, and when it goes disabled focus moves to `conflict-footer`'s `footer_focus`, not `conflict-sheet`. They pass only with B3's footer-press rule: "each footer button's press focuses the sheet's own handle first, as `LifecycleDialog::on` does" (`ResolveSheet::on_footer`, `conflict/render.rs:66-84`, used by Resume, Retry, Save resolution and Cancel). The plan gives that rule to Task 6 but expects E-11 green at Task 5. Options were A (pull the rule forward, about 25 lines), B (leave two walks red until Task 6) and C (assert `conflict-footer` instead, which changes what they assert). Chose A. Nothing else from B3 came forward. Consequence: Task 6's H rows that this rule answers (H8 and the footer-press rows) will pass the moment they are written, so Task 6's implementer proves each such row can fail by removing `on_footer` for a moment. Cost if wrong: Task 6's checkpoint shows fewer red rows.
+
 ## Test edits (E-n)
 
 | E | Task | Status |
@@ -209,7 +212,8 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | E-17 (Task 2) | 2 | `privacy_promote_tests::saved_document` made `pub(super)` so P1 reuses it. Visibility only |
 | E-18 (Task 3) | 3 | `made_ready_tests.rs` compares `READY_TO_START` instead of the deleted `MADE_READY_LEAD` (Task 1 left both; retired here). The assertion is otherwise unchanged |
 | E-19 (Task 4) | 4 | `keyboard_tests::lifecycle::Walk::reach_the_action` hands its steps to a new `reach_the_action_in(.., tab, ..)` so P13 can open the document as tab 1 (the original passes `("tab", 0)`). Behaviour identical, no assertion changed |
-| E-20, E-21 (Ruling O-3; renumbered once Tasks 2 to 4 took E-16 to E-19) | 8 | reserved for `window_text` and `ask` visibility, if Task 8 needs them |
+| E-20 (Task 5) | 5 | 12 existing test helpers widened to `pub(in crate::desktop::view)` so P5 reaches them. Visibility only, no assertion changed (listed in the Task 5 report) |
+| E-21, E-22 (Ruling O-3; renumbered once Tasks 2 to 5 took E-16 to E-20) | 8 | reserved for `window_text` and `ask` visibility, if Task 8 needs them |
 
 ## Tests run, by checkpoint
 
@@ -224,6 +228,8 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | Task 4, implementer | exact names: P2 `lifecycle::stages_tests::each_stage_orders_its_footer`, P3 `::the_backdrop_hides_only_a_running_dialog`, P13 `keyboard_tests::lifecycle::a_failed_run_is_retried_by_keyboard`, the 4 walk tests sharing `reach_the_action`, the 2 frame tests that draw footers, and after the fix `check_now_tests::way_out_check_now`; fmt, check --features desktop, clippy | P2, P3, P13 each RED first (no footer yet; the backdrop never hid; the dismiss read "Close", not "Not now"), then green together; the others green; static gates clean |
 | Task 4, orchestrator module run 1, at `4401609c` | 28 module filters: the plan's list (`keyboard_tests::lifecycle`, `view::lifecycle::{tests, confirm_tests, stale_tests, outcome_tests, outcome_canned_tests, credential_tests, action_tests, check_now_tests}`, `operations::republish::{tests, stop_tests}`, `workspace::settings_sheet::tests`) plus Task 0's and the Task 3 modules | **1 failed** (`check_now_tests::way_out_check_now`, deterministic: left 0, right 1 at `check_now_tests.rs:74`), 142 passed, 215 s. Same failure alone by exact name. Cause and fix: Ruling O-7 |
 | Task 4, orchestrator module run 2, at `5f729d5d` | the same 28 filters | 143 passed, 0 failed, 219 s. The privacy sweeps and the Tab-count test (`settings_sheet_tests/keyboard.rs:200`) stayed green |
+| Task 5, implementer | exact names: P5 `workspace::resolve_sheet::tests::resolve_is_a_sheet_the_workspace_keeps`, the 5 E-11 walks, E-2's two, and the 34 tests that use `open_sheet_in` (E-1) | P5 RED seen first (`the banner: a sheet, no dialog`, left `(false, true)`, right `(true, false)`). After Ruling O-8: 40 run, 40 passed; static gates clean. U-10 holds: Repair locally…'s waiting sheet opens at the first frame after the prompt closes |
+| Task 5, orchestrator module run | 17 filters: `view::conflict`, `view::keyboard_tests::conflict`, `view::workspace::{tests, settings_sheet::tests, add_sheet::tests, resolve_sheet::tests}`, `view::{activity::tests, needs_attention::tests}`, `view::lifecycle::{tests, outcome_canned_tests, credential_tests, privacy_tests, privacy_remote_tests}`, `view::operations::resume::tests`, `view::item::{share::tests, posting::tests}`, `desktop::model::conflict` | 262 passed, 0 failed, 343 s |
 | Task 1, orchestrator module run | one `cargo test` with the filters `desktop::model::activity::tests`, `view::conflict`, `view::keyboard_tests::conflict`, `view::activity::tests`, `view::needs_attention::tests`, `view::lifecycle::{credential_tests, tests, outcome_tests, outcome_canned_tests}`, `view::item::{posting::tests, edit_tests::review, share::tests}`, `desktop::assets::tests`, `desktop::model::{review::tests, conflict}` | 256 passed, 0 failed, 284 s |
 
 ## Task 1: copy and constants
@@ -256,6 +262,14 @@ Implementer: Opus (resumed twice: once for rulings O-5 and O-6, once for the reg
 
 **Test edits.** E-19 only (above). No assertion removed. P2, P3 and P13 as the plan names; O-5 and O-6 above; the Review Focus "Stop pressed", "Done after Stop", "Waiting with Close first" rows are in P2.
 
+## Task 5: Resolve as a sheet: owner and ways in
+
+Implementer: Opus (resumed once for Ruling O-8). Commit `c22ae1ae` `feat(desktop): Resolve conflict as a sheet the workspace keeps`. Reviewer: Opus, spec compliant, no Critical or Important. B1: `SheetOwner::Resolve`, `SheetOwnerKind::Resolve`, `sync_sheet`'s two cases, a details request dropped while `resolve_open`. B2: `Workspace::show_resolve` (new `workspace/resolve_sheet.rs`, 60 lines) refuses over a dialog or any sheet, opens, sets the owner in the same update (R-9) and focuses the sheet's handle; every way in goes through it (`ItemRoute::Resolve` in `owned()` and `open_route`, the Activity and pending rows, the popover, both lifecycle ways in); its only production caller of `conflict::open` is `show_resolve`. `conflict::open` is a Kit sheet, width `(viewport − 48).clamp(0, 920)`, `overlay_closable(false)`, `conflict-header` in the title slot and `conflict-footer` in the footer slot with `RESOLVE_SHEET_CONTEXT`, `SaveResolution` and `footer_focus`; `max_h(720)` is gone. R-24: Review changes… presses only when focus was inside the dialog before `on` moved it; Repair locally…'s sheet waits (`State::Conflicted`, a deferred retry from render, bounded by `mem::take`). Cancel, Resume and `applied` go through `ResolveSheet::close`, which calls `close_sheet` for now.
+
+**Test edits.** E-1, E-2, E-11 (Task 5 part: seven `in_dialog` sites become `in_sheet`, which is `on(id, Region::Content)`, R-19), E-20. E-12 untouched (Tab still reaches Save first). No assertion removed. Deviation accepted: `Entry::opening` returns `Opening`, not `Option<Opening>` (building one cannot fail).
+
+**Carried to Task 6** (the reviewer's interim-gap list, each of which P6 or P7 must pin): until Task 6, `show_settings` and `show_add_repository` close any active sheet, so Ctrl+, or Add repository closes a Resolve sheet and loses its choices (before Task 5 the dialog blocked them); `ResolveSheet::close` can close a sheet opened after an Escape (R-22); `apply_review`'s refocus is not gated (R-25, Ruling O-1); `resolve_open` is `pub(super)` and `operations/republish.rs` needs it (R-18). Also **quit asking first**: `unkept_asks_first` (`workspace/lifecycle.rs:89-90`) used to close the Resolve dialog through `close_all_dialogs`; the sheet now stays under "Edits not kept" as the details sheet does. H11 covers `wait_to_quit`, not that path: Task 6's implementer checks what the quit does with an open Resolve sheet and reports the answer. Also stale docs to fix in Task 6's files: `ResolveSheet::focus`'s field doc (`conflict.rs` about :285-290), `resolve_open`'s doc, `keys.rs:460-463`.
+
 ## Deferred minor findings
 
 Task 0: minor (deferred): the design's U-1 closing paragraph says "Every name above exists as named" and then lists corrections; wording polish only.
@@ -275,3 +289,8 @@ Task 4: minor (deferred): P2 groups wrapped lines by exact `f32` centre equality
 Task 4: minor (deferred): the report says 16 other `Footer` sites; there are 14, all `hint: None`.
 Task 4: minor (deferred): P2 has no row for Done after a primary (Open ready tickets · Republish… · Done); P3's failed row does not assert its stage itself; nothing pins that Enter and Space on "Stopping…" do nothing.
 Task 4: minor (deferred): `stages_tests.rs` is 1434 lines and `each_stage_orders_its_footer` about 430 of them, with a conditional `if shell.present("item-done")`. The plan fixes the exact test paths, so no split.
+Task 5: minor (deferred): stale docs: `ResolveSheet::focus`'s field doc says focus returns through `focus_lost` where `on_footer` now does it; `resolve_open`'s doc says "read by every refusal and wait" where only `sync_sheet` reads it in Task 5; `keys.rs:460-463` still explains the Enter `NoAction` binding by the dialog. Task 6 touches these files and fixes them.
+Task 5: minor (deferred): `focus_inside` (`lifecycle/repair.rs` about :270) is true for any focused ancestor, Root's own handle included, not only the Kit's dialog-host the comment names. Tighten, or make the comment say so.
+Task 5: minor (deferred): P5's RED was seen at the first assertion (the banner); the R-24 and U-10 halves were not seen failing. The reviewer showed by reading that each discriminates (without `on_inside` the press closes the top dialog, the prompt; without the wait the answer closes the prompt and is refused).
+Task 5: minor (deferred): while `State::Conflicted` waits under a prompt, `repair_line` still reads "Bringing {primary} into this {item}'s working copy…" although the synchronization has answered.
+Task 5: minor (deferred): `on_inside` repeats `LifecycleDialog::on`'s body; it could wrap `on` with the guard.
