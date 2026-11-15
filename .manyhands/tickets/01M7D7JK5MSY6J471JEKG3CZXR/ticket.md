@@ -61,15 +61,15 @@ it element by element; in short:
 
 ## Planning
 
-- [ ] Merge the latest main (with 05a merged, or 05a's approved branch)
+- [x] Merge the latest main (with 05a merged, or 05a's approved branch)
   into this ticket branch.
-- [ ] Create `docs/Cycles/wave-04-cycle-05b-close-and-resolve.md`, with
+- [x] Create `docs/Cycles/wave-04-cycle-05b-close-and-resolve.md`, with
   the check in full.
-- [ ] Decide with the owner what to do where the design shows data the
+- [x] Decide with the owner what to do where the design shows data the
   library lacks, and whether Resolve conflict becomes a right-side sheet.
-- [ ] Decide with the owner what to take from
+- [x] Decide with the owner what to take from
   `01M6RAS63EWVHWWVBSZ836RXG2` (D5 follow-ups: copy and test harness).
-- [ ] Create the design and implementation plan and record their
+- [x] Create the design and implementation plan and record their
   checkpoints as ticket comments.
 
 ## Entry Gate
