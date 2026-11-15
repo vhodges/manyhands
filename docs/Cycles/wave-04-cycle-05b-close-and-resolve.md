@@ -20,6 +20,7 @@ Status: **draft**, for the owner's review. Nothing here is approved.
   next"), once Cycle 05a's documents were approved (05a decision 21).
 - The same day the owner answered decisions 1–5 and accepted the
   planner's outline with decision 6 ("Write the documents").
+- After review round 1 the owner answered decisions 11 and 12.
 - Decisions 7–10 are the planner's proposals, each with its reason,
   awaiting the owner.
 - Those marked **(owner's eye)** change something people see today or
@@ -30,7 +31,13 @@ Revision history:
 - Drafted on the ticket branch at `ac50ba1a`: main `ea6d899b` with
   Cycle 05a's branch (`2c398b03`, which carries Cycle 04's branch and
   05a's Tasks 0–3) merged in, as the ticket's first planning step allows
-  ("with 05a merged, or 05a's approved branch").
+  ("with 05a merged, or 05a's approved branch"). Revision 1 at
+  `702e569f`.
+- Review round 1 read revision 1 at `702e569f`:
+  - source and feasibility: 1 Blocking, 6 Important, 10 Minor;
+  - contract and consistency: 2 Blocking, 16 Important, 7 Minor.
+- Revision 2 applied both, and decisions 11 and 12. The follow-up
+  library ticket (decision 1) was created and published.
 
 ## Purpose And Authority
 
@@ -84,7 +91,7 @@ Authorities, in order:
 ## The Wave's "Check First"
 
 Read-only comparison, 2026-11-14 (recorded in the ticket), confirmed at
-`ac50ba1a` (design facts 1–19). Only the differences are in scope.
+`ac50ba1a` (design facts 1–24). Only the differences are in scope.
 
 **Close ticket and Approve and merge** (`D/view/lifecycle*`):
 
@@ -99,7 +106,7 @@ Read-only comparison, 2026-11-14 (recorded in the ticket), confirmed at
 | Files: icon, path, tag, `+n −m` | icon, path, tag (and a `comment` tag); no counts (D5 R-3) | no counts (decision 1) |
 | Code note | as designed | — |
 | Becomes ready to start, at confirm | none (D5 decision 6) | no (decision 2) |
-| Git line | as designed | — |
+| Git line | on confirm only | yes: also running, failed and stopped, as 2d and 2e draw it (design A5, A6) |
 | Footer hint, Cancel · **Close ticket** | none; **Close ticket** · Cancel, left | yes (decision 4) |
 | Local-only step 2 | as designed | — |
 | Running: lead above, ticks, spinner, numbers, progress in the step | lead below; state words; no notes | yes (A3, A5); progress as stage words (decision 1) |
@@ -153,8 +160,8 @@ merged code (design U-1).
 2. **Resolve conflict as a sheet** (Part B): a new sheet owner, every
    way in through the workspace, its focus contract, the header and
    footer fixed, cards with names, kinds and states.
-3. **Copy** (Part C), including the three copy items from the D5
-   follow-ups ticket (decision 5).
+3. **Copy** (Part C): the copy items from the D5 follow-ups ticket
+   (decision 5) and the ellipsis rule (decision 12).
 
 ## Explicit Exclusions And Downstream Obligations
 
@@ -165,10 +172,11 @@ merged code (design U-1).
   - a whole-file Result preview (D5 R-27);
   - every other item of `01M6RAS63EWVHWWVBSZ836RXG2` (decision 5);
   - any library, repository-format or CLI change.
-- **Follow-up ticket** (decision 1): the library data for line counts,
-  conflict authors and times, and the merge base, created with this
-  planning checkpoint. The surfaces leave room for them; drawing them is
-  that ticket's.
+- **Follow-up ticket** (decision 1): `01M7FBRBN04QACSCZV6KX0WMR3`
+  (`vh-nkp8c`), the library data for line counts, conflict authors and
+  times, and the merge base, created and published 2026-11-15. The
+  surfaces leave room for them; drawing them is that ticket's. Progress
+  counts and the key's name stay known limits.
 - **For later Cycles:** none.
 
 ## Required Contract
@@ -179,17 +187,19 @@ merged code (design U-1).
    - the footer order and labels (decision 4);
    - the running stage's buttons and backdrop (decision 4);
    - Resolve conflict as a sheet (decision 3);
-   - the copy (Part C, decisions 5, 7, 8, 10).
+   - the copy (Part C, decisions 5, 7, 8, 10, 12).
 2. **D5's behaviour holds** (Wave risk row): stale confirmations, Retry
    reusing the operation, the safe-point stop, no automatic winner. D5's
    tests pass, edited only as the named edits say.
 3. **Resolve conflict is a sheet the workspace keeps,** opened only
-   through the workspace, closed by Escape, its close button, Cancel or a
-   save, never by its scrim (decision 9).
-4. **Focus is trapped and returns,** as design B3's rows H1–H10 set out,
-   and as today for the lifecycle dialog.
+   through the workspace, closed by Escape, its close button, Cancel, a
+   save or quitting, never by its scrim (decision 9). A close that lands
+   after it has gone closes nothing.
+4. **Focus is trapped and returns,** as design B3's rows H1–H13 set out,
+   and as today for the lifecycle dialog, the backdrop's hide included.
 5. **Nothing acts behind either surface** (Wave 03 D3 R-60), and nothing
-   opens Settings or a details sheet over Resolve conflict.
+   opens Settings, Add repository or a details sheet over Resolve
+   conflict; what waited for its dialog waits for the sheet.
 6. **No secret.** No new text, tooltip, accessible name or Git line
    names a passphrase or private key.
 
@@ -201,14 +211,14 @@ rows await the owner's checks.
 
 | # | Wave exit evidence / contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | A close and an approval through confirm, running, failed with Retry, and done, including a local-only repository, by keyboard (Wave exit) | `keyboard_tests::lifecycle::{close_a_ticket_by_keyboard, approve_and_merge_a_document_by_keyboard}`, edited only as named; P1 `each_stage_has_its_title`; P2 `each_stage_orders_its_footer` | Planned |
+| A1 | A close and an approval through confirm, running, failed with Retry, and done, including a local-only repository, by keyboard (Wave exit) | `keyboard_tests::lifecycle::{close_a_ticket_by_keyboard, approve_and_merge_a_document_by_keyboard}`, edited only as named; P13 `a_failed_run_is_retried_by_keyboard` (both commands); P1 `each_stage_has_its_title`; P2 `each_stage_orders_its_footer` | Planned |
 | A2 | The design's stages: steps with state and progress, the outcome box, the footers (scope 1) | P2; P3 `the_backdrop_hides_only_a_running_dialog`; P4 `steps_show_their_state_and_progress` | Planned |
 | A3 | Resolving a conflict, by keyboard (Wave exit) | `keyboard_tests::conflict::{resolve_a_local_conflict_by_keyboard, resolve_a_shared_conflict_by_keyboard}` and `::sheet::*`, edited only as named | Planned |
 | A4 | Resolve conflict is a sheet the workspace keeps (contract 3) | P5 `resolve_is_a_sheet_the_workspace_keeps`; P7 `nothing_opens_over_the_resolve_sheet` | Planned |
-| A5 | Focus returned to the invoking control after each (Wave exit; contract 4) | P6 `focus_around_the_resolve_sheet` (H1–H10); `confirm_tests::enter_confirms_esc_cancels_and_focus_returns`; `action_tests::focus_returns_to_the_action_when_the_dialog_closes` | Planned |
-| A6 | Parts named in words; the Chosen state (Part C) | P8 `parts_are_named_in_words` | Planned |
+| A5 | Focus returned to the invoking control after each (Wave exit; contract 4) | P6 `focus_around_the_resolve_sheet` (H1–H13); P3; P13; `confirm_tests::enter_confirms_esc_cancels_and_focus_returns`; `action_tests::focus_returns_to_the_action_when_the_dialog_closes` | Planned |
+| A6 | Parts named in words; Chosen and Edited; nothing acts behind (Part C; contract 5) | P8 `parts_are_named_in_words`; P7 `nothing_opens_over_the_resolve_sheet` | Planned |
 | A7 | Copy (Part C) | P9 `close_and_resolve_copy_uses_the_vocabulary` | Planned |
-| A8 | No passphrase or private key text reaches any label, tooltip or Git detail line (Wave exit; contract 6) | P10: the lifecycle and conflict privacy tests, their surfaces extended | Planned |
+| A8 | No passphrase or private key text reaches any label, tooltip or Git detail line (Wave exit; contract 6) | P12 `close_and_resolve_show_no_secret`; P10: the a16 privacy tests, unchanged | Planned |
 | A9 | D5's behaviour (contract 2) | P11: D5's stale, Retry, Stop, answer and review tests, unchanged in what they assert about behaviour | Planned |
 | A10 | The surfaces match frames 2c, 2d, 2e and 2g as amended, in the dark theme | On screen: the owner | Planned |
 
@@ -224,12 +234,15 @@ repeated.
    them (design facts 25, 27, 28, 30). 05b shows what exists in their
    place: no counts, "Keep theirs" and "Theirs", a Git line with ours and
    theirs, today's message as the cause, and the stage's words as the
-   running step's progress. One follow-up ticket asks the library for
-   line counts, conflict authors and times, and the merge base; 05b does
-   not wait for it. **(owner's eye)**
+   running step's progress. One follow-up ticket,
+   `01M7FBRBN04QACSCZV6KX0WMR3` (`vh-nkp8c`), asks the library for line
+   counts, conflict authors and times, and the merge base; 05b does not
+   wait for it. Progress counts and the key's name stay known limits.
+   **(owner's eye)**
 2. **The ready list after the close only.** The owner chose "After the
-   close only". Confirm shows no "Becomes ready to start"; Done shows
-   "Now ready to start", the library's report, as D5 decision 6 has it.
+   close only". Confirm shows no "Becomes ready to start"; a closure that
+   reached main, Done or Failed, shows "Now ready to start", the
+   library's report, as D5 decision 6 and R-20 have it.
 3. **Resolve conflict becomes a right-side sheet.** The owner chose
    "Right-side sheet". It is another user of the one sheet slot, with
    its own owner, beside the details sheet, Settings and Add repository.
@@ -254,44 +267,81 @@ repeated.
 
 Proposed by the planner, awaiting the owner:
 
-7. **Stage titles and dismiss labels** (design A1, A7): "Close {code}?",
-   "Closing…", "Couldn't finish closing", "Ticket closed", "Stopped at a
-   safe point" (and the Approve and merge forms); the dismiss button
-   reads Cancel before a run, Not now after a failure or stop, Done when
-   done, Close elsewhere. Today's "Done" or "Failed" word stays as the
-   outcome box's first line (design R-17), and the kind icon and branch
-   line go. *Why:* `05` draws the first four; the rest follow them.
-   **(owner's eye)**
+7. **Stage titles, the Waiting stage, and every footer** (design A1, A7):
+   - titles "Close {short}?", "Closing…", "Still running…", "Ticket
+     closed", "Couldn't finish closing", "Stopped at a safe point" (and
+     the Approve and merge forms, "Merged into {primary}" when done);
+   - an answer that another call still holds the item (`busy`) is its
+     own stage, Waiting: "Still running…", Close and today's other
+     buttons, no backdrop hide;
+   - each phase's footer exactly as design A7's table lists it: the
+     dismiss button first (Cancel while asking to confirm, Close for the
+     other questions and for Waiting, Not now after a failure or stop,
+     Done last when done), then today's other buttons in today's order,
+     then today's primary buttons;
+   - today's "Done" or "Failed" word stays as the outcome box's first
+     line (design R-17), the kind icon and branch line go, and the Git
+     line is drawn on every stage that holds the preview.
+
+   *Why:* `05` draws the confirm, running, failed and done titles and
+   footers; the rest follow them. **(owner's eye)**
 8. **"Closed by {name} · today"** (design A4, R-3), without the email.
    *Why:* `05` draws it so; the email adds nothing the person does not
    know. **(owner's eye)**
 9. **Resolve conflict keeps today's rules where a sheet would differ**
-   (design R-7, R-10): its scrim does not close it, and Ctrl+, does
-   nothing while it is open. *Why:* both would lose the choices, and
-   today's dialog stops both.
-10. **Field names and kinds** (design Part C table, B5): "Status" for
-    `status` and so on, an unknown key as written; "Ticket detail",
-    "Document detail" or "Comment detail" as a field's kind; the body
-    stays "Description". *Why:* `05` names parts in words; the keys are
-    the library's. **(owner's eye)**
+   (design B2, B3): its scrim does not close it; Ctrl+, , a route into
+   Settings and Cycle 05a's Add repository do nothing while it is open;
+   a Republish… that waited for its dialog waits for the sheet. *Why:*
+   each would lose the choices or cover them, and today's dialog stops
+   all of them.
+10. **Field names, kinds and states** (design Part C table, B5): "Status"
+    for `status` and so on, an unknown key as written, as the details
+    sheet names them; "Ticket detail", "Document detail" or "Comment
+    detail" as a field's kind; the body stays "Description"; the state
+    reads "Chosen", or "Edited" once the Result was typed in; the chosen
+    button shows a check, so colour is not the only signal. *Why:* `05`
+    names parts in words and says "Chosen"; "Edited" keeps what "Keeping
+    the result as edited" said. **(owner's eye)**
+
+After review round 1:
+
+11. **Further test edits pre-authorized.** The owner chose "Pre-approve,
+    as 05a did". An edit to an existing test that the named edits (design
+    E-1 to E-15) do not list is numbered E-16 onward in the execution
+    ledger with its reason, checked by the task's reviewer, and each
+    assertion removal is named in the review-ready summary.
+12. **The ellipsis rule, everywhere the labels appear.** The owner chose
+    "Yes, everywhere they appear": "Open Sharing & keys…", "Open
+    repository details…" and "Check host…", in the lifecycle dialog and
+    in Activity, as `06` asks of an action that opens a sheet or
+    confirmation. This changes Cycle 03b's Activity copy (design Document
+    Amendment 5). **(owner's eye)**
 
 ## Known Limits
 
-Design K-1 to K-13: no line counts; no ready list at confirm; progress as
+Design K-1 to K-17: no line counts; no ready list at confirm; progress as
 stage words; the cause names no key; "today" assumed; no author names or
-times; no base in the Git line; the Kit's selected style; the file count
-in parentheses; message-only states take the Ask title; Resolve's scrim
-does nothing; shared outside actions; the library follow-up.
+times; no base in the Git line; the Kit's selected style with a check;
+the file count in parentheses; message-only states take the Ask title;
+Resolve's scrim does nothing; shared outside actions; the library
+follow-up; the body has no kind label; a run shown without its preview
+has no Git line or step notes; Ctrl+Enter does nothing on the sheet's
+close button; the Git line has no tooltip.
 
 ## Open Questions
 
-None blocking. Design U-1 (05a's merged names) and U-6 (the named edits
-against 05a's merged code) are checked in Task 0.
+None blocking. Design U-1 (05a's merged names), U-6 (the named edits
+against 05a's merged code) and U-7 (the dialog-only guards) are checked
+in Task 0.
 
 ## Review Record
 
 | Source | Concern | Classification | Resolution | Evidence |
 | --- | --- | --- | --- | --- |
 | Owner, 2026-11-15 | Plan 05b now | Owner direction | Planning started; 05a's branch merged into this one (`ac50ba1a`), as the ticket's first planning step allows | Session, 2026-11-15 |
-| Planning research, 2026-11-15 | The lifecycle dialog, Resolve conflict and the library's data at `ac50ba1a`; the sheet slot; the D5 follow-ups; the test sweep | Facts; owner questions; rulings | Design facts 1–30; decisions 1–5; rulings | Research reports, 2026-11-15 |
+| Planning research, 2026-11-15 | The lifecycle dialog, Resolve conflict and the library's data at `ac50ba1a`; the sheet slot; the D5 follow-ups; the test sweep | Facts; owner questions; rulings | Design facts 1–34; decisions 1–5; rulings | Research reports, 2026-11-15 |
 | Owner, 2026-11-15 | Missing data; ready list; sheet or dialog; button order; D5 follow-ups; the outline | Owner decisions | Decisions 1–6 | Session, 2026-11-15 |
+| Review round 1, source and feasibility (revision 1, `702e569f`) | 1 Blocking, 6 Important, 10 Minor. Blocking: a control gone from the Kit's footer slot leaves focus outside the sheet. Important: footer order unreadable; StillRunning in two stages; the Republish… scenario; Settings' focus check; P4's input; the Kit body's scroll | Blocking, Important, Minor | Revision 2 (design Review Record) | Review report, 2026-11-15 |
+| Review round 1, contract and consistency (revision 1, `702e569f`) | 2 Blocking, 16 Important, 7 Minor. Blocking: no proof for the passphrase exit item; no failed-then-Retry keyboard journey. Important: the Git line in 2d and 2e; StillRunning; "Stopping…"; the footer order as an owner decision; the follow-up's scope; the ellipsis rule; colour alone for the choice; quit and late closes; "inside the sheet"; scrolling; contract 5; amendments; unlisted test edits; privacy order; Task 5's size; P3 | Blocking, Important, Minor; owner questions | Revision 2; decisions 7, 9, 10 revised; decisions 11 and 12 | Review report, 2026-11-15 |
+| Owner, 2026-11-15, after review round 1 | Further test edits; the ellipsis rule | Owner decisions | Decisions 11 and 12 | Session, 2026-11-15 |
+| Planner, 2026-11-15 | The follow-up library ticket (decision 1) | Owner direction | `01M7FBRBN04QACSCZV6KX0WMR3` (`vh-nkp8c`) created and published at `ecb44079` | Session, 2026-11-15 |
