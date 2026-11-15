@@ -24,7 +24,8 @@ serial (Cycle decision 13). Implementers: Task 0 on Opus, others per task.
 | 1 | complete | `eaf18125..30aaa015` | clean (Sonnet reviewer), 3 Minor deferred | with the ledger commit after it |
 | 2 | complete | `ec6a3110..25335162` | clean (Sonnet reviewer), 3 Minor deferred | with the ledger commit after it |
 | 3 | complete | `1df89a09..9a9a6e30` | clean (Sonnet reviewer), 5 Minor deferred | with the ledger commit after it |
-| 4–9 | not started | | | |
+| 4 | complete | `aa66a5ab..5f729d5d` (feature `4401609c`, fix `5f729d5d`) | clean (Opus reviewer, Sonnet re-review of the fix), 7 Minor deferred | with the ledger commit after it |
+| 5–9 | not started | | | |
 
 ## Base and merges
 
@@ -124,7 +125,7 @@ Each task's own text against itself:
   (Ask, with "Still running…" kept in the body). They are named by function
   in the task text. Cost if wrong: a reviewer queries an off-map file.
 - **Ruling O-3** (Task 8's helpers): Task 8 widens `window_text` and `ask`
-  to `pub(super)` where needed, recorded as E-19 and E-20 (visibility only,
+  to `pub(super)` where needed, recorded as E-20 and E-21 (visibility only,
   no assertion changes), in preference to copying them. Why: decision 11
   pre-authorizes edits with no assertion change, and a copy would drift.
   Cost if wrong: the edit is reverted and a copy used.
@@ -186,6 +187,10 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 
 **Review:** clean. Spec compliant, no Critical or Important findings. The reviewer checked far more than 8 line citations against the tree, confirmed that no contract text changed, that E-13's "57 to 59" is true, and that the two amendments match the design. Two items it could not check from the diff are the sweep's count of 55 (the raw count of 65 `has_active_dialog` lines, 9 of them also naming `has_active_sheet`, is consistent with it) and "`content.rs` changed only in the empty pane" (plausible from the hunks).
 
+- **Ruling O-5** (Task 4, P2 rows): the plan's Review Focus input "a failed run offering Retry and Unlock… (both last, Retry first)" cannot occur: `lifecycle/actions.rs:192-198` offers Unlock… only for a locked key and then withholds Retry (pinned at `:253-255` and in `credential_tests`), and Retry never sits beside Prepare again or Republish…. A7's table says "each when offered" and never claims the pair, so this is a plan wording defect, not a contract row. Three P2 rows replace it: Retry alone (Not now · Retry); a locked key (Not now · Open Sharing & keys… · Unlock…, no Retry); `unlock_required` with `request.prepare` (Not now · Open Sharing & keys… · Prepare again · Unlock…). Cost if wrong: the owner wants the pair possible, which is a code change in D5's rules.
+- **Ruling O-6** (Task 4, P13): after Done on a closed ticket the origin control no longer exists (a closed ticket does not offer Close ticket…), so D5's `focus_lost` fallback puts focus on the closed ticket's tab in the content region (unchanged behaviour, design A8). P13 asserts focus on the action for Approve and merge… and, for Close ticket…, that the action is gone and focus is on its tab, with a comment saying why. The Wave's "focus returned to the invoking control" cannot hold literally for a close. Flag at review-ready. Cost if wrong: a production change outside A7 to keep focus on a control that is gone.
+- **Ruling O-7** (Task 4, the footer wraps): the blocked prepare's footer holds five buttons (about 730 px) in a 580 px dialog with 538 px free. Without a fix the frame's right-aligned row spilled past the dialog's left edge: Close sat at x 337–407 (hidden) and Check now at 415–524 (its middle outside the dialog at 506), so a click on it hit the backdrop (`check_now_tests::way_out_check_now` failed, found by the orchestrator's module run, not by the implementer). Fix `5f729d5d`: the lifecycle footer (`lifecycle/view.rs`) wraps onto a second line, buttons still in A7's order with the action last; `frame.rs` unchanged, so no other dialog changes. Also ruled: the hint gets the id `frame-hint` in `frame.rs` (no collision: the 14 other `Footer` sites pass `hint: None`); "Still running…" stays in the footer after Close, as today. Flag at review-ready and in the on-screen checklist: the owner's eye on a two-line footer in the blocked state (frame 2e shows one line). Cost if wrong: the owner wants the dialog wider or the buttons shorter, a visual change.
+
 ## Test edits (E-n)
 
 | E | Task | Status |
@@ -203,7 +208,8 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | E-16 (Task 2) | 2 | Removed the dead `Heading::branch` field and the `branch: None,` line in `operations/resume.rs`, `conflict/entry.rs` and `conflict_tests.rs`. Why: `lifecycle-branch` goes (E-3), so the field is dead and clippy `-D warnings` fails on it. No assertion changed |
 | E-17 (Task 2) | 2 | `privacy_promote_tests::saved_document` made `pub(super)` so P1 reuses it. Visibility only |
 | E-18 (Task 3) | 3 | `made_ready_tests.rs` compares `READY_TO_START` instead of the deleted `MADE_READY_LEAD` (Task 1 left both; retired here). The assertion is otherwise unchanged |
-| E-19, E-20 (Ruling O-3; renumbered from E-16, E-17 once Tasks 2 and 3 took those) | 8 | reserved for `window_text` and `ask` visibility, if Task 8 needs them |
+| E-19 (Task 4) | 4 | `keyboard_tests::lifecycle::Walk::reach_the_action` hands its steps to a new `reach_the_action_in(.., tab, ..)` so P13 can open the document as tab 1 (the original passes `("tab", 0)`). Behaviour identical, no assertion changed |
+| E-20, E-21 (Ruling O-3; renumbered once Tasks 2 to 4 took E-16 to E-19) | 8 | reserved for `window_text` and `ask` visibility, if Task 8 needs them |
 
 ## Tests run, by checkpoint
 
@@ -215,6 +221,9 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | Task 2, orchestrator module run | one `cargo test` with filters `view::lifecycle::{tests, outcome_tests, outcome_canned_tests, privacy_tests, privacy_promote_tests, privacy_remote_tests, action_tests, save_first_tests, lock_tests, stages_tests}`, `view::keyboard_tests::lifecycle`, `view::frame::tests` | 52 passed, 0 failed, 95 s |
 | Task 3, implementer | exact names: P4 `lifecycle::stages_tests::steps_show_their_state_and_progress`, the two E-6 confirm tests, `outcome_tests::running_lights_each_step_from_its_stage`, `made_ready_tests::done_lists_made_ready_with_slug_and_title`; fmt, check --features desktop, clippy | P4 RED seen (empty notes where the stage words were expected), then 4 passed on the others; static gates clean |
 | Task 3, orchestrator module run | one `cargo test` over the 20 module filters the plan and Task 0 list for Task 3 (`view::lifecycle::{outcome_tests, outcome_canned_tests, made_ready_tests, made_ready_review_tests, confirm_tests, interruption_tests, no_record_tests, after_tests, privacy_tests, privacy_promote_tests, privacy_remote_tests, save_first_tests, lock_tests, steps_tests, stages_tests, tests}`, `view::operations::{resume::tests, republish::follow_tests}`, `view::keyboard_tests::lifecycle`, `view::conflict::lifecycle_resume_tests`) | 93 passed, 0 failed, 127 s. The privacy sweeps stayed green with the step notes now drawn on running and ended stages |
+| Task 4, implementer | exact names: P2 `lifecycle::stages_tests::each_stage_orders_its_footer`, P3 `::the_backdrop_hides_only_a_running_dialog`, P13 `keyboard_tests::lifecycle::a_failed_run_is_retried_by_keyboard`, the 4 walk tests sharing `reach_the_action`, the 2 frame tests that draw footers, and after the fix `check_now_tests::way_out_check_now`; fmt, check --features desktop, clippy | P2, P3, P13 each RED first (no footer yet; the backdrop never hid; the dismiss read "Close", not "Not now"), then green together; the others green; static gates clean |
+| Task 4, orchestrator module run 1, at `4401609c` | 28 module filters: the plan's list (`keyboard_tests::lifecycle`, `view::lifecycle::{tests, confirm_tests, stale_tests, outcome_tests, outcome_canned_tests, credential_tests, action_tests, check_now_tests}`, `operations::republish::{tests, stop_tests}`, `workspace::settings_sheet::tests`) plus Task 0's and the Task 3 modules | **1 failed** (`check_now_tests::way_out_check_now`, deterministic: left 0, right 1 at `check_now_tests.rs:74`), 142 passed, 215 s. Same failure alone by exact name. Cause and fix: Ruling O-7 |
+| Task 4, orchestrator module run 2, at `5f729d5d` | the same 28 filters | 143 passed, 0 failed, 219 s. The privacy sweeps and the Tab-count test (`settings_sheet_tests/keyboard.rs:200`) stayed green |
 | Task 1, orchestrator module run | one `cargo test` with the filters `desktop::model::activity::tests`, `view::conflict`, `view::keyboard_tests::conflict`, `view::activity::tests`, `view::needs_attention::tests`, `view::lifecycle::{credential_tests, tests, outcome_tests, outcome_canned_tests}`, `view::item::{posting::tests, edit_tests::review, share::tests}`, `desktop::assets::tests`, `desktop::model::{review::tests, conflict}` | 256 passed, 0 failed, 284 s |
 
 ## Task 1: copy and constants
@@ -241,6 +250,12 @@ Implementer: Sonnet. Commit `9a9a6e30` `feat(desktop): lifecycle step rows and o
 
 **Test edits.** E-6 (two confirm tests) and E-18 (above). No assertion removed. **Carried to Task 4:** "Open ready tickets" stays in the button row until A7's table moves it; the interim `frame::body(...)` wrapper of `render` is Task 4's to re-nest; the Git line sits where A6 puts it.
 
+## Task 4: lifecycle footers, backdrop and the failed journey
+
+Implementer: Opus (resumed twice: once for rulings O-5 and O-6, once for the regression). Commits `4401609c` `feat(desktop): lifecycle footers, action last` and `5f729d5d` `fix(desktop): keep Check now working in the lifecycle footer`. Reviewers: Opus on `4401609c` (spec compliant, no Critical or Important), Sonnet re-review on `5f729d5d` (approved). `footer_buttons` applies A7's rule in one place with a stable partition, so order within each group is today's by construction; `hides_on_backdrop` is read at each render; "Stopping…" is an inert Tab stop with its own handle and keeps `lifecycle-stopping`; the body and footer are re-nested as A2 says. Helper files outside the File Map (Ruling O-2): `prepare.rs`, `republish.rs`, `repair.rs`, `resumed.rs`, `actions.rs`, `made_ready.rs`.
+
+**Test edits.** E-19 only (above). No assertion removed. P2, P3 and P13 as the plan names; O-5 and O-6 above; the Review Focus "Stop pressed", "Done after Stop", "Waiting with Close first" rows are in P2.
+
 ## Deferred minor findings
 
 Task 0: minor (deferred): the design's U-1 closing paragraph says "Every name above exists as named" and then lists corrections; wording polish only.
@@ -255,3 +270,8 @@ Task 3: minor (deferred): P4's `message_home` searches rows `(0..16)`; deriving 
 Task 3: minor (deferred): the `split_once(" <")` fallback (no email in `closed_by`) has no test; E-6 covers the email form only.
 Task 3: minor (deferred): P4's failure and Waiting rows use a ticket; the document kind is covered only by the held-with-preview row. The drawer is shared.
 Task 3: minor (deferred): `running.rs`'s `ended()` is long, since it builds the box's `lines` vector.
+Task 4: minor (deferred): P2's "no footer control drawn off the dialog" check uses `visible()`, which is true for a control only partly past the dialog's edge (the original Check now spill was partial, so it passed that check and only Close was caught). It proves "not wholly clipped", not "inside the dialog's bounds". Tighten to each wrapper's bounds within the `lifecycle-dialog` bounds if the final review wants it. `check_now_tests::way_out_check_now` pins the actual regression.
+Task 4: minor (deferred): P2 groups wrapped lines by exact `f32` centre equality (a false failure, never a false pass, if rounding split a line); quantize the centre if it ever flakes.
+Task 4: minor (deferred): the report says 16 other `Footer` sites; there are 14, all `hint: None`.
+Task 4: minor (deferred): P2 has no row for Done after a primary (Open ready tickets · Republish… · Done); P3's failed row does not assert its stage itself; nothing pins that Enter and Space on "Stopping…" do nothing.
+Task 4: minor (deferred): `stages_tests.rs` is 1434 lines and `each_stage_orders_its_footer` about 430 of them, with a conditional `if shell.present("item-done")`. The plan fixes the exact test paths, so no split.
