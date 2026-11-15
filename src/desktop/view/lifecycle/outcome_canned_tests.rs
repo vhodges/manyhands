@@ -415,6 +415,10 @@ async fn each_way_out_offers_its_button(cx: &mut TestAppContext) {
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
     assert!(matches!(shown, Shown::Settings(SettingsPage::Repositories)));
+    assert!(
+        shell.holds_focus("add-path", cx),
+        "W-22 lands on the Add folder (Part D)"
+    );
 }
 
 /// P6, canned (decision 9): a remote that refuses the shared branch's

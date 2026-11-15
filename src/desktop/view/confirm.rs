@@ -68,7 +68,7 @@ pub(crate) const SUBMITTED: &str = "Submitted";
 pub(crate) const NOT_QUEUED: &str = "The request cannot be submitted again now: it is still queued or running, or Manyhands is quitting.";
 pub(crate) const SECRET_REQUIRED: &str = "The passphrase is needed again.";
 pub(crate) const REQUESTED_KEY: &str = "Requested key";
-pub(crate) const PINNED_KEY: &str = "Pinned key";
+pub(crate) const PINNED_KEY: &str = "Trusted key";
 /// A repository removal's preview, which says it changes no file and
 /// nothing Git holds, says so in words too (design, Repositories).
 pub(crate) const FILES_REMAIN: &str = "Local files remain: only the registration is removed. Nothing in the folder or in Git is changed.";

@@ -410,6 +410,12 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
         shell.label("remotes-root", cx),
         Some(format!("Repository: {key_d}"))
     );
+    assert!(
+        shell.holds_focus("remote-add-name", cx),
+        "W-10 lands on the add-remote Name (Part D)"
+    );
+    // Settings is a sheet: it closes before the list is used again.
+    shell.keys("escape", cx);
 
     // Settings… on `b`, not the chosen one: Settings opens on `b` (P27).
     right_click(&shell, "b", cx);
@@ -417,6 +423,11 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
     assert_eq!(page(&shell, cx), Page::Settings(SettingsPage::Repositories));
     assert_eq!(shell.label("managed-root", cx), Some(key_b.clone()));
     assert_eq!(chosen(cx), Some(key_a.clone()));
+    assert!(
+        shell.holds_focus(("settings-page", 0usize), cx),
+        "W-7 lands on the page's entry (Part D)"
+    );
+    shell.keys("escape", cx);
 
     // Remove from Manyhands… on `d`: the dialog with its note; Cancel gives
     // focus back to the list the menu was opened from (P11, R-12).

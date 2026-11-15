@@ -556,9 +556,13 @@ impl Walk {
     }
 
     /// `secondary-,` shows the settings with focus on the first page's
-    /// entry; Tab and Enter show each other page. Back to tabs, by Tab
-    /// and Enter, shows the tabs and focuses the shown one.
+    /// entry; Tab and Enter show each other page. Escape closes them, and
+    /// focus is back on the control that opened them.
     fn open_settings_and_each_page(&self, cx: &mut TestAppContext) {
+        let origin = self
+            .shell
+            .frame(cx, |window, cx| window.focused(cx))
+            .expect("a control holds focus");
         self.keys("secondary-,", cx);
         assert_eq!(self.settings_shown(cx), Shown::Settings(PAGES[0]));
         self.on(("settings-page", 0usize), Region::Content, cx);
@@ -568,12 +572,9 @@ impl Walk {
             assert_eq!(self.settings_shown(cx), Shown::Settings(page), "{page:?}");
             self.on(("settings-page", ix), Region::Content, cx);
         }
-        self.tab_to("shift-tab", "settings-close", cx);
-        self.on("settings-close", Region::Content, cx);
-        self.enter(cx);
+        self.keys("escape", cx);
         assert_eq!(self.settings_shown(cx), Shown::Tabs);
-        let shown = self.shown_tab(cx);
-        self.on(("tab", shown), Region::Content, cx);
+        self.on_handle(&origin, Region::Content, cx);
     }
 
     /// `secondary-4`, the arrows to the pending row of `a` whose command is

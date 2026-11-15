@@ -17,7 +17,7 @@ use crate::desktop::{
         stamp::SettingsPage,
     },
     services::requests::Intent,
-    view::settings::Shown,
+    view::{harness::MAKE_A_NEW_KEY, settings::Shown},
 };
 
 const ACTION: &str = "polling-attention";
@@ -69,7 +69,8 @@ async fn settings_polling_attention_actions(cx: &mut TestAppContext) {
     );
     assert_eq!(sent.len(), 1, "Unlock… sent Check now");
 
-    // Choose a key… shows the Keys page.
+    // Choose a key… shows the Keys page, on its key list: with no key,
+    // Make a new key (W-32; Part D, R-22).
     rig.shell.click((ACTION, b), cx);
     assert_eq!(
         rig.shell
@@ -77,11 +78,22 @@ async fn settings_polling_attention_actions(cx: &mut TestAppContext) {
             .read_with(cx, |workspace, cx| workspace.settings_shown(cx)),
         Shown::Settings(SettingsPage::Keys)
     );
+    assert!(
+        rig.shell.holds_keys_control(MAKE_A_NEW_KEY, cx),
+        "W-32 Choose a key…"
+    );
 
     // Resume checking is reached by Tab and pressed by Enter; the library's
-    // hold is released, and the row no longer says held.
+    // hold is released, and the row no longer says held. Ctrl+, with
+    // Settings open does nothing: the Keys page Choose a key… left stays.
     rig.shell.keys("secondary-,", cx);
-    rig.shell.click(("settings-page", 4usize), cx);
+    assert_eq!(
+        rig.shell
+            .workspace
+            .read_with(cx, |workspace, cx| workspace.settings_shown(cx)),
+        Shown::Settings(SettingsPage::Keys)
+    );
+    rig.shell.click(("settings-page", 2usize), cx);
     assert!(rig.shell.tab_reaches((ACTION, c), TABS, cx));
     rig.shell.press("enter", cx);
     rig.shell

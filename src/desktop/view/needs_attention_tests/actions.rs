@@ -32,7 +32,7 @@ use crate::desktop::{
             pending_cases::{PENDING_ROOT, listing, read_pending, waiting},
         },
         activity_support::{pending_key, refresh},
-        harness::Shell,
+        harness::{MAKE_A_NEW_KEY, Shell},
         operations::{
             attention_tests::{every_reason, hold_with, shown},
             republish::tests::ticket_shell,
@@ -136,13 +136,22 @@ async fn holds(cx: &mut TestAppContext) {
     let page = |cx: &mut TestAppContext| shown(&rig, cx);
     press_from_popover(shell, &hold_with(&rig, UNLOCK_KEY, cx), UNLOCK_KEY, cx);
     assert_eq!(rig.checks(cx), [std::path::PathBuf::from(&rig.roots[0])]);
+    // Settings is a sheet, behind which the footer item cannot be pressed:
+    // Escape closes it after each press that opens it.
+    // Each lands on the control Wave 04 Cycle 04's Part D names.
     press_from_popover(shell, &hold_with(&rig, CHOOSE_A_KEY, cx), CHOOSE_A_KEY, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Keys));
+    assert!(shell.holds_keys_control(MAKE_A_NEW_KEY, cx), "W-23, no key");
+    shell.keys("escape", cx);
     press_from_popover(shell, &hold_with(&rig, APPROVE_HOST, cx), APPROVE_HOST, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Hosts));
+    assert!(shell.holds_focus("hosts-check", cx), "W-25");
+    shell.keys("escape", cx);
     let remote = hold_with(&rig, OPEN_REMOTE_SETTINGS, cx);
     press_from_popover(shell, &remote, OPEN_REMOTE_SETTINGS, cx);
     assert_eq!(page(cx), Shown::Settings(SettingsPage::Remotes));
+    assert!(shell.holds_focus("remote-add-name", cx), "W-24");
+    shell.keys("escape", cx);
     let resume = hold_with(&rig, RESUME_CHECKING, cx);
     press_from_popover(shell, &resume, RESUME_CHECKING, cx);
     assert_eq!(rig.backend.resumed(), [rig.roots[4].clone()]);
