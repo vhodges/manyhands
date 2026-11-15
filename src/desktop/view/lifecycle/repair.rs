@@ -35,7 +35,7 @@ use manyhands::{
 };
 
 use super::{
-    Heading, LifecycleDialog, NOT_SENT, Phase, REPAIR_LOCALLY, RESOLVE_CONFLICT, button, text,
+    Heading, LifecycleDialog, NOT_SENT, Phase, REPAIR_LOCALLY, REVIEW_CHANGES, button, text,
 };
 use crate::desktop::{
     model::{
@@ -357,7 +357,7 @@ impl LifecycleDialog {
                     });
                     buttons.push(button(
                         "lifecycle-resolve-conflict",
-                        RESOLVE_CONFLICT,
+                        REVIEW_CHANGES,
                         false,
                         go,
                     ));

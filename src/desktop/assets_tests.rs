@@ -5,7 +5,7 @@ use gpui_kit::AssetSource;
 use super::{DesktopAssets, icon_path};
 
 /// The item view's Lucide icons (design R-52).
-const ICONS: [&str; 57] = [
+const ICONS: [&str; 59] = [
     "folder-git-2",
     "ticket",
     "file-text",
@@ -66,6 +66,9 @@ const ICONS: [&str; 57] = [
     "key-round",
     "git-branch",
     "cloud",
+    // The lifecycle dialog's tiles (Wave 04 Cycle 05b, Part A, E-13).
+    "git-merge",
+    "circle-x",
 ];
 
 #[test]

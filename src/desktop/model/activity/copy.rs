@@ -36,8 +36,14 @@ pub(crate) const DISMISS: &str = "Dismiss";
 /// A lifecycle's entry, once failed or stopped: its dialog again (D5, A3).
 pub(crate) const OPEN_LIFECYCLE: &str = "Open\u{2026}";
 /// The entry points of the conflict sheet (B5): the operation area's, a
-/// pending row's and the banner's.
-pub(crate) const REVIEW_CHANGES: &str = "Review changes";
+/// pending row's, the banner's and the lifecycle dialog's. It opens a sheet,
+/// so it carries the ellipsis (`06`).
+pub(crate) const REVIEW_CHANGES: &str = "Review changes\u{2026}";
+/// The conflict sheet's, and the item review's, choice of one's own side.
+pub(crate) const KEEP_MINE: &str = "Keep mine";
+/// A part with a choice made, and a Result typed in by hand (`05`).
+pub(crate) const CHOSEN: &str = "Chosen";
+pub(crate) const EDITED: &str = "Edited";
 
 /// A request's state in the tooltip's words.
 pub(crate) const QUEUED: &str = "Queued";
@@ -49,8 +55,8 @@ pub(crate) const NOT_SENT: &str = "Not sent";
 pub(crate) const UNLOCK: &str = "Unlock\u{2026}";
 /// Give up (decision 8).
 pub(crate) const GIVE_UP: &str = "Stop trying to share";
-pub(crate) const OPEN_SHARING_AND_KEYS: &str = "Open Sharing & keys";
-pub(crate) const CHECK_HOST: &str = "Check host";
+pub(crate) const OPEN_SHARING_AND_KEYS: &str = "Open Sharing & keys\u{2026}";
+pub(crate) const CHECK_HOST: &str = "Check host\u{2026}";
 pub(crate) const SET_IDENTITY: &str = "Set identity";
 pub(crate) const SHOW_IT: &str = "Show it";
 pub(crate) const SET_UP_SHARING: &str = "Set up sharing";
@@ -75,6 +81,12 @@ pub(crate) const APPLICATION: &str = "Application";
 /// The repository menu's Share main: `repo sync` (design, Lane B, Share
 /// controls).
 pub(crate) const SHARE_MAIN: &str = "Share main";
+
+/// Share, naming the primary branch `primary` (R-35): the lifecycle's button
+/// and its step, and what Activity calls a repository's share.
+pub(crate) fn share_main(primary: &str) -> String {
+    format!("Share {primary}")
+}
 
 /// An outcome in fixed text.
 pub(crate) fn outcome_label(outcome: Outcome) -> &'static str {

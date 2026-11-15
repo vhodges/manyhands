@@ -10,10 +10,7 @@ use gpui_kit::{
     div,
 };
 
-use super::super::{
-    CHOOSE_ONE, KEEPING_BOTH, KEEPING_EDITED, KEEPING_MINE, KEEPING_THEIRS, TAKEN_MINE,
-    TAKEN_THEIRS,
-};
+use super::super::{CHOOSE_ONE, CHOSEN, EDITED, TAKEN_MINE, TAKEN_THEIRS};
 use crate::desktop::model::conflict::{BodyChoice, Choice, Mark, Marked};
 
 /// A side with no value.
@@ -42,18 +39,15 @@ pub(super) fn taken_words(from: Choice) -> &'static str {
 pub(super) fn field_state(choice: Option<Choice>) -> &'static str {
     match choice {
         None => CHOOSE_ONE,
-        Some(Choice::Mine) => KEEPING_MINE,
-        Some(Choice::Theirs) => KEEPING_THEIRS,
+        Some(Choice::Mine | Choice::Theirs) => CHOSEN,
     }
 }
 
 pub(super) fn body_state(choice: Option<BodyChoice>) -> &'static str {
     match choice {
         None => CHOOSE_ONE,
-        Some(BodyChoice::Mine) => KEEPING_MINE,
-        Some(BodyChoice::Theirs) => KEEPING_THEIRS,
-        Some(BodyChoice::Both) => KEEPING_BOTH,
-        Some(BodyChoice::Edited) => KEEPING_EDITED,
+        Some(BodyChoice::Mine | BodyChoice::Theirs | BodyChoice::Both) => CHOSEN,
+        Some(BodyChoice::Edited) => EDITED,
     }
 }
 

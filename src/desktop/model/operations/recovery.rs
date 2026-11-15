@@ -10,7 +10,7 @@ use manyhands::{
 
 use super::Operations;
 use crate::desktop::{
-    model::list_state::ListState,
+    model::{activity::copy::RESUME, list_state::ListState},
     services::requests::{DesktopRequestId, Intent, Refusals, RequestState},
 };
 
@@ -290,7 +290,7 @@ pub(crate) fn recovery_label(kind: RecoveryActionKind) -> &'static str {
         RecoveryActionKind::RequestRetry => "Retry",
         RecoveryActionKind::RequestPrepare => "Prepare again",
         RecoveryActionKind::RequestCancel => "Cancel",
-        RecoveryActionKind::OperationResume => "Resume",
+        RecoveryActionKind::OperationResume => RESUME,
         RecoveryActionKind::OperationAbandon => "Abandon",
         RecoveryActionKind::RepoIdentitySet => "Set identity",
         RecoveryActionKind::HostApprove => "Approve host",

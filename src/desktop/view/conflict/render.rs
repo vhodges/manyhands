@@ -17,8 +17,8 @@ use gpui_kit::{
 use manyhands::repository::ItemDtoKind;
 
 use super::{
-    BodyEditors, CANCEL, DESCRIPTION_REMOTE, LOST, NOT_READ, READ_AGAIN, READING, RESULT_NOTE,
-    RESUME, RESUME_LEAD, RETRY, ResolveSheet, SAVE_RESOLUTION, SETTLED, SheetSource,
+    BodyEditors, CANCEL, DESCRIPTION_REMOTE, KEEP_MINE, LOST, NOT_READ, READ_AGAIN, READING,
+    RESULT_NOTE, RESUME, RESUME_LEAD, RETRY, ResolveSheet, SAVE_RESOLUTION, SETTLED, SheetSource,
     description_local, external::REPAIRED,
 };
 use crate::desktop::{
@@ -40,7 +40,6 @@ use pieces::{Lines, before_column, body_state, field_state, marked_column, state
 
 /// What a part is called in its card: the body is the Description.
 const DESCRIPTION: &str = "Description";
-const KEEP_MINE: &str = "Keep mine";
 const KEEP_THEIRS: &str = "Keep theirs";
 const KEEP_BOTH: &str = "Keep both";
 const BEFORE: &str = "Before";

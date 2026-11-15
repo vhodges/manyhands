@@ -191,7 +191,7 @@ pub(super) fn repositories() -> Vec<Row> {
                         row.row
                             .menu
                             .iter()
-                            .any(|offer| offer.label == "Review changes")
+                            .any(|offer| offer.label == "Review changes…")
                     );
                     assert!(!s.has(&repo(ROOT)), "no repository row");
                 }),

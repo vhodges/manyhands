@@ -30,8 +30,8 @@ use manyhands::{
 };
 
 use super::{
-    CHANGED, KEEPING_MINE, KEEPING_THEIRS, OpenedSheet, Opening, ResolveSheet, SAVE_RESOLUTION,
-    SheetSource, TAKEN_THEIRS, open,
+    CHANGED, CHOSEN, OpenedSheet, Opening, PartAt, ResolveSheet, SAVE_RESOLUTION, SheetSource,
+    TAKEN_THEIRS, open,
 };
 use crate::desktop::{
     model::conflict::{BodyChoice, Choice, STANDARD_LAYOUT_NOTE},
@@ -326,7 +326,12 @@ async fn save_is_disabled_until_every_part_is_chosen(cx: &mut TestAppContext) {
     );
     assert_eq!(
         shell.label(("conflict-choice", 0usize), cx).as_deref(),
-        Some(KEEPING_THEIRS)
+        Some(CHOSEN)
+    );
+    assert_eq!(
+        sheet.read_with(cx, |sheet, _| sheet.choice_of(PartAt::Field(0))),
+        Some(BodyChoice::Theirs),
+        "Keep theirs was the choice"
     );
     assert_eq!(
         shell.label("conflict-save", cx).as_deref(),
@@ -667,13 +672,23 @@ async fn choices_wait_while_a_save_is_out(cx: &mut TestAppContext) {
     shell.run(cx);
     assert_eq!(
         shell.label(("conflict-choice", 0usize), cx).as_deref(),
-        Some(KEEPING_MINE),
+        Some(CHOSEN),
         "the title is as it was sent"
     );
     assert_eq!(
+        sheet.read_with(cx, |sheet, _| sheet.choice_of(PartAt::Field(0))),
+        Some(BodyChoice::Mine),
+        "the title is still Keep mine"
+    );
+    assert_eq!(
         shell.label(("conflict-body-choice", 0usize), cx).as_deref(),
-        Some(KEEPING_MINE),
+        Some(CHOSEN),
         "the body is as it was sent"
+    );
+    assert_eq!(
+        sheet.read_with(cx, |sheet, _| sheet.choice_of(PartAt::Body(0))),
+        Some(BodyChoice::Mine),
+        "the body is still Keep mine"
     );
     assert_eq!(editor_text(&editor, cx), sent_text, "the Result is as sent");
     assert_eq!(shell.label("conflict-progress", cx), progress);

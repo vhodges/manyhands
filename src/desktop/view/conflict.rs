@@ -72,10 +72,11 @@ use crate::desktop::{
 
 pub(crate) const SAVE_RESOLUTION: &str = "Save resolution";
 /// The sheet's entry points (B5): the conflict banner's, the operation
-/// area's and a pending row's. The words live in the model (R-44).
-pub(crate) use crate::desktop::model::activity::copy::REVIEW_CHANGES;
+/// area's and a pending row's. The words live in the model (R-44), with a
+/// part's Chosen and Edited and the Keep mine of its choices (R-16).
+pub(crate) use crate::desktop::model::activity::copy::{CHOSEN, EDITED, KEEP_MINE, REVIEW_CHANGES};
 pub(crate) const RETRY: &str = "Retry";
-pub(crate) const RESUME: &str = "Resume";
+pub(crate) use crate::desktop::model::activity::copy::RESUME;
 pub(crate) const CANCEL: &str = "Cancel";
 pub(crate) const READ_AGAIN: &str = "Read again";
 pub(crate) const READING: &str = "Reading the conflict\u{2026}";
@@ -97,10 +98,17 @@ pub(crate) const EARLIER_USED: &str =
 pub(crate) const NOT_SENT_AGAIN: &str = "The earlier resolution could not be sent again.";
 /// A part's choice, or that it has none yet.
 pub(crate) const CHOOSE_ONE: &str = "Choose one";
-pub(crate) const KEEPING_MINE: &str = "Keeping yours";
-pub(crate) const KEEPING_THEIRS: &str = "Keeping theirs";
-pub(crate) const KEEPING_BOTH: &str = "Keeping both";
-pub(crate) const KEEPING_EDITED: &str = "Keeping the result as edited";
+/// What a part's card says of the kind of detail it holds, by the kind of
+/// the item at its path (B5).
+#[allow(dead_code)] // Used from Task 7
+pub(crate) const TICKET_DETAIL: &str = "Ticket detail";
+#[allow(dead_code)] // Used from Task 7
+pub(crate) const DOCUMENT_DETAIL: &str = "Document detail";
+#[allow(dead_code)] // Used from Task 7
+pub(crate) const COMMENT_DETAIL: &str = "Comment detail";
+/// Before's label's note (B5).
+#[allow(dead_code)] // Used from Task 7
+pub(crate) const LAST_SHARED_COPY: &str = "last shared copy";
 /// A part only one side changed is taken from it (R-5).
 pub(crate) const TAKEN_THEIRS: &str = "Only theirs changed it; theirs is kept.";
 pub(crate) const TAKEN_MINE: &str = "Only yours changed it; yours is kept.";
@@ -214,6 +222,17 @@ pub(crate) fn open(
     #[cfg(all(test, feature = "desktop-test-support"))]
     cx.set_global(OpenedSheet(opened.downgrade()));
     Some(opened)
+}
+
+/// A part of the sheet, as `("conflict-choice", k)` and
+/// `("conflict-body-choice", path)` number it.
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[derive(Clone, Copy)]
+pub(crate) enum PartAt {
+    /// The `k`th field, counted across every path.
+    Field(usize),
+    /// The body of the path at this index.
+    Body(usize),
 }
 
 /// The sheet last opened, for a test to read what it holds.
@@ -614,6 +633,25 @@ impl ResolveSheet {
         &self.folder
     }
 
+    /// The model's choice of `part`, which the state word "Chosen" no
+    /// longer tells (R-20). A field's Keep mine or Keep theirs reads as the
+    /// body's.
+    pub(crate) fn choice_of(&self, part: PartAt) -> Option<BodyChoice> {
+        let ConflictSet::Canonical(paths) = self.model.as_ref()?.set() else {
+            return None;
+        };
+        match part {
+            PartAt::Field(k) => {
+                let part = paths.iter().flat_map(|path| path.fields()).nth(k)?;
+                part.choice.map(|choice| match choice {
+                    Choice::Mine => BodyChoice::Mine,
+                    Choice::Theirs => BodyChoice::Theirs,
+                })
+            }
+            PartAt::Body(path) => paths.get(path)?.body()?.choice,
+        }
+    }
+
     /// The observation of the conflict as last read.
     pub(crate) fn observation(&self) -> Option<String> {
         self.model
@@ -666,3 +704,7 @@ mod repair_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "conflict/lifecycle_resume_tests.rs"]
 mod lifecycle_resume_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "conflict/copy_tests.rs"]
+mod copy_tests;

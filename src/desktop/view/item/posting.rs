@@ -31,6 +31,7 @@ use manyhands::{
 use super::{ItemPane, ItemRoute, pill::UPDATING_LIST, text, tokens::item_colors};
 use crate::desktop::{
     model::{
+        activity::copy::{CHECK_HOST, OPEN_SHARING_AND_KEYS},
         navigation::OpenTarget,
         operations::Operations,
         publication::{CommentOffer, CommentOutcome},
@@ -386,8 +387,8 @@ fn chip_control(offer: CommentOffer) -> Option<(&'static str, &'static str)> {
         CommentOffer::Unlock => ("unlock", "Unlock\u{2026}"),
         CommentOffer::GiveUp => ("give-up", "Stop trying to share"),
         CommentOffer::Share => ("share", "Share"),
-        CommentOffer::OpenSharingAndKeys => ("open-keys", "Open Sharing & keys"),
-        CommentOffer::CheckHost => ("check-host", "Check host"),
+        CommentOffer::OpenSharingAndKeys => ("open-keys", OPEN_SHARING_AND_KEYS),
+        CommentOffer::CheckHost => ("check-host", CHECK_HOST),
         CommentOffer::SetIdentity => ("set-identity", "Set identity"),
         CommentOffer::CheckAgain => ("check-again", "Check again"),
         CommentOffer::Retry

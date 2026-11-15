@@ -51,7 +51,6 @@ use crate::desktop::{
         activity_support::{act, offered, refresh, row, until_offered, until_pending},
         harness::{Shell, key},
         item::OpenedFolders,
-        lifecycle::RESOLVE_CONFLICT,
         operations::{DISMISS, OPEN_LIFECYCLE, RESUME},
     },
 };
@@ -405,7 +404,7 @@ async fn resolve_conflict_opens_the_childs_sheet(cx: &mut TestAppContext) {
     until_present(&shell, "lifecycle-resolve-conflict", cx).await;
     assert_eq!(
         shell.label("lifecycle-resolve-conflict", cx).as_deref(),
-        Some(RESOLVE_CONFLICT)
+        Some(REVIEW_CHANGES)
     );
     assert!(!shell.rows("lifecycle-way-out", cx).is_empty(), "guidance");
 

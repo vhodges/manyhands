@@ -56,7 +56,9 @@ mod outcome;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use confirm::KEEP_LOCAL;
 #[cfg(all(test, feature = "desktop-test-support"))]
-pub(crate) use outcome::{ENDING_DONE, ENDING_STOPPED, SHARING_PENDING, TIDIED_UP, merged};
+pub(crate) use outcome::{
+    ENDING_DONE, ENDING_STOPPED, OPEN_REPOSITORY_DETAILS, SHARING_PENDING, TIDIED_UP, merged,
+};
 pub(crate) use outcome::{cleanup_reason, item_of};
 pub(crate) use repair::{Reopen, reopen_repaired};
 #[cfg(all(test, feature = "desktop-test-support"))]
@@ -100,7 +102,7 @@ pub(crate) const CLOSE: &str = "Close";
 pub(crate) const PREPARE_AGAIN: &str = "Prepare again";
 pub(crate) const RETRY: &str = "Retry";
 pub(crate) const CONTINUE: &str = "Continue";
-pub(crate) const RESUME: &str = "Resume";
+pub(crate) use crate::desktop::model::activity::copy::RESUME;
 pub(crate) const OPEN_FOLDER: &str = "Open folder";
 /// L1's `PollOnce`, as a button (D6 C2): Check now, for the item's
 /// repository.
@@ -109,14 +111,71 @@ pub(crate) const CHECK_NOW: &str = "Check now";
 pub(crate) const CHECKING_ORIGIN: &str =
     "Checking for others' changes. Prepare again once it has finished.";
 /// L1's `SharePrimary`: Share, naming the primary branch `primary`
-/// (R-35).
-pub(crate) fn share_main(primary: &str) -> String {
-    format!("Share {primary}")
-}
+/// (R-35). The words live in the model (R-16).
+pub(crate) use crate::desktop::model::activity::copy::share_main;
 /// L1's `RepairLocally` (B6).
 pub(crate) const REPAIR_LOCALLY: &str = "Repair locally\u{2026}";
-/// L1's `ResolveChildConflict` (B5).
-pub(crate) const RESOLVE_CONFLICT: &str = "Resolve conflict\u{2026}";
+/// L1's `ResolveChildConflict` (B5) reads as every other way into the
+/// sheet does (Part C, 1). The words live in the model.
+pub(crate) use crate::desktop::model::activity::copy::REVIEW_CHANGES;
+
+// The stage titles (A1); Waiting and Stopped keep `STILL_RUNNING` and
+// `ENDING_STOPPED`, and Done after a promotion is `merged`.
+/// Ask: a ticket's close, naming its short code.
+#[allow(dead_code)] // Used from Task 2
+pub(crate) fn close_title(short: &str) -> String {
+    format!("Close {short}?")
+}
+/// Ask: a document's promotion, naming its short ID.
+#[allow(dead_code)] // Used from Task 2
+pub(crate) fn approve_title(short: &str) -> String {
+    format!("Approve and merge {short}?")
+}
+/// Running a close.
+#[allow(dead_code)] // Used from Task 2
+pub(crate) const CLOSING: &str = "Closing\u{2026}";
+/// Running a promotion.
+#[allow(dead_code)] // Used from Task 2
+pub(crate) const MERGING: &str = "Merging\u{2026}";
+/// Done, a close.
+#[allow(dead_code)] // Used from Task 2
+pub(crate) const CLOSED: &str = "Ticket closed";
+/// Failed, a close.
+#[allow(dead_code)] // Used from Task 2
+pub(crate) const COULDNT_CLOSE: &str = "Couldn't finish closing";
+/// Failed, a promotion.
+#[allow(dead_code)] // Used from Task 2
+pub(crate) const COULDNT_MERGE: &str = "Couldn't finish merging";
+
+/// The Mark as closed note when the closure is to be recorded (A4).
+#[allow(dead_code)] // Used from Task 3
+pub(crate) fn closed_by_today(name: &str) -> String {
+    format!("Closed by {name} \u{b7} today")
+}
+/// The same note for a closure already recorded, which may be from an
+/// earlier day (A4).
+#[allow(dead_code)] // Used from Task 3
+pub(crate) fn closed_by(name: &str) -> String {
+    format!("Closed by {name}")
+}
+/// A run's lead above its steps (A5).
+#[allow(dead_code)] // Used from Task 3
+pub(crate) const RUNNING_LEAD: &str =
+    "You can keep working. This continues in the background and shows up in Activity.";
+/// The made-ready box's lead (A6).
+#[allow(dead_code)] // Used from Task 3
+pub(crate) const READY_TO_START: &str = "Now ready to start";
+
+/// The footer's hints (A7): Confirm's, and the running dialog's.
+#[allow(dead_code)] // Used from Task 4
+pub(crate) const CONFIRM_HINT: &str = "Enter to confirm \u{b7} Esc to cancel";
+#[allow(dead_code)] // Used from Task 4
+pub(crate) const HIDE_HINT: &str = "Esc hides this window";
+/// The dismiss button of a Failed or Stopped run, and of a Done one (A7).
+#[allow(dead_code)] // Used from Task 4
+pub(crate) const NOT_NOW: &str = "Not now";
+#[allow(dead_code)] // Used from Task 4
+pub(crate) const DONE: &str = "Done";
 /// Continue and Resume wait while the item's lifecycle runs (P22). The
 /// words live with the outcome types in the model (R-41).
 pub(crate) use crate::desktop::model::activity::lifecycle_lines::STILL_RUNNING;
