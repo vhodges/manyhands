@@ -189,9 +189,7 @@ fn table() -> Vec<(&'static str, &'static str, String)> {
         // view/add_repository.rs: the Add forms Settings › Repositories
         // draws (Wave 04 Cycle 05a B4). The scan below reads only
         // `view/settings/`, so it does not check these against their source.
-        c!(add_repository, CREATE_HEADING),
         c!(add_repository, FOLDER),
-        c!(add_repository, CREATE_FOLDER),
         c!(add_repository, BROWSE),
         c!(add_repository, MAIN_BRANCH),
         c!(add_repository, PREFIX),
@@ -201,8 +199,6 @@ fn table() -> Vec<(&'static str, &'static str, String)> {
         c!(add_repository, CHECKING),
         c!(add_repository, ALREADY_ADDED),
         c!(add_repository, IDENTITY_REQUIRED),
-        c!(add_repository, NEED_FOLDER),
-        c!(add_repository, NEED_BRANCH),
         c!(add_repository, BROWSE_PROMPT),
         c!(add_repository, BROWSE_UNAVAILABLE),
         c!(add_repository, BROWSE_NOT_TEXT),

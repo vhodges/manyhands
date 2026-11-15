@@ -29,7 +29,7 @@ use manyhands::{
 
 use super::{
     ALREADY_ADDED, ALREADY_SET_UP, AddRepositorySheet, BROWSE_PROMPT, CREATE_HERE,
-    IDENTITY_REQUIRED, IS_REPOSITORY, NEED_FOLDER, NOT_REPOSITORY, NOT_SET_UP,
+    IDENTITY_REQUIRED, IS_REPOSITORY, NOT_REPOSITORY, NOT_SET_UP,
 };
 use crate::desktop::{
     model::activity::rows::{ActivityAction, RowKey},
@@ -52,6 +52,8 @@ mod branch;
 mod browse;
 #[path = "add_repository_tests/checks.rs"]
 mod checks;
+#[path = "add_repository_tests/create.rs"]
+mod create;
 #[path = "add_repository_tests/enablement.rs"]
 mod enablement;
 #[path = "add_repository_tests/support.rs"]
@@ -266,7 +268,7 @@ async fn create_in_an_empty_directory_previews_nothing_then_creates_and_refreshe
     let root = fixture.empty_directory("new");
     let shell = settings(fixture, cx);
     new_mode(&shell, cx);
-    set(&shell, "create-path", text(&root), cx);
+    create::set_target(&shell, &root, cx);
     set(&shell, "create-branch", "main", cx);
     set(&shell, "create-name", &ada().name, cx);
     set(&shell, "create-email", &ada().email, cx);
@@ -395,7 +397,7 @@ fn create_in_a_non_empty_directory_shows_its_typed_failure(cx: &mut TestAppConte
     assert_ne!(expected, ResultCode::Ok);
     let shell = settings(fixture, cx);
     new_mode(&shell, cx);
-    set(&shell, "create-path", text(&root), cx);
+    create::set_target(&shell, &root, cx);
     set(&shell, "create-name", &ada().name, cx);
     set(&shell, "create-email", &ada().email, cx);
 
@@ -458,31 +460,29 @@ fn adding_a_folder_that_is_not_a_repository_shows_its_typed_failure(cx: &mut Tes
     assert!(shell.requests(cx, |_| true).is_empty());
 }
 
-/// Create with no folder says so and opens no dialog; with nothing typed
-/// Add repository is disabled, and pressing it opens nothing (E-2, Add's
-/// part; decision 9).
+/// With nothing typed Create repository and Add repository are disabled,
+/// and pressing either opens nothing; no message is drawn for what is
+/// missing (E-2; decision 9).
 #[gpui_kit::test]
 fn submitting_with_no_folder_says_so(cx: &mut TestAppContext) {
     let shell = settings(Fixture::new(), cx);
     new_mode(&shell, cx);
+    let enabled = sheet(&shell, cx).read_with(cx, |sheet, cx| sheet.create_enabled(cx));
+    assert!(!enabled, "Create repository is disabled with nothing typed");
     shell.click("create-submit", cx);
-    assert_eq!(
-        shell.label("create-message", cx).as_deref(),
-        Some(NEED_FOLDER)
-    );
+    assert!(!shell.present("create-message", cx));
     assert!(!shell.present("confirm-dialog", cx));
     shell.click("add-mode-existing", cx);
     let enabled = sheet(&shell, cx).read_with(cx, |sheet, cx| sheet.add_enabled(cx));
     assert!(!enabled, "Add repository is disabled with nothing typed");
     shell.click("add-submit", cx);
-    assert!(!shell.present("add-message", cx));
     assert!(!shell.present("confirm-dialog", cx));
 }
 
-/// The fields of a create in an empty `name`, in the new mode.
+/// The fields of a create in an empty `root`, in the new mode.
 fn fill_create(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
     new_mode(shell, cx);
-    set(shell, "create-path", text(root), cx);
+    create::set_target(shell, root, cx);
     set(shell, "create-name", &ada().name, cx);
     set(shell, "create-email", &ada().email, cx);
 }
@@ -679,17 +679,17 @@ fn browse_fills_the_field_and_a_dismissal_leaves_it_unchanged(cx: &mut TestAppCo
     assert!(!shell.present("add-browse-note", cx));
 
     new_mode(&shell, cx);
-    set(&shell, "create-path", "/typed/by/hand", cx);
+    set(&shell, "create-location", "/typed/by/hand", cx);
     shell.click("create-browse", cx);
     cx.simulate_path_prompt_response(|_| None);
     shell.run(cx);
-    assert_eq!(value(&shell, "create-path", cx), "/typed/by/hand");
+    assert_eq!(value(&shell, "create-location", cx), "/typed/by/hand");
     assert!(!shell.present("create-browse-note", cx));
     // Still usable: typing changes it, and Browse asks again.
-    focus_in(&shell, "create-path", cx);
+    focus_in(&shell, "create-location", cx);
     shell.visual(cx).simulate_input("/more");
     shell.run(cx);
-    assert_eq!(value(&shell, "create-path", cx), "/typed/by/hand/more");
+    assert_eq!(value(&shell, "create-location", cx), "/typed/by/hand/more");
     shell.click("create-browse", cx);
     cx.simulate_path_prompt_response(|_| None);
     shell.run(cx);
@@ -708,8 +708,9 @@ fn control_focus(shell: &Shell, id: &str, cx: &mut TestAppContext) -> FocusHandl
 fn a_form_control_below_the_fold_is_scrolled_into_view(cx: &mut TestAppContext) {
     let shell = settings(Fixture::new(), cx);
     new_mode(&shell, cx);
-    // Shorter than Cycle 04's 360: with one mode drawn the body is shorter.
-    shell.resize_keeping_content(1440., 250., cx);
+    // Shorter than Cycle 04's 360: one mode is drawn, and Create's prefix
+    // is the fourth field (E-17m).
+    shell.resize_keeping_content(1440., 150., cx);
     shell.run(cx);
     let bounds = |shell: &Shell, cx: &mut TestAppContext| {
         shell.frame(cx, |window, _| {

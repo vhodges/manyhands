@@ -28,7 +28,7 @@ use crate::desktop::{
     },
 };
 
-/// Text typed in Create's folder, the form the rows do not submit.
+/// Text typed in Create's Location, the form the rows do not submit.
 const TYPED: &str = "/typed/by/hand";
 
 /// The sheet's own state after a close: its open flag and its pending Add.
@@ -47,7 +47,7 @@ fn quiet_state(table: &mut Table, shell: &Shell, row: &str, cx: &mut TestAppCont
 fn typed(shell: &Shell, cx: &mut TestAppContext) -> (Option<String>, Option<String>) {
     (
         value(shell, "add-path", cx),
-        value(shell, "create-path", cx),
+        value(shell, "create-location", cx),
     )
 }
 
@@ -75,7 +75,7 @@ fn kept(table: &mut Table, cx: &mut TestAppContext) {
         if !opened(table, &shell, &row, cx) {
             return;
         }
-        set(&shell, "create-path", TYPED, cx);
+        set(&shell, "create-location", TYPED, cx);
         set(&shell, "add-path", plain.to_str().unwrap(), cx);
         let held = shell.backend.hold_read(ReadKind::Inspect);
         focus_control(&shell, "add-submit", cx);
@@ -118,7 +118,7 @@ async fn added(table: &mut Table, cx: &mut TestAppContext) {
     if !opened(table, &shell, row, cx) {
         return;
     }
-    set(&shell, "create-path", TYPED, cx);
+    set(&shell, "create-location", TYPED, cx);
     if !preview(&shell, &plain, cx) {
         table.fact(&format!("{row} (its preview)"), false, "the add's preview");
         return;
@@ -150,7 +150,7 @@ fn to_settings(table: &mut Table, cx: &mut TestAppContext) {
     if !opened(table, &shell, row, cx) {
         return;
     }
-    set(&shell, "create-path", TYPED, cx);
+    set(&shell, "create-location", TYPED, cx);
     route(&shell, cx, move |workspace, window, cx| {
         workspace.add_closed(AddClose::ToSettings(a), window, cx)
     });
@@ -162,7 +162,7 @@ fn to_settings(table: &mut Table, cx: &mut TestAppContext) {
     quiet_state(table, &shell, row, cx);
     table.fact(
         &format!("{row} (decision 16)"),
-        value(&shell, "create-path", cx).as_deref() == Some(TYPED),
+        value(&shell, "create-location", cx).as_deref() == Some(TYPED),
         "the typed text kept",
     );
     shell.keys("escape", cx);

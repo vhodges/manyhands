@@ -291,15 +291,15 @@ async fn confirmation(table: &mut Table, cx: &mut TestAppContext) {
         );
     }
 
-    // Close, on a refused preview: Create in a folder that is not empty,
-    // in the new mode, which alone draws Create (B5).
+    // Close, on a refused preview: Create in a folder that is not empty.
     if shell.present("add-mode-new", cx) {
         shell.click("add-mode-new", cx);
     }
     let full = shell.fixture.empty_directory("full");
     fs::write(full.join("notes.txt"), "kept\n").unwrap();
-    let ada = identity();
-    let filled = set(&shell, "create-path", full.to_str().unwrap(), cx)
+    let (ada, location) = (identity(), shell.fixture.parent());
+    let filled = set(&shell, "create-location", location.to_str().unwrap(), cx)
+        && set(&shell, "create-folder-name", "full", cx)
         && set(&shell, "create-name", &ada.name, cx)
         && set(&shell, "create-email", &ada.email, cx);
     focus_control(&shell, "create-submit", cx);

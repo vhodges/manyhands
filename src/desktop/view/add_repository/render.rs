@@ -22,8 +22,7 @@ use gpui_kit::{
 
 use super::{
     ADD, ADD_DESCRIPTION, ADD_TITLE, ADDING, AddRepositorySheet, BROWSE, CANCEL, CANCEL_ID, CREATE,
-    CREATE_FOLDER, CREATE_HEADING, CREATE_IDENTITY, FOLDER, Form, IDENTITY_HEADING,
-    IDENTITY_REQUIRED, MAIN_BRANCH, PREFIX, REMOVE_NOTE, mode::Mode,
+    FOLDER, Form, IDENTITY_HEADING, IDENTITY_REQUIRED, PREFIX, REMOVE_NOTE, mode::Mode,
 };
 use crate::desktop::{
     assets::icon_path,
@@ -63,19 +62,36 @@ pub(super) fn note(id: &'static str, value: &'static str) -> impl IntoElement + 
         .child(value)
 }
 
-fn heading(id: &'static str, label: &'static str) -> impl IntoElement {
-    div()
+/// The note both forms end with (B6 item 7; B8 item 7): removing a
+/// repository later never touches its files.
+pub(super) fn remove_note(id: &'static str, cx: &Context<AddRepositorySheet>) -> impl IntoElement {
+    let colors = chrome_colors(cx);
+    h_flex()
         .id(id)
         .test_support()
-        .aria_label(label)
-        .text_base()
-        .font_weight(gpui_kit::FontWeight::BOLD)
-        .child(label)
+        .aria_label(REMOVE_NOTE)
+        .items_start()
+        .gap(px(6.))
+        .text_size(px(12.))
+        .text_color(colors.secondary)
+        .child(
+            Icon::default()
+                .path(icon_path("shield-check"))
+                .text_color(colors.teal)
+                .w(px(14.))
+                .h(px(14.)),
+        )
+        .child(div().flex_1().min_w_0().child(REMOVE_NOTE))
 }
 
 impl AddRepositorySheet {
     /// A labeled field: its label, then its input in its wrapper.
-    fn field(&self, id: &'static str, label: &'static str, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn field(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         self.field_with(id, label, None, cx)
     }
 
@@ -119,7 +135,7 @@ impl AddRepositorySheet {
 
     /// The folder field with Browse… beside it, and the note under them
     /// (B6 item 1).
-    fn folder(
+    pub(super) fn folder(
         &self,
         form: Form,
         label: &'static str,
@@ -178,17 +194,10 @@ impl AddRepositorySheet {
         )
     }
 
-    fn message(&self, form: Form) -> Option<impl IntoElement + use<>> {
-        self.messages
-            .get(&form)
-            .map(|why| text(form.message(), *why))
-    }
-
     /// Add an existing folder (B6): the folder, its checks, the main
     /// branch, the prefix unless the folder is set up (R-31), the identity
     /// when Git has none, and the note.
     fn add_form(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let colors = chrome_colors(cx);
         let path = self.text(Form::Add.path(), cx);
         let identity = self.inspection.identity_required(&path).then(|| {
             v_flex()
@@ -215,39 +224,7 @@ impl AddRepositorySheet {
             .child(self.branch_field(cx))
             .children(prefix)
             .children(identity)
-            .child(
-                h_flex()
-                    .id("add-note")
-                    .test_support()
-                    .aria_label(REMOVE_NOTE)
-                    .items_start()
-                    .gap(px(6.))
-                    .text_size(px(12.))
-                    .text_color(colors.secondary)
-                    .child(
-                        Icon::default()
-                            .path(icon_path("shield-check"))
-                            .text_color(colors.teal)
-                            .w(px(14.))
-                            .h(px(14.)),
-                    )
-                    .child(div().flex_1().min_w_0().child(REMOVE_NOTE)),
-            )
-    }
-
-    /// Create a repository, as today's form draws it (B8 is Task 6's).
-    fn create_form(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = cx.theme().muted_foreground;
-        v_flex()
-            .gap_2()
-            .child(heading("create-heading", CREATE_HEADING))
-            .child(self.folder(Form::Create, CREATE_FOLDER, None, cx))
-            .child(self.field(Form::Create.branch(), MAIN_BRANCH, cx))
-            .child(div().text_xs().text_color(muted).child(CREATE_IDENTITY))
-            .child(self.field(Form::Create.name(), NAME, cx))
-            .child(self.field(Form::Create.email(), EMAIL, cx))
-            .child(self.field(Form::Create.prefix(), PREFIX, cx))
-            .children(self.message(Form::Create))
+            .child(remove_note("add-note", cx))
     }
 
     /// The sheet as this frame draws it. The builder Root keeps calls this
@@ -267,7 +244,7 @@ impl AddRepositorySheet {
                     .into_any_element()
             }
             Mode::New => {
-                let disabled = self.adding;
+                let disabled = !self.create_enabled(cx);
                 self.submit_button(Form::Create, CREATE, disabled, cx)
                     .into_any_element()
             }

@@ -80,11 +80,16 @@ pub(crate) const IDENTITY_REQUIRED: &str =
 pub(crate) const REMOVE_NOTE: &str =
     "Removing a repository from Manyhands later never deletes, moves or changes its files.";
 
-/// Create a repository, as today's form draws it (B8 is Wave 04 Cycle 05a
-/// Task 6's).
-pub(crate) const CREATE_HEADING: &str = "Create a repository";
-pub(crate) const CREATE_FOLDER: &str = "Folder (empty or not yet made)";
+/// Create a new repository (B8): its Name and Location, the line that says
+/// where the folder will be made, and the identity note kept from today's
+/// form.
+pub(crate) const NAME_FIELD: &str = "Name";
+pub(crate) const LOCATION: &str = "Location";
 pub(crate) const CREATE_IDENTITY: &str =
     "The name and email its commits are to carry. Leave both empty to use the ones Git finds.";
-pub(crate) const NEED_FOLDER: &str = "Enter the folder's path.";
-pub(crate) const NEED_BRANCH: &str = "Enter the primary branch.";
+
+/// B8's line under Location: where the empty folder will be made, `path`
+/// being Location joined with Name as typed (R-13).
+pub(crate) fn will_create(path: &str) -> String {
+    format!("Empty folder will be created at {path}")
+}

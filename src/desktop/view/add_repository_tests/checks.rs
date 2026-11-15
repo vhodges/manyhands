@@ -10,7 +10,7 @@
 //! checked out, another main branch, a remote that is not SSH; design
 //! Testing); `Busy` landed through the test accessor. Then what each
 //! action does, and a check that lands for text since changed is ignored.
-//! Create one here's focus (G20) is Task 6's.
+//! Create one here fills Location and Name and focuses Name (G20).
 
 use std::{fs, path::Path};
 
@@ -91,7 +91,8 @@ pub(super) fn rows_and_actions(table: &mut Table, cx: &mut TestAppContext) {
     let plain = fixture.plain_repository("plain", Some(identity()));
     let loose = fixture.empty_directory("loose");
     fs::write(loose.join("notes.txt"), "kept\n").unwrap();
-    let missing = fixture.parent().join("missing");
+    let parent = fixture.parent();
+    let missing = parent.join("missing");
     let not_repository = fixture
         .service()
         .inspect_repository(&loose)
@@ -212,7 +213,7 @@ pub(super) fn rows_and_actions(table: &mut Table, cx: &mut TestAppContext) {
         expect(table, &shell, &row, &wanted, offers, cx);
     }
 
-    // Failed(NotRepository), and Create one here (G20 is Task 6's).
+    // Failed(NotRepository), and Create one here (G20).
     check(&shell, &loose, cx);
     let offers = Some(("add-create-here", CREATE_HERE));
     let row = "Failed(NotRepository)";
@@ -228,6 +229,22 @@ pub(super) fn rows_and_actions(table: &mut Table, cx: &mut TestAppContext) {
         "Create one here, pressed",
         shell.selected("add-mode-new", cx) && !shell.selected("add-mode-existing", cx),
         "the new mode shown",
+    );
+    // B6: Location the folder's parent, Name its last part; focus on Name.
+    let found = (
+        super::value(&shell, "create-location", cx),
+        super::value(&shell, "create-folder-name", cx),
+    );
+    let wanted = (key(&parent), "loose".to_owned());
+    table.fact(
+        "Create one here (Location and Name)",
+        found == wanted,
+        &format!("Location and Name {wanted:?} (they are {found:?})"),
+    );
+    table.fact(
+        "G20 Create one here (focus on Name)",
+        holds(&shell, "create-folder-name", cx),
+        "focus on the Name field",
     );
     press(
         table,

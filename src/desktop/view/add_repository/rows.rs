@@ -23,7 +23,6 @@ use super::{
     CHOOSE_ANOTHER, CREATE_HERE, Form, IS_REPOSITORY, NEEDS_FIXING, NO_BRANCH, NOT_REPOSITORY,
     NOT_SET_UP, NOT_TEXT, OPEN_SETTINGS, RETRY, WILL_BE_ADDED,
     checks::{Inspection, allowed_branch, not_ssh},
-    mode::Mode,
     not_ssh_remote, other_main_branch,
 };
 use crate::desktop::{
@@ -259,20 +258,6 @@ impl AddRepositorySheet {
             }
             Action::Retry | Action::CheckAgain => self.inspect(cx),
         }
-    }
-
-    /// Create one here: the new mode, on the folder that is not a
-    /// repository. Its Name and Location, and focus on Name (G20), are
-    /// Task 6's; until then the new mode's folder takes this one and is
-    /// focused.
-    fn create_here(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let folder = self.inspection.path().unwrap_or_default().to_owned();
-        self.set_mode(Mode::New, cx);
-        let input = self.inputs[Form::Create.path()].clone();
-        input.update(cx, |input, cx| {
-            input.set_value(folder, window, cx);
-            input.focus(window, cx);
-        });
     }
 
     /// The code each check row names in its tooltip (P9).

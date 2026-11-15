@@ -39,10 +39,13 @@ pub(super) const SEGMENTS: [(Mode, &str, &str, &str); 2] = [
 ];
 
 impl AddRepositorySheet {
-    /// Shows `mode`'s form; the other keeps its text.
+    /// Shows `mode`'s form; the other keeps its text. An Add waiting for
+    /// its folder's check is forgotten: the person left that form, and the
+    /// landed check must not confirm or move focus behind it.
     pub(super) fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
         if self.mode != mode {
             self.mode = mode;
+            self.submit_pending = false;
             cx.notify();
         }
     }

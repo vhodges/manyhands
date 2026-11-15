@@ -22,9 +22,11 @@
 //! and email asked for, and written to its own configuration; a folder
 //! already set up keeps its own prefix, so none is asked (R-31).
 //!
-//! **Create** takes an empty or absent folder, its primary branch, an
-//! optional identity and an optional prefix; it refuses only a form with
-//! no folder or no branch, before anything is asked (B8 is Task 6's).
+//! **Create a new repository** (B8, `create`) takes a Name and a Location,
+//! which `create-target` shows joined as typed and the sheet does not
+//! check, its main branch, an optional identity and an optional prefix.
+//! Create repository is enabled when Name, Location and Main branch are
+//! filled (B10); the form draws no message about what is missing.
 //!
 //! Each submit builds `Intent::RepoEnable` or `Intent::RepoCreate` and
 //! opens the confirmation dialog, whose preview creates nothing (`submit`).
@@ -60,6 +62,7 @@ mod branch;
 mod browse;
 mod checks;
 mod copy;
+mod create;
 mod mode;
 mod render;
 mod rows;
@@ -87,11 +90,16 @@ enum Form {
     Create,
 }
 
+/// Create's Name: the new folder's name, which Location is joined with
+/// (B8).
+const FOLDER_NAME: &str = "create-folder-name";
+
 impl Form {
+    /// The form's folder: Add's folder, or Create's Location.
     fn path(self) -> &'static str {
         match self {
             Self::Add => "add-path",
-            Self::Create => "create-path",
+            Self::Create => "create-location",
         }
     }
 
@@ -147,19 +155,12 @@ impl Form {
         }
     }
 
-    fn message(self) -> &'static str {
-        match self {
-            Self::Add => "add-message",
-            Self::Create => "create-message",
-        }
-    }
-
-    /// The form's text fields: Add's branch is not one.
+    /// The form's text fields: Add's branch is not one, Create's Name is.
     fn fields(self) -> Vec<&'static str> {
         let fields = [self.path(), self.prefix(), self.name(), self.email()];
         match self {
             Self::Add => fields.to_vec(),
-            Self::Create => [&fields[..1], &[self.branch()], &fields[1..]].concat(),
+            Self::Create => [&[FOLDER_NAME], &fields[..1], &[self.branch()], &fields[1..]].concat(),
         }
     }
 }
@@ -204,8 +205,6 @@ pub(crate) struct AddRepositorySheet {
     /// The check changed since the select's items were made: they are made
     /// again at the next frame, which has the window the select needs.
     branches_stale: bool,
-    /// What each form said when it asked nothing.
-    messages: HashMap<Form, &'static str>,
     /// Browse is waiting for the platform's answer.
     browsing: Option<Task<()>>,
     /// Why Browse is unavailable, once the platform failed.
@@ -303,7 +302,6 @@ impl AddRepositorySheet {
             branch,
             branches: Vec::new(),
             branches_stale: false,
-            messages: HashMap::new(),
             browsing: None,
             browse_unavailable: None,
             browse_not_text: None,
@@ -369,8 +367,8 @@ impl AddRepositorySheet {
     }
 
     /// A successful add of this open (B3 step 2; decision 16): both forms'
-    /// typed text, the check, the choices and what each form said are
-    /// cleared. Create's branch starts again from its default.
+    /// typed text, the check and the choices are cleared. Create's branch
+    /// starts again from its default.
     pub(crate) fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for (id, input) in &self.inputs {
             let text = if *id == Form::Create.branch() {
@@ -382,7 +380,6 @@ impl AddRepositorySheet {
         }
         self.forget_inspection(cx);
         self.browse_not_text = None;
-        self.messages.clear();
         cx.notify();
     }
 

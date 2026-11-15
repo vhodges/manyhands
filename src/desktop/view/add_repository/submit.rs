@@ -15,7 +15,7 @@ use std::{path::PathBuf, rc::Rc};
 use gpui_kit::{Context, Window};
 
 use super::{
-    AddEvent, AddRepositorySheet, Form, NEED_BRANCH, NEED_FOLDER,
+    AddEvent, AddRepositorySheet, Form,
     checks::{Inspection, allowed_branch},
 };
 use crate::desktop::{
@@ -75,35 +75,6 @@ impl AddRepositorySheet {
             root: PathBuf::from(path),
             primary_branch,
             identity: asks_identity.then_some((name, email)),
-            slug_prefix: prefix,
-        })
-    }
-
-    /// Create's intent, when its folder and branch are filled; otherwise it
-    /// says what is missing.
-    fn create_intent(&mut self, cx: &mut Context<Self>) -> Option<Intent> {
-        let form = Form::Create;
-        let path = self.text(form.path(), cx);
-        let branch = self.text(form.branch(), cx);
-        let why = if path.is_empty() {
-            Some(NEED_FOLDER)
-        } else if branch.is_empty() {
-            Some(NEED_BRANCH)
-        } else {
-            None
-        };
-        if let Some(why) = why {
-            self.messages.insert(form, why);
-            return None;
-        }
-        self.messages.remove(&form);
-        let identity = Some((self.text(form.name(), cx), self.text(form.email(), cx)))
-            .filter(|(name, email)| !(name.is_empty() && email.is_empty()));
-        let prefix = Some(self.text(form.prefix(), cx)).filter(|prefix| !prefix.is_empty());
-        Some(Intent::RepoCreate {
-            root: PathBuf::from(path),
-            primary_branch: branch,
-            identity,
             slug_prefix: prefix,
         })
     }
