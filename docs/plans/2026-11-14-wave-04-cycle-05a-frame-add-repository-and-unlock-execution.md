@@ -28,7 +28,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 4 | done, design checkpoint stopped for the owner (Rulings 15 to 18), review approved first time (Minors parked) | code `0d5cae5c` (base `2c398b03`); ledger `4bab2795`; merge of main `9059778f`; ledger `f4059706`; ticket comment `315ae043` | yes |
 | 5 | done, review approved after fix round 1 (Minors parked) | code `1ff07fe3` (base `315ae043`), fix `0d14abe6`; ledger `80a39f6a` | yes |
 | 6 | done, review approved first time (Minors parked) | code `cb78fe3d` (base `80a39f6a`); ledger `d7b39f62` | yes |
-| 7 | done, review approved first time (Minors parked) | code `a14e862d` (base `d7b39f62`) | with the ledger commit |
+| 7 | done, review approved first time (Minors parked) | code `a14e862d` (base `d7b39f62`); ledger `4fb4c234`; ticket comment `08c7752e` | yes |
+| 8 | done, review approved first time (Minors parked); a Task 7 test hang found at its boundary (below) | code `6d7734d1` (base `08c7752e`) | with the ledger commit |
 
 ## Branches published
 
@@ -1168,3 +1169,113 @@ Important; no loop. Parked Minors and owner's-eye items, for the final review:
    carry the remote's name only. P17 (Task 9) exercises it.
 6. Windows: the P14 row that types `sub/../registered` depends on path
    canonicalisation; a native-CI follow-on, like the P12 literal.
+
+## Task 8 (The Unlock Key Dialog)
+
+Base `08c7752e`; code `6d7734d1`, `feat(desktop): the Unlock key dialog on the
+frame, with its key card`. 13 files under `src/desktop/`. Boundary diff empty;
+`Cargo.lock` unchanged. Gates pass.
+
+**What was built:** the dialog on the frame in Part D's layout
+(`passphrase.rs`, 452 lines): the header with the lock tile
+(`Tone::Accent`), title `passphrase-title` ("Unlock your key") and
+`passphrase-subtitle` while a prompt waits; the key card
+(`passphrase/card.rs`, 127 lines: `passphrase-key`, `passphrase-key-label` and
+`passphrase-fingerprint`, read from `list_keys` through `Services::read` under
+the new `ViewScope::Unlock`; the label alone before the read lands, when it
+fails, with no matching key or no fingerprint); the field labelled
+`PASSPHRASE`; a refusal puts focus back in `passphrase-input` and sends no
+reply; the note always shown; the footer Not now then Unlock; width 440 px
+(not tested). `open_dialog` takes `&Services` and `show_prompt` passes it
+(E-13). `label_for` and "Key {id}" are gone. Three guards drop a read that lands
+late (`drop_read` in `answer`, `withdraw` and `unavailable_now`; `listed`
+ignores a stale stamp or a withdrawn prompt). `ReadFailure` carries only a code
+and recovery actions, so a failed read puts no text in the dialog. The test-only
+U-8 hook (`#[cfg(all(test, feature = "desktop-test-support"))]`) calls the same
+private `listed` that the real read lands through.
+
+**Tests written first, each seen failing:** P2's Unlock row (the old order
+`[passphrase-ok, passphrase-cancel]`), P18
+`desktop::view::passphrase::tests::the_unlock_dialog_names_the_key`, P19
+`a_refused_passphrase_keeps_focus_in_the_field` (the Unlock button by Enter and
+Space on its focused handle); P1's 7 Unlock rows passed before and after (they
+pin kept behaviour). New files: `passphrase_tests/unlock.rs` (340 lines),
+`frame_tests/unlock.rs` (109); a fixture helper `import_key_without_public_key`
+covers the no-fingerprint row.
+
+**Tests run:**
+
+- Implementer, by exact name: P18, P19, P2 (3), P1 (1), the 12 edited and
+  Unlock evidence tests, polling_privacy (1) and 2 more passphrase tests.
+- Orchestrator's module run, once, 9 filters (all matched at least one test):
+  `desktop::view::{passphrase::tests (18), keyboard_tests::passphrase (3),
+  keyboard_tests::lifecycle (4), frame::tests (3), polling_privacy_tests (1),
+  operations::outcomes::route_tests (8), editing_privacy_tests (3),
+  lifecycle::privacy_tests (1)}`, `desktop::services::scheduler::attention_tests
+  (5)` — **46 passed, 0 failed**. The Unlock evidence tests and both privacy
+  sweeps are in it.
+- Named doubt (the reviewer listed tests outside the run list that open this
+  dialog), `desktop::view::workspace::add_sheet::tests`,
+  `lifecycle::credential_tests`, `needs_attention` and `item::edit_tests`:
+  241 of 242 passed; the one failure is a Task 7 test hang, below.
+
+**Existing tests edited:**
+
+- E-9 (`passphrase_tests.rs`): the `label_for` and `passphrase-note` sites.
+  **Assertion removed:** `label_for("primary") == "Passphrase for primary"`
+  (`:169`), with `label_for`; `assert_eq!(PASSPHRASE, "Passphrase")` takes its
+  line; at `:676` `passphrase-key-label == "next"` was **added** to keep that
+  test's meaning (the dialog is the "next" prompt's).
+- E-10: no code edit (the loops walk to the control and never press anything on
+  the way; with Not now first, `cancel_by_tab…` reaches it in one Tab,
+  `unlock_by_tab…` passes it without pressing). **E-17q**, doc only: the module
+  doc of `keyboard_tests/passphrase.rs` said Cancel is reached "past Unlock".
+- E-13 (`keyboard_tests/lifecycle.rs`): `open_dialog` gains the `Services`
+  argument.
+- **E-17p** `polling_privacy_tests.rs:1146-1147`: the positive control asserted
+  the sweep read "Passphrase for primary" on the "passphrase dialog" surface;
+  that copy is Part F's own change (`PASSPHRASE` replaces `label_for`), so it is
+  replaced by two rows, "Passphrase" (only `passphrase-label` or the input's aria
+  label can give it) and "primary" (only `passphrase-key-label`). Neither is
+  vacuous; the negative sweep (`holds_none` over `SENTINELS`) and the 25-surface
+  coverage are unchanged; no assertion removed. Task 0's sweep patterns could not
+  match it.
+
+**Review** (opus): spec compliant, quality approved, no Critical or Important;
+no loop. Parked Minors, for the final review:
+
+1. `REFUSED` is now drawn in `colors.red` (`passphrase.rs:416`): Part D asks only
+   for "today's REFUSED under the field"; a visual change for the owner's eye
+   (untested, rightly).
+2. `passphrase_tests/unlock.rs:273-304` `focus_in` and `tab_to` copy
+   `frame_tests/dialogs.rs::inside` and `keyboard_tests/passphrase.rs::tab_to`;
+   sharing `Table` widened `frame.rs:259` (`pub(in crate::desktop::view) mod
+   tests`) and `frame_tests.rs:42-67`, coupling the passphrase tests to the frame
+   tests (a `test_support` home would be cleaner; test-only).
+3. P18's table has set-up `expect`/`assert!` calls (`unlock.rs:160`, `:194`,
+   `:216-255`) that stop the remaining rows instead of reporting them; they are
+   preconditions.
+4. No test pins `TITLE` ("Unlock your key") or `NOT_NOW_NOTE`; the reviewer
+   checked both against Part F by hand; P20 (Task 9) may cover them.
+5. `answer_key_read` (`card.rs:119`) reads like `answer()`; `land_key_read` would
+   be clearer. `frame.rs:246` still has `#[allow(dead_code)] // Used from Task 4`
+   on `sheet_footer`, which `add_repository/render.rs:272` now uses (left over
+   from Task 4, not this task's).
+6. Not verified by test: if a prompting job holds the index so the `list_keys`
+   read returns Busy after its retries, the card shows the label only (R-16
+   accepts it).
+
+**A Task 7 test hang, found at this task's boundary.** The reviewer named tests
+outside the run list that open this dialog; the extra run
+(`add_sheet::tests`, `credential_tests`, `needs_attention`, `item::edit_tests`)
+passed 241 of 242 tests. The one failure is Task 7's P14
+`a_chosen_remote_is_selected_after_the_add_succeeds`: "the awaited state did not
+arrive in 180s" (`harness.rs:73`, `wait_until`). Evidence so far: it passes
+alone (20 s), with `edit_tests` (219 tests), with `credential_tests`, with
+`needs_attention`, and with the other `add_sheet` tests (9 tests, 27 s); it fails,
+reproducibly (3 of 3), when the nine `add_sheet` tests run together with
+`credential_tests` and `needs_attention` (24 tests), stalling the whole 180 s;
+and **the identical failure occurs on the Task 7 tree** (`a14e862d`, checked out
+detached and restored), so Task 8 is not the cause. It is a defect in Task 7's
+test or the production code under it that shows only with a wider test mix.
+Task 7 fix round 1, below.
