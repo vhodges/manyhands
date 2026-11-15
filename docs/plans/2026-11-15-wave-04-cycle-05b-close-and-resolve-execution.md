@@ -22,7 +22,8 @@ serial (Cycle decision 13). Implementers: Task 0 on Opus, others per task.
 | --- | --- | --- | --- | --- |
 | 0 | complete | `1fbb19b3..5be247cf` and this ledger commit | clean (Sonnet reviewer) | with this commit |
 | 1 | complete | `eaf18125..30aaa015` | clean (Sonnet reviewer), 3 Minor deferred | with the ledger commit after it |
-| 2–9 | not started | | | |
+| 2 | complete | `ec6a3110..25335162` | clean (Sonnet reviewer), 3 Minor deferred | with the ledger commit after it |
+| 3–9 | not started | | | |
 
 ## Base and merges
 
@@ -190,15 +191,17 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | --- | --- | --- |
 | E-1 | 5 | not started |
 | E-2 | 5 | not started |
-| E-3 (assertion removal: `lifecycle-kind` pair) | 2 | not started |
-| E-4, E-5 | 2 | not started |
+| E-3 (assertion removal: `lifecycle-kind` pair) | 2 | done (Task 2): the two `lifecycle-kind` asserts deleted, nothing else weakened |
+| E-4, E-5 | 2 | done (Task 2) |
 | E-6 | 3 | not started |
 | E-7, E-8, E-9, E-13 | 1 | done (Task 1) |
 | E-10, E-12 | 7 | not started |
 | E-11 | 1 (part), 5 (part) | Task 1 part done (`choose_by_keyboard`, callers, import); Task 5 part open |
 | E-14 | none | no edit needed |
 | E-15 | none | no edit needed (privacy sweeps keep reading the same surfaces) |
-| E-16 onward | | none yet |
+| E-16 (Task 2) | 2 | Removed the dead `Heading::branch` field and the `branch: None,` line in `operations/resume.rs`, `conflict/entry.rs` and `conflict_tests.rs`. Why: `lifecycle-branch` goes (E-3), so the field is dead and clippy `-D warnings` fails on it. No assertion changed |
+| E-17 (Task 2) | 2 | `privacy_promote_tests::saved_document` made `pub(super)` so P1 reuses it. Visibility only |
+| E-18, E-19 (Ruling O-3) | 8 | reserved for `window_text` and `ask` visibility, if Task 8 needs them |
 
 ## Tests run, by checkpoint
 
@@ -206,6 +209,8 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | --- | --- | --- |
 | Task 0 | none (static gates only: check, fmt, clippy, all green) | |
 | Task 1, implementer | one `--exact` run of 12 names (P9 `conflict::copy_tests::close_and_resolve_copy_uses_the_vocabulary`, the `field_name` test, `assets::tests::every_item_view_icon_loads`, and the E-7, E-8, E-9, E-11 tests); fmt --check, check --features desktop, clippy -D warnings | 12 passed; static gates clean. P9 RED was a compile failure on the missing names (E0432), then green |
+| Task 2, implementer | exact names: P1 `lifecycle::stages_tests::each_stage_has_its_title`, E-3 `lifecycle::tests::the_header_names_item_repository_and_context`, E-4 `outcome_tests::stop_at_a_safe_point_names_completed_steps`, E-5 `outcome_tests::the_operation_entry_reopens_the_dialog`; fmt, check --features desktop, clippy | 4 passed, 1 each; static gates clean. P1 RED seen (assertion: the old title "Close ae-c10s3?" against "Close ticket") |
+| Task 2, orchestrator module run | one `cargo test` with filters `view::lifecycle::{tests, outcome_tests, outcome_canned_tests, privacy_tests, privacy_promote_tests, privacy_remote_tests, action_tests, save_first_tests, lock_tests, stages_tests}`, `view::keyboard_tests::lifecycle`, `view::frame::tests` | 52 passed, 0 failed, 95 s |
 | Task 1, orchestrator module run | one `cargo test` with the filters `desktop::model::activity::tests`, `view::conflict`, `view::keyboard_tests::conflict`, `view::activity::tests`, `view::needs_attention::tests`, `view::lifecycle::{credential_tests, tests, outcome_tests, outcome_canned_tests}`, `view::item::{posting::tests, edit_tests::review, share::tests}`, `desktop::assets::tests`, `desktop::model::{review::tests, conflict}` | 256 passed, 0 failed, 284 s |
 
 ## Task 1: copy and constants
@@ -216,9 +221,22 @@ Implementer: Sonnet. Commit `30aaa015` `feat(desktop): Close ticket and Resolve 
 
 **Carried to Task 3:** `MADE_READY_LEAD` ("Now ready:", `made_ready.rs:39`) is still the live lead; Task 1 staged `READY_TO_START` ("Now ready to start") beside it. Task 3 switches `made_ready.rs:194` to it, updates `made_ready_tests.rs:205` (which compares the old constant as a constant: an E-16 edit, no assertion change) and deletes `MADE_READY_LEAD`. The confirm's "Closed by {}" at `confirm.rs:125` also stays until Task 3 (E-6).
 
+## Task 2: lifecycle stages, header and Git line
+
+Implementer: Sonnet. Commit `25335162` `feat(desktop): lifecycle stages in the frame's header`. Reviewer: Sonnet, spec compliant, no Critical or Important findings. New `view/lifecycle/stages.rs` (`Stage`, `stage()`, `header()`); `running.rs` has `Shown` and `shown()`, which `stage` and `submitted_body` share (R-1); the builder calls `frame::dialog(base, header, cx)` at each render; `confirm::git_row` draws `lifecycle-git` on confirm, running and ended stages when the preview is held. Ruling O-2 applied: a resume answered with no lifecycle data (busy included) is Ask, with its body and buttons unchanged, and P1 has the row. `Tone::{Danger, Success}` lost their allows.
+
+**Assertion removal (E-3):** the two `lifecycle-kind` asserts in `lifecycle_tests.rs`, as the design says. Call out at review-ready.
+
+**What the owner will see.** Blocked, Held, Saving, Preparing and any reopened or resumed run without a preview no longer name the context branch anywhere, because the branch is in the Git line only and that line needs the preview (A2, K-15, E-3). Not a defect against the design; the owner's eye marker on A2 covers it. Include in the review-ready summary.
+
+**Carried to Tasks 3 and 4.** `render` is wrapped in `frame::body(...)` for now, because `frame::dialog` zeroes the Kit padding. A2's final shape is `lifecycle-dialog` holding `frame::body(stage body)` and then `frame::footer` as its last child: Task 4 re-nests it (Task 3 moves the Git line per A6; it sits at the end of an ended body until then).
+
 ## Deferred minor findings
 
 Task 0: minor (deferred): the design's U-1 closing paragraph says "Every name above exists as named" and then lists corrections; wording polish only.
 Task 1: minor (deferred): `DONE` ("Done") is a second spelling beside `ENDING_DONE`, `STATE_DONE` and `outcome_label(Success)`; the roles differ and the design names it, so it stays.
 Task 1: minor (deferred): `choice_of` folds a field's Mine or Theirs into `BodyChoice` (R-20 as written); a future test of `Both` or `Edited` on a field would read as `None`, which cannot arise.
 Task 1: minor (deferred): `MADE_READY_LEAD` and `READY_TO_START` coexist until Task 3 retires the old one (carried to Task 3 above).
+Task 2: minor (deferred): P1 has no `NotSent` or `Dismissed` rows; both sit in the same `Shown::Message` arm as `Removed`, so a reordering that moved one out would go unseen. Task 3 or the final review may add a row.
+Task 2: minor (deferred): the interim `frame::body(...)` wrap of the whole render (carried to Task 4).
+Task 2: minor (deferred): the context branch is no longer shown on Blocked, Held, Saving or no-preview stages (design-mandated; for the review-ready summary).
