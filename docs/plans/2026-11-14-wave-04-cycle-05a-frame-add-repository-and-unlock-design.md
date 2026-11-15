@@ -969,7 +969,7 @@ In order:
    | `Checked`, not registered | ✓ "This folder is a Git repository." | — |
    | … then configuration Missing | ℹ "Manyhands isn't set up here yet. Adding it creates a small settings file and saves it as the first change." | — |
    | … then configuration Valid | ✓ "Manyhands is already set up here." and, when not registered, "It will be added to this computer." | — |
-   | … then configuration Invalid | ✗ "Manyhands' settings here need fixing." then each problem's guidance, as today | — |
+   | … then configuration Invalid | ✗ "Manyhands' settings here need fixing." then each problem's guidance, as today | ~~—~~ Check again (as built: owner Ruling 25) |
    | … then no branch checked out (`head_branch` is none) | ✗ "No branch is checked out. Check one out, then check again." | Check again |
    | … then configuration Valid, its `primary_branch` not the checked-out branch | ✗ "Manyhands here uses {primary} as its main branch. Check out {primary}, then check again." | Check again |
    | … then configuration Valid, its `publication_remote` not eligible | ✗ "Manyhands here shares through {remote}, which isn't an SSH address. Fix it in the folder's Git settings, then check again." *(as built: no row when the remote is not among the folder's remotes; **flagged for the owner**, see "As built, execution rulings")* | Check again |
@@ -1814,3 +1814,28 @@ are not corrected until the owner chooses.
   opens a chooser or a sheet; Part F gives both verbatim without it and P20
   names them with `ADD` and `CREATE` as exceptions.
   TODO(owner): choose; the fix is two constants and two names in P20's list.
+
+### As built, the final fix wave (owner review, 2026-11-15)
+
+- **B6, the Invalid row (owner Ruling 25).** A not-registered folder whose
+  configuration is Invalid offers Check again, as the branch and SSH rows do
+  (the configuration is fixed outside the app, so the only other way to re-check
+  was to retype the path or Browse). A registered folder keeps Open its settings.
+  P9's Invalid row, P11's G22 row and P16 changed with it (E-17s to E-17u).
+- **B9 G22, the fallback (note).** "Else `add-path`" no longer has a reachable
+  row: every state that disables Add now offers an action, so `resume_submit`
+  focuses that action; the fallback stays as a defensive `Option` default.
+- **Part D, the Unlock field (owner Ruling 26).** The visible label stays
+  Part F's "Passphrase"; the field's accessible label is "Passphrase for <key
+  label>" (`passphrase_for`), as before this Cycle. The key label is public (the
+  card shows it).
+- **Part A icons / fact 40 (owner Ruling 27).** `X` was added to the icon set
+  and nothing draws it (failed rows use the Kit's `circle-x`); it is removed, with
+  its entry in E-14's list.
+- **B10 / R-27 (owner Ruling 24).** "Adding…" after a confirmed add whose answer
+  offers Retry or Prepare again stays as designed; the owner judges it on screen
+  (checklist V-3.11).
+- **B3 (Ruling 28 context).** `add_closed` has an entry guard (a non-quiet close
+  with no owner, the open flag down and no waiting close returns at once) and
+  notifies only when its waiting close changes; `show_add_repository`'s stale-owner
+  branch closes `Quiet`.

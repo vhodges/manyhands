@@ -30,7 +30,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 6 | done, review approved first time (Minors parked) | code `cb78fe3d` (base `80a39f6a`); ledger `d7b39f62` | yes |
 | 7 | done, review approved first time (Minors parked) | code `a14e862d` (base `d7b39f62`); ledger `4fb4c234`; ticket comment `08c7752e` | yes |
 | 8 | done, review approved first time (Minors parked); a Task 7 test hang found at its boundary (below) | code `6d7734d1` (base `08c7752e`); ledger `97632b8b` | yes |
-| 9 | done, stopped once for the owner (Ruling 22), review approved first time (Minors parked) | code `0765dd28` (base `b81905cb`) | with the ledger commit |
+| 9 | done, stopped once for the owner (Ruling 22), review approved first time (Minors parked) | code `0765dd28` (base `b81905cb`); ledger `221cc5ee` | yes |
+| 10 | documents `8e4479f0` to `6550f995`; gates, whole-branch review, owner review and its fix wave `060bf559` (below); review-ready comment next | docs `8e4479f0`, `6ce8e0bd`, `698404d0`, `6550f995`; fix wave `060bf559` | documents yes; the fix wave with the ledger commit |
 
 ## Branches published
 
@@ -1493,3 +1494,125 @@ Critical or Important; no loop. Parked Minors, for the final review:
 6. Not verified: that the Kit `Select` trigger's snapshot exposes the chosen title
    as a value; that GPUI's native accessibility tree gives the decorative `img`
    a node; Part E's centring and 12 px `gap_3` (on screen).
+
+## Task 10 (Checklist, Gates, Review-Ready) and the final fix wave
+
+**Documents** (a sonnet agent, no Cargo; boundary diff empty): the on-screen
+checklist `docs/plans/2026-11-14-wave-04-cycle-05a-on-screen-checklist.md`
+(`8e4479f0`, sections V-1 to V-9, every result cell empty: only what the owner
+reports is recorded); Amendment 4 (`6ce8e0bd`: Cycle 04's Downstream
+Obligations marked "Done in Cycle 05a", notes at its design's A2 and Part D);
+the design's "As built, execution rulings" section with four `TODO(owner)`
+flags (`698404d0`); the Cycle document's Status column, K-16 and Review Record
+(`6550f995`: code commits `ded7ca46` to `0765dd28`, 12 of them, serial subagent
+execution). Amendment 5's comment on `01M5F3GVDYTH1Q5V5FCS9YF7V3` is drafted and
+posted with the review-ready comment.
+
+**Gates.** Static, whole tree, at `221cc5ee`: `cargo check --all-features
+--locked`, `cargo fmt --check` and `cargo clippy --all-targets --all-features
+--locked -- -D warnings` all exit 0. The fast tier ran once (AGENTS.md target
+list, `--no-fail-fast`, `--skip repository::local_sync::`; no SSH target, since
+nothing under their paths changed; 62 min): lib 1564 passed; `manyhands-cli`
+317; every integration target passed except one; **two failures**:
+
+- `desktop::view::item::frame_tests::page_keys_scroll_the_items_region_and_settings_keep_theirs`
+  (`frame_tests.rs:183`, "PageDown scrolled Settings: 0px"): a **real regression
+  of this Cycle**, deterministic (it failed alone), in no sweep or module run:
+  Settings' Repositories page shrank to 186 px, below its 604 px viewport, when
+  the forms left it (the family of Task 4's E-12 edits). Fixed in the fix wave
+  (item A, E-17r).
+- `tests/mutation_confirmation::abandon::a_rebuild_that_is_running_is_not_offered_and_its_abandon_is_busy`
+  (`tests/mutation_confirmation/abandon.rs:1708`, left `Busy`, right
+  `RecoveryRequired`): **not this Cycle's**. It passes alone, twice (0.85 s), and
+  this branch changes nothing outside `src/desktop/`. A load-sensitive flake of
+  the library's own test, for the owner (a follow-on outside this Cycle's
+  boundary; `tests/` is out of bounds here).
+
+**Final whole-branch review** (the most capable model, on a production-only
+diff of 366 KB, with the ledger's parked lists): **Ready to merge: yes**; no
+Critical or Important finding. Its triage of every parked Minor is the table
+below; nothing in it justified a fix wave on its own, so the orchestrator opened
+none (Ruling 28). Its Minors 1 to 4: (1) `sheet_keeps_lost_focus` and
+`drawn_behind` against Settings' layer (a finding the reviewer rated Minor and
+the owner's reviewer raised again; see finding 4 below, which was upheld as a
+pushback); (2) the stale-owner `Kept` (fixed, item E); (3) the spin and the
+missing entry guard (fixed, item F); (4) the `Blur` handler checks the folder
+after the sheet closed when focus moves before the open flag is cleared
+(`add_repository.rs:430-435`): a wasted read and a "Checking…" row at the next
+open; follow-on.
+
+**Owner review feedback, 2026-11-15 (eight findings, none verified by their
+reviewer; each verified by the orchestrator against `6550f995`).**
+
+| # | Finding | Verification | Outcome |
+| --- | --- | --- | --- |
+| 1 | "Adding…" stays after the confirmation closes on a Retry or Prepare-again answer | true; B10 and R-27 say "still waiting" (owner's-eye) | **Ruling 24:** keep as designed; checklist row V-3.11 (item I) |
+| 2 | Redraw loop in `add_closed(Kept)` | the path exists, the state is not produced today; GPUI ignores a notify made during a draw, so the loop itself cannot be reproduced | fixed anyway, defensively: notify only on change plus an entry guard (item F, E-17z) |
+| 3 | stale-owner `Kept` should close `Quiet` | true; a `Kept` close from a sheet that came from Settings defers a `show_settings` that closes the new sheet | fixed (item E, E-17y) |
+| 4 | the lost-focus target is tested against Settings' layer even over the Add sheet | **false**: `settings.layer()` is tracked around Root's whole sheet layer (`workspace/render.rs:123-128`), which includes the Add sheet; if it were true G19 and P16 would fail and Ruling 22 would never have been needed; the 250 ms flash is real but has another cause (the dialog's pending restore sits outside the layer, `defer_close_dialog`) | **pushback upheld** (re-review verified it independently); new P15 rows (E-17aa) pin it; no production change |
+| 5 | Invalid configuration has no Check again | true; B6's table said "—" | **Ruling 25:** added (item B, E-17s, E-17t, E-17u) |
+| 6 | a half-filled identity is sent | true but **legacy**: `origin/main`'s `repositories.rs:535` filters only both-empty | not a regression; not fixed here (**follow-on for the owner**) |
+| 7 | the Unlock field's aria label lost the key name | true (Part F and E-9 sanctioned it) | **Ruling 26:** aria label only (`passphrase_for`; item C, E-17v, E-17w) |
+| 8 | dead `X` icon | true | **Ruling 27:** removed (item D, E-17x: an assertion removal, `"x"` leaves E-14's `ICONS`) |
+
+Rulings made in this wave:
+
+Ruling 24 (owner): keep "Adding…" as designed — closing and reopening the sheet
+is the way out and Activity holds the Retry; a second add of the same folder
+under an unresolved first risks a duplicate request — cost if wrong: B10's table
+and R-27 change.
+
+Ruling 25 (owner): add `Check again` to the not-registered Invalid
+configuration row (same action and copy as the branch and SSH rows) — an
+owner-authorised edit of B6's table and P9's Invalid row — cost if wrong: remove
+it.
+
+Ruling 26 (owner): restore the key name in the Unlock field's aria label only
+("Passphrase for <key label>"); the visible text stays Part F's "Passphrase" —
+cost if wrong: revert `passphrase_for`.
+
+Ruling 27 (owner): remove the unused `X` icon and its `ICONS` entry — cost if
+wrong: restore it.
+
+Ruling 28 (orchestrator): findings 2, 3 and 4's neighbourhood are fixed or
+pinned, with tests first, in one fix wave; finding 6 is not fixed here; the final
+whole-branch review's Minors become the follow-on list below, not a second wave;
+the owner's reviewer's finding 4 is a pushback — cost if wrong: a Kit-level
+focus-restore fix later.
+
+**Fix wave** `060bf559`, `fix(desktop): Add sheet review fixes, Check again, the
+Unlock field's name` (one opus agent, items A to I; boundary diff empty; gates
+pass; 12 exact-name tests, each with its RED seen first): A the `frame_tests`
+fixture selects `a` first (E-17r; the row still fails when Settings' PageDown is
+a no-op); B Check again on the Invalid row (E-17s P9, E-17t P11's G22 row now
+lands on Check again, E-17u a new P16 row); C `passphrase_for` (E-17v P18, E-17w
+P20); D `X` removed (E-17x, an assertion removal); E stale owner `Quiet` (new P6
+row, E-17y); F `add_closed`'s entry guard and notify-on-change (new P7 rows,
+E-17z; the rows found a real double close that stole focus from the origin); G
+no production change, P15 rows (E-17aa) that pass before any change and fail
+under a mutation; H `onboarded`/`closed_onto_plus` only on `(Success, Ok)`
+(E-17ab) and P12's literal built with `joined()` (E-17ac); I the checklist row
+V-3.11. File sizes: `workspace/add_sheet.rs` 508 lines, `add_repository_tests/keyboard.rs`
+509. Scoped re-review (opus): every item addressed, G's pushback upheld
+independently; no new Critical or Important.
+
+**Concerns left by the fix wave:** G22's "else `add-path`" fallback in
+`resume_submit` no longer has a reachable row (every disabling state now offers
+an action); it stays as a defensive `Option` fallback, and B9's G22 text gets a
+note; an `Added` close that finds the sheet already closed still clears the typed
+text (B10, intended); a `Kept` close that runs while an `Added` close is waiting
+drops the clear (pre-existing; keep the waiting close's "added" when a `Kept`
+close supersedes it: follow-on); the layer handle lives on `SettingsHost`
+(`settings.layer()`), which invites the misreading behind finding 4: renaming it
+or moving it to the workspace is a follow-on.
+
+**Follow-on list** (not blocking; from the final review's triage, kept in the
+parked lists above): Windows rows (P14's `sub/../registered` canonicalisation;
+P12's literal is fixed); the busy-preview sites in `add_repository_tests`
+(`:555-560`, `create.rs:193-196`, `enablement.rs:202-209`, `share_attempts.rs:84-96`),
+which stall 180 s on a Busy prepare; P14's "choices" rows that can pass vacuously
+when `press_add` is false, and a row for R-26's reopened sheet; pinning
+`preview_landed`'s busy branch with `hold_lease_for_testing(CacheWrite)`; P17's
+`KEEP_LOCAL` substring check; duplicated test helpers; the blur read after close;
+`add_repository_tests.rs` (940 lines) split; the composer discard's empty body
+band; the half-filled identity (finding 6); the flaky library test above.
