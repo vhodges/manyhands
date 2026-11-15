@@ -629,6 +629,10 @@ fn the_identity_recovery_opens_the_form_for_its_root(cx: &mut TestAppContext) {
     assert!(shell.present("identity-submit", cx));
     let name = control_focus(&shell, "identity-name", cx);
     assert!(shell.frame(cx, |window, cx| name.contains_focused(window, cx)));
+    assert!(
+        shell.holds_focus("identity-name", cx),
+        "W-28 lands on the identity Name, after two draws (Part D)"
+    );
 }
 
 /// A repository Git finds no identity for says so.
@@ -864,8 +868,8 @@ fn a_repository_leaving_the_list_releases_its_sessions(cx: &mut TestAppContext) 
 }
 
 /// A removal whose release cannot write the newest text: the tabs close
-/// and the session stays live with its failure. Once Retry in the
-/// operation area stores the text, the release completes: the draft is
+/// and the session stays live with its failure. Once Retry in
+/// Activity stores the text, the release completes: the draft is
 /// listed unclaimed with that text, and no session is left.
 #[cfg(unix)]
 #[gpui_kit::test]
@@ -874,7 +878,10 @@ async fn a_release_that_failed_during_removal_completes_once_retry_stores_the_te
 ) {
     use std::os::unix::fs::PermissionsExt;
 
-    use crate::desktop::{model::drafts::RecoveryState, view::operations::draft_flush_id};
+    use crate::desktop::{
+        model::{activity::rows::RowKey, drafts::RecoveryState, list_view::RETRY},
+        view::activity_support::{act, offered, refresh, row},
+    };
 
     cx.executor().allow_parking();
     let (shell, root, draft) = with_restored_draft(cx);
@@ -905,13 +912,25 @@ async fn a_release_that_failed_during_removal_completes_once_retry_stores_the_te
         drafts.read_with(cx, |registry, _| registry.recovery_state(draft)),
         Some(RecoveryState::Failed(_))
     ));
-    assert!(shell.present(draft_flush_id(draft, "retry"), cx));
+    let entry = RowKey::Flush(draft);
+    refresh(&shell, cx);
+    assert!(row(&shell, &entry, cx).is_some(), "the failure is listed");
+    assert!(offered(&shell, &entry, RETRY, cx).is_some_and(|offer| offer.enabled));
 
     fs::set_permissions(&folder, fs::Permissions::from_mode(mode)).unwrap();
-    shell.click(draft_flush_id(draft, "retry"), cx);
+    // Settings is a sheet: it closes before Activity's Retry.
+    shell.keys("escape", cx);
+    assert_eq!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, cx| workspace.settings_shown(cx)),
+        crate::desktop::view::settings::Shown::Tabs
+    );
+    act(&shell, &entry, RETRY, cx);
     shell.run(cx);
     assert!(!session_live(&shell, draft, cx));
-    assert!(!shell.present(draft_flush_id(draft, "entry"), cx));
+    refresh(&shell, cx);
+    assert!(row(&shell, &entry, cx).is_none(), "the entry goes");
     let store = shell.fixture.draft_store();
     assert!(matches!(held(&store, draft), Some(Held::No)));
     assert_eq!(stored_body(&store, draft).as_deref(), Some("Newest body"));

@@ -25,18 +25,21 @@ use manyhands::{
 
 use super::*;
 use crate::desktop::{
-    model::{list_state::ListState, operations::Operations},
+    model::{
+        activity::rows::{ActivityAction, Offer, RowKey},
+        list_state::ListState,
+        operations::Operations,
+    },
     services::{
         requests::{DesktopRequest, Lane, Refusals},
         worker::WorkerEvent,
     },
     test_support::fixtures::{NoPassphrase, abandon_through},
-    view::operations::recovery_id,
+    view::activity_support::{act_refused, refresh, row},
 };
 
 const VIEWING_PRIVATE: &str = "Viewing your private copy";
 const STRANDED: &str = "Release stranded work context";
-const NOT_SENT_AGAIN: &str = "Retry (Not sent again after a later Edit or release)";
 const NOT_PREPARED_AGAIN: &str = "Your private copy cannot be made ready again from this \
                                   request: a release of this item was sent since. Abandon its \
                                   pending operation in the operation area, then press Edit.";
@@ -168,8 +171,10 @@ fn attempt(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> u32 
         .read_with(cx, |operations, _| operations.request(id).unwrap().attempt)
 }
 
-/// The control the operation area shows for the request `id`'s Retry.
-fn retry_control(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> String {
+/// The Retry the log offers on the entry of the request `id`, as it stands
+/// now: its action, its label and whether it can be pressed. It panics
+/// unless the entry offers one.
+fn retry_control(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> Offer {
     let operations = shell.operations(cx);
     let n = operations.read_with(cx, |operations, _| {
         match &operations.request(id).unwrap().state {
@@ -180,7 +185,15 @@ fn retry_control(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -
             _ => panic!("not finished"),
         }
     });
-    recovery_id(id, n)
+    refresh(shell, cx);
+    let action = ActivityAction::Recovery(id, n);
+    row(shell, &RowKey::Request(id), cx)
+        .expect("the request's entry")
+        .row
+        .menu
+        .into_iter()
+        .find(|offer| offer.action == action)
+        .expect("the entry offers Retry")
 }
 
 fn failing_at(shell: &Shell, point: FailurePoint) {
@@ -1024,7 +1037,7 @@ async fn a_release_is_not_retried_once_the_item_is_prepared_again(cx: &mut TestA
         "the branch is left"
     );
     let control = retry_control(&shell, release, cx);
-    assert_eq!(shell.label(control.clone(), cx).as_deref(), Some("Retry"));
+    assert_eq!((control.label.as_str(), control.enabled), ("Retry", true));
     working(&shell);
 
     shell.workspace.read_with(cx, |workspace, _| {
@@ -1043,12 +1056,13 @@ async fn a_release_is_not_retried_once_the_item_is_prepared_again(cx: &mut TestA
     shell.run(cx);
     let later = prepares(&shell, cx)[0];
     ended(&shell, later, cx).await;
+    let control = retry_control(&shell, release, cx);
     assert_eq!(
-        shell.label(control.clone(), cx).as_deref(),
-        Some(NOT_SENT_AGAIN)
+        (control.label.as_str(), control.enabled),
+        ("Retry", false),
+        "Retry stays listed and cannot be pressed"
     );
-    shell.click(control, cx);
-    shell.run(cx);
+    act_refused(&shell, &RowKey::Request(release), "Retry", cx);
     assert_eq!(attempt(&shell, release, cx), 1, "not sent again");
     let sent = shell.workspace.read_with(cx, |workspace, _| {
         workspace.services().worker().retry(release, None)
@@ -1093,8 +1107,8 @@ async fn a_refused_release_lets_the_earlier_prepare_resume(cx: &mut TestAppConte
     );
     let control = retry_control(&shell, pending, cx);
     assert_eq!(
-        shell.label(control, cx).as_deref(),
-        Some("Retry"),
+        (control.label.as_str(), control.enabled),
+        ("Retry", true),
         "still offered"
     );
 
@@ -1140,7 +1154,7 @@ async fn a_prepare_is_not_sent_again_once_its_context_is_released(cx: &mut TestA
         "Resume is offered"
     );
     let control = retry_control(&shell, pending, cx);
-    assert_eq!(shell.label(control.clone(), cx).as_deref(), Some("Retry"));
+    assert_eq!((control.label.as_str(), control.enabled), ("Retry", true));
 
     failing_at(&shell, FailurePoint::BeforeRequestDomainCall);
     let item = context_key(&root, TICKET);
@@ -1164,12 +1178,13 @@ async fn a_prepare_is_not_sent_again_once_its_context_is_released(cx: &mut TestA
         Some(NOT_PREPARED_AGAIN)
     );
     assert!(!shell.present("item-prepare-resume", cx), "no Resume");
+    let control = retry_control(&shell, pending, cx);
     assert_eq!(
-        shell.label(control.clone(), cx).as_deref(),
-        Some(NOT_SENT_AGAIN)
+        (control.label.as_str(), control.enabled),
+        ("Retry", false),
+        "Retry stays listed and cannot be pressed"
     );
-    shell.click(control, cx);
-    shell.run(cx);
+    act_refused(&shell, &RowKey::Request(pending), "Retry", cx);
     assert_eq!(attempt(&shell, pending, cx), 1, "not sent again");
     let sent = shell.workspace.read_with(cx, |workspace, _| {
         workspace.services().worker().retry(pending, None)

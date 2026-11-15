@@ -29,11 +29,13 @@ use crate::desktop::{
         fixtures::{Fixture, item_id},
     },
     view::{
+        activity_support::{act, pending_key},
         close_draft::{DISCARD, KEEP_DRAFT, SAVE},
         confirm::CANCEL,
         editor::host::EditorHost,
         harness::{Shell, WAIT, key},
         item::{NOT_REFRESHED, NOT_SAVED, PublicationRemote, tokens::colors},
+        operations::ABANDON,
         sidebar::SELECTED,
         workspace::{REGIONS, Region},
     },
@@ -494,7 +496,8 @@ fn the_tab_keys_do_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     open(&shell, ticket(&a, STRANDED), cx);
     assert_eq!(shown(&shell, cx), Some(1));
 
-    shell.click(("pending-abandon", 0usize), cx);
+    let pending = pending_key(&shell, &key(&a), "save_ticket", cx);
+    act(&shell, &pending, ABANDON, cx);
     assert!(shell.present("confirm-dialog", cx));
     shell.keys("ctrl-tab", cx);
     shell.keys("secondary-w", cx);

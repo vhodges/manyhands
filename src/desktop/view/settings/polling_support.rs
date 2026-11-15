@@ -103,7 +103,7 @@ impl Rig {
     /// Opens the page by keyboard and click, and waits for its rows.
     pub(crate) async fn open(&self, rows: usize, cx: &mut TestAppContext) {
         self.shell.keys("secondary-,", cx);
-        self.shell.click(("settings-page", 4usize), cx);
+        self.shell.click(("settings-page", 2usize), cx);
         let last = rows.saturating_sub(1);
         self.shell
             .until_drawn(cx, "the page's rows", move |shell, cx| {

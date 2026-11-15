@@ -685,15 +685,39 @@ async fn retire_resume_resends_original(cx: &mut TestAppContext) {
             .collect::<Vec<_>>()
     });
     assert_eq!(resumes, [true], "the Resume is dismissed");
+    // The count is the log's, over the rows `derive` makes of the models
+    // alone: no repository inputs (E-3).
     let counted = world.services.scheduler().read_with(cx, |scheduler, cx| {
-        world.services.operations().read_with(cx, |operations, cx| {
-            world.services.drafts().read_with(cx, |drafts, _| {
-                crate::desktop::model::attention::needs_attention(
-                    operations,
-                    drafts,
-                    scheduler.schedule(),
-                )
-            })
+        world.services.operations().read_with(cx, |operations, _| {
+            use crate::desktop::model::activity::{
+                Inputs, derive, log::ActivityLog, requests::RequestFacts, states::DraftsInput,
+            };
+            let pending = operations.pending_shown();
+            let derived = derive(&Inputs {
+                operations,
+                pending: &pending,
+                schedule: scheduler.schedule(),
+                repositories: &[],
+                drafts: DraftsInput {
+                    flush_failures: Vec::new(),
+                    unavailable: None,
+                    recovered: None,
+                },
+                requests: &|_| RequestFacts::none(),
+                conflict_waits: &|_, _| false,
+                title: &|_, _, _| None,
+                primary: &|_| None,
+                unlock_target: &|_| false,
+                lifecycle_running: &|_, _| false,
+            });
+            let mut log = ActivityLog::default();
+            log.refresh(
+                derived,
+                &Default::default(),
+                &Default::default(),
+                scheduler.utc(),
+            );
+            log.attention_count()
         })
     });
     assert_eq!(counted, 1, "the listed row alone");

@@ -66,6 +66,11 @@ icon_assets!(
         FileExclamationPoint,
         Lock,
         RefreshCw,
+        WifiOff,
+        // Sharing & keys' trash (Wave 04 Cycle 04, C2.1).
+        Trash,
+        // The Settings menu's Sharing & keys entry (Cycle 04, B1).
+        KeyRound,
     ]
 );
 

@@ -185,7 +185,10 @@ to Cycle 01. The obligations:
    operation area wraps so that its actions stay inside Activity at the
    default window; a test clicks each at its position. The three existing
    rows Cycle 01's accepted K-19 names stay with Wave 04 Cycle 03 (design
-   W-6, Document Amendment 8).
+   W-6, Document Amendment 8). *Amended 2026-11-13 by Wave 04 Cycle 03b
+   decision 22: Activity's rows are one line; the message ends in an
+   ellipsis and the button never leaves the row; the full text is the
+   row's tooltip, accessible description and menu.*
 4. **A small footprint in shared files.** The scheduler is held by
    `Services`, not by `Workspace`. D6's only edit to the repository list is one
    call beside the launch refresh in `repositories_loaded`, wherever Cycle 01
@@ -351,7 +354,10 @@ Whichever of those and D6 merges second adapts, per `AGENTS.md`.
 9. **Keyboard.** Every new control is reachable and operable by keyboard
    with visible focus.
 10. **Privacy.** No item title, body, comment or key material enters an
-    operation entry, status line, log or error message.
+    operation entry, status line, log or error message. *Amended 2026-11-13
+    by Wave 04 Cycle 03b decisions 12 and 21: a title may appear in an
+    Activity row, its tooltip and menu, and the Needs attention popover; no
+    body, comment, side, result text or path does.*
 11. **Retirement loses nothing.** An item is retired only by its own
     request: after a poll that reported it as `closed` or `promoted`, or by a
     person's Retire…. The loop never retires an item that is being edited or
@@ -460,7 +466,10 @@ Proposed by the planner; approved with the documents on 2026-11-09:
     so that its actions are inside Activity at the default window, and a
     test clicks each at its position. The three existing rows Cycle 01's
     accepted K-19 names stay with Wave 04 Cycle 03, which Wave 04 records
-    (K-16; design Document Amendment 8).
+    (K-16; design Document Amendment 8). *Amended 2026-11-13 by Wave 04
+    Cycle 03b decision 22: Activity's rows are one line; the message ends
+    in an ellipsis and the button never leaves the row; the full text is
+    the row's tooltip, accessible description and menu.*
 14. **How decisions 16 to 21 are carried out.**
     - Every poll stays a recognizing poll. An automatic poll keeps its
       eligibility, backoff, priority and no prompt, and Check now stays

@@ -137,6 +137,18 @@ pub(super) async fn check_all(cx: &mut TestAppContext) {
             })
         })
         .await;
+    // `raise` refuses an unscheduled repository and one whose check is
+    // running: `c` is scheduled, and its launch poll has ended.
+    shell
+        .until_drawn(cx, "c to be scheduled and quiet", |_, cx| {
+            services.scheduler().read_with(cx, |scheduler, _| {
+                scheduler
+                    .schedule()
+                    .repo(&key_c)
+                    .is_some_and(|repo| !repo.in_flight())
+            })
+        })
+        .await;
 
     // `c`'s key is locked, as the scheduler says it live.
     let locked = SharedKeyId::new();
@@ -299,6 +311,14 @@ pub(super) async fn more_menu(cx: &mut TestAppContext) {
     assert!(choose_and_hold(&shell, REBUILD_INDEX, &more, cx), "focus");
     assert_eq!(intents(cx, &a, true), before + 1, "IndexRebuild of a");
     assert_eq!(intents(cx, &b, true), 0, "not b");
+    // The rebuild ends before the removal below is prepared: both take the
+    // data directory's cache lock, and a preview still busy after its
+    // retries shows Retry, not the preview.
+    for id in shell.requests(cx, |request| {
+        matches!(request.intent, Intent::IndexRebuild { .. })
+    }) {
+        shell.until_ended(id, cx).await;
+    }
 
     // A Refresh the menu showed for `b`, while `a` is chosen, does nothing.
     let stale = RepositoryMenuChoice {
@@ -314,6 +334,11 @@ pub(super) async fn more_menu(cx: &mut TestAppContext) {
     // Remove from Manyhands…: the dialog with its note; Cancel gives focus
     // back to More; OK removes `a`.
     let ready = |shell: &Shell, cx: &mut TestAppContext| {
+        // Retry is drawn only once the preview has answered busy.
+        assert!(
+            !shell.present("confirm-retry", cx),
+            "the removal's preview answered busy (Retry is drawn)"
+        );
         shell.label("confirm-ok", cx).as_deref() == Some(CONFIRM)
             && shell.present("confirm-expires", cx)
     };

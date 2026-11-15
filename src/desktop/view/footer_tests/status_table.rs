@@ -11,7 +11,7 @@ use crate::desktop::{
         stamp::RepoKey,
     },
     view::footer::{
-        Control, FooterStatus, UPDATE_TOOLTIP, focus_after_hiding, next_to_share, plan,
+        Control, Face, FooterStatus, UPDATE_TOOLTIP, focus_after_hiding, next_to_share, plan,
         to_share_name, to_share_text, update_text, update_tooltip,
     },
 };
@@ -206,10 +206,35 @@ pub(super) fn table() {
             "{hidden:?} hid"
         );
     }
-    // Every other control stays where it is: the rule is for the two.
-    assert_eq!(
-        focus_after_hiding(Attention, &shown(status(None, 0, 0))),
-        None
-    );
+    // Needs attention hides to the right too (P26, R-37): the right dock
+    // group's first control, else Settings, whichever status items still
+    // show to its left.
+    for (planned, expected) in [
+        (shown(status(None, 0, 0)), Control::Panel(Tickets)),
+        (shown(status(Some("x"), 2, 0)), Control::Panel(Tickets)),
+        (bare_plan(status(None, 0, 0)), Control::Settings),
+        (bare_plan(status(Some("x"), 2, 0)), Control::Settings),
+    ] {
+        assert_eq!(
+            focus_after_hiding(Attention, &planned),
+            Some(expected),
+            "Needs attention hid: {planned:?}"
+        );
+    }
+    // Every other control stays where it is: the rule is for the three.
     assert_eq!(focus_after_hiding(Control::Settings, &default), None);
+    assert_eq!(focus_after_hiding(Control::Panel(Tickets), &default), None);
+
+    // Needs attention says what it is for (E1, fact 43).
+    let face = |control| Face {
+        control,
+        name: "name".to_owned(),
+        text: None,
+        on: None,
+    };
+    assert_eq!(
+        face(Attention).tooltip(),
+        "Things that need you. Your work is safe until you act."
+    );
+    assert_eq!(face(Control::Settings).tooltip(), "name");
 }

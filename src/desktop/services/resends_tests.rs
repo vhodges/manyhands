@@ -110,6 +110,53 @@ fn a_republish_waits_until_its_own_entry_is_dismissed() {
     assert!(!resends.waiting_for(Path::new("/repo"), &item_id(TICKET)));
 }
 
+/// Activity's `resend_waits` (R-47): `waits_on` is true exactly when
+/// `forget` would drop something, a chain link from or to the request, or a
+/// republish waiting under its ID, and not for the run a republish sends on.
+#[test]
+fn waits_on_says_when_forgetting_would_drop_something() {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let worker = worker(&fixture);
+    let mut operations = Operations::default();
+    let resends = Resends::default();
+    let operation = OperationId::new();
+    let resume = Intent::OperationResume {
+        root: root.clone(),
+        operation_id: operation,
+    };
+    rows(&mut operations, &root, operation);
+    let shown = finished(&mut operations, 1, resume, RequestId::new());
+    assert!(!resends.waits_on(shown), "nothing is registered");
+    resends.ended(
+        shown,
+        &original_request(RequestId::new()),
+        &operations,
+        &worker,
+    );
+    let follow = resends.follow(shown).expect("a request under it");
+    assert!(resends.waits_on(shown), "a link from it");
+    assert!(resends.waits_on(follow), "a link to it");
+    assert!(!resends.waits_on(DesktopRequestId(99)), "another request");
+    resends.forget(shown);
+    assert!(!resends.waits_on(shown) && !resends.waits_on(follow));
+
+    let (run, republish) = (DesktopRequestId(10), DesktopRequestId(11));
+    resends.after_republish(
+        republish,
+        AfterRepublish::Retry(run),
+        PathBuf::from("/repo"),
+        item_id(TICKET),
+    );
+    assert!(
+        resends.waits_on(republish),
+        "a republish waits under its ID"
+    );
+    assert!(!resends.waits_on(run), "its run's dismissal keeps it");
+    resends.forget(republish);
+    assert!(!resends.waits_on(republish));
+}
+
 /// Ruling (a), re-review 1, 2: an answer offering `request.retry` or
 /// `request.prepare` keeps the republish waiting; any other failure, and
 /// one removed or not sent, ends it; success sends the lifecycle on, its

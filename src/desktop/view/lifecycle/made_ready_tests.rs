@@ -10,7 +10,7 @@
 //! (`hold_job_return_answering`), so Open ready tickets lists the
 //! repository's own ready tickets.
 
-use gpui_kit::{ElementId, TestAppContext};
+use gpui_kit::TestAppContext;
 use manyhands::{
     repository::{
         ClosureFilter, ItemDtoKind, LifecycleMadeReadyDto, LifecycleMadeReadyState,
@@ -30,16 +30,16 @@ use super::{
     tests::{DOCUMENT, SLUG, TICKET, closes, code, open, saved_ticket, shell, until_present},
 };
 use crate::desktop::{
-    model::navigation::Pane,
+    model::{activity::rows::RowKey, navigation::Pane},
     services::{
         JobKind,
         requests::{DesktopRequestId, Intent},
     },
     test_support::fixtures::item_id,
     view::{
+        activity_support::{refresh, row},
         harness::{Shell, key},
         item::LIFECYCLE_ACTION,
-        operations::request_id,
         workspace::Region,
     },
 };
@@ -150,22 +150,17 @@ pub(super) async fn until_rows(shell: &Shell, expected: Vec<String>, cx: &mut Te
         .await;
 }
 
-/// The labels and values drawn inside the operation area's entry of `id`.
+/// Every text of the Activity entry of `id` in the log: its title,
+/// description, repository tag and tooltip lines.
 fn entry_texts(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> Vec<String> {
-    let within = ElementId::from(request_id(id, "entry"));
-    shell.frame(cx, |window, _| {
-        gpui_kit::base::test_support::snapshots(window)
-            .iter()
-            .filter(|snapshot| snapshot.path().contains(&within))
-            .flat_map(|snapshot| {
-                [snapshot.label(), snapshot.value()]
-                    .into_iter()
-                    .flatten()
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    })
+    refresh(shell, cx);
+    let entry = row(shell, &RowKey::Request(id), cx).expect("the entry is listed");
+    let derived = entry.row;
+    let mut texts = vec![derived.title];
+    texts.extend(derived.description);
+    texts.extend(derived.repo);
+    texts.extend(derived.detail);
+    texts
 }
 
 /// No made-ready part is drawn.
@@ -184,7 +179,7 @@ fn none_drawn(shell: &Shell, cx: &mut TestAppContext) {
 /// A3, real: Done on a closure lists the ticket it made ready by its short
 /// code and its title, read from the repository; the library's own report
 /// holds no title (`tests/mutation_remote/c5_made_ready.rs`
-/// `c5_made_ready_one`). The operation area's entry shows no title.
+/// `c5_made_ready_one`). Activity's entry shows no title.
 #[gpui_kit::test]
 async fn done_lists_made_ready_with_slug_and_title(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -213,10 +208,10 @@ async fn done_lists_made_ready_with_slug_and_title(cx: &mut TestAppContext) {
     assert!(!shell.present("lifecycle-open-ready", cx));
 
     let entry = entry_texts(&shell, id, cx);
-    assert!(!entry.is_empty(), "the entry is drawn");
+    assert!(!entry.is_empty(), "the entry is listed");
     assert!(
         entry.iter().all(|text| !text.contains(DEPENDENT_TITLE)),
-        "no title in the operation area: {entry:?}"
+        "no title in Activity: {entry:?}"
     );
 }
 

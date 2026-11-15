@@ -1,8 +1,8 @@
 //! D1's confirmation dialog by keyboard: Cancel, reached by Tab and
 //! pressed by Enter, cancels in every phase that shows it (Preparing,
 //! Ready, Stale and Answered), where Enter used to give the dialog's own
-//! default: in Ready that confirmed the command. And the Abandon control
-//! the dialog gives the focus back to is pressed by Enter or Space again.
+//! default: in Ready that confirmed the command. And the list the dialog
+//! gives the focus back to opens it again from the row's menu.
 
 use std::{path::PathBuf, time::Duration};
 
@@ -11,13 +11,17 @@ use manyhands::repository::{LeaseKind, RepositoryService};
 
 use super::Walk;
 use crate::desktop::{
+    model::activity::rows::RowKey,
     services::{
         ReadKind,
         requests::{DesktopRequestId, Intent},
     },
     test_support::fixtures::{Fixture, resume_through},
     view::{
-        harness::Shell,
+        activity_support::{highlighted, list_focused, pending_key, row as activity_row, to_row},
+        harness::{Shell, key},
+        operations::ABANDON,
+        repositories::tests::support::highlight,
         workspace::{REGIONS, Region},
     },
 };
@@ -49,13 +53,27 @@ fn abandons(walk: &Walk, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
 }
 
 impl Walk {
-    /// `secondary-4`, Tab to Abandon and Enter: the confirmation opens.
-    fn open_abandon(&self, cx: &mut TestAppContext) {
-        self.keys("secondary-4", cx);
-        self.tab_to("tab", ("pending-abandon", 0usize), cx);
-        self.on(("pending-abandon", 0usize), Region::Operations, cx);
-        self.enter(cx);
+    /// The pending save's row.
+    fn row(&self, cx: &mut TestAppContext) -> RowKey {
+        pending_key(&self.shell, &key(&self.a), "save_ticket", cx)
+    }
+
+    /// With the list focused on the pending row, `menu_key` opens its menu,
+    /// the arrows reach Abandon and Enter chooses it: the confirmation
+    /// opens.
+    fn choose_abandon(&self, menu_key: &str, cx: &mut TestAppContext) {
+        self.keys(menu_key, cx);
+        highlight(&mut self.shell.visual(cx), ABANDON);
+        self.keys("enter", cx);
         assert!(self.shell.present("confirm-dialog", cx));
+    }
+
+    /// `secondary-4`, the arrows to the pending row, `shift-f10`, the
+    /// arrows to Abandon and Enter: the confirmation opens.
+    fn open_abandon(&self, cx: &mut TestAppContext) {
+        let row = self.row(cx);
+        to_row(&self.shell, &row, cx);
+        self.choose_abandon("shift-f10", cx);
     }
 
     /// Tab, in the open dialog, to its Cancel, which then holds focus on
@@ -87,19 +105,20 @@ fn cancel_by_tab_and_enter_submits_nothing_and_abandon_opens_again(cx: &mut Test
     assert!(walk.shell.present("confirm-ok", cx), "the preview is ready");
     walk.cancel_by_tab_and_enter(cx);
     assert!(walk.shell.requests(cx, |_| true).is_empty());
-    walk.on(("pending-abandon", 0usize), Region::Operations, cx);
-    assert!(walk.shell.present(("pending-row", 0usize), cx));
+    // The focus given back is the list's, the row still highlighted.
+    let row = walk.row(cx);
+    walk.region(Region::Operations, cx);
+    assert!(list_focused(&walk.shell, cx));
+    assert_eq!(highlighted(&walk.shell, cx), Some(row.clone()));
+    assert!(activity_row(&walk.shell, &row, cx).is_some());
 
-    // The focus given back is the wrapper's: Enter and Space each press
-    // Abandon, after Cancel and after Escape.
-    for key in ["enter", "space", "enter", "space"] {
-        walk.shell.press(key, cx);
-        assert!(
-            walk.shell.present("confirm-dialog", cx),
-            "{key} presses Abandon"
-        );
+    // Both menu keys open the row's menu again, after Cancel and after
+    // Escape, and Abandon opens the confirmation each time.
+    for menu_key in ["shift-f10", "menu", "shift-f10", "menu"] {
+        walk.choose_abandon(menu_key, cx);
         walk.keys("escape", cx);
-        walk.on(("pending-abandon", 0usize), Region::Operations, cx);
+        walk.region(Region::Operations, cx);
+        assert!(list_focused(&walk.shell, cx), "{menu_key}");
     }
     assert!(walk.shell.requests(cx, |_| true).is_empty());
 }

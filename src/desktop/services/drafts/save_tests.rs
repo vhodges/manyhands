@@ -920,13 +920,16 @@ async fn a_discard_during_a_store_again_discards_the_new_draft(cx: &mut TestAppC
     assert!(drafts.read_with(cx, |registry, _| registry.is_idle()));
 }
 
-/// Review minor 2: dismissing a pending save from the operation area, as
+/// Review minor 2: dismissing a pending save from Activity, as
 /// the user does, ends that save.
 #[gpui_kit::test]
 async fn dismissing_a_pending_save_in_the_operation_area_lets_another_be_sent(
     cx: &mut TestAppContext,
 ) {
-    use crate::desktop::view::{harness::Shell, operations::request_id};
+    use crate::desktop::{
+        model::activity::rows::RowKey,
+        view::{activity_support::act, harness::Shell, operations::DISMISS},
+    };
 
     cx.executor().allow_parking();
     let fixture = Fixture::new();
@@ -958,7 +961,7 @@ async fn dismissing_a_pending_save_in_the_operation_area_lets_another_be_sent(
     finished(&services, request, 1, cx).await;
     assert!(save(&drafts, id, cx).await.is_none());
 
-    shell.click(request_id(request, "dismiss"), cx);
+    act(&shell, &RowKey::Request(request), DISMISS, cx);
     assert!(session_live(&drafts, id, cx));
     assert!(stored(&shell.fixture.draft_store(), id).is_some());
     shell

@@ -15,10 +15,11 @@ use manyhands::{
 
 use crate::desktop::{
     model::{
+        activity::rows::RowKey,
         operations::Entered,
         polling::{
             Answer, AttemptTarget, Clock, Disposition, Policy, PollAttempt, TargetKind,
-            entry::{RetireOffer, offer_text, short_code},
+            entry::{RETIRE, short_code},
             retire::Verdict,
         },
         tabs::TabKey,
@@ -34,7 +35,9 @@ use crate::desktop::{
         retire::{answer, original_request, pending_row},
     },
     view::{
+        activity_support::{act, button_focus, index_of, offered, refresh, row, to_row},
         confirm::CANCEL,
+        repositories::tests::support::{choose, highlight},
         retire_asks::{RETIRE_CHOICE, SHOW_TAB, kept_message, unkept_message},
         settings::polling_support::Rig,
     },
@@ -42,7 +45,6 @@ use crate::desktop::{
 
 const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
 const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
-const TABS: usize = 120;
 
 fn id(n: usize) -> ItemId {
     format!("01ARZ3NDEKTSV4RRFFQ69G5FD{n}").parse().unwrap()
@@ -110,13 +112,12 @@ fn report(rig: &Rig, targets: Vec<(ItemId, TargetKind)>, cx: &mut TestAppContext
     rig.shell.run(cx);
 }
 
-/// The element of the action Retire… of `item` in repository `a`'s entry.
-fn action(rig: &Rig, item: &ItemId) -> String {
-    format!("attempt-{}-retire-{}", rig.key(0), short_code(item))
-}
-
-fn words(rig: &Rig, item: &ItemId) -> String {
-    format!("attempt-{}-offer-{}", rig.key(0), short_code(item))
+/// The log's Retire… row of `item` in repository `a`, for the seam.
+fn retire_key(rig: &Rig, item: &ItemId) -> RowKey {
+    RowKey::RetireOffer {
+        root: rig.key(0),
+        item: item.clone(),
+    }
 }
 
 /// The retirements the person's actions sent, oldest first.
@@ -127,8 +128,9 @@ fn retirements(rig: &Rig, cx: &mut TestAppContext) -> Vec<DesktopRequest> {
 /// E4, E3, A19, W-6: Retire… shows on every reported `Closed` or `Promoted`
 /// item the loop did not retire (skipped, refused, not reached), with the
 /// item's short code and the words of its kind, never a title; not on one
-/// retired, retiring or pending. Pressed where a click reaches it at the
-/// default window, it submits `Intent::ContextRetire` on the user lane under
+/// retired, retiring or pending (the one marked keeps a disabled row).
+/// Reached by the arrows and Tab and pressed by a click on its drawn
+/// button, it submits `Intent::ContextRetire` on the user lane under
 /// a new request ID, recorded in the in-flight record first, and takes the
 /// item out of the refused set.
 #[gpui_kit::test]
@@ -176,52 +178,52 @@ async fn retire_left_offer(cx: &mut TestAppContext) {
     rig.shell.run(cx);
     rig.shell.frame(cx, |_, _| ());
 
-    // Offered for the three the loop left, in the poll's order, in words
-    // that name the short code and no title.
-    for (item, kind) in [
-        (&refused, TargetKind::Ticket),
-        (&skipped, TargetKind::Ticket),
-        (&document, TargetKind::Document),
-    ] {
-        assert!(rig.shell.present(action(&rig, item), cx), "{item}");
-        assert_eq!(
-            rig.shell.label(words(&rig, item), cx),
-            Some(
-                RetireOffer {
-                    kind,
-                    item: item.clone()
-                }
-                .text()
-            ),
+    // Offered for the three the loop left, with the item's short code and no
+    // title in the row's words.
+    for item in [&refused, &skipped, &document] {
+        let key = retire_key(&rig, item);
+        let at = row(&rig.shell, &key, cx).unwrap_or_else(|| panic!("{item} has a row"));
+        assert!(
+            offered(&rig.shell, &key, RETIRE, cx).is_some_and(|offer| offer.enabled),
+            "{item}"
+        );
+        assert!(
+            at.row.title.contains(&short_code(item)),
+            "{item}: {}",
+            at.row.title
         );
     }
-    assert_eq!(
-        rig.shell.label(words(&rig, &skipped), cx),
-        Some(offer_text(TargetKind::Ticket, &short_code(&skipped)))
-    );
-    for item in [&done, &pending, &running, &marked] {
-        assert!(!rig.shell.present(action(&rig, item), cx), "{item}");
+    // No row at all for the three the loop retired, is retiring or left
+    // pending. The one marked "Retiring…" keeps its row, with Retire…
+    // disabled (S7): that row existing is what makes the absences above
+    // not vacuous.
+    for item in [&done, &pending, &running] {
+        assert!(
+            row(&rig.shell, &retire_key(&rig, item), cx).is_none(),
+            "{item} has no Retire… row"
+        );
     }
+    let marked_offer = offered(&rig.shell, &retire_key(&rig, &marked), RETIRE, cx)
+        .expect("the marked item keeps its row");
+    assert!(!marked_offer.enabled, "its Retire… is disabled");
 
-    // The action is inside the area, and a click reaches it.
-    let area = rig
-        .shell
-        .frame(cx, |window, _| window.find("operation-area").bounds());
-    let button = action(&rig, &refused);
-    assert!(rig.shell.tab_reaches(button.clone(), TABS, cx));
-    let bounds = rig
-        .shell
-        .frame(cx, |window, _| window.find(button.clone()).bounds());
+    // The arrows reach the row and Tab its button; a click on the button
+    // reaches it too.
+    let key = retire_key(&rig, &refused);
+    to_row(&rig.shell, &key, cx);
+    rig.shell.keys("tab", cx);
+    let focus = button_focus(&rig.shell, cx);
     assert!(
-        bounds.left() >= area.left() && bounds.right() <= area.right(),
-        "Retire… wraps inside the area: {bounds:?} in {area:?}"
+        rig.shell.frame(cx, |window, _| focus.is_focused(window)),
+        "Tab reaches Retire…"
     );
+    let button = ("activity-button", index_of(&rig.shell, &key, cx));
     // The new retirement's entry is in the record before the library answers.
     let in_library = rig.shell.backend.hold_job(JobKind::ContextRetire);
     rig.shell
         .backend
         .answer_job(JobKind::ContextRetire, retired());
-    rig.shell.click(button.clone(), cx);
+    rig.shell.click(button, cx);
     rig.shell
         .until(cx, |operations| {
             operations
@@ -273,15 +275,20 @@ async fn retire_left_offer(cx: &mut TestAppContext) {
     // Retired, it is no longer offered; the others still are.
     rig.shell.run(cx);
     rig.shell.frame(cx, |_, _| ());
-    assert!(!rig.shell.present(action(&rig, &refused), cx));
-    assert!(rig.shell.present(action(&rig, &skipped), cx));
+    refresh(&rig.shell, cx);
+    assert!(row(&rig.shell, &retire_key(&rig, &refused), cx).is_none());
+    assert!(
+        offered(&rig.shell, &retire_key(&rig, &skipped), RETIRE, cx)
+            .is_some_and(|offer| offer.enabled)
+    );
 
     // A second Retire… is a new request again, not the first one's ID.
     let in_library = rig.shell.backend.hold_job(JobKind::ContextRetire);
     rig.shell
         .backend
         .answer_job(JobKind::ContextRetire, retired());
-    rig.shell.click(action(&rig, &skipped), cx);
+    let at = index_of(&rig.shell, &retire_key(&rig, &skipped), cx);
+    rig.shell.click(("activity-button", at), cx);
     in_library.wait_reached();
     let both = retirements(&rig, cx);
     assert_eq!(both.len(), 2);
@@ -335,10 +342,10 @@ async fn retire_left_unkept_ask(cx: &mut TestAppContext) {
     let rig = rig(cx);
     report(&rig, vec![(ticket(), TargetKind::Ticket)], cx);
     unkept_tab(&rig, cx);
-    let button = action(&rig, &ticket());
+    let button = retire_key(&rig, &ticket());
     rig.shell.frame(cx, |_, _| ());
 
-    rig.shell.click(button.clone(), cx);
+    act(&rig.shell, &button, RETIRE, cx);
     assert!(rig.shell.present("retire-unkept-dialog", cx), "it asks");
     assert_eq!(
         rig.shell.label("retire-unkept-message", cx),
@@ -367,7 +374,7 @@ async fn retire_left_unkept_ask(cx: &mut TestAppContext) {
     assert!(!tab_open(&rig, cx));
 
     // Again: Enter takes the default, Show tab.
-    rig.shell.click(button, cx);
+    act(&rig.shell, &button, RETIRE, cx);
     assert!(
         rig.shell.present("retire-unkept-dialog", cx),
         "pressed again"
@@ -463,7 +470,7 @@ async fn retire_left_kept_draft_ask(cx: &mut TestAppContext) {
         )
     });
     assert!(drafts.read_with(cx, |registry, _| registry.unsaved()));
-    let button = action(&rig, &ticket());
+    let button = retire_key(&rig, &ticket());
     rig.shell.frame(cx, |_, _| ());
     let asked = |rig: &Rig, cx: &mut TestAppContext| {
         rig.shell
@@ -486,8 +493,8 @@ async fn retire_left_kept_draft_ask(cx: &mut TestAppContext) {
 
     // A second press while the fresh listing is awaited starts nothing.
     let listing = rig.shell.backend.hold_read(ReadKind::Drafts);
-    rig.shell.click(button.clone(), cx);
-    rig.shell.click(button.clone(), cx);
+    act(&rig.shell, &button, RETIRE, cx);
+    act(&rig.shell, &button, RETIRE, cx);
     assert!(
         !rig.shell.present("retire-kept-dialog", cx),
         "still listing"
@@ -528,7 +535,7 @@ async fn retire_left_kept_draft_ask(cx: &mut TestAppContext) {
     assert_eq!(asked(&rig, cx), 0, "the press is over");
 
     // Retire, by keyboard.
-    rig.shell.click(button, cx);
+    act(&rig.shell, &button, RETIRE, cx);
     rig.shell
         .until_drawn(cx, "the question again", |shell, cx| {
             shell.present("retire-kept-dialog", cx)
@@ -606,39 +613,40 @@ async fn retire_pending_row_by_keyboard(cx: &mut TestAppContext) {
         })
     );
 
-    // Row 0 (the entry's) offers Resume and Abandon; row 1, Abandon alone.
-    assert!(rig.shell.present(("pending-resume", 0usize), cx));
-    assert!(rig.shell.present(("pending-abandon", 0usize), cx));
-    assert!(!rig.shell.present(("pending-resume", 1usize), cx));
-    assert!(rig.shell.present(("pending-abandon", 1usize), cx));
+    // The entry's row offers Resume and Abandon; the other row, Abandon alone.
+    let (first, second) = (
+        RowKey::Pending {
+            root: root.clone(),
+            operation: operation.to_string(),
+        },
+        RowKey::Pending {
+            root: root.clone(),
+            operation: other.to_string(),
+        },
+    );
+    refresh(&rig.shell, cx);
+    let enabled = |key: &RowKey, label: &str, cx: &mut TestAppContext| {
+        offered(&rig.shell, key, label, cx).is_some_and(|offer| offer.enabled)
+    };
+    assert!(enabled(&first, "Resume", cx));
+    assert!(enabled(&first, "Abandon", cx));
+    assert!(offered(&rig.shell, &second, "Resume", cx).is_none());
+    assert!(enabled(&second, "Abandon", cx));
 
-    // W-6: both actions are inside the area at the default window, and a
-    // click reaches them. Resume's click is held in the library, so the
-    // request stays a request.
-    let area = rig
-        .shell
-        .frame(cx, |window, _| window.find("operation-area").bounds());
-    for id in [
-        ("pending-resume", 0usize),
-        ("pending-abandon", 0usize),
-        ("pending-abandon", 1usize),
-    ] {
-        assert!(rig.shell.tab_reaches(id, TABS, cx));
-        let bounds = rig.shell.frame(cx, |window, _| window.find(id).bounds());
-        assert!(
-            bounds.left() >= area.left() && bounds.right() <= area.right(),
-            "{id:?} is inside the area: {bounds:?} in {area:?}"
-        );
-    }
-    rig.shell.click(("pending-abandon", 1usize), cx);
-    assert!(rig.shell.present("confirm-dialog", cx), "a click opens it");
+    // A click on a row opens its menu by the right button, and Abandon
+    // there opens the confirmation. Resume's click on its drawn button is
+    // held in the library, so the request stays a request.
+    right_click(&rig, &second, cx);
+    choose(&rig.shell, "Abandon", cx);
+    assert!(rig.shell.present("confirm-dialog", cx), "the menu opens it");
     rig.shell.keys("escape", cx);
     // The abandon's preview read the repository's rows again: they are as
     // the library would still list them.
     seed(cx);
     rig.shell.run(cx);
     let held = rig.shell.backend.hold_job(JobKind::OperationResume);
-    rig.shell.click(("pending-resume", 0usize), cx);
+    let at = index_of(&rig.shell, &first, cx);
+    rig.shell.click(("activity-button", at), cx);
     held.wait_reached();
     let resumes = rig.shell.requests(cx, |request| {
         matches!(request.intent, Intent::OperationResume { .. })
@@ -651,10 +659,9 @@ async fn retire_pending_row_by_keyboard(cx: &mut TestAppContext) {
     seed(cx);
     rig.shell.run(cx);
 
-    // Abandon, by keyboard, on the row no entry names.
-    rig.shell.keys("secondary-4", cx);
-    assert!(rig.shell.tab_reaches(("pending-abandon", 1usize), TABS, cx));
-    rig.shell.press("enter", cx);
+    // Abandon, by keyboard, on the row no entry names: the arrows, the
+    // menu's `shift-f10`, the arrows and Enter.
+    choose_by_keys(&rig, &second, "Abandon", cx);
     assert!(
         rig.shell.present("confirm-dialog", cx),
         "the confirmation opens"
@@ -666,15 +673,15 @@ async fn retire_pending_row_by_keyboard(cx: &mut TestAppContext) {
     seed(cx);
     rig.shell.run(cx);
 
-    // Resume, by keyboard.
+    // Resume, by keyboard: the arrows, Tab to its button, Enter.
     rig.shell
         .backend
         .answer_job(JobKind::OperationResume, original_request(request));
     rig.shell
         .backend
         .answer_job(JobKind::ContextRetire, retired());
-    rig.shell.keys("secondary-4", cx);
-    assert!(rig.shell.tab_reaches(("pending-resume", 0usize), TABS, cx));
+    to_row(&rig.shell, &first, cx);
+    rig.shell.keys("tab", cx);
     rig.shell.press("enter", cx);
     rig.shell
         .until(cx, |operations| {
@@ -687,6 +694,23 @@ async fn retire_pending_row_by_keyboard(cx: &mut TestAppContext) {
     let sent = retirements(&rig, cx);
     assert_eq!(sent.len(), 1);
     assert_eq!((sent[0].lane, sent[0].request_id), (Lane::User, request));
+}
+
+/// A right click on the drawn row `key`.
+fn right_click(rig: &Rig, key: &RowKey, cx: &mut TestAppContext) {
+    let at = index_of(&rig.shell, key, cx);
+    rig.shell.frame(cx, |window, cx| {
+        window.right_click(("activity-row", at), cx)
+    });
+    rig.shell.run(cx);
+}
+
+/// The arrows to `key`'s row, `shift-f10`, the arrows to `label` and Enter.
+fn choose_by_keys(rig: &Rig, key: &RowKey, label: &str, cx: &mut TestAppContext) {
+    to_row(&rig.shell, key, cx);
+    rig.shell.keys("shift-f10", cx);
+    highlight(&mut rig.shell.visual(cx), label);
+    rig.shell.keys("enter", cx);
 }
 
 /// E4 step 4: the item's draft sessions are written while it is read-only,
@@ -736,7 +760,7 @@ async fn retire_flush_failure_submits_nothing(cx: &mut TestAppContext) {
     let _read_only = FolderMode::set(&rig.shell.fixture.data_dir().join("drafts"), 0o500);
 
     rig.shell.frame(cx, |_, _| ());
-    rig.shell.click(action(&rig, &ticket()), cx);
+    act(&rig.shell, &retire_key(&rig, &ticket()), RETIRE, cx);
     rig.shell
         .until_drawn(cx, "the kept drafts question", |shell, cx| {
             shell.present("retire-kept-dialog", cx)
@@ -772,7 +796,7 @@ async fn retire_unkept_text_is_asked_before_drafts(cx: &mut TestAppContext) {
     rig.shell.frame(cx, |_, _| ());
     let listed = rig.shell.backend.reads_seen(ReadKind::Drafts);
 
-    rig.shell.click(action(&rig, &ticket()), cx);
+    act(&rig.shell, &retire_key(&rig, &ticket()), RETIRE, cx);
     for _ in 0..20 {
         rig.shell.run(cx);
         cx.executor()
@@ -855,9 +879,9 @@ async fn retire_after_a_quit_closed_its_question(cx: &mut TestAppContext) {
         )
     });
     let _read_only = FolderMode::set(&rig.shell.fixture.data_dir().join("drafts"), 0o500);
-    let button = action(&rig, &ticket());
+    let button = retire_key(&rig, &ticket());
     rig.shell.frame(cx, |_, _| ());
-    rig.shell.click(button.clone(), cx);
+    act(&rig.shell, &button, RETIRE, cx);
     assert!(shows(&rig, "retire-kept-dialog", cx).await, "the question");
 
     // Quitting closes it with no answer, and asks about the draft that
@@ -878,7 +902,7 @@ async fn retire_after_a_quit_closed_its_question(cx: &mut TestAppContext) {
 
     // Retire… asks again.
     rig.shell.frame(cx, |_, _| ());
-    rig.shell.click(button, cx);
+    act(&rig.shell, &button, RETIRE, cx);
     assert!(
         shows(&rig, "retire-kept-dialog", cx).await,
         "Retire… is not ignored"

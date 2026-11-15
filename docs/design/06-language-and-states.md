@@ -18,6 +18,7 @@ The owner's decision was **plain language everywhere; Git details only on hover 
 | Ticket closure lifecycle | **Close ticket…** → steps Save / Share / Merge / Mark as closed / Tidy up | Dialog |
 | Document promotion | **Approve and merge…** | Dialog |
 | Branch + worktree cleanup | **Tidy up** | Dialog |
+| Completed-context retirement (a closed or promoted item's branch + worktree removed from this computer; Wave 04 Cycle 03b, 2026-11-13) | "Retired the copy of … on this computer" | Activity |
 | Nonconforming item | **Needs fixing** · specific reason + fix action | Rows, banner |
 | Unmanaged document | "Not a managed document yet" · **Adopt…** | Tree, banner |
 | Index refresh / rebuild | "Refresh" / "Rebuild the search index" | Repos ⋯ menu |
@@ -26,6 +27,8 @@ The owner's decision was **plain language everywhere; Git details only on hover 
 | Poll or transport failure | **Can't reach** · "Couldn't reach {repo}'s shared copy. Your work is safe." | Repo row, Attention |
 | Passphrase prompt | **Unlock your key** | Dialog |
 | Recovery required | **Needs attention** | Footer, Attention, state pill |
+
+*Amended 2026-11-13 by Wave 04 Cycle 03b: Activity's full copy, row by row, is Wave 04 Cycle 03b's design Part B.*
 
 ## Writing rules
 

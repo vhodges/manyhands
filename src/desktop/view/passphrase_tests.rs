@@ -40,8 +40,11 @@ use crate::desktop::{
         fixtures::{Fixture, SSH_HOST, SSH_PORT},
     },
     view::{
+        activity_support::{choose_in_menu, highlighted, list_focus, pending_key},
         confirm::{CONFIRM, confirm},
-        harness::{Shell, wait_until},
+        harness::{Shell, key, wait_until},
+        operations::ABANDON,
+        repositories::tests::support::press_and_hold,
         workspace::{QuitPhase, Region},
     },
 };
@@ -301,7 +304,7 @@ async fn cancel_replies_cancelled(cx: &mut TestAppContext) {
 /// A prompt that arrives while the confirmation dialog is open shows
 /// above it. Escape answers the prompt, and only the prompt: the
 /// confirmation dialog stays, and its own Escape then gives focus back to
-/// the control that started it.
+/// the list, on the row that started it.
 #[gpui_kit::test]
 async fn a_prompt_above_the_confirmation_dialog_is_answered_by_its_own_dialog(
     cx: &mut TestAppContext,
@@ -311,9 +314,10 @@ async fn a_prompt_above_the_confirmation_dialog_is_answered_by_its_own_dialog(
     let root = fixture.create_repository("a");
     let ticket = "01ARZ3NDEKTSV4RRFFQ69G5FH0";
     fixture.create_ticket(&root, ticket, "Stranded", "open");
-    let operation = fixture.strand_ticket_save(&root, ticket, "Edited");
+    fixture.strand_ticket_save(&root, ticket, "Edited");
     let shell = Shell::open(fixture, cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    let row = pending_key(&shell, &key(&root), "save_ticket", cx);
+    choose_in_menu(&shell, &row, ABANDON, cx);
     assert!(shell.present("confirm-dialog", cx));
 
     let asked = ask(&shell, "primary", cx);
@@ -326,15 +330,13 @@ async fn a_prompt_above_the_confirmation_dialog_is_answered_by_its_own_dialog(
     assert!(!shell.present("passphrase-dialog", cx));
     assert!(shell.present("confirm-dialog", cx));
 
-    shell.keys("escape", cx);
+    let list = list_focus(&shell, cx);
+    assert!(
+        press_and_hold(&shell, "escape", &list, cx),
+        "focus is back on the list"
+    );
     assert!(!shell.present("confirm-dialog", cx));
-    let abandon = shell
-        .workspace
-        .read_with(cx, |workspace, _| {
-            workspace.abandon_focus(root.to_str().unwrap(), &operation)
-        })
-        .expect("the Abandon control has a focus");
-    assert!(shell.frame(cx, |window, _| abandon.is_focused(window)));
+    assert_eq!(highlighted(&shell, cx), Some(row), "its row");
     // Nothing was submitted by either dialog.
     assert!(shell.requests(cx, |_| true).is_empty());
 }

@@ -24,16 +24,17 @@ use super::{
     tests::{DOCUMENT, code, open, shell, shown, until_present},
 };
 use crate::desktop::{
-    model::navigation::OpenTarget,
+    model::{activity::rows::RowKey, navigation::OpenTarget},
     services::{
         JobKind,
         requests::{DesktopRequestId, Intent},
     },
     test_support::fixtures::{Fixture, NoPassphrase, item_id},
     view::{
+        activity_support::act,
         harness::{Shell, key},
         item::LIFECYCLE_ACTION,
-        operations::request_id,
+        operations::OPEN_LIFECYCLE,
     },
 };
 
@@ -164,7 +165,7 @@ async fn a16_a_promotion_stopped_untidied_and_done_shows_no_item_text(cx: &mut T
     // Retry tidies up: Done. (A finished-ok entry offers no Open…, so the
     // dialog is reopened while the run is still failed.)
     std::fs::remove_file(&left).unwrap();
-    shell.click(request_id(retried, "open"), cx);
+    act(&shell, &RowKey::Request(retried), OPEN_LIFECYCLE, cx);
     until_present(&shell, "lifecycle-retry", cx).await;
     seen.window(&shell, cx);
     shell.click("lifecycle-retry", cx);

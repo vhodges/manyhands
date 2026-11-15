@@ -3,7 +3,7 @@
 use super::{Region, Workspace};
 use crate::desktop::{
     model::{
-        layout::PanelKind,
+        activity::rows::RowKey,
         operations::RecoveryStep,
         stamp::{RepoKey, SettingsPage, ViewScope},
     },
@@ -15,7 +15,7 @@ use crate::desktop::{
     view::{
         confirm::{confirm, prepare_again},
         item::ItemRoute,
-        operations::{recovery_id, request_id},
+        settings::SettingsRoute,
     },
 };
 use gpui_kit::{
@@ -114,6 +114,9 @@ impl Workspace {
                 if let ViewScope::PendingConflicts(root) = stamp.scope {
                     this.pending_conflicts.insert(root, conflicts);
                     cx.notify();
+                    // A conflict that waits changes the row that offers its
+                    // review (N10).
+                    this.refresh_activity(cx);
                 }
             },
         );
@@ -123,6 +126,7 @@ impl Workspace {
     /// Coalesce each batch's changed roots, while keeping prompt/quit order.
     pub(super) fn operations_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.notify();
+        self.refresh_activity(cx);
         // Confirmation observers close their dialogs before a prompt opens.
         // The Kit closes the top dialog only.
         cx.defer_in(window, |this, window, cx| this.show_prompt(window, cx));
@@ -214,49 +218,68 @@ impl Workspace {
     }
 
     /// The Hosts page on the repository at `root`, naming no host to
-    /// check: a comment's host stop has no host data (K-3).
-    fn open_hosts(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.content.drafts.update(cx, |drafts, cx| drafts.hide(cx));
-        self.content.settings.update(cx, |settings, cx| {
-            settings.set_selection(Some(root));
-            settings.open(SettingsPage::Hosts, window, cx)
-        });
-        self.focus_region(Region::Content, window, cx);
+    /// check: a comment's host stop has no host data (K-3), nor has a host
+    /// answer that named none (R-23).
+    pub(in crate::desktop::view) fn open_hosts(
+        &mut self,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_settings(SettingsRoute::Hosts(root), None, window, cx);
     }
 
-    /// Show it, on `busy` (Busy repositories): the operation area entry
-    /// of `request`, the request of this session that may hold the
-    /// repository; with none, or one no longer listed, the operation area,
-    /// whose pending operations of `root` are read again.
-    fn show_holder(
+    /// Show it, on `busy` (Busy repositories): reveals Activity and
+    /// highlights, and focuses the list on, the row of `request`, the
+    /// request of this session that may hold the repository (a running
+    /// retirement is its S1 row, R-51); with none, or one no longer listed,
+    /// the first pending row of `root`, whose pending operations are read
+    /// again (C3). The filter, when it hides the row, is turned off here.
+    pub(in crate::desktop::view) fn show_holder(
         &mut self,
         root: PathBuf,
         request: Option<DesktopRequestId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Activity may be hidden, or behind another tab (R-10).
-        self.reveal(PanelKind::Activity, window, cx);
-        let entry = request
-            .map(|id| request_id(id, "entry"))
-            .and_then(|entry| self.control_focus.get(&entry).cloned());
-        match entry {
-            Some(entry) => {
-                self.last_region = Some(Region::Operations);
-                window.focus(&entry, cx);
-            }
-            None => {
-                if let Some(root) = root.to_str() {
-                    self.load_pending(root.to_owned(), cx);
-                }
-                self.focus_region(Region::Operations, window, cx);
-            }
+        let listed = |key: &RowKey| {
+            self.activity
+                .log
+                .rows()
+                .iter()
+                .any(|row| &row.row.key == key)
+        };
+        let holder = request
+            .map(RowKey::Request)
+            .filter(|key| listed(key))
+            .or_else(|| {
+                let root = root.to_str()?;
+                self.activity
+                    .log
+                    .rows()
+                    .iter()
+                    .map(|row| &row.row.key)
+                    .find(|key| matches!(key, RowKey::Pending { root: of, .. } if of == root))
+                    .cloned()
+            });
+        if let Some(key) = &holder {
+            self.show_row_through_filter(key);
+            self.activity.pane.highlight_when_shown(key);
         }
+        if request.is_none_or(|id| holder != Some(RowKey::Request(id)))
+            && let Some(root) = root.to_str()
+        {
+            self.load_pending(root.to_owned(), cx);
+        }
+        // Activity may be hidden, or behind another tab (R-10): focusing its
+        // region reveals it and focuses the list.
+        self.focus_region(Region::Operations, window, cx);
         cx.notify();
     }
 
     /// Runs `f` on this workspace with its window, once the update under
-    /// way has ended: the window whose root view is this workspace.
+    /// way has ended: the window whose root view is this workspace. Root is
+    /// not updated around `f`, which may open a sheet or a dialog.
     fn in_window(
         &self,
         cx: &mut Context<Self>,
@@ -264,12 +287,11 @@ impl Workspace {
     ) {
         let id = cx.entity_id();
         let workspace = cx.entity().downgrade();
-        let Some(window) = cx.windows().into_iter().find_map(|window| {
-            let root = window.downcast::<Root>()?;
-            let ours = root
-                .read(cx)
-                .is_ok_and(|root| root.view().entity_id() == id);
-            ours.then_some(root)
+        let Some(window) = cx.windows().into_iter().find(|window| {
+            window.downcast::<Root>().is_some_and(|root| {
+                root.read(cx)
+                    .is_ok_and(|root| root.view().entity_id() == id)
+            })
         }) else {
             return;
         };
@@ -280,21 +302,15 @@ impl Workspace {
         });
     }
 
-    /// Settings › Remotes, on the repository at `root`, in place of the
-    /// tabs, focused as Settings opened from the sidebar are.
+    /// Settings › Remotes, on the repository at `root` even when the page
+    /// works on another repository (O-1).
     pub(in crate::desktop::view) fn open_remotes(
         &mut self,
         root: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.content.drafts.update(cx, |drafts, cx| drafts.hide(cx));
-        // On `root` even when the page works on another repository (O-1).
-        self.content.settings.update(cx, |settings, cx| {
-            settings.set_selection(Some(root.clone()));
-            settings.open_remotes_on(root, window, cx)
-        });
-        self.focus_region(Region::Content, window, cx);
+        self.show_settings(SettingsRoute::Remotes(root), None, window, cx);
     }
 
     /// Whether a share of the primary branch of `root` is queued, waiting
@@ -520,47 +536,6 @@ impl Workspace {
         );
     }
 
-    pub(in crate::desktop::view) fn abandon_focus_for(
-        &mut self,
-        root: &RepoKey,
-        operation_id: &str,
-        cx: &mut Context<Self>,
-    ) -> FocusHandle {
-        let key = (root.clone(), operation_id.to_owned());
-        self.abandon_drawn.insert(key.clone());
-        self.abandon_focus
-            .entry(key)
-            .or_insert_with(|| cx.focus_handle())
-            .clone()
-    }
-
-    pub(in crate::desktop::view) fn control_focus_for(
-        &mut self,
-        id: String,
-        cx: &mut Context<Self>,
-    ) -> FocusHandle {
-        self.control_drawn.insert(id.clone());
-        self.control_focus
-            .entry(id)
-            .or_insert_with(|| cx.focus_handle())
-            .clone()
-    }
-
-    /// Dropped controls restore focus through the workspace's focus-lost handler.
-    pub(super) fn prune_abandon_focus(&mut self) {
-        let drawn = std::mem::take(&mut self.abandon_drawn);
-        self.abandon_focus.retain(|key, _| drawn.contains(key));
-        let drawn = std::mem::take(&mut self.control_drawn);
-        self.control_focus.retain(|key, _| drawn.contains(key));
-    }
-
-    #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn abandon_focus(&self, root: &str, operation_id: &str) -> Option<FocusHandle> {
-        self.abandon_focus
-            .get(&(root.to_owned(), operation_id.to_owned()))
-            .cloned()
-    }
-
     fn protected_generation(&self, id: DesktopRequestId, cx: &App) -> bool {
         self.services
             .operations()
@@ -581,6 +556,7 @@ impl Workspace {
         &mut self,
         id: DesktopRequestId,
         n: usize,
+        origin: FocusHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -596,11 +572,6 @@ impl Workspace {
             };
             operations.recovery_step(id, action)
         };
-        let origin = self
-            .control_focus
-            .get(&recovery_id(id, n))
-            .cloned()
-            .unwrap_or_else(|| self.regions[Region::Operations.index()].clone());
         window.focus(&origin, cx);
         self.last_region = Some(Region::Operations);
         match step {

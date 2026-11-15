@@ -26,10 +26,14 @@ use super::support::{
     until_adopted, until_answered, until_attempt, write_new,
 };
 use crate::desktop::{
-    model::publication::CommentOutcome,
+    model::{activity::rows::RowKey, publication::CommentOutcome},
     services::{JobKind, requests::RequestState, worker::RecordState},
     test_support::fixtures::item_id,
-    view::{harness::WAIT, operations::request_id},
+    view::{
+        activity_support::{act, offered, refresh},
+        harness::WAIT,
+        operations::STOP,
+    },
 };
 
 /// P1: a post whose checkpoint commits and whose publication succeeds is
@@ -152,7 +156,10 @@ async fn p3_a_stopped_post_offers_share_not_retry(cx: &mut TestAppContext) {
             )
         })
         .await;
-    shell.click(request_id(id, "stop"), cx);
+    let entry = RowKey::Request(id);
+    refresh(&shell, cx);
+    assert!(offered(&shell, &entry, STOP, cx).is_some_and(|offer| offer.enabled));
+    act(&shell, &entry, STOP, cx);
     let worker = shell
         .workspace
         .read_with(cx, |workspace, _| workspace.services().worker().clone());

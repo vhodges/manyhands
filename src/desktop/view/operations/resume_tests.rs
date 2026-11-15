@@ -14,20 +14,24 @@ use manyhands::{
     repository::{
         CancellationToken, ConfirmationId, FailurePoint, ItemDtoKind, LifecycleBlocker,
         LifecycleMutationDto, LifecycleMutationType, Mutation, MutationCall, MutationDataDto,
-        NoProgress, OperationAction, PrepareDataDto, RepositoryService, RequestId,
+        NoProgress, OperationAction, OperationDto, PrepareDataDto, RepositoryService, RequestId,
         TicketCloseInput, keys::SessionCredentials,
     },
     results::{Envelope, RecoveryAction, RecoveryActionKind, ResultCode, Scope},
 };
 
 use crate::desktop::{
-    model::lifecycle_lock::{LockSource, LockState},
+    model::{
+        activity::rows::{ActivityAction, RowKey},
+        lifecycle_lock::{LockSource, LockState},
+    },
     services::{
         BUSY_RETRY_DELAYS, JobKind,
         requests::{DesktopRequestId, Intent, RequestState},
     },
     test_support::fixtures::{Fixture, NoPassphrase, item_id},
     view::{
+        activity_support::{act, offered, pending_key, refresh, row},
         harness::{Shell, key},
         lifecycle::{LifecycleDialog, OpenedLifecycle, STILL_RUNNING},
         operations::RESUME,
@@ -93,23 +97,45 @@ pub(in crate::desktop::view::operations) fn stranded(
     (Shell::open(fixture, cx), root, request)
 }
 
-/// The close's pending row, once listed.
+/// The close's pending operation in `root`'s list, when listed.
+fn listed_close(shell: &Shell, root: &str, cx: &mut TestAppContext) -> Option<OperationDto> {
+    shell.operations(cx).read_with(cx, |operations, _| {
+        operations
+            .pending_shown()
+            .into_iter()
+            .filter(|(listed, _)| listed == root)
+            .filter_map(|(_, state)| state.rows().map(|list| list.items.clone()))
+            .flatten()
+            .find(|operation| operation.action == OperationAction::Close)
+    })
+}
+
+/// The close's pending row, once listed: its key, for the seam.
 pub(in crate::desktop::view::operations) async fn close_row(
     shell: &Shell,
+    root: &Path,
     cx: &mut TestAppContext,
-) -> usize {
-    let close = OperationAction::Close.as_str().to_owned();
-    let wanted = close.clone();
+) -> RowKey {
+    let root = key(root);
     shell
-        .until_drawn(cx, "the close's row", move |shell, cx| {
-            shell.rows("pending-command", cx).contains(&wanted)
+        .until_drawn(cx, "the close's row", |shell, cx| {
+            listed_close(shell, &root, cx).is_some()
         })
         .await;
-    shell
-        .rows("pending-command", cx)
-        .iter()
-        .position(|listed| *listed == close)
-        .expect("listed")
+    pending_key(shell, &root, OperationAction::Close.as_str(), cx)
+}
+
+/// Whether the log offers `label` on the pending row `entry`: the offer's
+/// action and whether it can be pressed. It panics unless the row is there.
+fn offer(
+    shell: &Shell,
+    entry: &RowKey,
+    label: &str,
+    cx: &mut TestAppContext,
+) -> Option<(ActivityAction, bool)> {
+    refresh(shell, cx);
+    row(shell, entry, cx).expect("the pending row stays");
+    offered(shell, entry, label, cx).map(|offer| (offer.action, offer.enabled))
 }
 
 /// Where the ticket of `root` stands under the lifecycle lock.
@@ -194,17 +220,28 @@ fn code(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> Option<
 #[gpui_kit::test]
 async fn a_lifecycle_row_offers_resume_after_restart(cx: &mut TestAppContext) {
     let (shell, root, _) = stranded(cx);
-    let row = close_row(&shell, cx).await;
+    let entry = close_row(&shell, &root, cx).await;
+    let operation = listed_close(&shell, &key(&root), cx).expect("listed");
     assert_eq!(
-        shell.label(("pending-next", row), cx).as_deref(),
+        operation.next_action.map(|next| next.as_str()),
         Some("resume")
     );
-    assert_eq!(
-        shell.label(("pending-resume", row), cx).as_deref(),
-        Some(RESUME)
+    let (action, enabled) = offer(&shell, &entry, RESUME, cx).expect("Resume");
+    assert!(enabled, "Resume can be pressed");
+    assert!(matches!(action, ActivityAction::ResumeLifecycle { .. }));
+    assert!(
+        offer(&shell, &entry, STILL_RUNNING, cx).is_none(),
+        "not still running"
     );
-    assert!(!shell.present(("pending-resume-unavailable", row), cx));
-    assert!(!shell.present(("pending-still-running", row), cx));
+    assert!(
+        row(&shell, &entry, cx)
+            .expect("its row")
+            .row
+            .menu
+            .iter()
+            .all(|offer| offer.enabled),
+        "no Resume that waits"
+    );
     until_lock(&shell, &root, LockState::Locked(LockSource::Record), cx).await;
 }
 
@@ -216,9 +253,9 @@ async fn a_lifecycle_row_offers_resume_after_restart(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 async fn resume_resends_the_named_request_and_opens_running(cx: &mut TestAppContext) {
     let (shell, root, holder) = stranded(cx);
-    let row = close_row(&shell, cx).await;
+    let entry = close_row(&shell, &root, cx).await;
     let held = shell.backend.hold_job(JobKind::TicketClose);
-    shell.click(("pending-resume", row), cx);
+    act(&shell, &entry, RESUME, cx);
     let resume = resumes(&shell, cx);
     assert_eq!(resume.len(), 1, "one resume of the row");
     assert!(dialog(cx).is_some(), "the dialog opened on it");
@@ -259,9 +296,8 @@ async fn resume_resends_the_named_request_and_opens_running(cx: &mut TestAppCont
     until_lock(&shell, &root, LockState::Open, cx).await;
     shell
         .until_drawn(cx, "the row is gone", |shell, cx| {
-            !shell
-                .rows("pending-command", cx)
-                .contains(&"close".to_owned())
+            refresh(shell, cx);
+            row(shell, &entry, cx).is_none()
         })
         .await;
 }
@@ -280,9 +316,9 @@ async fn resume_is_not_offered_while_in_flight_and_busy_reads_still_running(
     cx: &mut TestAppContext,
 ) {
     let (shell, root, _) = stranded(cx);
-    let row = close_row(&shell, cx).await;
+    let entry = close_row(&shell, &root, cx).await;
     let held = shell.backend.hold_job(JobKind::TicketClose);
-    shell.click(("pending-resume", row), cx);
+    act(&shell, &entry, RESUME, cx);
     // The drain sends the close once the resume's answer lands.
     shell
         .until(cx, |operations| {
@@ -294,15 +330,14 @@ async fn resume_is_not_offered_while_in_flight_and_busy_reads_still_running(
         .await;
     held.wait_reached();
     shell
-        .until_drawn(cx, "the row waits", move |shell, cx| {
-            shell.present(("pending-still-running", row), cx)
+        .until_drawn(cx, "the row waits", |shell, cx| {
+            refresh(shell, cx);
+            row(shell, &entry, cx).is_some() && offered(shell, &entry, STILL_RUNNING, cx).is_some()
         })
         .await;
-    assert_eq!(
-        shell.label(("pending-still-running", row), cx).as_deref(),
-        Some(STILL_RUNNING)
-    );
-    assert!(!shell.present(("pending-resume", row), cx));
+    let (_, enabled) = offer(&shell, &entry, STILL_RUNNING, cx).expect("it says why");
+    assert!(!enabled, "no Resume while it runs");
+    assert!(offer(&shell, &entry, RESUME, cx).is_none());
     shell.keys("escape", cx);
     held.release();
     let sent = closes(&shell, cx);
@@ -310,8 +345,8 @@ async fn resume_is_not_offered_while_in_flight_and_busy_reads_still_running(
     until_lock(&shell, &root, LockState::Open, cx).await;
 
     // A second stranded close, whose resume is answered `busy`.
-    let (shell, _, _) = stranded(cx);
-    let row = close_row(&shell, cx).await;
+    let (shell, root, _) = stranded(cx);
+    let entry = close_row(&shell, &root, cx).await;
     let busy = Envelope::<MutationDataDto>::failure(
         "operation resume",
         Scope::default(),
@@ -325,7 +360,7 @@ async fn resume_is_not_offered_while_in_flight_and_busy_reads_still_running(
             .hold_job_return_answering(JobKind::OperationResume, busy.clone())
             .release();
     }
-    shell.click(("pending-resume", row), cx);
+    act(&shell, &entry, RESUME, cx);
     let resume = resumes(&shell, cx)[0];
     until_long(&shell, "the resume's busy answer", cx, |shell, cx| {
         shell.operations(cx).read_with(cx, |operations, _| {
@@ -356,9 +391,9 @@ async fn resume_is_not_offered_while_in_flight_and_busy_reads_still_running(
 #[gpui_kit::test]
 async fn a_running_resume_counts_as_in_flight(cx: &mut TestAppContext) {
     let (shell, root, _) = stranded(cx);
-    let row = close_row(&shell, cx).await;
+    let entry = close_row(&shell, &root, cx).await;
     let held = shell.backend.hold_job(JobKind::OperationResume);
-    shell.click(("pending-resume", row), cx);
+    act(&shell, &entry, RESUME, cx);
     held.wait_reached();
     let resume = resumes(&shell, cx);
     assert_eq!(resume.len(), 1);
@@ -367,12 +402,13 @@ async fn a_running_resume_counts_as_in_flight(cx: &mut TestAppContext) {
     assert!(shell.present("lifecycle-stop", cx), "it shows running");
     shell.keys("escape", cx);
     shell
-        .until_drawn(cx, "the row waits", move |shell, cx| {
-            shell.present(("pending-still-running", row), cx)
+        .until_drawn(cx, "the row waits", |shell, cx| {
+            refresh(shell, cx);
+            row(shell, &entry, cx).is_some() && offered(shell, &entry, STILL_RUNNING, cx).is_some()
         })
         .await;
     assert!(
-        !shell.present(("pending-resume", row), cx),
+        offer(&shell, &entry, RESUME, cx).is_none(),
         "no second resume"
     );
 
@@ -396,8 +432,8 @@ async fn a_running_resume_counts_as_in_flight(cx: &mut TestAppContext) {
 /// failure.
 #[gpui_kit::test]
 async fn a_resent_close_answered_busy_reads_still_running(cx: &mut TestAppContext) {
-    let (shell, _, _) = stranded(cx);
-    let row = close_row(&shell, cx).await;
+    let (shell, root, _) = stranded(cx);
+    let entry = close_row(&shell, &root, cx).await;
     let busy = Envelope::<MutationDataDto>::failure(
         "ticket close",
         Scope::default(),
@@ -410,7 +446,7 @@ async fn a_resent_close_answered_busy_reads_still_running(cx: &mut TestAppContex
             .hold_job_return_answering(JobKind::TicketClose, busy.clone())
             .release();
     }
-    shell.click(("pending-resume", row), cx);
+    act(&shell, &entry, RESUME, cx);
     // Each busy answer still runs the real call, then waits out its delay:
     // longer than the harness's wait under the whole suite.
     until_long(&shell, "the close's busy answer", cx, |shell, cx| {
@@ -443,7 +479,7 @@ async fn a_resent_close_answered_busy_reads_still_running(cx: &mut TestAppContex
 #[gpui_kit::test]
 async fn a_resume_naming_an_unknown_lifecycle_sends_nothing(cx: &mut TestAppContext) {
     let (shell, root, _) = stranded(cx);
-    let row = close_row(&shell, cx).await;
+    let entry = close_row(&shell, &root, cx).await;
     let named = RequestId::new();
     let refused = Envelope::<MutationDataDto>::failure(
         "operation resume",
@@ -465,7 +501,7 @@ async fn a_resume_naming_an_unknown_lifecycle_sends_nothing(cx: &mut TestAppCont
     shell.operations(cx).update(cx, |operations, _| {
         operations.locks_mut().forget(&key(&root));
     });
-    shell.click(("pending-resume", row), cx);
+    act(&shell, &entry, RESUME, cx);
     let resume = resumes(&shell, cx)[0];
     shell.until_ended(resume, cx).await;
     shell
@@ -498,8 +534,8 @@ async fn a_resume_naming_an_unknown_lifecycle_sends_nothing(cx: &mut TestAppCont
 /// `context_conflicted`, `operation.resume` naming the parent).
 #[gpui_kit::test]
 async fn a_resumed_child_conflict_offers_resolve_and_resume(cx: &mut TestAppContext) {
-    let (shell, _, _) = stranded(cx);
-    let row = close_row(&shell, cx).await;
+    let (shell, root, _) = stranded(cx);
+    let entry = close_row(&shell, &root, cx).await;
     let mut conflicted = Envelope::<MutationDataDto>::failure(
         "operation resume",
         Scope::default(),
@@ -535,7 +571,7 @@ async fn a_resumed_child_conflict_offers_resolve_and_resume(cx: &mut TestAppCont
         .backend
         .hold_job_return_answering(JobKind::OperationResume, conflicted)
         .release();
-    shell.click(("pending-resume", row), cx);
+    act(&shell, &entry, RESUME, cx);
     shell
         .until_drawn(
             cx,

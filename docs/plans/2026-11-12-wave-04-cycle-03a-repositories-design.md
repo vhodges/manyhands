@@ -1245,7 +1245,7 @@ task:
 | R-35 | The menu's choice carries what it showed and is checked again when chosen (`menu_items` re-evaluated; ignored when disabled, changed or its repository is gone); Check now and Retry now, Settings' Check now and Check all go through `Services::check_now(&self, root: &Path) -> bool`, which refuses while a `PollOnce` for the root is in flight (fact 67) | — |
 | R-36 | The row's right-press hook reaches the Workspace through a `WeakEntity<Workspace>` in the delegate, with a bounds map shared through an `Rc`; the opener refuses under `modal_open` itself (fact 61) | — |
 | R-37 | A kept entry the list gives again is reset to `Resolution::Unknown` and `vanished` is set, so `take_vanished` resolves it again (facts 56, 68) | — |
-| R-38 | When a focused footer status item hides, focus moves to the next shown footer control to its right | — |
+| R-38 | When a focused footer status item hides, focus moves to the next shown footer control to its right. *Extended by Cycle 03b (its design E1; amended 2026-11-13): Needs attention follows the same rule.* | — |
 | R-39 | The footer's To share name and choice come from one function evaluated at press; the kept row is never its choice; a display name two listed repositories share gains its parent folder in the footer's name | — |
 | R-40 | `menu` and `shift-f10` on a Repositories toolbar button open the chosen repository's menu, never the Kit cursor's row, since the wrapper carries `REPOSITORIES_CONTEXT`; Esc returns focus to the button | — |
 | R-41 | `Scheduler::reread` ignores a root it does not know | — |
@@ -1280,7 +1280,8 @@ task:
 - **K-9.** The footer's Needs attention does not yet count Can't open,
   Needs fixing, Can't reach, or the Needs attention this Cycle adds (a
   stored outcome, a check's problems, Can't check, a pending conflict);
-  Cycle 03b decides.
+  Cycle 03b decides. *Decided by Cycle 03b decision 6 (amended
+  2026-11-13).*
 - **K-10.** "Checked for updates {ago}" is the latest check of any
   repository, even while another cannot be reached.
 - **K-11.** A row's sentence names at most five items not shared yet, then

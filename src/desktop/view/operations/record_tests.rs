@@ -6,12 +6,14 @@
 use gpui_kit::TestAppContext;
 
 use crate::desktop::{
-    model::operations::record_note_words, services::inflight::Report,
-    test_support::fixtures::Fixture, view::harness::Shell,
+    model::activity::{copy::DISMISS, rows::RowKey},
+    services::inflight::Report,
+    test_support::fixtures::Fixture,
+    view::{
+        activity_support::{act, offered, row, rows},
+        harness::Shell,
+    },
 };
-
-const NOTE: &str = "record-note";
-const DISMISS: &str = "record-note-dismiss";
 
 /// A record that is not JSON is set aside when the lock is taken at the
 /// first activation. Activity then names it, once: another activation, with
@@ -26,7 +28,8 @@ fn an_unreadable_record_is_reported_once_in_activity(cx: &mut TestAppContext) {
         .workspace
         .read_with(cx, |workspace, _| workspace.services().clone())
         .with_polling();
-    assert!(!shell.present((NOTE, 0usize), cx), "nothing was read yet");
+    let note = RowKey::Note(Report::Unreadable);
+    assert!(row(&shell, &note, cx).is_none(), "nothing was read yet");
 
     let activate = |cx: &mut TestAppContext| {
         let services = services.clone();
@@ -34,13 +37,13 @@ fn an_unreadable_record_is_reported_once_in_activity(cx: &mut TestAppContext) {
         shell.run(cx);
     };
     activate(cx);
-    assert_eq!(
-        shell.label((NOTE, 0usize), cx).as_deref(),
-        Some(record_note_words(Report::Unreadable))
-    );
-    assert!(!record_note_words(Report::Unreadable).is_empty());
+    assert!(row(&shell, &note, cx).is_some(), "the person is told");
     activate(cx);
-    assert!(!shell.present((NOTE, 1usize), cx), "once");
+    let notes = rows(&shell, cx)
+        .iter()
+        .filter(|row| matches!(row.row.key, RowKey::Note(_)))
+        .count();
+    assert_eq!(notes, 1, "once");
     // The record was set aside, not deleted.
     let aside = std::fs::read_dir(&directory)
         .unwrap()
@@ -51,11 +54,12 @@ fn an_unreadable_record_is_reported_once_in_activity(cx: &mut TestAppContext) {
         .count();
     assert_eq!(aside, 1);
 
-    shell.click((DISMISS, 0usize), cx);
-    assert!(!shell.present((NOTE, 0usize), cx));
+    assert!(offered(&shell, &note, DISMISS, cx).is_some_and(|offer| offer.enabled));
+    act(&shell, &note, DISMISS, cx);
+    assert!(row(&shell, &note, cx).is_none());
     // Whatever the scheduler publishes next, the record says nothing more.
     activate(cx);
     cx.update(|cx| services.repositories_listed(&[], cx));
     shell.run(cx);
-    assert!(!shell.present((NOTE, 0usize), cx), "for the session");
+    assert!(row(&shell, &note, cx).is_none(), "for the session");
 }

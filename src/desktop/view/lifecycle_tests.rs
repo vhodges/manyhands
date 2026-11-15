@@ -29,6 +29,7 @@ use super::{
 };
 use crate::desktop::{
     model::{
+        activity::rows::RowKey,
         item::{APPROVE_AND_MERGE, CLOSE_TICKET},
         lifecycle_lock::LockKey,
         navigation::OpenTarget,
@@ -42,6 +43,7 @@ use crate::desktop::{
         snapshot::RepositorySnapshot,
     },
     view::{
+        activity_support::{refresh, row},
         harness::{Shell, key},
         item::{ItemPane, LIFECYCLE_ACTION},
     },
@@ -268,14 +270,12 @@ async fn a_blocked_prepare_lists_blockers_and_way_out(cx: &mut TestAppContext) {
     });
     assert_eq!(share.len(), 1);
     shell.until_ended(share[0], cx).await;
-    assert_eq!(
-        shell
-            .label(
-                crate::desktop::view::operations::request_id(share[0], "command"),
-                cx
-            )
-            .as_deref(),
-        Some("Share trunk")
+    refresh(&shell, cx);
+    let entry = row(&shell, &RowKey::Request(share[0]), cx).expect("the share's entry is listed");
+    assert!(
+        entry.row.detail[0].starts_with("Share trunk"),
+        "{:?}",
+        entry.row.detail
     );
 }
 

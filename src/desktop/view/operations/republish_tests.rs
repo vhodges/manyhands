@@ -27,7 +27,15 @@ use manyhands::{
 
 use super::{REPUBLISH, STOP_AND_REPUBLISH};
 use crate::desktop::{
-    model::{navigation::OpenTarget, operations::BRANCH_DELETED},
+    model::{
+        activity::{
+            copy::offer_label,
+            rows::{ActivityAction, RowKey},
+        },
+        navigation::OpenTarget,
+        operations::BRANCH_DELETED,
+        publication::{SyncOffer, SyncOutcome},
+    },
     services::{
         JobKind,
         requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
@@ -35,8 +43,8 @@ use crate::desktop::{
     },
     test_support::fixtures::{Fixture, item_id},
     view::{
+        activity_support::{act, label_of, offered, refresh, row, share_outcome},
         harness::{Shell, key},
-        operations::request_id,
     },
 };
 
@@ -48,7 +56,7 @@ const FABRICATED: u64 = 4_000_000;
 
 /// One repository, `a`, with a ticket of its own working copy, its tab
 /// open.
-pub(super) fn ticket_shell(cx: &mut TestAppContext) -> (Shell, PathBuf) {
+pub(in crate::desktop::view) fn ticket_shell(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     cx.executor().allow_parking();
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
@@ -219,6 +227,36 @@ pub(super) async fn until_present(shell: &Shell, id: &'static str, cx: &mut Test
         .await;
 }
 
+/// Waits until the row `key` offers `label`, enabled.
+pub(super) async fn until_offered(
+    shell: &Shell,
+    key: &RowKey,
+    label: &'static str,
+    cx: &mut TestAppContext,
+) {
+    shell
+        .until_drawn(cx, label, |shell, cx| {
+            refresh(shell, cx);
+            offered(shell, key, label, cx).is_some_and(|offer| offer.enabled)
+        })
+        .await;
+}
+
+/// Waits until the row `key`, still there, offers no `label`, enabled.
+pub(super) async fn until_not_offered(
+    shell: &Shell,
+    key: &RowKey,
+    label: &'static str,
+    cx: &mut TestAppContext,
+) {
+    shell
+        .until_drawn(cx, label, |shell, cx| {
+            refresh(shell, cx);
+            row(shell, key, cx).is_some() && offered(shell, key, label, cx).is_none()
+        })
+        .await;
+}
+
 /// Puts the request `n` of `intent` in the request model, finished with
 /// `envelope`, through `Operations::apply`.
 pub(super) fn finished(
@@ -272,7 +310,7 @@ fn republish_builds_its_mutation() {
 /// A share of the ticket answered `remote_branch_deleted`, canned, whose
 /// record is finished: it ran against a repository with no publication
 /// remote, so the library holds nothing of it open.
-pub(super) async fn finished_deleted_share(
+pub(in crate::desktop::view) async fn finished_deleted_share(
     shell: &Shell,
     root: &Path,
     cx: &mut TestAppContext,
@@ -314,21 +352,21 @@ async fn a_deleted_branch_offers_republish(cx: &mut TestAppContext) {
     let (shell, root) = ticket_shell(cx);
     let id = finished_deleted_share(&shell, &root, cx).await;
     assert!(!BRANCH_DELETED.contains("later release"));
-    assert_eq!(
-        shell.label(request_id(id, "outcome"), cx).as_deref(),
-        Some(BRANCH_DELETED)
+    let entry = RowKey::Request(id);
+    refresh(&shell, cx);
+    assert_eq!(share_outcome(&shell, id, cx), SyncOutcome::BranchDeleted);
+    assert!(
+        offered(&shell, &entry, REPUBLISH, cx)
+            .expect("Republish…")
+            .enabled
     );
-    assert_eq!(
-        shell.label(request_id(id, "republish"), cx).as_deref(),
-        Some(REPUBLISH)
-    );
-    assert!(!shell.present(request_id(id, "stop-and-republish"), cx));
-    assert!(!shell.present(request_id(id, "share"), cx));
+    assert!(offered(&shell, &entry, STOP_AND_REPUBLISH, cx).is_none());
+    assert!(offered(&shell, &entry, offer_label(SyncOffer::Share), cx).is_none());
 
     shell
         .backend
         .answer_next_prepare("item republish", republish_preview(&shell, &root));
-    shell.click(request_id(id, "republish"), cx);
+    act(&shell, &entry, REPUBLISH, cx);
     until_present(&shell, "confirm-ok", cx).await;
     assert!(
         shell
@@ -388,18 +426,8 @@ async fn republish_confirms_then_shares(cx: &mut TestAppContext) {
         done[0].state,
         RequestState::Finished(Outcome::Success, ResultCode::Ok, ..)
     ));
-    // Its entry, one line: Republish, Done.
-    shell
-        .until_drawn(cx, "the entry's state", |shell, cx| {
-            shell.label(request_id(sent[0].id, "state"), cx).as_deref() == Some("Done")
-        })
-        .await;
-    assert_eq!(
-        shell
-            .label(request_id(sent[0].id, "command"), cx)
-            .as_deref(),
-        Some("Republish")
-    );
+    // Its entry: the republish of the item, finished.
+    assert_eq!(done[0].intent.label(), "Republish");
     assert!(!shell.present("confirm-ok", cx), "the dialog closed");
 }
 
@@ -433,13 +461,21 @@ async fn a_stopped_republish_sends_the_same_request(cx: &mut TestAppContext) {
         .read_with(cx, |workspace, _| workspace.services().worker().clone());
     let id = worker.submit_with_request_id(republish_of(&root), Lane::User, request);
     shell.until_ended(id, cx).await;
-    let retry = crate::desktop::view::operations::recovery_id(id, 0);
+    let entry = RowKey::Request(id);
+    let retry = ActivityAction::Recovery(id, 0);
     shell
         .until_drawn(cx, "Retry on the entry", |shell, cx| {
-            shell.present(retry.clone(), cx)
+            refresh(shell, cx);
+            row(shell, &entry, cx).is_some_and(|row| {
+                row.row
+                    .menu
+                    .iter()
+                    .any(|offer| offer.action == retry && offer.enabled)
+            })
         })
         .await;
-    shell.click(retry.clone(), cx);
+    let label = label_of(&shell, &entry, &retry, cx);
+    act(&shell, &entry, &label, cx);
     let again = requests_of(&shell, cx, is_republish);
     assert_eq!(again.len(), 1, "the same desktop request");
     assert_eq!(again[0].attempt, 2);
@@ -513,19 +549,10 @@ async fn accepted_deleted_share(
 async fn an_item_shares_stop_and_republish_opens_republish(cx: &mut TestAppContext) {
     let (shell, root, _, worker, id) = accepted_deleted_share(cx).await;
     let preview = republish_preview(&shell, &root);
-    shell
-        .until_drawn(cx, "the share's offers", |shell, cx| {
-            shell.present(request_id(id, "stop-and-republish"), cx)
-        })
-        .await;
-    assert_eq!(
-        shell
-            .label(request_id(id, "stop-and-republish"), cx)
-            .as_deref(),
-        Some(STOP_AND_REPUBLISH)
-    );
-    assert!(shell.present(request_id(id, "give-up"), cx));
-    assert!(!shell.present(request_id(id, "republish"), cx));
+    let entry = RowKey::Request(id);
+    until_offered(&shell, &entry, STOP_AND_REPUBLISH, cx).await;
+    assert!(offered(&shell, &entry, offer_label(SyncOffer::GiveUp), cx).is_some());
+    assert!(offered(&shell, &entry, REPUBLISH, cx).is_none());
 
     let cancelled = Envelope::classified_mutation(
         "item sync",
@@ -540,7 +567,7 @@ async fn an_item_shares_stop_and_republish_opens_republish(cx: &mut TestAppConte
         .hold_job_return_answering(JobKind::SynchronizeItem, cancelled)
         .release();
     shell.backend.answer_next_prepare("item republish", preview);
-    shell.click(request_id(id, "stop-and-republish"), cx);
+    act(&shell, &entry, STOP_AND_REPUBLISH, cx);
     until_present(&shell, "confirm-ok", cx).await;
     assert_eq!(worker.gave_up(id), Some(GaveUp::Resent));
     assert!(
@@ -572,11 +599,8 @@ async fn republish_waits_for_another_dialog_to_close(cx: &mut TestAppContext) {
     let (shell, root, other, worker, id) = accepted_deleted_share(cx).await;
     let preview = republish_preview(&shell, &root);
     shell.backend.answer_next_prepare("item republish", preview);
-    shell
-        .until_drawn(cx, "the share's offers", |shell, cx| {
-            shell.present(request_id(id, "stop-and-republish"), cx)
-        })
-        .await;
+    let entry = RowKey::Request(id);
+    until_offered(&shell, &entry, STOP_AND_REPUBLISH, cx).await;
     let cancelled = Envelope::classified_mutation(
         "item sync",
         Scope::default(),
@@ -588,7 +612,7 @@ async fn republish_waits_for_another_dialog_to_close(cx: &mut TestAppContext) {
     let give_up = shell
         .backend
         .hold_job_return_answering(JobKind::SynchronizeItem, cancelled);
-    shell.click(request_id(id, "stop-and-republish"), cx);
+    act(&shell, &entry, STOP_AND_REPUBLISH, cx);
     give_up.wait_reached();
 
     // The removal asked for behind the Give up, and left running.
@@ -667,15 +691,12 @@ async fn an_unreadable_record_offers_give_up_and_it_sends_the_give_up(cx: &mut T
     returned.release();
     shell.until_ended(id, cx).await;
     assert_eq!(worker.record_state(id), Some(RecordState::Unknown));
-    shell
-        .until_drawn(cx, "Give up", |shell, cx| {
-            shell.present(request_id(id, "give-up"), cx)
-        })
-        .await;
-    assert!(!shell.present(request_id(id, "republish"), cx));
-    assert!(!shell.present(request_id(id, "stop-and-republish"), cx));
+    let entry = RowKey::Request(id);
+    until_offered(&shell, &entry, offer_label(SyncOffer::GiveUp), cx).await;
+    assert!(offered(&shell, &entry, REPUBLISH, cx).is_none());
+    assert!(offered(&shell, &entry, STOP_AND_REPUBLISH, cx).is_none());
 
-    shell.click(request_id(id, "give-up"), cx);
+    act(&shell, &entry, offer_label(SyncOffer::GiveUp), cx);
     shell
         .until(cx, move |operations| {
             operations
@@ -698,11 +719,8 @@ async fn republish_opens_when_the_dialog_it_waits_for_is_cancelled(cx: &mut Test
     let (shell, root, other, worker, id) = accepted_deleted_share(cx).await;
     let preview = republish_preview(&shell, &root);
     shell.backend.answer_next_prepare("item republish", preview);
-    shell
-        .until_drawn(cx, "the share's offers", |shell, cx| {
-            shell.present(request_id(id, "stop-and-republish"), cx)
-        })
-        .await;
+    let entry = RowKey::Request(id);
+    until_offered(&shell, &entry, STOP_AND_REPUBLISH, cx).await;
     let cancelled = Envelope::classified_mutation(
         "item sync",
         Scope::default(),
@@ -714,7 +732,7 @@ async fn republish_opens_when_the_dialog_it_waits_for_is_cancelled(cx: &mut Test
     let give_up = shell
         .backend
         .hold_job_return_answering(JobKind::SynchronizeItem, cancelled);
-    shell.click(request_id(id, "stop-and-republish"), cx);
+    act(&shell, &entry, STOP_AND_REPUBLISH, cx);
     give_up.wait_reached();
 
     // A removal asked for, its preview shown and never confirmed.

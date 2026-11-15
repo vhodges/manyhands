@@ -4,6 +4,7 @@
 use gpui_kit::{App, KeyBinding, NoAction};
 
 use crate::desktop::model::{
+    activity::rows::{ActivityAction, RowKey},
     layout::{PanelKind, Side},
     repository_state::{MenuChoice, RowAction},
     stamp::RepoKey,
@@ -131,6 +132,45 @@ gpui_kit::actions!(
         /// Escape in the sheet's Result editor: back to its tab stop, the
         /// sheet left open (R-31).
         LeaveResult,
+        /// Move Activity's highlight to the row above; it stops at the first
+        /// (C2).
+        ActivityUp,
+        /// Move Activity's highlight to the row below; it stops at the last.
+        ActivityDown,
+        /// Highlight Activity's first row.
+        ActivityHome,
+        /// Highlight Activity's last row.
+        ActivityEnd,
+        /// Enter on Activity's list: press the highlighted row's button, or
+        /// open its item when it has none (C2).
+        ActivityEnter,
+        /// Open the highlighted Activity row's menu (Part D).
+        OpenActivityMenu,
+        /// "Clear finished", the one item of Activity's ⋯ menu (C1, L8). No
+        /// key is bound to it: the menu's item dispatches it.
+        ClearFinished,
+        /// Move the Needs attention popover's highlight to the row above; it
+        /// stops at the first (E2).
+        AttentionUp,
+        /// Move the popover's highlight to the row below; it stops at the
+        /// last.
+        AttentionDown,
+        /// Highlight the popover's first row.
+        AttentionHome,
+        /// Highlight the popover's last row.
+        AttentionEnd,
+        /// Enter on the popover's list: press the highlighted row's button,
+        /// or open its item when it has none. On the button or the link,
+        /// the control's own Enter.
+        AttentionEnter,
+        /// Tab in the popover: the list, the highlighted row's button, the
+        /// link, wrapping (R-12).
+        AttentionNext,
+        /// Shift-Tab in the popover, the other way round.
+        AttentionPrevious,
+        /// Escape in the popover: close it, with focus back to the footer
+        /// item.
+        CloseAttention,
     ]
 );
 
@@ -164,9 +204,35 @@ pub(crate) struct RepositoryMenuChoice {
     pub shown: Shown,
 }
 
+/// An Activity row's choice (Wave 04 Cycle 03b, Part D): the offer `action`
+/// of the row `key`, as it was labelled `shown` and at the row's `revision`
+/// when it was chosen, so the choice is checked against what the row offers
+/// now (T11, T12; R-46). Data for the menu's items and the test seam; no key
+/// and no keymap file name it, hence `no_json`.
+#[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
+#[action(namespace = manyhands, no_json)]
+pub(crate) struct ActivityMenuChoice {
+    pub key: RowKey,
+    pub action: ActivityAction,
+    pub shown: String,
+    pub revision: u64,
+}
+
 /// The key context of the Repositories region and its toolbar: `menu` and
 /// `shift-f10` open a repository's menu there (Part H).
 pub(crate) const REPOSITORIES_CONTEXT: &str = "Repositories";
+
+/// The key context of Activity's list (Wave 04 Cycle 03b, C2): the arrows,
+/// Home, End and Enter move and press in it, and `menu` and `shift-f10` open
+/// a row's menu. It is the list element's own, inside the region's
+/// `"Operations"` context.
+pub(crate) const ACTIVITY_CONTEXT: &str = "Activity";
+
+/// The key context of the Needs attention popover (Wave 04 Cycle 03b, E2):
+/// the arrows, Home, End, Enter, Tab and Escape work in it, on its list, its
+/// highlighted row's button and its link. It is the popover element's own, so
+/// no key outside the popover reaches it.
+pub(crate) const ATTENTION_POPOVER_CONTEXT: &str = "NeedsAttention";
 
 /// The key context of the Documents and Tickets regions (the tickets list
 /// with its filter bar): `secondary-n` opens the focused list's
@@ -295,6 +361,28 @@ pub(crate) fn bind(cx: &mut App) {
         // list binds neither key, so they reach this context (U-1).
         KeyBinding::new("menu", OpenRepositoryMenu, Some(REPOSITORIES_CONTEXT)),
         KeyBinding::new("shift-f10", OpenRepositoryMenu, Some(REPOSITORIES_CONTEXT)),
+        // In Activity's list: the highlight, Enter on its row, and its menu.
+        KeyBinding::new("up", ActivityUp, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("down", ActivityDown, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("home", ActivityHome, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("end", ActivityEnd, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("enter", ActivityEnter, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("menu", OpenActivityMenu, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("shift-f10", OpenActivityMenu, Some(ACTIVITY_CONTEXT)),
+        // In the Needs attention popover: the highlight, Enter, Tab's three
+        // stops and Escape.
+        KeyBinding::new("up", AttentionUp, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("down", AttentionDown, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("home", AttentionHome, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("end", AttentionEnd, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("enter", AttentionEnter, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("tab", AttentionNext, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new(
+            "shift-tab",
+            AttentionPrevious,
+            Some(ATTENTION_POPOVER_CONTEXT),
+        ),
+        KeyBinding::new("escape", CloseAttention, Some(ATTENTION_POPOVER_CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
         // The first and last row of a list; the Workspace handles them in
         // the document tree as in the ticket list (`view::documents`).
