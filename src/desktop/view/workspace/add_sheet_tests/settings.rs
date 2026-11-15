@@ -7,8 +7,8 @@
 //! O_s (G6). A direct call while Sharing & keys holds a typed passphrase
 //! empties it (G3). A later open by `+` does not return to Settings. A
 //! direct route into Settings closes the sheet quietly (G17), and Open its
-//! settings (G21; its button is Task 5's, so `add_closed(ToSettings)` is
-//! called as the button will call it) opens Settings on the repository.
+//! settings (G21), pressed on the check of a registered folder, opens
+//! Settings on the repository.
 //!
 //! Two rows are B2's edge cases, as B9 states them (the owner's Ruling 16):
 //! Settings opened with no origin, then AW-3 (G4); and an `Inspect` route
@@ -25,14 +25,13 @@ use crate::desktop::{
         footer::Control,
         harness::Shell,
         settings::SettingsRoute,
-        workspace::{
-            Region,
-            add_sheet::{AddClose, AddRoute},
-        },
+        workspace::{Region, add_sheet::AddRoute},
     },
 };
 
 const SENTINEL: &str = "sentinel-passphrase-c05a";
+/// Open its settings' own Kit button, in its wrapper of the same name (B6).
+const OPEN_SETTINGS: (&str, usize) = ("add-open-settings", 0);
 const PASSPHRASE: [&str; 2] = ["key-generate-passphrase", "key-generate-confirm"];
 
 /// Opens Settings by the footer's Settings item, focused and pressed with
@@ -281,17 +280,25 @@ fn route_into_settings(table: &mut Table, cx: &mut TestAppContext) {
     }
 }
 
-/// G21: Open its settings (`add_closed(ToSettings(root))`, as its button
-/// calls it) opens Settings › Repositories on `root`, on its entry; on its
-/// close, the sheet's origin, or O_s when the sheet came from Settings.
+/// G21: Open its settings, pressed on the check of the registered `a`,
+/// opens Settings › Repositories on `a`, on its entry; on its close, the
+/// sheet's origin, or O_s when the sheet came from Settings. False, and
+/// recorded, when the button is not drawn.
 fn open_its_settings(table: &mut Table, cx: &mut TestAppContext) {
     let (shell, a, _) = plain_shell(cx);
-    let to_settings = |shell: &Shell, a: &Path, cx: &mut TestAppContext| {
-        let a = a.to_owned();
-        route(shell, cx, move |workspace, window, cx| {
-            workspace.add_closed(AddClose::ToSettings(a), window, cx)
-        });
-    };
+    let to_settings =
+        |table: &mut Table, shell: &Shell, row: &str, a: &Path, cx: &mut TestAppContext| {
+            let drawn = checked_folder(shell, a, cx) && shell.present(OPEN_SETTINGS.0, cx);
+            table.fact(
+                &format!("{row} (Open its settings drawn)"),
+                drawn,
+                "Open its settings on the check of a",
+            );
+            if drawn {
+                shell.click(OPEN_SETTINGS, cx);
+            }
+            drawn
+        };
     for from_settings in [false, true] {
         let origin = if from_settings {
             open_settings(&shell, cx)
@@ -306,7 +313,10 @@ fn open_its_settings(table: &mut Table, cx: &mut TestAppContext) {
         if !opened(table, &shell, &row, cx) {
             return;
         }
-        to_settings(&shell, &a, cx);
+        if !to_settings(table, &shell, &row, &a, cx) {
+            shell.keys("escape", cx);
+            return;
+        }
         let held = settings_on(&shell, SettingsPage::Repositories, cx)
             && chosen(&shell, cx) == Some(a.clone())
             && holds(&shell, ("settings-page", 0usize), cx);

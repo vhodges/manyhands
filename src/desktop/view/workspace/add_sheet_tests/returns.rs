@@ -291,7 +291,11 @@ async fn confirmation(table: &mut Table, cx: &mut TestAppContext) {
         );
     }
 
-    // Close, on a refused preview: Create in a folder that is not empty.
+    // Close, on a refused preview: Create in a folder that is not empty,
+    // in the new mode, which alone draws Create (B5).
+    if shell.present("add-mode-new", cx) {
+        shell.click("add-mode-new", cx);
+    }
     let full = shell.fixture.empty_directory("full");
     fs::write(full.join("notes.txt"), "kept\n").unwrap();
     let ada = identity();
@@ -318,7 +322,11 @@ async fn confirmation(table: &mut Table, cx: &mut TestAppContext) {
         );
     }
 
-    // A finish that ends the add: the dialog closes itself.
+    // A finish that ends the add: the dialog closes itself. Add is drawn in
+    // the existing-folder mode.
+    if shell.present("add-mode-existing", cx) {
+        shell.click("add-mode-existing", cx);
+    }
     shell.backend.answer_job(
         JobKind::RepoEnable,
         answered("repo enable", ResultCode::InternalError),

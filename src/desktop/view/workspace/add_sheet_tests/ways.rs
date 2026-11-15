@@ -1,6 +1,8 @@
 //! P4, `each_way_in_opens_the_add_sheet` (design B2; G1): AW-1 to AW-5,
 //! each through its own trigger, open the Add sheet in the existing-folder
-//! mode with focus on `add-path` after two draws. AW-5 is raised three
+//! mode (its segment chosen, B5) with focus on `add-path` after two draws.
+//! The sheet is left in the new mode before the next open, and before an
+//! `Inspect` route in place, so the mode is shown again by each. AW-5 is raised three
 //! ways through Cycle 03b's `choose_activity`: an Activity row's button,
 //! its row menu and a popover row. `Inspect` routes fill and check the
 //! folder, also when the sheet is already open (B2 step 5: the origin
@@ -179,8 +181,9 @@ pub(super) fn empty_action() -> ElementId {
     (ElementId::from("repositories-empty"), "action").into()
 }
 
-/// G1 and, for an `Inspect` route of `root`, its folder filled and its
-/// check started. False when the sheet did not open.
+/// G1, its existing-folder mode included, and, for an `Inspect` route of
+/// `root`, its folder filled and its check started. False when the sheet
+/// did not open.
 fn lands(
     table: &mut Table,
     shell: &Shell,
@@ -191,6 +194,11 @@ fn lands(
     if !opened(table, shell, row, cx) {
         return false;
     }
+    table.fact(
+        &format!("{row} (the existing-folder mode)"),
+        shell.selected("add-mode-existing", cx) && !shell.selected("add-mode-new", cx),
+        "the existing-folder mode shown",
+    );
     if let Some(root) = inspected {
         let text = key(root);
         let filled = value(shell, "add-path", cx);
@@ -231,6 +239,8 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
     let (shell, a, _) = shell_with_two(cx);
     press_plus(&shell, cx);
     lands(table, &shell, "AW-2 the toolbar's +", None, cx);
+    // Left in the new mode: the next open shows the existing folder again.
+    leave_in_the_new_mode(table, &shell, "AW-2", "enter", cx);
     shell.keys("escape", cx);
     if settings_open(&shell, cx) {
         shell.keys("escape", cx);
@@ -239,6 +249,7 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
     // B2 step 5: an Inspect route while the sheet is open applies in place
     // and keeps the origin.
     let plus = press_plus(&shell, cx);
+    leave_in_the_new_mode(table, &shell, "B2 step 5", "space", cx);
     route(&shell, cx, {
         let a = a.clone();
         move |workspace, window, cx| {
@@ -324,6 +335,26 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
     }
 
     leaves_settings_chosen(table, cx);
+}
+
+/// The new mode chosen by its segment, focused and pressed with `key`
+/// (B5, R-10: each segment is a Tab stop that Enter or Space chooses).
+fn leave_in_the_new_mode(
+    table: &mut Table,
+    shell: &Shell,
+    row: &str,
+    key: &str,
+    cx: &mut TestAppContext,
+) {
+    if let Some(segment) = of_sheet(shell, cx, |sheet| sheet.control_focus("add-mode-new")) {
+        focus(shell, &segment, cx);
+        shell.press(key, cx);
+    }
+    table.fact(
+        &format!("{row} (left in the new mode by {key})"),
+        shell.selected("add-mode-new", cx) && !shell.selected("add-mode-existing", cx),
+        "the new mode chosen",
+    );
 }
 
 /// Repositories `a` and `b`, `a` selected in the panel. Gives the window,

@@ -1,30 +1,23 @@
-//! The Add folder's check: `inspect_repository` of the folder's text, read
-//! under `ViewScope::AddRepository` (Wave 04 Cycle 05a R-9), and what it
-//! found, drawn under the folder.
+//! The Add folder's check (Wave 04 Cycle 05a design B6 item 2):
+//! `inspect_repository` of the folder's text, read under
+//! `ViewScope::AddRepository` (R-9), and whether Add repository can go
+//! ahead on what it found (B10). Its rows and action are `rows`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use gpui_kit::{
-    AppContext, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt, Window,
-    component::{ActiveTheme, v_flex},
-    div,
-};
+use gpui_kit::{App, AppContext, Context, Window};
 use manyhands::{
     repository::{ConfigurationState, IdentityAvailability, RepositoryInspectionDto},
     results::ResultCode,
 };
 
-use super::{
-    ALREADY_ADDED, AddRepositorySheet, CHECKED_OUT, CHECKING, Form, NOT_ADDED, render::text,
-};
+use super::{AddRepositorySheet, Form};
 use crate::desktop::{
-    model::{list_state::LABEL_BUSY, stamp::ViewScope},
+    model::stamp::ViewScope,
     services::{ReadKind, ReadResult},
-    view::sidebar::configuration_label,
 };
 
-/// What checking the Add folder found.
+/// What checking the Add folder found, each of the text it was of.
 pub(super) enum Inspection {
     /// Not checked since its text last changed.
     None,
@@ -35,16 +28,31 @@ pub(super) enum Inspection {
         inspection: Box<RepositoryInspectionDto>,
     },
     Busy(String),
-    Failed(ResultCode),
+    Failed {
+        path: String,
+        code: ResultCode,
+    },
+    /// A route's root that is not text (Part G item 4), named over the
+    /// field it emptied.
+    NotText(String),
 }
 
 impl Inspection {
-    /// The text this check is of, if it is of one.
+    /// The text this check is of.
     pub(super) fn path(&self) -> Option<&str> {
         match self {
-            Self::Checking(path) | Self::Busy(path) | Self::Checked { path, .. } => Some(path),
-            Self::None | Self::Failed(_) => None,
+            Self::Checking(path)
+            | Self::Busy(path)
+            | Self::NotText(path)
+            | Self::Checked { path, .. }
+            | Self::Failed { path, .. } => Some(path),
+            Self::None => None,
         }
+    }
+
+    /// The check of `path` has landed: what it found, or that it could not.
+    pub(super) fn landed_for(&self, path: &str) -> bool {
+        !matches!(self, Self::None | Self::Checking(_)) && self.path() == Some(path)
     }
 
     /// Whether the check of `path` found that Git has no identity for it.
@@ -52,14 +60,47 @@ impl Inspection {
         matches!(self, Self::Checked { path: checked, inspection }
             if checked == path && inspection.identity_state == IdentityAvailability::Required)
     }
+
+    /// The configuration a check found is Valid: it holds the prefix
+    /// (R-31).
+    pub(super) fn set_up(&self) -> bool {
+        matches!(self, Self::Checked { inspection, .. }
+            if inspection.configuration.state == ConfigurationState::Valid)
+    }
+}
+
+/// The branch an add can start from (B7): the checked-out one, unless the
+/// configuration names another main branch.
+pub(super) fn allowed_branch(check: &RepositoryInspectionDto) -> Option<&str> {
+    let head = check.head_branch.as_deref()?;
+    let configuration = &check.configuration;
+    let other = configuration.state == ConfigurationState::Valid
+        && configuration
+            .primary_branch
+            .as_deref()
+            .is_some_and(|primary| primary != head);
+    (!other).then_some(head)
+}
+
+/// The remote the configuration shares through, when it is among the
+/// folder's remotes and is not an SSH address (B6).
+pub(super) fn not_ssh(check: &RepositoryInspectionDto) -> Option<&str> {
+    let remote = check.configuration.publication_remote.as_deref()?;
+    let set_up = check.configuration.state == ConfigurationState::Valid;
+    (set_up
+        && check
+            .remotes
+            .iter()
+            .any(|found| found.name == remote && !found.publication_eligible))
+    .then_some(remote)
 }
 
 impl AddRepositorySheet {
     pub(super) fn forget_inspection(&mut self, cx: &mut Context<Self>) {
         self.inspection = Inspection::None;
         self.submit_pending = false;
-        self.failed_path = None;
         self.inspect_read = None;
+        self.branches_stale = true;
         self.generations.next(ViewScope::AddRepository);
         cx.notify();
     }
@@ -75,7 +116,7 @@ impl AddRepositorySheet {
         }
         let stamp = self.generations.next(ViewScope::AddRepository);
         self.inspection = Inspection::Checking(path.clone());
-        self.failed_path = None;
+        self.branches_stale = true;
         let root = PathBuf::from(&path);
         self.inspect_read = Some(self.services.read(
             ReadKind::Inspect,
@@ -83,139 +124,101 @@ impl AddRepositorySheet {
             move |service| service.inspect_repository(&root),
             cx,
             move |this: &mut Self, stamp, result, cx| {
-                if !this.generations.is_current(&stamp) {
-                    return;
+                // A check of text since changed is dropped, and the wait
+                // with it.
+                if this.generations.is_current(&stamp) {
+                    this.landed(path, result, cx);
                 }
-                this.inspection = match result {
-                    ReadResult::Ok(inspection) => {
-                        if this.text(Form::Add.branch(), cx).is_empty() {
-                            this.pending_branch = inspection.head_branch.clone();
-                        }
-                        Inspection::Checked {
-                            path,
-                            inspection: Box::new(inspection),
-                        }
-                    }
-                    ReadResult::Busy => Inspection::Busy(path),
-                    ReadResult::Failed(failure) => {
-                        this.failed_path = Some(path);
-                        Inspection::Failed(failure.code)
-                    }
-                };
-                if this.submit_pending {
-                    let window = this.window;
-                    cx.spawn(async move |this, cx| {
-                        let _ = cx.update_window(window, |_, window, cx| {
-                            let _ = this.update(cx, |this, cx| this.resume_submit(window, cx));
-                        });
-                    })
-                    .detach();
-                }
-                cx.notify();
             },
         ));
         cx.notify();
     }
 
-    /// The `repo.inspect` recovery: `root` in the Add folder, checked.
+    /// The check of `path` landed with `result`; an Add waiting for it goes
+    /// on, once the window can be reached (R-T12b).
+    fn landed(
+        &mut self,
+        path: String,
+        result: ReadResult<RepositoryInspectionDto>,
+        cx: &mut Context<Self>,
+    ) {
+        self.inspection = match result {
+            ReadResult::Ok(inspection) => Inspection::Checked {
+                path,
+                inspection: Box::new(inspection),
+            },
+            ReadResult::Busy => Inspection::Busy(path),
+            ReadResult::Failed(failure) => Inspection::Failed {
+                path,
+                code: failure.code,
+            },
+        };
+        self.branches_stale = true;
+        if self.submit_pending {
+            let window = self.window;
+            cx.spawn(async move |this, cx| {
+                let _ = cx.update_window(window, |_, window, cx| {
+                    let _ = this.update(cx, |this, cx| this.resume_submit(window, cx));
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    /// The `repo.inspect` recovery: `root` in the Add folder, checked. A
+    /// root that is not text empties the field and is named (P22).
     pub(crate) fn inspect_root(
         &mut self,
         root: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(text) = root.to_str() else {
-            return;
-        };
-        let text = text.to_owned();
+        let text = root.to_str().map(str::to_owned);
         // No Add was pressed for this folder (R-48).
         self.submit_pending = false;
-        self.inputs[Form::Add.path()].update(cx, |input, cx| input.set_value(text, window, cx));
-        self.inspect(cx);
-    }
-
-    /// Whether the Add folder's current text has been checked: what was
-    /// found, or that the check failed.
-    pub(super) fn add_checked(&self, path: &str) -> bool {
-        matches!(&self.inspection, Inspection::Checked { path: checked, .. } if checked == path)
-            || self.failed_path.as_deref() == Some(path)
-    }
-
-    /// What the check of the Add folder found.
-    pub(super) fn inspection(&self, cx: &Context<Self>) -> Option<impl IntoElement + use<>> {
-        let muted = cx.theme().muted_foreground;
-        let body = v_flex().gap_1();
-        let body = match &self.inspection {
-            Inspection::None => return None,
-            Inspection::Checking(_) => body.child(text("add-inspection", CHECKING)),
-            Inspection::Busy(_) => body.child(text("add-inspection", LABEL_BUSY)),
-            Inspection::Failed(code) => body.child(text("add-inspection", code.message())).child(
-                div()
-                    .id("add-inspection-code")
-                    .test_support()
-                    .aria_label(code.as_str())
-                    .text_xs()
-                    .text_color(muted)
-                    .child(code.as_str()),
-            ),
-            Inspection::Checked { inspection, .. } => {
-                let state = if inspection.registered {
-                    ALREADY_ADDED
-                } else {
-                    NOT_ADDED
-                };
-                let configuration = &inspection.configuration;
-                let body = body.child(text("add-inspection", state)).children(
-                    inspection
-                        .head_branch
-                        .clone()
-                        .map(|branch| text("add-head-branch", format!("{CHECKED_OUT}: {branch}"))),
-                );
-                let body = if inspection.registered
-                    || configuration.state != ConfigurationState::Missing
-                {
-                    body.child(text(
-                        "add-configuration",
-                        configuration_label(configuration.state),
-                    ))
-                } else {
-                    body
-                };
-                body.children(
-                    configuration
-                        .problems
-                        .iter()
-                        .enumerate()
-                        .map(|(ix, problem)| text(("add-problem", ix), problem.code.guidance())),
-                )
-            }
-        };
-        Some(body)
-    }
-
-    /// The check Add waited for landed (ruling R-T12b). If Git has no
-    /// identity for the folder, its fields appear with focus in the first,
-    /// and nothing is confirmed yet; otherwise the submit goes on. A check
-    /// whose text changed meanwhile was dropped, and the wait with it.
-    fn resume_submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // A check that lands after the sheet closed goes no further (G12).
-        if !std::mem::take(&mut self.submit_pending) || !self.open.is_open(window, cx) {
-            return;
+        let shown = text.clone().unwrap_or_default();
+        self.inputs[Form::Add.path()].update(cx, |input, cx| input.set_value(shown, window, cx));
+        if text.is_some() {
+            self.inspect(cx);
+        } else {
+            self.forget_inspection(cx);
+            self.inspection = Inspection::NotText(String::new());
         }
-        if let Some(branch) = self.pending_branch.take() {
-            self.inputs[Form::Add.branch()]
-                .update(cx, |input, cx| input.set_value(branch, window, cx));
+    }
+
+    /// A success for an earlier open, landing while a later open shows
+    /// (B10, B2 step 7): its check of the folder just added, which said it
+    /// was not, is forgotten, so it is checked again. Its text and focus
+    /// stay (Ruling 19 C-5).
+    pub(crate) fn forget_check_of(&mut self, root: &Path, cx: &mut Context<Self>) {
+        let stale = matches!(&self.inspection, Inspection::Checked { path, inspection }
+            if !inspection.registered
+                && (Path::new(path) == root || Path::new(&inspection.root) == root));
+        if stale {
+            self.forget_inspection(cx);
         }
+    }
+
+    /// B10: Add repository can go ahead on the folder's text and its check.
+    /// Not checked yet, or checking, it can: pressing it checks first.
+    pub(super) fn add_enabled(&self, cx: &App) -> bool {
         let path = self.text(Form::Add.path(), cx);
-        if !self.add_checked(&path) {
-            return;
+        if self.adding || path.is_empty() {
+            return false;
         }
-        if self.inspection.identity_required(&path) {
-            self.inputs[Form::Add.name()].update(cx, |input, cx| input.focus(window, cx));
-            cx.notify();
-            return;
+        if !self.inspection.landed_for(&path) {
+            return true;
         }
-        self.submit(Form::Add, window, cx);
+        match &self.inspection {
+            Inspection::Checked { inspection, .. } => {
+                !inspection.registered
+                    && inspection.configuration.state != ConfigurationState::Invalid
+                    && allowed_branch(inspection).is_some()
+                    && not_ssh(inspection).is_none()
+            }
+            _ => false,
+        }
     }
 
     /// The folder text whose check has landed with what it found (P8).
@@ -230,6 +233,24 @@ impl AddRepositorySheet {
     /// The folder text whose check has started or landed (P4).
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn inspected(&self) -> Option<&str> {
-        self.inspection.path()
+        match &self.inspection {
+            Inspection::NotText(_) => None,
+            inspection => inspection.path(),
+        }
+    }
+
+    /// The check `result` landed for `path`, as the read lands it, a canned
+    /// check or `Busy` included (P9 to P11): a check still in flight is
+    /// then stale.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn land_check(
+        &mut self,
+        path: String,
+        result: ReadResult<RepositoryInspectionDto>,
+        cx: &mut Context<Self>,
+    ) {
+        self.generations.next(ViewScope::AddRepository);
+        self.inspect_read = None;
+        self.landed(path, result, cx);
     }
 }

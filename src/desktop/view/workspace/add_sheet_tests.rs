@@ -327,7 +327,9 @@ fn the_add_sheet_scrolls_on_its_own(cx: &mut TestAppContext) {
         let source = format!("{}{body}", ticket_source(MAIN, "Main", "project: p\n"));
         fixture.commit_file(root, &ticket_path(MAIN), source.as_bytes());
     });
-    shell.resize_keeping_content(1440., 250., cx);
+    // Shorter than Task 4's 250: with one mode drawn (B5) the body is
+    // shorter, and must still overflow the sheet (C-7).
+    shell.resize_keeping_content(1440., 150., cx);
     shell.set_activity_height(100., cx);
     shell.select(&root, cx);
     open(&shell, ticket(&root, MAIN), cx);

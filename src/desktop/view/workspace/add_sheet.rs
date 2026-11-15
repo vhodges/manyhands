@@ -31,7 +31,8 @@
 //!   each change of the request model, after the confirmation's own
 //!   observer has closed it (`defer_in`; R-25). A success closes the sheet
 //!   of the same open; one landing after that open closed clears its text
-//!   and check (decision 16); a later open is never touched (Ruling 19).
+//!   and check (decision 16); a later open keeps its text and focus, and
+//!   forgets only a stale check of the folder added (Ruling 19; B10).
 
 use std::{
     collections::HashMap,
@@ -77,7 +78,6 @@ pub(in crate::desktop::view) enum AddClose {
     /// A successful add of `root`: typed text is cleared.
     Added(PathBuf),
     /// Open its settings: Settings opens on `root`.
-    #[allow(dead_code)] // Used from Task 5
     ToSettings(PathBuf),
     /// Quitting, or Settings opening over it: no focus step.
     Quiet,
@@ -199,8 +199,10 @@ impl Workspace {
             .settings
             .update(cx, |settings, _| settings.saw_panel(panel));
         let sheet = self.add.sheet.clone();
+        // The existing-folder mode, and for an `Inspect` its folder filled
+        // and checked (B2 steps 5 and 6).
         if self.add_open(window, cx) {
-            self.add_route(route, &sheet, window, cx);
+            sheet.update(cx, |sheet, cx| sheet.route(route, window, cx));
             self.focus_add_path(window, cx);
             return;
         }
@@ -249,26 +251,10 @@ impl Workspace {
             });
             drawn.update(cx, |sheet, cx| sheet.sheet(kit, window, cx))
         });
-        self.add_route(route, &sheet, window, cx);
+        sheet.update(cx, |sheet, cx| sheet.route(route, window, cx));
         // After `open_sheet` has focused Root's own handle (fact 34).
         self.focus_add_path(window, cx);
         cx.notify();
-    }
-
-    /// Applies `route` to the sheet: an `Inspect` fills and checks its folder.
-    fn add_route(
-        &mut self,
-        route: AddRoute,
-        sheet: &Entity<AddRepositorySheet>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match route {
-            AddRoute::New => {}
-            AddRoute::Inspect(root) => {
-                sheet.update(cx, |sheet, cx| sheet.inspect_root(root, window, cx))
-            }
-        }
     }
 
     /// The Add sheet closed `how` (B3). A close that is not quiet waits,
@@ -379,6 +365,9 @@ impl Workspace {
                 self.adding_changed(cx);
             }
             AddEvent::Cancel => self.add_closed(AddClose::Kept, window, cx),
+            AddEvent::OpenSettings(root) => {
+                self.add_closed(AddClose::ToSettings(root.clone()), window, cx)
+            }
         }
     }
 
@@ -466,7 +455,8 @@ impl Workspace {
 
     /// A pending add ended: added at `root`, or not (`None`). Added: the
     /// sheet of the same open closes, or, that open closed since, forgets
-    /// its check and text; a later open is never touched (R-26).
+    /// its check and text; a later open forgets only a stale check of
+    /// `root`, its text and focus kept (R-26; Ruling 19 C-5; B10).
     fn add_ended(
         &mut self,
         entry: PendingAdd,
@@ -478,6 +468,9 @@ impl Workspace {
             return;
         };
         if entry.session != self.add.session {
+            self.add
+                .sheet
+                .update(cx, |sheet, cx| sheet.forget_check_of(&root, cx));
             return;
         }
         if self.add.open.get() && matches!(self.content.sheet, Some(SheetOwner::AddRepository)) {

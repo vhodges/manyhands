@@ -1,16 +1,15 @@
 //! Drawing the Add repository sheet (Wave 04 Cycle 05a design A1, B5 to
 //! B10): a Kit sheet 470 px wide, the frame's header, a body in a scroll of
 //! its own laid over the Kit's, which takes the page keys (B12), and the
-//! frame's footer with Cancel, Add repository and Create repository (B10).
-//! The body is Add an existing repository, then Create a repository, each
-//! a folder with Browse, its fields and what it said, then why Browse is
-//! unavailable, drawn once.
+//! frame's footer with Cancel and the shown mode's submit (B10). The body
+//! is the mode control, then the shown mode's form: Add an existing folder
+//! (B6) or Create a repository.
 
 use gpui_kit::{
     ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
-        ActiveTheme, Disableable,
+        ActiveTheme, Disableable, Icon,
         button::{Button, ButtonVariants},
         h_flex,
         input::Input,
@@ -22,16 +21,18 @@ use gpui_kit::{
 };
 
 use super::{
-    ADD, ADD_DESCRIPTION, ADD_HEADING, ADD_TITLE, ADDING, AddRepositorySheet, BROWSE, CANCEL,
-    CANCEL_ID, CREATE, CREATE_FOLDER, CREATE_HEADING, CREATE_IDENTITY, FOLDER, Form,
-    IDENTITY_REQUIRED, PREFIX, PRIMARY_BRANCH,
+    ADD, ADD_DESCRIPTION, ADD_TITLE, ADDING, AddRepositorySheet, BROWSE, CANCEL, CANCEL_ID, CREATE,
+    CREATE_FOLDER, CREATE_HEADING, CREATE_IDENTITY, FOLDER, Form, IDENTITY_HEADING,
+    IDENTITY_REQUIRED, MAIN_BRANCH, PREFIX, REMOVE_NOTE, mode::Mode,
 };
 use crate::desktop::{
+    assets::icon_path,
     keys::{ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop},
     view::{
         frame::{self, Footer, Header},
         scroll::ContentScroll,
         settings::{EMAIL, NAME, field_column, footer_kit, wrapped},
+        shell::tokens::chrome_colors,
     },
 };
 
@@ -52,6 +53,16 @@ pub(super) fn text(
         .child(value)
 }
 
+/// A note line a test reads by `id`, as the one under Browse… (B6 item 1).
+pub(super) fn note(id: &'static str, value: &'static str) -> impl IntoElement + use<> {
+    div()
+        .id(id)
+        .test_support()
+        .aria_label(value)
+        .text_size(px(12.))
+        .child(value)
+}
+
 fn heading(id: &'static str, label: &'static str) -> impl IntoElement {
     div()
         .id(id)
@@ -65,27 +76,34 @@ fn heading(id: &'static str, label: &'static str) -> impl IntoElement {
 impl AddRepositorySheet {
     /// A labeled field: its label, then its input in its wrapper.
     fn field(&self, id: &'static str, label: &'static str, cx: &Context<Self>) -> impl IntoElement {
+        self.field_with(id, label, None, cx)
+    }
+
+    /// `field`, its input led by the icon `icon`.
+    fn field_with(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        icon: Option<&'static str>,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
+        let input = Input::new(&self.inputs[id]).aria_label(label);
+        let input = match icon {
+            Some(icon) => input.prefix(Icon::default().path(icon_path(icon)).text_color(muted)),
+            None => input,
+        };
         field_column()
             .gap_0p5()
             .child(div().text_xs().text_color(muted).child(label))
-            .child(
-                wrapped(
-                    id,
-                    label,
-                    &self.focus[id],
-                    &self.scroll,
-                    Input::new(&self.inputs[id]).aria_label(label),
-                )
-                .w_full(),
-            )
+            .child(wrapped(id, label, &self.focus[id], &self.scroll, input).w_full())
     }
 
+    /// A body button in its wrapper.
     fn button(
         &self,
         id: &'static str,
         label: &'static str,
-        primary: bool,
         disabled: bool,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
@@ -96,36 +114,42 @@ impl AddRepositorySheet {
             .on_click(
                 cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)),
             );
-        let button = if primary { button.primary() } else { button };
         wrapped(id, label, &self.focus[id], &self.scroll, button)
     }
 
-    /// The folder field with Browse beside it.
-    fn folder(&self, form: Form, label: &'static str, cx: &mut Context<Self>) -> impl IntoElement {
-        let disabled = self.browsing.is_some() || self.browse_unavailable.is_some();
-        h_flex()
+    /// The folder field with Browse… beside it, and the note under them
+    /// (B6 item 1).
+    fn folder(
+        &self,
+        form: Form,
+        label: &'static str,
+        icon: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let row = h_flex()
             .gap_2()
             .items_end()
-            .child(self.field(form.path(), label, cx))
+            .child(self.field_with(form.path(), label, icon, cx))
             .child(self.button(
                 form.browse(),
                 BROWSE,
-                false,
-                disabled,
+                self.browse_disabled(),
                 move |this, window, cx| this.browse(form, window, cx),
                 cx,
-            ))
+            ));
+        v_flex().gap_1().child(row).children(self.browse_note(form))
     }
 
     /// A footer submit: a primary Kit button drawn with the sheet's own
     /// handle, which the confirmation gives focus back to (B12, G13). While
-    /// an add of this open is pending it reads "Adding…" and is disabled
-    /// (R-27): it then tracks no focus, and its wrapper holds the handle
-    /// until it is enabled again (Ruling 18).
+    /// an add of this open is pending it reads "Adding…" (R-27). Disabled,
+    /// it tracks no focus, and its wrapper holds the handle until it is
+    /// enabled again (Ruling 18).
     fn submit_button(
         &self,
         form: Form,
         label: &'static str,
+        disabled: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let id = form.submit();
@@ -133,7 +157,7 @@ impl AddRepositorySheet {
         let button = Button::new((id, 0usize))
             .label(label)
             .primary()
-            .disabled(self.adding)
+            .disabled(disabled)
             .on_click(
                 cx.listener(move |this, _: &ClickEvent, window, cx| this.submit(form, window, cx)),
             );
@@ -160,33 +184,65 @@ impl AddRepositorySheet {
             .map(|why| text(form.message(), *why))
     }
 
+    /// Add an existing folder (B6): the folder, its checks, the main
+    /// branch, the prefix unless the folder is set up (R-31), the identity
+    /// when Git has none, and the note.
     fn add_form(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let colors = chrome_colors(cx);
         let path = self.text(Form::Add.path(), cx);
         let identity = self.inspection.identity_required(&path).then(|| {
             v_flex()
+                .id("add-identity")
                 .gap_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .child(IDENTITY_HEADING),
+                )
                 .child(text("add-identity-required", IDENTITY_REQUIRED))
                 .child(self.field(Form::Add.name(), NAME, cx))
                 .child(self.field(Form::Add.email(), EMAIL, cx))
         });
+        let prefix = (!self.inspection.set_up()).then(|| {
+            self.field(Form::Add.prefix(), PREFIX, cx)
+                .into_any_element()
+        });
         v_flex()
-            .gap_2()
-            .child(heading("add-heading", ADD_HEADING))
-            .child(self.folder(Form::Add, FOLDER, cx))
-            .children(self.inspection(cx))
-            .child(self.field(Form::Add.branch(), PRIMARY_BRANCH, cx))
-            .child(self.field(Form::Add.prefix(), PREFIX, cx))
+            .gap_3()
+            .child(self.folder(Form::Add, FOLDER, Some("folder"), cx))
+            .children(self.checks(cx))
+            .child(self.branch_field(cx))
+            .children(prefix)
             .children(identity)
-            .children(self.message(Form::Add))
+            .child(
+                h_flex()
+                    .id("add-note")
+                    .test_support()
+                    .aria_label(REMOVE_NOTE)
+                    .items_start()
+                    .gap(px(6.))
+                    .text_size(px(12.))
+                    .text_color(colors.secondary)
+                    .child(
+                        Icon::default()
+                            .path(icon_path("shield-check"))
+                            .text_color(colors.teal)
+                            .w(px(14.))
+                            .h(px(14.)),
+                    )
+                    .child(div().flex_1().min_w_0().child(REMOVE_NOTE)),
+            )
     }
 
+    /// Create a repository, as today's form draws it (B8 is Task 6's).
     fn create_form(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
         v_flex()
             .gap_2()
             .child(heading("create-heading", CREATE_HEADING))
-            .child(self.folder(Form::Create, CREATE_FOLDER, cx))
-            .child(self.field(Form::Create.branch(), PRIMARY_BRANCH, cx))
+            .child(self.folder(Form::Create, CREATE_FOLDER, None, cx))
+            .child(self.field(Form::Create.branch(), MAIN_BRANCH, cx))
             .child(div().text_xs().text_color(muted).child(CREATE_IDENTITY))
             .child(self.field(Form::Create.name(), NAME, cx))
             .child(self.field(Form::Create.email(), EMAIL, cx))
@@ -202,22 +258,27 @@ impl AddRepositorySheet {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Sheet {
-        if let Some(branch) = self.pending_branch.take() {
-            self.inputs[Form::Add.branch()]
-                .update(cx, |input, cx| input.set_value(branch, window, cx));
-        }
-        let unavailable = self
-            .browse_unavailable
-            .map(|why| text("browse-unavailable", why));
+        self.sync_branches(window, cx);
         let handle = self.scroll.handle().clone();
+        let submit = match self.mode {
+            Mode::Existing => {
+                let disabled = !self.add_enabled(cx);
+                self.submit_button(Form::Add, ADD, disabled, cx)
+                    .into_any_element()
+            }
+            Mode::New => {
+                let disabled = self.adding;
+                self.submit_button(Form::Create, CREATE, disabled, cx)
+                    .into_any_element()
+            }
+        };
         let footer = Footer {
             hint: None,
-            buttons: vec![
-                self.cancel_button(cx).into_any_element(),
-                self.submit_button(Form::Add, ADD, cx).into_any_element(),
-                self.submit_button(Form::Create, CREATE, cx)
-                    .into_any_element(),
-            ],
+            buttons: vec![self.cancel_button(cx).into_any_element(), submit],
+        };
+        let form = match self.mode {
+            Mode::Existing => self.add_form(cx).into_any_element(),
+            Mode::New => self.create_form(cx).into_any_element(),
         };
         sheet
             .size(px(WIDTH))
@@ -264,9 +325,8 @@ impl AddRepositorySheet {
                                     .gap_4()
                                     .pr_4()
                                     .pb_4()
-                                    .child(self.add_form(cx))
-                                    .child(self.create_form(cx))
-                                    .children(unavailable),
+                                    .child(self.mode_control(window, cx))
+                                    .child(form),
                             ),
                     )
                     .child(

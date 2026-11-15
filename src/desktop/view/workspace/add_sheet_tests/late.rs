@@ -5,7 +5,9 @@
 //! pending Add. A Browse answer after the close. An add's success after
 //! the close: its next open finds the text cleared and the check forgotten
 //! (decision 16). A success for an earlier open does not close the sheet
-//! opened since.
+//! opened since: it keeps its text and focus, and forgets only the stale
+//! check of the folder just added, so it is checked again (B10, B2 step 7;
+//! Task 4 review, Minor 4).
 
 use gpui_kit::TestAppContext;
 
@@ -146,7 +148,9 @@ async fn success_after_close(table: &mut Table, cx: &mut TestAppContext) {
 }
 
 /// G12, R-26: a success for an earlier open, landing while the sheet is
-/// open again, does not close it: it stays open with focus where it was.
+/// open again, does not close it: it stays open with focus where it was,
+/// its text kept and its check of the folder, which said "not yet added",
+/// forgotten (B10).
 async fn earlier_open(table: &mut Table, cx: &mut TestAppContext) {
     let (shell, _, plain) = plain_shell(cx);
     press_plus(&shell, cx);
@@ -162,6 +166,13 @@ async fn earlier_open(table: &mut Table, cx: &mut TestAppContext) {
     shell.keys("escape", cx);
     press_plus(&shell, cx);
     let reopened = opened(table, &shell, &format!("{row} (reopened)"), cx);
+    let plain_text = key(&plain);
+    let kept = of_sheet(&shell, cx, |sheet| sheet.checked().map(str::to_owned)).flatten();
+    table.fact(
+        &format!("{row} (the check kept at the reopen)"),
+        kept.as_deref() == Some(plain_text.as_str()),
+        &format!("the check of plain kept (it is {kept:?})"),
+    );
     held.release();
     let id = enables(&shell, cx)[0];
     shell.until_ended(id, cx).await;
@@ -169,6 +180,15 @@ async fn earlier_open(table: &mut Table, cx: &mut TestAppContext) {
         return;
     }
     settle(&shell, cx);
+    let (text, checked) = (
+        value(&shell, "add-path", cx),
+        of_sheet(&shell, cx, |sheet| sheet.checked().map(str::to_owned)).flatten(),
+    );
+    table.fact(
+        &format!("{row} (B10, its check forgotten)"),
+        text.as_deref() == Some(plain_text.as_str()) && checked.is_none(),
+        &format!("the text kept and the check forgotten (text {text:?}, check {checked:?})"),
+    );
     let held_focus =
         add_open(&shell, cx) && !has_dialog(&shell, cx) && holds(&shell, "add-path", cx);
     table.row(
