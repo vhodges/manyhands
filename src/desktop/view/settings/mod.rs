@@ -46,7 +46,7 @@ pub(crate) use hosts::HostsPage;
 pub(crate) use keys::KeysPage;
 pub(crate) use polling::{PollingEvent, PollingPage};
 pub(crate) use remotes::RemotesPage;
-pub(crate) use repositories::{RepositoriesEvent, RepositoriesPage};
+pub(crate) use repositories::{EMAIL, NAME, RepositoriesEvent, RepositoriesPage};
 
 use super::scroll::ContentScroll;
 use crate::desktop::{
@@ -277,7 +277,7 @@ impl SettingsHost {
         }
         self.forget_passphrase(window, cx);
         if let Some(repositories) = &self.repositories {
-            repositories.update(cx, |page, _| page.forget_pending_submit());
+            repositories.update(cx, |page, cx| page.forget_pending_submit(cx));
         }
     }
 

@@ -61,6 +61,9 @@ pub(crate) enum ViewScope {
     /// The Find input's search. One scope: a new search drops the last.
     Find,
     Settings(SettingsPage),
+    /// The Add repository forms' folder check (Wave 04 Cycle 05a, R-9). The
+    /// forms keep their own generations.
+    AddRepository,
     Operations(RepoKey),
     /// A confirmation dialog's preview. Each dialog keeps its own
     /// generations, so one scope serves them all.
