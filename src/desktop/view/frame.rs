@@ -60,7 +60,6 @@ const KIT_SHEET_TITLE_PADDING: f32 = 8.;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Tone {
     /// Amber: Unlock key's `lock` (2h).
-    #[allow(dead_code)] // Used from Task 8
     Accent,
     /// Red: a step that failed (2e).
     #[allow(dead_code)] // Used from Cycle 05b
@@ -257,4 +256,4 @@ pub(crate) fn sheet_footer(footer: Footer, cx: &App) -> impl IntoElement {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "frame_tests.rs"]
-mod tests;
+pub(in crate::desktop::view) mod tests;

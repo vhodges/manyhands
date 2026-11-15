@@ -37,15 +37,16 @@ const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FF0";
 /// How many Tab presses a row may take to reach every button it names.
 const TAB_LIMIT: usize = 8;
 
-/// The rows of one test, as they are read.
-struct Table {
+/// The rows of one test, as they are read. Other modules' tables use it
+/// too (P18, P19).
+pub(in crate::desktop::view) struct Table {
     name: &'static str,
     held: Vec<String>,
     failed: Vec<String>,
 }
 
 impl Table {
-    fn new(name: &'static str) -> Self {
+    pub(in crate::desktop::view) fn new(name: &'static str) -> Self {
         Self {
             name,
             held: Vec::new(),
@@ -54,7 +55,7 @@ impl Table {
     }
 
     /// The row `row`: `held` says whether `what` is so.
-    fn fact(&mut self, row: &str, held: bool, what: &str) {
+    pub(in crate::desktop::view) fn fact(&mut self, row: &str, held: bool, what: &str) {
         if held {
             self.held.push(row.to_owned());
         } else {
@@ -63,7 +64,7 @@ impl Table {
     }
 
     /// Fails, naming every row that did not hold, unless none did.
-    fn done(self) {
+    pub(in crate::desktop::view) fn done(self) {
         eprintln!("{}: rows that held: {:?}", self.name, self.held);
         assert!(
             self.failed.is_empty(),
@@ -152,6 +153,7 @@ async fn every_dialog_keeps_its_keys_and_focus(cx: &mut TestAppContext) {
     dialogs::asks_keys(&mut table, cx);
     forms::forms_keys(&mut table, cx).await;
     item_dialogs::item_dialog_keys(&mut table, cx).await;
+    unlock::unlock_keys(&mut table, cx);
     table.done();
 }
 
@@ -161,6 +163,7 @@ async fn every_dialog_keeps_its_keys_and_focus(cx: &mut TestAppContext) {
 fn footer_buttons_tab_in_drawn_order(cx: &mut TestAppContext) {
     let mut table = Table::new("P2");
     confirmation_tabs(&mut table, cx);
+    unlock::unlock_tabs(&mut table, cx);
     table.done();
 }
 
@@ -288,7 +291,7 @@ fn confirmation_tabs(table: &mut Table, cx: &mut TestAppContext) {
     );
 }
 
-// The other dialogs' set-ups and rows (Task 2).
+// The other dialogs' set-ups and rows (Task 2), and Unlock key's (Task 8).
 
 #[path = "frame_tests/dialogs.rs"]
 mod dialogs;
@@ -296,3 +299,5 @@ mod dialogs;
 mod forms;
 #[path = "frame_tests/item_dialogs.rs"]
 mod item_dialogs;
+#[path = "frame_tests/unlock.rs"]
+mod unlock;

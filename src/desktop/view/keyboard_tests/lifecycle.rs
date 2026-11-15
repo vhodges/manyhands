@@ -410,9 +410,13 @@ async fn a_prompt_over_a_pressed_confirm_gives_focus_back_to_the_dialog(cx: &mut
         reason: UnlockReason::ProtectedKey,
         reply,
     };
+    let services = walk
+        .shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().clone());
     walk.shell.visual(cx).update(|window, cx| {
         window.dispatch_keystroke(Keystroke::parse("enter").unwrap(), cx);
-        open_dialog(prompt, window, cx);
+        open_dialog(prompt, &services, window, cx);
     });
     walk.shell.run(cx);
     assert_eq!(
