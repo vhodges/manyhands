@@ -2,7 +2,8 @@
 //! P2): every dialog on the frame keeps its keys and its focus, and a
 //! footer that puts its action last is tabbed in the order it is drawn.
 //! Each test is a table over design A3's dialogs. Task 1 writes the
-//! Confirmation dialog's rows; Tasks 2 and 8 add the others'.
+//! Confirmation dialog's rows; Task 2 adds the other dialogs', whose
+//! set-ups are in `frame_tests/`, and Task 8 Unlock key's.
 //!
 //! Focus is read after two draws (design B9; Cycle 04's design A6), never
 //! inside the update that moved it. A row that does not hold is kept, with
@@ -148,6 +149,9 @@ async fn every_dialog_keeps_its_keys_and_focus(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let mut table = Table::new("P1");
     confirmation_keys(&mut table, cx).await;
+    dialogs::asks_keys(&mut table, cx);
+    forms::forms_keys(&mut table, cx).await;
+    item_dialogs::item_dialog_keys(&mut table, cx).await;
     table.done();
 }
 
@@ -283,3 +287,12 @@ fn confirmation_tabs(table: &mut Table, cx: &mut TestAppContext) {
         &format!("Tab reaching Cancel, then Confirm (it reached {order:?})"),
     );
 }
+
+// The other dialogs' set-ups and rows (Task 2).
+
+#[path = "frame_tests/dialogs.rs"]
+mod dialogs;
+#[path = "frame_tests/forms.rs"]
+mod forms;
+#[path = "frame_tests/item_dialogs.rs"]
+mod item_dialogs;

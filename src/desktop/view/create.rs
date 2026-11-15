@@ -22,7 +22,10 @@
 //!   Escape closes the dialog, and focus goes back where it was.
 //!
 //! `Workspace::new_item` is the way in; the drawing is `form`'s. The
-//! fields hold the user's text, so nothing here derives `Debug`.
+//! dialog is on the common frame (Wave 04 Cycle 05a design A3): its
+//! heading in the Kit's title slot, the fields in the body, and Cancel and
+//! Create in the footer, the body element's last child. The fields hold
+//! the user's text, so nothing here derives `Debug`.
 
 mod document;
 mod form;
@@ -49,7 +52,10 @@ pub(in crate::desktop::view) use self::{
     document::PathCheck,
     form::{button, field, focus_the_note, held_button, keep_focus_in},
 };
-use super::workspace::Workspace;
+use super::{
+    frame::{self, Header},
+    workspace::Workspace,
+};
 use crate::desktop::{
     model::{
         create::DEFAULT_FOLDER,
@@ -76,6 +82,8 @@ pub(crate) const TITLE: &str = "Title";
 pub(crate) const TYPE: &str = "Type";
 pub(crate) const FOLDER: &str = "Folder";
 pub(crate) const FILE_NAME: &str = "File name";
+/// The header's title: the heading, as the Kit's title slot drew it.
+const HEADING_ID: &str = "create-heading";
 /// The new item's draft could not be written, the store being open: it is
 /// followed by why, in the store's words.
 pub(crate) const DRAFT_NOT_WRITTEN: &str =
@@ -145,10 +153,16 @@ fn open(
         ItemDtoKind::Ticket => TICKET_HEADING,
     };
     let built = dialog.clone();
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let creating = built.clone();
         let cancelling = built.clone();
-        base.title(heading)
+        let header = Header {
+            icon: None,
+            title: heading.into(),
+            description: None,
+            ids: (HEADING_ID, None),
+        };
+        frame::dialog(base, header, cx)
             .close_button(false)
             .overlay_closable(false)
             .child(built.clone())

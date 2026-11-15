@@ -24,6 +24,12 @@
 //! in the dialog, read as each frame is drawn, with Retry for a pending
 //! checkpoint and the library's message and code for a refusal; the tab
 //! stays. The note holds fixed words and the library's own message.
+//!
+//! The dialog is on the common frame (Wave 04 Cycle 05a design A3): the
+//! title in the Kit's title slot; the message and the save's note in the
+//! body; and the buttons in the footer, the body element's last child, in
+//! the order they were drawn: Keep draft, Save, Retry, Discard, Cancel, and
+//! a Save not available last.
 
 use std::rc::{Rc, Weak};
 
@@ -34,15 +40,20 @@ use gpui_kit::{
         ActiveTheme, Disableable, WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm,
-        h_flex, v_flex,
+        v_flex,
     },
     div,
 };
 use manyhands::results::ResultCode;
 
-use super::confirm::CANCEL;
+use super::{
+    confirm::CANCEL,
+    frame::{self, Footer, Header},
+};
 use crate::desktop::model::{edit::save_state::RETRY, item::LATER_NOTE};
 
+/// The header's title: the ask's title, as the Kit's title slot drew it.
+const TITLE_ID: &str = "close-draft-title";
 pub(crate) const KEEP_DRAFT: &str = "Keep draft";
 pub(crate) const DISCARD: &str = "Discard";
 pub(crate) const SAVE: &str = "Save";
@@ -318,7 +329,13 @@ pub(crate) fn open(
         let offers = (ask.offers)(cx);
         let note = (ask.note)(cx);
         let (asked, parked) = (ask.clone(), held.clone());
-        base.title(ask.title)
+        let header = Header {
+            icon: None,
+            title: ask.title.into(),
+            description: None,
+            ids: (TITLE_ID, None),
+        };
+        frame::dialog(base, header, cx)
             .close_button(false)
             .overlay_closable(false)
             .child(body(&ask, offers, note, &choose, &held, cx))
@@ -425,12 +442,7 @@ fn body(
             )
     });
     let note = note.map(|note| save_note(prefix, note, cx));
-    v_flex()
-        .id(ElementId::from(format!("{prefix}-dialog")))
-        .test_support()
-        .track_focus(held)
-        // Named by its title, which the Kit draws above it.
-        .aria_label(ask.title)
+    let content = v_flex()
         .gap_2()
         .child(
             div()
@@ -440,22 +452,34 @@ fn body(
                 .text_sm()
                 .child(message),
         )
-        .children(note)
-        .child(
-            h_flex()
-                .gap_2()
-                .children(keep)
-                .children(save)
-                .children(retry)
-                .child(button(
-                    "discard",
-                    DISCARD,
-                    CloseWithDraft::Discard,
-                    offers.discard,
-                ))
-                .child(button("cancel", CANCEL, CloseWithDraft::Cancel, true))
-                .children(later),
-        )
+        .children(note);
+    // Keep draft and Save first, as they were drawn, then Retry, Discard
+    // and Cancel; a Save not available is last.
+    let buttons = keep
+        .into_iter()
+        .map(IntoElement::into_any_element)
+        .chain(save.into_iter().map(IntoElement::into_any_element))
+        .chain(retry.into_iter().map(IntoElement::into_any_element))
+        .chain([
+            button("discard", DISCARD, CloseWithDraft::Discard, offers.discard).into_any_element(),
+            button("cancel", CANCEL, CloseWithDraft::Cancel, true).into_any_element(),
+        ])
+        .chain(later.into_iter().map(IntoElement::into_any_element))
+        .collect();
+    v_flex()
+        .id(ElementId::from(format!("{prefix}-dialog")))
+        .test_support()
+        .track_focus(held)
+        // Named by its title, which the Kit draws above it.
+        .aria_label(ask.title)
+        .child(frame::body(content))
+        .child(frame::footer(
+            Footer {
+                hint: None,
+                buttons,
+            },
+            cx,
+        ))
 }
 
 /// What the dialog's Save came to: its words, then the library's message

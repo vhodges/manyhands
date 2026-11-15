@@ -229,7 +229,6 @@ pub(crate) fn footer(footer: Footer, cx: &App) -> Div {
 /// The header element for a Kit `Sheet`'s title slot. The Kit pads its
 /// title row and draws the close button beside it, so the divider stops
 /// short of the edges and of the close button (K-5).
-#[allow(dead_code)] // Used from Task 2
 pub(crate) fn sheet_header(header: Header, cx: &App) -> impl IntoElement {
     let colors = chrome_colors(cx);
     let (top, _, bottom) = HEADER_PADDING;
