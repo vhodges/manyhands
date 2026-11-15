@@ -616,6 +616,15 @@ and its Cycle document records it element by element.
   Stop at a safe point. Failed names the step and cause, shows the outcome
   box, the contextual fix and Retry. Done shows the outcome and the newly
   ready tickets. The local-only wording for step 2 is kept.
+  *Amended 2026-11-15 by Cycle 05b* (decisions 1 and 2; its design fact
+  27): the files to be merged show their tags without line counts, which
+  the library does not compute (decision 1; the follow-up library ticket
+  `01M7FBRBN04QACSCZV6KX0WMR3`); Confirm shows no "Becomes ready to
+  start", and the newly ready tickets show only after a close that
+  reached main, done or failed, as "Now ready to start" (decision 2); and
+  "Running shows each step's state and progress" reads "Running shows
+  each step's state and its stage", in the stage's words, as the library
+  reports a stage and no count.
 - **Resolve conflict sheet** (`05`, 2g, 920 px): already built from the
   design in Wave 03 D5. This Cycle moves it onto the shared tokens and
   frame and corrects only the differences the check found, without
