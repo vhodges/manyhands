@@ -34,10 +34,7 @@ use super::{
     tests::{DOCUMENT, TICKET, closes, request, saved_ticket, shell, ticket, until_present},
 };
 use crate::desktop::{
-    model::{
-        activity::rows::{ActivityAction, RowKey},
-        stamp::SettingsPage,
-    },
+    model::activity::rows::{ActivityAction, RowKey},
     services::{
         JobKind,
         requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
@@ -211,6 +208,7 @@ pub(super) fn finished(
         lane: Lane::User,
         attempt: 1,
         state: RequestState::Queued,
+        registered_root: None,
     };
     shell.operations(cx).update(cx, |operations, cx| {
         operations.apply(WorkerEvent::Queued(request));
@@ -411,13 +409,16 @@ async fn each_way_out_offers_its_button(cx: &mut TestAppContext) {
     shell.click("lifecycle-inspect", cx);
     shell.run(cx);
     assert!(!shell.present("lifecycle-dialog", cx));
+    // The Add repository sheet, checking the repository, not Settings
+    // (Wave 04 Cycle 05a AW-4, decision 13; E-8).
     let shown = shell
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
-    assert!(matches!(shown, Shown::Settings(SettingsPage::Repositories)));
+    assert!(matches!(shown, Shown::Tabs));
+    assert!(shell.present("add-sheet", cx), "AW-4 opens the Add sheet");
     assert!(
         shell.holds_focus("add-path", cx),
-        "W-22 lands on the Add folder (Part D)"
+        "AW-4 lands on the Add folder (G1)"
     );
 }
 

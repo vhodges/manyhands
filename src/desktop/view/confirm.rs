@@ -107,9 +107,11 @@ fn header(title: &'static str) -> Header {
 pub(crate) enum Followed {
     /// Confirm sent the request, or queued it again after Prepare again,
     /// with the details of the preview confirmed: its answers are the
-    /// opener's to follow.
+    /// opener's to follow. `attempt` is the attempt it queued: 1, or the one
+    /// Prepare again's confirmation queued (Wave 04 Cycle 05a R-28).
     Confirmed {
         request: DesktopRequestId,
+        attempt: u32,
         details: Box<PreviewDetailsDto>,
     },
     /// The prepare gave no preview, and was answered this code.
@@ -493,7 +495,11 @@ impl ConfirmDialog {
         }
         if let (Some(request), Some((preview, _))) = (self.request, &self.preview) {
             let details = Box::new(preview.details.clone());
-            cx.emit(Followed::Confirmed { request, details });
+            cx.emit(Followed::Confirmed {
+                request,
+                attempt: self.attempt,
+                details,
+            });
         }
         // Part C fix 2, N1: once it lands, a removal closes only the tabs
         // whose unkept text the line counted as it was confirmed.

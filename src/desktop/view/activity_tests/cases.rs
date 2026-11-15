@@ -73,6 +73,7 @@ pub(in crate::desktop::view) fn fabricate(
         lane: Lane::User,
         attempt: 1,
         state: RequestState::Queued,
+        registered_root: None,
     };
     shell.operations(cx).update(cx, |operations, cx| {
         operations.apply(WorkerEvent::Queued(request));

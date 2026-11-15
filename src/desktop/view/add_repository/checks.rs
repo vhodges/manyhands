@@ -192,4 +192,44 @@ impl AddRepositorySheet {
         };
         Some(body)
     }
+
+    /// The check Add waited for landed (ruling R-T12b). If Git has no
+    /// identity for the folder, its fields appear with focus in the first,
+    /// and nothing is confirmed yet; otherwise the submit goes on. A check
+    /// whose text changed meanwhile was dropped, and the wait with it.
+    fn resume_submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A check that lands after the sheet closed goes no further (G12).
+        if !std::mem::take(&mut self.submit_pending) || !self.open.is_open(window, cx) {
+            return;
+        }
+        if let Some(branch) = self.pending_branch.take() {
+            self.inputs[Form::Add.branch()]
+                .update(cx, |input, cx| input.set_value(branch, window, cx));
+        }
+        let path = self.text(Form::Add.path(), cx);
+        if !self.add_checked(&path) {
+            return;
+        }
+        if self.inspection.identity_required(&path) {
+            self.inputs[Form::Add.name()].update(cx, |input, cx| input.focus(window, cx));
+            cx.notify();
+            return;
+        }
+        self.submit(Form::Add, window, cx);
+    }
+
+    /// The folder text whose check has landed with what it found (P8).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn checked(&self) -> Option<&str> {
+        match &self.inspection {
+            Inspection::Checked { path, .. } => Some(path),
+            _ => None,
+        }
+    }
+
+    /// The folder text whose check has started or landed (P4).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn inspected(&self) -> Option<&str> {
+        self.inspection.path()
+    }
 }

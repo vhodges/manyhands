@@ -1,25 +1,42 @@
-//! Drawing the Add repository forms: Add an existing repository, then
-//! Create a repository, each a folder with Browse, its fields, what it
-//! said and its submit, then why Browse is unavailable, drawn once.
+//! Drawing the Add repository sheet (Wave 04 Cycle 05a design A1, B5 to
+//! B10): a Kit sheet 470 px wide, the frame's header, a body in a scroll of
+//! its own laid over the Kit's, which takes the page keys (B12), and the
+//! frame's footer with Cancel, Add repository and Create repository (B10).
+//! The body is Add an existing repository, then Create a repository, each
+//! a folder with Browse, its fields and what it said, then why Browse is
+//! unavailable, drawn once.
 
 use gpui_kit::{
-    ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Render,
+    ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable,
         button::{Button, ButtonVariants},
         h_flex,
         input::Input,
+        scroll::Scrollbar,
+        sheet::Sheet,
         v_flex,
     },
-    div,
+    div, px,
 };
 
 use super::{
-    ADD, ADD_HEADING, AddRepositorySheet, BROWSE, CREATE, CREATE_FOLDER, CREATE_HEADING,
-    CREATE_IDENTITY, FOLDER, Form, IDENTITY_REQUIRED, PREFIX, PRIMARY_BRANCH,
+    ADD, ADD_DESCRIPTION, ADD_HEADING, ADD_TITLE, ADDING, AddRepositorySheet, BROWSE, CANCEL,
+    CANCEL_ID, CREATE, CREATE_FOLDER, CREATE_HEADING, CREATE_IDENTITY, FOLDER, Form,
+    IDENTITY_REQUIRED, PREFIX, PRIMARY_BRANCH,
 };
-use crate::desktop::view::settings::{EMAIL, NAME, field_column, wrapped};
+use crate::desktop::{
+    keys::{ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop},
+    view::{
+        frame::{self, Footer, Header},
+        scroll::ContentScroll,
+        settings::{EMAIL, NAME, field_column, footer_kit, wrapped},
+    },
+};
+
+/// The sheet's width (`05`, Add repository; B1).
+const WIDTH: f32 = 470.;
 
 /// A piece of text a test reads by `id`.
 pub(super) fn text(
@@ -100,6 +117,43 @@ impl AddRepositorySheet {
             ))
     }
 
+    /// A footer submit: a primary Kit button drawn with the sheet's own
+    /// handle, which the confirmation gives focus back to (B12, G13). While
+    /// an add of this open is pending it reads "Adding…" and is disabled
+    /// (R-27): it then tracks no focus, and its wrapper holds the handle
+    /// until it is enabled again (Ruling 18).
+    fn submit_button(
+        &self,
+        form: Form,
+        label: &'static str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let id = form.submit();
+        let label = if self.adding { ADDING } else { label };
+        let button = Button::new((id, 0usize))
+            .label(label)
+            .primary()
+            .disabled(self.adding)
+            .on_click(
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.submit(form, window, cx)),
+            );
+        footer_kit(id, label, &self.focus[id], (id, 0usize), button)
+    }
+
+    /// The footer's Cancel (B10).
+    fn cancel_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let button = Button::new((CANCEL_ID, 0usize))
+            .label(CANCEL)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.cancel(cx)));
+        footer_kit(
+            CANCEL_ID,
+            CANCEL,
+            &self.focus[CANCEL_ID],
+            (CANCEL_ID, 0usize),
+            button,
+        )
+    }
+
     fn message(&self, form: Form) -> Option<impl IntoElement + use<>> {
         self.messages
             .get(&form)
@@ -124,14 +178,6 @@ impl AddRepositorySheet {
             .child(self.field(Form::Add.prefix(), PREFIX, cx))
             .children(identity)
             .children(self.message(Form::Add))
-            .child(self.button(
-                Form::Add.submit(),
-                ADD,
-                true,
-                false,
-                |this, window, cx| this.submit(Form::Add, window, cx),
-                cx,
-            ))
     }
 
     fn create_form(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -146,21 +192,16 @@ impl AddRepositorySheet {
             .child(self.field(Form::Create.email(), EMAIL, cx))
             .child(self.field(Form::Create.prefix(), PREFIX, cx))
             .children(self.message(Form::Create))
-            .child(self.button(
-                Form::Create.submit(),
-                CREATE,
-                true,
-                false,
-                |this, window, cx| this.submit(Form::Create, window, cx),
-                cx,
-            ))
     }
-}
 
-/// Both forms, then why Browse is unavailable, once (fact 14). Spaced as
-/// the Repositories page spaces its sections, which it draws them among.
-impl Render for AddRepositorySheet {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The sheet as this frame draws it. The builder Root keeps calls this
+    /// on every render, so all its state is the sheet's.
+    pub(crate) fn sheet(
+        &mut self,
+        sheet: Sheet,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Sheet {
         if let Some(branch) = self.pending_branch.take() {
             self.inputs[Form::Add.branch()]
                 .update(cx, |input, cx| input.set_value(branch, window, cx));
@@ -168,10 +209,79 @@ impl Render for AddRepositorySheet {
         let unavailable = self
             .browse_unavailable
             .map(|why| text("browse-unavailable", why));
-        v_flex()
-            .gap_4()
-            .child(self.add_form(cx))
-            .child(self.create_form(cx))
-            .children(unavailable)
+        let handle = self.scroll.handle().clone();
+        let footer = Footer {
+            hint: None,
+            buttons: vec![
+                self.cancel_button(cx).into_any_element(),
+                self.submit_button(Form::Add, ADD, cx).into_any_element(),
+                self.submit_button(Form::Create, CREATE, cx)
+                    .into_any_element(),
+            ],
+        };
+        sheet
+            .size(px(WIDTH))
+            .title(frame::sheet_header(
+                Header {
+                    icon: None,
+                    title: ADD_TITLE.into(),
+                    description: Some(ADD_DESCRIPTION.into()),
+                    ids: ("add-sheet-title", Some("add-sheet-description")),
+                },
+                cx,
+            ))
+            .footer(frame::sheet_footer(footer, cx))
+            // The Kit's body grows with what it holds; laid over it, the
+            // sheet scrolls on its own handle, which reveals the focused
+            // control and takes the page keys (B12, R-8).
+            .child(
+                div()
+                    .id("add-sheet")
+                    .test_support()
+                    .absolute()
+                    .inset_0()
+                    .on_action(cx.listener(|this, _: &ScrollPageUp, _, cx| {
+                        this.scroll_body(|scroll| scroll.page(-1.), cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &ScrollPageDown, _, cx| {
+                        this.scroll_body(|scroll| scroll.page(1.), cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &ScrollToTop, _, cx| {
+                        this.scroll_body(ContentScroll::to_top, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| {
+                        this.scroll_body(ContentScroll::to_bottom, cx)
+                    }))
+                    .child(
+                        div()
+                            .id("add-scroll")
+                            .test_support()
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&handle)
+                            .child(
+                                v_flex()
+                                    .gap_4()
+                                    .pr_4()
+                                    .pb_4()
+                                    .child(self.add_form(cx))
+                                    .child(self.create_form(cx))
+                                    .children(unavailable),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .child(Scrollbar::vertical(&handle).id("add-scrollbar")),
+                    ),
+            )
+    }
+
+    /// A page key moves the body, and nothing behind the sheet.
+    fn scroll_body(&mut self, scroll: impl Fn(&ContentScroll) -> bool, cx: &mut Context<Self>) {
+        if scroll(&self.scroll) {
+            cx.notify();
+        }
     }
 }

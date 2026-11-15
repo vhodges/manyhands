@@ -1,10 +1,10 @@
-//! The Add repository forms over real directories and repositories, as
-//! Settings › Repositories draws them (Wave 04 Cycle 05a design B4; moved
-//! here from `settings/repositories_tests.rs` with them): Create and Add
-//! existing through the confirmation dialog, their typed refusals, a
-//! partial create that Retry completes under the same request, one
-//! repository for two presses of Confirm, Browse, a control below the
-//! fold, and the `repo.inspect` recovery.
+//! The Add repository forms over real directories and repositories, in
+//! the Add repository sheet the toolbar's `+` opens (Wave 04 Cycle 05a
+//! design B4; moved here from `settings/repositories_tests.rs` with them,
+//! E-1): Create and Add existing through the confirmation dialog, their
+//! typed refusals, a partial create that Retry completes under the same
+//! request, one repository for two presses of Confirm, Browse, a control
+//! below the fold, and the `repo.inspect` recovery.
 
 use std::{
     fs,
@@ -36,22 +36,33 @@ use crate::desktop::{
         activity_support::{act, label_of, offered, refresh, row},
         confirm::{CONFIRM, PREPARE_AGAIN},
         harness::{Shell, key},
+        workspace::AddRoute,
     },
 };
 
-/// The window over `fixture`, with the Repositories page shown, which
-/// draws the forms.
+/// The window over `fixture`, with the Add repository sheet opened by the
+/// toolbar's `+` (AW-2; E-1).
 fn settings(fixture: Fixture, cx: &mut TestAppContext) -> Shell {
     let shell = Shell::open(fixture, cx);
-    shell.keys("secondary-,", cx);
-    assert!(shell.present("settings-repositories", cx));
+    open_sheet(&shell, cx);
     shell
 }
 
-/// The forms the Repositories page draws.
+/// Opens the Add repository sheet by the toolbar's `+`.
+fn open_sheet(shell: &Shell, cx: &mut TestAppContext) {
+    shell.click("add-repository-button", cx);
+    assert!(
+        shell.present("add-sheet", cx),
+        "the Add repository sheet opened"
+    );
+}
+
+/// The Add repository sheet the workspace keeps.
 fn sheet(shell: &Shell, cx: &mut TestAppContext) -> Entity<AddRepositorySheet> {
-    let page = shell.repositories_page(cx);
-    page.read_with(cx, |page, _| page.add_sheet())
+    shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.add_sheet())
+        .expect("the workspace keeps the Add repository sheet")
 }
 
 fn input(shell: &Shell, id: &str, cx: &mut TestAppContext) -> Entity<InputState> {
@@ -296,7 +307,16 @@ async fn adding_a_repository_without_identity_asks_for_one_and_keeps_it(cx: &mut
     assert_eq!(registered(&shell), [key(&root)]);
     assert_eq!(background_refreshes(&shell, &root, cx), 1);
 
-    // Checked again, it is registered.
+    // Checked again, it is registered: the success closed the sheet and
+    // cleared it (decision 16), so it is opened and the folder typed again
+    // (E-1b).
+    assert!(
+        !shell.present("add-sheet", cx),
+        "the success closed the sheet"
+    );
+    open_sheet(&shell, cx);
+    assert_eq!(value(&shell, "add-path", cx), "", "the success cleared it");
+    set(&shell, "add-path", text(&root), cx);
     enter_in(&shell, "add-path", cx);
     assert_eq!(
         shell.label("add-inspection", cx).as_deref(),
@@ -646,10 +666,10 @@ fn control_focus(shell: &Shell, id: &str, cx: &mut TestAppContext) -> FocusHandl
     sheet.read_with(cx, |sheet, _| sheet.control_focus(id))
 }
 
-/// In a window too short for the page, Tab reaches Create repository,
-/// below the fold, and the Settings sheet's own scroll brings it into view:
-/// the control is a Kit button, whose own focus is private, so its wrapper
-/// is revealed.
+/// In a window too short for the sheet's body, Tab reaches Create's short
+/// code prefix, below the fold, and the sheet's own scroll brings it into
+/// view (E-1e; R-8): a body control, since the footer that holds the
+/// submits is outside the body.
 #[gpui_kit::test]
 fn a_form_control_below_the_fold_is_scrolled_into_view(cx: &mut TestAppContext) {
     let shell = settings(Fixture::new(), cx);
@@ -658,38 +678,36 @@ fn a_form_control_below_the_fold_is_scrolled_into_view(cx: &mut TestAppContext) 
     let bounds = |shell: &Shell, cx: &mut TestAppContext| {
         shell.frame(cx, |window, _| {
             (
-                window.find("settings-scroll").bounds(),
-                window.find("create-submit").bounds(),
+                window.find("add-scroll").bounds(),
+                window.find("create-prefix").bounds(),
             )
         })
     };
-    let (viewport, submit) = bounds(&shell, cx);
+    let (viewport, prefix) = bounds(&shell, cx);
     assert!(
-        submit.top() > viewport.bottom(),
-        "Create repository starts below the fold: {submit:?} {viewport:?}"
+        prefix.top() > viewport.bottom(),
+        "Create's prefix starts below the fold: {prefix:?} {viewport:?}"
     );
 
-    let focus = control_focus(&shell, "create-submit", cx);
+    let focus = control_focus(&shell, "create-prefix", cx);
     let mut presses = 0;
     while !shell.frame(cx, |window, cx| focus.contains_focused(window, cx)) {
         presses += 1;
-        assert!(presses < 60, "Tab never reached Create repository");
+        assert!(presses < 60, "Tab never reached Create's prefix");
         shell.keys("tab", cx);
     }
-    let (viewport, submit) = bounds(&shell, cx);
+    let (viewport, prefix) = bounds(&shell, cx);
     assert!(
-        submit.intersects(&viewport),
-        "the focused button is in view: {submit:?} {viewport:?}"
+        prefix.intersects(&viewport),
+        "the focused field is in view: {prefix:?} {viewport:?}"
     );
-    let offset = shell
-        .workspace
-        .read_with(cx, |workspace, cx| workspace.settings_offset(cx));
+    let offset = sheet(&shell, cx).read_with(cx, |sheet, _| sheet.scroll_offset());
     assert!(offset < px(0.));
 }
 
-/// The `repo.inspect` recovery's entry point opens the Repositories page
-/// with the root checked, and focuses its Add folder (Wave 04 Cycle 04
-/// Part D; R-24). The model maps the action to it (`operations_tests`); no
+/// The `repo.inspect` recovery's entry point opens the Add repository sheet
+/// with the root checked, and focuses its Add folder (Wave 04 Cycle 05a
+/// AW-5, G1; E-4). The model maps the action to it (`operations_tests`); no
 /// local command offers it, so it is called here as `run_recovery` calls
 /// it.
 #[gpui_kit::test]
@@ -700,11 +718,11 @@ fn the_inspect_recovery_opens_the_page_with_its_root_checked(cx: &mut TestAppCon
     let target = root.clone();
     shell.visual(cx).update(|window, cx| {
         shell.workspace.update(cx, |workspace, cx| {
-            workspace.inspect_in_settings(target, window, cx)
+            workspace.show_add_repository(AddRoute::Inspect(target), None, window, cx)
         })
     });
     shell.run(cx);
-    assert!(shell.present("settings-repositories", cx));
+    assert!(shell.present("add-sheet", cx));
     assert_eq!(value(&shell, "add-path", cx), text(&root));
     assert_eq!(
         shell.label("add-inspection", cx).as_deref(),
@@ -713,7 +731,7 @@ fn the_inspect_recovery_opens_the_page_with_its_root_checked(cx: &mut TestAppCon
     assert!(shell.present("add-configuration", cx));
     assert!(
         shell.holds_focus("add-path", cx),
-        "W-27 lands on the Add folder (Part D)"
+        "AW-5 lands on the Add folder (G1)"
     );
 }
 

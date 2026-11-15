@@ -318,9 +318,9 @@ impl ItemPane {
             return;
         };
         let followed = cx.subscribe(&dialog, |pane, _, event: &Followed, cx| match event {
-            Followed::Confirmed { request, details } => {
-                pane.repair_confirmed(*request, details, cx)
-            }
+            Followed::Confirmed {
+                request, details, ..
+            } => pane.repair_confirmed(*request, details, cx),
             Followed::Answered(code) => pane.repair_prepared(*code, cx),
         });
         if let Some(repair) = &mut self.repair {

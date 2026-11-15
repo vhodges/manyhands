@@ -1256,6 +1256,7 @@ fn queued(id: u64, intent: Intent, attempt: u32) -> WorkerEvent {
         lane: Lane::User,
         attempt,
         state: RequestState::Queued,
+        registered_root: None,
     })
 }
 

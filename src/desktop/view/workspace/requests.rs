@@ -1,6 +1,6 @@
 //! Worker completions, pending reads and explicit request/recovery actions.
 
-use super::{Region, Workspace};
+use super::{Region, Workspace, add_sheet::AddRoute};
 use crate::desktop::{
     model::{
         activity::rows::RowKey,
@@ -130,6 +130,9 @@ impl Workspace {
         // Confirmation observers close their dialogs before a prompt opens.
         // The Kit closes the top dialog only.
         cx.defer_in(window, |this, window, cx| this.show_prompt(window, cx));
+        // Before the confirmations' observers close them; each add handled
+        // after they have (Wave 04 Cycle 05a R-25).
+        self.adds_changed(window, cx);
         self.stops_to_republish_answered(window, cx);
         self.quit_if_finished(cx);
         let changed = self
@@ -595,7 +598,9 @@ impl Workspace {
             Some(RecoveryStep::Cancel(id)) => {
                 self.services.worker().cancel(id);
             }
-            Some(RecoveryStep::Inspect(root)) => self.inspect_in_settings(root, window, cx),
+            Some(RecoveryStep::Inspect(root)) => {
+                self.show_add_repository(AddRoute::Inspect(root), None, window, cx)
+            }
             Some(RecoveryStep::IdentitySet(root)) => self.identity_in_settings(root, window, cx),
             Some(RecoveryStep::CheckHost { root, authority }) => {
                 self.check_host_in_settings(root, authority, window, cx)
