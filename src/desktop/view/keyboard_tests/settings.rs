@@ -233,14 +233,11 @@ async fn sharing_and_keys_by_keyboard(cx: &mut TestAppContext) {
     assert_eq!(ended, Some((Outcome::Success, ResultCode::Ok)), "deleted");
 
     // Copy public key of `two`, now the first row.
-    let deadline = std::time::Instant::now() + crate::desktop::view::harness::WAIT;
-    while walk.shell.label(("key-label", 0usize), cx).as_deref() != Some("two") {
-        assert!(std::time::Instant::now() < deadline, "two is never first");
-        cx.executor()
-            .timer(std::time::Duration::from_millis(10))
-            .await;
-        walk.shell.run(cx);
-    }
+    walk.shell
+        .until_drawn(cx, "two is first", |shell, cx| {
+            shell.label(("key-label", 0usize), cx).as_deref() == Some("two")
+        })
+        .await;
     let wanted = walk
         .shell
         .fixture

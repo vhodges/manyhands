@@ -349,6 +349,7 @@ impl KeysPage {
             return;
         };
         let open = self.open.clone();
+        // The window is gone: nothing to focus.
         let _ = self.window.update(cx, |_, window, cx| {
             if open.is_open(window, cx) && held.is_focused(window) {
                 window.focus(&target, cx);

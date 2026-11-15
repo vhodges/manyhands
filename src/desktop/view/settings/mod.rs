@@ -124,6 +124,9 @@ pub(crate) struct SettingsHost {
     /// The sheet body's own scroll, a region of the content column's (B2):
     /// every page reveals its focused control in it.
     scroll: ContentScroll,
+    /// The menu entry last shown, kept across a close: the same entry shown
+    /// again keeps its offset, another starts from its top.
+    last_nav: Option<SettingsNav>,
     shown: Shown,
     /// The focus of each menu entry, in `PAGES` order.
     entries: Vec<FocusHandle>,
@@ -164,6 +167,7 @@ impl SettingsHost {
         Self {
             services,
             scroll: column.region(),
+            last_nav: None,
             shown: Shown::Tabs,
             entries: PAGES
                 .iter()
@@ -220,6 +224,10 @@ impl SettingsHost {
     /// Sharing & keys (B3).
     pub(crate) fn open(&mut self, page: SettingsPage, window: &mut Window, cx: &mut Context<Self>) {
         self.shown = Shown::Settings(page);
+        // Before any focus move, so a route's reveal of its control stands.
+        if self.last_nav.replace(page.nav()) != Some(page.nav()) {
+            self.scroll.to_top();
+        }
         self.forget_passphrase(window, cx);
         match page.nav() {
             SettingsNav::Repositories => {

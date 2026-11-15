@@ -209,18 +209,13 @@ impl Workspace {
 
     /// Settings' Repositories page managing the repository at `root`, not
     /// the chosen one, as `open_remotes` does (R-21).
-    pub(in crate::desktop::view) fn open_settings_on(
+    pub(in crate::desktop::view) fn manage_in_settings(
         &mut self,
-        page: SettingsPage,
         root: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let route = match page {
-            SettingsPage::Repositories => SettingsRoute::Manage(root),
-            page => SettingsRoute::Page(page),
-        };
-        self.show_settings(route, None, window, cx);
+        self.show_settings(SettingsRoute::Manage(root), None, window, cx);
     }
 
     pub(crate) fn inspect_in_settings(

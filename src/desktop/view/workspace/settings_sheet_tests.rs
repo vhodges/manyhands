@@ -63,6 +63,8 @@ mod returns;
 mod returns_activity;
 #[path = "settings_sheet_tests/routes.rs"]
 mod routes;
+#[path = "settings_sheet_tests/scrolls.rs"]
+mod scrolls;
 #[path = "settings_sheet_tests/support.rs"]
 mod support;
 #[path = "settings_sheet_tests/table.rs"]
@@ -524,9 +526,17 @@ fn nothing_acts_behind_settings(cx: &mut TestAppContext) {
 /// P8 (B2, R-12, R-40; Part G item 1): PageDown from a menu entry and End
 /// from a page control move Settings' own offset, not the content column's
 /// or the item's; Tab to a control below the fold reveals it in Settings.
+/// The rows in `scrolls`: a page keeps its offset when its entry is shown
+/// again, and shows from its top when the entry changes.
 #[gpui_kit::test]
-fn settings_scrolls_on_its_own(cx: &mut TestAppContext) {
-    let (shell, root) = shell(cx, long_and_other);
+async fn settings_scrolls_on_its_own(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        long_and_other(fixture, root);
+        for ix in 0..scrolls::KEYS {
+            fixture.generate_key(&format!("key {ix}"));
+        }
+    });
     shell.resize_keeping_content(1440., SHORT, cx);
     shell.set_activity_height(SHORT_ACTIVITY, cx);
     open(&shell, ticket(&root, MAIN), cx);
@@ -577,6 +587,8 @@ fn settings_scrolls_on_its_own(cx: &mut TestAppContext) {
     assert!(settings_offset(&shell, cx) < px(0.));
     assert_eq!(column_offset(&shell, cx), column);
     assert_eq!(item_offset(&shell, cx), item);
+
+    scrolls::rows(&shell, &root, cx).await;
 }
 
 /// P14 (C3, R-20, decision 5; A6 F11): with Activity hidden, Show in
