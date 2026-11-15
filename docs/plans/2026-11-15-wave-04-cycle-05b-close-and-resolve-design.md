@@ -47,6 +47,21 @@ Planned against:
   use (C5a B10) and `Tone::Accent` in use (C5a Part D). Task 0 re-maps
   every name this design takes from 05a against its merged code (U-1).
 
+**Re-mapped at Task 0 (U-1), 2026-11-15.** Cycle 05a merged to main at
+`1f30d58c` ("Integrate closed ticket 01M7D5Z7FZTGTC1HE25KQ1MYQY"), and main
+was merged into this branch at `1fbb19b3`; `Cargo.lock` is unchanged since
+`ac50ba1a`. Every name this design takes from 05a exists as named.
+`settings_sheet.rs`, `render.rs` and `focus.rs` are unchanged since
+`d7b39f62`; `content.rs` changed only in the empty pane; `add_sheet.rs`
+gained `add_closed`'s entry guard and moved its lines. Facts 20–24, 31
+and 32 and B3's notes on 05a's code were read again at the merge; what
+was wrong is corrected in place and marked "at the merge". The widened
+check is `sheet_held`, beside an unchanged `settings_open`;
+`apply_review`'s refocus is gated by an owner match, not by
+`sheet_held`; `Tone::Accent` and `frame::sheet_footer` are in use;
+`ICONS` holds 57 names. No contract row, ruling, H row, P row or
+decision changed.
+
 ## Conventions
 
 - `D/` is `src/desktop/`; `GC/` is the locked `gpui-component-0.6.6/src/`
@@ -60,7 +75,8 @@ Planned against:
   focus rows), "P-n", "E-n", "K-n" and "U-n" are this design's.
 - **(owner's eye)** marks a change people see today or a departure from
   an authority.
-- Line numbers are at `ac50ba1a`.
+- Line numbers are at `ac50ba1a`, except those marked "at the merge"
+  (`1fbb19b3`, Task 0).
 
 ## Baseline Facts
 
@@ -233,7 +249,12 @@ Planned against:
     `content.sheet: Option<SheetOwner>`, today `Details(WeakEntity<ItemPane>)`
     or `Settings` (`D/view/workspace/content.rs:44-50`), and C5a B1 adds
     `AddRepository`. `sync_sheet` (`content.rs:270-324`) closes any active
-    sheet its owner does not keep.
+    sheet its owner does not keep. At the merge: `SheetOwner` is
+    `content.rs:48-56`, with `AddRepository`; `sync_sheet` is `:281-337`,
+    whose match yields `(keep, settings_closed, add_closed)` per owner
+    (`:284-296`) and drops a requested details sheet while the owner is
+    Settings or Add repository (`:320-321`); the test mirror
+    `SheetOwnerKind` (`settings_sheet.rs:41-48`) has `AddRepository`.
 21. **Nothing acts behind a sheet** (Wave 03 D3 R-60): `modal_open` is
     `has_active_dialog || has_active_sheet` (`D/view/workspace/render.rs:149-151`),
     and Activity, its menus and Needs attention refuse under it.
@@ -245,12 +266,34 @@ Planned against:
     `settings_open` stays Settings' and a new `sheet_held` (Settings or
     Add repository) gates the renamed `keep_focus_in_sheet`,
     `sheet_keeps_lost_focus`, `focus_content` and `settings_key`
-    (`settings_sheet.rs:116-120`, `:347-371` there).
+    (`settings_sheet.rs:116-120`, `:347-371` there). At the merge, the
+    same: `settings_open` `:111-114`; `sheet_held` `:116-120`
+    (`settings_open` or `add_open`, `add_sheet.rs:147-150`);
+    `keep_focus_in_sheet` `:347-357`, deferred from the render under
+    `if self.sheet_held(..)` (`render.rs:175-183`); `sheet_keeps_lost_focus`
+    `:363-380`, the first step of `focus_lost` (`focus.rs:289`); both move
+    focus to the open sheet's first control (`focus_sheet_first`,
+    `:327-333`: Settings' page entry, else the Add sheet's folder field).
+    Both read Root's sheet layer through the handle the workspace tracks
+    it with, Settings' `layer()` (`render.rs:123-129`):
+    `keep_focus_in_sheet` through `drawn_behind` (`:313-323`), and
+    `sheet_keeps_lost_focus` by whether the layer holds the lost focus's
+    target; `focus_content` `content.rs:611-614`. C4's
+    `keep_focus_in_settings` and `settings_keeps_lost_focus` no longer
+    exist.
 22. **Ctrl+, and Settings routes.** `settings_key`
     (`settings_sheet.rs:350-360`) refuses while a dialog or Settings is
     open; `show_settings` (`:117-185`) refuses while a dialog is open, and
     otherwise closes any active sheet before opening Settings (`:143-147`).
-    Today the Resolve dialog stops both; as a sheet, it would not.
+    Today the Resolve dialog stops both; as a sheet, it would not. At the
+    merge: `settings_key` (`settings_sheet.rs:400-410`, bound at
+    `render.rs:272`, outside `unless_dialog`) refuses while a dialog is
+    open or `sheet_held`, so over Settings or the Add repository sheet;
+    `show_settings` (`:143-218`) refuses while a dialog is open or the app
+    is quitting (`:150-152`), closes an Add repository sheet quietly first
+    (`:154-159`), and closes any other active sheet (`:176-180`).
+    `show_add_repository` (`add_sheet.rs:179-258`) refuses the same way
+    (`:186-188`) and also closes any active sheet (`:218-222`).
 23. **Cycle 05a's frame** (`D/view/frame.rs`, 05a Task 1): `Tone { Accent,
     Danger, Success }` (`Danger` and `Success` marked "Used from Cycle
     05b", `Accent` "Used from Task 8"); `Header { icon: Option<(IconName,
@@ -260,13 +303,22 @@ Planned against:
     Kit dialog's title slot and zeroes its padding; `body(content)`;
     `footer(footer, cx)`, drawn as the body's last child (C5a R-19);
     `sheet_header` for a Kit sheet's title slot; `sheet_footer` for its
-    footer slot ("Used from Task 4", the Add sheet).
+    footer slot ("Used from Task 4", the Add sheet). At the merge
+    (`frame.rs:59-254`): `Accent` and `sheet_footer` are in use and carry
+    no marker (`Accent` by the Unlock key dialog's tile,
+    `D/view/passphrase.rs:152`; `sheet_footer` by the Add sheet,
+    `D/view/add_repository/render.rs:272`); `Danger` and `Success` keep
+    `#[allow(dead_code)] // Used from Cycle 05b` (`frame.rs:65`, `:68`;
+    C5a Ruling 11). A sheet footer's Kit buttons use
+    `settings::kit_button::footer_kit` (`:70-90`), `wrapped_kit`'s
+    no-scroll form (`:50-65`, both `pub(crate)`).
 24. **Icons.** `icon_assets!` (`D/assets.rs:17-79`) holds `Archive`,
     `CircleCheck`, `ShieldCheck` and `CircleAlert`; not `CircleX` or
     `GitMerge`. `CircleX` loads anyway, from the Kit's default bundle
     through the `Assets` fallback (`D/assets.rs:103-108`); `GitMerge` must
     be listed. Both are in the Kit's `IconName`. `ICONS` in
-    `D/assets_tests.rs:8` lists 58 names (`every_item_view_icon_loads`).
+    `D/assets_tests.rs:8` lists 58 names (`every_item_view_icon_loads`);
+    57 at the merge, since C5a Ruling 27 removed `x`.
     The Kit has `Spinner` (`GC/spinner.rs:10`), already drawn by
     `D/view/item/pill.rs:234`.
 
@@ -300,8 +352,9 @@ base) to the follow-up library ticket `01M7FBRBN04QACSCZV6KX0WMR3`
 ### Guards, focus and the tests
 
 31. **Dialog-only guards.** About 50 production sites in `D/view` check
-    `window.has_active_dialog(cx)` without `has_active_sheet`. Most refuse
-    a person's action (Done, Preview, Review changes, Resume, open the
+    `window.has_active_dialog(cx)` without `has_active_sheet` (55 at the
+    merge, by Task 0's sweep; its execution ledger classifies each). Most
+    refuse a person's action (Done, Preview, Review changes, Resume, open the
     lifecycle dialog). Two open something by themselves:
     - the deferred Republish… (`D/view/operations/republish.rs:205-230`):
       a share entry's Stop and republish… (`outcomes.rs:270`, no dialog)
@@ -312,11 +365,13 @@ base) to the follow-up library ticket `01M7FBRBN04QACSCZV6KX0WMR3`
       `D/view/lifecycle/republish.rs:234-243`), and its wait goes with
       the dialog (`republish.rs:157-166`);
     - `apply_review` (`D/view/workspace/content.rs:127-148`), which opens
-      Drafts or an identity form at the next frame.
+      Drafts or an identity form at the next frame (`:133-158` at the
+      merge; it refuses whole while a dialog is open, `:134`).
 32. **Where a sheet's focus counts.** Root's sheet layer is drawn inside
     the Content region (`D/view/workspace/render.rs:114-131`), so focus in
     a sheet counts as the Content region's; Settings' keyboard tests
-    assert `Region::Content` (`D/view/keyboard_tests/settings.rs:25`). The
+    assert `Region::Content` (`D/view/keyboard_tests/settings.rs:25`; `:27`
+    at the merge). The
     keyboard walk's `in_dialog` (`D/view/keyboard_tests/drafts.rs:73-87`)
     asserts that no region holds focus, which a sheet fails.
     - The Kit's `sheet-host` wraps the title row, body and footer, tracks
@@ -671,7 +726,12 @@ scrim does not close it (decision 9).
   the rest of `applied` (close, focus, reopen). This is Cycle 05a's
   `add.waiting` and `run_waiting_add_close` (`add_sheet.rs:276-280`,
   `:339-350` on 05a's branch at `d7b39f62`; its G23), and the deferral
-  keeps the Workspace from being entered twice (R-26).
+  keeps the Workspace from being entered twice (R-26). At the merge:
+  `AddState::waiting: Option<AddClose>` (`add_sheet.rs:111-112`), set by
+  `add_closed` while a dialog is open (`:280-287`, notifying only when it
+  changes), and `run_waiting_add_close` (`:347-358`), called from the
+  render before `sync_sheet` (`render.rs:173`), which takes it once no
+  dialog is open and runs `add_closed` through `cx.defer_in`.
 - **Footer presses keep focus inside.** Each footer button's press
   focuses the sheet's own handle first, as `LifecycleDialog::on` does
   (`D/view/lifecycle/view.rs:121-142`); a footer control that goes by
@@ -681,14 +741,21 @@ scrim does not close it (decision 9).
 - **Focus moves that would land behind it.** `focus_content`
   (`D/view/workspace/content.rs:598-600`) and `apply_review`'s refocus
   (`:127-148`), which skip today while Settings is open and on 05a's
-  branch while `sheet_held`, skip while `workspace_sheet_open`; the moves that run through them (a discarded
+  branch while `sheet_held`, skip while `workspace_sheet_open` (at the
+  merge, `focus_content`, `content.rs:611-614`, skips while `sheet_held`;
+  `apply_review`'s refocus, `:140-147`, is taken and dropped while the
+  owner is Settings or Add repository, an owner match rather than
+  `sheet_held`, and its `landed_refocus`, `:149`, is dropped under any
+  active sheet); the moves that run through them (a discarded
   draft's `DraftDiscarded`, `close_with_draft`, `open_created`) leave
   focus where it is. `apply_review` keeps its Drafts and Settings
   requests until the sheet has closed, rather than losing them to a
   refusal (R-25).
 - **Something behind takes focus anyway:** `keep_focus_in_resolve`, run
   from the Workspace's render beside `keep_focus_in_settings` (05a's
-  `keep_focus_in_sheet`; `D/view/workspace/render.rs:173-182`), on
+  `keep_focus_in_sheet`; `D/view/workspace/render.rs:173-182`; at the
+  merge, `keep_focus_in_sheet` deferred under `if self.sheet_held(..)`,
+  `render.rs:175-183`), on
   `resolve_open`, moves focus back to the sheet's own handle; like
   C4's, it leaves a context menu over the sheet alone (R-11).
 
@@ -954,8 +1021,8 @@ unless named. Edits the sweep missed are pre-authorized by decision 11.
   `conflict-save` (decision 4).
 - **E-13** (Task 1) `desktop::assets::tests::every_item_view_icon_loads`
   (`D/assets_tests.rs:8`): `ICONS` gains `circle-x` and `git-merge` (58 to
-  60). `circle-x` already loads from the Kit's default bundle; listing it
-  is harmless.
+  60; 57 to 59 at the merge, fact 24). `circle-x` already loads from the
+  Kit's default bundle; listing it is harmless.
 - **E-14** the `lifecycle-ending` waits and reads need no edit (R-17).
   Listed so a reviewer does not look for them: the sweep found about 25.
 - **E-15** the a16 privacy tests need no edit (P10, fact 33).
@@ -1172,6 +1239,18 @@ Each: decision — why — cost if wrong.
   has merged.
 - **U-10:** Repair locally…'s waiting sheet (R-24) opens at the
   lifecycle dialog's first render with focus back inside it. Task 5.
+
+Checked in Task 0 (2026-11-15), against Cycle 05a as merged (`1f30d58c`,
+merged here at `1fbb19b3`): U-1. Every name above exists as named
+(`SheetOwner::AddRepository`, `content.rs:55`; `sheet_held`,
+`settings_sheet.rs:118`; `keep_focus_in_sheet`, `:347`;
+`sheet_keeps_lost_focus`, `:363`; `AddState::waiting`, `add_sheet.rs:112`;
+`run_waiting_add_close`, `:349`; `frame::sheet_footer` in use,
+`add_repository/render.rs:272`; `Tone::Accent` in use, `passphrase.rs:152`;
+`wrapped_kit`, `settings/kit_button.rs:50`; `show_add_repository`,
+`add_sheet.rs:179`); facts 20–24, 31, 32 and B3 are corrected where
+they differed. U-6, U-7 and U-9 were answered by Task 0's sweep, in the
+execution ledger.
 
 Checked in review round 1 (source review, 2026-11-15) and no longer
 open: U-2 (the Result editor's Escape wins over the Kit sheet's, as over
