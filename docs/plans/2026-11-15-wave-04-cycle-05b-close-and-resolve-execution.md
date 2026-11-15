@@ -23,7 +23,8 @@ serial (Cycle decision 13). Implementers: Task 0 on Opus, others per task.
 | 0 | complete | `1fbb19b3..5be247cf` and this ledger commit | clean (Sonnet reviewer) | with this commit |
 | 1 | complete | `eaf18125..30aaa015` | clean (Sonnet reviewer), 3 Minor deferred | with the ledger commit after it |
 | 2 | complete | `ec6a3110..25335162` | clean (Sonnet reviewer), 3 Minor deferred | with the ledger commit after it |
-| 3–9 | not started | | | |
+| 3 | complete | `1df89a09..9a9a6e30` | clean (Sonnet reviewer), 5 Minor deferred | with the ledger commit after it |
+| 4–9 | not started | | | |
 
 ## Base and merges
 
@@ -123,7 +124,7 @@ Each task's own text against itself:
   (Ask, with "Still running…" kept in the body). They are named by function
   in the task text. Cost if wrong: a reviewer queries an off-map file.
 - **Ruling O-3** (Task 8's helpers): Task 8 widens `window_text` and `ask`
-  to `pub(super)` where needed, recorded as E-16 and E-17 (visibility only,
+  to `pub(super)` where needed, recorded as E-19 and E-20 (visibility only,
   no assertion changes), in preference to copying them. Why: decision 11
   pre-authorizes edits with no assertion change, and a copy would drift.
   Cost if wrong: the edit is reverted and a copy used.
@@ -201,7 +202,8 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | E-15 | none | no edit needed (privacy sweeps keep reading the same surfaces) |
 | E-16 (Task 2) | 2 | Removed the dead `Heading::branch` field and the `branch: None,` line in `operations/resume.rs`, `conflict/entry.rs` and `conflict_tests.rs`. Why: `lifecycle-branch` goes (E-3), so the field is dead and clippy `-D warnings` fails on it. No assertion changed |
 | E-17 (Task 2) | 2 | `privacy_promote_tests::saved_document` made `pub(super)` so P1 reuses it. Visibility only |
-| E-18, E-19 (Ruling O-3) | 8 | reserved for `window_text` and `ask` visibility, if Task 8 needs them |
+| E-18 (Task 3) | 3 | `made_ready_tests.rs` compares `READY_TO_START` instead of the deleted `MADE_READY_LEAD` (Task 1 left both; retired here). The assertion is otherwise unchanged |
+| E-19, E-20 (Ruling O-3; renumbered from E-16, E-17 once Tasks 2 and 3 took those) | 8 | reserved for `window_text` and `ask` visibility, if Task 8 needs them |
 
 ## Tests run, by checkpoint
 
@@ -211,6 +213,8 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | Task 1, implementer | one `--exact` run of 12 names (P9 `conflict::copy_tests::close_and_resolve_copy_uses_the_vocabulary`, the `field_name` test, `assets::tests::every_item_view_icon_loads`, and the E-7, E-8, E-9, E-11 tests); fmt --check, check --features desktop, clippy -D warnings | 12 passed; static gates clean. P9 RED was a compile failure on the missing names (E0432), then green |
 | Task 2, implementer | exact names: P1 `lifecycle::stages_tests::each_stage_has_its_title`, E-3 `lifecycle::tests::the_header_names_item_repository_and_context`, E-4 `outcome_tests::stop_at_a_safe_point_names_completed_steps`, E-5 `outcome_tests::the_operation_entry_reopens_the_dialog`; fmt, check --features desktop, clippy | 4 passed, 1 each; static gates clean. P1 RED seen (assertion: the old title "Close ae-c10s3?" against "Close ticket") |
 | Task 2, orchestrator module run | one `cargo test` with filters `view::lifecycle::{tests, outcome_tests, outcome_canned_tests, privacy_tests, privacy_promote_tests, privacy_remote_tests, action_tests, save_first_tests, lock_tests, stages_tests}`, `view::keyboard_tests::lifecycle`, `view::frame::tests` | 52 passed, 0 failed, 95 s |
+| Task 3, implementer | exact names: P4 `lifecycle::stages_tests::steps_show_their_state_and_progress`, the two E-6 confirm tests, `outcome_tests::running_lights_each_step_from_its_stage`, `made_ready_tests::done_lists_made_ready_with_slug_and_title`; fmt, check --features desktop, clippy | P4 RED seen (empty notes where the stage words were expected), then 4 passed on the others; static gates clean |
+| Task 3, orchestrator module run | one `cargo test` over the 20 module filters the plan and Task 0 list for Task 3 (`view::lifecycle::{outcome_tests, outcome_canned_tests, made_ready_tests, made_ready_review_tests, confirm_tests, interruption_tests, no_record_tests, after_tests, privacy_tests, privacy_promote_tests, privacy_remote_tests, save_first_tests, lock_tests, steps_tests, stages_tests, tests}`, `view::operations::{resume::tests, republish::follow_tests}`, `view::keyboard_tests::lifecycle`, `view::conflict::lifecycle_resume_tests`) | 93 passed, 0 failed, 127 s. The privacy sweeps stayed green with the step notes now drawn on running and ended stages |
 | Task 1, orchestrator module run | one `cargo test` with the filters `desktop::model::activity::tests`, `view::conflict`, `view::keyboard_tests::conflict`, `view::activity::tests`, `view::needs_attention::tests`, `view::lifecycle::{credential_tests, tests, outcome_tests, outcome_canned_tests}`, `view::item::{posting::tests, edit_tests::review, share::tests}`, `desktop::assets::tests`, `desktop::model::{review::tests, conflict}` | 256 passed, 0 failed, 284 s |
 
 ## Task 1: copy and constants
@@ -231,6 +235,12 @@ Implementer: Sonnet. Commit `25335162` `feat(desktop): lifecycle stages in the f
 
 **Carried to Tasks 3 and 4.** `render` is wrapped in `frame::body(...)` for now, because `frame::dialog` zeroes the Kit padding. A2's final shape is `lifecycle-dialog` holding `frame::body(stage body)` and then `frame::footer` as its last child: Task 4 re-nests it (Task 3 moves the Git line per A6; it sits at the end of an ended body until then).
 
+## Task 3: lifecycle step rows and outcome box
+
+Implementer: Sonnet. Commit `9a9a6e30` `feat(desktop): lifecycle step rows and outcome box`. Reviewer: Sonnet, spec compliant, no Critical or Important findings. New `view/lifecycle/rows.rs` (211 lines): one drawer for every stage, keeping `("lifecycle-step-state", ix)` and today's words (R-2). `running.rs` 432 lines, `confirm.rs` 500. The outcome box has `lifecycle-ending` first; the message goes in the box only when no step failed (`Note::Failure` carries the rule in the type, so it is drawn once); the made-ready box says "Now ready to start". `MADE_READY_LEAD` and `STARTED` are gone. The confirm note reads "Closed by {name} · today" (or without "· today" once recorded) and no longer shows the closer's email (E-6, A4). Two ids added in production, unlabelled containers: `("lifecycle-step-row", ix)` and `lifecycle-box`, so P4 can say where `lifecycle-message` sits.
+
+**Test edits.** E-6 (two confirm tests) and E-18 (above). No assertion removed. **Carried to Task 4:** "Open ready tickets" stays in the button row until A7's table moves it; the interim `frame::body(...)` wrapper of `render` is Task 4's to re-nest; the Git line sits where A6 puts it.
+
 ## Deferred minor findings
 
 Task 0: minor (deferred): the design's U-1 closing paragraph says "Every name above exists as named" and then lists corrections; wording polish only.
@@ -240,3 +250,8 @@ Task 1: minor (deferred): `MADE_READY_LEAD` and `READY_TO_START` coexist until T
 Task 2: minor (deferred): P1 has no `NotSent` or `Dismissed` rows; both sit in the same `Shown::Message` arm as `Removed`, so a reordering that moved one out would go unseen. Task 3 or the final review may add a row.
 Task 2: minor (deferred): the interim `frame::body(...)` wrap of the whole render (carried to Task 4).
 Task 2: minor (deferred): the context branch is no longer shown on Blocked, Held, Saving or no-preview stages (design-mandated; for the review-ready summary).
+Task 3: minor (deferred): `rows.rs` draws the Running spinner at the Kit's default size where A3 says 16 px (appearance only; the report discloses it). Set the size if the Kit offers one.
+Task 3: minor (deferred): P4's `message_home` searches rows `(0..16)`; deriving the index from the path would be sturdier.
+Task 3: minor (deferred): the `split_once(" <")` fallback (no email in `closed_by`) has no test; E-6 covers the email form only.
+Task 3: minor (deferred): P4's failure and Waiting rows use a ticket; the document kind is covered only by the held-with-preview row. The drawer is shared.
+Task 3: minor (deferred): `running.rs`'s `ended()` is long, since it builds the box's `lines` vector.
