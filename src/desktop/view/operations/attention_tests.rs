@@ -30,6 +30,7 @@ use crate::desktop::{
         activity_support::{
             act, act_unsettled, button_focus, drawn, index_of, offered, row, rows, to_row,
         },
+        harness::MAKE_A_NEW_KEY,
         settings::Shown,
     },
 };
@@ -148,6 +149,10 @@ async fn attention_host(cx: &mut TestAppContext) {
 
     act(&rig.shell, &hold(&reason), APPROVE_HOST, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Hosts));
+    assert!(
+        rig.shell.holds_focus("hosts-check", cx),
+        "W-25 lands on Check host (Part D)"
+    );
 
     rig.backend.answer_poll(poll_done(&rig));
     rig.services.scheduler().update(cx, |scheduler, cx| {
@@ -230,24 +235,38 @@ async fn attention_actions_by_reason(cx: &mut TestAppContext) {
     for _ in 0..4 {
         rig.backend.answer_poll(poll_done(&rig));
     }
+    // Each lands on the control Part D names: the add-remote Name, and the
+    // key list, Make a new key with no key.
     let changes = [
         (
             1,
             Shown::Settings(SettingsPage::Remotes),
+            "remote-add-name",
             Scope::Repository {
                 root: rig.roots[1].clone(),
                 gone: false,
             },
         ),
-        (0, Shown::Settings(SettingsPage::Keys), Scope::Keys),
+        (
+            0,
+            Shown::Settings(SettingsPage::Keys),
+            "keys-make",
+            Scope::Keys,
+        ),
     ];
-    for (n, (entry, page, scope)) in changes.into_iter().enumerate() {
+    for (n, (entry, page, control, scope)) in changes.into_iter().enumerate() {
         let (label, reason) = match entry {
             0 => (CHOOSE_A_KEY, &reasons[0]),
             _ => (OPEN_REMOTE_SETTINGS, &reasons[1]),
         };
         act(&rig.shell, &hold(reason), label, cx);
         assert_eq!(shown(&rig, cx), page);
+        if page == Shown::Settings(SettingsPage::Keys) {
+            rig.shell.keys_landed(cx);
+        }
+        assert!(rig.shell.holds_focus(control, cx), "{label}: {control}");
+        // Settings is a sheet: it closes before the next row's action.
+        rig.shell.keys("escape", cx);
         assert_eq!(rig.checks(cx).len(), n, "nothing is sent before the change");
         rig.services.scheduler().update(cx, |scheduler, cx| {
             scheduler.heard(vec![Heard::Reconfiguration(Moment::Succeeded, scope)], cx)
@@ -432,12 +451,23 @@ async fn attention_actions_hit(cx: &mut TestAppContext) {
 
     press(UNLOCK, cx);
     assert_eq!(rig.checks(cx), [std::path::PathBuf::from(&rig.roots[0])]);
+    // Settings is a sheet, whose scrim would take the next row's click:
+    // Escape closes it between them.
     press(CHOOSE_A_KEY, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Keys));
+    assert!(
+        rig.shell.holds_keys_control(MAKE_A_NEW_KEY, cx),
+        "W-23, no key"
+    );
+    rig.shell.keys("escape", cx);
     press(APPROVE_HOST, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Hosts));
+    assert!(rig.shell.holds_focus("hosts-check", cx), "W-25");
+    rig.shell.keys("escape", cx);
     press(OPEN_REMOTE_SETTINGS, cx);
     assert_eq!(shown(&rig, cx), Shown::Settings(SettingsPage::Remotes));
+    assert!(rig.shell.holds_focus("remote-add-name", cx), "W-24");
+    rig.shell.keys("escape", cx);
     press(RESUME_CHECKING, cx);
     assert_eq!(rig.backend.resumed(), [rig.roots[4].clone()]);
 }

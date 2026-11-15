@@ -629,6 +629,10 @@ fn the_identity_recovery_opens_the_form_for_its_root(cx: &mut TestAppContext) {
     assert!(shell.present("identity-submit", cx));
     let name = control_focus(&shell, "identity-name", cx);
     assert!(shell.frame(cx, |window, cx| name.contains_focused(window, cx)));
+    assert!(
+        shell.holds_focus("identity-name", cx),
+        "W-28 lands on the identity Name, after two draws (Part D)"
+    );
 }
 
 /// A repository Git finds no identity for says so.
@@ -914,6 +918,14 @@ async fn a_release_that_failed_during_removal_completes_once_retry_stores_the_te
     assert!(offered(&shell, &entry, RETRY, cx).is_some_and(|offer| offer.enabled));
 
     fs::set_permissions(&folder, fs::Permissions::from_mode(mode)).unwrap();
+    // Settings is a sheet: it closes before Activity's Retry.
+    shell.keys("escape", cx);
+    assert_eq!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, cx| workspace.settings_shown(cx)),
+        crate::desktop::view::settings::Shown::Tabs
+    );
     act(&shell, &entry, RETRY, cx);
     shell.run(cx);
     assert!(!session_live(&shell, draft, cx));

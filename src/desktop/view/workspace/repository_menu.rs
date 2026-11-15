@@ -16,7 +16,7 @@ use crate::desktop::{
     keys::{RepositoryMenuChoice, Shown},
     model::{
         repository_state::{MenuChoice, RowAction, more_items},
-        stamp::{RepoKey, SettingsPage},
+        stamp::RepoKey,
     },
     view::{
         item::open_folder,
@@ -226,9 +226,7 @@ impl Workspace {
                 self.share_main(root, remote, window, cx);
             }
             MenuChoice::OpenFolder => open_folder(Path::new(&root), cx),
-            MenuChoice::Settings => {
-                self.open_settings_on(SettingsPage::Repositories, PathBuf::from(root), window, cx)
-            }
+            MenuChoice::Settings => self.manage_in_settings(PathBuf::from(root), window, cx),
             MenuChoice::Remove => self.remove_repository(root, opened_from, window, cx),
         }
     }
@@ -250,9 +248,7 @@ impl Workspace {
             }
             RowAction::Attend(action, reason) => self.attend(*action, reason, &root, window, cx),
             RowAction::CheckNow | RowAction::RetryNow => self.menu_check_now(&root, cx),
-            RowAction::Settings => {
-                self.open_settings_on(SettingsPage::Repositories, PathBuf::from(root), window, cx)
-            }
+            RowAction::Settings => self.manage_in_settings(PathBuf::from(root), window, cx),
             RowAction::SetUpSharing => self.open_remotes(PathBuf::from(root), window, cx),
         }
     }

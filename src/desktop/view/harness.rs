@@ -21,6 +21,7 @@ use manyhands::{
 
 use super::{
     editor::host::EditorHost,
+    settings::RepositoriesPage,
     workspace::{Region, Workspace},
 };
 use crate::desktop::{
@@ -32,7 +33,7 @@ use crate::desktop::{
     },
     open_test_window_over,
     services::{
-        Backend,
+        BUSY_RETRY_DELAYS, Backend,
         prompts::{PromptReply, PromptRequest},
         requests::{DesktopRequest, DesktopRequestId, Intent},
     },
@@ -45,6 +46,13 @@ pub(crate) use crate::desktop::test_support::WAIT;
 
 /// How often a wait looks again while the worker runs.
 const POLL: Duration = Duration::from_millis(10);
+
+/// Make a new key's own Kit button, in its wrapper `keys-make`: where the
+/// key list lands with no usable key (R-22), read by `holds_control`.
+pub(crate) const MAKE_A_NEW_KEY: (&str, usize) = ("keys-make", 0);
+/// Check host's own Kit button, in its wrapper `hosts-check` (R-53), read
+/// by `holds_control`.
+pub(crate) const CHECK_HOST: &str = "hosts-check-button";
 
 /// Waits, with the worker running, until `done` holds of `entity`, then
 /// lets the reads that started finish. Panics after `WAIT` of real time.
@@ -378,6 +386,66 @@ impl Shell {
         })
     }
 
+    /// Whether the element `id`, or something in it, holds focus, read
+    /// after two draws with what each starts run after it: where a way into
+    /// Settings landed, read as Wave 04 Cycle 04's design A6 reads a focus,
+    /// so a rule that moves it on the first draw has had its frame.
+    pub(crate) fn holds_focus(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
+        for _ in 0..2 {
+            self.frame(cx, |_, _| ());
+            self.run(cx);
+        }
+        let id = id.into();
+        self.frame(cx, |window, _| {
+            window.try_find(id).and_then(|element| element.focused()) == Some(true)
+        })
+    }
+
+    /// Lets the Keys page's reads land: draws once, so the page has started
+    /// them, then runs them. A read answered `busy` waits out its retry
+    /// delay on the test clock, which `run` never moves, so each delay is
+    /// advanced here: no real time passes (E-35). A read a test holds does
+    /// not land.
+    pub(crate) fn keys_landed(&self, cx: &mut TestAppContext) {
+        self.frame(cx, |_, _| ());
+        self.run(cx);
+        for delay in BUSY_RETRY_DELAYS {
+            cx.executor().advance_clock(delay);
+            self.run(cx);
+        }
+    }
+
+    /// `holds_focus`, stricter: the element `id` is itself the control
+    /// focus is on, not a wrapper around it. A Kit button draws its focus
+    /// ring, and takes Enter, only while its own handle is focused, so
+    /// focus on its wrapper shows nothing and Enter does nothing: for a Kit
+    /// button, `id` is the button's own ID (`MAKE_A_NEW_KEY`, `CHECK_HOST`),
+    /// not its wrapper's. After the same two-draw read, `id` holds focus,
+    /// it is a control (it has a role), and the focused handle is a tab
+    /// stop, which a wrapper's is not.
+    pub(crate) fn holds_control(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
+        let id = id.into();
+        self.holds_focus(id.clone(), cx)
+            && self.frame(cx, |window, cx| {
+                let tab_stop = window.focused(cx).is_some_and(|focused| focused.tab_stop);
+                tab_stop
+                    && window
+                        .try_find(id)
+                        .is_some_and(|control| control.role().is_some())
+            })
+    }
+
+    /// `holds_control` for where a Keys route landed (R-22): the control the
+    /// key list gives, read once the keys' reads have landed.
+    pub(crate) fn holds_keys_control(
+        &self,
+        id: impl Into<ElementId>,
+        cx: &mut TestAppContext,
+    ) -> bool {
+        self.keys_landed(cx);
+        self.holds_control(id, cx)
+    }
+
     /// Whether the element `id` is drawn.
     pub(crate) fn present(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
         let id = id.into();
@@ -410,6 +478,26 @@ impl Shell {
         (0..)
             .map_while(|index| self.label((name, index as usize), cx))
             .collect()
+    }
+
+    /// Manage on `root`'s row of the Repositories page, which chooses it
+    /// for the Sharing section and Trusted servers (Cycle 04, R-15).
+    pub(crate) fn manage(&self, root: &Path, cx: &mut TestAppContext) {
+        let rows = self.rows("managed-row", cx);
+        let ix = rows
+            .iter()
+            .position(|row| *row == key(root))
+            .unwrap_or_else(|| panic!("{} listed in {rows:?}", key(root)));
+        self.click(("managed-choose", ix), cx);
+    }
+
+    /// The Repositories page, which Settings has made.
+    pub(crate) fn repositories_page(&self, cx: &mut TestAppContext) -> Entity<RepositoriesPage> {
+        let host = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.settings().clone());
+        host.read_with(cx, |host, _| host.made_repositories())
+            .expect("the Repositories page is made")
     }
 
     /// Selects the repository at `root` and lets its reads finish.

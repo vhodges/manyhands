@@ -1,9 +1,10 @@
 //! One command per settings page, by keyboard alone: add an existing
 //! repository by typing its path, add a remote, generate a key, and
 //! check a host to its typed failure (no desktop test reaches a network,
-//! ruling R11).
+//! ruling R11); and every key action of Sharing & keys (Wave 04 Cycle 04,
+//! P19).
 
-use gpui_kit::TestAppContext;
+use gpui_kit::{ElementId, TestAppContext};
 use manyhands::results::{Outcome, ResultCode};
 
 use super::Walk;
@@ -78,13 +79,21 @@ async fn add_an_existing_repository_by_keyboard(cx: &mut TestAppContext) {
     walk.region(Region::Content, cx);
 }
 
-/// Remotes: a name and a URL typed, Add pressed: the remote is added to
-/// the selected repository.
+/// Remotes: the repository chosen by its Manage on the Repositories page,
+/// then a name and a URL typed under Sharing, Add pressed: the remote is
+/// added to the chosen repository (R-15).
 #[gpui_kit::test]
 async fn add_a_remote_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
-    let walk = selected(Fixture::new(), cx);
-    open_page(&walk, 1, cx);
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.refresh(&a);
+    let walk = Walk::over(Shell::open(fixture, cx), a);
+    open_page(&walk, 0, cx);
+    let manage = ("managed-choose", 0usize);
+    walk.tab_to("tab", manage, cx);
+    walk.on(manage, Region::Content, cx);
+    walk.enter(cx);
     walk.type_into("remote-add-name", "backup", Region::Content, cx);
     walk.type_into(
         "remote-add-url",
@@ -101,13 +110,14 @@ async fn add_a_remote_by_keyboard(cx: &mut TestAppContext) {
     walk.region(Region::Content, cx);
 }
 
-/// Shared SSH keys: a label typed and Generate pressed, with no
-/// passphrase: the key is generated and listed.
+/// Sharing & keys: Make a new key pressed, a label typed and Generate
+/// pressed, with no passphrase: the key is generated and listed.
 #[gpui_kit::test]
 async fn generate_a_key_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let walk = selected(Fixture::new(), cx);
-    open_page(&walk, 2, cx);
+    open_page(&walk, 1, cx);
+    press_by_keys(&walk, "keys-make", cx);
     walk.type_into("key-generate-label", "keyboard", Region::Content, cx);
     submit(&walk, "key-generate-submit", cx);
     let ended = walk
@@ -122,6 +132,127 @@ async fn generate_a_key_by_keyboard(cx: &mut TestAppContext) {
     walk.region(Region::Content, cx);
 }
 
+/// Tab to the control `id` and press Enter, as a keyboard does.
+fn press_by_keys(walk: &Walk, id: impl Into<ElementId>, cx: &mut TestAppContext) {
+    let id = id.into();
+    walk.tab_to("tab", id.clone(), cx);
+    walk.on(id, Region::Content, cx);
+    walk.enter(cx);
+}
+
+/// P19 (fact 45; Part H; design C2): every key action of Sharing & keys by
+/// keys alone. Space on a key's radio puts it in use, and Enter on Stop
+/// using this key takes it out; Make a new key shows the Generate form, and
+/// a key is generated; Use a key I already have… shows the Import form, and
+/// a key is imported; the trash removes the imported key from Manyhands,
+/// its files kept; Delete key file… opens its confirmation, and Enter
+/// deletes the file; Copy public key copies exactly the public key text.
+#[gpui_kit::test]
+async fn sharing_and_keys_by_keyboard(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let one = fixture.generate_key("one");
+    let two = fixture.generate_key("two");
+    let a = fixture.create_repository("a");
+    let (private, public) = fixture.external_key_files("mine");
+    let walk = Walk::over(Shell::open(fixture, cx), a);
+    open_page(&walk, 1, cx);
+    walk.until_drawn(("key-radio", 1usize), cx).await;
+
+    // Choose a key: Space on its radio.
+    walk.tab_to("tab", ("key-radio", 1usize), cx);
+    walk.on(("key-radio", 1usize), Region::Content, cx);
+    walk.shell.press("space", cx);
+    let ended = walk
+        .ended(
+            |intent| matches!(intent, Intent::KeySelect { id } if *id == two),
+            cx,
+        )
+        .await;
+    assert_eq!(ended, Some((Outcome::Success, ResultCode::Ok)), "chosen");
+    walk.until_drawn(("key-selected", 1usize), cx).await;
+
+    // Stop using it.
+    press_by_keys(&walk, "keys-stop", cx);
+    let ended = walk
+        .ended(|intent| matches!(intent, Intent::KeyClear), cx)
+        .await;
+    assert_eq!(ended, Some((Outcome::Success, ResultCode::Ok)), "stopped");
+
+    // Make a new key, and generate.
+    press_by_keys(&walk, "keys-make", cx);
+    walk.type_into("key-generate-label", "keyboard", Region::Content, cx);
+    submit(&walk, "key-generate-submit", cx);
+    let ended = walk
+        .ended(|intent| matches!(intent, Intent::KeyGenerate { .. }), cx)
+        .await;
+    assert_eq!(ended, Some((Outcome::Success, ResultCode::Ok)), "generated");
+    walk.until_drawn(("key-label", 2usize), cx).await;
+
+    // Use a key I already have…, and import.
+    press_by_keys(&walk, "keys-use-existing", cx);
+    walk.type_into("key-import-label", "mine", Region::Content, cx);
+    walk.type_into(
+        "key-import-private",
+        private.to_str().unwrap(),
+        Region::Content,
+        cx,
+    );
+    walk.type_into(
+        "key-import-public",
+        public.to_str().unwrap(),
+        Region::Content,
+        cx,
+    );
+    submit(&walk, "key-import-submit", cx);
+    let ended = walk
+        .ended(|intent| matches!(intent, Intent::KeyImport { .. }), cx)
+        .await;
+    assert_eq!(ended, Some((Outcome::Success, ResultCode::Ok)), "imported");
+    walk.until_drawn(("key-label", 3usize), cx).await;
+
+    // Remove the imported key from Manyhands: its files stay.
+    press_by_keys(&walk, ("key-remove", 3usize), cx);
+    let ended = walk
+        .ended(|intent| matches!(intent, Intent::KeyRemove { .. }), cx)
+        .await;
+    assert_eq!(ended, Some((Outcome::Success, ResultCode::Ok)), "removed");
+    assert!(private.exists() && public.exists(), "the files stay");
+
+    // Delete key file… of `one`, through its confirmation.
+    walk.until_drawn(("key-label", 2usize), cx).await;
+    press_by_keys(&walk, ("key-delete-file", 0usize), cx);
+    assert!(walk.shell.present("confirm-ok", cx), "the confirmation");
+    walk.keys("enter", cx);
+    let ended = walk
+        .ended(
+            |intent| matches!(intent, Intent::KeyDelete { id } if *id == one),
+            cx,
+        )
+        .await;
+    assert_eq!(ended, Some((Outcome::Success, ResultCode::Ok)), "deleted");
+
+    // Copy public key of `two`, now the first row.
+    walk.shell
+        .until_drawn(cx, "two is first", |shell, cx| {
+            shell.label(("key-label", 0usize), cx).as_deref() == Some("two")
+        })
+        .await;
+    let wanted = walk
+        .shell
+        .fixture
+        .service()
+        .public_key_text(two)
+        .unwrap()
+        .public_key;
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("before".to_owned()));
+    press_by_keys(&walk, ("key-copy", 0usize), cx);
+    walk.until_drawn("keys-copied", cx).await;
+    let copied = cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some(wanted.as_str()), "the public key");
+    walk.region(Region::Content, cx);
+}
+
 /// Hosts: Check host on a repository that publishes over SSH, pressed by
 /// Enter, ends in its typed failure: no transport here.
 #[gpui_kit::test]
@@ -133,7 +264,7 @@ async fn check_a_host_by_keyboard(cx: &mut TestAppContext) {
     fixture.refresh(&a);
     let walk = Walk::over(Shell::open(fixture, cx), a);
     walk.select_a_repository(cx);
-    open_page(&walk, 3, cx);
+    open_page(&walk, 1, cx);
     submit(&walk, "hosts-check", cx);
     walk.until_drawn("hosts-observation-code", cx).await;
     let code = walk.shell.label("hosts-observation-code", cx).unwrap();
@@ -168,7 +299,7 @@ async fn checking_for_updates_by_keyboard(cx: &mut TestAppContext) {
     });
     let walk = Walk::over(shell, a.clone());
     walk.select_a_repository(cx);
-    open_page(&walk, 4, cx);
+    open_page(&walk, 2, cx);
     walk.until_drawn(("polling-name", 0usize), cx).await;
 
     let sent = |pick: fn(&Intent) -> bool, cx: &mut TestAppContext| {

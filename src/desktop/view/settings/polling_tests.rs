@@ -23,6 +23,7 @@ use crate::desktop::{
         requests::{Intent, Lane},
     },
     view::{
+        harness::key,
         settings::{Shown, page_title},
         workspace::Region,
     },
@@ -38,7 +39,7 @@ const INTRO: &str = "Manyhands checks your shared copies for other people's chan
 /// model (A4): a repository that checked just now, one needing its key
 /// unlocked, one that cannot be reached, one waiting on another operation,
 /// and one with no shared copy. The page's intro is C2's, word for word, and
-/// the page is the fifth of the list.
+/// the page is the third entry of the menu.
 #[gpui_kit::test]
 async fn settings_polling_rows(cx: &mut TestAppContext) {
     let rig = Rig::new(
@@ -66,7 +67,7 @@ async fn settings_polling_rows(cx: &mut TestAppContext) {
 
     assert_eq!(rig.shell.label("polling-intro", cx).as_deref(), Some(INTRO));
     assert_eq!(
-        rig.shell.label(("settings-page", 4usize), cx).as_deref(),
+        rig.shell.label(("settings-page", 2usize), cx).as_deref(),
         Some(page_title(SettingsPage::Polling))
     );
     assert_eq!(page_title(SettingsPage::Polling), "Checking for updates");
@@ -335,12 +336,15 @@ async fn settings_polling_states(cx: &mut TestAppContext) {
         Shown::Settings(SettingsPage::Remotes)
     );
     assert!(rig.shell.present("settings-remotes", cx));
-    let chosen = rig.shell.rows("remotes-registration", cx);
-    let ix = chosen
-        .iter()
-        .position(|root| *root == rig.key(0))
-        .expect("the repository is listed");
-    assert!(rig.shell.present(("remotes-chosen", ix), cx), "worked on");
+    let chosen = rig
+        .shell
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.settings_chosen(cx));
+    assert_eq!(chosen.as_deref().map(key), Some(rig.key(0)), "worked on");
+    assert!(
+        rig.shell.holds_focus("remote-add-name", cx),
+        "W-31 lands on the add-remote Name (Part D)"
+    );
 }
 
 /// A repository waiting for an unfinished operation links to its pending

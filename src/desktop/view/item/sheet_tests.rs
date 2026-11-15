@@ -42,7 +42,6 @@ use crate::desktop::{
     view::{
         footer::Control,
         harness::{Shell, key},
-        settings::Shown,
         tickets::{LIFECYCLE_CLOSED, LIFECYCLE_OPEN},
         workspace::QuitPhase,
     },
@@ -668,9 +667,10 @@ fn escape_done_and_close_return_focus_to_the_chip(cx: &mut TestAppContext) {
 }
 
 /// R-60: while the sheet is open, no workspace key acts behind it: the
-/// region keys, Find, the tab keys, Refresh and Rebuild, Settings,
-/// Drafts, the dock keys and the page keys leave the sheet open and
-/// focused, the tabs as they were, and submit nothing. Documents is off and
+/// region keys, Find, the tab keys, Refresh and Rebuild, Drafts, the dock
+/// keys and the page keys leave the sheet open and focused, the tabs as
+/// they were, and submit nothing. (Settings' key opens Settings in the
+/// sheet's place: `settings_sheet::tests`.) Documents is off and
 /// the bottom dock closed, so a region key or a dock key that acted would
 /// reveal a panel or toggle a dock: the layout is unchanged after each key.
 #[gpui_kit::test]
@@ -713,7 +713,6 @@ fn no_workspace_key_acts_behind_the_sheet(cx: &mut TestAppContext) {
         "secondary-w",
         "secondary-r",
         "secondary-shift-r",
-        "secondary-,",
         "secondary-shift-d",
         "secondary-b",
         "secondary-alt-b",
@@ -729,14 +728,9 @@ fn no_workspace_key_acts_behind_the_sheet(cx: &mut TestAppContext) {
         assert!(focused(&shell, "sheet-status", cx), "{key}: focus stays");
         assert_eq!(opened(&shell, cx), Some(ticket(&root, MAIN)), "{key}");
         assert_eq!(tabs(&shell, cx), 2, "{key}");
-        let (settings, drafts, now) = shell.workspace.read_with(cx, |workspace, cx| {
-            (
-                workspace.settings_shown(cx),
-                workspace.drafts_shown(cx),
-                workspace.item_offset(cx),
-            )
+        let (drafts, now) = shell.workspace.read_with(cx, |workspace, cx| {
+            (workspace.drafts_shown(cx), workspace.item_offset(cx))
         });
-        assert_eq!(settings, Shown::Tabs, "{key}");
         assert!(!drafts, "{key}");
         assert_eq!(now, offset, "{key}");
         assert_eq!(shell.requests(cx, |_| true).len(), requests, "{key}");

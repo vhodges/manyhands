@@ -1,8 +1,8 @@
 //! The item tab's frame (R-47), over a real repository: the tab strip and
 //! a header placeholder above the item's own scroll region, which holds
 //! the page and then the discussion. The page keys scroll the region while
-//! Settings keep D1's single column; the region shows the Kit's scrollbar;
-//! the discussion's Back to top returns to the page.
+//! Settings, a sheet, scroll their own; the region shows the Kit's
+//! scrollbar; the discussion's Back to top returns to the page.
 
 use gpui_kit::{
     Bounds, Modifiers, MouseButton, Pixels, TestAppContext, point, px, test::TestWindowExt,
@@ -26,6 +26,11 @@ const SHORT_COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE1";
 const COLUMN: f32 = 760.;
 /// A window short enough that `LONG` does not fit its region.
 const SHORT_WINDOW: f32 = 700.;
+/// A window short enough that Settings' Repositories page runs below the
+/// sheet's body's fold too: the sheet is as tall as the window. Activity is
+/// made short in it, so the item area keeps room for the region.
+const SETTINGS_WINDOW: f32 = 400.;
+const SETTINGS_ACTIVITY: f32 = 100.;
 /// The harness's own window height.
 const TALL_WINDOW: f32 = 1400.;
 
@@ -75,6 +80,14 @@ fn column_offset(shell: &Shell, cx: &mut TestAppContext) -> Pixels {
     shell
         .workspace
         .read_with(cx, |workspace, _| workspace.content_offset())
+}
+
+/// The Settings sheet's own scroll's offset, after a frame.
+fn settings_offset(shell: &Shell, cx: &mut TestAppContext) -> Pixels {
+    shell.frame(cx, |_, _| ());
+    shell
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.settings_offset(cx))
 }
 
 /// The bounds of each of `ids`, from one frame.
@@ -141,12 +154,13 @@ fn the_tab_strip_and_header_stay_in_place_while_the_page_scrolls(cx: &mut TestAp
 }
 
 /// While an item tab is shown, PageDown, PageUp, End and Home move its
-/// scroll region and not the content region's column. Settings keep
-/// D1's single column, which the same keys move, and the item keeps its
+/// scroll region and not the content region's column. Settings, a sheet,
+/// scroll their own body, which the same keys move, and the item keeps its
 /// place behind them.
 #[gpui_kit::test]
 fn page_keys_scroll_the_items_region_and_settings_keep_theirs(cx: &mut TestAppContext) {
-    let shell = shell(SHORT_WINDOW, LONG, cx);
+    let shell = shell(SETTINGS_WINDOW, LONG, cx);
+    shell.set_activity_height(SETTINGS_ACTIVITY, cx);
     assert_eq!(offset(&shell, cx), px(0.));
     shell.keys("pagedown", cx);
     let paged = offset(&shell, cx);
@@ -163,18 +177,19 @@ fn page_keys_scroll_the_items_region_and_settings_keep_theirs(cx: &mut TestAppCo
     assert_eq!(offset(&shell, cx), paged);
 
     shell.keys("secondary-,", cx);
-    assert_eq!(column_offset(&shell, cx), px(0.));
+    assert_eq!(settings_offset(&shell, cx), px(0.));
     shell.keys("pagedown", cx);
-    let settings = column_offset(&shell, cx);
+    let settings = settings_offset(&shell, cx);
     assert!(
         settings < px(0.),
         "PageDown scrolled Settings: {settings:?}"
     );
+    assert_eq!(column_offset(&shell, cx), px(0.), "the column did not move");
     assert_eq!(offset(&shell, cx), paged, "the item's region did not move");
     shell.keys("home", cx);
-    assert_eq!(column_offset(&shell, cx), px(0.));
+    assert_eq!(settings_offset(&shell, cx), px(0.));
 
-    shell.click("settings-close", cx);
+    shell.keys("escape", cx);
     assert_eq!(offset(&shell, cx), paged, "the item kept its place");
 }
 

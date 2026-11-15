@@ -49,7 +49,6 @@ use std::{
     path::Path,
 };
 
-pub(crate) const SHOWN: &str = "Shown";
 pub(crate) const CLOSE_TAB: &str = "Close";
 pub(crate) const OPEN_TABS: &str = "Open tabs";
 pub(crate) const UNSAVED_TOOLTIP: &str = "Unsaved changes";

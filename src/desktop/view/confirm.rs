@@ -26,6 +26,13 @@
 //! dialog (Task 25 fix 1, M5). The dialog tells an opener that follows it
 //! (`confirm_followed`, `prepare_again_followed`) what Confirm sent, and
 //! what a prepare that gave no preview answered (`Followed`).
+//!
+//! The dialog is drawn on the common frame (Wave 04 Cycle 05a design A1,
+//! A3): the command's label in the header, in the Kit's title slot; the
+//! command again (`confirm-command`), the preview or the answer in the
+//! body; and the footer, drawn by this view as its last child, with Cancel
+//! or Close first and the action last (R-1). Enter, Escape, the focus on
+//! open and where focus goes back are as before.
 
 use std::rc::Rc;
 
@@ -37,7 +44,7 @@ use gpui_kit::{
         ActiveTheme, Disableable, WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm,
-        h_flex, v_flex,
+        v_flex,
     },
     div,
 };
@@ -55,7 +62,10 @@ use crate::desktop::{
         KEY_STORE_UNAVAILABLE, Services,
         requests::{DesktopRequestId, Intent, Lane, NotBuilt, RequestState},
     },
-    view::quit::unkept_tabs,
+    view::{
+        frame::{self, Footer, Header},
+        quit::unkept_tabs,
+    },
 };
 
 pub(crate) const CONFIRM: &str = "Confirm";
@@ -68,7 +78,7 @@ pub(crate) const SUBMITTED: &str = "Submitted";
 pub(crate) const NOT_QUEUED: &str = "The request cannot be submitted again now: it is still queued or running, or Manyhands is quitting.";
 pub(crate) const SECRET_REQUIRED: &str = "The passphrase is needed again.";
 pub(crate) const REQUESTED_KEY: &str = "Requested key";
-pub(crate) const PINNED_KEY: &str = "Pinned key";
+pub(crate) const PINNED_KEY: &str = "Trusted key";
 /// A repository removal's preview, which says it changes no file and
 /// nothing Git holds, says so in words too (design, Repositories).
 pub(crate) const FILES_REMAIN: &str = "Local files remain: only the registration is removed. Nothing in the folder or in Git is changed.";
@@ -77,6 +87,20 @@ pub(crate) const DRAFTS_REMAIN: &str = "Drafts of this repository's items stay i
 /// A repair's preview that adopts the file: its ID is the source's
 /// (design, Part E: Repair).
 pub(crate) const NEW_ID: &str = "A new ID will be assigned";
+
+/// The header's title, the command's label.
+const TITLE_ID: &str = "confirm-title";
+
+/// The dialog's header: the command's label, its title before the frame
+/// (design A3). It gains no text, tile or description.
+fn header(title: &'static str) -> Header {
+    Header {
+        icon: None,
+        title: title.into(),
+        description: None,
+        ids: (TITLE_ID, None),
+    }
+}
 
 /// What the dialog tells an opener that follows it (`confirm_followed`,
 /// `prepare_again_followed`).
@@ -237,10 +261,10 @@ fn open(
         )
     });
     let opened = dialog.clone();
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let confirming = dialog.clone();
         let origin = origin.clone();
-        base.title(title)
+        frame::dialog(base, header(title), cx)
             .close_button(false)
             .overlay_closable(false)
             .child(dialog.clone())
@@ -902,23 +926,21 @@ impl Render for ConfirmDialog {
             let _ = entity.update(cx, |dialog, cx| dialog.retry(cx));
         };
         let mut body = v_flex()
-            .id("confirm-dialog")
-            .test_support()
             .gap_2()
             .child(text("confirm-command", self.intent.label()).text_sm());
-        let mut buttons = h_flex().gap_2();
+        // Cancel, or Close, first and the action last (design A3, R-1).
+        let mut buttons = Vec::new();
         match &self.phase {
             Phase::Preparing => {
                 body = body.child(text("confirm-state", PREPARING).text_sm());
-                buttons = buttons
-                    .child(Self::button(
-                        "confirm-ok",
-                        CONFIRM,
-                        true,
-                        true,
-                        |_, _, _| {},
-                    ))
-                    .child(Self::button("confirm-cancel", CANCEL, false, false, cancel));
+                buttons.push(Self::button("confirm-cancel", CANCEL, false, false, cancel));
+                buttons.push(Self::button(
+                    "confirm-ok",
+                    CONFIRM,
+                    true,
+                    true,
+                    |_, _, _| {},
+                ));
             }
             Phase::Ready | Phase::Submitted => {
                 let submitted = matches!(self.phase, Phase::Submitted);
@@ -927,27 +949,25 @@ impl Render for ConfirmDialog {
                 if submitted {
                     body = body.child(text("confirm-state", SUBMITTED).text_sm());
                 }
-                buttons = buttons
-                    .child(Self::button(
-                        "confirm-ok",
-                        CONFIRM,
-                        true,
-                        submitted,
-                        confirm,
-                    ))
-                    .child(Self::button("confirm-cancel", CANCEL, false, false, cancel));
+                buttons.push(Self::button("confirm-cancel", CANCEL, false, false, cancel));
+                buttons.push(Self::button(
+                    "confirm-ok",
+                    CONFIRM,
+                    true,
+                    submitted,
+                    confirm,
+                ));
             }
             Phase::Stale { code, message } => {
                 body = body.child(Self::answer(*code, message, cx));
-                buttons = buttons
-                    .child(Self::button(
-                        "confirm-prepare-again",
-                        PREPARE_AGAIN,
-                        true,
-                        false,
-                        again,
-                    ))
-                    .child(Self::button("confirm-cancel", CANCEL, false, false, cancel));
+                buttons.push(Self::button("confirm-cancel", CANCEL, false, false, cancel));
+                buttons.push(Self::button(
+                    "confirm-prepare-again",
+                    PREPARE_AGAIN,
+                    true,
+                    false,
+                    again,
+                ));
             }
             Phase::Answered {
                 code,
@@ -976,21 +996,30 @@ impl Render for ConfirmDialog {
                             ),
                         ));
                 }
+                buttons.push(Self::button("confirm-cancel", CLOSE, false, false, cancel));
                 // Still busy after every retry: Retry prepares again.
                 if *code == ResultCode::Busy {
-                    buttons =
-                        buttons.child(Self::button("confirm-retry", RETRY, true, false, retry));
+                    buttons.push(Self::button("confirm-retry", RETRY, true, false, retry));
                 }
-                buttons =
-                    buttons.child(Self::button("confirm-cancel", CLOSE, false, false, cancel));
             }
             Phase::Message(why) => {
                 body = body.child(text("confirm-message", *why).text_sm());
-                buttons =
-                    buttons.child(Self::button("confirm-cancel", CLOSE, false, false, cancel));
+                buttons.push(Self::button("confirm-cancel", CLOSE, false, false, cancel));
             }
         }
-        body.child(buttons)
+        // The footer is the last child of the body element, which privacy
+        // sweeps and focus reads find the buttons inside (R-19).
+        v_flex()
+            .id("confirm-dialog")
+            .test_support()
+            .child(frame::body(body))
+            .child(frame::footer(
+                Footer {
+                    hint: None,
+                    buttons,
+                },
+                cx,
+            ))
     }
 }
 

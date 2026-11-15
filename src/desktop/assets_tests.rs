@@ -5,7 +5,7 @@ use gpui_kit::AssetSource;
 use super::{DesktopAssets, icon_path};
 
 /// The item view's Lucide icons (design R-52).
-const ICONS: [&str; 53] = [
+const ICONS: [&str; 58] = [
     "folder-git-2",
     "ticket",
     "file-text",
@@ -60,6 +60,13 @@ const ICONS: [&str; 53] = [
     "wifi-off",
     "info",
     "loader-circle",
+    // The Add repository sheet and the Unlock key dialog (Wave 04 Cycle 05a,
+    // fact 40, E-14).
+    "folder-input",
+    "key-round",
+    "git-branch",
+    "cloud",
+    "x",
 ];
 
 #[test]
