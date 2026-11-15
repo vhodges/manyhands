@@ -25,7 +25,7 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 1 | done, review approved first time (Minors parked) | code `ded7ca46` (base `0ac6af37`); ledger `d9533dd9` | yes |
 | 2 | done, review approved after fix round 1 (Minors parked) | code `b2618100` (base `d9533dd9`), fix `31497e0e`; ledger `92f3ba73` | yes |
 | 3 | done, review approved first time (Minors parked) | code `5f8c10b7` (base `92f3ba73`; trailer amended before publishing); ledger `2c398b03` | yes |
-| 4 | done, design checkpoint stopped for the owner (Rulings 15 to 18), review approved first time (Minors parked) | code `0d5cae5c` (base `2c398b03`) | with the ledger commit |
+| 4 | done, design checkpoint stopped for the owner (Rulings 15 to 18), review approved first time (Minors parked) | code `0d5cae5c` (base `2c398b03`); ledger `4bab2795`; merge of main `9059778f` | yes |
 
 ## Branches published
 
@@ -48,8 +48,9 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
   (nothing under `src` outside `src/desktop`, `tests`, `Cargo.toml`,
   `Cargo.lock`, `packaging`), and `Cargo.lock` is unchanged, so the
   `gpui-kit`, `gpui-base` and `gpui-component` stop does not apply.
-- Cycle 04's branch is still moving. Its tip is merged again before Task 7
-  and before review-ready, or `origin/main` instead once Cycle 04 lands.
+- Cycle 04's branch was still moving. Its tip was merged again at `edb0e920`
+  (`5bacd7d2`). **Cycle 04 then landed on main** (owner heads-up, 2026-11-15):
+  see Ruling 20.
 
 ## Rulings
 
@@ -803,3 +804,17 @@ restores focus 0.25 s later through `defer_close_dialog`; if the sheet's
 waiting close has run by then, that restore could land on the closed sheet's
 submit handle. G23's rows close the prompt by Escape (immediate restore).
 `adds_changed` on a Partial then Retry is covered by P14 (Task 7).
+
+Ruling 20: Cycle 04 landed on main on 2026-11-15 (`origin/main` `14ca0938`,
+"Integrate closed ticket 01M7AMAPNHHTNECXBF4CA5WPKV"). Its tip `5bacd7d2`,
+already merged here, is an ancestor of main, and main differs from it only in
+Cycle 04's `ticket.md` (status `done`): no `src`, `Cargo.lock`, tests or
+packaging change, and Cycle 04's branch is deleted. At the Task 4 step
+boundary (worktree clean) the main checkout was already at `14ca0938` and
+`origin/main` was merged into this branch at `9059778f` (the merge changes only
+that `ticket.md`; boundary diff empty; no test re-run needed). From now on the
+merge source is `origin/main`, and Rulings 1 and 3's "Cycle 04's tip" mean
+`origin/main`. The handoff's stop for "another Cycle that touches the Settings
+sheet, the Workspace's sheet owner or the dialogs reaches main" does not fire:
+the Cycle that landed is the one already merged. Task 7 still merges
+`origin/main` — cost if wrong: a re-merge.
