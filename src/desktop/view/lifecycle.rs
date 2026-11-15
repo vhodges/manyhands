@@ -46,9 +46,11 @@
 //!   ready, with their titles, or says none could be worked out and offers
 //!   Open ready tickets (A3, R-20, `lifecycle/made_ready.rs`).
 //!
-//! Escape closes the dialog, and focus goes back to the control that
-//! opened it; a sent run goes on. The dialog holds the item's title for its header and derives
-//! no `Debug`.
+//! Each stage's footer puts its dismiss button first and its action last
+//! (Cycle 05b A7, `stages.rs`, `view.rs`). Escape closes the dialog, and
+//! focus goes back to the control that opened it; a sent run goes on. While
+//! it runs, a click on the backdrop hides it as Escape does (A5, R-5). The
+//! dialog holds the item's title for its header and derives no `Debug`.
 
 mod actions;
 mod confirm;
@@ -160,14 +162,10 @@ pub(crate) const RUNNING_LEAD: &str =
 pub(crate) const READY_TO_START: &str = "Now ready to start";
 
 /// The footer's hints (A7): Confirm's, and the running dialog's.
-#[allow(dead_code)] // Used from Task 4
 pub(crate) const CONFIRM_HINT: &str = "Enter to confirm \u{b7} Esc to cancel";
-#[allow(dead_code)] // Used from Task 4
 pub(crate) const HIDE_HINT: &str = "Esc hides this window";
 /// The dismiss button of a Failed or Stopped run, and of a Done one (A7).
-#[allow(dead_code)] // Used from Task 4
 pub(crate) const NOT_NOW: &str = "Not now";
-#[allow(dead_code)] // Used from Task 4
 pub(crate) const DONE: &str = "Done";
 /// Continue and Resume wait while the item's lifecycle runs (P22). The
 /// words live with the outcome types in the model (R-41).
@@ -271,11 +269,13 @@ pub(crate) fn open(
     window.open_dialog(cx, move |base, _, cx| {
         let confirming = dialog.clone();
         let origin = origin.clone();
-        // The stage's title and tile, read at each render (A2).
+        // The stage's title and tile, and whether a click on the backdrop
+        // hides it, read at each render (A2, A5).
         let header = dialog.read(cx).header(cx);
+        let hides = dialog.read(cx).hides_on_backdrop(cx);
         frame::dialog(base.w(px(580.)), header, cx)
             .close_button(false)
-            .overlay_closable(false)
+            .overlay_closable(hides)
             .child(dialog.clone())
             // Enter: Confirm, or Prepare again on a refused consent. The
             // Kit never closes the dialog here.
@@ -283,7 +283,8 @@ pub(crate) fn open(
                 confirming.update(cx, |dialog, cx| dialog.enter(window, cx));
                 false
             })
-            // Escape: close; what was sent goes on.
+            // Escape, or the backdrop while running: close; what was sent
+            // goes on.
             .on_cancel(|_, _, _| true)
             .on_close(move |_, window, cx| window.focus(&origin, cx))
     });
@@ -431,6 +432,9 @@ pub(crate) struct LifecycleDialog {
     /// The dialog's own focus: a dialog opened over it, Republish…, gives
     /// focus back here (review M5).
     focus: FocusHandle,
+    /// "Stopping…", once Stop is pressed: a Tab stop that does nothing, so
+    /// the running dialog keeps one (R-23).
+    stopping: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -493,6 +497,7 @@ impl LifecycleDialog {
             repair: repair::Repair::repaired(repaired),
             stop_refused: None,
             focus: cx.focus_handle(),
+            stopping: cx.focus_handle().tab_stop(true),
             _subscriptions: subscriptions,
         };
         // The dialog locks its item until it is dropped, in every phase

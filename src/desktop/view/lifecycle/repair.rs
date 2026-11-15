@@ -327,16 +327,16 @@ impl LifecycleDialog {
         conflict::open(opening, &self.services, window, cx)
     }
 
-    /// Repair locally… and Resolve conflict…, where the way out names
-    /// them. Repair locally… is not offered while it runs, while any local
-    /// synchronization of the item is queued or running, or while the
-    /// item's lifecycle is in flight (`waiting`, P22).
+    /// Repair locally… and Resolve conflict…, neither primary, where the
+    /// way out names them. Repair locally… is not offered while it runs,
+    /// while any local synchronization of the item is queued or running, or
+    /// while the item's lifecycle is in flight (`waiting`, P22).
     pub(super) fn repair_buttons(
         &self,
         way_out: &[LifecycleWayOut],
         waiting: bool,
         cx: &Context<Self>,
-    ) -> Vec<AnyElement> {
+    ) -> Vec<(bool, AnyElement)> {
         let mut buttons = Vec::new();
         let repair = !waiting && !self.repairing() && !self.syncing();
         for step in way_out {

@@ -133,8 +133,8 @@ impl LifecycleDialog {
             || self.republish_waiting()
     }
 
-    /// Stop and republish… or Republish…, where the way out of the run
-    /// `id`, answered `envelope`, names them; none while the item's
+    /// Stop and republish… or Republish…, primary, where the way out of the
+    /// run `id`, answered `envelope`, names them; none while the item's
     /// lifecycle is in flight (`waiting`).
     pub(super) fn republish_buttons(
         &self,
@@ -143,7 +143,7 @@ impl LifecycleDialog {
         way_out: &[LifecycleWayOut],
         waiting: bool,
         cx: &Context<Self>,
-    ) -> Vec<AnyElement> {
+    ) -> Vec<(bool, AnyElement)> {
         if waiting || self.republishing_now(id) {
             return Vec::new();
         }

@@ -142,9 +142,9 @@ impl LifecycleDialog {
         workspace.update(cx, |workspace, cx| f(workspace, window, cx));
     }
 
-    /// Open repository details: the Add repository sheet, checking the
-    /// repository (L1's `Inspect`; Wave 04 Cycle 05a AW-4).
-    pub(super) fn inspect_button(&self, cx: &Context<Self>) -> AnyElement {
+    /// Open repository details, not primary: the Add repository sheet,
+    /// checking the repository (L1's `Inspect`; Wave 04 Cycle 05a AW-4).
+    pub(super) fn inspect_button(&self, cx: &Context<Self>) -> (bool, AnyElement) {
         let go = self.on(cx, |dialog, window, cx| {
             if let Some(root) = dialog.root().map(|root| root.to_path_buf()) {
                 dialog.in_workspace(window, cx, move |workspace, window, cx| {

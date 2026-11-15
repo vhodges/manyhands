@@ -174,12 +174,12 @@ impl LifecycleDialog {
     }
 
     /// The made-ready part of the ended answer `envelope`, and Open ready
-    /// tickets where it is offered.
+    /// tickets, not primary, where it is offered.
     pub(super) fn made_ready_part(
         &self,
         envelope: &Envelope<MutationDataDto>,
         cx: &Context<Self>,
-    ) -> (Option<AnyElement>, Option<AnyElement>) {
+    ) -> (Option<AnyElement>, Option<(bool, AnyElement)>) {
         let muted = cx.theme().muted_foreground;
         match MadeReady::of(envelope) {
             MadeReady::Nothing => (None, None),

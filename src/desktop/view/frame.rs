@@ -121,6 +121,8 @@ impl Header {
 
 /// A footer: an optional hint on the left, then the buttons, right-aligned.
 pub(crate) struct Footer {
+    /// Drawn with the id `frame-hint`, which a test reads inside the
+    /// footer's own id.
     pub hint: Option<&'static str>,
     /// Drawn in this order (A3).
     pub buttons: Vec<AnyElement>,
@@ -141,7 +143,7 @@ impl Footer {
                     .min_w_0()
                     .text_xs()
                     .text_color(colors.muted)
-                    .child(hint)
+                    .child(line(Some("frame-hint"), hint.into()))
             }))
             .children(self.buttons)
     }

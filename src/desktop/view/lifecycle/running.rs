@@ -3,9 +3,11 @@
 //!
 //! - **Running.** The lead, then each step with its state, lit from L3's
 //!   stages, and the stage's words as the Running step's note; and Stop at
-//!   a safe point, which cancels the run's token and reads Stopping… once
-//!   pressed. Escape hides the dialog; the run goes on, and the
-//!   operation area's entry opens it again.
+//!   a safe point, which cancels the run's token, alone in the footer. Once
+//!   pressed, "Stopping…" takes its place, a Tab stop of its own that does
+//!   nothing, so Tab stays in the dialog and Escape still reaches it
+//!   (R-23). Escape, or a click on the backdrop, hides the dialog; the run
+//!   goes on, and the operation area's entry opens it again.
 //! - **Done, Failed, Stopped.** Each step's state, with a failed step's
 //!   message as its note; then the outcome box: how it ended; for a stop,
 //!   that the cancellation finished and which steps completed
@@ -27,7 +29,7 @@
 //!   main, `made_ready.rs`'s part, and its Open ready tickets.
 
 use gpui_kit::{
-    AnyElement, App, Context, FontWeight, IntoElement, ParentElement, Styled,
+    AnyElement, App, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Styled,
     component::{ActiveTheme, v_flex},
 };
 use manyhands::{
@@ -129,12 +131,13 @@ impl LifecycleDialog {
         }
     }
 
-    /// The body and buttons of a sent run, by where its request stands.
+    /// The body and buttons of a sent run, by where its request stands;
+    /// each button with whether it is primary.
     pub(super) fn submitted_body(
         &self,
         id: DesktopRequestId,
         cx: &Context<Self>,
-    ) -> (AnyElement, Vec<AnyElement>) {
+    ) -> (AnyElement, Vec<(bool, AnyElement)>) {
         match self.shown(id, cx) {
             Shown::Message(words) => (self.message(words), Vec::new()),
             Shown::Ended(envelope) => self.ended(id, envelope, cx),
@@ -163,7 +166,11 @@ impl LifecycleDialog {
         }
     }
 
-    fn running(&self, id: DesktopRequestId, cx: &Context<Self>) -> (AnyElement, Vec<AnyElement>) {
+    fn running(
+        &self,
+        id: DesktopRequestId,
+        cx: &Context<Self>,
+    ) -> (AnyElement, Vec<(bool, AnyElement)>) {
         let steps = self.shown_steps(None);
         let keys: Vec<_> = steps.iter().map(|step| step.key).collect();
         let states = running_states(&keys, self.reached);
@@ -190,9 +197,13 @@ impl LifecycleDialog {
             .children(self.plan.as_deref().map(|plan| git_row(plan, cx)))
             .into_any_element();
         let stop = if self.stop_pressed {
-            text("lifecycle-stopping", STOPPING)
+            // A Tab stop that does nothing: with none, Tab would leave the
+            // dialog, and Escape, bound inside it, would not reach it (R-23).
+            let stopping = text("lifecycle-stopping", STOPPING)
+                .track_focus(&self.stopping)
                 .text_sm()
-                .into_any_element()
+                .into_any_element();
+            (false, stopping)
         } else {
             button(
                 "lifecycle-stop",
@@ -209,7 +220,7 @@ impl LifecycleDialog {
         id: DesktopRequestId,
         envelope: &Envelope<MutationDataDto>,
         cx: &Context<Self>,
-    ) -> (AnyElement, Vec<AnyElement>) {
+    ) -> (AnyElement, Vec<(bool, AnyElement)>) {
         let muted = cx.theme().muted_foreground;
         let ending = Ending::of(envelope);
         let data = lifecycle_data(envelope);
@@ -365,7 +376,7 @@ impl LifecycleDialog {
         envelope: &Envelope<MutationDataDto>,
         offers: &Offers,
         cx: &Context<Self>,
-    ) -> Vec<AnyElement> {
+    ) -> Vec<(bool, AnyElement)> {
         let mut buttons = self.repair_buttons(&lifecycle_way_out(envelope), offers.waiting, cx);
         if offers.retry && !offers.waiting {
             let retry = self.on(cx, |dialog, _, cx| dialog.resend(cx));

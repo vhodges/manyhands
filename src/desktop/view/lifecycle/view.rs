@@ -1,6 +1,10 @@
-//! The lifecycle dialog drawn (D5 design, A2): each stage's body and its
-//! buttons; its header is `stages.rs`'s, in the Kit's title slot. Text and
-//! buttons carry their words as labels, for the tests to read.
+//! The lifecycle dialog drawn (D5 design, A2): each stage's body, and its
+//! footer, the body element's last child (Cycle 05b A2, A7; C5a R-19); its
+//! header is `stages.rs`'s, in the Kit's title slot. The footer puts the
+//! dismiss button first, then the stage's other buttons, then its primary
+//! ones, each kept in the order the stage gives them; on Done, Done comes
+//! last. Text and buttons carry their words as labels, for the tests to
+//! read.
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, ElementId, InteractiveElement, IntoElement,
@@ -9,16 +13,16 @@ use gpui_kit::{
         ActiveTheme, WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm,
-        h_flex, v_flex,
+        v_flex,
     },
     div,
 };
 use manyhands::results::ResultCode;
 
 use super::{
-    CANCEL, CLOSE, HELD_LEAD, LifecycleDialog, PREPARE_AGAIN, PREPARING, Phase, RETRY, SAVING_FIRST,
+    HELD_LEAD, LifecycleDialog, PREPARE_AGAIN, PREPARING, Phase, RETRY, SAVING_FIRST, stages::Stage,
 };
-use crate::desktop::view::frame;
+use crate::desktop::view::frame::{self, Footer};
 
 /// A piece of text a test reads by `id`.
 pub(super) type Text = gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>>;
@@ -32,14 +36,15 @@ pub(super) fn text(id: impl Into<ElementId>, value: impl Into<String>) -> Text {
         .child(value)
 }
 
-/// A button a test reads by `id`. Enter on it presses it: its wrapper takes
-/// the dialog's Enter before the dialog, whose `on_ok` would confirm.
+/// A button a test reads by `id`, with whether it is primary, which the
+/// footer orders by (A7). Enter on it presses it: its wrapper takes the
+/// dialog's Enter before the dialog, whose `on_ok` would confirm.
 pub(super) fn button(
     id: &'static str,
     label: impl Into<String>,
     primary: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
+) -> (bool, AnyElement) {
     let label = label.into();
     let on_click = std::rc::Rc::new(on_click);
     let on_enter = on_click.clone();
@@ -47,22 +52,53 @@ pub(super) fn button(
         .label(label.clone())
         .on_click(move |event, window, cx| on_click(event, window, cx));
     let button = if primary { button.primary() } else { button };
-    div()
+    let element = div()
         .id(id)
         .test_support()
         .aria_label(label)
         .on_action(move |_: &Confirm, window, cx| on_enter(&ClickEvent::default(), window, cx))
         .child(button)
-        .into_any_element()
+        .into_any_element();
+    (primary, element)
 }
 
 impl LifecycleDialog {
-    fn cancel(&self, label: &'static str) -> AnyElement {
+    /// The dismiss button, labelled by the stage: it closes the dialog and
+    /// focuses the origin, as Escape does.
+    fn dismiss(&self, label: &'static str, primary: bool) -> AnyElement {
         let origin = self.origin.clone();
-        button("lifecycle-cancel", label, false, move |_, window, cx| {
+        let (_, dismiss) = button("lifecycle-cancel", label, primary, move |_, window, cx| {
             window.close_dialog(cx);
             window.focus(&origin, cx);
-        })
+        });
+        dismiss
+    }
+
+    /// The footer's buttons at `stage` (A7): the dismiss button first, then
+    /// the non-primary `actions`, then the primary ones, each in the order
+    /// given; on Done, Done comes last, and is primary.
+    fn footer_buttons(&self, stage: Stage, actions: Vec<(bool, AnyElement)>) -> Vec<AnyElement> {
+        let done = stage == Stage::Done;
+        let dismiss = self
+            .dismiss_label(stage)
+            .map(|label| self.dismiss(label, done));
+        let (first, last) = if done {
+            (None, dismiss)
+        } else {
+            (dismiss, None)
+        };
+        let (primary, others): (Vec<_>, Vec<_>) =
+            actions.into_iter().partition(|(primary, _)| *primary);
+        first
+            .into_iter()
+            .chain(
+                others
+                    .into_iter()
+                    .chain(primary)
+                    .map(|(_, element)| element),
+            )
+            .chain(last)
+            .collect()
     }
 
     pub(super) fn on<F>(
@@ -102,32 +138,25 @@ impl LifecycleDialog {
 
 impl Render for LifecycleDialog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = v_flex()
-            .id("lifecycle-dialog")
-            .test_support()
-            .track_focus(&self.focus)
-            .gap_3();
-        let mut buttons = h_flex().gap_2();
+        let stage = self.stage(cx);
+        let mut body = v_flex().gap_3();
+        let mut actions = Vec::new();
         match &self.phase {
             Phase::Saving => {
                 body = body.child(text("lifecycle-state", SAVING_FIRST).text_sm());
-                buttons = buttons.child(self.cancel(CANCEL));
             }
             Phase::Preparing => {
                 body = body.child(text("lifecycle-state", PREPARING).text_sm());
-                buttons = buttons.child(self.cancel(CANCEL));
             }
             Phase::Confirm { preview, .. } => {
                 body = body.child(self.confirm_body(preview, cx));
                 let confirm = self.on(cx, |dialog, _, cx| dialog.confirm(cx));
-                buttons = buttons
-                    .child(button(
-                        "lifecycle-confirm",
-                        self.intent.label(),
-                        true,
-                        confirm,
-                    ))
-                    .child(self.cancel(CANCEL));
+                actions.push(button(
+                    "lifecycle-confirm",
+                    self.intent.label(),
+                    true,
+                    confirm,
+                ));
             }
             Phase::Blocked {
                 code,
@@ -135,68 +164,71 @@ impl Render for LifecycleDialog {
                 way_out,
                 shared,
             } => {
-                let (rows, actions) = self.blocked_body(*code, blockers, way_out, *shared, cx);
+                let (rows, way_out) = self.blocked_body(*code, blockers, way_out, *shared, cx);
                 body = body.child(rows);
-                buttons = buttons.children(actions);
+                actions = way_out;
                 // A closed ticket has nothing to prepare again for (P14).
                 if *code != ResultCode::TicketClosed {
                     let again = self.on(cx, |dialog, _, cx| dialog.prepare(cx));
-                    buttons = buttons.child(button(
+                    actions.push(button(
                         "lifecycle-prepare-again",
                         PREPARE_AGAIN,
                         true,
                         again,
                     ));
                 }
-                buttons = buttons.child(self.cancel(CLOSE));
             }
             Phase::Held { way_out } => {
                 body = body.child(text("lifecycle-lead", HELD_LEAD).text_sm());
-                buttons = buttons
-                    .children(self.held_action(way_out, cx))
-                    .child(self.cancel(CLOSE));
+                actions.extend(self.held_action(way_out, cx));
             }
             Phase::Stale { code, message } => {
                 body = body.child(Self::stale_body(*code, message, cx));
                 let again = self.on(cx, |dialog, _, cx| dialog.prepare(cx));
-                buttons = buttons
-                    .child(button(
-                        "lifecycle-prepare-again",
-                        PREPARE_AGAIN,
-                        true,
-                        again,
-                    ))
-                    .child(self.cancel(CANCEL));
+                actions.push(button(
+                    "lifecycle-prepare-again",
+                    PREPARE_AGAIN,
+                    true,
+                    again,
+                ));
             }
             Phase::Answered { code, message } => {
                 body = body.child(Self::answer(*code, message, cx));
                 if *code == ResultCode::Busy {
                     let retry = self.on(cx, |dialog, _, cx| dialog.prepare(cx));
-                    buttons = buttons.child(button("lifecycle-retry", RETRY, true, retry));
+                    actions.push(button("lifecycle-retry", RETRY, true, retry));
                 }
-                buttons = buttons.child(self.cancel(CLOSE));
             }
             Phase::Repaired => {
                 let again = self.on(cx, |dialog, _, cx| dialog.prepare(cx));
-                buttons = buttons
-                    .child(button(
-                        "lifecycle-prepare-again",
-                        PREPARE_AGAIN,
-                        true,
-                        again,
-                    ))
-                    .child(self.cancel(CLOSE));
+                actions.push(button(
+                    "lifecycle-prepare-again",
+                    PREPARE_AGAIN,
+                    true,
+                    again,
+                ));
             }
             Phase::Message(why) => {
                 body = body.child(text("lifecycle-message", *why).text_sm());
-                buttons = buttons.child(self.cancel(CLOSE));
             }
             Phase::Submitted(id) => {
-                let (shown, actions) = self.submitted_body(*id, cx);
+                let (shown, sent) = self.submitted_body(*id, cx);
                 body = body.child(shown);
-                buttons = buttons.children(actions).child(self.cancel(CLOSE));
+                actions = sent;
             }
         }
-        frame::body(body.children(self.repair_line(cx)).child(buttons))
+        let footer = Footer {
+            hint: self.hint(stage),
+            buttons: self.footer_buttons(stage, actions),
+        };
+        // The footer is the last child of the element that tracks the
+        // dialog's focus, inside which the privacy sweeps and focus reads
+        // find the buttons (C5a R-19).
+        v_flex()
+            .id("lifecycle-dialog")
+            .test_support()
+            .track_focus(&self.focus)
+            .child(frame::body(body.children(self.repair_line(cx))))
+            .child(frame::footer(footer, cx).id("lifecycle-footer"))
     }
 }
