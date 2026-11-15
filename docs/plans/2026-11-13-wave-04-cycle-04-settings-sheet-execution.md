@@ -2076,3 +2076,13 @@ public `track_focus` on `Button` is the owner's call; none was created.
 ### Gates after the fix wave
 
 `cargo check --all-features --locked`, `cargo fmt --check` and `cargo clippy --all-targets --all-features --locked -- -D warnings` exit 0 on `16bc94cf`. The fast tier's changed target, the binaries, ran again with `--bins`: the desktop binary `1938 passed; 1 failed` in 1389 s (the flake above, which passes alone); the CLI binary 317 passed. No other target changed. `git merge-tree --write-tree HEAD origin/main` is clean (origin/main is still `ea6d899b`); the boundary diff prints nothing; `Cargo.lock` and `Cargo.toml` are unchanged. The checklist gained S-10.12 to S-10.14 (landing on a Kit button, Shift Tab through the Kit buttons, Check host unavailable with focus on it). The fast tier takes about 23 minutes for the desktop binary alone.
+
+## Owner decisions after review-ready (2026-11-14)
+
+The owner read the review-ready summary and accepted its "for you to decide" items:
+- Ruling 55 stands: the Kit-internals workaround in `settings/kit_button.rs` stays; no Kit ticket is opened for now.
+- The kept "Selected key: …" line, "Open remote settings…" as is, the key-store wording difference between Settings and Activity, and the Activity row titles in the old vocabulary all stay (Rulings 38, 49, 50, 10).
+- R-23 (Approve host… with no server named uses the row's repository) stays, and the known gaps (P23's context-menu rows and F14 on unix only, F15 then F16 on screen, the flaky `the_more_menu_acts_on_the_chosen_repository`) are accepted for this Cycle.
+
+Still the owner's, not done: the on-screen checklist run, review approval, `ticket close` (which merges), native CI after merge.
+
