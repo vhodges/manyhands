@@ -1,22 +1,31 @@
-//! Repair locally… and Resolve conflict… in the lifecycle dialog (D5
+//! Repair locally… and Review changes… in the lifecycle dialog (D5
 //! design, B5, B6; L1's `RepairLocally` and `ResolveChildConflict`).
 //!
 //! - **Repair locally…** observes the item's work context, then sends
 //!   `context sync-local` with that observation (`Intent::LocalContextSync`).
 //!   A conflict closes the dialog and opens the resolve conflict sheet on
 //!   the synchronization, its folder the work context; once its resolution
-//!   applies, the dialog opens again on its way on (P9). It is not offered
-//!   while a local synchronization of the item is queued or running, or
-//!   while the item's lifecycle is in flight (P22). A clean result says
-//!   main is in the working copy, and the dialog's way on stays offered:
-//!   Retry where a request holds the lifecycle, Resume where none does,
-//!   Prepare again after a blocked prepare. A refusal, of the observation
-//!   or of the synchronization, or a stop shows its answer; the
+//!   applies, the dialog opens again on its way on (P9). With a prompt over
+//!   the dialog when the conflict lands, the sheet waits on the dialog
+//!   until a frame finds focus back inside it (Wave 04 Cycle 05b R-24). It
+//!   is not offered while a local synchronization of the item is queued or
+//!   running, or while the item's lifecycle is in flight (P22). A clean
+//!   result says main is in the working copy, and the dialog's way on stays
+//!   offered: Retry where a request holds the lifecycle, Resume where none
+//!   does, Prepare again after a blocked prepare. A refusal, of the
+//!   observation or of the synchronization, or a stop shows its answer; the
 //!   synchronization's pending row then offers Resume (P16).
-//! - **Resolve conflict…** closes the dialog and opens the sheet on the
+//! - **Review changes…** closes the dialog and opens the sheet on the
 //!   child's conflict, by the operation the way out names (C5 decision 34),
 //!   as the close's or merge's child: the one this dialog shows when it is
-//!   that request, or else the lifecycle row's (R-10).
+//!   that request, or else the lifecycle row's (R-10). It goes on only
+//!   while focus is inside the dialog: pressed in the frame a prompt opens
+//!   over it, it does nothing (Wave 04 Cycle 05b R-24).
+//!
+//! Each opens the sheet through the workspace's `show_resolve`, after
+//! `in_workspace` has closed the dialog (Wave 04 Cycle 05b B2). The Kit
+//! cannot say which dialog is on top, and closing the dialog closes the
+//! top one, so neither goes on while a prompt is over it.
 //!
 //! Neither waits for the item's lifecycle lock: they are how a stopped
 //! lifecycle goes on (P8, P9). Each keeps its words to fixed text and the
@@ -25,7 +34,7 @@
 use std::path::PathBuf;
 
 use gpui_kit::{
-    AnyElement, App, Context, Entity, FocusHandle, IntoElement, ParentElement, Styled,
+    AnyElement, App, ClickEvent, Context, Entity, FocusHandle, IntoElement, ParentElement, Styled,
     Subscription, Task, Window,
     component::{ActiveTheme, v_flex},
 };
@@ -47,7 +56,7 @@ use crate::desktop::{
         conflicts::LocalObservation,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
     },
-    view::conflict::{self, Opening, ResolveSheet, SheetSource},
+    view::conflict::{Opening, ResolveSheet, SheetSource},
 };
 
 /// Where Repair locally… stands.
@@ -58,6 +67,9 @@ enum State {
     Repaired,
     /// Refused or stopped: its code and message.
     Answered(ResultCode, String),
+    /// Stopped on the conflict of this synchronization, whose sheet waits
+    /// until focus is inside the dialog (R-24).
+    Conflicted(OperationId),
 }
 
 /// Repair locally…'s state in the dialog, until the dialog moves on.
@@ -125,7 +137,7 @@ impl LifecycleDialog {
     pub(super) fn repairing(&self) -> bool {
         matches!(
             self.repair.state,
-            Some(State::Observing | State::Syncing(_))
+            Some(State::Observing | State::Syncing(_) | State::Conflicted(_))
         )
     }
 
@@ -222,8 +234,8 @@ impl LifecycleDialog {
         let state = match &request.state {
             RequestState::Finished(_, code, _, _, message) => match operations.review(sync) {
                 Some(review) => {
-                    let operation = review.operation_id;
-                    return self.open_local_sheet(operation, window, cx);
+                    self.repair.state = Some(State::Conflicted(review.operation_id));
+                    return self.open_conflicted(window, cx);
                 }
                 None if *code == ResultCode::Ok => State::Repaired,
                 None => State::Answered(*code, message.clone()),
@@ -235,6 +247,62 @@ impl LifecycleDialog {
         };
         self.repair.state = Some(state);
         cx.notify();
+    }
+
+    /// Whether focus is inside this dialog: in its own element, or on the
+    /// Kit's dialog around it, which holds focus as the dialog opens. A
+    /// prompt opened over the dialog holds it outside, from the update that
+    /// opens the prompt (R-24).
+    fn focus_inside(&self, window: &Window, cx: &mut App) -> bool {
+        self.focus.contains_focused(window, cx) || self.focus.within_focused(window, cx)
+    }
+
+    /// A press of a way into the sheet: as `on`, but it goes on only while
+    /// focus was inside the dialog before the press moves it there, so a
+    /// press made in the frame a prompt opens over the dialog does nothing
+    /// (R-24).
+    fn on_inside<F>(
+        &self,
+        cx: &Context<Self>,
+        f: F,
+    ) -> impl Fn(&ClickEvent, &mut Window, &mut App) + use<F>
+    where
+        F: Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    {
+        let entity = cx.entity().downgrade();
+        move |_, window, cx| {
+            let _ = entity.update(cx, |dialog, cx| {
+                if !dialog.focus_inside(window, cx) {
+                    return;
+                }
+                window.focus(&dialog.focus, cx);
+                f(dialog, window, cx)
+            });
+        }
+    }
+
+    /// Each frame of a dialog whose synchronization stopped on its conflict
+    /// with a prompt over it: once the frame is drawn, the sheet opens if
+    /// focus is back inside the dialog, that is, once the prompt has closed
+    /// (R-24, U-10).
+    pub(super) fn conflicted_waits(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.repair.state, Some(State::Conflicted(_))) {
+            cx.defer_in(window, |dialog, window, cx| {
+                dialog.open_conflicted(window, cx)
+            });
+        }
+    }
+
+    /// The local synchronization's conflict, in the sheet in place of this
+    /// dialog, while focus is inside the dialog; otherwise it waits on the
+    /// dialog (`conflicted_waits`).
+    fn open_conflicted(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(State::Conflicted(operation)) = self.repair.state else {
+            return;
+        };
+        if self.focus_inside(window, cx) {
+            self.open_local_sheet(operation, window, cx);
+        }
     }
 
     /// The local synchronization's conflict, in the sheet in place of this
@@ -262,7 +330,7 @@ impl LifecycleDialog {
         }
     }
 
-    /// Resolve conflict…: the child's conflict, by `operation`, in the sheet
+    /// Review changes…: the child's conflict, by `operation`, in the sheet
     /// in place of this dialog.
     pub(super) fn resolve_child_conflict(
         &mut self,
@@ -297,6 +365,8 @@ impl LifecycleDialog {
         self.open_sheet(source, operation_id, None, window, cx);
     }
 
+    /// The sheet on `operation_id`, from `source`, in place of this dialog:
+    /// `in_workspace` closes the dialog, and the workspace opens the sheet.
     fn open_sheet(
         &mut self,
         source: SheetSource,
@@ -323,11 +393,13 @@ impl LifecycleDialog {
             folder,
             origin: self.origin.clone(),
         };
-        self.close(window, cx);
-        conflict::open(opening, &self.services, window, cx)
+        self.in_workspace(window, cx, move |workspace, window, cx| {
+            workspace.show_resolve(opening, window, cx)
+        })
+        .flatten()
     }
 
-    /// Repair locally… and Resolve conflict…, neither primary, where the
+    /// Repair locally… and Review changes…, neither primary, where the
     /// way out names them. Repair locally… is not offered while it runs,
     /// while any local synchronization of the item is queued or running, or
     /// while the item's lifecycle is in flight (`waiting`, P22).
@@ -352,7 +424,7 @@ impl LifecycleDialog {
                 }
                 LifecycleWayOut::ResolveChildConflict { operation_id } => {
                     let operation = operation_id.clone();
-                    let go = self.on(cx, move |dialog, window, cx| {
+                    let go = self.on_inside(cx, move |dialog, window, cx| {
                         dialog.resolve_child_conflict(&operation, window, cx)
                     });
                     buttons.push(button(
@@ -373,7 +445,7 @@ impl LifecycleDialog {
         let item = self.item_word();
         let primary = self.primary();
         let (words, code) = match self.repair.state.as_ref()? {
-            State::Observing | State::Syncing(_) => (
+            State::Observing | State::Syncing(_) | State::Conflicted(_) => (
                 format!("Bringing {primary} into this {item}'s working copy\u{2026}"),
                 None,
             ),

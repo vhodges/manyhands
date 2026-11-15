@@ -45,8 +45,8 @@ pub(crate) use entry::Entry;
 use std::path::PathBuf;
 
 use gpui_kit::{
-    App, AppContext, Context, Entity, EntityId, FocusHandle, ParentElement, Subscription, Task,
-    Window, component::WindowExt, px,
+    App, AppContext, Context, Entity, EntityId, FocusHandle, ParentElement, Styled, Subscription,
+    Task, Window, component::WindowExt, div, px,
 };
 use manyhands::{
     canonical::ItemId,
@@ -173,7 +173,9 @@ impl SheetSource {
     }
 }
 
-/// What opening the sheet takes.
+/// What opening the sheet takes. Cloned by the route that carries it from
+/// an item tab to the workspace (`ItemRoute::Resolve`).
+#[derive(Clone)]
 pub(crate) struct Opening {
     pub source: SheetSource,
     pub root: PathBuf,
@@ -194,9 +196,18 @@ pub(crate) struct Opening {
     pub origin: FocusHandle,
 }
 
-/// Opens the sheet. `None` while quitting, or while drafts are being saved
-/// for it: nothing opens in front of Quit now.
-pub(crate) fn open(
+/// The sheet's width, `05`'s, and what it leaves of a narrower window: the
+/// Kit does not clamp a sheet, and the app sets no minimum window width
+/// (Wave 04 Cycle 05b R-28).
+const WIDTH: f32 = 920.;
+const MARGIN: f32 = 48.;
+
+/// Opens the sheet on the right of the window, on Root's one sheet layer
+/// (Wave 04 Cycle 05b B2): `Workspace::show_resolve` does, and owns it.
+/// `None` while quitting, or while drafts are being saved for it: nothing
+/// opens in front of Quit now. Escape and the Kit's close button close it,
+/// and focus goes back to the origin; the scrim does not (decision 9).
+pub(in crate::desktop::view) fn open(
     opening: Opening,
     services: &Services,
     window: &mut Window,
@@ -208,15 +219,22 @@ pub(crate) fn open(
     let origin = opening.origin.clone();
     let sheet = cx.new(|cx| ResolveSheet::new(opening, services.clone(), window, cx));
     let opened = sheet.clone();
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_sheet(cx, move |kit, window, cx| {
         let origin = origin.clone();
-        base.w(px(920.))
-            .close_button(false)
+        let width = (window.viewport_size().width - px(MARGIN)).clamp(px(0.), px(WIDTH));
+        // The header and the footer, read at each render, as the body is.
+        let (header, footer) = sheet.update(cx, |sheet, cx| {
+            (sheet.header_slot(cx), sheet.footer_slot(cx))
+        });
+        kit.size(width)
             .overlay_closable(false)
-            .child(sheet.clone())
-            // Enter is the Result editor's newline, or a focused button's.
-            .on_ok(|_, _, _| false)
-            .on_cancel(|_, _, _| true)
+            .title(header)
+            .footer(footer)
+            // The Kit's body grows with what it holds and scrolls on a
+            // handle of its own. Laid over it, out of its flow, the sheet
+            // keeps its own scroll, and the header and footer stay put
+            // (R-12).
+            .child(div().absolute().inset_0().child(sheet.clone()))
             .on_close(move |_, window, cx| window.focus(&origin, cx))
     });
     #[cfg(all(test, feature = "desktop-test-support"))]
@@ -278,6 +296,10 @@ pub(crate) struct ResolveSheet {
     /// that held it (`Workspace::focus_lost`), so it stays in the sheet
     /// (A21).
     focus: FocusHandle,
+    /// The footer's own focus, which its slot tracks: a footer control that
+    /// goes gives focus back here, not to the Kit's host (Wave 04 Cycle 05b
+    /// B3).
+    footer_focus: FocusHandle,
     services: Services,
     generations: Generations,
     read: Option<Task<()>>,
@@ -347,6 +369,7 @@ impl ResolveSheet {
             reopen: None,
             origin: opening.origin,
             focus: cx.focus_handle(),
+            footer_focus: cx.focus_handle(),
             services,
             generations: Generations::default(),
             read: None,
@@ -384,6 +407,12 @@ impl ResolveSheet {
     /// `reopen` (P9).
     pub(crate) fn reopen_after(&mut self, reopen: Reopen) {
         self.reopen = Some(reopen);
+    }
+
+    /// The sheet's own focus, which `conflict-sheet` tracks: focused as the
+    /// sheet opens (Wave 04 Cycle 05b H1).
+    pub(in crate::desktop::view) fn own_focus(&self) -> &FocusHandle {
+        &self.focus
     }
 
     /// Reads the item's work folder, for Open folder (B4): an entry point
@@ -626,6 +655,12 @@ impl ResolveSheet {
 
     pub(crate) fn operation(&self) -> OperationId {
         self.operation_id
+    }
+
+    /// Whether the lifecycle dialog opens again once a local resolution
+    /// applies (`reopen_after`).
+    pub(crate) fn reopens(&self) -> bool {
+        self.reopen.is_some()
     }
 
     /// The folder Open folder opens.

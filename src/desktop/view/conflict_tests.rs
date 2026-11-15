@@ -31,7 +31,7 @@ use manyhands::{
 
 use super::{
     CHANGED, CHOSEN, OpenedSheet, Opening, PartAt, ResolveSheet, SAVE_RESOLUTION, SheetSource,
-    TAKEN_THEIRS, open,
+    TAKEN_THEIRS,
 };
 use crate::desktop::{
     model::conflict::{BodyChoice, Choice, STANDARD_LAYOUT_NOTE},
@@ -52,7 +52,7 @@ pub(super) const RESOLVING: Duration = Duration::from_secs(90);
 
 /// One repository, `a`, in an open window, with what `build` made in it
 /// before the window opened: a real local conflict's operation.
-pub(super) fn local_shell(
+pub(in crate::desktop::view) fn local_shell(
     cx: &mut TestAppContext,
     build: impl FnOnce(&Fixture, &Path) -> OperationId,
 ) -> (Shell, PathBuf, OperationId) {
@@ -96,7 +96,8 @@ pub(super) fn open_sheet(
 }
 
 /// Opens the sheet as `open_sheet` does, naming `folder` as the item's
-/// work folder (B4's Open folder).
+/// work folder (B4's Open folder). It opens as every way in opens it,
+/// through the workspace's `show_resolve` (Wave 04 Cycle 05b E-1).
 pub(super) fn open_sheet_in(
     shell: &Shell,
     source: SheetSource,
@@ -105,7 +106,6 @@ pub(super) fn open_sheet_in(
     folder: Option<PathBuf>,
     cx: &mut TestAppContext,
 ) -> Entity<ResolveSheet> {
-    let services = services(shell, cx);
     let opening = Opening {
         source,
         root: root.to_owned(),
@@ -117,7 +117,11 @@ pub(super) fn open_sheet_in(
     };
     let sheet = shell
         .visual(cx)
-        .update(|window, cx| open(opening, &services, window, cx))
+        .update(|window, cx| {
+            shell.workspace.update(cx, |workspace, cx| {
+                workspace.show_resolve(opening, window, cx)
+            })
+        })
         .expect("the sheet opens");
     shell.run(cx);
     sheet
@@ -139,7 +143,7 @@ pub(super) fn heading() -> Heading {
 }
 
 /// The sheet last opened, while it is open.
-pub(super) fn opened(cx: &mut TestAppContext) -> Option<Entity<ResolveSheet>> {
+pub(in crate::desktop::view) fn opened(cx: &mut TestAppContext) -> Option<Entity<ResolveSheet>> {
     cx.update(|cx| {
         cx.try_global::<OpenedSheet>()
             .and_then(|opened| opened.0.upgrade())
@@ -147,7 +151,7 @@ pub(super) fn opened(cx: &mut TestAppContext) -> Option<Entity<ResolveSheet>> {
 }
 
 /// Draws frames until `id` is drawn.
-pub(super) async fn until_present(
+pub(in crate::desktop::view) async fn until_present(
     shell: &Shell,
     id: impl Into<gpui_kit::ElementId>,
     cx: &mut TestAppContext,
@@ -161,7 +165,7 @@ pub(super) async fn until_present(
 }
 
 /// Waits, past the harness's `WAIT`, until `done` holds of the window.
-pub(super) async fn until_long(
+pub(in crate::desktop::view) async fn until_long(
     shell: &Shell,
     what: &str,
     cx: &mut TestAppContext,
@@ -202,7 +206,7 @@ pub(super) fn request(
 }
 
 /// The request's code, once it has its answer.
-pub(super) fn code(
+pub(in crate::desktop::view) fn code(
     shell: &Shell,
     id: DesktopRequestId,
     cx: &mut TestAppContext,
@@ -260,7 +264,7 @@ pub(crate) fn canned(operation: OperationId, paths: Vec<ConflictPathDto>) -> Con
 
 /// A ticket's path of a canned conflict whose title both sides changed,
 /// and nothing else.
-pub(super) fn canned_path(id: &str, n: char) -> ConflictPathDto {
+pub(in crate::desktop::view) fn canned_path(id: &str, n: char) -> ConflictPathDto {
     let source = |title: &str| same_body(&ticket_source(id, title, ""), title);
     ConflictPathDto {
         display_path: ticket_path(id),

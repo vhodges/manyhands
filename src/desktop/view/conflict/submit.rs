@@ -425,8 +425,11 @@ impl ResolveSheet {
         );
     }
 
+    /// The one way the sheet closes itself: Cancel, Resume and an applied
+    /// resolution. The Kit's `close_sheet` runs no `on_close`, so focus goes
+    /// back to the origin here (Wave 04 Cycle 05b B3).
     pub(super) fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.close_dialog(cx);
+        window.close_sheet(cx);
         window.focus(&self.origin, cx);
     }
 }

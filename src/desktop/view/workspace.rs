@@ -21,6 +21,7 @@ mod render;
 mod repositories;
 mod repository_menu;
 mod requests;
+mod resolve_sheet;
 mod settings_sheet;
 mod titles;
 

@@ -72,7 +72,7 @@ use gpui_kit::{
 };
 use manyhands::repository::transport::SshAuthority;
 
-use super::{relationships::RowKey, scroll::ContentScroll};
+use super::{conflict, relationships::RowKey, scroll::ContentScroll};
 use crate::desktop::{
     keys::{Edit, ITEM_TAB_CONTEXT, Save, ShareItem, ToggleRich},
     model::{
@@ -144,6 +144,9 @@ pub(crate) enum ItemRoute {
         root: PathBuf,
         request: Option<DesktopRequestId>,
     },
+    /// The conflict banner's Review changes: Resolve conflict on the
+    /// conflict, a sheet the workspace keeps (Wave 04 Cycle 05b B2).
+    Resolve(Box<conflict::Opening>),
 }
 
 impl EventEmitter<ItemRoute> for ItemPane {}

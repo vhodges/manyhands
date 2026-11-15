@@ -11,17 +11,16 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::{App, Entity, FocusHandle, Window};
+use gpui_kit::FocusHandle;
 use manyhands::{
     canonical::ItemId,
     repository::{AuthoringKind, ItemDtoKind, OperationId},
 };
 
-use super::{Opening, ResolveSheet, SheetSource, open};
+use super::{Opening, SheetSource};
 use crate::desktop::{
     model::operations::{Operations, ReviewOf},
     services::{
-        Services,
         pending_conflicts::{PendingConflict, PendingSource},
         requests::{DesktopRequest, Intent},
     },
@@ -128,17 +127,15 @@ impl Entry {
         &self.root
     }
 
-    /// Opens the sheet on the entry, in the repository whose main branch
-    /// and publication remote the workspace knows as `known`; focus goes
-    /// back to `origin`.
-    pub(crate) fn open(
+    /// What opening the sheet on the entry takes, in the repository whose
+    /// main branch and publication remote the workspace knows as `known`;
+    /// focus goes back to `origin`. `Workspace::show_resolve` opens it
+    /// (Wave 04 Cycle 05b B2).
+    pub(crate) fn opening(
         self,
         (primary, remote): (Option<String>, Option<Option<String>>),
         origin: FocusHandle,
-        services: &Services,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Option<Entity<ResolveSheet>> {
+    ) -> Opening {
         let heading = Heading {
             kind: self.kind,
             short: self
@@ -149,7 +146,7 @@ impl Entry {
             primary,
             remote,
         };
-        let opening = Opening {
+        Opening {
             source: self.source,
             root: self.root,
             operation_id: self.operation_id,
@@ -157,7 +154,6 @@ impl Entry {
             heading,
             folder: self.folder,
             origin,
-        };
-        open(opening, services, window, cx)
+        }
     }
 }

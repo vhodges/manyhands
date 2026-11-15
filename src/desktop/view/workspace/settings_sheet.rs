@@ -45,6 +45,8 @@ pub(crate) enum SheetOwnerKind {
     Settings,
     /// The Add repository sheet (Wave 04 Cycle 05a B1).
     AddRepository,
+    /// Resolve conflict (Wave 04 Cycle 05b B1).
+    Resolve,
 }
 
 /// Where a lost focus goes once Settings has closed onto a control that is
@@ -423,6 +425,7 @@ impl Workspace {
             SheetOwner::Details(_) => SheetOwnerKind::Details,
             SheetOwner::Settings => SheetOwnerKind::Settings,
             SheetOwner::AddRepository => SheetOwnerKind::AddRepository,
+            SheetOwner::Resolve(_) => SheetOwnerKind::Resolve,
         })
     }
 

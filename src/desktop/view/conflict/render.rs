@@ -1,13 +1,14 @@
-//! The resolve conflict sheet drawn (handoff 2g): title, note and progress;
-//! one card per part with Before, Yours and Theirs and its choices; each
-//! body's Result editor; and Cancel · Save resolution. Text and buttons
-//! carry their words as labels, for the tests to read.
+//! The resolve conflict sheet drawn (handoff 2g): title, note and progress,
+//! in the Kit sheet's title slot; one card per part with Before, Yours and
+//! Theirs and its choices; each body's Result editor; and the Git line and
+//! Cancel · Save resolution, in its footer slot (Wave 04 Cycle 05b B2).
+//! Text and buttons carry their words as labels, for the tests to read.
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement,
     ParentElement, Render, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
-        ActiveTheme, Disableable, Icon, Selectable, Sizable, WindowExt,
+        ActiveTheme, Disableable, Icon, Selectable, Sizable,
         button::{Button, ButtonVariants},
         h_flex, v_flex,
     },
@@ -59,6 +60,26 @@ impl ResolveSheet {
         let entity = cx.entity().downgrade();
         move |_, window, cx| {
             let _ = entity.update(cx, |sheet, cx| f(sheet, window, cx));
+        }
+    }
+
+    /// A footer button's press: as `on`, after focusing the sheet's own
+    /// handle, as `LifecycleDialog::on` does, so a footer control that goes
+    /// with its press leaves focus in the sheet (Wave 04 Cycle 05b B3).
+    fn on_footer<F>(
+        &self,
+        cx: &Context<Self>,
+        f: F,
+    ) -> impl Fn(&ClickEvent, &mut Window, &mut App) + use<F>
+    where
+        F: Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    {
+        let entity = cx.entity().downgrade();
+        move |_, window, cx| {
+            let _ = entity.update(cx, |sheet, cx| {
+                window.focus(&sheet.focus, cx);
+                f(sheet, window, cx)
+            });
         }
     }
 
@@ -445,7 +466,6 @@ impl ResolveSheet {
 
     /// Resume, Retry or Save resolution, and Cancel.
     fn buttons(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
-        let origin = self.origin.clone();
         let mut row = h_flex().gap_2().justify_end();
         if self.resumable() {
             row = row.child(
@@ -453,7 +473,7 @@ impl ResolveSheet {
                     .label(RESUME)
                     .primary()
                     .small()
-                    .on_click(self.on(cx, |sheet, window, cx| sheet.resume(window, cx))),
+                    .on_click(self.on_footer(cx, |sheet, window, cx| sheet.resume(window, cx))),
             );
         } else if self.kept.is_some() {
             row = row.child(
@@ -462,7 +482,7 @@ impl ResolveSheet {
                     .primary()
                     .small()
                     .disabled(self.waiting())
-                    .on_click(self.on(cx, |sheet, window, cx| sheet.save(window, cx))),
+                    .on_click(self.on_footer(cx, |sheet, window, cx| sheet.save(window, cx))),
             );
         } else if self.lost() {
             row = row.child(text("conflict-lost", LOST).text_sm());
@@ -481,18 +501,44 @@ impl ResolveSheet {
                     .primary()
                     .small()
                     .disabled(!ready)
-                    .on_click(self.on(cx, |sheet, window, cx| sheet.save(window, cx))),
+                    .on_click(self.on_footer(cx, |sheet, window, cx| sheet.save(window, cx))),
             );
         }
         row.child(
             Button::new("conflict-cancel")
                 .label(CANCEL)
                 .small()
-                .on_click(move |_, window, cx| {
-                    window.close_dialog(cx);
-                    window.focus(&origin, cx);
-                }),
+                .on_click(self.on_footer(cx, |sheet, window, cx| sheet.close(window, cx))),
         )
+    }
+
+    /// The Kit sheet's title slot: the header, inside `conflict-header`,
+    /// which takes the row's width beside the Kit's close button and wraps
+    /// its lines, as `frame::sheet_header` does (Wave 04 Cycle 05b B2).
+    pub(super) fn header_slot(&self, cx: &App) -> impl IntoElement + use<> {
+        div()
+            .id("conflict-header")
+            .test_support()
+            .flex_1()
+            .min_w_0()
+            .child(self.header(cx))
+    }
+
+    /// The Kit sheet's footer slot: the Git line and the buttons, inside
+    /// `conflict-footer`, which tracks the footer's own focus and saves on
+    /// Ctrl+Enter from its buttons, as the body does (Wave 04 Cycle 05b B2,
+    /// R-8).
+    pub(super) fn footer_slot(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
+        v_flex()
+            .id("conflict-footer")
+            .test_support()
+            .track_focus(&self.footer_focus)
+            .key_context(RESOLVE_SHEET_CONTEXT)
+            .on_action(cx.listener(|sheet, _: &SaveResolution, window, cx| sheet.save(window, cx)))
+            .w_full()
+            .gap_3()
+            .children(self.git_line(cx))
+            .child(self.buttons(cx))
     }
 }
 
@@ -506,12 +552,11 @@ impl Render for ResolveSheet {
             .key_context(RESOLVE_SHEET_CONTEXT)
             .on_action(cx.listener(|sheet, _: &SaveResolution, window, cx| sheet.save(window, cx)))
             .gap_3()
-            .max_h(px(720.))
+            .size_full()
+            .px_4()
+            .pb_4()
             .overflow_y_scroll()
-            .child(self.header(cx))
             .child(self.status(cx))
             .child(self.cards(cx))
-            .children(self.git_line(cx))
-            .child(self.buttons(cx))
     }
 }

@@ -137,7 +137,9 @@ impl LifecycleDialog {
 }
 
 impl Render for LifecycleDialog {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Repair locally…'s sheet, waiting for focus back inside (R-24).
+        self.conflicted_waits(window, cx);
         let stage = self.stage(cx);
         let mut body = v_flex().gap_3();
         let mut actions = Vec::new();

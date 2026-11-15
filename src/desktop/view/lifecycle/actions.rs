@@ -126,20 +126,22 @@ impl LifecycleDialog {
         });
     }
 
-    pub(super) fn in_workspace(
+    /// Closes the dialog and runs `f` on the window's workspace, giving
+    /// what it gives; `None` with no workspace.
+    pub(super) fn in_workspace<R>(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        f: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>),
-    ) {
+        f: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) -> R,
+    ) -> Option<R> {
         self.close(window, cx);
         let Some(Some(root)) = window.root::<Root>() else {
-            return;
+            return None;
         };
         let Ok(workspace) = root.read(cx).view().clone().downcast::<Workspace>() else {
-            return;
+            return None;
         };
-        workspace.update(cx, |workspace, cx| f(workspace, window, cx));
+        Some(workspace.update(cx, |workspace, cx| f(workspace, window, cx)))
     }
 
     /// Open repository details, not primary: the Add repository sheet,

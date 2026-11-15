@@ -17,7 +17,7 @@ use crate::desktop::view::{
 use support::*;
 
 #[path = "needs_attention_tests/actions.rs"]
-mod actions;
+pub(in crate::desktop::view) mod actions;
 #[path = "needs_attention_tests/closes.rs"]
 mod closes;
 #[path = "needs_attention_tests/hidden.rs"]

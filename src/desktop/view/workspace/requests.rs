@@ -42,6 +42,7 @@ fn owned(route: &ItemRoute) -> ItemRoute {
             root: root.clone(),
             request: *request,
         },
+        ItemRoute::Resolve(opening) => ItemRoute::Resolve(opening.clone()),
     }
 }
 
@@ -197,7 +198,8 @@ impl Workspace {
     /// Sharing & keys, the Keys page; Check host, the host named, or with
     /// none the repository's Hosts page (K-3); Set identity, its identity
     /// form; Show it, the entry of the request that may hold the
-    /// repository, or with none its pending operations.
+    /// repository, or with none its pending operations; the conflict
+    /// banner's Review changes, Resolve conflict (Wave 04 Cycle 05b B2).
     pub(in crate::desktop::view) fn open_route(
         &mut self,
         route: ItemRoute,
@@ -217,6 +219,9 @@ impl Workspace {
             } => self.open_hosts(root, window, cx),
             ItemRoute::SetIdentity(root) => self.identity_in_settings(root, window, cx),
             ItemRoute::Holder { root, request } => self.show_holder(root, request, window, cx),
+            ItemRoute::Resolve(opening) => {
+                self.show_resolve(*opening, window, cx);
+            }
         }
     }
 

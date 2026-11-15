@@ -15,6 +15,7 @@ use crate::desktop::{
     services::{drafts::NewItem, requests::DesktopRequestId},
     view::{
         close_draft::{self, Ask, CloseWithDraft},
+        conflict::ResolveSheet,
         drafts::DraftsEvent,
         item::{ChipField, ItemPane, Leaving, open_details},
         scroll::ContentScroll,
@@ -53,6 +54,9 @@ pub(super) enum SheetOwner {
     Settings,
     /// The Add repository sheet (Wave 04 Cycle 05a B1).
     AddRepository,
+    /// Resolve conflict (Wave 04 Cycle 05b B1).
+    #[allow(dead_code)] // Used from Task 6
+    Resolve(WeakEntity<ResolveSheet>),
 }
 
 impl ContentArea {
@@ -271,19 +275,23 @@ impl Workspace {
     /// Keeps the sheet its owner holds open, and closes any other (design
     /// A1). Settings and the Add repository sheet are kept whatever item is
     /// shown; once the Kit has closed one, `settings_closed` or
-    /// `add_closed(Kept)` runs (Wave 04 Cycle 05a B1). A details sheet is
-    /// kept while its tab is the one shown, and closes once it is not:
-    /// closed, left, or another item opened from the sheet (fact 80); Root
-    /// then gives focus back to the chip, or, when the chip went with its
-    /// tab, the content region takes it. A details sheet a chip asked for
-    /// opens while its tab is shown and no dialog is open, and never over
-    /// Settings or the Add repository sheet.
+    /// `add_closed(Kept)` runs (Wave 04 Cycle 05a B1). Resolve conflict is
+    /// kept whatever item is shown too, and once it has closed its owner is
+    /// cleared; focus is already where its close put it (Wave 04 Cycle 05b
+    /// B1). A details sheet is kept while its tab is the one shown, and
+    /// closes once it is not: closed, left, or another item opened from the
+    /// sheet (fact 80); Root then gives focus back to the chip, or, when the
+    /// chip went with its tab, the content region takes it. A details sheet
+    /// a chip asked for opens while its tab is shown and no dialog is open,
+    /// and never over Settings, the Add repository sheet or Resolve
+    /// conflict: asked for over one, it is dropped, not kept for its close.
     pub(super) fn sync_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let shown = self.shown_item(cx);
         let active = window.has_active_sheet(cx);
         let (keep, settings_closed, add_closed) = match &self.content.sheet {
             Some(SheetOwner::Settings) => (active, !active, false),
             Some(SheetOwner::AddRepository) => (active, false, !active),
+            Some(SheetOwner::Resolve(_)) => (active, false, false),
             Some(SheetOwner::Details(owner)) => (
                 active
                     && shown
@@ -302,7 +310,10 @@ impl Workspace {
             window.close_sheet(cx);
         }
         if !window.has_active_sheet(cx)
-            && matches!(self.content.sheet, Some(SheetOwner::Details(_)))
+            && matches!(
+                self.content.sheet,
+                Some(SheetOwner::Details(_) | SheetOwner::Resolve(_))
+            )
         {
             self.content.sheet = None;
         }
@@ -317,7 +328,7 @@ impl Workspace {
         if !add && self.add_flagged() {
             self.add_closed(AddClose::Quiet, window, cx);
         }
-        if settings || add {
+        if settings || add || self.resolve_open(window, cx) {
             self.content.details = None;
         } else if !window.has_active_dialog(cx)
             && let Some((pane, field)) = self.content.details.take()
