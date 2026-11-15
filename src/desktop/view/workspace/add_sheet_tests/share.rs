@@ -152,11 +152,11 @@ fn chosen_share(shell: &Shell, cx: &mut TestAppContext) -> Option<Option<String>
     sheet.read_with(cx, |sheet, cx| sheet.chosen_share(cx))
 }
 
-/// Add repository pressed: its confirmation open on its preview.
+/// Add repository pressed: its confirmation open on its preview, landed.
 pub(super) fn press_add(shell: &Shell, cx: &mut TestAppContext) -> bool {
     focus_control(shell, "add-submit", cx);
     shell.click("add-submit", cx);
-    shell.present("confirm-ok", cx)
+    preview_landed(shell, cx)
 }
 
 /// The selections the worker was sent for `root`, newest first, each by
@@ -217,7 +217,9 @@ pub(super) fn expect(
 }
 
 /// Every selection sent has ended, then `roots`' background refreshes: the
-/// worker must not outlive the test.
+/// worker must not outlive the test, and the next preview in the window is
+/// not prepared while one of them holds the repository lease, which would
+/// answer it busy.
 pub(super) async fn ended(shell: &Shell, roots: &[&Path], cx: &mut TestAppContext) {
     for id in selections(shell, cx) {
         shell.until_ended(id, cx).await;
@@ -238,6 +240,19 @@ struct Case {
     wanted: &'static [Option<&'static str>],
 }
 
+/// Confirm on the open preview of `root`'s add, the add until it has ended
+/// and been handled, then its selection and its background refresh until
+/// they have ended, before the next row prepares another preview. A press
+/// that sent no add is the row's failure.
+async fn add(table: &mut Table, shell: &Shell, row: &str, root: &Path, cx: &mut TestAppContext) {
+    let sent = confirm_and_end(shell, cx).await;
+    table.fact(&format!("{row} (its add)"), sent.is_some(), "the add sent");
+    if sent.is_some() {
+        settle(shell, cx);
+        ended(shell, &[root], cx).await;
+    }
+}
+
 /// The table of choices, each added in one window: a chosen remote over a
 /// root typed another way (R-29), Keep over a configured remote, unchanged
 /// choices, a configured remote the folder lacks, one sharing cannot use, a
@@ -246,7 +261,6 @@ struct Case {
 async fn choices(table: &mut Table, cx: &mut TestAppContext) {
     let (shell, a) = one_repo(cx, |_, _| ());
     shell.select(&a, cx);
-    let mut added: Vec<PathBuf> = Vec::new();
 
     // R-29: the root the library registered, not the one typed.
     let registered = with_origin(&shell, "registered");
@@ -260,9 +274,7 @@ async fn choices(table: &mut Table, cx: &mut TestAppContext) {
     if opened(table, &shell, row, cx) && checked_folder(&shell, &typed, cx) {
         choose(&shell, Some("origin"), cx);
         if press_add(&shell, cx) {
-            confirm_and_end(&shell, cx).await;
-            settle(&shell, cx);
-            added.push(registered.clone());
+            add(table, &shell, row, &registered, cx).await;
         }
     }
     expect(table, &shell, row, &registered, &[Some("origin")], cx);
@@ -322,25 +334,17 @@ async fn choices(table: &mut Table, cx: &mut TestAppContext) {
                 choose(&shell, to, cx);
             }
             if press_add(&shell, cx) {
-                confirm_and_end(&shell, cx).await;
-                settle(&shell, cx);
-                added.push(root.clone());
+                add(table, &shell, &row, &root, cx).await;
             }
         }
         expect(table, &shell, &row, &root, wanted, cx);
     }
 
     ineligible(table, &shell, cx);
-    if let Some(root) = held(table, &shell, cx).await {
-        added.push(root);
-    }
+    held(table, &shell, cx).await;
     ends(table, &shell, cx).await;
-    if let Some(root) = closed_meanwhile(table, &shell, cx).await {
-        added.push(root);
-    }
+    closed_meanwhile(table, &shell, cx).await;
 
-    let roots: Vec<&Path> = added.iter().map(PathBuf::as_path).collect();
-    ended(&shell, &roots, cx).await;
     let run = selections_run(&shell);
     table.fact(
         "P14 the choices: the worker ran each selection sent, once",
@@ -379,16 +383,15 @@ fn ineligible(table: &mut Table, shell: &Shell, cx: &mut TestAppContext) {
 /// R-30 (decision 20): a folder set up to share through `origin`, whose Git
 /// has no identity. The select is held on Keep with its reason and refuses
 /// a `Confirm` naming `origin`; the add, with an identity typed, sends
-/// nothing, since a selection would commit with no identity. Gives the
-/// root added.
-async fn held(table: &mut Table, shell: &Shell, cx: &mut TestAppContext) -> Option<PathBuf> {
+/// nothing, since a selection would commit with no identity.
+async fn held(table: &mut Table, shell: &Shell, cx: &mut TestAppContext) {
     let root = with_origin(shell, "held");
     let mut check = canned(&root, Some("origin"));
     check.identity_state = IdentityAvailability::Required;
     press_plus(shell, cx);
     let row = "P14 set up with no identity (R-30)";
     if !opened(table, shell, row, cx) || !land(shell, &root, check, cx) {
-        return None;
+        return;
     }
     let (is_held, chosen, line) = (
         of_sheet(shell, cx, |sheet| sheet.share_held()) == Some(true),
@@ -411,10 +414,9 @@ async fn held(table: &mut Table, shell: &Shell, cx: &mut TestAppContext) -> Opti
     let typed = set(shell, "add-name", &ada.name, cx) && set(shell, "add-email", &ada.email, cx);
     if !typed || !press_add(shell, cx) {
         table.fact(&format!("{row} (its preview)"), false, "the add's preview");
-        return None;
+        return;
     }
-    confirm_and_end(shell, cx).await;
-    settle(shell, cx);
+    add(table, shell, row, &root, cx).await;
     expect(
         table,
         shell,
@@ -423,7 +425,6 @@ async fn held(table: &mut Table, shell: &Shell, cx: &mut TestAppContext) -> Opti
         &[],
         cx,
     );
-    Some(root)
 }
 
 /// An add that ends (a canned failure): the sheet stays, nothing is sent.
@@ -455,22 +456,18 @@ async fn ends(table: &mut Table, shell: &Shell, cx: &mut TestAppContext) {
 }
 
 /// Decision 12: the sheet closed while the add runs, then the add
-/// succeeds: the share is still sent. Gives the root added.
-async fn closed_meanwhile(
-    table: &mut Table,
-    shell: &Shell,
-    cx: &mut TestAppContext,
-) -> Option<PathBuf> {
+/// succeeds: the share is still sent.
+async fn closed_meanwhile(table: &mut Table, shell: &Shell, cx: &mut TestAppContext) {
     let root = with_origin(shell, "closed");
     press_plus(shell, cx);
     let row = "P14 the sheet closed while the add runs";
     if !opened(table, shell, row, cx) || !checked_folder(shell, &root, cx) {
-        return None;
+        return;
     }
     choose(shell, Some("origin"), cx);
     if !press_add(shell, cx) {
         table.fact(&format!("{row} (its preview)"), false, "the add's preview");
-        return None;
+        return;
     }
     let held = shell.backend.hold_job(JobKind::RepoEnable);
     shell.click("confirm-ok", cx);
@@ -487,5 +484,5 @@ async fn closed_meanwhile(
     shell.until_ended(id, cx).await;
     settle(shell, cx);
     expect(table, shell, row, &root, &[Some("origin")], cx);
-    Some(root)
+    ended(shell, &[&root], cx).await;
 }

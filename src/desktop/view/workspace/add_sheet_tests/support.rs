@@ -23,6 +23,7 @@ use crate::desktop::{
     test_support::fixtures::{Fixture, identity, item_id},
     view::{
         add_repository::AddRepositorySheet,
+        confirm::PREPARING,
         harness::{Shell, key},
         settings::Shown,
         workspace::{Region, ToolbarButton, Workspace},
@@ -353,14 +354,24 @@ pub(super) fn checked_folder(shell: &Shell, folder: &Path, cx: &mut TestAppConte
     true
 }
 
-/// Add repository pressed on a checked `folder`: its confirmation is open
-/// on its preview. False when it is not.
+/// Add repository pressed on a checked `folder`: its preview landed.
 pub(super) fn preview(shell: &Shell, folder: &Path, cx: &mut TestAppContext) -> bool {
     if !checked_folder(shell, folder, cx) || !shell.present("add-submit", cx) {
         return false;
     }
     shell.click("add-submit", cx);
-    shell.present("confirm-ok", cx)
+    preview_landed(shell, cx)
+}
+
+/// Whether the confirmation shows its landed preview. It draws Confirm,
+/// disabled, while it prepares; a prepare answered busy retries on the
+/// test clock (Cycle 04 Ruling 52), which `keys_landed` advances.
+pub(super) fn preview_landed(shell: &Shell, cx: &mut TestAppContext) -> bool {
+    let state = |cx: &mut TestAppContext| shell.label("confirm-state", cx);
+    if state(cx).as_deref() == Some(PREPARING) {
+        shell.keys_landed(cx);
+    }
+    shell.present("confirm-ok", cx) && state(cx).as_deref() != Some(PREPARING)
 }
 
 /// The add requests of this session, newest first.
@@ -386,13 +397,15 @@ pub(super) async fn until_onboarded(shell: &Shell, root: &Path, cx: &mut TestApp
 }
 
 /// Confirm on the open preview, then the add until it has ended. Gives the
-/// request, if one was sent.
+/// request the press sent, if it sent one: never an earlier add's.
 pub(super) async fn confirm_and_end(
     shell: &Shell,
     cx: &mut TestAppContext,
 ) -> Option<DesktopRequestId> {
+    let before = enables(shell, cx);
     shell.click("confirm-ok", cx);
-    let id = enables(shell, cx).first().copied()?;
+    let after = enables(shell, cx);
+    let id = after.into_iter().find(|id| !before.contains(id))?;
     shell.until_ended(id, cx).await;
     Some(id)
 }
