@@ -27,7 +27,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | 3 | done, review approved first time (Minors parked) | code `5f8c10b7` (base `92f3ba73`; trailer amended before publishing); ledger `2c398b03` | yes |
 | 4 | done, design checkpoint stopped for the owner (Rulings 15 to 18), review approved first time (Minors parked) | code `0d5cae5c` (base `2c398b03`); ledger `4bab2795`; merge of main `9059778f`; ledger `f4059706`; ticket comment `315ae043` | yes |
 | 5 | done, review approved after fix round 1 (Minors parked) | code `1ff07fe3` (base `315ae043`), fix `0d14abe6`; ledger `80a39f6a` | yes |
-| 6 | done, review approved first time (Minors parked) | code `cb78fe3d` (base `80a39f6a`) | with the ledger commit |
+| 6 | done, review approved first time (Minors parked) | code `cb78fe3d` (base `80a39f6a`); ledger `d7b39f62` | yes |
+| 7 | done, review approved first time (Minors parked) | code `a14e862d` (base `d7b39f62`) | with the ledger commit |
 
 ## Branches published
 
@@ -1082,3 +1083,88 @@ Important; no loop. Parked Minors and owner's-eye items, for the final review:
    `returns.rs` stays at 502.
 8. Tab order on screen (Name, Location, Browse…, Main branch, prefix, Name,
    Email) follows draw order and is not asserted (P16, Task 9).
+
+## Task 7 (Share Changes Through)
+
+Step 1 (merge `origin/main`): a no-op, `origin/main` `14ca0938` was already an
+ancestor (main has not moved since Ruling 20). Base `d7b39f62`; code `a14e862d`,
+`feat(desktop): share changes through a chosen remote after an add`. 14 files
+under `src/desktop/`. Boundary diff empty; `Cargo.lock` unchanged. Gates pass.
+
+**What was built:** `add_repository/share.rs` (new, 389 lines: C1's select and
+C2's rule: `Share` items, the `Shares` delegate whose `on_will_change` refuses an
+ineligible remote, `share_confirmed` ignoring a `Confirm` naming one, `share_of`
+deciding what to send, `held` for R-30); `branches_stale` renamed
+`choices_stale`, starting `true`, with `sync_choices` syncing both selects (the
+share choice is the sheet's own `share_choice`, never the select's value);
+`SHARE_THROUGH`, `SHARE_HELP`, `KEEP_LOCAL`, `SSH_ONLY` verbatim from Part F
+plus `SHARE_NEEDS_IDENTITY` verbatim from C2; `add_form` draws the select after
+the main branch, existing mode only, not for a registered folder; `submit`
+decides the share when Add is pressed and `AddEvent::Confirmed` carries it, so a
+Prepare again re-records the same share; `PendingAdd::share` is used (its
+dead-code allow is removed); `workspace/add_sheet/share.rs` (new, 39 lines):
+`Workspace::send_share` sends `Intent::RemoteSelect { root, name }` on
+`Lane::User` with no confirmation, as Settings' `submit_select` does, for
+`registered_root` (R-29), nothing for `None` and nothing once
+`worker().quitting()` (K-10). `add_ended` calls it before the open-number
+checks, so an earlier open's share is still sent (R-26). `add_sheet.rs` is 499
+lines (was 494).
+
+**Tests written first, each seen failing:** P13
+`add_repository::tests::share::share_changes_through_lists_the_folders_remotes`
+(23 rows; 19 failed first) and P14
+`workspace::add_sheet::tests::a_chosen_remote_is_selected_after_the_add_succeeds`
+(45 rows in `add_sheet_tests/share.rs` 491 lines and `share_attempts.rs` 319;
+11 of 43 failed first). Four deliberate breakages each failed their rows. P14
+reads what the worker received; every row is transport-free (no SSH-harness
+case). `add_repository::tests` goes from 25 to 26, `add_sheet::tests` from 8 to
+9; no existing test function was changed.
+
+**Tests run:**
+
+- Implementer, by exact name: P13, P14 and P9 passed (3 of 3); P10, P11 and the
+  keyboard add walk passed earlier.
+- Orchestrator's module run, once, 4 filters (all matched at least one test):
+  `desktop::view::add_repository::tests` (26),
+  `desktop::view::workspace::add_sheet::tests` (9),
+  `desktop::view::settings::repositories::copy_tests` (1),
+  `desktop::view::keyboard_tests::settings` (6) — **42 passed, 0 failed**.
+
+**Existing tests edited:** none; the only edits add the new submodule
+declarations and P14's entry to `add_repository_tests.rs` (+2 lines, now 934)
+and `add_sheet_tests.rs`. No assertion removed.
+
+**Review** (sonnet): spec compliant, quality approved, no Critical or
+Important; no loop. Parked Minors and owner's-eye items, for the final review:
+
+1. **Design ambiguity for the owner (R-30 against C2):** C2's second case sends
+   `Some(None)` ("stop sharing") for Keep over a configured eligible remote,
+   "so the result agrees with what the sheet showed"; R-30 holds the select on
+   Keep for a Valid configuration with no identity, even when it names an
+   eligible remote. Read together the sheet would send "stop sharing", which
+   commits and fails without an identity. The code follows R-30 (`share_of`
+   returns `None` while held; P14 pins "nothing sent"). Amend C2's second case
+   ("unless held, R-30"); or show the configured remote selected and disabled in
+   the held state instead of Keep (more truthful, but R-30's literal text says
+   Keep).
+2. **For the final review (a real gap in a Review Focus item):**
+   `add_sheet_tests/share.rs` `closed_meanwhile`: R-26's "an earlier open's
+   success still sends" is only exercised with the sheet closed, never
+   reopened, so the session number does not change; a mutation that sent only
+   when `entry.session == self.add.session` would pass P14 (mutation 3 caught
+   only the "sheet still open" variant). A row that closes, reopens (a new
+   session), releases the held add and expects one send would pin it.
+3. `share_attempts.rs` `failed_selection` does not assert that focus stays and
+   the sheet is not reopened (no code path does it); no test pins that Create
+   sends no selection (hard-coded `None`); `mod share;` sits away from the other
+   module declarations in `add_sheet.rs`; the select's wrapper stays a Tab stop
+   while held and disabled (the Tab test passes).
+4. Before a check lands the select shows only Keep, chosen (the design is
+   silent; P13 pins it). `SHARE_NEEDS_IDENTITY` (R-30's line) is verbatim from C2
+   but has no row in Part F's table, like `ADDING`: P20 (Task 9) lists it. The
+   Prepare again row pins one send, not B10's waiting rule.
+5. Privacy: `Share.location` is the library-redacted `fetch_location`, which C1
+   requires and draws in the select's items; the request and `PendingAdd.share`
+   carry the remote's name only. P17 (Task 9) exercises it.
+6. Windows: the P14 row that types `sub/../registered` depends on path
+   canonicalisation; a native-CI follow-on, like the P12 literal.
