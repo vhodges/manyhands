@@ -23,7 +23,8 @@ reason. Commit trailer: `Co-Authored-By: Claude Sonnet 5.5
 | --- | --- | --- | --- |
 | 0 | review approved after fix round 1 (Minors parked) | merge of Cycle 04's branch `f5015aab`; design `81c3c0de`; Wave `5b7771db`, fix `42f807d5` (base `f5015aab`); ledger `4c515b5b`; merge of Cycle 04's tip `edb0e920`; ticket comment `46b5a11a` | yes |
 | 1 | done, review approved first time (Minors parked) | code `ded7ca46` (base `0ac6af37`); ledger `d9533dd9` | yes |
-| 2 | done, review approved after fix round 1 (Minors parked) | code `b2618100` (base `d9533dd9`), fix `31497e0e` | with the ledger commit |
+| 2 | done, review approved after fix round 1 (Minors parked) | code `b2618100` (base `d9533dd9`), fix `31497e0e`; ledger `92f3ba73` | yes |
+| 3 | done, review approved first time (Minors parked) | code `5f8c10b7` (base `92f3ba73`; trailer amended before publishing) | with the ledger commit |
 
 ## Branches published
 
@@ -491,3 +492,97 @@ Minors, for the final review:
   footer drawn outside the body would fail only through a keyed-close row. P1
   runs about ten windows in one `TestAppContext` (about 35 s): the first
   suspect if it ever flakes.
+
+Ruling 14: Task 3's `AddRepositorySheet` takes Settings' own `ContentScroll`
+and `OpenFlag` through its constructor
+(`new(services, scroll, open, window, cx)`), not "its own `ScrollHandle`" as
+the plan's Step 1 says — a scroll nothing draws would break "no visible
+change", the below-the-fold test and Cycle 04's P8; Task 4 gives the sheet its
+own scroll and flag through the same constructor, and this is a hand-off item,
+not an omission — cost if wrong: Task 4 does it anyway.
+
+## Task 3 (Extract The Add Forms' State)
+
+Base `92f3ba73`; code `5f8c10b7`, `refactor(desktop): move the Add repository
+forms into their own entity` (the implementer wrote an Opus 5.5 trailer against
+Ruling 5; the orchestrator corrected the trailer before anything was
+published, so `650f1889` became `5f8c10b7`). 11 files under `src/desktop/`.
+Boundary diff empty; `Cargo.lock` unchanged. Gates pass.
+
+**What moved:** the forms and all their state leave `RepositoriesPage` for
+`AddRepositorySheet` in `D/view/add_repository.rs` (475 lines),
+`add_repository/checks.rs` (195) and `add_repository/render.rs` (177). Its
+reads are stamped under `ViewScope::AddRepository` with generations of its own
+(R-9). `repositories.rs` went from 830 to 257 lines and holds an
+`Entity<AddRepositorySheet>` drawn where the forms were. The page keeps the
+managed section, its helpers, `NAME` and `EMAIL`. Review found the 17 tests'
+bodies and the production move identical except for the receiver, module paths
+and the scope line.
+
+**Test functions, before and after.** `repositories_tests.rs`: 17 before, 0
+after (only the helpers the manage tests import remain: `settings`, `page`,
+`input`, `value`, `set`, `registered`, `finished`, `control_focus`).
+`add_repository_tests.rs` (new): 17, the same names in the same order, each
+byte-identical to its original: `create_in_an_empty_directory_previews_nothing_then_creates_and_refreshes`,
+`adding_a_repository_without_identity_asks_for_one_and_keeps_it`,
+`a_repository_with_an_identity_shows_no_identity_fields`,
+`create_in_a_non_empty_directory_shows_its_typed_failure`,
+`adding_a_folder_that_is_not_a_repository_shows_its_typed_failure`,
+`submitting_with_no_folder_says_so`, `escape_on_the_preview_makes_nothing`,
+`a_create_whose_directory_changed_since_its_preview_offers_prepare_again`,
+`pressing_confirm_twice_creates_one_repository`,
+`a_partial_create_is_completed_by_retry_under_the_same_request`,
+`browse_fills_the_field_and_a_dismissal_leaves_it_unchanged`,
+`a_form_control_below_the_fold_is_scrolled_into_view`,
+`the_inspect_recovery_opens_the_page_with_its_root_checked`,
+`escape_on_an_add_preview_makes_nothing`,
+`an_add_whose_repository_was_enabled_since_its_preview_offers_prepare_again`,
+`add_pressed_at_once_checks_first_and_asks_for_the_identity`,
+`add_pressed_at_once_on_a_repository_with_an_identity_opens_the_preview`.
+`copy_tests.rs`: 1 before, 1 after (`settings_copy_uses_the_vocabulary`).
+`repositories_manage_tests.rs`: untouched, 20 tests.
+
+**Tests run:** by exact name, the 17 moved tests plus the copy test, 18 of 18
+passed; the 8 Cycle 04 tests that use the delegates, 8 of 8 passed
+(implementer). Orchestrator's module run, once, 7 filters:
+`desktop::view::add_repository::tests` (17),
+`desktop::view::settings::repositories::tests` (0, helpers only),
+`::manage_tests` (20), `::copy_tests` (1),
+`desktop::view::keyboard_tests::settings` (6),
+`desktop::view::workspace::settings_sheet::tests` (14),
+`desktop::view::settings::chosen_tests` (3) — **61 passed, 0 failed**.
+
+**Existing tests edited:** E-1 (the 17 moved, unchanged) and E-17a (the copy
+table's 20 Add and Create rows re-pointed to `add_repository`, plus `NAME` and
+`EMAIL` kept: 22 rows, none removed). No assertion removed; no Cycle 04 test
+edited. Known coverage gap: P18's source scan covers only `view/settings/`, so
+the 20 moved constants leave its "declared but missing from the table" check
+until P20 (Task 9); their rows still check the vocabulary.
+
+**Delegates for Task 4 to remove** (`D/view/settings/repositories.rs`):
+`add_path_focus` (`:156`, called from `settings/arrive.rs:66-75`),
+`inspect_root` (`:161`, `arrive.rs:70-75`), `forget_pending_submit` (`:168`,
+`settings/mod.rs:279-281`; its signature gained `cx`), the test-only `input`
+and `control_focus` (`:120`, `:131`), the test-only `add_controls` field
+(`:59`, filled `:101`) with `add_repository::Controls` and
+`AddRepositorySheet::controls()` (`add_repository.rs:205`, `:283`), and the
+test-only `RepositoriesPage::add_sheet()` (`:141`). Task 4 points
+`add_repository_tests.rs`'s `sheet` helper at `Workspace::add_sheet()` and
+removes the accessor.
+
+**Review** (sonnet): spec compliant, quality approved, no Important. Parked
+Minors, for Task 4 and the final review:
+
+- The sheet depends on Settings internals (`OpenFlag`, `wrapped`,
+  `field_column`, `NAME`, `EMAIL`): Task 4 replaces `OpenFlag` with the
+  sheet's own flag and decides where `wrapped` and `field_column` live
+  (Ruling 14).
+- `text`, `field`, `button` and `heading` now exist twice (page and sheet);
+  the page's stay for `manage.rs`. Staged duplication.
+- `add_repository_tests.rs` is 829 lines: a mechanical move of an 832-line
+  test file, no submodule in the File Map. Not split.
+- `settings::repositories::tests` holds helpers only, so its module filter
+  matches zero tests.
+- The sheet is an extra view node wrapping the forms in a flex column, with
+  the inner `gap_4` reproducing the old spacing: no test covers appearance;
+  the owner's on-screen check settles it.
