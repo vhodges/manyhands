@@ -753,11 +753,13 @@ async fn steps_show_their_state_and_progress(cx: &mut TestAppContext) {
 }
 
 /// The footer as drawn: the ids of what `lifecycle-footer` holds, by their
-/// left edge (design, Testing), with their paths, and its hint, read by the
-/// frame's hint id inside the footer.
+/// left edge (design, Testing), line by line where the footer wraps, with
+/// their paths; those not on screen; and its hint, read by the frame's hint
+/// id inside the footer.
 struct Drawn {
     ids: Vec<String>,
     paths: Vec<Vec<ElementId>>,
+    hidden: Vec<String>,
     hint: Option<String>,
 }
 
@@ -766,6 +768,7 @@ fn drawn_footer(shell: &Shell, cx: &mut TestAppContext) -> Drawn {
         let footer = ElementId::from("lifecycle-footer");
         let mut hint = None;
         let mut drawn = Vec::new();
+        let mut hidden = Vec::new();
         for element in gpui_kit::base::test_support::snapshots(window) {
             let path = element.path();
             let Some(at) = path.iter().position(|id| *id == footer) else {
@@ -779,12 +782,26 @@ fn drawn_footer(shell: &Shell, cx: &mut TestAppContext) -> Drawn {
             if name.as_ref() == "frame-hint" {
                 hint = element.label().map(str::to_owned);
             } else {
-                drawn.push((element.bounds().left(), name.to_string(), path.to_vec()));
+                if !element.visible() {
+                    hidden.push(name.to_string());
+                }
+                // A line's items share their middle: the row centres them.
+                let bounds = element.bounds();
+                drawn.push((
+                    (bounds.center().y, bounds.left()),
+                    name.to_string(),
+                    path.to_vec(),
+                ));
             }
         }
         drawn.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         let (ids, paths) = drawn.into_iter().map(|(_, id, path)| (id, path)).unzip();
-        Drawn { ids, paths, hint }
+        Drawn {
+            ids,
+            paths,
+            hidden,
+            hint,
+        }
     })
 }
 
@@ -829,6 +846,11 @@ fn footed(shell: &Shell, row: &str, foot: Foot, cx: &mut TestAppContext) {
     assert_eq!(stage, foot.stage, "{row}: the stage");
     let drawn = drawn_footer(shell, cx);
     assert_eq!(drawn.ids, foot.ids, "{row}: the footer, in drawn order");
+    assert!(
+        drawn.hidden.is_empty(),
+        "{row}: drawn off the dialog: {:?}",
+        drawn.hidden
+    );
     assert_eq!(
         shell.label("lifecycle-cancel", cx).as_deref(),
         foot.dismiss,

@@ -223,12 +223,14 @@ impl Render for LifecycleDialog {
         };
         // The footer is the last child of the element that tracks the
         // dialog's focus, inside which the privacy sweeps and focus reads
-        // find the buttons (C5a R-19).
+        // find the buttons (C5a R-19). A stage with more buttons than fit
+        // the 580 px dialog wraps them onto another line, still in order,
+        // rather than drawing them past its edge, where a click misses.
         v_flex()
             .id("lifecycle-dialog")
             .test_support()
             .track_focus(&self.focus)
             .child(frame::body(body.children(self.repair_line(cx))))
-            .child(frame::footer(footer, cx).id("lifecycle-footer"))
+            .child(frame::footer(footer, cx).flex_wrap().id("lifecycle-footer"))
     }
 }
