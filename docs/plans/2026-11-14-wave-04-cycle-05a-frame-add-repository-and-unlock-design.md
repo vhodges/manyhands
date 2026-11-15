@@ -37,6 +37,14 @@ Planned against:
   Settings. Cycle 04 is in execution. Task 0 re-maps every name this
   design takes from it against the merged code (U-1).
 
+**Re-mapped at Task 0 (U-1), 2026-11-14.** Cycle 04 is not on main. On the
+owner's direction its branch, at `7a484a7a`, was merged into this ticket
+branch at `f5015aab`, and this design's citations of Cycle 04 were read
+against that merge: facts 9, 10, 13a, 14, 16–24, 23a, 27, 31 and 40; A3's
+hand-drawn rings; B2–B4, B9's G4 and G5, and B12; Testing; and the Named
+Edits. Names, signatures and lines changed; no contract, ruling, G row,
+P row or decision did.
+
 ## Conventions
 
 - `D/` is `src/desktop/`; `GC/` is the locked
@@ -55,6 +63,9 @@ Planned against:
 ## Baseline Facts
 
 Read on 2026-11-14 at `ea6d899b`, and in Cycle 04's approved design.
+Facts 9–10, 13a, 14, 16–24, 27, 31 and 40 were re-read by Task 0 against
+Cycle 04's merged code (`7a484a7a`, merged at `f5015aab`); their lines are
+that merge's.
 
 ### The dialogs today
 
@@ -125,35 +136,43 @@ Read on 2026-11-14 at `ea6d899b`, and in Cycle 04's approved design.
 ### Add and Create today
 
 9. **Both forms live in Settings › Repositories,**
-   `D/view/settings/repositories.rs` (802 lines). About 560 lines serve
+   `D/view/settings/repositories.rs` (830 lines). About 560 lines serve
    them:
-   - copy constants `:71-99`;
-   - `enum Form { Add, Create }` `:101-175`, which names every id:
-     `add-path`, `add-branch`, `add-prefix`, `add-name`, `add-email`,
-     `add-browse`, `add-submit`, `add-message`, and the same with
-     `create-`;
+   - copy constants `:75-100`;
+   - `enum Form { Add, Create }` `:105-177` (and `FORMS` `:179`), which
+     names every id: `add-path`, `add-branch`, `add-prefix`, `add-name`,
+     `add-email`, `add-browse`, `add-submit`, `add-message`, and the same
+     with `create-`;
    - `enum Inspection { None, Checking(String), Checked { path,
-     inspection }, Busy(String), Failed(ResultCode) }` `:177-205`;
+     inspection }, Busy(String), Failed(ResultCode) }` `:181-209`;
    - the page's fields `inspection`, `failed_path`, `generations`,
      `inspect_read`, `pending_branch`, `messages`, `browsing`,
-     `browse_unavailable`, `submit_pending`, `window` (`:207-239`);
-   - `input_event`, `forget_inspection`, `inspect` (`:383-433`),
-     `inspect_root` (`:436`), `add_checked`, `resume_submit` (`:461`),
-     `submit` (`:483-536`), `browse` (`:539`), `chosen` (`:567`);
-   - `folder` (`:640`), `inspection` (`:667`), `message` (`:718`),
-     `add_form` (`:724-750`) and `create_form` (`:752-772`).
+     `browse_unavailable`, `submit_pending`, `open` (Cycle 04's
+     `OpenFlag`, fact 20) and `window` (`:217-241`);
+   - `input_event`, `forget_inspection`, `inspect` (`:353-446`),
+     `inspect_root` (`:449`), `forget_pending_submit` (`:467`, Cycle 04's
+     R-48), `add_checked` (`:473`), `resume_submit` (`:482`, which goes on
+     only while `open.is_open`), `submit` (`:505-558`), `browse` (`:561`),
+     `chosen` (`:589`);
+   - `folder` (`:662`), `inspection` (`:689`), `message` (`:740`),
+     `add_form` (`:746-772`) and `create_form` (`:774-794`);
+   - `add_path_focus` (`repositories/manage.rs:392-396`), which Cycle 04
+     put beside `name_focus` for the routes that land on `add-path`.
 
-   `field`, `button`, `heading`, `text`, `NAME` and `EMAIL` are shared
-   with the manage section (`repositories/manage.rs`).
+   `field` (`:625`), `button` (`:642`), `heading` (`:678`), `text`
+   (`:613`), `NAME` and `EMAIL` are shared with the manage section
+   (`repositories/manage.rs`). The page draws the managed section, then
+   Cycle 04's Sharing (the Remotes page's view), then the two forms
+   (`render`, `:797-817`).
 10. **The folder check** reads
     `services.read(ReadKind::Inspect, stamp, move |service| service.inspect_repository(&root), …)`
-    (`:393-398`) under `ViewScope::Settings(SettingsPage::Repositories)`,
-    a scope the manage section's reads share (`D/model/stamp.rs:32-46`).
-    It runs on Enter, on blur after a change, and after Browse. A
-    successful check fills an empty branch from `head_branch`
-    (`:406-408`). A failure keeps only its code: `Failed(failure.code)`
-    (`:417`) drops the read's recovery actions. Busy shows a label and no
-    Retry.
+    (`:408-444`) under `ViewScope::Settings(SettingsPage::Repositories)`,
+    a scope the manage section's reads share (`D/model/stamp.rs:52-94`;
+    `repositories/manage.rs:219`). It runs on Enter, on blur after a
+    change, and after Browse. A successful check fills an empty branch
+    from `head_branch` (`:419-421`). A failure keeps only its code:
+    `Failed(failure.code)` (`:428-431`) drops the read's recovery actions.
+    Busy shows a label and no Retry.
 11. **What the check returns.** `RepositoryInspectionDto`
     (`src/repository/read/dto.rs:153-162`): `selected_path`, `root`,
     `registered`, `head_branch: Option<String>`,
@@ -205,78 +224,147 @@ Read on 2026-11-14 at `ea6d899b`, and in Cycle 04's approved design.
     observer closes the dialog on any finish that is not stale, then
     focuses its origin, with a direct `close_dialog`, not the deferred one
     (`D/view/confirm.rs:510-545`). The Workspace's operations observer was
-    registered at startup (`D/view/workspace.rs:214`), before any dialog's,
+    registered at startup (`D/view/workspace.rs:224`, its handler
+    `operations_changed` at `D/view/workspace/requests.rs:127`), before any dialog's,
     so it sees `Finished` while the confirmation is still open. Prepare
     again re-confirms the same request id and emits
     `Followed::Confirmed` again (`:466-472`), and the model can still hold
     the earlier attempt's state until the new one is queued (`:521-525`).
     A failed add is shown by the Activity row, not by the dialog.
-14. **Browse** (`:539-587`) calls `cx.prompt_for_paths` for one
+14. **Browse** (`:561-609`) calls `cx.prompt_for_paths` for one
     directory. While it is open the button is disabled with no text;
-    after a platform failure it stays disabled (`:556`), and the reason
-    (`browse-unavailable`) is drawn once, at the bottom of the page
-    (`:782-784`). A chosen path that is not text gives the message
-    `BROWSE_NOT_TEXT` for that choice and leaves Browse enabled
-    (`:577-580`). `inspect_root` ignores a root that is not valid UTF-8
-    (`:442-444`).
+    after a platform failure it stays disabled (`:579`; `folder`, `:663`),
+    and the reason (`browse-unavailable`) is drawn once, at the bottom of
+    the page (`:804-806`, `:815`). A chosen path that is not text gives
+    the message `BROWSE_NOT_TEXT` for that choice and leaves Browse
+    enabled (`:599-601`). `inspect_root` ignores a root that is not valid
+    UTF-8 (`:455-457`).
 15. **Remote selection today** (`D/view/settings/remotes.rs`).
-    `submit_select(root, name, …)` (`:438-451`) builds
+    `submit_select(root, name, …)` (`:373-387`) builds
     `Intent::RemoteSelect { root, name }`, unconfirmed
-    (`D/services/requests.rs:374`), and submits it with
-    `worker().submit(intent, Lane::User, None, None)` (`:453`). Its
-    Activity row says "Choosing how {repo} shares", then "{repo} now
-    shares through {name}", or on failure "Couldn't choose how {repo}
-    shares" with the message and "Your work is safe on this computer."
-    (`D/model/activity/intent_words.rs:106-113`,
-    `D/model/activity/requests.rs:296-298`). `NOT_ELIGIBLE` is "Not
-    eligible for publication: publishing needs a remote reached over SSH"
-    (`remotes.rs:86-87`). The page lists `fetch_location` beside each
-    name.
-16. **The ways in today** all open Settings › Repositories in the item
-    area:
+    (`D/services/requests.rs:374`), and submits it through the page's
+    `submit` with `worker().submit(intent, Lane::User, None, None)`
+    (`:389-396`). Its Activity row says "Choosing how {repo} shares", then
+    "{repo} now shares through {name}", or on failure "Couldn't choose how
+    {repo} shares" with the message and "Your work is safe on this
+    computer." (`D/model/activity/intent_words.rs:106-113`,
+    `D/model/activity/requests.rs:296-298`). Cycle 04 rewrote the page's
+    copy (its Part E): `NOT_ELIGIBLE` is now "Can't be the shared copy:
+    sharing needs a remote reached over SSH" (`remotes.rs:83-84`), and
+    `SELECT_NONE` "Keep changes on this computer" (`:89`). The page lists
+    `fetch_location` on a "Fetches from" line beside each name (`:570`).
+16. **The ways in today** all open the Settings sheet (Cycle 04) on
+    Repositories:
     - the empty Repositories panel's "Add or create a repository…"
-      (`D/view/repositories/body.rs:108-119`);
+      (`D/view/repositories/body.rs:98-108`), which calls
+      `show_settings(SettingsRoute::AddRepository, None, …)` (`:104`, C4
+      W-5);
     - the toolbar's `+`, `ToolbarButton::AddRepository`, id
-      `add-repository-button` (`D/view/dock/header/toolbar.rs:235-255`);
-    - the `repo.inspect` and `remote.history` recoveries
-      (`D/view/workspace/requests.rs:602`) and the lifecycle dialog's
-      "Open repository details" (`D/view/lifecycle/actions.rs:144-153`),
-      through `inspect_in_settings` (`D/view/workspace/content.rs:237-248`),
-      `SettingsHost::inspect` (`D/view/settings/mod.rs:354-363`) and
-      `inspect_root`.
-17. **Tests reach the forms** through `settings()` and the helpers of
-    `D/view/settings/repositories_tests.rs:41-170`, which the manage tests
-    import (`repositories_manage_tests.rs:22`).
+      `add-repository-button`, in `press_toolbar`
+      (`D/view/dock/header/toolbar.rs:232-260`; the same call at
+      `:247-250`, C4 W-6);
+    - the `repo.inspect` and `remote.history` recoveries, in
+      `run_recovery` (`D/view/workspace/requests.rs:598`, after it focuses
+      its origin at `:575`; C4 W-27), and the lifecycle dialog's "Open
+      repository details" (`D/view/lifecycle/actions.rs:142-153`, the call
+      at `:148`; C4 W-22), through `inspect_in_settings`
+      (`D/view/workspace/content.rs:221-228`, `pub(crate)`, a wrapper for
+      `show_settings(SettingsRoute::Inspect(root), None, …)`). Cycle 04
+      removed `SettingsHost::inspect`: the `Inspect` arm of
+      `SettingsHost::arrive` (`D/view/settings/arrive.rs:70-75`) calls
+      `inspect_root` and lands on `add_path_focus`.
+17. **Tests reach the forms** through `settings()` (which opens Settings
+    by Ctrl+,) and the helpers of `D/view/settings/repositories_tests.rs:40-211`
+    (with `fill_create` `:433`, `control_focus` `:647` and `checked_add`
+    `:724`), which the manage tests import (`repositories_manage_tests.rs:21-22`:
+    `control_focus`, `finished`, `page`, `registered`, `set`, `settings`,
+    `value`).
 
-### Cycle 04 (approved design, not yet merged)
+### Cycle 04 (merged into this branch at `f5015aab`, not yet on main)
 
-18. **The sheet owner** (C4 A1): `ContentArea.sheet` becomes
-    `Option<SheetOwner>`, `enum SheetOwner { Details(WeakEntity<ItemPane>), Settings }`,
-    in `D/view/workspace/content.rs`. `sync_sheet` keeps Settings while a
-    sheet is active, runs `settings_closed` when the Kit has closed it,
-    and closes quietly a host left open under another owner.
+Re-mapped by Task 0 against Cycle 04's branch at `7a484a7a` (U-1).
+
+18. **The sheet owner** (C4 A1): `ContentArea.sheet` is
+    `Option<content::SheetOwner>` (`D/view/workspace.rs:95`), and
+    `pub(super) enum SheetOwner { Details(WeakEntity<ItemPane>), Settings }`
+    is in `D/view/workspace/content.rs:44-50`. `sync_sheet`
+    (`content.rs:270-324`) keeps Settings while a sheet is active, runs
+    `settings_closed(false)` when the Kit has closed it (`:281-296`; the
+    backstop, since the sheet's `on_close` already runs it, C4 Ruling 20),
+    closes quietly a host left shown under another owner (`:302-306`, C4
+    A1 case 3), and opens no requested details sheet while the owner is
+    `Settings` (`:307-315`, C4 A1 case 5). Its test mirror is
+    `SheetOwnerKind { Details, Settings }` (`D/view/workspace/settings_sheet.rs:38-44`,
+    test-only), read by `Workspace::sheet_owner()` (`:369-376`).
 19. **Opening Settings** (C4 A2): one function,
-    `Workspace::show_settings(route: SettingsRoute, origin: Option<FocusHandle>, window, cx)`,
-    in `D/view/workspace/settings_sheet.rs`. `SettingsRoute` has
-    `Page`, `AddRepository` ("the Repositories page, on its Add folder
-    field"), `Manage(PathBuf)`, `Inspect(PathBuf)`, `Identity`, `Remotes`,
-    `Keys`, `Hosts`, `CheckHost` and `RetryGeneration`. The origin is the
-    first of the argument, the Workspace's `settings_origin`, an open
-    layer's `restore`, and the focused handle. `show_settings` refuses
-    while a dialog is open or the app is quitting.
-20. **Closing Settings** (C4 A3, A4): `settings_closed(quiet)` closes the
-    Kit sheet if it is still active, clears the owner and the host's
-    `open` flag, hides the host (which empties a typed passphrase and a
-    pending Add), and unless `quiet` focuses the origin and arms
-    `settings_return`. Every quit path closes Settings quietly. Escape
-    always closes Settings, also while a request runs (C4 decision 6).
+    `pub(in crate::desktop::view) fn show_settings(&mut self, route: SettingsRoute, origin: Option<FocusHandle>, window, cx)`,
+    in `D/view/workspace/settings_sheet.rs:107-185`. `SettingsRoute`
+    (`D/view/settings/arrive.rs:13-38`) has `Page(SettingsPage)`,
+    `AddRepository` ("the Repositories page, on its Add folder field"),
+    `Manage(PathBuf)`, `Inspect(PathBuf)`, `Identity(PathBuf)`,
+    `Remotes(PathBuf)`, `Keys`, `Hosts(PathBuf)`,
+    `CheckHost(PathBuf, SshAuthority)` and
+    `RetryGeneration(DesktopRequestId)`; `SettingsHost::arrive(&mut self, route: &SettingsRoute, window, cx) -> Option<FocusHandle>`
+    (`arrive.rs:51-112`) applies it and gives the control to focus, `None`
+    meaning the page's menu entry, and `arrive_focused` (`:117-129`)
+    focuses it. `Manage(root)` chooses `root` (`D/view/settings/chosen.rs:25-43`)
+    and lands on the Repositories entry, `("settings-page", 0)`. In order,
+    `show_settings`: refuses while a dialog is open or the app is quitting
+    (`:124-126`); closes quietly a Settings the Kit closed unseen
+    (`:127-130`); chooses the repository (`choose_on_open`, `:133-136`);
+    if Settings is open, arrives in place and keeps the origin
+    (`:137-142`); drops a requested details sheet and closes any active
+    sheet, setting the owner to `None` (`:143-147`); takes the origin as
+    the first of the argument, the Workspace's `settings_origin`, an open
+    Workspace layer's (`take_layer_origin`, `:192-209`: its `restore`,
+    else its context; the layer closes) and the focused handle
+    (`:148-151`); records its region (`origin_region`, `:214-224`) in
+    `settings_return` (`:152-155`); focuses the origin before `open_sheet`
+    (`:156-158`, C4 R-44); sets the host's origin and `open` flag
+    (`:159-162`); opens the sheet, whose `on_close` runs
+    `settings_closed(false)` (`:163-178`); then focuses the route's target
+    (`:181-183`). `settings_origin: Option<FocusHandle>`
+    (`D/view/workspace.rs:149`) is set for one handler call by
+    `set_settings_origin` (`settings_sheet.rs:98-105`) from Cycle 03b's
+    `choose_activity` (`D/view/activity/actions.rs:50-52`).
+    `take_layer_origin` and `origin_region` are private to
+    `settings_sheet.rs`.
+20. **Closing Settings** (C4 A3, A4):
+    `pub(super) fn settings_closed(&mut self, quiet: bool, window, cx)`
+    (`settings_sheet.rs:226-266`) closes the Kit sheet if the owner is
+    `Settings` and a sheet is still active (`:239-242`), clears the owner
+    (`:243-245`), clears the host's `open` flag, hides the host and takes
+    its origin (`:246-250`: `SettingsHost::set_open`, `hide` and
+    `take_origin`, `D/view/settings/mod.rs:284-288`, `:273-282`,
+    `:300-303`). `hide` empties a typed passphrase (`forget_passphrase`,
+    `mod.rs:253-268`) and a pending Add (`forget_pending_submit`). Unless
+    `quiet`, **or a dialog or sheet is open by then** (`modal_open`,
+    `:253`), it focuses the origin and arms `settings_return`
+    (`:256-263`); with no origin, the origin's region, else Content
+    (`:264`). The host's origin is a weak handle set by `set_origin`
+    (`mod.rs:295-298`); `take_origin` is the only read of it. The `open`
+    flag is `OpenFlag(Rc<Cell<bool>>)` (`D/view/settings/mod.rs:92-112`),
+    shared with the pages; its `is_open(window, cx)` also requires an
+    active sheet (C4 R-47), and its `set` is private to `settings`.
+    `settings_return` is `SettingsReturn { region, armed }`
+    (`settings_sheet.rs:46-83`, Workspace field `workspace.rs:153`), its
+    constructor and fields private to `settings_sheet.rs`; each render
+    ticks it (`D/view/workspace/render.rs:168`), the second render after
+    arming clears it (C4 Ruling 21), and `focus_lost` takes it
+    (`D/view/workspace/focus.rs:297-301`). Every quit path calls
+    `close_settings_quietly` (`settings_sheet.rs:337-345`) at
+    `D/view/workspace/lifecycle.rs:90`, `:231` and `:280`. Escape always
+    closes Settings, also while a request runs (C4 decision 6).
 21. **The routes Cycle 04 moves to this Cycle** (C4 Part D):
-    W-5 (empty panel), W-6 (toolbar `+`), both
-    `show_settings(AddRepository, None, …)` landing on `add-path`; W-22
-    (lifecycle "Open repository details") and W-27 (the recoveries),
+    W-5 (empty panel, `repositories/body.rs:104`), W-6 (toolbar `+`,
+    `toolbar.rs:247-250`), both `show_settings(AddRepository, None, …)`
+    landing on `add-path`; W-22 (lifecycle "Open repository details",
+    `lifecycle/actions.rs:148`) and W-27 (the recoveries,
+    `workspace/requests.rs:598`), through `inspect_in_settings`,
     `Inspect(root)` landing on `add-path`. C4 R-48: `submit_pending` is
-    cleared when the host hides and by `inspect_root`. C4 R-55: `Inspect`
-    does not change the chosen repository.
+    cleared when the host hides (`settings/mod.rs:279-281`) and by
+    `inspect_root` (`repositories.rs:459-460`). C4 R-55: `Inspect` does
+    not change the chosen repository (`chosen.rs:25-43`, `:59-60`).
 22. **Cycle 04's focus contract** is its A6 table (F1–F19), each row read
     after at least one draw, and A7's ten facts any mechanism must
     survive: focus reads lag a frame; Root's overlays sit outside the
@@ -284,21 +372,51 @@ Read on 2026-11-14 at `ea6d899b`, and in Cycle 04's approved design.
     `close_sheet` and `close_all_dialogs` move focus without looking;
     `focus_lost` may have no target; a layer's `restore` may be empty;
     `region_of` defaults to Content; `on_next_frame` never runs in tests;
-    an `open` flag is only as fresh as the close that clears it.
-23. **Cycle 04's Downstream Obligations "For Cycle 05"**: an owner variant
-    for the Add repository sheet; emptying a typed passphrase when it
-    replaces Settings; reopening Settings at Repositories after Cancel or
-    Add with the origin Settings recorded first; the routes W-5, W-6,
-    W-22 and W-27; the common frame keeps Settings' Escape rule.
+    an `open` flag is only as fresh as the close that clears it. The
+    merged mechanism (C4 Rulings 20–22): the sheet's `on_close` runs
+    `settings_closed` at once; R-46 is a check after each frame, deferred
+    from the Workspace's render (`render.rs:174-182`,
+    `keep_focus_in_settings`, `settings_sheet.rs:292-313`), that moves
+    only focus it finds on a control drawn behind the sheet
+    (`drawn_behind`, `:275-290`, which reads the host's `layer` handle);
+    and `focus_lost` keeps a lost focus in the sheet
+    (`settings_keeps_lost_focus`, `:315-335`; `focus.rs:285-290`).
+23. **Cycle 04's Downstream Obligations "For Cycle 05"**
+    (`docs/Cycles/wave-04-cycle-04-settings-sheet.md:192-203`): an owner
+    variant for the Add repository sheet; emptying a typed passphrase
+    when it replaces Settings; reopening Settings at Repositories after
+    Cancel or Add with the origin Settings recorded first; the routes W-5,
+    W-6, W-22 and W-27; the common frame keeps Settings' Escape rule.
 23a. **Cycle 04 keeps focus inside Settings only.** Its R-34
-    (`focus_content` does nothing and `apply_review`'s refocus is
-    dropped) and R-46 (a focus landing behind the open sheet goes to the
-    page's entry) are keyed on the owner `Settings` (C4 A3, A5; F16,
-    F18). Its Ctrl+, handler opens Settings over the details sheet (C4
-    A5). It adds `D/view/settings/frame.rs` for the Settings header.
-24. **Cycle 04's execution has started.** Its branch holds Task 0
-    (`9f89a3bb`, `003eb518`), whose ledger adds a way in (W-36) and
-    rulings 7 and 8. Task 0 of this Cycle reads the merged result.
+    (`focus_content` does nothing while `settings_open`,
+    `D/view/workspace/content.rs:595-613`, and `apply_review`'s refocus is
+    dropped while the owner is `Settings`, `:131-137`) and R-46 (a focus
+    landing behind the open sheet goes to the page's entry, fact 22) are
+    keyed on `settings_open`, the owner `Settings` with a sheet active
+    (`settings_sheet.rs:93-96`) (C4 A3, A5; F16, F18). Its Ctrl+, handler
+    is `Workspace::settings_key` (`settings_sheet.rs:347-360`), bound with
+    a guard of its own at `D/view/workspace/render.rs:268-272`: it returns
+    while a dialog or Settings is open (`:351-353`), else it calls
+    `show_settings(Page(Repositories), None, …)`, which closes any other
+    sheet (C4 A5). It adds `D/view/settings/frame.rs` (185 lines):
+    `SettingsHost::sheet` draws the 720 px Kit sheet, its title slot
+    holding `settings-heading` and `settings-note` (`:61-83`), and its
+    body as an overlay that takes the page keys (`:92-103`) around the
+    scroll `settings-scroll` (`:113-120`). The body's scroll is a
+    `ContentScroll` region kept on its focused control
+    (`column.region_keeping()`, `D/view/settings/mod.rs:166-170`; C4
+    Ruling 57). A Kit button that a route lands on is drawn with
+    `wrapped_kit` (`D/view/settings/kit_button.rs`, private to
+    `settings`), since focus on a plain `wrapped` wrapper's handle draws
+    no ring and Enter does nothing (C4 final review, Important 1; Ruling
+    55).
+24. **Cycle 04 is not on main.** On the owner's direction (2026-11-14) its
+    branch, at `7a484a7a`, was merged into this ticket branch at
+    `f5015aab` in place of Task 0's merge of main; the re-map is of that
+    tip. Its ledger's W-36 (Activity's Share main row, `Remotes(root)`) is
+    not a way into the Add sheet. Its branch was still moving at the merge
+    (a flaky test being chased), so its tip, or main once it lands, is
+    merged again before Task 7 and before review-ready.
 
 ### The Unlock key dialog today
 
@@ -320,12 +438,13 @@ Read on 2026-11-14 at `ea6d899b`, and in Cycle 04's approved design.
     `UnlockRequest { key_id, label, source, reason }`
     (`src/repository/keys/session.rs:139-150`). No fingerprint, and no
     sign that an earlier attempt failed. `Workspace::show_prompt`
-    (`D/view/workspace/lifecycle.rs:354-379`) opens it.
+    (`D/view/workspace/lifecycle.rs:358-383`, `open_dialog` at `:381`)
+    opens it.
 28. **The key list.** `list_keys()` (`src/repository/read/credentials.rs:190`)
     returns each `KeyDto` (`src/repository/read/dto.rs:247-258`) with
     `id`, `label` and `fingerprint: Option<String>`, without opening a
     key file. The Keys page reads it through
-    `services.read(ReadKind::Keys, …)` (`D/view/settings/keys/reads.rs:14-33`).
+    `services.read(ReadKind::Keys, …)` (`D/view/settings/keys/reads.rs:12-34`, where Cycle 04's key-list retarget lands).
     `Services::read` (`D/services/reads.rs:151`) runs on the background
     executor and retries Busy. The dialog holds no `Services`;
     `show_prompt` has the Workspace's.
@@ -340,11 +459,11 @@ Read on 2026-11-14 at `ea6d899b`, and in Cycle 04's approved design.
 
 ### The empty item area
 
-31. `empty_pane()` (`D/view/workspace/content.rs:646-660`) draws the text
+31. `empty_pane()` (`D/view/workspace/content.rs:638-652`) draws the text
     `item-area-empty` only; its constant (`:35-37`) notes "without its
     icon until Cycle 05". The app icon at runtime is
     `src/desktop/brand/manyhands.png` (64×64), served as `APP_ICON_PATH`
-    (`D/assets.rs:74-76`) and drawn by the title bar with
+    (`D/assets.rs:76-78`) and drawn by the title bar with
     `img(APP_ICON_PATH)` (`D/view/shell.rs:15`, `:62`).
 
 ### GPUI Kit 0.6.6
@@ -412,13 +531,18 @@ Read on 2026-11-14 at `ea6d899b`, and in Cycle 04's approved design.
     (`D/view/tickets/filter_bar.rs:1-7`, `:109-126`; `08`, amended
     2026-11-11).
 40. **Icons.** The app's `icon_assets!(ItemIcons, …)` list
-    (`D/assets.rs:17-86`) lacks `FolderInput`, `KeyRound`, `GitBranch`,
-    `Cloud` and `X`, which `gpui_kit::assets::IconName` names and
-    `gpui-kit-assets-0.6.6` holds. `DesktopAssets::load` falls back to the
-    Kit's default bundle (`D/assets.rs:88-96`), which has `folder`,
-    `info`, `circle-x` and `loader-circle` but not those five.
+    (`D/assets.rs:17-75`) lacks `FolderInput`, `GitBranch`, `Cloud` and
+    `X`, which `gpui_kit::assets::IconName` names and
+    `gpui-kit-assets-0.6.6` holds. Cycle 04 added `Trash` and `KeyRound`
+    to it (`:70-73`; `key-round` is its Settings menu's Sharing & keys
+    icon). `DesktopAssets::load` falls back to the Kit's default bundle
+    (`D/assets.rs:91-101`), which has `folder`, `info`, `circle-x` and
+    `loader-circle` but not those four.
     `desktop::assets::tests::every_item_view_icon_loads` checks its own
-    `ICONS` list.
+    `ICONS` list (`D/assets_tests.rs:8-63`), which Cycle 04 did not extend:
+    it holds neither `key-round` nor `trash`. So the five icons Part D and
+    Part B draw are four to add to `icon_assets!` and five to add to
+    `ICONS`.
 41. **`img`** (GP `elements/img.rs`) takes `grayscale(bool)` (`:153`) and
     `Styled`'s `opacity` and `size` (`:513`).
 
@@ -571,10 +695,13 @@ The footers, left to right:
 the body now reaches Cancel or Not now before the action (decision 15).
 Enter still presses the action.
 
-**Hand-drawn focus rings.** The three rings the app draws today (fact 5:
-Create's held button, Quit now, the composer's Keep editing) move with
-their buttons into the footer and keep drawing. The on-screen checklist
-names them (`MH-NFR-005`).
+**Hand-drawn focus rings.** Of the three rings the app draws today (fact
+5), two are on dialog buttons: Create's held button (Create, New folder
+and Move) and the composer's Keep editing. They move with their buttons
+into the footer and keep drawing. The third, Quit now, is not a dialog's:
+`Workspace::finishing` (`D/view/quit.rs:102-146`) draws it where quitting
+waits, and this Cycle leaves it as it is (Task 0 re-map, U-3). The
+on-screen checklist names the two (`MH-NFR-005`).
 
 ### A4. Escape and focus stay as they are
 
@@ -679,7 +806,10 @@ a repository…" button (B11; R-6).
 2. **Every open resets `add_return_to_settings`** to `None`, then, if
    Settings is open (owner `Settings`), sets it to Settings' own recorded
    origin (O_s) and closes Settings quietly (`settings_closed(true)`),
-   which empties a typed passphrase (fact 20).
+   which empties a typed passphrase (fact 20). The host holds O_s weakly
+   and `take_origin` is its only read; `settings_closed` takes it and,
+   when quiet, drops it, so O_s is taken first. Its Kit close focuses O_s,
+   which `show_settings` focused before `open_sheet` (fact 19).
 3. **If the details sheet is active:** drop it as `show_settings` does
    (C4 A2 step 4), which gives focus back to its chip; its edits are in
    the draft. (No way in can fire while the details sheet is open, since
@@ -687,7 +817,9 @@ a repository…" button (B11; R-6).
    defensive, R-21.)
 4. **The origin**, by C4 A2's rules, recorded after steps 2 and 3: the
    argument, `settings_origin` (set by Cycle 03b's `choose_activity` for
-   AW-5), an open layer's `restore`, the focused handle. For AW-3 that is
+   AW-5), an open layer's `restore` (`take_layer_origin`), the focused
+   handle; with its region (`origin_region`). Both helpers are private to
+   `settings_sheet.rs` (fact 19), so Task 4 shares them. For AW-3 that is
    O_s, the control the Kit's close of Settings focused; Settings'
    `settings-add-repository` button is only where `AddButton` lands
    (B3).
@@ -761,7 +893,9 @@ Workspace:
      `Added(root)` (decision 12) and `SettingsRoute::AddButton` otherwise;
    - **otherwise:** focuses the origin, else its region, else the content
      region, by Cycle 04's mechanism for an origin no longer drawn
-     (`settings_return`'s rule, C4 R-45);
+     (`settings_return`'s rule, C4 R-45: `SettingsReturn`, which only
+     `focus_lost` takes and whose constructor is private to
+     `settings_sheet.rs`, fact 20);
 4. takes `add_return_to_settings`, so the next open starts without it.
 
 ### B4. The sheet's state
@@ -771,11 +905,15 @@ over everything fact 9 lists for the two forms from `RepositoriesPage`,
 unchanged in behaviour unless this Part says otherwise, plus:
 
 - `mode: Mode` (`Existing` or `New`);
-- `open: Rc<Cell<bool>>`, set on open and cleared at once by
+- `open`, an open flag of its own, set on open and cleared at once by
   `add_closed`; while it is false a landing moves no focus and opens no
-  dialog (C4 R-47's rule; G12);
+  dialog (C4 R-47's rule; G12). Cycle 04's is `OpenFlag`, an
+  `Rc<Cell<bool>>` whose `is_open` also requires an active sheet (fact
+  20); the forms' `open` today is Settings' own;
 - the branch and remote choices (B7, Part C);
-- its own `ScrollHandle` for the body (R-8).
+- its own scroll for the body (R-8): a `ContentScroll` region, as
+  Settings' is (fact 23a), since `wrapped`'s marker reveals a focused
+  control through one.
 
 As its own entity it has its own `Generations`, so its reads no longer
 share them with the manage section (fact 10). Its read stamps take a new
@@ -947,6 +1085,12 @@ draw when `focus_lost` or a render-time rule moves focus on the first
 G18 and G19 extend Cycle 04's R-34 and R-46 to the owner
 `AddRepository` (fact 23a; R-24).
 
+Names in the rows, against Cycle 04's merged code (Task 0; the rows are
+unchanged): G5's and G21's "control C4's `Manage` route lands on" is the
+Repositories menu entry, `("settings-page", 0)`, since `arrive` gives no
+control for `Manage` (fact 19). G4's `settings-add-repository` is the
+control `SettingsRoute::AddButton`'s `arrive` gives (R-6; B11).
+
 ### B10. The footer and adding
 
 **Footer** (A1): Cancel (`add-cancel`) · Add repository (`add-submit`),
@@ -985,7 +1129,7 @@ confirmation opens above the sheet (fact 34).
 `Followed::Confirmed` gains the attempt the dialog queued (1, or the
 value `reconfirm` returned), set before the emit
 (`D/view/confirm.rs:459-472`), as `republish.rs` already tracks attempts
-(fact 13; R-28). `item/repair.rs:320` matches the new field. The
+(fact 13; R-28). `item/repair.rs:321` matches the new field. The
 Workspace keeps the add:
 
 ```rust
@@ -1056,11 +1200,17 @@ identity form and Remove are unchanged.
   counts any active sheet. Ctrl+, does nothing while it is open (R-14).
   Nothing pulls focus behind it (G18, G19).
 - The body scrolls on its own handle; Page Up, Page Down, Home and End
-  scroll it, as Cycle 04's Settings frame does (P23).
+  scroll it, as Cycle 04's Settings frame does (P23; its frame binds the
+  four keys on the element around its body, `D/view/settings/frame.rs:92-103`).
 - Enter in `add-path` checks the folder, as today. Kit buttons take
   Enter and Space themselves (GB `button.rs:346-367`). The sheet's
-  buttons keep today's `wrapped` wrappers (`D/view/settings/mod.rs:482-496`)
-  for their focus handles and the scroll-into-view marker.
+  buttons keep today's `wrapped` wrappers (`D/view/settings/mod.rs:463-481`)
+  for their focus handles and the scroll-into-view marker. A Kit button
+  that a G row puts focus on (G13's button, G22's row action,
+  `settings-add-repository` for G4) is drawn with Cycle 04's
+  `wrapped_kit`, so the handle focused is the button's own: on a plain
+  `wrapped` handle it draws no ring and Enter does nothing (fact 23a).
+  `kit_button` is private to `settings` today.
 
 ## Part C: Share Changes Through
 
@@ -1302,21 +1452,22 @@ Module paths: `desktop::view::frame::tests`,
   `D/view/add_repository_tests.rs`; the helpers the manage tests import
   stay where they are (E-1).
 - **Unlock evidence** (Wave exit): unlocking and Not now are today's
-  `desktop::view::keyboard_tests::passphrase` walks and
+  `desktop::view::keyboard_tests::passphrase` walks
+  (`cancel_by_tab_and_enter_cancels_and_the_key_stays_locked`,
+  `enter_in_the_input_still_submits_once`,
+  `unlock_by_tab_and_enter_submits_once`) and
   `desktop::view::passphrase::tests::{submit_supplies_the_passphrase_and_releases_the_input, cancel_replies_cancelled}`;
   the declined key then waiting in Activity with Unlock… is today's
-  `unlock_clears_the_declined_key_and_retries_the_same_request` and
-  `share_after_a_finished_locked_key_clears_its_declined_key`
-  (`D/view/operations/outcomes_route_tests.rs:242`, `:287`) and
-  `unlock_after_cancelled_prompt`
-  (`D/services/scheduler_attention_tests.rs:227`, module
-  `scheduler::attention_tests`); a refused passphrase is
+  `desktop::view::operations::outcomes::route_tests::{unlock_clears_the_declined_key_and_retries_the_same_request, share_after_a_finished_locked_key_clears_its_declined_key}`
+  (`D/view/operations/outcomes_route_tests.rs:250`, `:295`) and
+  `desktop::services::scheduler::attention_tests::unlock_after_cancelled_prompt`
+  (`D/services/scheduler_attention_tests.rs:227`); a refused passphrase is
   P19; a wrong passphrase is today's journey (decision 4), which the
   library pins (`tests/ssh_transport/session.rs:183-185`, an SSH target
   this Cycle does not run) and the desktop maps like any
-  `transport_unavailable` (`D/model/publication.rs:413-416`); this Cycle
-  changes neither and adds no test for it. Task 0 confirms the module
-  paths.
+  `transport_unavailable` (`D/model/publication.rs:414-418`); this Cycle
+  changes neither and adds no test for it. Task 0 confirmed the module
+  paths (U-4).
 
 ## Named Edits To Pre-Existing Tests
 
@@ -1327,24 +1478,24 @@ recorded in the ledger as E-17 onward (decision 8).
 | --- | --- | --- | --- |
 | E-1 | The Add and Create tests of `D/view/settings/repositories_tests.rs`: `create_in_an_empty_directory_previews_nothing_then_creates_and_refreshes`, `adding_a_repository_without_identity_asks_for_one_and_keeps_it`, `a_repository_with_an_identity_shows_no_identity_fields`, `create_in_a_non_empty_directory_shows_its_typed_failure`, `adding_a_folder_that_is_not_a_repository_shows_its_typed_failure`, `escape_on_the_preview_makes_nothing`, `a_create_whose_directory_changed_since_its_preview_offers_prepare_again`, `pressing_confirm_twice_creates_one_repository`, `a_partial_create_is_completed_by_retry_under_the_same_request`, `browse_fills_the_field_and_a_dismissal_leaves_it_unchanged`, `escape_on_an_add_preview_makes_nothing`, `an_add_whose_repository_was_enabled_since_its_preview_offers_prepare_again`, `add_pressed_at_once_checks_first_and_asks_for_the_identity`, `add_pressed_at_once_on_a_repository_with_an_identity_opens_the_preview` | **Task 3:** move to `add_repository_tests.rs` unchanged but for the helper that opens them (still in Settings). **Task 4:** open the sheet. **Task 5:** see E-1a to E-1e. **Task 6:** Create fills Name and Location | 3, 4, 5, 6 |
 | E-1a | `adding_a_folder_that_is_not_a_repository_shows_its_typed_failure` (`:396-411`) | It presses Add after a failed check to see the preview's typed failure; Add is now disabled there. **Assertion removed:** the preview's code; the `NotRepository` row and its Create one here action are asserted instead | 5 |
-| E-1b | `adding_a_repository_without_identity_asks_for_one_and_keeps_it` (`:282`, `:302-307`), `add_pressed_at_once_checks_first_and_asks_for_the_identity` (`:804`) | **Task 4:** the re-check after success (`:302-307`) reopens the sheet and types the path again, since a success closed and cleared it (decision 16). **Task 5:** `value("add-branch")` reads the select's chosen branch | 4, 5 |
+| E-1b | `adding_a_repository_without_identity_asks_for_one_and_keeps_it` (`:282-284`, `:302-307`), `add_pressed_at_once_checks_first_and_asks_for_the_identity` (`:805`) | **Task 4:** the re-check after success (`:302-307`) reopens the sheet and types the path again, since a success closed and cleared it (decision 16). **Task 5:** `value("add-branch")` reads the select's chosen branch | 4, 5 |
 | E-1c | `browse_fills_the_field_and_a_dismissal_leaves_it_unchanged` (`:609-635`) | Add's and Create's Browse are tested one mode at a time; `browse-unavailable` becomes `add-browse-note` | 5, 6 |
 | E-1d | The tests that assert `NOT_ADDED`, `CHECKED_OUT` or the configuration label | Assert B6's rows | 5 |
-| E-1e | `a_form_control_below_the_fold_is_scrolled_into_view` (`:657-695`) | Tabs to a body control (`create-prefix`, not `create-submit`, which the sheet's footer holds outside the body) and reads the sheet's own scroll offset (R-8) | 4 |
+| E-1e | `a_form_control_below_the_fold_is_scrolled_into_view` (`:656-692`; Cycle 04 already reads `settings-scroll` and `settings_offset` in a 1440×360 window) | Tabs to a body control (`create-prefix`, not `create-submit`, which the sheet's footer holds outside the body) and reads the sheet's own scroll offset (R-8) | 4 |
 | E-2 | `submitting_with_no_folder_says_so` (`:419`) | Becomes: Add (Task 5) and Create (Task 6) are disabled with nothing typed (decision 9). **Assertion removed:** `NEED_FOLDER` | 5, 6 |
-| E-4 | `the_inspect_recovery_opens_the_page_with_its_root_checked` (`:698`) | The recovery opens the Add sheet with the root checked and focus on `add-path` (Task 4); `ALREADY_ADDED` as a row (Task 5) | 4, 5 |
-| E-5 | `desktop::view::keyboard_tests::settings::add_an_existing_repository_by_keyboard` (`:52`) | Opens the sheet by the toolbar's `+`; its last step (`:78`) expects focus back on `+`, not the content region (G7) | 4 |
-| E-6 | `desktop::view::repositories::tests::rows_and_list_states` (`D/view/repositories_tests.rs:146-151`) | The empty state's action opens the Add sheet, not `Shown::Settings(Repositories)` | 4 |
-| E-7 | `desktop::view::dock::tests::toolbars::panel_toolbars_work_by_tab_and_enter`, through its helper `repositories_toolbar` (`D/view/dock_tests/toolbars/repositories.rs:49`, `:66-70`) | Enter on `+` opens the Add sheet | 4 |
-| E-8 | `desktop::view::lifecycle::outcome_canned_tests::each_way_out_offers_its_button` (`:411-417`) | "Open repository details" opens the Add sheet. A D5 test's asserted route changes, against the Wave's risk control for D5's tests; decision 13 is the reason | 4 |
-| E-9 | `desktop::view::passphrase::tests::submit_supplies_the_passphrase_and_releases_the_input`, `the_dialog_names_what_waits_and_says_not_now` (`:705` note absent, `:733-738` the old note's words), `a_finished_confirmation_and_a_prompt_in_one_batch_close_only_the_confirmation` (`:676-677`, `label_for`), `a_prompt_for_a_check_now_names_no_share` (`:785`, `!present("passphrase-note")`) | The label reads `PASSPHRASE`; the note is always shown with its new text, so `:705` and `:785` assert it present and `:733-738` read `NOT_NOW_NOTE`; the absent toggle stays asserted | 8 |
-| E-10 | (none expected) The keyboard walks of the Confirmation dialog and Unlock key (`D/view/keyboard_tests/confirm.rs`, `keyboard_tests/passphrase.rs`) loop with `tab_to` (sweep, 2026-11-14) | Task 0 confirms | 1, 8 |
-| E-11 | (none expected) The fixed-count Tab walks (`tabs_tests.rs:1280`, `keyboard_tests/drafts.rs:261`, `:369`, `keyboard_tests/drafts/quit.rs:114`, `item/edit_restored_tests.rs:741`) are on dialogs A3 leaves in order | Task 0 confirms | 2 |
-| E-12 | Cycle 04's tests for W-5, W-6, W-22 and W-27 (its E-18 and P4 rows), its P2 `settings_leaves_the_item_as_it_was` (the AddRepository route to `add-path`) and P22 `late_work_moves_no_focus` (Add pressed in Settings with a check pending), and any of its P8 or P2 steps that rely on the forms' length | Expect the Add sheet (AW-1, AW-2, AW-4, AW-5); P2 takes `SettingsRoute::AddButton`; P22's Add case moves to this Cycle's P8 | 4 |
+| E-4 | `the_inspect_recovery_opens_the_page_with_its_root_checked` (`:699`; Cycle 04's E-17 already asserts `holds_focus("add-path")`, `:716-719`) | The recovery opens the Add sheet with the root checked and focus on `add-path` (Task 4); `ALREADY_ADDED` as a row (Task 5) | 4, 5 |
+| E-5 | `desktop::view::keyboard_tests::settings::add_an_existing_repository_by_keyboard` (`:53`; it opens Settings by `open_page`, Ctrl+,, `:23-31`) | Opens the sheet by the toolbar's `+`; its last step (`:79`) expects focus back on `+`, not the content region (G7) | 4 |
+| E-6 | `desktop::view::repositories::tests::rows_and_list_states` (`D/view/repositories_tests.rs:146-158`; Cycle 04's E-18 added `holds_focus("add-path")` and an Escape, `:153-158`) | The empty state's action opens the Add sheet, not `Shown::Settings(Repositories)` | 4 |
+| E-7 | `desktop::view::dock::tests::toolbars::panel_toolbars_work_by_tab_and_enter`, through its helper `repositories_toolbar` (`D/view/dock_tests/toolbars/repositories.rs:49`, `:66-76`; Cycle 04's E-18 added `holds_focus("add-path")` and an Escape, `:71-76`) | Enter on `+` opens the Add sheet | 4 |
+| E-8 | `desktop::view::lifecycle::outcome_canned_tests::each_way_out_offers_its_button` (`:411-421`; Cycle 04's E-18 added `holds_focus("add-path")`, `:418-421`) | "Open repository details" opens the Add sheet. A D5 test's asserted route changes, against the Wave's risk control for D5's tests; decision 13 is the reason | 4 |
+| E-9 | `desktop::view::passphrase::tests::submit_supplies_the_passphrase_and_releases_the_input` (`:166-169`, `label_for`; the toggle `:179-180`), `the_dialog_names_what_waits_and_says_not_now` (`:705` note absent, `:733-738` the old note's words), `a_finished_confirmation_and_a_prompt_in_one_batch_close_only_the_confirmation` (`:676-677`, `label_for`), `a_prompt_for_a_check_now_names_no_share` (`:785`, `!present("passphrase-note")`) | The label reads `PASSPHRASE`; the note is always shown with its new text, so `:705` and `:785` assert it present and `:733-738` read `NOT_NOW_NOTE`; the absent toggle stays asserted | 8 |
+| E-10 | (none expected) The keyboard walks of the Confirmation dialog and Unlock key (`D/view/keyboard_tests/confirm.rs`, `keyboard_tests/passphrase.rs`) loop with `tab_to` (sweep, 2026-11-14) | Confirmed by Task 0: `confirm.rs` loops through `Walk::tab_to` (`keyboard_tests.rs:181-189`) to `("confirm-cancel", 0)`; `passphrase.rs` through its own `tab_to` (`:124-148`) to `passphrase-cancel` and `passphrase-ok`. No edit | 1, 8 |
+| E-11 | (none expected) The fixed-count Tab walks (`tabs_tests.rs:1280`, `keyboard_tests/drafts.rs:261`, `:369`, `keyboard_tests/drafts/quit.rs:114`, `item/edit_restored_tests.rs:741`) are on dialogs A3 leaves in order | Confirmed by Task 0, unchanged by Cycle 04: the close-draft dialog (Keep draft first, then Save), Discard a draft (Cancel first) and the drafts-not-saved ask (Cancel first). No edit | 2 |
+| E-12 | Cycle 04's tests for W-5, W-6, W-22 and W-27 (its E-18 and P4 rows), its P2 `settings_leaves_the_item_as_it_was` (the AddRepository route to `add-path`) and P22 `late_work_moves_no_focus` (Add pressed in Settings with a check pending), and any of its P8 or P2 steps that rely on the forms' length. At `7a484a7a` (Task 0): the E-18 sites are E-4, E-6, E-7 and E-8's; P4 `desktop::view::workspace::settings_sheet::tests::each_route_lands_on_its_page_and_control`, rows "F1 AddRepository" and "F1 Inspect(root) … (R-55)" (`settings_sheet_tests/routes.rs:413-436`); P2 (`settings_sheet_tests.rs:142-203`: `tab_to_create` `:171`, the route `:177-184`); P22's `pending_add` (`settings_sheet_tests/late.rs:33-102`); P8 `settings_scrolls_on_its_own` (`settings_sheet_tests.rs:526-593`: `add-browse` `:559-566`, End `:567-571`, `tab_to_create` and `create-submit` `:576-590`) and its `scrolls::rows` (a) and (b), End on Repositories (`settings_sheet_tests/scrolls.rs:59-85`); and the helper `tab_to_create` (`settings_sheet_tests/support.rs:316-327`) | Expect the Add sheet (AW-1, AW-2, AW-4, AW-5); P2 takes `SettingsRoute::AddButton`; P22's Add case moves to this Cycle's P8 | 4 |
 | E-13 | `D/view/keyboard_tests/lifecycle.rs:415`, which calls `open_dialog(prompt, window, cx)` | Passes the `Services` Part D adds | 8 |
 | E-14 | `desktop::assets::tests::every_item_view_icon_loads` | Its `ICONS` list gains the five icons (fact 40) | 1 |
-| E-15 | `desktop::view::workspace::tests` that pin Settings' routes Part B moves (found by Task 0's sweep) | Follow AW-1 to AW-5 | 4 |
-| E-16 | Tests and code that build or match `Followed::Confirmed { request, details }` (`D/view/item/repair.rs:320`, and any test Task 0's sweep finds) | Take the new `attempt` field (R-28) | 4 |
+| E-15 | `desktop::view::workspace::tests` that pin Settings' routes Part B moves (found by Task 0's sweep) | Follow AW-1 to AW-5. Task 0's sweep found none in `D/view/workspace_tests.rs` or `workspace_tests/` | 4 |
+| E-16 | Tests and code that build or match `Followed::Confirmed { request, details }` (`D/view/item/repair.rs:321`, and any test Task 0's sweep finds) | Take the new `attempt` field (R-28). Task 0's sweep found no test; `D/view/operations/republish.rs:96` matches with `..` and needs no edit | 4 |
 
 E-3 is not used (revision 1's E-3 is E-1e).
 
@@ -1462,13 +1613,22 @@ Applied by the planner, after the owner's approval:
   `settings_closed`, `SettingsRoute`, `settings_origin`,
   `settings_return`, the host's `open` flag, its Ctrl+, handler, its
   `frame.rs`, W-36. Task 0 re-maps them and corrects this design first.
+  *Answered at Task 0 (against `7a484a7a`):* every name exists as facts
+  18–24 now cite it, and the code carries B2 and B3 (an origin for AW-3,
+  a quiet close that empties the passphrase, a `Manage(root)` route, a
+  refusal point in `settings_key`). W-36 is not a way into the Add sheet.
 - **U-2:** which theme mode the app shows on screen, given fact 8. A2
   sets both modes and leaves the current one in force; the owner's
   on-screen check confirms.
 - **U-3:** A3's footer table, per dialog, against the code at Task 0
-  (the sweep of 2026-11-14 read it at `ea6d899b`).
+  (the sweep of 2026-11-14 read it at `ea6d899b`). *Answered at Task 0:*
+  every row matches its dialog's code, which Cycle 04 did not change;
+  only A3's note on the hand-drawn rings was corrected (Quit now is not
+  a dialog's).
 - **U-4:** the exact module paths of the Unlock evidence tests (Testing).
-  Task 0 confirms them.
+  Task 0 confirms them. *Answered at Task 0:* as Testing now names them;
+  `every_item_view_icon_loads` is `desktop::assets::tests::every_item_view_icon_loads`
+  (a plain `#[test]`, `D/assets_tests.rs:65-74`).
 - **U-5:** (not used; revision 1's ToggleGroup question is settled by
   fact 39).
 - **U-6:** the five icons load once added (fact 40); E-14's test proves
@@ -1478,7 +1638,11 @@ Applied by the planner, after the owner's approval:
   Task 1 reads the schema; a slot with no key is K-13.
 - **U-8:** how P18 makes the key read fail: a `#[cfg(test)]` hook on the
   dialog that applies a failed read result, unless Task 0 finds a read
-  double in `D/test_support/`.
+  double in `D/test_support/`. *Answered at Task 0:* there is none. The
+  test backend only delays (`D/test_support/delaying.rs:4-12`):
+  `hold_read` holds a read (`:132-144`), and its canned answers cover
+  jobs, prepares, conflict reads and the pending list only. So P18's
+  failed row uses the `#[cfg(test)]` hook on the dialog.
 
 ## Alternatives Rejected
 
