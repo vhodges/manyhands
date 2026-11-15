@@ -536,6 +536,7 @@ async fn settings_scrolls_on_its_own(cx: &mut TestAppContext) {
         for ix in 0..scrolls::KEYS {
             fixture.generate_key(&format!("key {ix}"));
         }
+        scrolls::shared(fixture);
     });
     shell.resize_keeping_content(1440., SHORT, cx);
     shell.set_activity_height(SHORT_ACTIVITY, cx);

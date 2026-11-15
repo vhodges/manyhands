@@ -166,7 +166,7 @@ impl SettingsHost {
     pub(crate) fn new(services: Services, column: ContentScroll, cx: &mut Context<Self>) -> Self {
         Self {
             services,
-            scroll: column.region(),
+            scroll: column.region_keeping(),
             last_nav: None,
             shown: Shown::Tabs,
             entries: PAGES
