@@ -83,7 +83,7 @@ pub(crate) const TYPE: &str = "Type";
 pub(crate) const FOLDER: &str = "Folder";
 pub(crate) const FILE_NAME: &str = "File name";
 /// The header's title: the heading, as the Kit's title slot drew it.
-const HEADING_ID: &str = "create-heading";
+const HEADING_ID: &str = "create-item-heading";
 /// The new item's draft could not be written, the store being open: it is
 /// followed by why, in the store's words.
 pub(crate) const DRAFT_NOT_WRITTEN: &str =
