@@ -16,6 +16,7 @@ mod editing_privacy_tests;
 pub(crate) mod editor;
 pub(crate) mod find;
 pub(crate) mod footer;
+pub(crate) mod frame;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) mod harness;
 pub(crate) mod item;
