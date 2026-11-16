@@ -12,6 +12,13 @@
 //! A remote conflict is canned (D5 decision 9), as
 //! `conflict/entry_tests.rs` cans it; the pending row's local conflict and
 //! Repair locally…'s are real.
+//!
+//! B3's focus table (P6, rows H1 to H16) and what nothing opens over (P7),
+//! written before their code (Task 6's design checkpoint), are tables in
+//! files of their own, run from here so that each test is named here. A
+//! focus a row names is read after two draws; guards are tested with
+//! dispatched actions and direct calls, which the scrim does not take; the
+//! Kit's deferred restore is reached by the test clock, with no real wait.
 
 use gpui_kit::{
     App, InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
@@ -45,8 +52,48 @@ use crate::desktop::{
     },
 };
 
+#[path = "resolve_sheet_tests/focus.rs"]
+mod focus;
+#[path = "resolve_sheet_tests/focus_late.rs"]
+mod focus_late;
+#[path = "resolve_sheet_tests/quitting.rs"]
+mod quitting;
+#[path = "resolve_sheet_tests/refusals.rs"]
+mod refusals;
+#[path = "resolve_sheet_tests/support.rs"]
+mod support;
+
 /// The close a canned child conflict names (`child_conflict`).
 const PARENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FY1";
+
+/// P6 (B3; H1 to H16; R-11, R-22, R-25, R-26, R-27): where focus goes as
+/// Resolve conflict opens by each way in, closes by each way out, gives
+/// focus back after a dialog over it, keeps Tab and focus inside, and sees
+/// late answers and the workspace's own focus moves move nothing. One row
+/// per H, some in parts; the rows are in `focus` (H1 to H8, H16),
+/// `focus_late` (H9, H10, H12 to H15) and `quitting` (H11).
+#[gpui_kit::test]
+async fn focus_around_the_resolve_sheet(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let mut table = support::Table::new("P6");
+    focus::rows(&mut table, cx).await;
+    focus_late::rows(&mut table, cx).await;
+    table.done();
+}
+
+/// P7 (B1, B2, decision 9, R-18): while Resolve conflict is open, Ctrl+,,
+/// `show_settings`, `show_add_repository`, a details sheet, a region focus
+/// key and Activity's choices do nothing; it opens over neither a dialog
+/// nor a sheet; a share's Stop and republish… whose share stops while it
+/// is open opens Republish… only once it closes, on both paths; Ctrl+,
+/// right after Escape opens Settings. The rows are in `refusals`.
+#[gpui_kit::test]
+async fn nothing_opens_over_the_resolve_sheet(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let mut table = support::Table::new("P7");
+    refusals::rows(&mut table, cx).await;
+    table.done();
+}
 
 fn owner(shell: &Shell, cx: &mut TestAppContext) -> Option<SheetOwnerKind> {
     shell
