@@ -1,10 +1,7 @@
 //! The sheet's Save resolution, its kept sets and how it follows an
 //! answer (D5 design, B3's table; R-10, R-12, R-25; P8, P11, P15, P24).
 
-use gpui_kit::{
-    App, Context, Entity, Window,
-    component::{Root, WindowExt},
-};
+use gpui_kit::{App, Context, Window, component::WindowExt};
 use manyhands::{
     repository::RequestId,
     results::{CheckpointEffect, Effects, RecoveryAction, ResultCode},
@@ -19,7 +16,7 @@ use crate::desktop::{
     },
     view::{
         lifecycle::{follow_resume, reopen_repaired},
-        workspace::Workspace,
+        workspace::window_workspace,
     },
 };
 
@@ -367,7 +364,7 @@ impl ResolveSheet {
     ) {
         if window.has_active_dialog(cx) {
             let sheet = cx.entity();
-            if let Some(workspace) = workspace(window, cx) {
+            if let Some(workspace) = window_workspace(window, cx) {
                 workspace.update(cx, |workspace, cx| {
                     // A stale sheet's answer waits for nothing: it would
                     // replace the open sheet's waiting close.
@@ -460,7 +457,7 @@ impl ResolveSheet {
     /// Cycle 05b B3).
     pub(super) fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let sheet = cx.entity();
-        let closed = workspace(window, cx).is_some_and(|workspace| {
+        let closed = window_workspace(window, cx).is_some_and(|workspace| {
             workspace.update(cx, |workspace, cx| {
                 workspace.close_resolve(&sheet, window, cx)
             })
@@ -470,13 +467,6 @@ impl ResolveSheet {
         }
         closed
     }
-}
-
-/// The window's workspace, found through Root, as the lifecycle dialog's
-/// `in_workspace` finds it.
-fn workspace(window: &Window, cx: &App) -> Option<Entity<Workspace>> {
-    let root = window.root::<Root>()??;
-    root.read(cx).view().clone().downcast::<Workspace>().ok()
 }
 
 /// Whether two sets submit the same paths with the same results.

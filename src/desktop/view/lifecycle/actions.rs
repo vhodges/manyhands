@@ -6,7 +6,7 @@
 //! places the way out opens in the workspace; what an ended run offers;
 //! and Enter.
 
-use gpui_kit::{AnyElement, App, Context, Window, component::Root};
+use gpui_kit::{AnyElement, App, Context, Window};
 use manyhands::{
     repository::{LifecycleBlocker, LifecycleWayOut, MutationDataDto, lifecycle_way_out},
     results::{Envelope, RecoveryActionKind, ResultCode},
@@ -23,7 +23,7 @@ use crate::desktop::{
     },
     view::{
         item::ItemRoute,
-        workspace::{AddRoute, Workspace},
+        workspace::{AddRoute, Workspace, window_workspace},
     },
 };
 
@@ -135,12 +135,7 @@ impl LifecycleDialog {
         f: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) -> R,
     ) -> Option<R> {
         self.close(window, cx);
-        let Some(Some(root)) = window.root::<Root>() else {
-            return None;
-        };
-        let Ok(workspace) = root.read(cx).view().clone().downcast::<Workspace>() else {
-            return None;
-        };
+        let workspace = window_workspace(window, cx)?;
         Some(workspace.update(cx, |workspace, cx| f(workspace, window, cx)))
     }
 

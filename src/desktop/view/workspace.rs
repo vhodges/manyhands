@@ -28,8 +28,9 @@ mod titles;
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
-    AppContext, Context, Entity, FocusHandle, Subscription, Task, WeakEntity, Window,
+    App, AppContext, Context, Entity, FocusHandle, Subscription, Task, WeakEntity, Window,
     component::{
+        Root,
         dock::DockArea,
         input::{InputEvent, InputState},
         list::ListEvent,
@@ -66,8 +67,6 @@ pub(in crate::desktop::view) use add_sheet::AddRoute;
 pub(crate) use focus::REGIONS;
 pub(crate) use focus::Region;
 pub(in crate::desktop::view) use focus::ToolbarButton;
-#[cfg(all(test, feature = "desktop-test-support"))]
-use gpui_kit::App;
 use manyhands::drafts::DraftId;
 pub(in crate::desktop::view) use render::{modal_open, unless_dialog};
 
@@ -505,6 +504,16 @@ impl Workspace {
     pub(crate) fn tickets_list_focus(&self, cx: &App) -> FocusHandle {
         gpui_kit::Focusable::focus_handle(self.tickets_pane.list().read(cx), cx)
     }
+}
+
+/// The window's workspace: the view Root shows. `None` in a window whose
+/// view is something else.
+pub(in crate::desktop::view) fn window_workspace(
+    window: &Window,
+    cx: &App,
+) -> Option<Entity<Workspace>> {
+    let root = window.root::<Root>()??;
+    root.read(cx).view().clone().downcast::<Workspace>().ok()
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]
