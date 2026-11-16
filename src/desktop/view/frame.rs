@@ -19,8 +19,8 @@
 pub(crate) mod theme;
 
 use gpui_kit::{
-    AnyElement, App, Div, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, TestSupportExt,
+    AnyElement, App, Div, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
+    SharedString, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     assets::IconName,
     component::{Icon, dialog::Dialog, h_flex, v_flex},
     div, px,
@@ -223,6 +223,24 @@ pub(crate) fn footer(footer: Footer, cx: &App) -> Div {
         .px(px(sides))
         .border_t_1()
         .border_color(colors.border)
+}
+
+/// A sheet's share of the window's width: 1/φ², the golden ratio's smaller
+/// part.
+const SHEET_SHARE: f32 = 0.381_966;
+/// What a sheet leaves of a narrow window: the Kit does not clamp a sheet,
+/// and the app sets no minimum window width (Wave 04 Cycle 05b R-28).
+const SHEET_MARGIN: f32 = 48.;
+
+/// A sheet's width in `window`, taken when its builder runs: a share of
+/// the window's width, no narrower than `floor`, the sheet's width before
+/// it followed the window, and no wider than the window less a margin.
+pub(crate) fn sheet_width(window: &Window, floor: f32) -> Pixels {
+    let viewport = window.viewport_size().width;
+    (viewport * SHEET_SHARE)
+        .max(px(floor))
+        .min(viewport - px(SHEET_MARGIN))
+        .max(px(0.))
 }
 
 /// The header element for a Kit `Sheet`'s title slot. The Kit pads its
