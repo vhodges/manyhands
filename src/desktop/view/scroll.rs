@@ -37,7 +37,7 @@ use std::{
 };
 
 use gpui_kit::{
-    Bounds, FocusHandle, IntoElement, Pixels, ScrollHandle, Size, Styled, WeakFocusHandle, Window,
+    Bounds, FocusHandle, IntoElement, Pixels, ScrollHandle, Styled, WeakFocusHandle, Window,
     canvas, point, px,
 };
 
@@ -104,20 +104,15 @@ impl ContentScroll {
         self.handle.bounds().size.height
     }
 
-    /// The region's visible width in the last frame.
-    pub(crate) fn width(&self) -> Pixels {
-        self.handle.bounds().size.width
-    }
-
     /// An empty canvas to draw inside the region, for a child sized from
-    /// the region's size in the last frame, `used`: when the region is
-    /// laid out at another size, as on a window's first frame or a
+    /// the region's height in the last frame, `used`: when the region is
+    /// laid out at another height, as on a window's first frame or a
     /// resize, it asks for the frame that sizes the child again.
-    pub(crate) fn follow_size(&self, used: Size<Pixels>) -> impl IntoElement + use<> {
+    pub(crate) fn follow_height(&self, used: Pixels) -> impl IntoElement + use<> {
         let handle = self.handle.clone();
         canvas(
             move |_, window, cx| {
-                if handle.bounds().size != used {
+                if handle.bounds().size.height != used {
                     redraw(window, cx);
                 }
             },

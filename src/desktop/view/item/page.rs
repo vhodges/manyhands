@@ -4,10 +4,9 @@
 //! The region sits below the tab strip and the header, which stay in
 //! place, and holds the page, then the discussion, then the workspace's
 //! details of the selected repository (owner, 2026-10-27). The page is white in
-//! both themes, its column 80% of the region's width, between 760 and 1230
-//! px, centred, and it is at least as tall as the region was in the last
-//! frame, so the white reaches the bottom and the discussion starts below
-//! the fold.
+//! both themes, its column at most 760 px wide and centred, and it is at
+//! least as tall as the region was in the last frame, so the white reaches
+//! the bottom and the discussion starts below the fold.
 //!
 //! While viewing, an item tab's page holds the body in a read editor
 //! (decision 17): a `ReadOnly` made at the first read with a body, kept
@@ -39,7 +38,7 @@ use gpui_kit::{
     MouseButton, MouseDownEvent, ParentElement, Pixels, StatefulInteractiveElement, Styled,
     Subscription, TestSupportExt, Window, canvas,
     component::{ActiveTheme, scroll::Scrollbar, v_flex},
-    div, px, size,
+    div, px,
 };
 
 use super::{ItemPane, tokens::item_colors};
@@ -53,28 +52,12 @@ use crate::desktop::{
     },
 };
 
-/// The page's column at its narrowest, before the region itself is narrower.
-const MIN_COLUMN: f32 = 760.;
-/// The page's column at its widest: past it, a line is too long to read.
-const MAX_COLUMN: f32 = 1230.;
-/// The column's share of the region's width.
-const COLUMN_SHARE: f32 = 0.8;
+/// The page's column at its widest.
+const COLUMN: f32 = 760.;
 /// The column's padding: top, sides and bottom.
 const PADDING: (f32, f32, f32) = (36., 48., 40.);
 /// Body text on the page.
 const BODY_SIZE: f32 = 15.;
-
-/// The column's width in a region `region` wide, as the last frame laid
-/// it out. A column laid out wider than its region is held to it (`max_w`),
-/// as on the first frame, when the region has no width yet.
-pub(super) fn column_width(region: Pixels) -> Pixels {
-    (region * COLUMN_SHARE).clamp(px(MIN_COLUMN), px(MAX_COLUMN))
-}
-
-/// The width of the text in the column, between the page's side padding.
-pub(super) fn text_width(region: Pixels) -> Pixels {
-    column_width(region) - px(2. * PADDING.1)
-}
 
 /// The item's page.
 pub(crate) struct Page {
@@ -292,7 +275,6 @@ impl Page {
     ) -> impl IntoElement + use<C> {
         let colors = item_colors(cx);
         let height = scroll.height();
-        let region = scroll.width();
         let ring = (self.ring && self.focus.is_focused(window)).then(|| {
             div()
                 .id("item-page-ring")
@@ -327,14 +309,14 @@ impl Page {
                 div()
                     .id("item-page-column")
                     .test_support()
-                    .w(column_width(region))
-                    .max_w_full()
+                    .w_full()
+                    .max_w(px(COLUMN))
                     .pt(px(top))
                     .px(px(sides))
                     .pb(px(bottom))
                     .child(content),
             )
-            .child(scroll.follow_size(size(region, height)))
+            .child(scroll.follow_height(height))
             .children(ring)
     }
 }
