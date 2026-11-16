@@ -80,7 +80,7 @@ pub(crate) const FACTS: &str = "Facts";
 pub(crate) const PROBLEMS: &str = "Problems";
 pub(crate) const NOT_CLOSED: &str = "Not closed. Use Close ticket… to close it.";
 
-/// The sheet's width (fact 61).
+/// The sheet's narrowest width (fact 61).
 const WIDTH: f32 = 440.;
 const LABEL_SIZE: f32 = 12.;
 /// Between the body's rows.
@@ -238,7 +238,7 @@ impl ItemPane {
                     .on_click(|_, window, cx| window.close_sheet(cx)),
             );
         sheet
-            .size(px(WIDTH))
+            .size(frame::sheet_width(window, WIDTH))
             // The heading and the description, on the common frame (Wave 04
             // Cycle 05a design A5): the description moved out of the body.
             .title(frame::sheet_header(

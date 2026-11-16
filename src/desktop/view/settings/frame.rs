@@ -1,5 +1,5 @@
 //! The Settings sheet's frame (Wave 04 Cycle 04 design B1 and B2): the Kit
-//! sheet, 720 px wide on the right, with the heading and its description in
+//! sheet, at least 720 px wide on the right, with the heading and its description in
 //! the header (`frame::sheet_header`, Wave 04 Cycle 05a R-20) and no footer; the page list down the left; and the shown
 //! page in a scroll of its own laid over the Kit's body, as the details
 //! sheet does. The frame's root, which holds the list and the body, takes
@@ -24,7 +24,7 @@ use crate::desktop::{
     },
 };
 
-/// The sheet's width (`05`, Settings sheet).
+/// The sheet's narrowest width (`05`, Settings sheet).
 const WIDTH: f32 = 720.;
 /// The page list's width (`05`'s left nav).
 const MENU_WIDTH: f32 = 214.;
@@ -58,7 +58,7 @@ impl SettingsHost {
         let entries = self.entries(shown, window, cx);
         let handle = self.scroll.handle().clone();
         sheet
-            .size(px(WIDTH))
+            .size(frame::sheet_width(window, WIDTH))
             // The heading and its note, on the common frame (Wave 04 Cycle
             // 05a design A5, R-20).
             .title(frame::sheet_header(

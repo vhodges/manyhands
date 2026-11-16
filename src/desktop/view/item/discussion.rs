@@ -1,6 +1,6 @@
 //! The discussion (design, Discussion; `item_view/04-comments.md`). It
 //! follows the page in the item's scroll region, on the `discussion`
-//! ground, in a 664 px column.
+//! ground, in the page's column.
 //!
 //! - **Header row.** `message-square`, the "Discussion" heading, "{n}
 //!   comments · oldest first", and Back to top, which returns the region
@@ -48,7 +48,7 @@ use gpui_kit::{
 use manyhands::repository::CommentListDto;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
-use super::{BACK_TO_TOP, ItemPane, text, tokens::item_colors};
+use super::{BACK_TO_TOP, ItemPane, page::text_width, text, tokens::item_colors};
 use crate::desktop::{
     assets::icon_path,
     model::{
@@ -72,8 +72,6 @@ pub(crate) const REPLY: &str = "Reply";
 /// Why Reply does nothing while the reply composer is posting.
 pub(crate) const REPLY_POSTING: &str = "Finish or cancel the reply being posted";
 
-/// The discussion's column at its widest, under the page's text.
-const COLUMN: f32 = 664.;
 /// The section's padding: top, sides and bottom.
 const PADDING: (f32, f32, f32) = (28., 48., 48.);
 /// Between the header row, the cards and the composers.
@@ -277,8 +275,8 @@ impl ItemPane {
                 .text_color(colors.page_text)
                 .child(
                     v_flex()
-                        .w_full()
-                        .max_w(px(COLUMN))
+                        .w(text_width(self.scroll.width()))
+                        .max_w_full()
                         .gap(px(GAP))
                         .child(header)
                         .child(status)
