@@ -111,6 +111,14 @@ impl RepositoryService {
         if !cached {
             match self.connect_ssh(&prepared, &context, None, &mut use_remote, &mut may_prompt) {
                 Ok(result) => return result,
+                // A key stored without a passphrase has none to ask for: the
+                // failure is the answer, and a prompt could never succeed.
+                Err(error)
+                    if may_prompt
+                        && !source_may_need_passphrase(&prepared.registration.private_key_path) =>
+                {
+                    return Err(error);
+                }
                 Err(_) if may_prompt => {}
                 Err(error) => return Err(error),
             }

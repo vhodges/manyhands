@@ -10,7 +10,10 @@ pub const CASES: &[crate::ssh_harness::Case] = &[
     ("wrong_passphrase_retry", wrong_passphrase_retry),
     ("cancelled_retry", cancelled_retry),
     ("unavailable_retry", unavailable_retry),
-    ("wrong_plain_key_prompts", wrong_plain_key_prompts),
+    (
+        "wrong_plain_key_is_rejected_without_prompt",
+        wrong_plain_key_is_rejected_without_prompt,
+    ),
     ("cached_rejection", cached_rejection),
     ("advertisement_failure", advertisement_failure),
 ];
@@ -212,15 +215,17 @@ fn retry(first: PassphraseResponse, expected: SshTransportErrorKind) -> Result<(
     assert_eq!(requests.borrow().len(), 2);
     Ok(())
 }
-fn wrong_plain_key_prompts() -> Result<(), FixtureError> {
+// An unencrypted key has no passphrase to ask for: the server's rejection is
+// the answer, and the provider is never asked.
+fn wrong_plain_key_is_rejected_without_prompt() -> Result<(), FixtureError> {
     let case = Case::new(false)?;
     case.fixture.reject_client();
-    let (mut credentials, requests) = session(vec![PassphraseResponse::Cancelled]);
+    let (mut credentials, requests) = session(vec![]);
     assert_eq!(
         case.verify(&mut credentials).unwrap_err().kind,
-        SshTransportErrorKind::UnlockCancelled
+        SshTransportErrorKind::KeyRejected
     );
-    assert_eq!(requests.borrow().len(), 1);
+    assert_eq!(requests.borrow().len(), 0);
     assert_eq!(case.fixture.helper_invocations(), 0);
     Ok(())
 }
