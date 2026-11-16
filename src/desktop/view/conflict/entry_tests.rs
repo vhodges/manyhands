@@ -51,19 +51,18 @@ use crate::desktop::{
         activity_support::{act, offered, refresh, row, until_offered, until_pending},
         harness::{Shell, key},
         item::OpenedFolders,
-        lifecycle::RESOLVE_CONFLICT,
         operations::{DISMISS, OPEN_LIFECYCLE, RESUME},
     },
 };
 
 /// The synchronization a canned conflict answer names.
-const SYNCHRONIZATION: &str = "01M4CC0VN1KTQFSVR99378TDHV";
+pub(in crate::desktop::view) const SYNCHRONIZATION: &str = "01M4CC0VN1KTQFSVR99378TDHV";
 /// Fabricated requests stand far above the worker's own numbering.
 const FABRICATED: u64 = 4_000_000;
 
 /// A ticket committed on main and saved once, so it has a work context of
 /// its own, in repository `a`, in an open window with its tab open.
-pub(super) fn ticket_shell(cx: &mut TestAppContext) -> (Shell, PathBuf) {
+pub(in crate::desktop::view) fn ticket_shell(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     cx.executor().allow_parking();
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
@@ -144,7 +143,11 @@ pub(crate) fn share_conflict() -> Envelope<MutationDataDto> {
 /// `tests/mutation_remote/c5_child_conflict.rs` `shown_by_either_id`
 /// answers (its `ticket_close` way out is `way_out_tests.rs`'s
 /// `ResolveChildConflict` then `SendAgain`).
-fn child_conflict(root: &Path, parent: &str, request: RequestId) -> Envelope<MutationDataDto> {
+pub(in crate::desktop::view) fn child_conflict(
+    root: &Path,
+    parent: &str,
+    request: RequestId,
+) -> Envelope<MutationDataDto> {
     let mut envelope = Envelope::<MutationDataDto>::classified_mutation(
         "ticket close",
         Scope {
@@ -199,7 +202,7 @@ pub(super) fn opened_on(
 
 /// The pending row of `root` whose command is `command`, once listed: its
 /// key, for the seam.
-pub(super) async fn row_of(
+pub(in crate::desktop::view) async fn row_of(
     shell: &Shell,
     root: &Path,
     command: &str,
@@ -405,7 +408,7 @@ async fn resolve_conflict_opens_the_childs_sheet(cx: &mut TestAppContext) {
     until_present(&shell, "lifecycle-resolve-conflict", cx).await;
     assert_eq!(
         shell.label("lifecycle-resolve-conflict", cx).as_deref(),
-        Some(RESOLVE_CONFLICT)
+        Some(REVIEW_CHANGES)
     );
     assert!(!shell.rows("lifecycle-way-out", cx).is_empty(), "guidance");
 

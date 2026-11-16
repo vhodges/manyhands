@@ -77,6 +77,10 @@ icon_assets!(
         FolderInput,
         GitBranch,
         Cloud,
+        // The lifecycle dialog's Approve and merge tile and its Failed tile
+        // (Wave 04 Cycle 05b, Part A).
+        GitMerge,
+        CircleX,
     ]
 );
 

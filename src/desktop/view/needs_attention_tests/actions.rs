@@ -44,7 +44,7 @@ use crate::desktop::{
 /// Opens the popover with Enter on the footer item, moves the highlight to
 /// `key` with the arrows, says its button reads `label` and is enabled, and
 /// presses it with Enter. The action closes the popover.
-pub(super) fn press_from_popover(
+pub(in crate::desktop::view) fn press_from_popover(
     shell: &Shell,
     key: &RowKey,
     label: &str,

@@ -46,7 +46,7 @@ pub(crate) use crate::desktop::model::activity::copy::{
 
 pub(crate) const DISMISSED: &str = "Dismissed";
 #[cfg(test)]
-pub(crate) const RESUME: &str = "Resume";
+pub(crate) use crate::desktop::model::activity::copy::RESUME;
 #[cfg(test)]
 pub(crate) const ABANDON: &str = "Abandon";
 

@@ -47,7 +47,7 @@ use gpui_kit::{
     Subscription, Task, TestSupportExt, WeakEntity, Window,
     assets::IconName,
     component::{
-        Icon, Root, WindowExt,
+        Icon, WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm,
         h_flex,
@@ -62,7 +62,7 @@ use super::{
     frame::{self, Footer, Header, Tone},
     operations::scope_name,
     shell::tokens::chrome_colors,
-    workspace::Workspace,
+    workspace::window_workspace,
 };
 use crate::desktop::{
     model::{operations::Progressing, stamp::Generations},
@@ -321,8 +321,7 @@ impl PassphraseDialog {
 /// The repository of the share or post the window's workspace has
 /// running, by its directory name: what waits on the prompt.
 fn waiting_share(window: &Window, cx: &App) -> Option<String> {
-    let root = window.root::<Root>()??;
-    let workspace = root.read(cx).view().clone().downcast::<Workspace>().ok()?;
+    let workspace = window_workspace(window, cx)?;
     let operations = workspace.read(cx).services().operations().read(cx);
     let request = operations.running()?;
     // Not a Check now: it may prompt too, but it is not a share.
@@ -460,4 +459,4 @@ impl Render for PassphraseDialog {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "passphrase_tests.rs"]
-mod tests;
+pub(super) mod tests;

@@ -41,7 +41,7 @@ use crate::desktop::{
 /// A document committed on main, titled "Untitled", with the sentinel
 /// comment, then saved through the library with `TITLE` and `BODY`: it has
 /// a working copy of its own to approve and merge.
-fn saved_document(fixture: &Fixture, root: &Path) {
+pub(super) fn saved_document(fixture: &Fixture, root: &Path) {
     let source = format!(
         "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {DOCUMENT}\n\
          title: Untitled\n---\nUntitled.\n"

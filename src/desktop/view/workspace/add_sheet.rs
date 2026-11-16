@@ -172,7 +172,8 @@ impl Workspace {
 
     /// Opens the Add repository sheet at `route` (B2). `origin` is where
     /// focus returns on close; with none, C4 A2's next ways to it. Nothing
-    /// opens under a dialog or while quitting. Open already, the route
+    /// opens under a dialog, over Resolve conflict (Wave 04 Cycle 05b
+    /// decision 9) or while quitting. Open already, the route
     /// applies in place and the origin, and any return to Settings, are
     /// kept (step 5). From Settings, Settings' origin is taken and Settings
     /// closes quietly (step 2); a details sheet gives way (step 3, R-21).
@@ -183,7 +184,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if window.has_active_dialog(cx) || self.quit != QuitPhase::Running {
+        if window.has_active_dialog(cx)
+            || self.quit != QuitPhase::Running
+            || self.resolve_open(window, cx)
+        {
             return;
         }
         // Closed by the Kit unseen: quietly, so no return to Settings follows.

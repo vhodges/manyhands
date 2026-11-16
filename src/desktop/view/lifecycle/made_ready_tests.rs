@@ -21,8 +21,9 @@ use manyhands::{
 };
 
 use super::{
+    READY_TO_START,
     confirm_tests::confirming,
-    made_ready::{COULD_NOT_WORK_OUT, MADE_READY_LEAD, MAY_BE_INCOMPLETE, OPEN_READY_TICKETS},
+    made_ready::{COULD_NOT_WORK_OUT, MAY_BE_INCOMPLETE, OPEN_READY_TICKETS},
     outcome::ENDING_DONE,
     outcome_canned_tests::{answer, finished, intent, reached, reached_effects, reopen, retry},
     outcome_tests::stopped_at_integrating,
@@ -202,7 +203,7 @@ async fn done_lists_made_ready_with_slug_and_title(cx: &mut TestAppContext) {
     until_rows(&shell, vec![format!("{SLUG} \u{b7} {DEPENDENT_TITLE}")], cx).await;
     assert_eq!(
         shell.label("lifecycle-made-ready-lead", cx).as_deref(),
-        Some(MADE_READY_LEAD)
+        Some(READY_TO_START)
     );
     assert!(!shell.present("lifecycle-made-ready-incomplete", cx));
     assert!(!shell.present("lifecycle-open-ready", cx));

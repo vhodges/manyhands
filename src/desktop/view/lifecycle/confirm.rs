@@ -6,9 +6,10 @@
 //! - **Steps** (handoff 2c, R-8): Save your latest edits; Share with the
 //!   remote, or "Keep on this computer (sharing pending)" when publication
 //!   is `pending_no_remote`; Mark as closed (closure only, "Closed by
-//!   {closed_by}" from the preview, or "Already marked closed"); Merge into
-//!   main, or "Already in main"; Share main (omitted when local-only); Tidy
-//!   up, naming what `cleanup` removes.
+//!   {name} · today" from the preview's `closed_by`, or "Closed by {name}"
+//!   for "Already marked closed"; A4); Merge into main, or "Already in
+//!   main"; Share main (omitted when local-only); Tidy up, naming what
+//!   `cleanup` removes.
 //! - **Paths.** One row per `changes[]` entry: its change, the path and a
 //!   tag from `item_path_kind`, else `code` (R-2). Any `code` row adds the
 //!   code note. No line counts (R-3).
@@ -41,8 +42,9 @@ use manyhands::{
 };
 
 use super::{
-    LifecycleDialog, Phase,
+    LifecycleDialog, Phase, closed_by, closed_by_today,
     outcome::{StepKey, stage_step},
+    rows::{Mark, Note, StepRow, step_rows},
     text,
 };
 use crate::desktop::{
@@ -119,11 +121,16 @@ pub(crate) fn steps(details: &LifecyclePreviewDto) -> Vec<Step> {
             LifecycleRecording::Record => MARK_CLOSED,
             LifecycleRecording::Existing => ALREADY_MARKED,
         };
-        steps.push(Step::new(
-            StepKey::MarkClosed,
-            title,
-            format!("Closed by {}", closure.closed_by),
-        ));
+        // `closed_by` is "Name <email>": the name is what the note says.
+        let name = closure
+            .closed_by
+            .split_once(" <")
+            .map_or(closure.closed_by.as_str(), |(name, _)| name);
+        let note = match closure.recording {
+            LifecycleRecording::Record => closed_by_today(name),
+            LifecycleRecording::Existing => closed_by(name),
+        };
+        steps.push(Step::new(StepKey::MarkClosed, title, note));
     }
     steps.push(match details.integration {
         LifecyclePlannedIntegration::MergeCommit => Step::new(
@@ -201,6 +208,16 @@ pub(crate) fn git_line(details: &LifecyclePreviewDto) -> String {
         parts.push(format!("delete {}", deleted.join(", ")));
     }
     format!("Git: {}", parts.join(" \u{b7} "))
+}
+
+/// The Git line, as the dialog draws it at every stage that holds the
+/// preview (A4, A5, A6).
+pub(super) fn git_row(details: &LifecyclePreviewDto, cx: &App) -> impl IntoElement + use<> {
+    let theme = cx.theme();
+    text("lifecycle-git", git_line(details))
+        .text_xs()
+        .font_family(theme.mono_font_family.clone())
+        .text_color(theme.muted_foreground)
 }
 
 /// A changed path's tag, by its path alone (R-2).
@@ -354,9 +371,8 @@ impl LifecycleDialog {
     /// and expiry.
     pub(super) fn confirm_body(&self, preview: &PreviewDto, cx: &App) -> AnyElement {
         let theme = cx.theme();
-        let (muted, border, mono, info) = (
+        let (muted, mono, info) = (
             theme.muted_foreground,
-            theme.border,
             theme.mono_font_family.clone(),
             theme.info,
         );
@@ -372,45 +388,17 @@ impl LifecycleDialog {
             .gap_2()
             .child(text("lifecycle-lead", lead).text_sm());
         if let PreviewDetailsDto::Lifecycle(details) = &preview.details {
-            let list = v_flex()
-                .gap_2()
-                .p_2()
-                .border_1()
-                .border_color(border)
-                .rounded_md()
-                .children(steps(details).into_iter().enumerate().map(|(ix, step)| {
-                    h_flex()
-                        .gap_2()
-                        .items_start()
-                        .child(
-                            div()
-                                .flex_none()
-                                .w(px(20.))
-                                .h(px(20.))
-                                .rounded_full()
-                                .border_1()
-                                .border_color(border)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_xs()
-                                .child((ix + 1).to_string()),
-                        )
-                        .child(
-                            v_flex()
-                                .min_w_0()
-                                .child(
-                                    text(("lifecycle-step", ix), step.title)
-                                        .text_sm()
-                                        .font_weight(FontWeight::SEMIBOLD),
-                                )
-                                .child(
-                                    text(("lifecycle-step-note", ix), step.note)
-                                        .text_xs()
-                                        .text_color(muted),
-                                ),
-                        )
-                }));
+            let list = step_rows(
+                steps(details)
+                    .iter()
+                    .map(|step| StepRow {
+                        title: &step.title,
+                        mark: Mark::Planned,
+                        note: Note::Words(step.note.clone()),
+                    })
+                    .collect(),
+                cx,
+            );
             let code = details
                 .changes
                 .iter()
@@ -478,12 +466,7 @@ impl LifecycleDialog {
                     .children(code.then(|| {
                         text("lifecycle-code-note", code_note(self.heading.kind)).text_sm()
                     }))
-                    .child(
-                        text("lifecycle-git", git_line(details))
-                            .text_xs()
-                            .font_family(mono)
-                            .text_color(muted),
-                    );
+                    .child(git_row(details, cx));
         }
         body.child(
             text(

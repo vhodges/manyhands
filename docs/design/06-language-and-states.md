@@ -34,7 +34,7 @@ The owner's decision was **plain language everywhere; Git details only on hover 
 
 - Always reassure about data: when something fails, say that the work is safe and where it is ("Your saved work is still on this computer").
 - Name the item, the repository and the step on every failure (PRD).
-- Each failure gets **one obvious next action** (Retry now, Unlock…, Review changes, Set up sharing).
+- Each failure gets **one obvious next action** (Retry now, Unlock…, Review changes…, Set up sharing). *Amended 2026-11-15 by Wave 04 Cycle 05b (its decision 5): "Review changes…" takes the ellipsis, as it opens a sheet.*
 - Use people's names from Git identity ("Jo Smith"), not emails.
 - No exclamation marks, no emoji, sentence case, ellipsis (…) on any action that opens a confirmation or sheet.
 - Counts use real numbers ("2 to share", "3 need attention"); never vague words like "some".

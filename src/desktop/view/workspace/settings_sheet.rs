@@ -45,6 +45,8 @@ pub(crate) enum SheetOwnerKind {
     Settings,
     /// The Add repository sheet (Wave 04 Cycle 05a B1).
     AddRepository,
+    /// Resolve conflict (Wave 04 Cycle 05b B1).
+    Resolve,
 }
 
 /// Where a lost focus goes once Settings has closed onto a control that is
@@ -131,9 +133,11 @@ impl Workspace {
     /// Opens Settings at `route` (Part D). `origin` is where focus returns
     /// on close; with none, A2's next ways to it (`settings_origin`, an open
     /// Workspace layer, the control focused now). Nothing opens under a
-    /// dialog or while quitting (R-9, R-29). One the Kit closed without the
-    /// workspace seeing it yet closes quietly first (A2 step 2; R-36). Open
-    /// already, the route arrives in place and the origin is kept (step 3).
+    /// dialog, over Resolve conflict, whose choices it would lose (Wave 04
+    /// Cycle 05b decision 9), or while quitting (R-9, R-29). One the Kit
+    /// closed without the workspace seeing it yet closes quietly first (A2
+    /// step 2; R-36). Open already, the route arrives in place and the
+    /// origin is kept (step 3).
     /// A details sheet asked for, or open, gives way (R-51): its edits are
     /// already in the draft, and Root gives focus back to its chip (facts
     /// 28, 32, 34), which is then the origin. Drafts stays shown under the
@@ -147,7 +151,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if window.has_active_dialog(cx) || self.quit != QuitPhase::Running {
+        if window.has_active_dialog(cx)
+            || self.quit != QuitPhase::Running
+            || self.resolve_open(window, cx)
+        {
             return;
         }
         let mut origin = origin;
@@ -310,7 +317,12 @@ impl Workspace {
     /// sheet's layer included, a panel's toolbar or the footer. A control
     /// not drawn yet is not (A7 item 1), nor is one in Root's own overlays,
     /// such as an input's context menu (A7 item 2).
-    fn drawn_behind(&self, focused: &FocusHandle, window: &Window, cx: &gpui_kit::App) -> bool {
+    pub(super) fn drawn_behind(
+        &self,
+        focused: &FocusHandle,
+        window: &Window,
+        cx: &gpui_kit::App,
+    ) -> bool {
         let layer = self.content.settings.read(cx).layer();
         !layer.contains(focused, window)
             && (REGIONS
@@ -393,12 +405,16 @@ impl Workspace {
         }
     }
 
-    /// Ctrl+, (A5; R-8): nothing under a dialog, over Settings or over the
-    /// Add repository sheet (Wave 04 Cycle 05a R-14); over the details
-    /// sheet, Settings opens in its place; otherwise Repositories. The one
-    /// key that acts under a sheet (contract 7).
+    /// Ctrl+, (A5; R-8): nothing under a dialog, over Settings, over the
+    /// Add repository sheet (Wave 04 Cycle 05a R-14) or over Resolve
+    /// conflict (Wave 04 Cycle 05b decision 9); over the details sheet,
+    /// Settings opens in its place; otherwise Repositories. The one key that
+    /// acts under a sheet (contract 7).
     pub(super) fn settings_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if window.has_active_dialog(cx) || self.sheet_held(window, cx) {
+        if window.has_active_dialog(cx)
+            || self.sheet_held(window, cx)
+            || self.resolve_open(window, cx)
+        {
             return;
         }
         self.show_settings(
@@ -423,6 +439,7 @@ impl Workspace {
             SheetOwner::Details(_) => SheetOwnerKind::Details,
             SheetOwner::Settings => SheetOwnerKind::Settings,
             SheetOwner::AddRepository => SheetOwnerKind::AddRepository,
+            SheetOwner::Resolve(_) => SheetOwnerKind::Resolve,
         })
     }
 

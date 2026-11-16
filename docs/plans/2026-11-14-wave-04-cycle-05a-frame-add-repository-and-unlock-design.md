@@ -803,6 +803,10 @@ a repository…" button (B11; R-6).
 
 1. **Refuses** while a dialog is open or the app is quitting, as
    `show_settings` does (fact 19).
+   *Amended 2026-11-15 by Wave 04 Cycle 05b (its decision 9):* it also
+   refuses while Resolve conflict is open, since opening would close that
+   sheet and lose its choices. No way into the Add sheet can fire while it
+   is open, so the line is defensive (Cycle 05b design B2).
 2. **Every open resets `add_return_to_settings`** to `None` *(as built:
    only when the sheet is not already open, and "from Settings" is carried
    separately from the origin handle; see Ruling 16)*, then, if
@@ -903,6 +907,10 @@ Workspace:
      (`settings_return`'s rule, C4 R-45: `SettingsReturn`, which only
      `focus_lost` takes and whose constructor is private to
      `settings_sheet.rs`, fact 20);
+
+   *Amended 2026-11-15 by Wave 04 Cycle 05b (its decision 9; its design
+   U-9):* the return to Settings also waits while Resolve conflict is
+   open.
 4. takes `add_return_to_settings`, so the next open starts without it.
 
 ### B4. The sheet's state

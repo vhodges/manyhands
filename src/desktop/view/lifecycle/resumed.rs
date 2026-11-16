@@ -77,7 +77,7 @@ impl LifecycleDialog {
         code: ResultCode,
         message: &str,
         cx: &Context<Self>,
-    ) -> (AnyElement, Vec<AnyElement>) {
+    ) -> (AnyElement, Vec<(bool, AnyElement)>) {
         if code == ResultCode::Busy {
             let body = text("lifecycle-still-running", STILL_RUNNING)
                 .text_sm()
