@@ -535,7 +535,7 @@ async fn a_prompt_while_finishing_is_answered_unavailable(cx: &mut TestAppContex
 
 /// Every piece of text a test can read off the window: each observed
 /// element's label and accessibility value.
-fn window_text(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
+pub(in crate::desktop::view) fn window_text(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
     shell.frame(cx, |window, _| {
         gpui_kit::base::test_support::snapshots(window)
             .iter()

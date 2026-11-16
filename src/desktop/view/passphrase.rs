@@ -460,4 +460,4 @@ impl Render for PassphraseDialog {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "passphrase_tests.rs"]
-mod tests;
+pub(super) mod tests;

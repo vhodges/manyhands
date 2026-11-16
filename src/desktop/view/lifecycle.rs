@@ -678,3 +678,7 @@ mod privacy_consent_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/stages_tests.rs"]
 mod stages_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/privacy_secret_tests.rs"]
+mod privacy_secret_tests;
