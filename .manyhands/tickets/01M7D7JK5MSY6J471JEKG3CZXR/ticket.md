@@ -5,7 +5,7 @@ deps:
 id: 01M7D7JK5MSY6J471JEKG3CZXR
 title: 'Wave 04 Cycle 05b: Close Ticket And Resolve Conflict'
 type: cycle
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
