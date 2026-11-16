@@ -314,6 +314,27 @@ Reviewer: Opus, whole branch (`1f30d58c..6c26f6e7`, 39 commits, 78 files). Verdi
 
 Final deferred state: the lists above stand, with Task 6's waiting-slot item resolved by `7a93db2a`. Open and left: Task 3 spinner size (appearance), Task 4 P2 `visible()` and `f32` centre notes, Task 5 `repair_line` wording while waiting, Task 7 `render.rs` size and `item_kind` document and comment unit test, Task 8 masked-field note (now a comment), the 0.25 s no-focus gap, and the 109-column doc line.
 
+## Review feedback (2026-11-16)
+
+Ten findings from a review of the finished Cycle, each checked against the code and the design. Commits `61f4bfa7` `fix(desktop): name the chosen choice for screen readers, wrap card headers` and `63729853` `refactor(desktop): one window workspace lookup, drop the sheet's Enter NoAction`. Reviewer: Sonnet, spec compliant, no Critical or Important.
+
+| # | Finding | Verdict |
+| --- | --- | --- |
+| 1 | `applied` returns early on a closed sheet, dropping the follow-up | Refuted: design R-22, R-27 and H12 say nothing more runs after Escape. In production the dismissed sheet is dropped, so its observer is gone; the drain still sends the lifecycle on (I-3) and Activity shows the request. No leak: `on_release` unwatches |
+| 2 | Repair locally… wait never opens the sheet if focus is elsewhere | Not reproduced by a real route: the prompt traps Tab, a click behind is occluded, the 0.25 s restore only delays. It happens only as the aftermath of item 3's race; Activity's row still offers Review changes…, so the conflict is not lost; one click inside the dialog brings it back |
+| 3 | `on_inside` drops a press silently and `within_focused` may accept Root | The route named does not exist (neither Root nor the Workspace tracks a focus handle). A related race **does** reproduce: a click on the dialog body, or an `on` press such as Retry, in the one frame between a prompt opening and its first draw moves focus into the covered dialog, so a later Review changes… press or Repair's conflict passes the guard and closes the prompt. The silent drop is R-24 as designed. The same race lets the dialog's dismiss button and Escape close the top dialog, which predates this Cycle. **Not fixed; needs an owner decision** (options in `task-feedback-report.md`: refuse while the workspace's Unlock prompt waits; an app-wide record of open dialogs; an upstream gpui-kit topmost read) |
+| 4 | `applied` with no Workspace returns without queuing | Refuted: unreachable (production roots the Workspace, `desktop/mod.rs:125`) and `close()` has the same dependency |
+| 5 | Message-only stages take the Ask title | Refuted: owner-approved Known Limit K-10 and Ruling O-2; the old dialog's title was static too |
+| 6 | "Chosen" does not tell which choice | Fixed in `61f4bfa7`: the chosen button's accessible name is "Keep theirs, chosen" (a formatting fn on `CHOSEN`); visible label, `selected` style and check unchanged. The state word stays "Chosen" (decision 10, K-8) |
+| 7 | Body clipped; header row overflows | Height refuted: the Kit body is `size_full` and the sheet is an `absolute().inset_0()` child, as `item/sheet.rs` does. The narrow-window overflow was real: the card header row now wraps (`61f4bfa7`); checked on screen only |
+| 8 | Failed outcome box uses a red shield-check | Refuted: design A6 specifies `ShieldCheck`, red, for Failed (the header's `CircleX` is a separate element) |
+| 9 | Fourth copy of the Root-to-Workspace lookup | Fixed in `63729853`: one `workspace::window_workspace`, used by all four callers |
+| 10 | The keys.rs comment contradicts the binding | Fixed in `63729853`: no context around the sheet binds Enter (the Kit's Sheet binds only Escape), so the `NoAction` binding and its comment are removed; the five conflict walks and P6 pass |
+
+**Test edits.** E-25 (numbered here because E-16 is Task 2's): `conflict::tests::save_is_disabled_until_every_part_is_chosen` gains two assertions (the accessible names before and after the choice) and three imports. No assertion removed.
+**Tests run.** The implementer ran exact names (item 6's red then green; the walks, P5, P6, P7, P8, P12). Orchestrator module run over `desktop::keys`, `view::{conflict, keyboard_tests, workspace, lifecycle, passphrase, operations, activity::tests, needs_attention::tests}`: the first run had **one failure**, `keyboard_tests::editing::edit_the_mode_key_save_and_done_by_keyboard_alone` ("tab never reached item-page"), which then passed alone twice, in the `keyboard_tests` module (62 passed) and in a full rerun (**419 passed, 0 failed**, 560 s): treated as a load flake, not caused by these commits; watch for it. fmt, check and clippy clean at `63729853` (implementer). The fast tier was not rerun: the change is in `src/desktop/` and covered by the bin module run above.
+Deferred minor findings: a copy-table row for `chosen_choice` ("Keep theirs, chosen") is missing in `conflict/copy_tests.rs`; `KEEP_THEIRS` was widened to `pub(super)` only for a test and could sit beside `KEEP_MINE`; `window_workspace`'s doc omits the no-Root `None`.
+
 ## Deferred minor findings
 
 Task 0: minor (deferred): the design's U-1 closing paragraph says "Every name above exists as named" and then lists corrections; wording polish only.
