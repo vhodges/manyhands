@@ -55,7 +55,6 @@ pub(super) enum SheetOwner {
     /// The Add repository sheet (Wave 04 Cycle 05a B1).
     AddRepository,
     /// Resolve conflict (Wave 04 Cycle 05b B1).
-    #[allow(dead_code)] // Used from Task 6
     Resolve(WeakEntity<ResolveSheet>),
 }
 
@@ -133,15 +132,18 @@ impl Workspace {
     /// repository a tab's create asked for: the identity form, where its
     /// initials are set. While a dialog is open the request waits, as D1's
     /// actions do not act behind one; the frame after the dialog closes
-    /// opens it.
+    /// opens it. While Resolve conflict is open, Drafts and the identity
+    /// form wait too, and open once it closes (Wave 04 Cycle 05b R-25).
     pub(super) fn apply_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
         }
-        // Dropped while Settings or the Add repository sheet owns the
-        // sheet: nothing pulls focus behind it (R-34; Wave 04 Cycle 05a
-        // R-24).
+        let resolve = self.resolve_open(window, cx);
+        // Dropped while Settings, the Add repository sheet or Resolve
+        // conflict owns the sheet: nothing pulls focus behind it (R-34;
+        // Wave 04 Cycle 05a R-24; Wave 04 Cycle 05b R-25).
         if std::mem::take(&mut self.content.refocus)
+            && !resolve
             && !matches!(
                 self.content.sheet,
                 Some(SheetOwner::Settings | SheetOwner::AddRepository)
@@ -152,6 +154,9 @@ impl Workspace {
         // Dropped behind the details sheet, never kept for its close (N2).
         if std::mem::take(&mut self.content.landed_refocus) && !window.has_active_sheet(cx) {
             self.focus_region(Region::Content, window, cx);
+        }
+        if resolve {
+            return;
         }
         if let Some(id) = self.content.review.take() {
             self.open_drafts(Some(id), window, cx);
@@ -617,10 +622,11 @@ impl Workspace {
     }
 
     /// Focuses the content region's shown tab, Drafts page or the region
-    /// itself; nothing while Settings or the Add repository sheet is open,
-    /// behind which nothing takes focus (R-34; Wave 04 Cycle 05a R-24).
+    /// itself; nothing while Settings, the Add repository sheet or Resolve
+    /// conflict is open, behind which nothing takes focus (R-34; Wave 04
+    /// Cycle 05a R-24; Wave 04 Cycle 05b R-25).
     pub(super) fn focus_content(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sheet_held(window, cx) {
+        if self.workspace_sheet_open(window, cx) {
             return;
         }
         let region = || self.regions[Region::Content.index()].clone();

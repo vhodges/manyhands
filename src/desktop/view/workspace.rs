@@ -96,6 +96,9 @@ struct ContentArea {
     /// Who keeps Root's sheet open: Settings, or the tab whose details
     /// sheet it is, which closes once another is shown.
     sheet: Option<content::SheetOwner>,
+    /// Resolve conflict's applied resolution that landed under a dialog,
+    /// whose close waits for none to be open (Wave 04 Cycle 05b R-26).
+    resolve_waiting: Option<resolve_sheet::ResolveWaiting>,
 }
 
 pub(crate) struct Workspace {
@@ -378,6 +381,7 @@ impl Workspace {
                 landed_refocus: false,
                 details: None,
                 sheet: None,
+                resolve_waiting: None,
             },
             _settings_events: settings_events,
             settings_origin: None,

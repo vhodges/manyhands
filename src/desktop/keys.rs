@@ -457,10 +457,11 @@ pub(crate) fn bind(cx: &mut App) {
             SaveResolution,
             Some(RESOLVE_SHEET_CONTEXT),
         ),
-        // The dialog's Enter (its Confirm, which the sheet ignores) is
-        // taken back inside the sheet, so Enter presses the focused button,
-        // as Space does (A21); the Result editor's Enter, bound deeper, is
-        // still its newline.
+        // Enter is no binding's inside the sheet, so no context around it
+        // takes the key and Enter presses the focused button, as Space does
+        // (A21); while the sheet was a dialog, this took back the dialog's
+        // Confirm (Wave 04 Cycle 05b B2). The Result editor's Enter, bound
+        // deeper, is still its newline.
         KeyBinding::new("enter", NoAction, Some(RESOLVE_SHEET_CONTEXT)),
         KeyBinding::new("escape", LeaveResult, Some(RESOLVE_SHEET_EDITOR)),
     ]);

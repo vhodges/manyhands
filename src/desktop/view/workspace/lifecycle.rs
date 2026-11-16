@@ -88,6 +88,7 @@ impl Workspace {
         self.hold_prompt(window, cx);
         window.close_all_dialogs(cx);
         self.close_settings_quietly(window, cx);
+        self.close_resolve_quietly(window, cx);
         let workspace = cx.entity().downgrade();
         EditsNotKept {
             count: unkept.len(),

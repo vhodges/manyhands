@@ -123,10 +123,17 @@ pub(super) async fn until_lifecycle(shell: &Shell, cx: &mut TestAppContext) -> b
 }
 
 fn lifecycle_open(cx: &mut TestAppContext) -> bool {
+    lifecycle_id(cx).is_some()
+}
+
+/// The lifecycle dialog last opened, while it is open. The global is the
+/// test app's, so it may name another window's: a row compares it before
+/// and after rather than reading it alone.
+fn lifecycle_id(cx: &mut TestAppContext) -> Option<gpui_kit::EntityId> {
     cx.update(|cx| {
         cx.try_global::<OpenedLifecycle>()
             .and_then(|opened| opened.0.upgrade())
-            .is_some()
+            .map(|dialog| dialog.entity_id())
     })
 }
 
@@ -261,6 +268,7 @@ async fn h12(table: &mut Table, cx: &mut TestAppContext) {
     );
     super::support::settle(&shell, cx);
     let before = shell.frame(cx, |window, cx| window.focused(cx));
+    let dialog_before = lifecycle_id(cx);
     held.release();
     resolutions_end(&shell, cx).await;
     until_attempt(&shell, close, 2, cx).await;
@@ -268,7 +276,8 @@ async fn h12(table: &mut Table, cx: &mut TestAppContext) {
         super::support::settle(&shell, cx);
     }
     let now = shell.frame(cx, |window, cx| window.focused(cx));
-    let quiet = settings_open(&shell, cx) && !has_dialog(&shell, cx) && !lifecycle_open(cx);
+    let quiet =
+        settings_open(&shell, cx) && !has_dialog(&shell, cx) && lifecycle_id(cx) == dialog_before;
     table.fact(
         "H12 an answer after the sheet closed: no sheet closes, no dialog reopens",
         quiet,

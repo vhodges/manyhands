@@ -508,7 +508,9 @@ impl ResolveSheet {
             Button::new("conflict-cancel")
                 .label(CANCEL)
                 .small()
-                .on_click(self.on_footer(cx, |sheet, window, cx| sheet.close(window, cx))),
+                .on_click(self.on_footer(cx, |sheet, window, cx| {
+                    sheet.close(window, cx);
+                })),
         )
     }
 

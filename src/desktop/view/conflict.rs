@@ -290,11 +290,15 @@ pub(crate) struct ResolveSheet {
     /// once a local resolution applies (B6, P9).
     reopen: Option<Reopen>,
     origin: FocusHandle,
-    /// The sheet's own focus: a control that goes or is disabled while it
-    /// holds focus (Save resolution while its request waits, Read again
-    /// once its read lands) gives focus back here, the nearest focusable
-    /// that held it (`Workspace::focus_lost`), so it stays in the sheet
-    /// (A21).
+    /// The sheet's own focus, which `conflict-sheet` tracks and the sheet
+    /// opens on (Wave 04 Cycle 05b H1). A body control that goes or is
+    /// disabled while it holds focus (a choice while a save is out, Read
+    /// again once its read lands) gives focus back here, its nearest
+    /// tracked ancestor, through `Workspace::focus_lost`; a footer press
+    /// (Save resolution, Retry) focuses it first, through `on_footer`, so
+    /// the control going with the press leaves focus here (A21; B3).
+    /// `keep_focus_in_resolve` brings focus taken behind the sheet back
+    /// here.
     focus: FocusHandle,
     /// The footer's own focus, which its slot tracks: a footer control that
     /// goes gives focus back here, not to the Kit's host (Wave 04 Cycle 05b

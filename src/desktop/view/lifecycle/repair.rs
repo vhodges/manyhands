@@ -249,10 +249,13 @@ impl LifecycleDialog {
         cx.notify();
     }
 
-    /// Whether focus is inside this dialog: in its own element, or on the
-    /// Kit's dialog around it, which holds focus as the dialog opens. A
-    /// prompt opened over the dialog holds it outside, from the update that
-    /// opens the prompt (R-24).
+    /// Whether focus is inside this dialog: in its own element, or on an
+    /// element around it (`within_focused`), which is the Kit's dialog host
+    /// as the dialog opens, but would be Root's own handle too, were focus
+    /// ever left there. A prompt opened over the dialog takes focus into a
+    /// layer of its own, around nothing of this dialog's, from the update
+    /// that opens the prompt, so the check tells the two apart, which is
+    /// all R-24 asks of it.
     fn focus_inside(&self, window: &Window, cx: &mut App) -> bool {
         self.focus.contains_focused(window, cx) || self.focus.within_focused(window, cx)
     }
