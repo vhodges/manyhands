@@ -6,7 +6,6 @@ use std::borrow::Cow;
 
 /// The name the card of the field `key` shows. A key with no name here is
 /// shown as written.
-#[allow(dead_code)] // Used from Task 7
 pub(crate) fn field_name(key: &str) -> Cow<'static, str> {
     Cow::Borrowed(match key {
         "id" => "ID",

@@ -111,8 +111,9 @@ fn into_the_result(walk: &Walk, handle: &FocusHandle, cx: &mut TestAppContext) {
 /// body's Keep both are chosen by Tab and Enter; Tab then reaches the
 /// Result's tab stop, after the choices, and Enter goes into the editor,
 /// where typing edits the Result. Escape comes back to the stop and leaves
-/// the sheet open; Tab goes on to Save resolution, and Enter saves the
-/// edited Result, which applies.
+/// the sheet open; Tab goes on to the footer's Cancel, then Save resolution
+/// (Wave 04 Cycle 05b decision 4, E-12), and Enter saves the edited Result,
+/// which applies.
 #[gpui_kit::test]
 async fn edit_the_result_by_keyboard(cx: &mut TestAppContext) {
     let (walk, handle) = body_sheet(cx).await;
@@ -131,6 +132,8 @@ async fn edit_the_result_by_keyboard(cx: &mut TestAppContext) {
     assert!(walk.shell.present("conflict-sheet", cx), "the sheet stays");
     walk.in_sheet(RESULT, cx);
 
+    walk.keys("tab", cx);
+    walk.in_sheet("conflict-cancel", cx);
     walk.keys("tab", cx);
     walk.in_sheet("conflict-save", cx);
     walk.enter(cx);

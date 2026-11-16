@@ -100,14 +100,10 @@ pub(crate) const NOT_SENT_AGAIN: &str = "The earlier resolution could not be sen
 pub(crate) const CHOOSE_ONE: &str = "Choose one";
 /// What a part's card says of the kind of detail it holds, by the kind of
 /// the item at its path (B5).
-#[allow(dead_code)] // Used from Task 7
 pub(crate) const TICKET_DETAIL: &str = "Ticket detail";
-#[allow(dead_code)] // Used from Task 7
 pub(crate) const DOCUMENT_DETAIL: &str = "Document detail";
-#[allow(dead_code)] // Used from Task 7
 pub(crate) const COMMENT_DETAIL: &str = "Comment detail";
 /// Before's label's note (B5).
-#[allow(dead_code)] // Used from Task 7
 pub(crate) const LAST_SHARED_COPY: &str = "last shared copy";
 /// A part only one side changed is taken from it (R-5).
 pub(crate) const TAKEN_THEIRS: &str = "Only theirs changed it; theirs is kept.";

@@ -300,7 +300,7 @@ async fn save_is_disabled_until_every_part_is_chosen(cx: &mut TestAppContext) {
         shell.label("conflict-progress", cx).as_deref(),
         Some("0 of 1 chosen")
     );
-    assert_eq!(shell.rows("conflict-field", cx), ["title"]);
+    assert_eq!(shell.rows("conflict-field", cx), ["Title"]);
     assert_eq!(
         shell.label(("conflict-body-taken", 0usize), cx),
         Some(format!("Description: {TAKEN_THEIRS}"))

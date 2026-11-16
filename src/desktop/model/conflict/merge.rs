@@ -2,7 +2,7 @@
 
 use std::{mem, path::Path};
 
-use manyhands::canonical::{CanonicalItem, parse_item, serialize_item};
+use manyhands::canonical::{CanonicalItem, ItemKind, parse_item, serialize_item};
 use serde_yaml::{Mapping, Value};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -209,6 +209,17 @@ impl PathConflict {
 
     pub(crate) fn token(&self) -> &str {
         &self.token
+    }
+
+    /// The kind of the item at the path, as its parse found it: the three
+    /// sides are one kind (`parse`), so mine's is the path's (Wave 04 Cycle
+    /// 05b B5).
+    pub(crate) fn item_kind(&self) -> ItemKind {
+        match self.mine {
+            CanonicalItem::Document(_) => ItemKind::Document,
+            CanonicalItem::Ticket(_) => ItemKind::Ticket,
+            CanonicalItem::Comment(_) => ItemKind::Comment,
+        }
     }
 
     /// The fields to choose between, in the canonical order, then the

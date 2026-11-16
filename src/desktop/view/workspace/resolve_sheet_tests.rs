@@ -19,6 +19,7 @@
 //! focus a row names is read after two draws; guards are tested with
 //! dispatched actions and direct calls, which the scrim does not take; the
 //! Kit's deferred restore is reached by the test clock, with no real wait.
+//! P8, how the cards name their parts (B5, Task 7), is in `words`.
 
 use gpui_kit::{
     App, InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
@@ -62,6 +63,8 @@ mod quitting;
 mod refusals;
 #[path = "resolve_sheet_tests/support.rs"]
 mod support;
+#[path = "resolve_sheet_tests/words.rs"]
+mod words;
 
 /// The close a canned child conflict names (`child_conflict`).
 const PARENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FY1";
@@ -92,6 +95,20 @@ async fn nothing_opens_over_the_resolve_sheet(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let mut table = support::Table::new("P7");
     refusals::rows(&mut table, cx).await;
+    table.done();
+}
+
+/// P8 (B5, Part C; Task 7): a ticket's conflict on `status` and a key
+/// Manyhands does not define names them "Status" and the key as written,
+/// each a "Ticket detail", and a taken field by its name; a part reads
+/// "Choose one", then "Chosen" once kept, and the body "Edited" once its
+/// Result is typed in; a set that goes outside draws one card per path and
+/// one row of actions (R-14). The rows are in `words`.
+#[gpui_kit::test]
+async fn parts_are_named_in_words(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let mut table = support::Table::new("P8");
+    words::rows(&mut table, cx).await;
     table.done();
 }
 
