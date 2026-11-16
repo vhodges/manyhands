@@ -27,7 +27,8 @@ serial (Cycle decision 13). Implementers: Task 0 on Opus, others per task.
 | 4 | complete | `aa66a5ab..5f729d5d` (feature `4401609c`, fix `5f729d5d`) | clean (Opus reviewer, Sonnet re-review of the fix), 7 Minor deferred | with the ledger commit after it |
 | 5 | complete | `c0cd4df8..c22ae1ae` | clean (Opus reviewer), 7 Minor deferred | with the ledger commit after it |
 | 6 | complete | `7b2b4511` (red tests), `2651c63b` (code) | clean (Opus reviewer), 4 Minor deferred | with the ledger commit after it |
-| 7–9 | not started | | | |
+| 7 | complete | `45f06cb6` | clean (Opus reviewer), 4 Minor deferred | with the ledger commit after it |
+| 8–9 | not started | | | |
 
 ## Base and merges
 
@@ -208,7 +209,7 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | E-4, E-5 | 2 | done (Task 2) |
 | E-6 | 3 | not started |
 | E-7, E-8, E-9, E-13 | 1 | done (Task 1) |
-| E-10, E-12 | 7 | not started |
+| E-10, E-12 | 7 | done (Task 7). E-10 changes one string; E-12 adds a Tab and `in_sheet("conflict-cancel")`: the design (B6, decision 4) has Tab from the Result stop reach Cancel, then Save. The Task 5 section's "Tab still reaches Save first" was the orchestrator's misreading; the design governs |
 | E-11 | 1 (part), 5 (part) | Task 1 part done (`choose_by_keyboard`, callers, import); Task 5 part open |
 | E-14 | none | no edit needed |
 | E-15 | none | no edit needed (privacy sweeps keep reading the same surfaces) |
@@ -238,6 +239,8 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | Task 6 Phase A, implementer | exact names: P6 `workspace::resolve_sheet::tests::focus_around_the_resolve_sheet`, P7 `…::nothing_opens_over_the_resolve_sheet`; 18 mutations, each reverted; fmt, clippy | RED as intended: P6 12 contract facts red (all Phase B code, now incl. H11 ruled), 29 pass each failing under a mutation (H1 Shift+Tab is Kit draw order, weak proof); P7 7 facts red (5 sub-cases), 10 pass each with a mutation proof |
 | Task 6, implementer (Phase B) | exact names: P6, P7, P5 and 7 other tests through the changed close, save and reopen paths; fmt, check, clippy | P6 (12 of 54 red) and P7 (7 of 21 red) green; others green; static gates clean |
 | Task 6, orchestrator module run | 10 filters: `desktop::model::conflict`, `view::conflict`, `view::keyboard_tests`, `view::workspace`, `view::activity::tests`, `view::needs_attention::tests`, `view::lifecycle`, `view::operations`, `view::item::{share::tests, posting::tests}` | 500 passed, 0 failed, 637 s |
+| Task 7, implementer | exact names: P8 `workspace::resolve_sheet::tests::parts_are_named_in_words`, E-10 `conflict::tests::save_is_disabled_until_every_part_is_chosen`, E-12 `keyboard_tests::conflict::sheet::edit_the_result_by_keyboard`; fmt, check, clippy | P8 RED first (3 of 9 rows: "status" for "Status", no kind labels, "team: …" for "Team: …"), then 3 of 3 green; static gates clean |
+| Task 7, orchestrator module run | `desktop::view::conflict`, `desktop::view::keyboard_tests::conflict`, `desktop::view::workspace::resolve_sheet::tests`, `desktop::model::conflict`; then `view::lifecycle::{privacy_tests, privacy_remote_tests, privacy_promote_tests}` (the sweeps read `conflict-sheet`) | 77 passed, 117 s; privacy sweeps 4 passed. The bounded Tab counts in P6 H8/H9 and `keyboard_tests/conflict.rs` still hold with Cancel before Save |
 | Task 1, orchestrator module run | one `cargo test` with the filters `desktop::model::activity::tests`, `view::conflict`, `view::keyboard_tests::conflict`, `view::activity::tests`, `view::needs_attention::tests`, `view::lifecycle::{credential_tests, tests, outcome_tests, outcome_canned_tests}`, `view::item::{posting::tests, edit_tests::review, share::tests}`, `desktop::assets::tests`, `desktop::model::{review::tests, conflict}` | 256 passed, 0 failed, 284 s |
 
 ## Task 1: copy and constants
@@ -286,6 +289,12 @@ Implementer: Opus (resumed once for Ruling O-8). Commit `c22ae1ae` `feat(desktop
 
 **Test edits.** E-23 only (above). No assertion removed.
 
+## Task 7: Resolve header, cards and footer
+
+Implementer: Opus. Commit `45f06cb6` `feat(desktop): Resolve conflict's header, cards and footer`. Reviewer: Opus, spec compliant, no Critical or Important. `frame::sheet_header` with `conflict-title` and `conflict-description` in `conflict-header`; the meta line, note and status in the body; cards with `field_name`, `("conflict-field-kind", k)`, the state words and a check on the chosen choice; Before with "last shared copy"; outside sets draw one card per path and one shared row of actions; the footer slot holds the git line, Cancel and the primary through `frame::sheet_footer`, every press through `ResolveSheet::on_footer`. `PathConflict::item_kind()` maps the parsed `mine` side (no library change). P8 has two rows beyond the brief (the taken row "Team: …" and "Choose one"). The allows on `TICKET_DETAIL`, `DOCUMENT_DETAIL`, `COMMENT_DETAIL`, `LAST_SHARED_COPY` and `field_name` are removed.
+
+**Test edits.** E-10 and E-12 as named. No assertion removed, no E-16 onward.
+
 ## Deferred minor findings
 
 Task 0: minor (deferred): the design's U-1 closing paragraph says "Every name above exists as named" and then lists corrections; wording polish only.
@@ -315,3 +324,7 @@ Task 6: minor (deferred): fourth copy of the Root-to-Workspace lookup (`conflict
 Task 6: minor (deferred): a deferred Republish… returns with `over_dialog = false` (`operations/republish.rs:213`); unreachable today because no lifecycle dialog can open over the sheet.
 Task 6: minor (deferred): H1's Shift+Tab row has only the weak M7 mutation proof (Kit draw order).
 Task 6: minor (deferred): the 0.25 s no-focus gap noted above (not a table row).
+Task 7: minor (deferred): `conflict/render.rs` is 559 lines (564 before). The implementer said the File Map has no sibling file; the reviewer found `render/pieces.rs` is in it. A `render/footer.rs` with `git_line`, `primary_action` and `footer_slot` would bring it under 500. Take it in the final review or Task 9 if cheap.
+Task 7: minor (deferred): no unit test of `item_kind` for document and comment paths, and P8 covers tickets only (the design's P8); `kind_words` reads right against Part C.
+Task 7: minor (deferred): some strings are private consts, not `pub(crate)`: `BEFORE`, `YOURS`, `THEIRS` (`render/pieces.rs:24-26`), `KEEP_THEIRS` and similar in `render.rs`, and the inline "Choose what to keep" title. They predate the task (moved, not added).
+Task 7: minor (deferred): the report says `pieces.rs` is 213 lines; it is 217.
