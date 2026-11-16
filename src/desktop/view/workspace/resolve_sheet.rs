@@ -68,6 +68,23 @@ impl Workspace {
         Some(sheet)
     }
 
+    /// The workspace keeps `sheet` open: it owns the sheet layer's Resolve
+    /// conflict, which is this sheet's own entity, and a sheet is active.
+    /// `close_resolve` closes only a sheet kept; `applied` waits under a
+    /// dialog only for one kept, so a stale sheet's answer replaces no
+    /// waiting close (R-22, R-26).
+    pub(in crate::desktop::view) fn keeps_resolve(
+        &self,
+        sheet: &Entity<ResolveSheet>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        matches!(
+            &self.content.sheet,
+            Some(SheetOwner::Resolve(owner)) if owner.entity_id() == sheet.entity_id()
+        ) && window.has_active_sheet(cx)
+    }
+
     /// Closes `sheet`'s Kit sheet, only while the workspace keeps that
     /// sheet open: an answer that lands after Escape closes nothing opened
     /// since (B3, R-22). Gives whether it closed; on false the sheet does
@@ -78,11 +95,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let kept = matches!(
-            &self.content.sheet,
-            Some(SheetOwner::Resolve(owner)) if owner.entity_id() == sheet.entity_id()
-        );
-        if !kept || !window.has_active_sheet(cx) {
+        if !self.keeps_resolve(sheet, window, cx) {
             return false;
         }
         self.content.sheet = None;

@@ -355,8 +355,10 @@ impl ResolveSheet {
     /// owner 2026-11-05). Under a dialog (an Unlock prompt over the sheet)
     /// the rest waits in the workspace until none is open, which then runs
     /// this again (Wave 04 Cycle 05b R-26). A sheet the workspace no longer
-    /// keeps, closed by Escape before the answer landed, does nothing more:
-    /// no focus moves, and no lifecycle dialog opens again (R-22, R-27).
+    /// keeps, closed by Escape before the answer landed, does nothing more,
+    /// under a dialog or not: it leaves the open sheet's waiting close
+    /// alone, no focus moves, and no lifecycle dialog opens again (R-22,
+    /// R-27).
     pub(in crate::desktop::view) fn applied(
         &mut self,
         resolution: RequestId,
@@ -364,10 +366,14 @@ impl ResolveSheet {
         cx: &mut Context<Self>,
     ) {
         if window.has_active_dialog(cx) {
-            let sheet = cx.entity().downgrade();
+            let sheet = cx.entity();
             if let Some(workspace) = workspace(window, cx) {
                 workspace.update(cx, |workspace, cx| {
-                    workspace.wait_to_close_resolve(sheet, resolution, cx)
+                    // A stale sheet's answer waits for nothing: it would
+                    // replace the open sheet's waiting close.
+                    if workspace.keeps_resolve(&sheet, window, cx) {
+                        workspace.wait_to_close_resolve(sheet.downgrade(), resolution, cx)
+                    }
                 });
             }
             return;

@@ -219,9 +219,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Quitting waits: every dialog, Settings (quietly, R-52) and the
-    /// details sheet close, no sheet a chip asked for opens over it, and
-    /// Quit now takes focus. Closing a sheet gives focus back to what held
+    /// Quitting waits: every dialog, Settings (quietly, R-52), Resolve
+    /// conflict (quietly, O-10) and the details sheet close, no sheet a
+    /// chip asked for opens over it, and Quit now takes focus. Closing a sheet gives focus back to what held
     /// it as the sheet opened, so Quit now is focused after it. Quit now
     /// lives in Activity: with Activity not displayed focus stays where the
     /// closing left it, and the layout is untouched (R-20).

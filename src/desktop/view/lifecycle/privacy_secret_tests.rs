@@ -184,6 +184,10 @@ async fn close_and_resolve_show_no_secret(cx: &mut TestAppContext) {
         &["passphrase-title", "passphrase-label", "passphrase-ok"],
         cx,
     );
+    // The masked field hides its value from accessibility, so this sweep
+    // cannot see the typed sentinel, and `ask` returns a static string, not
+    // the typed value: the sweeps here prove no leak into the surfaces
+    // they read, not that the field holds the sentinel.
     shell.visual(cx).simulate_input(PASSPHRASE_SENTINEL);
     shell.run(cx);
     sweep(&shell, "the passphrase typed", &["passphrase-ok"], cx);

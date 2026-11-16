@@ -9,7 +9,10 @@
 use std::{path::PathBuf, time::Duration};
 
 use gpui_kit::{Entity, TestAppContext};
-use manyhands::{drafts::DraftId, repository::OperationId};
+use manyhands::{
+    drafts::DraftId,
+    repository::{OperationId, RequestId},
+};
 
 use super::{
     focus::resolutions_end,
@@ -49,6 +52,7 @@ pub(super) async fn rows(table: &mut Table, cx: &mut TestAppContext) {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     h13(table, cx).await;
     h14(table, cx).await;
+    h14_stale(table, cx).await;
     h15(table, cx).await;
 }
 
@@ -377,6 +381,51 @@ async fn h14(table: &mut Table, cx: &mut TestAppContext) {
         held,
         "the origin, Activity's list, the sheet closed",
         cx,
+    );
+}
+
+/// H14, a stale sheet: a sheet Escape closed, the test holding its entity,
+/// hears an applied answer under a prompt after the sheet open now has
+/// waited under it. The stale answer does not replace the open sheet's
+/// waiting close: once the prompt closes, the open sheet closes and its
+/// lifecycle dialog reopens (R-26).
+async fn h14_stale(table: &mut Table, cx: &mut TestAppContext) {
+    let (shell, root, close) = close_shell(cx).await;
+    let Some(stale) = open_close_child(&shell, &root, close, cx).await else {
+        table.fact("H14 stale", false, "the first sheet opened");
+        return;
+    };
+    shell.keys("escape", cx);
+    let Some(_open) = open_close_child(&shell, &root, close, cx).await else {
+        table.fact("H14 stale", false, "the second sheet opened");
+        return;
+    };
+    shell.click(("conflict-keep-mine", 0usize), cx);
+    let held = shell
+        .backend
+        .hold_job_return_answering(JobKind::ConflictResolve, applied());
+    shell.click("conflict-save", cx);
+    let _answer = shell.prompt(cx);
+    held.release();
+    resolutions_end(&shell, cx).await;
+    super::support::settle(&shell, cx);
+    let waits = resolve_open(&shell, cx) && has_dialog(&shell, cx);
+    table.fact(
+        "H14 stale setup: the open sheet's answer waits under the prompt",
+        waits,
+        "the prompt, the open sheet still open under it",
+    );
+    shell.frame(cx, |window, cx| {
+        stale.update(cx, |sheet, cx| sheet.applied(RequestId::new(), window, cx))
+    });
+    shell.keys("escape", cx);
+    for _ in 0..3 {
+        super::support::settle(&shell, cx);
+    }
+    table.fact(
+        "H14 a stale sheet's answer under the prompt leaves the open sheet's waiting close",
+        !resolve_open(&shell, cx),
+        "the open sheet closed once the prompt closed",
     );
 }
 

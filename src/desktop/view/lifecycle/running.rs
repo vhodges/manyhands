@@ -19,8 +19,8 @@
 //!   a new request, where the library deleted the request (P18) or its
 //!   stored answer stands before main; Open repository details; Open
 //!   folder for a dirty main (P19); and D4's credential recovery: Unlock…,
-//!   Open Sharing & keys, Check host; and Repair locally… and Resolve
-//!   conflict… beside their guidance (`repair.rs`); Stop and republish… and
+//!   Open Sharing & keys…, Check host…; and Repair locally… and Review
+//!   changes… beside their guidance (`repair.rs`); Stop and republish… and
 //!   Republish… beside theirs (`republish.rs`). The rest of L1 is guidance.
 //!   Retry, Resume and Unlock… wait while the item's lifecycle is in
 //!   flight, which the dialog then says (P22).

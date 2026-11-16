@@ -142,7 +142,7 @@ pub(crate) fn running_states(keys: &[StepKey], reached: Option<StepKey>) -> Vec<
 
 /// A way out of an execute result in words, for one with no button here;
 /// `None` for one the dialog offers as a button (Retry, Resume, Continue,
-/// Share main). Repair locally… and Resolve conflict… are buttons beside
+/// Share main). Repair locally… and Review changes… are buttons beside
 /// their words (`repair.rs`), and so are Republish… and Stop and
 /// republish… (`republish.rs`).
 pub(crate) fn guidance(
