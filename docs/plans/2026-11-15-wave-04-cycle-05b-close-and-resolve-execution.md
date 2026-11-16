@@ -28,7 +28,8 @@ serial (Cycle decision 13). Implementers: Task 0 on Opus, others per task.
 | 5 | complete | `c0cd4df8..c22ae1ae` | clean (Opus reviewer), 7 Minor deferred | with the ledger commit after it |
 | 6 | complete | `7b2b4511` (red tests), `2651c63b` (code) | clean (Opus reviewer), 4 Minor deferred | with the ledger commit after it |
 | 7 | complete | `45f06cb6` | clean (Opus reviewer), 4 Minor deferred | with the ledger commit after it |
-| 8–9 | not started | | | |
+| 8 | complete | `d73f3eec` | clean (Sonnet reviewer), 1 Minor deferred | with the ledger commit after it |
+| 9 | not started | | | |
 
 ## Base and merges
 
@@ -219,7 +220,8 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | E-19 (Task 4) | 4 | `keyboard_tests::lifecycle::Walk::reach_the_action` hands its steps to a new `reach_the_action_in(.., tab, ..)` so P13 can open the document as tab 1 (the original passes `("tab", 0)`). Behaviour identical, no assertion changed |
 | E-20 (Task 5) | 5 | 12 existing test helpers widened to `pub(in crate::desktop::view)` so P5 reaches them. Visibility only, no assertion changed (listed in the Task 5 report) |
 | E-23 (Task 6) | 6 | P6's H12 "no dialog reopens" fact, after the red commit: it read an app-wide lifecycle-dialog global that H5's still-open dialog (another window of the same test) satisfied. It now asserts no dialog in H12's own window and that the global's entity id is unchanged across the answer (every lifecycle open sets it). The reviewer judged it no weaker; it fails when the close guard is removed. Numbered E-23 because the implementer's "E-21" collides with the reserved E-21 and E-22 below |
-| E-21, E-22 (Ruling O-3; renumbered once Tasks 2 to 5 took E-16 to E-20) | 8 | reserved for `window_text` and `ask` visibility, if Task 8 needs them |
+| E-21, E-22 (Ruling O-3; renumbered once Tasks 2 to 5 took E-16 to E-20) | 8 | done (Task 8): `window_text` is `pub(in crate::desktop::view)` (E-21); `credential_tests::ask` is `pub(super)` (E-22). Visibility only |
+| E-24 (Task 8) | 8 | `passphrase.rs:463` `mod tests;` became `pub(super) mod tests;` so `lifecycle` reaches `window_text`. A non-test file but under `cfg(all(test, feature = "desktop-test-support"))`; no production change. The reviewer judged it better than copying `window_text` |
 
 ## Tests run, by checkpoint
 
@@ -241,6 +243,8 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | Task 6, orchestrator module run | 10 filters: `desktop::model::conflict`, `view::conflict`, `view::keyboard_tests`, `view::workspace`, `view::activity::tests`, `view::needs_attention::tests`, `view::lifecycle`, `view::operations`, `view::item::{share::tests, posting::tests}` | 500 passed, 0 failed, 637 s |
 | Task 7, implementer | exact names: P8 `workspace::resolve_sheet::tests::parts_are_named_in_words`, E-10 `conflict::tests::save_is_disabled_until_every_part_is_chosen`, E-12 `keyboard_tests::conflict::sheet::edit_the_result_by_keyboard`; fmt, check, clippy | P8 RED first (3 of 9 rows: "status" for "Status", no kind labels, "team: …" for "Team: …"), then 3 of 3 green; static gates clean |
 | Task 7, orchestrator module run | `desktop::view::conflict`, `desktop::view::keyboard_tests::conflict`, `desktop::view::workspace::resolve_sheet::tests`, `desktop::model::conflict`; then `view::lifecycle::{privacy_tests, privacy_remote_tests, privacy_promote_tests}` (the sweeps read `conflict-sheet`) | 77 passed, 117 s; privacy sweeps 4 passed. The bounded Tab counts in P6 H8/H9 and `keyboard_tests/conflict.rs` still hold with Cancel before Save |
+| Task 8, implementer | exact names: P12 `lifecycle::privacy_secret_tests::close_and_resolve_show_no_secret`, 5 `keyboard_tests::conflict::*`, 3 `keyboard_tests::lifecycle`, 3 a16 privacy tests; fmt, check, clippy | P12 plant check: two plants (a sheet title, the prompt's note) each failed naming the sentinel, then green with the plants removed; 11 of 11 journeys and a16 green; static gates clean |
+| Task 8, orchestrator module run | `view::lifecycle::privacy`, `view::lifecycle::credential_tests`, `view::passphrase`, `view::keyboard_tests` | 92 passed, 93 s |
 | Task 1, orchestrator module run | one `cargo test` with the filters `desktop::model::activity::tests`, `view::conflict`, `view::keyboard_tests::conflict`, `view::activity::tests`, `view::needs_attention::tests`, `view::lifecycle::{credential_tests, tests, outcome_tests, outcome_canned_tests}`, `view::item::{posting::tests, edit_tests::review, share::tests}`, `desktop::assets::tests`, `desktop::model::{review::tests, conflict}` | 256 passed, 0 failed, 284 s |
 
 ## Task 1: copy and constants
@@ -295,6 +299,10 @@ Implementer: Opus. Commit `45f06cb6` `feat(desktop): Resolve conflict's header, 
 
 **Test edits.** E-10 and E-12 as named. No assertion removed, no E-16 onward.
 
+## Task 8: no secret, and the keyboard journeys
+
+Implementer: Sonnet. Commit `d73f3eec` `test(desktop): no secret on the close and resolve surfaces`. Reviewer: Sonnet, spec compliant, no Critical or Important. New `view/lifecycle/privacy_secret_tests.rs` (273 lines): P12 sweeps every label and value (the Kit dialog and sheet slots included) for `PRIVATE_KEY_SENTINEL` and a typed sentinel passphrase through the unlock-required close, Unlock… and its prompt, Retry, Done, then a remote conflict's sheet opened from the banner. The sweep fails on an empty window and asserts each named slot's label is among the text read. All 11 Step-2 journeys and a16 tests pass unchanged. **Test edits:** E-21, E-22, E-24 (visibility only). No assertion removed.
+
 ## Deferred minor findings
 
 Task 0: minor (deferred): the design's U-1 closing paragraph says "Every name above exists as named" and then lists corrections; wording polish only.
@@ -328,3 +336,4 @@ Task 7: minor (deferred): `conflict/render.rs` is 559 lines (564 before). The im
 Task 7: minor (deferred): no unit test of `item_kind` for document and comment paths, and P8 covers tickets only (the design's P8); `kind_words` reads right against Part C.
 Task 7: minor (deferred): some strings are private consts, not `pub(crate)`: `BEFORE`, `YOURS`, `THEIRS` (`render/pieces.rs:24-26`), `KEEP_THEIRS` and similar in `render.rs`, and the inline "Choose what to keep" title. They predate the task (moved, not added).
 Task 7: minor (deferred): the report says `pieces.rs` is 213 lines; it is 217.
+Task 8: minor (deferred): P12's typed-passphrase stage cannot see the sentinel in its own field (a masked input hides its value from accessibility, as `passphrase_tests.rs:564`), and `ask` returns a static string, so the test does not show the typed text reached the field. A comment would say so.
