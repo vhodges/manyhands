@@ -99,9 +99,11 @@ reviewed. The workflow itself never publishes a draft.
 
 The new asset contract applies to a new source version/tag containing this
 checkpoint, not the existing `v0.1.6` draft. Never retrofit or clobber an
-existing immutable source manifest to add channels. The observed initial
-draft-visibility failure still requires an assembly-only failed-job rerun;
-automatic post-create retries are deliberately deferred during Stage 2.
+existing immutable source manifest to add channels. GitHub lists a new draft
+only some time after creating it. Assembly waits for it, polling with a
+bounded backoff of about two minutes, and fails only if it never appears; a
+failed-job rerun then repairs the draft without rebuilding. This applies to
+a source tag containing the polling, not to `v0.2.0-rc.1`, which needed that rerun.
 
 ## Homebrew personal cask
 
