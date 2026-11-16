@@ -26,7 +26,7 @@ serial (Cycle decision 13). Implementers: Task 0 on Opus, others per task.
 | 3 | complete | `1df89a09..9a9a6e30` | clean (Sonnet reviewer), 5 Minor deferred | with the ledger commit after it |
 | 4 | complete | `aa66a5ab..5f729d5d` (feature `4401609c`, fix `5f729d5d`) | clean (Opus reviewer, Sonnet re-review of the fix), 7 Minor deferred | with the ledger commit after it |
 | 5 | complete | `c0cd4df8..c22ae1ae` | clean (Opus reviewer), 7 Minor deferred | with the ledger commit after it |
-| 6 | Phase A done (checkpoint passed with two owner rulings); Phase B in progress | `7b2b4511` (red tests) | | with the checkpoint comment |
+| 6 | complete | `7b2b4511` (red tests), `2651c63b` (code) | clean (Opus reviewer), 4 Minor deferred | with the ledger commit after it |
 | 7–9 | not started | | | |
 
 ## Base and merges
@@ -217,6 +217,7 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | E-18 (Task 3) | 3 | `made_ready_tests.rs` compares `READY_TO_START` instead of the deleted `MADE_READY_LEAD` (Task 1 left both; retired here). The assertion is otherwise unchanged |
 | E-19 (Task 4) | 4 | `keyboard_tests::lifecycle::Walk::reach_the_action` hands its steps to a new `reach_the_action_in(.., tab, ..)` so P13 can open the document as tab 1 (the original passes `("tab", 0)`). Behaviour identical, no assertion changed |
 | E-20 (Task 5) | 5 | 12 existing test helpers widened to `pub(in crate::desktop::view)` so P5 reaches them. Visibility only, no assertion changed (listed in the Task 5 report) |
+| E-23 (Task 6) | 6 | P6's H12 "no dialog reopens" fact, after the red commit: it read an app-wide lifecycle-dialog global that H5's still-open dialog (another window of the same test) satisfied. It now asserts no dialog in H12's own window and that the global's entity id is unchanged across the answer (every lifecycle open sets it). The reviewer judged it no weaker; it fails when the close guard is removed. Numbered E-23 because the implementer's "E-21" collides with the reserved E-21 and E-22 below |
 | E-21, E-22 (Ruling O-3; renumbered once Tasks 2 to 5 took E-16 to E-20) | 8 | reserved for `window_text` and `ask` visibility, if Task 8 needs them |
 
 ## Tests run, by checkpoint
@@ -235,6 +236,8 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | Task 5, implementer | exact names: P5 `workspace::resolve_sheet::tests::resolve_is_a_sheet_the_workspace_keeps`, the 5 E-11 walks, E-2's two, and the 34 tests that use `open_sheet_in` (E-1) | P5 RED seen first (`the banner: a sheet, no dialog`, left `(false, true)`, right `(true, false)`). After Ruling O-8: 40 run, 40 passed; static gates clean. U-10 holds: Repair locally…'s waiting sheet opens at the first frame after the prompt closes |
 | Task 5, orchestrator module run | 17 filters: `view::conflict`, `view::keyboard_tests::conflict`, `view::workspace::{tests, settings_sheet::tests, add_sheet::tests, resolve_sheet::tests}`, `view::{activity::tests, needs_attention::tests}`, `view::lifecycle::{tests, outcome_canned_tests, credential_tests, privacy_tests, privacy_remote_tests}`, `view::operations::resume::tests`, `view::item::{share::tests, posting::tests}`, `desktop::model::conflict` | 262 passed, 0 failed, 343 s |
 | Task 6 Phase A, implementer | exact names: P6 `workspace::resolve_sheet::tests::focus_around_the_resolve_sheet`, P7 `…::nothing_opens_over_the_resolve_sheet`; 18 mutations, each reverted; fmt, clippy | RED as intended: P6 12 contract facts red (all Phase B code, now incl. H11 ruled), 29 pass each failing under a mutation (H1 Shift+Tab is Kit draw order, weak proof); P7 7 facts red (5 sub-cases), 10 pass each with a mutation proof |
+| Task 6, implementer (Phase B) | exact names: P6, P7, P5 and 7 other tests through the changed close, save and reopen paths; fmt, check, clippy | P6 (12 of 54 red) and P7 (7 of 21 red) green; others green; static gates clean |
+| Task 6, orchestrator module run | 10 filters: `desktop::model::conflict`, `view::conflict`, `view::keyboard_tests`, `view::workspace`, `view::activity::tests`, `view::needs_attention::tests`, `view::lifecycle`, `view::operations`, `view::item::{share::tests, posting::tests}` | 500 passed, 0 failed, 637 s |
 | Task 1, orchestrator module run | one `cargo test` with the filters `desktop::model::activity::tests`, `view::conflict`, `view::keyboard_tests::conflict`, `view::activity::tests`, `view::needs_attention::tests`, `view::lifecycle::{credential_tests, tests, outcome_tests, outcome_canned_tests}`, `view::item::{posting::tests, edit_tests::review, share::tests}`, `desktop::assets::tests`, `desktop::model::{review::tests, conflict}` | 256 passed, 0 failed, 284 s |
 
 ## Task 1: copy and constants
@@ -279,6 +282,10 @@ Implementer: Opus (resumed once for Ruling O-8). Commit `c22ae1ae` `feat(desktop
 
 **Phase A (design checkpoint).** Implementer: Opus. Commit `7b2b4511` `test(desktop): Resolve conflict's focus table, red`: P6 (H1 to H16, one table-driven test with sibling modules under `resolve_sheet_tests/`) and P7 (11 sub-cases), tests only, no production code. The first report was BLOCKED on two rows: H13 (Ruling O-9) and H11's Edits-not-kept path (Ruling O-10). The owner approved both recommendations; nothing else differs from the design. O-8 finding: H8's "a footer control goes by itself" row passes through Task 5's `track_focus(footer_focus)`, not `on_footer`; the implementer added an "H8 a footer press" fact that fails without `on_footer`'s focus. Findings for Phase B: an applied resolution clears the banner, so H5 and H14 open from Activity's row (H6 covers the banner); nothing is focused for 0.25 s after a Confirm dialog over an open sheet closes by Enter (`keep_focus_in_resolve` as designed does not fill it; harmless if the restore lands in the sheet); `resolve_open` must become `pub(in crate::desktop::view)` for R-18. Phase B follows.
 
+**Phase B.** Implementer: Opus (same agent, resumed). Commit `2651c63b` `feat(desktop): Resolve conflict's closes, focus and refusals`. Reviewer: Opus, spec compliant, no Critical or Important. `close_resolve` (`resolve_sheet.rs`) requires that the owner is this sheet's own entity and that a sheet is active (R-22); `ResolveSheet::close` reaches it through Root and `applied` stops on false; `resolve_waiting` and `run_waiting_resolve_close` run before `sync_sheet` and the waiting close is deferred on the sheet, not the workspace (a workspace deferral would borrow it twice); `keep_focus_in_resolve` moves only focus that is drawn behind the sheet and does nothing while a dialog is open; `focus_content` is gated on `workspace_sheet_open`; `apply_review` keeps Drafts and the identity form waiting while `resolve_open` (O-1, R-25); `settings_key`, `show_settings` and `show_add_repository` refuse (P7); both republish paths wait (`resolve_open` is `pub(in crate::desktop::view)`); `unkept_asks_first` closes Resolve (O-10). The four stale docs from Task 5 are fixed and no `Used from Task 6` allow is left. The 0.25 s no-focus gap after a Confirm dialog closes over the sheet is left; `keep_focus_in_resolve` could cover it with one more condition (nothing focused).
+
+**Test edits.** E-23 only (above). No assertion removed.
+
 ## Deferred minor findings
 
 Task 0: minor (deferred): the design's U-1 closing paragraph says "Every name above exists as named" and then lists corrections; wording polish only.
@@ -303,3 +310,8 @@ Task 5: minor (deferred): `focus_inside` (`lifecycle/repair.rs` about :270) is t
 Task 5: minor (deferred): P5's RED was seen at the first assertion (the banner); the R-24 and U-10 halves were not seen failing. The reviewer showed by reading that each discriminates (without `on_inside` the press closes the top dialog, the prompt; without the wait the answer closes the prompt and is refused).
 Task 5: minor (deferred): while `State::Conflicted` waits under a prompt, `repair_line` still reads "Bringing {primary} into this {item}'s working copy…" although the synchronization has answered.
 Task 5: minor (deferred): `on_inside` repeats `LifecycleDialog::on`'s body; it could wrap `on` with the guard.
+Task 6: minor (deferred): one waiting slot can be overwritten. If an old sheet already closed by Escape gets its `applied` answer under a prompt after the open sheet's answer, it overwrites the open sheet's waiting close; the open sheet stays open and loses its lifecycle reopen (Cancel still closes it). Fix: in `applied`'s dialog branch (`conflict/submit.rs:366-373`) return unless the workspace keeps this sheet. Take it in Task 9 or the final review.
+Task 6: minor (deferred): fourth copy of the Root-to-Workspace lookup (`conflict/submit.rs:471-474`); a shared helper could replace all four.
+Task 6: minor (deferred): a deferred Republish… returns with `over_dialog = false` (`operations/republish.rs:213`); unreachable today because no lifecycle dialog can open over the sheet.
+Task 6: minor (deferred): H1's Shift+Tab row has only the weak M7 mutation proof (Kit draw order).
+Task 6: minor (deferred): the 0.25 s no-focus gap noted above (not a table row).
