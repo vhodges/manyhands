@@ -229,22 +229,22 @@ merged code (design U-1).
 
 ## Acceptance And Exit Evidence
 
-Planned proof. The Status column is filled at the final task from the
-branch's own tests, by exact name, and the execution ledger. "On screen"
-rows await the owner's checks.
+Planned proof. The Status column was filled at the final task (2026-11-15)
+from the branch's own tests, by exact name, and the execution ledger.
+"On screen" rows await the owner's checks.
 
 | # | Wave exit evidence / contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | A close and an approval through confirm, running, failed with Retry, and done, including a local-only repository, by keyboard (Wave exit) | `keyboard_tests::lifecycle::{close_a_ticket_by_keyboard, approve_and_merge_a_document_by_keyboard}`, edited only as named; P13 `a_failed_run_is_retried_by_keyboard` (both commands); P1 `each_stage_has_its_title`; P2 `each_stage_orders_its_footer` | Planned |
-| A2 | The design's stages: steps with state and progress, the outcome box, the footers (scope 1) | P2; P3 `the_backdrop_hides_only_a_running_dialog`; P4 `steps_show_their_state_and_progress` | Planned |
-| A3 | Resolving a conflict, by keyboard (Wave exit) | `keyboard_tests::conflict::{resolve_a_local_conflict_by_keyboard, resolve_a_shared_conflict_by_keyboard}` and `::sheet::*`, edited only as named | Planned |
-| A4 | Resolve conflict is a sheet the workspace keeps (contract 3) | P5 `resolve_is_a_sheet_the_workspace_keeps`; P7 `nothing_opens_over_the_resolve_sheet` | Planned |
-| A5 | Focus returned to the invoking control after each (Wave exit; contract 4) | P6 `focus_around_the_resolve_sheet` (H1–H16); P3; P13; `confirm_tests::enter_confirms_esc_cancels_and_focus_returns`; `action_tests::focus_returns_to_the_action_when_the_dialog_closes` | Planned |
-| A6 | Parts named in words; Chosen and Edited; nothing acts behind (Part C; contract 5) | P8 `parts_are_named_in_words`; P7 `nothing_opens_over_the_resolve_sheet` | Planned |
-| A7 | Copy (Part C) | P9 `close_and_resolve_copy_uses_the_vocabulary` | Planned |
-| A8 | No passphrase or private key text reaches any label, tooltip or Git detail line (Wave exit; contract 6) | P12 `close_and_resolve_show_no_secret`; P10: the a16 privacy tests, unchanged | Planned |
-| A9 | D5's behaviour (contract 2) | P11: D5's stale, Retry, Stop, answer and review tests, unchanged in what they assert about behaviour | Planned |
-| A10 | The surfaces match frames 2c, 2d, 2e and 2g as amended, in the dark theme | On screen: the owner | Planned |
+| A1 | A close and an approval through confirm, running, failed with Retry, and done, including a local-only repository, by keyboard (Wave exit) | `keyboard_tests::lifecycle::{close_a_ticket_by_keyboard, approve_and_merge_a_document_by_keyboard}`, edited only as named; P13 `a_failed_run_is_retried_by_keyboard` (both commands); P1 `each_stage_has_its_title`; P2 `each_stage_orders_its_footer` | Met. Each test green (Task 4 and 8 runs; fast tier). P13 seen failing first |
+| A2 | The design's stages: steps with state and progress, the outcome box, the footers (scope 1) | P2; P3 `the_backdrop_hides_only_a_running_dialog`; P4 `steps_show_their_state_and_progress` | Met. P2, P3, P4 green, each seen failing first; Task 4 module run 143 passed |
+| A3 | Resolving a conflict, by keyboard (Wave exit) | `keyboard_tests::conflict::{resolve_a_local_conflict_by_keyboard, resolve_a_shared_conflict_by_keyboard}` and `::sheet::*`, edited only as named | Met. The five `keyboard_tests::conflict::*` walks and the `::sheet::*` tests green (Task 8 run, fast tier); E-10, E-11, E-12 as named |
+| A4 | Resolve conflict is a sheet the workspace keeps (contract 3) | P5 `resolve_is_a_sheet_the_workspace_keeps`; P7 `nothing_opens_over_the_resolve_sheet` | Met. P5 and P7 green; P7's 17 facts each seen failing or proved by mutation |
+| A5 | Focus returned to the invoking control after each (Wave exit; contract 4) | P6 `focus_around_the_resolve_sheet` (H1–H16); P3; P13; `confirm_tests::enter_confirms_esc_cancels_and_focus_returns`; `action_tests::focus_returns_to_the_action_when_the_dialog_closes` | Met. P6 (H1 to H16; H13 reworded by Ruling O-9) green; P3, P13, `confirm_tests::enter_confirms_esc_cancels_and_focus_returns` and `action_tests::focus_returns_to_the_action_when_the_dialog_closes` green. A5's "focus returns to the invoking control" cannot hold after a close (the control is gone): Ruling O-6 |
+| A6 | Parts named in words; Chosen and Edited; nothing acts behind (Part C; contract 5) | P8 `parts_are_named_in_words`; P7 `nothing_opens_over_the_resolve_sheet` | Met. P8 `parts_are_named_in_words` green, seen failing first (3 of 9 rows); P7 green |
+| A7 | Copy (Part C) | P9 `close_and_resolve_copy_uses_the_vocabulary` | Met. P9 green |
+| A8 | No passphrase or private key text reaches any label, tooltip or Git detail line (Wave exit; contract 6) | P12 `close_and_resolve_show_no_secret`; P10: the a16 privacy tests, unchanged | Met. P12 green, seen failing with a sentinel planted in a label (two plants); the a16 privacy tests (P10) green unchanged |
+| A9 | D5's behaviour (contract 2) | P11: D5's stale, Retry, Stop, answer and review tests, unchanged in what they assert about behaviour | Met. D5's tests green, unchanged in what they assert about behavior (module runs for Tasks 1 to 8 and the fast tier: 1977 bin tests passed) |
+| A10 | The surfaces match frames 2c, 2d, 2e and 2g as amended, in the dark theme | On screen: the owner | On screen: awaiting the owner (`2026-11-15-wave-04-cycle-05b-on-screen-checklist.md`) |
 
 ## Product-Owner Decisions (2026-11-15)
 

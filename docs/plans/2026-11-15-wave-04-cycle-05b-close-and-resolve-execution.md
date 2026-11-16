@@ -29,7 +29,8 @@ serial (Cycle decision 13). Implementers: Task 0 on Opus, others per task.
 | 6 | complete | `7b2b4511` (red tests), `2651c63b` (code) | clean (Opus reviewer), 4 Minor deferred | with the ledger commit after it |
 | 7 | complete | `45f06cb6` | clean (Opus reviewer), 4 Minor deferred | with the ledger commit after it |
 | 8 | complete | `d73f3eec` | clean (Sonnet reviewer), 1 Minor deferred | with the ledger commit after it |
-| 9 | not started | | | |
+| Final review and fix wave | complete | review of `1f30d58c..6c26f6e7`; fix `7a93db2a` | Opus whole-branch review: Ready to merge, no Critical or Important; Sonnet re-review of the fix: addressed | with the ledger commit after it |
+| 9 | review-ready (the owner's checks and the close remain) | this ledger commit | | with this commit |
 
 ## Base and merges
 
@@ -245,6 +246,8 @@ Close ticket bullet); 6 in 05a's design B2 step 1 and B3 step 3.
 | Task 7, orchestrator module run | `desktop::view::conflict`, `desktop::view::keyboard_tests::conflict`, `desktop::view::workspace::resolve_sheet::tests`, `desktop::model::conflict`; then `view::lifecycle::{privacy_tests, privacy_remote_tests, privacy_promote_tests}` (the sweeps read `conflict-sheet`) | 77 passed, 117 s; privacy sweeps 4 passed. The bounded Tab counts in P6 H8/H9 and `keyboard_tests/conflict.rs` still hold with Cancel before Save |
 | Task 8, implementer | exact names: P12 `lifecycle::privacy_secret_tests::close_and_resolve_show_no_secret`, 5 `keyboard_tests::conflict::*`, 3 `keyboard_tests::lifecycle`, 3 a16 privacy tests; fmt, check, clippy | P12 plant check: two plants (a sheet title, the prompt's note) each failed naming the sentinel, then green with the plants removed; 11 of 11 journeys and a16 green; static gates clean |
 | Task 8, orchestrator module run | `view::lifecycle::privacy`, `view::lifecycle::credential_tests`, `view::passphrase`, `view::keyboard_tests` | 92 passed, 93 s |
+| Final fix wave, implementer | exact names: P6, P7, P5, P12 | each ran 1 test and passed; the new `h14_stale` fact failed with the guard disabled, then passed |
+| Review-ready, orchestrator (Task 9) | `cargo check --all-features --locked`, `cargo fmt --check`, `cargo clippy --all-targets --all-features --locked -- -D warnings`, then the AGENTS.md fast tier once (`--lib --bins` and 26 integration targets, `--skip repository::local_sync::`), no SSH target (desktop-only) | all gates clean (exit 0); fast tier: 30 targets, **6063 passed, 0 failed** (lib 1564, bin 1977, in 1456 s). Run at `7a93db2a`; nothing after it changes source |
 | Task 1, orchestrator module run | one `cargo test` with the filters `desktop::model::activity::tests`, `view::conflict`, `view::keyboard_tests::conflict`, `view::activity::tests`, `view::needs_attention::tests`, `view::lifecycle::{credential_tests, tests, outcome_tests, outcome_canned_tests}`, `view::item::{posting::tests, edit_tests::review, share::tests}`, `desktop::assets::tests`, `desktop::model::{review::tests, conflict}` | 256 passed, 0 failed, 284 s |
 
 ## Task 1: copy and constants
@@ -302,6 +305,14 @@ Implementer: Opus. Commit `45f06cb6` `feat(desktop): Resolve conflict's header, 
 ## Task 8: no secret, and the keyboard journeys
 
 Implementer: Sonnet. Commit `d73f3eec` `test(desktop): no secret on the close and resolve surfaces`. Reviewer: Sonnet, spec compliant, no Critical or Important. New `view/lifecycle/privacy_secret_tests.rs` (273 lines): P12 sweeps every label and value (the Kit dialog and sheet slots included) for `PRIVATE_KEY_SENTINEL` and a typed sentinel passphrase through the unlock-required close, Unlock… and its prompt, Retry, Done, then a remote conflict's sheet opened from the banner. The sweep fails on an empty window and asserts each named slot's label is among the text read. All 11 Step-2 journeys and a16 tests pass unchanged. **Test edits:** E-21, E-22, E-24 (visibility only). No assertion removed.
+
+## Final review and fix wave
+
+Reviewer: Opus, whole branch (`1f30d58c..6c26f6e7`, 39 commits, 78 files). Verdict: Ready to merge, no Critical or Important. Boundary clean; no `gpui_kit::*` glob; no leftover old-dialog strings or `Used from Task N` allows; no task undid an earlier one; no appearance tests added; privacy sweeps cover the Kit slots. The reviewer triaged the deferred list: every item LEAVE except two cheap items. One fix wave, commit `7a93db2a` `fix(desktop): keep a stale answer from replacing the open sheet's waiting close`: `Workspace::keeps_resolve` (used by `close_resolve` and before `wait_to_close_resolve` in `applied`), fact `h14_stale`, three stale doc comments, and the P12 comment. Sonnet re-review: all addressed, one Minor (a 109-column doc line in `wait_to_quit`'s doc).
+**Ruling:** the `render.rs` split (`render/footer.rs`) was not taken: the file predates the Cycle (564 lines, now 559) and the 500-line rule is for new files; cost if wrong: the owner asks for the split as follow-on work.
+**Ruling:** the stale `applied` answer defect is unreachable in production (Root's `close_sheet` drops the only strong holder), so it was fixed for safety, not urgency; no ticket.
+
+Final deferred state: the lists above stand, with Task 6's waiting-slot item resolved by `7a93db2a`. Open and left: Task 3 spinner size (appearance), Task 4 P2 `visible()` and `f32` centre notes, Task 5 `repair_line` wording while waiting, Task 7 `render.rs` size and `item_kind` document and comment unit test, Task 8 masked-field note (now a comment), the 0.25 s no-focus gap, and the 109-column doc line.
 
 ## Deferred minor findings
 
