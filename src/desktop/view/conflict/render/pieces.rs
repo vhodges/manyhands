@@ -1,6 +1,7 @@
 //! The sheet's small pieces (handoff 2g; Wave 04 Cycle 05b B5): labelled
-//! text, a part's card frame, header row, state and choices, and a side's
-//! mono lines with their tints and gutters.
+//! text, a part's card frame, its header row, which wraps in a narrow
+//! window, its state and its choices, the chosen one named so, and a
+//! side's mono lines with their tints and gutters.
 
 use std::cell::Cell;
 
@@ -15,7 +16,7 @@ use manyhands::canonical::ItemKind;
 
 use super::super::{
     CHOOSE_ONE, CHOSEN, COMMENT_DETAIL, DOCUMENT_DETAIL, EDITED, LAST_SHARED_COPY, TAKEN_MINE,
-    TAKEN_THEIRS, TICKET_DETAIL,
+    TAKEN_THEIRS, TICKET_DETAIL, chosen_choice,
 };
 use crate::desktop::model::conflict::{BodyChoice, Choice, Mark, Marked};
 
@@ -50,21 +51,33 @@ pub(in crate::desktop::view::conflict) fn card_frame(cx: &App) -> Div {
 }
 
 /// A card's header row (B5): the part's name, its kind, its state, then,
-/// right-aligned, its choices.
+/// right-aligned, its choices. The app sets no minimum window size (R-28):
+/// in a narrow window the row wraps, the choices onto a line of their own,
+/// still right-aligned, rather than running past the card's edge, where a
+/// click misses.
 pub(super) fn header_row(
     parts: impl IntoIterator<Item = AnyElement>,
     choices: impl IntoIterator<Item = Button>,
 ) -> Div {
     h_flex()
+        .flex_wrap()
         .gap_2()
         .items_center()
         .children(parts)
-        .child(h_flex().ml_auto().gap_2().children(choices))
+        .child(
+            h_flex()
+                .flex_wrap()
+                .justify_end()
+                .ml_auto()
+                .gap_2()
+                .children(choices),
+        )
 }
 
 /// One of a part's choices. The chosen one keeps the Kit's `selected`
 /// style and shows a check before its label, so the choice is not told by
-/// colour alone (B5, K-8).
+/// colour alone (B5, K-8). Neither reaches a screen reader, so its
+/// accessible name says it is chosen too (`chosen_choice`).
 pub(super) fn choice_button(
     id: (&'static str, usize),
     label: &'static str,
@@ -72,7 +85,9 @@ pub(super) fn choice_button(
 ) -> Button {
     let button = Button::new(id).label(label).small().selected(chosen);
     if chosen {
-        button.icon(IconName::Check)
+        button
+            .icon(IconName::Check)
+            .accessibility_label(chosen_choice(label))
     } else {
         button
     }

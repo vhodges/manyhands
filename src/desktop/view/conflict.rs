@@ -98,6 +98,12 @@ pub(crate) const EARLIER_USED: &str =
 pub(crate) const NOT_SENT_AGAIN: &str = "The earlier resolution could not be sent again.";
 /// A part's choice, or that it has none yet.
 pub(crate) const CHOOSE_ONE: &str = "Choose one";
+/// The accessible name of a part's chosen choice: its label, then that it
+/// is chosen, which the Kit's `selected` style and its check show only on
+/// screen (B5, K-8). Its label on screen stays the choice's own.
+pub(crate) fn chosen_choice(label: &str) -> String {
+    format!("{label}, {}", CHOSEN.to_lowercase())
+}
 /// What a part's card says of the kind of detail it holds, by the kind of
 /// the item at its path (B5).
 pub(crate) const TICKET_DETAIL: &str = "Ticket detail";

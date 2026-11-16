@@ -30,8 +30,8 @@ use manyhands::{
 };
 
 use super::{
-    CHANGED, CHOSEN, OpenedSheet, Opening, PartAt, ResolveSheet, SAVE_RESOLUTION, SheetSource,
-    TAKEN_THEIRS,
+    CHANGED, CHOSEN, KEEP_MINE, OpenedSheet, Opening, PartAt, ResolveSheet, SAVE_RESOLUTION,
+    SheetSource, TAKEN_THEIRS, chosen_choice, render::KEEP_THEIRS,
 };
 use crate::desktop::{
     model::conflict::{BodyChoice, Choice, STANDARD_LAYOUT_NOTE},
@@ -321,8 +321,26 @@ async fn save_is_disabled_until_every_part_is_chosen(cx: &mut TestAppContext) {
         "the notice stays"
     );
     sheet.update(cx, |sheet, _| sheet.notice = None);
+    // A choice's accessible name says so once it is chosen, which its
+    // style and check show only on screen; the others keep their labels.
+    let names = |shell: &Shell, cx: &mut TestAppContext| {
+        (
+            shell.label(("conflict-keep-mine", 0usize), cx),
+            shell.label(("conflict-keep-theirs", 0usize), cx),
+        )
+    };
+    assert_eq!(
+        names(&shell, cx),
+        (Some(KEEP_MINE.to_owned()), Some(KEEP_THEIRS.to_owned())),
+        "nothing chosen yet"
+    );
 
     shell.click(("conflict-keep-theirs", 0usize), cx);
+    assert_eq!(
+        names(&shell, cx),
+        (Some(KEEP_MINE.to_owned()), Some(chosen_choice(KEEP_THEIRS))),
+        "Keep theirs reads as chosen, Keep mine does not"
+    );
     assert_eq!(
         shell.label("conflict-progress", cx).as_deref(),
         Some("1 of 1 chosen")

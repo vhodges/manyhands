@@ -47,7 +47,7 @@ pub(super) use pieces::{card_frame, text};
 
 /// What a part is called in its card: the body is the Description.
 const DESCRIPTION: &str = "Description";
-const KEEP_THEIRS: &str = "Keep theirs";
+pub(super) const KEEP_THEIRS: &str = "Keep theirs";
 const KEEP_BOTH: &str = "Keep both";
 const RESULT: &str = "Result";
 
