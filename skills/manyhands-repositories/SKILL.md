@@ -219,7 +219,7 @@ manyhands-cli --json --non-interactive repo remove --repo <repo-root> --prepare
 | Code (exit) | Meaning and next step |
 | --- | --- |
 | `identity_required` (3) | The repository has no commit identity. Ask the person; supply `identity` on `repo enable` or `repo create`, or run `repo identity-set` once registered. |
-| `repository_not_registered` (3) | Not enabled here. `repo enable`. Its `recovery` suggests `index.rebuild`; that is not the fix. |
+| `repository_not_registered` (3) | This data directory does not know the repository (never enabled, or enabled under another data directory). `repo enable --prepare`, show, wait. [Recovery](../manyhands-recovery/SKILL.md), "Not registered"; `index rebuild`, which `recovery` may suggest, is not the first answer. |
 | `repository_not_enabled` (2) | A write to a repository that was never enabled. `repo enable`. |
 | `not_repository` (2) | No Git repository at the path. `repo create` for a new one. |
 | `occupied_path` (2) | `repo create` where a Git repository already is. Use `repo enable`. |

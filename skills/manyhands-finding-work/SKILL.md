@@ -7,7 +7,7 @@ description: "Use when you need to find out what exists in a Manyhands repositor
 
 Read the [overview](../manyhands-overview/SKILL.md) first. JSON answers, the envelope and `--repo` are in [CLI conventions](../manyhands-overview/references/cli-conventions.md); codes are in [errors and exit codes](../manyhands-overview/references/errors-and-exit-codes.md). This skill is reads only: nothing here writes, asks the person or needs `--request-id`. Looking first is how you avoid a duplicate ticket, a path clash or a stale save. To change what you found: [documents](../manyhands-documents/SKILL.md), and `manyhands-tickets` for tickets.
 
-Every verb here takes `--repo <repo-root>`, the repository's main checkout root, and fails with `usage_error` without it. A repository Manyhands does not know answers `repository_not_registered`: see [repositories](../manyhands-repositories/SKILL.md). Add `--json`. The human output is one short line per item, the ID first and the title last, and leaves out most fields, including the observation token.
+Every verb here takes `--repo <repo-root>`, the repository's main checkout root, and fails with `usage_error` without it. A repository Manyhands does not know answers `repository_not_registered`: see "Not registered" in [recovery](../manyhands-recovery/SKILL.md). Add `--json`. The human output is one short line per item, the ID first and the title last, and leaves out most fields, including the observation token.
 
 ## Look first, in this order
 
@@ -15,6 +15,8 @@ Every verb here takes `--repo <repo-root>`, the repository's main checkout root,
 2. `ticket list --closure open` for open work, `ticket ready` for what can start now, `ticket blocked` for what is waiting and why.
 3. `document list` and `folder list` for documents and where they are.
 4. `ticket show --id` or `document show --id` for the one item you will touch. Its `observation` is the token a save needs.
+
+Two cautions about step 1 and 3. `index status` `current` can coexist with an item that is missing from a list, because a commit made outside Manyhands is not seen until `index refresh`. And a list shows an item's fields, with `body` and `source` null: read the item with `ticket show` or `document show` before you decide what it says.
 
 ```sh
 manyhands-cli --json ticket list --repo <repo-root> --closure open
@@ -100,7 +102,7 @@ manyhands-cli --json operation list --repo <repo-root>
 manyhands-cli --json repo inspect --repo <repo-root>
 ```
 
-- `index status`: `data.state` (`current` in every run here; the contract also names `stale`, `never_refreshed` and `unavailable`, which were not provoked), `refreshed_at`, `item_count`, `context_count`, and `problems` (the same findings as an item's `problems`) with `problem_count`. `pending_operations` was empty in runs where an unfinished sync and a local sync conflict were pending (verified), so do not rely on it: `operation list` is the check, and a non-empty list is for [`manyhands-recovery`](../manyhands-recovery/SKILL.md).
+- `index status`: `data.state` (`current` in every run here; the contract also names `stale`, `never_refreshed` and `unavailable`, which were not provoked), `refreshed_at`, `item_count`, `context_count`, and `problems` (the same findings as an item's `problems`) with `problem_count`. `pending_operations` lists local operations such as a local sync conflict, and omits remote ones (a remote conflict, a blocked sync, a close stopped at publication; verified), so do not rely on it: `operation list` is the check, and a non-empty list is for [`manyhands-recovery`](../manyhands-recovery/SKILL.md).
 - The index is a cache of the repository. Manyhands' own writes update it at once. A commit made outside Manyhands (a person's `git commit`, a merge, a pull) is not seen until the index is refreshed: after one, `document list` omitted the new file while `index status` still said `current` (verified). `index refresh --repo <repo-root> --request-id <REQUEST_ID>` brings it up to date; you run it alone, and it is not confirmable. [`manyhands-polling-and-index`](../manyhands-polling-and-index/SKILL.md) covers refresh, rebuild and the schedule.
 - `poll status` says whether polling a shared remote is on (`enabled`, `paused`, `interval_seconds`, `latest_outcome`, `next_eligible_at`). A repository with no remote shows the defaults and nothing observed. Whether other people's work has arrived is [sharing and sync](../manyhands-sharing-and-sync/SKILL.md) and [`manyhands-polling-and-index`](../manyhands-polling-and-index/SKILL.md).
 - `operation list` lists operations that still have work to do (an interrupted write, sync or promotion). Empty `items` means none. A non-empty list is for [`manyhands-recovery`](../manyhands-recovery/SKILL.md).
@@ -111,7 +113,7 @@ manyhands-cli --json repo inspect --repo <repo-root>
 | Code (exit) | Meaning and next step |
 | --- | --- |
 | `usage_error` (2) | A missing `--repo`, a flag the verb does not take, `--ready` with `--blocked`, or a bad `--closure` value. Fix the command line. |
-| `repository_not_registered` (3) | Manyhands does not know this repository. `manyhands-repositories`. |
+| `repository_not_registered` (3) | Manyhands does not know this repository. "Not registered" in [`manyhands-recovery`](../manyhands-recovery/SKILL.md); never `index rebuild` first. |
 | `item_not_found` (2) | No item has that ID. Look with `ticket list` or `document list`. |
 | `path_not_found` (2) | `--path` names nothing on the main branch. Use `--id`, or add `--context <worktree>`. |
 | `invalid_id` (2) | An ID that is not a ULID, including a bad entry in `--deps`. |

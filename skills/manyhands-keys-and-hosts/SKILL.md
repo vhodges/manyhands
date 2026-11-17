@@ -172,7 +172,7 @@ Confirm as for `host approve`.
 | `no_selected_key` (3) | No key is selected. `key list`, then `key select`. |
 | `unlock_required` (3) | The selected key has a passphrase and the step authenticates. Hand the command, with its confirmation ID and request ID, to the person's terminal. |
 | `publication_remote_required` (3) | The repository has no selected remote. [Repositories](../manyhands-repositories/SKILL.md). |
-| `repository_not_registered` (3) | The repository is not enabled here. [Repositories](../manyhands-repositories/SKILL.md). Its `recovery` suggests `index.rebuild`; that is not the fix. |
+| `repository_not_registered` (3) | This data directory does not know the repository. [Recovery](../manyhands-recovery/SKILL.md), "Not registered": `repo enable --prepare`, not `index rebuild`. |
 | `host_approval_required` (3) | A step needs the host pinned. `host observe`, show the person, `host approve`. |
 | `host_replacement_required` (3) | The pinned key changed. See "A changed host key". |
 | `host_mismatch` (3) | The fingerprint you gave is not what the host presents. Observe again and show the person. |

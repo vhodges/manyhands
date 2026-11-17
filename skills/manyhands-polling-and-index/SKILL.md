@@ -1,6 +1,6 @@
 ---
 name: manyhands-polling-and-index
-description: "Use when a Manyhands list or status looks out of date, when you need to fetch what collaborators published, to check or change how often polling runs, to refresh or rebuild the index, or when poll or index answers index_unavailable, repository_not_registered or publication_remote_required."
+description: "Use when a Manyhands list or status looks out of date, when you need to fetch what collaborators published, to check or change how often polling runs, to refresh or rebuild the index, when a ticket closed elsewhere still shows as active here, or when poll or index answers index_unavailable or publication_remote_required."
 ---
 
 # Polling and the index
@@ -18,11 +18,11 @@ The CLI never polls by itself: `poll once` is one fetch and then it exits. The d
 
 ## "My list is out of date": the order
 
-1. `poll status` and `index status` (reads). Look at `poll status` `latest_observed_at` and `next_eligible_at`, and at `index status` `state`, `refreshed_at` and `problems`.
+1. `poll status` and `index status` (reads). Look at `poll status` `latest_observed_at` and `next_eligible_at`, and at `index status` `state`, `refreshed_at` and `problems`. `current` can coexist with an item that is missing from a list (a commit made outside Manyhands is not seen until `index refresh`), and a list shows an item's fields, not its content: read the item with `ticket show` or `document show` before you decide something changed or is absent.
 2. Someone else may have published: `poll once`. It fetches, brings clean branches forward, creates a branch and worktree for each item you did not have, and refreshes the index itself (verified: right after a poll the new ticket was in `ticket list` and `refreshed_at` was the poll's time). You do not need `index refresh` after a poll.
 3. Something changed on this machine outside Manyhands (a `git commit`, a merge, a pull, a file added): `index refresh`. It is a local rescan that never touches the network (verified: a document committed with plain `git` was missing from `document list` while `index status` still said `current`, and appeared after `index refresh`).
 4. A ticket or document that the poll reported `closed` or `promoted` still shows its old branch as active: that is a leftover local context, not a stale index. See "Completed items" below.
-5. `index rebuild` only when the index itself is the problem: `index_unavailable`, a damaged database, or `repository_not_registered` for a repository the person has enabled. Never as the first answer to "stale".
+5. `index rebuild` only when the index itself is the problem: `index_unavailable` or a damaged database. Never as the first answer to "stale", and not for `repository_not_registered` (that is in the [recovery](../manyhands-recovery/SKILL.md) skill, "Not registered").
 
 ```sh
 manyhands-cli --json poll status --repo <repo-root>
@@ -53,7 +53,7 @@ Read `data.targets[]`: `target` (a ref), `kind` (`ticket` or `document`, null fo
 | `recovery_required` (3) | Something unfinished holds the repository (verified with a pending conflict). Find it with `operation list` and take it to [recovery](../manyhands-recovery/SKILL.md). |
 | `busy`, `poll_yielding` (5) | Another request holds the repository. Retry the same request after a pause. Not run here. |
 | `repository_not_enabled` (2) | The repository was never enabled: [repositories](../manyhands-repositories/SKILL.md). |
-| `repository_not_registered` (3) | This data directory does not know the repository. See "Rebuild" below. |
+| `repository_not_registered` (3) | This data directory does not know the repository. [Recovery](../manyhands-recovery/SKILL.md), "Not registered". Do not run `index rebuild` for it. |
 
 A poll that stopped on a key, host or transport answer is final: send a new request to poll again, after the person has dealt with the cause.
 
@@ -94,7 +94,7 @@ manyhands-cli --json --non-interactive poll resume --repo <repo-root> --request-
 
 ## Index: status, refresh, rebuild
 
-`index status` is a read: `state` (`current` in nearly every run; the contract also names `stale`, `never_refreshed` and `unavailable`), `refreshed_at`, `context_count`, `item_count`, `problems[]` (the same findings as an item's `problems`, such as `missing_front_matter`) and `pending_operations`. `current` does not prove the index has seen a commit made outside Manyhands. `pending_operations` was empty while an unfinished sync and a local conflict were pending (verified), so `operation list` is the way to find those ([recovery](../manyhands-recovery/SKILL.md)).
+`index status` is a read: `state` (`current` in nearly every run; the contract also names `stale`, `never_refreshed` and `unavailable`), `refreshed_at`, `context_count`, `item_count`, `problems[]` (the same findings as an item's `problems`, such as `missing_front_matter`) and `pending_operations`. `current` does not prove the index has seen a commit made outside Manyhands. `pending_operations` lists only local operations such as a local sync conflict (verified); it was empty while a blocked sync, a remote conflict and a close stopped at publication were pending. `operation list` is the way to find unfinished work ([recovery](../manyhands-recovery/SKILL.md)).
 
 - `index refresh`: rescans every branch and worktree of this repository and replaces the index rows. No network, nothing written to the repository. Use it after outside changes.
 - `index rebuild`: makes a new index from the repository. Use it when reads answer `index_unavailable` ("The index is degraded and must be rebuilt", `recovery` `index.rebuild`). It was run on an index whose database file was overwritten with garbage: reads and `index refresh` answered `index_unavailable`, and `index rebuild` succeeded, kept the damaged file as `manyhands.sqlite3.corrupt-<number>` and listed the items again. Both verbs answer `ok` with `data` null, take no `--input`, and neither touches the remote.
@@ -103,9 +103,9 @@ manyhands-cli --json --non-interactive poll resume --repo <repo-root> --request-
 manyhands-cli --json --non-interactive index rebuild --repo <repo-root> --request-id <REQUEST_ID>
 ```
 
-Tell the person before you rebuild a damaged database, because the same run showed what else it loses. The database is the registry as well as the index. After rebuilding an overwritten database file: the repository was registered again by the rebuild, but the key list was empty and no key was selected (`poll once` answered `no_selected_key`), `host list` was empty with `reapproval_required` `true`, and the lost-history flag was set (see [recovery](../manyhands-recovery/SKILL.md)). The key files on disk were still there. Restoring keys and host pins is `key import` and `host approve`, both show-then-wait ([keys and hosts](../manyhands-keys-and-hosts/SKILL.md)). A smaller index problem may lose less; this is what a destroyed file loses.
+Tell the person before you rebuild a damaged database, because the database is the registry as well as the index. The damage, not the rebuild, lost the registry: with the database file overwritten, `key list` and `host list` already answered `index_unavailable` before the rebuild, and after it the keys, the selection and the host pins were gone (`key list` empty, `poll once` answered `no_selected_key`, `host list` empty with `reapproval_required` `true`), the repository was registered again by the rebuild, and the lost-history flag was set (see [recovery](../manyhands-recovery/SKILL.md)). The damaged file was kept as `manyhands.sqlite3.corrupt-<number>` and the key files on disk were still there. Restoring is `key import` then `key select`, and `host approve`, all show-then-wait or alone as in [autonomy](../manyhands-overview/references/autonomy.md) ([keys and hosts](../manyhands-keys-and-hosts/SKILL.md)). A smaller index problem may lose less; this is what a destroyed file loses.
 
-`repository_not_registered` (exit 3) answers "The repository is not registered with Manyhands" and some verbs offer `index.rebuild`. Check first that `MANYHANDS_DATA_DIR` is not set to a scratch directory. For a repository that was enabled earlier (its configuration is committed in it) `index rebuild` registers it in the current data directory, which is a change to the person's registry, so ask first (verified on a repository enabled under another data directory). A repository that was never enabled answers `repository_not_enabled` instead: [repositories](../manyhands-repositories/SKILL.md).
+`repository_not_registered` (exit 3) is not an index problem and is not fixed by `index rebuild`: see "Not registered" in [recovery](../manyhands-recovery/SKILL.md).
 
 ## What this skill did not cover
 
