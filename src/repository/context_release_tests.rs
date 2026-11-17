@@ -452,15 +452,14 @@ fn with_neither_the_worktree_nor_the_branch_nothing_is_touched_and_the_row_is_di
 type Change = fn(&Path);
 
 #[test]
-fn check_a_a_worktree_with_a_change_or_an_untracked_or_ignored_file_is_not_clean() {
-    let changes: [(&str, Change); 3] = [
+fn check_a_a_worktree_with_a_change_or_an_untracked_file_is_not_clean() {
+    let changes: [(&str, Change); 2] = [
         ("untracked", |worktree| {
             write(worktree, "notes.txt", "draft\n")
         }),
         ("modified", |worktree| {
             write(worktree, &ticket_path(TICKET), "edited, not committed\n");
         }),
-        ("ignored", |worktree| write(worktree, IGNORED, "scratch\n")),
     ];
     for (name, change) in changes {
         let f = Fixture::new();
@@ -474,6 +473,16 @@ fn check_a_a_worktree_with_a_change_or_an_untracked_or_ignored_file_is_not_clean
             name,
         );
     }
+}
+
+#[test]
+fn check_a_a_worktree_with_only_an_ignored_file_is_released() {
+    let f = Fixture::new();
+    f.edit(TICKET);
+    write(&f.worktree(TICKET), IGNORED, "scratch\n");
+
+    assert_eq!(f.release(TICKET).unwrap(), ContextReleaseOutcome::Released);
+    assert_eq!(f.state(AuthoringKind::Ticket, TICKET), GONE);
 }
 
 #[test]
