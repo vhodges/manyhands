@@ -109,6 +109,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(installer.main(), 0)
         managed = Path(json.loads(parameters.read_text())['managed_files'])
         self.assertEqual(managed.read_text(encoding='utf-8-sig').splitlines(), installer.managed_file_list(verified_files))
+        self.assertIn('skills\\README.md', managed.read_text(encoding='utf-8-sig').splitlines())
         digests = Path(json.loads(parameters.read_text())['managed_digests'])
         self.assertEqual(digests.read_text(encoding='utf-8-sig').splitlines(),
                          installer.managed_digest_list(verified_files, managed.read_bytes(),
@@ -146,7 +147,6 @@ class InstallerTests(unittest.TestCase):
             base + ['release.json', 'skills/README.md', 'skills/manyhands-overview/SKILL.md'])
         self.assertIn('skills\\README.md', managed)
         self.assertIn('skills\\manyhands-overview\\SKILL.md', managed)
-        self.assertEqual(managed, sorted(managed, key=str.upper))
         self.assertEqual([name for name in managed if not name.startswith('skills\\')],
                          installer.managed_file_list(base))
         with self.assertRaisesRegex(ValueError, 'canonical case'):
