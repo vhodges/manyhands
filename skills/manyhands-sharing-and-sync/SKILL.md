@@ -38,7 +38,7 @@ manyhands-cli --json --non-interactive repo sync --repo <repo-root> --request-id
 
 ### Operate per item
 
-An item has its own branch and worktree, and so its own sync result. To share "everything", list the items that have work in progress (`ticket list`, `document list`: an item with `context.kind` `active` has a branch) and run `item sync` once per item with its own `--request-id`, then `repo sync` for main. Read each answer on its own: one item can conflict while the others publish. Report per item, not as one result. Run them one after another, never two at once, and run `operation list` between them: a second writer at about the same moment can leave an unfinished operation behind that holds the first's work. Wait for the first to finish, and keep the request IDs outside the repository ([CLI conventions](../manyhands-overview/references/cli-conventions.md), "Your own writes").
+An item has its own branch and worktree, and so its own sync result. To share "everything", list the items that have work in progress (`ticket list`, `document list`: an item with `context.kind` `active` has a branch) and run `item sync` once per item with its own `--request-id`, then `repo sync` for main. Read each answer on its own: one item can conflict while the others publish. Report per item, not as one result. Run them one after another, never two at once, and run `operation list` between them: [CLI conventions](../manyhands-overview/references/cli-conventions.md), "Your own writes".
 
 ## Receiving: the usual order
 

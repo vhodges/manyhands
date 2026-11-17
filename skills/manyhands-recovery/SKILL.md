@@ -69,10 +69,9 @@ A `submit_comment` operation shows no `item_id` and no author in `operation list
 What to do:
 
 - **Proven yours** (your request ID leads to it): handle it by the table in step 3 and [autonomy](../manyhands-overview/references/autonomy.md).
-- **Only a hint** (your item, or new since the baseline): say so and show it to the person. Resume it only if they say it is theirs to resume or give their OK.
-- **Cannot attribute it**: do not resume it, do not abandon it, do not cancel a request on its behalf. Show the person the whole `operation list` (and `operation show` of the one in question) and say what is held. They decide, or they run `operation resume` at their own terminal.
+- **Not proven yours** (a matching item or a baseline difference is only a hint): do not resume it, do not abandon it, do not cancel a request on its behalf. Show the person the whole `operation list` (and `operation show` of the one in question) and say what is held. They run `operation resume` at their own terminal, or they tell you explicitly that it is theirs to resume. Only that statement lets you go on, and the resume is then the person's to approve under [autonomy](../manyhands-overview/references/autonomy.md); a bare "OK" to your question is not it.
 
-The real case, 2026-11-17: an agent's `comment add` on one ticket answered `partial` / `recovery_required` and left a `synchronize_context` operation for that ticket in `reconciling`, with `failure_code` and `next_action` empty. Listed next to it was another session's `submit_comment` operation in `indexing`, `next_action` `resume`, `item_id` null. The agent resumed the wrong one, and only the answer's author showed it. With the rules above it would have compared the IDs with its own answer, found that the `submit_comment` was not its own, and shown it to the person.
+The real case, 2026-11-17: an agent's `comment add` on one ticket answered `partial` / `recovery_required` and left a `synchronize_context` operation for that ticket in `reconciling`, with `failure_code` and `next_action` empty. Listed next to it was another session's `submit_comment` operation in `indexing`, `next_action` `resume`, `item_id` null. The agent resumed the wrong one, and only the resume answer, which showed a different author, revealed it. With the rules above it would have compared the IDs with its own answer, found that the `submit_comment` was not its own, and shown it to the person.
 
 ## 3. What to do, by what `operation list` shows
 
@@ -95,7 +94,7 @@ A passphrase key cannot be unlocked by you ([keys and hosts](../manyhands-keys-a
 There are two hand-offs, by what you saw:
 
 - You saw the original answer (`unlock_required` with `recovery` `request.retry` and a request ID). Give the person that exact command without `--json --non-interactive` and with the same `--request-id`. Verified: the rerun of the same `repo sync` request at a terminal prompted, published and emptied `operation list`.
-- You did not start it, or lost the answer. Do not look for the request ID, and do not start a new sync (a new `item sync` at the terminal answered `busy`, exit 5). Give the person this, with a new request ID, to run at their terminal and type the passphrase there:
+- You did not start it, or lost the answer. If you have no saved ID for it, do not look for the request ID, and do not start a new sync (a new `item sync` at the terminal answered `busy`, exit 5). Give the person this, with a new request ID, to run at their terminal and type the passphrase there:
 
 ```sh
 manyhands-cli operation resume --repo <repo-root> --operation-id <OPERATION_ID> --request-id <REQUEST_ID>
@@ -105,7 +104,7 @@ Verified with a throwaway passphrase key: it prompted for the passphrase and fin
 
 ## Resume
 
-`operation resume` re-enters an interrupted operation. It has no preview (`--prepare` answers `not_confirmable`) and it writes state: on a local sync conflict it answered `partial`, exit 4, `write` `written`, and left the conflict pending. Who may run it, and the one narrow case where you may run it alone, are in [autonomy](../manyhands-overview/references/autonomy.md); otherwise say which operation, what it is and what resume will do, and wait. Never resume an operation you cannot attribute ("Whose operation is it?").
+`operation resume` re-enters an interrupted operation. It has no preview (`--prepare` answers `not_confirmable`) and it writes state: on a local sync conflict it answered `partial`, exit 4, `write` `written`, and left the conflict pending. Who may run it, and the one narrow case where you may run it alone, are in [autonomy](../manyhands-overview/references/autonomy.md); otherwise say which operation, what it is and what resume will do, and wait. Never resume an operation you cannot prove you started, whatever the person's OK to a question you asked: the person resumes it at their terminal or says it is theirs ("Whose operation is it?").
 
 Verified once: a `repo sync` refused with `invalid_configuration` (the remote had no main branch) left a `fetch_observed` operation and every later sync answered `busy`; after the person had put a main branch on the remote, `operation resume` finished it with `already_applied` and syncs worked. After a passphrase hand-off the person's rerun, or their own `operation resume` at their terminal, finishes the operation, so the agent has nothing to resume.
 
@@ -113,7 +112,7 @@ Resume does not resolve a conflict. On a remote conflict it re-answered `recover
 
 ## Abandon and removals are the person's
 
-`operation abandon` closes an unfinished local operation's record without changing files, and releases its request. It is a hand-over verb, and it is never yours to choose for an operation you cannot attribute ("Whose operation is it?"). You may run `--prepare` to show them what it would do (verified on a local sync conflict: effects `operation_closed` and `request_released`, `files_changed` false, `git_state_changed` false) and give them the exact command with `--confirm`; you never run `--confirm`.
+`operation abandon` closes an unfinished local operation's record without changing files, and releases its request. It is a hand-over verb, so the person decides, whoever started the operation, and you never abandon one you cannot attribute ("Whose operation is it?"). You may run `--prepare` to show them what it would do (verified on a local sync conflict: effects `operation_closed` and `request_released`, `files_changed` false, `git_state_changed` false) and give them the exact command with `--confirm`; you never run `--confirm`.
 
 ```sh
 manyhands-cli --json --non-interactive operation abandon --repo <repo-root> --operation-id <OPERATION_ID> --prepare

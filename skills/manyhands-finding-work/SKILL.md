@@ -64,7 +64,7 @@ Open and closed come from `closure.state`, never from the `status` text: a ticke
 | `ticket deps --id <ID>` | The tickets this one depends on (`--direction down`, the default), the tickets that depend on it (`up`) or both; `--depth <n>` limits it. `data.dependencies` and `data.dependents` are flat lists with `id`, `state`, `slug`, `title` and `depth` (1 is a direct dependency). A ticket reached twice is marked `repeated`. |
 | `ticket children --id <ID>` | Direct children (a ticket's `parent` is this ID). Empty when none. |
 | `ticket cycles` | Every dependency or parent cycle, open or closed. Empty `items` when there are none. |
-| `ticket plan` | Open tickets in `data.batches` (`batch` 1, 2, ...): everything in a batch can be worked in parallel, and its open dependencies are in earlier batches. `data.unplannable` holds tickets behind a cycle or an unresolved dependency. Takes the list filters. |
+| `ticket plan` | Open tickets in `data.batches` (`batch` 1, 2, ...): everything in a batch can be worked in parallel (in different worktrees; still one write at a time in a repository), and its open dependencies are in earlier batches. `data.unplannable` holds tickets behind a cycle or an unresolved dependency. Takes the list filters. |
 | `ticket critical-path` | The longest chain of open, plannable tickets by dependency, in order, as `data.items`. |
 | `ticket find --slug <code>` | Tickets whose short code matches, ignoring case. No match is an empty list, not an error. `ticket list --slug` filters the same way. |
 | `ticket show --id <ID>` | One ticket, with `body`, `source` and `observation`. `--path` with `--context` names it by path instead. |
