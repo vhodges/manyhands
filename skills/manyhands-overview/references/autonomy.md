@@ -1,0 +1,15 @@
+# What an agent does alone, and what it hands to the person
+
+The owner set this policy on 2026-11-17. Every other skill defers to it and does not restate it.
+
+| Agent acts alone | Agent shows the person what it will do, then waits for their OK | Agent hands to the person |
+| --- | --- | --- |
+| Reads. Creating and saving documents and tickets, comments, `item sync`, `poll once`, `index refresh` and `rebuild`, `key select` and `clear`, `remote add` and `select`. | `host approve` and `replace` (showing the fingerprint), `key generate` and `import`, `repo create` and `enable`, `document promote`, `ticket close`. Where a verb has `--prepare`, the agent shows the preview before `--confirm`. | `key delete`, `key remove`, `repo remove`. `operation abandon`, `item resolve-history` and `conflict resolve`, unless the person has said which side wins. Any passphrase step. |
+
+## Showing the person a prepared preview
+
+Run the verb with `--prepare`. It changes nothing and answers with a confirmation ID, an expiry (about ten minutes) and the effects it will have. Show the person the preview in plain words: what will be created, merged, removed or trusted, and for `host approve` and `replace` the fingerprint itself, copied from the answer and never summarized. Ask for their OK and wait. Only then run the same command with `--confirm <confirmation-id>` and a fresh `--request-id`. If the person says no, or the expiry passes, drop the confirmation and prepare again if they change their mind.
+
+Only some verbs are confirmable. Any other verb answers `--prepare` with `not_confirmable` (exit 2) and has no preview: `key generate`, `key import`, `key select` and `key remove` are among them, so for those you describe the action in your own words and wait for the person's OK before you run it. `--prepare` never executes, so asking is safe. The mechanics of prepare and confirm are in [CLI conventions](cli-conventions.md).
+
+When a step is handed to the person, say which command, why you cannot run it (a passphrase prompt needs their terminal, or the action is destructive), and what you will check afterwards.
