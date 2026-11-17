@@ -14,7 +14,7 @@ Item files are Manyhands' to write. Change them with the CLI (`ticket save`, `do
 
 Creating an item creates its own branch (`manyhands/ticket/<id>` or `manyhands/document/<id>`) and a worktree for it at `<repo>/.manyhands/worktrees/<id>`. Edits happen on that branch, so two items can be worked on at once without touching each other or the main branch. Repository operations therefore run per item: a sync, a close or a retry names one item, and what you check, you check for that item.
 
-The worktree is inside the main checkout, but it is not the repository root. Commands that write take the main checkout root as `--repo`; the worktree path is used only as `--context` for `path observe`. Do not put files in an item's worktree: an untracked or ignored file there (`target/`, `.devenv/`) blocks closing the ticket, with `recovery_required` and the blocker `context_dirty`.
+The worktree is inside the main checkout, but it is not the repository root. Commands that write take the main checkout root as `--repo`; the worktree path is used only as `--context` for `path observe`. Do not put files in an item's worktree. A file Git does not ignore stops `ticket close` at its preview (`recovery_required`, blocker `context_dirty`, exit 3). An ignored file such as `target/` or `.devenv/` lets the close start, then leaves its cleanup pending (`recovery_required`, exit 4, `cleanup_pending` `ignored_files`); `manyhands-tickets` has the fix.
 
 ## A checkpoint on every save
 

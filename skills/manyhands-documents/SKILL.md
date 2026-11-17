@@ -160,7 +160,7 @@ manyhands-cli --json --non-interactive document promote --repo <repo-root> --id 
 
 A Markdown file under `docs/` that has no front matter or no ID (for example a note someone committed outside Manyhands) is listed with `id: null` and a `problems` entry such as `missing_front_matter` or `missing_field`; `index status` lists the same problems. `document show --path` gives its `observation` and `source`. Run `index refresh` first if you suspect the index has not seen a recent outside commit: it is a read-side step you take alone, and `document list` does not show a file added outside Manyhands until then (verified, although `index status` said `current`). `manyhands-polling-and-index` covers it.
 
-`document repair` writes the corrected whole file, with a new ID, and is a confirmed verb. It is not in the autonomy table; treat it as show then wait, because it rewrites a person's file and adopts a new ID. The preview lists effects (`context_created`, `id_adopted`, `source_written`, `checkpoint_committed`) but not the file content, so show the person the `source` you will write.
+`document repair` writes the corrected whole file, with a new ID, and is a confirmed verb. It is show then wait in [autonomy](../manyhands-overview/references/autonomy.md), because it rewrites a person's file and adopts a new ID. The preview lists effects (`context_created`, `id_adopted`, `source_written`, `checkpoint_committed`) but not the file content, so show the person the `source` you will write.
 
 | Verb | Required | Optional |
 | --- | --- | --- |

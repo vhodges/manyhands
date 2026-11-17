@@ -9,6 +9,7 @@ Agent Skills for using Manyhands through its command line, `manyhands-cli`. Each
 | `manyhands-repositories` | Creates or enables a repository, onboards a clone or an SSH URL, sets the remote, commit identity and ticket short-code prefix, and inspects or removes a repository. | Starting with a new, existing or cloned repository, or when a repository is not enabled. |
 | `manyhands-documents` | Creates folders and documents, reads and saves them with observation tokens, recovers from a stale save, moves, repairs and promotes documents. | Writing, editing or promoting a document, or when a document command answers `external_change` or `occupied_path`. |
 | `manyhands-finding-work` | Reads before acting: lists and filters tickets and documents, what is ready or blocked, dependencies, short codes, folders, comments, and whether the index is current. | Finding out what exists or what to do next, before creating or changing anything. |
+| `manyhands-tickets` | Creates, reads and saves tickets with observation tokens, sets status, type, dependencies and parent, assigns short codes, repairs a ticket file, and closes a ticket after showing the person what it will do. | Creating, updating or closing a ticket, or when a ticket command answers `external_change`, `ticket_closed`, `relationship_cycle`, `recovery_required` or `unlock_required`. |
 
 Minimum CLI version: 0.2.0
 
