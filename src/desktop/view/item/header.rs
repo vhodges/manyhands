@@ -222,6 +222,7 @@ impl ItemPane {
             .items_center()
             .gap(px(8.))
             .children(pill)
+            .children(self.git_details_button(item, cx))
             .children(self.comments_button(window, cx))
             .children(self.edit_action(read, window, cx))
             .children(self.share_button(window, cx))
@@ -233,7 +234,8 @@ impl ItemPane {
                 .line_height(relative(1.25))
                 .text_color(colors.header_title)
         });
-        // An item read by path has no chips: it has no details sheet.
+        // An item read by path has no chips and no item details sheet; a
+        // nonconforming one has the Git details button (`git_details_button`).
         let chips = match (self.model.target(), item) {
             (OpenTarget::Item { kind, .. }, Some(item)) => Some(self.chip_row(
                 chips(

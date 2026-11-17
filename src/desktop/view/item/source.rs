@@ -27,7 +27,12 @@ impl ItemPane {
         let Some(item) = self.model.item().rows() else {
             return;
         };
-        let Some(source) = item.source.clone() else {
+        // A nonconforming file is read in the read view, not here.
+        let source = item
+            .source
+            .clone()
+            .filter(|_| !self.nonconforming_file(item));
+        let Some(source) = source else {
             self.source = None;
             return;
         };

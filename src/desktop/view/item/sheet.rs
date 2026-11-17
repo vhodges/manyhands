@@ -25,9 +25,11 @@
 mod document;
 mod facts;
 mod fields;
+mod git;
 mod ticket;
 
 pub(super) use self::fields::SheetFields;
+use self::git::{GIT_DESCRIPTION, GIT_DETAILS};
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, Entity, FocusHandle, FontWeight, InteractiveElement,
@@ -185,11 +187,17 @@ impl ItemPane {
         let kind = self
             .shown_kind(item.as_ref())
             .unwrap_or(ItemDtoKind::Ticket);
+        // A nonconforming file's sheet holds its Git details alone.
+        let git = item
+            .as_ref()
+            .is_some_and(|item| self.nonconforming_file(item));
         let heading = match kind {
+            _ if git => GIT_DETAILS,
             ItemDtoKind::Ticket => TICKET_DETAILS,
             ItemDtoKind::Document => DOCUMENT_DETAILS,
         };
         let rows = match (&item, kind) {
+            (Some(item), _) if git => self.git_rows(item, cx),
             (Some(item), ItemDtoKind::Ticket) => self.ticket_rows(item, window, cx),
             (Some(item), ItemDtoKind::Document) => self.document_rows(item, window, cx),
             (None, _) => Vec::new(),
@@ -201,6 +209,7 @@ impl ItemPane {
         // review; a kept session views the saved copy.
         let editing = self.editing();
         let (description, note) = match (editing, kind) {
+            _ if git => (GIT_DESCRIPTION, READ_ONLY),
             (true, ItemDtoKind::Ticket) => (EDITING_TICKET, SAVED_WITH_TICKET),
             (true, ItemDtoKind::Document) => (EDITING_DOCUMENT, SAVED_WITH_DOCUMENT),
             (false, _) if self.opening_new_item() => (NOT_CREATED_YET, READ_ONLY_UNTIL_READY),
