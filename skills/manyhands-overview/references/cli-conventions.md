@@ -28,7 +28,16 @@ manyhands-cli --json --non-interactive ticket create --repo <repo-root> --input 
 
 `--input -` reads the object from stdin instead, but use it only when you cannot write a file. Quoting a JSON string on a command line or in a pipe differs between shells, and on Windows the double quotes are mangled in ways that break the JSON, so the file form is the portable one.
 
-The required fields of each input are in `schemas/input/v1/<verb>.schema.json` (`ticket create` is `ticket_create.schema.json`). When the answer is `invalid_input`, run the same command again without `--json`: human output names the field, such as `Required input field is missing: type.`, where the JSON answer only says the input is not valid.
+The schemas are `schemas/input/v1/<verb>.schema.json` (`ticket create` is `ticket_create.schema.json`) in the Manyhands source tree; an installed copy may not have them. Then use the tables below and in the task skills. When the answer is `invalid_input`, run the same command again without `--json`: human output names the field, such as `Required input field is missing: type.`, where the JSON answer only says the input is not valid.
+
+Fields of the two inputs shown here. No other field is accepted.
+
+| Verb | Required | Optional |
+| --- | --- | --- |
+| `ticket create` | `item_id`, `title`, `type`, `status` (strings) | `body`, `project`, `team`, `initials` (strings); `deps` (array of item IDs, or null); `parent` (item ID, or null) |
+| `ticket save` | `observation` (string) | `title`, `type`, `status`, `body` (strings); `project`, `team` (string or null, null clears); `deps` (array or null, null or `[]` clears); `parent` (item ID or null, null clears) |
+
+A field you leave out of a save stays as it was. `type` and `status` are free text the person chooses.
 
 ## IDs: item ID and request ID are different
 

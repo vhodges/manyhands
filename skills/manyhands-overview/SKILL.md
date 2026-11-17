@@ -1,6 +1,6 @@
 ---
 name: manyhands-overview
-description: "Use when starting any task with Manyhands or manyhands-cli (tickets, documents, comments, keys, repositories, sync), before the task skill, to learn how the command line behaves, what you may do alone and when to stop and ask the person."
+description: "Use when starting any task with Manyhands or manyhands-cli (tickets, documents, comments, keys, repositories, sync), before opening the task skill, and whenever you are unsure how the command line behaves."
 ---
 
 # Manyhands overview
@@ -22,8 +22,8 @@ Read [concepts](references/concepts.md) for the model behind these lines.
 ## Before you start
 
 1. Run `manyhands-cli --version` and compare it with the minimum above. If it is older, tell the person before doing anything else. A newer CLI is never a warning.
-2. Trust `manyhands-cli <resource> <verb> --help` and the JSON schemas in `schemas/input/v1/` over this skill. If they disagree with a skill, follow them and say so.
-3. Know the repository's main checkout root. Pass it as `--repo` on every command. A linked worktree path is refused for writes.
+2. Trust `manyhands-cli <resource> <verb> --help` and the JSON input schemas over this skill. The schemas (`schemas/input/v1/`) are in the Manyhands source tree and may be absent from an installed copy; then use the field tables and examples in the skills, and rerun a failed command without `--json`, because human output names the missing or unknown field. If any of these disagrees with a skill, follow it and say so.
+3. Know the repository's main checkout root. Pass it as `--repo` on every repository command (key and `id` verbs take none). A linked worktree path is refused for writes.
 
 ## The rules that matter most
 
@@ -31,6 +31,7 @@ Read [concepts](references/concepts.md) for the model behind these lines.
 - Mint a new `item_id` with `manyhands-cli id new` for every item you create. Use a different new ID as `--request-id` on every write.
 - Add `--json --non-interactive` when you drive the CLI, and read `outcome`, `code`, `data` and `recovery` from the answer.
 - A save needs an `observation` token from a fresh read of that item. The refusal `external_change` (exit 3) means the item changed since you read it: read again and merge. Do not retry blindly.
+- A passphrase-protected key cannot be unlocked by you: `unlock_required` means hand that step to the person at their terminal. Never ask for or type a passphrase. See [autonomy](references/autonomy.md).
 - Which actions you take alone, which you show the person first and which you hand over are in [autonomy](references/autonomy.md). Read it before your first write.
 
 Details: [CLI conventions](references/cli-conventions.md) and [errors and exit codes](references/errors-and-exit-codes.md).

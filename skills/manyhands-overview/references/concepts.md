@@ -22,7 +22,7 @@ The worktree is inside the main checkout, but it is not the repository root. Com
 
 ## Moving work onward
 
-- A ticket is finished by `ticket close`: it records the closure, merges the ticket's branch into main, publishes main, and removes the branch and worktree. It is a confirmed verb (see [autonomy](autonomy.md)).
+- A ticket is finished by `ticket close`: it records the closure, merges the ticket's branch into main, publishes main, and removes the branch and worktree. It is a confirmed verb (see [autonomy](autonomy.md)). With no publication remote it still exits 0: the merge into main is complete and `effects.publication` is `pending`, waiting for a remote.
 - A document is moved onward with `document promote`, also a confirmed verb. `manyhands-documents` covers it.
 - Sharing with collaborators is done with the sync verbs. See `manyhands-sharing-and-sync`.
 
