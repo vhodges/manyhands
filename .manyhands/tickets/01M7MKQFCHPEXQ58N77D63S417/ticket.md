@@ -3,7 +3,7 @@ slug: vh-gvzsr
 id: 01M7MKQFCHPEXQ58N77D63S417
 title: Ticket close and its cleanup should not block on ignored files
 type: defect
-status: open
+status: done
 project: manyhands
 team: core
 closed_at: 2026-11-17T15:45:11Z
