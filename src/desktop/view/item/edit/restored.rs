@@ -192,7 +192,8 @@ impl ItemPane {
     /// Save from D2's restored section: Continue editing's steps, then the
     /// save.
     fn save_restored(&mut self, cx: &mut Context<Self>) {
-        if self.edit_available(cx) {
+        // While the item's close or merge is unfinished, Save waits (R-23).
+        if self.edit_available(cx) && !self.edits_wait(cx) {
             self.continue_requested(Then::Save, cx);
         }
     }
@@ -279,8 +280,10 @@ impl ItemPane {
         id: &'static str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let enabled = self.edit_available(cx);
-        action(id, CONTINUE_EDITING, enabled, None)
+        // While the item's close or merge is unfinished, it waits, saying
+        // so (R-23).
+        let enabled = self.edit_available(cx) && !self.edits_wait(cx);
+        action(id, CONTINUE_EDITING, enabled, self.locked_words(cx))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.edit_requested(window, cx);
             }))
@@ -295,8 +298,8 @@ impl ItemPane {
         &self,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let enabled = self.edit_available(cx) && self.restored_unsaved(cx);
-        let note = self.save_blocked(cx);
+        let enabled = self.edit_available(cx) && self.restored_unsaved(cx) && !self.edits_wait(cx);
+        let note = self.locked_words(cx).or_else(|| self.save_blocked(cx));
         action("draft-save", SAVE, enabled, note)
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save_restored(cx)))
             .into_any_element()

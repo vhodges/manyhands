@@ -1077,15 +1077,25 @@ fn release_after_a_proven_publication_is_external_change() {
     assert_eq!(image(&world, items::TICKET_A), before);
 }
 
-/// R-43: every re-selection of the remote leaves the publication history
-/// unknown for good.
+/// R-43, amended by vh-hyksw: a re-selection no longer unknowns the history
+/// (the old repository-wide flag); a change of the remote's identity does, for
+/// each context that exists when it happens.
 #[test]
 fn release_with_an_unknown_publication_history_and_no_tracking_ref_is_ok() {
     git_home::isolated();
     let world = World::new();
     select_origin(&world);
-    select(&world, None);
     make(&world, REQUEST_1, items::TICKET_A);
+    world
+        .service
+        .add_remote(AddRemoteRequest {
+            root: world.root.clone(),
+            name: "elsewhere".to_owned(),
+            url: "ssh://fixture@localhost/elsewhere".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    select(&world, Some("elsewhere"));
     assert_eq!(
         evidence(&world, items::TICKET_A),
         RemotePublicationEvidence::HistoryUnknown
@@ -1098,12 +1108,11 @@ fn release_with_an_unknown_publication_history_and_no_tracking_ref_is_ok() {
 }
 
 #[test]
-fn release_of_an_untracked_modified_or_ignored_file_is_worktree_not_clean_and_discards_the_row() {
+fn release_of_an_untracked_or_modified_file_is_worktree_not_clean_and_discards_the_row() {
     git_home::isolated();
-    let changes: [(&str, &str); 3] = [
+    let changes: [(&str, &str); 2] = [
         ("notes.txt", "untracked\n"),
         (".gitignore", "scratch.log\nmodified\n"),
-        ("scratch.log", "ignored\n"),
     ];
     for (path, text) in changes {
         let world = World::new();

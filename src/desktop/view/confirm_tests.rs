@@ -2,7 +2,10 @@
 //! for two presses of Enter, Escape with nothing asked and focus given
 //! back, and a stale preview that offers Prepare again.
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use gpui_kit::{TestAppContext, component::dialog::Confirm};
 use manyhands::{
@@ -21,12 +24,69 @@ use crate::desktop::{
     },
     test_support::fixtures::{Fixture, resume_through},
     view::{
-        harness::Shell,
+        activity_support::{
+            act, choose_in_menu, highlighted, list_focus, pending_key, refresh, row as activity_row,
+        },
+        harness::{Shell, key},
+        operations::ABANDON,
+        repositories::tests::support::press_and_hold,
         workspace::{QuitPhase, REGIONS, Region},
     },
 };
 
 const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FH0";
+
+/// This is consent data, not a layout/font/rendering assertion. The existing
+/// generic confirmation must tell the user what remains and retains old Ri.
+#[test]
+fn preserving_abandon_confirmation_names_retained_resources_and_request() {
+    use manyhands::repository::{
+        OperationAbandonPreviewDto, PreviewDetailsDto, RetirementAbandonMetadata, RetirementRemoval,
+    };
+    let details = PreviewDetailsDto::OperationAbandon(OperationAbandonPreviewDto {
+        root: "root".into(),
+        operation_id: "operation".into(),
+        action: None,
+        state: "authoritative_observed".into(),
+        step: Some("context_retirement_preserved".into()),
+        item_id: None,
+        worktree: None,
+        paths: Vec::new(),
+        paths_complete: true,
+        committed: false,
+        request_id: Some("old-request".into()),
+        files_changed: false,
+        git_state_changed: false,
+        retirement: Some(RetirementAbandonMetadata {
+            request_id: Some("old-request".into()),
+            phase: "preserving".into(),
+            owner_epoch: 3,
+            index_owner_epoch: 2,
+            worktree_removal: RetirementRemoval::Observed,
+            branch_removal: RetirementRemoval::Possible,
+            worktree_retained: false,
+            branch_retained: true,
+            index_pending: true,
+        }),
+    });
+    let fields = super::detail_fields(&details);
+    for pair in [
+        ("Request retained", "old-request"),
+        ("Retirement phase", "preserving"),
+        ("Worktree removal", "observed"),
+        ("Branch removal", "possible"),
+        ("Worktree retained", "no"),
+        ("Branch retained", "yes"),
+        ("Discovery pending", "yes"),
+    ] {
+        assert!(
+            fields
+                .iter()
+                .any(|(key, value)| *key == pair.0 && value == pair.1),
+            "missing {pair:?}: {fields:?}"
+        );
+    }
+}
 
 /// A ticket save whose index hand-off failed, pending in `a`, with the
 /// window open: its operation ID.
@@ -37,6 +97,12 @@ fn stranded(cx: &mut TestAppContext) -> (Shell, PathBuf, String) {
     let operation = fixture.strand_ticket_save(&root, TICKET, "Edited");
     let shell = Shell::open(fixture, cx);
     (shell, root, operation)
+}
+
+/// Chooses Abandon on the stranded save's pending row in `root`.
+fn abandon(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
+    let pending = pending_key(shell, &key(root), "save_ticket", cx);
+    act(shell, &pending, ABANDON, cx);
 }
 
 fn abandons(shell: &Shell, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
@@ -61,8 +127,8 @@ fn finished(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> (Ou
 #[gpui_kit::test]
 async fn pressing_enter_twice_on_confirm_submits_one_request(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
-    let (shell, _, _) = stranded(cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    let (shell, root, _) = stranded(cx);
+    abandon(&shell, &root, cx);
     assert!(shell.present("confirm-ok", cx));
 
     let held = shell.backend.hold_job(JobKind::OperationAbandon);
@@ -88,26 +154,26 @@ async fn pressing_enter_twice_on_confirm_submits_one_request(cx: &mut TestAppCon
 }
 
 /// Escape closes the dialog with nothing asked of the worker, and focus
-/// goes back to the Abandon control that opened it.
+/// goes back to the list, the row that opened it highlighted (decision 23).
 #[gpui_kit::test]
 fn escape_closes_the_dialog_with_no_request_and_focus_returns_to_abandon(cx: &mut TestAppContext) {
-    let (shell, root, operation) = stranded(cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    let (shell, root, _) = stranded(cx);
+    let row = pending_key(&shell, &key(&root), "save_ticket", cx);
+    choose_in_menu(&shell, &row, ABANDON, cx);
     assert!(shell.present("confirm-dialog", cx));
 
-    shell.keys("escape", cx);
+    let list = list_focus(&shell, cx);
+    assert!(
+        press_and_hold(&shell, "escape", &list, cx),
+        "focus is back on the list, in the update Escape closed the dialog"
+    );
     assert!(!shell.present("confirm-dialog", cx));
     assert!(shell.requests(cx, |_| true).is_empty());
-    let focus = shell
-        .workspace
-        .read_with(cx, |workspace, _| {
-            workspace.abandon_focus(root.to_str().unwrap(), &operation)
-        })
-        .expect("the Abandon control has a focus");
-    assert!(shell.frame(cx, |window, _| focus.is_focused(window)));
+    assert_eq!(highlighted(&shell, cx), Some(row.clone()), "its row");
     assert!(shell.present(Region::Operations.ring_id(), cx));
     // The pending row is untouched.
-    assert!(shell.present(("pending-row", 0usize), cx));
+    refresh(&shell, cx);
+    assert!(activity_row(&shell, &row, cx).is_some());
 }
 
 /// The region rings the frame draws.
@@ -125,7 +191,7 @@ fn rings(shell: &Shell, cx: &mut TestAppContext) -> Vec<Region> {
 fn region_and_refresh_keys_do_not_escape_the_dialog(cx: &mut TestAppContext) {
     let (shell, root, _) = stranded(cx);
     shell.select(&root, cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    abandon(&shell, &root, cx);
     assert!(shell.present("confirm-ok", cx));
     let before = rings(&shell, cx);
 
@@ -146,8 +212,8 @@ fn region_and_refresh_keys_do_not_escape_the_dialog(cx: &mut TestAppContext) {
 /// Quit still works while a dialog is open.
 #[gpui_kit::test]
 fn quit_works_while_a_dialog_is_open(cx: &mut TestAppContext) {
-    let (shell, _, _) = stranded(cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    let (shell, root, _) = stranded(cx);
+    abandon(&shell, &root, cx);
     assert!(shell.present("confirm-dialog", cx));
 
     shell.keys("secondary-q", cx);
@@ -165,7 +231,7 @@ fn quit_works_while_a_dialog_is_open(cx: &mut TestAppContext) {
 async fn a_stale_preview_is_shown_with_prepare_again(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let (shell, root, operation) = stranded(cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    abandon(&shell, &root, cx);
     assert!(shell.present("confirm-ok", cx));
 
     let other = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
@@ -224,7 +290,7 @@ fn a_busy_preview_offers_retry_which_prepares_again(cx: &mut TestAppContext) {
         LeaseKind::CacheWrite,
     )
     .unwrap();
-    shell.click(("pending-abandon", 0usize), cx);
+    abandon(&shell, &root, cx);
     cx.executor().advance_clock(Duration::from_secs(1));
     shell.run(cx);
 
@@ -288,7 +354,7 @@ async fn an_answer_to_an_earlier_attempt_is_not_shown_after_prepare_again(cx: &m
     let (shell, root, _) = stranded(cx);
 
     // The first attempt is answered `busy`: another call holds the lease.
-    shell.click(("pending-abandon", 0usize), cx);
+    abandon(&shell, &root, cx);
     let lease = RepositoryService::hold_lease_for_testing(
         &root,
         shell.fixture.data_dir(),

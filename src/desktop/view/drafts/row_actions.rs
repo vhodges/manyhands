@@ -1,12 +1,14 @@
-//! The Drafts page's row actions: Restore, Export…, Export raw… and
+//! The Drafts page's row actions: Restore, Open, Export…, Export raw… and
 //! Discard…, the last three through the `actions` the tab shares.
 //!
 //! Restore leaves the page through its host, which opens the item's tab
-//! (ruling R25); the page never hides itself. What an action came to is
+//! (ruling R25); the page never hides itself. A comment draft's Open does
+//! the same at once, claiming nothing: the item's composer adopts the
+//! draft. What an action came to is
 //! said on its row. A row Discard removes gives the focus to the next
 //! row, else the previous one, else the page's first control.
 
-use gpui_kit::{App, Context, Task, Window};
+use gpui_kit::{App, Context, Task, Window, component::WindowExt};
 use manyhands::{
     canonical::ItemId,
     drafts::{DraftError, DraftId, DraftTarget, ItemKind, markdown},
@@ -23,7 +25,7 @@ use crate::desktop::{
         tabs::TabKey,
     },
     services::drafts::RestoreRefused,
-    view::item::{NOT_DISCARDED, refused_label},
+    view::item::{NOT_DISCARDED, locked_text, refused_label},
 };
 
 /// The desktop's item kind of a draft's.
@@ -76,6 +78,26 @@ impl DraftsPage {
             return;
         };
         let target = open_target(&draft.target);
+        // While the item's close or merge is unfinished, or its local copy
+        // is being retired, its draft is not restored into its tab (D5 A2,
+        // R-23; D6 decision 19).
+        let kind = dto_kind(draft.target.item_kind);
+        let lock = self.services.lock(
+            &draft.target.repository,
+            kind,
+            &draft.target.item_id.to_string(),
+            cx,
+        );
+        if draft.target.comment.is_none() && lock.blocks() {
+            let words = locked_text(lock, kind);
+            let notice = Notice {
+                text: words.to_owned(),
+                restore: false,
+            };
+            self.notices.insert(id, notice);
+            cx.notify();
+            return;
+        }
         if !self.restoring.insert(id) {
             return;
         }
@@ -112,6 +134,23 @@ impl DraftsPage {
             }
         })
         .detach();
+    }
+
+    /// Open: the host opens and focuses the tab of a comment draft's item,
+    /// whose composer adopts the draft. Nothing is claimed here.
+    pub(super) fn open_item_of(&mut self, id: DraftId, cx: &mut Context<Self>) {
+        let Some(Slot {
+            row,
+            draft: Some(draft),
+            ..
+        }) = self.slot(id)
+        else {
+            return;
+        };
+        if !row.actions.open {
+            return;
+        }
+        cx.emit(DraftsEvent::Open(open_target(&draft.target)));
     }
 
     /// Export… or Export raw…: a draft restored here exports its newest
@@ -182,7 +221,7 @@ impl DraftsPage {
         let drafts = self.services.drafts().clone();
         let held_here = drafts.read(cx).session(id).is_some();
         let discard = drafts.update(cx, |registry, cx| match held_here {
-            true => registry.discard(id, cx),
+            true => registry.discard_held(id, cx),
             false => registry.discard_stored(id, readable, cx),
         });
         self.notices.remove(&id);
@@ -219,7 +258,9 @@ impl DraftsPage {
     /// focus to the page's first control.) Not while a dialog is open or
     /// quitting waits, with Quit now holding the focus: the refocus is kept
     /// for the first frame after, and goes to a neighbour still listed then,
-    /// else the page's first control.
+    /// else the page's first control. Behind a sheet, Settings over the
+    /// page, it is dropped, never kept for the sheet's close, which gives
+    /// focus back where Settings opened from (Wave 04 Cycle 04, R-34).
     pub(super) fn apply_refocus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.refocus.is_none() || !may_open(&self.services, window, cx) {
             return;
@@ -230,6 +271,9 @@ impl DraftsPage {
         {
             let next = refocus.next.iter().find(|id| listed(self, id)).copied();
             self.refocus = None;
+            if window.has_active_sheet(cx) {
+                return;
+            }
             let focus = next
                 .and_then(|id| self.focus.get(&id).map(|focus| focus.row.clone()))
                 .or_else(|| self.first_focus());

@@ -452,15 +452,14 @@ fn with_neither_the_worktree_nor_the_branch_nothing_is_touched_and_the_row_is_di
 type Change = fn(&Path);
 
 #[test]
-fn check_a_a_worktree_with_a_change_or_an_untracked_or_ignored_file_is_not_clean() {
-    let changes: [(&str, Change); 3] = [
+fn check_a_a_worktree_with_a_change_or_an_untracked_file_is_not_clean() {
+    let changes: [(&str, Change); 2] = [
         ("untracked", |worktree| {
             write(worktree, "notes.txt", "draft\n")
         }),
         ("modified", |worktree| {
             write(worktree, &ticket_path(TICKET), "edited, not committed\n");
         }),
-        ("ignored", |worktree| write(worktree, IGNORED, "scratch\n")),
     ];
     for (name, change) in changes {
         let f = Fixture::new();
@@ -474,6 +473,16 @@ fn check_a_a_worktree_with_a_change_or_an_untracked_or_ignored_file_is_not_clean
             name,
         );
     }
+}
+
+#[test]
+fn check_a_a_worktree_with_only_an_ignored_file_is_released() {
+    let f = Fixture::new();
+    f.edit(TICKET);
+    write(&f.worktree(TICKET), IGNORED, "scratch\n");
+
+    assert_eq!(f.release(TICKET).unwrap(), ContextReleaseOutcome::Released);
+    assert_eq!(f.state(AuthoringKind::Ticket, TICKET), GONE);
 }
 
 #[test]
@@ -589,15 +598,23 @@ fn check_c_a_verified_push_of_the_context_is_an_external_change() {
     assert_refused_and_left(&f, TICKET, RepositoryErrorKind::ExternalChange);
 }
 
-/// R-43: every re-selection of the remote leaves the publication history
-/// unknown for good. With no tracking ref and no commit of its own, the
-/// context is released.
+/// R-43: a change of the remote's identity leaves the publication history
+/// unknown. With no tracking ref and no commit of its own, the context is
+/// released.
 #[test]
 fn check_c_an_unknown_publication_history_with_no_tracking_ref_is_released() {
     let f = Fixture::new();
     f.select_origin();
-    f.select(None);
     f.edit(TICKET);
+    f.service
+        .add_remote(AddRemoteRequest {
+            root: f.root(),
+            name: "elsewhere".into(),
+            url: "ssh://fixture@localhost/elsewhere".into(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    f.select(Some("elsewhere"));
     assert_eq!(
         f.evidence(TICKET),
         RemotePublicationEvidence::HistoryUnknown

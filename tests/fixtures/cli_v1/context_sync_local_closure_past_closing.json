@@ -1,0 +1,48 @@
+{
+  "code": "recovery_required",
+  "command": "context sync-local",
+  "data": {
+    "cancel_acknowledged": false,
+    "eligibility": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "kind": "ticket",
+    "next_action": "external_repair",
+    "operation_id": null,
+    "reason": "authority_missing",
+    "required_request_id": null,
+    "resolution_request_id": null,
+    "result_oid": null,
+    "state": "refused",
+    "type": "local_context_sync"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "Recovery is required before this can continue.",
+  "operation_id": "<operation-id>",
+  "outcome": "blocked",
+  "recovery": [
+    {
+      "action": "repo.inspect",
+      "arguments": {
+        "root": "<repository>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0"
+  }
+}

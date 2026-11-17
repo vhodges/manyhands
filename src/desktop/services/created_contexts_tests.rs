@@ -200,3 +200,86 @@ fn a_document_move_committed_takes_the_context_out() {
     );
     assert!(!created.contains(&document), "already applied takes it out");
 }
+
+/// R-4: a comment whose checkpoint committed into the item's context
+/// takes that context out, as a save does: it holds the comment's commit
+/// now, so leaving never releases it. A post that committed nothing
+/// leaves it in; while one is in flight, a release waits for it
+/// (`saved_by`).
+#[test]
+fn a_committed_comment_keeps_its_context_from_release() {
+    let post = Intent::CommentAdd {
+        root: PathBuf::from(ROOT),
+        kind: AuthoringKind::Ticket,
+        id: item_id(TICKET),
+        comment_id: item_id("01ARZ3NDEKTSV4RRFFQ69G5FF1"),
+        parent_id: None,
+        body: crate::desktop::services::requests::CommentBody::new("Said.".to_owned()),
+    };
+    assert_eq!(ContextKey::of(&post), Some(key()));
+    assert!(key().saved_by(&post), "a release waits for it");
+    assert!(!key().prepared_by(&post) && !key().released_by(&post));
+
+    let made = answer(Outcome::Success, ResultCode::Ok, Some(true));
+    let mut created = CreatedContexts::default();
+    created.finished(&prepare(), &made);
+    created.finished(
+        &post,
+        &answer(Outcome::Blocked, ResultCode::OccupiedPath, None),
+    );
+    assert!(created.contains(&key()), "nothing committed leaves it in");
+
+    let mut committed = answer(Outcome::Partial, ResultCode::InternalError, None);
+    committed.effects.checkpoint = CheckpointEffect::Committed;
+    assert!(!created.finished(&post, &committed));
+    assert!(
+        !created.contains(&key()),
+        "a committed comment takes it out, shared or not"
+    );
+}
+
+/// D5 A4: a close whose tidy-up is complete retired the ticket's context,
+/// so it no longer counts as made here; one whose tidy-up is pending
+/// leaves it in.
+#[test]
+fn a_tidied_close_takes_its_context_out() {
+    use manyhands::repository::{
+        LifecycleCleanupPendingReason, LifecycleCleanupState, LifecycleMutationDto,
+        LifecycleMutationType,
+    };
+    let close = Intent::TicketClose {
+        root: PathBuf::from(ROOT),
+        id: item_id(TICKET),
+    };
+    let lifecycle = |cleanup: LifecycleCleanupState| {
+        let mut envelope = answer(Outcome::Success, ResultCode::Ok, None);
+        let pending = cleanup == LifecycleCleanupState::Pending;
+        envelope.data = Some(MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
+            r#type: LifecycleMutationType::Lifecycle,
+            kind: ItemDtoKind::Ticket,
+            item_id: TICKET.to_owned(),
+            recording: None,
+            checkpoint_oid: None,
+            integration: None,
+            integration_oid: None,
+            publication: None,
+            publication_oid: None,
+            publication_pending: None,
+            cleanup: Some(cleanup),
+            cleanup_pending: pending.then_some(LifecycleCleanupPendingReason::ContextChanged),
+            blockers: Vec::new(),
+            made_ready: None,
+            made_ready_state: None,
+        })));
+        envelope
+    };
+    let mut created = CreatedContexts::default();
+    created.finished(
+        &prepare(),
+        &answer(Outcome::Success, ResultCode::Ok, Some(true)),
+    );
+    created.finished(&close, &lifecycle(LifecycleCleanupState::Pending));
+    assert!(created.contains(&key()), "a pending tidy-up keeps it");
+    created.finished(&close, &lifecycle(LifecycleCleanupState::Complete));
+    assert!(!created.contains(&key()), "a complete one takes it out");
+}

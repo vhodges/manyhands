@@ -1,0 +1,53 @@
+{
+  "code": "ok",
+  "command": "conflict show",
+  "data": {
+    "comment_operation_id": null,
+    "eligibility": "eligible_canonical",
+    "historical": false,
+    "incoming_parent": "<incoming-parent>",
+    "item_id": null,
+    "local_parent": "<local-parent>",
+    "next_action": "resolve",
+    "observation": "<observation>",
+    "operation_id": "<operation>",
+    "paths": [
+      {
+        "base": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAX\ntitle: Base\ntype: task\nstatus: open\n---\nBody of Base.\n",
+        "content_available": true,
+        "display_path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAX/ticket.md",
+        "incoming": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAX\ntitle: Incoming\ntype: task\nstatus: open\n---\nBody of Incoming.\n",
+        "kind": "ticket",
+        "local": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAX\ntitle: Local\ntype: task\nstatus: open\n---\nBody of Local.\n",
+        "structure": "regular",
+        "token": "<token>"
+      }
+    ],
+    "request_id": null,
+    "stage": "primary",
+    "state": "conflict_pending",
+    "target": "primary"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

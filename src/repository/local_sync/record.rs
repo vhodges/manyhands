@@ -918,7 +918,7 @@ const FOREIGN_IDENTITIES: &[(&str, &str)] = &[
     ("remote_identity_confirmations", "confirmation_ulid"),
 ];
 
-fn foreign_id_collision(
+pub(in super::super) fn foreign_id_collision(
     db: &Connection,
     id: &str,
     own_envelope: Option<i64>,
@@ -975,6 +975,7 @@ pub(in super::super) fn require_foreign_id_available(
     db: &Connection,
     id: OperationId,
 ) -> Result<(), RepositoryError> {
+    super::super::context_retirement::record::require_foreign_id_available(db, id)?;
     if owned_identity(db, &id.to_string())? {
         Err(RepositoryError::new(
             RepositoryOperation::Read,

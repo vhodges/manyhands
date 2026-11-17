@@ -7,6 +7,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from package import archive_payload
+from common import TARGETS
 from payload_fixture import LINUX, MACOS, WINDOWS, PayloadFixture
 
 
@@ -29,6 +30,17 @@ class StagingTests(unittest.TestCase):
         self.assertEqual(manifest["target"], LINUX)
         self.assertEqual(manifest["signing_mode"], "none")
         self.assertEqual(manifest["compiler"], "rustc 1.98.1 (fixture)")
+
+    def test_native_runtime_requirements_do_not_require_a_local_git_executable(self):
+        for target in TARGETS:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temp:
+                fixture = PayloadFixture(temp, target)
+                fixture.stage()
+                manifest = json.loads((fixture.staging / 'release.json').read_text())
+                self.assertNotIn('Git available on PATH', manifest['runtime_requirements'])
+                readme = (fixture.staging / 'README.md').read_text()
+                self.assertNotIn('Install Git', readme)
+                self.assertIn('libgit2', readme)
 
     def test_missing_cli_fails_without_leaving_a_payload(self):
         (self.fixture.binaries / "manyhands-cli").unlink()

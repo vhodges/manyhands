@@ -1,13 +1,17 @@
 //! How an intent becomes a library command, one attempt at a time.
 
 use manyhands::repository::{
-    CommitIdentity, ContextPrepareInput, ContextReleaseInput, DocumentCreateInput, DocumentDraft,
-    DocumentMoveInput, DocumentRepairInput, DocumentSaveInput, FolderCreateInput, HostApproveInput,
-    HostReplaceInput, IndexRebuildInput, IndexRefreshInput, KeyClearInput, KeyDeleteInput,
-    KeyGenerateInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation,
-    OperationAbandonInput, OperationResumeInput, RemoteAddInput, RemoteRemoveInput,
-    RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput,
-    TicketCreateInput, TicketDraft, TicketRepairInput, TicketSaveInput,
+    CommentAddInput, CommitIdentity, ConflictResolutionInput, ConflictResolveInput,
+    ContextPrepareInput, ContextReleaseInput, ContextRetireInput, DocumentCreateInput,
+    DocumentDraft, DocumentMoveInput, DocumentPromoteInput, DocumentRepairInput, DocumentSaveInput,
+    FolderCreateInput, HostApproveInput, HostReplaceInput, IndexRebuildInput, IndexRefreshInput,
+    ItemRepublishInput, ItemSyncInput, KeyClearInput, KeyDeleteInput, KeyGenerateInput,
+    KeyImportInput, KeyRemoveInput, KeySelectInput, LocalConflictResolutionInput,
+    LocalContextResolveInput, LocalContextSyncInput, Mutation, OperationAbandonInput,
+    OperationResumeInput, PollConfigureInput, PollOnceInput, PollPauseInput, PollResumeInput,
+    RemoteAddInput, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
+    RepoIdentitySetInput, RepoRemoveInput, RepoSyncInput, TicketCloseInput, TicketCreateInput,
+    TicketDraft, TicketRepairInput, TicketSaveInput,
     keys::{KeyProtection, KeyStore, SecretPassphrase},
 };
 
@@ -102,6 +106,18 @@ impl Intent {
             }
             Self::IndexRebuild { root } => {
                 Mutation::IndexRebuild(IndexRebuildInput { root: root.clone() })
+            }
+            Self::PollOnce { root } => Mutation::PollOnce(PollOnceInput { root: root.clone() }),
+            Self::PollConfigure {
+                root,
+                interval_seconds,
+            } => Mutation::PollConfigure(PollConfigureInput {
+                root: root.clone(),
+                interval_seconds: *interval_seconds,
+            }),
+            Self::PollPause { root } => Mutation::PollPause(PollPauseInput { root: root.clone() }),
+            Self::PollResume { root } => {
+                Mutation::PollResume(PollResumeInput { root: root.clone() })
             }
             Self::KeyGenerate { label, protected } => {
                 let protection = if *protected {
@@ -227,6 +243,11 @@ impl Intent {
                     id: id.clone(),
                 })
             }
+            Self::ContextRetire { root, kind, id } => Mutation::ContextRetire(ContextRetireInput {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+            }),
             Self::DocumentCreate {
                 root,
                 id,
@@ -306,6 +327,86 @@ impl Intent {
                 path: path.clone(),
                 observation: observation.clone(),
                 source: source.clone(),
+            }),
+            Self::CommentAdd {
+                root,
+                kind,
+                id,
+                comment_id,
+                parent_id,
+                body,
+            } => Mutation::CommentAdd(CommentAddInput {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+                comment_id: comment_id.clone(),
+                parent_id: parent_id.clone(),
+                body: body.0.clone(),
+                created_by: None,
+            }),
+            Self::ItemSync { root, kind, id } => Mutation::ItemSync(ItemSyncInput {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+            }),
+            Self::RepoSync { root } => Mutation::RepoSync(RepoSyncInput { root: root.clone() }),
+            Self::ItemRepublish { root, kind, id } => Mutation::ItemRepublish(ItemRepublishInput {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+            }),
+            Self::DocumentPromote { root, id } => Mutation::DocumentPromote(DocumentPromoteInput {
+                root: root.clone(),
+                id: id.clone(),
+            }),
+            Self::TicketClose { root, id } => Mutation::TicketClose(TicketCloseInput {
+                root: root.clone(),
+                id: id.clone(),
+            }),
+            Self::ConflictResolve {
+                root,
+                operation_id,
+                observation,
+                resolutions,
+            } => Mutation::ConflictResolve(ConflictResolveInput {
+                root: root.clone(),
+                operation_id: *operation_id,
+                observation: observation.clone(),
+                resolutions: resolutions
+                    .iter()
+                    .map(|path| ConflictResolutionInput {
+                        token: path.token.clone(),
+                        source: path.source.clone(),
+                    })
+                    .collect(),
+            }),
+            Self::LocalContextSync {
+                root,
+                kind,
+                id,
+                observation,
+            } => Mutation::LocalContextSync(LocalContextSyncInput {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+                observation: observation.clone(),
+            }),
+            Self::LocalContextResolve {
+                root,
+                operation_id,
+                observation,
+                resolutions,
+            } => Mutation::LocalContextResolve(LocalContextResolveInput {
+                root: root.clone(),
+                operation_id: *operation_id,
+                observation: observation.clone(),
+                resolutions: resolutions
+                    .iter()
+                    .map(|path| LocalConflictResolutionInput {
+                        token: path.token.clone(),
+                        source: path.source.clone(),
+                    })
+                    .collect(),
             }),
         })
     }

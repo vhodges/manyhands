@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Manyhands
+Comment=Local-first, Git-backed project management and documentation
+Exec=manyhands
+Icon=manyhands
+Terminal=false
+Categories=Development;ProjectManagement;
+StartupNotify=true

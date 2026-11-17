@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 ordinary context retirement data",
+  "description": "One independently durable local retirement. Removal flags distinguish observed, possible and no owned removal. No source, title, credential, endpoint or backend diagnostic is stored. Pending debt belongs only to this operation and its ordinary request.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "kind", "item_id", "operation_id", "state", "code", "worktree_removal", "branch_removal", "materialization_settled"],
+  "properties": {
+    "type": {"type": "string", "enum": ["context_retirement"]},
+    "kind": {"type": "string", "enum": ["document", "ticket"]},
+    "item_id": {"type": "string"},
+    "operation_id": {"type": "string"},
+    "state": {"type": "string", "enum": ["retired", "already_absent", "refused", "pending", "preserved"]},
+    "code": {
+      "type": "string",
+      "enum": ["ok", "already_applied", "external_change", "recovery_required", "worktree_not_clean", "cancelled", "discovery_pending", "busy", "poll_yielding", "internal_error", "index_unavailable", "repository_inaccessible", "invalid_path", "not_repository", "not_repository_root", "bare_repository", "repository_not_registered", "repository_not_enabled", "invalid_remote", "invalid_configuration", "publication_remote_required", "no_selected_key", "key_unavailable", "key_rejected", "unlock_required", "unlock_failed", "host_approval_required", "host_replacement_required", "transport_unavailable", "remote_unavailable", "occupied_path", "wrong_branch", "worktree_conflicted", "identity_required", "item_not_found", "invalid_input", "request_mismatch"]
+    },
+    "worktree_removal": {"type": "string", "enum": ["none", "possible", "observed"]},
+    "branch_removal": {"type": "string", "enum": ["none", "possible", "observed"]},
+    "materialization_settled": {"type": "boolean"}
+  }
+}

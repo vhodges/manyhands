@@ -43,6 +43,7 @@
         "rebuild",
         "prepare_context",
         "release_context",
+        "retire_context",
         "save_document",
         "save_ticket",
         "submit_comment",

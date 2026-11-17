@@ -636,6 +636,10 @@ router in `view/workspace/content.rs`, not a new `Workspace` field:
 - Leaving Keys for Drafts clears an unsent passphrase, as leaving it for
   the tabs does: the Drafts arm of `content_body` calls
   `forget_passphrase` too.
+- *Amended 2026-11-13 by Wave 04 Cycle 04:* Settings becomes a sheet, so
+  it no longer excludes the Drafts page, which stays shown under it. A
+  typed passphrase is emptied when Settings closes or leaves Sharing &
+  keys.
 - `secondary-w` does nothing while the page is shown, as with Settings.
   Tab stepping and `open_item` already show the tabs.
 - `focus_content` focuses the page's first control.

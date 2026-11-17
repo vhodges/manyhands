@@ -4,8 +4,12 @@
 //! reloads, that copies as Markdown and takes no edit; the header's
 //! Comments {n} and `secondary-shift-c` jump to the discussion and focus
 //! its heading; the floating button hides once the discussion shows and
-//! when there are no comments; Comment is disabled with its note; and Tab
-//! runs through the comments, bringing each caret into view.
+//! when there are no comments; Tab runs through the comments and each
+//! one's Reply, bringing each caret into view; and the composers: the new
+//! comment's after the threads, the one reply composer in the thread whose
+//! Reply was pressed, answering its root and keeping each thread's text;
+//! and the new comment's composer collapsed to one Write a comment… stop
+//! until it is opened (decision 22).
 
 use std::{
     cell::RefCell,
@@ -14,23 +18,23 @@ use std::{
 };
 
 use gpui_kit::{
-    ClipboardItem, ElementId, Entity, Focusable, Pixels, TestAppContext, px, size,
-    test::TestWindowExt,
+    ClipboardItem, ElementId, Entity, Focusable, Pixels, TestAppContext, px, test::TestWindowExt,
 };
-use manyhands::{repository::ItemDtoKind, results::ProblemCode};
+use manyhands::{
+    drafts::{CommentTarget, DraftFields, Entry, Held},
+    repository::ItemDtoKind,
+    results::ProblemCode,
+};
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 use zorite_editor::{EditorEvent, EditorState};
 
 use super::{
     ItemPane,
+    composer::Composer,
     discussion::{NO_COMMENTS, comments_phrase, shown_time},
 };
 use crate::desktop::{
-    model::{
-        editor_text::load,
-        item::{COMMENT, LATER_NOTE},
-        navigation::OpenTarget,
-    },
+    model::{drafts::IDLE, editor_text::load, navigation::OpenTarget},
     test_support::fixtures::{Fixture, item_id, ticket_path, ticket_source},
     view::{
         editor::read_only::ReadOnly,
@@ -38,24 +42,24 @@ use crate::desktop::{
     },
 };
 
-const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
-const A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE0";
-const B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE1";
-const C: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE2";
+pub(super) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
+pub(super) const A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE0";
+pub(super) const B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE1";
+pub(super) const C: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE2";
 const BROKEN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE9";
-const ADA: &str = "Ada Lovelace <ada@example.invalid>";
-const BO: &str = "Bo Carter <bo@example.invalid>";
+pub(super) const ADA: &str = "Ada Lovelace <ada@example.invalid>";
+pub(super) const BO: &str = "Bo Carter <bo@example.invalid>";
 /// A window short enough that the discussion's comments do not all fit
 /// its region.
 const SHORT_WINDOW: f32 = 700.;
 
-fn comment_path(id: &str) -> String {
+pub(super) fn comment_path(id: &str) -> String {
     format!(".manyhands/comments/{TICKET}/{id}.md")
 }
 
 /// Commits the comment `id` on `TICKET`, `second`s after noon, by
 /// `author` when there is one, with `body`.
-fn commit_comment(
+pub(super) fn commit_comment(
     fixture: &Fixture,
     root: &Path,
     id: &str,
@@ -88,7 +92,7 @@ fn commit_long_ticket(fixture: &Fixture, root: &Path) {
 
 /// One repository, `a`, built by `build` and refreshed, in a window
 /// `height` tall, with `TICKET` open.
-fn shell(
+pub(super) fn shell(
     height: f32,
     cx: &mut TestAppContext,
     build: impl FnOnce(&Fixture, &Path),
@@ -98,9 +102,7 @@ fn shell(
     build(&fixture, &root);
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
-    shell
-        .visual(cx)
-        .simulate_resize(size(px(1440.), px(height)));
+    shell.resize_keeping_content(1440., height, cx);
     shell.run(cx);
     let target = OpenTarget::Item {
         repo: key(&root),
@@ -114,7 +116,7 @@ fn shell(
     (shell, root)
 }
 
-fn pane(shell: &Shell, cx: &mut TestAppContext) -> Entity<ItemPane> {
+pub(super) fn pane(shell: &Shell, cx: &mut TestAppContext) -> Entity<ItemPane> {
     shell
         .workspace
         .read_with(cx, |workspace, _| workspace.item_pane())
@@ -129,7 +131,11 @@ fn comment_view(shell: &Shell, id: &str, cx: &mut TestAppContext) -> Option<Enti
 }
 
 /// The read editor of the comment `id`'s body, after a frame.
-fn comment_editor(shell: &Shell, id: &str, cx: &mut TestAppContext) -> Entity<EditorState> {
+pub(super) fn comment_editor(
+    shell: &Shell,
+    id: &str,
+    cx: &mut TestAppContext,
+) -> Entity<EditorState> {
     let view = comment_view(shell, id, cx).unwrap_or_else(|| panic!("{id} has a read editor"));
     view.read_with(cx, |view, _| view.editor().clone())
 }
@@ -142,7 +148,7 @@ fn page_editor(shell: &Shell, cx: &mut TestAppContext) -> Entity<EditorState> {
         .expect("the read view is shown")
 }
 
-fn text(editor: &Entity<EditorState>, cx: &mut TestAppContext) -> String {
+pub(super) fn text(editor: &Entity<EditorState>, cx: &mut TestAppContext) -> String {
     editor.read_with(cx, |editor, _| editor.text().to_owned())
 }
 
@@ -151,13 +157,21 @@ fn cursor(editor: &Entity<EditorState>, cx: &mut TestAppContext) -> usize {
 }
 
 /// Whether `editor` itself holds focus, after a frame.
-fn focused(shell: &Shell, editor: &Entity<EditorState>, cx: &mut TestAppContext) -> bool {
+pub(super) fn focused(
+    shell: &Shell,
+    editor: &Entity<EditorState>,
+    cx: &mut TestAppContext,
+) -> bool {
     let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
     shell.frame(cx, move |window, _| handle.is_focused(window))
 }
 
 /// Whether the element `id` holds focus.
-fn holds_focus(shell: &Shell, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
+pub(super) fn holds_focus(
+    shell: &Shell,
+    id: impl Into<ElementId>,
+    cx: &mut TestAppContext,
+) -> bool {
     let id = id.into();
     shell.frame(cx, |window, _| {
         window
@@ -167,7 +181,7 @@ fn holds_focus(shell: &Shell, id: impl Into<ElementId>, cx: &mut TestAppContext)
 }
 
 /// Whether the element `id` is drawn inside `within`.
-fn inside(
+pub(super) fn inside(
     shell: &Shell,
     id: impl Into<ElementId>,
     within: &'static str,
@@ -183,7 +197,12 @@ fn inside(
 
 /// Puts the caret at `at`, focuses `editor` and draws a frame, as the
 /// editor tests do before typing.
-fn focus_editor(shell: &Shell, editor: &Entity<EditorState>, at: usize, cx: &mut TestAppContext) {
+pub(super) fn focus_editor(
+    shell: &Shell,
+    editor: &Entity<EditorState>,
+    at: usize,
+    cx: &mut TestAppContext,
+) {
     editor.update(cx, |editor, cx| editor.set_cursor(at, cx));
     let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
     shell.frame(cx, |window, cx| window.focus(&handle, cx));
@@ -506,38 +525,6 @@ fn no_comments_says_so_and_hides_the_floating_button(cx: &mut TestAppContext) {
     assert!(!shell.present("discussion-jump", cx));
 }
 
-/// The discussion ends with Comment, disabled, with "Available in a later
-/// release" written below it. Pressing it does nothing.
-#[gpui_kit::test]
-fn comment_is_disabled_with_its_note(cx: &mut TestAppContext) {
-    let (shell, _root) = shell(1400., cx, |fixture, root| {
-        fixture.commit_ticket(root, TICKET, "Discussed", "");
-        commit_comment(fixture, root, A, None, 1, Some(ADA), "First.\n");
-    });
-    // After the header's Share and Close ticket….
-    let comment = 2usize;
-    assert_eq!(
-        shell.label(("later-action", comment), cx).as_deref(),
-        Some(COMMENT)
-    );
-    assert!(inside(&shell, ("later-action", comment), "discussion", cx));
-    assert_eq!(
-        shell.label(("later-note", comment), cx).as_deref(),
-        Some(LATER_NOTE)
-    );
-    assert!(inside(&shell, ("later-note", comment), "discussion", cx));
-    assert!(shell.inert_button(("later-button", comment), cx));
-    assert!(!shell.present(("later-action", comment + 1), cx));
-
-    // Below the fold: brought into view, then pressed.
-    shell.keys("secondary-3 end", cx);
-    let before = shell.rows("comment-author", cx);
-    shell.click(("later-button", comment), cx);
-    assert_eq!(shell.rows("comment-author", cx), before);
-    assert!(shell.fixture.draft_store().list().unwrap().is_empty());
-    assert!(comment_view(&shell, A, cx).is_some());
-}
-
 /// R-67 and the Tab order: from the page, Tab reaches Back to top, then
 /// each comment in the library's order, each one's caret brought into
 /// view; Shift-Tab goes back.
@@ -559,7 +546,7 @@ fn tab_runs_through_each_comment_and_reveals_its_caret(cx: &mut TestAppContext) 
     shell.keys("tab", cx);
     assert!(holds_focus(&shell, "back-to-top", cx), "Back to top first");
 
-    for id in [A, B, C] {
+    for (ix, id) in [A, B, C].into_iter().enumerate() {
         shell.keys("tab", cx);
         let editor = comment_editor(&shell, id, cx);
         assert!(focused(&shell, &editor, cx), "Tab reached {id}");
@@ -568,10 +555,16 @@ fn tab_runs_through_each_comment_and_reveals_its_caret(cx: &mut TestAppContext) 
             caret_in_view(&shell, &editor, cx),
             "{id}: the caret was revealed"
         );
+        // E-11: the comment's Reply comes after it.
+        shell.keys("tab", cx);
+        assert!(
+            holds_focus(&shell, ("comment-reply", ix), cx),
+            "Tab reached {id}'s Reply"
+        );
     }
     assert!(offset(&shell, cx) < px(0.));
 
-    shell.keys("shift-tab", cx);
+    shell.keys("shift-tab shift-tab shift-tab", cx);
     let b = comment_editor(&shell, B, cx);
     assert!(focused(&shell, &b, cx), "Shift-Tab went back to B");
     assert!(caret_in_view(&shell, &b, cx));
@@ -610,4 +603,433 @@ fn comment_bodies_queue_no_request(cx: &mut TestAppContext) {
     shell.keys("enter backspace delete secondary-v", cx);
     shell.run(cx);
     assert_eq!(shell.requests(cx, |_| true).len(), requests);
+}
+
+/// The new comment's composer, after a frame.
+pub(super) fn new_composer(shell: &Shell, cx: &mut TestAppContext) -> Entity<Composer> {
+    shell.frame(cx, |_, _| ());
+    pane(shell, cx)
+        .read_with(cx, |pane, _| pane.new_composer())
+        .expect("the new comment's composer is shown")
+}
+
+/// The reply composer and the root of the thread it is in, after a frame.
+pub(super) fn reply_composer(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+) -> Option<(String, Entity<Composer>)> {
+    shell.frame(cx, |_, _| ());
+    pane(shell, cx).read_with(cx, |pane, _| pane.reply_composer())
+}
+
+/// The comment `composer` writes: its ID and parent, once allocated.
+pub(super) fn composer_target(
+    shell: &Shell,
+    composer: &Entity<Composer>,
+    cx: &mut TestAppContext,
+) -> Option<CommentTarget> {
+    pane(shell, cx).read_with(cx, |pane, _| pane.composer_target(composer))
+}
+
+pub(super) fn composer_text(composer: &Entity<Composer>, cx: &mut TestAppContext) -> String {
+    composer.read_with(cx, |composer, cx| composer.text(cx))
+}
+
+/// Types `typed` at the end of `composer`'s text, through the window: the
+/// caret set there, the editor focused and a frame drawn first.
+pub(super) fn type_into(
+    shell: &Shell,
+    composer: &Entity<Composer>,
+    typed: &str,
+    cx: &mut TestAppContext,
+) {
+    let editor = composer.read_with(cx, |composer, _| composer.editor().clone());
+    let end = editor.read_with(cx, |editor, _| editor.text().len());
+    focus_editor(shell, &editor, end, cx);
+    shell.visual(cx).simulate_input(typed);
+    shell.run(cx);
+}
+
+/// Lets the idle delay pass and every draft write land.
+pub(super) fn flushed(shell: &Shell, cx: &mut TestAppContext) {
+    shell.run(cx);
+    cx.executor().advance_clock(IDLE * 2);
+    shell.run(cx);
+}
+
+/// The comment drafts in the store: each one's target, text and holder,
+/// in ID order.
+pub(super) fn stored_comments(fixture: &Fixture) -> Vec<(CommentTarget, String, Held)> {
+    fixture
+        .draft_store()
+        .list()
+        .unwrap()
+        .into_iter()
+        .filter_map(|listing| match listing.entry {
+            Entry::Draft(draft) => match (draft.target.comment, draft.current) {
+                (Some(target), DraftFields::Comment { body }) => Some((target, body, listing.held)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// Opens the new comment's collapsed composer by Write a comment…, the
+/// discussion brought into the region first by the header's Comments.
+pub(super) fn open_new_composer(shell: &Shell, cx: &mut TestAppContext) {
+    shell.click("item-comments", cx);
+    shell.click("new-comment-start", cx);
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+}
+
+/// Presses the Reply of the `ix`th comment, the discussion brought into
+/// the region first by the header's Comments.
+pub(super) fn press_reply(shell: &Shell, ix: usize, cx: &mut TestAppContext) {
+    shell.click("item-comments", cx);
+    shell.click(("comment-reply", ix), cx);
+}
+
+/// The window-space bounds of the element `id`, and the IDs of the
+/// elements it is drawn inside.
+fn placed(
+    shell: &Shell,
+    id: impl Into<ElementId>,
+    cx: &mut TestAppContext,
+) -> Option<(gpui_kit::Bounds<Pixels>, Vec<ElementId>)> {
+    let id = id.into();
+    shell.frame(cx, |window, _| {
+        window
+            .try_find(id)
+            .map(|element| (element.bounds(), element.path().to_vec()))
+    })
+}
+
+/// Whether the element `id` is drawn inside the element `within`, and
+/// below the element `after`.
+fn placed_after(
+    shell: &Shell,
+    id: impl Into<ElementId>,
+    within: impl Into<ElementId>,
+    after: impl Into<ElementId>,
+    cx: &mut TestAppContext,
+) -> bool {
+    let (Some((bounds, path)), Some((before, _))) =
+        (placed(shell, id, cx), placed(shell, after, cx))
+    else {
+        return false;
+    };
+    path.contains(&within.into()) && bounds.top() >= before.bottom() - px(1.)
+}
+
+/// Comments A (Ada), B (Bo, replying to A) and C (no author, a root).
+fn two_threads(fixture: &Fixture, root: &Path) {
+    fixture.commit_ticket(root, TICKET, "Discussed", "");
+    commit_comment(fixture, root, A, None, 1, Some(ADA), "First.\n");
+    commit_comment(fixture, root, B, Some(A), 2, Some(BO), "In reply.\n");
+    commit_comment(fixture, root, C, None, 3, Some(BO), "Another.\n");
+}
+
+/// E-7: the new comment's composer follows the threads, inside the
+/// discussion, with its placeholder, and no reply composer is open.
+#[gpui_kit::test]
+fn the_new_comment_composer_follows_the_threads(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    assert!(placed_after(
+        &shell,
+        "new-comment-composer",
+        "discussion",
+        ("thread", 1usize),
+        cx
+    ));
+    let composer = new_composer(&shell, cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.placeholder()),
+        "Add a comment. Markdown works here."
+    );
+    assert!(composer_text(&composer, cx).is_empty());
+    assert!(reply_composer(&shell, cx).is_none());
+    assert!(!shell.present("reply-composer", cx));
+}
+
+/// Reply opens the one reply composer in its thread, after its last
+/// reply, with focus in it; Reply in another thread moves it there.
+#[gpui_kit::test]
+fn reply_opens_one_composer_in_its_thread(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    press_reply(&shell, 0, cx);
+    let (root, composer) = reply_composer(&shell, cx).expect("a reply composer is open");
+    assert_eq!(root, A);
+    assert!(placed_after(
+        &shell,
+        "reply-composer",
+        ("thread", 0usize),
+        ("comment", 1usize),
+        cx
+    ));
+    let editor = composer.read_with(cx, |composer, _| composer.editor().clone());
+    assert!(focused(&shell, &editor, cx), "focus is in the composer");
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.placeholder()),
+        "Write a reply. Markdown works here."
+    );
+    assert_eq!(
+        shell.label("composer-replying-to", cx).as_deref(),
+        Some("Replying to Ada Lovelace")
+    );
+
+    press_reply(&shell, 2, cx);
+    let (root, moved) = reply_composer(&shell, cx).expect("a reply composer is open");
+    assert_eq!(root, C);
+    assert!(placed_after(
+        &shell,
+        "reply-composer",
+        ("thread", 1usize),
+        ("comment", 2usize),
+        cx
+    ));
+    let in_first = placed(&shell, "reply-composer", cx)
+        .is_some_and(|(_, path)| path.contains(&ElementId::from(("thread", 0usize))));
+    assert!(!in_first, "one reply composer, in the second thread");
+    let editor = moved.read_with(cx, |composer, _| composer.editor().clone());
+    assert!(focused(&shell, &editor, cx));
+    // The new comment's composer stays after the threads.
+    assert!(shell.present("new-comment-composer", cx));
+}
+
+/// Decision 5: Reply on a reply answers the thread's root, and "Replying
+/// to" names the comment it was pressed on.
+#[gpui_kit::test]
+fn reply_on_a_reply_targets_its_root_and_names_the_comment(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    press_reply(&shell, 1, cx);
+    let (root, composer) = reply_composer(&shell, cx).expect("a reply composer is open");
+    assert_eq!(root, A, "in A's thread");
+    assert_eq!(
+        shell.label("composer-replying-to", cx).as_deref(),
+        Some("Replying to Bo Carter")
+    );
+    type_into(&shell, &composer, "Agreed.", cx);
+    flushed(&shell, cx);
+    let target = composer_target(&shell, &composer, cx).expect("a comment ID is allocated");
+    assert_eq!(target.parent_id, Some(item_id(A)), "the root is the parent");
+    let stored = stored_comments(&shell.fixture);
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].0, target);
+    assert_eq!(stored[0].1, "Agreed.");
+}
+
+/// Moving the reply composer keeps the thread it leaves's text and draft,
+/// and brings back the thread it reaches's.
+#[gpui_kit::test]
+fn moving_the_reply_keeps_each_threads_draft(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    press_reply(&shell, 0, cx);
+    let (_, first) = reply_composer(&shell, cx).unwrap();
+    type_into(&shell, &first, "For A.", cx);
+    let for_a = composer_target(&shell, &first, cx).unwrap();
+
+    press_reply(&shell, 2, cx);
+    let (_, second) = reply_composer(&shell, cx).unwrap();
+    assert!(composer_text(&second, cx).is_empty(), "C's thread has none");
+    type_into(&shell, &second, "For C.", cx);
+    let for_c = composer_target(&shell, &second, cx).unwrap();
+    assert_ne!(for_a.comment_id, for_c.comment_id);
+    assert_eq!(for_c.parent_id, Some(item_id(C)));
+
+    // Back in A's thread from B's Reply: A's text, its comment, B named.
+    press_reply(&shell, 1, cx);
+    let (root, back) = reply_composer(&shell, cx).unwrap();
+    assert_eq!(root, A);
+    assert_eq!(composer_text(&back, cx), "For A.");
+    assert_eq!(composer_target(&shell, &back, cx), Some(for_a.clone()));
+    assert_eq!(
+        shell.label("composer-replying-to", cx).as_deref(),
+        Some("Replying to Bo Carter")
+    );
+    press_reply(&shell, 2, cx);
+    let (_, again) = reply_composer(&shell, cx).unwrap();
+    assert_eq!(composer_text(&again, cx), "For C.");
+    assert_eq!(composer_target(&shell, &again, cx), Some(for_c.clone()));
+
+    flushed(&shell, cx);
+    let stored: Vec<_> = stored_comments(&shell.fixture)
+        .into_iter()
+        .map(|(target, body, _)| (target, body))
+        .collect();
+    assert_eq!(stored.len(), 2, "each thread's draft is kept");
+    assert!(stored.contains(&(for_a, "For A.".to_owned())));
+    assert!(stored.contains(&(for_c, "For C.".to_owned())));
+}
+
+/// Decision 22: an empty new-comment composer is one tab stop, Write a
+/// comment…, with no editor drawn; Tab passes on from it, and Shift-Tab
+/// comes back to it.
+#[gpui_kit::test]
+fn an_empty_new_comment_composer_is_one_tab_stop(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Discussed", "");
+    });
+    assert_eq!(
+        shell.label("new-comment-start", cx).as_deref(),
+        Some("Write a comment\u{2026}")
+    );
+    assert!(!shell.present("composer-editor", cx), "no editor is drawn");
+    shell.click("item-comments", cx);
+    shell.keys("tab", cx);
+    assert!(holds_focus(&shell, "back-to-top", cx));
+    shell.keys("tab", cx);
+    assert!(holds_focus(&shell, "new-comment-start", cx), "one stop");
+    shell.keys("tab", cx);
+    assert!(!holds_focus(&shell, "new-comment-start", cx));
+    let in_composer = shell.frame(cx, |window, _| {
+        gpui_kit::base::test_support::snapshots(window)
+            .iter()
+            .any(|element| {
+                element.focused() == Some(true)
+                    && element
+                        .path()
+                        .contains(&ElementId::from("new-comment-composer"))
+            })
+    });
+    assert!(!in_composer, "Tab passed on from it");
+    assert!(!shell.present("composer-editor", cx), "still collapsed");
+    shell.keys("shift-tab", cx);
+    assert!(
+        holds_focus(&shell, "new-comment-start", cx),
+        "Shift-Tab back"
+    );
+}
+
+/// Decision 22: Enter or a click on Write a comment… opens the composer
+/// with focus in its editor. With text it stays open when focus leaves;
+/// empty, it collapses again.
+#[gpui_kit::test]
+fn write_a_comment_opens_the_composer_with_focus(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    shell.click("item-comments", cx);
+    assert!(shell.tab_reaches("new-comment-start", 12, cx));
+    shell.press("enter", cx);
+    let composer = new_composer(&shell, cx);
+    let editor = composer.read_with(cx, |composer, _| composer.editor().clone());
+    assert!(focused(&shell, &editor, cx), "focus is in the editor");
+    assert!(!shell.present("new-comment-start", cx), "open");
+    assert!(placed_after(
+        &shell,
+        "composer-editor",
+        "new-comment-composer",
+        ("thread", 1usize),
+        cx
+    ));
+
+    // Empty, it collapses once focus leaves it.
+    shell.keys("f6", cx);
+    assert!(shell.present("new-comment-start", cx), "collapsed again");
+
+    // By click; with text it stays open when focus leaves.
+    open_new_composer(&shell, cx);
+    assert!(focused(&shell, &editor, cx), "a click opens it with focus");
+    shell.visual(cx).simulate_input("Kept open.");
+    shell.run(cx);
+    shell.keys("f6", cx);
+    assert!(!shell.present("new-comment-start", cx), "still open");
+    assert_eq!(composer_text(&composer, cx), "Kept open.");
+}
+
+/// Space presses Reply and Write a comment…, as Enter and a click do.
+#[gpui_kit::test]
+fn reply_and_write_a_comment_open_by_space(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    shell.click("item-comments", cx);
+    assert!(shell.tab_reaches(("comment-reply", 0usize), 4, cx));
+    shell.press("space", cx);
+    let (root, reply) = reply_composer(&shell, cx).expect("Space opened the reply");
+    assert_eq!(root, A);
+    let editor = reply.read_with(cx, |composer, _| composer.editor().clone());
+    assert!(focused(&shell, &editor, cx));
+
+    // An empty Cancel closes it, focus back on its Reply.
+    shell.keys("escape", cx);
+    assert!(reply_composer(&shell, cx).is_none());
+    assert!(holds_focus(&shell, ("comment-reply", 0usize), cx));
+    assert!(shell.tab_reaches("new-comment-start", 8, cx));
+    shell.press("space", cx);
+    let composer = new_composer(&shell, cx);
+    let editor = composer.read_with(cx, |composer, _| composer.editor().clone());
+    assert!(focused(&shell, &editor, cx), "Space opened the composer");
+    assert!(!shell.present("new-comment-start", cx));
+}
+
+/// Text typed and then deleted leaves a draft with no text: an empty
+/// Cancel discards it, and the composer starts again collapsed, with focus
+/// on Write a comment….
+#[gpui_kit::test]
+fn an_empty_cancel_discards_the_new_comments_draft_and_collapses(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    open_new_composer(&shell, cx);
+    let composer = new_composer(&shell, cx);
+    type_into(&shell, &composer, "Gone.", cx);
+    flushed(&shell, cx);
+    assert_eq!(stored_comments(&shell.fixture).len(), 1);
+    shell.keys("secondary-a backspace", cx);
+    flushed(&shell, cx);
+    assert!(composer_text(&composer, cx).is_empty());
+
+    shell.keys("escape", cx);
+    flushed(&shell, cx);
+    assert!(stored_comments(&shell.fixture).is_empty(), "the draft went");
+    assert!(shell.present("new-comment-start", cx), "collapsed");
+    assert!(holds_focus(&shell, "new-comment-start", cx));
+    let fresh = new_composer(&shell, cx);
+    assert!(composer_text(&fresh, cx).is_empty());
+    assert_eq!(composer_target(&shell, &fresh, cx), None, "no comment ID");
+}
+
+/// A reply composer moved away with no text, but a draft, is not kept:
+/// its draft goes, and its thread's next reply starts afresh.
+#[gpui_kit::test]
+fn moving_an_emptied_reply_away_discards_its_draft(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    press_reply(&shell, 0, cx);
+    let (_, reply) = reply_composer(&shell, cx).unwrap();
+    type_into(&shell, &reply, "Gone.", cx);
+    flushed(&shell, cx);
+    assert_eq!(stored_comments(&shell.fixture).len(), 1);
+    shell.keys("secondary-a backspace", cx);
+    flushed(&shell, cx);
+
+    press_reply(&shell, 2, cx);
+    flushed(&shell, cx);
+    assert!(stored_comments(&shell.fixture).is_empty(), "the draft went");
+    press_reply(&shell, 0, cx);
+    let (root, again) = reply_composer(&shell, cx).unwrap();
+    assert_eq!(root, A);
+    assert!(composer_text(&again, cx).is_empty());
+    assert_eq!(composer_target(&shell, &again, cx), None, "afresh");
+}
+
+/// A new comment emptied of the text whose draft this tab began collapses
+/// once focus leaves it, its draft discarded, as an empty Cancel does.
+#[gpui_kit::test]
+fn an_emptied_new_comment_collapses_when_focus_leaves(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    open_new_composer(&shell, cx);
+    let composer = new_composer(&shell, cx);
+    type_into(&shell, &composer, "Gone.", cx);
+    flushed(&shell, cx);
+    assert_eq!(stored_comments(&shell.fixture).len(), 1);
+    shell.keys("secondary-a backspace", cx);
+    flushed(&shell, cx);
+    assert!(
+        !shell.present("new-comment-start", cx),
+        "open while focused"
+    );
+
+    shell.keys("f6", cx);
+    flushed(&shell, cx);
+    assert!(shell.present("new-comment-start", cx), "collapsed");
+    assert!(stored_comments(&shell.fixture).is_empty(), "the draft went");
+    let fresh = new_composer(&shell, cx);
+    assert_eq!(composer_target(&shell, &fresh, cx), None, "no comment ID");
 }

@@ -37,17 +37,28 @@ defines the equivalent automation surface.
 
 ## Navigation and item identity
 
-One application window contains a repository selector, a navigation pane with
-Documents and Tickets, an open-item tab strip, and the selected item's content
-and discussion. Settings exposes repositories, remotes, Git identity, shared
-SSH keys and host trust. A persistent operation area shows background work and
-recovery; failures MUST NOT exist only in transient notifications.
+Amended 2026-11-07 by [Wave 04](../Waves/wave-04-workspace-design.md), on
+the owner's approval of that Wave; it replaces the fixed layout first
+approved here. One application window contains a title bar naming the
+selected repository; left, right and bottom docks around a center item area
+with the open-item tab strip and the selected item's content and discussion;
+and a footer. Repositories, Tickets, Documents and Activity are dockable,
+resizable panels. The user shows, hides and moves them between docks from the
+footer, which also toggles each side dock and carries Needs attention and
+Settings. The layout is kept in app-local data, never in a repository, and a
+missing or unreadable layout restores the default. Settings opens as a sheet
+and exposes repositories, remotes, Git identity, shared SSH keys and host
+trust. Activity, with the footer's Needs attention popover over the same
+records, is the persistent operation area for background work and recovery;
+failures MUST NOT exist only in transient notifications. Labels use the
+plain-language vocabulary of `docs/design/06-language-and-states.md`, with
+Git detail in tooltips, dialogs and sheets.
 
 Documents retain their folder hierarchy. Tickets use a list with title, type,
 status and latest content/metadata change time. Both lists include visible
 nonconforming and inaccessible entries with a reason and recovery action.
 An empty result, a scan still running, and a failed/stale scan are distinct.
-No boards, project rollups or configurable docking system are required.
+No boards or project rollups are required.
 Short codes, ready and blocked filters and a ticket's dependencies, parent and
 children are shown as the
 [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md#desktop)
@@ -170,7 +181,9 @@ records the detail and the evidence, and its decision numbers are the
 - **Keyboard** (D3 ruling R-59). In the editor, Escape first closes the
   editor's own menu after a pointer press, and otherwise moves focus out of
   the editor to the item header. In the read-only view, Tab and Shift-Tab
-  move focus on.
+  move focus on. Amended 2026-11-02 by D4: this Escape rule applies to the
+  item body editor; in a comment composer Escape cancels the composer
+  (`docs/design/item_view/04-comments.md`).
 
 The CLI and the headless library do not load bodies through the editor; the
 canonical RFC's preservation contract applies to them unchanged.
@@ -252,6 +265,14 @@ The composer allocates one comment ID per submission and retains it through
 retry. After a checkpoint succeeds and publication fails, it shows the saved
 comment once with Retry publication; it does not resubmit a new comment.
 
+Amended 2026-11-02 by D4 (decisions 7 and 14). The desktop uses the item
+view design's words: a reply composer offers **Reply and sync** or **Save
+reply locally**; Sync item is **Share**, Sync primary is **Share main**, and
+Retry publication is **Retry sharing**. The publication-pending marker
+("not shared yet") is session-only until a library read reports
+unpublished work; after a restart a pending publication shows as an
+operation with Resume.
+
 | Action | Required presentation |
 | --- | --- |
 | Save | Local checkpoint and discovery outcome; no implicit publication. |
@@ -270,8 +291,12 @@ the durable consent boundary. The UI never reports cleanup success solely
 because primary integration succeeded.
 
 Conflicts have base/local/remote views and an editable result, with a path list
-and explicit Mark resolved action. Accepting one side is deliberate per file;
-there is no automatic winner. Canonical resolutions must validate and retain
+and explicit Save resolution action. Accepting one side is deliberate per file;
+there is no automatic winner. Amended 2026-11-04 by D5 (decision 4): the
+action is named Save resolution, as in the
+[resolve conflict sheet](../design/05-sheets-and-dialogs.md#resolve-conflict-sheet-2g--920-px).
+The sheet's choices are made per part, and each is a deliberate choice for
+its file: no part's side is chosen automatically. Canonical resolutions must validate and retain
 expected observations before the domain service checkpoints them. Markdown
 markers alone are not the definition of an unresolved Git conflict. A stale
 resolution stays recoverable and requires a refreshed comparison.

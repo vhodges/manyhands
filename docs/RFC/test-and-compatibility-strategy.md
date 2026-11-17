@@ -228,3 +228,7 @@ that exceed the ten-second feedback threshold: the UI reports still stopping,
 retains live ownership/recovery state and waits safely; no total process-exit
 deadline is asserted. There is no CLI daemon or concurrent
 resident-poller orchestration gate in this release.
+
+Amended 2026-11-09 by Wave 03 D6 (decision 12): the desktop reports still
+stopping in the quit's entry in its Activity panel; with Activity hidden it is
+seen when Activity is opened.

@@ -1,0 +1,48 @@
+{
+  "code": "original_request_required",
+  "command": "operation resume",
+  "data": {
+    "cancel_acknowledged": false,
+    "eligibility": "eligible_canonical",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "kind": "ticket",
+    "next_action": "retry_resolution",
+    "operation_id": "<operation-id>",
+    "reason": "original_resolution_required",
+    "required_request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX3",
+    "resolution_request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX3",
+    "result_oid": null,
+    "state": "resolution_prepared",
+    "type": "local_context_sync"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The original request must be submitted again to finish the operation.",
+  "operation_id": null,
+  "outcome": "blocked",
+  "recovery": [
+    {
+      "action": "request.retry",
+      "arguments": {
+        "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX3"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX5",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

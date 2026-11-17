@@ -220,7 +220,7 @@ def package_macos(root: Path) -> None:
     manifest["runtime_audit"] = {"system": "macos", "architecture": "arm64",
                                  "minimum_macos": version_string(deployment),
                                  "bundled_libraries": sorted({path.name for path in libraries})}
-    manifest["runtime_requirements"] = [f"macOS {version_string(deployment)} or newer on Apple Silicon", "Git available on PATH"]
+    manifest["runtime_requirements"] = [f"macOS {version_string(deployment)} or newer on Apple Silicon"]
     # Finish documents before sealing the bundle. A failed codesign leaves
     # the payload pending; no archive may be assembled from it.
     refresh_documents(root, manifest)

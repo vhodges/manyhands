@@ -189,6 +189,21 @@ impl InputObject {
             .map(|values| values.map_or(ListChange::Missing, ListChange::Value))
     }
 
+    /// A required whole number that is not negative.
+    pub fn whole_number(&self, field: &'static str) -> Result<u64, InputError> {
+        match self.fields.get(field) {
+            None => Err(InputError::Missing(field)),
+            Some(Json::Number(number)) => number.as_u64().ok_or(InputError::WrongType {
+                field,
+                expected: "a whole number",
+            }),
+            Some(_) => Err(InputError::WrongType {
+                field,
+                expected: "a whole number",
+            }),
+        }
+    }
+
     pub fn optional_object(&self, field: &'static str) -> Result<Option<InputObject>, InputError> {
         match self.fields.get(field) {
             None => Ok(None),
@@ -199,6 +214,30 @@ impl InputObject {
                 field,
                 expected: "an object",
             }),
+        }
+    }
+
+    /// A required, non-empty array of objects. A missing field is
+    /// `Missing`; a value that is no array, an element that is no object
+    /// and an empty array are each `WrongType`, which names the field and
+    /// never a value.
+    pub fn object_list(&self, field: &'static str) -> Result<Vec<InputObject>, InputError> {
+        let wrong_type = || InputError::WrongType {
+            field,
+            expected: "a non-empty array of objects",
+        };
+        match self.fields.get(field) {
+            None => Err(InputError::Missing(field)),
+            Some(Json::Array(values)) if !values.is_empty() => values
+                .iter()
+                .map(|value| match value {
+                    Json::Object(fields) => Ok(InputObject {
+                        fields: fields.clone(),
+                    }),
+                    _ => Err(wrong_type()),
+                })
+                .collect(),
+            _ => Err(wrong_type()),
         }
     }
 
@@ -226,7 +265,7 @@ pub fn schema_name(resource: &str, verb: &str) -> String {
 enum Json {
     Null,
     Bool(#[allow(dead_code)] bool),
-    Number(#[allow(dead_code)] serde_json::Number),
+    Number(serde_json::Number),
     String(String),
     Array(Vec<Json>),
     Object(BTreeMap<String, Json>),

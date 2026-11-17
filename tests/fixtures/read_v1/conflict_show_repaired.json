@@ -1,0 +1,42 @@
+{
+  "code": "ok",
+  "command": "conflict show",
+  "data": {
+    "comment_operation_id": null,
+    "eligibility": null,
+    "historical": false,
+    "incoming_parent": "<incoming-parent>",
+    "item_id": null,
+    "local_parent": "<local-parent>",
+    "next_action": "resume",
+    "observation": null,
+    "operation_id": "<operation>",
+    "paths": [],
+    "request_id": null,
+    "stage": "primary",
+    "state": "repaired",
+    "target": "primary"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

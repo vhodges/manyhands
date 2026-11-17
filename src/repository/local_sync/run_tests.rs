@@ -260,6 +260,45 @@ fn unrelated_histories_refuse_before_acceptance() {
     }
 }
 
+/// Git would drop the trailing comma of the first and refuse the brackets of
+/// the second. Neither is carried unchanged, so each answers as a missing
+/// identity does, before any write, and a usable one then merges as itself.
+#[test]
+fn an_unusable_identity_answers_as_a_missing_one_before_any_write() {
+    for name in ["Example Person,", "<Example Person>", " Example Person"] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        graph(&f, "merge");
+        let observation = f.observe();
+        let id = OperationId::new();
+        let c = f.context();
+        let before_tip = tip(&c);
+        let before = f.image();
+        let mut config = c.config().unwrap();
+        config.set_str("user.name", name).unwrap();
+        let result = execute(&f, id, &observation.observation);
+        assert_eq!(
+            result.code,
+            ResultCode::IdentityRequired,
+            "{name}: {result:?}"
+        );
+        assert_eq!(result.reason, Reason::IdentityRequired, "{name}");
+        assert!(!result.effects.is_durable(), "{name}");
+        no_owner(&f, id);
+        assert_eq!(tip(&c), before_tip, "{name}");
+        assert_eq!(before, f.image(), "{name}");
+        config.set_str("user.name", "Replacement").unwrap();
+        assert_eq!(
+            execute(&f, id, &observation.observation).code,
+            ResultCode::Ok,
+            "{name}"
+        );
+        assert_eq!(
+            c.find_commit(tip(&c)).unwrap().author().name(),
+            Some("Replacement")
+        );
+    }
+}
+
 #[test]
 fn identity_missing_then_set_retries_the_same_local_intent() {
     for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {

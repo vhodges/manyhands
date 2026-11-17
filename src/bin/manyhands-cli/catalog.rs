@@ -2,6 +2,7 @@
 pub enum Availability {
     /// Available, with the Cycle that delivered it.
     Available(&'static str),
+    #[cfg_attr(not(test), allow(dead_code))]
     Planned(&'static str),
 }
 
@@ -83,17 +84,35 @@ const REPO: OptionSpec = option(
 );
 const ID: OptionSpec = option("--id", Some("ULID"), true, "Canonical item ULID.");
 const KEY_ID: OptionSpec = option("--key-id", Some("ULID"), true, "Canonical key ULID.");
+pub const OPERATION_ID: OptionSpec = option(
+    "--operation-id",
+    Some("ULID"),
+    true,
+    "Canonical operation ULID.",
+);
 pub const INPUT: OptionSpec = option(
     "--input",
     Some("file|-"),
     false,
     "Read one JSON input object from a file or stdin (-).",
 );
+const RESOLVE_AS: OptionSpec = option(
+    "--as",
+    Some("publish|release"),
+    true,
+    "The choice for a context whose publication history is unknown.",
+);
 pub const REQUEST_ID: OptionSpec = option(
     "--request-id",
     Some("ULID"),
     false,
     "Canonical request ULID.",
+);
+const TOKEN: OptionSpec = option(
+    "--token",
+    Some("token"),
+    false,
+    "A conflict path's token, to read its sides. Needs --json.",
 );
 pub const PREPARE: OptionSpec = option(
     "--prepare",
@@ -206,6 +225,9 @@ const fn available(
     }
 }
 
+/// No verb is planned once C5 is bound (R-8), and this mechanism stays for a
+/// later Cycle's. Tests read it through `PLANNED`.
+#[cfg(test)]
 const fn planned(
     resource: &'static str,
     verb: &'static str,
@@ -223,7 +245,14 @@ const fn planned(
     }
 }
 
+/// The one planned verb there is: no command, only what tests pin of the
+/// mechanism. It is in no catalog.
+#[cfg(test)]
+pub const PLANNED: CommandSpec = planned("poll", "future", "A planned verb.", "C9");
+
 use RepoRule::{Refused, Required};
+/// A repository mutation that takes no input.
+const MUTATION_NO_INPUT: &[OptionSpec] = &[REPO, REQUEST_ID, PREPARE, CONFIRM];
 const MUTATION_INPUT: &[OptionSpec] = &[
     REPO,
     OptionSpec {
@@ -393,15 +422,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         "show",
         "Show a repository operation.",
         Required,
-        &[
-            REPO,
-            option(
-                "--operation-id",
-                Some("ULID"),
-                true,
-                "Canonical operation ULID.",
-            ),
-        ],
+        &[REPO, OPERATION_ID],
     ),
     available("id", "new", "Generate a new item ID.", Refused, &[]),
     CommandSpec {
@@ -434,7 +455,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary: "Remove a repository registration.",
         availability: Availability::Available("C2"),
         repo: Some(Required),
-        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        options: MUTATION_NO_INPUT,
         kind: Kind::Mutation {
             confirmed: true,
             input: InputRule::Refused,
@@ -813,7 +834,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary: "Refresh the index.",
         availability: Availability::Available("C3"),
         repo: Some(Required),
-        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        options: MUTATION_NO_INPUT,
         kind: Kind::Mutation {
             confirmed: false,
             input: InputRule::Refused,
@@ -825,7 +846,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary: "Rebuild the index.",
         availability: Availability::Available("C3"),
         repo: Some(Required),
-        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        options: MUTATION_NO_INPUT,
         kind: Kind::Mutation {
             confirmed: false,
             input: InputRule::Refused,
@@ -873,19 +894,321 @@ pub const COMMANDS: &[CommandSpec] = &[
         ],
         kind: Kind::Read,
     },
-    planned("comment", "add", "Add a comment.", "C4"),
-    planned("item", "sync", "Synchronize an item.", "C4"),
-    planned("repo", "sync", "Synchronize a repository.", "C4"),
-    planned("conflict", "show", "Show a conflict.", "C4"),
-    planned("conflict", "resolve", "Resolve a conflict.", "C4"),
-    planned("operation", "resume", "Resume an operation.", "C4"),
-    planned("operation", "abandon", "Abandon an operation.", "C4"),
-    planned("document", "promote", "Promote a document.", "C5"),
-    planned("ticket", "close", "Close a ticket.", "C5"),
-    planned("poll", "once", "Poll a repository once.", "C5"),
-    planned("poll", "configure", "Configure polling.", "C5"),
-    planned("poll", "pause", "Pause polling.", "C5"),
-    planned("poll", "resume", "Resume polling.", "C5"),
+    CommandSpec {
+        resource: "comment",
+        verb: "add",
+        summary: "Add a comment.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            ID,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "item",
+        verb: "sync",
+        summary: "Synchronize an item.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[REPO, ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "repo",
+        verb: "sync",
+        summary: "Synchronize a repository.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: MUTATION_NO_INPUT,
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "item",
+        verb: "republish",
+        summary: "Republish a deleted item branch.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[REPO, ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "item",
+        verb: "resolve-history",
+        summary: "Record a context whose publication history is unknown as never published.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, ID, RESOLVE_AS, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "remote",
+        verb: "history",
+        summary: "Poll the publication remote and list the contexts whose publication history is unknown.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO],
+        kind: Kind::UnlockingRead,
+    },
+    CommandSpec {
+        resource: "remote",
+        verb: "resolve-history",
+        summary: "Clear the repository's lost-history flag once no context reads unknown.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: MUTATION_NO_INPUT,
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "conflict",
+        verb: "show",
+        summary: "Show a conflict.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[REPO, OPERATION_ID],
+        kind: Kind::Read,
+    },
+    CommandSpec {
+        resource: "conflict",
+        verb: "resolve",
+        summary: "Resolve a conflict.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            OPERATION_ID,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "operation",
+        verb: "resume",
+        summary: "Resume an operation.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[REPO, OPERATION_ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "operation",
+        verb: "abandon",
+        summary: "Abandon an operation.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[REPO, OPERATION_ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "document",
+        verb: "promote",
+        summary: "Promote a document.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "ticket",
+        verb: "close",
+        summary: "Close a ticket.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "poll",
+        verb: "once",
+        summary: "Poll a repository once.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+            option(
+                "--retire-completed",
+                None,
+                false,
+                "Explicitly retire proven-safe completed contexts in this live pass only.",
+            ),
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "poll",
+        verb: "configure",
+        summary: "Configure polling.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "poll",
+        verb: "pause",
+        summary: "Pause polling.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: MUTATION_NO_INPUT,
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "poll",
+        verb: "resume",
+        summary: "Resume polling.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: MUTATION_NO_INPUT,
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "context",
+        verb: "retire",
+        summary: "Retire a proven-safe completed local context, after a fresh remote observation.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            option(
+                "--kind",
+                Some("ticket|document"),
+                true,
+                "Kind of the completed context.",
+            ),
+            ID,
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "context",
+        verb: "observe-local",
+        summary: "Observe an item's context for a local synchronization.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, ID],
+        kind: Kind::Read,
+    },
+    CommandSpec {
+        resource: "context",
+        verb: "show-local",
+        summary: "Show a local synchronization, or a conflict's sides with --token and --json.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, OPERATION_ID, TOKEN],
+        kind: Kind::Read,
+    },
+    CommandSpec {
+        resource: "context",
+        verb: "sync-local",
+        summary: "Bring primary into an item's context, locally.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            ID,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "context",
+        verb: "resolve-local",
+        summary: "Resolve a local synchronization's conflict with a source for each path.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            OPERATION_ID,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
 ];
 
 pub fn find(resource: &str, verb: &str) -> Option<&'static CommandSpec> {

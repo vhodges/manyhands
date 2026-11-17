@@ -1,0 +1,45 @@
+{
+  "code": "push_rejected",
+  "command": "comment add",
+  "data": {
+    "comment_id": "01ARZ3NDEKTSV4RRFFQ69G5FC1",
+    "conflict": null,
+    "created_by": "Fixture <fixture@example.invalid>",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "parent_id": null,
+    "pending_reason": "synchronization",
+    "publication": "pending",
+    "synchronization_id": "<synchronization>",
+    "type": "comment"
+  },
+  "effects": {
+    "checkpoint": "committed",
+    "cleanup": "not_requested",
+    "commit_oid": "<commit>",
+    "discovery": "current",
+    "integration": "not_requested",
+    "publication": "pending",
+    "write": "written"
+  },
+  "message": "The remote rejected the push.",
+  "operation_id": "<operation>",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "request.retry",
+      "arguments": {
+        "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": "<root>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAW"
+  }
+}

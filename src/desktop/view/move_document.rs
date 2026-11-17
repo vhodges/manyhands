@@ -37,6 +37,10 @@
 //!   move runs, when Cancel is disabled as Move is (Part E review, M5);
 //!   focus goes back where it was.
 //!
+//! The dialog is on the common frame (Wave 04 Cycle 05a design A3): its
+//! heading in the Kit's title slot, the fields and the last answer in the
+//! body, and Cancel and Move in the footer, the body element's last child.
+//!
 //! The paths are the user's text, so nothing here derives `Debug`; the
 //! request carries them to the library and nothing else does.
 
@@ -46,7 +50,7 @@ use gpui_kit::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, Render, Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
     component::{
-        ActiveTheme, WindowExt, h_flex,
+        ActiveTheme, WindowExt,
         input::{InputEvent, InputState},
         v_flex,
     },
@@ -62,6 +66,7 @@ use super::{
         CANCEL, FILE_NAME, FOLDER, PathCheck, button, field, focus_the_note, held_button,
         keep_focus_in,
     },
+    frame::{self, Footer, Header},
     item::{ItemPane, text},
 };
 use crate::desktop::{
@@ -77,6 +82,8 @@ mod steps;
 /// The sheet's control, on the Folder row.
 pub(crate) const MOVE: &str = "Move\u{2026}";
 pub(crate) const MOVE_HEADING: &str = "Move document";
+/// The header's title: the heading, as the Kit's title slot drew it.
+const HEADING_ID: &str = "move-heading";
 pub(crate) const MOVE_ACTION: &str = "Move";
 /// R-23's words (pre-flight ruling, Task 24): a session, a draft or a save.
 pub(crate) const MOVE_WHILE_VIEWING: &str =
@@ -210,10 +217,16 @@ pub(crate) fn open(
     }
     let dialog = cx.new(|cx| MoveDialog::new(source, pane, services.clone(), window, cx));
     let built = dialog.clone();
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let moving = built.clone();
         let cancelling = built.clone();
-        base.title(MOVE_HEADING)
+        let header = Header {
+            icon: None,
+            title: MOVE_HEADING.into(),
+            description: None,
+            ids: (HEADING_ID, None),
+        };
+        frame::dialog(base, header, cx)
             .close_button(false)
             .overlay_closable(false)
             .child(built.clone())
@@ -408,7 +421,8 @@ impl MoveDialog {
 }
 
 /// The dialog: the Folder and the File name, with the destination's note,
-/// what the last Move said, and Cancel and Move.
+/// and what the last Move said, in the body; Cancel and Move in the footer,
+/// the last child of the body element.
 impl Render for MoveDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let noted = self.check.note().is_some().then_some(&self.file_name);
@@ -444,10 +458,7 @@ impl Render for MoveDialog {
                 });
             },
         );
-        v_flex()
-            .id("move-dialog")
-            .test_support()
-            .track_focus(&self.focus)
+        let content = v_flex()
             .gap_3()
             .child(field("move-folder", FOLDER, &self.folder, None, cx))
             .child(field(
@@ -457,14 +468,19 @@ impl Render for MoveDialog {
                 self.check.note(),
                 cx,
             ))
-            .children(failure)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .justify_end()
-                    .child(cancel)
-                    .child(move_button),
-            )
+            .children(failure);
+        v_flex()
+            .id("move-dialog")
+            .test_support()
+            .track_focus(&self.focus)
+            .child(frame::body(content))
+            .child(frame::footer(
+                Footer {
+                    hint: None,
+                    buttons: vec![cancel.into_any_element(), move_button.into_any_element()],
+                },
+                cx,
+            ))
     }
 }
 

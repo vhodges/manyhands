@@ -38,14 +38,17 @@ use manyhands::{
     results::ResultCode,
 };
 
+pub(crate) mod comments;
 mod create;
 mod flush;
+mod held;
 mod restore;
 mod retire;
 mod save;
 mod stored;
 
 pub(crate) use create::{NewItem, RECOVERY_NEEDED};
+pub(crate) use held::{Fresh, Kept};
 pub(crate) use restore::RestoreRefused;
 
 use super::{
@@ -107,6 +110,14 @@ pub(crate) enum SessionDiscarded {
 
 impl gpui_kit::EventEmitter<SessionDiscarded> for DraftRegistry {}
 
+/// The Drafts page discards a comment draft an item tab's composer holds:
+/// that composer starts again. It names every ID that reached the
+/// discarded session (`current_id`), so a composer holding an earlier one
+/// is found too. It holds no text.
+pub(crate) struct CommentDiscarded(pub Vec<DraftId>);
+
+impl gpui_kit::EventEmitter<CommentDiscarded> for DraftRegistry {}
+
 /// A draft was discarded, the store having deleted it: from a tab, its
 /// banners or the Drafts page, with or without a tab (design, Release on
 /// leave, condition 2). Its target names the item; it holds no text.
@@ -157,6 +168,9 @@ pub(crate) struct DraftRegistry {
     /// The session each item tab holds, by the ID it was restored under;
     /// `attached` follows it to the ID it goes on under.
     attached: HashMap<TabKey, DraftId>,
+    /// The comment drafts each item tab's composers hold, beside the
+    /// tab's own draft (`comments`): where the Drafts page's Show goes.
+    comment_tabs: HashMap<DraftId, TabKey>,
     /// Sessions whose tab is gone and whose release waits for their text
     /// to be stored, by the ID they were released under.
     releasing: BTreeSet<DraftId>,
@@ -199,6 +213,7 @@ impl DraftRegistry {
             saves: BTreeMap::new(),
             moved: BTreeMap::new(),
             attached: HashMap::new(),
+            comment_tabs: HashMap::new(),
             releasing: BTreeSet::new(),
             contexts: HashMap::new(),
             path_unread: BTreeSet::new(),
@@ -418,6 +433,25 @@ impl DraftRegistry {
         self.sessions
             .get(&self.current_id(id)?)
             .map(|live| live.session.recovery_state())
+    }
+
+    /// Each session whose last write failed, as `flush_failures` gives it,
+    /// with the draft's target: what Activity's recovery rows name (S11).
+    pub(crate) fn flush_failure_items(
+        &self,
+    ) -> Vec<(DraftId, DraftTarget, String, DraftErrorKind)> {
+        self.sessions
+            .values()
+            .filter_map(|live| match live.session.recovery_state() {
+                RecoveryState::Failed(kind) => Some((
+                    live.session.id(),
+                    live.session.target().clone(),
+                    live.session.item_title().to_owned(),
+                    kind,
+                )),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Each session whose last write failed: its ID, its item's title as

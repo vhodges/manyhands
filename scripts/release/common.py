@@ -20,20 +20,16 @@ TARGETS = {
     "x86_64-unknown-linux-gnu": Target("linux", "", ".tar.gz", "none", (
         "Ubuntu 24.04 or compatible newer GNU/Linux; Wayland for the desktop",
         "Working Vulkan graphics stack and the documented system runtime libraries",
-        "Git available on PATH",
     )),
     "aarch64-unknown-linux-gnu": Target("linux", "", ".tar.gz", "none", (
         "Ubuntu 24.04 or compatible newer GNU/Linux; Wayland for the desktop",
         "Working Vulkan graphics stack and the documented system runtime libraries",
-        "Git available on PATH",
     )),
     "x86_64-pc-windows-msvc": Target("windows", ".exe", ".zip", "self-signed-authenticode", (
         "Windows x86_64 and the runtime dependencies documented for this release",
-        "Git available on PATH",
     )),
     "aarch64-apple-darwin": Target("macos", "", ".zip", "ad-hoc", (
         "Apple Silicon macOS; minimum version is recorded in the app Info.plist",
-        "Git available on PATH",
     )),
 }
 

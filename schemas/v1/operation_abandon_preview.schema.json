@@ -29,10 +29,11 @@
       }
     },
     "details": {
-      "description": "The operation that will be closed. The command closes its row in the local journal and deletes the record of the unfinished request that began it, and nothing else. The confirmation binds the operation's state and step: an operation that has ended or advanced since is external_change.",
+      "description": "The operation that will be closed. Generic abandonment closes the local row and releases its unfinished request. Retirement instead retains that request identity, fences deletion, preserves remaining resources and settles local discovery before atomically recording abandonment. The confirmation binds state and step, plus retirement epochs, removal flags and retained resources when retirement is not null; a changed snapshot is external_change.",
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "retirement",
         "root",
         "operation_id",
         "action",
@@ -48,6 +49,23 @@
         "git_state_changed"
       ],
       "properties": {
+        "retirement": {
+          "description": "Null for generic abandonment. A retirement retains its controlling request and every remaining resource; only its local discovery obligation is settled.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["request_id", "phase", "owner_epoch", "index_owner_epoch", "worktree_removal", "branch_removal", "worktree_retained", "branch_retained", "index_pending"],
+          "properties": {
+            "request_id": {"type": ["string", "null"]},
+            "phase": {"type": "string", "enum": ["selected", "worktree_removing", "worktree_removed", "branch_deleting", "local_absent", "index_pending", "complete", "refused", "preserving", "abandoned"]},
+            "owner_epoch": {"type": "integer", "minimum": 1},
+            "index_owner_epoch": {"type": "integer", "minimum": 0},
+            "worktree_removal": {"type": "string", "enum": ["none", "possible", "observed"]},
+            "branch_removal": {"type": "string", "enum": ["none", "possible", "observed"]},
+            "worktree_retained": {"description": "Present or not safely known absent. This is conservative consent metadata, never cleanup authority.", "type": "boolean"},
+            "branch_retained": {"description": "Present or not safely known absent, including unreadable or redirected ref storage. Never cleanup authority.", "type": "boolean"},
+            "index_pending": {"type": "boolean"}
+          }
+        },
         "root": {
           "description": "The repository's root, as the operation's journal names it.",
           "type": "string"
@@ -70,6 +88,7 @@
             "rebuild",
             "prepare_context",
             "release_context",
+            "retire_context",
             "save_document",
             "save_ticket",
             "submit_comment",
@@ -110,7 +129,7 @@
           "type": "boolean"
         },
         "request_id": {
-          "description": "The unfinished request that began the operation, whose record the command deletes: its ID is then free, and its next use is a new request. Null when no such request is recorded.",
+          "description": "The unfinished request that began the operation. Generic abandonment releases its record so its ID is free. When retirement is not null, its identity and operation mapping are retained permanently instead. Null when no such request is recorded.",
           "type": ["string", "null"]
         },
         "files_changed": {

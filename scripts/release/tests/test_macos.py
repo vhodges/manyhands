@@ -1,17 +1,41 @@
 """macOS policy and bundle metadata; real codesign runs on macOS."""
 
 from pathlib import Path
+import json
 import plistlib
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from macos import bundle_dependencies, minimum_os, parse_dependencies, plist_document, resolve_dependency
+from macos import bundle_dependencies, minimum_os, package_macos, parse_dependencies, plist_document, resolve_dependency
+from payload_fixture import MACOS, PayloadFixture
 
 
 class MacPolicyTests(unittest.TestCase):
+    def test_finalized_runtime_metadata_does_not_require_a_local_git_executable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = PayloadFixture(temp, MACOS)
+            fixture.stage()
+
+            def native(args, **kwargs):
+                if args[:2] == ['brew', '--prefix']:
+                    return '/fixture/openssl'
+                if args[:2] == ['lipo', '-archs']:
+                    return 'arm64'
+                if args[:2] == ['otool', '-l']:
+                    return 'cmd LC_BUILD_VERSION\nplatform 1\nminos 14.0\nsdk 15.0\n'
+                return ''
+
+            with patch('macos.command', side_effect=native), \
+                 patch('macos.bundle_dependencies', return_value=[]), \
+                 patch('macos.verify_native'):
+                package_macos(fixture.staging)
+            manifest = json.loads((fixture.staging / 'release.json').read_text())
+            self.assertEqual(manifest['runtime_requirements'], ['macOS 14.0.0 or newer on Apple Silicon'])
+
     def test_dependency_paths_preserve_spaces(self):
         output = """/some path/manyhands:
     /usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1345.0.0)

@@ -74,6 +74,12 @@ impl ItemPane {
         let Some(Stopped::Pending(request)) = self.edit.stopped else {
             return;
         };
+        // While the item's close or merge is unfinished, Resume waits: it
+        // would open an editor on, or make again, a context the merge has
+        // finished with (R-23, P23).
+        if self.edits_wait(cx) {
+            return;
+        }
         self.edit.phase = Phase::Viewing;
         self.send_again(request, cx);
     }
@@ -82,6 +88,10 @@ impl ItemPane {
     /// sent again, unless a release of the item was sent since, and not
     /// refused (R-78); then the tab stays viewing, and says why.
     pub(super) fn retry_prepare(&mut self, request: DesktopRequestId, cx: &mut Context<Self>) {
+        // Waits for the lock as Resume does.
+        if self.edits_wait(cx) {
+            return;
+        }
         self.send_again(request, cx);
     }
 
