@@ -578,6 +578,7 @@ fn require_cleanup_clean(
         return Err(Precheck::Changed);
     }
     drop(statuses);
+    ignored_dirs_hold_no_repository(repository)?;
     let workdir = repository.workdir().ok_or(Precheck::Changed)?;
     for entry in gitlinks {
         let path = std::str::from_utf8(&entry.path).map_err(|_| Precheck::Changed)?;
@@ -631,6 +632,47 @@ fn require_cleanup_clean(
     Ok(())
 }
 
+/// Ignored files are build output and go with the worktree, but a Git
+/// repository nested in an ignored directory (a clone under `vendor/`) may
+/// hold commits nothing else has. Nothing is followed through a symlink, and
+/// a directory that cannot be read counts as one that might hold a repository.
+fn ignored_dirs_hold_no_repository(repository: &git2::Repository) -> Result<(), Precheck> {
+    let workdir = repository.workdir().ok_or(Precheck::Changed)?;
+    let mut options = git2::StatusOptions::new();
+    options
+        .include_untracked(false)
+        .include_ignored(true)
+        .recurse_ignored_dirs(false);
+    let statuses = repository
+        .statuses(Some(&mut options))
+        .map_err(|_| Precheck::Changed)?;
+    let mut pending = Vec::new();
+    for entry in statuses
+        .iter()
+        .filter(|entry| entry.status().contains(git2::Status::IGNORED))
+    {
+        let path = std::str::from_utf8(entry.path_bytes()).map_err(|_| Precheck::Changed)?;
+        pending.push(workdir.join(path));
+    }
+    while let Some(path) = pending.pop() {
+        if !std::fs::symlink_metadata(&path)
+            .map_err(|_| Precheck::Changed)?
+            .is_dir()
+        {
+            continue;
+        }
+        for child in std::fs::read_dir(&path).map_err(|_| Precheck::Changed)? {
+            let child = child.map_err(|_| Precheck::Changed)?;
+            if child.file_name() == ".git" {
+                return Err(Precheck::Changed);
+            }
+            if child.file_type().map_err(|_| Precheck::Changed)?.is_dir() {
+                pending.push(child.path());
+            }
+        }
+    }
+    Ok(())
+}
 /// Complete registration/HEAD inventory shared by cleanup and metadata-only
 /// retirement admission. Call under the repository lease; it grants no effects.
 pub(super) fn branch_is_checked_out(

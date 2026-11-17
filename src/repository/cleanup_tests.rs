@@ -382,6 +382,58 @@ fn cleanup_ignored_files_beside_other_changes_still_block() {
     }
 }
 
+#[test]
+fn cleanup_ignored_directories_holding_a_repository_or_unreadable_block() {
+    for case in ["git_dir", "gitfile", "three_deep", "unreadable"] {
+        if cfg!(not(unix)) && case == "unreadable" {
+            continue;
+        }
+        let f = Fixture::new(AuthoringKind::Document);
+        let c = f.cleanup();
+        exclude(&f, "vendor/\ntarget/");
+        let worktree = f.linked.workdir().unwrap().to_owned();
+        let mut unreadable = None;
+        match case {
+            "git_dir" => {
+                fs::create_dir(worktree.join("vendor")).unwrap();
+                Repository::init(worktree.join("vendor/clone")).unwrap();
+            }
+            "gitfile" => {
+                fs::create_dir_all(worktree.join("vendor/clone")).unwrap();
+                fs::write(worktree.join("vendor/clone/.git"), b"gitdir: /elsewhere\n").unwrap();
+            }
+            "three_deep" => {
+                fs::create_dir_all(worktree.join("target/a/b/c")).unwrap();
+                Repository::init(worktree.join("target/a/b/c")).unwrap();
+            }
+            _ => {
+                let path = worktree.join("target/closed");
+                fs::create_dir_all(&path).unwrap();
+                fs::write(path.join("x"), b"ignored").unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+                }
+                unreadable = Some(path);
+            }
+        }
+        // The snapshot walker cannot read the unreadable directory either.
+        let before = unreadable.is_none().then(|| files(f.root.path()));
+        assert_eq!(f.precheck(&c), Precheck::Changed, "{case}");
+        assert_ne!(f.remove(&c), WorktreeRemoval::Removed, "{case}");
+        assert!(worktree.exists(), "{case}");
+        if let Some(before) = before {
+            assert_eq!(files(f.root.path()), before, "{case}");
+        }
+        #[cfg(unix)]
+        if let Some(path) = unreadable {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+}
+
 fn hide_index_entry(repo: &Repository, path: &str, flag: &str) {
     let result = std::process::Command::new("git")
         .arg("-C")
