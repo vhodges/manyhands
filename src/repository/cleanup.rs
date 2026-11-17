@@ -17,7 +17,6 @@ use std::{
 pub(super) enum Precheck {
     Ok,
     Changed,
-    IgnoredFiles,
     Locked,
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -31,8 +30,8 @@ pub(super) enum WorktreeRemoval {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ReleaseCheck {
     Clean,
-    /// A change, an untracked or ignored file, a hidden index bit or a
-    /// submodule change: something of the user's that removal would lose.
+    /// A change, an untracked file, a hidden index bit or a submodule
+    /// change: something of the user's that removal would lose.
     NotClean,
     /// The worktree is not the context's as it is registered: another
     /// identity or HEAD, a lock, or a tree that is no context's.
@@ -232,7 +231,7 @@ impl ContextCleanup {
         }
         // The recorded clean OID is canonical authority. Do not invoke the
         // filesystem canonical-context scanner while this capability owns the
-        // common lease; materialization/status/ignored checks remain below.
+        // common lease; materialization/status checks remain below.
         if super::validate_context_tree_items(
             &linked,
             &context,
@@ -571,22 +570,12 @@ fn require_cleanup_clean(
     options
         .include_untracked(true)
         .recurse_untracked_dirs(true)
-        .include_ignored(true)
-        .recurse_ignored_dirs(true);
+        .include_ignored(false);
     let statuses = repository
         .statuses(Some(&mut options))
         .map_err(|_| Precheck::Changed)?;
     if !statuses.is_empty() {
-        return Err(
-            if statuses
-                .iter()
-                .any(|entry| entry.status().contains(git2::Status::IGNORED))
-            {
-                Precheck::IgnoredFiles
-            } else {
-                Precheck::Changed
-            },
-        );
+        return Err(Precheck::Changed);
     }
     drop(statuses);
     let workdir = repository.workdir().ok_or(Precheck::Changed)?;

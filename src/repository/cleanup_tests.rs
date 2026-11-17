@@ -297,39 +297,88 @@ fn cleanup_precheck_clean_and_dirty_cases_preserve_full_git_image() {
 }
 
 #[test]
-fn cleanup_ignored_and_locked_are_preserved() {
-    for case in ["ignored", "locked"] {
+fn cleanup_locked_is_preserved() {
+    let f = Fixture::new(AuthoringKind::Document);
+    let c = f.cleanup();
+    f.repo
+        .find_worktree(ID)
+        .unwrap()
+        .lock(Some("fixture"))
+        .unwrap();
+    let before = files(f.root.path());
+    assert_eq!(f.precheck(&c), Precheck::Locked);
+    assert_eq!(f.remove(&c), WorktreeRemoval::Changed);
+    assert_eq!(files(f.root.path()), before);
+}
+
+/// Adds `pattern` to the repository's `info/exclude`, which every linked
+/// worktree reads.
+fn exclude(f: &Fixture, pattern: &str) {
+    let exclude = f.repo.path().join("info/exclude");
+    let mut text = fs::read_to_string(&exclude).unwrap_or_default();
+    text.push_str(&format!("\n{pattern}\n"));
+    fs::write(exclude, text).unwrap();
+}
+
+#[test]
+fn cleanup_ignored_files_do_not_block() {
+    let f = Fixture::new(AuthoringKind::Document);
+    let c = f.cleanup();
+    exclude(&f, "private/");
+    let worktree = f.linked.workdir().unwrap().to_owned();
+    fs::create_dir_all(worktree.join("private/deep")).unwrap();
+    fs::write(worktree.join("private/keep"), b"ignored").unwrap();
+    fs::write(worktree.join("private/deep/x.o"), b"ignored").unwrap();
+    let read_only = worktree.join("private/ro.bin");
+    fs::write(&read_only, b"ignored").unwrap();
+    let mut permissions = fs::metadata(&read_only).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&read_only, permissions).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/nonexistent", worktree.join("private/dangling")).unwrap();
+    assert_eq!(f.precheck(&c), Precheck::Ok);
+    assert_eq!(
+        c.precheck_release(f.kind, &ID.parse().unwrap(), f.oid),
+        ReleaseCheck::Clean
+    );
+    assert_eq!(f.remove(&c), WorktreeRemoval::Removed);
+    assert!(!worktree.exists());
+    assert!(!f.repo.path().join("worktrees").join(ID).exists());
+}
+
+#[test]
+fn cleanup_ignored_files_beside_other_changes_still_block() {
+    for case in ["untracked", "tracked_matching_an_ignore_pattern", "staged"] {
         let f = Fixture::new(AuthoringKind::Document);
         let c = f.cleanup();
-        if case == "ignored" {
-            let exclude = f.repo.path().join("info/exclude");
-            let mut text = fs::read_to_string(&exclude).unwrap();
-            text.push_str("\nprivate/\n");
-            fs::write(exclude, text).unwrap();
-            fs::create_dir(f.linked.workdir().unwrap().join("private")).unwrap();
-            fs::write(
-                f.linked.workdir().unwrap().join("private/keep"),
-                b"preserve",
-            )
-            .unwrap();
-        } else {
-            f.repo
-                .find_worktree(ID)
-                .unwrap()
-                .lock(Some("fixture"))
-                .unwrap();
+        exclude(&f, "private/");
+        let worktree = f.linked.workdir().unwrap().to_owned();
+        fs::create_dir(worktree.join("private")).unwrap();
+        fs::write(worktree.join("private/keep"), b"ignored").unwrap();
+        match case {
+            "untracked" => fs::write(worktree.join("new"), b"keep").unwrap(),
+            "tracked_matching_an_ignore_pattern" => {
+                // `ordinary` is tracked, so Git reports it modified, not
+                // ignored, whatever the patterns say.
+                exclude(&f, "ordinary");
+                fs::write(worktree.join("ordinary"), b"changed").unwrap();
+            }
+            _ => {
+                fs::write(worktree.join("new"), b"keep").unwrap();
+                let mut index = f.linked.index().unwrap();
+                index.add_path(Path::new("new")).unwrap();
+                index.write().unwrap();
+            }
         }
         let before = files(f.root.path());
+        assert_eq!(f.precheck(&c), Precheck::Changed, "{case}");
         assert_eq!(
-            f.precheck(&c),
-            if case == "ignored" {
-                Precheck::IgnoredFiles
-            } else {
-                Precheck::Locked
-            }
+            c.precheck_release(f.kind, &ID.parse().unwrap(), f.oid),
+            ReleaseCheck::NotClean,
+            "{case}"
         );
-        assert_eq!(f.remove(&c), WorktreeRemoval::Changed);
-        assert_eq!(files(f.root.path()), before);
+        assert_ne!(f.remove(&c), WorktreeRemoval::Removed, "{case}");
+        assert_eq!(files(f.root.path()), before, "{case}");
     }
 }
 
@@ -469,7 +518,7 @@ fn submodule_fixture(
 }
 
 #[test]
-fn cleanup_submodule_ignored_files_are_preserved_recursively() {
+fn cleanup_submodule_ignored_files_do_not_block() {
     for depth in [1, 2] {
         let (f, child, nested) = submodule_fixture(depth, true);
         let c = f.cleanup();
@@ -486,12 +535,12 @@ fn cleanup_submodule_ignored_files_are_preserved_recursively() {
             .recurse_ignored_dirs(true)
             .include_untracked(true);
         assert!(f.linked.statuses(Some(&mut options)).unwrap().is_empty());
-        let before = files(f.root.path());
         let data_before = files(f.data.path());
-        assert_eq!(f.precheck(&c), Precheck::IgnoredFiles, "depth {depth}");
-        assert_eq!(f.remove(&c), WorktreeRemoval::Changed);
-        assert_eq!(files(f.root.path()), before);
-        assert_eq!(files(f.data.path()), data_before);
+        assert_eq!(f.precheck(&c), Precheck::Ok, "depth {depth}");
+        assert_eq!(f.remove(&c), WorktreeRemoval::Removed, "depth {depth}");
+        assert_eq!(files(f.data.path()), data_before, "depth {depth}");
+        // The submodule's own Git data lives outside the removal and survives.
+        assert!(child.path().is_dir(), "depth {depth}");
     }
 }
 
