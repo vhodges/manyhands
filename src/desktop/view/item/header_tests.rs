@@ -862,7 +862,7 @@ fn a_nonconforming_item_shows_needs_fixing_with_repair_offered(cx: &mut TestAppC
 
     assert_eq!(shell.label("item-path", cx), Some(entry.path.clone()));
     assert!(shell.present("item-nonconforming", cx));
-    assert!(shell.present("item-source", cx));
+    assert!(shell.present("item-read", cx));
     assert!(!shell.present(ChipField::All.id(), cx));
 
     // Enabled: pressed, it opens the repair view, and writes nothing.

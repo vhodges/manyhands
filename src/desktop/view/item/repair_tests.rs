@@ -828,7 +828,7 @@ async fn closing_or_quitting_with_edited_repair_text_asks_first(cx: &mut TestApp
     );
     shell.click("repair-discard-discard-button", cx);
     assert!(!shell.present("repair-source", cx), "the view closes");
-    assert!(shell.present("item-source", cx), "the tab shows the file");
+    assert!(shell.present("item-read", cx), "the tab shows the file");
     assert_eq!(tabs(&shell, cx), 1);
 
     open_repair(&shell, cx);
@@ -902,10 +902,14 @@ async fn the_repair_view_never_passes_through_the_markdown_editor(cx: &mut TestA
              title: Raw\n---\n{body}"
         )
     );
-    let (host, read) = pane(&shell, cx).read_with(cx, |pane, _| {
-        (pane.edit_host().is_some(), pane.read_view().is_some())
-    });
-    assert!(!host && !read, "no markdown editor");
+    // The tab's read view holds the file as read, to show it when no repair
+    // is open; it is not drawn now, and the typed text is never in it.
+    let host = pane(&shell, cx).read_with(cx, |pane, _| pane.edit_host().is_some());
+    assert!(!host, "no edit editor");
+    assert!(
+        !shell.present("item-read", cx),
+        "the markdown editor is not shown over the repair text"
+    );
     let tab = TabKey::for_target(&inspect(&root, MARKER));
     let drafts = shell
         .workspace
