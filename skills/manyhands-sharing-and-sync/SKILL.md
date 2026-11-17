@@ -48,7 +48,7 @@ An item has its own branch and worktree, and so its own sync result. To share "e
 
 ## No remote
 
-With no publication remote, `item sync` and `repo sync` answer `publication_remote_required` (exit 3, `blocked`, nothing written), and a human run prints `No publication remote is selected.` Saving, commenting, promoting and closing all work locally, and their publication stays `pending`. Tell the person that sharing waits for a remote and that adding one is [repositories](../manyhands-repositories/SKILL.md). Do not invent a remote, and do not edit Git remotes to get past it. A remote must be SSH.
+With no publication remote, `item sync` and `repo sync` answer `publication_remote_required` (exit 3, `blocked`, nothing written), and a human run prints `No publication remote is selected.` Saving works locally and has nothing to publish. Commenting, promoting and closing also work locally, and their publication stays `pending`. Tell the person that sharing waits for a remote and that adding one is [repositories](../manyhands-repositories/SKILL.md). Do not invent a remote, and do not edit Git remotes to get past it. A remote must be SSH.
 
 ## Read the answer
 
@@ -61,12 +61,14 @@ With no publication remote, `item sync` and `repo sync` answer `publication_remo
 | `unlock_required` (3) | The key has a passphrase. | "Passphrase" below. |
 | `publication_remote_required` (3) | No publication remote. | "No remote" above. |
 | `host_approval_required`, `host_replacement_required`, `key_rejected` (3) | The host is not pinned, its key changed, or it refused the key. | The person decides: [keys and hosts](../manyhands-keys-and-hosts/SKILL.md). |
-| `busy` (5) | Another request holds the repository. | Retry the same request after a pause. A sync that was blocked (`unlock_required`, a conflict, `remote_branch_deleted`) keeps the repository busy for later syncs until it is finished or cancelled: finish the blocked one first. |
+| `busy` (5) | Another request holds the repository. | Retry the same request after a pause. A sync that was blocked (`unlock_required`, a conflict, `remote_branch_deleted`) keeps the repository busy for later syncs until it is finished or cancelled: finish the blocked one first. A `comment add` whose publication was blocked (`unlock_required`, or held by a waiting conflict) counts as a blocked sync. Who cancels: you may cancel your own blocked request (`request cancel`, see "A deleted branch"); cancelling is final, and a new request redoes the work. Never cancel one that is not yours, and a request that waits for the person's passphrase is finished by the person at their terminal instead. |
 | `item_not_found` (2) | This clone has no such item, or it is closed. | `poll once` for items from others; `ticket list`. |
 
 ## A conflict
 
 A conflict means the same file was changed here and on the remote (or by another comment publication), and Manyhands will not choose. `item sync`, `repo sync`, `comment add` and others stop with `recovery_required` and `data.conflict` `{operation_id, next_action}`, where `next_action` is `resolve`. `comment add` also saved the comment (exit 4, see [comments](../manyhands-comments/SKILL.md)); the conflict is in the item. While a conflict is pending, reads of that item can look broken (`comment list` shows every comment with a problem and a stale index); resolve the conflict first.
+
+A conflict that waits holds other work too, so tell the person when you ask for their choice. A remote conflict on one item (`operation list` shows it as `interrupted`, next action `resume`, with its `item_id`) holds the publication of other items: a `comment add` on another ticket is saved but answers `partial` / `busy` (exit 4), and stays `busy` until the conflict is resolved, then the same request publishes; a `ticket save` on another ticket still works. A local-sync conflict ([local context sync](references/local-context-sync.md)) holds every write in the repository: `comment add` and `ticket save` on other items answer `blocked` / `recovery_required` (exit 3) and write nothing. While you wait, do not mint new comments for the held ones: resend the same request afterwards.
 
 Which side wins is the person's decision. `conflict resolve` is a hand-over verb unless the person has already said which side wins ([autonomy](../manyhands-overview/references/autonomy.md)). Do the reading, show them both sides, and ask.
 
@@ -77,7 +79,7 @@ Which side wins is the person's decision. `conflict resolve` is a hand-over verb
    ```
 
    `data.observation` is the token a resolution needs. `data.paths[]` has one entry per conflicted file: `display_path`, `token`, `kind`, and, when `content_available` is true, the whole file three ways: `base` (the last common version), `local` (this machine's) and `incoming` (the remote's). An unknown operation ID answers `operation_not_found`. `conflict show` is a read.
-2. Show the person both sides in plain words: the file, what each side changed relative to `base` (for a ticket, the front matter field that differs, such as `status`, and the body). Do not summarize away a difference. Ask which side wins, or whether to combine them, and wait. If the person already said which side wins, use that side exactly.
+2. Show the person both sides in plain words: the file, what each side changed relative to `base` (for a ticket, the front matter field that differs, such as `status`, and the body). Do not summarize away a difference. Ask which side wins, or whether to combine them, and wait. If the person already said which side wins, use that side exactly. If they choose to combine, write out the exact resulting text (the whole `source`) and show it to them before you run `conflict resolve`; resolving publishes at once.
 3. Build `source`: the complete text of the file as it should end up, front matter included (a ticket's `id`, `slug`, `title`, `type`, `status` and the marker lines). Start from `local` or `incoming` and change only what was decided. Do not alter the `id` or `slug`. Content stays one line per paragraph. A `source` that is not a valid item answers `invalid_input` and writes nothing.
 4. Resolve. There is one resolution for every conflicted path, and at least one.
 
@@ -117,7 +119,7 @@ The answer is `ok` with `data.type` `conflict_resolution`, the resolution commit
 manyhands-cli --json --non-interactive item republish --repo <repo-root> --id <ITEM_ID> --prepare
 ```
 
-Show the person `data.details`: the `branch`, the `remote`, `last_published_oid` and `local_oid`, and the effect `branch_republished`. Confirming pushes exactly that local commit and merges nothing; the next `item sync` merges main. Wait for their OK, then confirm with a new `--request-id`.
+Order: first finish the blocked `item sync` that reported `remote_branch_deleted` (cancel it and send it once more, below), because while it is unfinished the confirm answers `busy`. Then prepare, show the person `data.details` (the `branch`, the `remote`, `last_published_oid` and `local_oid`, and the effect `branch_republished`) and wait for their OK. Confirming pushes exactly that local commit and merges nothing; the next `item sync` merges main. Confirm with a new `--request-id`.
 
 ```sh
 manyhands-cli --json --non-interactive item republish --repo <repo-root> --id <ITEM_ID> --confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>
@@ -125,7 +127,8 @@ manyhands-cli --json --non-interactive item republish --repo <repo-root> --id <I
 
 - With no evidence of a deletion the preview is `already_applied`: run `item sync` first. A closed ticket answers `ticket_closed`.
 - If the branch moved, or the remote advertises it again, the confirm answers `external_change` and pushes nothing: prepare again.
-- A blocked `item sync` holds the repository until it is cancelled and sent once more, so the confirm answers `busy` (exit 5) meanwhile. Cancel the blocked sync by its request ID (it is in that answer's `recovery`, `request.cancel`), send that same sync once more (it answers `cancelled`), then prepare and confirm again. `request cancel` takes only `--request-id`.
+- A blocked `item sync` holds the repository until it is cancelled and sent once more, so the confirm answers `busy` (exit 5) meanwhile (the prepare still works). Cancel the blocked sync by its request ID (it is in that answer's `recovery`, `request.cancel`), send that same sync once more (it answers `cancelled`), then prepare, show and confirm. Verified in both orders: a prepare made before the cancel was still good afterwards, and the same confirm with the same confirmation ID and request ID that had answered `busy` succeeded once the blocked sync was cancelled, within the ten minutes.
+- `request cancel` is yours to run alone, but only for your own blocked request ([autonomy](../manyhands-overview/references/autonomy.md)). It takes only `--request-id`.
 
 ```sh
 manyhands-cli --json request cancel --request-id <REQUEST_ID>
@@ -135,7 +138,7 @@ manyhands-cli --json request cancel --request-id <REQUEST_ID>
 
 With a passphrase-protected key every network step answers `unlock_required`, and you cannot enter the passphrase. Never ask for it or put it anywhere. Hand the step to the person: give them the same command, without `--json --non-interactive`, with the same `--request-id`, which `recovery` names (`request.retry`), so they run it at their terminal and type the passphrase there. Verified: `item sync` answered `unlock_required` (exit 3, nothing written), the same command and request ID at a terminal prompted for the passphrase and published, and a later sync answered `already_applied`. `comment add` saves first, then answers `unlock_required` with exit 4 ([comments](../manyhands-comments/SKILL.md)). The mechanics are in [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
 
-A blocked sync leaves an operation unfinished: `operation list` shows it (`fetch_prepared`). While it is, later syncs answer `busy`. A blocked `repo sync` also makes `remote add` answer `recovery_required` (verified; a blocked `item sync` did not). The way out is to have the person finish the blocked request at their terminal; then `operation list` is empty and `remote add` works. More on operations is in `manyhands-recovery`.
+A blocked sync leaves an operation unfinished: `operation list` shows it in an interrupted state, such as `fetch_prepared`, `fetch_observed` (after `remote_branch_deleted`), `reconciling` (after a comment's `unlock_required`) or `interrupted` (a waiting conflict). While it is, later syncs answer `busy`. A blocked `repo sync` also makes `remote add` answer `recovery_required` (verified; a blocked `item sync` did not). The way out is to have the person finish the blocked request at their terminal; then `operation list` is empty and `remote add` works. More on operations is in `manyhands-recovery`.
 
 ## Local sync without a network
 
