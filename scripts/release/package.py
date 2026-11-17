@@ -68,6 +68,7 @@ def refresh_documents(root: Path, manifest: dict, repo: Path = REPO) -> None:
         for name in ("README.md", "release.json", "THIRD-PARTY-NOTICES.html", "LICENSE"):
             shutil.copyfile(root / name, resources / name)
         shutil.copytree(root / "licenses", resources / "licenses", dirs_exist_ok=True)
+        shutil.copytree(root / "skills", resources / "skills", dirs_exist_ok=True)
 
 
 def stage_payload(release: dict, target: str, binaries: Path, notices: Path,
@@ -93,6 +94,7 @@ def stage_payload(release: dict, target: str, binaries: Path, notices: Path,
         shutil.copytree(notices, root)
         (root / "bin").mkdir(exist_ok=True)
         shutil.copyfile(repo / "LICENSE", root / "LICENSE")
+        shutil.copytree(repo / "skills", root / "skills")
         template = Template((repo / "packaging/README-release.md").read_text(encoding="utf-8"))
         (root / "README.md").write_text(template.substitute(readme_values(release, target)), encoding="utf-8")
         write_json(root / "release.json", manifest)
@@ -106,6 +108,7 @@ def stage_payload(release: dict, target: str, binaries: Path, notices: Path,
             for name in ("README.md", "LICENSE", "THIRD-PARTY-NOTICES.html", "release.json"):
                 shutil.copyfile(root / name, resources / name)
             shutil.copytree(root / "licenses", resources / "licenses")
+            shutil.copytree(root / "skills", resources / "skills")
         else:
             shutil.copy2(binaries / f"manyhands{platform.suffix}", root / "bin" / f"manyhands{platform.suffix}")
         validate_payload(root, release, target, final=False)
