@@ -56,6 +56,24 @@ One unfinished operation holds more than its own item. Verified in scratch repos
 
 Tell the person that one item's unfinished operation is holding the rest.
 
+## Whose operation is it?
+
+`operation list` and `operation show` do not say who started an operation: no request ID, author, process or start time (run against a scratch repository; the fields are `operation_id`, `family`, `owner`, `action`, `state`, `completed_step`, `next_action`, `item_id`, `key_id`, `worktree`, `updated_at`, `failure_code`). Other sessions, the person's included, write to the same repository, so an unfinished operation can be theirs. Never resume or abandon an operation you cannot attribute. Until the CLI attributes operations, the signals are these, strongest first:
+
+- **Your own request ID.** The operation ID is in your saved answer for that request (`operation_id`, `data.synchronization_id` or `data.conflict.operation_id`), and `request show --request-id <REQUEST_ID>` answers for an ID you sent (its `operations[]` can omit a later sync, such as the one behind `data.synchronization_id`) and answers `request_not_found` for an ID it never accepted, a `busy` or `blocked` one included. This is the only signal that proves the operation is yours.
+- **An `item_id` that is yours.** The operation names an item you were writing. It is a hint: another session may be writing the same item.
+- **A baseline `operation list` taken before your writes** ([CLI conventions](../manyhands-overview/references/cli-conventions.md), "Your own writes"). An operation that is not in it appeared afterwards, which fits yours and fits anyone else's.
+
+A `submit_comment` operation shows no `item_id` and no author in `operation list`, so no comment operation can be attributed from the list; only your own request ID can place it.
+
+What to do:
+
+- **Proven yours** (your request ID leads to it): handle it by the table in step 3 and [autonomy](../manyhands-overview/references/autonomy.md).
+- **Only a hint** (your item, or new since the baseline): say so and show it to the person. Resume it only if they say it is theirs to resume or give their OK.
+- **Cannot attribute it**: do not resume it, do not abandon it, do not cancel a request on its behalf. Show the person the whole `operation list` (and `operation show` of the one in question) and say what is held. They decide, or they run `operation resume` at their own terminal.
+
+The real case, 2026-11-17: an agent's `comment add` on one ticket answered `partial` / `recovery_required` and left a `synchronize_context` operation for that ticket in `reconciling`, with `failure_code` and `next_action` empty. Listed next to it was another session's `submit_comment` operation in `indexing`, `next_action` `resume`, `item_id` null. The agent resumed the wrong one, and only the answer's author showed it. With the rules above it would have compared the IDs with its own answer, found that the `submit_comment` was not its own, and shown it to the person.
+
 ## 3. What to do, by what `operation list` shows
 
 | You see | What it is | What to do |
@@ -64,7 +82,7 @@ Tell the person that one item's unfinished operation is holding the rest.
 | `remote`, `synchronize_context`, `interrupted`, `next_action` `resume`; the answer had `data.conflict` | A sync conflict. | [Sharing and sync](../manyhands-sharing-and-sync/SKILL.md), "A conflict". |
 | `remote`, sync, `fetch_prepared`, `fetch_observed` or `reconciling`, after `unlock_required` | A sync waits for the key's passphrase. | Hand it to the person: "A sync waiting for a passphrase" below. |
 | the same states, after `remote_branch_deleted` | The item's remote branch was deleted. | [Sharing and sync](../manyhands-sharing-and-sync/SKILL.md), "A deleted branch". |
-| the same states, after another refusal (`failure_code` stays empty), the cause since fixed by the person | A refused sync that never finished. | `operation resume`, described and approved: see "Resume". How to tell the cause is fixed: check the usual causes in the order of the [sharing and sync](../manyhands-sharing-and-sync/SKILL.md) table (`host list`, `key list`, `remote list`, `poll status`), and if you cannot tell, hand it to the person. |
+| the same states, after another refusal (`failure_code` stays empty), the cause since fixed by the person | A refused sync that never finished. | `operation resume`, described and approved, and only when your own request ID leads to it ("Whose operation is it?"): see "Resume". How to tell the cause is fixed: check the usual causes in the order of the [sharing and sync](../manyhands-sharing-and-sync/SKILL.md) table (`host list`, `key list`, `remote list`, `poll status`), and if you cannot tell, hand it to the person. |
 | `close` (a ticket close, verified), or a document promotion (the contract says the same; not run), `next_action` `resume` | An unfinished lifecycle step. | `operation resume` answers `original_request_required` and names the request. Send that request again (same confirmation and request ID): [tickets](../manyhands-tickets/SKILL.md) for a close stopped at cleanup or at a passphrase, [documents](../manyhands-documents/SKILL.md) for a promotion. |
 | any state `cancelled`, `next_action` empty | A request that was cancelled. | Nothing to do. It stays listed, and `operation resume` on it answers `recovery_required` (verified), so leave it. |
 
@@ -87,7 +105,7 @@ Verified with a throwaway passphrase key: it prompted for the passphrase and fin
 
 ## Resume
 
-`operation resume` re-enters an interrupted operation. It has no preview (`--prepare` answers `not_confirmable`) and it writes state: on a local sync conflict it answered `partial`, exit 4, `write` `written`, and left the conflict pending. Who may run it, and the one narrow case where you may run it alone, are in [autonomy](../manyhands-overview/references/autonomy.md); otherwise say which operation, what it is and what resume will do, and wait.
+`operation resume` re-enters an interrupted operation. It has no preview (`--prepare` answers `not_confirmable`) and it writes state: on a local sync conflict it answered `partial`, exit 4, `write` `written`, and left the conflict pending. Who may run it, and the one narrow case where you may run it alone, are in [autonomy](../manyhands-overview/references/autonomy.md); otherwise say which operation, what it is and what resume will do, and wait. Never resume an operation you cannot attribute ("Whose operation is it?").
 
 Verified once: a `repo sync` refused with `invalid_configuration` (the remote had no main branch) left a `fetch_observed` operation and every later sync answered `busy`; after the person had put a main branch on the remote, `operation resume` finished it with `already_applied` and syncs worked. After a passphrase hand-off the person's rerun, or their own `operation resume` at their terminal, finishes the operation, so the agent has nothing to resume.
 
@@ -95,7 +113,7 @@ Resume does not resolve a conflict. On a remote conflict it re-answered `recover
 
 ## Abandon and removals are the person's
 
-`operation abandon` closes an unfinished local operation's record without changing files, and releases its request. It is a hand-over verb. You may run `--prepare` to show them what it would do (verified on a local sync conflict: effects `operation_closed` and `request_released`, `files_changed` false, `git_state_changed` false) and give them the exact command with `--confirm`; you never run `--confirm`.
+`operation abandon` closes an unfinished local operation's record without changing files, and releases its request. It is a hand-over verb, and it is never yours to choose for an operation you cannot attribute ("Whose operation is it?"). You may run `--prepare` to show them what it would do (verified on a local sync conflict: effects `operation_closed` and `request_released`, `files_changed` false, `git_state_changed` false) and give them the exact command with `--confirm`; you never run `--confirm`.
 
 ```sh
 manyhands-cli --json --non-interactive operation abandon --repo <repo-root> --operation-id <OPERATION_ID> --prepare

@@ -53,6 +53,18 @@ manyhands-cli id new
 
 A write without `--request-id` in `--non-interactive` mode answers `usage_error` ("--request-id is required for a non-interactive mutation"). A request ID that is not a ULID answers `invalid_id`.
 
+## Your own writes: one at a time, on record
+
+Manyhands does not yet say whose an unfinished operation is: `operation list` and `operation show` print no request ID, author, process or start time. Until it does, keep the record yourself, so you can tell your operations from another session's ([recovery](../../manyhands-recovery/SKILL.md), "Whose operation is it?").
+
+- **One write at a time.** Run a write in a repository, wait for its answer, then run `operation list` and look for anything new compared with the baseline below, before the next write. Do not start a second write while one runs: no parallel commands, no background job, and no second helper writing in the same repository. Two writers at about the same moment can leave an unfinished operation behind, and it holds the other writer's work.
+- **Save every request ID you mint for a write** to a file outside the repository, one line each: the ID, the verb and the item ID. A stuck or interrupted request is replayed with its own ID ("Request IDs and retrying" in recovery), and the file is also how you later show an operation is yours.
+- **Record a baseline first.** Before a series of writes, run `operation list` and keep the answer next to that file. An operation that is not in the baseline and appears after your writes is a candidate for being yours, not proof: another session may have started it too.
+
+```sh
+manyhands-cli --json operation list --repo <repo-root>
+```
+
 ## Prepare, then confirm
 
 Some verbs change things the person should see first (`ticket close`, `repo enable`, `repo remove`, `repo identity-set` among them). Run the verb with `--prepare` and no `--request-id`; it executes nothing and answers with `data.confirmation_id`, `data.expires_at`, `data.effects` and `data.details`.
