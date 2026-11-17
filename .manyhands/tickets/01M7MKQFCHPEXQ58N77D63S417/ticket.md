@@ -6,6 +6,8 @@ type: defect
 status: open
 project: manyhands
 team: core
+closed_at: 2026-11-17T15:45:11Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
