@@ -38,8 +38,8 @@ Ticket `01M7MKQFCHPEXQ58N77D63S417` (vh-gvzsr). Status: approved by the owner in
 ## Design
 
 - `require_cleanup_clean`: ask for untracked entries only. Any entry in the result is `Precheck::Changed`. This applies to the submodule recursion too, so ignored files inside a submodule are also disposable, and the submodule's Git metadata must still survive the prune as today.
-- Remove `Precheck::IgnoredFiles` and the code that returns or maps it: `Clean::IgnoredFiles` and its three uses in `promotion/run.rs`, `PromotionCleanupPending::IgnoredFiles`, and the matching desktop and DTO copy.
-- Keep the stored string `ignored_files` readable so existing rows and the CHECK constraints stay valid, but nothing produces it. A row already at `ignored_files` is treated like any other retryable cleanup category, so resending the request finishes it.
+- Remove `Precheck::IgnoredFiles` and the three arms in `promotion/run.rs` that turned it into `Clean::IgnoredFiles`. Only the producers go. `Clean` is an alias of the stored `CleanupCategory`, and `PromotionCleanupPending::IgnoredFiles` and the desktop and DTO copy map from a stored row, so they stay: they are how a row an older build wrote is read.
+- Keep the stored string `ignored_files` readable so existing rows and the CHECK constraints stay valid, but nothing produces it. `ignored_files` is a supersedable category, and a resend finds the worktree clean for the precheck, so the cleanup finishes (pinned by `a_cleanup_left_at_ignored_files_by_an_older_build_finishes_on_resend`).
 - Reword `context_release.rs`'s `not_clean` message: it no longer mentions ignored files.
 
 - An ignored directory that holds a `.git` entry (a nested repository, which may hold unpushed commits), or that cannot be read, still blocks as `Precheck::Changed` (owner decision, 2026-11-17). The check walks ignored directories without following symlinks.
