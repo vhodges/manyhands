@@ -11,7 +11,7 @@ manyhands_kind: ticket
 ---
 `ticket close`, and the cleanup it runs after the merge, stop on files that Git ignores in the ticket's worktree. Ignored files are build output and editor caches, not the user's work, so they should not block. Untracked and modified files must keep blocking, as they do now.
 
-Found 2026-11-09 and again 2026-11-15, 2026-11-17 (see `close-stops-on-ignored-worktree-files` notes below). Each time the close merged and published main, then answered `partial` / `recovery_required` with `cleanup_pending: ignored_files`. The owner had to remove `target/` or `.devenv/` by hand and resend the same request. An editor with the worktree open (rust-analyzer's `target/flycheck0`) recreated `target/` within minutes, so the removal had to be in the same command as the retry.
+Found 2026-11-09, closing `01M70PYS3B3YWEFTY0QBJGCF6N` (`target/` and `.devenv/`, created by running Cargo inside the ticket worktree), and seen again 2026-11-15, closing `01M7D5Z7FZTGTC1HE25KQ1MYQY`. Each time the close merged and published main, then answered `partial` / `recovery_required` with `cleanup_pending: ignored_files`. The owner had to remove `target/` or `.devenv/` by hand and resend the same request. An editor with the worktree open (rust-analyzer's `target/flycheck0`) recreated `target/` within minutes, so the removal had to be in the same command as the retry.
 
 ## Where it happens
 
