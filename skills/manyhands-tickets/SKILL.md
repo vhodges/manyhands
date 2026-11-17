@@ -161,6 +161,7 @@ manyhands-cli --json --non-interactive ticket close --repo <repo-root> --id <ITE
 - `details.publication`: `publish` (the main branch is pushed to `details.remote`) or `pending_no_remote` (nothing is pushed: there is no publication remote, and a later `repo sync` publishes it, see [sharing and sync](../manyhands-sharing-and-sync/SKILL.md)).
 - `details.closure.closed_by`: whose name goes on the closure, from the repository's commit identity.
 - That the status text stays as it is, and that the ticket worktree and local branch are deleted.
+- What the ticket's worktree holds that Git ignores. Look first, read only: `git -C <worktree> status --short --ignored` (the worktree is `data.context.worktree` of `ticket show`; the `!!` lines are ignored files and directories) and `find <worktree> -mindepth 2 -name .git` (a nested Git repository; the worktree's own `.git` is not matched). Ignored files are build output, caches and local environment directories (`target/`, `.devenv/`, editor caches). A build with the ignored-files change deletes them with the worktree in the same run, without asking and without listing them, and the preview does not mention them. Tell the person which ones exist and that they will be deleted, and let them save anything they want first. If you find a nested repository, say so: it needs the person's decision before the close (see "Ignored files in the worktree" below).
 
 Then stop and wait for their OK. If they say no, or the ten minutes pass, drop it. Only after their OK:
 
@@ -175,7 +176,7 @@ Use a new `--request-id`, and keep it: it is how you continue this close if some
 | Answer | Meaning and next step |
 | --- | --- |
 | exit 0, `outcome` `success`, `data.cleanup` `complete` | Closed. `data.publication` is `published` or, with no remote, `pending` (`publication_pending` `no_publication_remote`). `data.made_ready` lists the dependent tickets (`id`, `slug`) that this close made ready: tell the person. Check with `ticket show`: `closure.state` `closed`, `context.kind` `primary`. |
-| exit 4, `outcome` `partial`, `code` `recovery_required`, `data.cleanup_pending` `ignored_files` | The closure and merge are done and the worktree is not removed, because it holds an ignored file such as `target/` or `.devenv/`. See below. |
+| exit 4, `outcome` `partial`, `code` `recovery_required`, `data.cleanup_pending` `context_changed` or `ignored_files` | The closure and merge are done and the worktree is not removed. See "Ignored files in the worktree" below. |
 | exit 3, `unlock_required` | The key needs a passphrase. Nothing was recorded. Hand over, see below. |
 | exit 3, `confirmation_required` | You ran the close without `--confirm`. Prepare first. |
 | exit 3, `confirmation_not_found` | The confirmation expired or is unknown. Prepare again and show the person the new preview. |
@@ -198,15 +199,25 @@ A blocked prepare is `recovery_required` or `identity_required` (exit 3) with `d
 
 Anything else with `recovery_required`: read `data.blockers` and `recovery`, and take it to [`manyhands-recovery`](../manyhands-recovery/SKILL.md).
 
-### The worktree holds an ignored file
+### Ignored files in the worktree
 
-A file Git ignores in the ticket's worktree (a `target/` build directory, `.devenv/`) does not stop the prepare, and the close then stops at cleanup: exit 4, `partial`, `recovery_required`, `data.cleanup_pending` `ignored_files`. Verified: the closure and the merge into the main branch are already done (`ticket show` says `closure.state` closed, with `context.kind` still `active` because the branch and worktree remain), and `operation list` shows the close as an unfinished operation.
+This section is the one home for what a ticket close (and a document promotion, `context release` and `context retire`) does with files Git ignores in the item's worktree. Other skills link here. Two behaviours exist, and the preview is the same for both, so you learn which build you are on from what the close does.
 
-1. Do not start over and do not prepare a second close of the same ticket.
-2. Tell the person which ignored files are in the worktree (`git -C <worktree> status --short --ignored`, read only). They are build output, but they are the person's files: ask before you delete them.
-3. After their OK, remove them, and run the same confirm again with the same `--confirm` and the same `--request-id`. If they decline, the ticket stays closed and merged (verified) and only the cleanup stays pending: the worktree and local branch remain and the close shows in `operation list`. Tell them so and leave it; [`manyhands-recovery`](../manyhands-recovery/SKILL.md) covers finishing it later. Replaying the same request continues the close and repeats no merge: it answers exit 0, `cleanup` `complete`, and the worktree and branch are gone (verified). A new request ID with the used confirmation answers `confirmation_used`.
+**A build with the ignored-files change** (the design is `docs/plans/2026-11-17-ignored-files-cleanup-design.md`; verified on a rebuilt CLI that reports the same `0.2.0`, so do not key on `--version`). Ignored files no longer block. A worktree whose only extras are ignored (`target/`, `.devenv/`, `.cache/` were run) closes in one run: exit 0, `data.cleanup` `complete`, no `cleanup_pending`, the worktree and branch gone, with no remote (`publication` `pending`) and with a remote (`published`, and the ticket's remote branch deleted); `operation list` is empty afterwards. The ignored files went with the worktree, unasked and unlisted: that is why the preview step above makes you tell the person first. Still blocking, as before:
 
-To avoid it: never run builds, editors or tools inside a ticket's worktree.
+- A file Git does not ignore, or a changed tracked file (`ticket.md` edited): the prepare answers `context_dirty` (exit 3), see "A prepare that is blocked". Verified again on this build with an untracked file and with an edited `ticket.md`.
+- An ignored directory that holds a nested Git repository (a `.git` inside `target/`, which can hold commits that exist nowhere else), or one the CLI cannot read: the prepare passes, the close merges, and then stops at cleanup: exit 4, `partial`, `recovery_required`, `data.cleanup_pending` `context_changed`. `git status --short --ignored` shows such a repository only as `!! target/`, so use the `find` above. Verified with a nested repository and with a directory made unreadable (mode 000).
+
+**Released 0.2.0 and any older build** (from the design and this skill's earlier verified run with an older build; not re-run on the new one): any ignored file in the worktree passes the prepare, the close merges, and then stops at cleanup: exit 4, `partial`, `recovery_required`, `data.cleanup_pending` `ignored_files`. Treat that answer as the sign that you are on an older build.
+
+What you do after an exit 4 stop at cleanup, for either cause:
+
+1. Do not start over and do not prepare a second close of the same ticket. The closure and the merge into the main branch are done: `ticket show` says `closure.state` `closed` with `context.kind` still `active` (the branch and worktree remain), and `operation list` shows the close as an unfinished operation (verified for `context_changed`).
+2. Find what holds the worktree: `git -C <worktree> status --short --ignored` and the `find` above. They are the person's files. Tell them what is there, and for a nested repository or unreadable directory say that it may hold work that exists nowhere else. Do not delete, move or `chmod` anything of it yourself: the person decides, or gives you an explicit OK for each thing. For `ignored_files` on an older build the files are build output and the same rule applies: ask before removing.
+3. After they have dealt with it (removed or moved the nested repository, fixed the permissions, or said the ignored files may go), run the same confirm again with the same `--confirm` and the same `--request-id`. Verified on the new build for a nested repository (a retry while it was still there stopped again with `context_changed`, nothing lost) and for an unreadable directory (after the mode was restored): exit 0, `cleanup` `complete`, the worktree and branch gone, with no merge repeated. A new request ID with the used confirmation answers `confirmation_used`. A close that an older build left at `ignored_files` finishes the same way when the same request is retried on a newer build: that is from the design, not run (no older binary).
+4. If they decline, the ticket stays closed and merged and only the cleanup stays pending: the worktree and local branch remain and the close shows in `operation list`. Tell them so and leave it; [`manyhands-recovery`](../manyhands-recovery/SKILL.md) covers finishing it later.
+
+To avoid it: do not run builds, editors or tools inside a ticket's worktree. On a newer build their output is deleted with the worktree; on an older one it stops the close.
 
 ### The key needs a passphrase: hand it over
 

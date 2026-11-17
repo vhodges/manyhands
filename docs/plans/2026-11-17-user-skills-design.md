@@ -141,8 +141,11 @@ updating on a new release and what is shipped where in the archive. The main
 
 Taken from the project's own findings, to be re-verified while writing, not
 copied: `comment add` pushes the target item's branch and merges main in first
-if main moved; a ticket worktree holding ignored files (`target/`, `.devenv/`)
-leaves `ticket close` cleanup pending; `history_unknown` has repair verbs; a
+if main moved; on builds with the ignored-files change (main, 2026-11-17)
+ignored files in a ticket worktree are deleted with it and only a nested
+repository or unreadable ignored directory leaves `ticket close` cleanup
+pending, while released 0.2.0 leaves it pending for any ignored file
+(`target/`, `.devenv/`); `history_unknown` has repair verbs; a
 passphrase-protected key makes `ticket close` and sync answer
 `unlock_required` for a noninteractive agent, who must hand the step to the
 person at their terminal; repository operations are per item (a branch and a

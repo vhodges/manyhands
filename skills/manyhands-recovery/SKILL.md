@@ -129,7 +129,7 @@ After the index database is lost and rebuilt, Manyhands cannot tell whether a lo
 
 When you stop for the person, say: what you saw (the code and exit status), which operation holds the repository (`operation list`), what is held (step 2), what you did and did not run, the exact command they should run (with its request ID, at their terminal if it needs a passphrase), and what you will check afterwards (`operation list` empty, then the item with `ticket show` or `document show`).
 
-Cleanup stopped at ignored files after a ticket close, and a retired or leftover completed context, are in [tickets](../manyhands-tickets/SKILL.md) ("The worktree holds an ignored file") and [polling and the index](../manyhands-polling-and-index/SKILL.md).
+A cleanup that stopped after a ticket close or a document promotion (exit 4, `cleanup_pending` `context_changed`, or `ignored_files` from an older build) is in [tickets](../manyhands-tickets/SKILL.md) ("Ignored files in the worktree"); a retired or leftover completed context is in [polling and the index](../manyhands-polling-and-index/SKILL.md).
 
 ## Not run
 

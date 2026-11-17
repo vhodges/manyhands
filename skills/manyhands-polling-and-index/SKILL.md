@@ -66,7 +66,7 @@ manyhands-cli --json --non-interactive context retire --repo <repo-root> --kind 
 manyhands-cli --json --non-interactive poll once --repo <repo-root> --retire-completed --request-id <REQUEST_ID>
 ```
 
-Retirement only removes what is proven safe, and refuses otherwise (details and verified answers in [retiring completed contexts](references/retiring-completed-contexts.md)). A refusal removes nothing and is not an error to repeat: `worktree_not_clean` (an untracked file in the item's worktree) and `external_change` (the item is not complete, so nothing is proven) were verified. `poll once --retire-completed` answers exit 0 even when a child refused, so read `data.retirements[]` per item.
+Retirement only removes what is proven safe, and refuses otherwise (details and verified answers in [retiring completed contexts](references/retiring-completed-contexts.md)). A refusal removes nothing and is not an error to repeat: `worktree_not_clean` (an untracked file in the item's worktree) and `external_change` (the item is not complete, so nothing is proven) were verified. Ignored files in the worktree (`target/`, `.devenv/`) do not refuse a retirement on a build with the ignored-files change and are deleted with the worktree, so name them to the person before you retire; a nested Git repository inside an ignored directory refuses it as `worktree_not_clean`. `poll once --retire-completed` answers exit 0 even when a child refused, so read `data.retirements[]` per item.
 
 ## Polling status and schedule
 
