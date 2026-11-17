@@ -24,7 +24,7 @@ The worktree is inside the main checkout, but it is not the repository root. Com
 
 - A ticket is finished by `ticket close`: it records the closure, merges the ticket's branch into main, publishes main, and removes the branch and worktree. It is a confirmed verb (see [autonomy](autonomy.md)). With no publication remote it still exits 0: the merge into main is complete and `effects.publication` is `pending`, waiting for a remote.
 - A document is moved onward with `document promote`, also a confirmed verb. `manyhands-documents` covers it.
-- Sharing with collaborators is done with the sync verbs. See `manyhands-sharing-and-sync`.
+- Sharing with collaborators is done with the sync verbs. See [sharing and sync](../../manyhands-sharing-and-sync/SKILL.md).
 
 Closing is not a status. A ticket's `status` is free text the person chooses; a ticket saved with status `closed` is still open: `closure.state` stays `open` and nothing is merged. Closure is `data.closure.state` (`open` or `closed`, with `closed_at` and `closed_by`), and only `ticket close` sets it. To find open work, filter on closure, not on a status word. `ticket list --closure open` does.
 

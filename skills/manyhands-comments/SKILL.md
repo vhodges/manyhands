@@ -1,0 +1,88 @@
+---
+name: manyhands-comments
+description: "Use when reading, adding or replying to a comment on a Manyhands ticket or document, or when a comment command answers ticket_closed, item_not_found, invalid_input, occupied_path, recovery_required or unlock_required."
+---
+
+# Comments
+
+Read the [overview](../manyhands-overview/SKILL.md) first. Who runs what is in [autonomy](../manyhands-overview/references/autonomy.md); input files, `--request-id` and the main checkout root are in [CLI conventions](../manyhands-overview/references/cli-conventions.md); codes are in [errors and exit codes](../manyhands-overview/references/errors-and-exit-codes.md). Looking at an item's comments among the rest of its data is in [finding work](../manyhands-finding-work/SKILL.md). This skill says only what is specific to comments.
+
+A comment belongs to one item (a ticket or a document) and is its own small file, written by the CLI. You never write a comment file yourself. `comment add` is a write, so `--repo` is the repository's main checkout root, never a worktree. Keep your `--input` files in a temporary directory outside the repository, and delete them when done.
+
+A comment is a push. `comment add` saves the comment on the item's own branch and then publishes that branch to the publication remote, so a comment on another ticket pushes that ticket's branch, with everything saved on it. Tell the person it was published, or that it could not be. Sharing the rest is in [sharing and sync](../manyhands-sharing-and-sync/SKILL.md).
+
+## Read the comments
+
+```sh
+manyhands-cli --json comment list --repo <repo-root> --id <ITEM_ID>
+```
+
+`data.items[]` is one flat list, each entry with `id`, `parent_id` (null for a root comment), `author` (`Name <email>`), `created_at`, `body`, `depth` (0 for a root, 1 for a reply, 2 for a reply to a reply) and `path`, and `problems` (empty for a sound comment). A reply follows its parent. `data.context` names the item's branch and worktree, and `data.index.state` says whether the index is current. An item with none gives an empty list; an ID that is not an item gives `item_not_found`. There is no verb to show a single comment.
+
+Read with `--json`. The human output prints only the thread (id, author, time, indented by depth) and no body.
+
+If every comment shows a problem `missing_comment_item`, with `index.state` `stale`, the item has an unresolved conflict. The comments are not lost: find the conflict (a sync answered `recovery_required` with `data.conflict`) and resolve it first, in [sharing and sync](../manyhands-sharing-and-sync/SKILL.md).
+
+## Add a comment
+
+Content is one line per paragraph, with a blank line between paragraphs and no hard wrap at a column: the editors do not reflow. In the JSON file a body is one string, paragraphs joined by `\n\n`, with no `\n` inside a paragraph.
+
+Mint a new `comment_id` for every comment with `manyhands-cli id new`, and a different new `--request-id` for the write. The comment ID is neither the item ID nor a request ID. The IDs in the examples are placeholders: never reuse one.
+
+| Verb | Required | Optional |
+| --- | --- | --- |
+| `comment add` | `comment_id` (a ULID from `id new`), `body` (string, may be empty) | `parent_id` (the ID of a comment on the same item, or null for a root comment; leaving it out is the same as null); `created_by` (string, `Name <email>`) |
+
+```json schema=comment_add
+{
+  "comment_id": "<COMMENT_ID>",
+  "body": "First paragraph on one line.\n\nSecond paragraph on one line."
+}
+```
+
+```sh
+manyhands-cli --json --non-interactive comment add --repo <repo-root> --id <ITEM_ID> --input comment.json --request-id <REQUEST_ID>
+```
+
+`--id` names the item the comment is on. `comment add` takes no `--prepare`: it answers `not_confirmable` (exit 2), and per [autonomy](../manyhands-overview/references/autonomy.md) you add comments alone.
+
+### Replies
+
+A reply names its parent comment. A reply to a reply works, one level deeper each time (the list stays flat).
+
+```json schema=comment_add
+{
+  "comment_id": "<COMMENT_ID>",
+  "parent_id": "<PARENT_COMMENT_ID>",
+  "created_by": "Agent Helper <agent@example.com>",
+  "body": "A reply on one line."
+}
+```
+
+Run it with the same command line as above. A `parent_id` that is not a comment on this item answers `item_not_found` ("No item has that ID"), with nothing written.
+
+### Who the comment is by
+
+Leave `created_by` out and the comment is by the repository's commit identity, which is the person. Set it only when the person wants the comment attributed to someone else or to you, and ask for the name and email: do not invent an address. The value must be `Name <email>`: a name, one space, then an email with an `@` in angle brackets, with no leading or trailing white space and no `<` or `>` inside either part, at most 256 bytes. A bare value such as `agent`, an empty email, or any other shape answers `invalid_input` (exit 2); rerun without `--json` to see it is the input, then fix the value.
+
+## What the answer tells you
+
+Read `outcome`, `code` and `effects` first. `data` holds `comment_id`, `parent_id`, `created_by`, `publication` and `pending_reason`.
+
+| You see | It means | What to do |
+| --- | --- | --- |
+| `success`, `ok`, `effects.publication` `published` | The comment is saved on the item's branch and the branch is pushed. | Done. If main had moved, `effects.integration` is `complete`: Manyhands merged main into the item's branch first (a "Merge primary into ..." commit) and pushed that too. |
+| `success`, `ok`, `publication` `pending`, `pending_reason` `no_publication_remote`, exit 0 | The comment is saved. The repository has no publication remote, so nothing was pushed. | Say so. The comment is shared later by `item sync` once a remote is selected ([repositories](../manyhands-repositories/SKILL.md)). Do not add it again. |
+| `partial`, `recovery_required`, exit 4, `data.conflict` holds `operation_id` | The comment is saved, but pushing found that someone else changed the same item, and merging them conflicts. | The comment is not lost and must not be added again. Resolve the conflict by `data.conflict.operation_id`: [sharing and sync](../manyhands-sharing-and-sync/SKILL.md). |
+| `partial`, `unlock_required`, exit 4 | The comment is saved. The selected key has a passphrase, so it could not be pushed. | Do not add the comment again: a new `comment_id` would post it twice. Hand the person this same command, without `--json --non-interactive`, with the same `--input` and the same `--request-id` (it is in `recovery`, `request.retry`). They run it at their terminal, type the passphrase and it publishes. Never ask for the passphrase. See [keys and hosts](../manyhands-keys-and-hosts/SKILL.md). |
+| `blocked`, `ticket_closed`, exit 3 | The ticket is closed. A closed ticket takes no new comment. | Tell the person. Its existing comments still read. |
+| `item_not_found` (2) | The item ID is wrong, or the `parent_id` is not a comment on this item. | `ticket list`, `document list`, `comment list`. |
+| `invalid_input` (2) | A missing or unknown field, a `comment_id` that is not a ULID, or a `created_by` that is not `Name <email>`. | Rerun without `--json` to read the field. |
+| `occupied_path` (2) | The `comment_id` is the same as the item's ID. | Mint a new `comment_id`. |
+| `internal_error` (1) | Seen when a `comment_id` that was already saved is sent again under a new `--request-id`. | Stop. Run `comment list`: the comment is probably there. Never "retry" with another request ID. To repeat a request you do not know finished, send the same `--request-id` and the same input; the stored answer comes back and nothing is written twice. A new comment gets a new `comment_id`. |
+
+`comment add` does not answer `publication_remote_required`: with no remote it succeeds with publication pending, as above. The sync verbs do answer it.
+
+A comment on a document that has already been promoted opens a new branch and worktree for the document again, as a save would, and publishes that branch.
+
+If a command stops at `host_approval_required`, `host_replacement_required` or `key_rejected`, that is the person's decision: [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).

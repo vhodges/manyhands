@@ -65,7 +65,7 @@ manyhands-cli --json --non-interactive ticket close --repo <repo-root> --id <ITE
 - `--prepare` refuses `--request-id` (`usage_error`: "--prepare conflicts with --request-id").
 - `--confirm` needs its own new `--request-id` in noninteractive mode. Repeat the same `--repo`, `--id` and `--input` as the prepare.
 - A confirmation works once. A second use answers `confirmation_used` (exit 3). An unknown or expired one answers `confirmation_not_found` with the next action `request.prepare`: prepare again. A confirmation prepared for a different item answers `confirmation_mismatch` (exit 2). Replaying the same confirm with the same request ID returns the stored answer.
-- A verb that is not confirmable answers `--prepare` with `not_confirmable` (exit 2): `ticket create`, `ticket save`, `key generate`, `index rebuild`, `poll once` and `item sync` are among them. Run those without `--prepare`.
+- A verb that is not confirmable answers `--prepare` with `not_confirmable` (exit 2): `ticket create`, `ticket save`, `key generate`, `index rebuild`, `poll once`, `item sync`, `repo sync`, `context sync-local`, `context resolve-local` and `conflict resolve` are among them. Run those without `--prepare`.
 - Who shows the preview to the person, and when: [autonomy](autonomy.md).
 
 ## The answer envelope

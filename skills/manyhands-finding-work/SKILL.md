@@ -87,7 +87,7 @@ Ready and blocked come from the dependencies, not from status words: a ticket is
 
 ## Comments
 
-`comment list --repo <repo-root> --id <ITEM_ID>` lists an item's comments: `data.items[]` each with `id`, `author`, `created_at`, `body`, `parent_id` (null for a top-level comment), `depth` and `path`, plus the item's `context`. An item with none is an empty list; an ID that is not an item is `item_not_found`. Writing a comment is `manyhands-comments`.
+`comment list --repo <repo-root> --id <ITEM_ID>` lists an item's comments: `data.items[]` each with `id`, `author`, `created_at`, `body`, `parent_id` (null for a top-level comment), `depth` and `path`, plus the item's `context`. An item with none is an empty list; an ID that is not an item is `item_not_found`. Writing a comment is [comments](../manyhands-comments/SKILL.md).
 
 ## Is what I see current
 
@@ -102,7 +102,7 @@ manyhands-cli --json repo inspect --repo <repo-root>
 
 - `index status`: `data.state` (`current` in every run here; the contract also names `stale`, `never_refreshed` and `unavailable`, which were not provoked), `refreshed_at`, `item_count`, `context_count`, and `problems` (the same findings as an item's `problems`) with `problem_count`. `pending_operations` lists work that is not finished: take it to `manyhands-recovery`.
 - The index is a cache of the repository. Manyhands' own writes update it at once. A commit made outside Manyhands (a person's `git commit`, a merge, a pull) is not seen until the index is refreshed: after one, `document list` omitted the new file while `index status` still said `current` (verified). `index refresh --repo <repo-root> --request-id <REQUEST_ID>` brings it up to date; you run it alone, and it is not confirmable. `manyhands-polling-and-index` covers refresh, rebuild and the schedule.
-- `poll status` says whether polling a shared remote is on (`enabled`, `paused`, `interval_seconds`, `latest_outcome`, `next_eligible_at`). A repository with no remote shows the defaults and nothing observed. Whether other people's work has arrived is `manyhands-sharing-and-sync` and `manyhands-polling-and-index`.
+- `poll status` says whether polling a shared remote is on (`enabled`, `paused`, `interval_seconds`, `latest_outcome`, `next_eligible_at`). A repository with no remote shows the defaults and nothing observed. Whether other people's work has arrived is [sharing and sync](../manyhands-sharing-and-sync/SKILL.md) and `manyhands-polling-and-index`.
 - `operation list` lists operations that still have work to do (an interrupted write, sync or promotion). Empty `items` means none. A non-empty list is for `manyhands-recovery`.
 - `repo inspect` shows `registered`, `head_branch`, `identity_state` (`available` or `required`), `local_branches` (including `manyhands/ticket/<id>` and `manyhands/document/<id>` branches of items in progress) and `remotes`.
 

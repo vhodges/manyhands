@@ -14,7 +14,7 @@ A managed document is a Markdown file under `docs/` with front matter that Manyh
 1. `folder create` (optional): make a folder to put documents in.
 2. `document create`: new document, new item ID, its own branch and worktree.
 3. `document show`, then `document save`: read, then edit, as often as needed. Each save is a checkpoint commit on the document's branch.
-4. Share it: `manyhands-sharing-and-sync`.
+4. Share it: [sharing and sync](../manyhands-sharing-and-sync/SKILL.md).
 5. `document promote`: merge the document into the main branch. Show the person first and wait ([autonomy](../manyhands-overview/references/autonomy.md)).
 
 A created document lives only on its own branch and worktree (`manyhands/document/<id>`, `.manyhands/worktrees/<id>`) until it is promoted. It is not in the main checkout's `docs/` yet, so `ls docs` and `document show --path docs/a.md` do not find it. Find it with `document list` or by ID (`document show --id`). After promotion the branch and worktree are gone; a later save makes a new branch and worktree again.
@@ -151,7 +151,7 @@ manyhands-cli --json --non-interactive document promote --repo <repo-root> --id 
 manyhands-cli --json --non-interactive document promote --repo <repo-root> --id <ITEM_ID> --confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>
 ```
 
-- `data.details.changes` lists each path and its change (`added`, `modified`...), `data.effects` the three steps (`primary_integrated`, `worktree_removed`, `branch_deleted`), `details.publication` what happens to the shared copy. Without a publication remote it reads `pending_no_remote`: the merge is complete (exit 0, `effects.integration` `complete`, `effects.publication` `pending`) and a later `repo sync` publishes (`manyhands-sharing-and-sync`). Promotion with a remote was not run here (no SSH host): the contract says it then publishes the main branch.
+- `data.details.changes` lists each path and its change (`added`, `modified`...), `data.effects` the three steps (`primary_integrated`, `worktree_removed`, `branch_deleted`), `details.publication` what happens to the shared copy. Without a publication remote it reads `pending_no_remote`: the merge is complete (exit 0, `effects.integration` `complete`, `effects.publication` `pending`) and a later `repo sync` publishes ([sharing and sync](../manyhands-sharing-and-sync/SKILL.md)). Promotion with a remote was not run here (no SSH host): the contract says it then publishes the main branch.
 - Save everything first: promotion takes the branch as it is. It is not a close: the document stays a document, and a later `document save` opens a new branch and worktree (verified).
 - Without `--confirm` the verb answers `confirmation_required` (exit 3) with a `request.prepare` recovery. A prepare that finds something in the way answers `recovery_required` (exit 3) and names it in `data.blockers`; nothing was changed. Verified blockers: `primary_dirty` (the main checkout has uncommitted or untracked changes: ask the person, do not clean up their files), `integration_conflict` (another document already holds the same path on main: `document move` yours to a free path, then prepare again). Others are in [errors and exit codes](../manyhands-overview/references/errors-and-exit-codes.md) and `manyhands-recovery`.
 - A document that is already promoted and has no branch since answers `recovery_required` with blocker `context_missing` (nothing to promote); an unknown ID answers `item_not_found`.
@@ -185,7 +185,7 @@ After the repair the document is on its own branch (`data.adopted` is true); the
 
 ## Identity and sharing
 
-A write in a repository with no commit identity answers `identity_required`: that is a repository setup step, see `manyhands-repositories`. Sharing a document with collaborators, and receiving theirs, is `manyhands-sharing-and-sync`.
+A write in a repository with no commit identity answers `identity_required`: that is a repository setup step, see `manyhands-repositories`. Sharing a document with collaborators, and receiving theirs, is [sharing and sync](../manyhands-sharing-and-sync/SKILL.md).
 
 ## Codes you will meet
 

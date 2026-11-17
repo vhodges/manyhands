@@ -13,7 +13,7 @@ Every verb here takes `--repo <repo-root>`, the repository's main checkout root,
 
 1. `ticket create`: a new ticket, with its own branch and worktree (`manyhands/ticket/<id>`, `.manyhands/worktrees/<id>`). It is given a short code (`slug`) at once.
 2. `ticket show`, then `ticket save`: read, then change status, text or relationships, as often as needed. Each save is a checkpoint commit on the ticket's branch.
-3. Share it: `manyhands-sharing-and-sync`. Comments on it: `manyhands-comments`.
+3. Share it: [sharing and sync](../manyhands-sharing-and-sync/SKILL.md). Comments on it: [comments](../manyhands-comments/SKILL.md).
 4. `ticket close`: record the closure, merge the branch into the main branch, publish if there is a remote, remove the branch and worktree. Show the person first and wait ([autonomy](../manyhands-overview/references/autonomy.md)).
 
 `type` and `status` are free text the person chooses (`task`, `bug`, `in_progress`, `review_ready`: none is special). Ask which words the project uses and look at `ticket list` before you invent one. A ticket is open until `closed_at` is set, whatever its status says: saving status `closed` closes nothing, and `ticket close` does not rewrite the status text. [Statuses and relationships](references/statuses-and-relationships.md) has the details.
@@ -158,7 +158,7 @@ manyhands-cli --json --non-interactive ticket close --repo <repo-root> --id <ITE
 - Which ticket: `details.slug` and `details.branch`. The preview carries no title, so take the title from `ticket show`.
 - `data.effects`: `closure_recorded`, `primary_integrated` (merged into `details.primary_branch` as a merge commit), `worktree_removed` and `branch_deleted`. With a remote it also lists `context_synchronized` (the ticket's branch is pushed first), `primary_published` and `remote_branch_deleted`.
 - `details.changes`: the paths the merge adds or changes.
-- `details.publication`: `publish` (the main branch is pushed to `details.remote`) or `pending_no_remote` (nothing is pushed: there is no publication remote, and a later `repo sync` publishes it, see `manyhands-sharing-and-sync`).
+- `details.publication`: `publish` (the main branch is pushed to `details.remote`) or `pending_no_remote` (nothing is pushed: there is no publication remote, and a later `repo sync` publishes it, see [sharing and sync](../manyhands-sharing-and-sync/SKILL.md)).
 - `details.closure.closed_by`: whose name goes on the closure, from the repository's commit identity.
 - That the status text stays as it is, and that the ticket worktree and local branch are deleted.
 

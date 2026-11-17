@@ -202,7 +202,7 @@ Git's host check is not Manyhands' host pin, and you never skip either. Steps 3 
    ```sh
    manyhands-cli host approve --repo <destination> --input approve.json --confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>
    ```
-9. Check: `host inspect --authority <host:port>` shows the pin, and `repo inspect --repo <destination>` shows `registered: true`, a publication remote and `identity_state: available`. Sync and sharing: `manyhands-sharing-and-sync`.
+9. Check: `host inspect --authority <host:port>` shows the pin, and `repo inspect --repo <destination>` shows `registered: true`, a publication remote and `identity_state: available`. Sync and sharing: [sharing and sync](../manyhands-sharing-and-sync/SKILL.md).
 
 If you cannot do a step, say which and why, and give the person the exact command. Never edit `.git/config`, `known_hosts` or `.manyhands/config.toml` by hand to get past a step.
 
