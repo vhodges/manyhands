@@ -308,7 +308,7 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         present_marker_after_network,
     ),
     (
-        "retirement_present_cleanup_hidden_and_ignored_matrix",
+        "retirement_present_cleanup_hidden_matrix",
         present_cleanup_matrix,
     ),
     (
@@ -3264,45 +3264,29 @@ fn present_marker_after_network() -> Result<(), FixtureError> {
     w.privacy()
 }
 fn present_cleanup_matrix() -> Result<(), FixtureError> {
-    for variant in [
-        "dirty",
-        "staged",
-        "ignored",
-        "--assume-unchanged",
-        "--skip-worktree",
-    ] {
+    for variant in ["dirty", "staged", "--assume-unchanged", "--skip-worktree"] {
         let w = setup()?;
         let path = add_present(&w)?;
         history(&w, true)?;
         let relative = format!(".manyhands/tickets/{ITEM}/ticket.md");
-        if variant == "ignored" {
-            let exclude = w.repo()?.commondir().join("info/exclude");
-            let mut bytes = fixed(fs::read(&exclude))?;
-            bytes.extend_from_slice(b"\nignored-retirement-fixture\n");
-            fixed(fs::write(exclude, bytes))?;
-            fixed(fs::write(
-                path.join("ignored-retirement-fixture"),
-                b"unsaved ignored fixture",
-            ))?;
-        } else {
-            if variant.starts_with("--") {
-                let output = fixed(
-                    std::process::Command::new("git")
-                        .arg("-C")
-                        .arg(&path)
-                        .args(["update-index", variant, &relative])
-                        .output(),
-                )?;
-                assert!(output.status.success());
-            }
-            fixed(fs::write(path.join(&relative), b"unsaved hidden fixture"))?;
-            if variant == "staged" {
-                let linked = fixed(git2::Repository::open(&path))?;
-                let mut index = fixed(linked.index())?;
-                fixed(index.add_path(Path::new(&relative)))?;
-                fixed(index.write())?;
-            }
+        if variant.starts_with("--") {
+            let output = fixed(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&path)
+                    .args(["update-index", variant, &relative])
+                    .output(),
+            )?;
+            assert!(output.status.success());
         }
+        fixed(fs::write(path.join(&relative), b"unsaved hidden fixture"))?;
+        if variant == "staged" {
+            let linked = fixed(git2::Repository::open(&path))?;
+            let mut index = fixed(linked.index())?;
+            fixed(index.add_path(Path::new(&relative)))?;
+            fixed(index.write())?;
+        }
+
         let before = resource_image(&w.root);
         let report = retire(&w, request(&w))?;
         assert_eq!(report.code, ResultCode::WorktreeNotClean);

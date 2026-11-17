@@ -2236,52 +2236,112 @@ fn contained_remote_cache_recovery_skips_deleted_context_child_and_does_not_reme
 }
 
 #[test]
-fn f6_rechecks_dirty_or_ignored_context_under_lease_before_deletion() {
-    for ignored in [false, true] {
-        let f = Fixture::new();
-        f.remote();
-        let req = f.request();
-        let root = f.root.path().to_owned();
-        hook(&f, move |_, p| {
-            if p == FailurePoint::BeforeRemoteDeletion {
-                let path = if ignored {
-                    "late-ignored"
-                } else {
-                    "late-untracked"
-                };
-                if ignored {
-                    fs::write(
-                        git2::Repository::open(&root)
-                            .unwrap()
-                            .path()
-                            .join("info/exclude"),
-                        "late-ignored\n",
-                    )
-                    .unwrap();
-                }
-                write(
-                    &git2::Repository::open(root.join(".manyhands/worktrees").join(ITEM)).unwrap(),
-                    path,
-                    "preserve",
-                );
-            }
-        });
-        let mut io = FakeIo::default();
-        let result = authoritative(f.run_io(req, &mut io).unwrap());
-        assert_eq!(
-            result.cleanup(),
-            PromotionCleanup::Pending {
-                reason: if ignored {
-                    PromotionCleanupPending::IgnoredFiles
-                } else {
-                    PromotionCleanupPending::ContextChanged
-                }
-            }
-        );
-        assert_eq!(io.calls.borrow().deletes, 0);
-        assert!(f.context.workdir().unwrap().exists());
-    }
+fn f6_rechecks_a_dirty_context_under_lease_before_deletion() {
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let root = f.root.path().to_owned();
+    hook(&f, move |_, p| {
+        if p == FailurePoint::BeforeRemoteDeletion {
+            write(
+                &git2::Repository::open(root.join(".manyhands/worktrees").join(ITEM)).unwrap(),
+                "late-untracked",
+                "preserve",
+            );
+        }
+    });
+    let mut io = FakeIo::default();
+    let result = authoritative(f.run_io(req, &mut io).unwrap());
+    assert_eq!(
+        result.cleanup(),
+        PromotionCleanup::Pending {
+            reason: PromotionCleanupPending::ContextChanged
+        }
+    );
+    assert_eq!(io.calls.borrow().deletes, 0);
+    assert!(f.context.workdir().unwrap().exists());
 }
+
+/// Ignores `name` in the repository and writes an ignored file of that name
+/// into the context's worktree.
+fn write_ignored(f: &Fixture, name: &str) {
+    fs::write(
+        git2::Repository::open(f.root.path())
+            .unwrap()
+            .path()
+            .join("info/exclude"),
+        format!("{name}\n"),
+    )
+    .unwrap();
+    write(&f.context, name, "ignored");
+}
+
+#[test]
+fn an_ignored_file_does_not_stop_the_cleanup_of_a_run() {
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let root = f.root.path().to_owned();
+    hook(&f, move |_, p| {
+        if p == FailurePoint::BeforeRemoteDeletion {
+            fs::write(
+                git2::Repository::open(&root)
+                    .unwrap()
+                    .path()
+                    .join("info/exclude"),
+                "late-ignored\n",
+            )
+            .unwrap();
+            write(
+                &git2::Repository::open(root.join(".manyhands/worktrees").join(ITEM)).unwrap(),
+                "late-ignored",
+                "ignored",
+            );
+        }
+    });
+    let mut io = FakeIo::default();
+    let result = outcome(f.run_io(req, &mut io).unwrap());
+    assert_eq!(result.cleanup(), PromotionCleanup::Complete);
+    assert!(!f.context.workdir().unwrap().exists());
+}
+
+#[test]
+fn a_cleanup_left_at_ignored_files_by_an_older_build_finishes_on_resend() {
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let root = f.root.path().to_owned();
+    hook(&f, move |_, p| {
+        if p == FailurePoint::AfterPublication {
+            write(
+                &git2::Repository::open(root.join(".manyhands/worktrees").join(ITEM)).unwrap(),
+                "untracked",
+                "keep",
+            );
+        }
+    });
+    let mut io = FakeIo::default();
+    let stopped = authoritative(f.run_io(req.clone(), &mut io).unwrap());
+    assert!(matches!(
+        stopped.cleanup(),
+        PromotionCleanup::Pending { .. }
+    ));
+    HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+    // What an older build left: the stop recorded as `ignored_files`, over a
+    // worktree that now holds only an ignored file.
+    f.db()
+        .execute(
+            "UPDATE document_promotions SET cleanup_category='ignored_files' WHERE operation_id=?1",
+            [req.operation_id.to_string()],
+        )
+        .unwrap();
+    fs::remove_file(f.context.workdir().unwrap().join("untracked")).unwrap();
+    write_ignored(&f, "build-output");
+    let done = outcome(f.run_io(req, &mut io).unwrap());
+    assert_eq!(done.cleanup(), PromotionCleanup::Complete);
+    assert!(!f.context.workdir().unwrap().exists());
+}
+
 struct ConsentIo {
     inner: FakeIo,
     approval: HostApproval,
@@ -5008,8 +5068,8 @@ fn deletion_changed_and_still_present_keep_context_and_retry() {
     }
 }
 #[test]
-fn cleanup_precheck_preserves_dirty_untracked_moved_and_ignored_before_remote_delete() {
-    for mode in 0..4 {
+fn cleanup_precheck_preserves_dirty_untracked_and_moved_before_remote_delete() {
+    for mode in 0..3 {
         let f = Fixture::new();
         f.remote();
         let req = f.request();
@@ -5021,20 +5081,9 @@ fn cleanup_precheck_preserves_dirty_untracked_moved_and_ignored_before_remote_de
                 match mode {
                     0 => write(&repo, DOC, "dirty"),
                     1 => write(&repo, "untracked", "preserve"),
-                    2 => {
+                    _ => {
                         write(&repo, "moved", "preserve");
                         commit(&repo);
-                    }
-                    _ => {
-                        fs::write(
-                            git2::Repository::open(&root)
-                                .unwrap()
-                                .path()
-                                .join("info/exclude"),
-                            "ignored\n",
-                        )
-                        .unwrap();
-                        write(&repo, "ignored", "preserve");
                     }
                 }
             }
@@ -5044,11 +5093,7 @@ fn cleanup_precheck_preserves_dirty_untracked_moved_and_ignored_before_remote_de
         assert_eq!(
             result.cleanup(),
             PromotionCleanup::Pending {
-                reason: if mode == 3 {
-                    PromotionCleanupPending::IgnoredFiles
-                } else {
-                    PromotionCleanupPending::ContextChanged
-                }
+                reason: PromotionCleanupPending::ContextChanged
             }
         );
         assert_eq!(io.calls.borrow().deletes, 0);
