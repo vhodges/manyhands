@@ -1260,7 +1260,6 @@ fn finish_steps<L: Lifecycle>(
         let cleanup = ContextCleanup::acquire(root).map_err(recovery)?;
         match cleanup.precheck_context(L::KIND.authoring(), r.item_id(), oid) {
             Precheck::Ok => (),
-            Precheck::IgnoredFiles => return Err(Clean::IgnoredFiles),
             _ => return Err(Clean::ContextChanged),
         }
     }
@@ -1340,7 +1339,6 @@ fn finish_steps<L: Lifecycle>(
                 let cleanup = ContextCleanup::acquire(root).map_err(recovery)?;
                 match cleanup.precheck_context(L::KIND.authoring(), r.item_id(), oid) {
                     Precheck::Ok => (),
-                    Precheck::IgnoredFiles => return Err(Clean::IgnoredFiles),
                     _ => return Err(Clean::ContextChanged),
                 }
             } // Drop the precheck lease before credentials/advertisement/delete.
@@ -1433,7 +1431,6 @@ fn finish_steps<L: Lifecycle>(
     ) {
         match cleanup.precheck_context(L::KIND.authoring(), r.item_id(), oid) {
             Precheck::Ok => (),
-            Precheck::IgnoredFiles => return Err(Clean::IgnoredFiles),
             _ => return Err(Clean::ContextChanged),
         }
         r.set_step(Step::WorktreeRemoving);
