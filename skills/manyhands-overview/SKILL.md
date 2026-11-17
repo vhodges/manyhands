@@ -33,7 +33,7 @@ Read [concepts](references/concepts.md) for the model behind these lines.
 - Never resume or abandon an operation you cannot prove you started. If you cannot attribute it, show it to the person: [recovery](../manyhands-recovery/SKILL.md), "Whose operation is it?".
 - Add `--json --non-interactive` when you drive the CLI, and read `outcome`, `code`, `data` and `recovery` from the answer.
 - A save needs an `observation` token from a fresh read of that item. The refusal `external_change` (exit 3) means the item changed since you read it: read again and merge. Do not retry blindly.
-- A passphrase-protected key cannot be unlocked by you: `unlock_required` means hand that step to the person at their terminal. Never ask for or type a passphrase. See [autonomy](references/autonomy.md).
+- A passphrase-protected key cannot be unlocked by you: `unlock_required` means hand that step to the person at their terminal, or ask them to load the key into their ssh-agent so unattended runs can sign through it ([keys and hosts](../manyhands-keys-and-hosts/SKILL.md), "A passphrase key through ssh-agent"). Never ask for or type a passphrase. See [autonomy](references/autonomy.md).
 - Which actions you take alone, which you show the person first and which you hand over are in [autonomy](references/autonomy.md). Read it before your first write.
 
 Details: [CLI conventions](references/cli-conventions.md) and [errors and exit codes](references/errors-and-exit-codes.md).

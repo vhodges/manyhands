@@ -21,9 +21,7 @@ Manyhands uses one user-selected SSH private key for every Git-over-SSH
 operation. It generates Ed25519 OpenSSH private keys, registers imported keys
 without copying their private material, keeps passphrases only for one
 application session, and requires explicit trust for an unknown SSH host key.
-All remote Git operations use `git2`/libgit2 callbacks. A system Git executable,
-SSH-agent fallback, default-key fallback, credential helper, OAuth token, and
-Git-forge key upload are not runtime dependencies.
+All remote Git operations use `git2`/libgit2 callbacks. A system Git executable, default-key fallback, credential helper, OAuth token, and Git-forge key upload are not runtime dependencies. An ssh-agent is used only to sign for the selected key ([Agent signing](#agent-signing)).
 
 ## Scope
 
@@ -172,11 +170,20 @@ operation that uses them. The credentials callback:
 - Uses the URL username when present, or returns an SSH username credential only
   when libgit2 requests one before key authentication.
 - Supplies the session passphrase only to the selected key's credential call.
-- Rejects HTTP(S), username/password, SSH-agent, credential-helper, and default
-  credential requests with a typed non-secret error.
+- Rejects HTTP(S), username/password, credential-helper, and default credential requests with a typed non-secret error, and never lets the agent offer or sign with any key but the selected one.
 
 Neither callbacks nor `git2` handles may be retained in desktop or CLI model
 state, transferred across threads, or reused after an operation ends.
+
+## Agent Signing
+
+Amended 2026-11-17 (ticket `01M67Y754SJ1FTYQJFR37Z4ZTY`, owner decision): an ssh-agent may sign for the selected key. This lets an unattended CLI run, such as an LLM agent's, authenticate with a passphrase-protected key the person has already unlocked in their agent, with no prompt and no `unlock_required`.
+
+- The agent is the one named by SSH_AUTH_SOCK as the process had it when the service opened. `~/.ssh/config` is never read, so `IdentityAgent` and, on macOS, `UseKeychain` have no effect. `UseKeychain` makes Apple's `ssh` fetch a passphrase from the keychain and load the key into the agent; Manyhands only uses a key that is already in the agent (`ssh-add`, or `ssh-add --apple-load-keychain` on macOS).
+- The selected key's public key is read from its private key file. The agent is asked for its identities, and the agent route is used only when it lists that exact key. The credential offers that one public key and asks the agent to sign for it. The agent's other keys are never offered to the server or asked to sign.
+- Ed25519 and ECDSA keys. An RSA selected key does not use the agent. Unix only for now; elsewhere the agent is unavailable.
+- Anything else about the agent (unset, unreachable, empty, key absent, malformed or oversized answers, a refused or timed-out sign, a rejection by the server) leaves the selected-key file flow exactly as before, including its prompt at a terminal and `unlock_required` without one. A failure that is not about the key, such as a host-trust or network failure, ends the attempt.
+- Host trust, redaction and the one-credential-submission bound apply unchanged. No agent detail (socket path, identity list, comments) reaches output, logs or stored results.
 
 ## Host Trust
 
@@ -242,8 +249,7 @@ Git executable.
 
 The fixture and tests MUST prove:
 
-- Successful fetch and push with the selected key, and rejection with a wrong,
-  absent, default, or SSH-agent key.
+- Successful fetch and push with the selected key, and rejection with a wrong, absent, or default key. Through an agent, successful fetch with the selected key when the agent lists other keys first, with no sign request for any other key.
 - First-contact host approval, changed-host replacement, and no inherited
   developer `known_hosts` or global Git state.
 - Generated-key protection, imported-key non-deletion, explicit generated-key
@@ -270,8 +276,7 @@ This RFC is satisfied when automated evidence demonstrates that:
 - A user can register an externally supplied key without copying or deleting it;
   first use reports any actual backend or unlock incompatibility recoverably.
 - Every successful Git-over-SSH operation uses exactly the selected shared key
-  and approved host trust, without agent, default-key, or credential-helper
-  fallback.
+  and approved host trust, with an agent only signing for that key, and without default-key or credential-helper fallback.
 - First use of a protected key requests an in-session passphrase, reuses it only
   for that session, and leaves local work recoverable after cancellation or
   failure.
@@ -291,3 +296,4 @@ This RFC is satisfied when automated evidence demonstrates that:
 | Host trust uses explicit TOFU pins by host and port. | Accepted | Prevents silent first-contact or host-key replacement while remaining usable without preconfigured global state. |
 | Production uses only `git2`/libgit2 transport. | Accepted | Preserves the approved runtime Git backend boundary. |
 | Tests may use a restricted local SSH Git server with Git protocol helpers. | Accepted | Supplies real authenticated fetch/push evidence without making system Git a production dependency. |
+| An ssh-agent reached through SSH_AUTH_SOCK may sign for the selected key, and for no other key. | Accepted (2026-11-17) | Lets unattended CLI runs use a passphrase-protected key the person already unlocked, without a prompt. Supersedes the earlier "no SSH-agent" rule; default-key, helper, password and anonymous fallbacks stay refused. |
