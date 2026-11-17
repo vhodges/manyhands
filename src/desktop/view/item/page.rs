@@ -354,7 +354,9 @@ impl ItemPane {
         let body = match self.model.target() {
             OpenTarget::Item { .. } => item.body.as_deref(),
             OpenTarget::Inspect { .. } if self.nonconforming_file(item) => item.source.as_deref(),
-            OpenTarget::Inspect { .. } => return,
+            // A file that conforms now has the source view; a read view kept
+            // from when it did not is dropped.
+            OpenTarget::Inspect { .. } => None,
         };
         self.page.show(body, &self.scroll, &self.images, window, cx);
         self.page.note_focus(window, cx);

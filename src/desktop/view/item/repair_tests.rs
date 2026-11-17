@@ -876,7 +876,8 @@ async fn a_non_utf8_file_says_it_cannot_be_repaired_here(cx: &mut TestAppContext
 /// R-25: the repair view is a plain text area, never the markdown editor.
 /// A body the editor's load would rewrite (CRLF line endings, a `$$` pair)
 /// is held exactly as read and repaired exactly as typed; no edit editor
-/// and no read view is made, and no draft holds the text.
+/// is made, the tab's read view is not drawn over the text, and no draft
+/// holds the text.
 #[gpui_kit::test]
 async fn the_repair_view_never_passes_through_the_markdown_editor(cx: &mut TestAppContext) {
     let body = "First\r\nWhat if words $$E=mc^2$$ more\r\n";

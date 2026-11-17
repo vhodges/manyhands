@@ -746,6 +746,49 @@ fn a_nonconforming_file_reads_in_the_read_view_with_its_git_details_in_a_sheet(
     assert!(!present(&shell, "sheet-inspect", cx), "no Inspect link");
 }
 
+/// A file read by its path that is repaired elsewhere reads as a conforming
+/// file the next time: the raw source view takes the page, and the read
+/// view the file had is dropped, so it cannot take a press.
+#[gpui_kit::test]
+fn a_file_repaired_elsewhere_drops_the_read_view_it_had(cx: &mut TestAppContext) {
+    const PATH: &str = "docs/mended.md";
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_file(
+            root,
+            PATH,
+            b"---\nmanyhands_managed: true\n---\nOnly a marker.\n",
+        );
+    });
+    let target = OpenTarget::Inspect {
+        repo: key(&root),
+        worktree: key(&root),
+        path: PATH.to_owned(),
+    };
+    open(&shell, target, cx);
+    let pane = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.item_pane())
+        .expect("an item tab is shown");
+    assert!(pane.read_with(cx, |pane, _| pane.read_view().is_some()));
+
+    let mended = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {DOCUMENT}\ntitle: Mended\n---\nOnly a marker.\n"
+    );
+    shell.fixture.commit_file(&root, PATH, mended.as_bytes());
+    shell.fixture.refresh(&root);
+    pane.update(cx, |pane, cx| {
+        pane.reload(cx);
+    });
+    shell.run(cx);
+
+    assert!(present(&shell, "item-source", cx), "the raw source");
+    assert!(!present(&shell, "item-read", cx));
+    assert!(
+        pane.read_with(cx, |pane, _| pane.read_view().is_none()),
+        "no read view is kept"
+    );
+}
+
 /// Refresh that is emptied from the queue on quit has ended: the item
 /// is read again and Refresh is offered, not "Refreshing" for ever.
 #[gpui_kit::test]

@@ -234,7 +234,8 @@ impl ItemPane {
                 .line_height(relative(1.25))
                 .text_color(colors.header_title)
         });
-        // An item read by path has no chips: it has no details sheet.
+        // An item read by path has no chips and no item details sheet; a
+        // nonconforming one has the Git details button (`git_details_button`).
         let chips = match (self.model.target(), item) {
             (OpenTarget::Item { kind, .. }, Some(item)) => Some(self.chip_row(
                 chips(
