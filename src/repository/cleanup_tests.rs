@@ -384,7 +384,13 @@ fn cleanup_ignored_files_beside_other_changes_still_block() {
 
 #[test]
 fn cleanup_ignored_directories_holding_a_repository_or_unreadable_block() {
-    for case in ["git_dir", "gitfile", "three_deep", "unreadable"] {
+    for case in [
+        "git_dir",
+        "gitfile",
+        "three_deep",
+        "unreadable",
+        "untracked_empty_repository",
+    ] {
         if cfg!(not(unix)) && case == "unreadable" {
             continue;
         }
@@ -401,6 +407,11 @@ fn cleanup_ignored_directories_holding_a_repository_or_unreadable_block() {
             "gitfile" => {
                 fs::create_dir_all(worktree.join("vendor/clone")).unwrap();
                 fs::write(worktree.join("vendor/clone/.git"), b"gitdir: /elsewhere\n").unwrap();
+            }
+            "untracked_empty_repository" => {
+                // Not ignored itself, and holding nothing Git reports: only the
+                // `.git` entry says there are commits to lose.
+                Repository::init(worktree.join("notes")).unwrap();
             }
             "three_deep" => {
                 fs::create_dir_all(worktree.join("target/a/b/c")).unwrap();
@@ -432,6 +443,18 @@ fn cleanup_ignored_directories_holding_a_repository_or_unreadable_block() {
             fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
         }
     }
+}
+
+#[test]
+fn a_directory_that_vanishes_during_the_walk_is_not_a_block() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("target")).unwrap();
+    fs::write(dir.path().join("target/x"), b"ignored").unwrap();
+    let roots = vec![dir.path().join("target"), dir.path().join("gone")];
+    assert!(!super::tree_holds_git_entry(roots).unwrap());
+    fs::create_dir(dir.path().join("target/inner")).unwrap();
+    fs::create_dir(dir.path().join("target/inner/.git")).unwrap();
+    assert!(super::tree_holds_git_entry(vec![dir.path().join("target")]).unwrap());
 }
 
 fn hide_index_entry(repo: &Repository, path: &str, flag: &str) {
