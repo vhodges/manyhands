@@ -6,6 +6,8 @@ type: story
 status: done
 project: manyhands
 team: core
+closed_at: 2026-11-17T18:51:53Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
