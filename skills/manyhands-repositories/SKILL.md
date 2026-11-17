@@ -1,13 +1,13 @@
 ---
 name: manyhands-repositories
-description: "Use when creating a Manyhands repository, enabling Manyhands in an existing or cloned repository, onboarding an SSH URL or clone the person gives you, setting the publication remote, commit identity or ticket slug prefix, or inspecting or removing a repository."
+description: "Use when creating a Manyhands repository, enabling Manyhands in an existing or cloned repository, onboarding an SSH URL or clone the person gives you, setting the publication remote, commit identity or ticket slug prefix, inspecting or removing a repository, or a command answers repository_not_registered, repository_not_enabled or identity_required."
 ---
 
 # Repositories
 
-Read the [overview](../manyhands-overview/SKILL.md) first. Who runs what is in [autonomy](../manyhands-overview/references/autonomy.md); input files, `--request-id`, prepare and confirm, and the main checkout root are in [CLI conventions](../manyhands-overview/references/cli-conventions.md); codes are in [errors and exit codes](../manyhands-overview/references/errors-and-exit-codes.md). Keys and host trust are in `manyhands-keys-and-hosts`; this skill says when to use them.
+Read the [overview](../manyhands-overview/SKILL.md) first. Who runs what is in [autonomy](../manyhands-overview/references/autonomy.md); input files, `--request-id`, prepare and confirm, and the main checkout root are in [CLI conventions](../manyhands-overview/references/cli-conventions.md); codes are in [errors and exit codes](../manyhands-overview/references/errors-and-exit-codes.md). Keys and host trust are in [keys and hosts](../manyhands-keys-and-hosts/SKILL.md); this skill says when to use them.
 
-Every verb here takes `--repo <repo-root>`, the repository's main checkout root, the directory that holds `.git`. There is no "current repository": the CLI never guesses from where you stand.
+Every verb here except `repo list` takes `--repo <repo-root>`, the repository's main checkout root, the directory that holds `.git`. There is no "current repository": the CLI never guesses from where you stand. Keep your `--input` files in a temporary directory outside the repository, so they are not committed, and delete them when done.
 
 ## Which situation is it
 
@@ -28,7 +28,7 @@ manyhands-cli --json repo identity --repo <repo-root>
 manyhands-cli --json remote list --repo <repo-root>
 ```
 
-`repo inspect` works on a repository that is not registered: `data.registered` is false, `data.configuration.publication_remote` is the selected remote or null, `data.identity_state` is `available` or `required`, `data.remotes` lists the remotes. `repo list` lists only registered repositories (`data.items[].root`, `accessibility`, `configuration`, `problem_count`). Neither shows an SSH key: the selected key is global, see `manyhands-keys-and-hosts`.
+`repo inspect` works on a repository that is not registered: `data.registered` is false, `data.configuration.publication_remote` is the selected remote or null, `data.identity_state` is `available` or `required`, `data.remotes` lists the remotes. `repo list` lists only registered repositories (`data.items[].root`, `accessibility`, `configuration`, `problem_count`). Neither shows an SSH key: the selected key is global, see [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
 
 ## `repo create` and `repo enable`
 
@@ -72,7 +72,7 @@ manyhands-cli --json --non-interactive repo create --repo <new-repo-root> --inpu
 manyhands-cli --json --non-interactive repo create --repo <new-repo-root> --input create.json --confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>
 ```
 
-The prepare's `data.effects` lists what will happen (`directory_created`, `repository_initialized`, `identity_written`, `configuration_written`, `initialization_committed`, `repository_registered`) and `data.details.identity.written_locally` says whether the identity will be stored. Show it in words.
+The prepare's `data.effects` lists what will happen (`directory_created`, `repository_initialized`, `identity_written`, `worktree_exclusion_written`, `configuration_written`, `initialization_committed`, `repository_registered`) and `data.details.identity.written_locally` says whether the identity will be stored. Show it in words.
 
 ### Commit identity
 
@@ -97,7 +97,7 @@ manyhands-cli --json --non-interactive repo identity-set --repo <repo-root> --in
 manyhands-cli --json --non-interactive repo identity-set --repo <repo-root> --input identity.json --confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>
 ```
 
-`repo identity-set` is not in the autonomy table's list; it is confirmed like the other repository verbs here, so treat it like `repo enable`: show the preview, wait for the OK.
+Who runs it is in [autonomy](../manyhands-overview/references/autonomy.md).
 
 ## Remotes
 
@@ -132,7 +132,7 @@ manyhands-cli --json --non-interactive remote select --repo <repo-root> --input 
 
 `remote add` and `remote select` you run alone. `remote list` shows `selected_for_publication` and `publication_eligible`; the URL shown has no credentials. Adding the same remote again is `already_applied`.
 
-`remote remove` is confirmed and not in the autonomy table. Prepare, show the person, wait. A selected remote cannot be removed (`publication_remote_in_use`): select null first, which stops publication, so ask the person.
+`remote remove` is confirmed ([autonomy](../manyhands-overview/references/autonomy.md)). A selected remote cannot be removed (`publication_remote_in_use`): select null first, which stops publication, so ask the person.
 
 ```json schema=remote_remove
 {
@@ -148,8 +148,8 @@ Confirm with `--confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>` as for the 
 
 ## The order for a repository that will share
 
-1. A key exists and is selected, and its public key is on the Git host (`manyhands-keys-and-hosts`).
-2. The repository is created or enabled.
+1. A key exists (`key generate` or `key import`) and is selected (`key select`), and its public key is on the Git host ([keys and hosts](../manyhands-keys-and-hosts/SKILL.md)).
+2. The repository is created or enabled (`repo create` or `repo enable`).
 3. The remote is added and selected.
 4. Host trust: `host observe`, the person checks the fingerprint, `host approve`. These need steps 1 to 3: `host observe` answers `no_selected_key` without a key, `publication_remote_required` without a selected remote and `repository_not_registered` for a repository that is not enabled.
 
@@ -160,44 +160,55 @@ A repository with no remote works fully on its own; sharing waits (`publication_
 A clone of a repository that already uses Manyhands has `.manyhands/config.toml`, but is not registered on this machine and has no identity in its local Git configuration. After `repo enable` the identity is still `required`: enabling a repository that already has a Manyhands configuration does not write the identity you supply (verified, even though `repo enable` accepted it). So:
 
 1. `repo enable` (prepare, show, wait, confirm). Include `identity` in the input, as the prepare refuses without it.
-2. `repo identity` shows `Source: none`. Ask the person for the commit name and email, then `repo identity-set` as above.
+2. `repo identity` shows `Source: none`. Run `repo identity-set` with the same name and email the person already gave for `repo enable`; ask again only if you never had them.
 3. `remote list`. If the config already selects a remote, `repo inspect` shows `Publication remote: <name>`. If not, `remote select`.
-4. Host trust, if it will share: `manyhands-keys-and-hosts`.
+4. Host trust, if it will share: [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
 
 ## Onboarding from an SSH URL
 
 Use when the person gives only a URL, such as `ssh://git@git.example.com/org/repo.git`. Run these in order and stop where it says. The reasons and the failures are in [onboarding from an SSH URL](references/onboarding-from-an-ssh-url.md); the sequence was run end to end against a throwaway `sshd` on a high port.
 
-Stop and hand over at each marked step. Git's host check is not Manyhands' host pin, and you never skip either.
+Git's host check is not Manyhands' host pin, and you never skip either. Steps 3 and 4 always come before any hand-off of the clone to the person, whether or not the key has a passphrase.
 
-1. Ask the person where to clone, and which key to use if more than one is registered (`key list`). If none exists, `manyhands-keys-and-hosts` first. Select it: `manyhands-cli --json --non-interactive key select --key-id <KEY_ID> --request-id <REQUEST_ID>`. Selecting changes the key for every repository: say so if another key was selected.
-2. **Stop if the key is passphrase-protected.** `key show` does not say, so ask the person if you did not generate the key yourself with `none`. `ssh` will prompt for the passphrase and you cannot answer; without a terminal it fails as `Permission denied (publickey)`. Give the person the clone command (step 4) to run in their own terminal, then continue from step 5 when they say it is done.
+1. Ask the person where to clone. If that directory already exists and is not empty, `git clone` refuses it (`destination path ... already exists and is not an empty directory`): ask the person for another path, and never empty or delete their directory yourself. An existing empty directory is fine. Ask which key to use if more than one is registered (`key list`). If none exists, or the person says one exists and `key list` is empty, go to [keys and hosts](../manyhands-keys-and-hosts/SKILL.md) first. Select it: `manyhands-cli --json --non-interactive key select --key-id <KEY_ID> --request-id <REQUEST_ID>`. Selecting changes the key for every repository: say so if another key was selected. Get `<private_key_path>` from `data.private_key_path` of `key show`.
+2. Ask whether that key has a passphrase if you did not generate it yourself with `none` (`key show` does not say). Note it: a passphrase key changes only who runs step 5 and step 9, not the order.
 3. **The public key must already be on the Git host, by the person's hand.** Show `manyhands-cli key public --key-id <KEY_ID>` and wait. Without it the clone fails with `Permission denied (publickey)`.
-4. **Stop at the host fingerprint.** Git must trust the host before it can clone, but plain `git clone` with no terminal fails with `Host key verification failed`. Never use `-o StrictHostKeyChecking=no` or `accept-new`: that trusts whatever answers. Instead read the host's key without trusting it (this is a network connection to the real host) and show the person the fingerprint:
+4. **Stop at the host fingerprint.** Git must trust the host before it can clone, but plain `git clone` with no terminal fails with `Host key verification failed`. Never use `-o StrictHostKeyChecking=no` or `accept-new`: that trusts whatever answers. Instead read the host's key without trusting it (a network connection to the real host) into a temporary directory outside any repository, and show the person the fingerprint:
 
    ```sh
-   ssh-keyscan -p <port> <host> > scanned.txt
-   ssh-keygen -lf scanned.txt
+   mkdir <temp-dir>
+   ssh-keyscan -p <port> <host> > <temp-dir>/scanned.txt
+   ssh-keygen -lf <temp-dir>/scanned.txt
    ```
 
-   Omit `-p <port>` for port 22. Ask the person to confirm each fingerprint against a source they trust (the Git host's published list), and wait.
-5. Only after their OK, clone with that exact key and only the scanned host key trusted. `<private_key_path>` is `data.private_key_path` from `key show`:
+   Omit `-p <port>` for port 22. Ask the person to confirm each fingerprint against a source they trust (the Git host's published list), and wait. Keep the scanned fingerprint for step 8.
+5. Only after their OK, clone with that exact key, trusting only the scanned host key. If the key has no passphrase, run:
 
    ```sh
-   GIT_SSH_COMMAND='ssh -i <private_key_path> -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<path>/scanned.txt' git clone <url> <destination>
+   GIT_SSH_COMMAND='ssh -i <private_key_path> -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<temp-dir>/scanned.txt' git clone <url> <destination>
    ```
 
-   The environment variable form is for a POSIX shell. In PowerShell set `$env:GIT_SSH_COMMAND` first; that form was not run here.
-6. `repo enable` on `<destination>`, then the identity check, as in "Onboarding a clone".
+   **If the key has a passphrase, hand the clone to the person's own terminal** and give them this command, which differs only in leaving out `-o BatchMode=yes`. `BatchMode` forbids the passphrase prompt even at a terminal (verified: the clone fails with `Permission denied (publickey)` and no prompt; without it, it prompts and clones):
+
+   ```sh
+   GIT_SSH_COMMAND='ssh -i <private_key_path> -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<temp-dir>/scanned.txt' git clone <url> <destination>
+   ```
+
+   Wait until they say it is done, then continue at step 6. Delete `<temp-dir>` afterwards. The environment variable form is for a POSIX shell. In PowerShell set `$env:GIT_SSH_COMMAND` first; that form was not run here.
+6. `repo enable` on `<destination>` (include the `identity` the person gives), then `repo identity-set` if `repo identity` shows `Source: none`, as in "Onboarding a clone".
 7. Make sure a remote is selected (`repo inspect`, then `remote select` if `Publication remote` is empty).
-8. **Stop at Manyhands' host pin.** `host observe --repo <destination>` (a network call), compare `presented_fingerprint` with what the person approved at step 4, show it, wait for their OK, then `host approve` with `--prepare`, show the preview, `--confirm`. Details are in `manyhands-keys-and-hosts`.
+8. **Stop at Manyhands' host pin.** `host observe --repo <destination>` (a network call; a host that is not pinned yet is not authenticated, so it works even with a passphrase key). Compare `presented_fingerprint` with what the person accepted at step 4, show it, and wait for their OK. Then `host approve` with `--prepare`, show the preview, and `--confirm`. With a passphrase key `--confirm` answers `unlock_required`: give the person the same command at their terminal, with the same confirmation ID and request ID. Details and the input are in [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
+
+   ```sh
+   manyhands-cli host approve --repo <destination> --input approve.json --confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>
+   ```
 9. Check: `host inspect --authority <host:port>` shows the pin, and `repo inspect --repo <destination>` shows `registered: true`, a publication remote and `identity_state: available`. Sync and sharing: `manyhands-sharing-and-sync`.
 
 If you cannot do a step, say which and why, and give the person the exact command. Never edit `.git/config`, `known_hosts` or `.manyhands/config.toml` by hand to get past a step.
 
 ## Remove a repository: hand-over
 
-`repo remove` unregisters a repository from Manyhands: it drops the registration, the index and the operation records, and leaves the repository's files and Git history alone. It is a hand-over verb. You may run `--prepare`, which changes nothing, to tell the person exactly what it will do (`data.effects`, and `details.files_changed` and `details.git_state_changed`, both false). Then give them the command and let them run it.
+`repo remove` unregisters a repository from Manyhands: it drops the registration, the index and the operation records, and leaves the repository's files and Git history alone. It is a hand-over verb ([autonomy](../manyhands-overview/references/autonomy.md)): you may run `--prepare` to tell the person exactly what it will do (`data.effects`: `registration_removed`, `index_dropped`, `operation_records_dropped`, `remote_state_dropped`; and `details.files_changed` and `details.git_state_changed`, both false), and you never confirm it. Give them the command to run.
 
 ```sh
 manyhands-cli --json --non-interactive repo remove --repo <repo-root> --prepare

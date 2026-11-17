@@ -20,7 +20,7 @@ The sequence in `../SKILL.md` was run end to end here against a throwaway OpenSS
 | `repo enable --prepare` with no `identity` | `identity_required`, exit 3 (a global Git identity was present and ignored) |
 | `repo enable` confirmed, with `identity` | success, but `repo identity` still `Source: none`; `repo identity-set` then wrote it to the clone's local Git config |
 | `remote select` (config had no selection) | success, and a local commit "Configure Manyhands publication remote" on `main` |
-| `host observe` | `presented_fingerprint` equal to the scanned one, `pinned_fingerprint` null |
+| `host observe` (host not yet pinned) | `presented_fingerprint` equal to the scanned one, `pinned_fingerprint` null; it did not authenticate, so it worked with a passphrase key and with a key the host rejects |
 | `host approve --prepare` and `--confirm` | success; `host list` showed `127.0.0.1:2299  ssh-ed25519  SHA256:...` |
 | `repo sync` afterwards | success, `publication: published`: Manyhands' own transport used the key and the pin |
 
@@ -28,7 +28,7 @@ The sequence in `../SKILL.md` was run end to end here against a throwaway OpenSS
 
 | Where | What happens | Hand-off |
 | --- | --- | --- |
-| Passphrase-protected key | In a terminal `ssh` prints `Enter passphrase for key '...'`. With no terminal it fails as `Permission denied (publickey)`, which looks like a missing public key. `host observe`, sync and `ticket close` answer `unlock_required`. | The person runs the clone, and later the blocked Manyhands command, at their own terminal. You never type or fetch the passphrase. |
+| Passphrase-protected key | In a terminal `ssh` prints `Enter passphrase for key '...'`, unless the command has `-o BatchMode=yes`, which suppresses the prompt (the clone then fails with `Permission denied (publickey)`; verified in a pty both ways). With no terminal it fails the same way, which looks like a missing public key. `host observe` of a pinned host, `host approve --confirm`, `host replace --confirm`, sync and `ticket close` answer `unlock_required`; `host observe` of a host not yet pinned does not authenticate and works. | The person runs the clone (without `BatchMode`), and later the blocked Manyhands command with the same confirmation ID and request ID, at their own terminal. You never type or fetch the passphrase. |
 | Host fingerprint (Git) | No terminal, no trusted key: `Host key verification failed`. | Show the scanned fingerprint and wait for the person's OK before trusting it. |
 | Host fingerprint (Manyhands) | `host observe` is read-only and trusts nothing; `host approve` is show-then-wait. A wrong fingerprint answers `host_mismatch`. | Show the exact fingerprint, wait for the OK, never approve a fingerprint you only observed. |
 | The public key is not on the host | `Permission denied (publickey)` from Git; `key_rejected` from `host approve --confirm`. | The person adds the key by hand. |
@@ -37,5 +37,5 @@ The sequence in `../SKILL.md` was run end to end here against a throwaway OpenSS
 ## Notes
 
 - `scp`-style URLs (`git@host:org/repo.git`) were accepted by `remote add` and `remote select`. They have no port, so they use port 22.
-- `host observe` takes `--authority <host[:port]>` to pick which remote's host to observe; it was not run here.
+- `host observe --authority <host:port>` accepted the selected remote's own `127.0.0.1:2299` and answered as without it; `other.example.com:22` answered `invalid_input`. Use it only to name the selected remote's host.
 - A changed pin and an unpinned host both stop sync with a `host.approve` or `host.replace` action in `recovery`. Neither has a no-prompt override; that is the design.

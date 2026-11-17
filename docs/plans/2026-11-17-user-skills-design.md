@@ -164,7 +164,7 @@ test.
 
 | Agent acts alone | Agent shows the person what it will do, then waits for their OK | Agent hands to the person |
 | --- | --- | --- |
-| Reads. Creating and saving documents and tickets, comments, `item sync`, `poll once`, `index refresh` and `rebuild`, `key select` and `clear`, `remote add` and `select`. | `host approve` and `replace` (showing the fingerprint), `key generate` and `import`, `repo create` and `enable`, `document promote`, `ticket close`. Where a verb has `--prepare`, the agent shows the preview before `--confirm`. | `key delete`, `key remove`, `repo remove`. `operation abandon`, `item resolve-history` and `conflict resolve`, unless the person has said which side wins. Any passphrase step. |
+| Reads. Creating and saving documents and tickets, comments, `item sync`, `poll once`, `index refresh` and `rebuild`, `key select` and `clear`, `remote add` and `select`. | `host approve` and `replace` (showing the fingerprint), `key generate` and `import`, `repo create`, `enable` and `identity-set`, `remote remove`, `document promote`, `ticket close`. Where a verb has `--prepare`, the agent shows the preview before `--confirm`. | `key delete`, `key remove`, `repo remove`. `operation abandon`, `item resolve-history` and `conflict resolve`, unless the person has said which side wins. Any passphrase step. |
 
 ## Key guidance (owner decision, 2026-11-17)
 
@@ -179,16 +179,35 @@ with Manyhands, and says why.
 
 Manyhands generates keys at `~/.ssh/manyhands/<key-id>`
 ([authentication RFC](../RFC/authentication-and-credential-handling.md)) and
-never uses ssh-agent or default keys. So the documented sequence is: select
-the key (`key select`), clone with Git pointing at that file
-(`GIT_SSH_COMMAND='ssh -i ~/.ssh/manyhands/<key-id> -o IdentitiesOnly=yes' git clone <url>`),
-`host observe` and `host approve` for Manyhands' own host pin (Git's
-`known_hosts` is separate), then `repo enable`. A passphrase-protected key makes
-`ssh` prompt, which an agent cannot answer; the skill hands that step to the
-person. An imported key lives where the person put it. The builder runs the
-sequence against the SSH test harness's server or a local `ssh` target to
-confirm it before documenting it, and documents the gap honestly where it
-does not work.
+never uses ssh-agent or default keys, and `git` does not use the selected key
+on its own. The documented sequence (corrected 2026-11-17 by the Task 5 run
+against a throwaway `sshd`; ruling R10) is:
+
+1. `key select`: the key (generated or imported) is selected, and the person
+   adds its public key to the Git host by hand.
+2. The agent reads the host's fingerprint with `ssh-keyscan` (a network read
+   that trusts nothing), shows it, and the person accepts it.
+3. Clone with Git pointing at the key and trusting only the scanned key, in a
+   file used for this one clone:
+   `GIT_SSH_COMMAND='ssh -i <key-file> -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<scanned>' git clone <url>`.
+   Plain `git clone` with no terminal fails with `Host key verification failed`,
+   and `accept-new` would trust whatever answers.
+4. `repo enable` on the clone, then `repo identity-set` (enabling an already
+   initialized clone does not write the supplied identity).
+5. `remote add` and `remote select` if the clone's configuration selects no
+   remote.
+6. `host observe` and the person's OK on the fingerprint, then `host approve`
+   for Manyhands' own host pin (Git's `known_hosts` is separate).
+
+The order differs from the first draft (key, host pin, repository) because on
+a clone that is not yet registered, `host observe`, `remote list` and `remote
+select` answer `repository_not_registered`: Manyhands' host pin needs an
+enabled repository with a selected remote. A passphrase-protected key makes
+`ssh` prompt (and `host observe` of a pinned host, `host approve --confirm`,
+sync and `ticket close` answer `unlock_required`), which an agent cannot
+answer; the skill hands those steps to the person. An imported key lives where
+the person put it. The sequence was run end to end against a local `sshd` and
+documents the gaps (no real forge, no Windows or macOS run).
 
 ## Compatibility with the installed CLI
 
