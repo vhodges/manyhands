@@ -12,11 +12,14 @@
 //! show, and where a link clicked in the tab's editors is followed. A chip
 //! opens the details `sheet`, which holds D1's identity details,
 //! provenance, fields, metadata, problems and, from the sibling view,
-//! relationships; a file read by its path has no sheet, so its page
-//! keeps D1's `details`. `reads` owns the ordered per-tab read and refresh
-//! job, `status` D1's loading and recovery controls, `source` the
-//! read-only textarea of a file read by its path (an Inspect tab, which
-//! the sheet's Inspect link opens: R-64), `discussion` the threads, with a
+//! relationships; a file read by its path has no such sheet, so its page
+//! keeps D1's `details`, except that a nonconforming file's provenance is
+//! in a Git details sheet, opened from the header (`sheet::git`). `reads`
+//! owns the ordered per-tab read and refresh job, `status` D1's loading
+//! and recovery controls, `source` the read-only textarea of a conforming
+//! file read by its path (an Inspect tab, which the sheet's Inspect link
+//! opens: R-64; a nonconforming file reads in the read view),
+//! `discussion` the threads, with a
 //! read editor per comment body, the jump to them and the floating button
 //! over the region, and `draft` the banner of a stored draft and the
 //! section of one restored here, with `draft_actions` its Export… and
@@ -480,8 +483,9 @@ impl Render for ItemPane {
         let item = self.model.item().rows().cloned();
         let header = self.header(item.as_ref(), window, cx);
         // An item tab's details are in its sheet. A file read by its path
-        // has no sheet, so its page keeps D1's; a nonconforming file shows
-        // its problems in "Needs fixing".
+        // has no such sheet, so its page keeps D1's, but for a nonconforming
+        // file's provenance, which is in its Git details sheet; a
+        // nonconforming file shows its problems in "Needs fixing".
         let inspect = matches!(self.model.target(), OpenTarget::Inspect { .. });
         let identity = inspect.then(|| self.identity(item.as_ref(), cx));
         // While a session lives, kept or not, its text is the edit editor's;
@@ -494,19 +498,23 @@ impl Render for ItemPane {
         let body = match item.as_ref() {
             Some(item) => {
                 let details = inspect.then(|| {
+                    // A nonconforming file's Git details are in their own
+                    // sheet.
+                    let git = (!self.nonconforming_file(item)).then(|| self.provenance(item, cx));
                     v_flex()
                         .gap_3()
-                        .child(self.provenance(item, cx))
+                        .children(git)
                         .child(self.fields(item, cx))
                         .children((!banners::nonconforming(item)).then(|| self.problems(item, cx)))
                         .child(self.metadata(item, &[], cx))
                 });
                 // An item tab reads its body in the read view (decision
-                // 17); a file read by its path keeps D1's source view
-                // (R-64). The repair view takes the place of either.
+                // 17), as does a nonconforming file read by its path; any
+                // other file read by its path keeps D1's source view
+                // (R-64). The repair view takes the place of any.
                 let text = if let Some(repairing) = self.repair_view(cx) {
                     repairing
-                } else if inspect {
+                } else if inspect && !self.nonconforming_file(item) {
                     self.source(item, cx)
                 } else if let Some(editing) = self.edit_view(cx) {
                     editing

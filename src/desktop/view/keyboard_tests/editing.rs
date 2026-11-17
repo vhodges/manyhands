@@ -1028,9 +1028,18 @@ async fn repair_and_adopt_by_keyboard_alone(cx: &mut TestAppContext) {
     walk.enter(cx);
     assert!(!walk.shell.present("repair-discard-dialog", cx));
     assert!(!walk.shell.present("repair-source", cx), "the view closed");
-    assert!(walk.shell.present("item-source", cx), "the file is shown");
+    assert!(walk.shell.present("item-read", cx), "the file is shown");
+    // The read view's editor is not a Kit control, so its own focus is read.
+    let read = walk
+        .pane(cx)
+        .read_with(cx, |pane, _| pane.read_view())
+        .expect("the read view");
+    let editor = read.read_with(cx, |read, _| read.editor().clone());
+    let handle = editor.read_with(cx, |editor, cx| {
+        gpui_kit::Focusable::focus_handle(editor, cx)
+    });
     assert!(
-        walk.focus_inside("item-source", cx),
+        walk.shell.frame(cx, |window, _| handle.is_focused(window)),
         "focus in the file shown"
     );
     walk.region(Region::Content, cx);
