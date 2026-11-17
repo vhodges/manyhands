@@ -188,7 +188,9 @@ in `skills/manyhands-overview/references/autonomy.md`):
   request.
 - R17 and R18: `operation resume` is in column 2, with one narrow exception
   (resuming the agent's own interrupted request after the person removed the
-  cause); `poll configure`, `poll pause` and `poll resume` are in column 1;
+  cause; tightened 2026-11-17 to an operation the agent can prove it started,
+  that is, one its own request ID leads to); `poll configure`, `poll pause`
+  and `poll resume` are in column 1;
   `poll once --retire-completed` and `context retire` are in column 2;
   `remote resolve-history` is in column 3.
 - R19: `index rebuild` stays in column 1, and the skill warns the person first
