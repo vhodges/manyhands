@@ -3,7 +3,7 @@ slug: vh-a2j23
 id: 01M7MYETX7H5YYAYJJBP85FVYP
 title: Distributable user skills
 type: task
-status: review_ready
+status: done
 project: manyhands
 manyhands_managed: true
 manyhands_kind: ticket
