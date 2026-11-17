@@ -181,7 +181,7 @@ Git's host check is not Manyhands' host pin, and you never skip either. Steps 3 
    ssh-keygen -lf <temp-dir>/scanned.txt
    ```
 
-   Omit `-p <port>` for port 22. `ssh-keyscan` is read-only and trusts nothing, so it may run as soon as the key exists, even before the person has added the key to the host. If the host does not resolve, `ssh-keyscan` prints `getaddrinfo <host>: Name or service not known`, exits 1 and writes nothing (verified): tell the person, there is nothing to show. Ask the person to confirm each fingerprint against a source they trust (the Git host's published list), and wait. Keep the scanned fingerprint for step 8.
+   Omit `-p <port>` for port 22. `ssh-keyscan` is read-only and trusts nothing, so it may run as soon as the key exists, even before the person has added the key to the host (the order above still holds: the person has the key on the host before you scan). If the host does not resolve, `ssh-keyscan` prints `getaddrinfo <host>: Name or service not known`, exits 1 and writes nothing (verified): tell the person, there is nothing to show. Ask the person to confirm each fingerprint against a source they trust (the Git host's published list), and wait. Keep the scanned fingerprint for step 8.
 5. Only after their OK, clone with that exact key, trusting only the scanned host key. If the key has no passphrase, run:
 
    ```sh

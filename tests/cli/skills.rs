@@ -286,6 +286,7 @@ fn skill_json_examples_match_their_input_schema() {
 
 /// `X.Y.Z` as a comparable triple. A pre-release or build suffix
 /// (`0.3.0-rc.1`, `0.3.0+build`) is ignored: only the core is compared.
+/// So a pre-release compares equal to its release in this drift check.
 fn version(text: &str) -> (u64, u64, u64) {
     let core = text.trim().split(['-', '+']).next().unwrap();
     let parts: Vec<u64> = core
@@ -319,10 +320,8 @@ fn readme_lists_every_skill_and_states_the_minimum_version() {
     for dir in skill_dirs() {
         let name = dir.file_name().unwrap().to_str().unwrap();
         let row = format!("| `{name}` |");
-        assert!(
-            text.lines().any(|line| line.starts_with(&row)),
-            "README.md has no table row for {name}"
-        );
+        let rows = text.lines().filter(|line| line.starts_with(&row)).count();
+        assert_eq!(rows, 1, "README.md has {rows} table rows for {name}");
     }
     // The other direction: a row for a skill that has no directory fails.
     let names: BTreeSet<String> = skill_dirs()

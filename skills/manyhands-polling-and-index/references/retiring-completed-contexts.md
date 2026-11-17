@@ -8,7 +8,7 @@ Removed: the item's worktree, then its local branch, after a fresh authenticated
 
 ## What "proven safe" means
 
-Retirement refuses unless all of these hold (from the contract, `docs/RFC/cli-contract.md` "Completed-context retirement", and the Git workflow RFC):
+Retirement refuses unless all of these hold (from the CLI contract, "Completed-context retirement", and the Git workflow RFC):
 
 - The remote no longer has the item's branch, and this clone had seen it there before. Missing or unknown history is not proof.
 - Local main already holds the completion: a ticket's closure, or the promoted document. Run `poll once` first if main is behind.

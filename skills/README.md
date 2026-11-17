@@ -20,6 +20,8 @@ The skills are about using Manyhands. They contain no how-to for the desktop app
 
 Minimum CLI version: 0.2.0
 
+Install `manyhands-cli` itself first: see "Releases" in the repository `README.md` and the `README.md` inside each release archive. This README covers installing the skills only.
+
 The table is ordered by use: the foundation, setup, working with items, sharing and upkeep, and what to do when something goes wrong. The version is a minimum, not an exact match: a newer `manyhands-cli` is fine. Check yours with `manyhands-cli --version`.
 
 ### Which skill when
@@ -43,7 +45,7 @@ Pick the target for your agent runtime. Each runtime reads skills from the place
 | Claude Code | `<project>/.claude/skills/` | `~/.claude/skills/` |
 | Codex | `<project>/.agents/skills/` | `~/.agents/skills/` |
 
-Run the copy from the directory that contains `skills/` (the repository root, or the root of an unpacked release archive). On Linux and macOS, for example for one person in Claude Code:
+Run the copy from the directory that contains `skills/` (the repository root, or the root of the unpacked release archive's folder). On Linux and macOS, for example for one person in Claude Code:
 
 ```sh
 mkdir -p ~/.claude/skills
@@ -57,14 +59,14 @@ New-Item -ItemType Directory -Force "$HOME\.claude\skills"
 Copy-Item -Recurse skills\manyhands-* "$HOME\.claude\skills\"
 ```
 
-For a project, use `<project>/.claude/skills/` (or `.agents/skills/`) as the target instead. The agent picks up new or changed skills during a session; in Claude Code, `/reload-skills` forces it.
+For a project, use `<project>/.claude/skills/` (or `.agents/skills/`) as the target instead. Claude Code picks up new or changed skills during a session, and `/reload-skills` forces it; for other runtimes, check their documentation or start a new session.
 
 ### Check that it worked
 
-List the target and expect the eleven directories, each holding a `SKILL.md`:
+List the installed directories and expect eleven, each holding a `SKILL.md` (use `~/.agents/skills/` or the project paths for the other targets; other skills may also live there, so list only ours):
 
 ```sh
-ls ~/.claude/skills
+ls -d ~/.claude/skills/manyhands-*
 ```
 
 Then ask the agent which Manyhands skills it has, or ask it to set up Manyhands for a repository and watch it open `manyhands-overview` first.
@@ -82,7 +84,7 @@ Do not mix versions: skills from one release describe the CLI of that release. E
 
 ### Where the skills are in a release
 
-- The Linux archive, the Windows zip and the macOS zip each hold the set in `skills/` at the archive root.
+- The Linux archive, the Windows zip and the macOS zip each hold the set in `skills/`, at the root of the unpacked archive's folder (the archive wraps everything in one top-level `manyhands-v<version>-<target>/` folder).
 - On macOS the same directory is inside the app, at `Manyhands.app/Contents/Resources/skills`.
 - The Windows installer puts it in `<install dir>\skills`. The installer owns that tree: it removes or replaces files there on upgrade, so copy the set elsewhere (as above) before editing anything.
 - A Homebrew cask installs the app and links the CLI. It does not link the skills anywhere; take them from the release archive, from the app's `Contents/Resources/skills`, or from the repository.

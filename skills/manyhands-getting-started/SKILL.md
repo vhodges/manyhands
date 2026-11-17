@@ -11,7 +11,7 @@ Setup is where you stop most often, because the key, the host fingerprint and an
 
 ## Step 0: is it installed
 
-- `manyhands-cli --version` prints `manyhands-cli <version>`. It must be at least the line `Minimum CLI version` in the [skills README](../README.md) (a newer one is fine and never a warning). If the command is not found or is older, stop and tell the person: installing the CLI is theirs, and the README has the install steps.
+- `manyhands-cli --version` prints `manyhands-cli <version>`. It must be at least the line `Minimum CLI version` in the skills README (`skills/README.md` in a release or the repository; a newer one is fine and never a warning). If the command is not found or is older, stop and tell the person: installing the CLI is theirs. The install steps are under "Releases" in the repository `README.md`, and in the `README.md` inside each release archive; the skills README covers installing the skills only.
 - You are reading this skill, so the skills are installed. They are meant to be installed as the whole `skills/` directory, because they link to each other; if a link here does not open, say so.
 - Find the repository's main checkout root (the first line of `git worktree list`). It is the `--repo` of every command below. Keep your `--input` files in a temporary directory outside the repository.
 
