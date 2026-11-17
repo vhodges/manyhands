@@ -2322,7 +2322,10 @@ fn a_cleanup_left_at_ignored_files_by_an_older_build_finishes_on_resend() {
     });
     let mut io = FakeIo::default();
     let stopped = authoritative(f.run_io(req.clone(), &mut io).unwrap());
-    assert!(matches!(stopped.cleanup(), PromotionCleanup::Pending { .. }));
+    assert!(matches!(
+        stopped.cleanup(),
+        PromotionCleanup::Pending { .. }
+    ));
     HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
     // What an older build left: the stop recorded as `ignored_files`, over a
     // worktree that now holds only an ignored file.

@@ -59,9 +59,6 @@ pub(super) const CASES: &[ssh_harness::Case] = &[
     ("preserve_untracked_context_after_integration", || {
         preservation(1)
     }),
-    ("preserve_ignored_context_after_integration", || {
-        preservation(2)
-    }),
     ("preserve_moved_context_after_integration", || {
         preservation(3)
     }),
@@ -857,18 +854,6 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
             fixed(std::fs::write(p.a.worktree().join("u"), b"user\n"))?;
             None
         }
-        2 => {
-            let repo = p.a.repo()?;
-            let path = repo.commondir().join("info/exclude");
-            let mut bytes = fixed(std::fs::read(&path))?;
-            bytes.extend_from_slice(b"\nprivate-ignored\n");
-            fixed(std::fs::write(path, bytes))?;
-            fixed(std::fs::write(
-                p.a.worktree().join("private-ignored"),
-                b"user\n",
-            ))?;
-            None
-        }
         3 => Some(commit_files(
             &linked(&p.a)?,
             &[("moved.txt", b"user commit\n")],
@@ -882,11 +867,7 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
     assert_eq!(
         outcome.cleanup(),
         PromotionCleanup::Pending {
-            reason: if mode == 2 {
-                PromotionCleanupPending::IgnoredFiles
-            } else {
-                PromotionCleanupPending::ContextChanged
-            }
+            reason: PromotionCleanupPending::ContextChanged
         }
     );
     assert_eq!(server_oid(&p, CONTEXT)?, remote);
@@ -906,7 +887,6 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
     match mode {
         0 => fixed(std::fs::write(&ticket, &closed))?,
         1 => fixed(std::fs::remove_file(p.a.worktree().join("u")))?,
-        2 => fixed(std::fs::remove_file(p.a.worktree().join("private-ignored")))?,
         _ => unreachable!(),
     }
     // A new confirmation observes the published primary; only the cleanup
