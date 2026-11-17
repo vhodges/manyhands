@@ -51,6 +51,11 @@ class VerificationTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 self.archive()
 
+    def test_a_payload_without_skills_is_refused(self):
+        (self.fixture.staging / "skills/README.md").unlink()
+        with self.assertRaisesRegex(ValueError, "skills"):
+            validate_payload(self.fixture.staging, self.fixture.release, LINUX)
+
     def test_missing_required_notice_is_rejected(self):
         (self.fixture.staging / "THIRD-PARTY-NOTICES.html").unlink()
         with self.assertRaisesRegex(ValueError, "NOTICES"):

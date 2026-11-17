@@ -31,6 +31,18 @@ class StagingTests(unittest.TestCase):
         self.assertEqual(manifest["signing_mode"], "none")
         self.assertEqual(manifest["compiler"], "rustc 1.98.1 (fixture)")
 
+    def test_stages_the_skills_for_every_target(self):
+        for target in TARGETS:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temp:
+                fixture = PayloadFixture(temp, target)
+                fixture.stage()
+                roots = [fixture.staging]
+                if target == MACOS:
+                    roots.append(fixture.staging / "Manyhands.app/Contents/Resources")
+                for root in roots:
+                    self.assertTrue((root / "skills/README.md").is_file(), root)
+                    self.assertTrue((root / "skills/manyhands-overview/SKILL.md").is_file(), root)
+
     def test_native_runtime_requirements_do_not_require_a_local_git_executable(self):
         for target in TARGETS:
             with self.subTest(target=target), tempfile.TemporaryDirectory() as temp:
