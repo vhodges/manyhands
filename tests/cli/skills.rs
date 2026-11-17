@@ -25,7 +25,8 @@ pub(crate) fn skills_directory() -> PathBuf {
 }
 
 /// The single-line `key: value` pairs between the leading `---` lines, a
-/// double-quoted value unquoted.
+/// double-quoted value unquoted. `description` is the exception: its raw
+/// value is kept, quotes included, so a test can check the quoting.
 fn frontmatter(text: &str) -> BTreeMap<String, String> {
     let mut lines = text.lines();
     assert_eq!(lines.next(), Some("---"), "frontmatter starts the file");
@@ -38,10 +39,14 @@ fn frontmatter(text: &str) -> BTreeMap<String, String> {
             .split_once(':')
             .unwrap_or_else(|| panic!("frontmatter line without a key: {line:?}"));
         let value = value.trim();
-        let value = value
-            .strip_prefix('"')
-            .and_then(|inner| inner.strip_suffix('"'))
-            .unwrap_or(value);
+        let value = if key.trim() == "description" {
+            value
+        } else {
+            value
+                .strip_prefix('"')
+                .and_then(|inner| inner.strip_suffix('"'))
+                .unwrap_or(value)
+        };
         pairs.insert(key.trim().to_owned(), value.to_owned());
     }
     panic!("frontmatter is never closed");
@@ -135,9 +140,14 @@ fn skills_are_well_formed() {
         assert!(file.is_file(), "{name}: no SKILL.md");
         let pairs = frontmatter(&read(&file));
         assert_eq!(pairs.get("name").map(String::as_str), Some(name), "{name}");
-        let description = pairs
+        let raw = pairs
             .get("description")
             .unwrap_or_else(|| panic!("{name}: no description"));
+        assert!(
+            raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"'),
+            "{name}: description is not one double-quoted value: {raw}"
+        );
+        let description = &raw[1..raw.len() - 1];
         assert!(description.starts_with("Use when"), "{name}: {description}");
         assert!(
             description.chars().count() <= 1024,
@@ -274,10 +284,11 @@ fn skill_json_examples_match_their_input_schema() {
     }
 }
 
-/// `X.Y.Z` as a comparable triple.
+/// `X.Y.Z` as a comparable triple. A pre-release or build suffix
+/// (`0.3.0-rc.1`, `0.3.0+build`) is ignored: only the core is compared.
 fn version(text: &str) -> (u64, u64, u64) {
-    let parts: Vec<u64> = text
-        .trim()
+    let core = text.trim().split(['-', '+']).next().unwrap();
+    let parts: Vec<u64> = core
         .split('.')
         .map(|part| part.parse().unwrap_or_else(|_| panic!("version {text:?}")))
         .collect();
@@ -313,6 +324,21 @@ fn readme_lists_every_skill_and_states_the_minimum_version() {
             "README.md has no table row for {name}"
         );
     }
+    // The other direction: a row for a skill that has no directory fails.
+    let names: BTreeSet<String> = skill_dirs()
+        .iter()
+        .map(|dir| dir.file_name().unwrap().to_str().unwrap().to_owned())
+        .collect();
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("| `") else {
+            continue;
+        };
+        let name = rest.split('`').next().unwrap();
+        assert!(
+            names.contains(name),
+            "README.md has a table row for {name}, which is not a skill directory"
+        );
+    }
     let stated = minimum_version(&readme);
     assert_eq!(
         stated,
@@ -324,4 +350,35 @@ fn readme_lists_every_skill_and_states_the_minimum_version() {
         "minimum {stated} is newer than this CLI, {}",
         env!("CARGO_PKG_VERSION")
     );
+}
+
+/// The set the design names, no more and no fewer.
+const DESIGNED_SKILLS: &[&str] = &[
+    "manyhands-comments",
+    "manyhands-documents",
+    "manyhands-finding-work",
+    "manyhands-getting-started",
+    "manyhands-keys-and-hosts",
+    "manyhands-overview",
+    "manyhands-polling-and-index",
+    "manyhands-recovery",
+    "manyhands-repositories",
+    "manyhands-sharing-and-sync",
+    "manyhands-tickets",
+];
+
+#[test]
+fn the_set_is_the_eleven_designed_skills() {
+    let found: Vec<String> = skill_dirs()
+        .iter()
+        .map(|dir| dir.file_name().unwrap().to_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(found, DESIGNED_SKILLS);
+}
+
+#[test]
+fn a_pre_release_suffix_does_not_break_the_version_comparison() {
+    assert_eq!(version("0.3.0-rc.1"), (0, 3, 0));
+    assert_eq!(version("0.3.0+build.5"), (0, 3, 0));
+    assert!(version("0.2.0") <= version("0.3.0-rc.1"));
 }

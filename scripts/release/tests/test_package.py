@@ -6,9 +6,9 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from package import archive_payload
+from package import archive_payload, refresh_documents
 from common import TARGETS
-from payload_fixture import LINUX, MACOS, WINDOWS, PayloadFixture
+from payload_fixture import LINUX, MACOS, REPO, WINDOWS, PayloadFixture
 
 
 class StagingTests(unittest.TestCase):
@@ -130,6 +130,19 @@ class PlatformLayoutTests(unittest.TestCase):
             for relative in ("LICENSE", "README.md", "release.json", "THIRD-PARTY-NOTICES.html",
                              "licenses/fonts/LICENSE.txt", "licenses/fonts/README.md"):
                 self.assertTrue((app / "Resources" / relative).is_file(), relative)
+
+    def test_refresh_documents_mirrors_skills_into_the_macos_bundle(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = PayloadFixture(temp, MACOS)
+            fixture.stage()
+            root = fixture.staging
+            manifest = json.loads((root / "release.json").read_text())
+            changed = root / "skills/manyhands-overview/SKILL.md"
+            changed.write_text("changed after staging", encoding="utf-8")
+            bundled = root / "Manyhands.app/Contents/Resources/skills/manyhands-overview/SKILL.md"
+            self.assertNotEqual(bundled.read_text(), "changed after staging")
+            refresh_documents(root, manifest, repo=REPO)
+            self.assertEqual(bundled.read_text(), "changed after staging")
 
 
 if __name__ == "__main__":
