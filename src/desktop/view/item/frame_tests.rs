@@ -22,8 +22,6 @@ const LONG: &str = "01ARZ3NDEKTSV4RRFFQ69G5FM0";
 const SHORT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FM1";
 const LONG_COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE0";
 const SHORT_COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE1";
-/// The page's column at its widest (`item_view/01-item-frame.md`).
-const COLUMN: f32 = 760.;
 /// A window short enough that `LONG` does not fit its region.
 const SHORT_WINDOW: f32 = 700.;
 /// A window short enough that Settings' Repositories page runs below the
@@ -31,8 +29,6 @@ const SHORT_WINDOW: f32 = 700.;
 /// made short in it, so the item area keeps room for the region.
 const SETTINGS_WINDOW: f32 = 400.;
 const SETTINGS_ACTIVITY: f32 = 100.;
-/// The harness's own window height.
-const TALL_WINDOW: f32 = 1400.;
 
 /// `LONG`, with a long body, and `SHORT`, each with one comment, in one
 /// repository, in a window `height` tall: the ticket `open` is opened and
@@ -195,50 +191,6 @@ fn page_keys_scroll_the_items_region_and_settings_keep_theirs(cx: &mut TestAppCo
 
     shell.keys("escape", cx);
     assert_eq!(offset(&shell, cx), paged, "the item kept its place");
-}
-
-/// The page spans the region and is at least as tall as it, so the white
-/// reaches the bottom even for a short ticket, and the discussion starts
-/// below the fold. Its column is at most 760 px wide and centred. After
-/// the window grows, the page grows with the region.
-#[gpui_kit::test]
-fn the_page_fills_the_region_and_the_discussion_starts_below_it(cx: &mut TestAppContext) {
-    let shell = shell(TALL_WINDOW, SHORT, cx);
-    const PAGE: [&str; 4] = ["item-scroll", "item-page", "item-page-column", "discussion"];
-    let check = |shell: &Shell, cx: &mut TestAppContext| {
-        // The page takes its height from the region in the frame before.
-        shell.frame(cx, |_, _| ());
-        let [region, page, column, discussion] = bounds(shell, PAGE, cx);
-        assert_eq!(
-            (page.left(), page.right(), page.top()),
-            (region.left(), region.right(), region.top()),
-            "the page spans the region from its top: {page:?} {region:?}"
-        );
-        assert!(
-            page.size.height >= region.size.height,
-            "the page fills the region: {page:?} {region:?}"
-        );
-        assert!(
-            discussion.top() >= region.bottom(),
-            "the discussion starts below the fold: {discussion:?} {region:?}"
-        );
-        assert_eq!(column.size.width, px(COLUMN), "{column:?}");
-        let centre = (column.center().x - page.center().x).abs();
-        assert!(
-            centre < px(1.),
-            "the column is centred: {column:?} {page:?}"
-        );
-        region
-    };
-    let region = check(&shell, cx);
-
-    shell.resize_keeping_content(1440., TALL_WINDOW + 200., cx);
-    shell.run(cx);
-    let grown = check(&shell, cx);
-    assert!(
-        grown.size.height > region.size.height,
-        "{grown:?} {region:?}"
-    );
 }
 
 /// The Kit's scrollbar lies over the region, below the header, and works

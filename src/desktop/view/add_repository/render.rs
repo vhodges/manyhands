@@ -35,7 +35,7 @@ use crate::desktop::{
     },
 };
 
-/// The sheet's width (`05`, Add repository; B1).
+/// The sheet's narrowest width (`05`, Add repository; B1).
 const WIDTH: f32 = 470.;
 
 /// A piece of text a test reads by `id`.
@@ -259,7 +259,7 @@ impl AddRepositorySheet {
             Mode::New => self.create_form(cx).into_any_element(),
         };
         sheet
-            .size(px(WIDTH))
+            .size(frame::sheet_width(window, WIDTH))
             .title(frame::sheet_header(
                 Header {
                     icon: None,

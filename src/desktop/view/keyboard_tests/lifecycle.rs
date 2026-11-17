@@ -454,9 +454,10 @@ async fn a_prompt_over_a_pressed_confirm_gives_focus_back_to_the_dialog(cx: &mut
 /// once it is accepted, and the dialog offers Retry after Not now (A7). The
 /// normal service is put back without moving the branch; Tab and Enter on
 /// Retry send the same request again, which finishes. Tab reaches Done,
-/// and Enter on it closes the dialog with focus back on the action: the
-/// document's Approve and merge…, and, for the closed ticket, which no
-/// longer offers Close ticket…, the content region, on its tab.
+/// and Enter on it closes the dialog; neither item offers its action any
+/// more, the closed ticket no Close ticket… and the merged document, now
+/// on main, no Approve and merge…, so focus is in the content region, on
+/// its tab.
 #[gpui_kit::test]
 async fn a_failed_run_is_retried_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -466,11 +467,8 @@ async fn a_failed_run_is_retried_by_keyboard(cx: &mut TestAppContext) {
         fixture.save_ticket(a, TICKET, "Failing");
         fixture.create_document(a, DOCUMENT, "docs/plan.md", "Plan");
     });
-    let commands = [
-        (TICKET, CLOSE_TICKET, false),
-        (DOCUMENT, APPROVE_AND_MERGE, true),
-    ];
-    for (tab, (id, label, origin_stays)) in commands.into_iter().enumerate() {
+    let commands = [(TICKET, CLOSE_TICKET), (DOCUMENT, APPROVE_AND_MERGE)];
+    for (tab, (id, label)) in commands.into_iter().enumerate() {
         walk.shell.backend.replace_service(
             RepositoryService::open_at_with_failure_point_for_testing(
                 walk.shell.fixture.data_dir(),
@@ -483,7 +481,6 @@ async fn a_failed_run_is_retried_by_keyboard(cx: &mut TestAppContext) {
         } else {
             walk.reach_the_action_in(id, label, tab, cx);
         }
-        let focus = walk.action_focus(cx);
         walk.open_the_dialog(cx).await;
         walk.tab_to_control("lifecycle-confirm", cx);
         walk.enter(cx);
@@ -534,15 +531,12 @@ async fn a_failed_run_is_retried_by_keyboard(cx: &mut TestAppContext) {
             !walk.shell.present("lifecycle-dialog", cx),
             "{label}: Enter on Done closes it"
         );
-        if origin_stays {
-            walk.on_handle(&focus, Region::Content, cx);
-        } else {
-            // Ruling O-6: a closed ticket offers no Close ticket… any
-            // more, so the origin is not drawn. Done gives focus back to
-            // it, and D5's `focus_lost` fallback, unchanged (A8), keeps it
-            // in the content region, on the closed ticket's tab.
-            assert!(!walk.shell.present(LIFECYCLE_ACTION, cx), "{label}");
-            walk.on(("tab", tab), Region::Content, cx);
-        }
+        // Ruling O-6: a closed ticket offers no Close ticket… any
+        // more, nor a merged document, now on main, Approve and
+        // merge…, so the origin is not drawn. Done gives focus back to
+        // it, and D5's `focus_lost` fallback, unchanged (A8), keeps it
+        // in the content region, on the item's tab.
+        assert!(!walk.shell.present(LIFECYCLE_ACTION, cx), "{label}");
+        walk.on(("tab", tab), Region::Content, cx);
     }
 }

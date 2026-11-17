@@ -46,7 +46,7 @@ use std::path::PathBuf;
 
 use gpui_kit::{
     App, AppContext, Context, Entity, EntityId, FocusHandle, ParentElement, Styled, Subscription,
-    Task, Window, component::WindowExt, div, px,
+    Task, Window, component::WindowExt, div,
 };
 use manyhands::{
     canonical::ItemId,
@@ -66,6 +66,7 @@ use crate::desktop::{
     },
     view::{
         editor::set_exact,
+        frame,
         lifecycle::{Heading, Reopen},
     },
 };
@@ -198,11 +199,8 @@ pub(crate) struct Opening {
     pub origin: FocusHandle,
 }
 
-/// The sheet's width, `05`'s, and what it leaves of a narrower window: the
-/// Kit does not clamp a sheet, and the app sets no minimum window width
-/// (Wave 04 Cycle 05b R-28).
+/// The sheet's narrowest width, `05`'s.
 const WIDTH: f32 = 920.;
-const MARGIN: f32 = 48.;
 
 /// Opens the sheet on the right of the window, on Root's one sheet layer
 /// (Wave 04 Cycle 05b B2): `Workspace::show_resolve` does, and owns it.
@@ -223,7 +221,7 @@ pub(in crate::desktop::view) fn open(
     let opened = sheet.clone();
     window.open_sheet(cx, move |kit, window, cx| {
         let origin = origin.clone();
-        let width = (window.viewport_size().width - px(MARGIN)).clamp(px(0.), px(WIDTH));
+        let width = frame::sheet_width(window, WIDTH);
         // The header and the footer, read at each render, as the body is.
         let (header, footer) = sheet.update(cx, |sheet, cx| {
             (sheet.header_slot(cx), sheet.footer_slot(cx))
