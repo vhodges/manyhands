@@ -144,7 +144,7 @@ manyhands-cli --json --non-interactive remote select --repo <repo-root> --input 
 manyhands-cli --json --non-interactive remote remove --repo <repo-root> --input remove.json --prepare
 ```
 
-Confirm with `--confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>` as for the other confirmed verbs.
+After the person's OK, confirm with `--confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>` as for the other confirmed verbs.
 
 ## The order for a repository that will share
 
@@ -152,6 +152,7 @@ Confirm with `--confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>` as for the 
 2. The repository is created or enabled (`repo create` or `repo enable`).
 3. The remote is added and selected.
 4. Host trust: `host observe`, the person checks the fingerprint, `host approve`. These need steps 1 to 3: `host observe` answers `no_selected_key` without a key, `publication_remote_required` without a selected remote and `repository_not_registered` for a repository that is not enabled.
+5. `poll once` (you run it alone; it answers `publication_remote_required` only when no remote is selected). Until it has run, the repository has no record of the remote's primary branch, and `ticket close --prepare` and `document promote --prepare` answer `recovery_required` with `data.blockers` `["primary_missing"]` (verified). A passphrase key makes the poll the person's: [polling and the index](../manyhands-polling-and-index/SKILL.md).
 
 A repository with no remote works fully on its own; sharing waits (`publication_remote_required`).
 
@@ -160,7 +161,7 @@ A repository with no remote works fully on its own; sharing waits (`publication_
 A clone of a repository that already uses Manyhands has `.manyhands/config.toml`, but is not registered on this machine and has no identity in its local Git configuration. After `repo enable` the identity is still `required`: enabling a repository that already has a Manyhands configuration does not write the identity you supply (verified, even though `repo enable` accepted it). So:
 
 1. `repo enable` (prepare, show, wait, confirm). Include `identity` in the input, as the prepare refuses without it.
-2. `repo identity` shows `Source: none`. Run `repo identity-set` with the same name and email the person already gave for `repo enable`; ask again only if you never had them.
+2. `repo identity` shows `Source: none`. Run `repo identity-set` (prepare, show, wait, confirm) with the same name and email the person already gave for `repo enable`; ask again only if you never had them.
 3. `remote list`. If the config already selects a remote, `repo inspect` shows `Publication remote: <name>`. If not, `remote select`.
 4. Host trust, if it will share: [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
 

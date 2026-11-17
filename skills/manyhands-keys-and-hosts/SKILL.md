@@ -21,7 +21,7 @@ Manyhands talks to a Git host over SSH with one key and checks the host against 
 Explain both to the person and wait for their choice. Do not choose silently.
 
 - `none`: no passphrase. You can sync, close tickets and observe hosts unattended. It is weaker if the key file ever leaks, because anyone holding the file can use it.
-- `passphrase`: stronger if the file leaks. But Manyhands cannot unlock it for you. These answer `unlock_required` (exit 3) in a non-interactive run: `host observe` of a host that is already pinned, `host approve --confirm`, `host replace --confirm`, sync and `ticket close`; and the clone in onboarding prompts for it. The person must run those steps at their own terminal and type the passphrase. You never see or handle it.
+- `passphrase`: stronger if the file leaks. But Manyhands cannot unlock it for you. These answer `unlock_required` (exit 3) in a non-interactive run: `host observe` of a host that is already pinned, `host approve --confirm`, `host replace --confirm`, sync, `ticket close`, `document promote` (with a remote), `poll once`, `poll once --retire-completed` and `context retire`; and the clone in onboarding prompts for it. Most finish with the same confirmation and request ID at the person's terminal, but a stopped poll or retirement is final and takes a new request ID ([polling and the index](../manyhands-polling-and-index/SKILL.md)). The person must run those steps at their own terminal and type the passphrase. You never see or handle it.
 
 Recommend `none` for a key used only with Manyhands, a key that exists for no other purpose and can be revoked on the host in seconds, and say that reason. A key the person also uses for other things deserves the passphrase. Say that it is their choice.
 

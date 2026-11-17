@@ -23,7 +23,7 @@ Read [concepts](references/concepts.md) for the model behind these lines.
 
 1. Run `manyhands-cli --version` and compare it with the minimum above. If it is older, tell the person before doing anything else. A newer CLI is never a warning.
 2. Trust `manyhands-cli <resource> <verb> --help` and the JSON input schemas over this skill. The schemas (`schemas/input/v1/`) are in the Manyhands source tree and may be absent from an installed copy; then use the field tables and examples in the skills, and rerun a failed command without `--json`, because human output names the missing or unknown field. If any of these disagrees with a skill, follow it and say so.
-3. Know the repository's main checkout root. Pass it as `--repo` on every repository command (key and `id` verbs take none). A linked worktree path is refused for writes.
+3. Know the repository's main checkout root. Pass it as `--repo` on every repository command (the `key` and `id` verbs, `host list`, `host inspect`, `request show`, `request cancel` and `repo list` take none). A linked worktree path is refused for writes.
 
 ## The rules that matter most
 
@@ -40,13 +40,13 @@ Details: [CLI conventions](references/cli-conventions.md) and [errors and exit c
 
 | You are doing | Open |
 | --- | --- |
-| New user, or "set up Manyhands" | `manyhands-getting-started` |
-| Choosing or enrolling an SSH key, or a host trust prompt | `manyhands-keys-and-hosts` |
-| Creating a repository, onboarding a clone, setting remotes | `manyhands-repositories` |
-| Looking before acting: lists, status, what is ready or blocked | `manyhands-finding-work` |
-| Creating, editing, saving or promoting a document | `manyhands-documents` |
-| Creating, updating or closing a ticket | `manyhands-tickets` |
-| Discussing an item | `manyhands-comments` |
-| Making work visible to others, or receiving theirs | `manyhands-sharing-and-sync` |
+| New user, or "set up Manyhands" | [`manyhands-getting-started`](../manyhands-getting-started/SKILL.md) |
+| Choosing or enrolling an SSH key, or a host trust prompt | [`manyhands-keys-and-hosts`](../manyhands-keys-and-hosts/SKILL.md) |
+| Creating a repository, onboarding a clone, setting remotes | [`manyhands-repositories`](../manyhands-repositories/SKILL.md) |
+| Looking before acting: lists, status, what is ready or blocked | [`manyhands-finding-work`](../manyhands-finding-work/SKILL.md) |
+| Creating, editing, saving or promoting a document | [`manyhands-documents`](../manyhands-documents/SKILL.md) |
+| Creating, updating or closing a ticket | [`manyhands-tickets`](../manyhands-tickets/SKILL.md) |
+| Discussing an item | [`manyhands-comments`](../manyhands-comments/SKILL.md) |
+| Making work visible to others, or receiving theirs | [`manyhands-sharing-and-sync`](../manyhands-sharing-and-sync/SKILL.md) |
 | Stale lists, "is it up to date", scheduled refresh | [`manyhands-polling-and-index`](../manyhands-polling-and-index/SKILL.md) |
 | A command reported recovery, or an item or operation is stuck | [`manyhands-recovery`](../manyhands-recovery/SKILL.md) |

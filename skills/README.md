@@ -20,7 +20,7 @@ The skills are about using Manyhands. They contain no how-to for the desktop app
 
 Minimum CLI version: 0.2.0
 
-Install `manyhands-cli` itself first: see "Releases" in the repository `README.md` and the `README.md` inside each release archive. This README covers installing the skills only.
+Install `manyhands-cli` itself first: take it from the GitHub Releases page, https://github.com/vhodges/manyhands/releases, and follow "Installation and startup" in the `README.md` inside the release archive. This README covers installing the skills only.
 
 The table is ordered by use: the foundation, setup, working with items, sharing and upkeep, and what to do when something goes wrong. The version is a minimum, not an exact match: a newer `manyhands-cli` is fine. Check yours with `manyhands-cli --version`.
 
@@ -32,7 +32,7 @@ The table is ordered by use: the foundation, setup, working with items, sharing 
 
 ### The safety model every skill shares
 
-Whenever a step touches trust (a host fingerprint), credentials (a passphrase, a key), something destructive, or publishing, the agent shows the person what it is about to do and waits, or hands the step over to the person. The single statement of which actions are which is [autonomy.md](manyhands-overview/references/autonomy.md); the other skills link to it rather than repeat it.
+The agent works alone on reads and on routine work: creating and saving tickets, documents and comments, and sharing saved work (`item sync`, `repo sync`, and a comment, which saves and publishes its branch). It shows the person first and waits for their OK before it closes a ticket, promotes a document, republishes a branch, trusts a host (`host approve`, `host replace`), creates or imports a key, or creates or enables a repository. It hands over to the person any passphrase step, removing a key or a repository, and the choices about a conflict, an abandoned operation or lost history. The single statement of which action is which is [autonomy.md](manyhands-overview/references/autonomy.md); the other skills link to it rather than repeat it.
 
 ## Install
 
@@ -59,7 +59,7 @@ New-Item -ItemType Directory -Force "$HOME\.claude\skills"
 Copy-Item -Recurse skills\manyhands-* "$HOME\.claude\skills\"
 ```
 
-For a project, use `<project>/.claude/skills/` (or `.agents/skills/`) as the target instead. Claude Code picks up new or changed skills during a session, and `/reload-skills` forces it; for other runtimes, check their documentation or start a new session.
+For a project, use `<project>/.claude/skills/` (or `.agents/skills/`) as the target instead. If the project is itself a Manyhands repository, do one of two things after the copy, or prefer the per-user install: commit the copied directory, or list it in the repository's `.git/info/exclude` (for example the line `.claude/`). Otherwise the main checkout has an untracked `.claude/`, and `ticket close --prepare` and `document promote --prepare` answer `recovery_required` with the blocker `primary_dirty` until it is committed or excluded (verified). Claude Code picks up new or changed skills during a session, and `/reload-skills` forces it; for other runtimes, check their documentation or start a new session.
 
 ### Check that it worked
 

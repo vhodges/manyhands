@@ -39,7 +39,7 @@ What it does, from runs against two clones of one remote:
 
 - Fetches the remote. Main and each item branch that is clean and strictly behind its remote branch are fast-forwarded (`fast_forwarded`). An item you did not have gets a branch and a worktree (`materialized`). It then refreshes the index.
 - Leaves everything else as it is and says so per target: a local branch ahead of the remote (`local_ahead`), a branch that both sides changed (`diverged`), a worktree with uncommitted files (`dirty`), a branch never published (`unpublished`), and others. The answer is still `ok`, exit 0, so read every target, not just the top. The table with what each disposition means and what to do is in [poll results](references/poll-results.md).
-- Never pushes, commits, merges, rebases, deletes anything on the remote, or asks for a passphrase. `item sync` and `repo sync` do the merging and pushing ([sharing and sync](../manyhands-sharing-and-sync/SKILL.md)).
+- Never pushes, commits, merges, rebases or deletes anything on the remote. It does need the key: a passphrase key answers you `unlock_required` and is the person's to unlock at a terminal. `item sync` and `repo sync` do the merging and pushing ([sharing and sync](../manyhands-sharing-and-sync/SKILL.md)).
 - Works while polling is paused (verified), and a second poll right after the first is not refused. The schedule applies only to the desktop's automatic polls.
 
 Read `data.targets[]`: `target` (a ref), `kind` (`ticket` or `document`, null for main), `item_id`, `disposition`, `before_oid`, `after_oid`. `data.next_eligible_at` is when an automatic poll would next run.
@@ -49,13 +49,23 @@ Read `data.targets[]`: `target` (a ref), `kind` (`ticket` or `document`, null fo
 | `ok` (0) | The poll finished. Read the targets. |
 | `publication_remote_required` (3) | No publication remote: nothing to poll ([repositories](../manyhands-repositories/SKILL.md)). |
 | `no_selected_key`, `host_approval_required`, `key_rejected` (3) | A key or host step for the person ([keys and hosts](../manyhands-keys-and-hosts/SKILL.md)). `no_selected_key` and `host_approval_required` were run; `key_rejected` is the same hand-off. |
-| `unlock_required` (3) | A passphrase key: the person runs the same `poll once` at their terminal ([keys and hosts](../manyhands-keys-and-hosts/SKILL.md)). Not run here for a poll; the same answer as for sync. |
+| `unlock_required` (3) | A passphrase key: the person runs a new `poll once` at their terminal, with a new request ID ([keys and hosts](../manyhands-keys-and-hosts/SKILL.md)). See "A passphrase key" below. |
 | `recovery_required` (3) | Something unfinished holds the repository (verified with a pending conflict). Find it with `operation list` and take it to [recovery](../manyhands-recovery/SKILL.md). |
 | `busy`, `poll_yielding` (5) | Another request holds the repository. Retry the same request after a pause. Not run here. |
 | `repository_not_enabled` (2) | The repository was never enabled: [repositories](../manyhands-repositories/SKILL.md). |
 | `repository_not_registered` (3) | This data directory does not know the repository. [Recovery](../manyhands-recovery/SKILL.md), "Not registered". Do not run `index rebuild` for it. |
 
 A poll that stopped on a key, host or transport answer is final: send a new request to poll again, after the person has dealt with the cause.
+
+### A passphrase key
+
+`poll once` authenticates, so with a passphrase-protected selected key it answers `unlock_required` (exit 3, `recovery` empty), and you cannot type the passphrase. The stop is final, so the same request ID is not the hand-off: the same ID at a terminal, and the same ID again non-interactively, only replay the stored refusal with no prompt (verified against a local `sshd` with a throwaway passphrase key). Give the person a command with a new request ID, to run at their terminal without `--json --non-interactive`, and check `poll status` and `ticket list` afterwards:
+
+```sh
+manyhands-cli poll once --repo <repo-root> --request-id <NEW_REQUEST_ID>
+```
+
+This differs from a sync, a close or a promotion, which finish with the same request ID ([sharing and sync](../manyhands-sharing-and-sync/SKILL.md), [tickets](../manyhands-tickets/SKILL.md)). The `unlock_required` of a poll left nothing in `operation list`.
 
 ## Completed items: `--retire-completed` and `context retire`
 
@@ -67,6 +77,15 @@ manyhands-cli --json --non-interactive poll once --repo <repo-root> --retire-com
 ```
 
 Retirement only removes what is proven safe, and refuses otherwise (details and verified answers in [retiring completed contexts](references/retiring-completed-contexts.md)). A refusal removes nothing and is not an error to repeat: `worktree_not_clean` (an untracked file in the item's worktree) and `external_change` (the item is not complete, so nothing is proven) were verified. Ignored files in the worktree (`target/`, `.devenv/`) do not refuse a retirement on a build with the ignored-files change and are deleted with the worktree, so name them to the person before you retire; a nested Git repository inside an ignored directory refuses it as `worktree_not_clean`. `poll once --retire-completed` answers exit 0 even when a child refused, so read `data.retirements[]` per item.
+
+Both authenticate, so a passphrase key stops them with `unlock_required` (exit 3), and the stop is final: the stored answer is replayed for the same request ID, with no prompt, at a terminal too. After the person's OK to remove the item, give them the command with a new request ID, to run at their terminal:
+
+```sh
+manyhands-cli poll once --repo <repo-root> --retire-completed --request-id <NEW_REQUEST_ID>
+manyhands-cli context retire --repo <repo-root> --kind ticket --id <ITEM_ID> --request-id <NEW_REQUEST_ID>
+```
+
+Verified with a throwaway passphrase key: `poll once --retire-completed` with a new request ID at a terminal prompted, fetched, and retired the closed ticket's worktree and branch (`state` `retired`). For `context retire`, the same-ID replay and the prompt for a new ID were run; its `retired` answer was run only with a key with no passphrase. Run a poll first if local main may not hold the closure yet (`external_change` otherwise).
 
 ## Polling status and schedule
 
@@ -109,4 +128,4 @@ Tell the person before you rebuild a damaged database, because the database is t
 
 ## What this skill did not cover
 
-Not run: a `stale` or `never_refreshed` index, `busy` and `poll_yielding` from a poll, `unlock_required` from a poll, the desktop's background polling, and a rebuild that lost less than a destroyed database file.
+Not run: a `stale` or `never_refreshed` index, `busy` and `poll_yielding` from a poll, the desktop's background polling, and a rebuild that lost less than a destroyed database file.

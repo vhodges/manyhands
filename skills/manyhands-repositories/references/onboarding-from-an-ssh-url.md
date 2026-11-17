@@ -13,7 +13,7 @@ The sequence in `../SKILL.md` was run end to end here against a throwaway OpenSS
 
 | Step | Result |
 | --- | --- |
-| Clone before the public key was on the host | `vhodges@127.0.0.1: Permission denied (publickey).` exit 128 |
+| Clone before the public key was on the host | `<user>@127.0.0.1: Permission denied (publickey).` exit 128 |
 | Clone with no terminal and no `known_hosts` entry | `Host key verification failed.` exit 128 |
 | `ssh-keyscan -p 2299 127.0.0.1` then `ssh-keygen -lf` | `256 SHA256:... [127.0.0.1]:2299 (ED25519)`, the same fingerprint `host observe` later reported |
 | Clone with the key authorized, the scanned key trusted | success; `.manyhands/config.toml` came with it, and `origin` carried the SSH URL |

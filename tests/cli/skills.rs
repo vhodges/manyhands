@@ -189,6 +189,24 @@ fn skill_links_stay_inside_the_set_and_resolve() {
                 "{}: {target} leaves skills/",
                 relative(&file)
             );
+            // A skill is installed as the set of `manyhands-*` directories and
+            // nothing beside them, so from inside one a link may reach only
+            // another such directory, never a file directly under `skills/`
+            // such as the README. The README itself is exempt.
+            let own = relative(&file);
+            if own.starts_with("manyhands-") {
+                let first = canonical
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .components()
+                    .next()
+                    .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                assert!(
+                    first.starts_with("manyhands-"),
+                    "{own}: {target} reaches {first}, which an installed set does not have"
+                );
+            }
         }
     }
 }
@@ -380,4 +398,95 @@ fn a_pre_release_suffix_does_not_break_the_version_comparison() {
     assert_eq!(version("0.3.0-rc.1"), (0, 3, 0));
     assert_eq!(version("0.3.0+build.5"), (0, 3, 0));
     assert!(version("0.2.0") <= version("0.3.0-rc.1"));
+}
+
+/// Where the autonomy table puts each verb that declares `--prepare`, with the
+/// text its cell holds for it, plus `request cancel` (it declares none). The
+/// cells are the table's three columns: acts alone, shows then waits, hands
+/// to the person. A new mutation must be added here, which makes someone
+/// classify it, and a verb moved to another column fails until this agrees.
+const CREATE_SAVE: &str = "Creating and saving documents and tickets";
+
+const AUTONOMY: &[(&str, usize, &str)] = &[
+    ("document create", 0, CREATE_SAVE),
+    ("document save", 0, CREATE_SAVE),
+    ("document move", 0, "`document move`"),
+    ("folder create", 0, "`folder create`"),
+    ("ticket create", 0, CREATE_SAVE),
+    ("ticket save", 0, CREATE_SAVE),
+    ("ticket slug-assign", 0, "`ticket slug-assign`"),
+    ("comment add", 0, "comments"),
+    ("item sync", 0, "`item sync`"),
+    ("repo sync", 0, "`repo sync`"),
+    ("context sync-local", 0, "`context sync-local`"),
+    ("poll once", 0, "`poll once`"),
+    ("poll configure", 0, "`poll configure`"),
+    ("poll pause", 0, "`poll pause`"),
+    ("poll resume", 0, "`poll resume`"),
+    ("index refresh", 0, "`index refresh`"),
+    ("index rebuild", 0, "`rebuild`"),
+    ("key select", 0, "`key select`"),
+    ("key clear", 0, "`clear`"),
+    ("remote add", 0, "`remote add`"),
+    ("remote select", 0, "`select`"),
+    ("request cancel", 0, "`request cancel`"),
+    ("host approve", 1, "`host approve`"),
+    ("host replace", 1, "`replace`"),
+    ("key generate", 1, "`key generate`"),
+    ("key import", 1, "`import`"),
+    ("repo create", 1, "`repo create`"),
+    ("repo enable", 1, "`enable`"),
+    ("repo identity-set", 1, "`identity-set`"),
+    ("remote remove", 1, "`remote remove`"),
+    ("document promote", 1, "`document promote`"),
+    ("document repair", 1, "`document repair`"),
+    ("ticket repair", 1, "`ticket repair`"),
+    ("ticket close", 1, "`ticket close`"),
+    ("item republish", 1, "`item republish`"),
+    ("operation resume", 1, "`operation resume`"),
+    ("context retire", 1, "`context retire`"),
+    ("key delete", 2, "`key delete`"),
+    ("key remove", 2, "`key remove`"),
+    ("repo remove", 2, "`repo remove`"),
+    ("operation abandon", 2, "`operation abandon`"),
+    ("item resolve-history", 2, "`item resolve-history`"),
+    ("remote resolve-history", 2, "`remote resolve-history`"),
+    ("conflict resolve", 2, "`conflict resolve`"),
+    ("context resolve-local", 2, "`context resolve-local`"),
+];
+
+#[test]
+fn every_mutation_sits_in_one_autonomy_column() {
+    let text = read(&skills_directory().join("manyhands-overview/references/autonomy.md"));
+    let row = text
+        .lines()
+        .find(|line| line.starts_with("| Reads."))
+        .expect("the autonomy table's row");
+    let cells: Vec<&str> = row.trim_matches('|').split(" | ").collect();
+    assert_eq!(cells.len(), 3, "the autonomy table has three columns");
+
+    let catalog = catalog();
+    let classified: BTreeSet<&str> = AUTONOMY.iter().map(|(verb, _, _)| *verb).collect();
+    for (verb, entry) in &catalog {
+        if verb == "request cancel" || options(entry).contains("--prepare") {
+            assert!(
+                classified.contains(verb.as_str()),
+                "{verb} changes state and is in no autonomy column: classify it in autonomy.md and AUTONOMY"
+            );
+        }
+    }
+    for (verb, column, phrase) in AUTONOMY {
+        assert!(catalog.contains_key(*verb), "{verb} is not a verb");
+        let holders: Vec<usize> = cells
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| cell.contains(phrase))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            holders,
+            vec![*column],
+            "autonomy.md must name {verb} ({phrase}) in column {column} only"
+        );
+    }
 }

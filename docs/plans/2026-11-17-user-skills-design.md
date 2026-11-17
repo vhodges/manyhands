@@ -113,7 +113,7 @@ with its purpose and when to use it (the table above, in plain words), the
 recommended starting points ("new here: getting-started; doing work:
 overview, then the task skill"), and install instructions.
 
-Install instructions cover copying or symlinking the whole `skills/`
+Install instructions cover copying the whole `skills/`
 directory into a project (`.claude/skills/` for Claude Code, `.agents/skills/`
 for Codex-style runtimes) or a user directory (`~/.claude/skills/`), plus
 updating on a new release and what is shipped where in the archive. The main
@@ -167,7 +167,34 @@ test.
 
 | Agent acts alone | Agent shows the person what it will do, then waits for their OK | Agent hands to the person |
 | --- | --- | --- |
-| Reads. Creating and saving documents and tickets, `ticket slug-assign`, comments, `item sync`, `repo sync`, `context sync-local`, `poll once`, `poll configure`, `poll pause` and `poll resume`, `index refresh` and `rebuild`, `key select` and `clear`, `remote add` and `select`, `request cancel` (only for your own blocked request: cancelling is final, and a new request redoes the work). | `host approve` and `replace` (showing the fingerprint), `key generate` and `import`, `repo create`, `enable` and `identity-set`, `remote remove`, `document promote`, `document repair`, `ticket repair`, `ticket close`, `item republish`, `operation resume`, `context retire`, `poll once --retire-completed`. Where a verb has `--prepare`, the agent shows the preview before `--confirm`. | `key delete`, `key remove`, `repo remove`. `operation abandon`, `item resolve-history` and `remote resolve-history`. `conflict resolve` and `context resolve-local`, unless the person has said which side wins. Any passphrase step. |
+| Reads. Creating and saving documents and tickets, `folder create`, `document move`, `ticket slug-assign`, comments, `item sync`, `repo sync`, `context sync-local`, `poll once`, `poll configure`, `poll pause` and `poll resume`, `index refresh` and `rebuild`, `key select` and `clear`, `remote add` and `select`, `request cancel` (only for your own blocked request: cancelling is final, and a new request redoes the work). | `host approve` and `replace` (showing the fingerprint), `key generate` and `import`, `repo create`, `enable` and `identity-set`, `remote remove`, `document promote`, `document repair`, `ticket repair`, `ticket close`, `item republish`, `operation resume`, `context retire`, `poll once --retire-completed`. Where a verb has `--prepare`, the agent shows the preview before `--confirm`. | `key delete`, `key remove`, `repo remove`. `operation abandon`, `item resolve-history` and `remote resolve-history`. `conflict resolve` and `context resolve-local`, unless the person has said which side wins. Any passphrase step. |
+
+### Amended during implementation (2026-11-17)
+
+The table above is the owner's text plus the verbs the implementation had to
+place. Each verb the skills run sits in exactly one column. Verbs added, and
+rulings that changed the owner's wording (the rows of the table are the same
+in `skills/manyhands-overview/references/autonomy.md`):
+
+- R8: `repo identity-set` and `remote remove` are in column 2.
+- R9: `--prepare` may be run on a hand-over verb to show the person its
+  preview, and `--confirm` never.
+- R11: `document repair` and `ticket repair` are in column 2.
+- R13: `ticket slug-assign` is in column 1.
+- R14: `repo sync` and `context sync-local` are in column 1; `item republish`
+  is in column 2; `context resolve-local` and `conflict resolve` are in column 3
+  unless the person said which side wins.
+- R15: `request cancel` is in column 1, only for the agent's own blocked
+  request.
+- R17 and R18: `operation resume` is in column 2, with one narrow exception
+  (resuming the agent's own interrupted request after the person removed the
+  cause); `poll configure`, `poll pause` and `poll resume` are in column 1;
+  `poll once --retire-completed` and `context retire` are in column 2;
+  `remote resolve-history` is in column 3.
+- R19: `index rebuild` stays in column 1, and the skill warns the person first
+  after damage.
+- R21: `folder create` and `document move` are catalog mutations in column 1,
+  with the other create, save and move verbs.
 
 ## Key guidance (owner decision, 2026-11-17)
 

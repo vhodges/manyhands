@@ -146,7 +146,7 @@ Closing records `closed_at` and `closed_by`, merges the ticket's branch into the
 
 Before you prepare:
 
-1. Save the status and text you want to keep. A closed ticket cannot be saved, and close does not rewrite the status.
+1. Save the text you want to keep, and ask the person which status the ticket should end with: never pick a done-like status yourself. A closed ticket cannot be saved, and close does not rewrite the status.
 2. Look for open children and open dependencies (reads in [finding work](../manyhands-finding-work/SKILL.md)): `ticket children --id <ITEM_ID>` for children, and the ticket's own dependencies from `ticket show` (`data.deps`, each with a `state`, and `readiness` `blocked` with reason `open_dependency`) or `ticket deps --direction down`. Not `--direction up`: that lists the tickets that depend on this one, and for a ticket that depends on an open ticket it is empty (verified). Close does not check: it closes a ticket whose children or own dependencies are still open (verified), and leaves them open, and the preview does not mention them. Tell the person what you found. Open dependents need no warning: closing makes them ready (`made_ready`).
 
 ```sh
@@ -177,7 +177,7 @@ Use a new `--request-id`, and keep it: it is how you continue this close if some
 | --- | --- |
 | exit 0, `outcome` `success`, `data.cleanup` `complete` | Closed. `data.publication` is `published` or, with no remote, `pending` (`publication_pending` `no_publication_remote`). `data.made_ready` lists the dependent tickets (`id`, `slug`) that this close made ready: tell the person. Check with `ticket show`: `closure.state` `closed`, `context.kind` `primary`. |
 | exit 4, `outcome` `partial`, `code` `recovery_required`, `data.cleanup_pending` `context_changed` or `ignored_files` | The closure and merge are done and the worktree is not removed. See "Ignored files in the worktree" below. |
-| exit 3, `unlock_required` | The key needs a passphrase. Nothing was recorded. Hand over, see below. |
+| exit 3, `unlock_required` | The key needs a passphrase. Nothing was recorded, but the close stays unfinished in `operation list`. Hand over, see below. |
 | exit 3, `confirmation_required` | You ran the close without `--confirm`. Prepare first. |
 | exit 3, `confirmation_not_found` | The confirmation expired or is unknown. Prepare again and show the person the new preview. |
 | exit 3, `confirmation_used` | That confirmation already ran with another request ID. `ticket show` the ticket and see what is done. |
@@ -194,6 +194,8 @@ A blocked prepare is `recovery_required` or `identity_required` (exit 3) with `d
 | `context_dirty` | The ticket's worktree has changes Manyhands did not commit: a file Git does not ignore, or an edited tracked file. Look with a read-only `git -C <worktree> status --short` (the worktree is `data.context.worktree` of `ticket show`). They are the person's files, so show the list and ask. Remove or move an unwanted other file only with their OK, then prepare again. The ticket's own `ticket.md` is different: never delete it, `git checkout` it or edit it yourself, because reverting an unwanted edit is the person's decision. If they want the edit kept and `ticket show` reads it cleanly, a `ticket save` (fresh token) commits it as it stands (verified). If the edit broke the front matter, the prepare lists `context_nonconforming` as well and a save answers `item_not_found`: hand it to the person, or use `ticket repair`. |
 | `primary_dirty` | The main checkout has uncommitted or untracked changes. They are the person's: ask them, never clean up. |
 | `context_missing` | The ticket exists only on the main branch and has no branch to merge (a ticket committed outside Manyhands). A `ticket save` or `ticket slug-assign` gives it a branch and worktree; then prepare again. Ask the person first if the save changes anything. |
+| `primary_missing` | A remote is selected, but this repository has never read the remote's primary branch, because no poll has run since the remote was added and selected (verified: `ticket close --prepare` answered `blocked` / `recovery_required` with `data.blockers` `["primary_missing"]`). The JSON `recovery` offers only `repo.inspect`; the human output names the way on. Run `poll once` (you run it alone, [polling and the index](../manyhands-polling-and-index/SKILL.md)), then prepare again. With no remote selected the blocker does not arise. |
+| `primary_ahead_of_remote` | The main branch holds commits the remote's primary lacks, for example the commit that selected the remote (seen right after `primary_missing` was cleared by a poll). `poll once`, then `repo sync` (both yours to run alone, [sharing and sync](../manyhands-sharing-and-sync/SKILL.md)), then prepare again (verified: the prepare then showed `publish`). |
 | `identity_required` | The repository has no commit identity, so there is no `closed_by`. `repo identity-set` is a show-then-wait step: see [repositories](../manyhands-repositories/SKILL.md). |
 | `history_unresolved`, `history_unknown` | The branch and its remote have histories Manyhands cannot reconcile. [`manyhands-recovery`](../manyhands-recovery/SKILL.md). Not run here. |
 
@@ -201,7 +203,7 @@ Anything else with `recovery_required`: read `data.blockers` and `recovery`, and
 
 ### Ignored files in the worktree
 
-This section is the one home for what a ticket close (and a document promotion, `context release` and `context retire`) does with files Git ignores in the item's worktree. Other skills link here. Two behaviours exist, and the preview is the same for both, so you learn which build you are on from what the close does.
+This section is the one home for what a ticket close (and a document promotion and `context retire`) does with files Git ignores in the item's worktree. Other skills link here. Two behaviours exist, and the preview is the same for both, so you learn which build you are on from what the close does.
 
 **A build with the ignored-files change** (the owner-approved change to cleanup; verified on a rebuilt CLI that reports the same `0.2.0`, so do not key on `--version`). Ignored files no longer block. A worktree whose only extras are ignored (`target/`, `.devenv/`, `.cache/` were run) closes in one run: exit 0, `data.cleanup` `complete`, no `cleanup_pending`, the worktree and branch gone, with no remote (`publication` `pending`) and with a remote (`published`, and the ticket's remote branch deleted); `operation list` is empty afterwards. The ignored files went with the worktree, unasked and unlisted: that is why the preview step above makes you tell the person first. Still blocking, as before:
 
@@ -227,7 +229,7 @@ With a passphrase-protected key, a close that needs the remote answers `unlock_r
 manyhands-cli ticket close --repo <repo-root> --id <ITEM_ID> --confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>
 ```
 
-At a terminal the CLI prompts for the passphrase and finishes the same operation. Verified end to end with a throwaway key: `publication` `published`, the remote's main branch holds the merge, the ticket's branch and worktree are gone. That ran within the confirmation's ten minutes; the contract says an accepted confirmation stands for its request, and a retry after expiry was not run. Afterwards read the ticket with `ticket show` and check `closure.state`. If the confirmation has expired, prepare again, show the person the preview again, and give them the new command. If the person does not finish it, the started close stays in `operation list` (a `close` operation, `confirmed`) and the ticket stays open on its branch: nothing is lost, and [`manyhands-recovery`](../manyhands-recovery/SKILL.md) covers resuming or abandoning it (abandoning is the person's call). See [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
+At a terminal the CLI prompts for the passphrase and finishes the same operation. Verified end to end with a throwaway key: `publication` `published`, the remote's main branch holds the merge, the ticket's branch and worktree are gone. That ran within the confirmation's ten minutes; the contract says an accepted confirmation stands for its request, and a retry after expiry was not run. Afterwards read the ticket with `ticket show` and check `closure.state`. If the confirmation has expired, prepare again, show the person the preview again, and give them the new command. If the person does not finish it, the started close stays in `operation list` (a `close` operation, `confirmed`) and the ticket stays open on its branch: nothing is lost, and [`manyhands-recovery`](../manyhands-recovery/SKILL.md) covers finishing it (the same confirm at their terminal; `operation abandon` does not apply to a close and answers `operation_not_found`). See [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
 
 ## Codes you will meet
 
