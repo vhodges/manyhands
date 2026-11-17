@@ -4,7 +4,7 @@ The owner set this policy on 2026-11-17. Every other skill defers to it and does
 
 | Agent acts alone | Agent shows the person what it will do, then waits for their OK | Agent hands to the person |
 | --- | --- | --- |
-| Reads. Creating and saving documents and tickets, comments, `item sync`, `poll once`, `index refresh` and `rebuild`, `key select` and `clear`, `remote add` and `select`. | `host approve` and `replace` (showing the fingerprint), `key generate` and `import`, `repo create`, `enable` and `identity-set`, `remote remove`, `document promote`, `document repair`, `ticket repair`, `ticket close`. Where a verb has `--prepare`, the agent shows the preview before `--confirm`. | `key delete`, `key remove`, `repo remove`. `operation abandon`, `item resolve-history` and `conflict resolve`, unless the person has said which side wins. Any passphrase step. |
+| Reads. Creating and saving documents and tickets, `ticket slug-assign`, comments, `item sync`, `poll once`, `index refresh` and `rebuild`, `key select` and `clear`, `remote add` and `select`. | `host approve` and `replace` (showing the fingerprint), `key generate` and `import`, `repo create`, `enable` and `identity-set`, `remote remove`, `document promote`, `document repair`, `ticket repair`, `ticket close`. Where a verb has `--prepare`, the agent shows the preview before `--confirm`. | `key delete`, `key remove`, `repo remove`. `operation abandon`, `item resolve-history` and `conflict resolve`, unless the person has said which side wins. Any passphrase step. |
 
 ## Showing the person a prepared preview
 

@@ -5,7 +5,7 @@ Every command shown here was run against a scratch repository. Placeholders are 
 ## Always pass these
 
 - `--json` for one machine-readable answer on stdout, and `--non-interactive` so nothing waits for a prompt. They are global flags and work before or after the verb.
-- `--repo <root>` on almost every verb. It must be the repository's main checkout root, the directory that holds `.git`. See "The repository root" below.
+- `--repo <root>` on almost every verb. It must be the repository's main checkout root: the path on the first line of `git worktree list`, never a linked worktree. See "The repository root" below.
 - `--request-id <ULID>` on every write.
 
 ## JSON input: one object in a file

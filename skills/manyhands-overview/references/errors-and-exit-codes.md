@@ -14,7 +14,7 @@ The exit status classifies the answer; `code` in the JSON envelope says exactly 
 | `1` | An unexpected internal or I/O failure. | Stop and tell the person, with the `code` and the request ID. |
 | `130` | Cancelled by the person. | Read `effects` for what finished before the cancel. |
 
-Exits `4`, `5`, `1` and `130` need a failing disk, a lock or a cancel to provoke and were not run for this skill; they are as the CLI contract states them (`docs/RFC/cli-contract.md`, "Exit statuses and partial completion"). The rest were each produced by the command shown.
+Exit `4` was produced by a `ticket close` whose worktree held an ignored file (`recovery_required`, `partial`, cleanup pending). Exits `5`, `1` and `130` need a lock, a failing disk or a cancel to provoke and were not run for this skill; they are as the CLI contract states them (`docs/RFC/cli-contract.md`, "Exit statuses and partial completion"). The rest were each produced by the command shown.
 
 ## Codes an agent meets
 

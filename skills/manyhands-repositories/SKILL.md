@@ -7,7 +7,7 @@ description: "Use when creating a Manyhands repository, enabling Manyhands in an
 
 Read the [overview](../manyhands-overview/SKILL.md) first. Who runs what is in [autonomy](../manyhands-overview/references/autonomy.md); input files, `--request-id`, prepare and confirm, and the main checkout root are in [CLI conventions](../manyhands-overview/references/cli-conventions.md); codes are in [errors and exit codes](../manyhands-overview/references/errors-and-exit-codes.md). Keys and host trust are in [keys and hosts](../manyhands-keys-and-hosts/SKILL.md); this skill says when to use them.
 
-Every verb here except `repo list` takes `--repo <repo-root>`, the repository's main checkout root, the directory that holds `.git`. There is no "current repository": the CLI never guesses from where you stand. Keep your `--input` files in a temporary directory outside the repository, so they are not committed, and delete them when done.
+Every verb here except `repo list` takes `--repo <repo-root>`, the repository's main checkout root, the path on the first line of `git worktree list` (a linked worktree is not it). There is no "current repository": the CLI never guesses from where you stand. Keep your `--input` files in a temporary directory outside the repository, so they are not committed, and delete them when done.
 
 ## Which situation is it
 

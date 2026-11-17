@@ -7,7 +7,7 @@ description: "Use when creating, updating, saving, relating, repairing or closin
 
 Read the [overview](../manyhands-overview/SKILL.md) first. Who runs what is in [autonomy](../manyhands-overview/references/autonomy.md); input files, `--request-id`, prepare and confirm, observation tokens and the main checkout root are in [CLI conventions](../manyhands-overview/references/cli-conventions.md); codes are in [errors and exit codes](../manyhands-overview/references/errors-and-exit-codes.md). Look before you write: [finding work](../manyhands-finding-work/SKILL.md) lists tickets, what is ready or blocked, dependencies and short codes, and `ticket check` there tries a relationship change before you save it. The stale-observation pattern is in [documents](../manyhands-documents/SKILL.md) ("A stale observation"); it is the same for tickets. This skill says only what is specific to tickets.
 
-Every verb here takes `--repo <repo-root>`, the repository's main checkout root, never a ticket's worktree. A write that names a worktree answers `not_repository_root` (exit 2) and writes nothing. A ticket's worktree is `.manyhands/worktrees/<id>` inside the repository: when you are working in it, still pass the main checkout root, which is the directory that holds `.git`. Keep your `--input` files in a temporary directory outside the repository, and delete them when done.
+Every verb here takes `--repo <repo-root>`, the repository's main checkout root, never a ticket's worktree. A write that names a worktree answers `not_repository_root` (exit 2) and writes nothing. A ticket's worktree is `.manyhands/worktrees/<id>` inside the repository: when you are working in it, still pass the main checkout root: the path on the first line of `git worktree list`, not the worktree. Keep your `--input` files in a temporary directory outside the repository, and delete them when done.
 
 ## The lifecycle
 
@@ -84,7 +84,8 @@ manyhands-cli --json --non-interactive ticket save --repo <repo-root> --id <ITEM
 
 - That example changes the status, clears `project` and clears every dependency. Leave `project` and `deps` out of a patch that should keep them. `deps` is replaced whole: to add one dependency, send the full new list. `parent` and `deps` clear independently (verified: clearing `deps` kept the parent).
 - A body is replaced whole, so send the complete new body. `"title": null` and `"status": null` are `invalid_input`.
-- A save that changes nothing answers `already_applied` and writes nothing (verified: a second save with an already-used token and the same change, and an observation-only save).
+- A save that changes nothing answers `already_applied` and writes nothing (verified: a second save with an already-used token and the same change, and an observation-only save on a clean worktree).
+- Any save captures the person's uncommitted edits in the ticket's worktree. If someone edited the worktree's `ticket.md` outside Manyhands, `ticket show` reads that edit, a save with its fresh token commits it as it stands (verified, even an observation-only save), and a token from before the edit answers `external_change`. If the edit broke the front matter (a missing `type`, say), `ticket show` reports `missing_field` in `problems` and a save answers `item_not_found` (exit 2) and commits nothing: stop and tell the person, who can revert the edit, or use `ticket repair`.
 - A stale token answers `external_change` (exit 3) when the change is new: read again, merge, save with the new token and a new `--request-id`. See [documents](../manyhands-documents/SKILL.md) for the steps. `--prepare` answers `not_confirmable`: save runs alone.
 - A closed ticket cannot be saved: `ticket_closed` (exit 3). Set the status and text you want before you close.
 - A save from a patch is checked like a create: `relationship_cycle` (exit 2, nothing written) or an ID not yet known (accepted, in `data.unresolved`).
@@ -108,7 +109,8 @@ Only a ticket without a `slug` needs this (an older ticket, or one a person comm
 manyhands-cli --json --non-interactive ticket slug-assign --repo <repo-root> --id <ITEM_ID> --input slug.json --request-id <REQUEST_ID>
 ```
 
-- Run on a ticket that already has a code: with no `initials` it is `already_applied`; with `initials` it answers `slug_already_assigned` (exit 2). The code never changes once written.
+- It runs alone like create and save, but it is write-once: the code never changes afterwards.
+- Run on a ticket that already has a code, the answer depends on whether the initials match the code's middle part. Initials omitted are taken from the commit identity (`repo identity` shows them). Matching initials, given or derived, answer `already_applied`; different ones answer `slug_already_assigned` (exit 2) and change nothing. Verified: a code `sc-...` with identity initials `sc` was `already_applied` with none and with `sc`, and `slug_already_assigned` with `zz`; a code `vh-...` was `slug_already_assigned` with none (identity initials `sc`) and `already_applied` with `vh`.
 - Run on a ticket that is only on the main branch, it writes the code on a new branch and worktree for the ticket, so the ticket is then in progress there ("active" in `context`). `--prepare` answers `not_confirmable`.
 
 ## Repair: a ticket file that is not valid
@@ -140,12 +142,12 @@ Without `--confirm` the verb answers `confirmation_required` (exit 3). The previ
 
 ## Close: show the person first, then confirm
 
-Closing records `closed_at` and `closed_by`, merges the ticket's branch into the main branch, publishes the main branch when a publication remote is selected, and removes the branch and worktree. It cannot be undone from the CLI, so it is show then wait ([autonomy](../manyhands-overview/references/autonomy.md)), even when the person said "close it": the request does not show them these effects. Their OK should also mean the work is done and, in a project that reviews work, approved.
+Closing records `closed_at` and `closed_by`, merges the ticket's branch into the main branch, publishes the main branch when a publication remote is selected, and removes the branch and worktree. It cannot be undone from the CLI, so it is show then wait ([autonomy](../manyhands-overview/references/autonomy.md)), even when the person said "close it": the request does not show them these effects. As part of showing the preview, ask the person whether the work has been reviewed and approved, and treat their OK as covering that too: closing is the last step after approval, and the CLI does not check it.
 
 Before you prepare:
 
 1. Save the status and text you want to keep. A closed ticket cannot be saved, and close does not rewrite the status.
-2. If the ticket has children or dependents, look (`ticket children`, `ticket deps --direction up`, in [finding work](../manyhands-finding-work/SKILL.md)). Close does not check: it closes a ticket whose children or own dependencies are still open (verified), and leaves them open. Tell the person.
+2. Look for open children and open dependencies (reads in [finding work](../manyhands-finding-work/SKILL.md)): `ticket children --id <ITEM_ID>` for children, and the ticket's own dependencies from `ticket show` (`data.deps`, each with a `state`, and `readiness` `blocked` with reason `open_dependency`) or `ticket deps --direction down`. Not `--direction up`: that lists the tickets that depend on this one, and for a ticket that depends on an open ticket it is empty (verified). Close does not check: it closes a ticket whose children or own dependencies are still open (verified), and leaves them open, and the preview does not mention them. Tell the person what you found. Open dependents need no warning: closing makes them ready (`made_ready`).
 
 ```sh
 manyhands-cli --json --non-interactive ticket close --repo <repo-root> --id <ITEM_ID> --prepare
@@ -188,7 +190,7 @@ A blocked prepare is `recovery_required` or `identity_required` (exit 3) with `d
 
 | Blocker | Meaning and fix |
 | --- | --- |
-| `context_dirty` | The ticket's worktree has changes Manyhands did not commit: a file Git does not ignore, or an edited tracked file. Look with a read-only `git -C <worktree> status --short` (the worktree is `data.context.worktree` of `ticket show`). They are the person's files, so show the list and ask. Remove or move an unwanted file only with their OK, then prepare again. If it is an edit to the ticket's own `ticket.md` that they want kept, a `ticket save` commits it as it stands (verified: the edit landed in the checkpoint); do not edit the file yourself. |
+| `context_dirty` | The ticket's worktree has changes Manyhands did not commit: a file Git does not ignore, or an edited tracked file. Look with a read-only `git -C <worktree> status --short` (the worktree is `data.context.worktree` of `ticket show`). They are the person's files, so show the list and ask. Remove or move an unwanted other file only with their OK, then prepare again. The ticket's own `ticket.md` is different: never delete it, `git checkout` it or edit it yourself, because reverting an unwanted edit is the person's decision. If they want the edit kept and `ticket show` reads it cleanly, a `ticket save` (fresh token) commits it as it stands (verified). If the edit broke the front matter, the prepare lists `context_nonconforming` as well and a save answers `item_not_found`: hand it to the person, or use `ticket repair`. |
 | `primary_dirty` | The main checkout has uncommitted or untracked changes. They are the person's: ask them, never clean up. |
 | `context_missing` | The ticket exists only on the main branch and has no branch to merge (a ticket committed outside Manyhands). A `ticket save` or `ticket slug-assign` gives it a branch and worktree; then prepare again. Ask the person first if the save changes anything. |
 | `identity_required` | The repository has no commit identity, so there is no `closed_by`. `repo identity-set` is a show-then-wait step: see [repositories](../manyhands-repositories/SKILL.md). |
@@ -202,7 +204,7 @@ A file Git ignores in the ticket's worktree (a `target/` build directory, `.deve
 
 1. Do not start over and do not prepare a second close of the same ticket.
 2. Tell the person which ignored files are in the worktree (`git -C <worktree> status --short --ignored`, read only). They are build output, but they are the person's files: ask before you delete them.
-3. After their OK, remove them, and run the same confirm again with the same `--confirm` and the same `--request-id`. Replaying the same request continues the close and repeats no merge: it answers exit 0, `cleanup` `complete`, and the worktree and branch are gone (verified). A new request ID with the used confirmation answers `confirmation_used`.
+3. After their OK, remove them, and run the same confirm again with the same `--confirm` and the same `--request-id`. If they decline, the ticket stays closed and merged (verified) and only the cleanup stays pending: the worktree and local branch remain and the close shows in `operation list`. Tell them so and leave it; `manyhands-recovery` covers finishing it later. Replaying the same request continues the close and repeats no merge: it answers exit 0, `cleanup` `complete`, and the worktree and branch are gone (verified). A new request ID with the used confirmation answers `confirmation_used`.
 
 To avoid it: never run builds, editors or tools inside a ticket's worktree.
 
@@ -214,7 +216,7 @@ With a passphrase-protected key, a close that needs the remote answers `unlock_r
 manyhands-cli ticket close --repo <repo-root> --id <ITEM_ID> --confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>
 ```
 
-At a terminal the CLI prompts for the passphrase and finishes the same operation. Verified end to end with a throwaway key: `publication` `published`, the remote's main branch holds the merge, the ticket's branch and worktree are gone. That ran within the confirmation's ten minutes; the contract says an accepted confirmation stands for its request, and a retry after expiry was not run. Afterwards read the ticket with `ticket show` and check `closure.state`. If the confirmation has expired, prepare again, show the person the preview again, and give them the new command. See [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
+At a terminal the CLI prompts for the passphrase and finishes the same operation. Verified end to end with a throwaway key: `publication` `published`, the remote's main branch holds the merge, the ticket's branch and worktree are gone. That ran within the confirmation's ten minutes; the contract says an accepted confirmation stands for its request, and a retry after expiry was not run. Afterwards read the ticket with `ticket show` and check `closure.state`. If the confirmation has expired, prepare again, show the person the preview again, and give them the new command. If the person does not finish it, the started close stays in `operation list` (a `close` operation, `confirmed`) and the ticket stays open on its branch: nothing is lost, and `manyhands-recovery` covers resuming or abandoning it (abandoning is the person's call). See [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
 
 ## Codes you will meet
 
@@ -224,7 +226,7 @@ At a terminal the CLI prompts for the passphrase and finishes the same operation
 | `ticket_closed` (3) | The ticket is closed: no save, slug-assign or second close. |
 | `relationship_cycle` (2) | The `deps` or `parent` would form a cycle. `data.rejected` names the tickets. Try with `ticket check`. |
 | `invalid_relationship` (2) | A `deps` or `parent` ID is not a ticket ID. |
-| `slug_already_assigned` (2) | The ticket has a code and you asked for different initials. |
+| `slug_already_assigned` (2) | The ticket has a code and the initials (given, or derived from the identity) differ from it. |
 | `invalid_input` (2) | A field is missing, unknown or null where null is refused. Rerun without `--json`. |
 | `occupied_path` (2) | The `item_id` was already used for other content. Mint a new one. |
 | `item_not_found` (2) | No item has that ID. `ticket list`. |
