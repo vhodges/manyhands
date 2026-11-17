@@ -1,6 +1,6 @@
 ---
 name: manyhands-recovery
-description: "Use when a Manyhands command answers recovery_required, busy or an incomplete result (exit 4), when operation list is not empty, when writes are refused though nothing looks wrong, when an item or repository seems stuck, or when history_unknown, history_unresolved or index_unavailable appears."
+description: "Use when a Manyhands command answers recovery_required, busy or an incomplete result (exit 4), when operation list is not empty, when writes are refused though nothing looks wrong, when a command answers repository_not_registered, when an item or repository seems stuck, or when history_unknown, history_unresolved or index_unavailable appears."
 ---
 
 # Recovery
@@ -43,7 +43,7 @@ manyhands-cli --json request show --request-id <REQUEST_ID>
 
 `operation list` returns every operation that still has work outstanding (`data.items[]`, `data.complete`). Each has `operation_id`, `family` (`local` or `remote`), `action`, `state`, `completed_step`, `next_action`, `item_id` and `failure_code`. `operation show` gives the same fields for one ID. `request show` takes a request ID (the one in `recovery`'s `request.retry`) and gives `state` (`accepted` while unfinished, `finished`), the `command`, its `operations` and the stored `result`; it answers `request_not_found` for a request that was refused as `busy`, because that one was never accepted. `index status` `pending_operations` lists only some of them: it listed a local sync conflict, and was empty while a blocked sync, a remote conflict and a close stopped at publication were pending (verified). Do not rely on it; `operation list` is the check.
 
-An empty list with `recovery_required` has two possible causes. First, `data.blockers` of that answer may name one ([tickets](../manyhands-tickets/SKILL.md), [documents](../manyhands-documents/SKILL.md) list the blockers they raise). Second, if `data` is null and there are no blockers, look for a worktree Manyhands did not make, with a read: `git worktree list` in the repository. Verified: a detached worktree made with `git worktree add --detach <path>` outside `.manyhands/worktrees/` made `ticket create` and `comment add` answer `blocked` / `recovery_required` (exit 3, nothing written, `recovery` only `repo.inspect`), while `operation list` was empty, `index status` said `current` and `repo inspect` showed nothing. `git worktree remove` of it fixed both at once. That worktree is the person's: tell them which path and why it blocks, and never remove or move it yourself.
+An empty list with `recovery_required` has two possible causes. First, `data.blockers` of that answer may name one ([tickets](../manyhands-tickets/SKILL.md), [documents](../manyhands-documents/SKILL.md) list the blockers they raise). Second, if there is no `data.blockers`, look for a worktree Manyhands did not make, with a read: `git worktree list` in the repository. Verified: a detached worktree made with `git worktree add --detach <path>` outside `.manyhands/worktrees/` made `ticket create` and `comment add` answer `blocked` / `recovery_required` (exit 3, nothing written, `recovery` only `repo.inspect`), while `operation list` was empty, `index status` said `current` and `repo inspect` showed nothing. `git worktree remove` of it fixed both at once. That worktree is the person's: tell them which path and why it blocks, and never remove or move it yourself.
 
 One unfinished operation holds more than its own item. Verified in scratch repositories: reads keep working, and:
 
@@ -83,13 +83,13 @@ There are two hand-offs, by what you saw:
 manyhands-cli operation resume --repo <repo-root> --operation-id <OPERATION_ID> --request-id <REQUEST_ID>
 ```
 
-Verified with a throwaway passphrase key: it prompted for the passphrase and finished a blocked `repo sync` (`already_applied`) and a blocked `item sync` (`published`), and `operation list` was empty afterwards. Your own non-interactive `operation resume` of such an operation only answers `unlock_required` with an empty `recovery`, and left it `reconciling`, which did not hurt the person's finish. Do not cancel the request; it is what finishes the work. Afterwards run `operation list` and tell the person it is empty.
+Verified with a throwaway passphrase key: it prompted for the passphrase and finished a blocked `repo sync` (`already_applied`) and a blocked `item sync` (`published`), and `operation list` was empty afterwards. What happens if an agent resumes it, seen once: a non-interactive `operation resume` of such an operation only answers `unlock_required` with an empty `recovery` and leaves it `reconciling` (it did not hurt the person's finish). That is an observation, not advice: do not do this. Do not cancel the request; it is what finishes the work. Afterwards run `operation list` and tell the person it is empty.
 
 ## Resume
 
 `operation resume` re-enters an interrupted operation. It has no preview (`--prepare` answers `not_confirmable`) and it writes state: on a local sync conflict it answered `partial`, exit 4, `write` `written`, and left the conflict pending. Who may run it, and the one narrow case where you may run it alone, are in [autonomy](../manyhands-overview/references/autonomy.md); otherwise say which operation, what it is and what resume will do, and wait.
 
-Verified once: a `repo sync` refused with `invalid_configuration` (the remote had no main branch) left a `fetch_observed` operation and every later sync answered `busy`; after the person had put a main branch on the remote, `operation resume` finished it with `already_applied` and syncs worked. After a passphrase hand-off there is nothing left to resume: the person's rerun finishes the operation.
+Verified once: a `repo sync` refused with `invalid_configuration` (the remote had no main branch) left a `fetch_observed` operation and every later sync answered `busy`; after the person had put a main branch on the remote, `operation resume` finished it with `already_applied` and syncs worked. After a passphrase hand-off the person's rerun, or their own `operation resume` at their terminal, finishes the operation, so the agent has nothing to resume.
 
 Resume does not resolve a conflict. On a remote conflict it re-answered `recovery_required` with the same conflict.
 

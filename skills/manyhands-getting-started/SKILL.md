@@ -42,10 +42,10 @@ Keys and host pins are application-wide, not per repository: another repository'
 
 Go to [keys and hosts](../manyhands-keys-and-hosts/SKILL.md) for how: explain the passphrase choice and recommend none for a key used only for Manyhands, then `key generate` or `key import`, then `key select`.
 
-- **Stop: the key choice.** Say which of generate or import, and passphrase or none, and wait. Generating is show-then-wait.
+- **Stop: the key choice.** Say which of generate or import, and passphrase or none, and wait. Generating is show-then-wait. In A and D there is no remote yet, so no key is needed until one exists: the person decides whether to generate one now. If they already gave the protection choice (none or passphrase), that is the choice; still describe the action first, because `key generate` has no preview.
 - **Stop: any passphrase.** A passphrase key cannot be generated or unlocked by you. Hand the command to the person's terminal.
 - **Stop: the public key.** For B and C, show the `key public` line and ask the person to add it to their Git host. Wait until they say it is done.
-- Check: `manyhands-cli key list` has one line ending `selected` (JSON: `data.items[].selected` true). Right after a generate and before the select it ends `-`. Run no host command yet.
+- Check: in `manyhands-cli --json key list` the selected key has `data.items[].selected` true. Without `--json` each line is `<id> <label> generated selected <fingerprint>`: the fourth column reads `selected`, and `-` for a key that is not selected (right after a generate and before the select). Run no host command yet.
 
 ## Step 3: the repository
 
@@ -62,13 +62,13 @@ manyhands-cli repo identity --repo <repo-root>
 
 Good answer: `Registered: true`, `Configuration: valid`, `Identity: available`, and in `repo identity` `Source: repository`. `Publication remote: -` is right for A and D. If a command answers `repository_not_registered` or `repository_not_enabled`, this data directory does not know the repository yet: [recovery](../manyhands-recovery/SKILL.md), "Not registered", then `repo enable`, never `index rebuild`.
 
-## Step 4: the remote (B and C; skip for A and D)
+## Step 4: the remote (B; for C it is inside the onboarding, so only run the check; skip for A and D)
 
 `remote select` is in [repositories](../manyhands-repositories/SKILL.md), and `remote add` first if the repository has no remote yet. Both you run alone, and both need a registered repository (`remote list` answers `repository_not_registered` before the enable; `repo inspect` still lists the remotes).
 
 - Check: `manyhands-cli remote list --repo <repo-root>` ends `selected=true` on the remote, and `repo inspect` shows `Publication remote: origin` (or its name). With no remote `remote list` prints nothing.
 
-## Step 5: the host pin (B and C)
+## Step 5: the host pin (B; for C it is inside the onboarding, so only run the check)
 
 Go to [keys and hosts](../manyhands-keys-and-hosts/SKILL.md), "Host trust": `host observe`, show the fingerprint, then `host approve`. For C this is step 8 of the onboarding.
 
@@ -86,7 +86,7 @@ manyhands-cli poll status --repo <repo-root>
 [Polling and the index](../manyhands-polling-and-index/SKILL.md) has the answers. A fresh `<REQUEST_ID>` comes from `manyhands-cli id new`. Good: `Completion: completed`, every target `current` (or `fast_forwarded`, `materialized`), and `poll status` showing `Latest outcome: completed` and a `Latest observed at`.
 
 - A and D: `poll once` answers `publication_remote_required` (exit 3). That is expected, not a failure: a repository with no remote works fully by itself. `poll status` still answers, with `Latest outcome: -`.
-- **A remote with no `main` yet.** A brand-new empty remote has no main branch. The first `poll once` then reports `refs/heads/main` as `history_unknown` (seen once, with an empty remote), and `repo sync` against it answers `invalid_configuration` and leaves an unfinished operation that makes later syncs `busy`. So read the targets, and do not run `repo sync` yet. Putting main on the remote is the person's step: tell them, wait, and they push it with their own Git and credentials. Then poll again: `refs/heads/main` should read `current`. If you already ran a sync, [recovery](../manyhands-recovery/SKILL.md) covers the leftover operation.
+- **A remote with no `main` yet.** A brand-new empty remote has no main branch. The first `poll once` then reports `refs/heads/main` as `history_unknown`, and `repo sync` against it answers `invalid_configuration` and leaves an unfinished operation that makes later syncs `busy` (all of this seen once, with an empty remote; not reproduced). So read the targets, and do not run `repo sync` yet. Putting main on the remote is the person's step: tell them, wait, and they push it with their own Git and credentials. Then poll again: `refs/heads/main` should read `current` (not verified; expected). If you already ran a sync, [recovery](../manyhands-recovery/SKILL.md) covers the leftover operation.
 - `host_approval_required`, `no_selected_key`, `key_rejected` and `unlock_required` send you back to step 5 or 2; none of them is yours to fix alone.
 
 ## Step 7: a first read and, if they want, a first ticket
@@ -103,17 +103,6 @@ The setup is done when these are all true: `key list` shows a selected key (when
 - Looking around: [finding work](../manyhands-finding-work/SKILL.md).
 - Tickets: [tickets](../manyhands-tickets/SKILL.md). Documents: [documents](../manyhands-documents/SKILL.md). Comments: [comments](../manyhands-comments/SKILL.md).
 - Sharing work with collaborators later: [sharing and sync](../manyhands-sharing-and-sync/SKILL.md).
-
-## What you show the person at each stop
-
-| Stop | Show | Then wait for |
-| --- | --- | --- |
-| Key choice | generate or import, passphrase or none, and why you recommend none for a Manyhands-only key | their choice and OK |
-| Passphrase | the command, with the file, for their terminal | them saying it is done |
-| Public key | the `key public` line | them saying it is on the Git host |
-| Repository enable or create | the prepared effects, and the name and email that will be the commit author | their OK |
-| Fingerprint | the exact algorithm and fingerprint (twice in C: scanned, then observed) | their confirmation against a trusted source |
-| Empty remote | that the remote has no main branch | them pushing it |
 
 ## Not run end to end
 

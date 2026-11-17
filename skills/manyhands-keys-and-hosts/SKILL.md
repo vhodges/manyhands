@@ -92,7 +92,8 @@ Manyhands does not upload keys to a Git host. Show the person the `key public` l
 
 Manyhands pins a host's key itself, per `host:port`. This is separate from Git's and OpenSSH's `known_hosts`: approving a host in Manyhands does not touch `~/.ssh/known_hosts`, and a trusted `known_hosts` entry does not satisfy Manyhands (verified: after `host approve` no `known_hosts` file existed).
 
-Prerequisites, all checked: a registered, enabled repository (`repository_not_registered` otherwise), a selected publication remote (`publication_remote_required`, exit 3), and a selected key (`no_selected_key`, exit 3). 
+Prerequisites, all checked: a registered, enabled repository (`repository_not_registered` otherwise), a selected publication remote (`publication_remote_required`, exit 3), and a selected key (`no_selected_key`, exit 3).
+
 `host observe` makes a real network connection to the remote's host to read its current key. It writes nothing and trusts nothing. Whether it authenticates depends on the pin: observing a host that is not pinned yet does not authenticate, so it works with no key accepted by the host and with a passphrase-protected key (verified); observing a host that is already pinned does, and then answers `unlock_required` for a passphrase-protected key and `key_rejected` for a key the host does not accept. Run it only when the person has asked you to set up or check that host, and say that it connects to the host. It is the way to learn the fingerprint to show them.
 
 ```sh
@@ -161,7 +162,7 @@ Confirm as for `host approve`.
 
 ## Hand to the person
 
-- `key remove` (unregister) and `key delete` (delete the generated files). Never run them, even if asked to "clean up". You may run `key delete --prepare` to show what it would remove (the private and public key files and the registration); `key remove` has no preview (`not_confirmable`). See [autonomy](../manyhands-overview/references/autonomy.md). `key delete` refuses a selected key (`selected_key_in_use`) and an imported key (`key_not_deletable`; imported files are the person's). Tell the person which key and why.
+- `key remove` (unregister) and `key delete` (delete the generated files). Never run them, even if asked to "clean up". You may run `key delete --prepare` to show what it would remove (the private and public key files and the registration); `key remove` has no preview (`not_confirmable`). See [autonomy](../manyhands-overview/references/autonomy.md). `key delete` refuses a selected key (`key delete --prepare` on a selected key answers `blocked` with `selected_key_in_use` and no preview, so there is no file-effects preview to show; verified) and an imported key (`key_not_deletable`; imported files are the person's). Tell the person which key and why.
 - Any passphrase: `key generate` with `passphrase`, and any step that answers `unlock_required`.
 - Adding the public key to the Git host.
 

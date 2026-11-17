@@ -5,9 +5,9 @@ description: "Use when you need to find out what exists in a Manyhands repositor
 
 # Finding work
 
-Read the [overview](../manyhands-overview/SKILL.md) first. JSON answers, the envelope and `--repo` are in [CLI conventions](../manyhands-overview/references/cli-conventions.md); codes are in [errors and exit codes](../manyhands-overview/references/errors-and-exit-codes.md). This skill is reads only: nothing here writes, asks the person or needs `--request-id`. Looking first is how you avoid a duplicate ticket, a path clash or a stale save. To change what you found: [documents](../manyhands-documents/SKILL.md), and `manyhands-tickets` for tickets.
+Read the [overview](../manyhands-overview/SKILL.md) first. JSON answers, the envelope and `--repo` are in [CLI conventions](../manyhands-overview/references/cli-conventions.md); codes are in [errors and exit codes](../manyhands-overview/references/errors-and-exit-codes.md). This skill is reads only, except `index refresh` (it rewrites the local index, not the repository, and needs `--request-id`): nothing else here writes, asks the person or needs `--request-id`. Looking first is how you avoid a duplicate ticket, a path clash or a stale save. To change what you found: [documents](../manyhands-documents/SKILL.md), and `manyhands-tickets` for tickets.
 
-Every verb here takes `--repo <repo-root>`, the repository's main checkout root, and fails with `usage_error` without it. A repository Manyhands does not know answers `repository_not_registered`: see "Not registered" in [recovery](../manyhands-recovery/SKILL.md). Add `--json`. The human output is one short line per item, the ID first and the title last, and leaves out most fields, including the observation token.
+Every verb here takes `--repo <repo-root>`, the repository's main checkout root, and fails with `usage_error` without it. Reads also accept a worktree path (only writes refuse one with `not_repository_root`), but pass the root. A repository Manyhands does not know answers `repository_not_registered`: see "Not registered" in [recovery](../manyhands-recovery/SKILL.md). Add `--json`. The human output is one short line per item, the ID first and the title last, and leaves out most fields, including the observation token.
 
 ## Look first, in this order
 

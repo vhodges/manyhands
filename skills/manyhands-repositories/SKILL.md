@@ -170,8 +170,8 @@ Use when the person gives only a URL, such as `ssh://git@git.example.com/org/rep
 
 Git's host check is not Manyhands' host pin, and you never skip either. Steps 3 and 4 always come before any hand-off of the clone to the person, whether or not the key has a passphrase.
 
-1. Ask the person where to clone. If that directory already exists and is not empty, `git clone` refuses it (`destination path ... already exists and is not an empty directory`): ask the person for another path, and never empty or delete their directory yourself. An existing empty directory is fine. Ask which key to use if more than one is registered (`key list`). If none exists, or the person says one exists and `key list` is empty, go to [keys and hosts](../manyhands-keys-and-hosts/SKILL.md) first. Select it: `manyhands-cli --json --non-interactive key select --key-id <KEY_ID> --request-id <REQUEST_ID>`. Selecting changes the key for every repository: say so if another key was selected. Get `<private_key_path>` from `data.private_key_path` of `key show`.
-2. Ask whether that key has a passphrase if you did not generate it yourself with `none` (`key show` does not say). Note it: a passphrase key changes only who runs step 5 and step 9, not the order.
+1. Ask the person where to clone. If that directory already exists and is not empty, `git clone` refuses it (`destination path ... already exists and is not an empty directory`): ask the person for another path, and never empty or delete their directory yourself. An existing empty directory is fine, and `git clone` creates the destination folder (and any missing parents) itself. Ask which key to use if more than one is registered (`key list`). If none exists, or the person says one exists and `key list` is empty, go to [keys and hosts](../manyhands-keys-and-hosts/SKILL.md) first. Select it: `manyhands-cli --json --non-interactive key select --key-id <KEY_ID> --request-id <REQUEST_ID>`. Selecting changes the key for every repository: say so if another key was selected. Get `<private_key_path>` from `data.private_key_path` of `key show`.
+2. Ask whether that key has a passphrase if you did not generate it yourself with `none` (`key show` does not say). Note it: a passphrase key changes only who runs step 5 and step 8, not the order.
 3. **The public key must already be on the Git host, by the person's hand.** Show `manyhands-cli key public --key-id <KEY_ID>` and wait. Without it the clone fails with `Permission denied (publickey)`.
 4. **Stop at the host fingerprint.** Git must trust the host before it can clone, but plain `git clone` with no terminal fails with `Host key verification failed`. Never use `-o StrictHostKeyChecking=no` or `accept-new`: that trusts whatever answers. Instead read the host's key without trusting it (a network connection to the real host) into a temporary directory outside any repository, and show the person the fingerprint:
 
@@ -181,7 +181,7 @@ Git's host check is not Manyhands' host pin, and you never skip either. Steps 3 
    ssh-keygen -lf <temp-dir>/scanned.txt
    ```
 
-   Omit `-p <port>` for port 22. Ask the person to confirm each fingerprint against a source they trust (the Git host's published list), and wait. Keep the scanned fingerprint for step 8.
+   Omit `-p <port>` for port 22. `ssh-keyscan` is read-only and trusts nothing, so it may run as soon as the key exists, even before the person has added the key to the host. If the host does not resolve, `ssh-keyscan` prints `getaddrinfo <host>: Name or service not known`, exits 1 and writes nothing (verified): tell the person, there is nothing to show. Ask the person to confirm each fingerprint against a source they trust (the Git host's published list), and wait. Keep the scanned fingerprint for step 8.
 5. Only after their OK, clone with that exact key, trusting only the scanned host key. If the key has no passphrase, run:
 
    ```sh
