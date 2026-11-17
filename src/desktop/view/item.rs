@@ -494,9 +494,12 @@ impl Render for ItemPane {
         let body = match item.as_ref() {
             Some(item) => {
                 let details = inspect.then(|| {
+                    // A nonconforming file's Git details are in their own
+                    // sheet.
+                    let git = (!self.nonconforming_file(item)).then(|| self.provenance(item, cx));
                     v_flex()
                         .gap_3()
-                        .child(self.provenance(item, cx))
+                        .children(git)
                         .child(self.fields(item, cx))
                         .children((!banners::nonconforming(item)).then(|| self.problems(item, cx)))
                         .child(self.metadata(item, &[], cx))
@@ -506,7 +509,7 @@ impl Render for ItemPane {
                 // (R-64). The repair view takes the place of either.
                 let text = if let Some(repairing) = self.repair_view(cx) {
                     repairing
-                } else if inspect {
+                } else if inspect && !self.nonconforming_file(item) {
                     self.source(item, cx)
                 } else if let Some(editing) = self.edit_view(cx) {
                     editing

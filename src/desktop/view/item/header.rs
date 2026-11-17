@@ -222,6 +222,7 @@ impl ItemPane {
             .items_center()
             .gap(px(8.))
             .children(pill)
+            .children(self.git_details_button(item, cx))
             .children(self.comments_button(window, cx))
             .children(self.edit_action(read, window, cx))
             .children(self.share_button(window, cx))

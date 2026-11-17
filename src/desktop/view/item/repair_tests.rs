@@ -406,6 +406,10 @@ async fn the_needs_fixing_banner_offers_repair(cx: &mut TestAppContext) {
 
     open(&shell, inspect(&root, &ticket_path(READABLE)), cx);
     assert!(shell.present("item-source", cx), "the file is read");
+    assert!(
+        !shell.present("item-git-details", cx),
+        "no Git details button"
+    );
     assert!(!shell.present("item-needs-fixing", cx));
     assert!(!shell.present("item-repair", cx), "no Repair… for it");
     assert_eq!(RepositorySnapshot::take(&root), before);
