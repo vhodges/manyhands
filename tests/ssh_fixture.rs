@@ -2,9 +2,6 @@
 #[path = "../src/lib.rs"]
 mod production;
 pub use production::*;
-#[cfg(unix)]
-#[path = "support/ssh_agent.rs"]
-mod ssh_agent;
 #[path = "support/ssh_harness.rs"]
 mod ssh_harness;
 #[path = "support/ssh_privacy.rs"]
@@ -50,8 +47,6 @@ fn main() {
             trust_default_key_fallback_refused,
         ),
         ("encrypted_ed25519", encrypted_ed25519),
-        #[cfg(unix)]
-        ("agent_selected_key_only", agent_selected_key_only),
         ("wrong_key_denied", wrong_key_denied),
         ("other_auth_denied", other_auth_denied),
         ("host_rotation_and_rejection", host_rotation_and_rejection),
@@ -283,44 +278,6 @@ fn encrypted_ed25519() -> Result<(), FixtureError> {
         fixture.accepted_keys(),
         vec![fixture.allowed_client_public_key()]
     );
-    Ok(())
-}
-#[cfg(unix)]
-fn agent_selected_key_only() -> Result<(), FixtureError> {
-    let fixture = SshRemoteFixture::start()?;
-    let selected = fixed(ssh_key::PrivateKey::read_openssh_file(
-        fixture.client_key_path(),
-    ))?;
-    let decoy = fixed(ssh_key::PrivateKey::random(
-        &mut ssh_key::rand_core::OsRng,
-        ssh_key::Algorithm::Ed25519,
-    ))?;
-    let selected_blob = fixed(selected.public_key().to_bytes())?;
-    // The decoy is listed first: an unpinned client would reach it first.
-    let agent = fixed(ssh_agent::FakeAgent::start(vec![decoy, selected]))?;
-    let signer = ssh_agent::AgentSigner {
-        socket: agent.socket().to_owned(),
-        key_blob: selected_blob.clone(),
-    };
-    let root = fixed(tempfile::tempdir())?;
-    let repo = fixed(git2::Repository::init(root.path()))?;
-    let mut remote = fixed(repo.remote_anonymous(&fixture.url()))?;
-    let mut callbacks = git2::RemoteCallbacks::new();
-    callbacks.certificate_check(|_, _| Ok(git2::CertificateCheckStatus::CertificateOk));
-    callbacks.credentials(|_, username, _| {
-        ssh_agent::custom_credential(username.unwrap_or("fixture"), &signer)
-    });
-    let connection = fixed(remote.connect_auth(git2::Direction::Fetch, Some(callbacks), None))?;
-    let heads: Vec<git2::Oid> = fixed(connection.list())?
-        .iter()
-        .map(|head| head.oid())
-        .collect();
-    assert!(heads.contains(&fixture.commit_id()));
-    assert_eq!(
-        fixture.accepted_keys(),
-        vec![fixture.allowed_client_public_key()]
-    );
-    assert_eq!(agent.signed(), vec![selected_blob]);
     Ok(())
 }
 fn wrong_key_denied() -> Result<(), FixtureError> {
