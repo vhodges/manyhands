@@ -3,7 +3,7 @@ slug: vh-p7fp7
 id: 01M7N5TWFR7DFV5B9BCY032PPA
 title: 'Nonconforming document view: Zorite read view for the body, Git details in a sheet'
 type: story
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
