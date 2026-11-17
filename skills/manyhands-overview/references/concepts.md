@@ -33,7 +33,7 @@ Closing is not a status. A ticket's `status` is free text the person chooses; a 
 Manyhands keeps a registry of the repositories it knows, and an index that makes lists fast, in a SQLite database in a data directory (a per-user application directory). The repository itself holds only `.manyhands/config.toml` and the items. Consequences:
 
 - A repository the registry does not hold answers `repository_not_registered` on reads; one that was never enabled answers `repository_not_enabled` on writes.
-- The index can be stale. A list that looks wrong after an outside change is fixed by an index refresh or rebuild (`manyhands-polling-and-index`); it is not a sign the item is lost.
+- The index can be stale. A list that looks wrong after an outside change is fixed by an index refresh or rebuild ([`manyhands-polling-and-index`](../../manyhands-polling-and-index/SKILL.md)); it is not a sign the item is lost.
 - `MANYHANDS_DATA_DIR` points Manyhands at a different data directory. Use it to test against a scratch repository without touching the person's real registry, and leave it unset otherwise.
 - Do not open or edit the database.
 

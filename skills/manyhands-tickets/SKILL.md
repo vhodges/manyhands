@@ -115,7 +115,7 @@ manyhands-cli --json --non-interactive ticket slug-assign --repo <repo-root> --i
 
 ## Repair: a ticket file that is not valid
 
-A ticket file that Manyhands cannot read as a ticket is listed with `problems` (for example `missing_field`: no `type`) and no usable fields; `index status` lists the same. `ticket show --path <path>` of the file gives the `observation` and the whole `source`. Run `index refresh` first if you suspect the index has not seen an outside commit (`manyhands-polling-and-index`).
+A ticket file that Manyhands cannot read as a ticket is listed with `problems` (for example `missing_field`: no `type`) and no usable fields; `index status` lists the same. `ticket show --path <path>` of the file gives the `observation` and the whole `source`. Run `index refresh` first if you suspect the index has not seen an outside commit ([`manyhands-polling-and-index`](../manyhands-polling-and-index/SKILL.md)).
 
 `ticket repair` writes the corrected whole file onto a new branch and worktree, and is a confirmed verb. It rewrites a person's file, so it is show then wait in [autonomy](../manyhands-overview/references/autonomy.md): show the person the `source` you will write, then confirm.
 
@@ -194,9 +194,9 @@ A blocked prepare is `recovery_required` or `identity_required` (exit 3) with `d
 | `primary_dirty` | The main checkout has uncommitted or untracked changes. They are the person's: ask them, never clean up. |
 | `context_missing` | The ticket exists only on the main branch and has no branch to merge (a ticket committed outside Manyhands). A `ticket save` or `ticket slug-assign` gives it a branch and worktree; then prepare again. Ask the person first if the save changes anything. |
 | `identity_required` | The repository has no commit identity, so there is no `closed_by`. `repo identity-set` is a show-then-wait step: see [repositories](../manyhands-repositories/SKILL.md). |
-| `history_unresolved`, `history_unknown` | The branch and its remote have histories Manyhands cannot reconcile. `manyhands-recovery`. Not run here. |
+| `history_unresolved`, `history_unknown` | The branch and its remote have histories Manyhands cannot reconcile. [`manyhands-recovery`](../manyhands-recovery/SKILL.md). Not run here. |
 
-Anything else with `recovery_required`: read `data.blockers` and `recovery`, and take it to `manyhands-recovery`.
+Anything else with `recovery_required`: read `data.blockers` and `recovery`, and take it to [`manyhands-recovery`](../manyhands-recovery/SKILL.md).
 
 ### The worktree holds an ignored file
 
@@ -204,7 +204,7 @@ A file Git ignores in the ticket's worktree (a `target/` build directory, `.deve
 
 1. Do not start over and do not prepare a second close of the same ticket.
 2. Tell the person which ignored files are in the worktree (`git -C <worktree> status --short --ignored`, read only). They are build output, but they are the person's files: ask before you delete them.
-3. After their OK, remove them, and run the same confirm again with the same `--confirm` and the same `--request-id`. If they decline, the ticket stays closed and merged (verified) and only the cleanup stays pending: the worktree and local branch remain and the close shows in `operation list`. Tell them so and leave it; `manyhands-recovery` covers finishing it later. Replaying the same request continues the close and repeats no merge: it answers exit 0, `cleanup` `complete`, and the worktree and branch are gone (verified). A new request ID with the used confirmation answers `confirmation_used`.
+3. After their OK, remove them, and run the same confirm again with the same `--confirm` and the same `--request-id`. If they decline, the ticket stays closed and merged (verified) and only the cleanup stays pending: the worktree and local branch remain and the close shows in `operation list`. Tell them so and leave it; [`manyhands-recovery`](../manyhands-recovery/SKILL.md) covers finishing it later. Replaying the same request continues the close and repeats no merge: it answers exit 0, `cleanup` `complete`, and the worktree and branch are gone (verified). A new request ID with the used confirmation answers `confirmation_used`.
 
 To avoid it: never run builds, editors or tools inside a ticket's worktree.
 
@@ -216,7 +216,7 @@ With a passphrase-protected key, a close that needs the remote answers `unlock_r
 manyhands-cli ticket close --repo <repo-root> --id <ITEM_ID> --confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>
 ```
 
-At a terminal the CLI prompts for the passphrase and finishes the same operation. Verified end to end with a throwaway key: `publication` `published`, the remote's main branch holds the merge, the ticket's branch and worktree are gone. That ran within the confirmation's ten minutes; the contract says an accepted confirmation stands for its request, and a retry after expiry was not run. Afterwards read the ticket with `ticket show` and check `closure.state`. If the confirmation has expired, prepare again, show the person the preview again, and give them the new command. If the person does not finish it, the started close stays in `operation list` (a `close` operation, `confirmed`) and the ticket stays open on its branch: nothing is lost, and `manyhands-recovery` covers resuming or abandoning it (abandoning is the person's call). See [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
+At a terminal the CLI prompts for the passphrase and finishes the same operation. Verified end to end with a throwaway key: `publication` `published`, the remote's main branch holds the merge, the ticket's branch and worktree are gone. That ran within the confirmation's ten minutes; the contract says an accepted confirmation stands for its request, and a retry after expiry was not run. Afterwards read the ticket with `ticket show` and check `closure.state`. If the confirmation has expired, prepare again, show the person the preview again, and give them the new command. If the person does not finish it, the started close stays in `operation list` (a `close` operation, `confirmed`) and the ticket stays open on its branch: nothing is lost, and [`manyhands-recovery`](../manyhands-recovery/SKILL.md) covers resuming or abandoning it (abandoning is the person's call). See [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
 
 ## Codes you will meet
 
@@ -236,4 +236,4 @@ At a terminal the CLI prompts for the passphrase and finishes the same operation
 | `unlock_required` (3) | A passphrase key: hand the step to the person. |
 | `not_repository_root` (2) | `--repo` was a worktree. Use the main checkout root. |
 
-Not run for this skill: a close whose remote moved since you prepared (another person's work arrived), `history_unresolved` and `history_unknown`, and a remote reached with a host key that changed. The contract describes them; take any such answer to `manyhands-recovery` and tell the person.
+Not run for this skill: a close whose remote moved since you prepared (another person's work arrived), `history_unresolved` and `history_unknown`, and a remote reached with a host key that changed. The contract describes them; take any such answer to [`manyhands-recovery`](../manyhands-recovery/SKILL.md) and tell the person.

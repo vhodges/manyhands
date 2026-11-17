@@ -17,7 +17,7 @@ Everything in Manyhands is local until it is published. Sharing means pushing a 
 | --- | --- | --- |
 | One item (a ticket or a document in progress) | `item sync --id <ITEM_ID>` | Fetches that item's branch from the remote, merges it with the local one, merges the local main branch into it, and pushes the item's branch. |
 | The main branch | `repo sync` | Fetches the main branch, brings it up to date, and pushes it. It does not touch item branches. |
-| Items other people started | `poll once` (`manyhands-polling-and-index`) | Fetches, and creates the local branch and worktree for an item you did not have. It never pushes or merges. |
+| Items other people started | `poll once` ([`manyhands-polling-and-index`](../manyhands-polling-and-index/SKILL.md)) | Fetches, and creates the local branch and worktree for an item you did not have. It never pushes or merges. |
 
 The verified behavior behind this table, from two clones of one remote:
 
@@ -42,7 +42,7 @@ An item has its own branch and worktree, and so its own sync result. To share "e
 
 ## Receiving: the usual order
 
-1. `poll once` to see what others published (`manyhands-polling-and-index`).
+1. `poll once` to see what others published ([`manyhands-polling-and-index`](../manyhands-polling-and-index/SKILL.md)).
 2. `repo sync` to bring main up to date.
 3. `item sync` for each item you are working on, which merges the new main into it and publishes it.
 
@@ -138,7 +138,7 @@ manyhands-cli --json request cancel --request-id <REQUEST_ID>
 
 With a passphrase-protected key every network step answers `unlock_required`, and you cannot enter the passphrase. Never ask for it or put it anywhere. Hand the step to the person: give them the same command, without `--json --non-interactive`, with the same `--request-id`, which `recovery` names (`request.retry`), so they run it at their terminal and type the passphrase there. Verified: `item sync` answered `unlock_required` (exit 3, nothing written), the same command and request ID at a terminal prompted for the passphrase and published, and a later sync answered `already_applied`. `comment add` saves first, then answers `unlock_required` with exit 4 ([comments](../manyhands-comments/SKILL.md)). The mechanics are in [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
 
-A blocked sync leaves an operation unfinished: `operation list` shows it in an interrupted state, such as `fetch_prepared`, `fetch_observed` (after `remote_branch_deleted`), `reconciling` (after a comment's `unlock_required`) or `interrupted` (a waiting conflict). While it is, later syncs answer `busy`. A blocked `repo sync` also makes `remote add` answer `recovery_required` (verified; a blocked `item sync` did not). The way out is to have the person finish the blocked request at their terminal; then `operation list` is empty and `remote add` works. More on operations is in `manyhands-recovery`.
+A blocked sync leaves an operation unfinished: `operation list` shows it in an interrupted state, such as `fetch_prepared`, `fetch_observed` (after `remote_branch_deleted`), `reconciling` (after a comment's `unlock_required`) or `interrupted` (a waiting conflict). While it is, later syncs answer `busy`. A blocked `repo sync` also makes `remote add` answer `recovery_required` (verified; a blocked `item sync` did not). The way out is to have the person finish the blocked request at their terminal; then `operation list` is empty and `remote add` works. More on operations is in [`manyhands-recovery`](../manyhands-recovery/SKILL.md).
 
 ## Local sync without a network
 

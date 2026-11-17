@@ -48,5 +48,5 @@ Details: [CLI conventions](references/cli-conventions.md) and [errors and exit c
 | Creating, updating or closing a ticket | `manyhands-tickets` |
 | Discussing an item | `manyhands-comments` |
 | Making work visible to others, or receiving theirs | `manyhands-sharing-and-sync` |
-| Stale lists, "is it up to date", scheduled refresh | `manyhands-polling-and-index` |
-| A command reported recovery, or an item or operation is stuck | `manyhands-recovery` |
+| Stale lists, "is it up to date", scheduled refresh | [`manyhands-polling-and-index`](../manyhands-polling-and-index/SKILL.md) |
+| A command reported recovery, or an item or operation is stuck | [`manyhands-recovery`](../manyhands-recovery/SKILL.md) |
