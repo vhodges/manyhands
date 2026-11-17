@@ -20,7 +20,7 @@ Ticket `01M7MKQFCHPEXQ58N77D63S417` (vh-gvzsr). Status: approved by the owner in
 
 - No new listing of the deleted ignored paths, and no prompt before deleting them.
 - No registry migration. Registry migrations are one-way.
-- Nothing that lets an untracked, non-ignored file be deleted. If such a file appears between the check and the prune, the removal still stops.
+- Nothing that lets an untracked, non-ignored file, or a Git repository nested in an ignored directory, be deleted. If such a file appears between the check and the prune, the removal still stops.
 
 ## Facts checked
 
@@ -41,6 +41,8 @@ Ticket `01M7MKQFCHPEXQ58N77D63S417` (vh-gvzsr). Status: approved by the owner in
 - Remove `Precheck::IgnoredFiles` and the code that returns or maps it: `Clean::IgnoredFiles` and its three uses in `promotion/run.rs`, `PromotionCleanupPending::IgnoredFiles`, and the matching desktop and DTO copy.
 - Keep the stored string `ignored_files` readable so existing rows and the CHECK constraints stay valid, but nothing produces it. A row already at `ignored_files` is treated like any other retryable cleanup category, so resending the request finishes it.
 - Reword `context_release.rs`'s `not_clean` message: it no longer mentions ignored files.
+
+- An ignored directory that holds a `.git` entry (a nested repository, which may hold unpushed commits), or that cannot be read, still blocks as `Precheck::Changed` (owner decision, 2026-11-17). The check walks ignored directories without following symlinks.
 
 ## Tests
 

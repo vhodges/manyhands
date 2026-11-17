@@ -26,7 +26,7 @@
 2. **An untracked, non-ignored file next to ignored ones** still blocks, and nothing is removed. Pinned in Task 1.
 3. **Ignored files of awkward shapes**: a read-only file, a dangling symlink, a nested directory, all pass and are removed with the worktree. Pinned in Task 1.
 4. **A row an older build left at `cleanup_category = 'ignored_files'`** finishes when its request is resent. Pinned in Task 2.
-5. **Ignored directory holding a nested Git repository** (for example a clone under an ignored `vendor/`): before this change it blocked as ignored; after it, nothing looks inside ignored directories, so the clone, with any unpushed commits, is deleted with the worktree. Not covered by any task: the owner decides (see the handoff message). If the owner wants it to block, add a task after Task 1 that walks ignored directories for a `.git` entry and returns `Precheck::Changed`.
+5. **Ignored directory holding a nested Git repository** (for example a clone under an ignored `vendor/`): it must still block, so unpushed commits in it are not deleted with the worktree. Owner decision 2026-11-17. Pinned in Task 1a. An ignored directory that cannot be read blocks too (fail closed).
 
 ---
 
@@ -49,6 +49,22 @@
 - [ ] **Step 3: Implement.** In `require_cleanup_clean` drop `.include_ignored(true)` and `.recurse_ignored_dirs(true)` and return `Precheck::Changed` for any remaining status entry (delete the `IGNORED` branch). Remove `Precheck::IgnoredFiles` and the three `run.rs` arms. In `not_clean` change the message to "the context worktree holds a change or an untracked file". The `Finding`/`ReleaseCheck` doc comments that name ignored files get the same edit.
 - [ ] **Step 4: Run the three tests, then `devenv shell -- cargo check --all-features --locked`.** Expected: PASS, and a clean check (no remaining reference to `Precheck::IgnoredFiles`).
 - [ ] **Step 5: Commit** `fix(cleanup): ignored files no longer block a context's cleanup`.
+
+### Task 1a: An ignored directory holding a nested repository still blocks
+
+**Files:**
+- Modify: `src/repository/cleanup.rs` (`require_cleanup_clean`, after the status check; one new private function)
+- Test: `src/repository/cleanup_tests.rs`
+
+**Interfaces:**
+- Consumes: Task 1's `require_cleanup_clean`.
+- Produces: `fn ignored_dirs_hold_no_repository(repository: &Repository) -> Result<(), Precheck>` in `cleanup.rs`, called by `require_cleanup_clean` for the repository it checks (each submodule too, as the recursion already calls it). It returns `Err(Precheck::Changed)` when an ignored directory contains an entry named `.git` (file or directory) at any depth, or when a directory in it cannot be read.
+
+- [ ] **Step 1: Write the failing test `cleanup_ignored_directories_holding_a_repository_or_unreadable_block`** in `cleanup_tests.rs`, table-driven over: an ignored `vendor/` with a nested `git2::Repository::init` (a `.git` directory); an ignored `vendor/` with a `.git` file (a gitfile); a `.git` three directories deep under `target/`; an ignored directory with a subdirectory set to mode `0o000` (restore the mode at the end of the case so the tempdir cleans up). Each row asserts `Precheck::Changed`, `files(f.root.path())` unchanged and `f.remove(&c)` not `Removed`. Add the control row: an ignored directory with nested plain files and no `.git` is `Precheck::Ok` (Task 1's test already covers it; do not duplicate it, just keep this table's rows to the blocked cases).
+- [ ] **Step 2: Run it by exact name and confirm it fails** (`left: Ok right: Changed`).
+- [ ] **Step 3: Implement `ignored_dirs_hold_no_repository`.** Ask libgit2 for statuses with `include_ignored(true)` and `recurse_ignored_dirs(false)`, so an ignored directory is one entry. For each ignored entry that is a directory, walk it with `std::fs::read_dir` and `symlink_metadata`, never following symlinks, iteratively with a stack, and return `Changed` on an entry named `.git` or on any I/O error. The worktree root's own `.git` is outside the ignored entries, so it is never seen. Call it from `require_cleanup_clean` right after the untracked-status check passes.
+- [ ] **Step 4: Run the test, then Task 1's three tests again, then `devenv shell -- cargo check --all-features --locked`.** Expected: PASS.
+- [ ] **Step 5: Commit** `fix(cleanup): an ignored directory holding a repository still blocks`.
 
 ### Task 2: Library tests of promotion and closure follow, and an old row resumes
 
