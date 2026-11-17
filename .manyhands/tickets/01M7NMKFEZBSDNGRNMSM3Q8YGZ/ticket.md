@@ -3,7 +3,7 @@ slug: vh-ghxpf
 id: 01M7NMKFEZBSDNGRNMSM3Q8YGZ
 title: 'Skills: never resume an unattributed operation, and serialize an agent''s writes'
 type: task
-status: open
+status: review_ready
 project: manyhands
 team: core
 manyhands_managed: true
