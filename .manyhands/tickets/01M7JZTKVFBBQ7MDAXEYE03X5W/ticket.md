@@ -3,7 +3,7 @@ slug: vh-t62dj
 id: 01M7JZTKVFBBQ7MDAXEYE03X5W
 title: SSH transport prompts for a passphrase when the key is unencrypted, and a protected key is asked again on automatic polls
 type: defect
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
