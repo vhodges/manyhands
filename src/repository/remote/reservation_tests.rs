@@ -1164,6 +1164,7 @@ fn a_reservation_refused_for_another_operation_names_it() {
             family: crate::repository::OperationFamily::Local,
             operation_id: local,
             live: None,
+            seen: None,
         })
     );
     db.execute("UPDATE operation_records SET state='completed'", [])
@@ -1193,6 +1194,7 @@ fn a_reservation_refused_for_another_operation_names_it() {
             family: crate::repository::OperationFamily::Remote,
             operation_id: holder,
             live: None,
+            seen: None,
         })
     );
     // The holder's own call is not in its own way.

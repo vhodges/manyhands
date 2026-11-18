@@ -978,6 +978,7 @@ impl OperationResumeBinding {
             family,
             operation_id,
             live: None,
+            seen: None,
         };
         let (operation, unfinished) = match service.blocking_operation(root, &blocker) {
             crate::repository::BlockerRow::Found {

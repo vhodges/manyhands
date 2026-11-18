@@ -4,7 +4,7 @@
 use rusqlite::{Connection, params};
 
 use super::*;
-use crate::repository::{REGISTRY_FILE, mutation::dto::BlockerDto};
+use crate::repository::{OperationDto, REGISTRY_FILE, mutation::dto::BlockerDto};
 
 /// A registry with one repository, and a local row of `operation`, a ticket
 /// save in `state`, whose `item_id` is `item`. An item that is not an ID
@@ -56,13 +56,15 @@ fn an_answer_names_a_live_blocker_its_read_cannot_return() {
         live,
     };
     // (case, item the row names, its state, blocker the domain names, its
-    // judgment, the answer's code before, its code after, what it names)
+    // judgment, the row as the wait read it, the answer's code before, its
+    // code after, what it names)
     type Row<'a> = (
         &'a str,
         &'a str,
         &'a str,
         OperationId,
         Option<bool>,
+        Option<&'a OperationDto>,
         ResultCode,
         ResultCode,
         Option<BlockerDto>,
@@ -72,13 +74,30 @@ fn an_answer_names_a_live_blocker_its_read_cannot_return() {
         item_id: Some(item.to_owned()),
         ..minimal(Some(true))
     };
-    let rows: [Row<'_>; 6] = [
+    // The row as a wait that found it live read it, before it was damaged.
+    let (_data, root, service) = registry_with_a_row(operation, item, "created");
+    let crate::repository::BlockerRow::Found {
+        operation: read, ..
+    } = service.blocking_operation(
+        root.path(),
+        &Blocker {
+            family: OperationFamily::Local,
+            operation_id: operation,
+            live: None,
+            seen: None,
+        },
+    )
+    else {
+        panic!("the row reads");
+    };
+    let rows: [Row<'_>; 7] = [
         (
             "live, the row reads: named in full",
             item,
             "created",
             operation,
             Some(true),
+            None,
             ResultCode::Busy,
             ResultCode::Busy,
             Some(full.clone()),
@@ -89,9 +108,10 @@ fn an_answer_names_a_live_blocker_its_read_cannot_return() {
             "completed",
             operation,
             Some(true),
+            None,
             ResultCode::Busy,
             ResultCode::Busy,
-            Some(full),
+            Some(full.clone()),
         ),
         (
             "live, the row cannot be read: named by its ID and family",
@@ -99,9 +119,21 @@ fn an_answer_names_a_live_blocker_its_read_cannot_return() {
             "created",
             operation,
             Some(true),
+            None,
             ResultCode::Busy,
             ResultCode::Busy,
             Some(minimal(Some(true))),
+        ),
+        (
+            "live, the row cannot be read, the wait read it: named as the wait read it",
+            "not-an-item",
+            "created",
+            operation,
+            Some(true),
+            Some(&read),
+            ResultCode::Busy,
+            ResultCode::Busy,
+            Some(full.clone()),
         ),
         (
             "live, the row is gone: named nothing, busy still",
@@ -109,6 +141,7 @@ fn an_answer_names_a_live_blocker_its_read_cannot_return() {
             "created",
             elsewhere,
             Some(true),
+            None,
             ResultCode::Busy,
             ResultCode::Busy,
             None,
@@ -119,6 +152,7 @@ fn an_answer_names_a_live_blocker_its_read_cannot_return() {
             "created",
             operation,
             Some(false),
+            None,
             ResultCode::RecoveryRequired,
             ResultCode::RecoveryRequired,
             None,
@@ -129,17 +163,19 @@ fn an_answer_names_a_live_blocker_its_read_cannot_return() {
             "created",
             operation,
             None,
+            None,
             ResultCode::Busy,
             ResultCode::Busy,
             None,
         ),
     ];
-    for (case, item, state, named, live, before, after, expected) in rows {
+    for (case, item, state, named, live, seen, before, after, expected) in rows {
         let (_data, root, service) = registry_with_a_row(operation, item, state);
         let blocker = Blocker {
             family: OperationFamily::Local,
             operation_id: named,
             live,
+            seen: seen.cloned().map(Box::new),
         };
         let answer = Answer::stopped(before).naming(&service, root.path(), Some(&blocker));
         assert_eq!(answer.code, after, "{case}");

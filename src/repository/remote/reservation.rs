@@ -1365,6 +1365,7 @@ impl RepositoryService {
             family: crate::repository::OperationFamily::Remote,
             operation_id,
             live: None,
+            seen: None,
         })
     }
 

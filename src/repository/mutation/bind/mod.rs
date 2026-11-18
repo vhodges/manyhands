@@ -375,10 +375,15 @@ impl Answer {
                 BlockerDto::of(&operation, blocker.operation_id.to_string())
             }
             // A holder the domain found at work is named whatever this
-            // read finds of its row: what the wait knew of it is enough
-            // to name it, and `operation.show` reads the rest.
+            // read finds of its row: by the row as the wait last read it,
+            // or else by what the domain knew of it, which is enough to
+            // name it; `operation.show` reads the rest.
             crate::repository::BlockerRow::Unreadable if blocker.live == Some(true) => {
-                BlockerDto::known(blocker)
+                match &blocker.seen {
+                    // As the wait last read it.
+                    Some(seen) => BlockerDto::of(seen, blocker.operation_id.to_string()),
+                    None => BlockerDto::known(blocker),
+                }
             }
             // The row is gone since, as when it was abandoned: nothing of
             // it is left to show, and the same request, which a `busy`

@@ -33,6 +33,10 @@ pub struct Blocker {
     /// Whether its holder still worked when the call that was refused
     /// judged it. `None` until a call judges it with the service's probe.
     pub live: Option<bool>,
+    /// The row as a waiting call last read it while its holder worked:
+    /// what names the operation in the answer when the answer's own read of
+    /// the row fails.
+    pub(crate) seen: Option<Box<super::OperationDto>>,
 }
 
 impl Blocker {
@@ -53,6 +57,7 @@ impl Blocker {
             family,
             operation_id: OperationId::parse(operation_id).ok()?,
             live: None,
+            seen: None,
         })
     }
 
@@ -94,6 +99,14 @@ pub(crate) enum Judged {
     Unreadable,
 }
 
+/// What one look at a blocker found: how it stands, and, for a live one,
+/// its row as the look read it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Judgment {
+    pub(crate) judged: Judged,
+    pub(crate) seen: Option<Box<super::OperationDto>>,
+}
+
 /// How long a writer waits for a live holder, and how long it sleeps
 /// between two looks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +145,9 @@ impl Sleeper for SystemSleeper {
 pub(crate) struct Wait {
     started: OffsetDateTime,
     polls: u128,
+    /// The blocker's row as the last look that could read it found it,
+    /// live: `None` once a look found it stale, gone or finished.
+    seen_live: Option<Box<super::OperationDto>>,
 }
 
 /// What a writer that was refused does next.
@@ -162,29 +178,34 @@ impl RepositoryService {
         Wait {
             started: self.clock.now(),
             polls: 0,
+            seen_live: None,
         }
     }
 
     /// How the operation `blocker` names is found by the read of its row at
     /// `root`; see `Judged`.
-    pub(crate) fn judge_blocker(&self, root: &Path, blocker: &Blocker) -> Judged {
+    pub(crate) fn judge_blocker(&self, root: &Path, blocker: &Blocker) -> Judgment {
+        let judged = |judged| Judgment { judged, seen: None };
         match self.blocking_operation(root, blocker) {
             BlockerRow::Found {
                 operation,
                 unfinished: true,
             } => {
                 if operation.attribution.live == Some(true) {
-                    Judged::Live
+                    Judgment {
+                        judged: Judged::Live,
+                        seen: Some(operation),
+                    }
                 } else {
-                    Judged::Stale
+                    judged(Judged::Stale)
                 }
             }
             BlockerRow::Found {
                 operation: _,
                 unfinished: false,
             }
-            | BlockerRow::Gone => Judged::Away,
-            BlockerRow::Unreadable => Judged::Unreadable,
+            | BlockerRow::Gone => judged(Judged::Away),
+            BlockerRow::Unreadable => judged(Judged::Unreadable),
         }
     }
 
@@ -203,13 +224,14 @@ impl RepositoryService {
     /// least `SHORTEST_POLL`), and looked at again, until the budget is spent
     /// by the service's clock or by the count of looks, so that a clock that
     /// does not move cannot make it endless. Then the answer is `busy`,
-    /// naming the blocker live when it was last found live, and with no
-    /// judgment otherwise.
+    /// naming the blocker live, with its row as last read, when the last
+    /// look that could read it found it live, and with no judgment
+    /// otherwise.
     fn waited_judging(
         &self,
         wait: &mut Wait,
         error: RepositoryError,
-        judge: impl FnOnce(&Blocker) -> Judged,
+        judge: impl FnOnce(&Blocker) -> Judgment,
     ) -> Waited {
         let Some(blocker) = error.blocker().cloned() else {
             return Waited::Refused(error);
@@ -217,12 +239,21 @@ impl RepositoryService {
         if error.kind != RepositoryErrorKind::RecoveryRequired {
             return Waited::Refused(error);
         }
-        let judged = judge(&blocker);
-        if judged == Judged::Stale {
-            return Waited::Refused(error.with_blocker(Some(blocker.judged(false))));
+        let Judgment { judged, seen } = judge(&blocker);
+        match judged {
+            Judged::Stale => {
+                return Waited::Refused(error.with_blocker(Some(blocker.judged(false))));
+            }
+            Judged::Live => wait.seen_live = seen,
+            Judged::Away => wait.seen_live = None,
+            // What the last look that could read the row found stands.
+            Judged::Unreadable => {}
         }
+        let live =
+            judged == Judged::Live || judged == Judged::Unreadable && wait.seen_live.is_some();
         let blocker = Blocker {
-            live: (judged == Judged::Live).then_some(true),
+            live: live.then_some(true),
+            seen: if live { wait.seen_live.clone() } else { None },
             ..blocker
         };
         let policy = self.wait_policy;
@@ -292,7 +323,27 @@ mod tests {
             family: OperationFamily::Local,
             operation_id: OperationId::new(),
             live: None,
+            seen: None,
         }
+    }
+
+    /// A row as a look that found its holder live read it.
+    fn seen() -> Box<super::super::OperationDto> {
+        Box::new(super::super::OperationDto {
+            operation_id: None,
+            family: OperationFamily::Local,
+            owner: super::super::OperationOwner::Repository,
+            action: super::super::OperationAction::SaveTicket,
+            state: "indexing".to_owned(),
+            completed_step: None,
+            next_action: None,
+            item_id: None,
+            key_id: None,
+            worktree: None,
+            updated_at: None,
+            failure_code: None,
+            attribution: Default::default(),
+        })
     }
 
     fn refused(kind: RepositoryErrorKind, blocker: Option<Blocker>) -> RepositoryError {
@@ -331,7 +382,11 @@ mod tests {
             let judge = |_: &Blocker| {
                 let at = judged.get();
                 judged.set(at + 1);
-                judgments[at.min(judgments.len() - 1)]
+                let judged = judgments[at.min(judgments.len() - 1)];
+                Judgment {
+                    judged,
+                    seen: (judged == Judged::Live).then(seen),
+                }
             };
             match service.waited_judging(&mut wait, error(), judge) {
                 Waited::Again => {}
@@ -367,7 +422,7 @@ mod tests {
             u64,
             usize,
         );
-        let rows: [Row<'_>; 8] = [
+        let rows: [Row<'_>; 9] = [
             (
                 "live, with a clock that never moves: budget / poll looks",
                 short,
@@ -409,6 +464,17 @@ mod tests {
                 &[Judged::Unreadable],
                 RepositoryBusy,
                 Some(None),
+                5,
+                6,
+            ),
+            (
+                "live, then unreadable: busy, live by the last read that worked",
+                short,
+                frozen,
+                &blocked,
+                &[Judged::Live, Judged::Unreadable],
+                RepositoryBusy,
+                Some(Some(true)),
                 5,
                 6,
             ),
@@ -470,6 +536,8 @@ mod tests {
             );
             if let Some(blocker) = answered.blocker() {
                 assert_eq!(blocker.operation_id, named.operation_id, "{case}");
+                // A blocker named live carries its row as the wait read it.
+                assert_eq!(blocker.seen.is_some(), blocker.live == Some(true), "{case}");
             }
             assert_eq!((sleeps, judgments_made), (slept, judged), "{case}");
         }
