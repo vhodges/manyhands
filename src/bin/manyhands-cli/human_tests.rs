@@ -564,6 +564,7 @@ fn operation() -> OperationDto {
         worktree: Some("/repository".into()),
         updated_at: Some("2026-10-19T12:00:00Z".into()),
         failure_code: Some(OperationFailureCode::ProtocolRejected),
+        attribution: Default::default(),
     }
 }
 

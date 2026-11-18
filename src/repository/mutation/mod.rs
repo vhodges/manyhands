@@ -290,6 +290,17 @@ impl RepositoryService {
         self
     }
 
+    /// The same service, asking `probe` whether a process exists when an
+    /// operation read judges whether its holder still works.
+    #[doc(hidden)]
+    pub fn with_process_probe_for_testing(
+        mut self,
+        probe: Arc<dyn crate::repository::ProcessProbe>,
+    ) -> Self {
+        self.process_probe = probe;
+        self
+    }
+
     /// Has `hook` run once in the mutation boundary, immediately before
     /// the next domain call an `execute` on this service makes: after the
     /// request is accepted, or, for a request entered again, after its
@@ -517,10 +528,19 @@ impl RepositoryService {
     /// `data.result`.
     pub fn show_request(&self, request_id: RequestId) -> Envelope<RequestDto> {
         let shown = self.request_record(request_id).and_then(|record| {
-            record
-                .map(request_dto)
-                .transpose()?
-                .ok_or_else(|| ReadError::new(ResultCode::RequestNotFound))
+            let Some(mut record) = record else {
+                return Err(ReadError::new(ResultCode::RequestNotFound));
+            };
+            // The record links what the call itself began; rows the
+            // request began under it since name it themselves.
+            record.operations = self.read_session(RepositoryOperation::Read, |connection| {
+                records::started_operations(
+                    connection,
+                    &record.request_id.to_string(),
+                    &record.operations,
+                )
+            })?;
+            request_dto(record)
         });
         match shown {
             Ok((scope, dto)) => Envelope::read_success(REQUEST_SHOW, scope, dto),

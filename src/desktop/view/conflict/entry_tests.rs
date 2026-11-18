@@ -353,6 +353,7 @@ async fn a_local_synchronization_offers_resume(cx: &mut TestAppContext) {
             worktree: None,
             updated_at: None,
             failure_code: None,
+            attribution: Default::default(),
         };
         assert_eq!(resume_offer(&row), ResumeOffer::Offered, "{action:?}");
     }

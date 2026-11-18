@@ -104,6 +104,7 @@ pub(crate) fn pending_row(
         worktree: None,
         updated_at: None,
         failure_code: None,
+        attribution: Default::default(),
     }
 }
 

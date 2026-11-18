@@ -879,6 +879,49 @@ pub struct OperationDto {
     /// Why a remote or key-material operation did not complete. Always
     /// null for a local operation, which stores no reason.
     pub failure_code: Option<OperationFailureCode>,
+    /// Whose the operation is. It serializes as eight more fields of the
+    /// operation, flat.
+    #[serde(flatten)]
+    pub attribution: OperationAttributionDto,
+}
+
+/// Whose an operation is: the request that began it, who ran it, where, and
+/// whether that process still works. Every field is null for an operation
+/// recorded before operations were attributed, and for a key-material
+/// operation, whose store records none of it.
+///
+/// `request_id`, `command`, `author` and `started_at` name the call that
+/// began the operation and stay as they were when another call takes it
+/// up. `host` and `pid` name the process that last held it, which is the
+/// one that began it until another takes it over. The two are not changed
+/// by merely reading the operation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct OperationAttributionDto {
+    /// The request that began the operation: the one `request show` lists
+    /// it under, or, for a synchronization a comment's submission
+    /// reserved, the comment's own request.
+    pub request_id: Option<String>,
+    /// The command of that request, as its envelope names it.
+    pub command: Option<String>,
+    /// The identity the operation committed as, as `Name <email>`. Null
+    /// when the repository had none.
+    pub author: Option<String>,
+    /// The name of the host that last held the operation.
+    pub host: Option<String>,
+    /// The process ID that last held it on that host.
+    pub pid: Option<i64>,
+    /// When the request began the operation, in UTC.
+    pub started_at: Option<String>,
+    /// The comment a comment submission publishes. Null for every other
+    /// operation.
+    pub comment_id: Option<String>,
+    /// Whether the holder still works, as this read found it: true when
+    /// the operation's indexing heartbeat is fresh, or when it names this
+    /// host and a process that exists on it, and false otherwise. Null
+    /// when the operation names neither a host nor a process. It is a
+    /// judgment of this read and is not stored; a process ID the system
+    /// has since given to another process makes a dead holder look live.
+    pub live: Option<bool>,
 }
 
 contract_enum!(

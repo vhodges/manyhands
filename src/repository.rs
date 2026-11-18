@@ -49,6 +49,8 @@ mod discovery;
 mod integration;
 pub mod keys;
 mod liveness;
+#[doc(hidden)]
+pub use liveness::{ProcessProbe, this_host};
 mod local_sync;
 mod mutation;
 #[cfg(unix)]
@@ -409,6 +411,8 @@ pub struct RepositoryService {
     identity_lock_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// What the request records read the time from.
     clock: Arc<dyn mutation::Clock>,
+    /// What an operation read asks whether a holder's process exists.
+    process_probe: Arc<dyn liveness::ProcessProbe>,
 }
 
 struct IndexOwnerHeartbeat {
@@ -4169,6 +4173,7 @@ impl RepositoryService {
             acceptance_hook: Mutex::new(None),
             identity_lock_hook: Mutex::new(None),
             clock: Arc::new(mutation::SystemClock),
+            process_probe: Arc::new(liveness::SystemProbe),
         })
     }
 

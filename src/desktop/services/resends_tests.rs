@@ -268,6 +268,7 @@ fn rows(operations: &mut Operations, root: &Path, operation: OperationId) {
         worktree: None,
         updated_at: None,
         failure_code: None,
+        attribution: Default::default(),
     };
     operations.locks_mut().rows_read(
         root.to_str().unwrap(),
@@ -515,6 +516,7 @@ fn resume_dead_check_now() {
         worktree: None,
         updated_at: None,
         failure_code: None,
+        attribution: Default::default(),
     };
 
     // Every phase that holds the reservation offers Resume; a poll that

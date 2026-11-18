@@ -30,6 +30,7 @@ fn poll_row(operation: OperationId) -> manyhands::repository::OperationDto {
         worktree: None,
         updated_at: None,
         failure_code: None,
+        attribution: Default::default(),
     }
 }
 

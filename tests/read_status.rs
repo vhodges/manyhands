@@ -512,6 +512,14 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
             "worktree": null,
             "updated_at": null,
             "failure_code": "source_missing",
+            "request_id": null,
+            "command": null,
+            "author": null,
+            "host": null,
+            "pid": null,
+            "started_at": null,
+            "comment_id": null,
+            "live": null,
         })
     );
     assert_eq!(remote.family, OperationFamily::Remote);
@@ -522,6 +530,20 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
     assert_eq!(remote.next_action, None);
     assert!(remote.updated_at.is_some());
     assert_eq!(remote.failure_code, None);
+    // A reservation made through the service names this process, which the
+    // system's own process table finds; the rows inserted above name no one.
+    assert_eq!(
+        (
+            remote.attribution.host.as_deref(),
+            remote.attribution.pid,
+            remote.attribution.live
+        ),
+        (
+            Some(manyhands::repository::this_host().as_str()),
+            Some(i64::from(std::process::id())),
+            Some(true)
+        )
+    );
     assert_eq!(
         serde_json::to_value(local).unwrap(),
         json!({
@@ -537,6 +559,14 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
             "worktree": null,
             "updated_at": STORED_AT_TEXT,
             "failure_code": null,
+            "request_id": null,
+            "command": null,
+            "author": null,
+            "host": null,
+            "pid": null,
+            "started_at": null,
+            "comment_id": null,
+            "live": null,
         })
     );
     assert_eq!(

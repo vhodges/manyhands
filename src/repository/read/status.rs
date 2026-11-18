@@ -1,8 +1,10 @@
 //! Status reads: one registration's index, its polling policy, and the
 //! operations recorded for it.
 //!
-//! Each reports what is stored. None observes the repository, asks whether
-//! a process is running, or resumes anything.
+//! Each reports what is stored. None observes the repository or resumes
+//! anything. The operation reads ask the system only whether the process
+//! an operation names still exists, and only to say so in `live`; it
+//! changes nothing they report of the operation's state.
 
 use std::str::FromStr;
 
@@ -10,9 +12,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use time::OffsetDateTime;
 
 use super::{
-    IndexProblemDto, IndexState, IndexStatusDto, IndexStatusState, OperationAction, OperationDto,
-    OperationFamily, OperationListDto, OperationNextAction, OperationOwner, PollingOutcome,
-    PollingStatusDto, ReadError, ResolvedRepository,
+    IndexProblemDto, IndexState, IndexStatusDto, IndexStatusState, OperationAction,
+    OperationAttributionDto, OperationDto, OperationFamily, OperationListDto, OperationNextAction,
+    OperationOwner, PollingOutcome, PollingStatusDto, ReadError, ResolvedRepository,
     items::{behind, effective_rows, invalid_stored_data, stored_index_state, stored_items},
 };
 use crate::{
@@ -20,6 +22,7 @@ use crate::{
     repository::{
         OperationId, RemoteOperationAction, RemoteOperationPhase, RemoteOperationSafePoint,
         RemoteOutcomeCategory, RepositoryOperation, RepositoryService, SharedKeyId,
+        liveness::{AttributionRow, Liveness, ProcessProbe, row_liveness, this_host},
         promotion::lifecycle::resumable,
         recovery,
         remote::state::{self, StoredRemoteOperation},
@@ -38,6 +41,103 @@ const LOCAL_COMPLETED: &str = "completed";
 struct StoredOperation {
     listed: bool,
     dto: OperationDto,
+}
+
+/// The attribution columns of an operation row, as stored.
+#[derive(Default)]
+struct StoredAttribution {
+    request_id: Option<String>,
+    command: Option<String>,
+    author: Option<String>,
+    host: Option<String>,
+    pid: Option<i64>,
+    started_at: Option<i64>,
+    comment_id: Option<String>,
+}
+
+/// How a read judges whether an operation's holder still works: by the
+/// host this process runs on, the process table the service was given and
+/// the service's clock, which decides whether an indexing heartbeat is
+/// fresh. One is made for each read, so every row of it is judged alike.
+struct Holders<'a> {
+    host: String,
+    probe: &'a dyn ProcessProbe,
+    /// The time before which an indexing heartbeat is too old to be a
+    /// call's; the rule every other reader of the heartbeat uses.
+    stale_before: i64,
+}
+
+impl<'a> Holders<'a> {
+    fn of(service: &'a RepositoryService) -> Self {
+        Self {
+            host: this_host(),
+            probe: &*service.process_probe,
+            stale_before: service.clock.now().unix_timestamp()
+                - crate::repository::INDEX_OWNER_STALE_AFTER,
+        }
+    }
+
+    /// The attribution a row names. `heartbeat` is whether the row shows a
+    /// call at work under it by the heartbeat; a row that names neither a
+    /// host nor a process is not judged.
+    fn attribution(
+        &self,
+        stored: StoredAttribution,
+        heartbeat: bool,
+    ) -> Result<OperationAttributionDto, ReadError> {
+        let live = (stored.host.is_some() || stored.pid.is_some()).then(|| {
+            let row = AttributionRow {
+                host: stored.host.clone(),
+                pid: stored.pid,
+                index_heartbeat_fresh: heartbeat,
+            };
+            row_liveness(&row, &self.host, self.probe) == Liveness::Live
+        });
+        Ok(OperationAttributionDto {
+            request_id: stored.request_id,
+            command: stored.command,
+            author: stored.author,
+            host: stored.host,
+            pid: stored.pid,
+            started_at: stored.started_at.map(stored_time).transpose()?,
+            comment_id: stored.comment_id,
+            live,
+        })
+    }
+
+    /// The attribution of a remote row, which no heartbeat keeps alive, or
+    /// none for an operation that has no such row. A promotion's or a
+    /// closure's parent has none of its own: its reservation is the remote
+    /// row of the same ID, and it is the one that names the holder.
+    fn remote(
+        &self,
+        connection: &Connection,
+        repo: &ResolvedRepository,
+        operation: &str,
+    ) -> Result<OperationAttributionDto, ReadError> {
+        let stored = connection
+            .query_row(
+                "SELECT request_ulid, command, author, host, pid, started_at
+                   FROM remote_operation_records
+                  WHERE repository_id = ?1 AND operation_ulid = ?2
+                  ORDER BY id DESC LIMIT 1",
+                params![repo.registration_id(), operation],
+                |row| {
+                    Ok(StoredAttribution {
+                        request_id: row.get(0)?,
+                        command: row.get(1)?,
+                        author: row.get(2)?,
+                        host: row.get(3)?,
+                        pid: row.get(4)?,
+                        started_at: row.get(5)?,
+                        comment_id: None,
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or_default();
+        self.attribution(stored, false)
+    }
 }
 
 /// A time a store recorded, in seconds. One that cannot be written as a
@@ -131,13 +231,15 @@ fn local_synchronization(rest: &str) -> Result<(OperationAction, Option<String>)
 fn local_operations(
     connection: &Connection,
     repo: &ResolvedRepository,
+    holders: &Holders<'_>,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
     crate::repository::local_sync::record::audit(connection)
         .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
     let mut statement = connection.prepare(
         "SELECT operation_ulid, action, item_id, context_path, state, completed_step,
-                observed_at, target
+                observed_at, target, id, request_ulid, command, author, host, pid,
+                started_at, comment_id
            FROM operation_records
           WHERE root_path = ?1
             AND ((?2 IS NULL
@@ -164,6 +266,27 @@ fn local_operations(
         {
             return Err(invalid_stored_data());
         }
+        let heartbeat = recovery::LocalRow {
+            id: row.get(8)?,
+            action: action.clone(),
+            target: target.clone(),
+            state: state.clone(),
+            step: completed_step.clone(),
+            observed_at: row.get(6)?,
+        }
+        .has_live_heartbeat(holders.stale_before);
+        let attribution = holders.attribution(
+            StoredAttribution {
+                request_id: row.get(9)?,
+                command: row.get(10)?,
+                author: row.get(11)?,
+                host: row.get(12)?,
+                pid: row.get(13)?,
+                started_at: row.get(14)?,
+                comment_id: row.get(15)?,
+            },
+            heartbeat,
+        )?;
         let action = local_action(&action).ok_or_else(invalid_stored_data)?;
         let synchronized = target
             .as_deref()
@@ -195,6 +318,7 @@ fn local_operations(
                 worktree: row.get(3)?,
                 updated_at: Some(stored_time(row.get(6)?)?),
                 failure_code: None,
+                attribution,
             },
         });
     }
@@ -338,6 +462,8 @@ fn remote_standing(
 
 fn remote_operation(
     connection: &Connection,
+    repo: &ResolvedRepository,
+    holders: &Holders<'_>,
     record: &StoredRemoteOperation,
 ) -> Result<StoredOperation, ReadError> {
     let (state, _) = remote_phase(record.phase);
@@ -361,6 +487,7 @@ fn remote_operation(
             worktree: None,
             updated_at: Some(stored_time(record.updated_at)?),
             failure_code: record.outcome.and_then(remote_failure),
+            attribution: holders.remote(connection, repo, &record.operation_id.to_string())?,
         },
     })
 }
@@ -373,6 +500,7 @@ fn remote_operation(
 fn promotion_operations(
     connection: &Connection,
     repo: &ResolvedRepository,
+    holders: &Holders<'_>,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
     if !recovery::has_table(connection, "document_promotions")? {
@@ -409,6 +537,7 @@ fn promotion_operations(
                     worktree: None,
                     updated_at: Some(stored_time(r.updated_at)?),
                     failure_code: None,
+                    attribution: holders.remote(connection, repo, &r.operation_id.to_string())?,
                 },
             })
         })
@@ -421,6 +550,7 @@ fn promotion_operations(
 fn closure_operations(
     connection: &Connection,
     repo: &ResolvedRepository,
+    holders: &Holders<'_>,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
     if !recovery::has_table(connection, "ticket_closures")? {
@@ -457,6 +587,7 @@ fn closure_operations(
                     worktree: None,
                     updated_at: Some(stored_time(r.updated_at)?),
                     failure_code: None,
+                    attribution: holders.remote(connection, repo, &r.operation_id.to_string())?,
                 },
             })
         })
@@ -480,6 +611,7 @@ fn remote_records(
 fn remote_operations(
     connection: &Connection,
     repo: &ResolvedRepository,
+    holders: &Holders<'_>,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
     let has_promotions = recovery::has_table(connection, "document_promotions")?;
@@ -504,7 +636,7 @@ fn remote_operations(
         )? {
             continue;
         }
-        let operation = remote_operation(connection, &record)?;
+        let operation = remote_operation(connection, repo, holders, &record)?;
         if id.is_some() || operation.listed {
             operations.push(operation);
         }
@@ -595,6 +727,7 @@ fn key_material_operations(
                 failure_code: failure
                     .as_deref()
                     .map(OperationFailureCode::from_stored_key_material),
+                attribution: OperationAttributionDto::default(),
             },
         });
     }
@@ -678,7 +811,7 @@ impl RepositoryService {
                 |row| row.get(0),
             )?;
             let problems = index_problems(connection, repo)?;
-            let pending_operations = local_operations(connection, repo, None)?
+            let pending_operations = local_operations(connection, repo, &Holders::of(self), None)?
                 .into_iter()
                 .map(|operation| operation.dto)
                 .collect();
@@ -770,11 +903,12 @@ impl RepositoryService {
     ) -> Result<OperationListDto, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
             require_registration(connection, repo)?;
-            let mut items: Vec<OperationDto> = local_operations(connection, repo, None)?
+            let holders = Holders::of(self);
+            let mut items: Vec<OperationDto> = local_operations(connection, repo, &holders, None)?
                 .into_iter()
-                .chain(remote_operations(connection, repo, None)?)
-                .chain(promotion_operations(connection, repo, None)?)
-                .chain(closure_operations(connection, repo, None)?)
+                .chain(remote_operations(connection, repo, &holders, None)?)
+                .chain(promotion_operations(connection, repo, &holders, None)?)
+                .chain(closure_operations(connection, repo, &holders, None)?)
                 .chain(key_material_operations(connection, None)?)
                 .map(|operation| operation.dto)
                 .collect();
@@ -816,11 +950,17 @@ impl RepositoryService {
         self.read_session(RepositoryOperation::Read, |connection| {
             require_registration(connection, repo)?;
             let text = id.to_string();
-            local_operations(connection, repo, Some(&text))?
+            let holders = Holders::of(self);
+            local_operations(connection, repo, &holders, Some(&text))?
                 .into_iter()
-                .chain(remote_operations(connection, repo, Some(&text))?)
-                .chain(promotion_operations(connection, repo, Some(&text))?)
-                .chain(closure_operations(connection, repo, Some(&text))?)
+                .chain(remote_operations(connection, repo, &holders, Some(&text))?)
+                .chain(promotion_operations(
+                    connection,
+                    repo,
+                    &holders,
+                    Some(&text),
+                )?)
+                .chain(closure_operations(connection, repo, &holders, Some(&text))?)
                 .chain(key_material_operations(connection, Some(&text))?)
                 .min_by_key(|operation| (!operation.listed, family_rank(operation.dto.family)))
                 .map(|operation| operation.dto)

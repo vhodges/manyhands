@@ -38,7 +38,7 @@ pub enum Liveness {
 }
 
 /// Asks the system whether a process exists.
-pub trait ProcessProbe {
+pub trait ProcessProbe: Send + Sync {
     /// True when a process with this id exists on this host, whatever its
     /// owner.
     fn exists(&self, pid: u32) -> bool;

@@ -457,6 +457,7 @@ fn operation(
         worktree: None,
         updated_at: None,
         failure_code: None,
+        attribution: Default::default(),
     }
 }
 
