@@ -1,13 +1,13 @@
 ---
+wave: '02'
+id: 01M57SBA7MKR9BZR7PYECSJ05G
+title: 2.10 follow up
+type: task
+status: superseded
+project: manyhands
+team: core
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M57SBA7MKR9BZR7PYECSJ05G"
-title: "2.10 follow up"
-type: "task"
-status: "open"
-project: "manyhands"
-team: "core"
-wave: "02"
 ---
 
 Internal cleanup left over from Wave 02 Cycle 10 (confirmed ticket closure,
