@@ -17,15 +17,33 @@ every run:
 
 This is the loop-friendly variant of `implementing-a-cycle`. AGENTS.md
 governs, including the exception it records for this skill's targeted
-testing. Formats for status edits, comments, the reviewer brief and the PR
-body are in [references/formats.md](references/formats.md).
+testing. Formats for comments, the reviewer brief and the PR body, plus
+sandbox-only canonical edits, are in [references/formats.md](references/formats.md).
+
+## Choose the operating mode
+
+**Normal mode:** follow the shared
+[Manyhands operations](../implementing-a-cycle/references/manyhands-operations.md)
+reference. Load `manyhands-overview` first, `manyhands-finding-work` for ticket
+reads, `manyhands-tickets` for status saves and closure, and
+`manyhands-comments` for reads and checkpoint comments. Use
+`manyhands-sharing-and-sync` for publication and `manyhands-recovery` for
+blocked or partial operations. Writes run from the registered main checkout,
+not the ticket worktree. If registration or a command is missing, pause for
+the owner; do not silently switch to manual edits or enable a repository.
+
+**Sandbox loop, only when `MANYHANDS_LOOP=1`:** use the loop overrides below
+and canonical formats in the reference. This is the retained exception for
+clones without the main checkout's registration or credentials. Do not invoke
+registered-checkout writes, auto-register the clone, or change the driver.
 
 ## 1. Orient, every run
 
 Read these four things:
 
-- the ticket, in its worktree (`.manyhands/worktrees/<id>`);
-- its comments, newest last;
+- the ticket (`manyhands-finding-work` in normal mode; the canonical file in
+  `.manyhands/worktrees/<id>` in loop mode);
+- its comments, newest last (`manyhands-comments` in normal mode);
 - the ticket branch log;
 - the PR: `gh pr view manyhands/ticket/<id> --json number,state,url,comments,reviews,commits`.
   A non-zero exit with "no pull requests found" means there is no PR yet.
@@ -84,19 +102,24 @@ Before any run changes anything, and that includes resume runs:
   - A choice between behaviors, a contract change or a new mechanism: pause,
     and suggest `planning-a-cycle`.
   - A Cycle ticket with an approved plan: follow its tasks in order.
-- **Worktree:** use the existing one. If there is none, create
-  `manyhands/ticket/<id>` and its worktree from `origin/main`, as
-  `file-ticket` does.
+- **Worktree:** use the existing one. If it is missing in normal mode, inspect
+  `ticket show` and use `manyhands-tickets` to establish the existing ticket's
+  context with an appropriate save; never create a duplicate ticket or a manual
+  branch/worktree. If the context cannot be restored safely, pause. In loop
+  mode the driver supplies the worktree; if it is missing, report that and stop.
 
 ## 3. Start
 
-Set the status to `implementing`. Add a start comment with:
+Set the status to `implementing` with `manyhands-tickets`. Commit intended
+implementation changes before adding a start comment with `manyhands-comments`:
 
 - the base SHA;
 - the plan as steps;
 - for each acceptance item, the test that will prove it.
 
-Commit, then push the ticket branch.
+Check the resulting branch and publication state, then push any remaining
+authorized ticket-branch commits. `comment add` itself saves and publishes.
+Loop mode uses canonical edits and driver publication instead.
 
 ## 4. Implement, test first
 
@@ -155,13 +178,18 @@ subagent is available, say so in the PR.
 
 1. Run `git merge-tree --write-tree HEAD origin/main`. If main has moved,
    merge it and re-run the affected tests.
-2. Set the status to `review_ready`. Add the review-ready comment, commit and
-   push.
+2. Commit intended implementation changes, set the status to `review_ready`,
+   then add the review-ready comment. Inspect the resulting branch/HEAD and
+   publication state before pushing remaining authorized commits. Loop mode
+   makes these metadata/comment edits canonically and commits for the driver.
 3. If no PR exists, create one:
    `gh pr create --base main --head manyhands/ticket/<id> --title "<ticket title>" --body-file <file>`.
    Stop: `review_ready PR #n`.
-4. Once the owner approves, close the ticket in canonical form, commit and
-   push. Stop: `closed, awaiting merge PR #n`. The owner merges.
+4. Once the owner approves, use `manyhands-tickets` to save the resolution and
+   prepare close. Show the lifecycle preview and wait for approval before
+   confirming. Close merges into main, publishes and removes the context; do
+   not merge the PR separately. Verify the result and PR state from outside
+   the removed worktree. Stop: `closed`. Loop mode replaces this step below.
 
 ## Loop mode (`MANYHANDS_LOOP=1`)
 
@@ -179,6 +207,14 @@ GitHub credentials. It does the network work before and after each run. When
   `[]` means there is no PR. Don't call `gh`.
 - **Pushing:** commit, but don't push. The driver pushes the ticket branch
   after the run.
+- **Ticket/status/comments:** read canonical files and use the manual formats
+  in the reference for all status saves and comments, including start, pause
+  and review-ready checkpoints. Do not call CLI writes against the sandbox
+  clone or the registered main checkout.
+- **Closure (§7, step 4):** after approval, set the resolution and closure
+  fields in canonical form, commit, and stop: `closed, awaiting merge PR #n`.
+  The driver pushes; the owner merges. Do not run `ticket close`, merge into
+  main, or remove the worktree or branch in the sandbox.
 - **Opening the PR (§7, step 3):** write the PR body to the file named by
   `MANYHANDS_LOOP_PR_BODY`, then stop with `review_ready`. The driver opens
   the PR.
@@ -188,12 +224,14 @@ GitHub credentials. It does the network work before and after each run. When
 ## Never
 
 - rebase or force-push;
-- push to or merge into main, or merge the PR;
+- push to or merge into main manually, or merge the PR (`ticket close` in
+  normal mode is the explicitly approved lifecycle operation, not a manual merge);
 - dispatch native CI;
 - close the ticket before approval;
 - post PR comments;
 - edit another ticket's worktree;
-- remove the worktree or branches.
+- remove the worktree or branches manually (normal-mode `ticket close` owns
+  its approved cleanup; loop mode leaves all cleanup to the owner/driver).
 
 ## Last line of every run
 

@@ -87,20 +87,27 @@ Do not hold or reopen the merged Cycle for it. In that session:
 
 ## Approved merge and closure
 
-Code review alone does not authorize merging. Once merge is approved, add the
-requested approval/verification comment and refresh stale test counts, commit
-and push the ticket branch. Then set the ticket's status to its resolution
+Code review alone does not authorize merging. Once delivery is authorized,
+commit intended changes, add the requested approval/verification comment with
+`manyhands-comments`, and refresh stale test counts. Then set the ticket's
+status to its resolution
 (`done`, or `wontdo`, `duplicate` or `obsolete`) with `ticket save`, and close it
-with `ticket close`, following current `AGENTS.md` and the `file-ticket` skill.
+with `ticket close`, following current `AGENTS.md`, `manyhands-tickets` and
+[Manyhands operations](manyhands-operations.md).
 The close is the merge: it merges the ticket branch into main, publishes main,
-and removes the branch and worktree. Read its preview before confirming. If a PR
-is open for the branch, check afterwards that GitHub shows it merged. Do not
+and removes the branch and worktree. Show its prepared preview and wait for
+the owner's approval before confirming. If a PR is open for the branch,
+check afterwards that GitHub shows it merged. Do not
 bypass required checks. Preserve unrelated edits in the main checkout.
 
 ## Separately authorized local cleanup
 
-Merge approval alone does not request worktree deletion. When cleanup is requested,
-inspect tracked, untracked, and relevant ignored files in the exact ticket worktree.
+Normal `ticket close` already removes its worktree and branch with the approved
+lifecycle operation. The following is only for leftover contexts or separately
+requested Git cleanup, not an extra step after every close.
+
+Merge approval alone does not authorize manual worktree deletion. When cleanup
+is requested, inspect tracked, untracked, and relevant ignored files in the exact ticket worktree.
 Preserve user data; remove disposable agent/build artifacts only within that scope.
 Fetch main and verify the ticket tip is its ancestor. From outside the worktree,
 remove it with `git worktree remove`, then use `git branch -d` for the local branch.
