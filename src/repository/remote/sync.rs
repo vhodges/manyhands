@@ -6883,7 +6883,19 @@ impl RepositoryService {
         state::with_transaction(self, root, |tx, id| {
             let current = reservation::owned(self, tx, id, owner)?;
             let own = (!inherited).then(|| owner.operation_id());
-            Ok(push_absence(tx, id, root, current.generation, &current.target, own)?.0)
+            // A resumed synchronization retries its own push that was never
+            // issued, so that intent is not an unanswered push.
+            let unissued = inherited.then(|| owner.operation_id());
+            Ok(push_absence(
+                tx,
+                id,
+                root,
+                current.generation,
+                &current.target,
+                own,
+                unissued,
+            )?
+            .0)
         })
         .map_err(SynchronizationError::Repository)
     }
@@ -7073,6 +7085,13 @@ impl RepositoryService {
 /// is an operation left out of it: the synchronization's own, unless it
 /// inherited an earlier call's push.
 ///
+/// `unissued` is the resuming synchronization's own operation, when it
+/// inherited an earlier call's push: its intent still at `PushPrepared`, with
+/// no publication attempt or authority, for a context never published, was
+/// never issued, so nothing of it can be on the remote and the push is
+/// retried rather than counted. At `PushReturned`, with publication evidence,
+/// or for any other operation's row, the intent stays an unanswered push.
+///
 /// The second value is the commit the newest publication of the context
 /// put there, among those the classification counts as proven: `None` with
 /// no such publication.
@@ -7083,6 +7102,7 @@ fn push_absence(
     generation: i64,
     target: &RemoteOperationTarget,
     own: Option<OperationId>,
+    unissued: Option<OperationId>,
 ) -> Result<(Option<PushAbsenceBoundary>, Option<git2::Oid>), RepositoryError> {
     let Some((kind, item_id)) = target.item() else {
         return Ok((None, None));
@@ -7098,11 +7118,10 @@ fn push_absence(
         "SELECT retired_oid FROM retired_contexts WHERE repository_id=?1 AND kind=?2 AND item_id=?3 AND NOT EXISTS(SELECT 1 FROM remote_context_states WHERE repository_id=?1 AND kind=?2 AND item_id=?3)",
         rusqlite::params![id,authoring_kind_segment(&kind),item_id.to_string()], |row| row.get(0)
     ).optional().map_err(|_|state::recovery_required())?;
+    let never_published = snapshot.fetch_publication_evidence_for(kind, item_id)
+        == RemotePublicationEvidence::NeverPublished;
     let retired = retired
-        .filter(|_| {
-            snapshot.fetch_publication_evidence_for(kind, item_id)
-                == RemotePublicationEvidence::NeverPublished
-        })
+        .filter(|_| never_published)
         .map(|oid| git2::Oid::from_str(&oid).map_err(|_| state::recovery_required()))
         .transpose()?;
     let repository = retired
@@ -7153,7 +7172,13 @@ fn push_absence(
         let refused = record.phase == RemoteOperationPhase::Cancelled
             && record.outcome == Some(RemoteOutcomeCategory::ProtocolRejected)
             && record.sync_checkpoint == Some(Checkpoint::PushPrepared);
+        let retried = Some(operation) == unissued
+            && never_published
+            && attempt.is_none()
+            && record.authority.is_none()
+            && record.sync_checkpoint == Some(Checkpoint::PushPrepared);
         let intent = !refused
+            && !retried
             && evidence.push_oid.is_some()
             && matches!(
                 record.sync_checkpoint,
@@ -7290,7 +7315,7 @@ impl RepositoryService {
         .operation_target(&plan);
         state::with_transaction(self, root, |tx, id| {
             let generation = state::generation(tx, id)?;
-            let (boundary, proven) = push_absence(tx, id, root, generation, &target, None)?;
+            let (boundary, proven) = push_absence(tx, id, root, generation, &target, None, None)?;
             let fetched: Option<(String, Option<String>)> = tx
                 .query_row(
                     "SELECT state, last_advertised_oid FROM remote_context_states
