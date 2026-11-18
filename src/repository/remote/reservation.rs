@@ -2865,10 +2865,15 @@ impl RepositoryService {
                 return Err(state::recovery_required());
             }
             // No effect was prepared: actual graph planning remains Task 4's job.
-            let (checkpoint, phase) = if matches!(
+            // Before any effect was prepared, a row that never recorded where
+            // the operation began (a restart skips `FetchPrepared`) began at
+            // the local tip proved here. Recording it keeps the row and the
+            // evidence read back from it agreeing for every later checkpoint.
+            let before_effect = matches!(
                 record.sync_checkpoint,
                 None | Some(C::FetchPrepared | C::FetchObserved)
-            ) {
+            );
+            let (checkpoint, phase) = if before_effect {
                 if evidence
                     .expected_oid
                     .is_some_and(|expected| expected != local_oid)
@@ -2911,8 +2916,8 @@ impl RepositoryService {
             if decision != RemoteSafePointOutcome::Continue {
                 return Ok(decision);
             }
-            tx.execute("UPDATE remote_operation_records SET phase=?2,sync_checkpoint=?3,reconciliation_required=0,local_oid=?4,push_advertised_oid=?5 WHERE id=?1",
-                params![record.id,phase,checkpoint.name(),local_oid.to_string(),push_advertised_oid.map(|v|v.to_string())]).map_err(|_|state::recovery_required())?;
+            tx.execute("UPDATE remote_operation_records SET phase=?2,sync_checkpoint=?3,reconciliation_required=0,local_oid=?4,push_advertised_oid=?5,expected_oid=CASE WHEN ?6 THEN COALESCE(expected_oid,?4) ELSE expected_oid END WHERE id=?1",
+                params![record.id,phase,checkpoint.name(),local_oid.to_string(),push_advertised_oid.map(|v|v.to_string()),before_effect]).map_err(|_|state::recovery_required())?;
             if checkpoint == C::PushVerified {
                 state::consume_retirement_on_publication(tx, &record)?;
             }

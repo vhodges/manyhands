@@ -6327,6 +6327,12 @@ impl RepositoryService {
                         oid != actual
                             && repository.graph_descendant_of(actual, oid).unwrap_or(false)
                     });
+                    // The reconcile records `actual` as where a restarted row
+                    // began. That is only the head this invocation started from
+                    // while no other writer moved it since.
+                    if evidence.expected_oid.is_none() && actual != initial {
+                        return Err(SynchronizationError::ExternalChange);
+                    }
                     decision(self.reconcile_synchronization(
                         &root, &owner, actual, actual, push, ancestor,
                     )?)?;
@@ -6549,10 +6555,11 @@ impl RepositoryService {
                 }
                 let linked = local_target(&root, &config.primary_branch, &request.target)?;
                 let local = local_oid(&linked)?;
-                // A restarted row skips the `FetchPrepared` checkpoint, the
-                // only one that records where the operation began, so it has
-                // none to compare with here.
-                backfill_expected_oid(&mut evidence, local);
+                // The reconcile records where a restarted row began. A row
+                // that took no reconcile on this pass has still none to compare
+                // with here: it began at the head this invocation started
+                // from, so a move since is still an external change.
+                backfill_expected_oid(&mut evidence, initial);
                 if evidence.expected_oid != Some(local)
                     && !matches!(
                         resumed,
@@ -7083,10 +7090,11 @@ impl RepositoryService {
         )
     }
 }
-/// Record where a synchronization began when its row does not say, as the
+/// Record where a synchronization began when the evidence does not say, as the
 /// consented local tip does for `republish_reserved`: `FetchPrepared` is the
-/// only checkpoint that writes `expected_oid`, and a restarted row skips it.
-/// A recorded value is never overwritten.
+/// only checkpoint that establishes `expected_oid`, and a restarted row skips
+/// it. `reconcile_synchronization` does the same for the stored row. A
+/// recorded value is never overwritten.
 fn backfill_expected_oid(evidence: &mut Evidence, local: git2::Oid) {
     evidence.expected_oid.get_or_insert(local);
 }

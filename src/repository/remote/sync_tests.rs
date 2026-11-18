@@ -4176,23 +4176,46 @@ struct PassFixture {
 
 impl PassFixture {
     fn new(local_file: &str, local_bytes: &[u8]) -> Self {
-        Self::build(local_file, local_bytes, false, false)
+        Self::build(local_file, local_bytes, false, false, true)
     }
 
     /// As `new`, in a repository whose base tree already holds a submodule
     /// entry and a seven-line `shared.txt` both sides can change cleanly.
     fn with_gitlink(local_file: &str, local_bytes: &[u8]) -> Self {
-        Self::build(local_file, local_bytes, false, true)
+        Self::build(local_file, local_bytes, false, true, true)
     }
 
     /// As `new`, with the publication remote also selected in the committed
     /// configuration and its endpoints bound, so the public entry point
     /// proceeds past local reconciliation to the transport boundary.
     fn published(local_file: &str, local_bytes: &[u8]) -> Self {
-        Self::build(local_file, local_bytes, true, false)
+        Self::build(local_file, local_bytes, true, false, true)
     }
 
-    fn build(local_file: &str, local_bytes: &[u8], published: bool, gitlink: bool) -> Self {
+    /// As `new`, for an operation that stopped before it recorded anything:
+    /// no `FetchPrepared`, and the row restarted as the explicit restart
+    /// leaves it, for the stored row to be reconciled from.
+    fn restarted_before_any_checkpoint(local_file: &str, local_bytes: &[u8]) -> Self {
+        let mut fixture = Self::build(local_file, local_bytes, false, false, false);
+        // The process died before its first checkpoint.
+        fixture
+            .db()
+            .execute(
+                "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+                [fixture.operation.to_string()],
+            )
+            .unwrap();
+        fixture.restart();
+        fixture
+    }
+
+    fn build(
+        local_file: &str,
+        local_bytes: &[u8],
+        published: bool,
+        gitlink: bool,
+        journaled: bool,
+    ) -> Self {
         let (root, data, service) = fixture();
         let repository = git2::Repository::open(root.path()).unwrap();
         if gitlink {
@@ -4254,18 +4277,20 @@ impl PassFixture {
         else {
             panic!("reservation")
         };
-        service
-            .checkpoint_synchronization(
-                root.path(),
-                &owner,
-                state::SynchronizationCheckpoint::FetchPrepared,
-                &state::SynchronizationEvidence {
-                    expected_oid: Some(local),
-                    local_oid: Some(local),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+        if journaled {
+            service
+                .checkpoint_synchronization(
+                    root.path(),
+                    &owner,
+                    state::SynchronizationCheckpoint::FetchPrepared,
+                    &state::SynchronizationEvidence {
+                        expected_oid: Some(local),
+                        local_oid: Some(local),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
         Self {
             root,
             data,
@@ -5651,109 +5676,102 @@ fn journal_unanswered_context_push(
     }
 }
 
-/// A restarted row skips `FetchPrepared`, the only checkpoint that records
-/// `expected_oid`, so it reaches `fetch_observed` without one; `PushPrepared`
-/// refuses such a row until the main path backfills it from the local tip.
+/// A restart skips `FetchPrepared`, the only checkpoint that establishes
+/// `expected_oid`, and the reconcile that follows records `local_oid` but not
+/// where the operation began. Left NULL, the row refuses a fast-forward
+/// (`LocalPrepared` moves `local_oid` and is excused only for a row that
+/// began where it stood) and takes a merge application only to become
+/// unreadable. The reconcile records the local tip it proved as the start.
 #[test]
-fn a_restarted_row_without_expected_oid_can_checkpoint_push_prepared_after_backfill() {
+fn a_restarted_row_records_expected_oid_at_the_reconcile() {
     use state::SynchronizationCheckpoint as C;
-    let (root, _data, service) = fixture();
-    let repository = git2::Repository::open(root.path()).unwrap();
-    let tracking = repository.head().unwrap().target().unwrap();
-    repository
-        .remote("origin", "ssh://example.invalid/fixture.git")
-        .unwrap();
-    // The local head is one commit ahead of the tracking ref.
-    let signature = repository.signature().unwrap();
-    let parent = repository.find_commit(tracking).unwrap();
-    let local = repository
-        .commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            "ahead",
-            &parent.tree().unwrap(),
-            &[&parent],
-        )
-        .unwrap();
-    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
-    state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
-    })
-    .unwrap();
-    let target = RemoteOperationTarget::for_context(
-        &plan,
-        RemoteOperationAction::SynchronizeContext,
-        AuthoringKind::Ticket,
-        "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
-    )
-    .unwrap();
-    let RemoteReservationOutcome::Reserved(owner) = service
-        .reserve_remote_operation(root.path(), OperationId::new(), &target)
-        .unwrap()
-    else {
-        panic!("reservation")
-    };
-    // Journaled as a restart leaves it: no `expected_oid` at `fetch_observed`.
-    service
-        .checkpoint_synchronization(
-            root.path(),
-            &owner,
-            C::FetchPrepared,
-            &state::SynchronizationEvidence::default(),
-        )
-        .unwrap();
-    repository
-        .reference(plan.primary().tracking_ref(), tracking, true, "fixture")
-        .unwrap();
-    service
-        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
-        .unwrap();
-    let observation = RemoteRefObservation::from_advertisement(
-        &plan,
-        "refs/heads/main",
-        tracking,
-        Some(tracking),
-    )
-    .unwrap();
-    commit_observation_batch(&service, root.path(), &owner, &plan, &[observation], 1).unwrap();
-    let row = || {
-        state::with_transaction(&service, root.path(), |tx, id| {
-            Ok(state::read_operation(tx, id, owner.operation_id())?
-                .unwrap()
-                .sync_evidence)
-        })
-        .unwrap()
-    };
-    assert_eq!(row().expected_oid, None);
-
-    let mut evidence = state::SynchronizationEvidence {
-        local_oid: Some(local),
-        primary_tracking_oid: Some(tracking),
-        push_oid: Some(local),
-        ..Default::default()
-    };
-    let refused =
-        service.checkpoint_synchronization(root.path(), &owner, C::PushPrepared, &evidence);
-    assert!(
-        matches!(&refused, Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired),
-        "{refused:?}"
+    // Fast-forward: the remote is ahead of a clean local tip.
+    {
+        let fixture = PassFixture::restarted_before_any_checkpoint("local.txt", b"local\n");
+        let repository = fixture.repository();
+        assert_eq!(fixture.record().sync_evidence.expected_oid, None);
+        let ahead = child_file(&repository, fixture.local, "remote.txt", b"remote\n");
+        fixture.fetch(ahead, 1);
+        fixture
+            .service
+            .reconcile_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                fixture.local,
+                fixture.local,
+                None,
+                false,
+            )
+            .unwrap();
+        let mut evidence = fixture.record().sync_evidence;
+        assert_eq!(evidence.local_oid, Some(fixture.local));
+        assert_eq!(evidence.expected_oid, Some(fixture.local));
+        evidence.local_oid = Some(ahead);
+        evidence.tracking_oid = Some(ahead);
+        evidence.primary_tracking_oid = Some(ahead);
+        fixture
+            .service
+            .checkpoint_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                C::LocalPrepared,
+                &evidence,
+            )
+            .unwrap();
+        assert_eq!(
+            fixture.record().sync_evidence.expected_oid,
+            Some(fixture.local)
+        );
+    }
+    // Divergence: the merge application leaves a row that still reads.
+    {
+        let fixture = PassFixture::restarted_before_any_checkpoint("local.txt", b"local\n");
+        let repository = fixture.repository();
+        let first = child_file(&repository, fixture.base, "remote-one.txt", b"one\n");
+        fixture.fetch(first, 1);
+        fixture
+            .service
+            .reconcile_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                fixture.local,
+                fixture.local,
+                None,
+                false,
+            )
+            .unwrap();
+        fixture.append_window(1, first).unwrap();
+        let merged = fixture.integrate(first).unwrap();
+        let mut evidence = fixture.record().sync_evidence;
+        evidence.local_oid = Some(merged);
+        evidence.tracking_oid = Some(first);
+        evidence.primary_tracking_oid = Some(first);
+        fixture
+            .service
+            .checkpoint_synchronization_merge_applied(
+                fixture.root.path(),
+                &fixture.owner,
+                &evidence,
+            )
+            .unwrap();
+        let record = fixture.record();
+        assert_eq!(record.sync_checkpoint, Some(C::LocalFastForwarded));
+        assert_eq!(record.sync_evidence.expected_oid, Some(fixture.local));
+    }
+    // A recorded start is kept, by the in-memory backstop as by the reconcile.
+    let (local, other) = (
+        git2::Oid::from_bytes(&[1; 20]).unwrap(),
+        git2::Oid::from_bytes(&[2; 20]).unwrap(),
     );
-
-    backfill_expected_oid(&mut evidence, local);
-    assert_eq!(evidence.expected_oid, Some(local));
-    service
-        .checkpoint_synchronization(root.path(), &owner, C::PushPrepared, &evidence)
-        .unwrap();
-    assert_eq!(row().expected_oid, Some(local));
-
-    // A recorded value is where the operation began, and is kept.
     let mut recorded = state::SynchronizationEvidence {
-        expected_oid: Some(tracking),
+        expected_oid: Some(other),
         ..Default::default()
     };
     backfill_expected_oid(&mut recorded, local);
-    assert_eq!(recorded.expected_oid, Some(tracking));
+    assert_eq!(recorded.expected_oid, Some(other));
+    let mut missing = state::SynchronizationEvidence::default();
+    backfill_expected_oid(&mut missing, local);
+    assert_eq!(missing.expected_oid, Some(local));
 }
 
 /// A synchronization that resumes after its own first push of a context
