@@ -1138,6 +1138,73 @@ fn cancellation_attempt_writer_fault_rolls_back_phase_outcome_and_retains_reques
     );
 }
 
+/// A reservation refused because of another operation names it: a pending
+/// local row refuses it with that row's operation as the blocker, and a
+/// reservation another remote operation holds is `Busy` with that
+/// operation as the holder, never the refused one's own. Neither refusal
+/// begins a row.
+#[test]
+fn a_reservation_refused_for_another_operation_names_it() {
+    let (data, root, service) = fixture();
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let local = OperationId::new();
+    db.execute(
+        "INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at)
+         VALUES(1,?1,?2,'save_ticket','t','created',1)",
+        params![root.path().to_str().unwrap(), local.to_string()],
+    )
+    .unwrap();
+    let refused = service
+        .reserve_remote_operation(root.path(), OperationId::new(), &promote_target())
+        .unwrap_err();
+    assert_eq!(refused.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(
+        refused.blocker(),
+        Some(&Blocker {
+            family: crate::repository::OperationFamily::Local,
+            operation_id: local,
+            live: None,
+        })
+    );
+    db.execute("UPDATE operation_records SET state='completed'", [])
+        .unwrap();
+
+    let holder = OperationId::new();
+    assert!(matches!(
+        service
+            .reserve_remote_operation(root.path(), holder, &promote_target())
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    let refused = OperationId::new();
+    assert!(matches!(
+        service
+            .reserve_remote_operation(
+                root.path(),
+                refused,
+                &RemoteOperationTarget::for_poll(&plan())
+            )
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+    assert_eq!(
+        service.reservation_holder(root.path(), refused),
+        Some(Blocker {
+            family: crate::repository::OperationFamily::Remote,
+            operation_id: holder,
+            live: None,
+        })
+    );
+    // The holder's own call is not in its own way.
+    assert_eq!(service.reservation_holder(root.path(), holder), None);
+    let rows: i64 = db
+        .query_row("SELECT COUNT(*) FROM remote_operation_records", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(rows, 1, "only the holder's row");
+}
+
 fn fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
     fixture_in(&std::env::temp_dir())
 }

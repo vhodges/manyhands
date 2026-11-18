@@ -960,6 +960,63 @@ impl RepositoryService {
         .map_err(|error| repo.failure(error))
     }
 
+    /// The operation `blocker` names, in its own journal, as `show_operation`
+    /// reads it, and whether the list includes it: whether it is still
+    /// unfinished. `None` when it cannot be read or is not there. The
+    /// repository is the one registered at `root`, the root its rows name;
+    /// a root with no registration has local rows only.
+    pub(crate) fn blocking_operation(
+        &self,
+        root: &std::path::Path,
+        blocker: &crate::repository::Blocker,
+    ) -> Option<(OperationDto, bool)> {
+        let root_text = root.to_str()?;
+        self.read_session(RepositoryOperation::Read, |connection| {
+            let registration: Option<i64> = connection
+                .query_row(
+                    "SELECT id FROM repositories WHERE root_path = ?1",
+                    [root_text],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let text = blocker.operation_id.to_string();
+            let holders = Holders::of(self);
+            let found = match (blocker.family, registration) {
+                (OperationFamily::Local, registration) => {
+                    let repo = ResolvedRepository::registered(
+                        registration.unwrap_or_default(),
+                        root.to_owned(),
+                    );
+                    local_operations(connection, &repo, &holders, Some(&text))?
+                }
+                (OperationFamily::Remote, Some(registration)) => {
+                    let repo = ResolvedRepository::registered(registration, root.to_owned());
+                    let mut found = remote_operations(connection, &repo, &holders, Some(&text))?;
+                    found.extend(promotion_operations(
+                        connection,
+                        &repo,
+                        &holders,
+                        Some(&text),
+                    )?);
+                    found.extend(closure_operations(
+                        connection,
+                        &repo,
+                        &holders,
+                        Some(&text),
+                    )?);
+                    found
+                }
+                (OperationFamily::Remote, None) | (OperationFamily::KeyMaterial, _) => Vec::new(),
+            };
+            Ok(found
+                .into_iter()
+                .next()
+                .map(|operation| (operation.dto, operation.listed)))
+        })
+        .ok()
+        .flatten()
+    }
+
     /// The operation with this ID, whether or not it has finished: one of
     /// the repository's local or remote operations, or one of the
     /// application's key-material operations. No other ID is

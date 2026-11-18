@@ -15,7 +15,7 @@ use crate::{
 
 use super::{
     super::{
-        AuthoringKind, ExpectedPathObservation, OperationFamily, OperationId, ReadError,
+        AuthoringKind, Blocker, ExpectedPathObservation, OperationFamily, OperationId, ReadError,
         RepositoryError, RepositoryService, ResolvedRepository,
         recovery::{FinalKind, JournalRow, PendingOperation, RecordedStep},
     },
@@ -23,7 +23,8 @@ use super::{
     confirm::{Row, Seen},
     context::context_names,
     dto::{
-        HostReplacementDto, LifecycleBlockedDto, MutationDataDto, PreviewDetailsDto, PreviewEffect,
+        BlockerDto, HostReplacementDto, LifecycleBlockedDto, MutationDataDto, PreviewDetailsDto,
+        PreviewEffect,
     },
     evidence::{PathEvidence, Position},
     identity::{IntentDigestBuilder, RequestId, ScopeKey},
@@ -299,6 +300,11 @@ pub(crate) struct Answer {
     /// What a preview of `document promote` or `ticket close` is refused
     /// for. An answer of `execute` holds the same blockers in its `data`.
     pub(crate) lifecycle_blocked: Option<LifecycleBlockedDto>,
+    /// The operation whose unfinished row the request was refused for,
+    /// as `naming` reads it. A `busy` or `recovery_required` envelope
+    /// carries it as its data, in place of the command's own, and offers
+    /// `operation.show` for it. It is no part of a stored result.
+    pub(crate) blocker: Option<Box<BlockerDto>>,
 }
 
 impl Answer {
@@ -325,6 +331,7 @@ impl Answer {
             offers_nothing: false,
             host_replacement: None,
             lifecycle_blocked: None,
+            blocker: None,
         }
     }
 
@@ -339,6 +346,40 @@ impl Answer {
 
     pub(crate) fn with_data(mut self, data: MutationDataDto) -> Self {
         self.data = Some(data);
+        self
+    }
+
+    /// The answer, naming `blocker`, the operation the domain refused the
+    /// request for, as the read of its row at `root` gives it. Only a
+    /// `busy` or a `recovery_required` answer names one. A holder that
+    /// still works makes the answer `busy`, whichever of the two it was:
+    /// the request is refused only because another call is at work, and
+    /// the same request sent again goes on once it is done. Nothing is
+    /// named when the row cannot be read.
+    pub(crate) fn naming(
+        mut self,
+        service: &RepositoryService,
+        root: &Path,
+        blocker: Option<&Blocker>,
+    ) -> Self {
+        let Some(blocker) = blocker else {
+            return self;
+        };
+        if !matches!(self.code, ResultCode::Busy | ResultCode::RecoveryRequired) {
+            return self;
+        }
+        let Some((operation, _)) = service.blocking_operation(root, blocker) else {
+            return self;
+        };
+        let mut named = BlockerDto::of(&operation, blocker.operation_id.to_string());
+        // The judgment the domain answered on, when it made one.
+        if let Some(live) = blocker.live {
+            named.live = Some(live);
+        }
+        if named.live == Some(true) {
+            self.code = ResultCode::Busy;
+        }
+        self.blocker = Some(Box::new(named));
         self
     }
 }

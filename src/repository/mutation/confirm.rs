@@ -100,6 +100,9 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         offers_nothing,
         host_replacement,
         lifecycle_blocked,
+        // A preview names no blocker: what `prepare` refuses for is its
+        // own.
+        blocker: _,
     } = answer;
     // The host a refusal is about is named by its data, and the action
     // that replaces its pin takes the host.

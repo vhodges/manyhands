@@ -127,6 +127,7 @@ pub const CASES: &[&str] = &[
     "operation_resume_noop",
     "operation_resume_not_found",
     "operation_resume_original_request_required",
+    "operation_resume_busy_blocked",
     "poll_once",
     "poll_once_busy",
     "poll_once_cancelled",

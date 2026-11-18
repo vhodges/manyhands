@@ -131,6 +131,11 @@ impl CommentSubmissionError {
     pub fn external_change(&self) -> Option<&ExternalChangeDiagnostic> {
         self.error.external_change()
     }
+    /// The operation whose row the submission was refused for, when
+    /// another's row is why; see `RepositoryError::blocker`.
+    pub fn blocker(&self) -> Option<&crate::repository::Blocker> {
+        self.error.blocker()
+    }
 }
 impl From<RepositoryError> for CommentSubmissionError {
     fn from(error: RepositoryError) -> Self {

@@ -583,6 +583,28 @@ pub(crate) fn inspect_the_root_it_lies_in(root: &Path) -> Vec<RecoveryAction> {
         .collect()
 }
 
+/// What a result that names the operation in its way offers: what it
+/// offered, and `operation.show` of that operation after it, once. The
+/// actions that take a pending row up or give it up are added around it
+/// afterwards, as for every result; see `offering_abandon`.
+pub(crate) fn showing(
+    mut recovery: Vec<RecoveryAction>,
+    operation_id: &str,
+) -> Vec<RecoveryAction> {
+    let shown = recovery.iter().any(|action| {
+        action.action == RecoveryActionKind::OperationShow
+            && action.operation_id.as_deref() == Some(operation_id)
+    });
+    if !shown {
+        recovery.push(RecoveryAction::for_operation(
+            RecoveryActionKind::OperationShow,
+            operation_id,
+            [],
+        ));
+    }
+    recovery
+}
+
 /// The refresh of the index of the repository at `root`.
 pub(crate) fn refresh_the_root(root: &str) -> RecoveryAction {
     RecoveryAction::new(

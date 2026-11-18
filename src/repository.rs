@@ -43,11 +43,13 @@ pub use context_retirement::{
 };
 mod coordination;
 pub use comment_publication::*;
+mod blocker;
 #[cfg(test)]
 mod comment_publication_tests;
 mod discovery;
 mod integration;
 pub mod keys;
+pub use blocker::{Blocker, Sleeper, WaitPolicy};
 mod liveness;
 #[doc(hidden)]
 pub use liveness::{ProcessProbe, this_host};
@@ -413,6 +415,10 @@ pub struct RepositoryService {
     clock: Arc<dyn mutation::Clock>,
     /// What an operation read asks whether a holder's process exists.
     process_probe: Arc<dyn liveness::ProcessProbe>,
+    /// How long a writer waits for a live holder of the row in its way.
+    wait_policy: WaitPolicy,
+    /// What that wait lets its time pass with.
+    sleeper: Arc<dyn Sleeper>,
 }
 
 struct IndexOwnerHeartbeat {
@@ -1233,6 +1239,9 @@ pub struct RepositoryError {
     message: String,
     source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     external_change: Option<Box<ExternalChangeDiagnostic>>,
+    /// The operation whose row the call was refused for, when that is
+    /// why it was refused: see `Blocker`.
+    blocker: Option<Box<Blocker>>,
 }
 
 impl RepositoryError {
@@ -1266,6 +1275,7 @@ impl RepositoryError {
             message: error.to_string(),
             source: None,
             external_change: None,
+            blocker: None,
         }
     }
 
@@ -1282,6 +1292,7 @@ impl RepositoryError {
             message: error.to_string(),
             source: Some(Box::new(error)),
             external_change: None,
+            blocker: None,
         }
     }
 
@@ -1299,11 +1310,24 @@ impl RepositoryError {
             message: "an owned path changed after it was observed".to_owned(),
             source: None,
             external_change: Some(Box::new(diagnostic)),
+            blocker: None,
         }
     }
 
     pub fn external_change(&self) -> Option<&ExternalChangeDiagnostic> {
         self.external_change.as_deref()
+    }
+
+    /// The operation whose unfinished row the call was refused for, when
+    /// another operation's row is why it was refused.
+    pub fn blocker(&self) -> Option<&Blocker> {
+        self.blocker.as_deref()
+    }
+
+    /// The same error, naming `blocker` as what it was refused for.
+    pub(crate) fn with_blocker(mut self, blocker: Option<Blocker>) -> Self {
+        self.blocker = blocker.map(Box::new);
+        self
     }
 }
 
@@ -3519,9 +3543,24 @@ impl RepositoryService {
         operation_id: OperationId,
         target: &str,
     ) -> Result<(RepositoryLease, RecoveryRecord), RepositoryError> {
-        let lease = repository_lease(repository, root, operation)?;
-        let record = self.begin_lifecycle_record(root, operation, operation_id, target)?;
-        Ok((lease, record))
+        // Another operation's row in the way is waited for while its holder
+        // works: the lease is let go, and the begin's registry transaction
+        // has ended, before the wait sleeps, and both are taken again for
+        // the next look. Nothing a peer needs to finish is held meanwhile.
+        let mut wait = self.start_wait();
+        loop {
+            let lease = repository_lease(repository, root, operation)?;
+            match self.begin_lifecycle_record(root, operation, operation_id, target) {
+                Ok(record) => return Ok((lease, record)),
+                Err(error) => {
+                    drop(lease);
+                    match self.waited(root, &mut wait, error) {
+                        blocker::Waited::Again => {}
+                        blocker::Waited::Refused(error) => return Err(error),
+                    }
+                }
+            }
+        }
     }
 
     fn begin_lifecycle_record(
@@ -4174,6 +4213,8 @@ impl RepositoryService {
             identity_lock_hook: Mutex::new(None),
             clock: Arc::new(mutation::SystemClock),
             process_probe: Arc::new(liveness::SystemProbe),
+            wait_policy: WaitPolicy::default(),
+            sleeper: Arc::new(blocker::SystemSleeper),
         })
     }
 
@@ -11194,6 +11235,7 @@ fn registry_refresh_pending(
             .to_owned(),
         source: Some(Box::new(error)),
         external_change: None,
+        blocker: None,
     }
 }
 

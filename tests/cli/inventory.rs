@@ -209,6 +209,7 @@ const DATA: &[(&str, &[&str])] = &[
     (
         "operation resume",
         &[
+            "blocked",
             "comment_mutation",
             "synchronization_conflict_mutation",
             "local_context_sync_mutation",

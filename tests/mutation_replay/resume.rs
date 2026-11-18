@@ -210,7 +210,12 @@ fn a_resume_finishes_an_invalidated_authoritative_hand_off_after_executor_loss()
     assert_eq!(blocked.code, ResultCode::RecoveryRequired);
     assert_eq!(
         recovery_actions(&blocked),
-        ["operation.resume", "repo.inspect", "operation.abandon"]
+        [
+            "operation.resume",
+            "repo.inspect",
+            "operation.show",
+            "operation.abandon"
+        ]
     );
     assert_eq!(
         blocked.recovery[0].operation_id.as_deref(),
@@ -669,10 +674,25 @@ fn a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it() {
     for now in [HEARTBEAT, HEARTBEAT + 3] {
         clock.set(now);
         let busy = world.execute(REQUEST_2, resume(&world, &operation_id));
-        assert_refused(&world, REQUEST_2, &busy, Outcome::Error, ResultCode::Busy);
-        assert_eq!(busy.failure_class(), Some(FailureClass::Transient));
+        assert_eq!(busy.command, "operation resume");
+        assert_eq!(
+            (busy.outcome, busy.code, busy.failure_class()),
+            (
+                Outcome::Error,
+                ResultCode::Busy,
+                Some(FailureClass::Transient)
+            )
+        );
+        assert_eq!(busy.effects, Effects::not_requested());
+        assert_eq!(busy.operation_id, None);
+        assert!(world.record(REQUEST_2).is_none(), "a request record");
+        // It names the operation the call indexes under, live by its
+        // heartbeat.
+        let blocker = serde_json::to_value(&busy).unwrap()["data"]["blocker"].clone();
+        assert_eq!(blocker["operation_id"], operation_id.as_str());
+        assert_eq!(blocker["live"], true);
         // The same resume is what to send again.
-        assert_eq!(recovery_actions(&busy), ["request.retry"]);
+        assert_eq!(recovery_actions(&busy), ["request.retry", "operation.show"]);
         assert_eq!(busy.recovery[0].arguments["request_id"], REQUEST_2);
         assert_eq!(stored(&world, &operation_id), before);
     }
@@ -1479,9 +1499,18 @@ fn a_request_refused_for_a_hand_off_another_request_owes_is_offered_its_resume_f
     );
     assert_eq!(
         recovery_actions(&blocked),
-        ["operation.resume", "repo.inspect", "operation.abandon"]
+        [
+            "operation.resume",
+            "repo.inspect",
+            "operation.show",
+            "operation.abandon"
+        ]
     );
-    for action in [&blocked.recovery[0], &blocked.recovery[2]] {
+    for action in [
+        &blocked.recovery[0],
+        &blocked.recovery[2],
+        &blocked.recovery[3],
+    ] {
         assert_eq!(action.operation_id.as_deref(), Some(operation_id.as_str()));
     }
     assert!(world.record(REQUEST_2).is_none());
@@ -1502,6 +1531,156 @@ fn a_request_refused_for_a_hand_off_another_request_owes_is_offered_its_resume_f
         (Outcome::Success, ResultCode::Ok)
     );
     assert!(created.recovery.is_empty());
+}
+
+/// Names `pid` on this host as the holder of the local row `operation_id`,
+/// with the request and command that began it.
+fn held_by(world: &World, operation_id: &str, pid: i64) {
+    let host = manyhands::repository::this_host();
+    operations::attribute_local(
+        world.data.path(),
+        operation_id,
+        &operations::Attribution {
+            request: Some(REQUEST_1),
+            command: Some("ticket save"),
+            author: Some("Ada <ada@example.com>"),
+            host: Some(&host),
+            pid: Some(pid),
+            started_at: Some(operations::STORED_AT),
+        },
+        None,
+    );
+}
+
+/// The service of `world`, asking `table` whether a process exists.
+fn probing(world: &mut World, table: Vec<u32>) {
+    world.service = manyhands::repository::RepositoryService::open_at(world.data.path())
+        .unwrap()
+        .with_process_probe_for_testing(std::sync::Arc::new(operations::ProcessTable(table)));
+}
+
+/// A pid the process table of `probing` holds, and one it does not.
+const LIVE_PID: u32 = 4242;
+const DEAD_PID: u32 = 4243;
+
+/// A row in the way whose holder is gone is not waited for: the request is
+/// refused `recovery_required` at once, naming the operation and its
+/// holder, with the ways on and out a stale row has always been offered,
+/// and `operation.show` for the operation. No row is begun for it.
+#[test]
+fn a_stale_row_answers_recovery_required_naming_the_operation() {
+    let (mut world, _token, owed) = save_owing_its_hand_off();
+    let operation_id = operation_of(&owed);
+    held_by(&world, &operation_id, i64::from(DEAD_PID));
+    let clock = mutation::StepClock::new();
+    world.service = manyhands::repository::RepositoryService::open_at(world.data.path())
+        .unwrap()
+        .with_process_probe_for_testing(std::sync::Arc::new(operations::ProcessTable(vec![
+            LIVE_PID,
+        ])))
+        .with_sleeper_for_testing(clock.clone());
+
+    let blocked = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));
+    assert_eq!(
+        (blocked.outcome, blocked.code),
+        (Outcome::Blocked, ResultCode::RecoveryRequired)
+    );
+    assert_eq!(
+        recovery_actions(&blocked),
+        [
+            "operation.resume",
+            "repo.inspect",
+            "operation.show",
+            "operation.abandon"
+        ]
+    );
+    assert_eq!(
+        blocked.recovery[2].operation_id.as_deref(),
+        Some(operation_id.as_str())
+    );
+    let data = serde_json::to_value(&blocked).unwrap()["data"].clone();
+    crate::support::schema::check_published("blocked.schema.json", &data).unwrap();
+    let host = manyhands::repository::this_host();
+    assert_eq!(
+        data,
+        serde_json::json!({
+            "blocker": {
+                "operation_id": operation_id,
+                "family": "local",
+                "action": "save_ticket",
+                "item_id": TICKET_A,
+                "request_id": REQUEST_1,
+                "author": "Ada <ada@example.com>",
+                "host": host,
+                "pid": DEAD_PID,
+                "started_at": operations::STORED_AT_TEXT,
+                "live": false,
+            }
+        })
+    );
+    assert_eq!(clock.slept(), 0, "a stale row is not waited for");
+    assert!(world.record(REQUEST_2).is_none());
+    assert_eq!(world.pending_journal_rows(), 1);
+}
+
+/// A resume of an operation whose holder, another process, still works is
+/// refused `busy`, naming it, and takes nothing up: the row is as it was.
+/// Once the holder is gone the same operation is resumed as before.
+#[test]
+fn resume_of_a_live_owned_row_is_refused_with_the_blocker() {
+    let (mut world, _token, owed) = save_owing_its_hand_off();
+    let operation_id = operation_of(&owed);
+    // Another process of this host indexes under the row: it claimed it,
+    // and its heartbeat is fresh.
+    held_by(&world, &operation_id, i64::from(LIVE_PID));
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    set_state(&world, &operation_id, "indexing", now);
+    probing(&mut world, vec![LIVE_PID]);
+    let before = stored(&world, &operation_id);
+
+    let refused = world.execute(REQUEST_3, resume(&world, &operation_id));
+    assert_eq!(
+        (refused.outcome, refused.code, refused.failure_class()),
+        (
+            Outcome::Error,
+            ResultCode::Busy,
+            Some(FailureClass::Transient)
+        )
+    );
+    assert_eq!(refused.effects, Effects::not_requested());
+    assert_eq!(
+        recovery_actions(&refused),
+        ["request.retry", "operation.show"]
+    );
+    let mut golden = serde_json::to_value(&refused).unwrap();
+    let blocker = &mut golden["data"]["blocker"];
+    assert_eq!(blocker["operation_id"], operation_id.as_str());
+    assert_eq!(blocker["pid"], LIVE_PID);
+    assert_eq!(blocker["live"], true);
+    // The host is this machine's, and is replaced in the golden alone: a
+    // short name could stand anywhere in the envelope.
+    assert_eq!(blocker["host"], manyhands::repository::this_host());
+    blocker["host"] = "<this-host>".into();
+    mutation::assert_contract_at(
+        "operation_resume_busy_blocked",
+        world.root.to_str().unwrap(),
+        Some("blocked.schema.json"),
+        &[(operation_id.as_str(), "<blocker>")],
+        &golden,
+    );
+    assert_eq!(stored(&world, &operation_id), before);
+    assert!(world.record(REQUEST_3).is_none());
+
+    // The holder is gone, and so, a moment later, is its heartbeat: the
+    // resume takes the row up.
+    probing(&mut world, Vec::new());
+    set_state(&world, &operation_id, "indexing", operations::STORED_AT);
+    let resumed = world.execute(REQUEST_3, resume(&world, &operation_id));
+    assert_eq!(
+        (resumed.outcome, resumed.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
 }
 
 /// The row of `operation resume` in the conformance table: the resume

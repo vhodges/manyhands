@@ -607,7 +607,8 @@ impl CommentAddBinding {
             answer: Answer {
                 effects,
                 ..Answer::stopped(code)
-            },
+            }
+            .naming(service, &accepted.root(), error.blocker()),
             standing,
         }
     }

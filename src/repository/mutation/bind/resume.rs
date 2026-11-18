@@ -62,9 +62,9 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, OperationFamily, OperationId, ReadError, RefreshRepositoryRequest,
-            RepositoryErrorKind, RepositoryOperation, RepositoryService, SynchronizationTarget,
-            closure, keys, promotion,
+            AuthoringKind, Blocker, OperationFamily, OperationId, ReadError,
+            RefreshRepositoryRequest, RepositoryErrorKind, RepositoryOperation, RepositoryService,
+            SynchronizationTarget, closure, keys, promotion,
             promotion::lifecycle::{LifecycleRecord, ParentStep},
             recovery::{self, FinalKind, JournalRow, LocalStanding, PendingOperation},
             remote::{self, state::ResolutionAttemptPhase},
@@ -939,6 +939,59 @@ impl OperationResumeBinding {
         })
     }
 
+    /// The refusal of a resume of an operation a call is still at work
+    /// under: its row, unfinished, names a holder that still works, as an
+    /// operation read judges it. Such an operation is not taken over: the
+    /// answer is `busy`, naming it, and nothing is recorded. `None` for an
+    /// operation no one is at work under, which is taken up as before. The
+    /// row looked at is the one a resume would take up: a local hand-off's
+    /// own, or the remote row of a synchronization, of a comment's
+    /// publication or of a lifecycle's reservation.
+    fn held(&self, service: &RepositoryService, root: &Path, found: &Named) -> Option<Answer> {
+        let (family, operation_id) = match found {
+            Named::HandOff => (OperationFamily::Local, self.operation_id),
+            Named::Synchronization(_)
+            | Named::Lifecycle {
+                command: _,
+                item_id: _,
+            } => (OperationFamily::Remote, self.operation_id),
+            Named::Comment {
+                comment: _,
+                synchronization,
+                target: _,
+            } => (OperationFamily::Remote, *synchronization),
+            Named::NotFound
+            | Named::Abandoned
+            | Named::Ended { synchronization: _ }
+            | Named::LeftToInspect { synchronization: _ }
+            | Named::OriginalRequest { request: _ }
+            | Named::Complete {
+                command: _,
+                item_id: _,
+            }
+            | Named::Fenced
+            | Named::Unowned
+            | Named::NotResumable => return None,
+        };
+        let blocker = Blocker {
+            family,
+            operation_id,
+            live: None,
+        };
+        let (operation, unfinished) = service.blocking_operation(root, &blocker)?;
+        if !unfinished || operation.attribution.live != Some(true) {
+            return None;
+        }
+        Some(Answer::stopped(ResultCode::Busy).naming(
+            service,
+            root,
+            Some(&Blocker {
+                live: Some(true),
+                ..blocker
+            }),
+        ))
+    }
+
     /// The request whose unfinished record holds the operation
     /// `operation_id`, in the journal `family`: the one that owns it.
     /// `None` when no such record does. It is the operation the resume
@@ -1517,6 +1570,9 @@ impl Binding for OperationResumeBinding {
         }
         let (scope, found) = self.observe(call.service)?;
         if let Some(answer) = Self::refusal(&found) {
+            return Err(answer);
+        }
+        if let Some(answer) = self.held(call.service, Path::new(scope.as_str()), &found) {
             return Err(answer);
         }
         // A synchronization's result can name the commit it published:

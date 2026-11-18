@@ -879,6 +879,54 @@ impl PrepareDataDto {
     }
 }
 
+/// The operation whose unfinished row stands in a request's way, and
+/// whose it is: the fields `operation show` gives of it, with the same
+/// names and the same meaning of `live`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BlockerDto {
+    pub operation_id: String,
+    pub family: OperationFamily,
+    pub action: OperationAction,
+    pub item_id: Option<String>,
+    pub request_id: Option<String>,
+    pub author: Option<String>,
+    pub host: Option<String>,
+    pub pid: Option<i64>,
+    /// When the request began the operation, in UTC.
+    pub started_at: Option<String>,
+    /// Whether its holder still worked when the request was answered: the
+    /// judgment that made the answer `busy` (true) or `recovery_required`
+    /// (false). Null when the row names neither a host nor a process.
+    pub live: Option<bool>,
+}
+
+impl BlockerDto {
+    /// The blocker as `operation show` reads `operation`.
+    pub(crate) fn of(operation: &crate::repository::OperationDto, fallback_id: String) -> Self {
+        let attribution = &operation.attribution;
+        Self {
+            operation_id: operation.operation_id.clone().unwrap_or(fallback_id),
+            family: operation.family,
+            action: operation.action,
+            item_id: operation.item_id.clone(),
+            request_id: attribution.request_id.clone(),
+            author: attribution.author.clone(),
+            host: attribution.host.clone(),
+            pid: attribution.pid,
+            started_at: attribution.started_at.clone(),
+            live: attribution.live,
+        }
+    }
+}
+
+/// The `data` of a `busy` or `recovery_required` answer refused for
+/// another operation's unfinished row: that operation, in place of the
+/// command's own data.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BlockedDto {
+    pub blocker: BlockerDto,
+}
+
 /// The `data` of a mutation's envelope: the shape of the command's family.
 /// It may accompany any outcome and never holds a body or a source.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -904,6 +952,9 @@ pub enum MutationDataDto {
     Poll(PollMutationDto),
     PollRetirement(PollRetirementMutationDto),
     ResolveHistory(ItemResolveHistoryMutationDto),
+    /// Of a `busy` or `recovery_required` answer that names the operation
+    /// in its way. It is never stored: a record keeps the command's own.
+    Blocked(BlockedDto),
 }
 
 contract_enum!(
@@ -2286,7 +2337,10 @@ impl MutationDataDto {
             | Self::PollRetirement(_)
             | Self::ContextRetirement(_)
             // A history resolution never reaches the host.
-            | Self::ResolveHistory(_) => None,
+            | Self::ResolveHistory(_)
+            // Nor is a request refused for another operation's row
+            // refused for its host.
+            | Self::Blocked(_) => None,
         }
     }
 

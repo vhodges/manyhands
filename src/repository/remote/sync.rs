@@ -402,6 +402,17 @@ pub enum SynchronizationError {
     ExternalChange,
     RecoveryRequired,
 }
+impl SynchronizationError {
+    /// The operation whose row the synchronization was refused for, when
+    /// another's row is why; see `RepositoryError::blocker`.
+    pub fn blocker(&self) -> Option<&crate::repository::Blocker> {
+        match self {
+            Self::Repository(error) => error.blocker(),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for SynchronizationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {

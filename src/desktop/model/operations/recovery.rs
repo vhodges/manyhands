@@ -266,9 +266,10 @@ pub(crate) fn recovery_control(kind: RecoveryActionKind) -> RecoveryControl {
         // `remote.history` has no button: repair runs in `manyhands-cli
         // remote history` until the repair sheet (vh-ez4y9). Inspect opens
         // the repository's details; the guidance text names the command.
-        RecoveryActionKind::RepoInspect | RecoveryActionKind::RemoteHistory => {
-            RecoveryControl::Inspect
-        }
+        // The operation in a result's way is among those details.
+        RecoveryActionKind::RepoInspect
+        | RecoveryActionKind::RemoteHistory
+        | RecoveryActionKind::OperationShow => RecoveryControl::Inspect,
         RecoveryActionKind::RepoIdentitySet => RecoveryControl::IdentitySet,
         // The action names the host but not the key to pin: the Hosts
         // page checks the host, and offers Approve or Replace for the key
@@ -296,5 +297,6 @@ pub(crate) fn recovery_label(kind: RecoveryActionKind) -> &'static str {
         RecoveryActionKind::HostApprove => "Approve host",
         RecoveryActionKind::HostReplace => "Replace host key",
         RecoveryActionKind::RepoInspect | RecoveryActionKind::RemoteHistory => "Inspect repository",
+        RecoveryActionKind::OperationShow => "Show operation",
     }
 }

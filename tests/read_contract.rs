@@ -1063,6 +1063,16 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             OperationAction::ALL.map(OperationAction::as_str).to_vec(),
         ),
         (
+            "blocker.schema.json",
+            "family",
+            OperationFamily::ALL.map(OperationFamily::as_str).to_vec(),
+        ),
+        (
+            "blocker.schema.json",
+            "action",
+            OperationAction::ALL.map(OperationAction::as_str).to_vec(),
+        ),
+        (
             "operation.schema.json",
             "next_action",
             OperationNextAction::ALL

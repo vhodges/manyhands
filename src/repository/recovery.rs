@@ -4,7 +4,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use time::OffsetDateTime;
 
 use super::{
-    OperationId, ReadError, RecoveryInspection, RemoteOperationPhase, RepositoryError,
+    Blocker, OperationId, ReadError, RecoveryInspection, RemoteOperationPhase, RepositoryError,
     RepositoryErrorKind, RepositoryOperation, keys::KeyMaterialPhase,
 };
 use crate::results::ResultCode;
@@ -1066,9 +1066,41 @@ pub(super) fn require_no_pending_local(
         OR EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND completed_step='comment_registration_pending')",
         [repository_id], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
     if pending {
-        return Err(super::remote::state::recovery_required());
+        return Err(super::remote::state::recovery_required()
+            .with_blocker(first_pending_local(connection, repository_id)));
     }
     Ok(())
+}
+
+/// The operation of the oldest local row of the repository `repository_id`
+/// that `require_no_pending_local` is refused for, read by the two
+/// indexes the refusal itself reads. `None` when it names no operation or
+/// cannot be read: the refusal stands without a name.
+fn first_pending_local(connection: &Connection, repository_id: i64) -> Option<Blocker> {
+    let first = |condition: &str| -> Option<(i64, Option<String>)> {
+        connection
+            .query_row(
+                &format!(
+                    "SELECT id, operation_ulid FROM operation_records
+                      WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1)
+                        AND {condition}
+                      ORDER BY id LIMIT 1"
+                ),
+                [repository_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .ok()
+            .flatten()
+    };
+    let pending = first("state!='completed'");
+    let registering = first("completed_step='comment_registration_pending'");
+    let (_, operation_id) = match (pending, registering) {
+        (Some(pending), Some(registering)) => std::cmp::min(pending, registering),
+        (Some(row), None) | (None, Some(row)) => row,
+        (None, None) => return None,
+    };
+    Blocker::local(operation_id.as_deref())
 }
 
 /// Tagged synchronization-local identity cannot share an ID with any remote row.
@@ -1241,7 +1273,9 @@ fn begin_or_reconcile(
     }
 
     match pending {
-        Pending::Another => return Err(recovery_required(operation, root)),
+        Pending::Another(blocker) => {
+            return Err(recovery_required(operation, root).with_blocker(blocker));
+        }
         Pending::Own(id) => {
             // Taken up by this call, which every caller makes under the
             // repository's lease: the row is held by this process now.
@@ -1819,15 +1853,17 @@ pub(super) fn is_comment_synchronization(
 
 /// What the local journal holds pending for a root, as a call that would
 /// begin or take up an operation there reads it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Pending {
     /// No row is pending.
     Nothing,
     /// The pending rows are the call's own to take up: the row `id`.
     Own(i64),
     /// A row is pending that the call may not take up. Every other
-    /// operation on the root is refused until that one is.
-    Another,
+    /// operation on the root is refused until that one is. The blocker
+    /// is that row's operation, the first such row stored; `None` for a
+    /// row recorded before operations had IDs.
+    Another(Option<Blocker>),
 }
 
 /// What stands in the way of a call that would begin, or take up, the
@@ -1850,11 +1886,13 @@ fn in_the_way(
     target: &str,
     tagged_local_binding: bool,
 ) -> Result<Pending, RepositoryError> {
-    let remote_active: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%')))",
-        rusqlite::params![root_path, target], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
-    if remote_active {
-        return Err(super::remote::state::recovery_required());
+    let remote_active: Option<String> = connection.query_row(
+        "SELECT remote_operation_records.operation_ulid FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%')) ORDER BY remote_operation_records.id LIMIT 1",
+        rusqlite::params![root_path, target], |row| row.get(0)).optional().map_err(|_| super::remote::state::recovery_required())?;
+    if let Some(operation_id) = remote_active {
+        return Err(
+            super::remote::state::recovery_required().with_blocker(Blocker::remote(&operation_id))
+        );
     }
     let pending = connection
         .prepare(
@@ -1898,10 +1936,11 @@ fn in_the_way(
         if compatible {
             matching = Some(id);
         } else {
-            return Ok(Pending::Another);
+            return Ok(Pending::Another(Blocker::local(existing_id.as_deref())));
         }
     }
-    Ok(matching.map_or(Pending::Another, Pending::Own))
+    // Only compatible rows were found, and at least one: `matching` is set.
+    Ok(matching.map_or(Pending::Another(None), Pending::Own))
 }
 
 /// Refuses a root on which a refresh under `operation_id` would be
@@ -1966,7 +2005,7 @@ pub(super) fn require_refresh_can_begin(
         false,
     )? {
         Pending::Nothing | Pending::Own(_) => Ok(()),
-        Pending::Another => Err(recovery_required(operation, root)),
+        Pending::Another(blocker) => Err(recovery_required(operation, root).with_blocker(blocker)),
     }
 }
 

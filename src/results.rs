@@ -408,6 +408,9 @@ recovery_actions! {
     RepoInspect => "repo.inspect", ["root"];
     /// Resume the operation the action names.
     OperationResume => "operation.resume", [];
+    /// Show the operation the action names: the one whose unfinished row
+    /// stands in the result's way, and whose it is.
+    OperationShow => "operation.show", [];
     /// Submit the request `request_id` again.
     RequestRetry => "request.retry", ["request_id"];
     /// Prepare the command again for a new confirmation.

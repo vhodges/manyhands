@@ -1162,6 +1162,14 @@ impl SyncBinding {
                 host_data(error)
             }
         };
+        // The operation the synchronization was refused for: the local
+        // row the reservation found in its way, or, for a reservation
+        // another remote operation holds, that operation.
+        let blocker = error.blocker().cloned().or_else(|| {
+            matches!(error, SynchronizationError::Busy)
+                .then(|| service.reservation_holder(&accepted.root(), accepted.operation_id))
+                .flatten()
+        });
         let recovery = if unresolved {
             crate::results::absolute_path_string(&accepted.root())
                 .map(|root| {
@@ -1179,7 +1187,8 @@ impl SyncBinding {
                 local_change,
                 recovery,
                 ..Answer::stopped(code)
-            },
+            }
+            .naming(service, &accepted.root(), blocker.as_ref()),
             standing: Standing::Stopped { journal },
         }
     }

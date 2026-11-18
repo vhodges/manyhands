@@ -259,9 +259,14 @@ fn assert_blocked_and_offered_the_abandon(stranded: &Stranded, request_id: &str)
     assert_eq!(blocked.outcome, Outcome::Blocked);
     assert_eq!(
         recovery_actions(&blocked),
-        ["repo.inspect", "operation.abandon"]
+        ["repo.inspect", "operation.show", "operation.abandon"]
     );
-    let offered = &blocked.recovery[1];
+    // The operation in the way is named, and shown.
+    assert_eq!(
+        blocked.recovery[1].operation_id.as_deref(),
+        Some(stranded.operation_id.as_str())
+    );
+    let offered = &blocked.recovery[2];
     assert_eq!(
         offered.operation_id.as_deref(),
         Some(stranded.operation_id.as_str())
@@ -1120,7 +1125,10 @@ fn an_abandon_is_busy_while_a_call_holds_the_repository_lease() {
     .unwrap();
     let blocked = world.execute(REQUEST_2, world.create(TICKET_NEW));
     assert_eq!(blocked.code, ResultCode::RecoveryRequired);
-    assert_eq!(recovery_actions(&blocked), ["repo.inspect"]);
+    assert_eq!(
+        recovery_actions(&blocked),
+        ["repo.inspect", "operation.show"]
+    );
     let busy = stranded.execute(REQUEST_3, &confirmation);
     assert_eq!(busy.code, ResultCode::Busy);
     // The snapshot reads every file under `.git`, the lease file among
@@ -1289,10 +1297,14 @@ fn a_local_row_under_a_synchronization_s_id_is_refused_and_is_not_offered() {
         manyhands::repository::AbandonOperationOutcome::AnotherJournal
     );
     // The row does refuse the repository's other operations. They are
-    // told to look, and are not told to abandon it.
+    // told to look, at the row among the rest, and are not told to abandon
+    // it.
     let blocked = world.execute(REQUEST_2, world.create(TICKET_NEW));
     assert_eq!(blocked.code, ResultCode::RecoveryRequired);
-    assert_eq!(recovery_actions(&blocked), ["repo.inspect"]);
+    assert_eq!(
+        recovery_actions(&blocked),
+        ["repo.inspect", "operation.show"]
+    );
 
     before.assert_unchanged(&world, "a refused abandon");
     assert_eq!(world.pending_journal_rows(), 1);
@@ -1655,9 +1667,10 @@ fn the_lease_file_is_the_only_file_an_abandon_can_add() {
 }
 
 /// A rebuild observes the whole repository with no lease held. While it
-/// does, its row refuses other requests as any pending row does, but no
-/// result offers to abandon it and an abandon of it is busy: its
-/// heartbeat shows a call at work. The rebuild then finishes.
+/// does, its row refuses other requests: its heartbeat shows a call at
+/// work, so they wait for it and are then answered busy, naming it. No
+/// result offers to abandon it and an abandon of it is busy. The rebuild
+/// then finishes.
 #[test]
 fn a_rebuild_that_is_running_is_not_offered_and_its_abandon_is_busy() {
     let world = World::new();
@@ -1665,7 +1678,8 @@ fn a_rebuild_that_is_running_is_not_offered_and_its_abandon_is_busy() {
     let (data, root) = (world.data.path().to_owned(), world.root.clone());
     let (sent, received) = std::sync::mpsc::channel();
     world.service.set_observation_hook_for_testing(move || {
-        let other = RepositoryService::open_at(&data).unwrap();
+        // Its wait passes on its own clock: the rebuild waits on it here.
+        let other = mutation::waiting_service(&data, &mutation::StepClock::new());
         let operation_id: String = items::index(&data)
             .query_row(
                 "SELECT operation_ulid FROM operation_records WHERE state != 'completed'",
@@ -1705,8 +1719,11 @@ fn a_rebuild_that_is_running_is_not_offered_and_its_abandon_is_busy() {
     );
 
     let (blocked, attempt) = received.recv().unwrap();
-    assert_eq!(blocked.code, ResultCode::RecoveryRequired);
-    assert_eq!(recovery_actions(&blocked), ["repo.inspect"]);
+    assert_eq!(blocked.code, ResultCode::Busy);
+    assert_eq!(
+        recovery_actions(&blocked),
+        ["request.retry", "operation.show"]
+    );
     let attempt = attempt.expect("a preview is given: it does not say who is at work");
     assert_eq!(attempt.code, ResultCode::Busy);
     assert_eq!(recovery_actions(&attempt), ["request.retry"]);

@@ -334,6 +334,7 @@ pub fn repair_data(envelope: &Envelope<MutationDataDto>) -> &RepairMutationDto {
     match envelope.data.as_ref() {
         Some(MutationDataDto::LocalContextSync(_)) => panic!("local synchronization data"),
         Some(MutationDataDto::ResolveHistory(_)) => panic!("a history resolution's data"),
+        Some(MutationDataDto::Blocked(_)) => panic!("the operation in the request's way"),
         Some(MutationDataDto::PollPolicy(_))
         | Some(MutationDataDto::Poll(_))
         | Some(MutationDataDto::PollRetirement(_)) => {

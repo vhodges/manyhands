@@ -11,8 +11,8 @@ use super::{
     RemoteOperationTarget, RemoteOutcomeCategory, state,
 };
 use crate::repository::{
-    OperationId, RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
-    promotion::lifecycle::LifecycleKind,
+    Blocker, OperationId, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+    RepositoryService, promotion::lifecycle::LifecycleKind,
 };
 
 #[cfg(test)]
@@ -1349,6 +1349,22 @@ impl RepositoryService {
                 .into_iter()
                 .next()
                 .map(RemoteOperationInspection::from))
+        })
+    }
+
+    /// The remote operation that holds the reservation of the repository at
+    /// `root`, when it is not `own`: what a reservation that answered
+    /// `Busy` because another operation holds the reservation was refused
+    /// for. It is read after the refusal, so an operation that let the
+    /// reservation go since is not named. `None` also when nothing can be
+    /// read.
+    pub(crate) fn reservation_holder(&self, root: &Path, own: OperationId) -> Option<Blocker> {
+        let active = self.active_remote_operation(root).ok().flatten()?;
+        let operation_id = active.operation_id();
+        (operation_id != own).then_some(Blocker {
+            family: crate::repository::OperationFamily::Remote,
+            operation_id,
+            live: None,
         })
     }
 
