@@ -1153,8 +1153,7 @@ pub(super) fn begin_or_reconcile_local_synchronization(
         operation_id,
         target,
         true,
-        started_at,
-        true,
+        RowOrigin::here(root, started_at),
     )
 }
 
@@ -1177,8 +1176,7 @@ pub(super) fn begin_or_reconcile_operation(
         operation_id,
         target,
         false,
-        started_at,
-        true,
+        RowOrigin::here(root, started_at),
     )
 }
 
@@ -1201,8 +1199,7 @@ pub(super) fn begin_or_reconcile_unauthored_operation(
         operation_id,
         target,
         false,
-        started_at,
-        false,
+        RowOrigin::here(root, started_at).unauthored(),
     )
 }
 
@@ -1213,20 +1210,13 @@ fn begin_or_reconcile(
     operation_id: OperationId,
     target: &str,
     tagged_local_binding: bool,
-    started_at: i64,
-    authored: bool,
+    // Read before the registry transaction begins, so no Git configuration
+    // is read while it holds the database's write lock.
+    origin: RowOrigin,
 ) -> Result<RecoveryRecord, RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let action = action_name(operation);
     let requested = operation_id.to_string();
-    // Read before the registry transaction begins, so no Git configuration
-    // is read while it holds the database's write lock.
-    let origin = RowOrigin::here(root, started_at);
-    let origin = if authored {
-        origin
-    } else {
-        origin.unauthored()
-    };
     #[cfg(test)]
     pause_before_begin_for_testing_if_installed(&requested);
     let transaction = connection
