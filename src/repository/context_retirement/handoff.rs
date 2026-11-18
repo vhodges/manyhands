@@ -93,9 +93,13 @@ impl Live {
             })
     }
 }
+/// The frozen report, in `pass::encode`'s sorted form: `decode_frozen`
+/// compares it byte for byte with the stored copy.
 pub(in super::super) fn report_image(report: &RemotePollReport) -> Result<String, RepositoryError> {
     let targets:Vec<_>=report.targets().iter().map(|r|serde_json::json!({"target":r.target().map(|t|t.remote_ref()),"tracking":r.target().map(|t|t.tracking_ref()),"kind":r.kind().map(|k|format!("{k:?}")),"item_id":r.item_id().map(ToString::to_string),"disposition":format!("{:?}",r.disposition()),"before_oid":r.before_oid().map(|o|o.to_string()),"after_oid":r.after_oid().map(|o|o.to_string())})).collect();
-    Ok(serde_json::json!({"version":1,"operation_id":report.operation_id().to_string(),"completion":format!("{:?}",report.completion()),"completed_at":report.completed_at().unix_timestamp(),"next_eligible_at":report.next_eligible_at().map(|t|t.unix_timestamp()),"outcome":report.outcome().map(|v|format!("{v:?}")),"local_changes":report.local_changes(),"targets":targets}).to_string())
+    pass::encode(
+        &serde_json::json!({"version":1,"operation_id":report.operation_id().to_string(),"completion":format!("{:?}",report.completion()),"completed_at":report.completed_at().unix_timestamp(),"next_eligible_at":report.next_eligible_at().map(|t|t.unix_timestamp()),"outcome":report.outcome().map(|v|format!("{v:?}")),"local_changes":report.local_changes(),"targets":targets}),
+    )
 }
 fn digest(operation: &str, image: &str, report: &str) -> Vec<u8> {
     let mut h = blake3::Hasher::new();
