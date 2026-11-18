@@ -3,7 +3,7 @@ slug: vh-5kvmy
 id: 01M6H7VXJJHRYHTW9S8TJ88921
 title: 'Desktop follow-up: structure and tests from the D4 review'
 type: task
-status: open
+status: superseded
 project: manyhands
 team: core
 manyhands_managed: true
