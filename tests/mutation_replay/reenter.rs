@@ -1123,9 +1123,12 @@ fn a_second_writer_waits_for_a_live_peer_then_answers_busy_naming_it() {
         )
     );
     assert_eq!(second.effects, Effects::not_requested());
+    // The whole answer is shown on a failure: once in a while, on a loaded
+    // machine, this busy has named no blocker.
     assert_eq!(
         recovery_actions(&second),
-        ["request.retry", "operation.show"]
+        ["request.retry", "operation.show"],
+        "{second:?}"
     );
     assert_eq!(
         second.recovery[1].operation_id.as_deref(),
