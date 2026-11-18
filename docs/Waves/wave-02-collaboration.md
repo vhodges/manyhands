@@ -88,7 +88,7 @@ Wave 02 includes:
   key use for every Git-over-SSH operation, host verification, and redacted
   credential outcomes.
 - Authenticated `git2` fetch and push against the configured SSH publication
-  remote. A system Git executable, SSH-agent fallback, and default-key fallback
+  remote. A system Git executable and default-key fallback
   are not runtime dependencies.
 - Durable remote operation observations and reconciliation that retain only
   non-secret identifiers, progress, and redacted failure data.
@@ -118,7 +118,7 @@ Wave 02 does not implement:
   worker and explicit CLI commands. PRD 0.5 removes CLI daemon mode without
   changing Wave 02's one-shot operations or repository coordination.
 - OAuth, Git-forge APIs, automatic public-key upload, HTTP(S) publication,
-  repository cloning, SSH-agent fallback, or fallback to a user's default key.
+  repository cloning, or fallback to a user's default key. (An ssh-agent may sign for the selected key since 2026-11-17, ticket `01M67Y754SJ1FTYQJFR37Z4ZTY`.)
 - Filesystem watching, automatic retry scheduling, or a second source of truth
   for remote or canonical content.
 - Automatic rebase, force push, merge or cleanup without a deliberate and

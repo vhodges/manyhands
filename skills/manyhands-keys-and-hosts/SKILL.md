@@ -21,7 +21,7 @@ Manyhands talks to a Git host over SSH with one key and checks the host against 
 Explain both to the person and wait for their choice. Do not choose silently.
 
 - `none`: no passphrase. You can sync, close tickets and observe hosts unattended. It is weaker if the key file ever leaks, because anyone holding the file can use it.
-- `passphrase`: stronger if the file leaks. But Manyhands cannot unlock it for you. These answer `unlock_required` (exit 3) in a non-interactive run: `host observe` of a host that is already pinned, `host approve --confirm`, `host replace --confirm`, sync, `ticket close`, `document promote` (with a remote), `poll once`, `poll once --retire-completed` and `context retire`; and the clone in onboarding prompts for it. Most finish with the same confirmation and request ID at the person's terminal, but a stopped poll or retirement is final and takes a new request ID ([polling and the index](../manyhands-polling-and-index/SKILL.md)). The person must run those steps at their own terminal and type the passphrase. You never see or handle it.
+- `passphrase`: stronger if the file leaks. But Manyhands cannot unlock it for you, unless the person has loaded the key into their ssh-agent ("A passphrase key through ssh-agent" below). Without that, these answer `unlock_required` (exit 3) in a non-interactive run: `host observe` of a host that is already pinned, `host approve --confirm`, `host replace --confirm`, sync, `ticket close`, `document promote` (with a remote), `poll once`, `poll once --retire-completed` and `context retire`; and the clone in onboarding prompts for it. Most finish with the same confirmation and request ID at the person's terminal, but a stopped poll or retirement is final and takes a new request ID ([polling and the index](../manyhands-polling-and-index/SKILL.md)). The person must run those steps at their own terminal and type the passphrase. You never see or handle it.
 
 Recommend `none` for a key used only with Manyhands, a key that exists for no other purpose and can be revoked on the host in seconds, and say that reason. A key the person also uses for other things deserves the passphrase. Say that it is their choice.
 
@@ -160,6 +160,17 @@ manyhands-cli --json --non-interactive host replace --repo <repo-root> --input r
 
 Confirm as for `host approve`.
 
+## A passphrase key through ssh-agent
+
+A passphrase key does not have to stop your unattended runs. When the person has loaded the selected key, unlocked, into their ssh-agent, and `SSH_AUTH_SOCK` names that agent in the environment you run in, every step that authenticates signs through the agent: no prompt, no `unlock_required`.
+
+- Only the selected key is used. Manyhands asks the agent whether it holds that exact key, offers that one key to the host and never asks the agent to sign with any other.
+- It needs `SSH_AUTH_SOCK` in your environment. Manyhands does not read `~/.ssh/config`, so `IdentityAgent` and `UseKeychain` have no effect on it. A sandboxed or detached run may not have the variable: if `unlock_required` persists although the person says the key is loaded, that is the first thing to check.
+- Ed25519 and ECDSA keys, on Linux and macOS. An RSA key, and Windows, do not use the agent yet.
+- If the agent is missing, empty, lacks the key, or refuses to sign, nothing changes: the step answers as before, with a prompt at a terminal and `unlock_required` without one.
+- The person loads the key: `ssh-add <private key path>` and the passphrase, once per agent session. On macOS the keychain holds the passphrase: `ssh-add --apple-load-keychain` loads the keys stored there. `UseKeychain yes` in `~/.ssh/config` only makes Apple's own `ssh` do that for itself; it does nothing for Manyhands, so a key that nothing has loaded into the agent shows as unavailable.
+- You can see whether the selected key is loaded without touching anything: `ssh-add -l` lists the agent's key fingerprints (`SHA256:...`), and `key list` shows the selected key's fingerprint. If they match, the agent route is available. Never run `ssh-add` yourself with a passphrase, and never ask for one.
+
 ## Hand to the person
 
 - `key remove` (unregister) and `key delete` (delete the generated files). Never run them, even if asked to "clean up". You may run `key delete --prepare` to show what it would remove (the private and public key files and the registration); `key remove` has no preview (`not_confirmable`). See [autonomy](../manyhands-overview/references/autonomy.md). `key delete` refuses a selected key (`key delete --prepare` on a selected key answers `blocked` with `selected_key_in_use` and no preview, so there is no file-effects preview to show; verified) and an imported key (`key_not_deletable`; imported files are the person's). Tell the person which key and why.
@@ -171,7 +182,7 @@ Confirm as for `host approve`.
 | Code (exit) | Meaning and next step |
 | --- | --- |
 | `no_selected_key` (3) | No key is selected. `key list`, then `key select`. |
-| `unlock_required` (3) | The selected key has a passphrase and the step authenticates. Hand the command, with its confirmation ID and request ID, to the person's terminal. |
+| `unlock_required` (3) | The selected key has a passphrase, it is not loaded in an ssh-agent you can reach, and the step authenticates. Hand the command, with its confirmation ID and request ID, to the person's terminal, or ask them to load the key into their agent ("A passphrase key through ssh-agent"). |
 | `publication_remote_required` (3) | The repository has no selected remote. [Repositories](../manyhands-repositories/SKILL.md). |
 | `repository_not_registered` (3) | This data directory does not know the repository. [Recovery](../manyhands-recovery/SKILL.md), "Not registered": `repo enable --prepare`, not `index rebuild`. |
 | `host_approval_required` (3) | A step needs the host pinned. `host observe`, show the person, `host approve`. |
