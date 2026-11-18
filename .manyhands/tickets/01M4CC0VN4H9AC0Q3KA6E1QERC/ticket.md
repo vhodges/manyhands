@@ -7,7 +7,7 @@ deps:
 id: 01M4CC0VN4H9AC0Q3KA6E1QERC
 title: 'Wave 03 G1: Native Journeys And Dogfooding Gate'
 type: cycle
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
