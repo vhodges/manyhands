@@ -574,16 +574,23 @@ fn c4_interruption_transport_refusals() -> Result<(), FixtureError> {
             None => assert_eq!(actions, ["request.retry"]),
         }
         assert_eq!(*recovery.last().unwrap(), retry);
+        value
     };
 
     refused("host_approval_required", Some("host.approve"));
     approve(&w)?;
-    refused("unlock_required", None);
+    let holder = refused("unlock_required", None)["operation_id"].clone();
+    // The new request is told which operation holds the reservation, and
+    // offered to look at it.
     let busy = sync(R2, "busy", 5);
     assert_eq!(
         busy["recovery"],
-        serde_json::json!([{"action": "request.retry", "operation_id": null, "arguments": {"request_id": R2}}])
+        serde_json::json!([
+            {"action": "request.retry", "operation_id": null, "arguments": {"request_id": R2}},
+            {"action": "operation.show", "operation_id": holder, "arguments": {}}
+        ])
     );
+    assert_eq!(busy["data"]["blocker"]["operation_id"], holder);
     checked(
         &env,
         &["request", "show", "--request-id", R2],
