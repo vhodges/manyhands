@@ -6,7 +6,7 @@
 //! places the way out opens in the workspace; what an ended run offers;
 //! and Enter.
 
-use gpui_kit::{AnyElement, App, Context, Window, component::Root};
+use gpui_kit::{AnyElement, App, Context, Window};
 use manyhands::{
     repository::{LifecycleBlocker, LifecycleWayOut, MutationDataDto, lifecycle_way_out},
     results::{Envelope, RecoveryActionKind, ResultCode},
@@ -21,7 +21,10 @@ use crate::desktop::{
         requests::{DesktopRequestId, Lane},
         worker::{CancelResult, GaveUp, RecordState},
     },
-    view::{item::ItemRoute, workspace::Workspace},
+    view::{
+        item::ItemRoute,
+        workspace::{AddRoute, Workspace, window_workspace},
+    },
 };
 
 /// What an ended run offers.
@@ -123,29 +126,26 @@ impl LifecycleDialog {
         });
     }
 
-    pub(super) fn in_workspace(
+    /// Closes the dialog and runs `f` on the window's workspace, giving
+    /// what it gives; `None` with no workspace.
+    pub(super) fn in_workspace<R>(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        f: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>),
-    ) {
+        f: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) -> R,
+    ) -> Option<R> {
         self.close(window, cx);
-        let Some(Some(root)) = window.root::<Root>() else {
-            return;
-        };
-        let Ok(workspace) = root.read(cx).view().clone().downcast::<Workspace>() else {
-            return;
-        };
-        workspace.update(cx, |workspace, cx| f(workspace, window, cx));
+        let workspace = window_workspace(window, cx)?;
+        Some(workspace.update(cx, |workspace, cx| f(workspace, window, cx)))
     }
 
-    /// Open repository details: Settings › Repositories, checking the
-    /// repository (L1's `Inspect`).
-    pub(super) fn inspect_button(&self, cx: &Context<Self>) -> AnyElement {
+    /// Open repository details, not primary: the Add repository sheet,
+    /// checking the repository (L1's `Inspect`; Wave 04 Cycle 05a AW-4).
+    pub(super) fn inspect_button(&self, cx: &Context<Self>) -> (bool, AnyElement) {
         let go = self.on(cx, |dialog, window, cx| {
             if let Some(root) = dialog.root().map(|root| root.to_path_buf()) {
                 dialog.in_workspace(window, cx, move |workspace, window, cx| {
-                    workspace.inspect_in_settings(root, window, cx)
+                    workspace.show_add_repository(AddRoute::Inspect(root), None, window, cx)
                 });
             }
         });

@@ -130,6 +130,7 @@ pub(in crate::desktop::view) fn running_accepted(
         lane: Lane::User,
         attempt: 1,
         state: RequestState::Queued,
+        registered_root: None,
     };
     let event = ProgressEvent {
         request_id: request.request_id.to_string(),

@@ -5,8 +5,9 @@
 //! `settings_sheet`), which leaves whatever the region shows as it was
 //! (R-31). One sheet is open at a time, and `SheetOwner` says whose it is.
 
-use super::{ContentArea, Region, Workspace};
+use super::{ContentArea, Region, Workspace, add_sheet::AddClose};
 use crate::desktop::{
+    assets::APP_ICON_PATH,
     model::{
         navigation::OpenTarget,
         stamp::{RepoKey, SettingsPage, TabId},
@@ -14,6 +15,7 @@ use crate::desktop::{
     services::{drafts::NewItem, requests::DesktopRequestId},
     view::{
         close_draft::{self, Ask, CloseWithDraft},
+        conflict::ResolveSheet,
         drafts::DraftsEvent,
         item::{ChipField, ItemPane, Leaving, open_details},
         scroll::ContentScroll,
@@ -23,9 +25,9 @@ use crate::desktop::{
 };
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt, WeakEntity, Window,
+    StatefulInteractiveElement, Styled, StyledImage, TestSupportExt, WeakEntity, Window,
     component::{WindowExt, v_flex},
-    div,
+    div, img, px,
 };
 use manyhands::{drafts::DraftId, repository::transport::SshAuthority};
 use std::{collections::BTreeSet, path::PathBuf};
@@ -33,8 +35,11 @@ use std::{collections::BTreeSet, path::PathBuf};
 /// The item area with no tab shown and no repository chosen (R-15).
 pub(crate) const NOTHING_SELECTED: &str = "Select a repository.";
 /// The item area with no tab shown and a repository chosen: `04`'s empty
-/// pane, without its icon until Cycle 05 (R-15; decision 13).
+/// pane, under its icon (R-15; decision 13; Wave 04 Cycle 05a Part E).
 pub(crate) const OPEN_FROM_THE_LISTS: &str = "Open a ticket or document from the lists";
+/// The empty pane's app icon: 56 px, at 35% opacity (`04`; Part E).
+const EMPTY_ICON_SIZE: f32 = 56.;
+const EMPTY_ICON_OPACITY: f32 = 0.35;
 
 enum ContentPage {
     Tabs,
@@ -47,6 +52,10 @@ pub(super) enum SheetOwner {
     Details(WeakEntity<ItemPane>),
     /// Settings (Part B).
     Settings,
+    /// The Add repository sheet (Wave 04 Cycle 05a B1).
+    AddRepository,
+    /// Resolve conflict (Wave 04 Cycle 05b B1).
+    Resolve(WeakEntity<ResolveSheet>),
 }
 
 impl ContentArea {
@@ -123,21 +132,31 @@ impl Workspace {
     /// repository a tab's create asked for: the identity form, where its
     /// initials are set. While a dialog is open the request waits, as D1's
     /// actions do not act behind one; the frame after the dialog closes
-    /// opens it.
+    /// opens it. While Resolve conflict is open, Drafts and the identity
+    /// form wait too, and open once it closes (Wave 04 Cycle 05b R-25).
     pub(super) fn apply_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
         }
-        // Dropped while Settings owns the sheet: nothing pulls focus behind
-        // it (R-34).
+        let resolve = self.resolve_open(window, cx);
+        // Dropped while Settings, the Add repository sheet or Resolve
+        // conflict owns the sheet: nothing pulls focus behind it (R-34;
+        // Wave 04 Cycle 05a R-24; Wave 04 Cycle 05b R-25).
         if std::mem::take(&mut self.content.refocus)
-            && !matches!(self.content.sheet, Some(SheetOwner::Settings))
+            && !resolve
+            && !matches!(
+                self.content.sheet,
+                Some(SheetOwner::Settings | SheetOwner::AddRepository)
+            )
         {
             self.focus_region(Region::Content, window, cx);
         }
         // Dropped behind the details sheet, never kept for its close (N2).
         if std::mem::take(&mut self.content.landed_refocus) && !window.has_active_sheet(cx) {
             self.focus_region(Region::Content, window, cx);
+        }
+        if resolve {
+            return;
         }
         if let Some(id) = self.content.review.take() {
             self.open_drafts(Some(id), window, cx);
@@ -218,15 +237,6 @@ impl Workspace {
         self.show_settings(SettingsRoute::Manage(root), None, window, cx);
     }
 
-    pub(crate) fn inspect_in_settings(
-        &mut self,
-        root: PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.show_settings(SettingsRoute::Inspect(root), None, window, cx);
-    }
-
     pub(crate) fn identity_in_settings(
         &mut self,
         root: PathBuf,
@@ -268,34 +278,47 @@ impl Workspace {
     }
 
     /// Keeps the sheet its owner holds open, and closes any other (design
-    /// A1). Settings is kept whatever item is shown; once the Kit has closed
-    /// it, `settings_closed` runs. A details sheet is kept while its tab is
-    /// the one shown, and closes once it is not: closed, left, or another
-    /// item opened from the sheet (fact 80); Root then gives focus back to
-    /// the chip, or, when the chip went with its tab, the content region
-    /// takes it. A details sheet a chip asked for opens while its tab is
-    /// shown and no dialog is open, and never over Settings.
+    /// A1). Settings and the Add repository sheet are kept whatever item is
+    /// shown; once the Kit has closed one, `settings_closed` or
+    /// `add_closed(Kept)` runs (Wave 04 Cycle 05a B1). Resolve conflict is
+    /// kept whatever item is shown too, and once it has closed its owner is
+    /// cleared; focus is already where its close put it (Wave 04 Cycle 05b
+    /// B1). A details sheet is kept while its tab is the one shown, and
+    /// closes once it is not: closed, left, or another item opened from the
+    /// sheet (fact 80); Root then gives focus back to the chip, or, when the
+    /// chip went with its tab, the content region takes it. A details sheet
+    /// a chip asked for opens while its tab is shown and no dialog is open,
+    /// and never over Settings, the Add repository sheet or Resolve
+    /// conflict: asked for over one, it is dropped, not kept for its close.
     pub(super) fn sync_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let shown = self.shown_item(cx);
         let active = window.has_active_sheet(cx);
-        let (keep, settings_closed) = match &self.content.sheet {
-            Some(SheetOwner::Settings) => (active, !active),
+        let (keep, settings_closed, add_closed) = match &self.content.sheet {
+            Some(SheetOwner::Settings) => (active, !active, false),
+            Some(SheetOwner::AddRepository) => (active, false, !active),
+            Some(SheetOwner::Resolve(_)) => (active, false, false),
             Some(SheetOwner::Details(owner)) => (
                 active
                     && shown
                         .as_ref()
                         .is_some_and(|pane| *owner == pane.downgrade()),
                 false,
+                false,
             ),
-            None => (false, false),
+            None => (false, false, false),
         };
         if settings_closed {
             self.settings_closed(false, window, cx);
+        } else if add_closed {
+            self.add_closed(AddClose::Kept, window, cx);
         } else if active && !keep {
             window.close_sheet(cx);
         }
         if !window.has_active_sheet(cx)
-            && matches!(self.content.sheet, Some(SheetOwner::Details(_)))
+            && matches!(
+                self.content.sheet,
+                Some(SheetOwner::Details(_) | SheetOwner::Resolve(_))
+            )
         {
             self.content.sheet = None;
         }
@@ -304,7 +327,13 @@ impl Workspace {
         if !settings && self.content.settings.read(cx).is_shown() {
             self.settings_closed(true, window, cx);
         }
-        if settings {
+        // Defensive: the Add sheet's flag is set with no sheet of its own
+        // (B1 case 3). Its quiet close leaves the other owner's sheet alone.
+        let add = matches!(self.content.sheet, Some(SheetOwner::AddRepository));
+        if !add && self.add_flagged() {
+            self.add_closed(AddClose::Quiet, window, cx);
+        }
+        if settings || add || self.resolve_open(window, cx) {
             self.content.details = None;
         } else if !window.has_active_dialog(cx)
             && let Some((pane, field)) = self.content.details.take()
@@ -593,10 +622,11 @@ impl Workspace {
     }
 
     /// Focuses the content region's shown tab, Drafts page or the region
-    /// itself; nothing while Settings is open, behind which nothing takes
-    /// focus (R-34).
+    /// itself; nothing while Settings, the Add repository sheet or Resolve
+    /// conflict is open, behind which nothing takes focus (R-34; Wave 04
+    /// Cycle 05a R-24; Wave 04 Cycle 05b R-25).
     pub(super) fn focus_content(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_open(window, cx) {
+        if self.workspace_sheet_open(window, cx) {
             return;
         }
         let region = || self.regions[Region::Content.index()].clone();
@@ -635,19 +665,32 @@ impl Workspace {
         }
     }
 
-    /// The empty pane's text, with no tab shown (Part F): nothing of the
-    /// repository is drawn in the item area, only what to do next.
+    /// The empty pane, with no tab shown (Part F): the app icon, grey and
+    /// faint, centred above the text (`04`; Wave 04 Cycle 05a Part E).
+    /// Nothing of the repository is drawn in the item area, only what to do
+    /// next.
     fn empty_pane(&self) -> AnyElement {
         let text = match self.navigation.selected_entry() {
             Some(_) => OPEN_FROM_THE_LISTS,
             None => NOTHING_SELECTED,
         };
-        div()
-            .id("item-area-empty")
-            .test_support()
-            .aria_label(text)
-            .text_sm()
-            .child(text)
+        v_flex()
+            .items_center()
+            .gap_3()
+            .child(
+                img(APP_ICON_PATH)
+                    .size(px(EMPTY_ICON_SIZE))
+                    .grayscale(true)
+                    .opacity(EMPTY_ICON_OPACITY),
+            )
+            .child(
+                div()
+                    .id("item-area-empty")
+                    .test_support()
+                    .aria_label(text)
+                    .text_sm()
+                    .child(text),
+            )
             .into_any_element()
     }
 

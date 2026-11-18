@@ -1,6 +1,7 @@
 //! D1's identity details, provenance, named fields, problems and unknown
 //! metadata. An item tab shows them in its details sheet (`sheet`); a
-//! file read by its path has no sheet, so its page keeps them, and names
+//! file read by its path has no such sheet, so its page keeps them (a
+//! nonconforming file's provenance is in its Git details sheet), and names
 //! the file by its kind and ID, or as nonconforming when it has no ID. The
 //! title is the header's, and a context problem the recovery banner's.
 

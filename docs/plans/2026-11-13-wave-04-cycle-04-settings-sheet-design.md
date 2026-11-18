@@ -614,6 +614,22 @@ build a route and pass `None`: `open_settings`, `open_settings_on`,
 callers change only where Part D says. W-5 and W-6 call
 `show_settings(AddRepository, None, …)` directly.
 
+> **Note, Wave 04 Cycle 05a (2026-11-15, design Amendment 4); the text
+> above is unchanged.** Cycle 05a moved Add repository into its own sheet
+> and changed this section's route set (its R-5 and R-6; ledger, Task 4):
+> `SettingsRoute::AddRepository` is renamed `SettingsRoute::AddButton` and
+> lands on Settings' "Add or create a repository…" button
+> (`settings-add-repository`, a Kit button), and `SettingsRoute::Inspect`
+> and `inspect_in_settings` are removed; their callers call
+> `show_add_repository`. W-5 and W-6 no longer call `show_settings`: they
+> open the Add sheet. Ruling 15 of Cycle 05a's ledger also realises R-55's
+> "`Inspect` does not choose": `show_add_repository` records the Repositories
+> panel's selection as Settings' `seen`, through `SettingsHost::saw_panel`
+> (`settings/chosen.rs`), on every open of the Add sheet, so a later plain
+> Settings open does not follow a panel selection made before the sheet
+> opened. Cycle 05a's P4 asserts what the removed P4 `Inspect(root)` row
+> asserted (R-55's Settings-side assertion).
+
 The page methods that focus a field today stop focusing when called from
 `arrive`, and give back the handle instead (fact 10): `manage_root`,
 `ask_again`, the Hosts `check_host` and `set_up_sharing`.
@@ -1141,6 +1157,17 @@ otherwise.
 | W-33 | Repository row action for an attention cause: Choose a key…, Approve host…, Open remote settings… (`repository_menu.rs:251` → `attention.rs:27-63`) | `attend` | as W-23 to W-25 (R-23 applies) | as W-23 to W-25 | as W-23 to W-25 |
 | W-34 | Cycle 03b: an Activity or popover repository-state row's Settings… (S4 Needs fixing; `D/model/activity/states/repositories.rs:78-83`, `:120-126`; `D/model/repository_state.rs:266`) | 03b's `choose_activity` → `row_action` | `Manage(root)` | `Settings(Repositories)` | entry |
 | W-35 | Cycle 03b: an Activity or popover repository-state row's Set up sharing… (S4 This computer, non-SSH; `states/repositories.rs:114-126`; `repository_state.rs:352`, `:357`) | same | `Remotes(root)` | `Settings(Remotes)` | `remote-add-name` |
+
+> **Note, Wave 04 Cycle 05a (2026-11-15, design Amendment 4); the table
+> above is unchanged.** Rows W-5, W-6, W-22 and W-27 moved to the Add
+> repository sheet: W-5 is Cycle 05a's AW-1, W-6 its AW-2, W-22 its AW-4
+> and W-27 its AW-5 (its design B2). They no longer open Settings, so the
+> route and focus columns of those four rows (`AddRepository`, `Inspect(root)`,
+> `Settings(Repositories)`, `add-path`) no longer apply: each opens the Add
+> sheet with focus on its folder field (`add-path`, G1) and, for W-22 and
+> W-27, the folder filled and checked. The Add form's ways in from inside
+> Settings are a new way, AW-3, from the "Add or create a repository…"
+> button (`SettingsRoute::AddButton`). Ledger, Task 4.
 
 **After Cycle 03b,** the triggers of W-12 to W-15 and W-23 to W-29 are
 Activity rows. So are 03b's S4 "Needs attention" repository rows, whose

@@ -318,9 +318,9 @@ impl ItemPane {
             return;
         };
         let followed = cx.subscribe(&dialog, |pane, _, event: &Followed, cx| match event {
-            Followed::Confirmed { request, details } => {
-                pane.repair_confirmed(*request, details, cx)
-            }
+            Followed::Confirmed {
+                request, details, ..
+            } => pane.repair_confirmed(*request, details, cx),
             Followed::Answered(code) => pane.repair_prepared(*code, cx),
         });
         if let Some(repair) = &mut self.repair {
@@ -460,10 +460,18 @@ impl ItemPane {
         }
     }
 
-    /// The view closes, and the file's own text takes the focus.
+    /// The view closes, and the file's own text takes the focus: the read
+    /// view's for a nonconforming file, else the source view's.
     fn close_repair(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.repair = None;
-        if let Some((_, state)) = &self.source {
+        let reads = self
+            .model
+            .item()
+            .rows()
+            .is_some_and(|item| self.nonconforming_file(item));
+        if reads {
+            self.page.focus_read(window, cx);
+        } else if let Some((_, state)) = &self.source {
             state.update(cx, |state, cx| state.focus(window, cx));
         }
         cx.notify();

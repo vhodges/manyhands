@@ -49,7 +49,7 @@ use crate::desktop::{
 
 // The model owns these words (R-41); the dialog keeps its old paths.
 pub(crate) use crate::desktop::model::activity::copy::{
-    CHECK_HOST, OPEN_SHARING_AND_KEYS, STOP, STOPPING, UNLOCK,
+    CHECK_HOST, OPEN_SHARING_AND_KEYS, STOP, STOPPING, UNLOCK, share_main,
 };
 /// A stop at a safe point answered `cancelled` (MH-COLLAB-006).
 pub(crate) const CANCELLATION_FINISHED: &str =
@@ -64,7 +64,7 @@ pub(crate) const REMOVED: &str = "Cancelled before it ran. Nothing was changed."
 /// The run's entry was dismissed from the operation area, and its answer
 /// with it.
 pub(crate) const DISMISSED: &str = "This run was dismissed from Activity.";
-pub(crate) const OPEN_REPOSITORY_DETAILS: &str = "Open repository details";
+pub(crate) const OPEN_REPOSITORY_DETAILS: &str = "Open repository details\u{2026}";
 
 /// The step a stage lights (L3); `None` for a stage before the steps, or
 /// one no lifecycle reports.
@@ -119,7 +119,7 @@ pub(crate) fn steps_by_kind(
     if !local {
         let title = match named {
             Some(remote) => format!("Share {primary} with {remote}"),
-            None => format!("Share {primary}"),
+            None => share_main(primary),
         };
         steps.push(Step::new(StepKey::SharePrimary, title, ""));
     }
@@ -142,7 +142,7 @@ pub(crate) fn running_states(keys: &[StepKey], reached: Option<StepKey>) -> Vec<
 
 /// A way out of an execute result in words, for one with no button here;
 /// `None` for one the dialog offers as a button (Retry, Resume, Continue,
-/// Share main). Repair locally… and Resolve conflict… are buttons beside
+/// Share main). Repair locally… and Review changes… are buttons beside
 /// their words (`repair.rs`), and so are Republish… and Stop and
 /// republish… (`republish.rs`).
 pub(crate) fn guidance(

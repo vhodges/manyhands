@@ -2,8 +2,9 @@
 //! resolve conflict sheet reached from where a conflict is offered, each
 //! part chosen, and Save resolution pressed, by Tab, Enter and Escape only:
 //! no click and no call into the workspace. After each step the walk
-//! asserts where focus is and that it is on screen; in the sheet, that no
-//! region holds it.
+//! asserts where focus is and that it is on screen; in the sheet, that the
+//! Content region holds it, as Root's sheet layer is drawn inside it (Wave
+//! 04 Cycle 05b R-19).
 //!
 //! The local conflict is real (`Fixture::conflict_locally`), and its
 //! resolution runs, so the test waits up to `RESOLVING`. The remote one is
@@ -20,7 +21,7 @@ use manyhands::results::{Outcome, ResultCode};
 
 use super::{Walk, drafts::kit_button};
 use crate::desktop::{
-    model::operations::CONFLICT_BANNER,
+    model::{conflict::BodyChoice, operations::CONFLICT_BANNER},
     services::{
         JobKind,
         requests::{Intent, RequestState},
@@ -28,7 +29,7 @@ use crate::desktop::{
     test_support::fixtures::{Fixture, ticket_path},
     view::{
         activity_support::{list_focused, refresh, row as activity_row},
-        conflict::{KEEPING_MINE, KEEPING_THEIRS},
+        conflict::{CHOSEN, OpenedSheet, PartAt},
         harness::Shell,
         workspace::Region,
     },
@@ -52,17 +53,31 @@ fn choice(id: &'static str, k: usize) -> ElementId {
 }
 
 impl Walk {
+    /// The element `id`, in the open sheet, holds focus and is on screen,
+    /// inside the Content region, which holds it: Root's sheet layer is
+    /// drawn inside it (Wave 04 Cycle 05b R-19; `in_dialog` cannot hold for
+    /// a sheet).
+    fn in_sheet(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) {
+        self.on(id, Region::Content, cx);
+    }
+
     /// Tab, in the open sheet, to `id`, which then holds focus on screen
-    /// while no region does.
+    /// inside the Content region.
     fn tab_in_sheet(&self, id: ElementId, cx: &mut TestAppContext) {
         self.tab_to("tab", id.clone(), cx);
-        self.in_dialog(id, cx);
+        self.in_sheet(id, cx);
     }
 
     /// Once the sheet has read the conflict, Save resolution is drawn
     /// disabled, and Tab passes it by. Tab reaches the title's choice
-    /// `pick`, and Enter chooses it: the part says so.
-    async fn choose_by_keyboard(&self, pick: &'static str, says: &str, cx: &mut TestAppContext) {
+    /// `pick`, and Enter chooses it: the part says "Chosen", and the sheet's
+    /// model holds `kept` (R-20).
+    async fn choose_by_keyboard(
+        &self,
+        pick: &'static str,
+        kept: BodyChoice,
+        cx: &mut TestAppContext,
+    ) {
         self.until_drawn("conflict-save", cx).await;
         assert_eq!(
             self.shell.label("conflict-progress", cx).as_deref(),
@@ -80,7 +95,17 @@ impl Walk {
         );
         assert_eq!(
             self.shell.label(("conflict-choice", 0usize), cx).as_deref(),
-            Some(says)
+            Some(CHOSEN)
+        );
+        let sheet = cx
+            .update(|cx| {
+                cx.try_global::<OpenedSheet>()
+                    .and_then(|opened| opened.0.upgrade())
+            })
+            .expect("the sheet is open");
+        assert_eq!(
+            sheet.read_with(cx, |sheet, _| sheet.choice_of(PartAt::Field(0))),
+            Some(kept)
         );
     }
 
@@ -147,7 +172,7 @@ async fn resolve_a_local_conflict_by_keyboard(cx: &mut TestAppContext) {
     );
     walk.choose_review(cx);
 
-    walk.choose_by_keyboard("conflict-keep-theirs", KEEPING_THEIRS, cx)
+    walk.choose_by_keyboard("conflict-keep-theirs", BodyChoice::Theirs, cx)
         .await;
     let sent = walk.shell.requests(cx, |request| {
         matches!(request.intent, Intent::LocalContextResolve { .. })
@@ -158,7 +183,7 @@ async fn resolve_a_local_conflict_by_keyboard(cx: &mut TestAppContext) {
         .backend
         .hold_job_return(JobKind::LocalContextResolve);
     walk.save_by_keyboard(cx);
-    walk.in_dialog("conflict-sheet", cx);
+    walk.in_sheet("conflict-sheet", cx);
     gate.release();
     walk.until_the_sheet_closes(cx).await;
     let resolve = walk.shell.requests(cx, |request| {
@@ -253,9 +278,9 @@ async fn resolve_a_shared_conflict_by_keyboard(cx: &mut TestAppContext) {
     walk.enter(cx);
     walk.sheet_drawn("conflict-save", cx).await;
     assert!(!walk.shell.present("conflict-read-again", cx));
-    walk.in_dialog("conflict-sheet", cx);
+    walk.in_sheet("conflict-sheet", cx);
 
-    walk.choose_by_keyboard("conflict-keep-mine", KEEPING_MINE, cx)
+    walk.choose_by_keyboard("conflict-keep-mine", BodyChoice::Mine, cx)
         .await;
     let gate = walk
         .shell
@@ -263,7 +288,7 @@ async fn resolve_a_shared_conflict_by_keyboard(cx: &mut TestAppContext) {
         .hold_job_return_answering(JobKind::ConflictResolve, applied());
     walk.save_by_keyboard(cx);
     gate.wait_reached();
-    walk.in_dialog("conflict-sheet", cx);
+    walk.in_sheet("conflict-sheet", cx);
     gate.release();
     walk.until_the_sheet_closes(cx).await;
     walk.shell

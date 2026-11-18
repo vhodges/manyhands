@@ -3,6 +3,7 @@
 pub(crate) mod activity;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) mod activity_support;
+pub(crate) mod add_repository;
 pub(crate) mod close_draft;
 pub(crate) mod confirm;
 pub(crate) mod conflict;
@@ -16,6 +17,7 @@ mod editing_privacy_tests;
 pub(crate) mod editor;
 pub(crate) mod find;
 pub(crate) mod footer;
+pub(crate) mod frame;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) mod harness;
 pub(crate) mod item;

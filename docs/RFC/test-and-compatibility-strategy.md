@@ -182,7 +182,7 @@ following, in addition to retaining the Wave 1 gate:
   cancellation, unavailable or unsupported keys, imported-key non-deletion, and
   generated-key protection/deletion recovery.
 - Successful authenticated fetch and push with the selected key; rejection of a
-  wrong, absent, default, or SSH-agent key; first-contact host approval; changed
+  wrong, absent, or default key, and an agent that holds the selected key signing for it and no other key; first-contact host approval; changed
   host replacement; and redaction of all credential and remote response data.
 - Two disposable clones synchronizing one shared context branch, including
   already-current, fast-forward, clean merge, conflict, explicit resolution,

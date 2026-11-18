@@ -1,5 +1,6 @@
 //! A Kit button whose focus is a handle its page owns (Wave 04 Cycle 04,
-//! the final review of Part D's landings).
+//! the final review of Part D's landings), in Settings and in the Add
+//! repository sheet (Wave 04 Cycle 05a B12).
 //!
 //! The Kit's `Button` takes no focus handle from its caller. It keeps its
 //! own as element state keyed by its ID, tracks it only while enabled, and
@@ -27,8 +28,9 @@
 use std::any::type_name;
 
 use gpui_kit::{
-    App, ElementId, FocusHandle, IntoElement, RenderOnce, SharedString, Window,
-    component::button::Button,
+    App, ElementId, FocusHandle, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    SharedString, StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    component::button::Button, div,
 };
 
 use super::{Wrapped, wrapped};
@@ -60,6 +62,31 @@ pub(crate) fn wrapped_kit(
         button,
     };
     wrapped(id, label, &held, scroll, button)
+}
+
+/// `wrapped_kit` for a button outside every scrolled region, as a sheet's
+/// footer is (Wave 04 Cycle 05a B10, B12): the same handle and wrapper, and
+/// no scroll marker, which would scroll a body the button is not in.
+pub(crate) fn footer_kit(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    focus: &FocusHandle,
+    button_id: impl Into<ElementId>,
+    button: Button,
+) -> Wrapped {
+    let held = focus.clone().tab_stop(false);
+    let button = KitButton {
+        id: button_id.into(),
+        focus: focus.clone(),
+        button,
+    };
+    div()
+        .id(id)
+        .test_support()
+        .aria_label(label)
+        .relative()
+        .track_focus(&held)
+        .child(button)
 }
 
 impl RenderOnce for KitButton {

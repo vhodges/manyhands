@@ -13,7 +13,10 @@
 //! back to the Discard that opened it; only Confirm discards.
 //!
 //! Neither dialog opens while quitting waits for drafts or a job, with
-//! Quit now in view, nor over another dialog.
+//! Quit now in view, nor over another dialog. The Discard dialog is on the
+//! common frame (Wave 04 Cycle 05a design A3): its title in the Kit's
+//! title slot, its message in the body and Cancel and Discard in the
+//! footer, the body element's last child.
 
 use std::{
     future::Future,
@@ -29,7 +32,7 @@ use gpui_kit::{
         WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm as DialogConfirm,
-        h_flex, v_flex,
+        v_flex,
     },
     div,
 };
@@ -38,7 +41,10 @@ use manyhands::drafts::{Draft, DraftError, DraftErrorKind, DraftFields, DraftId}
 use crate::desktop::{
     model::drafts::{DraftRow, RowState},
     services::Services,
-    view::confirm::CANCEL,
+    view::{
+        confirm::CANCEL,
+        frame::{self, Footer, Header},
+    },
 };
 
 pub(crate) const EXPORT: &str = "Export…";
@@ -46,6 +52,8 @@ pub(crate) const EXPORT_RAW: &str = "Export raw…";
 pub(crate) const EXPORTED: &str = "Draft exported";
 pub(crate) const NOT_EXPORTED: &str = "Draft not exported";
 pub(crate) const DISCARD_TITLE: &str = "Discard a draft";
+/// The header's title: the dialog's title, as the Kit's title slot drew it.
+const DISCARD_TITLE_ID: &str = "discard-draft-title";
 pub(crate) const DISCARD_CONFIRM: &str = "Discard";
 /// A Restore met by another process's claim: perhaps only a passing probe
 /// of its lock, so it may be tried again.
@@ -238,12 +246,18 @@ pub(crate) fn open_discard_saying(
         return;
     }
     let confirm: Confirm = Rc::new(confirm);
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let close = origin.clone();
-        base.title(DISCARD_TITLE)
+        let header = Header {
+            icon: None,
+            title: DISCARD_TITLE.into(),
+            description: None,
+            ids: (DISCARD_TITLE_ID, None),
+        };
+        frame::dialog(base, header, cx)
             .close_button(false)
             .overlay_closable(false)
-            .child(discard_body(&message, &confirm))
+            .child(discard_body(&message, &confirm, cx))
             // Enter: Cancel, the default; the Kit closes the dialog.
             .on_ok(|_, _, _| true)
             // Escape: close with nothing discarded.
@@ -276,37 +290,42 @@ fn dialog_button(
         .child(button.on_click(move |event, window, cx| on_click(event, window, cx)))
 }
 
-fn discard_body(message: &str, confirm: &Confirm) -> impl IntoElement + use<> {
+fn discard_body(message: &str, confirm: &Confirm, cx: &App) -> impl IntoElement + use<> {
     let confirm = confirm.clone();
+    let content = v_flex().child(
+        div()
+            .id("discard-draft-message")
+            .test_support()
+            .aria_label(message.to_owned())
+            .text_sm()
+            .child(message.to_owned()),
+    );
+    // The safe choice is the first Tab stop: one stray Tab and Enter keeps
+    // the draft.
+    let buttons = vec![
+        dialog_button("discard-draft-cancel", CANCEL, |_, window, cx| {
+            window.close_dialog(cx)
+        })
+        .into_any_element(),
+        dialog_button(
+            "discard-draft-confirm",
+            DISCARD_CONFIRM,
+            move |_, window, cx| {
+                window.close_dialog(cx);
+                confirm(window, cx);
+            },
+        )
+        .into_any_element(),
+    ];
     v_flex()
         .id("discard-draft-dialog")
         .test_support()
-        .gap_2()
-        .child(
-            div()
-                .id("discard-draft-message")
-                .test_support()
-                .aria_label(message.to_owned())
-                .text_sm()
-                .child(message.to_owned()),
-        )
-        .child(
-            h_flex()
-                .gap_2()
-                // The safe choice is the first Tab stop: one stray Tab and
-                // Enter keeps the draft.
-                .child(dialog_button(
-                    "discard-draft-cancel",
-                    CANCEL,
-                    |_, window, cx| window.close_dialog(cx),
-                ))
-                .child(dialog_button(
-                    "discard-draft-confirm",
-                    DISCARD_CONFIRM,
-                    move |_, window, cx| {
-                        window.close_dialog(cx);
-                        confirm(window, cx);
-                    },
-                )),
-        )
+        .child(frame::body(content))
+        .child(frame::footer(
+            Footer {
+                hint: None,
+                buttons,
+            },
+            cx,
+        ))
 }

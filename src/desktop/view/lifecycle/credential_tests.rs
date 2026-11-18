@@ -154,7 +154,11 @@ async fn a_refused_key_offers_unlock_and_sharing_and_keys(cx: &mut TestAppContex
 
 /// A provider call for the key `key_id` in flight on a plain thread, as
 /// the worker makes one (D4's `outcomes_route_tests`).
-fn ask(shell: &Shell, key_id: SharedKeyId, cx: &mut TestAppContext) -> Receiver<&'static str> {
+pub(super) fn ask(
+    shell: &Shell,
+    key_id: SharedKeyId,
+    cx: &mut TestAppContext,
+) -> Receiver<&'static str> {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("key");
     fs::write(&path, b"opaque fixture bytes").unwrap();

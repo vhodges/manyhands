@@ -45,8 +45,8 @@ pub(crate) use entry::Entry;
 use std::path::PathBuf;
 
 use gpui_kit::{
-    App, AppContext, Context, Entity, EntityId, FocusHandle, ParentElement, Subscription, Task,
-    Window, component::WindowExt, px,
+    App, AppContext, Context, Entity, EntityId, FocusHandle, ParentElement, Styled, Subscription,
+    Task, Window, component::WindowExt, div,
 };
 use manyhands::{
     canonical::ItemId,
@@ -66,16 +66,18 @@ use crate::desktop::{
     },
     view::{
         editor::set_exact,
+        frame,
         lifecycle::{Heading, Reopen},
     },
 };
 
 pub(crate) const SAVE_RESOLUTION: &str = "Save resolution";
 /// The sheet's entry points (B5): the conflict banner's, the operation
-/// area's and a pending row's. The words live in the model (R-44).
-pub(crate) use crate::desktop::model::activity::copy::REVIEW_CHANGES;
+/// area's and a pending row's. The words live in the model (R-44), with a
+/// part's Chosen and Edited and the Keep mine of its choices (R-16).
+pub(crate) use crate::desktop::model::activity::copy::{CHOSEN, EDITED, KEEP_MINE, REVIEW_CHANGES};
 pub(crate) const RETRY: &str = "Retry";
-pub(crate) const RESUME: &str = "Resume";
+pub(crate) use crate::desktop::model::activity::copy::RESUME;
 pub(crate) const CANCEL: &str = "Cancel";
 pub(crate) const READ_AGAIN: &str = "Read again";
 pub(crate) const READING: &str = "Reading the conflict\u{2026}";
@@ -97,10 +99,19 @@ pub(crate) const EARLIER_USED: &str =
 pub(crate) const NOT_SENT_AGAIN: &str = "The earlier resolution could not be sent again.";
 /// A part's choice, or that it has none yet.
 pub(crate) const CHOOSE_ONE: &str = "Choose one";
-pub(crate) const KEEPING_MINE: &str = "Keeping yours";
-pub(crate) const KEEPING_THEIRS: &str = "Keeping theirs";
-pub(crate) const KEEPING_BOTH: &str = "Keeping both";
-pub(crate) const KEEPING_EDITED: &str = "Keeping the result as edited";
+/// The accessible name of a part's chosen choice: its label, then that it
+/// is chosen, which the Kit's `selected` style and its check show only on
+/// screen (B5, K-8). Its label on screen stays the choice's own.
+pub(crate) fn chosen_choice(label: &str) -> String {
+    format!("{label}, {}", CHOSEN.to_lowercase())
+}
+/// What a part's card says of the kind of detail it holds, by the kind of
+/// the item at its path (B5).
+pub(crate) const TICKET_DETAIL: &str = "Ticket detail";
+pub(crate) const DOCUMENT_DETAIL: &str = "Document detail";
+pub(crate) const COMMENT_DETAIL: &str = "Comment detail";
+/// Before's label's note (B5).
+pub(crate) const LAST_SHARED_COPY: &str = "last shared copy";
 /// A part only one side changed is taken from it (R-5).
 pub(crate) const TAKEN_THEIRS: &str = "Only theirs changed it; theirs is kept.";
 pub(crate) const TAKEN_MINE: &str = "Only yours changed it; yours is kept.";
@@ -165,7 +176,9 @@ impl SheetSource {
     }
 }
 
-/// What opening the sheet takes.
+/// What opening the sheet takes. Cloned by the route that carries it from
+/// an item tab to the workspace (`ItemRoute::Resolve`).
+#[derive(Clone)]
 pub(crate) struct Opening {
     pub source: SheetSource,
     pub root: PathBuf,
@@ -186,9 +199,15 @@ pub(crate) struct Opening {
     pub origin: FocusHandle,
 }
 
-/// Opens the sheet. `None` while quitting, or while drafts are being saved
-/// for it: nothing opens in front of Quit now.
-pub(crate) fn open(
+/// The sheet's narrowest width, `05`'s.
+const WIDTH: f32 = 920.;
+
+/// Opens the sheet on the right of the window, on Root's one sheet layer
+/// (Wave 04 Cycle 05b B2): `Workspace::show_resolve` does, and owns it.
+/// `None` while quitting, or while drafts are being saved for it: nothing
+/// opens in front of Quit now. Escape and the Kit's close button close it,
+/// and focus goes back to the origin; the scrim does not (decision 9).
+pub(in crate::desktop::view) fn open(
     opening: Opening,
     services: &Services,
     window: &mut Window,
@@ -200,20 +219,38 @@ pub(crate) fn open(
     let origin = opening.origin.clone();
     let sheet = cx.new(|cx| ResolveSheet::new(opening, services.clone(), window, cx));
     let opened = sheet.clone();
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_sheet(cx, move |kit, window, cx| {
         let origin = origin.clone();
-        base.w(px(920.))
-            .close_button(false)
+        let width = frame::sheet_width(window, WIDTH);
+        // The header and the footer, read at each render, as the body is.
+        let (header, footer) = sheet.update(cx, |sheet, cx| {
+            (sheet.header_slot(cx), sheet.footer_slot(cx))
+        });
+        kit.size(width)
             .overlay_closable(false)
-            .child(sheet.clone())
-            // Enter is the Result editor's newline, or a focused button's.
-            .on_ok(|_, _, _| false)
-            .on_cancel(|_, _, _| true)
+            .title(header)
+            .footer(footer)
+            // The Kit's body grows with what it holds and scrolls on a
+            // handle of its own. Laid over it, out of its flow, the sheet
+            // keeps its own scroll, and the header and footer stay put
+            // (R-12).
+            .child(div().absolute().inset_0().child(sheet.clone()))
             .on_close(move |_, window, cx| window.focus(&origin, cx))
     });
     #[cfg(all(test, feature = "desktop-test-support"))]
     cx.set_global(OpenedSheet(opened.downgrade()));
     Some(opened)
+}
+
+/// A part of the sheet, as `("conflict-choice", k)` and
+/// `("conflict-body-choice", path)` number it.
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[derive(Clone, Copy)]
+pub(crate) enum PartAt {
+    /// The `k`th field, counted across every path.
+    Field(usize),
+    /// The body of the path at this index.
+    Body(usize),
 }
 
 /// The sheet last opened, for a test to read what it holds.
@@ -253,12 +290,20 @@ pub(crate) struct ResolveSheet {
     /// once a local resolution applies (B6, P9).
     reopen: Option<Reopen>,
     origin: FocusHandle,
-    /// The sheet's own focus: a control that goes or is disabled while it
-    /// holds focus (Save resolution while its request waits, Read again
-    /// once its read lands) gives focus back here, the nearest focusable
-    /// that held it (`Workspace::focus_lost`), so it stays in the sheet
-    /// (A21).
+    /// The sheet's own focus, which `conflict-sheet` tracks and the sheet
+    /// opens on (Wave 04 Cycle 05b H1). A body control that goes or is
+    /// disabled while it holds focus (a choice while a save is out, Read
+    /// again once its read lands) gives focus back here, its nearest
+    /// tracked ancestor, through `Workspace::focus_lost`; a footer press
+    /// (Save resolution, Retry) focuses it first, through `on_footer`, so
+    /// the control going with the press leaves focus here (A21; B3).
+    /// `keep_focus_in_resolve` brings focus taken behind the sheet back
+    /// here.
     focus: FocusHandle,
+    /// The footer's own focus, which its slot tracks: a footer control that
+    /// goes gives focus back here, not to the Kit's host (Wave 04 Cycle 05b
+    /// B3).
+    footer_focus: FocusHandle,
     services: Services,
     generations: Generations,
     read: Option<Task<()>>,
@@ -328,6 +373,7 @@ impl ResolveSheet {
             reopen: None,
             origin: opening.origin,
             focus: cx.focus_handle(),
+            footer_focus: cx.focus_handle(),
             services,
             generations: Generations::default(),
             read: None,
@@ -365,6 +411,12 @@ impl ResolveSheet {
     /// `reopen` (P9).
     pub(crate) fn reopen_after(&mut self, reopen: Reopen) {
         self.reopen = Some(reopen);
+    }
+
+    /// The sheet's own focus, which `conflict-sheet` tracks: focused as the
+    /// sheet opens (Wave 04 Cycle 05b H1).
+    pub(in crate::desktop::view) fn own_focus(&self) -> &FocusHandle {
+        &self.focus
     }
 
     /// Reads the item's work folder, for Open folder (B4): an entry point
@@ -609,9 +661,34 @@ impl ResolveSheet {
         self.operation_id
     }
 
+    /// Whether the lifecycle dialog opens again once a local resolution
+    /// applies (`reopen_after`).
+    pub(crate) fn reopens(&self) -> bool {
+        self.reopen.is_some()
+    }
+
     /// The folder Open folder opens.
     pub(crate) fn folder(&self) -> &std::path::Path {
         &self.folder
+    }
+
+    /// The model's choice of `part`, which the state word "Chosen" no
+    /// longer tells (R-20). A field's Keep mine or Keep theirs reads as the
+    /// body's.
+    pub(crate) fn choice_of(&self, part: PartAt) -> Option<BodyChoice> {
+        let ConflictSet::Canonical(paths) = self.model.as_ref()?.set() else {
+            return None;
+        };
+        match part {
+            PartAt::Field(k) => {
+                let part = paths.iter().flat_map(|path| path.fields()).nth(k)?;
+                part.choice.map(|choice| match choice {
+                    Choice::Mine => BodyChoice::Mine,
+                    Choice::Theirs => BodyChoice::Theirs,
+                })
+            }
+            PartAt::Body(path) => paths.get(path)?.body()?.choice,
+        }
     }
 
     /// The observation of the conflict as last read.
@@ -666,3 +743,7 @@ mod repair_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "conflict/lifecycle_resume_tests.rs"]
 mod lifecycle_resume_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "conflict/copy_tests.rs"]
+mod copy_tests;

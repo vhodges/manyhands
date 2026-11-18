@@ -182,7 +182,8 @@ impl Walk {
 /// The tab strip, then the header's Comments and Edit, then every chip,
 /// then the page, by Tab; and all the way back by Shift-Tab, into the
 /// strip's other tab. The header's unavailable actions take no focus. A
-/// document's chips run the same way.
+/// document's chips run the same way; one on main offers no Approve and
+/// merge…, as it has nothing to merge.
 #[gpui_kit::test]
 fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
     let walk = chipped(cx);
@@ -237,7 +238,6 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
     walk.tab_to("tab", "item-edit", cx);
     for id in [
         "item-share",
-        "item-lifecycle-action",
         "chip-status",
         "chip-author",
         "chip-date",
@@ -253,7 +253,6 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
         "chip-date",
         "chip-author",
         "chip-status",
-        "item-lifecycle-action",
         "item-share",
         "item-edit",
     ] {

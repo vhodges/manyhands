@@ -616,6 +616,21 @@ fn approve_and_merge_is_live_on_a_document(cx: &mut TestAppContext) {
     );
 }
 
+/// A document read from the primary branch, with no working copy of its
+/// own, has nothing to merge: its header offers no Approve and merge….
+#[gpui_kit::test]
+fn a_document_on_main_offers_no_approve_and_merge(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        let source = format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {DOCUMENT}\ntitle: On main\n---\nBody.\n"
+        );
+        fixture.commit_file(root, "docs/main.md", source.as_bytes());
+    });
+    open(&shell, document(&root, DOCUMENT), cx);
+    assert_eq!(shell.label("item-title", cx).as_deref(), Some("On main"));
+    assert!(!shell.present(LIFECYCLE_ACTION, cx));
+}
+
 /// A ticket the lifecycle closed (its closure says `closed`) offers no
 /// Close ticket…, while an open one beside it does (A1).
 #[gpui_kit::test]
@@ -847,7 +862,7 @@ fn a_nonconforming_item_shows_needs_fixing_with_repair_offered(cx: &mut TestAppC
 
     assert_eq!(shell.label("item-path", cx), Some(entry.path.clone()));
     assert!(shell.present("item-nonconforming", cx));
-    assert!(shell.present("item-source", cx));
+    assert!(shell.present("item-read", cx));
     assert!(!shell.present(ChipField::All.id(), cx));
 
     // Enabled: pressed, it opens the repair view, and writes nothing.
