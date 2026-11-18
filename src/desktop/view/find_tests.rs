@@ -20,7 +20,9 @@ use crate::desktop::{
     services::{ReadFailure, ReadKind},
     test_support::fixtures::{Fixture, item_id},
     view::{
+        activity_support::{act, pending_key},
         harness::{Shell, key},
+        operations::ABANDON,
         workspace::Region,
     },
 };
@@ -498,7 +500,8 @@ fn find_does_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     fixture.create_ticket(&a, OPEN, "Stranded", "open");
     let _operation = fixture.strand_ticket_save(&a, OPEN, "Edited");
     let shell = Shell::open(fixture, cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    let pending = pending_key(&shell, &key(&a), "save_ticket", cx);
+    act(&shell, &pending, ABANDON, cx);
     assert!(shell.present("confirm-dialog", cx));
     shell.keys("secondary-p", cx);
     assert!(!input_focused(&shell, cx));

@@ -14,7 +14,10 @@ use crate::desktop::{
         requests::{DesktopRequestId, Intent, Lane, PathResolution, RequestState},
         resolutions::{Followed, Followup, KeptSet, ResolutionStore, ResolutionStoreError},
     },
-    view::lifecycle::{follow_resume, reopen_repaired},
+    view::{
+        lifecycle::{follow_resume, reopen_repaired},
+        workspace::window_workspace,
+    },
 };
 
 impl ResolveSheet {
@@ -346,14 +349,35 @@ impl ResolveSheet {
     /// Running, then how it ends, never the earlier run: when that resume
     /// names the request that holds the lifecycle, the drain sends that
     /// request again (D5 Part C, `Resends`), and the dialog follows it (E-16,
-    /// owner 2026-11-05).
-    pub(super) fn applied(
+    /// owner 2026-11-05). Under a dialog (an Unlock prompt over the sheet)
+    /// the rest waits in the workspace until none is open, which then runs
+    /// this again (Wave 04 Cycle 05b R-26). A sheet the workspace no longer
+    /// keeps, closed by Escape before the answer landed, does nothing more,
+    /// under a dialog or not: it leaves the open sheet's waiting close
+    /// alone, no focus moves, and no lifecycle dialog opens again (R-22,
+    /// R-27).
+    pub(in crate::desktop::view) fn applied(
         &mut self,
         resolution: RequestId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.close(window, cx);
+        if window.has_active_dialog(cx) {
+            let sheet = cx.entity();
+            if let Some(workspace) = window_workspace(window, cx) {
+                workspace.update(cx, |workspace, cx| {
+                    // A stale sheet's answer waits for nothing: it would
+                    // replace the open sheet's waiting close.
+                    if workspace.keeps_resolve(&sheet, window, cx) {
+                        workspace.wait_to_close_resolve(sheet.downgrade(), resolution, cx)
+                    }
+                });
+            }
+            return;
+        }
+        if !self.close(window, cx) {
+            return;
+        }
         // A local resolution its Repair locally… led to: the lifecycle
         // dialog again, on its way on (B6, P9).
         if let (SheetSource::Local, Some(reopen)) = (self.source, self.reopen.take()) {
@@ -425,9 +449,23 @@ impl ResolveSheet {
         );
     }
 
-    pub(super) fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.close_dialog(cx);
-        window.focus(&self.origin, cx);
+    /// The one way the sheet closes itself: Cancel, Resume and an applied
+    /// resolution. It closes only while the workspace keeps this sheet
+    /// (`Workspace::close_resolve`, R-22), and gives whether it did; on
+    /// false the caller does nothing more (R-27). The Kit's `close_sheet`
+    /// runs no `on_close`, so focus goes back to the origin here (Wave 04
+    /// Cycle 05b B3).
+    pub(super) fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let sheet = cx.entity();
+        let closed = window_workspace(window, cx).is_some_and(|workspace| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.close_resolve(&sheet, window, cx)
+            })
+        });
+        if closed {
+            window.focus(&self.origin, cx);
+        }
+        closed
     }
 }
 

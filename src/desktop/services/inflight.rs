@@ -181,7 +181,7 @@ pub(crate) enum Acquired {
 
 /// Something about the record the person should hear of once (Activity shows
 /// it).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Report {
     /// The record could not be read. It was set aside, not deleted, and
     /// replaced.

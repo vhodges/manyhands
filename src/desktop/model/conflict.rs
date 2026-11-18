@@ -18,6 +18,7 @@
 
 mod lines;
 mod merge;
+pub(crate) mod names;
 
 use std::path::Path;
 

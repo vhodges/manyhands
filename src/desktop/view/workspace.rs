@@ -1,6 +1,12 @@
 //! The main window's state and subscriptions. Private implementation children
 //! own its transitions; sibling views render through queries and named actions.
 
+mod activity;
+mod activity_facts;
+mod activity_menu;
+mod activity_more;
+mod activity_panel;
+mod add_sheet;
 mod content;
 mod docks;
 mod find;
@@ -10,20 +16,21 @@ mod footer_status;
 mod layout_notices;
 mod lifecycle;
 mod lists;
+mod needs_attention;
 mod render;
 mod repositories;
 mod repository_menu;
 mod requests;
+mod resolve_sheet;
+mod settings_sheet;
 mod titles;
 
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
+use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
-    AppContext, Context, Entity, FocusHandle, Subscription, Task, WeakEntity, Window,
+    App, AppContext, Context, Entity, FocusHandle, Subscription, Task, WeakEntity, Window,
     component::{
+        Root,
         dock::DockArea,
         input::{InputEvent, InputState},
         list::ListEvent,
@@ -55,12 +62,11 @@ use crate::desktop::{
     },
     services::{Services, pending_conflicts::PendingConflict},
 };
+pub(in crate::desktop::view) use add_sheet::AddRoute;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use focus::REGIONS;
 pub(crate) use focus::Region;
 pub(in crate::desktop::view) use focus::ToolbarButton;
-#[cfg(all(test, feature = "desktop-test-support"))]
-use gpui_kit::App;
 use manyhands::drafts::DraftId;
 pub(in crate::desktop::view) use render::{modal_open, unless_dialog};
 
@@ -86,9 +92,12 @@ struct ContentArea {
     /// A chip's request for its tab's details sheet, for the next frame to
     /// open.
     details: Option<(WeakEntity<ItemPane>, ChipField)>,
-    /// The tab whose details sheet is open: the sheet closes once another
-    /// is shown.
-    sheet: Option<WeakEntity<ItemPane>>,
+    /// Who keeps Root's sheet open: Settings, or the tab whose details
+    /// sheet it is, which closes once another is shown.
+    sheet: Option<content::SheetOwner>,
+    /// Resolve conflict's applied resolution that landed under a dialog,
+    /// whose close waits for none to be open (Wave 04 Cycle 05b R-26).
+    resolve_waiting: Option<resolve_sheet::ResolveWaiting>,
 }
 
 pub(crate) struct Workspace {
@@ -138,10 +147,19 @@ pub(crate) struct Workspace {
     toolbar_focus: [FocusHandle; ToolbarButton::ALL.len()],
     _find_events: Subscription,
     content: ContentArea,
-    /// The operation area's scroll: a control in it that takes focus is
-    /// brought into view (E-2), sharing the focus the content region saw.
-    operations_scroll: super::scroll::ContentScroll,
     _settings_events: Subscription,
+    /// The origin Cycle 03b's `choose_activity` gives for the length of one
+    /// handler call: where focus goes back when that handler opens Settings
+    /// (Wave 04 Cycle 04 design A2, "The origin"; R-43).
+    settings_origin: Option<FocusHandle>,
+    /// The region of the control Settings, or the Add repository sheet,
+    /// opened from, recorded at the open and armed by its close: a lost
+    /// focus goes there when that control is no longer drawn (design A3;
+    /// R-45; Wave 04 Cycle 05a B3 step 3).
+    settings_return: settings_sheet::SettingsReturn,
+    /// The Add repository sheet, its open and the adds it confirmed (Wave 04
+    /// Cycle 05a B1 to B4, B10).
+    add: add_sheet::AddState,
     _drafts_events: Subscription,
     /// Fallback when the control holding focus is no longer drawn.
     last_region: Option<Region>,
@@ -164,10 +182,6 @@ pub(crate) struct Workspace {
     /// Each repository's read of them; a newer read drops the last.
     pending_conflict_reads: HashMap<RepoKey, Task<()>>,
     conflict_generations: Generations,
-    abandon_focus: HashMap<(RepoKey, String), FocusHandle>,
-    abandon_drawn: HashSet<(RepoKey, String)>,
-    control_focus: HashMap<String, FocusHandle>,
-    control_drawn: HashSet<String>,
     /// The items a Retire… press is in progress for, by repository and item
     /// ID: a second press waits (E4), unless the press is waiting on a
     /// question that no longer stands.
@@ -200,6 +214,10 @@ pub(crate) struct Workspace {
         Vec<(super::operations::republish::Republishing, FocusHandle)>,
     /// The titles of what a repository has not shared yet, and their reads.
     share_titles: titles::ShareTitles,
+    /// Activity's log, refreshed at each point that changes a row (A4).
+    activity: activity::ActivityState,
+    /// The Needs attention popover (E2).
+    attention: needs_attention::AttentionState,
 }
 
 impl Workspace {
@@ -214,12 +232,16 @@ impl Workspace {
         let operations = cx.observe_in(services.operations(), window, |this, _, window, cx| {
             this.operations_changed(window, cx)
         });
-        let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
+        let drafts = cx.observe(services.drafts(), |this, _, cx| {
+            cx.notify();
+            this.refresh_activity(cx);
+        });
         // What the scheduler holds back for the person is drawn in Activity
         // (D6 C3): its entries change with its answers, not with a request.
         cx.observe(services.scheduler(), |this, _, cx| {
             cx.notify();
             this.read_share_titles(cx);
+            this.refresh_activity(cx);
         })
         .detach();
         let focus_lost = cx.on_focus_lost(window, |this, window, cx| this.focus_lost(window, cx));
@@ -281,7 +303,6 @@ impl Workspace {
             }
         });
         let tabs = TabContent::default();
-        let operations_scroll = tabs.scroll().region();
         let settings = {
             let services = services.clone();
             let scroll = tabs.scroll().clone();
@@ -291,10 +312,14 @@ impl Workspace {
             &settings,
             window,
             |this, _, event: &SettingsEvent, window, cx| match event {
-                SettingsEvent::Closed => this.focus_region(Region::Content, window, cx),
-                SettingsEvent::ShowActivity => this.focus_region(Region::Operations, window, cx),
+                SettingsEvent::ShowActivity => this.settings_show_activity(window, cx),
+                // AW-3: the Add repository sheet in Settings' place (B11).
+                SettingsEvent::AddRepository => {
+                    this.show_add_repository(AddRoute::New, None, window, cx)
+                }
             },
         );
+        let add = add_sheet::AddState::new(services.clone(), tabs.scroll(), window, cx);
         let drafts_page = {
             let services = services.clone();
             let scroll = tabs.scroll().clone();
@@ -345,7 +370,6 @@ impl Workspace {
                 .collect(),
             toolbar_focus: std::array::from_fn(|_| cx.focus_handle()),
             _find_events: find_events,
-            operations_scroll,
             content: ContentArea {
                 tabs,
                 settings,
@@ -356,8 +380,12 @@ impl Workspace {
                 landed_refocus: false,
                 details: None,
                 sheet: None,
+                resolve_waiting: None,
             },
             _settings_events: settings_events,
+            settings_origin: None,
+            settings_return: Default::default(),
+            add,
             _drafts_events: drafts_events,
             last_region: Some(start),
             window_title: String::new(),
@@ -370,10 +398,6 @@ impl Workspace {
             pending_conflicts: HashMap::new(),
             pending_conflict_reads: HashMap::new(),
             conflict_generations: Generations::default(),
-            abandon_focus: HashMap::new(),
-            abandon_drawn: HashSet::new(),
-            control_focus: HashMap::new(),
-            control_drawn: HashSet::new(),
             retire_asked: HashMap::new(),
             _operations: operations,
             _drafts: drafts,
@@ -389,6 +413,8 @@ impl Workspace {
             stopping_to_republish: Vec::new(),
             republish_deferred: Vec::new(),
             share_titles: Default::default(),
+            activity: activity::ActivityState::new(cx),
+            attention: needs_attention::AttentionState::new(cx),
         };
         workspace.load_repositories(cx);
         workspace
@@ -396,9 +422,6 @@ impl Workspace {
 
     pub(crate) fn services(&self) -> &Services {
         &self.services
-    }
-    pub(in crate::desktop::view) fn operations_scroll(&self) -> &super::scroll::ContentScroll {
-        &self.operations_scroll
     }
     pub(crate) fn navigation(&self) -> &Navigation {
         &self.navigation
@@ -481,6 +504,16 @@ impl Workspace {
     pub(crate) fn tickets_list_focus(&self, cx: &App) -> FocusHandle {
         gpui_kit::Focusable::focus_handle(self.tickets_pane.list().read(cx), cx)
     }
+}
+
+/// The window's workspace: the view Root shows. `None` in a window whose
+/// view is something else.
+pub(in crate::desktop::view) fn window_workspace(
+    window: &Window,
+    cx: &App,
+) -> Option<Entity<Workspace>> {
+    let root = window.root::<Root>()??;
+    root.read(cx).view().clone().downcast::<Workspace>().ok()
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]

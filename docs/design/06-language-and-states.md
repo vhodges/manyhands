@@ -18,6 +18,7 @@ The owner's decision was **plain language everywhere; Git details only on hover 
 | Ticket closure lifecycle | **Close ticket…** → steps Save / Share / Merge / Mark as closed / Tidy up | Dialog |
 | Document promotion | **Approve and merge…** | Dialog |
 | Branch + worktree cleanup | **Tidy up** | Dialog |
+| Completed-context retirement (a closed or promoted item's branch + worktree removed from this computer; Wave 04 Cycle 03b, 2026-11-13) | "Retired the copy of … on this computer" | Activity |
 | Nonconforming item | **Needs fixing** · specific reason + fix action | Rows, banner |
 | Unmanaged document | "Not a managed document yet" · **Adopt…** | Tree, banner |
 | Index refresh / rebuild | "Refresh" / "Rebuild the search index" | Repos ⋯ menu |
@@ -27,11 +28,13 @@ The owner's decision was **plain language everywhere; Git details only on hover 
 | Passphrase prompt | **Unlock your key** | Dialog |
 | Recovery required | **Needs attention** | Footer, Attention, state pill |
 
+*Amended 2026-11-13 by Wave 04 Cycle 03b: Activity's full copy, row by row, is Wave 04 Cycle 03b's design Part B.*
+
 ## Writing rules
 
 - Always reassure about data: when something fails, say that the work is safe and where it is ("Your saved work is still on this computer").
 - Name the item, the repository and the step on every failure (PRD).
-- Each failure gets **one obvious next action** (Retry now, Unlock…, Review changes, Set up sharing).
+- Each failure gets **one obvious next action** (Retry now, Unlock…, Review changes…, Set up sharing). *Amended 2026-11-15 by Wave 04 Cycle 05b (its decision 5): "Review changes…" takes the ellipsis, as it opens a sheet.*
 - Use people's names from Git identity ("Jo Smith"), not emails.
 - No exclamation marks, no emoji, sentence case, ellipsis (…) on any action that opens a confirmation or sheet.
 - Counts use real numbers ("2 to share", "3 need attention"); never vague words like "some".

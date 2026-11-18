@@ -14,8 +14,8 @@ use futures::channel::oneshot;
 use gpui_kit::{ElementId, FocusHandle, Keystroke, TestAppContext};
 use manyhands::{
     repository::{
-        ItemContextKind, ItemDto, ItemDtoKind, ProgressStage, RequestId, SharedKeyId,
-        keys::UnlockReason,
+        FailurePoint, ItemContextKind, ItemDto, ItemDtoKind, ProgressStage, RepositoryService,
+        RequestId, SharedKeyId, keys::UnlockReason,
     },
     results::{Outcome, ResultCode},
 };
@@ -35,7 +35,10 @@ use crate::desktop::{
     view::{
         harness::{Shell, key},
         item::LIFECYCLE_ACTION,
-        lifecycle::{ENDING_DONE, ENDING_STOPPED, KEEP_LOCAL, SHARING_PENDING, TIDIED_UP, merged},
+        lifecycle::{
+            DONE, ENDING_DONE, ENDING_STOPPED, KEEP_LOCAL, NOT_NOW, SHARING_PENDING, TIDIED_UP,
+            merged,
+        },
         passphrase::open_dialog,
         workspace::Region,
     },
@@ -146,9 +149,15 @@ impl Walk {
     /// before it, and Tab comes back.
     fn reach_the_action(&self, id: &str, label: &str, cx: &mut TestAppContext) {
         self.select_a_repository(cx);
+        self.reach_the_action_in(id, label, 0, cx);
+    }
+
+    /// `reach_the_action` with the repository already chosen, the item
+    /// opening as the strip's tab `tab`.
+    fn reach_the_action_in(&self, id: &str, label: &str, tab: usize, cx: &mut TestAppContext) {
         self.find(id, cx);
         self.keys("secondary-3", cx);
-        self.on(("tab", 0usize), Region::Content, cx);
+        self.on(("tab", tab), Region::Content, cx);
         self.tab_to("tab", LIFECYCLE_ACTION, cx);
         self.on(LIFECYCLE_ACTION, Region::Content, cx);
         assert_eq!(
@@ -410,9 +419,13 @@ async fn a_prompt_over_a_pressed_confirm_gives_focus_back_to_the_dialog(cx: &mut
         reason: UnlockReason::ProtectedKey,
         reply,
     };
+    let services = walk
+        .shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().clone());
     walk.shell.visual(cx).update(|window, cx| {
         window.dispatch_keystroke(Keystroke::parse("enter").unwrap(), cx);
-        open_dialog(prompt, window, cx);
+        open_dialog(prompt, &services, window, cx);
     });
     walk.shell.run(cx);
     assert_eq!(
@@ -433,4 +446,97 @@ async fn a_prompt_over_a_pressed_confirm_gives_focus_back_to_the_dialog(cx: &mut
     held.release();
     let sent = walk.lifecycles(cx);
     walk.shell.until_ended(sent[0], cx).await;
+}
+
+/// P13 (Wave exit), real local-only: a close and an approval that fail,
+/// retried by keyboard to Done. The library's failure point
+/// `BeforeRequestDomainCall` fails each first run with `internal_error`
+/// once it is accepted, and the dialog offers Retry after Not now (A7). The
+/// normal service is put back without moving the branch; Tab and Enter on
+/// Retry send the same request again, which finishes. Tab reaches Done,
+/// and Enter on it closes the dialog; neither item offers its action any
+/// more, the closed ticket no Close ticket… and the merged document, now
+/// on main, no Approve and merge…, so focus is in the content region, on
+/// its tab.
+#[gpui_kit::test]
+async fn a_failed_run_is_retried_by_keyboard(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let walk = walk(cx, |fixture, a| {
+        fixture.commit_ticket(a, TICKET, "Untitled", "");
+        fixture.refresh(a);
+        fixture.save_ticket(a, TICKET, "Failing");
+        fixture.create_document(a, DOCUMENT, "docs/plan.md", "Plan");
+    });
+    let commands = [(TICKET, CLOSE_TICKET), (DOCUMENT, APPROVE_AND_MERGE)];
+    for (tab, (id, label)) in commands.into_iter().enumerate() {
+        walk.shell.backend.replace_service(
+            RepositoryService::open_at_with_failure_point_for_testing(
+                walk.shell.fixture.data_dir(),
+                FailurePoint::BeforeRequestDomainCall,
+            )
+            .unwrap(),
+        );
+        if tab == 0 {
+            walk.reach_the_action(id, label, cx);
+        } else {
+            walk.reach_the_action_in(id, label, tab, cx);
+        }
+        walk.open_the_dialog(cx).await;
+        walk.tab_to_control("lifecycle-confirm", cx);
+        walk.enter(cx);
+        let sent = walk.lifecycles(cx)[0];
+        walk.shell.until_ended(sent, cx).await;
+        assert_eq!(
+            walk.outcome(sent, cx).map(|(_, code)| code),
+            Some(ResultCode::InternalError),
+            "{label}: the failure point"
+        );
+        walk.until_drawn(kit("lifecycle-retry"), cx).await;
+        walk.tab_to_control("lifecycle-cancel", cx);
+        assert_eq!(
+            walk.shell.label("lifecycle-cancel", cx).as_deref(),
+            Some(NOT_NOW),
+            "{label}"
+        );
+
+        walk.shell
+            .backend
+            .replace_service(RepositoryService::open_at(walk.shell.fixture.data_dir()).unwrap());
+        walk.tab_to_control("lifecycle-retry", cx);
+        walk.enter(cx);
+        walk.in_dialog("lifecycle-dialog", cx);
+        let retried = walk.lifecycles(cx)[0];
+        assert_ne!(retried, sent, "{label}: Retry sent it again");
+        assert_eq!(
+            walk.request_id(retried, cx),
+            walk.request_id(sent, cx),
+            "{label}: under the same request ID"
+        );
+        walk.shell.until_ended(retried, cx).await;
+        assert_eq!(
+            walk.outcome(retried, cx),
+            Some((Outcome::Success, ResultCode::Ok)),
+            "{label}"
+        );
+        assert_eq!(walk.ending(cx).await.as_deref(), Some(ENDING_DONE));
+
+        walk.tab_to_control("lifecycle-cancel", cx);
+        assert_eq!(
+            walk.shell.label("lifecycle-cancel", cx).as_deref(),
+            Some(DONE),
+            "{label}"
+        );
+        walk.enter(cx);
+        assert!(
+            !walk.shell.present("lifecycle-dialog", cx),
+            "{label}: Enter on Done closes it"
+        );
+        // Ruling O-6: a closed ticket offers no Close ticket… any
+        // more, nor a merged document, now on main, Approve and
+        // merge…, so the origin is not drawn. Done gives focus back to
+        // it, and D5's `focus_lost` fallback, unchanged (A8), keeps it
+        // in the content region, on the item's tab.
+        assert!(!walk.shell.present(LIFECYCLE_ACTION, cx), "{label}");
+        walk.on(("tab", tab), Region::Content, cx);
+    }
 }

@@ -2,10 +2,9 @@
 
 use super::{QuitPhase, Region, Workspace};
 use crate::desktop::{
-    model::{layout::PanelKind, stamp::TabId},
+    model::{activity::rows::RowKey, layout::PanelKind, stamp::TabId},
     services::{prompts::PromptReply, requests::DesktopRequestId, worker::QuitState},
     view::{
-        operations::draft_flush_id,
         passphrase::open_dialog,
         quit::{DraftsNotSaved, EditsNotKept, NotSavedChoice},
     },
@@ -88,6 +87,8 @@ impl Workspace {
         }
         self.hold_prompt(window, cx);
         window.close_all_dialogs(cx);
+        self.close_settings_quietly(window, cx);
+        self.close_resolve_quietly(window, cx);
         let workspace = cx.entity().downgrade();
         EditsNotKept {
             count: unkept.len(),
@@ -218,15 +219,17 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Quitting waits: every dialog and the details sheet close, no sheet a
-    /// chip asked for opens over it, and Quit now takes focus. Closing the
-    /// sheet gives focus back to its chip, so Quit now is focused after it.
-    /// Quit now lives in Activity: with Activity not displayed focus stays
-    /// where the closing left it, and the layout is untouched (R-20).
+    /// Quitting waits: every dialog, Settings (quietly, R-52), Resolve
+    /// conflict (quietly, O-10) and the details sheet close, no sheet a
+    /// chip asked for opens over it, and Quit now takes focus. Closing a sheet gives focus back to what held
+    /// it as the sheet opened, so Quit now is focused after it. Quit now
+    /// lives in Activity: with Activity not displayed focus stays where the
+    /// closing left it, and the layout is untouched (R-20).
     fn wait_to_quit(&mut self, phase: QuitPhase, window: &mut Window, cx: &mut Context<Self>) {
         self.set_quit(phase, cx);
         window.close_all_dialogs(cx);
         self.content.details = None;
+        self.close_settings_quietly(window, cx);
         self.content.sheet = None;
         if window.has_active_sheet(cx) {
             window.close_sheet(cx);
@@ -275,6 +278,7 @@ impl Workspace {
         let failed: Vec<DraftId> = failed.into_iter().map(|(id, _)| id).collect();
         let workspace = cx.entity().downgrade();
         window.close_all_dialogs(cx);
+        self.close_settings_quietly(window, cx);
         DraftsNotSaved {
             count: failed.len(),
         }
@@ -315,9 +319,10 @@ impl Workspace {
                 if !self.layout.is_displayed(PanelKind::Activity) {
                     self.focus_region(Region::Content, window, cx);
                 } else if let Some(id) = first {
-                    let retry = self.control_focus_for(draft_flush_id(id, "retry"), cx);
-                    window.focus(&retry, cx);
-                    self.last_region = Some(Region::Operations);
+                    // The failed draft's Flush row is highlighted, and the
+                    // list focused (C3).
+                    self.activity.pane.highlight_when_shown(&RowKey::Flush(id));
+                    self.focus_region(Region::Operations, window, cx);
                 }
                 // A prompt held meanwhile shows once this dialog has
                 // closed (the Kit closes the top one); closing it gives the
@@ -374,7 +379,7 @@ impl Workspace {
             prompt.answer(PromptReply::Unavailable);
             return;
         }
-        self.passphrase = Some(open_dialog(prompt, window, cx));
+        self.passphrase = Some(open_dialog(prompt, &self.services, window, cx));
         cx.notify();
     }
 

@@ -13,19 +13,25 @@ use manyhands::{
     results::ResultCode,
 };
 
+use super::REVIEW_CHANGES;
 use super::{
     ResolveSheet, SheetSource,
     entry_tests::{opened_on, row_of, ticket_shell},
     tests::{TICKET, code, opened, until_long, until_present},
 };
 use crate::desktop::{
+    model::activity::rows::RowKey,
     services::{
         JobKind,
         requests::{DesktopRequestId, Intent, Lane},
     },
     test_support::fixtures::item_id,
     view::{
-        harness::Shell, item::LIFECYCLE_ACTION, lifecycle::REPAIR_LOCALLY, operations::request_id,
+        activity_support::{act, offered, refresh, row, until_offered},
+        harness::Shell,
+        item::LIFECYCLE_ACTION,
+        lifecycle::REPAIR_LOCALLY,
+        operations::{OPEN_LIFECYCLE, RESUME},
     },
 };
 
@@ -150,7 +156,10 @@ async fn repair_locally_syncs_and_opens_the_sheet_on_conflict(cx: &mut TestAppCo
 
     // Re-review 3: the applied local resolution clears the
     // synchronization's entry's Review changes.
-    assert!(!shell.present(request_id(syncs[0], "review"), cx));
+    let entry = RowKey::Request(syncs[0]);
+    refresh(&shell, cx);
+    assert!(row(&shell, &entry, cx).is_some(), "the entry stays listed");
+    assert!(offered(&shell, &entry, REVIEW_CHANGES, cx).is_none());
 
     // Then Retry (P9): the dialog again, on the same close.
     until_present(&shell, "lifecycle-retry", cx).await;
@@ -183,7 +192,7 @@ async fn a_refused_local_sync_shows_its_answer_and_resume(cx: &mut TestAppContex
     shell.keys("escape", cx);
     assert!(!shell.present("conflict-sheet", cx));
 
-    shell.click(request_id(close, "open"), cx);
+    act(&shell, &RowKey::Request(close), OPEN_LIFECYCLE, cx);
     until_present(&shell, "lifecycle-repair-locally", cx).await;
     shell.click("lifecycle-repair-locally", cx);
     until_present(&shell, "lifecycle-repair-code", cx).await;
@@ -199,13 +208,15 @@ async fn a_refused_local_sync_shows_its_answer_and_resume(cx: &mut TestAppContex
     shell.keys("escape", cx);
 
     let operation = listed_local_sync(&shell, &root);
-    let row = row_of(&shell, "context_sync_local", cx).await;
-    until_present(&shell, ("pending-review", row), cx).await;
-    assert!(shell.present(("pending-resume", row), cx));
-    let close_row = row_of(&shell, "close", cx).await;
-    assert!(!shell.present(("pending-review", close_row), cx));
+    let pending = row_of(&shell, &root, "context_sync_local", cx).await;
+    until_offered(&shell, &pending, REVIEW_CHANGES, cx).await;
+    assert!(offered(&shell, &pending, RESUME, cx).is_some_and(|offer| offer.enabled));
+    let close_row = row_of(&shell, &root, "close", cx).await;
+    refresh(&shell, cx);
+    assert!(row(&shell, &close_row, cx).is_some(), "the close's row");
+    assert!(offered(&shell, &close_row, REVIEW_CHANGES, cx).is_none());
 
-    shell.click(("pending-resume", row), cx);
+    act(&shell, &pending, RESUME, cx);
     let resumed = shell.requests(cx, move |request| {
         matches!(request.intent, Intent::OperationResume { operation_id, .. }
             if operation_id == operation)
@@ -218,8 +229,9 @@ async fn a_refused_local_sync_shows_its_answer_and_resume(cx: &mut TestAppContex
         "still conflicted"
     );
     // M3: the resume stopped on the conflict, whose entry offers it.
-    until_present(&shell, request_id(resumed[0], "review"), cx).await;
-    shell.click(request_id(resumed[0], "review"), cx);
+    let stopped = RowKey::Request(resumed[0]);
+    until_offered(&shell, &stopped, REVIEW_CHANGES, cx).await;
+    act(&shell, &stopped, REVIEW_CHANGES, cx);
     let sheet = until_opened(&shell, cx).await;
     assert_eq!(
         opened_on(&sheet, cx).0,
@@ -310,8 +322,9 @@ async fn repair_locally_waits_for_a_queued_sync(cx: &mut TestAppContext) {
         code(shell, sync, cx).is_some()
     })
     .await;
-    until_present(&shell, request_id(sync, "review"), cx).await;
-    shell.click(request_id(sync, "review"), cx);
+    let stopped = RowKey::Request(sync);
+    until_offered(&shell, &stopped, REVIEW_CHANGES, cx).await;
+    act(&shell, &stopped, REVIEW_CHANGES, cx);
     let sheet = until_opened(&shell, cx).await;
     assert_eq!(
         opened_on(&sheet, cx),

@@ -136,6 +136,13 @@ pub(crate) struct Scheduler {
     /// pending-operations read that began before the last move may predate
     /// it (`reconcile`).
     pub(super) entry_epoch: u64,
+    /// The failed Check nows whose answer `check_failed` applied to the
+    /// schedule (Activity N4; R-58). A request is added when its answer
+    /// moved the repository, never computed from the code.
+    pub(super) checks_applied: BTreeSet<DesktopRequestId>,
+    /// Each failed Check now `check_failed` heard, with its repository and the
+    /// repository's completed attempts at that moment (N22 clause 4).
+    pub(super) checks_heard: BTreeMap<DesktopRequestId, (Root, u64)>,
 }
 
 impl Scheduler {
@@ -179,7 +186,23 @@ impl Scheduler {
             marked: BTreeMap::new(),
             sent: BTreeMap::new(),
             entry_epoch: 0,
+            checks_applied: BTreeSet::new(),
+            checks_heard: BTreeMap::new(),
         }
+    }
+
+    /// Whether `check_failed` applied the failed Check now `id`'s answer to
+    /// the schedule (Activity's `RequestFacts.check_applied`; N4, R-58).
+    pub(crate) fn check_applied(&self, id: DesktopRequestId) -> bool {
+        self.checks_applied.contains(&id)
+    }
+
+    /// Whether the repository of the failed Check now `id` has applied a
+    /// completed attempt since `check_failed` heard it (N22 clause 4).
+    pub(crate) fn check_superseded(&self, id: DesktopRequestId) -> bool {
+        self.checks_heard
+            .get(&id)
+            .is_some_and(|(root, heard)| self.schedule.completed_attempts(root) > *heard)
     }
 
     /// The schedule: what each polled repository's status and attention

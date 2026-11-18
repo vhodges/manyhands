@@ -38,8 +38,7 @@ const SUSPENDED_NOTE: &str = "automatic polls are suspended for recovery, and po
 /// sending the same one gets this answer back, or is no help.
 const NEW_REQUEST_NOTE: &str = "polling again takes a new request.";
 const HOST_NOTE: &str = "once the host is approved or replaced, polling again takes a new request.";
-const UNLOCK_NOTE: &str =
-    "polling again takes a new request, made at a terminal, where it can ask for the passphrase.";
+const UNLOCK_NOTE: &str = "polling again takes a new request, made at a terminal, where it can ask for the passphrase, or once the key is loaded in ssh-agent (ssh-add), which needs no passphrase.";
 const KEY_NOTE: &str = "once a usable key is selected, polling again takes a new request.";
 const REMOTE_NOTE: &str =
     "once a publication remote is selected, polling again takes a new request.";

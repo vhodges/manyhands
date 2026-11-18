@@ -144,6 +144,7 @@ pub(in crate::desktop::view) fn finish(
             lane: Lane::User,
             attempt: 1,
             state: RequestState::Queued,
+            registered_root: None,
         }));
         operations.apply(WorkerEvent::Finished(
             DesktopRequestId(id),

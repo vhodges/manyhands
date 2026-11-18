@@ -117,10 +117,14 @@ pub(in crate::desktop::view) enum ToolbarButton {
     AddRepository,
     CheckAll,
     RepositoriesMore,
+    /// Activity's filter (C1).
+    ActivityFilter,
+    /// Activity's ⋯ menu (C1).
+    ActivityMore,
 }
 
 impl ToolbarButton {
-    pub(in crate::desktop::view) const ALL: [Self; 7] = [
+    pub(in crate::desktop::view) const ALL: [Self; 9] = [
         Self::NewTicket,
         Self::NewDocument,
         Self::NewFolder,
@@ -128,6 +132,8 @@ impl ToolbarButton {
         Self::AddRepository,
         Self::CheckAll,
         Self::RepositoriesMore,
+        Self::ActivityFilter,
+        Self::ActivityMore,
     ];
 
     /// The element's id: the body buttons' ids for the three New buttons.
@@ -140,6 +146,8 @@ impl ToolbarButton {
             Self::AddRepository => "add-repository-button",
             Self::CheckAll => "check-all-button",
             Self::RepositoriesMore => "repositories-more-button",
+            Self::ActivityFilter => "activity-filter-button",
+            Self::ActivityMore => "activity-more-button",
         }
     }
 
@@ -157,6 +165,7 @@ impl ToolbarButton {
             Self::NewTicket => Region::Tickets,
             Self::NewDocument | Self::NewFolder | Self::CollapseAll => Region::Documents,
             Self::AddRepository | Self::CheckAll | Self::RepositoriesMore => Region::Repositories,
+            Self::ActivityFilter | Self::ActivityMore => Region::Operations,
         }
     }
 }
@@ -260,6 +269,7 @@ impl Workspace {
             }
             Region::Tickets if self.tickets.repo().is_some() => self.tickets_pane.focus(window, cx),
             Region::Content => self.focus_content(window, cx),
+            Region::Operations => self.activity.pane.focus(window, cx),
             _ => window.focus(&self.regions[region.index()], cx),
         }
         self.last_region = Some(region);
@@ -274,10 +284,40 @@ impl Workspace {
     /// working (A21).
     pub(super) fn focus_lost(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let target = window.focus_lost_restore_target(cx);
+        // Settings or the Add repository sheet open, with no dialog over
+        // it: focus stays in the sheet.
+        if self.sheet_keeps_lost_focus(target.as_ref(), window, cx) {
+            return;
+        }
         if window.has_active_dialog(cx) || window.has_active_sheet(cx) {
             if let Some(target) = target {
                 window.focus(&target, cx);
             }
+            return;
+        }
+        // Settings closed onto a control no longer drawn: its region.
+        if let Some(region) = self.settings_return.take() {
+            self.focus_region(region, window, cx);
+            return;
+        }
+        // A dialog or menu opened from the popover gave focus back to one of
+        // its handles, which are no longer drawn: focus goes to the footer
+        // item, or E1's control when it has hidden (R-50, U-8). The
+        // Workspace keeps the handles, so the lost focus is still known.
+        // While the popover is still open, the handle was lost with its row
+        // (scrolled out of the list, or gone): focus goes to the popover's
+        // list, so its keys keep working (E2, P25). Every way it closes
+        // clears it first.
+        if window
+            .focused(cx)
+            .is_some_and(|focused| self.attention.handles.owns(&focused))
+        {
+            let target = if self.attention.popover.is_some() {
+                self.attention.handles.list.clone()
+            } else {
+                self.attention_restore_target(cx)
+            };
+            window.focus(&target, cx);
             return;
         }
         // A region that is not displayed cannot take focus: the last

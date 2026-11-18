@@ -16,7 +16,6 @@ use crate::desktop::{
         list_view::{REBUILD_INDEX, REFRESH},
         navigation::OpenTarget,
         repository_state::REMOVE_FROM_MANYHANDS,
-        stamp::SettingsPage,
     },
     services::requests::Intent,
     test_support::fixtures::item_id,
@@ -40,7 +39,7 @@ fn index_requests(
 }
 
 /// The Repositories panel's three buttons (P13, P28, P39, E-11): Add by Tab
-/// and Enter opens Settings > Repositories; `secondary-n` from a button
+/// and Enter opens the Add repository sheet; `secondary-n` from a button
 /// opens nothing; `menu` and `shift-f10` on a button open the chosen
 /// repository's menu, not the Kit cursor's, and Esc returns focus to the
 /// button; More opens its menu below itself and Refresh sends
@@ -63,11 +62,19 @@ pub(super) async fn repositories_toolbar(shell: &Shell, root: &Path, cx: &mut Te
         })
     };
 
-    // Add: its region holds focus with the ring; Enter opens Settings.
+    // Add: its region holds focus with the ring; Enter opens the Add
+    // repository sheet, not Settings (Wave 04 Cycle 05a AW-2; E-7).
     tab_to(shell, ToolbarButton::AddRepository, cx);
     holds_region(shell, Region::Repositories, cx);
     shell.press("enter", cx);
-    assert_eq!(page(cx), Page::Settings(SettingsPage::Repositories));
+    assert_eq!(page(cx), Page::Tabs);
+    assert!(shell.present("add-sheet", cx), "AW-2 opens the Add sheet");
+    assert!(
+        shell.holds_focus("add-path", cx),
+        "AW-2 lands on the Add folder (G1)"
+    );
+    // The sheet closes before the toolbar is used again.
+    shell.keys("escape", cx);
 
     // `secondary-n` from a Repositories button opens nothing (R-14).
     tab_to(shell, ToolbarButton::AddRepository, cx);

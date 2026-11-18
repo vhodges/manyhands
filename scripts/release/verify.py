@@ -58,6 +58,9 @@ def validate_payload(root: Path, release: dict, target: str, *, final: bool = Tr
                 raise ValueError(f"package contains a private key: {path.relative_to(root)}")
     for relative in DISCLOSURES:
         require_file(root, relative)
+    require_file(root, "skills/README.md")
+    if not any(path.is_file() for path in root.glob("skills/*/SKILL.md")):
+        raise ValueError("package is missing its skills")
     manifest = read_release(root / "release.json")
     for key in IDENTITY_KEYS:
         if manifest[key] != release[key]:

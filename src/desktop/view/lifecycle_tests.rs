@@ -24,11 +24,13 @@ use manyhands::{
 
 use super::{
     CONTINUE, HELD_LEAD, LifecycleDialog, OPEN_FOLDER, OpenedLifecycle, STILL_RUNNING,
+    approve_title, close_title,
     prepare::{blocker_words, primary_dirty},
     short_id,
 };
 use crate::desktop::{
     model::{
+        activity::rows::RowKey,
         item::{APPROVE_AND_MERGE, CLOSE_TICKET},
         lifecycle_lock::LockKey,
         navigation::OpenTarget,
@@ -42,6 +44,7 @@ use crate::desktop::{
         snapshot::RepositorySnapshot,
     },
     view::{
+        activity_support::{refresh, row},
         harness::{Shell, key},
         item::{ItemPane, LIFECYCLE_ACTION},
     },
@@ -268,14 +271,12 @@ async fn a_blocked_prepare_lists_blockers_and_way_out(cx: &mut TestAppContext) {
     });
     assert_eq!(share.len(), 1);
     shell.until_ended(share[0], cx).await;
-    assert_eq!(
-        shell
-            .label(
-                crate::desktop::view::operations::request_id(share[0], "command"),
-                cx
-            )
-            .as_deref(),
-        Some("Share trunk")
+    refresh(&shell, cx);
+    let entry = row(&shell, &RowKey::Request(share[0]), cx).expect("the share's entry is listed");
+    assert!(
+        entry.row.detail[0].starts_with("Share trunk"),
+        "{:?}",
+        entry.row.detail
     );
 }
 
@@ -518,9 +519,9 @@ async fn already_closed_runs_nothing(cx: &mut TestAppContext) {
     assert_eq!(RepositorySnapshot::take(&root), before, "nothing changed");
 }
 
-/// A22: the header names the command, the item by its short code (its
-/// short ID when it has none) and title, the repository, and the item's
-/// context branch.
+/// A22: the header names the command in its stage's title, the item by its
+/// short code (its short ID when it has none) and title, and the repository;
+/// the Git line names the item's context branch.
 #[gpui_kit::test]
 async fn the_header_names_item_repository_and_context(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -535,16 +536,13 @@ async fn the_header_names_item_repository_and_context(cx: &mut TestAppContext) {
         .expect("the ticket's own branch");
     shell.click(LIFECYCLE_ACTION, cx);
     until_present(&shell, "lifecycle-confirm", cx).await;
-    assert_eq!(shell.label("lifecycle-kind", cx).as_deref(), Some("ticket"));
-    assert_eq!(
-        shell.label("lifecycle-title", cx).as_deref(),
-        Some("Close ticket")
-    );
+    assert_eq!(shell.label("lifecycle-title", cx), Some(close_title(SLUG)));
     assert_eq!(
         shell.label("lifecycle-subtitle", cx),
         Some(format!("{SLUG} \u{b7} Coded \u{b7} a"))
     );
-    assert_eq!(shell.label("lifecycle-branch", cx), Some(branch));
+    let git = shell.label("lifecycle-git", cx).expect("the Git line");
+    assert!(git.contains(&branch), "{git}");
     shell.keys("escape", cx);
     assert!(!shell.present("lifecycle-dialog", cx));
     assert!(closes(&shell, cx).is_empty(), "Escape runs nothing");
@@ -565,12 +563,8 @@ async fn the_header_names_item_repository_and_context(cx: &mut TestAppContext) {
     shell.click(LIFECYCLE_ACTION, cx);
     until_present(&shell, "lifecycle-title", cx).await;
     assert_eq!(
-        shell.label("lifecycle-kind", cx).as_deref(),
-        Some("document")
-    );
-    assert_eq!(
-        shell.label("lifecycle-title", cx).as_deref(),
-        Some("Approve and merge")
+        shell.label("lifecycle-title", cx),
+        Some(approve_title(&short_id(DOCUMENT)))
     );
     assert_eq!(
         shell.label("lifecycle-subtitle", cx),

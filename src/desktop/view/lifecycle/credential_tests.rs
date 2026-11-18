@@ -33,7 +33,7 @@ use crate::desktop::{
     model::stamp::SettingsPage,
     services::JobKind,
     view::{
-        harness::{Shell, WAIT, wait_until},
+        harness::{MAKE_A_NEW_KEY, Shell, WAIT, wait_until},
         item::LIFECYCLE_ACTION,
         settings::Shown,
     },
@@ -132,6 +132,13 @@ async fn a_refused_key_offers_unlock_and_sharing_and_keys(cx: &mut TestAppContex
                     .workspace
                     .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
                 assert!(matches!(shown, Shown::Settings(SettingsPage::Keys)));
+                assert!(
+                    shell.holds_keys_control(MAKE_A_NEW_KEY, cx),
+                    "W-21 lands on the key list, with no key Make a new key itself (Part D)"
+                );
+                // Settings is a sheet: it closes before the next row reopens
+                // the dialog.
+                shell.keys("escape", cx);
             }
             2 => {
                 assert_eq!(
@@ -147,7 +154,11 @@ async fn a_refused_key_offers_unlock_and_sharing_and_keys(cx: &mut TestAppContex
 
 /// A provider call for the key `key_id` in flight on a plain thread, as
 /// the worker makes one (D4's `outcomes_route_tests`).
-fn ask(shell: &Shell, key_id: SharedKeyId, cx: &mut TestAppContext) -> Receiver<&'static str> {
+pub(super) fn ask(
+    shell: &Shell,
+    key_id: SharedKeyId,
+    cx: &mut TestAppContext,
+) -> Receiver<&'static str> {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("key");
     fs::write(&path, b"opaque fixture bytes").unwrap();

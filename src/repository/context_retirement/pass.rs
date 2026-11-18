@@ -117,10 +117,14 @@ pub(super) struct Candidate {
     pub refusal: Option<String>,
     pub child_request: String,
 }
+/// The canonical JSON a stored pass is compared with, byte for byte, by any
+/// later process. Keys are sorted: Cargo turns on `serde_json`'s
+/// `preserve_order` for the desktop build only, so an object's key order
+/// would otherwise depend on which binary wrote the row.
 pub(super) fn encode<T: serde::Serialize>(v: &T) -> Result<String, RepositoryError> {
-    serde_json::to_value(v)
-        .map(|v| v.to_string())
-        .map_err(|_| recovery_required())
+    let mut value = serde_json::to_value(v).map_err(|_| recovery_required())?;
+    value.sort_all_objects();
+    Ok(value.to_string())
 }
 impl Candidate {
     pub(super) fn decode(s: &str) -> Result<Self, RepositoryError> {

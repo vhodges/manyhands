@@ -34,7 +34,7 @@ use super::{
     tests::{DOCUMENT, TICKET, closes, request, saved_ticket, shell, ticket, until_present},
 };
 use crate::desktop::{
-    model::stamp::SettingsPage,
+    model::activity::rows::{ActivityAction, RowKey},
     services::{
         JobKind,
         requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
@@ -42,9 +42,10 @@ use crate::desktop::{
     },
     test_support::fixtures::item_id,
     view::{
+        activity_support::{act, offered, refresh, row},
         harness::{Shell, key},
         item::LIFECYCLE_ACTION,
-        operations::{recovery_id, request_id},
+        operations::OPEN_LIFECYCLE,
         settings::Shown,
     },
 };
@@ -207,6 +208,7 @@ pub(super) fn finished(
         lane: Lane::User,
         attempt: 1,
         state: RequestState::Queued,
+        registered_root: None,
     };
     shell.operations(cx).update(cx, |operations, cx| {
         operations.apply(WorkerEvent::Queued(request));
@@ -220,7 +222,7 @@ pub(super) fn finished(
 
 /// Opens the dialog on the finished request `id` from its entry's Open….
 pub(super) async fn reopen(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) {
-    shell.click(request_id(id, "open"), cx);
+    act(shell, &RowKey::Request(id), OPEN_LIFECYCLE, cx);
     until_present(shell, "lifecycle-ending", cx).await;
 }
 
@@ -407,10 +409,17 @@ async fn each_way_out_offers_its_button(cx: &mut TestAppContext) {
     shell.click("lifecycle-inspect", cx);
     shell.run(cx);
     assert!(!shell.present("lifecycle-dialog", cx));
+    // The Add repository sheet, checking the repository, not Settings
+    // (Wave 04 Cycle 05a AW-4, decision 13; E-8).
     let shown = shell
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
-    assert!(matches!(shown, Shown::Settings(SettingsPage::Repositories)));
+    assert!(matches!(shown, Shown::Tabs));
+    assert!(shell.present("add-sheet", cx), "AW-4 opens the Add sheet");
+    assert!(
+        shell.holds_focus("add-path", cx),
+        "AW-4 lands on the Add folder (G1)"
+    );
 }
 
 /// P6, canned (decision 9): a remote that refuses the shared branch's
@@ -609,11 +618,24 @@ async fn a_lifecycle_entry_keeps_the_recovery_its_dialog_does_not_own(cx: &mut T
         ),
         cx,
     );
-    assert!(shell.present(request_id(id, "open"), cx));
-    assert!(shell.present(recovery_id(id, 0), cx), "Set identity");
-    assert!(!shell.present(recovery_id(id, 1), cx), "no raw Retry");
+    let entry = RowKey::Request(id);
+    refresh(&shell, cx);
+    let menu = row(&shell, &entry, cx)
+        .expect("the close's entry is listed")
+        .row
+        .menu;
+    let has = |action: ActivityAction| menu.iter().any(|offer| offer.action == action);
     assert!(
-        !shell.present(recovery_id(id, 2), cx),
+        offered(&shell, &entry, OPEN_LIFECYCLE, cx).is_some_and(|offer| offer.enabled),
+        "{menu:?}"
+    );
+    assert!(
+        has(ActivityAction::Recovery(id, 0)),
+        "Set identity: {menu:?}"
+    );
+    assert!(!has(ActivityAction::Recovery(id, 1)), "no raw Retry");
+    assert!(
+        !has(ActivityAction::Recovery(id, 2)),
         "no raw Prepare again"
     );
 }

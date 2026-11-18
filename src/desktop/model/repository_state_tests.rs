@@ -21,6 +21,8 @@ use crate::desktop::{
 };
 use manyhands::results::{ProblemCode, ResultCode};
 
+#[path = "repository_state_tests/causes.rs"]
+mod causes;
 #[path = "repository_state_tests/menus.rs"]
 mod menus;
 #[path = "repository_state_tests/pairs.rs"]

@@ -30,8 +30,8 @@ use manyhands::{
 };
 
 use super::{
-    CHANGED, KEEPING_MINE, KEEPING_THEIRS, OpenedSheet, Opening, ResolveSheet, SAVE_RESOLUTION,
-    SheetSource, TAKEN_THEIRS, open,
+    CHANGED, CHOSEN, KEEP_MINE, OpenedSheet, Opening, PartAt, ResolveSheet, SAVE_RESOLUTION,
+    SheetSource, TAKEN_THEIRS, chosen_choice, render::KEEP_THEIRS,
 };
 use crate::desktop::{
     model::conflict::{BodyChoice, Choice, STANDARD_LAYOUT_NOTE},
@@ -52,7 +52,7 @@ pub(super) const RESOLVING: Duration = Duration::from_secs(90);
 
 /// One repository, `a`, in an open window, with what `build` made in it
 /// before the window opened: a real local conflict's operation.
-pub(super) fn local_shell(
+pub(in crate::desktop::view) fn local_shell(
     cx: &mut TestAppContext,
     build: impl FnOnce(&Fixture, &Path) -> OperationId,
 ) -> (Shell, PathBuf, OperationId) {
@@ -96,7 +96,8 @@ pub(super) fn open_sheet(
 }
 
 /// Opens the sheet as `open_sheet` does, naming `folder` as the item's
-/// work folder (B4's Open folder).
+/// work folder (B4's Open folder). It opens as every way in opens it,
+/// through the workspace's `show_resolve` (Wave 04 Cycle 05b E-1).
 pub(super) fn open_sheet_in(
     shell: &Shell,
     source: SheetSource,
@@ -105,7 +106,6 @@ pub(super) fn open_sheet_in(
     folder: Option<PathBuf>,
     cx: &mut TestAppContext,
 ) -> Entity<ResolveSheet> {
-    let services = services(shell, cx);
     let opening = Opening {
         source,
         root: root.to_owned(),
@@ -117,7 +117,11 @@ pub(super) fn open_sheet_in(
     };
     let sheet = shell
         .visual(cx)
-        .update(|window, cx| open(opening, &services, window, cx))
+        .update(|window, cx| {
+            shell.workspace.update(cx, |workspace, cx| {
+                workspace.show_resolve(opening, window, cx)
+            })
+        })
         .expect("the sheet opens");
     shell.run(cx);
     sheet
@@ -133,14 +137,13 @@ pub(super) fn heading() -> Heading {
         short: SHORT.to_owned(),
         title: Some("Mine".to_owned()),
         repository: "a".to_owned(),
-        branch: None,
         primary: Some("main".to_owned()),
         remote: Some(None),
     }
 }
 
 /// The sheet last opened, while it is open.
-pub(super) fn opened(cx: &mut TestAppContext) -> Option<Entity<ResolveSheet>> {
+pub(in crate::desktop::view) fn opened(cx: &mut TestAppContext) -> Option<Entity<ResolveSheet>> {
     cx.update(|cx| {
         cx.try_global::<OpenedSheet>()
             .and_then(|opened| opened.0.upgrade())
@@ -148,7 +151,7 @@ pub(super) fn opened(cx: &mut TestAppContext) -> Option<Entity<ResolveSheet>> {
 }
 
 /// Draws frames until `id` is drawn.
-pub(super) async fn until_present(
+pub(in crate::desktop::view) async fn until_present(
     shell: &Shell,
     id: impl Into<gpui_kit::ElementId>,
     cx: &mut TestAppContext,
@@ -162,7 +165,7 @@ pub(super) async fn until_present(
 }
 
 /// Waits, past the harness's `WAIT`, until `done` holds of the window.
-pub(super) async fn until_long(
+pub(in crate::desktop::view) async fn until_long(
     shell: &Shell,
     what: &str,
     cx: &mut TestAppContext,
@@ -203,7 +206,7 @@ pub(super) fn request(
 }
 
 /// The request's code, once it has its answer.
-pub(super) fn code(
+pub(in crate::desktop::view) fn code(
     shell: &Shell,
     id: DesktopRequestId,
     cx: &mut TestAppContext,
@@ -261,7 +264,7 @@ pub(crate) fn canned(operation: OperationId, paths: Vec<ConflictPathDto>) -> Con
 
 /// A ticket's path of a canned conflict whose title both sides changed,
 /// and nothing else.
-pub(super) fn canned_path(id: &str, n: char) -> ConflictPathDto {
+pub(in crate::desktop::view) fn canned_path(id: &str, n: char) -> ConflictPathDto {
     let source = |title: &str| same_body(&ticket_source(id, title, ""), title);
     ConflictPathDto {
         display_path: ticket_path(id),
@@ -297,7 +300,7 @@ async fn save_is_disabled_until_every_part_is_chosen(cx: &mut TestAppContext) {
         shell.label("conflict-progress", cx).as_deref(),
         Some("0 of 1 chosen")
     );
-    assert_eq!(shell.rows("conflict-field", cx), ["title"]);
+    assert_eq!(shell.rows("conflict-field", cx), ["Title"]);
     assert_eq!(
         shell.label(("conflict-body-taken", 0usize), cx),
         Some(format!("Description: {TAKEN_THEIRS}"))
@@ -318,15 +321,38 @@ async fn save_is_disabled_until_every_part_is_chosen(cx: &mut TestAppContext) {
         "the notice stays"
     );
     sheet.update(cx, |sheet, _| sheet.notice = None);
+    // A choice's accessible name says so once it is chosen, which its
+    // style and check show only on screen; the others keep their labels.
+    let names = |shell: &Shell, cx: &mut TestAppContext| {
+        (
+            shell.label(("conflict-keep-mine", 0usize), cx),
+            shell.label(("conflict-keep-theirs", 0usize), cx),
+        )
+    };
+    assert_eq!(
+        names(&shell, cx),
+        (Some(KEEP_MINE.to_owned()), Some(KEEP_THEIRS.to_owned())),
+        "nothing chosen yet"
+    );
 
     shell.click(("conflict-keep-theirs", 0usize), cx);
+    assert_eq!(
+        names(&shell, cx),
+        (Some(KEEP_MINE.to_owned()), Some(chosen_choice(KEEP_THEIRS))),
+        "Keep theirs reads as chosen, Keep mine does not"
+    );
     assert_eq!(
         shell.label("conflict-progress", cx).as_deref(),
         Some("1 of 1 chosen")
     );
     assert_eq!(
         shell.label(("conflict-choice", 0usize), cx).as_deref(),
-        Some(KEEPING_THEIRS)
+        Some(CHOSEN)
+    );
+    assert_eq!(
+        sheet.read_with(cx, |sheet, _| sheet.choice_of(PartAt::Field(0))),
+        Some(BodyChoice::Theirs),
+        "Keep theirs was the choice"
     );
     assert_eq!(
         shell.label("conflict-save", cx).as_deref(),
@@ -667,13 +693,23 @@ async fn choices_wait_while_a_save_is_out(cx: &mut TestAppContext) {
     shell.run(cx);
     assert_eq!(
         shell.label(("conflict-choice", 0usize), cx).as_deref(),
-        Some(KEEPING_MINE),
+        Some(CHOSEN),
         "the title is as it was sent"
     );
     assert_eq!(
+        sheet.read_with(cx, |sheet, _| sheet.choice_of(PartAt::Field(0))),
+        Some(BodyChoice::Mine),
+        "the title is still Keep mine"
+    );
+    assert_eq!(
         shell.label(("conflict-body-choice", 0usize), cx).as_deref(),
-        Some(KEEPING_MINE),
+        Some(CHOSEN),
         "the body is as it was sent"
+    );
+    assert_eq!(
+        sheet.read_with(cx, |sheet, _| sheet.choice_of(PartAt::Body(0))),
+        Some(BodyChoice::Mine),
+        "the body is still Keep mine"
     );
     assert_eq!(editor_text(&editor, cx), sent_text, "the Result is as sent");
     assert_eq!(shell.label("conflict-progress", cx), progress);
