@@ -3,7 +3,7 @@ slug: vh-jryd6
 id: 01M7P7ZJHKYP0TR4S8PY364W2K
 title: The desktop cannot open a registry after a featureless CLI writes a poll-retirement pass
 type: defect
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
