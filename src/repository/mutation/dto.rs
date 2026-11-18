@@ -886,7 +886,10 @@ impl PrepareDataDto {
 pub struct BlockerDto {
     pub operation_id: String,
     pub family: OperationFamily,
-    pub action: OperationAction,
+    /// Null only when the answer could not read the operation's row and
+    /// names it by what the wait knew of it: its ID, its family and that
+    /// its holder still worked. Every other field is then null too.
+    pub action: Option<OperationAction>,
     pub item_id: Option<String>,
     pub request_id: Option<String>,
     pub author: Option<String>,
@@ -901,13 +904,30 @@ pub struct BlockerDto {
 }
 
 impl BlockerDto {
+    /// The blocker as the domain knew it alone: its operation and its
+    /// journal, and whether its holder worked. Every other field is null.
+    pub(crate) fn known(blocker: &crate::repository::Blocker) -> Self {
+        Self {
+            operation_id: blocker.operation_id.to_string(),
+            family: blocker.family,
+            action: None,
+            item_id: None,
+            request_id: None,
+            author: None,
+            host: None,
+            pid: None,
+            started_at: None,
+            live: blocker.live,
+        }
+    }
+
     /// The blocker as `operation show` reads `operation`.
     pub(crate) fn of(operation: &crate::repository::OperationDto, fallback_id: String) -> Self {
         let attribution = &operation.attribution;
         Self {
             operation_id: operation.operation_id.clone().unwrap_or(fallback_id),
             family: operation.family,
-            action: operation.action,
+            action: Some(operation.action),
             item_id: operation.item_id.clone(),
             request_id: attribution.request_id.clone(),
             author: attribution.author.clone(),
