@@ -3,7 +3,7 @@ slug: vh-bczc7
 id: 01M6RAS63EWVHWWVBSZ836RXG2
 title: 'Wave 03 D5 follow-ups: structure, test harness and copy'
 type: task
-status: open
+status: superseded
 project: manyhands
 team: core
 manyhands_managed: true
