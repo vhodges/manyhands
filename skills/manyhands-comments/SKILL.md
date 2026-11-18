@@ -46,6 +46,8 @@ manyhands-cli --json --non-interactive comment add --repo <repo-root> --id <ITEM
 
 `--id` names the item the comment is on. `comment add` takes no `--prepare`: it answers `not_confirmable` (exit 2), and per [autonomy](../manyhands-overview/references/autonomy.md) you add comments alone.
 
+Add comments one at a time, never in quick succession and never while another write or sync is running in the repository. Wait for the answer, then run `operation list` before the next comment. The rules, and the request ID file, are in [CLI conventions](../manyhands-overview/references/cli-conventions.md), "Your own writes".
+
 ### Replies
 
 A reply names its parent comment. A reply to a reply works, one level deeper each time (the list stays flat).

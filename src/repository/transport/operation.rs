@@ -1,5 +1,6 @@
 //! Prepare, authenticate, recheck, use, and drop one selected-key operation.
 use super::{
+    agent::AgentSigner,
     callbacks::{CallbackAttempt, build_callbacks},
     endpoint::configured_remote_endpoint,
     remote::{AuthenticatedSshRemote, backend_failure},
@@ -108,8 +109,37 @@ impl RepositoryService {
         session.reconcile_source(&unlock);
         let mut use_remote = Some(use_remote);
         let mut may_prompt = false;
+        // An agent that holds the selected key signs for it: no passphrase, no
+        // prompt. Anything else about the agent (unset, unreachable, key absent,
+        // refusing to sign, rejected by the server) leaves today's flow as it
+        // was. A failure that is not about the key (host trust, the network)
+        // would repeat in that flow, so it ends here.
+        if let Ok(signer) = super::agent::lookup(
+            self.agent_socket.as_deref(),
+            &prepared.registration.private_key_path,
+        ) {
+            match self.connect_ssh(
+                &prepared,
+                &context,
+                None,
+                Some(&signer),
+                &mut use_remote,
+                &mut false,
+            ) {
+                Ok(result) => return result,
+                Err(error) if !authentication_failure(&error.kind) => return Err(error),
+                Err(_) => {}
+            }
+        }
         if !cached {
-            match self.connect_ssh(&prepared, &context, None, &mut use_remote, &mut may_prompt) {
+            match self.connect_ssh(
+                &prepared,
+                &context,
+                None,
+                None,
+                &mut use_remote,
+                &mut may_prompt,
+            ) {
                 Ok(result) => return result,
                 // A key stored without a passphrase has none to ask for: the
                 // failure is the answer, and a prompt could never succeed.
@@ -145,6 +175,7 @@ impl RepositoryService {
                 &prepared,
                 &context,
                 Some(passphrase),
+                None,
                 &mut use_remote,
                 &mut may_prompt,
             )
@@ -260,6 +291,7 @@ impl RepositoryService {
         prepared: &PreparedSshAttempt,
         context: &SshTransportError,
         passphrase: Option<&str>,
+        agent: Option<&AgentSigner>,
         use_remote: &mut Option<
             impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
         >,
@@ -292,7 +324,7 @@ impl RepositoryService {
                     SshDirection::Fetch => git2::Direction::Fetch,
                     SshDirection::Push | SshDirection::Delete => git2::Direction::Push,
                 },
-                Some(build_callbacks(prepared, passphrase, &attempt)),
+                Some(build_callbacks(prepared, passphrase, agent, &attempt)),
                 None,
             )
             .map_err(|error| {
@@ -331,6 +363,7 @@ impl RepositoryService {
             prepared,
             context,
             passphrase,
+            agent,
             observed,
         );
         Ok(use_remote.take().expect("one authenticated operation")(

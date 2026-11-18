@@ -380,6 +380,9 @@ impl<T> IndexPending<T> {
 
 pub struct RepositoryService {
     registry_path: PathBuf,
+    /// The ssh-agent socket (SSH_AUTH_SOCK as the process had it when the
+    /// service opened), used only to sign for the selected key.
+    agent_socket: Option<PathBuf>,
     remote_reservation_scope: Arc<()>,
     availability: Mutex<IndexAvailability>,
     failure_point: Mutex<Option<FailurePoint>>,
@@ -4126,6 +4129,9 @@ impl RepositoryService {
 
         Ok(Self {
             registry_path,
+            agent_socket: std::env::var_os("SSH_AUTH_SOCK")
+                .filter(|socket| !socket.is_empty())
+                .map(PathBuf::from),
             remote_reservation_scope: Arc::new(()),
             availability: Mutex::new(availability),
             failure_point: Mutex::new(None),
@@ -4700,6 +4706,14 @@ impl RepositoryService {
             }
             Err(_) => Ok(PublicationRemoteOutcome::RegistrationPending { commit_oid }),
         }
+    }
+
+    /// Use `socket` as the ssh-agent socket instead of the one in the
+    /// environment. `None` means no agent.
+    #[doc(hidden)]
+    pub fn with_agent_socket_for_testing(mut self, socket: Option<PathBuf>) -> Self {
+        self.agent_socket = socket;
+        self
     }
 
     #[doc(hidden)]
