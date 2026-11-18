@@ -530,8 +530,10 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
     assert_eq!(remote.next_action, None);
     assert!(remote.updated_at.is_some());
     assert_eq!(remote.failure_code, None);
-    // A reservation made through the service names this process, which the
-    // system's own process table finds; the rows inserted above name no one.
+    // A reservation made through the service names this process; the rows
+    // inserted above name no one. This process always exists, so a row of
+    // its own is judged by its heartbeat alone, and a remote row has none:
+    // the call that reserved it has returned, and nothing works under it.
     assert_eq!(
         (
             remote.attribution.host.as_deref(),
@@ -541,7 +543,7 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
         (
             Some(manyhands::repository::this_host().as_str()),
             Some(i64::from(std::process::id())),
-            Some(true)
+            Some(false)
         )
     );
     assert_eq!(

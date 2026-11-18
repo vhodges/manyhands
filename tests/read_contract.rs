@@ -3046,9 +3046,9 @@ const REQUEST_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR1";
 ///
 /// The service reads the process table through `operations::ProcessTable`
 /// and the time from a clock set at `STORED_AT + 1`. Three rows are
-/// attributed: the document save to this host and a live process, the
-/// synchronization to this host and a process that is gone, and the comment
-/// to another host with a fresh indexing heartbeat. The poll and the refresh
+/// attributed: the document save to this host and a process that is gone,
+/// the synchronization to this host and a live process, and the comment to
+/// another host with a fresh indexing heartbeat. The poll and the refresh
 /// are legacy rows with no attribution.
 fn repository_with_operations() -> (
     support::TestRepository,
@@ -3092,7 +3092,7 @@ fn repository_with_operations() -> (
             command: Some("document save"),
             author: Some("Ada Lovelace <ada@example.invalid>"),
             host: Some(&host),
-            pid: Some(LIVE_PID),
+            pid: Some(DEAD_PID),
             started_at: Some(operations::STORED_AT - 50),
         },
         None,
@@ -3140,7 +3140,7 @@ fn repository_with_operations() -> (
             command: Some("comment add"),
             author: Some("Grace Hopper <grace@example.invalid>"),
             host: Some(&host),
-            pid: Some(DEAD_PID),
+            pid: Some(LIVE_PID),
             started_at: Some(operations::STORED_AT - 40),
         },
     );
@@ -3184,8 +3184,9 @@ fn operation_list_matches_its_schema_and_golden() {
         ]
     );
     // Whether each row's holder still works, as the injected process table
-    // and clock judge it: a live process, a fresh indexing heartbeat of
-    // another host, a process that is gone, and rows that name no holder.
+    // and clock judge it: a process that is gone, a fresh indexing
+    // heartbeat of another host, a live process holding a remote row, and
+    // rows that name no holder.
     let live: Vec<_> = list
         .items
         .iter()
@@ -3193,7 +3194,7 @@ fn operation_list_matches_its_schema_and_golden() {
         .collect();
     assert_eq!(
         live,
-        [None, None, Some(true), Some(true), Some(false), None]
+        [None, None, Some(false), Some(true), Some(true), None]
     );
     // The key is a new one each run.
     let key_id = list.items[0].key_id.as_deref().unwrap();

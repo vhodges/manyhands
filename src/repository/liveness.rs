@@ -9,11 +9,10 @@
 //! to an unrelated process, and the stale row then looks live. That only ever
 //! lengthens a wait, which ends in `busy`; liveness never leads to a takeover
 //! of a row that is not provably stale. A process must not judge its own row
-//! by it: its own pid always exists.
-
-// The judge is consumed by the attribution code that follows; remove this
-// allowance once a caller uses every item.
-#![allow(dead_code)]
+//! by it: its own pid always exists. `holder_liveness` is the judgment every
+//! reader makes: it judges a row this very process holds by its heartbeat
+//! alone, a remote row of another process on this host by that process, and
+//! a local row of one by whether its call still works under it.
 
 /// What liveness needs to know of an operation's row. It is plain data; the
 /// caller reads the row and computes the heartbeat, so nothing here touches
@@ -65,6 +64,73 @@ pub fn row_liveness(row: &AttributionRow, this_host: &str, probe: &dyn ProcessPr
         Liveness::Live
     } else {
         Liveness::Stale
+    }
+}
+
+/// How the call that holds a row works under it, for `holder_liveness`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Worked {
+    /// A local row: its call works under the repository's lease, or, once
+    /// it has let the lease go, under a fresh heartbeat. `lease_held` is
+    /// whether a call holds the lease now, as the reader looked without
+    /// waiting.
+    UnderLease { lease_held: bool },
+    /// A remote row: its call holds no lease and keeps no heartbeat, and
+    /// only its process says whether it still works.
+    ByProcess,
+}
+
+/// Judges a row as a reader in this process judges it. A row that names
+/// this host and a known pid is judged by that process:
+///
+/// - this very process, `this_pid`, is live only on a fresh indexing
+///   heartbeat. It always exists, so its pid proves nothing: such a row is
+///   one an earlier call of this process left, or one another call of it
+///   is at work under, and only the heartbeat tells the two apart. So a
+///   row this process left after its call ended reads as stale, as it
+///   would after a restart;
+/// - another process that is gone makes the row stale, whatever the
+///   heartbeat says: a heartbeat is only ever beaten by the process that
+///   claimed the row, and one that is gone beats no more, though its last
+///   beat can still be fresh;
+/// - another process that exists makes a remote row live. A local row it
+///   is live only while its call works under it: on a fresh heartbeat, or
+///   while a call holds the repository's lease. A long-lived process, a
+///   desktop app, whose call ended and left the row is not at work under
+///   it, and its row reads as stale.
+///
+/// Any other row, of another host or naming no host or pid, is judged by
+/// `row_liveness`: live on a fresh heartbeat and stale otherwise.
+pub fn holder_liveness(
+    row: &AttributionRow,
+    this_host: &str,
+    this_pid: u32,
+    probe: &dyn ProcessProbe,
+    worked: Worked,
+) -> Liveness {
+    let pid = row
+        .pid
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|pid| *pid > 0);
+    match pid {
+        Some(pid) if row.host.as_deref() == Some(this_host) => {
+            let live = if pid == this_pid {
+                row.index_heartbeat_fresh
+            } else if !probe.exists(pid) {
+                false
+            } else {
+                match worked {
+                    Worked::ByProcess => true,
+                    Worked::UnderLease { lease_held } => row.index_heartbeat_fresh || lease_held,
+                }
+            };
+            if live {
+                Liveness::Live
+            } else {
+                Liveness::Stale
+            }
+        }
+        Some(_) | None => row_liveness(row, this_host, probe),
     }
 }
 
@@ -226,6 +292,96 @@ mod tests {
         ];
         for (name, row, expected) in cases {
             assert_eq!(row_liveness(&row, here, &probe), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_row_of_this_host_is_judged_by_its_process_and_of_this_process_by_its_heartbeat() {
+        // The probe finds this process, as the system's always does.
+        let probe = FakeProbe(HashSet::from([4242, 7]));
+        let here = "here";
+        let row = |host: &str, pid: i64, fresh: bool| AttributionRow {
+            host: Some(host.to_owned()),
+            pid: Some(pid),
+            index_heartbeat_fresh: fresh,
+        };
+        let free = Worked::UnderLease { lease_held: false };
+        let held = Worked::UnderLease { lease_held: true };
+        let remote = Worked::ByProcess;
+        let cases = [
+            (
+                "this process, no heartbeat",
+                row(here, 7, false),
+                held,
+                Liveness::Stale,
+            ),
+            (
+                "this process, fresh heartbeat",
+                row(here, 7, true),
+                free,
+                Liveness::Live,
+            ),
+            (
+                "this process, remote",
+                row(here, 7, false),
+                remote,
+                Liveness::Stale,
+            ),
+            (
+                "another process, remote",
+                row(here, 4242, false),
+                remote,
+                Liveness::Live,
+            ),
+            (
+                "another process, local, lease free, no heartbeat",
+                row(here, 4242, false),
+                free,
+                Liveness::Stale,
+            ),
+            (
+                "another process, local, lease held",
+                row(here, 4242, false),
+                held,
+                Liveness::Live,
+            ),
+            (
+                "another process, local, fresh heartbeat",
+                row(here, 4242, true),
+                free,
+                Liveness::Live,
+            ),
+            (
+                "a process that is gone",
+                row(here, 4243, false),
+                held,
+                Liveness::Stale,
+            ),
+            (
+                "a process that is gone, its last beat fresh",
+                row(here, 4243, true),
+                free,
+                Liveness::Stale,
+            ),
+            (
+                "this pid on another host",
+                row("there", 7, false),
+                held,
+                Liveness::Stale,
+            ),
+            (
+                "another host, fresh heartbeat",
+                row("there", 4243, true),
+                free,
+                Liveness::Live,
+            ),
+        ];
+        for (name, row, worked, expected) in cases {
+            assert_eq!(
+                holder_liveness(&row, here, 7, &probe, worked),
+                expected,
+                "{name}"
+            );
         }
     }
 

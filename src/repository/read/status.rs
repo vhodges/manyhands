@@ -22,7 +22,7 @@ use crate::{
     repository::{
         OperationId, RemoteOperationAction, RemoteOperationPhase, RemoteOperationSafePoint,
         RemoteOutcomeCategory, RepositoryOperation, RepositoryService, SharedKeyId,
-        liveness::{AttributionRow, Liveness, ProcessProbe, row_liveness, this_host},
+        liveness::{AttributionRow, Liveness, ProcessProbe, Worked, holder_liveness, this_host},
         promotion::lifecycle::resumable,
         recovery,
         remote::state::{self, StoredRemoteOperation},
@@ -56,15 +56,19 @@ struct StoredAttribution {
 }
 
 /// How a read judges whether an operation's holder still works: by the
-/// host this process runs on, the process table the service was given and
-/// the service's clock, which decides whether an indexing heartbeat is
-/// fresh. One is made for each read, so every row of it is judged alike.
+/// host this process runs on, the process table the service was given, the
+/// service's clock, which decides whether an indexing heartbeat is fresh,
+/// and, for a local row of another process, whether a call holds the
+/// repository's lease, looked at once per read and without waiting. One is
+/// made for each read, so every row of it is judged alike.
 struct Holders<'a> {
     host: String,
     probe: &'a dyn ProcessProbe,
     /// The time before which an indexing heartbeat is too old to be a
     /// call's; the rule every other reader of the heartbeat uses.
     stale_before: i64,
+    data_directory: std::path::PathBuf,
+    lease_held: std::cell::OnceCell<bool>,
 }
 
 impl<'a> Holders<'a> {
@@ -74,16 +78,25 @@ impl<'a> Holders<'a> {
             probe: &*service.process_probe,
             stale_before: service.clock.now().unix_timestamp()
                 - crate::repository::INDEX_OWNER_STALE_AFTER,
+            data_directory: service
+                .registry_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_owned(),
+            lease_held: std::cell::OnceCell::new(),
         }
     }
 
     /// The attribution a row names. `heartbeat` is whether the row shows a
-    /// call at work under it by the heartbeat; a row that names neither a
-    /// host nor a process is not judged.
+    /// call at work under it by the heartbeat; `local` is the root of a
+    /// local row, whose call works under that repository's lease, and
+    /// `None` for a remote row. A row that names neither a host nor a
+    /// process is not judged.
     fn attribution(
         &self,
         stored: StoredAttribution,
         heartbeat: bool,
+        local: Option<&std::path::Path>,
     ) -> Result<OperationAttributionDto, ReadError> {
         let live = (stored.host.is_some() || stored.pid.is_some()).then(|| {
             let row = AttributionRow {
@@ -91,7 +104,19 @@ impl<'a> Holders<'a> {
                 pid: stored.pid,
                 index_heartbeat_fresh: heartbeat,
             };
-            row_liveness(&row, &self.host, self.probe) == Liveness::Live
+            let worked = match local {
+                Some(root) => Worked::UnderLease {
+                    lease_held: *self.lease_held.get_or_init(|| {
+                        !crate::repository::coordination::leases_are_free(
+                            &self.data_directory,
+                            root,
+                        )
+                    }),
+                },
+                None => Worked::ByProcess,
+            };
+            holder_liveness(&row, &self.host, std::process::id(), self.probe, worked)
+                == Liveness::Live
         });
         Ok(OperationAttributionDto {
             request_id: stored.request_id,
@@ -136,7 +161,7 @@ impl<'a> Holders<'a> {
             )
             .optional()?
             .unwrap_or_default();
-        self.attribution(stored, false)
+        self.attribution(stored, false, None)
     }
 }
 
@@ -286,6 +311,7 @@ fn local_operations(
                 comment_id: row.get(15)?,
             },
             heartbeat,
+            Some(repo.root()),
         )?;
         let action = local_action(&action).ok_or_else(invalid_stored_data)?;
         let synchronized = target
