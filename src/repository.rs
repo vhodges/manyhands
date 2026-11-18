@@ -1423,7 +1423,17 @@ impl RepositoryService {
         &self,
         request: RefreshRepositoryRequest,
     ) -> Result<RefreshOutcome, RepositoryError> {
-        self.refresh_repository_target(request, "")
+        self.refresh_repository_target(request, "", true)
+    }
+
+    /// `refresh_repository`, whose row records no author: the refresh a
+    /// promotion or a closure hands its result to the index with, under an
+    /// ID of its own. Whoever closed or promoted is kept by the index alone.
+    pub(crate) fn refresh_repository_unauthored(
+        &self,
+        request: RefreshRepositoryRequest,
+    ) -> Result<RefreshOutcome, RepositoryError> {
+        self.refresh_repository_target(request, "", false)
     }
 
     // Only synchronization's validated local-only identity may use a nonempty
@@ -1432,6 +1442,7 @@ impl RepositoryService {
         &self,
         request: RefreshRepositoryRequest,
         target: &str,
+        authored: bool,
     ) -> Result<RefreshOutcome, RepositoryError> {
         let root = &request.root;
         let operation = RepositoryOperation::RefreshRepository;
@@ -1441,7 +1452,7 @@ impl RepositoryService {
             let _repository_lease = repository_lease(&repository, &root, operation)?;
             let repository_id = registered_repository_id(&self.registry_path, &root, operation)?;
             let Some((_record, owner)) =
-                self.claim_refresh_indexing(&root, request.operation_id, target)?
+                self.claim_refresh_indexing(&root, request.operation_id, target, authored)?
             else {
                 return Ok(RefreshOutcome::IndexPending { root });
             };
@@ -4011,13 +4022,19 @@ impl RepositoryService {
         root: &Path,
         operation_id: OperationId,
         target: &str,
+        authored: bool,
     ) -> Result<Option<(RecoveryRecord, IndexOwner)>, RepositoryError> {
         let operation = RepositoryOperation::RefreshRepository;
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
         let mut connection = open_registry(&self.registry_path, &mut |_| {})
             .map_err(|error| error.for_operation(operation, root))?;
         migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
-        let record = begin_or_reconcile_operation(
+        let begin = if authored {
+            begin_or_reconcile_operation
+        } else {
+            recovery::begin_or_reconcile_unauthored_operation
+        };
+        let record = begin(
             &mut connection,
             root,
             operation,

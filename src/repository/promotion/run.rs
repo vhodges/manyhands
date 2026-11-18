@@ -1705,7 +1705,9 @@ fn refresh_with_publication<L: Lifecycle>(
     let refreshed = marked
         && boundary(service, root, FailurePoint::RefreshFailure).is_ok()
         && matches!(
-            service.refresh_repository(RefreshRepositoryRequest {
+            // Under an ID of its own, and recording no author: whoever
+            // closed or promoted is kept by the index alone (Cycle 10).
+            service.refresh_repository_unauthored(RefreshRepositoryRequest {
                 root: root.into(),
                 operation_id: OperationId::new()
             }),

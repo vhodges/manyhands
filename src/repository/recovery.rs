@@ -860,7 +860,30 @@ impl RowOrigin {
             author: configured_author(root),
         }
     }
+
+    /// The same origin, naming no author.
+    pub(super) fn unauthored(self) -> Self {
+        Self {
+            author: None,
+            ..self
+        }
+    }
+
+    /// The author a row records whose request is of `command`: none for a
+    /// promotion's or a closure's (Cycle 10: the identity whoever closed
+    /// or promoted commits with is kept by the index alone), the
+    /// configured one for any other.
+    pub(super) fn author_for(&self, command: Option<&str>) -> Option<&str> {
+        if command.is_some_and(|command| LIFECYCLE_COMMANDS.contains(&command)) {
+            None
+        } else {
+            self.author.as_deref()
+        }
+    }
 }
+
+/// The commands of a promotion and a closure, as their records name them.
+const LIFECYCLE_COMMANDS: [&str; 2] = ["document promote", "ticket close"];
 
 /// Records on the local row `id` that `holder` holds it now. Nothing else of
 /// the row changes. A row an index owner holds is left to its claim, which
@@ -949,6 +972,7 @@ pub(super) fn attribute_local_row(
             .optional()?;
     }
     let (request_id, command) = request.unzip();
+    let author = origin.author_for(command.as_deref());
     db.execute(
         "UPDATE operation_records
             SET request_ulid = COALESCE(?2, request_ulid), command = COALESCE(?3, command),
@@ -958,7 +982,7 @@ pub(super) fn attribute_local_row(
             id,
             request_id,
             command,
-            origin.author,
+            author,
             origin.holder.host,
             origin.holder.pid,
             origin.started_at
@@ -984,6 +1008,7 @@ pub(super) fn attribute_remote_row(
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     let mut request = linked_request(db, "remote", &operation)?;
+    let mut lifecycle_child = false;
     for lifecycle in ["document_promotions", "ticket_closures"] {
         if request.is_some() || !has_table(db, lifecycle)? {
             continue;
@@ -1000,6 +1025,7 @@ pub(super) fn attribute_remote_row(
             )
             .optional()?;
         if let Some(parent) = parent {
+            lifecycle_child = true;
             request = linked_request(db, "remote", &parent)?;
         }
     }
@@ -1016,6 +1042,13 @@ pub(super) fn attribute_remote_row(
             .optional()?;
     }
     let (request_id, command) = request.unzip();
+    // A lifecycle's child is the lifecycle's, whatever request it is linked
+    // to.
+    let author = if lifecycle_child {
+        None
+    } else {
+        origin.author_for(command.as_deref())
+    };
     db.execute(
         "UPDATE remote_operation_records
             SET request_ulid = ?2, command = ?3, author = ?4, host = ?5, pid = ?6,
@@ -1025,7 +1058,7 @@ pub(super) fn attribute_remote_row(
             id,
             request_id,
             command,
-            origin.author,
+            author,
             origin.holder.host,
             origin.holder.pid,
             origin.started_at
@@ -1121,6 +1154,7 @@ pub(super) fn begin_or_reconcile_local_synchronization(
         target,
         true,
         started_at,
+        true,
     )
 }
 
@@ -1144,6 +1178,31 @@ pub(super) fn begin_or_reconcile_operation(
         target,
         false,
         started_at,
+        true,
+    )
+}
+
+/// `begin_or_reconcile_operation`, recording no author: for a row a
+/// promotion or a closure begins under an ID of its own, such as the
+/// refresh that hands its result to the index. The identity it commits
+/// with is whoever closed or promoted, which only the index keeps.
+pub(super) fn begin_or_reconcile_unauthored_operation(
+    connection: &mut Connection,
+    root: &Path,
+    operation: RepositoryOperation,
+    operation_id: OperationId,
+    target: &str,
+    started_at: i64,
+) -> Result<RecoveryRecord, RepositoryError> {
+    begin_or_reconcile(
+        connection,
+        root,
+        operation,
+        operation_id,
+        target,
+        false,
+        started_at,
+        false,
     )
 }
 
@@ -1155,6 +1214,7 @@ fn begin_or_reconcile(
     target: &str,
     tagged_local_binding: bool,
     started_at: i64,
+    authored: bool,
 ) -> Result<RecoveryRecord, RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let action = action_name(operation);
@@ -1162,6 +1222,11 @@ fn begin_or_reconcile(
     // Read before the registry transaction begins, so no Git configuration
     // is read while it holds the database's write lock.
     let origin = RowOrigin::here(root, started_at);
+    let origin = if authored {
+        origin
+    } else {
+        origin.unauthored()
+    };
     #[cfg(test)]
     pause_before_begin_for_testing_if_installed(&requested);
     let transaction = connection

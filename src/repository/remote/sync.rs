@@ -7084,7 +7084,8 @@ impl RepositoryService {
                         root: request.root.clone(),
                         operation_id: request.operation_id
                     },
-                    &matcher
+                    &matcher,
+                    true,
                 ),
                 Ok(RefreshOutcome::Refreshed { .. })
             );

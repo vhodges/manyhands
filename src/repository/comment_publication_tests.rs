@@ -2191,6 +2191,62 @@ fn a_new_authoring_row_records_request_host_pid_item_and_comment() {
     );
 }
 
+/// A row a promotion or a closure begins records no author: the identity
+/// it commits with is whoever promoted or closed, which only the index
+/// keeps (Cycle 10). So for a row whose request is `document promote` or
+/// `ticket close`, and for the refresh a lifecycle hands its result to the
+/// index with, under an ID of its own and no request; any other row
+/// records the configured identity.
+#[test]
+fn a_promotion_s_or_a_closure_s_rows_record_no_author() {
+    const AUTHOR: &str = "Comment fixture <comment@example.invalid>";
+    let f = Fixture::new();
+    let origin = recovery::RowOrigin::here(f.root.path(), 1_700_000_000);
+    for (command, author) in [
+        (Some("document promote"), None),
+        (Some("ticket close"), None),
+        (Some("ticket save"), Some(AUTHOR)),
+        (Some("comment add"), Some(AUTHOR)),
+        (None, Some(AUTHOR)),
+    ] {
+        assert_eq!(origin.author_for(command), author, "{command:?}");
+    }
+    let author_of = |unauthored: bool| -> Option<String> {
+        let mut connection = f.db();
+        let operation = OperationId::new();
+        let begin = if unauthored {
+            recovery::begin_or_reconcile_unauthored_operation
+        } else {
+            recovery::begin_or_reconcile_operation
+        };
+        begin(
+            &mut connection,
+            f.root.path(),
+            RepositoryOperation::RefreshRepository,
+            operation,
+            "",
+            1_700_000_000,
+        )
+        .unwrap();
+        let author = connection
+            .query_row(
+                "SELECT author FROM operation_records WHERE operation_ulid = ?1",
+                [operation.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE operation_records SET state = 'completed' WHERE operation_ulid = ?1",
+                [operation.to_string()],
+            )
+            .unwrap();
+        author
+    };
+    assert_eq!(author_of(false).as_deref(), Some(AUTHOR));
+    assert_eq!(author_of(true), None);
+}
+
 /// What a row says of whose it is: the request that began it, its command,
 /// the author and the start, then the host and the process that hold it.
 type Whose = (
