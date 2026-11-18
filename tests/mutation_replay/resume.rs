@@ -1668,6 +1668,50 @@ fn resume_of_a_live_owned_row_is_refused_with_the_blocker() {
     assert_eq!(world.pending_journal_rows(), 0);
 }
 
+/// A resume of an operation whose row cannot be read, to say whose it is,
+/// does not go ahead: it is `busy`, and nothing is recorded or run. The
+/// row is damaged here only where the resume's own reading of it does not
+/// look: the item it names is no ID.
+#[test]
+fn resume_of_a_row_that_cannot_be_read_is_refused_and_runs_nothing() {
+    let (world, _token, owed) = save_owing_its_hand_off();
+    let operation_id = operation_of(&owed);
+    let damage = |item: &str| {
+        let changed = items::index(world.data.path())
+            .execute(
+                "UPDATE operation_records SET item_id = ?2 WHERE operation_ulid = ?1",
+                [operation_id.as_str(), item],
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+    };
+    damage("not-an-item");
+    let before = stored(&world, &operation_id);
+
+    let refused = world.execute(REQUEST_3, resume(&world, &operation_id));
+    assert_eq!(
+        (refused.outcome, refused.code, refused.failure_class()),
+        (
+            Outcome::Error,
+            ResultCode::Busy,
+            Some(FailureClass::Transient)
+        )
+    );
+    assert_eq!(refused.effects, Effects::not_requested());
+    assert_eq!(refused.data, None);
+    assert_eq!(recovery_actions(&refused), ["request.retry"]);
+    assert_eq!(stored(&world, &operation_id), before);
+    assert!(world.record(REQUEST_3).is_none());
+
+    // Readable again, it is taken up.
+    damage(TICKET_A);
+    let resumed = world.execute(REQUEST_3, resume(&world, &operation_id));
+    assert_eq!(
+        (resumed.outcome, resumed.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+}
+
 /// The row of `operation resume` in the conformance table: the resume
 /// of the hand-off a save owes.
 pub(crate) const CONFORMANCE: [Row; 1] = [Row::new(
