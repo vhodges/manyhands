@@ -14,3 +14,5 @@ The owner noted (2026-11-02) that a ticket could be reopened in the normal cours
 Explore: a reopen verb or an accepted manual edit, the validation and merge rules it needs, and what made-ready, readiness and closure mean for a reopened ticket. Outcome: a proposed RFC amendment for the owner, not code.
 
 Found by Wave 03 C5 (ticket 01M4CC0VMXTNXNH78C11DYXS8H). Evidence: docs/RFC/cli-contract.md, "C5 evidence and known limits", follow-up list; and docs/plans/2026-10-31-wave-03-cli-05-completion-and-polling-execution.md (C5 execution ledger).
+
+Deferred for now.
