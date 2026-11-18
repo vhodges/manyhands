@@ -19,8 +19,8 @@ use crate::{
         promotion::{
             integrate,
             lifecycle::{
-                LeasedIntegration, Lifecycle, LifecycleError, LifecycleKind, LifecyclePreview,
-                LifecycleRequest, PreIntegration,
+                CancellationProbe, LeasedIntegration, Lifecycle, LifecycleError, LifecycleKind,
+                LifecyclePreview, LifecycleRequest, PreIntegration,
             },
             record::{ChildExecution, ChildRole, ChildState},
             run,
@@ -36,12 +36,18 @@ pub(in super::super) fn close<P: SessionCredentialProvider>(
     service: &RepositoryService,
     request: CloseTicketRequest,
     session: &mut SessionCredentials<P>,
+    probe: Option<CancellationProbe>,
+    progress: &mut dyn run::RunObserver,
 ) -> Result<TicketClosureResult, TicketClosureError> {
     run::run_lifecycle(
         &TicketClosureLifecycle,
         service,
-        lifecycle_request(request),
+        LifecycleRequest {
+            probe,
+            ..lifecycle_request(request)
+        },
         session,
+        progress,
     )
 }
 
@@ -63,6 +69,7 @@ pub(in super::super) fn lifecycle_request(
         expected,
         approval,
         confirmed_identity,
+        probe: None,
     }
 }
 

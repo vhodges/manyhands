@@ -23,7 +23,8 @@
 
 use manyhands::repository::{
     AuthoringKind, ContextPrepareInput, ContextPrepareIntent, ContextReleaseInput,
-    FolderCreateInput, InitialsChange, Mutation, RepoIdentitySetInput, TicketRepairInput,
+    ContextRetireInput, FolderCreateInput, InitialsChange, Mutation, RepoIdentitySetInput,
+    TicketRepairInput,
 };
 
 use super::support::{
@@ -37,7 +38,32 @@ use super::support::{
 /// What someone commits on primary over the file a preview was of.
 const EDITED: &str = "---\nmanyhands_managed: true\n---\nEdited since the preview.\n";
 
-const ROWS: [Row; 6] = [
+const ROWS: [Row; 7] = [
+    Row::new("context retire", false, "invalid_path", |rule| {
+        git_home::isolated();
+        let world = World::new();
+        drive_plain(
+            &world.service,
+            world.data.path(),
+            &|ask| {
+                Mutation::ContextRetire(ContextRetireInput {
+                    root: if matches!(ask, Ask::Refused) {
+                        world.root.join("missing-root")
+                    } else {
+                        world.root.clone()
+                    },
+                    kind: if matches!(ask, Ask::Changed) {
+                        AuthoringKind::Document
+                    } else {
+                        AuthoringKind::Ticket
+                    },
+                    id: items::item_id(TICKET_NEW),
+                })
+            },
+            rule,
+        );
+        Ok(())
+    }),
     Row::new("document repair", true, "confirmation_not_found", |rule| {
         git_home::isolated();
         let shelf = Shelf::new();

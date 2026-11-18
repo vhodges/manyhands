@@ -120,6 +120,7 @@ impl Reply<'_> {
         accepted: Option<&Accepted>,
         kept: Kept,
     ) -> Envelope<MutationDataDto> {
+        let cancelled = answer.cancelled_outcome();
         let Answer {
             code,
             effects,
@@ -129,6 +130,7 @@ impl Reply<'_> {
             offers_nothing,
             // Of a preview that is refused, and of no request.
             host_replacement: _,
+            lifecycle_blocked: _,
         } = answer;
         let scope = self.scope(accepted.map(|accepted| &accepted.position));
         // A request with no operation names none.
@@ -151,14 +153,26 @@ impl Reply<'_> {
                 .and_then(MutationDataDto::authority)
                 .as_deref(),
         );
-        let mut envelope = Envelope::classified_mutation(
-            self.binding.command().name(),
-            scope,
-            code == ResultCode::Cancelled,
-            code,
-            effects,
-            local_change,
-        )
+        let mut envelope = if code == ResultCode::Cancelled && !cancelled {
+            // Q1 retirement-only partial cancellation. Keep the generic
+            // classifier's legacy cancelled/code invariant for every other call.
+            Envelope::mutation(
+                self.binding.command().name(),
+                scope,
+                crate::results::Outcome::of_mutation(false, code, &effects, local_change),
+                code,
+            )
+            .with_effects(effects)
+        } else {
+            Envelope::classified_mutation(
+                self.binding.command().name(),
+                scope,
+                cancelled,
+                code,
+                effects,
+                local_change,
+            )
+        }
         .with_request_id(self.identity.request_id.to_string())
         .with_recovery(recovery);
         if let Some(operation) = operation {

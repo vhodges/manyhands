@@ -312,9 +312,7 @@ fn each_row_reads_its_state_and_offers_what_its_policy_allows(cx: &mut TestAppCo
     drop(lease);
     // Tall enough that every row's Retry is on screen, where a click
     // reaches it.
-    shell
-        .visual(cx)
-        .simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(6000.)));
+    shell.resize_keeping_content(1440., 6000., cx);
     for (id, _, _) in rows.iter().filter(|(id, _, _)| *id != busy) {
         shell.click(row_id(*id, "retry"), cx);
     }

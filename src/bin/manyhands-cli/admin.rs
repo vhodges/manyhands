@@ -164,10 +164,7 @@ pub fn repo_identity_set(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::RepoIdentitySet(RepoIdentitySetInput {
                 root: root.clone(),
@@ -300,10 +297,7 @@ pub fn repo_remove(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| Mutation::RepoRemove(RepoRemoveInput { root: root.clone() }),
         &mut std::thread::sleep,
     )
@@ -335,10 +329,7 @@ pub fn remote_add(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::RemoteAdd(RemoteAddInput {
                 root: root.clone(),
@@ -414,10 +405,7 @@ fn remote_name(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| build(root.clone(), name.clone()),
         &mut std::thread::sleep,
     )
@@ -565,10 +553,7 @@ pub fn key_import(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::KeyImport(KeyImportInput {
                 label: label.clone(),
@@ -644,10 +629,7 @@ fn key_selected(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| build(id),
         &mut std::thread::sleep,
     )
@@ -668,10 +650,7 @@ pub fn key_clear(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| Mutation::KeyClear(KeyClearInput {}),
         &mut std::thread::sleep,
     )
@@ -706,10 +685,7 @@ pub fn key_delete(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::KeyDelete(KeyDeleteInput {
                 store: store.clone(),
@@ -804,10 +780,7 @@ fn host_mutation(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             if let Some(old_fingerprint) = &input.old_fingerprint {
                 Mutation::HostReplace(HostReplaceInput {

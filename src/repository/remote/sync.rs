@@ -369,7 +369,13 @@ pub enum SynchronizationError {
     },
     PrimaryMissing,
     RemoteContextDeleted,
+    /// Push proof from an earlier generation left the history unknown:
+    /// resumable, and a poll can settle it.
     HistoryUnknown,
+    /// The evidence for the context says its history is unknown. Terminal:
+    /// the operation is ended and the reservation let go, and only the
+    /// owner's repair (`remote history`) settles it.
+    HistoryUnresolved,
     /// A real Git merge is installed in the target worktree. The branch HEAD
     /// remains on the local parent and callers must inspect/repair explicitly.
     ConflictPending {
@@ -410,6 +416,7 @@ impl fmt::Display for SynchronizationError {
             Self::PrimaryMissing => "primary missing",
             Self::RemoteContextDeleted => "remote context deleted",
             Self::HistoryUnknown => "publication history unknown",
+            Self::HistoryUnresolved => "publication history unresolved",
             Self::ConflictPending { .. } => "synchronization conflict pending",
             Self::IdentityRequired { .. } => "commit identity required",
             Self::ExternalResolutionRequired { .. } => "external conflict resolution required",
@@ -3003,12 +3010,19 @@ pub(in super::super) enum CommittingIdentity {
 /// Shared read-only selection. Persistence belongs to the committing caller:
 /// synchronization retains its existing owned journal; promotion uses an atomic
 /// local-config edit under its integration lease and Git's config lock.
+///
+/// An identity a commit would not carry unchanged is none: a configured one
+/// is `IdentityRequired`, as if it were absent, and a confirmed one
+/// `ExternalChange`, before anything persists it. The configured pair still
+/// comes from Git's cascade per key, not from one level as
+/// `resolve_identity`'s does, so the two can disagree on a split
+/// configuration.
 pub(in super::super) fn select_committing_identity(
     repository: &git2::Repository,
     confirmation: Option<&ConfirmedCommitIdentity>,
     target: &SynchronizationTarget,
 ) -> Result<CommittingIdentity, SynchronizationError> {
-    if let Some(identity) = effective_identity(repository)? {
+    if let Some(identity) = effective_identity(repository)?.filter(commits_unchanged) {
         return Ok(CommittingIdentity::Effective(identity));
     }
     let Some(confirmation) = confirmation else {
@@ -3019,10 +3033,7 @@ pub(in super::super) fn select_committing_identity(
             )?),
         });
     };
-    if confirmation.identity.name.is_empty()
-        || confirmation.identity.email.is_empty()
-        || confirmation.identity.name.contains('\0')
-        || confirmation.identity.email.contains('\0')
+    if !commits_unchanged(&confirmation.identity)
         || configuration_identity_digest(repository)? != confirmation.expected_configuration.0
     {
         return Err(SynchronizationError::ExternalChange);
@@ -3947,7 +3958,7 @@ fn graph_plan(
         refs::CleanIntegrationError::RemoteContextDeleted => {
             SynchronizationError::RemoteContextDeleted
         }
-        refs::CleanIntegrationError::HistoryUnknown => SynchronizationError::HistoryUnknown,
+        refs::CleanIntegrationError::HistoryUnknown => SynchronizationError::HistoryUnresolved,
         refs::CleanIntegrationError::MergeRequired => SynchronizationError::MergeRequired {
             target: target.clone(),
         },
@@ -3998,6 +4009,33 @@ pub(in super::super) fn promotion_test_publication_plan(
     .map(|_| ())
 }
 impl RepositoryService {
+    /// `error`, after ending the operation when it is `HistoryUnresolved`:
+    /// the owner's repair, not a call of the same request, settles that, so
+    /// the operation is cancelled and the reservation let go (as for a
+    /// refused push). With a push intended an earlier call may have
+    /// published, and a lifecycle child belongs to its parent, which blocks
+    /// on unresolved history before it runs one: both are left as they are
+    /// (`keep`). Should the ending fail, the operation is still pending and
+    /// still holds the reservation, which `HistoryUnresolved` would deny, so
+    /// the answer is `RecoveryRequired` and the row says it is pending.
+    fn ended_if_unresolved(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        keep: bool,
+        error: SynchronizationError,
+    ) -> SynchronizationError {
+        if matches!(error, SynchronizationError::HistoryUnresolved)
+            && !keep
+            && self
+                .request_synchronization_cancellation(root, owner)
+                .and_then(|()| self.check_synchronization_requests(root, owner))
+                .is_err()
+        {
+            return SynchronizationError::RecoveryRequired;
+        }
+        error
+    }
     fn synchronization_reserve_owned(
         &self,
         root: &Path,
@@ -5005,11 +5043,12 @@ impl RepositoryService {
         {
             return Ok(merge::ResolveSynchronizationOutcome::StaleObservation);
         }
-        let effective_identity = repository.signature().ok().and_then(|signature| {
-            let name = signature.name().unwrap_or_default();
-            let email = signature.email().unwrap_or_default();
-            (!name.is_empty() && !email.is_empty()).then(|| (name.to_owned(), email.to_owned()))
-        });
+        // Held to what `select_committing_identity` holds a merge's to. That
+        // selector can't serve here: a resolution's confirmation is bound to its
+        // observation's digest, not to the identity's alone.
+        let effective_identity = effective_identity(&repository)?
+            .filter(commits_unchanged)
+            .map(|identity| (identity.name, identity.email));
         // A caller confirmation is evidence only when no effective repository
         // identity exists. Supplying one beside a valid signature must not
         // alter attempt input, durable bindings, or retry semantics.
@@ -5018,6 +5057,7 @@ impl RepositoryService {
             .then(|| {
                 request.identity.as_ref().filter(|identity| {
                     identity.expected_configuration.0 == request.observation.configuration
+                        && commits_unchanged(&identity.identity)
                 })
             })
             .flatten();
@@ -6400,7 +6440,14 @@ impl RepositoryService {
             ) {
                 Ok(_) => false,
                 Err(SynchronizationError::MergeRequired { .. }) => true,
-                Err(error) => return Err(error),
+                Err(error) => {
+                    return Err(self.ended_if_unresolved(
+                        &root,
+                        &owner,
+                        push_intent || execution.is_some(),
+                        error,
+                    ));
+                }
             }
         };
         // An open publication attempt never replays the legacy local-update
@@ -6521,7 +6568,15 @@ impl RepositoryService {
                     primary,
                     context,
                     publication,
-                )?;
+                )
+                .map_err(|error| {
+                    self.ended_if_unresolved(
+                        &root,
+                        &owner,
+                        push_intent || execution.is_some(),
+                        error,
+                    )
+                })?;
                 if resumed.is_some_and(|c| {
                     matches!(
                         c,
@@ -6706,6 +6761,9 @@ impl RepositoryService {
             return Err(SynchronizationError::RecoveryRequired);
         }
         self.synchronization_boundary(root, owner)?;
+        // Before the row is completed: a stop between the two leaves a verified
+        // row whose next pass comes back here (decision 29).
+        advance_tracking_to_authority(root, plan, configuration, &request.target, authority.oid());
         decision(self.classify_synchronization(root, owner, authority)?)?;
         self.synchronization_refresh(
             request,
@@ -7246,6 +7304,33 @@ impl RepositoryService {
                 deletion,
                 last_published: None,
             };
+            // History lost (a row, or the cache-loss flag) but a tracking ref
+            // says a fetch once saw the branch, and a current batch does not
+            // advertise it now: a deletion, last published at the tracking ref.
+            let lost_then_gone = if fetched
+                .as_ref()
+                .is_none_or(|(state, _)| state == "history_unknown")
+            {
+                let snapshot = state::read_snapshot(tx, id)?;
+                let target = plan.context(kind, item_id);
+                if snapshot.fetch_publication_evidence_for(kind, item_id)
+                    == RemotePublicationEvidence::HistoryUnknown
+                    && snapshot.has_current_batch()
+                    && !snapshot
+                        .observations()
+                        .iter()
+                        .any(|observation| observation.remote_ref() == Some(target.remote_ref()))
+                {
+                    git2::Repository::open(root)
+                        .map_err(|_| state::recovery_required())?
+                        .refname_to_id(target.tracking_ref())
+                        .ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             Ok(match (boundary, fetched) {
                 (Some(PushAbsenceBoundary::Ambiguous), _) => none(DeletionEvidence::Ambiguous),
                 (Some(PushAbsenceBoundary::Unknown), _) => none(DeletionEvidence::Unknown),
@@ -7267,6 +7352,10 @@ impl RepositoryService {
                 {
                     none(DeletionEvidence::None)
                 }
+                (None, _) if lost_then_gone.is_some() => RepublishEvidence {
+                    deletion: DeletionEvidence::Fetched,
+                    last_published: lost_then_gone,
+                },
                 (Some(PushAbsenceBoundary::Deleted), _) => RepublishEvidence {
                     deletion: DeletionEvidence::Pushed,
                     last_published: proven,
@@ -7923,6 +8012,54 @@ impl RepositoryService {
         )?)?;
         Ok(())
     }
+}
+
+/// Decision 29: moves the pushed ref's tracking ref forward to `oid`, which
+/// the Push endpoint is verified to hold. Only when Fetch and Push are one
+/// endpoint, since tracking describes Fetch, and only a ref that exists: one
+/// made here would outlive a remote deletion that a cache loss forgot. A ref
+/// already at `oid`, or past or beside it, is left. A failure leaves tracking
+/// as stale as before, for the next fetch to correct, and fails nothing.
+fn advance_tracking_to_authority(
+    root: &Path,
+    plan: &RemoteRefPlan,
+    configuration: &super::observation::ObservationConfiguration,
+    target: &SynchronizationTarget,
+    oid: git2::Oid,
+) {
+    if !configuration.fetch_and_push_share_endpoint() {
+        return;
+    }
+    let Ok(repository) = git2::Repository::open(root) else {
+        return;
+    };
+    let Ok(_lease) = repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)
+    else {
+        return;
+    };
+    let pushed = target_ref(plan, target);
+    let tracking = pushed.tracking_ref();
+    let Some(current) = repository
+        .find_reference(tracking)
+        .ok()
+        .and_then(|reference| reference.target())
+    else {
+        return;
+    };
+    if current == oid
+        || !repository
+            .graph_descendant_of(oid, current)
+            .unwrap_or(false)
+    {
+        return;
+    }
+    let _ = repository.reference_matching(
+        tracking,
+        oid,
+        true,
+        current,
+        "manyhands: tracking a verified push",
+    );
 }
 
 fn authority_outcome(

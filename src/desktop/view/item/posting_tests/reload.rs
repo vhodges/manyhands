@@ -10,7 +10,10 @@ use std::path::Path;
 use gpui_kit::TestAppContext;
 use manyhands::{
     canonical::ItemId,
-    repository::{CommentMutationDto, CommentMutationType, CommentPendingReason, MutationDataDto},
+    repository::{
+        AuthoringKind, CommentMutationDto, CommentMutationType, CommentPendingReason,
+        MutationDataDto,
+    },
     results::{
         CheckpointEffect, DiscoveryEffect, Effects, Envelope, PublicationEffect, ResultCode, Scope,
         WriteEffect,
@@ -308,6 +311,56 @@ async fn the_chip_survives_a_reload_and_clears_when_shared(cx: &mut TestAppConte
         "cleared for the session"
     );
     assert_eq!(listed(&shell, cx), 2);
+}
+
+/// D4 K-19, D5 K-15: any share of the item that answers Published clears
+/// the chip of its saved posts, whatever sent it: a Republish… (the branch
+/// the remote deleted pushed again), and a close or an approval that
+/// publishes the work it merges, as a Share does.
+#[gpui_kit::test]
+async fn a_republish_or_a_lifecycle_that_publishes_clears_the_chip(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    for kind in [
+        JobKind::ItemRepublish,
+        JobKind::TicketClose,
+        JobKind::DocumentPromote,
+    ] {
+        let (shell, root) = posting_shell(true, cx, |_, _| {});
+        let (_, comment) = write_new(&shell, "Not shared yet.", cx);
+        submit(&shell, cx);
+        until_answered(&shell, &root, &comment, cx).await;
+        shell
+            .until_drawn(cx, "the chip", |shell, cx| {
+                shell.label(chip(&comment), cx).as_deref() == Some(CHIP)
+            })
+            .await;
+
+        let item: ItemId = TICKET.parse().unwrap();
+        let (root, id) = (root.clone(), item.clone());
+        let intent = match kind {
+            JobKind::ItemRepublish => Intent::ItemRepublish {
+                root,
+                kind: AuthoringKind::Ticket,
+                id,
+            },
+            JobKind::TicketClose => Intent::TicketClose { root, id },
+            _ => Intent::DocumentPromote { root, id },
+        };
+        shell
+            .backend
+            .hold_job_return_answering(kind, item_published())
+            .release();
+        let worker = shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().worker().clone());
+        let sent = worker.submit(intent, Lane::User, None, None);
+        shell.until_ended(sent, cx).await;
+        shell
+            .until_drawn(cx, "the chip cleared", |shell, cx| {
+                !shell.present(chip(&comment), cx)
+            })
+            .await;
+    }
 }
 
 /// P9 with pending discovery: the tab closed while its post runs and

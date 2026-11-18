@@ -4,7 +4,10 @@
 //! default (Enter), goes on to prepare the context; Cancel (Escape) makes
 //! nothing. It follows the close dialog's pattern (`view::close_draft`),
 //! names the store's fixed reason and holds no item text. Focus goes back
-//! where it was when the dialog closes.
+//! where it was when the dialog closes. It is on the common frame (Wave 04
+//! Cycle 05a design A3): the title in the Kit's title slot, the message in
+//! the body, and Continue and Cancel in the footer, the body element's
+//! last child.
 
 use std::rc::Rc;
 
@@ -15,7 +18,7 @@ use gpui_kit::{
         WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm,
-        h_flex, v_flex,
+        v_flex,
     },
     div,
 };
@@ -23,10 +26,15 @@ use gpui_kit::{
 use crate::desktop::{
     model::{edit::RECOVERY_OFF, operations::drafts_unavailable},
     services::DraftStoreUnavailable,
-    view::confirm::CANCEL,
+    view::{
+        confirm::CANCEL,
+        frame::{self, Footer, Header},
+    },
 };
 
 pub(crate) const CONTINUE: &str = "Continue";
+/// The header's title: the title, as the Kit's title slot drew it.
+const TITLE_ID: &str = "recovery-off-title";
 
 /// The message: the store's reason, in D2's words, then what follows.
 pub(crate) fn message(reason: DraftStoreUnavailable) -> String {
@@ -47,12 +55,18 @@ pub(super) fn open(
 ) {
     let go: Go = Rc::new(go);
     let origin = window.focused(cx);
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let (ok, close) = (go.clone(), origin.clone());
-        base.title(RECOVERY_OFF)
+        let header = Header {
+            icon: None,
+            title: RECOVERY_OFF.into(),
+            description: None,
+            ids: (TITLE_ID, None),
+        };
+        frame::dialog(base, header, cx)
             .close_button(false)
             .overlay_closable(false)
-            .child(body(reason, &go))
+            .child(body(reason, &go, cx))
             // Enter: Continue. The dialog closes itself at once, as its
             // buttons do: the Kit's own close of it would give focus back a
             // quarter second on, taking it from the editor that opens
@@ -71,7 +85,7 @@ pub(super) fn open(
     });
 }
 
-fn body(reason: DraftStoreUnavailable, go: &Go) -> impl IntoElement + use<> {
+fn body(reason: DraftStoreUnavailable, go: &Go, cx: &App) -> impl IntoElement + use<> {
     let button = |id: &'static str, label: &'static str, proceed: bool| {
         let go = go.clone();
         let press = Rc::new(move |window: &mut Window, cx: &mut App| {
@@ -95,22 +109,27 @@ fn body(reason: DraftStoreUnavailable, go: &Go) -> impl IntoElement + use<> {
             .child(button.on_click(move |_: &ClickEvent, window, cx| click(window, cx)))
     };
     let message = message(reason);
+    let content = v_flex().child(
+        div()
+            .id("recovery-off-message")
+            .test_support()
+            .aria_label(message.clone())
+            .text_sm()
+            .child(message),
+    );
+    let buttons = vec![
+        button("recovery-off-continue", CONTINUE, true).into_any_element(),
+        button("recovery-off-cancel", CANCEL, false).into_any_element(),
+    ];
     v_flex()
         .id("recovery-off-dialog")
         .test_support()
-        .gap_2()
-        .child(
-            div()
-                .id("recovery-off-message")
-                .test_support()
-                .aria_label(message.clone())
-                .text_sm()
-                .child(message),
-        )
-        .child(
-            h_flex()
-                .gap_2()
-                .child(button("recovery-off-continue", CONTINUE, true))
-                .child(button("recovery-off-cancel", CANCEL, false)),
-        )
+        .child(frame::body(content))
+        .child(frame::footer(
+            Footer {
+                hint: None,
+                buttons,
+            },
+            cx,
+        ))
 }

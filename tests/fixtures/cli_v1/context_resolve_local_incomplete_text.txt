@@ -1,0 +1,14 @@
+--- stderr
+progress: accepted
+progress: observing
+error: The request input is not valid.
+code: invalid_input
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX3
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Kind: ticket
+Operation id: <id>
+Reason: foreign_change
+State: conflict_pending
+next: repo.inspect root=<repository>
+next: manyhands-cli context show-local --repo '<repository>' --operation-id <id>
+--- exit 2

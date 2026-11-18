@@ -1,0 +1,11 @@
+Context head: <oid>
+Context ref: refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0
+Context worktree: <repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Kind: ticket
+Observation: <observation>
+Primary head: <oid>
+Primary ref: refs/heads/main
+--- stderr
+note: context sync-local's --input takes this as {"observation": "..."}.
+--- exit 0

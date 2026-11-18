@@ -7,11 +7,12 @@ use std::{collections::BTreeSet, fs, path::Path};
 use manyhands::{
     repository::{
         AuthoringKind, CommitIdentity, DocumentSaveInput, FailurePoint, IndexRebuildInput,
-        IndexRefreshInput, ItemSyncInput, KeyClearInput, KeyDeleteInput, KeyImportInput,
-        KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto, OperationAbandonInput,
-        OperationId, OperationResumeInput, RelationshipWrite, RemoteAddInput, RemoteRemoveInput,
-        RemoteSelectInput, RepoCreateInput, RepoRemoveInput, RepoSyncInput, SharedKeyId,
-        TicketCreateInput, TicketSaveInput, TicketSlugAssignInput, request_store,
+        IndexRefreshInput, ItemResolveHistoryInput, ItemSyncInput, KeyClearInput, KeyDeleteInput,
+        KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto,
+        OperationAbandonInput, OperationId, OperationResumeInput, RelationshipWrite,
+        RemoteAddInput, RemoteRemoveInput, RemoteResolveHistoryInput, RemoteSelectInput,
+        RepoCreateInput, RepoRemoveInput, RepoSyncInput, SharedKeyId, TicketCreateInput,
+        TicketSaveInput, TicketSlugAssignInput, request_store,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -36,6 +37,98 @@ const PROGRESS_SCHEMA: &str = "progress_event.schema.json";
 
 const TICKET_SCHEMA: &str = "ticket_mutation.schema.json";
 const DOCUMENT_SCHEMA: &str = "document_mutation.schema.json";
+
+#[test]
+fn an_opted_poll_matches_its_distinct_closed_schema_and_golden() {
+    let world = World::new();
+    add_origin(&world);
+    assert_eq!(
+        world
+            .execute(REQUEST_2, remote_select(&world, Some("origin")))
+            .code,
+        ResultCode::Ok
+    );
+    let mutation = || {
+        Mutation::PollOnceRetiring(manyhands::repository::PollOnceInput {
+            root: world.root.clone(),
+        })
+    };
+    let envelope = world.execute(REQUEST_1, mutation());
+    assert_eq!(
+        envelope.code,
+        ResultCode::InternalError,
+        "the deliberately uninitialized transport's live RuntimeUninitialized error must not become its coarse TransportUnavailable category: {envelope:?}"
+    );
+    assert_eq!(
+        envelope.effects.discovery,
+        manyhands::results::DiscoveryEffect::NotRequested,
+        "failed original poll must not claim discovery success"
+    );
+    let data = serde_json::to_value(envelope.data.as_ref().unwrap()).unwrap();
+    schema::check_published("poll_retirement_mutation.schema.json", &data).unwrap();
+    for key in data.as_object().unwrap().keys() {
+        let mut v = data.clone();
+        v.as_object_mut().unwrap().remove(key);
+        assert!(
+            schema::check_published("poll_retirement_mutation.schema.json", &v).is_err(),
+            "required {key}"
+        );
+    }
+    let mut mixed = data.clone();
+    mixed["operation_id"] = "mixed".into();
+    assert!(schema::check_published("poll_retirement_mutation.schema.json", &mixed).is_err());
+    assert!(schema::check_published("poll_mutation.schema.json", &data).is_err());
+    let op = envelope.operation_id.as_deref().unwrap();
+    let completed = data["poll"]["completed_at"].as_str().unwrap();
+    mutation::assert_contract(
+        &ContractCase {
+            name: "poll_retirement",
+            data_schema: Some("poll_retirement_mutation.schema.json"),
+            placeholders: &[
+                (world.root.to_str().unwrap(), "<root>"),
+                (op, "<operation>"),
+                (completed, "<completed-at>"),
+            ],
+            sentinels: &SENTINELS,
+        },
+        &envelope,
+    );
+    assert_eq!(envelope, world.execute(REQUEST_1, mutation()));
+}
+
+#[test]
+fn a_context_retirement_matches_its_closed_schema_and_golden() {
+    let world = World::new();
+    let mutation = || {
+        Mutation::ContextRetire(manyhands::repository::ContextRetireInput {
+            root: world.root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: TICKET_NEW.parse().unwrap(),
+        })
+    };
+    let envelope = world.execute(REQUEST_1, mutation());
+    assert_eq!(envelope.code, ResultCode::AlreadyApplied);
+    assert_data_contract(
+        "context_retirement",
+        "context_retirement_mutation.schema.json",
+        &world,
+        &envelope,
+    );
+    let data = serde_json::to_value(envelope.data.as_ref().unwrap()).unwrap();
+    for key in data.as_object().unwrap().keys() {
+        let mut missing = data.clone();
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(
+            schema::check_published("context_retirement_mutation.schema.json", &missing).is_err(),
+            "missing {key}"
+        );
+    }
+    let mut mixed = data.clone();
+    mixed["completion"] = "completed".into();
+    assert!(schema::check_published("context_retirement_mutation.schema.json", &mixed).is_err());
+    assert!(schema::check_published("poll_mutation.schema.json", &data).is_err());
+    assert_eq!(envelope, world.execute(REQUEST_1, mutation()));
+}
 
 /// Checks a ticket envelope against its fixture, with what differs from
 /// run to run replaced: the repository's path, the commit and the
@@ -1507,7 +1600,7 @@ fn every_bound_command_has_a_golden() {
 /// The schemas that describe the `data` of an answer: a read's, a
 /// command's, a preview's. With the envelope and the progress event they are
 /// the roots the contract publishes; every other schema is a part of one.
-const DATA_ROOTS: [&str; 56] = [
+const DATA_ROOTS: [&str; 67] = [
     "local_context_sync_mutation.schema.json",
     "local_context_sync_inspection.schema.json",
     "local_context_conflict_content.schema.json",
@@ -1520,10 +1613,12 @@ const DATA_ROOTS: [&str; 56] = [
     "conflict.schema.json",
     "conflict_resolution_mutation.schema.json",
     "context_mutation.schema.json",
+    "context_retirement_mutation.schema.json",
     "cycle_list.schema.json",
     "dependency_tree.schema.json",
     "document_folder_list.schema.json",
     "document_mutation.schema.json",
+    "history_resolution_mutation.schema.json",
     "host_mutation.schema.json",
     "host_observation.schema.json",
     "host_pin.schema.json",
@@ -1537,10 +1632,14 @@ const DATA_ROOTS: [&str; 56] = [
     "item.schema.json",
     "item_list.schema.json",
     "item_republish_preview.schema.json",
+    "item_resolve_history_preview.schema.json",
     "key.schema.json",
     "key_deletion_preview.schema.json",
     "key_list.schema.json",
     "key_mutation.schema.json",
+    "lifecycle_blocked.schema.json",
+    "lifecycle_mutation.schema.json",
+    "lifecycle_preview.schema.json",
     "new_id.schema.json",
     "operation.schema.json",
     "operation_abandon_preview.schema.json",
@@ -1548,13 +1647,18 @@ const DATA_ROOTS: [&str; 56] = [
     "operation_mutation.schema.json",
     "path_observation.schema.json",
     "plan.schema.json",
+    "poll_mutation.schema.json",
+    "poll_retirement_mutation.schema.json",
+    "poll_policy_mutation.schema.json",
     "polling_status.schema.json",
     "preview.schema.json",
     "public_key.schema.json",
     "relationship_check.schema.json",
+    "remote_history.schema.json",
     "remote_list.schema.json",
     "remote_mutation.schema.json",
     "remote_removal_preview.schema.json",
+    "remote_resolve_history_preview.schema.json",
     "repair_mutation.schema.json",
     "repair_preview.schema.json",
     "repository_inspection.schema.json",
@@ -1681,7 +1785,12 @@ fn every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root() 
 
 /// The result codes no fixture can produce, each with the reason. Every
 /// other code is the code of a golden envelope.
-const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 2] = [
+const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 3] = [
+    (
+        ResultCode::CommandUnavailable,
+        "a CLI code for a planned verb, and no verb is planned once poll once is bound \
+         (R-8); startup_tests.rs pins its answer on a test-only planned spec",
+    ),
     (
         ResultCode::RemoteUnavailable,
         "the transport gives it only when libgit2 says the remote is not found, and the test \
@@ -1786,4 +1895,179 @@ fn every_result_code_has_a_golden_or_a_reason_no_fixture_can_produce_it() {
         code_differences(&golden_codes, &CODES_NO_FIXTURE_CAN_PRODUCE),
         [""; 0]
     );
+}
+
+// The history repair's verbs. The remote is never contacted: a repository that
+// lost its cache is a flag in its registry, which is all a resolution reads.
+
+const REQUEST_4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
+const RESOLVE_PREVIEW_SCHEMA: &str = "item_resolve_history_preview.schema.json";
+const CLEAR_PREVIEW_SCHEMA: &str = "remote_resolve_history_preview.schema.json";
+const RESOLUTION_SCHEMA: &str = "history_resolution_mutation.schema.json";
+
+/// A prepare's envelope against its golden, with the run-to-run values of its
+/// preview replaced.
+fn assert_prepare_contract(
+    name: &str,
+    world: &World,
+    data_schema: Option<&str>,
+    envelope: &Envelope<manyhands::repository::PrepareDataDto>,
+) {
+    let preview = envelope
+        .data
+        .as_ref()
+        .and_then(manyhands::repository::PrepareDataDto::preview);
+    let mut replaced = Vec::new();
+    if let Some(preview) = preview {
+        replaced.push((preview.confirmation_id.clone(), "<confirmation>"));
+        replaced.push((preview.expires_at.clone(), "<expires-at>"));
+        if let manyhands::repository::PreviewDetailsDto::ResolveHistory(details) = &preview.details
+            && let Some(oid) = &details.local_oid
+        {
+            replaced.push((oid.clone(), "<commit>"));
+        }
+    }
+    let replaced: Vec<(&str, &str)> = replaced
+        .iter()
+        .map(|(found, placeholder)| (found.as_str(), *placeholder))
+        .collect();
+    mutation::assert_contract_at(
+        name,
+        world.root.to_str().unwrap(),
+        data_schema,
+        &replaced,
+        envelope,
+    );
+}
+
+/// The registry as a cache loss left it, then a complete fetch that
+/// advertised nothing: absence is read from a current batch.
+fn set_cache_loss(world: &World) {
+    let db =
+        rusqlite::Connection::open(world.data.path().join(manyhands::repository::REGISTRY_FILE))
+            .unwrap();
+    db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
+        .unwrap();
+    db.execute("INSERT OR IGNORE INTO remote_observation_batches(repository_id,remote_name,primary_branch,configuration_generation,observed_at,is_current) SELECT repository_id,remote_name,primary_branch,configuration_generation,100,1 FROM remote_polling_state WHERE remote_name IS NOT NULL", [])
+        .unwrap();
+}
+
+fn resolve_history(world: &World, choice: manyhands::repository::ResolveHistoryChoice) -> Mutation {
+    Mutation::ItemResolveHistory(ItemResolveHistoryInput {
+        root: world.root.clone(),
+        kind: AuthoringKind::Ticket,
+        id: support::items::item_id(TICKET_NEW),
+        choice,
+    })
+}
+
+fn clear_history(world: &World) -> Mutation {
+    Mutation::RemoteResolveHistory(RemoteResolveHistoryInput {
+        root: world.root.clone(),
+    })
+}
+
+fn confirmation_of(envelope: &Envelope<manyhands::repository::PrepareDataDto>) -> String {
+    envelope
+        .data
+        .as_ref()
+        .and_then(manyhands::repository::PrepareDataDto::preview)
+        .expect("a preview")
+        .confirmation_id
+        .clone()
+}
+
+#[test]
+fn the_history_resolutions_match_their_schemas_and_goldens() {
+    use manyhands::repository::ResolveHistoryChoice::{Publish, Release};
+    let world = World::new();
+    add_origin(&world);
+    let selected = world.execute(REQUEST_1, remote_select(&world, Some("origin")));
+    assert_eq!(selected.outcome, Outcome::Success);
+    let created = world.execute(support::mutation::REQUEST_2, world.create(TICKET_NEW));
+    assert_eq!(created.outcome, Outcome::Success, "{}", created.message);
+    set_cache_loss(&world);
+
+    // A context still reads unknown, so the flag can't be cleared.
+    let blocked = world.service.prepare(&clear_history(&world));
+    assert_eq!(blocked.code, ResultCode::RecoveryRequired);
+    assert_prepare_contract(
+        "remote_resolve_history_recovery_required",
+        &world,
+        None,
+        &blocked,
+    );
+
+    // Release is no choice of this verb.
+    let released = world.service.prepare(&resolve_history(&world, Release));
+    assert_eq!(released.code, ResultCode::InvalidInput);
+    assert_prepare_contract(
+        "item_resolve_history_invalid_input",
+        &world,
+        None,
+        &released,
+    );
+
+    let preview = world.service.prepare(&resolve_history(&world, Publish));
+    assert_eq!(preview.code, ResultCode::Ok, "{}", preview.message);
+    assert_prepare_contract(
+        "item_resolve_history_preview",
+        &world,
+        Some(RESOLVE_PREVIEW_SCHEMA),
+        &preview,
+    );
+    let resolved = mutation::execute_confirmed(
+        &world.service,
+        support::mutation::REQUEST_3,
+        &confirmation_of(&preview),
+        resolve_history(&world, Publish),
+    );
+    assert_eq!(resolved.code, ResultCode::Ok, "{}", resolved.message);
+    assert_data_contract_at("item_resolve_history", RESOLUTION_SCHEMA, &world, &resolved);
+
+    let again = world.service.prepare(&resolve_history(&world, Publish));
+    assert_eq!(again.code, ResultCode::AlreadyApplied);
+    assert_prepare_contract("item_resolve_history_already_applied", &world, None, &again);
+
+    // The flag was cleared with the last resolution; losing the cache again
+    // with nothing unknown is what `remote resolve-history` clears.
+    set_cache_loss(&world);
+    let preview = world.service.prepare(&clear_history(&world));
+    assert_eq!(preview.code, ResultCode::Ok, "{}", preview.message);
+    assert_prepare_contract(
+        "remote_resolve_history_preview",
+        &world,
+        Some(CLEAR_PREVIEW_SCHEMA),
+        &preview,
+    );
+    let cleared = mutation::execute_confirmed(
+        &world.service,
+        REQUEST_4,
+        &confirmation_of(&preview),
+        clear_history(&world),
+    );
+    assert_eq!(cleared.code, ResultCode::Ok, "{}", cleared.message);
+    assert_data_contract_at(
+        "remote_resolve_history",
+        RESOLUTION_SCHEMA,
+        &world,
+        &cleared,
+    );
+    let again = world.service.prepare(&clear_history(&world));
+    assert_eq!(again.code, ResultCode::AlreadyApplied);
+    assert_prepare_contract(
+        "remote_resolve_history_already_applied",
+        &world,
+        None,
+        &again,
+    );
+}
+
+fn assert_data_contract_at(
+    name: &str,
+    schema: &str,
+    world: &World,
+    envelope: &Envelope<MutationDataDto>,
+) {
+    world.assert_golden_with_data(name, schema, envelope);
 }

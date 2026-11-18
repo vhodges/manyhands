@@ -35,9 +35,22 @@ pub fn republish_noop(envelope: &Envelope<PrepareDataDto>) -> Option<Human> {
     })
 }
 
+/// `fields`, less the top-level keys a caller shows in its own form.
+pub(crate) fn fields_without(dto: &impl serde::Serialize, keys: &[&str]) -> String {
+    let Ok(mut value) = serde_json::to_value(dto) else {
+        return String::new();
+    };
+    if let Some(fields) = value.as_object_mut() {
+        for key in keys {
+            fields.remove(*key);
+        }
+    }
+    fields(&value)
+}
+
 // Only published, content-free DTOs reach this formatter. Inputs never do.
 // Nested field names retain their context, and every dynamic scalar is escaped.
-pub(super) fn fields(dto: &impl serde::Serialize) -> String {
+pub(crate) fn fields(dto: &impl serde::Serialize) -> String {
     fn walk(prefix: &str, value: &serde_json::Value, out: &mut String) {
         match value {
             serde_json::Value::Object(values) => {
@@ -87,11 +100,20 @@ pub fn preview(preview: &PreviewDto) -> String {
         PreviewDetailsDto::RemoteRemoval(d) => fields(d),
         PreviewDetailsDto::RepositoryRemoval(d) => fields(d),
         PreviewDetailsDto::KeyDeletion(d) => fields(d),
-        PreviewDetailsDto::OperationAbandon(d) => fields(d),
+        PreviewDetailsDto::OperationAbandon(d) => {
+            if d.retirement.is_some() {
+                fields(d)
+            } else {
+                fields_without(d, &["retirement"])
+            }
+        }
         PreviewDetailsDto::Identity(d) => fields(d),
         PreviewDetailsDto::Host(d) => fields(d),
         PreviewDetailsDto::Repair(d) => fields(d),
         PreviewDetailsDto::Republish(d) => fields(d),
+        PreviewDetailsDto::ResolveHistory(d) => fields(d),
+        PreviewDetailsDto::ResolveCacheLoss(d) => fields(d),
+        PreviewDetailsDto::Lifecycle(d) => lifecycle_details(d),
     };
     let mut out = format!("Preview of {}\n{details}", field(&preview.command));
     for effect in &preview.effects {
@@ -104,6 +126,38 @@ pub fn preview(preview: &PreviewDto) -> String {
     ));
     out
 }
+/// A preview's details: its fields, with each change on one line, its kind
+/// beside its path, where `Changes` sorts.
+fn lifecycle_details(details: &manyhands::repository::LifecyclePreviewDto) -> String {
+    let fields = fields_without(details, &["changes"]);
+    let changes: String = if details.changes.is_empty() {
+        "Changes: none\n".into()
+    } else {
+        details
+            .changes
+            .iter()
+            .map(|change| {
+                format!(
+                    "Changes: {} {}\n",
+                    change.change.as_str(),
+                    field(&change.path)
+                )
+            })
+            .collect()
+    };
+    let at = fields
+        .lines()
+        .position(|line| {
+            line.split(':')
+                .next()
+                .is_some_and(|label| label > "Changes")
+        })
+        .map_or(fields.len(), |line| {
+            fields.lines().take(line).map(|text| text.len() + 1).sum()
+        });
+    format!("{}{changes}{}", &fields[..at], &fields[at..])
+}
+
 pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
     match effect {
         PreviewEffect::DirectoryCreated => "create the directory",
@@ -133,6 +187,15 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::SourceWritten => "write the corrected source",
         PreviewEffect::CheckpointCommitted => "commit the checkpoint",
         PreviewEffect::BranchRepublished => "push the deleted branch again at the local commit",
+        PreviewEffect::HistoryFlagCleared => "clear the remote history flag",
+        PreviewEffect::HistoryResolved => "record the context as never published",
+        PreviewEffect::ContextSynchronized => "synchronize the editing branch with the remote",
+        PreviewEffect::ClosureRecorded => "record the closure on the editing branch",
+        PreviewEffect::PrimaryIntegrated => "merge the editing branch into primary",
+        PreviewEffect::PrimaryPublished => "publish primary",
+        PreviewEffect::RemoteBranchDeleted => "delete the editing branch on the remote",
+        PreviewEffect::WorktreeRemoved => "remove the editing worktree",
+        PreviewEffect::BranchDeleted => "delete the local editing branch",
     }
 }
 fn effects(effects: &Effects) -> String {

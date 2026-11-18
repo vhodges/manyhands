@@ -1,0 +1,14 @@
+--- stderr
+progress: accepted
+progress: observing
+error: A name and an email are required.
+code: identity_required
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX1
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Kind: ticket
+Next action: set_identity
+Reason: identity_required
+State: refused
+next: repo.identity_set root=<repository>
+note: once an identity is set, send this same request again: a merge commit needs one.
+--- exit 3

@@ -54,6 +54,12 @@ an ordinary save, refresh, startup or recovered journal into authorization to
 publish or clean up. Restart displays pending manual operations for deliberate
 resume. Actual Git/filesystem observations override stale records.
 
+Amended 2026-11-09 by Wave 03 D6 (decision 16): the desktop's polls retire
+closed tickets and promoted documents per item, each through its own ordinary
+`context retire` request after a completed poll, held back by any edit or draft
+of the item. That retirement is the one cleanup a desktop poll may lead to; it
+never publishes, checkpoints or merges.
+
 ## Desktop background worker
 
 Desktop launch starts one application-owned scheduling worker for enabled
@@ -65,6 +71,13 @@ default, one-to-sixty-minute interval, persisted explicit pause, and automatic f
 backoff from one minute doubling to a fifteen-minute cap. Explicit Poll now
 bypasses automatic pause/backoff for that attempt without clearing the stored
 pause. Resume clears explicit pause and makes an eligible poll due.
+Amended 2026-11-03 by C5 (decision 11): the CLI's `poll resume` does this by
+clearing `paused` and any stored next-eligible deadline, a backoff deadline
+included. It leaves the stored backoff value, `enabled` and the recovery
+suspension alone (decision 5: clearing the suspension stays with D6, and has
+no CLI verb). `poll pause` sets the flag and `poll configure` the interval,
+each in its request's own transaction, so neither overwrites another field;
+last commit wins (decision 15).
 
 Use the last attempt's completion time to compute the next attempt. Success
 uses the configured interval and clears failure backoff; a retryable transport
@@ -86,6 +99,11 @@ recheck, never a busy loop.
 Manual actions retain Wave 02 priority and safe-point yield. Reuse existing
 repository leases, reservations and interruption recovery for actual Git
 operations, including a one-shot CLI command overlapping desktop activity.
+Amended 2026-11-03 by C5 (decision 24): a one-shot `poll once` whose fetch
+meets a held repository lease answers `busy`, exit 5, retryable, told apart
+from a protocol failure; its row stays interrupted with no category or backoff
+stored, and the same request polls again under the same operation. An
+automatic poll that meets the same is a D6 note: nothing restarts its row.
 No new cross-process scheduler election, due-slot claiming, session heartbeat
 table or guarantee of one automatic attempt across multiple desktop processes
 is required. Coordinating concurrent resident pollers is outside this Wave's
@@ -96,6 +114,13 @@ remote or shared key invalidates queued observations; an active operation must
 stop/reconcile at a safe point before new configuration is used. Re-adding a
 remote never silently resumes a user-paused policy. An index-only rebuild does
 not fetch, start a poll or alter Git.
+
+Amended 2026-11-09 by Wave 03 D6: the launch poll follows the library's stored
+deadline, whether it came from the interval or a failure backoff, so a restart
+adds no polls (decision 23). A user job cancels a running automatic poll at its
+next safe point, because the desktop worker is one thread (decision 3), and a
+busy or interrupted poll restarts after 5 s, 15 s and 60 s, then the interval
+(decision 4). No background job prompts (D6 design B5).
 
 ## Credential and host interaction
 
@@ -159,6 +184,13 @@ do not establish a total operation deadline; cancellation may wait for a
 blocking call to return. This safe-wait contract was clarified by the product
 owner during Wave planning on 2026-10-05. A separate helper service is not an
 assumed fallback, and live-operation ownership must be retained while waiting.
+
+Amended 2026-11-09 by Wave 03 D6 (decisions 12, 22, 24 and 28): "still
+stopping" is shown in the quit's entry in the desktop's Activity panel, so with
+Activity hidden it is seen when Activity is opened. Cancellation is
+characterized for handshake and connect stalls; DNS and teardown stalls stay
+unmeasured, a recorded departure. A graceful quit lets a running per-item
+retirement finish instead of cancelling it.
 
 ## Alternatives and risks
 

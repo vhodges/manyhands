@@ -1734,7 +1734,10 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
     transaction.commit().map_err(RepositoryError::sqlite)?;
     migrate_item_read_schema(connection)?;
     super::recovery::migrate_operation_records(connection)?;
-    super::mutation::migrate_request_tables(connection)
+    super::mutation::migrate_request_tables(connection)?;
+    // Retirement authority joins remote, local and request journals. None of
+    // those companion tables may be queried before all three have migrated.
+    super::context_retirement::record::migrate(connection)
 }
 
 /// The columns the item reads need: who closed a ticket, an item's unknown

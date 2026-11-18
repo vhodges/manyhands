@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Local context synchronization input",
+  "type": "object",
+  "properties": {
+    "observation": {
+      "description": "The observation context observe-local printed for this item.",
+      "type": "string"
+    }
+  },
+  "required": ["observation"],
+  "additionalProperties": false
+}

@@ -99,7 +99,9 @@ pub(crate) fn callback_handshake(
     let attempt = CallbackAttempt::default();
     let result = remote.connect_auth(
         git2::Direction::Fetch,
-        Some(super::callbacks::build_callbacks(&prepared, None, &attempt)),
+        Some(super::callbacks::build_callbacks(
+            &prepared, None, None, &attempt,
+        )),
         None,
     );
     let (connected, backend_code) = match result {
@@ -244,7 +246,14 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
     assert_eq!(
         i64::from(
             attempt
-                .credentials(&prepared, None, url, None, git2::CredentialType::USERNAME)
+                .credentials(
+                    &prepared,
+                    None,
+                    None,
+                    url,
+                    None,
+                    git2::CredentialType::USERNAME
+                )
                 .unwrap()
                 .credtype()
         ),
@@ -255,6 +264,7 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
             attempt
                 .credentials(
                     &prepared,
+                    None,
                     None,
                     url,
                     Some("fixture"),
@@ -271,6 +281,7 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
             .credentials(
                 &prepared,
                 None,
+                None,
                 url,
                 Some("fixture"),
                 git2::CredentialType::SSH_KEY
@@ -280,11 +291,25 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
     assert_eq!(attempt.failure(), Some(SshTransportErrorKind::KeyRejected));
     let attempt = CallbackAttempt::default();
     attempt
-        .credentials(&prepared, None, url, None, git2::CredentialType::USERNAME)
+        .credentials(
+            &prepared,
+            None,
+            None,
+            url,
+            None,
+            git2::CredentialType::USERNAME,
+        )
         .unwrap();
     assert!(
         attempt
-            .credentials(&prepared, None, url, None, git2::CredentialType::USERNAME)
+            .credentials(
+                &prepared,
+                None,
+                None,
+                url,
+                None,
+                git2::CredentialType::USERNAME
+            )
             .is_err()
     );
     for kind in [
@@ -297,7 +322,7 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
         let attempt = CallbackAttempt::default();
         assert_eq!(
             attempt
-                .credentials(&prepared, None, url, Some("fixture"), kind)
+                .credentials(&prepared, None, None, url, Some("fixture"), kind)
                 .err()
                 .unwrap()
                 .message(),
@@ -318,6 +343,7 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
             attempt
                 .credentials(
                     &prepared,
+                    None,
                     None,
                     url,
                     username,
@@ -728,6 +754,7 @@ pub(crate) fn callback_privacy(
     let backend = attempt
         .credentials(
             &prepared,
+            None,
             None,
             "ssh://fixture@example.invalid/repository.git",
             Some(username),

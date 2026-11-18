@@ -1,13 +1,14 @@
 //! The Hosts settings page (design, Settings / Hosts): the host pins
 //! `list_host_pins` lists, and Check host for the repository the page
 //! works on, which then offers Approve or Replace for the key the host
-//! presented.
+//! presented. Its view is Trusted servers, drawn under the keys on Sharing
+//! & keys (Wave 04 Cycle 04 design C2).
 //!
-//! The page works on the repository selected in the main window when the
-//! settings were last opened, or on the one a `host.approve` or
-//! `host.replace` recovery names. Check host is offered only when that
-//! repository's publication remote is reached over SSH, as
-//! `list_remotes_redacted` says; otherwise the page says why in fixed text.
+//! The page works on the repository Settings has chosen (C1), the one a
+//! `host.approve` or `host.replace` recovery names included. Check host is
+//! offered only when that repository's publication remote is reached over
+//! SSH, as `list_remotes_redacted` says; otherwise the page says why in
+//! fixed text.
 //!
 //! **Check host** runs `observe_host` on the worker, under its session,
 //! for the host the publication remote fetches from (a recovery names its
@@ -50,7 +51,7 @@ use manyhands::{
     results::{Envelope, Outcome},
 };
 
-use super::wrapped;
+use super::{OpenFlag, kit_button::wrapped_kit};
 use crate::desktop::model::read_state::Read;
 use crate::desktop::{
     model::{
@@ -64,28 +65,28 @@ use crate::desktop::{
     view::{confirm::confirm, scroll::ContentScroll},
 };
 
-pub(crate) const PINS_HEADING: &str = "Host pins";
+pub(crate) const PINS_HEADING: &str = "Trusted servers";
 pub(crate) const CHECK_HEADING: &str = "Check host";
-pub(crate) const READING_PINS: &str = "Reading the host pins";
-pub(crate) const NO_PINS: &str = "No host is pinned yet.";
+pub(crate) const READING_PINS: &str = "Reading the trusted servers";
+pub(crate) const NO_PINS: &str = "No server is trusted yet.";
 pub(crate) const REAPPROVAL: &str =
-    "The host pin registry was lost: every host must be approved again.";
+    "The list of trusted servers was lost: approve each server again.";
 pub(crate) const NO_REPOSITORY: &str =
-    "Choose a repository in the sidebar to check the host it publishes to.";
+    "Manage a repository on the Repositories page to check the server it shares through.";
 pub(crate) const READING_REMOTES: &str = "Reading the repository's remotes";
-pub(crate) const NO_SSH_PUBLICATION: &str = "Check host is unavailable: this repository has no \
-     publication remote reached over SSH. Choose one on the Remotes page.";
+pub(crate) const NO_SSH_PUBLICATION: &str = "Check host is unavailable: this repository's shared \
+     copy is not reached over SSH. Choose one under Repositories \u{203a} Sharing.";
 pub(crate) const CHECK: &str = "Check host";
-pub(crate) const CHECK_NOTE: &str = "Check host connects to the host the publication remote \
-     fetches from and shows the key it presents. It pins nothing.";
+pub(crate) const CHECK_NOTE: &str = "Check host connects to the server this repository's shared \
+     copy is on and shows the key it presents. It trusts nothing yet.";
 pub(crate) const CONNECTING: &str = "Connecting";
 pub(crate) const CANCEL_UNAVAILABLE: &str = "Cancel is unavailable while connecting to a host.";
-pub(crate) const NOT_PINNED: &str = "This host is not pinned.";
-pub(crate) const MATCHES: &str = "The host presents the key it is pinned to.";
-pub(crate) const DIFFERENT: &str = "The host presents another key than the one it is pinned to.";
-pub(crate) const PINNED: &str = "Pinned key";
-pub(crate) const APPROVE: &str = "Approve host";
-pub(crate) const REPLACE: &str = "Replace host key";
+pub(crate) const NOT_PINNED: &str = "This server is not trusted yet.";
+pub(crate) const MATCHES: &str = "The server presents the key you trusted.";
+pub(crate) const DIFFERENT: &str = "The server presents a different key from the one you trusted.";
+pub(crate) const PINNED: &str = "Trusted key";
+pub(crate) const APPROVE: &str = "Approve host\u{2026}";
+pub(crate) const REPLACE: &str = "Replace host key\u{2026}";
 
 const CHECK_ID: &str = "hosts-check";
 const APPROVE_ID: &str = "hosts-approve";
@@ -231,10 +232,13 @@ pub(crate) struct HostsPage {
     remote_generations: Generations,
     remote_read: Option<Task<()>>,
     observing: Option<Observing>,
-    /// The focus each control's wrapper tracks, by its ID.
+    /// Each control's focus, by its ID: its Kit button's own and its wrapper's.
     focus: HashMap<&'static str, FocusHandle>,
     /// The finished requests already acted on, by attempt.
     seen: HashSet<(DesktopRequestId, u32)>,
+    /// Whether Settings is open: a request that lands after it closed moves
+    /// no focus (design A4).
+    open: OpenFlag,
     _operations: Subscription,
 }
 
@@ -242,6 +246,7 @@ impl HostsPage {
     pub(crate) fn new(
         services: Services,
         scroll: ContentScroll,
+        open: OpenFlag,
         root: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -276,6 +281,7 @@ impl HostsPage {
             observing: None,
             focus,
             seen,
+            open,
             _operations: operations,
         };
         page.load_pins(cx);
@@ -283,8 +289,7 @@ impl HostsPage {
         page
     }
 
-    /// Around Check host, whose own focus is the Kit's.
-    #[cfg(all(test, feature = "desktop-test-support"))]
+    /// Check host's own focus: where a route naming no host lands (R-53).
     pub(crate) fn check_focus(&self) -> FocusHandle {
         self.focus[CHECK_ID].clone()
     }
@@ -321,7 +326,7 @@ impl HostsPage {
 
     /// Works on `root` from now on. Another repository's publication and
     /// Check host are never left on show.
-    fn choose(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
+    pub(super) fn choose(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
         if root != self.root {
             self.publication = Read::Loading;
             self.remote_read = None;
@@ -417,7 +422,8 @@ impl HostsPage {
         )
     }
 
-    /// Check host: observes the host the publication remote fetches from.
+    /// Check host: observes the host the publication remote fetches from,
+    /// with focus on Check host: a prompt it raises gives focus back there.
     pub(crate) fn check(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) || self.connecting() || !self.check_offered() {
             return;
@@ -425,45 +431,40 @@ impl HostsPage {
         let Some(root) = self.root.clone() else {
             return;
         };
-        self.start(root, None, window, cx);
+        self.start(root, None, cx);
+        window.focus(&self.focus[CHECK_ID], cx);
     }
 
     /// The `host.approve` / `host.replace` recovery: works on `root` and
     /// checks the host `authority`, whose answer offers Approve or Replace.
+    /// Gives Check host's focus, for the route to focus (a prompt the check
+    /// raises gives focus back there); this moves none. `None` under a
+    /// dialog.
     pub(crate) fn check_host(
         &mut self,
         root: PathBuf,
         authority: SshAuthority,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<FocusHandle> {
         if window.has_active_dialog(cx) {
-            return;
+            return None;
         }
         self.choose(Some(root.clone()), cx);
-        if self.connecting() {
-            window.focus(&self.focus[CHECK_ID], cx);
-            return;
+        if !self.connecting() {
+            self.start(root, Some(authority), cx);
         }
-        self.start(root, Some(authority), window, cx);
+        Some(self.focus[CHECK_ID].clone())
     }
 
-    /// Starts the observation on the worker, and puts focus on Check host:
-    /// a prompt it raises gives focus back there.
-    fn start(
-        &mut self,
-        root: PathBuf,
-        authority: Option<SshAuthority>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Starts the observation on the worker.
+    fn start(&mut self, root: PathBuf, authority: Option<SshAuthority>, cx: &mut Context<Self>) {
         let id = self.services.worker().observe_host(root.clone(), authority);
         self.observing = Some(Observing {
             id,
             root,
             answer: None,
         });
-        window.focus(&self.focus[CHECK_ID], cx);
         cx.notify();
     }
 
@@ -574,7 +575,11 @@ impl HostsPage {
     /// drew them is gone: Check host takes it, the region's first control
     /// left in its place.
     fn refocus_gone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.observing.is_some() || window.has_active_dialog(cx) {
+        // A request that lands after Settings closed moves no focus (A4).
+        if self.observing.is_some()
+            || window.has_active_dialog(cx)
+            || !self.open.is_open(window, cx)
+        {
             return;
         }
         let gone = window.focused(cx).is_none()
@@ -584,6 +589,13 @@ impl HostsPage {
         if gone {
             window.focus(&self.focus[CHECK_ID], cx);
         }
+    }
+
+    /// A landing delivered to `refocus_gone` as a pinning request's does,
+    /// for a test of work that lands after Settings closed (design A6 F17).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn land_refocus_gone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refocus_gone(window, cx);
     }
 
     /// Whether `intent` pinned the host the page's answer shows, for the
@@ -689,7 +701,7 @@ impl HostsPage {
         body
     }
 
-    /// A button in its wrapper `id`.
+    /// A Kit button with its wrapper `id`'s focus as its own (`wrapped_kit`).
     fn button(
         &self,
         id: &'static str,
@@ -698,13 +710,14 @@ impl HostsPage {
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let button = Button::new(gpui_kit::ElementId::Name(format!("{id}-button").into()))
+        let button_id = gpui_kit::ElementId::Name(format!("{id}-button").into());
+        let button = Button::new(button_id.clone())
             .label(label)
             .disabled(disabled)
             .on_click(
                 cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)),
             );
-        wrapped(id, label, &self.focus[id], &self.scroll, button)
+        wrapped_kit(id, label, &self.focus[id], &self.scroll, button_id, button)
     }
 
     /// Check host for the repository worked on, and what it answered.
@@ -730,8 +743,7 @@ impl HostsPage {
             };
             body = body.child(text("hosts-check-state", line));
         }
-        // Drawn, unavailable, whenever it cannot run, so focus put on it
-        // (a recovery's check, a prompt closing) has a place to stay.
+        // Drawn, unavailable, whenever it cannot run: focus put on it stays.
         let unavailable = !offered || self.connecting();
         body.child(self.button(
             CHECK_ID,

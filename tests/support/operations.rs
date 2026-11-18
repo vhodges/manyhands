@@ -163,6 +163,14 @@ pub fn insert_remote_synchronization(
             ],
         )
         .unwrap();
+    // The integration window a synchronization's record is read with, as the
+    // store's migration gives one to every synchronization.
+    items::index(data_directory)
+        .execute(
+            "INSERT INTO remote_integration_windows(operation_record_id,number,configuration_generation,owner_epoch,kind) SELECT id,0,configuration_generation,0,'legacy' FROM remote_operation_records WHERE operation_ulid=?1",
+            [id],
+        )
+        .unwrap();
 }
 
 /// Makes the synchronization `child`, of `item`'s branch, the one a

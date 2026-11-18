@@ -51,6 +51,13 @@ impl ItemPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Retry and Post as a new comment send a comment: they wait for
+        // the lifecycle lock as Submit does (R-23).
+        if matches!(action, FailedAction::Retry | FailedAction::PostAsNew)
+            && self.refused_while_locked(composer, cx)
+        {
+            return;
+        }
         match action {
             FailedAction::Retry => self.retry_post(composer, window, cx),
             FailedAction::EditText => self.retarget(composer, After::Edit, window, cx),

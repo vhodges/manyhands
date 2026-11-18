@@ -265,6 +265,13 @@ pub(in super::super) trait ParentRecord: LifecycleRecord + Sized {
     fn context_attempt(&self) -> u32;
     fn primary_attempt(&self) -> u32;
     fn expectation_bytes(&self) -> [u8; 32];
+    /// Whether a new request may supersede this unfinished record: only a
+    /// cleanup stop of the kinds `begin_record` replaces.
+    fn supersedable(&self) -> bool;
+    /// The closure checkpoint the record holds. A promotion writes none.
+    fn written_checkpoint(&self) -> Option<Oid> {
+        None
+    }
 }
 
 pub(in super::super) fn read_record<R: ParentRecord>(
@@ -315,11 +322,11 @@ fn bindings<R: ParentRecord>(db: &Connection, op: OperationId) -> Result<Vec<R>,
     .collect()
 }
 pub(in super::super) fn unfinished_record<R: ParentRecord>(
-    tx: &Transaction<'_>,
+    db: &Connection,
     id: i64,
     item: &ItemId,
 ) -> Result<Option<R>, RepositoryError> {
-    tx
+    db
         .query_row(
             &format!("SELECT * FROM {} WHERE repository_id=?1 AND item_id=?2 AND step NOT IN ('complete','abandoned','superseded')",R::KIND.table()),
             params![id, item.to_string()],
@@ -717,6 +724,36 @@ pub(in super::super) fn validate_remote_identity(
     crate::repository::local_sync::record::require_foreign_id_available(db, op)?;
     remote_identity_of::<PromotionRecord>(db, id, op, target, priority)?;
     crate::repository::closure::record::validate_remote_identity(db, id, op, target, priority)
+}
+
+/// Only the poll dispatcher supplies its actual UPDATE kind. The exception is
+/// scoped to the incoming registered repository and manual priority BEFORE any
+/// reservation write; public O and lifecycle callers use the strict path above.
+pub(in super::super) fn validate_poll_identity(
+    db: &Connection,
+    id: i64,
+    op: OperationId,
+    target: &RemoteOperationTarget,
+    priority: RemoteOperationPriority,
+    poll_kind: Option<state::PollKind>,
+) -> Result<(), RepositoryError> {
+    if poll_kind == Some(state::PollKind::Update)
+        && target.action() == RemoteOperationAction::Poll
+        && crate::repository::context_retirement::pass::ordinary_poll_recovery(
+            db,
+            id,
+            &op.to_string(),
+            priority,
+        )?
+    {
+        if crate::repository::local_sync::record::owned_identity(db, &op.to_string())? {
+            return Err(state::recovery_required());
+        }
+        remote_identity_of::<PromotionRecord>(db, id, op, target, priority)?;
+        crate::repository::closure::record::validate_remote_identity(db, id, op, target, priority)
+    } else {
+        validate_remote_identity(db, id, op, target, priority)
+    }
 }
 /// A reservation under any of one table's parent or child IDs must be
 /// exactly that binding's.
