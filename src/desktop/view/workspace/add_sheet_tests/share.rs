@@ -105,6 +105,7 @@ fn canned(root: &Path, configured: Option<&str>) -> RepositoryInspectionDto {
         },
         identity_state: IdentityAvailability::Available,
         remotes: vec![remote("origin", SSH, true), remote("backup", HTTPS, false)],
+        operations: Vec::new(),
     }
 }
 

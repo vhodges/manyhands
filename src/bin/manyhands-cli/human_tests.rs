@@ -612,10 +612,12 @@ fn repository_inspection_reports_registration_configuration_and_remotes() {
         configuration: configuration(),
         identity_state: IdentityAvailability::Available,
         remotes: vec![remote()],
+        operations: vec![operation()],
     };
     contains(
         repository_inspection(&data),
         &[
+            "Operation: 01ARZ3NDEKTSV4RRFFQ69G5FA0  remote  synchronize_primary  failed",
             "/linked",
             "/repository",
             "false",
@@ -975,6 +977,7 @@ fn repository_and_remote_metadata_escape_controls_at_field_boundaries() {
             configuration,
             identity_state: IdentityAvailability::Available,
             remotes: vec![remote],
+            operations: Vec::new(),
         }),
         11,
         10,

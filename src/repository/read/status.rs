@@ -802,6 +802,44 @@ fn family_rank(family: OperationFamily) -> u8 {
     }
 }
 
+/// The unfinished operations of one repository: its local rows, then its
+/// remote synchronizations and polls, promotions and closures, in the order
+/// each store gives them. `registered` is whether the repository has a
+/// registration; without one only the local rows, which recovery matches by
+/// root, exist.
+fn repository_operations(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    holders: &Holders<'_>,
+    registered: bool,
+) -> Result<Vec<StoredOperation>, ReadError> {
+    let mut operations = local_operations(connection, repo, holders, None)?;
+    if registered {
+        operations.extend(remote_operations(connection, repo, holders, None)?);
+        operations.extend(promotion_operations(connection, repo, holders, None)?);
+        operations.extend(closure_operations(connection, repo, holders, None)?);
+    }
+    Ok(operations)
+}
+
+/// Orders operations as the operation list does: by operation ID, which is
+/// the order they were started in. The sort is stable, so operations with
+/// no ID keep the order they were stored in.
+fn sort_operations(items: &mut [OperationDto]) {
+    items.sort_by(|left, right| {
+        (
+            left.operation_id.is_none(),
+            &left.operation_id,
+            family_rank(left.family),
+        )
+            .cmp(&(
+                right.operation_id.is_none(),
+                &right.operation_id,
+                family_rank(right.family),
+            ))
+    });
+}
+
 /// Every problem the index stores for the registration, with the working
 /// tree it was found in. The stored guidance is not read: it can hold a
 /// parser's or the operating system's own words.
@@ -961,34 +999,47 @@ impl RepositoryService {
         self.read_session(RepositoryOperation::Read, |connection| {
             require_registration(connection, repo)?;
             let holders = Holders::of(self);
-            let mut items: Vec<OperationDto> = local_operations(connection, repo, &holders, None)?
-                .into_iter()
-                .chain(remote_operations(connection, repo, &holders, None)?)
-                .chain(promotion_operations(connection, repo, &holders, None)?)
-                .chain(closure_operations(connection, repo, &holders, None)?)
-                .chain(key_material_operations(connection, None)?)
-                .map(|operation| operation.dto)
-                .collect();
-            // The sort is stable, so operations with no ID keep the order
-            // they were stored in.
-            items.sort_by(|left, right| {
-                (
-                    left.operation_id.is_none(),
-                    &left.operation_id,
-                    family_rank(left.family),
-                )
-                    .cmp(&(
-                        right.operation_id.is_none(),
-                        &right.operation_id,
-                        family_rank(right.family),
-                    ))
-            });
+            let mut items: Vec<OperationDto> =
+                repository_operations(connection, repo, &holders, true)?
+                    .into_iter()
+                    .chain(key_material_operations(connection, None)?)
+                    .map(|operation| operation.dto)
+                    .collect();
+            sort_operations(&mut items);
             Ok(OperationListDto {
                 items,
                 complete: true,
             })
         })
         .map_err(|error| repo.failure(error))
+    }
+
+    /// The unfinished operations of the repository at `root`, for
+    /// `inspect_repository`: those `list_operations` lists for it, in its
+    /// order and with its attribution, judged as it judges them, less the
+    /// application's key-material operations, which are no repository's.
+    ///
+    /// `registration` is the root's registration, `None` for a root that
+    /// has none: it has local rows only, matched by root as recovery
+    /// matches them. It reads as any read does, on a read-only connection,
+    /// so it leaves no write-ahead file behind.
+    pub(super) fn inspected_operations(
+        &self,
+        root: &std::path::Path,
+        registration: Option<i64>,
+    ) -> Result<Vec<OperationDto>, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| {
+            let repo =
+                ResolvedRepository::registered(registration.unwrap_or_default(), root.to_owned());
+            let holders = Holders::of(self);
+            let mut items: Vec<OperationDto> =
+                repository_operations(connection, &repo, &holders, registration.is_some())?
+                    .into_iter()
+                    .map(|operation| operation.dto)
+                    .collect();
+            sort_operations(&mut items);
+            Ok(items)
+        })
     }
 
     /// The operation `blocker` names, in its own journal, as `show_operation`

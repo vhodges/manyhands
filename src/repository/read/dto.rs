@@ -149,6 +149,13 @@ pub struct IndexStateDto {
 
 /// `selected_path` is the canonical path the caller gave; `root` is the
 /// repository it selects, which differs for a linked worktree.
+///
+/// `operations` are the repository's unfinished operations, as `operation
+/// list` lists them for it and in its order, with the same attribution:
+/// who started each, from where, and whether that holder still works. It
+/// leaves out the application's key-material operations, which belong to no
+/// repository. It is empty for a repository with none, and for one that is
+/// not registered, which has no remote operation to hold.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RepositoryInspectionDto {
     pub selected_path: String,
@@ -159,6 +166,7 @@ pub struct RepositoryInspectionDto {
     pub configuration: ConfigurationDto,
     pub identity_state: IdentityAvailability,
     pub remotes: Vec<RemoteDto>,
+    pub operations: Vec<OperationDto>,
 }
 
 contract_enum!(
