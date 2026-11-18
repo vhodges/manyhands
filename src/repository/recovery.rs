@@ -722,7 +722,291 @@ pub(super) fn migrate_operation_records(
     migrate_comment_bindings(&transaction)?;
     validate_comment_bindings(&transaction)?;
     super::local_sync::record::migrate(&transaction)?;
+    migrate_operation_attribution(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)
+}
+
+/// The marker of the migration that adds the attribution columns.
+const ATTRIBUTION_MIGRATION: &str = "cycle_operation_attribution";
+
+/// The columns that say whose an operation's row is, on both journals, each
+/// with its type: the request that began the row and that request's
+/// command, the commit identity it ran under as `Name <email>`, the host
+/// and the process it ran in, and when it began, in seconds since the
+/// epoch by the service's clock. All are nullable: a row a build before
+/// them wrote has none, which is unknown, and none is inferred for it.
+const ATTRIBUTION_COLUMNS: [(&str, &str); 6] = [
+    ("request_ulid", "TEXT"),
+    ("command", "TEXT"),
+    ("author", "TEXT"),
+    ("host", "TEXT"),
+    ("pid", "INTEGER"),
+    ("started_at", "INTEGER"),
+];
+
+/// The local journal also names the comment a comment's submission writes.
+/// Its item is in `item_id`, which the table has always had.
+const LOCAL_ATTRIBUTION_COLUMNS: [(&str, &str); 1] = [("comment_id", "TEXT")];
+
+fn attribution_error() -> RepositoryError {
+    RepositoryError::new(
+        RepositoryOperation::OpenRegistry,
+        None,
+        RepositoryErrorKind::RecoveryRequired,
+        "operation attribution requires recovery",
+    )
+}
+
+/// Adds the attribution columns to the two journals, after every column
+/// they have, and records the marker; it runs in the recovery migration's
+/// transaction, which commits or rolls back with it.
+///
+/// Additive and idempotent: a column already there is left as it is, and
+/// no row is written. A registry that has the marker is only read, as the
+/// comment bindings' audit is: a journal of it that lacks a column was
+/// replaced, and is not repaired here. The marker is recorded only once
+/// both journals have the columns, so a registry whose remote journal has
+/// not been created yet gains them when it is.
+fn migrate_operation_attribution(db: &Connection) -> Result<(), RepositoryError> {
+    let failure = |_| attribution_error();
+    let migrated: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [ATTRIBUTION_MIGRATION],
+            |row| row.get(0),
+        )
+        .map_err(failure)?;
+    let mut complete = true;
+    for (table, own) in [
+        ("operation_records", &LOCAL_ATTRIBUTION_COLUMNS[..]),
+        (REMOTE_JOURNAL_TABLE, &[][..]),
+    ] {
+        if !has_table(db, table).map_err(failure)? {
+            if migrated {
+                return Err(attribution_error());
+            }
+            complete = false;
+            continue;
+        }
+        let present = db
+            .prepare("SELECT name FROM pragma_table_info(?1)")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([table], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(failure)?;
+        for (name, definition) in ATTRIBUTION_COLUMNS.iter().chain(own) {
+            if present.iter().any(|column| column == name) {
+                continue;
+            }
+            if migrated {
+                return Err(attribution_error());
+            }
+            db.execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN {name} {definition}"
+            ))
+            .map_err(failure)?;
+        }
+    }
+    if !migrated && complete {
+        db.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [ATTRIBUTION_MIGRATION],
+        )
+        .map_err(failure)?;
+    }
+    Ok(())
+}
+
+/// Whose a row is as it is begun: this process, on this host, at
+/// `started_at` by the service's clock, under the commit identity the
+/// repository's configuration gives. Reading it never fails: what cannot be
+/// read is recorded as unknown.
+pub(super) struct RowOrigin {
+    host: String,
+    pid: i64,
+    started_at: i64,
+    author: Option<String>,
+}
+
+impl RowOrigin {
+    /// This process, beginning a row of the repository at `root` at
+    /// `started_at`.
+    pub(super) fn here(root: &Path, started_at: i64) -> Self {
+        Self {
+            host: super::liveness::this_host(),
+            pid: i64::from(std::process::id()),
+            started_at,
+            author: configured_author(root),
+        }
+    }
+}
+
+/// The commit identity the repository at `root` commits with, as the text
+/// a comment's `created_by` is given: `Name <email>`. It is resolved as
+/// `repo identity` and a commit resolve it, from the repository's own
+/// configuration, its local level first; `None` when there is none or Git
+/// cannot say.
+fn configured_author(root: &Path) -> Option<String> {
+    let repository = git2::Repository::open(root).ok()?;
+    let config = repository.config().ok()?;
+    let (identity, _) =
+        super::resolve_identity(&config, &config, root, RepositoryOperation::Read).ok()??;
+    Some(format!("{} <{}>", identity.name, identity.email))
+}
+
+/// The request whose record holds the operation `operation_id` of
+/// `family`, and its command: the request that began it, since each
+/// acceptance is given an operation ID of its own. One still accepted is
+/// preferred to one that has finished. `None` when no record holds it, or
+/// the request tables are not there.
+fn linked_request(
+    db: &Connection,
+    family: &str,
+    operation_id: &str,
+) -> rusqlite::Result<Option<(String, String)>> {
+    if !has_table(db, "request_operations")? || !has_table(db, "request_records")? {
+        return Ok(None);
+    }
+    db.query_row(
+        "SELECT r.request_ulid, r.command FROM request_operations m
+           JOIN request_records r ON r.request_ulid = m.request_ulid
+          WHERE m.family = ?1 AND m.operation_ulid = ?2
+          ORDER BY r.state = 'accepted' DESC, r.accepted_at DESC, r.request_ulid
+          LIMIT 1",
+        params![family, operation_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+}
+
+/// Records on the local row `id` whose it is: `origin`, and the request
+/// that began it with its command, when a request's record holds the row's
+/// operation. A row begun again, after it was rejected, is the new call's:
+/// its host, process and start are replaced, and a request it already
+/// names is kept when none holds it now.
+pub(super) fn attribute_local_row(
+    db: &Connection,
+    id: i64,
+    origin: &RowOrigin,
+) -> rusqlite::Result<()> {
+    let operation: Option<String> = db.query_row(
+        "SELECT operation_ulid FROM operation_records WHERE id = ?1",
+        [id],
+        |row| row.get(0),
+    )?;
+    let request = match operation {
+        Some(operation) => linked_request(db, "local", &operation)?,
+        None => None,
+    };
+    let (request_id, command) = request.unzip();
+    db.execute(
+        "UPDATE operation_records
+            SET request_ulid = COALESCE(?2, request_ulid), command = COALESCE(?3, command),
+                author = COALESCE(?4, author), host = ?5, pid = ?6, started_at = ?7
+          WHERE id = ?1",
+        params![
+            id,
+            request_id,
+            command,
+            origin.author,
+            origin.host,
+            origin.pid,
+            origin.started_at
+        ],
+    )?;
+    Ok(())
+}
+
+/// Records on the remote row `id` whose it is: `origin`, and the request
+/// that began it with its command. That is the request whose record holds
+/// the operation; else, for the child of a promotion or a closure, the one
+/// whose record holds that lifecycle (decision 34); else, for the
+/// synchronization a comment's binding keeps, the request the comment's
+/// own row names, so the publication is the comment's request's.
+pub(super) fn attribute_remote_row(
+    db: &Connection,
+    id: i64,
+    origin: &RowOrigin,
+) -> rusqlite::Result<()> {
+    let (repository_id, operation): (i64, String) = db.query_row(
+        "SELECT repository_id, operation_ulid FROM remote_operation_records WHERE id = ?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let mut request = linked_request(db, "remote", &operation)?;
+    for lifecycle in ["document_promotions", "ticket_closures"] {
+        if request.is_some() || !has_table(db, lifecycle)? {
+            continue;
+        }
+        let parent: Option<String> = db
+            .query_row(
+                &format!(
+                    "SELECT operation_id FROM {lifecycle}
+                      WHERE repository_id = ?1 AND (context_sync_id = ?2 OR primary_sync_id = ?2)
+                      LIMIT 1"
+                ),
+                params![repository_id, operation],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(parent) = parent {
+            request = linked_request(db, "remote", &parent)?;
+        }
+    }
+    if request.is_none() && has_table(db, "comment_publication_bindings")? {
+        request = db
+            .query_row(
+                "SELECT o.request_ulid, o.command FROM comment_publication_bindings b
+                   JOIN operation_records o ON o.id = b.local_record_id
+                  WHERE b.synchronization_ulid = ?1
+                    AND o.request_ulid IS NOT NULL AND o.command IS NOT NULL",
+                [&operation],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+    }
+    let (request_id, command) = request.unzip();
+    db.execute(
+        "UPDATE remote_operation_records
+            SET request_ulid = ?2, command = ?3, author = ?4, host = ?5, pid = ?6,
+                started_at = ?7
+          WHERE id = ?1",
+        params![
+            id,
+            request_id,
+            command,
+            origin.author,
+            origin.host,
+            origin.pid,
+            origin.started_at
+        ],
+    )?;
+    Ok(())
+}
+
+/// The item and the comment a local row names, for the two actions whose
+/// rows name them, read from the target they are begun with:
+/// `authoring-context-v1/<kind>/<item>/<intent>`, then the paths, each
+/// after a NUL; a comment's are `.manyhands/comments` and its ID.
+fn authored_ids(action: &str, target: &str) -> (Option<String>, Option<String>) {
+    if !matches!(action, "save_ticket" | "submit_comment") {
+        return (None, None);
+    }
+    let item = super::bridges::abandon::authoring_item(Some(target));
+    let comment = if action == "submit_comment" {
+        match target.split('\0').collect::<Vec<_>>()[..] {
+            [_, ".manyhands/comments", comment] => comment
+                .parse::<crate::canonical::ItemId>()
+                .ok()
+                .map(|comment| comment.to_string()),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    (item, comment)
 }
 
 /// Remote reservations cannot consume, replace or reinterpret local recovery.
@@ -747,18 +1031,40 @@ pub(super) fn begin_or_reconcile_local_synchronization(
     operation: RepositoryOperation,
     operation_id: OperationId,
     target: &str,
+    started_at: i64,
 ) -> Result<RecoveryRecord, RepositoryError> {
-    begin_or_reconcile(connection, root, operation, operation_id, target, true)
+    begin_or_reconcile(
+        connection,
+        root,
+        operation,
+        operation_id,
+        target,
+        true,
+        started_at,
+    )
 }
 
+/// Begins the row of `operation_id`, or finds the one it has. A row that
+/// is begun, new or again after it was rejected, records whose it is: this
+/// process and host, `started_at` by the service's clock, the commit
+/// identity, and the request that holds the operation; see `RowOrigin`.
 pub(super) fn begin_or_reconcile_operation(
     connection: &mut Connection,
     root: &Path,
     operation: RepositoryOperation,
     operation_id: OperationId,
     target: &str,
+    started_at: i64,
 ) -> Result<RecoveryRecord, RepositoryError> {
-    begin_or_reconcile(connection, root, operation, operation_id, target, false)
+    begin_or_reconcile(
+        connection,
+        root,
+        operation,
+        operation_id,
+        target,
+        false,
+        started_at,
+    )
 }
 
 fn begin_or_reconcile(
@@ -768,10 +1074,14 @@ fn begin_or_reconcile(
     operation_id: OperationId,
     target: &str,
     tagged_local_binding: bool,
+    started_at: i64,
 ) -> Result<RecoveryRecord, RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let action = action_name(operation);
     let requested = operation_id.to_string();
+    // Read before the registry transaction begins, so no Git configuration
+    // is read while it holds the database's write lock.
+    let origin = RowOrigin::here(root, started_at);
     #[cfg(test)]
     pause_before_begin_for_testing_if_installed(&requested);
     let transaction = connection
@@ -909,6 +1219,7 @@ fn begin_or_reconcile(
                     params![id, now()],
                 )
                 .map_err(RepositoryError::sqlite)?;
+            attribute_local_row(&transaction, id, &origin).map_err(RepositoryError::sqlite)?;
             transaction.commit().map_err(RepositoryError::sqlite)?;
             return Ok(RecoveryRecord {
                 id,
@@ -933,14 +1244,25 @@ fn begin_or_reconcile(
         )
         .optional()
         .map_err(RepositoryError::sqlite)?;
+    let (item_id, comment_id) = authored_ids(action, target);
     transaction
         .execute(
-            "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, target, state, observed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'created', ?6)",
-            params![repository_id, root_path, requested, action, target, now()],
+            "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, target, item_id, comment_id, state, observed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'created', ?8)",
+            params![
+                repository_id,
+                root_path,
+                requested,
+                action,
+                target,
+                item_id,
+                comment_id,
+                now()
+            ],
         )
         .map_err(RepositoryError::sqlite)?;
     let id = transaction.last_insert_rowid();
+    attribute_local_row(&transaction, id, &origin).map_err(RepositoryError::sqlite)?;
     transaction.commit().map_err(RepositoryError::sqlite)?;
     Ok(RecoveryRecord {
         id,
@@ -2489,7 +2811,8 @@ mod abandoned_row_tests {
                 Path::new("/repository"),
                 RepositoryOperation::RefreshRepository,
                 op,
-                ""
+                "",
+                7
             )
             .err()
             .unwrap()
@@ -2941,5 +3264,213 @@ mod abandoned_row_tests {
             .execute("INSERT INTO remote_operation_records VALUES (?1)", [ID])
             .unwrap();
         assert!(held_by_another_journal(&connection, ID).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    //! Whose a row is: the migration that adds the columns, the request a
+    //! remote row is attributed to, and the item and comment a local row
+    //! names. Each over a journal of only the columns it reads.
+
+    use super::*;
+
+    fn origin() -> RowOrigin {
+        RowOrigin {
+            host: "host-a".to_owned(),
+            pid: 42,
+            started_at: 7,
+            author: Some("A <a@example.invalid>".to_owned()),
+        }
+    }
+
+    fn marked(db: &Connection) -> bool {
+        db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [ATTRIBUTION_MIGRATION],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    /// Without the remote journal the local one gains its columns and no
+    /// marker is recorded; once the remote journal is there it gains them
+    /// too and the marker is. A marked registry whose journal lost a
+    /// column is refused, not repaired.
+    #[test]
+    fn the_attribution_migration_adds_what_is_missing_and_refuses_a_lost_column() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE registry_migrations (name TEXT PRIMARY KEY);
+             CREATE TABLE operation_records (id INTEGER PRIMARY KEY, action TEXT);",
+        )
+        .unwrap();
+        migrate_operation_attribution(&db).unwrap();
+        assert!(has_column(&db, "operation_records", "comment_id"));
+        assert!(!marked(&db));
+
+        db.execute_batch("CREATE TABLE remote_operation_records (id INTEGER PRIMARY KEY);")
+            .unwrap();
+        migrate_operation_attribution(&db).unwrap();
+        for (name, _) in ATTRIBUTION_COLUMNS {
+            assert!(has_column(&db, "operation_records", name), "{name}");
+            assert!(has_column(&db, REMOTE_JOURNAL_TABLE, name), "{name}");
+        }
+        assert!(!has_column(&db, REMOTE_JOURNAL_TABLE, "comment_id"));
+        assert!(marked(&db));
+        // Marked: an audit only.
+        migrate_operation_attribution(&db).unwrap();
+
+        db.execute_batch("ALTER TABLE remote_operation_records DROP COLUMN host")
+            .unwrap();
+        assert_eq!(
+            migrate_operation_attribution(&db).unwrap_err().kind,
+            RepositoryErrorKind::RecoveryRequired
+        );
+        assert!(!has_column(&db, REMOTE_JOURNAL_TABLE, "host"));
+    }
+
+    fn has_column(db: &Connection, table: &str, column: &str) -> bool {
+        db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+            [table, column],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    /// A remote row is the request's whose record holds its operation, an
+    /// accepted one before a finished one; else the request of the
+    /// promotion or closure it is a child of; else, for a comment's
+    /// synchronization, the request the comment's row names. A row no
+    /// request began names none, and still records its process.
+    #[test]
+    fn a_remote_row_is_the_request_s_that_began_it_or_its_parent_s() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE registry_migrations (name TEXT PRIMARY KEY);
+             CREATE TABLE request_records (request_ulid TEXT, command TEXT, state TEXT, accepted_at INTEGER);
+             CREATE TABLE request_operations (request_ulid TEXT, ordinal INTEGER, family TEXT, operation_ulid TEXT);
+             CREATE TABLE operation_records (id INTEGER PRIMARY KEY, operation_ulid TEXT);
+             CREATE TABLE remote_operation_records (id INTEGER PRIMARY KEY, repository_id INTEGER, operation_ulid TEXT);
+             CREATE TABLE document_promotions (repository_id INTEGER, operation_id TEXT, context_sync_id TEXT, primary_sync_id TEXT);
+             CREATE TABLE ticket_closures (repository_id INTEGER, operation_id TEXT, context_sync_id TEXT, primary_sync_id TEXT);
+             CREATE TABLE comment_publication_bindings (operation_ulid TEXT, local_record_id INTEGER, synchronization_ulid TEXT);",
+        )
+        .unwrap();
+        migrate_operation_attribution(&db).unwrap();
+        db.execute_batch(
+            "INSERT INTO request_records VALUES
+                ('sync-request', 'item sync', 'accepted', 1),
+                ('earlier-request', 'item sync', 'finished', 9),
+                ('promote-request', 'document promote', 'accepted', 1),
+                ('close-request', 'ticket close', 'accepted', 1),
+                ('comment-request', 'comment add', 'accepted', 1);
+             INSERT INTO request_operations VALUES
+                ('sync-request', 0, 'remote', 'sync'),
+                ('earlier-request', 0, 'remote', 'sync'),
+                ('promote-request', 0, 'remote', 'promote'),
+                ('close-request', 0, 'remote', 'close'),
+                ('comment-request', 0, 'local', 'comment');
+             INSERT INTO document_promotions VALUES (1, 'promote', 'promote-context', 'promote-primary');
+             INSERT INTO ticket_closures VALUES (1, 'close', 'close-context', 'close-primary');
+             INSERT INTO operation_records (id, operation_ulid, request_ulid, command)
+                VALUES (1, 'comment', 'comment-request', 'comment add');
+             INSERT INTO comment_publication_bindings VALUES ('comment', 1, 'comment-sync');",
+        )
+        .unwrap();
+        for (operation, request) in [
+            ("sync", Some(("sync-request", "item sync"))),
+            (
+                "promote-context",
+                Some(("promote-request", "document promote")),
+            ),
+            ("close-primary", Some(("close-request", "ticket close"))),
+            ("comment-sync", Some(("comment-request", "comment add"))),
+            ("poll", None),
+        ] {
+            db.execute(
+                "INSERT INTO remote_operation_records (repository_id, operation_ulid) VALUES (1, ?1)",
+                [operation],
+            )
+            .unwrap();
+            attribute_remote_row(&db, db.last_insert_rowid(), &origin()).unwrap();
+            let stored: (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                String,
+                i64,
+                i64,
+            ) = db
+                .query_row(
+                    "SELECT request_ulid, command, author, host, pid, started_at
+                       FROM remote_operation_records WHERE operation_ulid = ?1",
+                    [operation],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                        ))
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                stored,
+                (
+                    request.map(|(id, _)| id.to_owned()),
+                    request.map(|(_, command)| command.to_owned()),
+                    Some("A <a@example.invalid>".to_owned()),
+                    "host-a".to_owned(),
+                    42,
+                    7
+                ),
+                "{operation}"
+            );
+        }
+    }
+
+    /// Only a ticket's save and a comment's submission name their item,
+    /// and only the submission its comment, each read from a target of the
+    /// form it is begun with.
+    #[test]
+    fn only_a_ticket_save_and_a_comment_name_their_item_and_comment() {
+        const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+        const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
+        let item = || Some(ITEM.to_owned());
+        for (action, target, expected) in [
+            (
+                "save_ticket",
+                format!("authoring-context-v1/ticket/{ITEM}/Edit\0"),
+                (item(), None),
+            ),
+            (
+                "submit_comment",
+                format!("authoring-context-v1/ticket/{ITEM}/Edit\0.manyhands/comments\0{COMMENT}"),
+                (item(), Some(COMMENT.to_owned())),
+            ),
+            (
+                "submit_comment",
+                format!("authoring-context-v1/document/{ITEM}/Edit\0.manyhands/comments\0x"),
+                (item(), None),
+            ),
+            (
+                "save_document",
+                format!("authoring-context-v1/document/{ITEM}/Edit\0docs/a.md"),
+                (None, None),
+            ),
+            ("save_ticket", "remote-v1-0123".to_owned(), (None, None)),
+            ("refresh", String::new(), (None, None)),
+        ] {
+            assert_eq!(
+                authored_ids(action, &target),
+                expected,
+                "{action} {target:?}"
+            );
+        }
     }
 }

@@ -1844,3 +1844,349 @@ fn comment_publication_recorded_receipt_refuses_reset_removed_or_replaced_commen
         );
     }
 }
+
+/// The columns that say whose an operation's row is, as the migration
+/// `cycle_operation_attribution` adds them to each journal, in order.
+const LOCAL_ATTRIBUTION: [&str; 7] = [
+    "request_ulid",
+    "command",
+    "author",
+    "host",
+    "pid",
+    "started_at",
+    "comment_id",
+];
+const REMOTE_ATTRIBUTION: [&str; 6] = [
+    "request_ulid",
+    "command",
+    "author",
+    "host",
+    "pid",
+    "started_at",
+];
+
+fn column_names(connection: &rusqlite::Connection, table: &str) -> Vec<String> {
+    connection
+        .prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
+        .unwrap()
+        .query_map([table], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+}
+
+/// The registry as a build from before attribution left it: neither
+/// journal has the columns, no marker says they were added, and no local
+/// row names its item.
+fn as_before_attribution(connection: &rusqlite::Connection) {
+    for (table, columns) in [
+        ("operation_records", &LOCAL_ATTRIBUTION[..]),
+        ("remote_operation_records", &REMOTE_ATTRIBUTION[..]),
+    ] {
+        let present = column_names(connection, table);
+        for column in columns {
+            if present.iter().any(|name| name == column) {
+                connection
+                    .execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
+                    .unwrap();
+            }
+        }
+    }
+    connection
+        .execute_batch(
+            "UPDATE operation_records SET item_id=NULL WHERE action IN ('save_ticket','submit_comment');
+             DELETE FROM registry_migrations WHERE name='cycle_operation_attribution';",
+        )
+        .unwrap();
+}
+
+/// A registry an older build left, with a comment's submission pending and
+/// an interrupted synchronization, gains the attribution columns when a
+/// build with them opens it. Nothing else changes: each row keeps every
+/// value it had, and says nothing of whose it is, which is unknown; no
+/// item is read back from a target. The rows still read, and the pending
+/// one is still taken up and finished by its own submission sent again.
+/// A second open finds the migration done and changes nothing.
+#[test]
+fn a_legacy_registry_migrates_attribution_columns_and_old_rows_keep_null() {
+    let f = Fixture::new();
+    f.configure_remote();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let synchronization = OperationId::new();
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::SynchronizeContext,
+        AuthoringKind::Ticket,
+        canonical::ItemId::generate(),
+    )
+    .unwrap();
+    assert!(matches!(
+        f.service
+            .reserve_remote_operation(f.root.path(), synchronization, &target)
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    f.db()
+        .execute(
+            "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+            [synchronization.to_string()],
+        )
+        .unwrap();
+    let request = f.request();
+    let failing = RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::BeforeCheckpointCommit,
+    )
+    .unwrap();
+    assert!(
+        failing
+            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+            .is_err()
+    );
+    drop(failing);
+    let comment = request.comment.target.operation_id.to_string();
+    let pending_row: (i64, String) = f
+        .db()
+        .query_row(
+            "SELECT id, state FROM operation_records WHERE operation_ulid=?1",
+            [&comment],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_ne!(pending_row.1, "completed", "the submission is pending");
+    as_before_attribution(&f.db());
+    let legacy_columns = [
+        column_names(&f.db(), "operation_records"),
+        column_names(&f.db(), "remote_operation_records"),
+    ];
+    let legacy_rows = [
+        metadata_rows(&f.db(), "operation_records"),
+        metadata_rows(&f.db(), "remote_operation_records"),
+    ];
+
+    let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+    for open in 0..2 {
+        if open == 1 {
+            RepositoryService::open_at(f.data.path()).unwrap();
+        }
+        for (((table, added), legacy), rows) in [
+            ("operation_records", &LOCAL_ATTRIBUTION[..]),
+            ("remote_operation_records", &REMOTE_ATTRIBUTION[..]),
+        ]
+        .into_iter()
+        .zip(&legacy_columns)
+        .zip(&legacy_rows)
+        {
+            // The columns follow every column the older build had.
+            let mut expected = legacy.clone();
+            expected.extend(added.iter().map(|name| (*name).to_owned()));
+            assert_eq!(
+                column_names(&f.db(), table),
+                expected,
+                "{table}, open {open}"
+            );
+            let migrated = metadata_rows(&f.db(), table);
+            assert_eq!(migrated.len(), rows.len(), "{table}");
+            for (row, before) in migrated.iter().zip(rows) {
+                assert_eq!(
+                    &row[..before.len()],
+                    &before[..],
+                    "{table}: a value changed"
+                );
+                assert!(
+                    row[before.len()..]
+                        .iter()
+                        .all(|value| *value == rusqlite::types::Value::Null),
+                    "{table}: an older row says whose it is: {row:?}"
+                );
+            }
+        }
+        assert!(
+            f.db()
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='cycle_operation_attribution')",
+                    [],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap()
+        );
+    }
+
+    // Both rows still read.
+    let repository = reopened.resolve_repository(f.root.path()).unwrap();
+    let remote = reopened
+        .show_operation(&repository, synchronization)
+        .unwrap();
+    assert_eq!(remote.state, "interrupted");
+    let local = reopened
+        .show_operation(&repository, request.comment.target.operation_id)
+        .unwrap();
+    assert_eq!(local.state, pending_row.1);
+    // And the pending one is taken up and finished, under its own row.
+    let (receipt, _, indexing) = saved(
+        reopened
+            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    assert_eq!(receipt.operation_id, request.comment.target.operation_id);
+    assert!(!indexing.local_pending);
+    let finished: (i64, String) = f
+        .db()
+        .query_row(
+            "SELECT id, state FROM operation_records WHERE operation_ulid=?1",
+            [&comment],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(finished, (pending_row.0, "completed".to_owned()));
+}
+
+/// A clock a test sets, in seconds.
+struct SetClock(std::sync::atomic::AtomicI64);
+impl mutation::Clock for SetClock {
+    fn now(&self) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(self.0.load(std::sync::atomic::Ordering::SeqCst))
+            .unwrap()
+    }
+}
+
+/// A ticket saved and a comment added through the mutation boundary each
+/// begin a row that says whose it is: the request and its command, the
+/// commit identity, this host and process, the time by the service's clock,
+/// the item, and for the comment the comment. The synchronization the
+/// comment's publication reserves says it is the comment's request's.
+#[test]
+fn a_new_authoring_row_records_request_host_pid_item_and_comment() {
+    const SAVED_AT: i64 = 1_700_000_000;
+    const COMMENTED_AT: i64 = 1_700_000_100;
+    let f = Fixture::new();
+    f.configure_remote();
+    let clock = Arc::new(SetClock(std::sync::atomic::AtomicI64::new(SAVED_AT)));
+    let service = RepositoryService::open_at(f.data.path())
+        .unwrap()
+        .with_clock_for_testing(clock.clone());
+    let run = |request_id: RequestId, mutation: Mutation| {
+        service.execute(
+            MutationCall {
+                request_id,
+                confirmation: None,
+                mutation,
+            },
+            &mut SessionCredentials::new(NoPrompt),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        )
+    };
+    let root: PathBuf = f.root.path().into();
+    let ticket = canonical::ItemId::generate();
+    let saving = RequestId::new();
+    let created = run(
+        saving,
+        Mutation::TicketCreate(TicketCreateInput {
+            root: root.clone(),
+            id: ticket.clone(),
+            draft: TicketDraft {
+                title: "Attributed".into(),
+                ticket_type: "task".into(),
+                status: "open".into(),
+                project: None,
+                team: None,
+                body: String::new(),
+            },
+            deps: Vec::new(),
+            parent: None,
+            initials: None,
+        }),
+    );
+    assert_eq!(created.code, crate::results::ResultCode::Ok, "{created:?}");
+    clock
+        .0
+        .store(COMMENTED_AT, std::sync::atomic::Ordering::SeqCst);
+    let commenting = RequestId::new();
+    let comment = canonical::ItemId::generate();
+    let added = run(
+        commenting,
+        Mutation::CommentAdd(CommentAddInput {
+            root,
+            kind: AuthoringKind::Ticket,
+            id: ticket.clone(),
+            comment_id: comment.clone(),
+            parent_id: None,
+            body: "An attributed comment.\n".into(),
+            created_by: None,
+        }),
+    );
+    let Some(MutationDataDto::Comment(data)) = added.data.as_ref() else {
+        panic!("a comment's data: {added:?}");
+    };
+    type Attribution = (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+    );
+    let attribution = |table: &str, operation: &str| -> Attribution {
+        f.db()
+            .query_row(
+                &format!(
+                    "SELECT request_ulid, command, author, host, pid, started_at
+                       FROM {table} WHERE operation_ulid=?1"
+                ),
+                [operation],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .unwrap()
+    };
+    let items = |operation: &str| -> (Option<String>, Option<String>) {
+        f.db()
+            .query_row(
+                "SELECT item_id, comment_id FROM operation_records WHERE operation_ulid=?1",
+                [operation],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    };
+    let whose = |request: RequestId, command: &str, at: i64| -> Attribution {
+        (
+            Some(request.to_string()),
+            Some(command.to_owned()),
+            Some("Comment fixture <comment@example.invalid>".to_owned()),
+            Some(liveness::this_host()),
+            Some(i64::from(std::process::id())),
+            Some(at),
+        )
+    };
+    let saved_operation = created.operation_id.clone().expect("the save's operation");
+    let comment_operation = added.operation_id.clone().expect("the comment's operation");
+
+    assert_eq!(
+        attribution("operation_records", &saved_operation),
+        whose(saving, "ticket create", SAVED_AT)
+    );
+    assert_eq!(items(&saved_operation), (Some(ticket.to_string()), None));
+    assert_eq!(
+        attribution("operation_records", &comment_operation),
+        whose(commenting, "comment add", COMMENTED_AT)
+    );
+    assert_eq!(
+        items(&comment_operation),
+        (Some(ticket.to_string()), Some(comment.to_string()))
+    );
+    // The publication's synchronization was reserved, then stopped for a
+    // key, since none is selected.
+    assert_eq!(
+        attribution("remote_operation_records", &data.synchronization_id),
+        whose(commenting, "comment add", COMMENTED_AT)
+    );
+}

@@ -7013,6 +7013,7 @@ impl RepositoryService {
             RepositoryOperation::RefreshRepository,
             request.operation_id,
             &format!("{}/{oid}", local_refresh_identity(&request.target)),
+            self.clock.now().unix_timestamp(),
         )
         .map_err(|_| SynchronizationError::RecoveryRequired)?;
         Ok(oid)

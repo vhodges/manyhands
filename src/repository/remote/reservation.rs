@@ -1161,6 +1161,10 @@ impl RepositoryService {
         }
         #[cfg(test)]
         promotion_reservation_checkpoint(operation_id);
+        // Read before the registry transaction begins, so no Git
+        // configuration is read while it holds the database's write lock.
+        let origin =
+            crate::repository::recovery::RowOrigin::here(root, self.clock.now().unix_timestamp());
         state::with_transaction(self, root, |tx, repository_id| {
             if poll_kind == Some(state::PollKind::Update) {
                 crate::repository::context_retirement::record::require_update_poll_id_available(
@@ -1310,7 +1314,7 @@ impl RepositoryService {
                     RemoteReservationOutcome::Busy,
                 ));
             }
-            if poll_kind == Some(state::PollKind::Update) {
+            let inserted = if poll_kind == Some(state::PollKind::Update) {
                 state::insert_operation_with_kind(
                     tx,
                     repository_id,
@@ -1319,10 +1323,12 @@ impl RepositoryService {
                     priority,
                     poll_kind,
                     now(),
-                )?;
+                )?
             } else {
-                state::insert_operation(tx, repository_id, operation_id, target, priority, now())?;
-            }
+                state::insert_operation(tx, repository_id, operation_id, target, priority, now())?
+            };
+            crate::repository::recovery::attribute_remote_row(tx, inserted, &origin)
+                .map_err(|_| state::recovery_required())?;
             let record = state::read_operation(tx, repository_id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             Ok(RemotePollReservationOutcome::Reservation(

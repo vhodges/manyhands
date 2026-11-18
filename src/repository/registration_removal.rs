@@ -344,8 +344,15 @@ impl RepositoryService {
         if repository.is_none() {
             require_registry_only_removal(&db, &root, operation_id).map_err(at_root)?;
         }
-        begin_or_reconcile_operation(&mut db, &root, OPERATION, operation_id, "")
-            .map_err(at_root)?;
+        begin_or_reconcile_operation(
+            &mut db,
+            &root,
+            OPERATION,
+            operation_id,
+            "",
+            self.clock.now().unix_timestamp(),
+        )
+        .map_err(at_root)?;
         self.check_failure(
             FailurePoint::BeforeRegistrationRemovalTransaction,
             OPERATION,

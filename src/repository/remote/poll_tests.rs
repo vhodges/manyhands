@@ -2177,6 +2177,7 @@ fn task6_busy_yield_local_pending_and_kind_mismatch_gate_before_transport() {
         RepositoryOperation::SaveDocument,
         local_id,
         "fixture",
+        0,
     )
     .unwrap();
     for invocation in [

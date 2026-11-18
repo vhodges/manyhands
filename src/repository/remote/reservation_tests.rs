@@ -1038,6 +1038,7 @@ fn update_local_prepared_journal_guard_yields_without_creating_local_rows() {
                 action,
                 local_id,
                 "local-fixture",
+                0,
             )
             .err()
             .expect("active poll must reject local journal begin");
@@ -1081,6 +1082,7 @@ fn update_local_prepared_journal_guard_yields_without_creating_local_rows() {
                 action,
                 local_id,
                 "local-fixture",
+                0,
             )
             .unwrap();
         }

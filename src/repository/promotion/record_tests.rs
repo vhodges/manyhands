@@ -323,7 +323,8 @@ fn spec_p2_create_folder_authoritative_child_keeps_exact_refresh_handoff() {
                 root.path(),
                 RepositoryOperation::SaveDocument,
                 child,
-                ""
+                "",
+                0
             )
             .is_err()
         );
@@ -333,7 +334,8 @@ fn spec_p2_create_folder_authoritative_child_keeps_exact_refresh_handoff() {
                 root.path(),
                 RepositoryOperation::RefreshRepository,
                 child,
-                "other"
+                "other",
+                0
             )
             .is_err()
         );
@@ -642,7 +644,8 @@ fn local_journal_cannot_begin_with_a_parent_or_unrun_child_id() {
                 std::path::Path::new("/fixture"),
                 RepositoryOperation::RefreshRepository,
                 op,
-                ""
+                "",
+                0
             )
             .err()
             .unwrap()

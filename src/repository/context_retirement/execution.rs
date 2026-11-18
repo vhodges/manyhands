@@ -265,6 +265,8 @@ impl RepositoryService {
             authoring_kind_segment(&request.kind),
             request.item_id
         );
+        // Whose the row is, read before the registry's write lock is taken.
+        let origin = recovery::RowOrigin::here(&root, self.clock.now().unix_timestamp());
         {
             let _guard = cache_write_guard(&self.registry_path, &root, OP)?;
             let mut db = open_registry(&self.registry_path, &mut |_| {})?;
@@ -355,6 +357,8 @@ impl RepositoryService {
                         .is_none_or(|(_, _, step)| step == "complete");
                 tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,'created',?5)", params![repository_id,root.to_str(),id,target,self.clock.now().unix_timestamp()]).map_err(RepositoryError::sqlite)?;
                 let local_id = tx.last_insert_rowid();
+                recovery::attribute_local_row(&tx, local_id, &origin)
+                    .map_err(RepositoryError::sqlite)?;
                 let captured = materialization.as_ref().filter(|_| complete);
                 tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,selection_epoch,instance_verified,materialization_capture,materialization_operation_ulid,materialization_oid,materialization_step,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis,final_code,final_result,request_ulid)
                   VALUES(?1,?2,?3,1,?4,?5,?13,1,0,?6,?7,?8,?9,0,1,?10,'none','none','none',?11,?12,?14)",

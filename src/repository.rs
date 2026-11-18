@@ -48,6 +48,7 @@ mod comment_publication_tests;
 mod discovery;
 mod integration;
 pub mod keys;
+mod liveness;
 mod local_sync;
 mod mutation;
 #[cfg(unix)]
@@ -1631,8 +1632,14 @@ impl RepositoryService {
         self.replace_corrupt_cache(operation, &root)?;
         let operation_id = {
             let _repository_lease = repository_lease(&repository, &root, operation)?;
-            let record_id =
-                begin_operation(&self.registry_path, &root, operation, request.operation_id)?.id;
+            let record_id = begin_operation(
+                &self.registry_path,
+                &root,
+                operation,
+                request.operation_id,
+                self.clock.now().unix_timestamp(),
+            )?
+            .id;
             // The row may be one an earlier call left: it is touched
             // before the lease is let go, so that it shows this call at
             // work from then on.
@@ -3533,9 +3540,15 @@ impl RepositoryService {
         let mut connection = open_registry(&self.registry_path, &mut |_| {})
             .map_err(|error| error.for_operation(operation, root))?;
         migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
-        let record =
-            begin_or_reconcile_operation(&mut connection, root, operation, operation_id, target)
-                .map_err(|error| error.for_operation(operation, root))?;
+        let record = begin_or_reconcile_operation(
+            &mut connection,
+            root,
+            operation,
+            operation_id,
+            target,
+            self.clock.now().unix_timestamp(),
+        )
+        .map_err(|error| error.for_operation(operation, root))?;
         Ok(record)
     }
 
@@ -3961,9 +3974,15 @@ impl RepositoryService {
         let mut connection = open_registry(&self.registry_path, &mut |_| {})
             .map_err(|error| error.for_operation(operation, root))?;
         migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
-        let record =
-            begin_or_reconcile_operation(&mut connection, root, operation, operation_id, target)
-                .map_err(|error| error.for_operation(operation, root))?;
+        let record = begin_or_reconcile_operation(
+            &mut connection,
+            root,
+            operation,
+            operation_id,
+            target,
+            self.clock.now().unix_timestamp(),
+        )
+        .map_err(|error| error.for_operation(operation, root))?;
         Ok(claim_indexing(
             &connection,
             record.id,
@@ -5893,12 +5912,20 @@ fn begin_operation(
     root: &Path,
     operation: RepositoryOperation,
     operation_id: OperationId,
+    started_at: i64,
 ) -> Result<recovery::RecoveryRecord, RepositoryError> {
     let _cache_guard = cache_read_guard(registry_path, root, operation)?;
     let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(operation, root))?;
-    begin_or_reconcile_operation(&mut connection, root, operation, operation_id, "")
-        .map_err(|error| error.for_operation(operation, root))
+    begin_or_reconcile_operation(
+        &mut connection,
+        root,
+        operation,
+        operation_id,
+        "",
+        started_at,
+    )
+    .map_err(|error| error.for_operation(operation, root))
 }
 
 fn registered_repository_id(

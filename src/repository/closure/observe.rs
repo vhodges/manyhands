@@ -373,9 +373,9 @@ pub(in super::super) fn revalidate_under_lease(
     .map_err(|refusal| refusal.blockers))
 }
 
-/// C12. `operation_records.item_id` is null for lifecycle rows: a row's
-/// ticket comes from its target (R-T0-4), parsed by the abandon bridge's own
-/// parser. A comment binding is unfinished while its local row or its
+/// C12. `operation_records.item_id` is null for most lifecycle rows, and for
+/// every row an older build wrote: a row's ticket comes from its target
+/// (R-T0-4), parsed by the abandon bridge's own parser. A comment binding is unfinished while its local row or its
 /// publication's remote row is.
 fn pending_work(
     tx: &rusqlite::Transaction<'_>,
