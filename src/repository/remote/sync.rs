@@ -6549,6 +6549,10 @@ impl RepositoryService {
                 }
                 let linked = local_target(&root, &config.primary_branch, &request.target)?;
                 let local = local_oid(&linked)?;
+                // A restarted row skips the `FetchPrepared` checkpoint, the
+                // only one that records where the operation began, so it has
+                // none to compare with here.
+                backfill_expected_oid(&mut evidence, local);
                 if evidence.expected_oid != Some(local)
                     && !matches!(
                         resumed,
@@ -6883,8 +6887,9 @@ impl RepositoryService {
         state::with_transaction(self, root, |tx, id| {
             let current = reservation::owned(self, tx, id, owner)?;
             let own = (!inherited).then(|| owner.operation_id());
-            // A resumed synchronization retries its own push that was never
-            // issued, so that intent is not an unanswered push.
+            // A resumed synchronization retries its own push intent that is
+            // not known to have returned, so that intent is not an unanswered
+            // push: the remote is observed before any retry.
             let unissued = inherited.then(|| owner.operation_id());
             Ok(push_absence(
                 tx,
@@ -7078,6 +7083,14 @@ impl RepositoryService {
         )
     }
 }
+/// Record where a synchronization began when its row does not say, as the
+/// consented local tip does for `republish_reserved`: `FetchPrepared` is the
+/// only checkpoint that writes `expected_oid`, and a restarted row skips it.
+/// A recorded value is never overwritten.
+fn backfill_expected_oid(evidence: &mut Evidence, local: git2::Oid) {
+    evidence.expected_oid.get_or_insert(local);
+}
+
 /// What the push evidence of the earlier synchronizations of `target`'s
 /// context says of an absence at the push endpoint, for a synchronization
 /// under `generation`: the classification `synchronization_push_absence_boundary`
@@ -7087,10 +7100,12 @@ impl RepositoryService {
 ///
 /// `unissued` is the resuming synchronization's own operation, when it
 /// inherited an earlier call's push: its intent still at `PushPrepared`, with
-/// no publication attempt or authority, for a context never published, was
-/// never issued, so nothing of it can be on the remote and the push is
-/// retried rather than counted. At `PushReturned`, with publication evidence,
-/// or for any other operation's row, the intent stays an unanswered push.
+/// no publication attempt or authority, for a context never published, is not
+/// known to have returned. `PushPrepared` is recorded before the push is
+/// issued, so a dropped connection can leave it after a push that landed;
+/// the remote is observed before any retry, and the push is retried rather
+/// than counted. At `PushReturned`, with publication evidence, or for any
+/// other operation's row, the intent stays an unanswered push.
 ///
 /// The second value is the commit the newest publication of the context
 /// put there, among those the classification counts as proven: `None` with
@@ -7648,7 +7663,7 @@ impl RepositoryService {
             evidence.tracking_oid = context;
             // An earlier call that stopped before it recorded where it
             // began began here: the local tip is the consented one.
-            evidence.expected_oid.get_or_insert(local);
+            backfill_expected_oid(&mut evidence, local);
             resumed = record.sync_checkpoint;
         }
         if resumed == Some(Checkpoint::PushVerified) {

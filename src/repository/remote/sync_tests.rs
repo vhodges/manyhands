@@ -5651,12 +5651,117 @@ fn journal_unanswered_context_push(
     }
 }
 
+/// A restarted row skips `FetchPrepared`, the only checkpoint that records
+/// `expected_oid`, so it reaches `fetch_observed` without one; `PushPrepared`
+/// refuses such a row until the main path backfills it from the local tip.
+#[test]
+fn a_restarted_row_without_expected_oid_can_checkpoint_push_prepared_after_backfill() {
+    use state::SynchronizationCheckpoint as C;
+    let (root, _data, service) = fixture();
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let tracking = repository.head().unwrap().target().unwrap();
+    repository
+        .remote("origin", "ssh://example.invalid/fixture.git")
+        .unwrap();
+    // The local head is one commit ahead of the tracking ref.
+    let signature = repository.signature().unwrap();
+    let parent = repository.find_commit(tracking).unwrap();
+    let local = repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "ahead",
+            &parent.tree().unwrap(),
+            &[&parent],
+        )
+        .unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(&service, root.path(), |tx, id| {
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+    })
+    .unwrap();
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::SynchronizeContext,
+        AuthoringKind::Ticket,
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+    )
+    .unwrap();
+    let RemoteReservationOutcome::Reserved(owner) = service
+        .reserve_remote_operation(root.path(), OperationId::new(), &target)
+        .unwrap()
+    else {
+        panic!("reservation")
+    };
+    // Journaled as a restart leaves it: no `expected_oid` at `fetch_observed`.
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            C::FetchPrepared,
+            &state::SynchronizationEvidence::default(),
+        )
+        .unwrap();
+    repository
+        .reference(plan.primary().tracking_ref(), tracking, true, "fixture")
+        .unwrap();
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let observation = RemoteRefObservation::from_advertisement(
+        &plan,
+        "refs/heads/main",
+        tracking,
+        Some(tracking),
+    )
+    .unwrap();
+    commit_observation_batch(&service, root.path(), &owner, &plan, &[observation], 1).unwrap();
+    let row = || {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            Ok(state::read_operation(tx, id, owner.operation_id())?
+                .unwrap()
+                .sync_evidence)
+        })
+        .unwrap()
+    };
+    assert_eq!(row().expected_oid, None);
+
+    let mut evidence = state::SynchronizationEvidence {
+        local_oid: Some(local),
+        primary_tracking_oid: Some(tracking),
+        push_oid: Some(local),
+        ..Default::default()
+    };
+    let refused =
+        service.checkpoint_synchronization(root.path(), &owner, C::PushPrepared, &evidence);
+    assert!(
+        matches!(&refused, Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired),
+        "{refused:?}"
+    );
+
+    backfill_expected_oid(&mut evidence, local);
+    assert_eq!(evidence.expected_oid, Some(local));
+    service
+        .checkpoint_synchronization(root.path(), &owner, C::PushPrepared, &evidence)
+        .unwrap();
+    assert_eq!(row().expected_oid, Some(local));
+
+    // A recorded value is where the operation began, and is kept.
+    let mut recorded = state::SynchronizationEvidence {
+        expected_oid: Some(tracking),
+        ..Default::default()
+    };
+    backfill_expected_oid(&mut recorded, local);
+    assert_eq!(recorded.expected_oid, Some(tracking));
+}
+
 /// A synchronization that resumes after its own first push of a context
 /// branch the remote has never had. The push endpoint advertises no context
 /// ref. Whether that is ambiguous depends on whether the push could have
-/// reached the remote: an intent still at `PushPrepared` (the push was never
-/// issued, so nothing of it can be there) with no evidence the context was ever
-/// published is retried; one at `PushReturned`, one the remote has been seen to
+/// reached the remote: an intent still at `PushPrepared` (not known to have
+/// returned; the remote is observed before the retry) with no evidence the
+/// context was ever published is retried; one at `PushReturned`, one the remote has been seen to
 /// hold, or one another operation left behind is not ours to retry and stays
 /// ambiguous.
 #[test]
