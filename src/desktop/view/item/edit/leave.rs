@@ -139,6 +139,7 @@ impl ItemPane {
                 TabEditing {
                     editing: pane.holds_session(),
                     unkept: pane.unkept_edit(cx),
+                    composing: pane.composing(cx),
                 }
             })
         });

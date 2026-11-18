@@ -17,10 +17,10 @@ use super::support::{
     until_post_runs, write_new,
 };
 use crate::desktop::{
-    model::{operations::CONFLICT_BANNER, publication::CommentOutcome},
+    model::{activity::rows::RowKey, operations::CONFLICT_BANNER, publication::CommentOutcome},
     services::JobKind,
     test_support::fixtures::item_id,
-    view::operations::request_id,
+    view::{activity_support::act, operations::DISMISS},
 };
 
 /// Decision 24: Check again with no record, the comment listed: the draft
@@ -187,7 +187,7 @@ async fn a_post_stopped_on_a_conflict_raises_the_items_banner(cx: &mut TestAppCo
     }
 
     let id = post_request(&shell, &comment, cx).unwrap();
-    shell.click(request_id(id, "dismiss"), cx);
+    act(&shell, &RowKey::Request(id), DISMISS, cx);
     shell.frame(cx, |_, _| ());
     assert!(!shell.present("item-conflict", cx), "dismissed");
 }

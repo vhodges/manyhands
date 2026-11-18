@@ -38,7 +38,9 @@ use crate::desktop::{
 /// Long enough for a refresh of a fixture on a loaded machine.
 const WAIT: Duration = Duration::from_secs(10);
 
-/// What the worker said, as a test reads it back.
+/// What the worker said, as a test reads it back. A test keeps a handful,
+/// so a request is held by value (Wave 04 Cycle 05a R-29 made it larger).
+#[allow(clippy::large_enum_variant)]
 enum Seen {
     Queued(DesktopRequest),
     Started(DesktopRequestId),
@@ -158,6 +160,7 @@ fn seen(event: &WorkerEvent) -> Seen {
             lane: request.lane,
             attempt: request.attempt,
             state: RequestState::Queued,
+            registered_root: None,
         }),
         WorkerEvent::Started(id) => Seen::Started(*id),
         WorkerEvent::Progress(id, progress) => Seen::Progress(*id, progress.clone()),
@@ -168,6 +171,10 @@ fn seen(event: &WorkerEvent) -> Seen {
         WorkerEvent::Removed(id) => Seen::Removed(*id),
         WorkerEvent::NotSent(id, why) => Seen::NotSent(*id, *why),
         WorkerEvent::Prompt(_) => Seen::Prompt,
+        // These tests submit no poll (`poll_tests` hears them).
+        WorkerEvent::Polled(..) | WorkerEvent::PreemptPoll { .. } => {
+            unreachable!("no poll was submitted")
+        }
     }
 }
 

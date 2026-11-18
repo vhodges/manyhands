@@ -103,7 +103,8 @@ fn removals(shell: &Shell, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
 async fn ask_to_remove(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
     shell.frame(cx, |window, cx| {
         shell.workspace.update(cx, |workspace, cx| {
-            workspace.remove_repository(key(root), window, cx)
+            let restore = workspace.repositories_list_focus(cx);
+            workspace.remove_repository(key(root), restore, window, cx)
         })
     });
     let deadline = Instant::now() + WAIT;
@@ -402,7 +403,8 @@ async fn a_removal_found_already_applied_keeps_an_unkept_tab(cx: &mut TestAppCon
     second_actor(&shell.fixture, Actor::Unregister(&root));
     shell.frame(cx, |window, cx| {
         shell.workspace.update(cx, |workspace, cx| {
-            workspace.remove_repository(key(&root), window, cx)
+            let restore = workspace.repositories_list_focus(cx);
+            workspace.remove_repository(key(&root), restore, window, cx)
         })
     });
     let deadline = Instant::now() + WAIT;

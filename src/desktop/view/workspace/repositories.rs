@@ -37,6 +37,7 @@ impl Workspace {
                     }
                     this.repositories_loaded(cx);
                     cx.notify();
+                    this.refresh_activity(cx);
                 }
             },
         ));
@@ -62,6 +63,9 @@ impl Workspace {
         let Some(roots) = self.listed() else {
             return;
         };
+        // The launch poll, and the schedule of a repository that came or
+        // went (D6 B6, R-16).
+        self.services.repositories_listed(&roots, cx);
         if !self.launched {
             self.launched = true;
             if self.services.launch_refresh() {
@@ -82,6 +86,7 @@ impl Workspace {
             cx.notify();
         });
         self.pending_reads.retain(|root, _| roots.contains(root));
+        self.retain_titles(&roots);
         // A removed repository's conflict offers go, and a read of them
         // still running lands on nothing.
         let gone: Vec<RepoKey> = self
@@ -119,6 +124,28 @@ impl Workspace {
         self.load_repositories(cx);
     }
 
+    /// The panel's pane, whose rows a test compares with the model's.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn repositories_pane(
+        &self,
+    ) -> &crate::desktop::view::repositories::RepositoriesPane {
+        &self.repositories_pane
+    }
+
+    /// Applies `list` as if a list read had answered it: the incomplete
+    /// list the library never answers today (fact 57).
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn apply_repository_list(
+        &mut self,
+        list: manyhands::repository::RepositoryListDto,
+        cx: &mut Context<Self>,
+    ) {
+        let stamp = self.navigation.load_repositories();
+        self.navigation
+            .apply_repositories(stamp, crate::desktop::services::ReadResult::Ok(list));
+        cx.notify();
+    }
+
     #[allow(clippy::result_large_err)]
     fn resolve(&mut self, key: String, stamp: Stamp, cx: &mut Context<Self>) {
         let root = PathBuf::from(key);
@@ -131,6 +158,7 @@ impl Workspace {
                 if this.navigation.apply_resolution(stamp, result) {
                     this.load_lists(cx);
                     cx.notify();
+                    this.refresh_activity(cx);
                 }
             },
         ));

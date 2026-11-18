@@ -2,10 +2,9 @@
 
 use super::{QuitPhase, Region, Workspace};
 use crate::desktop::{
-    model::stamp::TabId,
-    services::{prompts::PromptReply, worker::QuitState},
+    model::{activity::rows::RowKey, layout::PanelKind, stamp::TabId},
+    services::{prompts::PromptReply, requests::DesktopRequestId, worker::QuitState},
     view::{
-        operations::draft_flush_id,
         passphrase::open_dialog,
         quit::{DraftsNotSaved, EditsNotKept, NotSavedChoice},
     },
@@ -40,6 +39,9 @@ impl Workspace {
             QuitPhase::SavingDrafts => return false,
             QuitPhase::Running => {}
         }
+        // Nothing new starts from here: the unkept ask below opens while
+        // `QuitPhase` is still `Running`, and Cancel on it lets go (R-33).
+        self.freeze_polling(true, cx);
         // Part C fix 1, I1: an edit session's text that no draft holds is
         // asked about first, once every begin in flight has landed.
         if self.unkept_asks_first(window, cx) {
@@ -85,6 +87,8 @@ impl Workspace {
         }
         self.hold_prompt(window, cx);
         window.close_all_dialogs(cx);
+        self.close_settings_quietly(window, cx);
+        self.close_resolve_quietly(window, cx);
         let workspace = cx.entity().downgrade();
         EditsNotKept {
             count: unkept.len(),
@@ -127,6 +131,7 @@ impl Workspace {
             }
             NotSavedChoice::Cancel => {
                 self.prompts_held = false;
+                self.freeze_polling(false, cx);
                 if let Some(&id) = unkept.first() {
                     self.show_tab(id, cx);
                     self.focus_region(Region::Content, window, cx);
@@ -154,29 +159,85 @@ impl Workspace {
         self.prompt_unavailable(window, cx);
         match self.services.worker().quit() {
             QuitState::Idle => {
-                self.quit_now(cx);
+                self.quit_gracefully(cx);
                 true
             }
             QuitState::Finishing(id) => {
                 self.wait_to_quit(QuitPhase::Finishing(id), window, cx);
+                self.start_still_stopping(id, window, cx);
                 false
             }
         }
     }
 
-    /// Quitting waits: every dialog and the details sheet close, no sheet a
-    /// chip asked for opens over it, and Quit now takes focus. Closing the
-    /// sheet gives focus back to its chip, so Quit now is focused after it.
+    /// A graceful exit: the worker thread is joined before the app quits
+    /// (A9, O-7). Quit now goes to `quit_now` directly and joins nothing.
+    fn quit_gracefully(&mut self, cx: &mut Context<Self>) {
+        self.services.worker().shut_down_and_join();
+        self.quit_now(cx);
+    }
+
+    /// The polling scheduler starts nothing while quitting is asked and not
+    /// yet cancelled, through the unkept ask, the flush and the wait for a
+    /// job (R-33).
+    fn freeze_polling(&mut self, frozen: bool, cx: &mut Context<Self>) {
+        self.services
+            .scheduler()
+            .update(cx, |scheduler, cx| scheduler.set_quitting(frozen, cx));
+    }
+
+    /// Waiting for the job `id`: after the injected ten seconds the words
+    /// say so (decision 7). The UI stays interactive and nothing is cleared
+    /// or reclaimed.
+    fn start_still_stopping(
+        &mut self,
+        id: DesktopRequestId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let operations = self.services.operations().clone();
+        let after = operations.update(cx, |operations, _| {
+            operations.set_still_stopping(false);
+            operations.still_stopping_after()
+        });
+        cx.spawn_in(window, async move |workspace, cx| {
+            cx.background_executor().timer(after).await;
+            let _ = workspace.update(cx, |workspace, cx| workspace.still_stopping(id, cx));
+        })
+        .detach();
+    }
+
+    /// Ten seconds have passed while quitting waited for `id`. Quit now may
+    /// have quit meanwhile.
+    fn still_stopping(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) {
+        if self.quit != QuitPhase::Finishing(id) {
+            return;
+        }
+        self.services
+            .operations()
+            .update(cx, |operations, _| operations.set_still_stopping(true));
+        cx.notify();
+    }
+
+    /// Quitting waits: every dialog, Settings (quietly, R-52), Resolve
+    /// conflict (quietly, O-10) and the details sheet close, no sheet a
+    /// chip asked for opens over it, and Quit now takes focus. Closing a sheet gives focus back to what held
+    /// it as the sheet opened, so Quit now is focused after it. Quit now
+    /// lives in Activity: with Activity not displayed focus stays where the
+    /// closing left it, and the layout is untouched (R-20).
     fn wait_to_quit(&mut self, phase: QuitPhase, window: &mut Window, cx: &mut Context<Self>) {
         self.set_quit(phase, cx);
         window.close_all_dialogs(cx);
         self.content.details = None;
+        self.close_settings_quietly(window, cx);
         self.content.sheet = None;
         if window.has_active_sheet(cx) {
             window.close_sheet(cx);
         }
-        window.focus(&self.quit_focus, cx);
-        self.last_region = Some(Region::Operations);
+        if self.layout.is_displayed(PanelKind::Activity) {
+            window.focus(&self.quit_focus, cx);
+            self.last_region = Some(Region::Operations);
+        }
         cx.notify();
     }
 
@@ -217,6 +278,7 @@ impl Workspace {
         let failed: Vec<DraftId> = failed.into_iter().map(|(id, _)| id).collect();
         let workspace = cx.entity().downgrade();
         window.close_all_dialogs(cx);
+        self.close_settings_quietly(window, cx);
         DraftsNotSaved {
             count: failed.len(),
         }
@@ -228,7 +290,9 @@ impl Workspace {
     }
 
     /// Quit anyway goes on to D1's quit. Cancel stays, with the first
-    /// failed draft's Retry focused, in the operation area's order.
+    /// failed draft's Retry focused, in the operation area's order. Retry
+    /// lives in Activity: with Activity not displayed, focus goes to the
+    /// item area, and Needs attention counts the failure (R-20, P27).
     fn not_saved_chosen(
         &mut self,
         choice: NotSavedChoice,
@@ -245,16 +309,20 @@ impl Workspace {
             }
             NotSavedChoice::Cancel => {
                 self.prompts_held = false;
+                self.freeze_polling(false, cx);
                 let failures = self.services.drafts().read(cx).flush_failures();
                 let first = failures
                     .iter()
                     .map(|(id, ..)| *id)
                     .find(|id| failed.contains(id))
                     .or_else(|| failures.first().map(|(id, ..)| *id));
-                if let Some(id) = first {
-                    let retry = self.control_focus_for(draft_flush_id(id, "retry"), cx);
-                    window.focus(&retry, cx);
-                    self.last_region = Some(Region::Operations);
+                if !self.layout.is_displayed(PanelKind::Activity) {
+                    self.focus_region(Region::Content, window, cx);
+                } else if let Some(id) = first {
+                    // The failed draft's Flush row is highlighted, and the
+                    // list focused (C3).
+                    self.activity.pane.highlight_when_shown(&RowKey::Flush(id));
+                    self.focus_region(Region::Operations, window, cx);
                 }
                 // A prompt held meanwhile shows once this dialog has
                 // closed (the Kit closes the top one); closing it gives the
@@ -265,7 +333,10 @@ impl Workspace {
         }
     }
 
+    /// Every exit passes through here: the layout is written first, on this
+    /// thread, so a change made while the quit waited is kept (R-19, P31).
     pub(in crate::desktop::view) fn quit_now(&mut self, cx: &mut Context<Self>) {
+        self.dock.write_for_quit(&self.layout, cx);
         self.set_quit(QuitPhase::Quit, cx);
         self.prompts_held = false;
         self.prompt_unavailable_now(cx);
@@ -277,7 +348,7 @@ impl Workspace {
         if matches!(self.quit, QuitPhase::Finishing(_))
             && self.services.worker().quit() == QuitState::Idle
         {
-            self.quit_now(cx);
+            self.quit_gracefully(cx);
         }
     }
 
@@ -308,7 +379,7 @@ impl Workspace {
             prompt.answer(PromptReply::Unavailable);
             return;
         }
-        self.passphrase = Some(open_dialog(prompt, window, cx));
+        self.passphrase = Some(open_dialog(prompt, &self.services, window, cx));
         cx.notify();
     }
 

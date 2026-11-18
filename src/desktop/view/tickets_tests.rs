@@ -1,6 +1,5 @@
 //! The ticket list: the closure filter keeps every nonconforming entry,
-//! the rows are the library's, a filter change drops the last filter's
-//! read, and the keyboard moves and opens.
+//! the rows are the library's, and the keyboard moves and opens.
 
 use std::path::{Path, PathBuf};
 
@@ -9,16 +8,13 @@ use manyhands::repository::{
     ClosureFilter, ItemDto, ItemDtoKind, ItemListDto, ReadinessFilter, TicketFilter,
 };
 
-use super::{
-    LIFECYCLE_CLOSED, LIFECYCLE_OPEN, NO_REASONS, NONCONFORMING, READINESS_FILTERS, SELECT_BLOCKED,
-    WHY_BLOCKED, row_description, row_label,
-};
+use super::{NO_REASONS, SELECT_BLOCKED, WHY_BLOCKED, row_label};
 use crate::desktop::{
     model::{
-        navigation::OpenTarget,
-        tickets::{TicketQuery, blocked_reasons},
+        navigation::{OpenTarget, Pane},
+        ticket_view::{CLOSED_LINE, NEEDS_FIXING_PILL, NEEDS_FIXING_TYPE, ticket_tooltip},
+        tickets::blocked_reasons,
     },
-    services::ReadKind,
     test_support::fixtures::Fixture,
     view::harness::{Shell, key},
 };
@@ -31,7 +27,7 @@ const BROKEN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC3";
 /// An open ticket whose status is `closed`, a lifecycle-closed ticket, a
 /// plain open ticket and a nonconforming file under `.manyhands/tickets/`,
 /// then a library refresh. The repository is selected and the Tickets
-/// pane shown.
+/// list shown.
 fn four_tickets(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
@@ -42,21 +38,22 @@ fn four_tickets(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
     shell.click(("repo-row", 0usize), cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     (shell, root)
 }
 
 fn library(shell: &Shell, root: &Path, closure: ClosureFilter) -> ItemListDto {
     let service = shell.fixture.service();
     let repo = service.resolve_repository(root).unwrap();
-    let query = TicketQuery {
+    let filter = TicketFilter {
         closure,
-        ..TicketQuery::default()
+        ..TicketFilter::default()
     };
-    service.list_tickets(&repo, &query.to_filter()).unwrap()
+    service.list_tickets(&repo, &filter).unwrap()
 }
 
-/// What a test reads of one row: its label, status and lifecycle.
+/// What a test reads of one row: its label, its status pill and its
+/// Closed marker.
 type Seen = (String, Option<String>, Option<String>);
 
 fn visible(shell: &Shell, cx: &mut TestAppContext) -> Vec<Seen> {
@@ -68,20 +65,45 @@ fn visible(shell: &Shell, cx: &mut TestAppContext) -> Vec<Seen> {
             (
                 label,
                 shell.label(("ticket-status", index), cx),
-                shell.label(("ticket-lifecycle", index), cx),
+                shell.label(("ticket-closed", index), cx),
             )
         })
         .collect()
 }
 
-/// What the row for `item` must show.
-fn expected(item: &ItemDto) -> Seen {
-    let lifecycle = match &item.closure {
-        Some(closure) if closure.closed_at.is_some() => Some(LIFECYCLE_CLOSED.to_owned()),
-        Some(_) => Some(LIFECYCLE_OPEN.to_owned()),
-        None => None,
+/// What the row for `item` must show under `closure`: the status as
+/// written, "needs fixing" for a nonconforming entry, and the Closed
+/// marker only for a lifecycle-closed ticket under All.
+fn expected(item: &ItemDto, closure: ClosureFilter) -> Seen {
+    let pill = match item.id {
+        Some(_) => item.status.clone(),
+        None => Some(NEEDS_FIXING_PILL.to_owned()),
     };
-    (row_label(item), item.status.clone(), lifecycle)
+    let closed = item
+        .closure
+        .as_ref()
+        .is_some_and(|closure| closure.closed_at.is_some());
+    (
+        row_label(item),
+        pill,
+        (closed && closure == ClosureFilter::All).then(|| CLOSED_LINE.to_owned()),
+    )
+}
+
+/// Chooses `readiness` through the menu of `filter-readiness`: a click opens
+/// it, Down moves to the item and Enter chooses it. Focus is back on the
+/// button.
+fn choose_readiness(shell: &Shell, readiness: Option<ReadinessFilter>, cx: &mut TestAppContext) {
+    let downs = match readiness {
+        None => 1,
+        Some(ReadinessFilter::Ready) => 2,
+        Some(ReadinessFilter::Blocked) => 3,
+    };
+    shell.click("filter-readiness", cx);
+    for _ in 0..downs {
+        shell.keys("down", cx);
+    }
+    shell.keys("enter", cx);
 }
 
 fn labels(seen: &[Seen]) -> Vec<&str> {
@@ -121,7 +143,11 @@ fn each_closure_filter_shows_the_librarys_rows_and_keeps_the_nonconforming_entry
         assert!(shell.selected(filter, cx), "{filter}");
         let list = library(&shell, &root, closure);
         let seen = visible(&shell, cx);
-        let library_rows: Vec<Seen> = list.items.iter().map(expected).collect();
+        let library_rows: Vec<Seen> = list
+            .items
+            .iter()
+            .map(|item| expected(item, closure))
+            .collect();
         assert_eq!(seen, library_rows, "{filter}");
         let mut shown = labels(&seen);
         shown.sort_unstable();
@@ -129,8 +155,8 @@ fn each_closure_filter_shows_the_librarys_rows_and_keeps_the_nonconforming_entry
         assert_eq!(shown, wanted, "{filter}");
     }
 
-    // An open ticket whose status says closed: status as written,
-    // lifecycle Open, in text.
+    // An open ticket whose status says closed: the status as written, and
+    // no Closed marker, which only a lifecycle-closed ticket gets.
     shell.click("filter-all", cx);
     let seen = visible(&shell, cx);
     let says = seen
@@ -138,44 +164,26 @@ fn each_closure_filter_shows_the_librarys_rows_and_keeps_the_nonconforming_entry
         .find(|(label, ..)| label == "Says closed")
         .unwrap();
     assert_eq!(says.1.as_deref(), Some("closed"));
-    assert_eq!(says.2.as_deref(), Some(LIFECYCLE_OPEN));
-    // The nonconforming entry says so in text, with its problem.
+    assert_eq!(says.2, None);
+    let closed = seen
+        .iter()
+        .find(|(label, ..)| label == "Closed for good")
+        .unwrap();
+    assert_eq!(closed.2.as_deref(), Some(CLOSED_LINE));
+    // The nonconforming entry says so in text: its type cell and its
+    // status pill.
     let at = labels(&seen)
         .iter()
         .position(|label| *label == broken)
         .unwrap();
     assert_eq!(
-        shell.label(("ticket-nonconforming", at), cx).as_deref(),
-        Some(NONCONFORMING)
+        shell.label(("ticket-type", at), cx).as_deref(),
+        Some(NEEDS_FIXING_TYPE)
     );
     assert_eq!(
-        shell.label(("ticket-problem", at), cx).as_deref(),
-        Some("malformed_front_matter")
+        shell.label(("ticket-status", at), cx).as_deref(),
+        Some(NEEDS_FIXING_PILL)
     );
-}
-
-/// Review Focus 1: the Closed read is held while the user moves on to
-/// All; releasing it leaves All's rows.
-#[gpui_kit::test]
-fn a_filter_change_drops_the_held_read_of_the_last_filter(cx: &mut TestAppContext) {
-    let (shell, root) = four_tickets(cx);
-    let held = shell.backend.hold_read(ReadKind::Tickets);
-    shell.click("filter-closed", cx);
-    shell.click("filter-all", cx);
-    let all: Vec<Seen> = library(&shell, &root, ClosureFilter::All)
-        .items
-        .iter()
-        .map(expected)
-        .collect();
-    assert_eq!(visible(&shell, cx), all);
-
-    // The Closed read may already be dropped with its task; either way it
-    // is let go.
-    let _ = held.send(());
-    shell.run(cx);
-    assert_eq!(visible(&shell, cx), all);
-    assert!(shell.selected("filter-all", cx));
-    assert!(!shell.selected("filter-closed", cx));
 }
 
 /// Arrows move through the list and Enter opens the row by its ID, or by
@@ -249,7 +257,7 @@ const AFTER_DONE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD7";
 
 /// A ticket waiting for an open one, one waiting for a ticket no context
 /// holds, two waiting for each other, one whose only dependency is closed,
-/// and a nonconforming entry. The Tickets pane is shown.
+/// and a nonconforming entry. The Tickets list is shown.
 fn related(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
@@ -264,20 +272,14 @@ fn related(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
     shell.click(("repo-row", 0usize), cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     (shell, root)
-}
-
-/// The reasons drawn under the row at `index`.
-fn reasons(shell: &Shell, index: usize, cx: &mut TestAppContext) -> Vec<String> {
-    (0..)
-        .map_while(|n| shell.label(format!("ticket-reason-{index}-{n}"), cx))
-        .collect()
 }
 
 /// Review Focus 3, and no fabrication: under Ready and under Blocked the
 /// rows are exactly those of the same `list_tickets` call, the
-/// nonconforming entry among them; each blocked row gives its reasons.
+/// nonconforming entry among them; each blocked row gives its reasons in
+/// Why blocked when it is selected.
 #[gpui_kit::test]
 fn ready_and_blocked_show_the_librarys_rows_with_reasons_and_keep_the_nonconforming_entry(
     cx: &mut TestAppContext,
@@ -295,51 +297,57 @@ fn ready_and_blocked_show_the_librarys_rows_with_reasons_and_keep_the_nonconform
         .filter_map(|item| Some((item.id.clone()?, item.clone())))
         .collect();
 
-    assert!(shell.selected("filter-any-readiness", cx));
-    for (id, readiness, mut wanted) in [
+    assert_eq!(
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: any")
+    );
+    for (name, readiness, mut wanted) in [
         (
-            "filter-ready",
+            "Readiness: ready",
             ReadinessFilter::Ready,
             vec!["Blocker", "After done", broken.as_str()],
         ),
         (
-            "filter-blocked",
+            "Readiness: blocked",
             ReadinessFilter::Blocked,
             vec!["Waits", "Dangling", "Cycle A", "Cycle B", broken.as_str()],
         ),
     ] {
-        shell.click(id, cx);
-        assert!(shell.selected(id, cx), "{id}");
-        assert!(!shell.selected("filter-any-readiness", cx), "{id}");
-        let showing = READINESS_FILTERS
-            .iter()
-            .find(|(.., filter)| *filter == Some(readiness))
-            .map(|(_, _, showing, _)| *showing);
-        assert_eq!(
-            shell.label("tickets-readiness-showing", cx).as_deref(),
-            showing
-        );
-        let query = TicketQuery {
+        choose_readiness(&shell, Some(readiness), cx);
+        assert_eq!(shell.label("filter-readiness", cx).as_deref(), Some(name));
+        let filter = TicketFilter {
             closure: ClosureFilter::Open,
             readiness: Some(readiness),
+            ..TicketFilter::default()
         };
-        let list = service.list_tickets(&repo, &query.to_filter()).unwrap();
+        let list = service.list_tickets(&repo, &filter).unwrap();
         let seen = visible(&shell, cx);
-        let library_rows: Vec<Seen> = list.items.iter().map(expected).collect();
-        assert_eq!(seen, library_rows, "{id}");
+        let library_rows: Vec<Seen> = list
+            .items
+            .iter()
+            .map(|item| expected(item, ClosureFilter::Open))
+            .collect();
+        assert_eq!(seen, library_rows, "{name}");
         let mut shown = labels(&seen);
         shown.sort_unstable();
         wanted.sort_unstable();
-        assert_eq!(shown, wanted, "{id}");
+        assert_eq!(shown, wanted, "{name}");
 
-        for (index, item) in list.items.iter().enumerate() {
-            let drawn = reasons(&shell, index, cx);
-            match readiness {
-                ReadinessFilter::Ready => assert!(drawn.is_empty(), "{id} {index}"),
-                ReadinessFilter::Blocked => {
-                    assert_eq!(drawn, blocked_reasons(item, &by_id), "{id} {index}");
-                    assert_eq!(drawn.is_empty(), item.id.is_none(), "{id} {index}");
-                }
+        // Why blocked is under Blocked only; there each row, selected in
+        // turn, gives its own reasons, and the nonconforming entry none.
+        assert_eq!(
+            shell.present("why-blocked", cx),
+            readiness == ReadinessFilter::Blocked,
+            "{name}"
+        );
+        if readiness == ReadinessFilter::Blocked {
+            shell.keys("secondary-2", cx);
+            for (index, item) in list.items.iter().enumerate() {
+                shell.keys("down", cx);
+                assert!(shell.selected(("ticket-row", index), cx), "{name} {index}");
+                let drawn = panel(&shell, cx);
+                assert_eq!(drawn, blocked_reasons(item, &by_id), "{name} {index}");
+                assert_eq!(drawn.is_empty(), item.id.is_none(), "{name} {index}");
             }
         }
     }
@@ -367,56 +375,39 @@ fn ready_and_blocked_show_the_librarys_rows_with_reasons_and_keep_the_nonconform
         .find(|item| item.id.as_deref() == Some(BLOCKER))
         .and_then(|item| item.slug.clone())
         .unwrap();
+    let select = |index: usize, cx: &mut TestAppContext| {
+        shell.keys("secondary-2", cx);
+        // Up and down wrap, so the row is reached by the arrows from the top.
+        shell.keys("home", cx);
+        for _ in 0..index {
+            shell.keys("down", cx);
+        }
+        assert!(shell.selected(("ticket-row", index), cx), "{index}");
+        panel(&shell, cx)
+    };
     assert_eq!(
-        reasons(&shell, at(WAITS), cx),
+        select(at(WAITS), cx),
         [format!("Waits for open ticket: {slug} Blocker")]
     );
     assert_eq!(
-        reasons(&shell, at(DANGLING), cx),
+        select(at(DANGLING), cx),
         [format!("Waits for a ticket not found: {MISSING}")]
     );
     assert_eq!(
-        reasons(&shell, at(CYCLE_B), cx),
+        select(at(CYCLE_B), cx),
         [
             format!("Waits for open ticket: {CYCLE_A} Cycle A"),
             format!("On a dependency cycle: {CYCLE_A}, {CYCLE_B}"),
         ]
     );
 
-    // All again: no reasons are drawn.
-    shell.click("filter-any-readiness", cx);
-    assert!(shell.selected("filter-any-readiness", cx));
-    let count = visible(&shell, cx).len();
-    assert!((0..count).all(|index| reasons(&shell, index, cx).is_empty()));
-}
-
-/// Review Focus 1: the Blocked read is held while the user moves on to
-/// Ready; releasing it leaves Ready's rows.
-#[gpui_kit::test]
-fn a_readiness_change_drops_the_held_read_of_the_last_one(cx: &mut TestAppContext) {
-    let (shell, root) = related(cx);
-    let held = shell.backend.hold_read(ReadKind::Tickets);
-    shell.click("filter-blocked", cx);
-    shell.click("filter-ready", cx);
-    let service = shell.fixture.service();
-    let repo = service.resolve_repository(&root).unwrap();
-    let query = TicketQuery {
-        closure: ClosureFilter::Open,
-        readiness: Some(ReadinessFilter::Ready),
-    };
-    let ready: Vec<Seen> = service
-        .list_tickets(&repo, &query.to_filter())
-        .unwrap()
-        .items
-        .iter()
-        .map(expected)
-        .collect();
-    assert_eq!(visible(&shell, cx), ready);
-    let _ = held.send(());
-    shell.run(cx);
-    assert_eq!(visible(&shell, cx), ready);
-    assert!(shell.selected("filter-ready", cx));
-    assert!(!shell.selected("filter-blocked", cx));
+    // Any readiness again: Why blocked goes.
+    choose_readiness(&shell, None, cx);
+    assert_eq!(
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: any")
+    );
+    assert!(!shell.present("why-blocked", cx));
 }
 
 /// The lines of the Why blocked panel.
@@ -449,24 +440,25 @@ fn names(
 fn blocked_list(shell: &Shell, root: &Path) -> ItemListDto {
     let service = shell.fixture.service();
     let repo = service.resolve_repository(root).unwrap();
-    let query = TicketQuery {
+    let filter = TicketFilter {
         closure: ClosureFilter::Open,
         readiness: Some(ReadinessFilter::Blocked),
+        ..TicketFilter::default()
     };
-    service.list_tickets(&repo, &query.to_filter()).unwrap()
+    service.list_tickets(&repo, &filter).unwrap()
 }
 
 /// Under Blocked, the panel below the list gives the selected row's
 /// reasons in full, one per line: every `blocked_reasons` line of the same
 /// read, as the arrows move the selection. With nothing selected it gives
-/// a hint, and for an entry with no reasons it says so. The row carries
-/// the same reasons as its accessible description.
+/// a hint, and for an entry with no reasons it says so. The row's tooltip,
+/// which is also its description, carries the same reasons.
 #[gpui_kit::test]
 fn the_why_blocked_panel_gives_the_selected_rows_reasons_in_full(cx: &mut TestAppContext) {
     let (shell, root) = related(cx);
     // Not under any other readiness.
     assert!(!shell.present("why-blocked", cx));
-    shell.click("filter-blocked", cx);
+    choose_readiness(&shell, Some(ReadinessFilter::Blocked), cx);
     assert_eq!(
         shell.label("why-blocked-title", cx).as_deref(),
         Some(WHY_BLOCKED)
@@ -497,10 +489,21 @@ fn the_why_blocked_panel_gives_the_selected_rows_reasons_in_full(cx: &mut TestAp
                 shell.label("why-blocked-hint", cx).as_deref(),
                 Some(NO_REASONS)
             );
-            assert_eq!(row_description(&rows[index]), None);
+            // The tooltip, and the description made of it, gives no reason.
+            assert!(
+                !ticket_tooltip(&rows[index], "a")
+                    .iter()
+                    .any(|line| line.starts_with("Waits for") || line.starts_with("On a")),
+                "{index}"
+            );
         } else {
             assert_eq!(shell.label("why-blocked-hint", cx), None);
-            assert_eq!(row_description(&rows[index]), Some(wanted.join("; ")));
+            // The reasons are in the tooltip, and so in the description.
+            let lines = ticket_tooltip(&rows[index], "a");
+            assert!(
+                wanted.iter().all(|reason| lines.contains(reason)),
+                "{index}"
+            );
         }
     }
 
@@ -546,8 +549,8 @@ fn the_panel_says_incomplete_where_the_library_does(cx: &mut TestAppContext) {
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
     shell.click(("repo-row", 0usize), cx);
-    shell.click("pane-tickets", cx);
-    shell.click("filter-blocked", cx);
+    shell.use_list(Pane::Tickets, cx);
+    choose_readiness(&shell, Some(ReadinessFilter::Blocked), cx);
 
     let list = blocked_list(&shell, &root);
     let by_id = names(&shell, &root);
@@ -565,21 +568,18 @@ fn the_panel_says_incomplete_where_the_library_does(cx: &mut TestAppContext) {
     );
 }
 
-/// No two choices of the navigation region share a label, so a screen
-/// reader tells them apart, and each row of choices says in text which
-/// is chosen: the pane, the closure and the readiness.
+/// No two choices of the Tickets region share a label, so a screen reader
+/// tells them apart: each segment says its count, and the readiness menu's
+/// button says which readiness is chosen, since the Kit does not expose the
+/// checked item.
 #[gpui_kit::test]
 fn every_choice_has_its_own_label_and_the_chosen_one_is_said_in_text(cx: &mut TestAppContext) {
     let (shell, _) = four_tickets(cx);
     let ids = [
-        "pane-documents",
-        "pane-tickets",
         "filter-open",
         "filter-closed",
         "filter-all",
-        "filter-any-readiness",
-        "filter-ready",
-        "filter-blocked",
+        "filter-readiness",
     ];
     let labels: Vec<String> = ids
         .iter()
@@ -589,19 +589,23 @@ fn every_choice_has_its_own_label_and_the_chosen_one_is_said_in_text(cx: &mut Te
     unique.sort();
     unique.dedup();
     assert_eq!(unique.len(), labels.len(), "{labels:?}");
+    // Two open tickets, one closed, and the nonconforming entry counted by
+    // none.
     assert_eq!(
-        shell.label("filter-any-readiness", cx).as_deref(),
-        Some(super::ANY_READINESS)
+        labels,
+        [
+            "Open, 2 tickets",
+            "Closed, 1 ticket",
+            "All, 3 tickets",
+            "Readiness: any"
+        ]
     );
-
+    assert!(shell.selected("filter-open", cx));
+    assert!(!shell.selected("filter-closed", cx));
+    choose_readiness(&shell, Some(ReadinessFilter::Ready), cx);
     assert_eq!(
-        shell.label("pane-showing", cx).as_deref(),
-        Some(super::super::lists::SHOWING_TICKETS)
-    );
-    shell.click("pane-documents", cx);
-    assert_eq!(
-        shell.label("pane-showing", cx).as_deref(),
-        Some(super::super::lists::SHOWING_DOCUMENTS)
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: ready")
     );
 }
 
@@ -628,8 +632,8 @@ fn a_long_why_blocked_panel_scrolls_by_keyboard(cx: &mut TestAppContext) {
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
     shell.click(("repo-row", 0usize), cx);
-    shell.click("pane-tickets", cx);
-    shell.click("filter-blocked", cx);
+    shell.use_list(Pane::Tickets, cx);
+    choose_readiness(&shell, Some(ReadinessFilter::Blocked), cx);
     shell.keys("secondary-2 down", cx);
     let reasons = panel(&shell, cx);
     assert_eq!(reasons.len(), blockers.len());
@@ -673,3 +677,701 @@ fn a_long_why_blocked_panel_scrolls_by_keyboard(cx: &mut TestAppContext) {
     shell.keys("pagedown", cx);
     assert!(!visible(&shell, first, cx), "PageDown moves it on");
 }
+
+// ---- the filter bar, list states and markers (Wave 04 Cycle 02, Task 3) ----
+
+/// Whether the element `id` holds focus in the frame just drawn.
+fn focused(shell: &Shell, id: &'static str, cx: &mut TestAppContext) -> bool {
+    shell.frame(cx, |window, _| {
+        window.try_find(id).and_then(|element| element.focused()) == Some(true)
+    })
+}
+
+/// Presses `key`, Tab or shift-Tab, until the element `id` holds focus.
+fn tab_to(shell: &Shell, key: &str, id: &'static str, cx: &mut TestAppContext) {
+    for _ in 0..40 {
+        if focused(shell, id, cx) {
+            return;
+        }
+        shell.keys(key, cx);
+    }
+    assert!(focused(shell, id, cx), "{key} never reached {id}");
+}
+
+/// Whether the ticket list holds focus.
+fn list_focused(shell: &Shell, cx: &mut TestAppContext) -> bool {
+    let handle = shell
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.tickets_list_focus(cx));
+    shell.frame(cx, |window, _| handle.is_focused(window))
+}
+
+/// Whether the filter input holds focus.
+fn input_focused(shell: &Shell, cx: &mut TestAppContext) -> bool {
+    let input = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.find_input().clone());
+    let handle = input.read_with(cx, gpui_kit::Focusable::focus_handle);
+    shell.frame(cx, |window, _| handle.is_focused(window))
+}
+
+fn input_text(shell: &Shell, cx: &mut TestAppContext) -> String {
+    let input = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.find_input().clone());
+    input.read_with(cx, |input, _| input.value().to_string())
+}
+
+/// What a step of the journey must not change: the reads, the requests and
+/// the open tabs.
+#[derive(Debug, PartialEq)]
+struct Quiet {
+    reads: Vec<crate::desktop::services::ReadKind>,
+    requests: Vec<crate::desktop::services::requests::DesktopRequestId>,
+    tabs: Vec<String>,
+}
+
+fn quiet(shell: &Shell, cx: &mut TestAppContext) -> Quiet {
+    Quiet {
+        reads: shell.backend.reads_in_order(),
+        requests: shell.requests(cx, |_| true),
+        tabs: shell.rows("tab-title", cx),
+    }
+}
+
+fn panel_count(shell: &Shell, cx: &mut TestAppContext) -> Option<String> {
+    crate::desktop::view::dock::tests::support::panel_count(
+        shell,
+        crate::desktop::model::layout::PanelKind::Tickets,
+        cx,
+    )
+}
+
+const ALPHA: &str = "01ARZ3NDEKTSV4RRFFQ69G5FK0";
+const BETA: &str = "01ARZ3NDEKTSV4RRFFQ69G5FK1";
+const GAMMA: &str = "01ARZ3NDEKTSV4RRFFQ69G5FK2";
+const DELTA: &str = "01ARZ3NDEKTSV4RRFFQ69G5FK3";
+const SHARED_CLOSED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FK4";
+/// The short code Alpha and the closed ticket share.
+const SHARED_CODE: &str = "fb-k9x2b";
+
+/// Four open tickets, Gamma waiting for Alpha, and a lifecycle-closed one
+/// that has Alpha's short code. The repository `a` is selected and the
+/// Tickets list shown.
+fn filter_tickets(cx: &mut TestAppContext) -> (Shell, PathBuf) {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, ALPHA, "Alpha", &format!("slug: {SHARED_CODE}\n"));
+    fixture.commit_ticket(&root, BETA, "Beta", "");
+    fixture.commit_ticket(&root, GAMMA, "Gamma", &format!("deps:\n  - {ALPHA}\n"));
+    fixture.commit_ticket(&root, DELTA, "Delta", "");
+    let closed = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {SHARED_CLOSED}\n\
+         title: Shared and closed\ntype: task\nstatus: done\nslug: {SHARED_CODE}\n\
+         closed_at: 2026-09-30T12:34:56Z\nclosed_by: Ada Lovelace <ada@example.invalid>\n---\n\
+         Body.\n"
+    );
+    fixture.commit_file(
+        &root,
+        &crate::desktop::test_support::fixtures::ticket_path(SHARED_CLOSED),
+        closed.as_bytes(),
+    );
+    fixture.refresh(&root);
+    let shell = Shell::open(fixture, cx);
+    shell.click(("repo-row", 0usize), cx);
+    shell.use_list(Pane::Tickets, cx);
+    (shell, root)
+}
+
+/// What the filter bar shows: the rows (in the order shown), the three
+/// segments' names, the footnote and the header count.
+fn bar(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+) -> (
+    Vec<String>,
+    [Option<String>; 3],
+    Option<String>,
+    Option<String>,
+) {
+    (
+        shell.rows("ticket-row", cx),
+        ["filter-open", "filter-closed", "filter-all"].map(|id| shell.label(id, cx)),
+        shell.label("tickets-footnote", cx),
+        panel_count(shell, cx),
+    )
+}
+
+fn sorted(mut rows: Vec<String>) -> Vec<String> {
+    rows.sort();
+    rows
+}
+
+fn strings<const N: usize>(texts: [&str; N]) -> [Option<String>; N] {
+    texts.map(|text| Some(text.to_owned()))
+}
+
+/// P1, P2, P7, P10 to P12, P18, P25, P29, P30: the lifecycle segments, the
+/// readiness menu, text with its hint and Show all, and the sort headers
+/// work by click and by key, and none of it reads, sends or opens anything
+/// after the load. A filter that hides the selected row leaves Enter with
+/// nothing to open.
+#[gpui_kit::test]
+fn the_filter_bar_works_without_a_read(cx: &mut TestAppContext) {
+    use crate::desktop::services::ReadKind;
+
+    let (shell, _root) = filter_tickets(cx);
+    // One ticket read on load, whatever the filter.
+    assert_eq!(shell.backend.reads_seen(ReadKind::Tickets), 1);
+    let before = quiet(&shell, cx);
+    let (rows, segments, footnote, count) = bar(&shell, cx);
+    assert_eq!(sorted(rows), ["Alpha", "Beta", "Delta", "Gamma"]);
+    assert_eq!(
+        segments,
+        strings(["Open, 4 tickets", "Closed, 1 ticket", "All, 5 tickets"])
+    );
+    assert_eq!(footnote.as_deref(), Some("4 open tickets in a"));
+    assert_eq!(count.as_deref(), Some("4"));
+    assert!(shell.selected("filter-open", cx));
+
+    // Closed, by click.
+    shell.click("filter-closed", cx);
+    let (rows, segments, footnote, count) = bar(&shell, cx);
+    assert_eq!(rows, ["Shared and closed"]);
+    assert_eq!(
+        segments,
+        strings(["Open, 4 tickets", "Closed, 1 ticket", "All, 5 tickets"]),
+        "the counts are the text's, not the lifecycle's"
+    );
+    assert_eq!(footnote.as_deref(), Some("1 closed ticket in a"));
+    assert_eq!(count.as_deref(), Some("1"));
+    assert!(shell.selected("filter-closed", cx));
+    assert_eq!(quiet(&shell, cx), before);
+
+    // All, by Tab and Enter.
+    tab_to(&shell, "tab", "filter-all", cx);
+    shell.press("enter", cx);
+    let (rows, _, footnote, count) = bar(&shell, cx);
+    assert_eq!(
+        sorted(rows),
+        ["Alpha", "Beta", "Delta", "Gamma", "Shared and closed"]
+    );
+    assert_eq!(footnote.as_deref(), Some("5 tickets in a"));
+    assert_eq!(count.as_deref(), Some("5"));
+    assert!(shell.selected("filter-all", cx));
+    assert_eq!(quiet(&shell, cx), before);
+
+    // Blocked, by keyboard: the button, Enter, Down three times, Enter.
+    tab_to(&shell, "tab", "filter-readiness", cx);
+    shell.keys("enter", cx);
+    shell.keys("down down down enter", cx);
+    assert_eq!(
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: blocked")
+    );
+    let (rows, _, footnote, count) = bar(&shell, cx);
+    assert_eq!(rows, ["Gamma"]);
+    assert_eq!(footnote.as_deref(), Some("1 blocked ticket in a"));
+    assert_eq!(count.as_deref(), Some("1"));
+    assert!(shell.present("why-blocked", cx));
+    assert!(focused(&shell, "filter-readiness", cx), "focus is back");
+    assert_eq!(quiet(&shell, cx), before);
+
+    // Any readiness.
+    shell.keys("enter down enter", cx);
+    assert_eq!(
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: any")
+    );
+    assert!(!shell.present("why-blocked", cx));
+    assert_eq!(bar(&shell, cx).0.len(), 5);
+    assert_eq!(quiet(&shell, cx), before);
+
+    // With Closed chosen, choosing Ready chooses Open (R-26).
+    shell.click("filter-closed", cx);
+    assert_eq!(bar(&shell, cx).0, ["Shared and closed"]);
+    choose_readiness(&shell, Some(ReadinessFilter::Ready), cx);
+    assert!(shell.selected("filter-open", cx));
+    let (rows, _, footnote, count) = bar(&shell, cx);
+    assert_eq!(sorted(rows), ["Alpha", "Beta", "Delta"]);
+    assert_eq!(footnote.as_deref(), Some("3 ready tickets in a"));
+    assert_eq!(count.as_deref(), Some("3"));
+    assert_eq!(quiet(&shell, cx), before);
+
+    // Under Open and Ready, a short code the closed ticket shares: the hint
+    // names it, and Show all lists both.
+    shell.keys("secondary-p", cx);
+    assert!(input_focused(&shell, cx));
+    shell.visual(cx).simulate_input(SHARED_CODE);
+    shell.run(cx);
+    let (rows, segments, footnote, count) = bar(&shell, cx);
+    assert_eq!(rows, ["Alpha"]);
+    assert_eq!(
+        segments,
+        strings(["Open, 1 ticket", "Closed, 1 ticket", "All, 2 tickets"])
+    );
+    assert_eq!(
+        footnote.as_deref(),
+        Some(format!("1 ready ticket in a matches \"{SHARED_CODE}\"").as_str())
+    );
+    assert_eq!(count.as_deref(), Some("1"));
+    assert_eq!(
+        shell.label("tickets-hint", cx).as_deref(),
+        Some("1 more ticket matches with other filters.")
+    );
+    assert_eq!(quiet(&shell, cx), before);
+    shell.click("tickets-show-all", cx);
+    let (rows, _, _, count) = bar(&shell, cx);
+    assert_eq!(sorted(rows), ["Alpha", "Shared and closed"]);
+    assert_eq!(count.as_deref(), Some("2"));
+    assert!(shell.selected("filter-all", cx));
+    assert_eq!(
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: any")
+    );
+    assert!(!shell.present("tickets-hint", cx));
+    assert!(input_focused(&shell, cx), "focus is in the filter input");
+    assert_eq!(input_text(&shell, cx), SHARED_CODE, "the text is kept");
+    assert_eq!(quiet(&shell, cx), before);
+
+    // Back to every ticket, then the sorts. By click, ascending.
+    shell.keys("secondary-a backspace", cx);
+    assert_eq!(input_text(&shell, cx), "");
+    assert_eq!(bar(&shell, cx).0.len(), 5);
+    shell.click("sort-title", cx);
+    assert_eq!(
+        bar(&shell, cx).0,
+        ["Alpha", "Beta", "Delta", "Gamma", "Shared and closed"]
+    );
+    assert_eq!(
+        shell.label("sort-title", cx).as_deref(),
+        Some("Sort by title, A to Z")
+    );
+    assert_eq!(
+        shell.label("sort-updated", cx).as_deref(),
+        Some("Sort by updated")
+    );
+    assert!(shell.selected("sort-title", cx));
+    assert_eq!(quiet(&shell, cx), before);
+    // By Tab and Enter, reversed.
+    tab_to(&shell, "tab", "sort-title", cx);
+    shell.press("enter", cx);
+    assert_eq!(
+        bar(&shell, cx).0,
+        ["Shared and closed", "Gamma", "Delta", "Beta", "Alpha"]
+    );
+    assert_eq!(
+        shell.label("sort-title", cx).as_deref(),
+        Some("Sort by title, Z to A")
+    );
+    assert_eq!(quiet(&shell, cx), before);
+
+    // Home and End in the list.
+    shell.keys("secondary-2", cx);
+    shell.keys("home", cx);
+    assert!(shell.selected(("ticket-row", 0usize), cx));
+    shell.keys("end", cx);
+    assert!(shell.selected(("ticket-row", 4usize), cx));
+    assert!(!shell.selected(("ticket-row", 0usize), cx));
+    shell.keys("home", cx);
+    assert!(shell.selected(("ticket-row", 0usize), cx));
+
+    // Review Focus 1: the selected row is the closed ticket; Open hides it,
+    // and Enter in the list opens nothing, not another ticket.
+    assert_eq!(bar(&shell, cx).0[0], "Shared and closed");
+    shell.click("filter-open", cx);
+    assert_eq!(bar(&shell, cx).0, ["Gamma", "Delta", "Beta", "Alpha"]);
+    shell.keys("secondary-2", cx);
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, cx| workspace
+                .tickets_pane()
+                .selected_row(cx))
+            .is_none(),
+        "the hidden row is no longer selected"
+    );
+    shell.keys("enter", cx);
+    assert_eq!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, cx| workspace.opened(cx)),
+        None
+    );
+    assert_eq!(quiet(&shell, cx), before);
+    assert_eq!(shell.backend.reads_seen(ReadKind::Tickets), 1);
+}
+
+/// P14: an item with unsaved work is marked in its row at once, with no
+/// read of the list.
+#[gpui_kit::test]
+async fn markers_appear_without_a_read(cx: &mut TestAppContext) {
+    use crate::desktop::services::ReadKind;
+
+    cx.executor().allow_parking();
+    let (shell, root) = filter_tickets(cx);
+    let row = |shell: &Shell, cx: &mut TestAppContext| {
+        shell
+            .rows("ticket-row", cx)
+            .iter()
+            .position(|label| label == "Beta")
+            .expect("Beta is listed")
+    };
+    assert!(!shell.present(("ticket-unsaved", row(&shell, cx)), cx));
+
+    // Opening the ticket, editing it and typing a change begins its draft
+    // session, which holds unsaved work.
+    let target = OpenTarget::Item {
+        repo: key(&root),
+        kind: ItemDtoKind::Ticket,
+        id: BETA.parse().unwrap(),
+    };
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.open_item(target, cx));
+    shell.run(cx);
+    shell.click("item-edit", cx);
+    let host = shell.until_editing(cx).await;
+    // Starting an edit is an operation of the repository, which reloads the
+    // list as any does; the marker must not need another read.
+    shell.run(cx);
+    let reads = shell.backend.reads_seen(ReadKind::Tickets);
+    shell.type_at_end(&host, " more", cx);
+    shell
+        .until_drawn(cx, "the unsaved marker", |shell, cx| {
+            let at = row(shell, cx);
+            shell.present(("ticket-unsaved", at), cx)
+        })
+        .await;
+
+    let at = row(&shell, cx);
+    assert_eq!(
+        shell.label(("ticket-unsaved", at), cx).as_deref(),
+        Some(crate::desktop::model::ticket_view::UNSAVED_MARKER)
+    );
+    // No other row is marked, and the list was not read again.
+    let others = (0..bar(&shell, cx).0.len()).filter(|ix| *ix != at);
+    for other in others {
+        assert!(!shell.present(("ticket-unsaved", other), cx), "{other}");
+    }
+    assert_eq!(shell.backend.reads_seen(ReadKind::Tickets), reads);
+}
+
+/// The id of `name`'s child `part`, as the alert row and the empty state
+/// give their action and detail.
+fn child(name: &'static str, part: &'static str) -> gpui_kit::ElementId {
+    (gpui_kit::ElementId::from(name), part).into()
+}
+
+/// Whether the Tickets region holds focus and draws its ring.
+fn tickets_ringed(shell: &Shell, cx: &mut TestAppContext) -> bool {
+    use crate::desktop::view::workspace::Region;
+    shell.frame(cx, |window, _| {
+        window.find(Region::Tickets.id()).focused() == Some(true)
+            && window.try_find(Region::Tickets.ring_id()).is_some()
+    })
+}
+
+/// P15, P16, P31: a reload over kept rows says "Updating…" and keeps them;
+/// a busy one keeps them under an alert whose Retry reads once and keeps
+/// the typed text and the rows; a failed one and an unavailable index say
+/// so, with their action; an empty list is reached by F6 as any; Clear
+/// filters, New ticket…, Refresh and Rebuild the search index each do
+/// their own thing.
+#[gpui_kit::test]
+async fn list_states_act_and_a_reload_keeps_the_rows(cx: &mut TestAppContext) {
+    use std::time::Duration;
+
+    use manyhands::repository::{LeaseKind, RepositoryService};
+
+    use crate::desktop::{
+        model::list_view::{
+            ListKind, NO_TICKETS_MATCH, busy_over_kept_text, empty_text, failed_text,
+            index_unavailable_text, never_refreshed_text, stale_text,
+        },
+        services::{ReadKind, requests::Intent},
+    };
+
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.commit_ticket(&a, ALPHA, "Alpha", "");
+    fixture.commit_ticket(&a, BETA, "Beta", "");
+    fixture.refresh(&a);
+    let b = fixture.create_repository("b");
+    fixture.refresh(&b);
+    // Stale, and never refreshed: states the library makes only from its
+    // registry, which a test reaches beside the service's own connection.
+    let stale = fixture.create_repository("s");
+    fixture.commit_ticket(&stale, ALPHA, "Kept", "");
+    fixture.refresh(&stale);
+    let never = fixture.create_repository("n");
+    fixture.commit_ticket(&never, ALPHA, "Gone", "");
+    fixture.refresh(&never);
+    {
+        let registry = rusqlite::Connection::open(
+            fixture
+                .data_dir()
+                .join(manyhands::repository::REGISTRY_FILE),
+        )
+        .unwrap();
+        let stale_rows = registry
+            .execute(
+                "UPDATE repositories SET refresh_required = 1 WHERE root_path LIKE '%/s'",
+                [],
+            )
+            .unwrap();
+        let never_rows = registry
+            .execute(
+                "UPDATE repositories SET refreshed_at = NULL WHERE root_path LIKE '%/n'",
+                [],
+            )
+            .unwrap();
+        registry
+            .execute(
+                "DELETE FROM contexts WHERE repository_id IN \
+                 (SELECT id FROM repositories WHERE root_path LIKE '%/n')",
+                [],
+            )
+            .unwrap();
+        assert_eq!((stale_rows, never_rows), (1, 1));
+    }
+    let shell = Shell::open(fixture, cx);
+    shell.select(&a, cx);
+    shell.use_list(Pane::Tickets, cx);
+    shell.keys("secondary-p", cx);
+    shell.visual(cx).simulate_input("a");
+    shell.run(cx);
+    let rows = |shell: &Shell, cx: &mut TestAppContext| sorted(shell.rows("ticket-row", cx));
+    assert_eq!(rows(&shell, cx), ["Alpha", "Beta"]);
+    assert_eq!(panel_count(&shell, cx).as_deref(), Some("2"));
+    assert!(!shell.present("tickets-alert", cx));
+
+    // A reload after a finished job: the old rows stay, the count says
+    // Updating… until the read lands.
+    let held = shell.backend.hold_read(ReadKind::Tickets);
+    shell.keys("secondary-r", cx);
+    let refresh = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::IndexRefresh { .. })
+    })[0];
+    shell.until_ended(refresh, cx).await;
+    until_settled(&shell, cx, "the held reload", |shell, cx| {
+        panel_count(shell, cx).as_deref() == Some("Updating\u{2026}")
+    })
+    .await;
+    assert_eq!(rows(&shell, cx), ["Alpha", "Beta"]);
+    assert!(!shell.present("tickets-skeleton", cx));
+    let _ = held.send(());
+    until_settled(&shell, cx, "the reload landed", |shell, cx| {
+        panel_count(shell, cx).as_deref() == Some("2")
+    })
+    .await;
+    assert_eq!(rows(&shell, cx), ["Alpha", "Beta"]);
+
+    // A reload that stays busy keeps the rows under the busy alert.
+    let held = shell.backend.hold_read(ReadKind::Tickets);
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.reload_lists(cx));
+    shell.run(cx);
+    let lease = RepositoryService::hold_lease_for_testing(
+        &a,
+        shell.fixture.data_dir(),
+        LeaseKind::CacheWrite,
+    )
+    .unwrap();
+    let _ = held.send(());
+    until_settled(&shell, cx, "the busy alert", |shell, cx| {
+        // The read waits 100, 200 and 400 ms on the executor's timer.
+        cx.executor().advance_clock(Duration::from_secs(1));
+        shell.present("tickets-alert", cx)
+    })
+    .await;
+    assert_eq!(
+        shell.label("tickets-alert", cx),
+        Some(busy_over_kept_text("a"))
+    );
+    assert_eq!(rows(&shell, cx), ["Alpha", "Beta"], "the rows are kept");
+
+    // Retry reads the tickets once, without clearing: while its read is
+    // held the rows and the text stay, there is no skeleton, and the count
+    // says Updating…. Focus is on the list.
+    drop(lease);
+    let reads = shell.backend.reads_seen(ReadKind::Tickets);
+    let held = shell.backend.hold_read(ReadKind::Tickets);
+    shell.click(child("tickets-alert", "action"), cx);
+    assert_eq!(shell.backend.reads_seen(ReadKind::Tickets), reads + 1);
+    assert_eq!(rows(&shell, cx), ["Alpha", "Beta"], "kept while held");
+    assert!(!shell.present("tickets-skeleton", cx));
+    assert_eq!(input_text(&shell, cx), "a");
+    assert_eq!(panel_count(&shell, cx).as_deref(), Some("Updating\u{2026}"));
+    assert!(list_focused(&shell, cx), "Retry focuses the list");
+    let _ = held.send(());
+    until_settled(&shell, cx, "Retry landed", |shell, cx| {
+        !shell.present("tickets-alert", cx)
+    })
+    .await;
+    assert_eq!(shell.backend.reads_seen(ReadKind::Tickets), reads + 1);
+    assert_eq!(rows(&shell, cx), ["Alpha", "Beta"]);
+    assert_eq!(input_text(&shell, cx), "a");
+
+    // A narrowed list with nothing in it: Clear filters empties the text,
+    // chooses Any readiness and focuses the input.
+    choose_readiness(&shell, Some(ReadinessFilter::Ready), cx);
+    shell.keys("secondary-p", cx);
+    shell.keys("secondary-a backspace", cx);
+    shell.visual(cx).simulate_input("zzz");
+    shell.run(cx);
+    assert_eq!(
+        shell.label("tickets-empty", cx).as_deref(),
+        Some(NO_TICKETS_MATCH)
+    );
+    shell.click(child("tickets-empty", "action"), cx);
+    assert_eq!(input_text(&shell, cx), "");
+    assert_eq!(
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: any")
+    );
+    assert!(input_focused(&shell, cx));
+    assert_eq!(rows(&shell, cx), ["Alpha", "Beta"]);
+
+    // An empty repository: its empty state offers New ticket…, which opens
+    // the dialog, and F6 reaches its list.
+    shell.select(&b, cx);
+    until_settled(&shell, cx, "the empty state", |shell, cx| {
+        shell.present("tickets-empty", cx)
+    })
+    .await;
+    assert_eq!(
+        shell.label("tickets-empty", cx),
+        Some(empty_text(
+            ListKind::Tickets,
+            manyhands::repository::ClosureFilter::Open,
+            "b"
+        ))
+    );
+    shell.click(child("tickets-empty", "action"), cx);
+    assert!(shell.present("create-dialog", cx));
+    shell.keys("escape", cx);
+    assert!(!shell.present("create-dialog", cx));
+    shell.keys("secondary-3", cx);
+    shell.keys("f6", cx);
+    assert!(tickets_ringed(&shell, cx), "F6 reaches the empty list");
+
+    // A stale list keeps its rows under an alert, and a list never
+    // refreshed has none; each offers Refresh, which submits a refresh and
+    // focuses the list.
+    for (name, repo, alert, kept) in [
+        ("s", &stale, stale_text("s"), true),
+        ("n", &never, never_refreshed_text("n"), false),
+    ] {
+        shell.select(repo, cx);
+        until_settled(&shell, cx, "the alert", |shell, cx| {
+            shell.present("tickets-alert", cx)
+        })
+        .await;
+        assert_eq!(shell.label("tickets-alert", cx), Some(alert), "{name}");
+        assert_eq!(
+            shell.rows("ticket-row", cx).len(),
+            usize::from(kept),
+            "{name}"
+        );
+        let refreshes = |shell: &Shell, cx: &mut TestAppContext| {
+            shell.requests(cx, |request| {
+                matches!(request.intent, Intent::IndexRefresh { .. })
+            })
+        };
+        let before = refreshes(&shell, cx).len();
+        shell.click(child("tickets-alert", "action"), cx);
+        let after = refreshes(&shell, cx);
+        assert_eq!(
+            after.len(),
+            before + 1,
+            "{name}: Refresh submitted a refresh"
+        );
+        assert!(list_focused(&shell, cx), "{name}: focus is on the list");
+        shell.until_ended(after[0], cx).await;
+    }
+
+    // Back to `a`, whose lists the next two states replace.
+    shell.select(&a, cx);
+    until_settled(&shell, cx, "a's rows", |shell, cx| {
+        !shell.rows("ticket-row", cx).is_empty()
+    })
+    .await;
+
+    // A failed read says so, with its message on a visible line, and no
+    // row; F6 into it keeps the region's ring.
+    let elsewhere = shell.fixture.empty_directory("other-data");
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(&elsewhere).unwrap());
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.reload_lists(cx));
+    until_settled(&shell, cx, "the failure", |shell, cx| {
+        shell.present("tickets-alert", cx)
+    })
+    .await;
+    assert_eq!(
+        shell.label("tickets-alert", cx),
+        Some(failed_text(ListKind::Tickets, "a"))
+    );
+    assert!(shell.label(child("tickets-alert", "detail"), cx).is_some());
+    assert!(rows(&shell, cx).is_empty());
+    shell.keys("secondary-3", cx);
+    shell.keys("f6", cx);
+    assert!(tickets_ringed(&shell, cx), "F6 reaches the failed list");
+
+    // An index that cannot be read offers to rebuild it. Its job is held
+    // at the library, so no rebuild runs on the unreadable index.
+    let degraded = shell.fixture.empty_directory("degraded-data");
+    std::fs::write(degraded.join("manyhands.sqlite3"), b"not sqlite").unwrap();
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(&degraded).unwrap());
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.reload_lists(cx));
+    until_settled(&shell, cx, "the unavailable index", |shell, cx| {
+        shell.label("tickets-alert", cx) == Some(index_unavailable_text("a"))
+    })
+    .await;
+    let gate = shell
+        .backend
+        .hold_job(crate::desktop::services::JobKind::IndexRebuild);
+    shell.click(child("tickets-alert", "action"), cx);
+    let rebuild = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::IndexRebuild { .. })
+    });
+    assert_eq!(
+        rebuild.len(),
+        1,
+        "Rebuild the search index submitted a rebuild"
+    );
+    assert!(list_focused(&shell, cx), "Rebuild focuses the list");
+    gate.release();
+    shell.until_ended(rebuild[0], cx).await;
+}
+
+/// Draws frames until `done`, as `until_drawn` does, moving the executor's
+/// clock on at each look: a read that met a repository busy with the
+/// worker's own job waits on the timer to try again, and no real time is
+/// waited for it.
+async fn until_settled(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+    what: &str,
+    done: impl Fn(&Shell, &mut TestAppContext) -> bool,
+) {
+    shell
+        .until_drawn(cx, what, |shell, cx| {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_secs(1));
+            done(shell, cx)
+        })
+        .await;
+}
+
+#[path = "tickets_tests/unreadable.rs"]
+mod unreadable;

@@ -406,6 +406,10 @@ async fn the_needs_fixing_banner_offers_repair(cx: &mut TestAppContext) {
 
     open(&shell, inspect(&root, &ticket_path(READABLE)), cx);
     assert!(shell.present("item-source", cx), "the file is read");
+    assert!(
+        !shell.present("item-git-details", cx),
+        "no Git details button"
+    );
     assert!(!shell.present("item-needs-fixing", cx));
     assert!(!shell.present("item-repair", cx), "no Repair… for it");
     assert_eq!(RepositorySnapshot::take(&root), before);
@@ -824,7 +828,7 @@ async fn closing_or_quitting_with_edited_repair_text_asks_first(cx: &mut TestApp
     );
     shell.click("repair-discard-discard-button", cx);
     assert!(!shell.present("repair-source", cx), "the view closes");
-    assert!(shell.present("item-source", cx), "the tab shows the file");
+    assert!(shell.present("item-read", cx), "the tab shows the file");
     assert_eq!(tabs(&shell, cx), 1);
 
     open_repair(&shell, cx);
@@ -872,7 +876,8 @@ async fn a_non_utf8_file_says_it_cannot_be_repaired_here(cx: &mut TestAppContext
 /// R-25: the repair view is a plain text area, never the markdown editor.
 /// A body the editor's load would rewrite (CRLF line endings, a `$$` pair)
 /// is held exactly as read and repaired exactly as typed; no edit editor
-/// and no read view is made, and no draft holds the text.
+/// is made, the tab's read view is not drawn over the text, and no draft
+/// holds the text.
 #[gpui_kit::test]
 async fn the_repair_view_never_passes_through_the_markdown_editor(cx: &mut TestAppContext) {
     let body = "First\r\nWhat if words $$E=mc^2$$ more\r\n";
@@ -898,10 +903,14 @@ async fn the_repair_view_never_passes_through_the_markdown_editor(cx: &mut TestA
              title: Raw\n---\n{body}"
         )
     );
-    let (host, read) = pane(&shell, cx).read_with(cx, |pane, _| {
-        (pane.edit_host().is_some(), pane.read_view().is_some())
-    });
-    assert!(!host && !read, "no markdown editor");
+    // The tab's read view holds the file as read, to show it when no repair
+    // is open; it is not drawn now, and the typed text is never in it.
+    let host = pane(&shell, cx).read_with(cx, |pane, _| pane.edit_host().is_some());
+    assert!(!host, "no edit editor");
+    assert!(
+        !shell.present("item-read", cx),
+        "the markdown editor is not shown over the repair text"
+    );
     let tab = TabKey::for_target(&inspect(&root, MARKER));
     let drafts = shell
         .workspace
@@ -1045,7 +1054,8 @@ async fn a_removal_counts_edited_repair_text(cx: &mut TestAppContext) {
     type_at_line(&shell, 0, "x", cx);
     shell.frame(cx, |window, cx| {
         shell.workspace.update(cx, |workspace, cx| {
-            workspace.remove_repository(key(&root), window, cx)
+            let restore = workspace.repositories_list_focus(cx);
+            workspace.remove_repository(key(&root), restore, window, cx)
         })
     });
     previewed(&shell, cx).await;

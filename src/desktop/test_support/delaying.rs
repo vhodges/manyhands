@@ -25,14 +25,15 @@ use futures::channel::oneshot;
 use manyhands::{
     drafts::{DraftError, DraftStore},
     repository::{
-        ConflictDto, Mutation, MutationDataDto, OperationId, PrepareDataDto, ProgressStage,
-        RepositoryService, keys::KeyStore,
+        ConflictDto, Mutation, MutationDataDto, OperationId, OperationListDto, PrepareDataDto,
+        ProgressStage, RepositoryService, keys::KeyStore,
     },
     results::Envelope,
 };
 
 use crate::desktop::services::{
     Backend, DraftStoreUnavailable, JobKind, KeyStoreUnavailable, ReadGate, ReadKind,
+    layout::{LayoutStore, LayoutStoreError},
     resolutions::{ResolutionStore, ResolutionStoreError},
 };
 
@@ -56,11 +57,17 @@ pub(crate) struct DelayingBackend {
     /// The real resolutions store over the fixture's data directory, or
     /// why it did not open; unavailable until `with_resolutions`.
     resolutions: Result<ResolutionStore, ResolutionStoreError>,
+    /// The real layout store over the fixture's data directory, or why it
+    /// did not open; unavailable until `with_layout`.
+    layout: Result<LayoutStore, LayoutStoreError>,
     reads: Mutex<HashMap<ReadKind, VecDeque<ReadGate>>>,
     jobs: Mutex<HashMap<JobKind, VecDeque<Arc<Gate>>>>,
     /// Holds taken after a job's library call returns, each with the
     /// answer, if any, that stands in place of the library's.
     returned: Mutex<HashMap<JobKind, VecDeque<Returned>>>,
+    /// Canned answers that stand in place of the next jobs' library calls,
+    /// by kind: the call is not made.
+    instead: Mutex<HashMap<JobKind, VecDeque<Envelope<MutationDataDto>>>>,
     /// Every read kind a read or prepare asked its gate for, in order:
     /// only observed.
     reads_seen: Mutex<Vec<ReadKind>>,
@@ -74,6 +81,9 @@ pub(crate) struct DelayingBackend {
     /// Canned conflicts, each standing in place of the next conflict read
     /// of its own operation ID.
     conflicts: Mutex<Vec<ConflictDto>>,
+    /// A list that stands in place of the library's pending operations of
+    /// every repository (`Some(None)`: the read fails).
+    pending: Mutex<Option<Option<OperationListDto>>>,
 }
 
 impl DelayingBackend {
@@ -90,14 +100,17 @@ impl DelayingBackend {
             home,
             drafts: drafts.map_err(DraftStoreUnavailable::from),
             resolutions: Err(ResolutionStoreError::Unavailable),
+            layout: Err(LayoutStoreError::Unavailable),
             reads: Mutex::default(),
             jobs: Mutex::default(),
             returned: Mutex::default(),
+            instead: Mutex::default(),
             reads_seen: Mutex::default(),
             seen: Mutex::default(),
             stages: Mutex::default(),
             prepares: Mutex::default(),
             conflicts: Mutex::default(),
+            pending: Mutex::default(),
         }
     }
 
@@ -107,6 +120,12 @@ impl DelayingBackend {
         resolutions: Result<ResolutionStore, ResolutionStoreError>,
     ) -> Self {
         self.resolutions = resolutions;
+        self
+    }
+
+    /// The same backend over the layout store's open result.
+    pub(crate) fn with_layout(mut self, layout: Result<LayoutStore, LayoutStoreError>) -> Self {
+        self.layout = layout;
         self
     }
 
@@ -156,6 +175,26 @@ impl DelayingBackend {
         answer: Envelope<MutationDataDto>,
     ) -> JobGate {
         self.hold_return(kind, Some(answer))
+    }
+
+    /// Makes every repository's pending operations read answer `list` in
+    /// place of the library's (`None`: the read fails), as the scheduler
+    /// matches its in-flight entries against it.
+    pub(crate) fn answer_pending(&self, list: Option<OperationListDto>) {
+        *self.pending.lock().unwrap() = Some(list);
+    }
+
+    /// Answers the next job of `kind` with `answer` and makes no library
+    /// call: for a job that would reach a remote no desktop test has, or
+    /// take seconds to fail. Answers for one kind stack: each job takes the
+    /// oldest.
+    pub(crate) fn answer_job(&self, kind: JobKind, answer: Envelope<MutationDataDto>) {
+        self.instead
+            .lock()
+            .unwrap()
+            .entry(kind)
+            .or_default()
+            .push_back(answer);
     }
 
     fn hold_return(&self, kind: JobKind, answer: Option<Envelope<MutationDataDto>>) -> JobGate {
@@ -270,6 +309,10 @@ impl Backend for DelayingBackend {
         self.resolutions.as_ref().map_err(|error| *error)
     }
 
+    fn layout(&self) -> Result<&LayoutStore, LayoutStoreError> {
+        self.layout.as_ref().map_err(|error| *error)
+    }
+
     fn read_gate(&self, kind: ReadKind) -> Option<ReadGate> {
         self.reads_seen.lock().unwrap().push(kind);
         self.reads.lock().unwrap().get_mut(&kind)?.pop_front()
@@ -285,6 +328,25 @@ impl Backend for DelayingBackend {
             .and_then(VecDeque::pop_front);
         if let Some(gate) = gate {
             gate.wait();
+        }
+    }
+
+    fn instead_of_job(&self, kind: JobKind) -> Option<Envelope<MutationDataDto>> {
+        self.instead
+            .lock()
+            .unwrap()
+            .get_mut(&kind)
+            .and_then(VecDeque::pop_front)
+    }
+
+    fn pending_operations(&self, root: &std::path::Path) -> Option<OperationListDto> {
+        let canned = self.pending.lock().unwrap().clone();
+        match canned {
+            Some(list) => list,
+            None => {
+                let repo = self.service().resolve_repository(root).ok()?;
+                self.service().list_operations(&repo).ok()
+            }
         }
     }
 
@@ -352,14 +414,14 @@ struct GateState {
 }
 
 #[derive(Default)]
-struct Gate {
+pub(super) struct Gate {
     state: Mutex<GateState>,
     changed: Condvar,
 }
 
 impl Gate {
     /// The worker side: says it is here, then waits for the release.
-    fn wait(&self) {
+    pub(super) fn wait(&self) {
         let mut state = self.state.lock().unwrap();
         state.reached = true;
         self.changed.notify_all();
@@ -368,13 +430,13 @@ impl Gate {
         }
     }
 
-    fn release(&self) {
+    pub(super) fn release(&self) {
         self.state.lock().unwrap().released = true;
         self.changed.notify_all();
     }
 
     /// Blocks until the worker is at the gate, for at most `limit`.
-    fn wait_reached(&self, limit: Duration) -> bool {
+    pub(super) fn wait_reached(&self, limit: Duration) -> bool {
         let state = self.state.lock().unwrap();
         let (state, _) = self
             .changed
@@ -390,7 +452,7 @@ impl Gate {
 /// for `hold_job_return`, and once the named stage has been sent to the UI
 /// for `hold_at_stage`.
 #[must_use = "dropping the handle releases the hold"]
-pub(crate) struct JobGate(Arc<Gate>);
+pub(crate) struct JobGate(pub(super) Arc<Gate>);
 
 impl JobGate {
     pub(crate) fn release(&self) {

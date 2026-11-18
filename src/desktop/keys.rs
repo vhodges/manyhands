@@ -1,7 +1,14 @@
 //! Actions and key bindings, defined once here (design, Layout And
 //! Keyboard). `secondary` is Ctrl on Linux and Windows, Cmd on macOS.
 
-use gpui_kit::{App, KeyBinding, NoAction};
+use gpui_kit::{App, KeyBinding};
+
+use crate::desktop::model::{
+    activity::rows::{ActivityAction, RowKey},
+    layout::{PanelKind, Side},
+    repository_state::{MenuChoice, RowAction},
+    stamp::RepoKey,
+};
 
 gpui_kit::actions!(
     manyhands,
@@ -18,7 +25,7 @@ gpui_kit::actions!(
         FocusContent,
         /// Focus the operation area.
         FocusOperations,
-        /// Find an item by short code or ID.
+        /// Focus the filter input, where a ULID opens its item.
         Find,
         /// Show the next tab.
         NextTab,
@@ -41,6 +48,10 @@ gpui_kit::actions!(
         /// Open the selected row of the document tree. The ticket list is
         /// the Kit's, whose own `enter` binding opens its row.
         OpenSelected,
+        /// Select the first row of the ticket list or the document tree.
+        SelectFirst,
+        /// Select the last row of the ticket list or the document tree.
+        SelectLast,
         /// Scroll the content region up by a page.
         ScrollPageUp,
         /// Scroll the content region down by a page.
@@ -66,7 +77,8 @@ gpui_kit::actions!(
         /// Make the edit editor's selection a link: the toolbar asks for
         /// the address.
         InsertLink,
-        /// New document or New ticket, the shown list's.
+        /// New document or New ticket, the focused list's: Documents or
+        /// Tickets.
         NewItem,
         /// Focus the edit toolbar's next control.
         ToolbarNext,
@@ -106,20 +118,138 @@ gpui_kit::actions!(
         ComposerToggleMode,
         /// Save resolution, in the resolve conflict sheet (D5 B3).
         SaveResolution,
+        /// Show or hide the left dock.
+        ToggleLeftDock,
+        /// Show or hide the right dock.
+        ToggleRightDock,
+        /// Show or hide the bottom dock.
+        ToggleBottomDock,
+        /// Open the dock menu of the focused panel toggle.
+        OpenDockMenu,
+        /// Open the repository menu: the Kit cursor's row from the list, the
+        /// chosen repository's from a toolbar button (Part D).
+        OpenRepositoryMenu,
         /// Escape in the sheet's Result editor: back to its tab stop, the
         /// sheet left open (R-31).
         LeaveResult,
+        /// Move Activity's highlight to the row above; it stops at the first
+        /// (C2).
+        ActivityUp,
+        /// Move Activity's highlight to the row below; it stops at the last.
+        ActivityDown,
+        /// Highlight Activity's first row.
+        ActivityHome,
+        /// Highlight Activity's last row.
+        ActivityEnd,
+        /// Enter on Activity's list: press the highlighted row's button, or
+        /// open its item when it has none (C2).
+        ActivityEnter,
+        /// Open the highlighted Activity row's menu (Part D).
+        OpenActivityMenu,
+        /// "Clear finished", the one item of Activity's ⋯ menu (C1, L8). No
+        /// key is bound to it: the menu's item dispatches it.
+        ClearFinished,
+        /// Move the Needs attention popover's highlight to the row above; it
+        /// stops at the first (E2).
+        AttentionUp,
+        /// Move the popover's highlight to the row below; it stops at the
+        /// last.
+        AttentionDown,
+        /// Highlight the popover's first row.
+        AttentionHome,
+        /// Highlight the popover's last row.
+        AttentionEnd,
+        /// Enter on the popover's list: press the highlighted row's button,
+        /// or open its item when it has none. On the button or the link,
+        /// the control's own Enter.
+        AttentionEnter,
+        /// Tab in the popover: the list, the highlighted row's button, the
+        /// link, wrapping (R-12).
+        AttentionNext,
+        /// Shift-Tab in the popover, the other way round.
+        AttentionPrevious,
+        /// Escape in the popover: close it, with focus back to the footer
+        /// item.
+        CloseAttention,
     ]
 );
 
-/// The key context of the navigation region, the documents and tickets
-/// lists with their find bar and choices: `secondary-n` opens the shown
-/// list's New document… or New ticket… there, and nowhere else.
+/// The dock menu's choice (R-12): `panel` moves to the end of `side`'s dock
+/// and is revealed. Data for the menu's items; no key and no keymap file
+/// name it, hence `no_json`.
+#[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
+#[action(namespace = manyhands, no_json)]
+pub(crate) struct DockPanel {
+    pub panel: PanelKind,
+    pub side: Side,
+}
+
+/// What an item of a repository's menu showed when the menu opened, so the
+/// choice is checked against what it would show now (R-35): the state's
+/// action as its `RowAction`, any other item as its label.
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum Shown {
+    Action(RowAction),
+    Label(String),
+}
+
+/// A repository menu's choice (Part D): `choice` on the repository at
+/// `root`, as the item showed it. Data for the menu's items; no key and no
+/// keymap file name it, hence `no_json`.
+#[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
+#[action(namespace = manyhands, no_json)]
+pub(crate) struct RepositoryMenuChoice {
+    pub root: RepoKey,
+    pub choice: MenuChoice,
+    pub shown: Shown,
+}
+
+/// An Activity row's choice (Wave 04 Cycle 03b, Part D): the offer `action`
+/// of the row `key`, as it was labelled `shown` and at the row's `revision`
+/// when it was chosen, so the choice is checked against what the row offers
+/// now (T11, T12; R-46). Data for the menu's items and the test seam; no key
+/// and no keymap file name it, hence `no_json`.
+#[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
+#[action(namespace = manyhands, no_json)]
+pub(crate) struct ActivityMenuChoice {
+    pub key: RowKey,
+    pub action: ActivityAction,
+    pub shown: String,
+    pub revision: u64,
+}
+
+/// The key context of the Repositories region and its toolbar: `menu` and
+/// `shift-f10` open a repository's menu there (Part H).
+pub(crate) const REPOSITORIES_CONTEXT: &str = "Repositories";
+
+/// The key context of Activity's list (Wave 04 Cycle 03b, C2): the arrows,
+/// Home, End and Enter move and press in it, and `menu` and `shift-f10` open
+/// a row's menu. It is the list element's own, inside the region's
+/// `"Operations"` context.
+pub(crate) const ACTIVITY_CONTEXT: &str = "Activity";
+
+/// The key context of the Needs attention popover (Wave 04 Cycle 03b, E2):
+/// the arrows, Home, End, Enter, Tab and Escape work in it, on its list, its
+/// highlighted row's button and its link. It is the popover element's own, so
+/// no key outside the popover reaches it.
+pub(crate) const ATTENTION_POPOVER_CONTEXT: &str = "NeedsAttention";
+
+/// The key context of the Documents and Tickets regions (the tickets list
+/// with its filter bar): `secondary-n` opens the focused list's
+/// New document… or New ticket… there, and nowhere else.
 pub(crate) const NAVIGATION_CONTEXT: &str = "Navigation";
+
+/// The key context of a footer panel toggle (`view::footer`): `menu` and
+/// `shift-f10` open its dock menu there, and nowhere else.
+pub(crate) const PANEL_TOGGLE_CONTEXT: &str = "PanelToggle";
 
 /// The key context of the document tree's wrapper, where `enter` opens
 /// the selected row.
 pub(crate) const DOCUMENTS_CONTEXT: &str = "Documents";
+
+/// The key context of the ticket list's wrapper, where Home and End select
+/// the first and last row. The filter input, outside it, keeps its own.
+pub(crate) const TICKET_LIST_CONTEXT: &str = "TicketList";
 
 /// The key context of the content region, where PageUp, PageDown, Home
 /// and End scroll it. A focused control that binds them itself, such as
@@ -217,9 +347,51 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-shift-d", OpenDrafts, None),
         KeyBinding::new("secondary-q", Quit, None),
+        // The dock keys, in the workspace. An editor's own `ctrl-b` (Bold) is
+        // bound in its "Editor" context, which lies deeper, so it wins in an
+        // editable editor whichever is registered first; a read-only editor
+        // has it unbound (`editor::keys`, decision 2).
+        KeyBinding::new("secondary-b", ToggleLeftDock, Some("Workspace")),
+        KeyBinding::new("secondary-alt-b", ToggleRightDock, Some("Workspace")),
+        KeyBinding::new("secondary-j", ToggleBottomDock, Some("Workspace")),
+        // On a focused panel toggle: its dock menu.
+        KeyBinding::new("menu", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
+        KeyBinding::new("shift-f10", OpenDockMenu, Some(PANEL_TOGGLE_CONTEXT)),
+        // In the Repositories list or toolbar: a repository's menu. The Kit
+        // list binds neither key, so they reach this context (U-1).
+        KeyBinding::new("menu", OpenRepositoryMenu, Some(REPOSITORIES_CONTEXT)),
+        KeyBinding::new("shift-f10", OpenRepositoryMenu, Some(REPOSITORIES_CONTEXT)),
+        // In Activity's list: the highlight, Enter on its row, and its menu.
+        KeyBinding::new("up", ActivityUp, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("down", ActivityDown, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("home", ActivityHome, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("end", ActivityEnd, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("enter", ActivityEnter, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("menu", OpenActivityMenu, Some(ACTIVITY_CONTEXT)),
+        KeyBinding::new("shift-f10", OpenActivityMenu, Some(ACTIVITY_CONTEXT)),
+        // In the Needs attention popover: the highlight, Enter, Tab's three
+        // stops and Escape.
+        KeyBinding::new("up", AttentionUp, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("down", AttentionDown, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("home", AttentionHome, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("end", AttentionEnd, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("enter", AttentionEnter, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new("tab", AttentionNext, Some(ATTENTION_POPOVER_CONTEXT)),
+        KeyBinding::new(
+            "shift-tab",
+            AttentionPrevious,
+            Some(ATTENTION_POPOVER_CONTEXT),
+        ),
+        KeyBinding::new("escape", CloseAttention, Some(ATTENTION_POPOVER_CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
-        // New document… or New ticket…, the shown list's, in the navigation
-        // region only.
+        // The first and last row of a list; the Workspace handles them in
+        // the document tree as in the ticket list (`view::documents`).
+        KeyBinding::new("home", SelectFirst, Some(TICKET_LIST_CONTEXT)),
+        KeyBinding::new("end", SelectLast, Some(TICKET_LIST_CONTEXT)),
+        KeyBinding::new("home", SelectFirst, Some(DOCUMENTS_CONTEXT)),
+        KeyBinding::new("end", SelectLast, Some(DOCUMENTS_CONTEXT)),
+        // New document… or New ticket…, the focused list's, in either
+        // list's region (both carry this context) and nowhere else.
         KeyBinding::new("secondary-n", NewItem, Some(NAVIGATION_CONTEXT)),
         KeyBinding::new("pageup", ScrollPageUp, Some(CONTENT_CONTEXT)),
         KeyBinding::new("pagedown", ScrollPageDown, Some(CONTENT_CONTEXT)),
@@ -285,11 +457,6 @@ pub(crate) fn bind(cx: &mut App) {
             SaveResolution,
             Some(RESOLVE_SHEET_CONTEXT),
         ),
-        // The dialog's Enter (its Confirm, which the sheet ignores) is
-        // taken back inside the sheet, so Enter presses the focused button,
-        // as Space does (A21); the Result editor's Enter, bound deeper, is
-        // still its newline.
-        KeyBinding::new("enter", NoAction, Some(RESOLVE_SHEET_CONTEXT)),
         KeyBinding::new("escape", LeaveResult, Some(RESOLVE_SHEET_EDITOR)),
     ]);
 }

@@ -11,42 +11,64 @@ pub(crate) mod created_contexts;
 pub(crate) mod drafts;
 pub(crate) mod edit_tabs;
 pub(crate) mod images;
+pub(crate) mod inflight;
+pub(crate) mod layout;
 pub(crate) mod links;
 pub(crate) mod pending_conflicts;
+pub(crate) mod poll;
+pub(crate) mod poll_convert;
+pub(crate) mod preempt;
 pub(crate) mod prompts;
 mod reads;
 pub(crate) mod release;
 pub(crate) mod requests;
 pub(crate) mod resends;
 pub(crate) mod resolutions;
+pub(crate) mod scheduler;
 pub(crate) mod submissions;
 pub(crate) mod worker;
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use futures::StreamExt;
 use gpui_kit::{App, AppContext, Entity};
 use manyhands::{
     drafts::{DraftError, DraftStore},
     repository::{
-        ConflictDto, ContextPrepareIntent, Mutation, MutationDataDto, OperationId, PrepareDataDto,
-        ProgressStage, RepositoryService, keys::KeyStore,
+        AutomaticPollEligibility, ConflictDto, ContextPrepareIntent, Mutation, MutationDataDto,
+        OperationId, PollPublicationRemoteRequest, PollingStatusDto, PrepareDataDto, ProgressStage,
+        ReadError, RemoteListDto, RemotePollError, RemotePollResult, RemoteSnapshot,
+        RepositoryError, RepositoryService, ResolvedRepository, SharedKeyId,
+        keys::{KeyStore, SessionCredentials},
     },
     results::{Envelope, Outcome, PublicationEffect, RecoveryActionKind, ResultCode},
 };
 
 use crate::desktop::model::{
-    lifecycle_lock::{LockKey, LockState},
+    lifecycle_lock::{self as model_lock, LockKey, LockState},
     list_state::ListState,
     operations::Operations,
+    polling as model_polling,
+    publication::ShareTarget,
 };
 use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
 use edit_tabs::EditTabs;
+use layout::{LayoutStore, LayoutStoreError};
+use poll::PollInbox;
+use prompts::DesktopProvider;
 use release::Releases;
 use resolutions::{ResolutionStore, ResolutionStoreError};
+use scheduler::Scheduler;
 use submissions::Submissions;
-use worker::{WorkerEvent, WorkerHandle};
+use worker::{RecordState, WorkerEvent, WorkerHandle};
 
 pub(crate) use drafts::DraftStoreUnavailable;
 
@@ -78,6 +100,9 @@ pub(crate) enum ReadKind {
     Dependencies,
     Children,
     FindSlug,
+    /// `index_status`, read beside the lists for the files they could not
+    /// read (Part I).
+    IndexStatus,
     Operations,
     /// `inspect_repository`, of a folder the Repositories page checks.
     Inspect,
@@ -97,6 +122,10 @@ pub(crate) enum ReadKind {
     /// made ready (D5 A3), apart from `Item`, which the item's tabs reload
     /// under as the run ends.
     MadeReady,
+    /// The Workspace's reads of the titles of what a repository has not
+    /// shared yet (Cycle 03a, R-9): its repository's resolution and one
+    /// `show_item` per unknown ID.
+    ShareTitles,
     /// `observe_path`: the path a clicked link names, and any other path
     /// the desktop asks the library about.
     ObservePath,
@@ -131,6 +160,12 @@ pub(crate) enum JobKind {
     RemoteSelect,
     IndexRefresh,
     IndexRebuild,
+    /// Check now (D6): the person's own `poll once`, a mutation.
+    PollOnce,
+    /// The policy verbs (D6): single writes that never report `accepted`.
+    PollConfigure,
+    PollPause,
+    PollResume,
     KeyGenerate,
     KeyImport,
     KeySelect,
@@ -145,6 +180,8 @@ pub(crate) enum JobKind {
     TicketSave,
     ContextPrepare,
     ContextRelease,
+    /// Retires a completed item's local copy (D6 Part E).
+    ContextRetire,
     DocumentCreate,
     TicketCreate,
     DocumentMove,
@@ -161,6 +198,8 @@ pub(crate) enum JobKind {
     LocalContextSync,
     LocalContextResolve,
     ObserveHost,
+    /// An automatic poll (D6): no intent, so no request.
+    Poll,
 }
 
 /// The key store could not be found. The Keys page shows
@@ -168,7 +207,7 @@ pub(crate) enum JobKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct KeyStoreUnavailable;
 
-pub(crate) const KEY_STORE_UNAVAILABLE: &str = "Manyhands could not find your SSH key store.";
+pub(crate) const KEY_STORE_UNAVAILABLE: &str = "Manyhands could not find your key store.";
 
 /// What the desktop calls the library through.
 pub(crate) trait Backend: Send + Sync + 'static {
@@ -188,6 +227,12 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// production, the fixture's in tests; otherwise why it did not open.
     fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError>;
 
+    /// The saved panel layout (Wave 04 Cycle 01, Part G), in `layout`
+    /// beside the draft store's folder: the application data directory's
+    /// in production, the fixture's in tests; otherwise why it did not
+    /// open.
+    fn layout(&self) -> Result<&LayoutStore, LayoutStoreError>;
+
     /// Awaited inside the read's future, before the blocking library call.
     fn read_gate(&self, _kind: ReadKind) -> Option<ReadGate> {
         None
@@ -195,6 +240,27 @@ pub(crate) trait Backend: Send + Sync + 'static {
 
     /// Called on the worker thread before a job's library call.
     fn before_job(&self, _kind: JobKind) {}
+
+    /// Called on the worker thread after `before_job`. An answer it gives
+    /// stands in place of the library's, and the library call is not made: a
+    /// test's canned answer for a job whose call would reach a remote no
+    /// desktop test has (D6 decision 9), or take seconds to fail.
+    fn instead_of_job(&self, _kind: JobKind) -> Option<Envelope<MutationDataDto>> {
+        None
+    }
+
+    /// The pending operations of the repository at `root`, read off the UI
+    /// thread, for the scheduler to match its in-flight entries against
+    /// (D6 review I-C). `None`: the read failed, so nothing is concluded. A
+    /// test may stand in for the library's list.
+    fn pending_operations(
+        &self,
+        root: &std::path::Path,
+    ) -> Option<manyhands::repository::OperationListDto> {
+        let service = self.service();
+        let repo = service.resolve_repository(root).ok()?;
+        service.list_operations(&repo).ok()
+    }
 
     /// Called on the worker thread after a job's library call returns,
     /// before the worker decides what follows it. An answer it gives
@@ -227,6 +293,90 @@ pub(crate) trait Backend: Send + Sync + 'static {
     ) -> Option<ConflictDto> {
         None
     }
+
+    // The automatic poll's calls (D6 B1, B4), one per library call so that a
+    // recording double can list them. The defaults are the library's own;
+    // a double records, then delegates.
+
+    /// The first call of an automatic poll: the repository at `root`, as
+    /// registered.
+    #[allow(clippy::result_large_err)] // The library's `ReadError`.
+    fn resolve(&self, root: &Path) -> Result<ResolvedRepository, ReadError> {
+        self.service().resolve_repository(root)
+    }
+
+    /// The repository's polling policy, stored deadline and active
+    /// operation.
+    #[allow(clippy::result_large_err)] // The library's `ReadError`.
+    fn polling_status(&self, repo: &ResolvedRepository) -> Result<PollingStatusDto, ReadError> {
+        self.service().polling_status(repo)
+    }
+
+    /// The repository's remotes, redacted: whether one is selected for
+    /// publication over SSH decides whether the scheduler polls it at all
+    /// (R-27, U-2). A scheduler call, not part of an automatic poll's own
+    /// call list (B4); the read contacts nothing.
+    #[allow(clippy::result_large_err)] // The library's `ReadError`.
+    fn publication_remotes(&self, repo: &ResolvedRepository) -> Result<RemoteListDto, ReadError> {
+        self.service().list_remotes_redacted(repo)
+    }
+
+    /// Whether the policy lets an automatic poll go ahead. Contacts
+    /// nothing.
+    fn poll_eligibility(&self, root: &Path) -> Result<AutomaticPollEligibility, RepositoryError> {
+        self.service().automatic_poll_eligibility(root)
+    }
+
+    /// The poll itself: `Automatic`, so no job prompt reaches `session`'s
+    /// provider (B5).
+    #[allow(clippy::result_large_err)] // The library's `RemotePollError`.
+    fn poll_automatic(
+        &self,
+        request: PollPublicationRemoteRequest,
+        session: &mut SessionCredentials<DesktopProvider>,
+    ) -> Result<RemotePollResult, RemotePollError> {
+        self.service().poll_publication_remote(request, session)
+    }
+
+    /// What the registry stores of the remote after the poll: its
+    /// deadline.
+    fn remote_snapshot(&self, root: &Path) -> Result<RemoteSnapshot, RepositoryError> {
+        self.service().remote_snapshot(root)
+    }
+
+    /// A test may put a constructed answer in place of `poll_automatic`'s,
+    /// as `after_job` does for a job: the library builds its poll report
+    /// only inside itself, so a test that needs a `Cancelled` or an
+    /// `Interrupted` report cannot make one. The call itself still runs.
+    fn after_poll(&self, _operation: OperationId) -> Option<poll_convert::Library> {
+        None
+    }
+
+    /// Resume checking (decision 10, C2): releases the repository's
+    /// recovery suspension, and nothing else. Called off the UI thread by
+    /// the scheduler.
+    fn resume_polling(&self, root: &Path) -> Result<(), RepositoryError> {
+        self.service().resume_remote_polling_after_recovery(root)
+    }
+
+    /// The key registered as selected, for the attention of a retirement
+    /// that was refused a locked key when no key was recorded against it
+    /// (D6 E3). A scheduler call, off the UI thread; `None` when no key is
+    /// selected or the registry cannot be read.
+    fn selected_key(&self) -> Option<SharedKeyId> {
+        let keys = self.service().list_keys().ok()?;
+        let selected = keys.items.iter().find(|key| key.selected)?;
+        SharedKeyId::parse(&selected.id).ok()
+    }
+
+    /// Asks the poll `op` of `root` to stop at its next safe point.
+    /// Called only by the cancel task (`preempt`: a user job, a
+    /// reconfiguration and quit all go that way), never by a poll itself,
+    /// and again until the poll answers (B2). It answers `Ok` without
+    /// effect on a row that is not active (Fact 30).
+    fn cancel_poll(&self, root: &Path, op: OperationId) -> Result<(), RepositoryError> {
+        self.service().cancel_remote_operation(root, op)
+    }
 }
 
 /// The production backend: the library, with no delays.
@@ -234,21 +384,24 @@ pub(crate) struct LibraryBackend {
     service: RepositoryService,
     drafts: Result<DraftStore, DraftStoreUnavailable>,
     resolutions: Result<ResolutionStore, ResolutionStoreError>,
+    layout: Result<LayoutStore, LayoutStoreError>,
 }
 
 impl LibraryBackend {
-    /// A backend over `service` and the open results of the draft store
-    /// and the resolutions store: the desktop starts whether or not they
-    /// opened.
+    /// A backend over `service` and the open results of the draft store,
+    /// the resolutions store and the layout store: the desktop starts
+    /// whether or not they opened.
     pub(crate) fn new(
         service: RepositoryService,
         drafts: Result<DraftStore, DraftError>,
         resolutions: Result<ResolutionStore, ResolutionStoreError>,
+        layout: Result<LayoutStore, LayoutStoreError>,
     ) -> Self {
         Self {
             service,
             drafts: drafts.map_err(DraftStoreUnavailable::from),
             resolutions,
+            layout,
         }
     }
 }
@@ -268,6 +421,48 @@ impl Backend for LibraryBackend {
 
     fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError> {
         self.resolutions.as_ref().map_err(|error| *error)
+    }
+
+    fn layout(&self) -> Result<&LayoutStore, LayoutStoreError> {
+        self.layout.as_ref().map_err(|error| *error)
+    }
+}
+
+/// Starts the cancel task of a poll the worker was asked to stop.
+struct Canceller {
+    backend: Arc<dyn Backend>,
+    watch: worker::PollWatch,
+    executor: gpui_kit::BackgroundExecutor,
+}
+
+impl Canceller {
+    /// The watch of the run that job `id` is: the task it ends with is about
+    /// that run alone, not a later one of the same operation.
+    fn watch_for(&self, id: requests::DesktopRequestId) -> worker::PollWatch {
+        self.watch.clone().for_run(id)
+    }
+
+    /// Spawns `preempt::cancel_until_answered` for the poll `op` of `root`
+    /// on the background executor, never the UI thread (P-1).
+    fn start(&self, root: model_polling::Root, op: OperationId, id: requests::DesktopRequestId) {
+        let (backend, watch, executor) = (
+            self.backend.clone(),
+            self.watch_for(id),
+            self.executor.clone(),
+        );
+        self.executor
+            .spawn(async move {
+                preempt::cancel_until_answered(
+                    backend.as_ref(),
+                    &watch,
+                    &root,
+                    op,
+                    &preempt::RESEND_DELAYS,
+                    |delay| executor.timer(delay),
+                )
+                .await;
+            })
+            .detach();
     }
 }
 
@@ -295,6 +490,17 @@ pub(crate) struct Services {
     followups: resolutions::Followups,
     /// What follows a lifecycle's resume or republish (D5 decision 10, A3).
     resends: resends::Resends,
+    /// The polls that ended and no one has taken yet. The scheduler takes
+    /// them from its own handle on the same inbox; tests read them here.
+    #[cfg_attr(not(test), allow(dead_code))]
+    polls: PollInbox,
+    /// The polling scheduler (D6 B6): one entity, so every clone and window
+    /// shares it (A17). `Workspace` holds none (R-16).
+    scheduler: Entity<Scheduler>,
+    /// The polling switch (R-27): off unless `with_polling`, shared by every
+    /// clone and by the drain. Apart from `launch_refresh`, which is on by
+    /// default.
+    polling: Arc<AtomicBool>,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -359,6 +565,30 @@ impl Services {
         let resending = worker.clone();
         let resends = resends::Resends::default();
         let resent = resends.clone();
+        let polls = PollInbox::default();
+        let polled = polls.clone();
+        let polling = Arc::new(AtomicBool::new(false));
+        let edit_tabs = cx.new(|_| EditTabs::default());
+        let scheduler = cx.new(|_| {
+            Scheduler::new(
+                backend.clone(),
+                worker.clone(),
+                operations.downgrade(),
+                polls.clone(),
+                polling.clone(),
+                edit_tabs.downgrade(),
+                drafts.downgrade(),
+            )
+        });
+        let scheduling = scheduler.downgrade();
+        let switch = polling.clone();
+        // The cancel task of a poll the worker was asked to stop (B2) runs
+        // on a background executor: the library's cancel is a write.
+        let canceller = Canceller {
+            backend: backend.clone(),
+            watch: worker.poll_watch(),
+            executor: cx.background_executor().clone(),
+        };
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
                 let mut batch = vec![event];
@@ -370,7 +600,29 @@ impl Services {
                     let mut prepared = Vec::new();
                     let mut posted = Vec::new();
                     let mut settled = Vec::new();
+                    let mut scheduled = Vec::new();
                     for event in batch {
+                        // A poll's end is the scheduler's, not a request's
+                        // (D6 B1).
+                        let event = match event {
+                            WorkerEvent::Polled(root, attempt) => {
+                                polled.push(root, attempt);
+                                continue;
+                            }
+                            WorkerEvent::PreemptPoll { root, op, id } => {
+                                canceller.start(root, op, id);
+                                continue;
+                            }
+                            event => event,
+                        };
+                        // A retirement's answer is read from where the worker's
+                        // record of the request stood (E3); `Finished` has none.
+                        scheduler::note_record(&event, operations, |id| resending.record_state(id));
+                        // A share's record and Give up, noted before its
+                        // `Finished` classifies it once (F2, R-8).
+                        note_share_attempt(&event, operations, &resending);
+                        // A request that reconfigures polling (R-11).
+                        scheduled.extend(scheduler::heard(&event, operations));
                         let ended = match &event {
                             WorkerEvent::Finished(id, _)
                             | WorkerEvent::Removed(id)
@@ -485,11 +737,17 @@ impl Services {
                         operations.apply(event);
                     }
                     cx.notify();
-                    (finished, prepared, posted, settled)
+                    (finished, prepared, posted, settled, scheduled)
                 });
-                let Ok((finished, prepared, posted, settled)) = applied else {
+                let Ok((finished, prepared, posted, settled, scheduled)) = applied else {
                     break;
                 };
+                // Every batch pokes the scheduler: a poll may have ended and
+                // the user lane may have emptied. It does nothing while
+                // polling is off (R-27).
+                if switch.load(Ordering::Relaxed) {
+                    let _ = scheduling.update(cx, |scheduler, cx| scheduler.heard(scheduled, cx));
+                }
                 if !settled.is_empty() {
                     resolutions::settle_finished(&settling, &settled_followups, settled, cx);
                 }
@@ -563,10 +821,13 @@ impl Services {
             #[cfg(all(test, feature = "desktop-test-support"))]
             created,
             releases,
-            edit_tabs: cx.new(|_| EditTabs::default()),
+            edit_tabs,
             submissions,
             followups,
             resends,
+            polls,
+            scheduler,
+            polling,
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
@@ -585,6 +846,34 @@ impl Services {
 
     pub(crate) fn launch_refresh(&self) -> bool {
         self.launch_refresh
+    }
+
+    /// The same services, with polling switched on (R-27): the repository
+    /// list starts the launch poll and the scheduler polls what is due. Off
+    /// unless this is called; production `run()` calls it. The switch is
+    /// shared with every clone.
+    pub(crate) fn with_polling(self) -> Self {
+        self.polling.store(true, Ordering::Relaxed);
+        self
+    }
+
+    /// Whether polling is switched on.
+    pub(crate) fn polling(&self) -> bool {
+        self.polling.load(Ordering::Relaxed)
+    }
+
+    /// The polling scheduler, shared by every clone (A17).
+    pub(crate) fn scheduler(&self) -> &Entity<Scheduler> {
+        &self.scheduler
+    }
+
+    /// The same services with the scheduler reading `clock`, for a test
+    /// that moves the time by hand.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn with_clock(self, clock: Arc<dyn model_polling::Clock>, cx: &mut App) -> Self {
+        self.scheduler
+            .update(cx, |scheduler, _| scheduler.use_clock(clock));
+        self
     }
 
     /// The key store a key command is built with.
@@ -613,6 +902,78 @@ impl Services {
             .in_flight(|intent| lifecycle_of(intent, &key, &held));
         let loading = matches!(operations.pending().get(root), Some(ListState::Loading));
         operations.locks().state(&key, in_flight, loading)
+    }
+
+    /// Whether the local copy of the item `id` of `kind` in `root` is being
+    /// retired (D6 decision 19, E1): a retirement of it is queued or
+    /// running in the worker, of any lane, a mark holds it for the loop or a
+    /// Retire… not yet handed over, or the in-flight record holds one that
+    /// is pending, after a relaunch too. Keyed by all three, and counted per
+    /// request: one ending clears nothing of another's.
+    pub(crate) fn retiring(
+        &self,
+        root: &str,
+        kind: manyhands::repository::ItemDtoKind,
+        id: &str,
+        cx: &App,
+    ) -> bool {
+        self.operations.read(cx).is_retiring(root, kind, id)
+            || self.worker.retirement_in_flight(root, kind, id)
+    }
+
+    /// Where the item `id` of `kind` in `root` stands under every lock: the
+    /// lifecycle's (`lifecycle_lock`), then "Retiring…" (D6 decision 19). A
+    /// lifecycle that holds the item says so first.
+    pub(crate) fn lock(
+        &self,
+        root: &str,
+        kind: manyhands::repository::ItemDtoKind,
+        id: &str,
+        cx: &App,
+    ) -> LockState {
+        let state = self.lifecycle_lock(root, id, cx);
+        if matches!(state, LockState::Locked(_)) || !self.retiring(root, kind, id, cx) {
+            return state;
+        }
+        LockState::Locked(model_lock::LockSource::Retiring)
+    }
+
+    /// Resume of the pending operation `operation_id` of `root`: its
+    /// `operation resume`, on the user lane. A pending retirement's Resume
+    /// first clears the Not now marks of the keys its request's last attempt
+    /// was answered `Cancelled` for, so the resend it leads to can prompt
+    /// (E4, Fact 15). The record's entry ties the row to its request.
+    pub(crate) fn resume(&self, root: &str, operation_id: &str, cx: &App) {
+        let Ok(operation_id) = OperationId::parse(operation_id) else {
+            return;
+        };
+        let held: Vec<requests::DesktopRequestId> = {
+            let operations = self.operations.read(cx);
+            let request = operations
+                .retirement_of(root, operation_id)
+                .and_then(|entry| entry.request);
+            operations
+                .requests()
+                .iter()
+                .filter(|held| {
+                    Some(held.request_id) == request
+                        && matches!(held.intent, requests::Intent::ContextRetire { .. })
+                })
+                .map(|held| held.id)
+                .collect()
+        };
+        for id in held {
+            self.worker.clear_declined_for(id);
+        }
+        self.worker.submit(
+            requests::Intent::OperationResume {
+                root: std::path::PathBuf::from(root),
+                operation_id,
+            },
+            requests::Lane::User,
+            None,
+            None,
+        );
     }
 
     /// Whether a republish of the item `id` of `root` is queued or running.
@@ -676,9 +1037,38 @@ impl Services {
         &self.resends
     }
 
-    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
+    }
+}
+
+/// Tells the request model where the worker's record of a share stood when
+/// its last attempt finished, and whether that attempt was a Give up's,
+/// before `Finished` is applied: the event carries neither (F2, R-8). The
+/// drain calls this for every event.
+fn note_share_attempt(event: &WorkerEvent, operations: &mut Operations, worker: &WorkerHandle) {
+    let WorkerEvent::Finished(id, _) = event else {
+        return;
+    };
+    let shares = operations
+        .request(*id)
+        .is_some_and(|request| ShareTarget::of(&request.intent).is_some());
+    if shares {
+        operations.note_share_attempt(
+            *id,
+            worker.record_state(*id).unwrap_or(RecordState::Unknown),
+            worker.gave_up(*id).is_some(),
+        );
+    }
+}
+
+/// The kind of item a retirement names, as the tabs know it.
+fn retire_kind(kind: manyhands::repository::AuthoringKind) -> manyhands::repository::ItemDtoKind {
+    match kind {
+        manyhands::repository::AuthoringKind::Ticket => manyhands::repository::ItemDtoKind::Ticket,
+        manyhands::repository::AuthoringKind::Document => {
+            manyhands::repository::ItemDtoKind::Document
+        }
     }
 }
 

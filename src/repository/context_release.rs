@@ -469,7 +469,7 @@ fn not_clean(root: &Path) -> RepositoryError {
         OPERATION,
         root,
         RepositoryErrorKind::DirtyWorktree,
-        "the context worktree holds a change, an untracked file or an ignored file",
+        "the context worktree holds a change or an untracked file",
     )
 }
 

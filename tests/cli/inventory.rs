@@ -286,7 +286,7 @@ fn help(args: &[&str]) -> Value {
 }
 
 /// The root help's commands, by name.
-fn catalog() -> BTreeMap<String, Value> {
+pub(crate) fn catalog() -> BTreeMap<String, Value> {
     let root = help(&["--help", "--json"]);
     let commands: BTreeMap<String, Value> = root["data"]["commands"]
         .as_array()
@@ -307,7 +307,7 @@ fn catalog() -> BTreeMap<String, Value> {
     commands
 }
 
-fn options(command: &Value) -> BTreeSet<String> {
+pub(crate) fn options(command: &Value) -> BTreeSet<String> {
     command["options"]
         .as_array()
         .unwrap()

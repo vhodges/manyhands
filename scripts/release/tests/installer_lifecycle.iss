@@ -27,6 +27,7 @@ Name: "clipath"; Description: "Unused isolated PATH fixture"; Flags: unchecked
 Source: "installer_lifecycle.iss"; DestDir: "{app}\bin"; DestName: "manyhands.exe"; Flags: ignoreversion; AfterInstall: CancelAfterCopy
 Source: "installer_lifecycle.iss"; DestDir: "{app}\bin"; DestName: "manyhands-cli.exe"; Flags: ignoreversion
 Source: "installer_lifecycle.iss"; DestDir: "{app}\licenses"; DestName: "README.md"; Flags: ignoreversion
+Source: "installer_lifecycle.iss"; DestDir: "{app}\skills"; DestName: "README.md"; Flags: ignoreversion
 Source: "..\..\..\packaging\windows\INNO-LICENSE.txt"; DestDir: "{app}\licenses\installer"; Flags: ignoreversion
 Source: "{#ManagedFiles}"; DestDir: "{app}\licenses\installer"; DestName: "managed-files.txt"; Flags: ignoreversion
 Source: "{#ManagedDigests}"; DestName: "managed-digests.txt"; Flags: dontcopy
@@ -86,9 +87,11 @@ begin
   if ExpandConstant('{param:Mode}') <> 'fresh' then begin
     ForceDirectories(App + '\bin');
     ForceDirectories(App + '\licenses\old-crate');
+    ForceDirectories(App + '\skills\old-skill');
     SaveStringToFile(App + '\bin\manyhands.exe', 'old executable', False);
     SaveStringToFile(App + '\bin\stale.dll', 'old DLL', False);
     SaveStringToFile(App + '\licenses\old-crate\COPYING', 'old licence', False);
+    SaveStringToFile(App + '\skills\old-skill\SKILL.md', 'old skill', False);
     SaveStringToFile(App + '\user-state.txt', 'preserve user state', False);
     RegWriteStringValue(HKCU64, InstallerKey, 'Version', '1.0.0');
     RegWriteStringValue(HKCU64, InstallerKey, 'InstallDir', App);
@@ -268,6 +271,7 @@ begin
         RaiseException('Mid-copy cancellation fixture did not overwrite its executable.');
     if FileExists(App + '\bin\stale.dll') = Completed then RaiseException('Wrong stale executable state.');
     if FileExists(App + '\licenses\old-crate\COPYING') = Completed then RaiseException('Wrong stale licence state.');
+    if FileExists(App + '\skills\old-skill\SKILL.md') = Completed then RaiseException('Wrong stale skill state.');
     if Mode <> 'fresh' then
       if not LoadStringFromFile(App + '\user-state.txt', Contents) or (Contents <> 'preserve user state') then
         RaiseException('User state changed.');

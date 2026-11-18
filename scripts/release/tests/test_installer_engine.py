@@ -157,7 +157,7 @@ class InstallerEngineTests(unittest.TestCase):
             directory = self.root / ('inputs-' + invalid)
             directory.mkdir()
         managed, digests = self.write_compiler_inputs({name: digest for name in
-                                                      ('bin/manyhands.exe', 'bin/manyhands-cli.exe', 'licenses/README.md')},
+                                                      ('bin/manyhands.exe', 'bin/manyhands-cli.exe', 'licenses/README.md', 'skills/README.md')},
                                                      directory=directory)
         if invalid:
             replacement = {'traversal': b'bin\\..\\user-state.txt', 'collision': b'bin\\Manyhands.exe'}[invalid]
@@ -184,6 +184,7 @@ class InstallerEngineTests(unittest.TestCase):
         evidence = result.stdout + result.stderr + (scenario / 'setup.log').read_text(encoding='utf-8-sig', errors='replace')
         evidence += '\nstale_bin_exists=' + str((fixture / 'app/bin/stale.dll').exists())
         evidence += '\nstale_licence_exists=' + str((fixture / 'app/licenses/old-crate/COPYING').exists())
+        evidence += '\nstale_skill_exists=' + str((fixture / 'app/skills/old-skill/SKILL.md').exists())
         self.assertEqual(result.returncode, expected, evidence)
         self.assertTrue(report.exists(), 'Engine did not pass deinitialization assertions: ' + mode + '\n' + evidence)
         self.assertEqual(report.read_text(), 'passed')

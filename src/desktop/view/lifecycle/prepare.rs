@@ -15,8 +15,8 @@ use manyhands::{
 };
 
 use super::{
-    CONTINUE, LifecycleDialog, NOT_SENT, OPEN_FOLDER, Phase, RESUME, STILL_RUNNING, button,
-    share_main, sharing_main, text,
+    CHECK_NOW, CHECKING_ORIGIN, CONTINUE, LifecycleDialog, NOT_SENT, OPEN_FOLDER, Phase, RESUME,
+    STILL_RUNNING, button, share_main, sharing_main, text,
 };
 use crate::desktop::{
     model::{
@@ -341,19 +341,41 @@ impl LifecycleDialog {
         }
     }
 
-    /// The held item's one way on, as a button; while the item's lifecycle
-    /// is in flight, that it is still running.
+    /// Whether this process's own Check now of `root` is queued or running.
+    fn checking_origin(&self, root: &std::path::Path) -> bool {
+        self.services
+            .worker()
+            .in_flight(|intent| matches!(intent, Intent::PollOnce { root: asked } if asked == root))
+    }
+
+    /// Check now, from a blocked prepare whose way out is the poll: `poll
+    /// once` of the item's repository, as the person's own action. The
+    /// dialog does not prepare again by itself (D6 C2).
+    fn check_now(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.root().map(|root| root.to_path_buf()) else {
+            return;
+        };
+        if self.checking_origin(&root) {
+            return;
+        }
+        self.services
+            .worker()
+            .submit(Intent::PollOnce { root }, Lane::User, None, None);
+        cx.notify();
+    }
+
+    /// The held item's one way on, as a primary button; while the item's
+    /// lifecycle is in flight, that it is still running, in its place.
     pub(super) fn held_action(
         &self,
         way_out: &LifecycleWayOut,
         cx: &Context<Self>,
-    ) -> Option<AnyElement> {
+    ) -> Option<(bool, AnyElement)> {
         if self.in_flight(cx) {
-            return Some(
-                text("lifecycle-still-running", STILL_RUNNING)
-                    .text_sm()
-                    .into_any_element(),
-            );
+            let waiting = text("lifecycle-still-running", STILL_RUNNING)
+                .text_sm()
+                .into_any_element();
+            return Some((false, waiting));
         }
         match way_out {
             LifecycleWayOut::RetryRequest { request_id } => {
@@ -371,8 +393,9 @@ impl LifecycleDialog {
     }
 
     /// A blocked prepare's rows: each blocker in words, then each way out
-    /// that is guidance, and its code; and its buttons: Repair locally…,
-    /// Open folder for a dirty main and Share main when it is a way out.
+    /// that is guidance, and its code; and its buttons, none primary:
+    /// Repair locally…, Open folder for a dirty main and Share main when it
+    /// is a way out.
     pub(super) fn blocked_body(
         &self,
         code: ResultCode,
@@ -380,7 +403,7 @@ impl LifecycleDialog {
         way_out: &[LifecycleWayOut],
         shared: bool,
         cx: &Context<Self>,
-    ) -> (impl IntoElement + use<>, Vec<AnyElement>) {
+    ) -> (impl IntoElement + use<>, Vec<(bool, AnyElement)>) {
         let item = match self.heading.kind {
             manyhands::repository::ItemDtoKind::Ticket => "ticket",
             manyhands::repository::ItemDtoKind::Document => "document",
@@ -388,6 +411,10 @@ impl LifecycleDialog {
         let muted = cx.theme().muted_foreground;
         let primary = self.primary();
         let known = self.known_primary();
+        // The poll is a way out with a button of its own (D6 C2): while
+        // this process's Check now runs, the dialog says so instead.
+        let polls = way_out.contains(&LifecycleWayOut::PollOnce);
+        let checking = polls && self.root().is_some_and(|root| self.checking_origin(root));
         let guidance: Vec<String> = way_out
             .iter()
             .filter_map(|step| guidance(step, item, &primary))
@@ -410,6 +437,7 @@ impl LifecycleDialog {
             .children(
                 shared.then(|| text("lifecycle-sharing-main", sharing_main(&primary)).text_sm()),
             )
+            .children(checking.then(|| text("lifecycle-checking", CHECKING_ORIGIN).text_sm()))
             .child(
                 text("lifecycle-code", code.as_str())
                     .text_xs()
@@ -426,6 +454,10 @@ impl LifecycleDialog {
                 false,
                 move |_, _, cx: &mut App| cx.open_with_system(&root),
             ));
+        }
+        if polls && !checking {
+            let check = self.on(cx, |dialog, _, cx| dialog.check_now(cx));
+            actions.push(button("lifecycle-check-now", CHECK_NOW, false, check));
         }
         if way_out.contains(&LifecycleWayOut::SharePrimary) && !shared {
             let share = self.on(cx, |dialog, _, cx| dialog.share_main(cx));

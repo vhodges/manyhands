@@ -41,6 +41,9 @@ use crate::desktop::{
 pub(crate) const CLOSING: &str = "Closing\u{2026}";
 /// What a document's tab says while its merge is unfinished.
 pub(crate) const MERGING: &str = "Merging\u{2026}";
+/// What a tab says while its item's local copy is being retired (D6
+/// decision 19), of either kind.
+pub(crate) const RETIRING: &str = "Retiring\u{2026}";
 /// The note around a control that waits for the lock, carrying its words.
 pub(crate) const LOCKED_NOTE: &str = "item-locked-note";
 /// Share's note while it waits for the lock.
@@ -52,6 +55,15 @@ pub(crate) fn lock_words(kind: ItemDtoKind) -> &'static str {
     match kind {
         ItemDtoKind::Ticket => CLOSING,
         ItemDtoKind::Document => MERGING,
+    }
+}
+
+/// The words of an item of `kind` that `state` locks: "Retiring…" for a
+/// retirement of its local copy, else its lifecycle's.
+pub(crate) fn locked_text(state: LockState, kind: ItemDtoKind) -> &'static str {
+    match state {
+        LockState::Locked(LockSource::Retiring) => RETIRING,
+        _ => lock_words(kind),
     }
 }
 
@@ -91,7 +103,7 @@ impl ItemPane {
     /// tab, which has no lifecycle.
     pub(crate) fn lock_state(&self, cx: &App) -> LockState {
         match self.tab_key() {
-            TabKey::Item { repo, id, .. } => self.services.lifecycle_lock(&repo, &id, cx),
+            TabKey::Item { repo, kind, id } => self.services.lock(&repo, kind, &id, cx),
             TabKey::Inspect { .. } => LockState::Open,
         }
     }
@@ -112,12 +124,26 @@ impl ItemPane {
     /// What the tab says while a source locks it; none while nothing is
     /// known yet (R-21) or nothing locks it.
     pub(super) fn locked_words(&self, cx: &App) -> Option<&'static str> {
-        matches!(self.lock_state(cx), LockState::Locked(_)).then(|| lock_words(self.lock_kind()))
+        let state = self.lock_state(cx);
+        matches!(state, LockState::Locked(_)).then(|| locked_text(state, self.lock_kind()))
     }
 
     /// What a refused action says: the item's words, whatever locks it.
-    pub(super) fn refused_words(&self) -> &'static str {
-        lock_words(self.lock_kind())
+    pub(super) fn refused_words(&self, cx: &App) -> &'static str {
+        locked_text(self.lock_state(cx), self.lock_kind())
+    }
+
+    /// Whether the item's local copy is being retired (D6 decision 19): the
+    /// tab says "Retiring…" and starts nothing, and a composer takes no new
+    /// text.
+    pub(in crate::desktop::view::item) fn retiring(&self, cx: &App) -> bool {
+        self.lock_state(cx) == LockState::Locked(LockSource::Retiring)
+    }
+
+    /// Whether a run of the item, its record or a retirement of its local
+    /// copy says so in the header's pill.
+    pub(super) fn shows_lock_progress(&self, cx: &App) -> bool {
+        self.run_locks(cx) || self.retiring(cx)
     }
 
     /// `control` inside the lock's note while a source locks the tab;
@@ -153,7 +179,10 @@ impl ItemPane {
     /// record, locks it ends if clean and is kept otherwise (R-23). The
     /// dialog's own lock waits for its save first.
     pub(super) fn lock_changed(&mut self, cx: &mut Context<Self>) {
-        if self.run_locks(cx) {
+        // A retirement of the item's local copy ends a clean session too:
+        // Retire… marked it after it checked that no text is unkept (E4
+        // step 4), and the loop never retires an item with a session.
+        if self.run_locks(cx) || self.retiring(cx) {
             self.lock_session(cx);
         }
     }

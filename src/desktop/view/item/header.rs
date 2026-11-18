@@ -29,7 +29,7 @@ use gpui_kit::{
 };
 use manyhands::{
     canonical::ItemId,
-    repository::{ClosureState, ItemDto, ItemDtoKind},
+    repository::{ClosureState, ItemContextKind, ItemDto, ItemDtoKind},
 };
 use time::OffsetDateTime;
 
@@ -128,7 +128,9 @@ pub(crate) fn crumbs(target: &OpenTarget, item: Option<&ItemDto>) -> (Option<Str
 /// The header's lifecycle action for an item of `kind`, as `item` reads:
 /// Close ticket… for a ticket, unless the lifecycle closed it (its closure,
 /// not its status text, says `closed`), and Approve and merge… for a
-/// document. None while the kind is not known.
+/// document that has a working copy of its own to merge: one read from the
+/// primary branch has none, and promoting it only comes back blocked. None
+/// while the kind is not known.
 pub(crate) fn lifecycle_action(
     kind: Option<ItemDtoKind>,
     item: Option<&ItemDto>,
@@ -140,7 +142,13 @@ pub(crate) fn lifecycle_action(
                 .is_some_and(|closure| closure.state == ClosureState::Closed);
             (!closed).then_some(CLOSE_TICKET)
         }
-        ItemDtoKind::Document => Some(APPROVE_AND_MERGE),
+        ItemDtoKind::Document => {
+            // A file with no ID keeps its action, disabled and saying why.
+            let nothing_to_merge = item.is_some_and(|item| {
+                item.id.is_some() && item.context.kind != ItemContextKind::Active
+            });
+            (!nothing_to_merge).then_some(APPROVE_AND_MERGE)
+        }
     }
 }
 
@@ -178,8 +186,8 @@ impl ItemPane {
         // A run of the item, or its record, says so first (D5 A2); its
         // dialog, open in front of the tab, says so itself.
         let progress = self
-            .run_locks(cx)
-            .then(|| self.refused_words().to_owned())
+            .shows_lock_progress(cx)
+            .then(|| self.refused_words(cx).to_owned())
             .or_else(|| self.share_progress(cx));
         let pill = item.map(|item| {
             // A running share or post of the item says its stage.
@@ -214,6 +222,7 @@ impl ItemPane {
             .items_center()
             .gap(px(8.))
             .children(pill)
+            .children(self.git_details_button(item, cx))
             .children(self.comments_button(window, cx))
             .children(self.edit_action(read, window, cx))
             .children(self.share_button(window, cx))
@@ -225,7 +234,8 @@ impl ItemPane {
                 .line_height(relative(1.25))
                 .text_color(colors.header_title)
         });
-        // An item read by path has no chips: it has no details sheet.
+        // An item read by path has no chips and no item details sheet; a
+        // nonconforming one has the Git details button (`git_details_button`).
         let chips = match (self.model.target(), item) {
             (OpenTarget::Item { kind, .. }, Some(item)) => Some(self.chip_row(
                 chips(

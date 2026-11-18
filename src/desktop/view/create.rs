@@ -1,6 +1,6 @@
 //! The create dialogs (design, Create (decision 3); R-20, R-21, R-22, R-46):
 //! New document… and New ticket…, opened on the selected repository from
-//! the shown list's button, or by `secondary-n` in the navigation region.
+//! its list's button, or by `secondary-n` in either list's region.
 //!
 //! - **The fields.** Both take a Title. A ticket also takes a Type, `task`
 //!   until changed; it is made with the status `open` and no initials,
@@ -22,7 +22,10 @@
 //!   Escape closes the dialog, and focus goes back where it was.
 //!
 //! `Workspace::new_item` is the way in; the drawing is `form`'s. The
-//! fields hold the user's text, so nothing here derives `Debug`.
+//! dialog is on the common frame (Wave 04 Cycle 05a design A3): its
+//! heading in the Kit's title slot, the fields in the body, and Cancel and
+//! Create in the footer, the body element's last child. The fields hold
+//! the user's text, so nothing here derives `Debug`.
 
 mod document;
 mod form;
@@ -49,7 +52,10 @@ pub(in crate::desktop::view) use self::{
     document::PathCheck,
     form::{button, field, focus_the_note, held_button, keep_focus_in},
 };
-use super::workspace::Workspace;
+use super::{
+    frame::{self, Header},
+    workspace::Workspace,
+};
 use crate::desktop::{
     model::{
         create::DEFAULT_FOLDER,
@@ -76,6 +82,8 @@ pub(crate) const TITLE: &str = "Title";
 pub(crate) const TYPE: &str = "Type";
 pub(crate) const FOLDER: &str = "Folder";
 pub(crate) const FILE_NAME: &str = "File name";
+/// The header's title: the heading, as the Kit's title slot drew it.
+const HEADING_ID: &str = "create-item-heading";
 /// The new item's draft could not be written, the store being open: it is
 /// followed by why, in the store's words.
 pub(crate) const DRAFT_NOT_WRITTEN: &str =
@@ -145,10 +153,16 @@ fn open(
         ItemDtoKind::Ticket => TICKET_HEADING,
     };
     let built = dialog.clone();
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let creating = built.clone();
         let cancelling = built.clone();
-        base.title(heading)
+        let header = Header {
+            icon: None,
+            title: heading.into(),
+            description: None,
+            ids: (HEADING_ID, None),
+        };
+        frame::dialog(base, header, cx)
             .close_button(false)
             .overlay_closable(false)
             .child(built.clone())
@@ -176,19 +190,21 @@ pub(crate) struct OpenedDialog(pub(crate) gpui_kit::WeakEntity<CreateDialog>);
 impl gpui_kit::Global for OpenedDialog {}
 
 impl Workspace {
-    /// New document… or New ticket…, the shown list's, on the selected
-    /// repository: from its button, or `secondary-n` in the navigation
-    /// region. Nothing opens with no repository shown, nor in front of a
-    /// dialog or the sheet. The dialog's new item opens in its tab.
+    /// New document… (`Pane::Documents`) or New ticket…, on the selected
+    /// repository: each list's button passes its own kind, and the key the
+    /// focused list region's. Nothing opens with no repository shown, nor in
+    /// front of a dialog or the sheet. The dialog's new item opens in its
+    /// tab.
     pub(in crate::desktop::view) fn new_item(
         &mut self,
+        list: Pane,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if window.has_active_dialog(cx) || window.has_active_sheet(cx) {
             return;
         }
-        let (kind, root) = match self.navigation().pane() {
+        let (kind, root) = match list {
             Pane::Documents => (ItemDtoKind::Document, self.documents().repo()),
             Pane::Tickets => (ItemDtoKind::Ticket, self.tickets().repo()),
         };

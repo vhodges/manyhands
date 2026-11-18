@@ -16,12 +16,12 @@ use manyhands::{
     drafts::{DraftError, DraftStore},
     repository::{
         CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
-        FailurePoint, FolderCreateInput, IndexRefreshInput, InitialsChange, KeyGenerateInput,
-        KeyRemoveInput, KeySelectInput, Mutation, MutationCall, MutationDataDto, NoProgress,
-        OperationAbandonInput, OperationId, OperationResumeInput, PrepareDataDto,
-        RelationshipWrite, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
-        RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId, SharedKeyId,
-        TicketCreateInput, TicketDraft, TicketSaveInput,
+        FailurePoint, FolderCreateInput, IndexRefreshInput, InitialsChange, KeyClearInput,
+        KeyGenerateInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, MutationCall,
+        MutationDataDto, NoProgress, OperationAbandonInput, OperationId, OperationResumeInput,
+        PollPauseInput, PrepareDataDto, RelationshipWrite, RemoteRemoveInput, RemoteSelectInput,
+        RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, RepositoryService,
+        RequestId, SharedKeyId, TicketCreateInput, TicketDraft, TicketSaveInput,
         keys::{
             KeyProtection, KeyStore, PassphraseResponse, SessionCredentialProvider,
             SessionCredentials, UnlockRequest,
@@ -32,7 +32,10 @@ use manyhands::{
 };
 
 use super::{delaying::DelayingBackend, git_home};
-use crate::desktop::services::resolutions::{ResolutionStore, ResolutionStoreError};
+use crate::desktop::services::{
+    layout::{LayoutStore, LayoutStoreError},
+    resolutions::{ResolutionStore, ResolutionStoreError},
+};
 
 /// The identity every fixture repository is created and committed as.
 pub(crate) fn identity() -> CommitIdentity {
@@ -65,6 +68,12 @@ pub(crate) struct Fixture {
     /// The kept resolution sets in the data directory, opened as the
     /// draft store is.
     resolutions: OnceLock<Result<ResolutionStore, ResolutionStoreError>>,
+    /// The panel layout store in the data directory, opened as the draft
+    /// store is.
+    layout: OnceLock<Result<LayoutStore, LayoutStoreError>>,
+    /// The backend is given no layout store, as when its folder cannot be
+    /// opened.
+    layout_unavailable: bool,
     data: tempfile::TempDir,
     home: tempfile::TempDir,
     repositories: tempfile::TempDir,
@@ -83,6 +92,8 @@ impl Fixture {
             service,
             drafts: OnceLock::new(),
             resolutions: OnceLock::new(),
+            layout: OnceLock::new(),
+            layout_unavailable: false,
             data,
             home,
             repositories,
@@ -103,8 +114,36 @@ impl Fixture {
                 self.home().to_owned(),
                 self.drafts_opened(),
             )
-            .with_resolutions(self.resolutions_opened()),
+            .with_resolutions(self.resolutions_opened())
+            .with_layout(if self.layout_unavailable {
+                Err(LayoutStoreError::Unavailable)
+            } else {
+                self.layout_opened()
+            }),
         )
+    }
+
+    /// The same fixture, whose backends have no layout store: the layout
+    /// folder is never made.
+    pub(crate) fn without_layout_store(mut self) -> Self {
+        self.layout_unavailable = true;
+        self
+    }
+
+    /// `LayoutStore::open_in` of the data directory, the first time.
+    fn layout_opened(&self) -> Result<LayoutStore, LayoutStoreError> {
+        self.layout
+            .get_or_init(|| LayoutStore::open_in(self.data.path()))
+            .clone()
+    }
+
+    /// The layout store the desktop under test shares, for a test to seed
+    /// and to set its seams on. Panics if it did not open.
+    pub(crate) fn layout_store(&self) -> LayoutStore {
+        match self.layout_opened() {
+            Ok(store) => store,
+            Err(error) => panic!("the fixture's layout store must open: {error}"),
+        }
     }
 
     /// `ResolutionStore::open_in` of the data directory, the first time.
@@ -374,10 +413,25 @@ impl Fixture {
     /// `closed_at` and `closed_by` as `tests/support/items.rs` writes it:
     /// no local operation closes a ticket. Refresh to index it.
     pub(crate) fn commit_closed_ticket(&self, root: &Path, id: &str, title: &str) {
+        self.commit_closed_ticket_with(root, id, title, "");
+    }
+
+    /// `commit_closed_ticket`, carrying the short code `slug`.
+    pub(crate) fn commit_closed_ticket_with_slug(
+        &self,
+        root: &Path,
+        id: &str,
+        title: &str,
+        slug: &str,
+    ) {
+        self.commit_closed_ticket_with(root, id, title, &format!("slug: {slug}\n"));
+    }
+
+    fn commit_closed_ticket_with(&self, root: &Path, id: &str, title: &str, extra: &str) {
         let source = format!(
             "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {id}\ntitle: {title}\n\
              type: task\nstatus: done\nclosed_at: 2026-09-30T12:34:56Z\n\
-             closed_by: Ada Lovelace <ada@example.invalid>\n---\nBody of {title}.\n"
+             closed_by: Ada Lovelace <ada@example.invalid>\n{extra}---\nBody of {title}.\n"
         );
         self.commit_file(root, &ticket_path(id), source.as_bytes());
     }
@@ -534,6 +588,17 @@ impl Fixture {
             }),
         );
         assert_eq!(refreshed.code, ResultCode::Ok, "{}", refreshed.message);
+    }
+
+    /// Pauses automatic polling of `root` through the library.
+    pub(crate) fn pause_polling(&self, root: &Path) {
+        let paused = self.execute(
+            None,
+            Mutation::PollPause(PollPauseInput {
+                root: root.to_owned(),
+            }),
+        );
+        assert_eq!(paused.code, ResultCode::Ok, "{}", paused.message);
     }
 
     fn execute(
@@ -890,6 +955,40 @@ impl Fixture {
         .unwrap();
         (private, public)
     }
+
+    /// Imports `external_key_files(label)` as the key `label`, through the
+    /// library's `key import`: a key of the user's own, which Manyhands did
+    /// not make. Gives its ID.
+    pub(crate) fn import_key(&self, label: &str) -> SharedKeyId {
+        self.import_key_with(label, true)
+    }
+
+    /// `import_key` with no public key file: a registration that records no
+    /// fingerprint, its public metadata unavailable. Gives its ID.
+    pub(crate) fn import_key_without_public_key(&self, label: &str) -> SharedKeyId {
+        self.import_key_with(label, false)
+    }
+
+    fn import_key_with(&self, label: &str, with_public: bool) -> SharedKeyId {
+        let (private, public) = self.external_key_files(label);
+        let imported = self.execute(
+            None,
+            Mutation::KeyImport(KeyImportInput {
+                label: label.to_owned(),
+                private_key_path: private,
+                public_key_path: with_public.then_some(public),
+            }),
+        );
+        assert_eq!(imported.code, ResultCode::Ok, "{}", imported.message);
+        let listed = self.service.list_keys().unwrap();
+        let key = listed
+            .items
+            .iter()
+            .rev()
+            .find(|key| key.label == label)
+            .expect("the imported key is listed");
+        SharedKeyId::parse(&key.id).unwrap()
+    }
 }
 
 /// Selects the key `id` through `service`: a second actor's `key
@@ -897,6 +996,12 @@ impl Fixture {
 pub(crate) fn select_key_through(service: &RepositoryService, id: SharedKeyId) {
     let selected = execute_through(service, None, Mutation::KeySelect(KeySelectInput { id }));
     assert_eq!(selected.code, ResultCode::Ok, "{}", selected.message);
+}
+
+/// Clears the key in use through `service`: a second actor's `key clear`.
+pub(crate) fn clear_key_through(service: &RepositoryService) {
+    let cleared = execute_through(service, None, Mutation::KeyClear(KeyClearInput {}));
+    assert_eq!(cleared.code, ResultCode::Ok, "{}", cleared.message);
 }
 
 /// Unregisters the key `id` through `service`: a second actor's `key
@@ -915,7 +1020,12 @@ impl Fixture {
     /// `root` and selects it for publication through the library's
     /// `remote select`. Nothing is contacted.
     pub(crate) fn publish_over_ssh(&self, root: &Path) {
-        self.add_remote(root, "origin", "ssh://git@example.invalid/team/repo.git");
+        self.publish_at(root, "ssh://git@example.invalid/team/repo.git");
+    }
+
+    /// `publish_over_ssh`, the remote `origin` fetching from `url`.
+    pub(crate) fn publish_at(&self, root: &Path, url: &str) {
+        self.add_remote(root, "origin", url);
         let selected = self.execute(
             None,
             Mutation::RemoteSelect(RemoteSelectInput {

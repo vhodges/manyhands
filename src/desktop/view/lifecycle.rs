@@ -3,9 +3,11 @@
 //! lifecycle action. It is its own view over the services, not a
 //! `ConfirmDialog` arm (ruling R-1).
 //!
-//! Its header names the item: the kind's icon, the command, "{short code or
-//! short ID} · {title} · {repository}", and the item's context branch
-//! (MH-COLLAB-006, A22).
+//! Its header, in the Kit's title slot, follows the stage the dialog is at
+//! (`stages.rs`): the stage's tile and title, and "{short code or short ID}
+//! · {title} · {repository}" beneath (MH-COLLAB-006, A22). The item's
+//! context branch is in the Git line, which a stage that holds the preview
+//! draws.
 //!
 //! - **Saving.** With unsaved edits in the tab, or a draft of the item
 //!   stored or restored there (R-17), the tab saves them first (decision
@@ -44,9 +46,11 @@
 //!   ready, with their titles, or says none could be worked out and offers
 //!   Open ready tickets (A3, R-20, `lifecycle/made_ready.rs`).
 //!
-//! Escape closes the dialog, and focus goes back to the control that
-//! opened it; a sent run goes on. The dialog holds the item's title for its header and derives
-//! no `Debug`.
+//! Each stage's footer puts its dismiss button first and its action last
+//! (Cycle 05b A7, `stages.rs`, `view.rs`). Escape closes the dialog, and
+//! focus goes back to the control that opened it; a sent run goes on. While
+//! it runs, a click on the backdrop hides it as Escape does (A5, R-5). The
+//! dialog holds the item's title for its header and derives no `Debug`.
 
 mod actions;
 mod confirm;
@@ -56,8 +60,10 @@ mod outcome;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use confirm::KEEP_LOCAL;
 #[cfg(all(test, feature = "desktop-test-support"))]
-pub(crate) use outcome::{ENDING_DONE, ENDING_STOPPED, SHARING_PENDING, TIDIED_UP, merged};
-pub(crate) use outcome::{cleanup_reason, item_of, progress_words};
+pub(crate) use outcome::{
+    ENDING_DONE, ENDING_STOPPED, OPEN_REPOSITORY_DETAILS, SHARING_PENDING, TIDIED_UP, merged,
+};
+pub(crate) use outcome::{cleanup_reason, item_of};
 pub(crate) use repair::{Reopen, reopen_repaired};
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use republish::{NOT_STOPPED, REPUBLISH_STOPPED};
@@ -66,7 +72,9 @@ mod prepare;
 mod repair;
 mod republish;
 mod resumed;
+mod rows;
 mod running;
+mod stages;
 mod view;
 
 use std::path::Path;
@@ -90,7 +98,7 @@ use crate::desktop::{
         Services,
         requests::{DesktopRequestId, Intent},
     },
-    view::item::ItemPane,
+    view::{frame, item::ItemPane},
 };
 
 pub(crate) const SAVING_FIRST: &str = "Saving your latest edits\u{2026}";
@@ -100,22 +108,68 @@ pub(crate) const CLOSE: &str = "Close";
 pub(crate) const PREPARE_AGAIN: &str = "Prepare again";
 pub(crate) const RETRY: &str = "Retry";
 pub(crate) const CONTINUE: &str = "Continue";
-pub(crate) const RESUME: &str = "Resume";
+pub(crate) use crate::desktop::model::activity::copy::RESUME;
 pub(crate) const OPEN_FOLDER: &str = "Open folder";
+/// L1's `PollOnce`, as a button (D6 C2): Check now, for the item's
+/// repository.
+pub(crate) const CHECK_NOW: &str = "Check now";
+/// Check now was sent from a blocked prepare and is running.
+pub(crate) const CHECKING_ORIGIN: &str =
+    "Checking for others' changes. Prepare again once it has finished.";
 /// L1's `SharePrimary`: Share, naming the primary branch `primary`
-/// (R-35).
-pub(crate) fn share_main(primary: &str) -> String {
-    format!("Share {primary}")
-}
+/// (R-35). The words live in the model (R-16).
+pub(crate) use crate::desktop::model::activity::copy::share_main;
 /// L1's `RepairLocally` (B6).
 pub(crate) const REPAIR_LOCALLY: &str = "Repair locally\u{2026}";
-/// L1's `ResolveChildConflict` (B5).
-pub(crate) const RESOLVE_CONFLICT: &str = "Resolve conflict\u{2026}";
-/// Continue and Resume wait while the item's lifecycle runs (P22).
-pub(crate) const STILL_RUNNING: &str = "Still running\u{2026}";
-/// A run is sent: it goes on with the dialog hidden.
-pub(crate) const STARTED: &str =
-    "It continues in the background if you close this, and shows up in Activity.";
+/// L1's `ResolveChildConflict` (B5) reads as every other way into the
+/// sheet does (Part C, 1). The words live in the model.
+pub(crate) use crate::desktop::model::activity::copy::REVIEW_CHANGES;
+
+// The stage titles (A1); Waiting and Stopped keep `STILL_RUNNING` and
+// `ENDING_STOPPED`, and Done after a promotion is `merged`.
+/// Ask: a ticket's close, naming its short code.
+pub(crate) fn close_title(short: &str) -> String {
+    format!("Close {short}?")
+}
+/// Ask: a document's promotion, naming its short ID.
+pub(crate) fn approve_title(short: &str) -> String {
+    format!("Approve and merge {short}?")
+}
+/// Running a close.
+pub(crate) const CLOSING: &str = "Closing\u{2026}";
+/// Running a promotion.
+pub(crate) const MERGING: &str = "Merging\u{2026}";
+/// Done, a close.
+pub(crate) const CLOSED: &str = "Ticket closed";
+/// Failed, a close.
+pub(crate) const COULDNT_CLOSE: &str = "Couldn't finish closing";
+/// Failed, a promotion.
+pub(crate) const COULDNT_MERGE: &str = "Couldn't finish merging";
+
+/// The Mark as closed note when the closure is to be recorded (A4).
+pub(crate) fn closed_by_today(name: &str) -> String {
+    format!("Closed by {name} \u{b7} today")
+}
+/// The same note for a closure already recorded, which may be from an
+/// earlier day (A4).
+pub(crate) fn closed_by(name: &str) -> String {
+    format!("Closed by {name}")
+}
+/// A run's lead above its steps (A5).
+pub(crate) const RUNNING_LEAD: &str =
+    "You can keep working. This continues in the background and shows up in Activity.";
+/// The made-ready box's lead (A6).
+pub(crate) const READY_TO_START: &str = "Now ready to start";
+
+/// The footer's hints (A7): Confirm's, and the running dialog's.
+pub(crate) const CONFIRM_HINT: &str = "Enter to confirm \u{b7} Esc to cancel";
+pub(crate) const HIDE_HINT: &str = "Esc hides this window";
+/// The dismiss button of a Failed or Stopped run, and of a Done one (A7).
+pub(crate) const NOT_NOW: &str = "Not now";
+pub(crate) const DONE: &str = "Done";
+/// Continue and Resume wait while the item's lifecycle runs (P22). The
+/// words live with the outcome types in the model (R-41).
+pub(crate) use crate::desktop::model::activity::lifecycle_lines::STILL_RUNNING;
 /// A blocked prepare's lead.
 pub(crate) const BLOCKED_LEAD: &str =
     "Nothing was changed. Each thing below stands in the way; deal with it, then prepare again.";
@@ -131,8 +185,8 @@ pub(crate) fn sharing_main(primary: &str) -> String {
 /// request's ID could not be read.
 pub(crate) const NOT_SENT: &str = "This could not be sent.";
 
-/// Who the dialog speaks of (A22): the item, its repository and its context
-/// branch. It holds the item's title, and derives no `Debug`.
+/// Who the dialog speaks of (A22): the item and its repository. It holds
+/// the item's title, and derives no `Debug`.
 #[derive(Clone)]
 pub(crate) struct Heading {
     pub kind: ItemDtoKind,
@@ -140,9 +194,6 @@ pub(crate) struct Heading {
     pub short: String,
     pub title: Option<String>,
     pub repository: String,
-    /// The item's context branch as the tab read it; a preview's names it
-    /// once one is shown.
-    pub branch: Option<String>,
     /// The repository's main branch, as the workspace knows it, for a run
     /// shown without its preview (review M-5).
     pub primary: Option<String>,
@@ -160,7 +211,6 @@ impl Heading {
             short: item.slug.clone().unwrap_or_else(|| short_id(id)),
             title: item.title.clone(),
             repository,
-            branch: item.context.branch.clone(),
             primary: None,
             remote: None,
         }
@@ -216,12 +266,16 @@ pub(crate) fn open(
     let origin = opening.origin.clone();
     let dialog = cx.new(|cx| LifecycleDialog::new(opening, services.clone(), window, cx));
     let opened = dialog.clone();
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let confirming = dialog.clone();
         let origin = origin.clone();
-        base.w(px(580.))
+        // The stage's title and tile, and whether a click on the backdrop
+        // hides it, read at each render (A2, A5).
+        let header = dialog.read(cx).header(cx);
+        let hides = dialog.read(cx).hides_on_backdrop(cx);
+        frame::dialog(base.w(px(580.)), header, cx)
             .close_button(false)
-            .overlay_closable(false)
+            .overlay_closable(hides)
             .child(dialog.clone())
             // Enter: Confirm, or Prepare again on a refused consent. The
             // Kit never closes the dialog here.
@@ -229,7 +283,8 @@ pub(crate) fn open(
                 confirming.update(cx, |dialog, cx| dialog.enter(window, cx));
                 false
             })
-            // Escape: close; what was sent goes on.
+            // Escape, or the backdrop while running: close; what was sent
+            // goes on.
             .on_cancel(|_, _, _| true)
             .on_close(move |_, window, cx| window.focus(&origin, cx))
     });
@@ -261,7 +316,6 @@ pub(crate) fn reopen(
         short: short_id(&id.to_string()),
         title: None,
         repository: crate::desktop::view::operations::scope_name(request.intent.root()),
-        branch: None,
         primary,
         remote,
     };
@@ -378,6 +432,9 @@ pub(crate) struct LifecycleDialog {
     /// The dialog's own focus: a dialog opened over it, Republish…, gives
     /// focus back here (review M5).
     focus: FocusHandle,
+    /// "Stopping…", once Stop is pressed: a Tab stop that does nothing, so
+    /// the running dialog keeps one (R-23).
+    stopping: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -440,6 +497,7 @@ impl LifecycleDialog {
             repair: repair::Repair::repaired(repaired),
             stop_refused: None,
             focus: cx.focus_handle(),
+            stopping: cx.focus_handle().tab_stop(true),
             _subscriptions: subscriptions,
         };
         // The dialog locks its item until it is dropped, in every phase
@@ -534,6 +592,10 @@ mod tests;
 mod save_first_tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/check_now_tests.rs"]
+mod check_now_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/action_tests.rs"]
 mod action_tests;
 
@@ -582,6 +644,10 @@ mod lock_tests;
 mod lock_restart_tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/retiring_tests.rs"]
+mod retiring_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/after_tests.rs"]
 mod after_tests;
 
@@ -608,3 +674,11 @@ mod privacy_remote_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/privacy_consent_tests.rs"]
 mod privacy_consent_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/stages_tests.rs"]
+mod stages_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/privacy_secret_tests.rs"]
+mod privacy_secret_tests;

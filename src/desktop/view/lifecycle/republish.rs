@@ -19,7 +19,7 @@
 //! Republish… opens over the dialog, and gives focus back to it. The
 //! workspace runs both (`view/operations/republish.rs`).
 
-use gpui_kit::{AnyElement, App, Context, IntoElement, Styled, Window, component::Root};
+use gpui_kit::{AnyElement, App, Context, IntoElement, Styled, Window};
 use manyhands::{
     repository::{LifecycleWayOut, MutationDataDto, OperationId, lifecycle_way_out},
     results::{Envelope, ResultCode},
@@ -30,7 +30,7 @@ use crate::desktop::{
     services::{requests::DesktopRequestId, resends::AfterRepublish, worker::GaveUp},
     view::{
         operations::republish::{REPUBLISH, REPUBLISHING, Republishing, STOP_AND_REPUBLISH},
-        workspace::Workspace,
+        workspace::{Workspace, window_workspace},
     },
 };
 
@@ -133,8 +133,8 @@ impl LifecycleDialog {
             || self.republish_waiting()
     }
 
-    /// Stop and republish… or Republish…, where the way out of the run
-    /// `id`, answered `envelope`, names them; none while the item's
+    /// Stop and republish… or Republish…, primary, where the way out of the
+    /// run `id`, answered `envelope`, names them; none while the item's
     /// lifecycle is in flight (`waiting`).
     pub(super) fn republish_buttons(
         &self,
@@ -143,7 +143,7 @@ impl LifecycleDialog {
         way_out: &[LifecycleWayOut],
         waiting: bool,
         cx: &Context<Self>,
-    ) -> Vec<AnyElement> {
+    ) -> Vec<(bool, AnyElement)> {
         if waiting || self.republishing_now(id) {
             return Vec::new();
         }
@@ -261,12 +261,8 @@ impl LifecycleDialog {
         cx: &mut Context<Self>,
         f: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>),
     ) {
-        let Some(Some(root)) = window.root::<Root>() else {
-            return;
-        };
-        let Ok(workspace) = root.read(cx).view().clone().downcast::<Workspace>() else {
-            return;
-        };
-        workspace.update(cx, |workspace, cx| f(workspace, window, cx));
+        if let Some(workspace) = window_workspace(window, cx) {
+            workspace.update(cx, |workspace, cx| f(workspace, window, cx));
+        }
     }
 }

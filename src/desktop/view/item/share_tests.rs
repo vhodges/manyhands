@@ -1,9 +1,11 @@
-//! The header's Share and the repository detail's Share main (design,
-//! Lane B, Share controls), over real repositories: Share follows Edit and
-//! sends `item sync`, with the remote in its tooltip; with no publication
-//! remote it reads Share… and opens Settings › Remotes; while a share of
-//! the same target is queued or running it reads Sharing… and queues
-//! nothing more; Share main sends `repo sync`.
+//! The header's Share and the repository menu's Share main (design,
+//! Lane B, Share controls; Cycle 03a Part D), over real repositories:
+//! Share follows Edit and sends `item sync`, with the remote in its
+//! tooltip; with no publication remote it reads Share… and opens Settings
+//! › Remotes; while a share of the same target is queued or running it
+//! reads Sharing… and queues nothing more; Share main sends `repo sync`.
+//! The menu's labels are read through `menu_items`, and its items chosen
+//! by label.
 
 use std::{
     path::{Path, PathBuf},
@@ -24,11 +26,14 @@ use manyhands::{
 use super::{SHARE_BUTTON, SHARE_NOTE, SHARE_SET_UP, share_tooltip};
 use crate::desktop::{
     model::{
+        activity::{
+            copy::offer_label,
+            rows::{ActivityAction, ActivityRow, Kind, Offer, RowKey},
+        },
         item::SHARE,
         navigation::OpenTarget,
-        operations::{
-            CONFLICT_BANNER, NEEDS_ATTENTION, SHARED, STOPPED_AFTER_PART, STOPPED_BEFORE_SENDING,
-        },
+        operations::{CONFLICT_BANNER, NEEDS_ATTENTION, SHARED},
+        publication::{SyncOffer, SyncOutcome},
         stamp::SettingsPage,
     },
     services::{
@@ -41,11 +46,13 @@ use crate::desktop::{
         fixtures::{Fixture, item_id, ticket_source},
     },
     view::{
+        activity_support::{act, offered, refresh, request, row, share_outcome},
         harness::{Shell, WAIT, key},
         item::pill::{PillState, pill_words},
-        operations::{STOP, STOPPING, request_id},
+        operations::{CANCEL, DISMISS, STOP, STOPPING},
+        repositories::tests::support::{choose, items_of, right_click},
         settings::Shown,
-        sidebar::{SHARE_MAIN, SHARE_MAIN_BUTTON, SHARE_MAIN_SET_UP, SHARING},
+        sidebar::{SHARE_MAIN, SHARE_MAIN_SET_UP, SHARING},
     },
 };
 
@@ -74,6 +81,17 @@ fn open_ticket(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
         .workspace
         .update(cx, |workspace, cx| workspace.open_item(target, cx));
     shell.run(cx);
+}
+
+/// Whether `menu_items` gives the row named `name` the item `label`.
+fn offers(shell: &Shell, name: &str, label: &str, cx: &mut TestAppContext) -> bool {
+    items_of(shell, name, cx).iter().any(|item| item == label)
+}
+
+/// Opens the menu of the row named `name` and chooses its item `label`.
+fn share_from_menu(shell: &Shell, name: &str, label: &str, cx: &mut TestAppContext) {
+    right_click(shell, name, cx);
+    choose(shell, label, cx);
 }
 
 fn focused(shell: &Shell, id: &'static str, cx: &mut TestAppContext) -> bool {
@@ -107,6 +125,43 @@ fn repo_syncs(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> usize {
             matches!(&request.intent, Intent::RepoSync { root: asked } if *asked == root)
         })
         .len()
+}
+
+/// The log's entry of the request `id`, as it stands now.
+fn entry(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> ActivityRow {
+    refresh(shell, cx);
+    row(shell, &RowKey::Request(id), cx).expect("the request's entry")
+}
+
+/// The entry of the finished share `id` is listed, and its answer is a
+/// published one: the model's `SyncOutcome`, which the entry's words follow.
+fn says_shared(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) {
+    entry(shell, id, cx);
+    assert_eq!(share_outcome(shell, id, cx), SyncOutcome::Published);
+}
+
+/// Whether the entry offers no Stop control at all: no offer labelled Stop
+/// or Stopping, enabled or not (a running accepted request that cannot be
+/// stopped offers a disabled Finishing, which is not one). The row's menu
+/// holds its button too.
+fn no_stop(entry: &ActivityRow) -> bool {
+    entry
+        .row
+        .menu
+        .iter()
+        .chain(entry.row.button.iter())
+        .all(|offer| offer.label != STOP && offer.label != STOPPING)
+}
+
+/// Whether the entry offers nothing that runs a Stop, labelled however: for
+/// a request that has ended.
+fn no_stop_action(entry: &ActivityRow) -> bool {
+    entry
+        .row
+        .menu
+        .iter()
+        .chain(entry.row.button.iter())
+        .all(|offer| !matches!(offer.action, ActivityAction::Stop(_)))
 }
 
 /// With a publication remote, Share comes after Edit, in the tab order
@@ -159,6 +214,10 @@ fn share_without_a_remote_reads_share_and_opens_remotes(cx: &mut TestAppContext)
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
     assert!(matches!(shown, Shown::Settings(SettingsPage::Remotes)));
     assert_eq!(item_syncs(&shell, &root, cx), 0, "nothing was sent");
+    assert!(
+        shell.holds_focus("remote-add-name", cx),
+        "W-11 lands on the add-remote Name (Part D)"
+    );
 }
 
 /// A remote selected for publication through the request path, as the
@@ -225,7 +284,7 @@ async fn a_second_press_while_sharing_queues_nothing(cx: &mut TestAppContext) {
     assert_eq!(shell.label(SHARE_BUTTON, cx).as_deref(), Some(SHARE));
 }
 
-/// The repository detail offers Share main, which sends `repo sync` of
+/// The repository's menu offers Share main, which sends `repo sync` of
 /// the repository; while it is running it reads Sharing… and queues
 /// nothing more.
 #[gpui_kit::test]
@@ -233,22 +292,20 @@ async fn share_main_in_the_repository_detail_submits_repo_sync(cx: &mut TestAppC
     cx.executor().allow_parking();
     let (shell, root) = shell(true, cx);
     shell.select(&root, cx);
-    assert_eq!(
-        shell.label(SHARE_MAIN_BUTTON, cx).as_deref(),
-        Some(SHARE_MAIN)
-    );
+    assert!(offers(&shell, "a", SHARE_MAIN, cx));
 
     let held = shell.backend.hold_job(JobKind::SynchronizeRepo);
-    shell.click(SHARE_MAIN_BUTTON, cx);
+    share_from_menu(&shell, "a", SHARE_MAIN, cx);
     held.wait_reached();
     assert_eq!(
         repo_syncs(&shell, &root, cx),
         1,
         "Share main sent repo sync"
     );
-    assert_eq!(shell.label(SHARE_MAIN_BUTTON, cx).as_deref(), Some(SHARING));
-    // The button is disabled, so a press reaches nothing: Share main's own
-    // guard is asked directly, as a press made before the frame is.
+    assert!(offers(&shell, "a", SHARING, cx));
+    assert!(!offers(&shell, "a", SHARE_MAIN, cx));
+    // The item is disabled, so a choice of it does nothing: Share main's
+    // own guard is asked directly, as a choice made before the frame is.
     let workspace = shell.workspace.clone();
     let repo = key(&root);
     shell.visual(cx).update(|window, cx| {
@@ -268,70 +325,27 @@ async fn share_main_in_the_repository_detail_submits_repo_sync(cx: &mut TestAppC
     });
     held.release();
     shell.until_ended(sent[0], cx).await;
-    assert_eq!(
-        shell.label(SHARE_MAIN_BUTTON, cx).as_deref(),
-        Some(SHARE_MAIN)
-    );
+    assert!(offers(&shell, "a", SHARE_MAIN, cx));
 }
 
-/// With no publication remote, the repository detail reads Share main…,
-/// and pressing it opens Settings › Remotes, sending nothing.
+/// With no publication remote, the repository's menu reads Share main…,
+/// and choosing it opens Settings › Remotes, sending nothing.
 #[gpui_kit::test]
 fn share_main_without_a_remote_reads_share_main_and_opens_remotes(cx: &mut TestAppContext) {
     let (shell, root) = shell(false, cx);
     shell.select(&root, cx);
-    assert_eq!(
-        shell.label(SHARE_MAIN_BUTTON, cx).as_deref(),
-        Some(SHARE_MAIN_SET_UP)
-    );
+    assert!(offers(&shell, "a", SHARE_MAIN_SET_UP, cx));
 
-    shell.click(SHARE_MAIN_BUTTON, cx);
+    share_from_menu(&shell, "a", SHARE_MAIN_SET_UP, cx);
     let shown = shell
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
     assert!(matches!(shown, Shown::Settings(SettingsPage::Remotes)));
     assert_eq!(repo_syncs(&shell, &root, cx), 0, "nothing was sent");
-}
-
-/// While an item tab is shown, the repository detail at the end of its
-/// scroll region offers Share main too, and it sends `repo sync`.
-#[gpui_kit::test]
-async fn share_main_at_the_end_of_an_item_tab_submits_repo_sync(cx: &mut TestAppContext) {
-    cx.executor().allow_parking();
-    let (shell, root) = shell(true, cx);
-    shell.select(&root, cx);
-    open_ticket(&shell, &root, cx);
     assert!(
-        shell
-            .workspace
-            .read_with(cx, |workspace, _| workspace.item_pane())
-            .is_some(),
-        "the ticket's tab is shown"
+        shell.holds_focus("remote-add-name", cx),
+        "W-10 lands on the add-remote Name (Part D)"
     );
-    // The detail ends the item's scroll region: End brings it on screen.
-    shell.keys("secondary-3", cx);
-    shell.keys("end", cx);
-    assert_eq!(
-        shell.label(SHARE_MAIN_BUTTON, cx).as_deref(),
-        Some(SHARE_MAIN)
-    );
-
-    let held = shell.backend.hold_job(JobKind::SynchronizeRepo);
-    shell.click(SHARE_MAIN_BUTTON, cx);
-    held.wait_reached();
-    assert_eq!(
-        repo_syncs(&shell, &root, cx),
-        1,
-        "Share main sent repo sync"
-    );
-    assert_eq!(shell.label(SHARE_MAIN_BUTTON, cx).as_deref(), Some(SHARING));
-    assert_eq!(item_syncs(&shell, &root, cx), 0, "not the item's share");
-
-    let sent = shell.requests(cx, |request| {
-        matches!(request.intent, Intent::RepoSync { .. })
-    });
-    held.release();
-    shell.until_ended(sent[0], cx).await;
 }
 
 // Task 9: stages and Stop (design, Lane B, Stage text and Stop at a safe
@@ -374,6 +388,7 @@ fn running(shell: &Shell, n: u64, intent: Intent, cx: &mut TestAppContext) -> De
         lane: Lane::User,
         attempt: 1,
         state: RequestState::Queued,
+        registered_root: None,
     };
     let operations = shell.operations(cx);
     let queued = request.clone();
@@ -431,8 +446,9 @@ const POST_STAGES: [(ProgressStage, &str); 10] = [
     (ProgressStage::Stopping, "Stopping at a safe point…"),
 ];
 
-/// Each stage a share or a post reports reads as the design's text, in
-/// the item's pill and in its operation area entry.
+/// Each stage a share or a post reports reads as the design's text in the
+/// item's pill, and its entry in Activity is a working row of the request
+/// at that stage.
 #[gpui_kit::test]
 fn each_stage_shows_its_text_for_share_and_post(cx: &mut TestAppContext) {
     let (shell, root) = shell(true, cx);
@@ -447,11 +463,7 @@ fn each_stage_shows_its_text_for_share_and_post(cx: &mut TestAppContext) {
             Some(words.as_str()),
             "{stage:?}"
         );
-        assert_eq!(
-            shell.label(request_id(share.id, "state"), cx).as_deref(),
-            Some(words.as_str()),
-            "{stage:?}"
-        );
+        assert_staged(&shell, share.id, stage, "Sharing", cx);
     }
     finish(&shell, share.id, cx);
 
@@ -464,12 +476,29 @@ fn each_stage_shows_its_text_for_share_and_post(cx: &mut TestAppContext) {
             Some(words.as_str()),
             "{stage:?}"
         );
-        assert_eq!(
-            shell.label(request_id(post.id, "state"), cx).as_deref(),
-            Some(words.as_str()),
-            "{stage:?}"
-        );
+        assert_staged(&shell, post.id, stage, "Posting", cx);
     }
+}
+
+/// The request `id` is running at `stage`, and its entry in Activity is a
+/// working row whose title opens with `doing`.
+fn assert_staged(
+    shell: &Shell,
+    id: DesktopRequestId,
+    stage: ProgressStage,
+    doing: &str,
+    cx: &mut TestAppContext,
+) {
+    assert!(
+        matches!(
+            request(shell, id, cx).state,
+            RequestState::Running { stage: Some(reached), .. } if reached == stage
+        ),
+        "{stage:?}"
+    );
+    let entry = entry(shell, id, cx).row;
+    assert_eq!(entry.kind, Kind::Working, "{stage:?}");
+    assert!(entry.title.starts_with(doing), "{stage:?}: {}", entry.title);
 }
 
 /// Ends the fabricated request `id` with a success.
@@ -505,15 +534,15 @@ fn a_post_without_a_remote_never_says_sharing(cx: &mut TestAppContext) {
         ProgressStage::Indexing,
     ] {
         reach(&shell, &post, stage, cx);
-        for shown in [
-            shell.label("item-pill", cx),
-            shell.label(request_id(post.id, "state"), cx),
+        for (shown, starts) in [
+            (shell.label("item-pill", cx), "Posting · "),
+            (Some(entry(&shell, post.id, cx).row.title), "Posting"),
         ] {
             let shown = shown.expect("the post's progress is shown");
-            assert!(shown.starts_with("Posting · "), "{stage:?}: {shown}");
+            assert!(shown.starts_with(starts), "{stage:?}: {shown}");
             assert!(!shown.contains("Sharing"), "{stage:?}: {shown}");
         }
-        assert!(!shell.present(request_id(post.id, "stop"), cx), "{stage:?}");
+        assert!(no_stop(&entry(&shell, post.id, cx)), "{stage:?}");
     }
 }
 
@@ -548,7 +577,7 @@ async fn an_accepted_share_offers_stop_and_stopping_signals_it(cx: &mut TestAppC
             let _ = released.recv_timeout(WAIT);
         });
     shell.select(&root, cx);
-    shell.click(SHARE_MAIN_BUTTON, cx);
+    share_from_menu(&shell, "a", SHARE_MAIN, cx);
     reached.recv_timeout(WAIT).expect("the share was accepted");
     shell
         .until(cx, |operations| {
@@ -561,35 +590,44 @@ async fn an_accepted_share_offers_stop_and_stopping_signals_it(cx: &mut TestAppC
     let id = shell.requests(cx, |request| {
         matches!(request.intent, Intent::RepoSync { .. })
     })[0];
+    let share = RowKey::Request(id);
+    refresh(&shell, cx);
     assert_eq!(
-        shell.label(request_id(id, "stop"), cx).as_deref(),
-        Some(STOP)
+        offered(&shell, &share, STOP, cx),
+        Some(Offer::new(ActivityAction::Stop(id), STOP, true))
     );
-    assert!(!shell.present(request_id(id, "cancel"), cx));
+    assert!(offered(&shell, &share, CANCEL, cx).is_none());
 
-    shell.click(request_id(id, "stop"), cx);
+    act(&shell, &share, STOP, cx);
     let worker = shell
         .workspace
         .read_with(cx, |workspace, _| workspace.services().worker().clone());
     let job = worker.running_job().expect("the share still runs");
     assert_eq!(job.id, id);
     assert!(job.cancelled, "Stop cancelled its token");
+    refresh(&shell, cx);
     assert_eq!(
-        shell.label(request_id(id, "stop"), cx).as_deref(),
-        Some(STOPPING)
+        offered(&shell, &share, STOPPING, cx),
+        Some(Offer::new(ActivityAction::Stop(id), STOPPING, false)),
+        "Stopping…, which cannot be pressed"
     );
+    assert!(offered(&shell, &share, STOP, cx).is_none());
 
     drop(release);
     shell.until_ended(id, cx).await;
-    assert!(!shell.present(request_id(id, "stop"), cx));
-    // It stopped at its first safe point, before anything was sent.
-    assert_eq!(
-        shell.label(request_id(id, "code"), cx).as_deref(),
-        Some("cancelled")
+    let ended = entry(&shell, id, cx);
+    assert!(
+        no_stop(&ended) && no_stop_action(&ended),
+        "no Stop or Stopping"
     );
+    // It stopped at its first safe point, before anything was sent.
+    assert!(matches!(
+        request(&shell, id, cx).state,
+        RequestState::Finished(_, ResultCode::Cancelled, ..)
+    ));
     assert_eq!(
-        shell.label(request_id(id, "outcome"), cx).as_deref(),
-        Some(STOPPED_BEFORE_SENDING)
+        share_outcome(&shell, id, cx),
+        SyncOutcome::Stopped { completed: false }
     );
 }
 
@@ -600,15 +638,12 @@ async fn a_stopped_share_says_what_completed_and_offers_share(cx: &mut TestAppCo
     cx.executor().allow_parking();
     let (shell, root) = shell(true, cx);
     shell.select(&root, cx);
-    let completed = Effects {
+    let part = Effects {
         integration: IntegrationEffect::Complete,
         ..Effects::not_requested()
     };
     let mut seen = Vec::new();
-    for (effects, text) in [
-        (Effects::not_requested(), STOPPED_BEFORE_SENDING),
-        (completed, STOPPED_AFTER_PART),
-    ] {
+    for (effects, completed) in [(Effects::not_requested(), false), (part, true)] {
         let stopped = Envelope::classified_mutation(
             "repo sync",
             Scope::default(),
@@ -621,8 +656,8 @@ async fn a_stopped_share_says_what_completed_and_offers_share(cx: &mut TestAppCo
             .backend
             .hold_job_return_answering(JobKind::SynchronizeRepo, stopped);
         match seen.last() {
-            None => shell.click(SHARE_MAIN_BUTTON, cx),
-            Some(&previous) => shell.click(request_id(previous, "share"), cx),
+            None => share_from_menu(&shell, "a", SHARE_MAIN, cx),
+            Some(&previous) => act(&shell, &RowKey::Request(previous), SHARE, cx),
         }
         held.wait_reached();
         let sent = shell.requests(cx, |request| {
@@ -634,12 +669,17 @@ async fn a_stopped_share_says_what_completed_and_offers_share(cx: &mut TestAppCo
         held.release();
         shell.until_ended(id, cx).await;
         assert_eq!(
-            shell.label(request_id(id, "outcome"), cx).as_deref(),
-            Some(text)
+            share_outcome(&shell, id, cx),
+            SyncOutcome::Stopped { completed }
         );
+        refresh(&shell, cx);
         assert_eq!(
-            shell.label(request_id(id, "share"), cx).as_deref(),
-            Some(SHARE)
+            offered(&shell, &RowKey::Request(id), SHARE, cx),
+            Some(Offer::new(
+                ActivityAction::Offer(id, SyncOffer::Share),
+                offer_label(SyncOffer::Share),
+                true
+            ))
         );
         seen.push(id);
     }
@@ -744,7 +784,7 @@ fn the_conflict_banner_says_work_is_safe_and_offers_review_changes(cx: &mut Test
     });
     assert_eq!(others, 0, "the banner offers Review changes only");
 
-    shell.click(request_id(share.id, "dismiss"), cx);
+    act(&shell, &RowKey::Request(share.id), DISMISS, cx);
     assert!(!shell.present("item-conflict", cx));
     assert_ne!(
         shell.label("item-pill", cx).as_deref(),
@@ -773,18 +813,15 @@ fn a_finished_share_says_its_outcome_in_the_pill(cx: &mut TestAppContext) {
     );
     finish_with(&shell, share.id, published, cx);
     assert_eq!(shell.label("item-pill", cx).as_deref(), Some(SHARED));
-    assert_eq!(
-        shell.label(request_id(share.id, "outcome"), cx).as_deref(),
-        Some(SHARED)
-    );
+    says_shared(&shell, share.id, cx);
 
-    shell.click(request_id(share.id, "dismiss"), cx);
+    act(&shell, &RowKey::Request(share.id), DISMISS, cx);
     assert_eq!(shell.label("item-pill", cx), viewing);
 }
 
 /// O-1: Share… opens Settings › Remotes on the item's own repository,
-/// though the page last worked on another; Share main… on the
-/// repository detail does too. The selection is the repository's.
+/// though the page last worked on another; Share main… in the
+/// repository's menu does too. The selection is the repository's.
 #[gpui_kit::test]
 fn share_opens_remotes_on_its_own_repository_after_another(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -796,13 +833,14 @@ fn share_opens_remotes_on_its_own_repository_after_another(cx: &mut TestAppConte
     let shell = Shell::open(fixture, cx);
 
     shell.select(&a, cx);
-    shell.click(SHARE_MAIN_BUTTON, cx);
+    assert!(offers(&shell, "a", SHARE_MAIN_SET_UP, cx));
+    share_from_menu(&shell, "a", SHARE_MAIN_SET_UP, cx);
     assert!(shell.present("settings-remotes", cx));
     assert_eq!(
         shell.label("remotes-root", cx),
         Some(format!("Repository: {}", key(&a)))
     );
-    shell.click("settings-close", cx);
+    shell.keys("escape", cx);
 
     open_ticket(&shell, &b, cx);
     assert_eq!(shell.label(SHARE_BUTTON, cx).as_deref(), Some(SHARE_SET_UP));
@@ -812,6 +850,10 @@ fn share_opens_remotes_on_its_own_repository_after_another(cx: &mut TestAppConte
         shell.label("remotes-root", cx),
         Some(format!("Repository: {}", key(&b))),
         "the Remotes page works on the item's repository"
+    );
+    assert!(
+        shell.holds_focus("remote-add-name", cx),
+        "W-11 lands on the add-remote Name (Part D)"
     );
 }
 
@@ -846,10 +888,7 @@ fn a_kept_draft_after_a_shared_outcome_reads_draft_kept(cx: &mut TestAppContext)
 
     let share = running(&shell, 1, item_sync(&root), cx);
     finish_with(&shell, share.id, published(), cx);
-    assert_eq!(
-        shell.label(request_id(share.id, "outcome"), cx).as_deref(),
-        Some(SHARED)
-    );
+    says_shared(&shell, share.id, cx);
     assert_eq!(shell.label("item-pill", cx).as_deref(), Some(kept));
 }
 
@@ -887,11 +926,7 @@ async fn a_shared_outcome_leaves_the_pill_once_the_item_reads_otherwise(cx: &mut
         shell.label("item-pill", cx).as_deref(),
         Some(pill_words(PillState::ViewingShared))
     );
-    assert_eq!(
-        shell.label(request_id(share.id, "outcome"), cx).as_deref(),
-        Some(SHARED),
-        "the entry still says it"
-    );
+    says_shared(&shell, share.id, cx);
 }
 
 /// Orchestrator ruling (Task 10b): sharing private work says Shared in
@@ -967,9 +1002,5 @@ async fn sharing_private_work_shows_shared_until_the_item_reads_differently(
         })
         .await;
     assert_eq!(shell.label("item-pill", cx).as_deref(), Some(private));
-    assert_eq!(
-        shell.label(request_id(share, "outcome"), cx).as_deref(),
-        Some(SHARED),
-        "the entry still says it"
-    );
+    says_shared(&shell, share, cx);
 }

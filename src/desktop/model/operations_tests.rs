@@ -12,14 +12,17 @@ use manyhands::{
 
 use super::{
     Operations, RecoveryControl, ResumeOffer, SYNCHRONIZATION_UNAVAILABLE, StopOffer,
-    abandon_offered, recovery_control, recovery_label, resume_offer,
+    abandon_offered, recovery_control, recovery_label, resume_offer, stage_words,
 };
 use crate::desktop::{
-    model::list_state::LABEL_EMPTY,
+    model::{
+        list_state::LABEL_EMPTY,
+        publication::{SyncOffer, SyncOutcome},
+    },
     services::{
         ReadFailure, ReadResult,
         requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
-        worker::{NotSent, WorkerEvent},
+        worker::{NotSent, RecordState, WorkerEvent},
     },
 };
 
@@ -34,6 +37,7 @@ fn request(id: u64) -> DesktopRequest {
         lane: Lane::User,
         attempt: 1,
         state: RequestState::Queued,
+        registered_root: None,
     }
 }
 
@@ -287,6 +291,83 @@ fn a_finished_settings_request_does_not_mark_items_changed() {
         ["/fixture/a".to_owned()]
     );
     assert!(changed.items.is_empty());
+}
+
+/// R-27: a New folder that made its folder, and a Move that put its
+/// document in place (or found it there), name that place, so the Documents
+/// tree opens the folders above it. A refused request, and any other
+/// intent, name nothing.
+#[test]
+fn a_folder_made_or_a_document_moved_names_its_place_to_reveal() {
+    let intents = || {
+        [
+            Intent::FolderCreate {
+                root: PathBuf::from("/fixture/a"),
+                path: "docs/guides/new".to_owned(),
+            },
+            Intent::DocumentMove {
+                root: PathBuf::from("/fixture/b"),
+                id: "01ARZ3NDEKTSV4RRFFQ69G5FD0".parse().unwrap(),
+                observation: None,
+                destination_path: PathBuf::from("docs/plans/moved.md"),
+                destination_observation: "absent".to_owned(),
+            },
+            Intent::IndexRefresh {
+                root: PathBuf::from("/fixture/c"),
+            },
+        ]
+    };
+    let table = [
+        (
+            "made",
+            ResultCode::Ok,
+            Some(Outcome::Success),
+            vec![
+                ("/fixture/a", "docs/guides/new"),
+                ("/fixture/b", "docs/plans/moved.md"),
+            ],
+        ),
+        (
+            "made with its index refresh owed",
+            ResultCode::DiscoveryPending,
+            Some(Outcome::Partial),
+            vec![
+                ("/fixture/a", "docs/guides/new"),
+                ("/fixture/b", "docs/plans/moved.md"),
+            ],
+        ),
+        (
+            "found already done",
+            ResultCode::AlreadyApplied,
+            Some(Outcome::Noop),
+            vec![
+                ("/fixture/a", "docs/guides/new"),
+                ("/fixture/b", "docs/plans/moved.md"),
+            ],
+        ),
+        ("refused", ResultCode::Busy, None, Vec::new()),
+    ];
+    for (name, code, outcome, want) in table {
+        let mut operations = Operations::default();
+        for (n, intent) in intents().into_iter().enumerate() {
+            let mut queued = request(n as u64 + 1);
+            queued.intent = intent;
+            operations.apply(WorkerEvent::Queued(queued));
+            let envelope = match outcome {
+                Some(outcome) => Envelope::mutation("request", Scope::default(), outcome, code),
+                None => Envelope::failure("request", Scope::default(), code, vec![]),
+            };
+            operations.apply(WorkerEvent::Finished(
+                DesktopRequestId(n as u64 + 1),
+                Box::new(envelope),
+            ));
+        }
+        let want: Vec<(String, String)> = want
+            .into_iter()
+            .map(|(root, path)| (root.to_owned(), path.to_owned()))
+            .collect();
+        assert_eq!(operations.take_changed().reveal, want, "{name}");
+    }
 }
 
 /// A removal that succeeded names its root removed, so the workspace
@@ -952,5 +1033,231 @@ fn what_settles_a_conflict_clears_its_review() {
             intent.label(),
             code.as_str()
         );
+    }
+}
+
+/// K-27, Fact 26, E4: a pending retirement is offered Resume when the
+/// in-flight record's entry names its operation, and, with no entry, only
+/// when all it owes is its index hand-off; otherwise only Abandon is. An
+/// automatic poll's row of the desktop's own is still not offered it.
+#[test]
+fn retirement_resume_needs_an_entry_or_only_a_hand_off() {
+    use crate::desktop::{
+        model::operations::resume_offer_among, test_support::retire::pending_row,
+    };
+    use std::collections::HashSet;
+
+    let operation = OperationId::new();
+    let id = operation.to_string();
+    let none = HashSet::new();
+    let entered = HashSet::from([operation]);
+    let (own, other) = (HashSet::from([OperationId::new()]), HashSet::new());
+
+    // The work is not recorded as done: an original request is needed.
+    for (state, step) in [
+        ("created", None),
+        ("created", Some("worktree_observed")),
+        (
+            "context_worktree_released",
+            Some("context_worktree_released"),
+        ),
+        // Recorded as done, but not handed off to indexing yet.
+        ("created", Some("context_branch_released")),
+    ] {
+        let row = pending_row(&id, state, step);
+        assert_eq!(
+            resume_offer_among(&row, &own, &entered),
+            ResumeOffer::Offered,
+            "{state} {step:?}: with an entry"
+        );
+        assert_eq!(
+            resume_offer_among(&row, &own, &none),
+            ResumeOffer::NotOffered,
+            "{state} {step:?}: with no entry"
+        );
+        assert!(abandon_offered(&row), "{state} {step:?}: Abandon stays");
+    }
+
+    // All the row owes is its hand-off: Resume needs no original.
+    for step in [
+        "context_branch_released",
+        "context_retirement_absent",
+        "context_retirement_preserved",
+    ] {
+        for state in [
+            "authoritative_observed",
+            "indexing",
+            "index_invalidated",
+            "failed",
+            "retry",
+        ] {
+            let row = pending_row(&id, state, Some(step));
+            for entries in [&none, &entered] {
+                assert_eq!(
+                    resume_offer_among(&row, &other, entries),
+                    ResumeOffer::Offered,
+                    "{state} {step}"
+                );
+            }
+        }
+    }
+
+    // A row Resume does not take up stays unoffered with an entry too.
+    let mut waiting = pending_row(&id, "created", None);
+    waiting.next_action = None;
+    assert_eq!(
+        resume_offer_among(&waiting, &other, &entered),
+        ResumeOffer::NotOffered
+    );
+}
+
+/// A share is classified once, when it finishes, from the attempt the drain
+/// noted before `apply` (F2, P9; R-8). A retry clears the result and the
+/// note; a `Finished` the drain never noted reads as an unknown record that
+/// was no Give up's, which offers no Give up.
+#[test]
+fn shares_are_classified_once() {
+    use SyncOffer as O;
+    /// One row: what the drain noted, whether the share is retried before
+    /// it finishes again, and the attempt and offers the result reads.
+    struct Row {
+        name: &'static str,
+        noted: Option<(RecordState, bool)>,
+        retried: bool,
+        record: RecordState,
+        after_give_up: bool,
+        offers: &'static [SyncOffer],
+    }
+    let rows = [
+        Row {
+            name: "noted accepted",
+            noted: Some((RecordState::Accepted, false)),
+            retried: false,
+            record: RecordState::Accepted,
+            after_give_up: false,
+            offers: &[O::Unlock, O::GiveUp],
+        },
+        Row {
+            name: "noted accepted after a give up",
+            noted: Some((RecordState::Accepted, true)),
+            retried: false,
+            record: RecordState::Accepted,
+            after_give_up: true,
+            offers: &[O::Unlock],
+        },
+        Row {
+            name: "a retry clears the result, and the note with it",
+            noted: Some((RecordState::Finished, false)),
+            retried: true,
+            record: RecordState::Unknown,
+            after_give_up: false,
+            offers: &[O::Unlock],
+        },
+        Row {
+            name: "fabricated, never noted",
+            noted: None,
+            retried: false,
+            record: RecordState::Unknown,
+            after_give_up: false,
+            offers: &[O::Unlock],
+        },
+    ];
+    for Row {
+        name: row,
+        noted,
+        retried,
+        record,
+        after_give_up,
+        offers,
+    } in rows
+    {
+        let mut operations = Operations::default();
+        let queued = DesktopRequest {
+            intent: Intent::RepoSync {
+                root: PathBuf::from("/fixture/a"),
+            },
+            ..request(1)
+        };
+        let id = queued.id;
+        let finish = |operations: &mut Operations| {
+            let envelope = Envelope::classified_mutation(
+                "repo sync",
+                Scope::default(),
+                false,
+                ResultCode::UnlockRequired,
+                Effects::not_requested(),
+                false,
+            );
+            operations.apply(WorkerEvent::Finished(id, Box::new(envelope)));
+        };
+        operations.apply(WorkerEvent::Queued(queued.clone()));
+        operations.apply(WorkerEvent::Started(id));
+        if retried {
+            if let Some((record, gave_up)) = noted {
+                operations.note_share_attempt(id, record, gave_up);
+            }
+            finish(&mut operations);
+            assert!(operations.share_result(id).is_some(), "{row}");
+            operations.apply(WorkerEvent::Queued(queued));
+            assert!(operations.share_result(id).is_none(), "{row}");
+            assert!(operations.share_results.is_empty(), "{row}");
+            assert!(operations.share_attempts.is_empty(), "{row}");
+            operations.apply(WorkerEvent::Started(id));
+        } else if let Some((record, gave_up)) = noted {
+            operations.note_share_attempt(id, record, gave_up);
+        }
+        finish(&mut operations);
+        let result = operations
+            .share_result(id)
+            .expect("a finished share")
+            .clone();
+        assert_eq!(result.outcome, SyncOutcome::NeedsUnlock, "{row}");
+        assert_eq!(result.attempt.record, record, "{row}");
+        assert_eq!(result.attempt.after_give_up, after_give_up, "{row}");
+        assert_eq!(result.offers(), offers, "{row}");
+        // The test-only form classifies the same answer from the same
+        // attempt, and under another record on purpose.
+        assert_eq!(
+            operations.classify_share(id, record, after_give_up),
+            Some(result),
+            "{row}"
+        );
+    }
+}
+
+/// What a running request says at each stage, whatever it is (F3, P10):
+/// the share column of the stage words, `Writing` reading "Saving…", and
+/// the primary branch named only where the stage is about it.
+#[test]
+fn stages_are_shown() {
+    let rows: [(ProgressStage, &str); 14] = [
+        (ProgressStage::Accepted, "Getting ready…"),
+        (ProgressStage::Observing, "Getting ready…"),
+        (ProgressStage::Writing, "Saving…"),
+        (ProgressStage::Connecting, "Connecting…"),
+        (ProgressStage::Fetching, "Bringing in changes…"),
+        (ProgressStage::UpdatingLocal, "Merging changes…"),
+        (ProgressStage::Pushing, "Sending your saved changes…"),
+        (ProgressStage::Verifying, "Checking it arrived…"),
+        (ProgressStage::Indexing, "Updating the list…"),
+        (ProgressStage::Recording, "Marking it closed…"),
+        (ProgressStage::Integrating, "Merging into {primary}…"),
+        (ProgressStage::Publishing, "Sharing {primary}…"),
+        (ProgressStage::CleaningUp, "Tidying up…"),
+        (ProgressStage::Stopping, "Stopping at a safe point…"),
+    ];
+    assert_eq!(
+        rows.map(|(stage, _)| stage),
+        ProgressStage::ALL,
+        "a row for every stage"
+    );
+    for (stage, words) in rows {
+        for (primary, name) in [(None, "main"), (Some("trunk"), "trunk")] {
+            assert_eq!(
+                stage_words(stage, primary),
+                words.replace("{primary}", name),
+                "{stage:?} {primary:?}"
+            );
+        }
     }
 }

@@ -10,7 +10,7 @@
 //! (`hold_job_return_answering`), so Open ready tickets lists the
 //! repository's own ready tickets.
 
-use gpui_kit::{ElementId, TestAppContext};
+use gpui_kit::TestAppContext;
 use manyhands::{
     repository::{
         ClosureFilter, ItemDtoKind, LifecycleMadeReadyDto, LifecycleMadeReadyState,
@@ -21,8 +21,9 @@ use manyhands::{
 };
 
 use super::{
+    READY_TO_START,
     confirm_tests::confirming,
-    made_ready::{COULD_NOT_WORK_OUT, MADE_READY_LEAD, MAY_BE_INCOMPLETE, OPEN_READY_TICKETS},
+    made_ready::{COULD_NOT_WORK_OUT, MAY_BE_INCOMPLETE, OPEN_READY_TICKETS},
     outcome::ENDING_DONE,
     outcome_canned_tests::{answer, finished, intent, reached, reached_effects, reopen, retry},
     outcome_tests::stopped_at_integrating,
@@ -30,19 +31,52 @@ use super::{
     tests::{DOCUMENT, SLUG, TICKET, closes, code, open, saved_ticket, shell, until_present},
 };
 use crate::desktop::{
-    model::navigation::Pane,
+    model::{activity::rows::RowKey, navigation::Pane},
     services::{
         JobKind,
         requests::{DesktopRequestId, Intent},
     },
     test_support::fixtures::item_id,
     view::{
+        activity_support::{refresh, row},
         harness::{Shell, key},
         item::LIFECYCLE_ACTION,
-        operations::request_id,
         workspace::Region,
     },
 };
+
+/// Text typed into the Tickets filter before Open ready tickets clears it.
+pub(super) const TYPED: &str = "Closing";
+
+/// The Tickets query the model holds: closure, readiness and text.
+pub(super) fn query(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+) -> (ClosureFilter, Option<ReadinessFilter>, String) {
+    shell.workspace.read_with(cx, |workspace, _| {
+        let query = workspace.tickets().query();
+        (query.closure, query.readiness, query.text.clone())
+    })
+}
+
+/// Types `text` in the filter input as `set_filter_text` does: the input
+/// and the query both hold it.
+pub(super) fn type_filter(shell: &Shell, text: &str, cx: &mut TestAppContext) {
+    shell.frame(cx, |window, cx| {
+        shell.workspace.update(cx, |workspace, cx| {
+            workspace.set_filter_text(text, window, cx)
+        })
+    });
+    shell.run(cx);
+}
+
+/// What the filter input holds.
+pub(super) fn filter_text(shell: &Shell, cx: &mut TestAppContext) -> String {
+    let input = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.find_input().clone());
+    input.read_with(cx, |input, _| input.value().to_string())
+}
 
 /// A ticket that depends on `TICKET` alone, so closing it makes this one
 /// ready.
@@ -117,22 +151,17 @@ pub(super) async fn until_rows(shell: &Shell, expected: Vec<String>, cx: &mut Te
         .await;
 }
 
-/// The labels and values drawn inside the operation area's entry of `id`.
+/// Every text of the Activity entry of `id` in the log: its title,
+/// description, repository tag and tooltip lines.
 fn entry_texts(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> Vec<String> {
-    let within = ElementId::from(request_id(id, "entry"));
-    shell.frame(cx, |window, _| {
-        gpui_kit::base::test_support::snapshots(window)
-            .iter()
-            .filter(|snapshot| snapshot.path().contains(&within))
-            .flat_map(|snapshot| {
-                [snapshot.label(), snapshot.value()]
-                    .into_iter()
-                    .flatten()
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    })
+    refresh(shell, cx);
+    let entry = row(shell, &RowKey::Request(id), cx).expect("the entry is listed");
+    let derived = entry.row;
+    let mut texts = vec![derived.title];
+    texts.extend(derived.description);
+    texts.extend(derived.repo);
+    texts.extend(derived.detail);
+    texts
 }
 
 /// No made-ready part is drawn.
@@ -151,7 +180,7 @@ fn none_drawn(shell: &Shell, cx: &mut TestAppContext) {
 /// A3, real: Done on a closure lists the ticket it made ready by its short
 /// code and its title, read from the repository; the library's own report
 /// holds no title (`tests/mutation_remote/c5_made_ready.rs`
-/// `c5_made_ready_one`). The operation area's entry shows no title.
+/// `c5_made_ready_one`). Activity's entry shows no title.
 #[gpui_kit::test]
 async fn done_lists_made_ready_with_slug_and_title(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -174,16 +203,16 @@ async fn done_lists_made_ready_with_slug_and_title(cx: &mut TestAppContext) {
     until_rows(&shell, vec![format!("{SLUG} \u{b7} {DEPENDENT_TITLE}")], cx).await;
     assert_eq!(
         shell.label("lifecycle-made-ready-lead", cx).as_deref(),
-        Some(MADE_READY_LEAD)
+        Some(READY_TO_START)
     );
     assert!(!shell.present("lifecycle-made-ready-incomplete", cx));
     assert!(!shell.present("lifecycle-open-ready", cx));
 
     let entry = entry_texts(&shell, id, cx);
-    assert!(!entry.is_empty(), "the entry is drawn");
+    assert!(!entry.is_empty(), "the entry is listed");
     assert!(
         entry.iter().all(|text| !text.contains(DEPENDENT_TITLE)),
-        "no title in the operation area: {entry:?}"
+        "no title in Activity: {entry:?}"
     );
 }
 
@@ -284,11 +313,20 @@ async fn index_unavailable_final_offers_open_ready_tickets(cx: &mut TestAppConte
     });
     let other = root.with_file_name("b");
     shell.select(&other, cx);
+    // Closed with text typed: Closed with Blocked cannot be chosen (R-26),
+    // and the text is what Open ready tickets clears (R-29).
     shell.workspace.update(cx, |workspace, cx| {
-        workspace.set_closure(ClosureFilter::Closed, cx);
-        workspace.set_readiness(Some(ReadinessFilter::Blocked), cx);
+        workspace.set_closure(ClosureFilter::Closed, cx)
     });
-    shell.run(cx);
+    type_filter(&shell, TYPED, cx);
+    assert_eq!(
+        query(&shell, cx),
+        (ClosureFilter::Closed, None, TYPED.to_owned())
+    );
+    assert_eq!(
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: any")
+    );
 
     confirming(&shell, &root, cx).await;
     let request = RequestId::new();
@@ -348,10 +386,22 @@ async fn index_unavailable_final_offers_open_ready_tickets(cx: &mut TestAppConte
         .await;
     assert_eq!(selected(&shell, cx), (Some(key(&root)), Pane::Tickets));
     assert!(shell.selected("filter-open", cx));
-    assert!(shell.selected("filter-ready", cx));
+    assert_eq!(
+        query(&shell, cx),
+        (
+            ClosureFilter::Open,
+            Some(ReadinessFilter::Ready),
+            String::new()
+        )
+    );
+    assert_eq!(
+        shell.label("filter-readiness", cx).as_deref(),
+        Some("Readiness: ready")
+    );
+    assert_eq!(filter_text(&shell, cx), "", "the input is cleared too");
     assert!(
-        shell.present(Region::Navigation.ring_id(), cx),
-        "the navigation has focus"
+        shell.present(Region::Tickets.ring_id(), cx),
+        "the Tickets region has focus"
     );
 }
 

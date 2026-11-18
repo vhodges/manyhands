@@ -8,7 +8,7 @@
 use manyhands::results::{CheckpointEffect, Effects, PublicationEffect, ResultCode};
 
 /// A hand-off owed, a prepare's or a save's: finish it.
-pub(crate) const RESUME: &str = "Resume";
+pub(crate) use crate::desktop::model::activity::copy::RESUME;
 /// The same request again.
 pub(crate) const RETRY: &str = "Retry";
 /// The header's Save while editing.

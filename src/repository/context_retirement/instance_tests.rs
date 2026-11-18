@@ -14,6 +14,13 @@ impl Fixture {
         let data = tempfile::tempdir().unwrap();
         let git = git2::Repository::init(root.path()).unwrap();
         git.set_head("refs/heads/main").unwrap();
+        // Enabling takes its identity from Git; without one it writes no
+        // configuration. Set it here so no global identity is needed.
+        let mut config = git.config().unwrap();
+        config.set_str("user.name", "Fixture").unwrap();
+        config
+            .set_str("user.email", "fixture@example.invalid")
+            .unwrap();
         let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
         let tree = git
             .find_tree(git.treebuilder(None).unwrap().write().unwrap())

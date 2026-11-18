@@ -479,7 +479,7 @@ async fn a_dismissed_refusal_is_not_another_windows_set(cx: &mut TestAppContext)
     );
     shell
         .visual(cx)
-        .update(gpui_kit::component::WindowExt::close_dialog);
+        .update(gpui_kit::component::WindowExt::close_sheet);
     shell.run(cx);
     shell
         .operations(cx)

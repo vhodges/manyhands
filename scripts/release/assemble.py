@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from urllib.parse import quote
 import zipfile
 
@@ -258,7 +259,24 @@ successfully and the downloads are reviewed. Do not publish while a run is activ
 """
 
 
-def assemble(release: dict, assets: Path, github) -> str:
+# GitHub does not list a new draft immediately; it can take a while to appear
+# in the tag lookup and release listing. Poll with a bounded backoff (about
+# two minutes in all) before treating a created draft as lost.
+DRAFT_VISIBILITY_DELAYS = (1, 2, 4, 8, 15, 15, 15, 15, 15, 15, 15)
+
+
+def wait_for_draft(release: dict, github, sleep=time.sleep):
+    """Return the draft once GitHub lists it; only absence is retried."""
+    for delay in (*DRAFT_VISIBILITY_DELAYS, None):
+        existing = preflight(release, github)
+        if existing is not None:
+            return existing
+        if delay is None:
+            raise ApiError("new draft is not visible after creation")
+        sleep(delay)
+
+
+def assemble(release: dict, assets: Path, github, sleep=time.sleep) -> str:
     packages, installer = candidates(release, assets)  # Complete verification before any mutation.
     existing = preflight(release, github)
     with tempfile.TemporaryDirectory(prefix="manyhands-assembly-") as temp:
@@ -281,9 +299,7 @@ def assemble(release: dict, assets: Path, github) -> str:
             existing = preflight(release, github)
             if existing is None:
                 github.create(release, notes)
-                existing = preflight(release, github)
-                if existing is None:
-                    raise ApiError("new draft is not visible after creation")
+                existing = wait_for_draft(release, github, sleep)
         release_id = existing["id"]
         previous = github.read_manifest(existing)
         if previous is not None and previous != identity:

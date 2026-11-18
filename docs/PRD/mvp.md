@@ -18,6 +18,17 @@ id: "01M5MHD4J983933AB0G40DK90W"
 
 ## Changelog
 
+### 0.8 - 2026-11-09
+
+- Wave 03 D6 (owner decisions 16 to 21): the desktop's background polling also
+  retires, per item, the local context of a ticket closed or a document
+  promoted elsewhere, through an ordinary guarded `context retire` after each
+  completed poll. It holds back any item being edited or with a draft, never
+  prompts, and never publishes, checkpoints, merges or deletes a remote
+  branch. This amends the release scope, `MH-COLLAB-004`, `MH-COLLAB-006`,
+  `MH-INDEX-002` and `MH-NFR-007` where they reserve retirement to explicit
+  invocation. The CLI's explicit entrypoints are unchanged.
+
 ### 0.7 - 2026-11-06
 
 - Amend `MH-COLLAB-006`'s exclusive lifecycle-cleanup rule for deliberate,
@@ -96,7 +107,7 @@ An enabled repository is a local Git repository that its user has opted into man
 
 ## Scope
 
-The dogfooding release supports enabled local repositories and trusted Git collaborators only. It includes repository onboarding; basic SSH key generation and management; managed-document and ticket creation, editing, and discovery; threaded comments on both item types; isolated branches and worktrees; an automatic checkpoint commit on save; deliberate synchronization and safe background remote polling; confirmed managed-document promotion; explicit ticket closure that merges work and cleans up its isolated workspace; and deliberate, guarded local retirement of peer-completed contexts under `MH-COLLAB-006`.
+The dogfooding release supports enabled local repositories and trusted Git collaborators only. It includes repository onboarding; basic SSH key generation and management; managed-document and ticket creation, editing, and discovery; threaded comments on both item types; isolated branches and worktrees; an automatic checkpoint commit on save; deliberate synchronization and safe background remote polling; confirmed managed-document promotion; explicit ticket closure that merges work and cleans up its isolated workspace; and deliberate, guarded local retirement of peer-completed contexts under `MH-COLLAB-006`, which the desktop also performs per item after each completed poll (0.8).
 
 ### MH-PROD-001: Git-Backed Local Collaboration
 
@@ -408,6 +419,7 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 - Background polling preserves dirty, divergent, conflicted, deleted, renamed, malformed, inaccessible, or unrecognized contexts; it identifies the state and provides recovery guidance without removing a local worktree.
 - Background polling is serialized with manual synchronization, primary-branch synchronization, managed-document promotion, and ticket closure for the same repository. A manual lifecycle operation takes precedence and polling waits or stops at a safe point before that operation changes Git state.
 - Background polling never pushes, commits, merges, rebases, stashes, overwrites, discards, deletes a branch, or deletes a worktree. Other remote Git operations occur only in response to a direct synchronization request, an RFC-defined synchronization-triggering user action, an explicitly confirmed managed-document promotion, an explicitly confirmed ticket-close action, or the fresh read-only observation required by explicit peer-context retirement under `MH-COLLAB-006`.
+- Amended in 0.8 (Wave 03 D6, decision 16): the desktop's background polling may also retire a proven-completed local context per item through an ordinary guarded `context retire`, held back by any edit or draft of the item; it removes no other worktree or branch.
 
 ### MH-COLLAB-005: Close Tickets Through a Confirmed Lifecycle
 
@@ -454,6 +466,7 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 - Long-running lifecycle work reports progress and outcome while keeping the interface responsive.
 - A user may cancel long-running lifecycle work only at a safe point; Manyhands reports whether cancellation completed or work must continue to a safe recovery state.
 - Lifecycle failures name the affected item, repository, and context and offer next actions to retry, recover, or inspect the problem.
+- Amended in 0.8 (Wave 03 D6, decision 16): the desktop's background polling may also retire a proven-completed local context per item through an ordinary guarded `context retire`, held back by any edit or draft of the item; it removes no other worktree or branch.
 
 ### MH-COLLAB-007: Promote Managed Documents Through a Confirmed Lifecycle
 
@@ -506,6 +519,7 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
   `poll once --retire-completed` may additionally perform the guarded local
   retirement allowed by `MH-COLLAB-006`, with per-item outcomes and discovery
   settlement; recognition alone does not authorize removal.
+- Amended in 0.8 (Wave 03 D6, decision 16): the desktop's background polling may also retire a proven-completed local context per item through an ordinary guarded `context retire`, held back by any edit or draft of the item; it removes no other worktree or branch.
 
 ### MH-INDEX-003: Surface External and Malformed Changes
 
@@ -636,6 +650,7 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
   per-context retirement and subsequent discovery settlement in `MH-COLLAB-006`;
   it does not give the index scan itself mutation authority.
 - The behavior remains consistent with `MH-INDEX-001` and `MH-INDEX-003` when canonical content is malformed or inaccessible.
+- Amended in 0.8 (Wave 03 D6, decision 16): the desktop's background polling may also retire a proven-completed local context per item through an ordinary guarded `context retire`, held back by any edit or draft of the item; it removes no other worktree or branch.
 
 ### MH-NFR-008: Prevent Silent Data Loss
 

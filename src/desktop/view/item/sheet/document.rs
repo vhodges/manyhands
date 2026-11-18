@@ -118,7 +118,7 @@ impl ItemPane {
     pub(in crate::desktop::view) fn move_blocked(&self, cx: &App) -> Option<&'static str> {
         // While the document's merge is unfinished, Move… waits (R-23).
         if self.edits_wait(cx) {
-            return Some(self.refused_words());
+            return Some(self.refused_words(cx));
         }
         let (TabKey::Item { repo, kind, id }, Some(_)) = (self.tab_key(), self.model.item().rows())
         else {

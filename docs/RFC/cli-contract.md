@@ -199,6 +199,13 @@ The C5 `poll once` row's no-cleanup rule describes the default mode. The only
 exception is the explicit `--retire-completed` mode specified below; neither
 background polling nor an ordinary invocation inherits that consent.
 
+Amended 2026-11-09 by Wave 03 D6 (decision 16): this governs the CLI. The
+desktop, by the owner's decision, follows each completed poll with one ordinary
+`context retire` per reported completed item; that changes neither the CLI's
+`poll once`, its flag, nor the consent of any CLI invocation, including the
+`context retire` row above and "Execution is the new deliberate consent"
+below.
+
 ### Authoring reads
 
 Amended 2026-10-24 by C3: `path observe --repo <root> --path <path>

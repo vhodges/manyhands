@@ -697,6 +697,10 @@ No title, body, comment, side or result text enters an operation entry,
 log or error. Paths appear only in the dialog and the sheet. Sentinel tests
 seed each.
 
+*Amended 2026-11-13 by Wave 04 Cycle 03b decisions 12 and 21: a title may
+appear in an Activity row, its tooltip and menu, and the Needs attention
+popover; no body, comment, side, result text or path does.*
+
 ## Testing (Decision 9)
 
 Desktop tests use real local repositories for local-only runs and local
@@ -842,7 +846,7 @@ Applied in the approval commit:
   is the way out (GRFC local rule).
 - **K-11.** Withdrawn: U-4 held in part (Task 0). A resend that adopts an
   already-published context child shows no stages for Share with origin.
-- **K-12.** `PollOnce` is guidance text until D6.
+- **K-12.** `PollOnce` is guidance text until D6. Superseded 2026-11-09 by D6 (design C2): the way-out guidance gains a Check now button.
 - **K-13.** A merged item whose tidy-up is refused because its working
   copy, ignored files or remote branch changed (decision 21) is unlocked
   and stays untidied until that change is undone or cleaned outside the

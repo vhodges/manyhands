@@ -47,6 +47,7 @@ fn finished(
         lane: Lane::User,
         attempt: 1,
         state: RequestState::Queued,
+        registered_root: None,
     }));
     id
 }
@@ -108,6 +109,53 @@ fn a_republish_waits_until_its_own_entry_is_dismissed() {
     resends.forget(republish);
     assert!(!resends.pending_for(run));
     assert!(!resends.waiting_for(Path::new("/repo"), &item_id(TICKET)));
+}
+
+/// Activity's `resend_waits` (R-47): `waits_on` is true exactly when
+/// `forget` would drop something, a chain link from or to the request, or a
+/// republish waiting under its ID, and not for the run a republish sends on.
+#[test]
+fn waits_on_says_when_forgetting_would_drop_something() {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let worker = worker(&fixture);
+    let mut operations = Operations::default();
+    let resends = Resends::default();
+    let operation = OperationId::new();
+    let resume = Intent::OperationResume {
+        root: root.clone(),
+        operation_id: operation,
+    };
+    rows(&mut operations, &root, operation);
+    let shown = finished(&mut operations, 1, resume, RequestId::new());
+    assert!(!resends.waits_on(shown), "nothing is registered");
+    resends.ended(
+        shown,
+        &original_request(RequestId::new()),
+        &operations,
+        &worker,
+    );
+    let follow = resends.follow(shown).expect("a request under it");
+    assert!(resends.waits_on(shown), "a link from it");
+    assert!(resends.waits_on(follow), "a link to it");
+    assert!(!resends.waits_on(DesktopRequestId(99)), "another request");
+    resends.forget(shown);
+    assert!(!resends.waits_on(shown) && !resends.waits_on(follow));
+
+    let (run, republish) = (DesktopRequestId(10), DesktopRequestId(11));
+    resends.after_republish(
+        republish,
+        AfterRepublish::Retry(run),
+        PathBuf::from("/repo"),
+        item_id(TICKET),
+    );
+    assert!(
+        resends.waits_on(republish),
+        "a republish waits under its ID"
+    );
+    assert!(!resends.waits_on(run), "its run's dismissal keeps it");
+    resends.forget(republish);
+    assert!(!resends.waits_on(republish));
 }
 
 /// Ruling (a), re-review 1, 2: an answer offering `request.retry` or
@@ -436,4 +484,102 @@ fn a_stopped_or_finished_resume_is_not_a_twin() {
     }
     let after = worker.submit(resume(), Lane::User, None, None);
     assert!(![first, again].contains(&after), "answered: not a twin");
+}
+
+/// L-4, U-15: a Check now left active by Quit now or a crash is listed with
+/// no next action, and its pending row offers Resume; Resume answered
+/// `original_request_required` sends `PollOnce{root}` under the request the
+/// answer names, on the user lane. A row that is not a poll's, or that does
+/// not hold the reservation, is not offered it and is not resent as one.
+#[test]
+fn resume_dead_check_now() {
+    use crate::desktop::model::operations::{ResumeOffer, resume_offer};
+    use futures::StreamExt;
+
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let (worker, mut events) = WorkerHandle::spawn(fixture.delaying_backend());
+    let mut operations = Operations::default();
+    let resends = Resends::default();
+    let operation = OperationId::new();
+    let poll_row = |state: &str| OperationDto {
+        operation_id: Some(operation.to_string()),
+        family: OperationFamily::Remote,
+        owner: OperationOwner::Repository,
+        action: OperationAction::Poll,
+        state: state.to_owned(),
+        completed_step: None,
+        next_action: None,
+        item_id: None,
+        key_id: None,
+        worktree: None,
+        updated_at: None,
+        failure_code: None,
+    };
+
+    // Every phase that holds the reservation offers Resume; a poll that
+    // ended, and rows of other kinds, do not.
+    for state in ["reserved", "advertising", "fetch_prepared", "reconciling"] {
+        assert_eq!(
+            resume_offer(&poll_row(state)),
+            ResumeOffer::Offered,
+            "{state}"
+        );
+    }
+    for state in ["completed", "interrupted", "cancelled", "failed"] {
+        assert_eq!(
+            resume_offer(&poll_row(state)),
+            ResumeOffer::NotOffered,
+            "{state}"
+        );
+    }
+    let mut sync = poll_row("advertising");
+    sync.action = OperationAction::SynchronizePrimary;
+    assert_eq!(resume_offer(&sync), ResumeOffer::NotOffered);
+    let mut unnamed = poll_row("advertising");
+    unnamed.operation_id = None;
+    assert_eq!(resume_offer(&unnamed), ResumeOffer::NotOffered);
+
+    // The resume is answered with the request that holds the row. Until the
+    // rows list the operation as a poll's, nothing is resent for it.
+    let named = RequestId::new();
+    let resume = |operations: &mut Operations, n: u64| {
+        finished(
+            operations,
+            n,
+            Intent::OperationResume {
+                root: root.clone(),
+                operation_id: operation,
+            },
+            RequestId::new(),
+        )
+    };
+    let unlisted = resume(&mut operations, 1);
+    resends.ended(unlisted, &original_request(named), &operations, &worker);
+    assert_eq!(resends.follow(unlisted), None, "no row names a poll");
+
+    let stamp = operations.load_pending(root.to_str().unwrap().to_owned());
+    operations.apply_pending(
+        stamp,
+        ReadResult::Ok(OperationListDto {
+            items: vec![poll_row("advertising")],
+            complete: true,
+        }),
+    );
+    let sent = resume(&mut operations, 2);
+    resends.ended(sent, &original_request(named), &operations, &worker);
+    let followed = resends
+        .follow(sent)
+        .expect("the poll once follows the resume");
+    let queued = loop {
+        match futures::executor::block_on(events.next()) {
+            Some(WorkerEvent::Queued(request)) if request.id == followed => break request,
+            Some(_) => {}
+            None => panic!("the worker hung up"),
+        }
+    };
+    assert!(matches!(&queued.intent, Intent::PollOnce { root: asked } if *asked == root));
+    assert_eq!(queued.request_id, named, "under the request that holds it");
+    assert_eq!(queued.lane, Lane::User);
+    assert!(queued.intent.stops_at_safe_points());
 }
