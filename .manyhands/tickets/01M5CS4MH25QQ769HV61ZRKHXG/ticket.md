@@ -1,12 +1,12 @@
 ---
+id: 01M5CS4MH25QQ769HV61ZRKHXG
+title: 'Desktop follow-up: tests and polish from the D1 reviews'
+type: task
+status: superseded
+project: manyhands
+team: core
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M5CS4MH25QQ769HV61ZRKHXG"
-title: "Desktop follow-up: tests and polish from the D1 reviews"
-type: "task"
-status: "open"
-project: "manyhands"
-team: "core"
 ---
 
 The D1 desktop reviews (Wave 03 Cycle D1, ticket
