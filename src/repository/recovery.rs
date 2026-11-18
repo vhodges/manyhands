@@ -1916,6 +1916,12 @@ pub(super) fn is_comment_synchronization(
     )
 }
 
+/// The phases in which a remote operation holds its repository's
+/// reservation, as an SQL list: what `in_the_way` refuses a local operation
+/// for, and the only phases in which a call can be at work under a remote
+/// row (see `liveness::Worked`).
+pub(super) const RESERVATION_PHASES: &str = "('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')";
+
 /// What the local journal holds pending for a root, as a call that would
 /// begin or take up an operation there reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1952,7 +1958,7 @@ fn in_the_way(
     tagged_local_binding: bool,
 ) -> Result<Pending, RepositoryError> {
     let remote_active: Option<String> = connection.query_row(
-        "SELECT remote_operation_records.operation_ulid FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%')) ORDER BY remote_operation_records.id LIMIT 1",
+        &format!("SELECT remote_operation_records.operation_ulid FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN {RESERVATION_PHASES} AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%')) ORDER BY remote_operation_records.id LIMIT 1"),
         rusqlite::params![root_path, target], |row| row.get(0)).optional().map_err(|_| super::remote::state::recovery_required())?;
     if let Some(operation_id) = remote_active {
         return Err(

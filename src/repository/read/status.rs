@@ -93,13 +93,15 @@ impl<'a> Holders<'a> {
     /// The attribution a row names. `heartbeat` is whether the row shows a
     /// call at work under it by the heartbeat; `local` is the root of a
     /// local row, whose call works under that repository's lease, and
-    /// `None` for a remote row. A row that names neither a host nor a
-    /// process is not judged.
+    /// `None` for a remote row, whose call works only while it holds the
+    /// reservation, `holds_reservation`. A row that names neither a host
+    /// nor a process is not judged.
     fn attribution(
         &self,
         stored: StoredAttribution,
         heartbeat: bool,
         local: Option<&std::path::Path>,
+        holds_reservation: bool,
     ) -> Result<OperationAttributionDto, ReadError> {
         let live = (stored.host.is_some() || stored.pid.is_some()).then(|| {
             let row = AttributionRow {
@@ -116,7 +118,7 @@ impl<'a> Holders<'a> {
                         )
                     }),
                 },
-                None => Worked::ByProcess,
+                None => Worked::ByProcess { holds_reservation },
             };
             holder_liveness(&row, &self.host, std::process::id(), self.probe, worked)
                 == Liveness::Live
@@ -136,35 +138,45 @@ impl<'a> Holders<'a> {
     /// The attribution of a remote row, which no heartbeat keeps alive, or
     /// none for an operation that has no such row. A promotion's or a
     /// closure's parent has none of its own: its reservation is the remote
-    /// row of the same ID, and it is the one that names the holder.
+    /// row of the same ID, and it is the one that names the holder. A call
+    /// is at work under it only while it holds the reservation and, for a
+    /// parent, only while the parent is `open`, not ended.
     fn remote(
         &self,
         connection: &Connection,
         repo: &ResolvedRepository,
         operation: &str,
+        open: bool,
     ) -> Result<OperationAttributionDto, ReadError> {
-        let stored = connection
+        let (stored, holds_reservation) = connection
             .query_row(
-                "SELECT request_ulid, command, author, host, pid, started_at
-                   FROM remote_operation_records
-                  WHERE repository_id = ?1 AND operation_ulid = ?2
-                  ORDER BY id DESC LIMIT 1",
+                &format!(
+                    "SELECT request_ulid, command, author, host, pid, started_at,
+                            phase IN {}
+                       FROM remote_operation_records
+                      WHERE repository_id = ?1 AND operation_ulid = ?2
+                      ORDER BY id DESC LIMIT 1",
+                    recovery::RESERVATION_PHASES
+                ),
                 params![repo.registration_id(), operation],
                 |row| {
-                    Ok(StoredAttribution {
-                        request_id: row.get(0)?,
-                        command: row.get(1)?,
-                        author: row.get(2)?,
-                        host: row.get(3)?,
-                        pid: row.get(4)?,
-                        started_at: row.get(5)?,
-                        comment_id: None,
-                    })
+                    Ok((
+                        StoredAttribution {
+                            request_id: row.get(0)?,
+                            command: row.get(1)?,
+                            author: row.get(2)?,
+                            host: row.get(3)?,
+                            pid: row.get(4)?,
+                            started_at: row.get(5)?,
+                            comment_id: None,
+                        },
+                        row.get::<_, bool>(6)?,
+                    ))
                 },
             )
             .optional()?
             .unwrap_or_default();
-        self.attribution(stored, false, None)
+        self.attribution(stored, false, None, open && holds_reservation)
     }
 }
 
@@ -315,6 +327,7 @@ fn local_operations(
             },
             heartbeat,
             Some(repo.root()),
+            false,
         )?;
         let action = local_action(&action).ok_or_else(invalid_stored_data)?;
         let synchronized = target
@@ -516,7 +529,12 @@ fn remote_operation(
             worktree: None,
             updated_at: Some(stored_time(record.updated_at)?),
             failure_code: record.outcome.and_then(remote_failure),
-            attribution: holders.remote(connection, repo, &record.operation_id.to_string())?,
+            attribution: holders.remote(
+                connection,
+                repo,
+                &record.operation_id.to_string(),
+                true,
+            )?,
         },
     })
 }
@@ -566,7 +584,12 @@ fn promotion_operations(
                     worktree: None,
                     updated_at: Some(stored_time(r.updated_at)?),
                     failure_code: None,
-                    attribution: holders.remote(connection, repo, &r.operation_id.to_string())?,
+                    attribution: holders.remote(
+                        connection,
+                        repo,
+                        &r.operation_id.to_string(),
+                        !r.step.terminal(),
+                    )?,
                 },
             })
         })
@@ -616,7 +639,12 @@ fn closure_operations(
                     worktree: None,
                     updated_at: Some(stored_time(r.updated_at)?),
                     failure_code: None,
-                    attribution: holders.remote(connection, repo, &r.operation_id.to_string())?,
+                    attribution: holders.remote(
+                        connection,
+                        repo,
+                        &r.operation_id.to_string(),
+                        !r.step.terminal(),
+                    )?,
                 },
             })
         })

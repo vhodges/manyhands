@@ -75,9 +75,12 @@ pub enum Worked {
     /// whether a call holds the lease now, as the reader looked without
     /// waiting.
     UnderLease { lease_held: bool },
-    /// A remote row: its call holds no lease and keeps no heartbeat, and
-    /// only its process says whether it still works.
-    ByProcess,
+    /// A remote row: its call holds no lease and keeps no heartbeat. A call
+    /// is at work under it only while it holds the repository's
+    /// reservation, `holds_reservation`, and then its process says whether
+    /// it still works. One that stopped, was interrupted, failed or ended
+    /// has no call at work under it, whatever process last held it.
+    ByProcess { holds_reservation: bool },
 }
 
 /// Judges a row as a reader in this process judges it. A row that names
@@ -93,11 +96,11 @@ pub enum Worked {
 ///   heartbeat says: a heartbeat is only ever beaten by the process that
 ///   claimed the row, and one that is gone beats no more, though its last
 ///   beat can still be fresh;
-/// - another process that exists makes a remote row live. A local row it
-///   is live only while its call works under it: on a fresh heartbeat, or
-///   while a call holds the repository's lease. A long-lived process, a
-///   desktop app, whose call ended and left the row is not at work under
-///   it, and its row reads as stale.
+/// - another process that exists makes a row live only while its call
+///   works under it: a remote row while it holds the reservation, a local
+///   one on a fresh heartbeat or while a call holds the repository's lease.
+///   A long-lived process, a desktop app, whose call ended and left the
+///   row is not at work under it, and its row reads as stale.
 ///
 /// Any other row, of another host or naming no host or pid, is judged by
 /// `row_liveness`: live on a fresh heartbeat and stale otherwise.
@@ -120,7 +123,7 @@ pub fn holder_liveness(
                 false
             } else {
                 match worked {
-                    Worked::ByProcess => true,
+                    Worked::ByProcess { holds_reservation } => holds_reservation,
                     Worked::UnderLease { lease_held } => row.index_heartbeat_fresh || lease_held,
                 }
             };
@@ -307,7 +310,12 @@ mod tests {
         };
         let free = Worked::UnderLease { lease_held: false };
         let held = Worked::UnderLease { lease_held: true };
-        let remote = Worked::ByProcess;
+        let remote = Worked::ByProcess {
+            holds_reservation: true,
+        };
+        let stopped = Worked::ByProcess {
+            holds_reservation: false,
+        };
         let cases = [
             (
                 "this process, no heartbeat",
@@ -328,10 +336,16 @@ mod tests {
                 Liveness::Stale,
             ),
             (
-                "another process, remote",
+                "another process, remote, holding the reservation",
                 row(here, 4242, false),
                 remote,
                 Liveness::Live,
+            ),
+            (
+                "another process, remote, interrupted or failed",
+                row(here, 4242, false),
+                stopped,
+                Liveness::Stale,
             ),
             (
                 "another process, local, lease free, no heartbeat",
