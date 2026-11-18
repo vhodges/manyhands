@@ -1,0 +1,2780 @@
+---
+title: "Wave 03 C3 Authoring And Discovery Execution Ledger"
+date: 2026-10-25
+status: "review-ready"
+author: "Claude"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5RD6N5PEYMVGZNZ2HGPSHKD"
+---
+
+# Wave 03 C3 Authoring And Discovery Execution Ledger
+
+## Baseline
+
+Task 0 baseline, in ticket worktree
+`/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMV81DFRGJ4Z76489XM`,
+on `manyhands/ticket/01M4CC0VMV81DFRGJ4Z76489XM`. No subagents dispatched.
+Tasks 0–4 and Part A are approved (see task log; Part A spec and quality
+approvals conveyed in the fresh Task 5 implementer brief at base `452f031`).
+Task 5 spec and quality are APPROVED, as conveyed in the fresh Task 6 brief at
+`6d0ec5191bf4282e099b0d28dac4b37bb26112f3`. Task 6 spec and quality are APPROVED,
+as conveyed in the fresh Task 7 brief at `aab0e795d5245d0e0932d8ceff2501d06846d963`.
+Task 7 / Part B spec and quality are **APPROVED**, explicitly conveyed in the
+fresh Task 8 brief at `9a2a5170c4704ef03420ef2276911c6b1bfa3959`, retaining
+the six checkpoint gates and 593 tests. Task 8 spec and quality are **APPROVED**,
+explicitly conveyed in the fresh Task 9 brief at
+`f9618f76ce9608c9ccc42018701647d7b98bb642`.
+Task 3's two stops are resolved by explicit owner
+rulings: Partial/Incomplete assertion precedence, and primary-only committed
+move-to-self no-op. The interrupted-save checkpoint also passes through real
+CLI retries with its approved assertions unchanged. The owner has **accepted an
+explicit Task 9 verification exception**: the original failed full suite plus
+the scoped post-fix verification and check/fmt/clippy. The full suite itself
+remains historically non-green and was not rerun. The controller reports
+independent whole-branch **SPEC and QUALITY both APPROVED** over
+`ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a..806057d3223b9ac2e71fa3a28c3eba83de5c63ef`,
+including the authorized test-baseline exception, with no actionable findings
+or new gaps. Dogfooding steps **4–7 are complete** under the owner's fresh
+go-ahead: six saves/checks and six new remote branches, with local/remote tips
+verified equal and all targets clean. The C4 checker error, stop, read-only
+preflight and authorized correction are preserved below; C4 was never resent.
+The controller reports independent switch **SPEC and QUALITY both APPROVED** over
+`8da3890f2c4f2ac6199324163346f72eb13818f8..297bd7810190dc099d174648d582f81134b16fab`,
+with no findings or questions. **C3 is REVIEW-READY**: Task 9's authorized work
+through Step 5 is complete. Step 6 closure remains a separately authorized
+lifecycle action, not owed implementation; ticket status remains **open**.
+Actual verification date: 2026-10-25 UTC;
+the filename retains the approved plan's date.
+
+- Approved documents: `e7b2b71`; handoff/base HEAD:
+  `ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a`.
+- `git worktree list --porcelain`, branch, status and the last three commits
+  confirmed the required worktree and branch. Ticket and main checkout were
+  clean; main status was inspected read-only from the ticket workdir.
+- Initial and resumed `git fetch origin` succeeded. `git merge origin/main`
+  answered `Already up to date.` Both before/after HEADs remain
+  `ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a`.
+- `origin/main`: `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`.
+  Its `AGENTS.md` was read with `git show origin/main:AGENTS.md`.
+- `git merge-base --is-ancestor origin/main HEAD` passed.
+  `git merge-tree --write-tree HEAD origin/main` succeeded, tree
+  `6fe57e5bebadc7fdc141d565cd29335811f26946`.
+- The three prescribed `git log --oneline origin/main --grep <ULID>`
+  searches returned no matches for `01M4PB82G07RZSQMNJZN672S3W`,
+  `01M4PB80T7SVB23TQ6466RDHCB` and `01M4PB7YZMBFAFFM94AZY08HWS`.
+
+### Baseline checks
+
+All commands ran from this worktree through Devenv, before any tracked edit.
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | Passed. The first invocation was terminated by the shell's 120-second timeout during dependency compilation, with no compiler error. `pgrep -a -x cargo` then returned no process. A second invocation, with a longer timeout, completed in 19.49 seconds. |
+| `devenv shell -- cargo fmt --check` | Passed. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, 1m 42s. |
+| `devenv shell -- cargo test --all-features --locked --bin manyhands-cli --test cli --test read_contract --test mutation_contract` | Passed: 172 CLI unit + 177 CLI integration + 71 read-contract + 44 mutation-contract = **464**; zero failed, ignored, measured or filtered. |
+
+The combined fmt/clippy/test tool transcript is
+`tool_170d1b4a7001Sz6wPttnKvWHXW` in the harness tool-output directory.
+These are Linux baseline checks, not C3 acceptance or native CI. Other tests
+cited below were inspected as source, not executed.
+
+The test build supplied `target/debug/manyhands-cli`. Two invocations of
+`./target/debug/manyhands-cli id new` allocated this document's ID and
+comment `01M5RD6N6KZYYQBQMGPNXR3B66`. No separate build was needed.
+
+## Confirmed facts
+
+All **37** design baseline facts were rechecked during Task 0: 33 confirmed,
+1 previously unknown fact resolved (17), and 3 corrected with explicit owner
+approval (9, 19 and 21, including the post-quality-review correction to fact 9).
+Task 3's binary evidence subsequently corrected fact 15 with owner approval;
+the current inventory is **32 confirmed / 1 resolved / 4 corrected**.
+Library paths abbreviated `mutation/`, `read/`, `discovery.rs` and
+`recovery.rs` are under `src/repository/`; `bind/` abbreviates
+`src/repository/mutation/bind/`. Bare filenames in grouped citations retain
+the last named directory. CLI paths are under
+`src/bin/manyhands-cli/`. Citations refer to the implementation baseline,
+not line positions shifted by these documentation edits. “Confirmed” is
+source inspection unless the baseline test run is explicitly named.
+
+| Fact | Outcome | Evidence and conclusion |
+| --- | --- | --- |
+| 1 | Confirmed | All eleven variants at `mutation/mod.rs:398–428`, input re-exports at `:76–94`, and public repository re-export at `src/repository.rs:83`. |
+| 2 | Confirmed | Input fields/types match `mutation/bind/document.rs:47–82`, `ticket.rs:44–67,948–955`, `folder.rs:58–61`, `repair.rs:100–123`, `index.rs:36–45`. Document save/move None observation is refused at `document.rs:341–347`. Full signatures and field types are in the refreshed audit. |
+| 3 | Confirmed | Complete drafts derive Clone only; relationship writes default to Unchanged (`src/repository.rs:578–620`). No library patch input exists; the approved CLI fill remains necessary. |
+| 4 | Confirmed | Only DocumentRepair/TicketRepair among C3 mutations need confirmation (`mutation/command.rs:436–474`). |
+| 5 | Confirmed | `mutation/bind/save.rs:89–116` checks kind, source, observation, parse and parsed ID, returning item_not_found for these failures. |
+| 6 | Confirmed | `read/items.rs:1963–1995,2115–2219` checks root/active context and canonical/listed-nonconforming path; no owner-item restriction. `mutation/bind/document.rs:556–566` compares the same context token; repair reads primary (`repair.rs:350–359`). |
+| 7 | Confirmed | `ProposedRelationships` has typed complete deps/parent (`read/items.rs:107–116`); the read checks exactly that proposal (`:1998–2054`). Rejection is data in a successful read. |
+| 8 | Confirmed, qualified | Conforming title/body are Some, including an empty body (`read/items.rs:1110–1154`); optional non-string project/team is invalid (`src/canonical.rs:1106–1122`). An already-indexed file that becomes nonconforming can return a bare DTO (`items.rs:1812–1822`) rather than directly failing. The approved fill step 4 already converts that unfillable DTO to item_not_found; no task change. |
+| 9 | Corrected, approved | Unknown values and exact body survive serialization, with front matter re-emitted (`src/canonical.rs:911–980,1026–1063`; order test `tests/canonical_foundation.rs:449–461`). Documents write their destination (`src/repository.rs:2265–2296`); tickets compare parsed items to decide rewriting, then still checkpoint (`:2646–2691`). Both save no-ops require intended content already committed (HEAD-equal); the checkpoint compares HEAD (`:3561–3590`). Matching uncommitted ticket content can be committed without a rewrite (`tests/mutation_replay/execute.rs:1041–1078`). Quality review found the missing qualification; the owner approved it as ruling 5 below. Repair still writes source verbatim (`mutation/bind/repair.rs:579–582`). |
+| 10 | Confirmed | Index success has no data, code ok and discovery current (`mutation/bind/index.rs:80–88`). Execute restores an unavailable index first (`mutation/execute.rs:83–141`). Rebuild root selection has the separately approved exception below. |
+| 11 | Confirmed | Identity refusal deletes the save record and retains its uncommitted context; retry uses a fresh observation (`tests/mutation_replay/execute.rs:1100–1182`). Tokens include branch name (`read/items.rs:1187–1217`). |
+| 12 | Confirmed | Per-service failure hook at `src/repository.rs:4490`, wrapped by `tests/support/mod.rs:277–292`. Actor helpers are `tests/support/mutation.rs:487–534`; scoped CLI actor precedent at `tests/cli/keys.rs:743–762`. |
+| 13 | Confirmed | Listed code classes match `src/results.rs:537–661`. Envelope partial precedence is separate (`:273–288`); see fact 19. A class listing is not a claim that each C3 verb reaches every listed code. |
+| 14 | Confirmed | Document occupied path at `mutation/bind/document.rs:415–446`; folder occupied/invalid/no-op at `folder.rs:100–177`. |
+| 15 | Corrected during Task 3, owner-approved | Move-to-self uses only_at and the committed-state rule (`mutation/bind/document.rs:512–553`). `Position::of` falls back to primary HEAD when the document branch is absent (`mutation/evidence.rs:19–44`), so a primary-only committed move-to-self also returns already_applied/noop, exit 0, without context creation. Task 3 binary evidence exposed the missing fallback in the earlier audit; the owner approved the narrow correction. |
+| 16 | Confirmed | Matching composed and committed slug is already-applied; a different held code is slug_already_assigned (`mutation/bind/ticket.rs:1240–1290`). |
+| 17 | Resolved | A current-token save with no context provisions one before content comparison/checkpointing (`mutation/bind/document.rs:489–503`, `ticket.rs:601–634`; `src/repository.rs:2034–2065,2453–2492,2646–2678`). It can therefore create a context without adding a commit. An early stale-token already-applied answer need not provision one. Existing planned no-op fixtures already use contextual items. Source-derived, not a new context-specific test run. |
+| 18 | Confirmed | Filename `src/repository.rs:112`, WAL `discovery.rs:1539`; missing-registration read has no recovery (`read/resolve.rs:68–80,228–240`), mutation distinguishes never-enabled and offers rebuild for lost registration (`mutation/bind/mod.rs:93–123`, `outcome.rs:804–807`). Structural corruption detects non-database bytes (`src/repository.rs:5607–5621`). F2 removes sidecars but keeps locks (`tests/mutation_replay/index.rs:344–352`). |
+| 19 | Corrected, approved | Hook/result are correct (`tests/mutation_bridges/repair.rs:650–678`), but partial internal_error maps to exit 4 (`src/results.rs:273–288`, `render.rs:85–90`). Shared execute re-entry uses recorded consent, not the newly presented one (`mutation/execute.rs:190–208`, `reenter.rs:159–174`). Repair Shelf fixture remains available in tests/support/repair.rs. |
+| 20 | Confirmed | Index stores title (`discovery.rs:1623–1629`). Privacy scans only the eight request stores (`tests/support/mutation.rs:73–82,107–157`). |
+| 21 | Corrected, approved | Pending fence applies to requests reaching a new domain operation (`recovery.rs:1366–1392`), not early no-ops/refusals or finished replay (`mutation/execute.rs:190–208,254–258`; `tests/mutation_replay/documents.rs:573–614`). Partial save offers operation.resume (`tests/mutation_replay/execute.rs:552–583`); driver retries only request.retry (`mutate.rs:74–83`). Index-pending refresh maps to busy (`mutation/outcome.rs:245–253`). Re-entered content accepts intended/original bytes only (`src/repository.rs:8194–8222`, called at `:2218–2226,2636–2644`). Task 3's retry expectations are unchanged. |
+| 22 | Confirmed | Child lease holder `tests/support/mod.rs:477–504`; C2 binary busy fixture `tests/cli/exits.rs:513`. The baseline CLI target passed. |
+| 23 | Confirmed | Thirteen planned C3 entries (`catalog.rs:662–679`), helper defaults (`:191–224`), mutation prompts (`:57–59`), mutation options (`:227`) and literal C2 catalog entries, including repo remove, unchanged. |
+| 24 | Confirmed | C2-only clap suppression (`parse.rs:113–125`), required flags/context error (`:191–206`), last repeated value (`parse_tests.rs:310–341`, passed in baseline). Positional clap text remains unredacted outside C2, so the approved C3 privacy change is still required. |
+| 25 | Confirmed | Boundary/retry delays (`mutate.rs:40–83`), build per prepare/attempt (`:120–252`), refusal empty scope (`:273–301`). No change to C2 driver required. |
+| 26 | Confirmed | `InputObject` methods stop at one_of, with no list accessor; missing nullable string refused (`input.rs:110–181`). |
+| 27 | Confirmed | Unhandled available dispatch is internal_error (`dispatch.rs:678–692`); wrong-kind show is item-scoped for ID selection (`:314–333`). |
+| 28 | Confirmed | C3 mutation DTOs contain no title/status/body; success prints message, metadata/effects and DTO fields (`human_admin.rs:139–161`); Repair preview at `:62`. Note helpers private (`human.rs:24,30`), field escaping pub(super) (`render.rs:158`). |
+| 29 | Confirmed | Help command DTO has no kind (`startup.rs:140–147`). C3 mutation entries will expose request-id through their options. |
+| 30 | Confirmed | C2 exit test reads its own heading (`tests/cli/exits.rs:601–608`); C2 inventories filter delivery (`tests/cli/human.rs:50`, `privacy.rs:413–455`), C1 inventories filter C1 (`dispatch_tests.rs:58–62`, `tests/cli/boundaries.rs:175`). |
+| 31 | Confirmed | Existing native command includes the CLI bin, cli and cli_remote (`.github/workflows/build.yml:115`). No dispatch performed. |
+| 32 | Confirmed, search exception approved | Three E1 goldens and DESIGN row found by the exact first search. Unfiltered tests are `startup_tests.rs:181–216,269–313,318–388`, `catalog_tests.rs:130–160`, `parse_tests.rs:212–234`; their logic accommodates C3 unchanged. The owner additionally permits catalog_tests.rs:262–267 as a local literal, not an edit. All 57 second-search hits classified below. |
+| 33 | Confirmed | Fixture disables autocrlf and rejects a system identity (`tests/cli/repository.rs:14–30,50–54`). Baseline identity cases passed on this machine. |
+| 34 | Confirmed at inspection | `git show manyhands/ticket/<id>:.manyhands/tickets/<id>/ticket.md` for all eight fact-34 IDs showed open, quoted managed ticket metadata, no deps/parent/slug and the stated wave/cycle keys (gate has wave only). They reside on their own branches; no dogfooding save performed. |
+| 35 | Confirmed at inspection | Read-only status of all eight worktrees was clean. G1 remained at 7b306d1. D3 independently advanced to 98f49b7, a main merge; its ticket metadata remained unchanged. This is not a Task 9 preflight and does not authorize later saves. |
+| 36 | Confirmed at inspection | `git for-each-ref` showed no remote/upstream for the six save targets; C3 and gate have origin refs. `git log origin/main..<branch>` gave C4 2, C5 2, D4 1, D5 3, D6 1, G1 1 unpublished commits. These old target branches remain behind main. |
+| 37 | Confirmed | Public path/slug/relationship fields are in `mutation/dto.rs:556–565,906–945`; human output prints all DTO fields (`human_admin.rs:139–161`). The approved privacy exemption remains necessary. |
+
+### Other mandatory Task 0 resolutions
+
+- **Initials:** a new create that cannot compose initials is refused before
+  acceptance (`mutation/bind/ticket.rs:491–524,582–598`; `execute.rs:249–258`).
+  No record exists to delete; the ID is free. The source-inspected test
+  `tests/mutation_replay/execute.rs:152–198` asserts nothing exists and reuses
+  that ID with changed initials.
+- **Committed save/cache loss:** before rebuild, repository_not_registered;
+  the F2 answer offers index.rebuild. After rebuild, unchanged intended
+  content gives already_applied/noop and no second commit. Ticket fixture:
+  `tests/mutation_replay/cache_loss.rs:23–49,115–132`. Document code follows
+  `mutation/bind/document.rs:489–503` and shared `bind/save.rs:124–139`;
+  its stale-token no-op is asserted at `tests/mutation_replay/documents.rs:249–286`.
+  Document cache-loss is source-derived, not claimed as an executed fixture.
+  Both C3 binary cache-loss tests remain owed. Decision 7's fill-read recovery
+  difference remains unchanged.
+- **Confirmation/cache loss:** `tests/mutation_confirmation.rs:304–331`
+  asserts confirmation_not_found and request.prepare. Shared consent lookup
+  precedes repair preparation (`mutation/execute.rs:249–254`,
+  `confirm.rs:399–410`); no library call can recover lost consent from Git.
+- **Repair:** invalid corrected source is invalid_input. Non-place path or
+  a conforming ticket source with another directory ID is not_repairable
+  (`bridges/repair.rs:146–179`, `mutation/bind/repair.rs:193–198`). A conforming
+  current file is not_repairable; an absent/exact-case-missing file is
+  path_not_found; an invalid/symlink path is invalid_path (`bind/repair.rs:18–45,350–371,446–464`).
+  The audit distinguishes these cases instead of inventing one code for all
+  paths lacking a nonconforming entry.
+
+### Resolved ruling: fact 19 partial-outcome exit precedence
+
+The originally approved design, Baseline Fact 19 (`:201–204`), said the actor stopped at
+`AfterOwnedWriteBeforeLifecyclePersistence` answers `internal_error`, partial,
+**exit 1**. The cited test actually asserts:
+
+- `ResultCode::InternalError` (`tests/mutation_bridges/repair.rs:663`);
+- `Outcome::Partial` (`:664`);
+- written content and a pending checkpoint (`:665–666`).
+
+`Envelope::failure_class()` explicitly maps every `Outcome::Partial` to
+`FailureClass::Incomplete`, regardless of code (`src/results.rs:273–288`).
+The CLI uses that envelope classification (`src/bin/manyhands-cli/render.rs:29`)
+and maps `Incomplete` to **4** (`:85–90`). The actor itself has no process exit;
+4 is the exit the envelope would produce through the CLI renderer.
+
+The owner explicitly approved correcting fact 19 to exit 4, retaining
+`internal_error` and `partial`, and using that classification for C3 repair
+and exit evidence. The narrow design correction is applied. A search of the
+C3 documents found no directly dependent inaccurate exit claim: the Task 6
+reference describes a partial `internal_error` without stating exit 1.
+No behavior or test changed. The earlier catalog-test exception also remains
+approved.
+
+### Resolved ruling: index rebuild root-handling exception
+
+Found on the resumed source audit, 2026-10-25T02:22:01Z. The design's Grammar
+And Per-Verb Rules originally said, for mutation `--repo`, that “The library refuses a
+linked worktree's root with `not_repository_root`” (baseline lines 395–397).
+The rebuild binding has a deliberate exception to ordinary root resolution:
+
+1. `mutation/bind/mod.rs:93–103` resolves a linked root to its owner and
+   returns `NotRepositoryRoot` when the supplied canonical path differs.
+2. `mutation/bind/index.rs:213–233` propagates this for refresh, but rebuild
+   propagates only `RepositoryNotEnabled`. A `NotRepositoryRoot` answer is
+   discarded. The comments explicitly say rebuild asks for the root itself.
+3. `mutation/bind/index.rs:148–151` then calls `rebuild_repository` with the
+   accepted root. `repository.rs:1533–1544` uses
+   `canonical_repository_root`, whose `9570–9620` implementation accepts the
+   selected path when it equals that Git repository's own `workdir()`. It
+   has no linked-worktree-owner rejection. An inside-root path is instead
+   `InvalidPath` (`9611–9617`).
+4. The rebuild re-entry has the same `RepositoryNotEnabled`-only check
+   (`mutation/bind/index.rs:278–285`). The unavailable-index restoration
+   path also uses `canonical_repository_root` (`repository.rs:1647–1656`).
+
+This is source evidence of a missing promised refusal, not a claim that a
+linked-root rebuild was executed against this repository. No dogfooding
+service mutation was run. Adding a CLI root guard would depart from the
+approved one-call adapter; changing the library is outside this task.
+
+The owner approved documenting and passing through `index rebuild`'s existing
+root-selection exception, rather than promising `not_repository_root` for
+that verb. The design grammar now narrowly qualifies the rule and explicitly
+distinguishes source-inspected behavior from fixture-proven success. This
+does not promise success for every linked-root situation. No library or CLI
+workaround was added. The API audit refresh carries the same qualification.
+
+### Resolved ruling: fact 21's pending-request fence scope
+
+Found during the no-op/code audit, 2026-10-25T02:42:41Z. Fact 21 and the
+interrupted-saves required-outcomes table originally said **every other request** on the
+repository answers `recovery_required` while the save is pending. The fence
+is a domain-operation check; the mutation boundary can answer earlier.
+
+Direct source-inspected counterexample:
+
+- `tests/mutation_replay/documents.rs:573–614`,
+  `a_create_s_own_file_in_a_context_the_index_has_not_seen_is_not_an_occupied_path`,
+  stops document creation at `BeforeIndexTransactionCommit`. It asserts the
+  first answer is partial (`:585–596`), the index does not hold the document
+  (`:597–603`), and then submits the same creation under **REQUEST_2**
+  (`:606–609`). The required second answer is `Noop`/`AlreadyApplied`
+  (`:585–587,610`), with no operation, no request record and an unchanged
+  branch tip (`:611–614`). The test source was inspected, not newly run.
+- The mechanism is `bind/document.rs:421–443`: intended content committed
+  in the deterministic context is answered by the stale-token/already-applied
+  rule before any domain call. `mutation/execute.rs:254–258` returns this
+  binding answer before accepting a request. Thus it does not ask whether
+  another operation is pending. This applies to an already-applied create
+  during a pending save as well: the binding does not inspect the pending
+  operation or distinguish its action.
+- Finished-request replay likewise happens before binding/domain execution
+  (`mutation/execute.rs:190–208`; `mutation/replay.rs:19–53`). A reachable
+  finished result is returned without entering a new domain operation.
+- The recovery fence itself remains as inspected in
+  `src/repository/recovery.rs:1366–1392`: a different operation reaching that
+  check is refused. The existing test of another create that needs new work
+  asserts `recovery_required` (`tests/mutation_replay/resume.rs:1337–1359`).
+
+The owner approved limiting the fence to requests reaching a new domain
+operation, preserving early no-op/refusal and finished-request replay.
+Task 3's blocked-request fixtures request actual new work. Its interrupted-save
+retry expectations are unchanged. Narrow updates are applied to Fact 21,
+the directly dependent Cycle/design wording and table row, and Task 3 Step 0
+in the plan. No test, behavior or library change was made. This resolves the
+last stop; no owner question remains open in Task 0.
+
+### Additional evidence gathered on the resumed audit
+
+- Facts 12, 20 and 22: `FailOnce` opens the in-process failure-point service
+  (`tests/support/mod.rs:277–292`); actors call execute directly
+  (`tests/support/mutation.rs:487–534`). The request privacy scan uses its
+  eight named stores (`:73–82,107–157`), not `discovered_items`, whose title
+  column exists (`src/repository/discovery.rs:1623–1629`). The lease holder
+  is a child process (`tests/support/mod.rs:477–504`) used by the binary exit
+  fixture (`tests/cli/exits.rs:513`).
+- Facts 27–29 and 37: fallback dispatch is internal error and wrong-kind
+  show has the item scope (`dispatch.rs:314–333,678–692`). Human mutation
+  output prints the message, metadata/effects and DTO fields
+  (`human_admin.rs:139–161`); Repair preview is handled at `:62`. Document
+  path and ticket slug/relationship IDs are DTO fields
+  (`mutation/dto.rs:906–945`), consistent with the privacy exemption.
+  Human note helpers remain private (`human.rs:24,30`) and `render::field`
+  is `pub(super)` (`render.rs:158`).
+- Facts 30–33: C2's exit equality test reads only its own audit heading
+  (`tests/cli/exits.rs:601–608`). The native workflow includes the existing
+  CLI bin, cli and cli_remote targets (`.github/workflows/build.yml:115`).
+  The fixture disables autocrlf and rejects a system identity
+  (`tests/cli/repository.rs:14–30,50–54`). The source-inspected unfiltered
+  tests match fact 32 (`startup_tests.rs:181–216,269–313,318–388`,
+  `catalog_tests.rs:130–160`, `parse_tests.rs:212–234`). C1 minimum-option
+  inventory is filtered (`parse_tests.rs:95–106`); the DESIGN comparison is
+  `catalog_tests.rs:106–127`. The admin-test hits are assertions about
+  explicitly selected C2 verbs (`admin_tests.rs:7–9,52–55,104–107,140–178`),
+  not a C3-sensitive inventory.
+
+These notes supplement the completed 37-row audit above. Baseline Rust
+checks were not repeated: subsequent edits are documentation only.
+
+## Audit refresh
+
+Completed in `docs/research/wave-03-api-audit.md`, under
+`Wave 03 CLI Cycle C3 refresh (2026-10-24)`. Thirteen inventory rows updated
+in place; exact F1/F2 signatures, all input types, confirmation requirements
+and result sets are recorded with binding/domain/boundary/read citations.
+The single C3 union block contains **40 unique library codes**, **42** after
+the design's CLI_ONLY union. No C2 audit union or pre-existing test changed.
+
+The eleven-mutation no-op inventory has **9 capable**, **2 incapable**
+(index refresh/rebuild always answer ok for successful explicit work).
+It distinguishes a fresh request from replay, contextual no-ops from context
+provisioning, and no canonical change from cache/same-byte filesystem writes.
+The root-handling and pending-fence rulings, partial exit precedence,
+initials recovery, cache-loss limits and repair refusal distinctions are
+recorded there. Source-derived cases are not labeled fixture-proven.
+
+## Decisions 1–7, rulings R-1–R-18 and E1
+
+The approved Cycle's decisions and design rulings remain the authority,
+with only the explicit Task 0 owner qualifications recorded here.
+
+| Decision | Retained requirement |
+| --- | --- |
+| 1 | Three library defects are known limits, not prerequisites; no fixes in C3. |
+| 2 | CLI fills omitted save fields, accepting the documented replay limit. |
+| 3 | Dogfooding is final-task work with a separate owner go-ahead; none performed. |
+| 4 | One Cycle in two Parts, with all-feature gates and independent review. |
+| 5 | Fill-read failures retain their code, scope and recovery, with the request ID. |
+| 6 | Exit 4 has reason/library-actor evidence; exit 5 must be reached through the binary. |
+| 7 | Accept and document missing-registration recovery differences; optional library ticket not filed. |
+
+| Ruling | Retained requirement |
+| --- | --- |
+| R-1 | Literal C3 catalog entries become available only with their dispatch. |
+| R-2 | Expand usage privacy beyond C1; positional sentinel test. |
+| R-3 | Two list readers, without deduplication. |
+| R-4 | CLI-owned save fill with the approved refusal and replay rules. |
+| R-5 | Approved optional/nullable fields and create defaults. |
+| R-6 | Complete ticket-check proposal; rejection data still exits 0. |
+| R-7 | Path observation reports what exists in the named context. |
+| R-8 | Unconfirmed explicit index mutations; request IDs required in JSON. |
+| R-9 | Identity recovery passes through without prompting, with a fresh observation. |
+| R-10 | Separate C3 exit table, exact set equality with this audit's union. |
+| R-11 | In-process library actors for interruptions; CLI retries exercise fill/consent. |
+| R-12 | Deleted/whole-file-corrupt index evidence only; WAL files removed first. |
+| R-13 | Example inputs are schema-validated and exercised through the binary. |
+| R-14 | Fresh-request no-op inventory on contextual items; reasons for incapable verbs. |
+| R-15 | New tests stay modules of the existing cli target. |
+| R-16 | Dogfooding preflight, go-ahead, clean/value checks, stop/resume and own review. |
+| R-17 | Body/source privacy; request-store scan; approved public data echoes exempt. |
+| R-18 | Isolated children and no-system-identity test machine. |
+
+E1 remains exactly the three help goldens, changed only as verbs are
+delivered in later tasks. Task 0 changes none. The additional search literal
+exception below is not another named edit.
+
+### Additional owner ruling during Task 0
+
+The first prescribed grep returned exactly five files: production catalog,
+catalog tests, and the three E1 help goldens. The second grep additionally
+found a test-local `CommandSpec` at
+`src/bin/manyhands-cli/catalog_tests.rs:262–267`, outside the named test-local
+exceptions. Task 0 stopped without edits or pushes.
+
+The owner answered **YES** to the precise ruling: add those lines as a
+permitted test-local `CommandSpec` search hit; leave the test unchanged and
+continue Task 0. This is an additional search classification, not a new
+pre-existing-test edit. E1 remains the only authorized pre-existing test change.
+
+### E1 search evidence
+
+Both exact prescribed grep commands ran against the unchanged baseline:
+
+```sh
+grep -rln -E 'path observe|ticket check|index (refresh|rebuild)|folder create|document (create|save|move|repair)|ticket (create|save|repair|slug-assign)|"C3"' src/bin/manyhands-cli tests/cli tests/cli_remote tests/cli.rs tests/support/cli.rs tests/fixtures/cli_v1
+grep -rn -E '\bAvailability::(Available|Planned)|available.*len\(\)|"available"\] == true' src/bin/manyhands-cli tests/cli
+```
+
+The first returned exactly catalog.rs, catalog_tests.rs and
+`tests/fixtures/cli_v1/{help_root.json,help_root_text.txt,help_resource_ticket.json}`.
+The second has **57 matching lines**, classified as follows (counts confirmed
+with `rg --count`, not a new test run):
+
+| Category | Hits and explanation |
+| --- | --- |
+| Production | catalog.rs 21, parse.rs 4, startup.rs 6: declaration/dispatch/help logic. |
+| C1/C2-scoped tests | parse_tests.rs:102 (C1 filter); dispatch_tests.rs:59 (C1 filter); catalog_tests.rs:257 (DESIGN[..2], C1 check); admin_tests.rs:9,55,107,178 (explicit C2 verb selections); tests/cli/boundaries.rs:175 (C1); human.rs:50 (C2); privacy.rs:413,455 (C2 filter and its 18-count). |
+| Fact 32 unfiltered tests | parse_tests.rs:216; startup_tests.rs:184,272,332,371; catalog_tests.rs:137,155. Each naturally includes or excludes a newly available C3 verb as intended. |
+| DESIGN comparison | catalog_tests.rs:120–121 compares delivering Cycle for either availability. |
+| Permitted local literals | parse_tests.rs:606,670; startup_tests.rs:477,635; mutate_tests.rs:13. |
+| Owner-approved additional local literal | catalog_tests.rs:262 constructs a local CommandSpec at :263–267; unchanged. |
+
+No unclassified hit remains. No pre-existing test or golden requires a Task 0
+edit. Independent review must still check E1 diffs as later verbs ship.
+
+## Planning review record
+
+The Cycle Review Record retains three independent planning-review rounds:
+38 contract-lens and 22 source-lens findings in round 1; 22 scoped/adversarial
+findings in round 2; 16 in round 3. Decisions 1–7 and R-1–R-18 were approved
+with the documents at `e7b2b71`. Round-3 edits had no further independent
+review. The optional decision-7 library ticket was not filed. Task 0's
+implementation-review status is recorded below.
+
+## Task 0 review and fifth owner ruling
+
+Recorded 2026-10-25T03:27:38Z, as conveyed by the controller/owner:
+
+- **Spec review:** approved `d9e961df04ee3b338247b0032d5194ecbc805923`.
+- **Quality review:** must-fix finding on the audit's document/ticket save
+  no-op wording and design Fact 9. Equality with the worktree file was
+  incorrectly sufficient for “no new checkpoint.”
+- **Verified mechanism:** ticket save conditionally rewrites at
+  `src/repository.rs:2646–2678`, then calls the checkpoint at `:2680–2691`.
+  The checkpoint compares the resulting tree against HEAD (`:3561–3590`).
+  `tests/mutation_replay/execute.rs:1041–1078` explicitly covers committing
+  matching uncommitted content without rewriting it. This test was
+  source-inspected, not rerun for the documentation correction.
+- **Fifth owner ruling:** qualify both save no-ops to require intended
+  content already committed (HEAD-equal). Matching uncommitted content may
+  skip rewriting yet still checkpoint. No new behavior or test is requested.
+- **Resolution:** the audit's two save no-op rows and shared precondition,
+  design Fact 9/save-patch row/R-14, directly dependent Cycle wording and
+  the plan's existing no-op fixture description now state that condition.
+  Fact 9 is marked corrected in the fact inventory. The **9 capable / 2
+  incapable** inventory and **40 library / 42 CLI-inclusive codes** are unchanged.
+- **Evidence retained:** baseline check/fmt/clippy and **464 tests**; no broad
+  rerun for documentation-only edits. Self-review `git diff --check` passed;
+  comparison with `d9e961d` confirms src/tests/Cargo unchanged. A separate fix commit follows
+  `d9e961d`, with its own diff/whitespace review and ticket-only push.
+  Canonical review comment: `01M5RHJZQ672X4JG8VPYVPM3P3` (ID from the built CLI).
+- **Final Task 0 approval:** the controller's Task 1 handoff explicitly
+  reports quality re-review approval of
+  `7368902a677a8228813f21da8f74d3cafff68ec3`, after the fifth owner ruling's
+  correction. Recorded during Task 1 on 2026-10-25. Together with spec
+  approval of `d9e961df04ee3b338247b0032d5194ecbc805923`, this clears the
+  Task 0 review gate. All five owner rulings above remain binding.
+
+## Task 0 self-review and checkpoint
+
+Initial checkpoint `d9e961d`, completed 2026-10-25T02:54:18Z. Scope reviewed:
+the original audit, ledger and
+canonical comment plus only the owner-authorized Cycle/design/plan corrections.
+All four stops were returned to the owner and resumed on explicit approval.
+No unresolved blocker remains. The source/test/Cargo tree is unchanged from
+the verified baseline. No subagents or later task work were started.
+
+Documentation checks: 13 C3 inventory rows counted, 37 individually numbered
+fact records, 57 classified search hits, 11 no-op rows. Expanding the audit's
+13 row expressions independently gives exactly its 40-code block with no
+missing/extra code; adding CLI_ONLY gives 42. The tracked diff whitespace
+check passed. No repeated Rust gates were needed for these documentation edits.
+Read-only behind/ahead counts additionally confirmed all six dogfooding save
+targets are 865 commits behind origin/main and retain the unpublished counts
+in fact 36. These observations do not replace Task 9's fresh preflight.
+
+The initial Task 0 checkpoint is `d9e961df04ee3b338247b0032d5194ecbc805923`.
+Its pre-checkpoint fetch and merge were repeated: origin/main stayed
+at `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`, the merge was already current,
+and merge-tree was clean. The three defect searches still had no matches.
+`git diff --exit-code ad4d3f0 -- src tests Cargo.toml Cargo.lock` confirmed
+the source/test/Cargo baseline is unchanged.
+Publication is authorized only to `manyhands/ticket/01M4CC0VMV81DFRGJ4Z76489XM`.
+Current review status is in the review record above; the controller has
+reported final Task 0 approval. This is not a whole-Cycle
+review-ready or closure claim.
+
+## Task log
+
+| Task | State | Commit range | Verification | Review |
+| --- | --- | --- | --- | --- |
+| 0 | Complete | `ad4d3f0..7368902` | Baseline gates and 464 tests; documentation-only correction | Spec approved `d9e961d`; quality re-review approved `7368902`, per controller handoff |
+| 1 | Complete | `7368902a677a8228813f21da8f74d3cafff68ec3..8ae22ab9b34e52cf3404f74841cc5e1348ad393a` | 177 CLI unit + 10 authoring-read + 9 help = **196 passing**; check/fmt/clippy passed | Spec and quality both APPROVED, explicitly conveyed in the owner's Task 2 brief |
+| 2 | Complete | `8ae22ab9b34e52cf3404f74841cc5e1348ad393a..66efd0629d73fa8d762921fd987d143604178175` | 13 index + 7 folders + 7 input-schema + 9 help = **36 passing**; check/fmt/clippy passed | Spec and quality both APPROVED, explicitly conveyed in the Task 3 Step 0 brief |
+| 3 Step 0 | Complete; binary conversion passed | Base `66efd0629d73fa8d762921fd987d143604178175`; included in Task 3 completion | Exact checkpoint filter initially **1 passed / 0 failed / 201 filtered**, 5.72s; all five rows, six independent fixtures; passes again inside final documents filter through real CLI children | Owner approved correcting only extra failure-class assertions to partial/Incomplete precedence; table expectations unchanged |
+| 3 | Complete | `66efd0629d73fa8d762921fd987d143604178175..90c8e3ae15f9085c74b283c95bc557d60a7abc00` | **27 document + 7 input-schema + 4 fill + 9 help = 47 passing**; all-feature check, all-target/all-feature clippy, fmt check passed | Spec and quality both **APPROVED**, explicitly conveyed in the controller's Task 4 brief; prior owner rulings retained |
+| 4 | Implemented; Part A independent review pending | Base `90c8e3ae15f9085c74b283c95bc557d60a7abc00`; head is the `test(cli): C3 Part A exit table and inventories` commit carrying this entry | **10 new focused tests passed**; all six checkpoint gates passed; **182 CLI unit + 238 CLI integration + 71 read-contract + 44 mutation-contract = 535 passing** | Self-reviewed only; controller independently reviews actual Part A range `7368902a677a8228813f21da8f74d3cafff68ec3..Task4HEAD` after return, then records the returned SHA and review outcome |
+| 4 P2 follow-up | Implemented; re-review pending | Base/initial Task 4 head `329a1436f3671586382ca4c1f41b2c9a8ab8a699`; follow-up head is the `test(cli): prove C3 index-unavailable exit through refresh` commit carrying this entry | Expected red C1-command attribution failure; **11 authoring-exits passed**; all six checkpoint gates passed, **182 + 239 + 71 + 44 = 536** | Part A SPEC P2 corrected with a new Task 4 binary test; independent acceptance remains with controller |
+| 4 final / Part A | Complete, APPROVED | `7368902a677a8228813f21da8f74d3cafff68ec3..452f031fd06d3a39e2c5de6cfe711b74256ab8a1` | Six gates and **536** tests retained | Spec and quality **APPROVED**, explicitly conveyed in the owner's fresh Task 5 brief; supersedes historical pending statuses above |
+| 5 | Implemented; independent review pending | Base `452f031fd06d3a39e2c5de6cfe711b74256ab8a1`; head is the `feat(cli): ticket create, save and slug-assign` commit carrying this entry | **27 input + 8 fill + 31 ticket-authoring + 7 schemas + 11 authoring-exits + 9 help = 93 passing**; check/fmt/clippy passed | Self-reviewed; controller spec/quality reviews next |
+| 5 final | Complete, APPROVED | `452f031fd06d3a39e2c5de6cfe711b74256ab8a1..6d0ec5191bf4282e099b0d28dac4b37bb26112f3` | The recorded 93 passing tests and check/fmt/clippy retained | Spec and quality **APPROVED**, explicitly conveyed in the owner's fresh Task 6 brief; supersedes the historical pending row |
+| 6 | Implemented; independent review pending | Base `6d0ec5191bf4282e099b0d28dac4b37bb26112f3`; head is the `feat(cli): document and ticket repair` commit carrying this entry | **16 repair + 11 authoring-exits + 7 input-schema + 9 help = 43 passing**; check/fmt/clippy passed | Self-reviewed; controller spec/quality reviews next |
+| 6 final | Complete, APPROVED | `6d0ec5191bf4282e099b0d28dac4b37bb26112f3..aab0e795d5245d0e0932d8ceff2501d06846d963` | Recorded 43 passing tests and check/fmt/clippy retained | Spec and quality **APPROVED**, explicitly conveyed in the owner's fresh Task 7 brief; supersedes historical pending row |
+| 7 | Implemented; Part B independent review pending | Base `aab0e795d5245d0e0932d8ceff2501d06846d963`; head is the `test(cli): C3 exit table, input, human, privacy and example evidence` commit carrying this entry | **15 authoring-exits passed**; six checkpoint gates passed; **188 CLI unit + 290 CLI integration + 71 read-contract + 44 mutation-contract = 593 passing** | Self-reviewed; controller reviews actual Part B range `452f031fd06d3a39e2c5de6cfe711b74256ab8a1..Task7HEAD` after return; no approval claimed |
+| 7 final / Part B | Complete, APPROVED | `452f031fd06d3a39e2c5de6cfe711b74256ab8a1..9a2a5170c4704ef03420ef2276911c6b1bfa3959` | Recorded six gates and **593** tests retained, not rerun | Spec and quality **APPROVED**, explicitly conveyed in the owner's fresh Task 8 brief; supersedes the historical pending row |
+| 8 | Implemented; independent review pending | Base `9a2a5170c4704ef03420ef2276911c6b1bfa3959`; head is the `docs: amend the RFCs, Wave and audit for C3` commit carrying this entry | Documentation/source checks: 38 changed links/anchors, 11 scoped amendment markers, 9 schema/example inventories and exact example outcomes, 13 available audit/catalog rows, unchanged **40/42** union, whitespace/scope/merge-tree | Self-reviewed; controller review after return. No Rust gate rerun for docs-only changes |
+| 8 final | Complete, APPROVED | `9a2a5170c4704ef03420ef2276911c6b1bfa3959..f9618f76ce9608c9ccc42018701647d7b98bb642` | Recorded documentation/source validation retained | Spec and quality **APPROVED**, explicitly conveyed in the fresh Task 9 brief; supersedes historical pending row |
+| 9 verification | BLOCKED; gate evidence complete | Tested HEAD `f9618f76ce9608c9ccc42018701647d7b98bb642` | Check/fmt/clippy/CLI smoke/no-GPUI passed; sole full-suite invocation exit **101**, **4528 passed / 1 failed / 1 ignored**, 43 targets, 6239s | Outside-C3 library assertion requires owner/controller disposition; whole-branch reviews pending; no review-ready claim |
+| 9 narrow test correction | Implemented; independent review and full-gate disposition pending | Base `f9618f76ce9608c9ccc42018701647d7b98bb642`; fix/evidence commit carrying the follow-up below | Exact test **1 passed**, then checkpoint module **46 passed**; fmt/check/clippy passed. Full suite **not rerun** | Explicit owner exception for this test baseline only; original **4528/1/1**, exit **101** remains the sole full-suite result |
+| 9 whole-branch reviews | SPEC and QUALITY APPROVED; remaining gates outstanding | `ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a..806057d3223b9ac2e71fa3a28c3eba83de5c63ef` | Prior full-suite **4528/1/1**, exit **101**, and scoped **46 distinct passing** retained; no new test run | Both independent approvals conveyed by controller, including the authorized baseline correction; no actionable findings/new gaps. Owner full-suite disposition and dogfooding/switch remain owed; not review-ready |
+| 9 verification exception / dogfood preflight | Verification accepted by explicit owner exception; build/read-only preflight complete | Base `a79a3bd6d3ac0453726d00908c286f69f2c30a8d` | Historical full suite **4528/1/1**, exit **101**, plus scoped **46 distinct passing** and check/fmt/clippy accepted; no second full run. CLI build and repo inspect passed; six targets clean | SPEC/QUALITY approvals retained. Separate dogfood go-ahead pending; saves/pushes and switch OWED; Task 9 not complete/review-ready |
+| 9 dogfood steps 4–7 | Owner authorized; STOPPED during C4 value check | Base `5cba600b562062d6809d9ce916e26b65ea1e204e` | Refresh and C4 save ok; C4 one checkpoint, clean, body/other compared values preserved. Checker incorrectly compared dependency DTO objects with strings | Dependency IDs in returned data match proposal, but checker failed; no checker fix/retry, C5 or later save, target push or switch. Controller/owner disposition required |
+| 9 dogfood steps 4–7 resumed | Complete under fresh owner go-ahead | C3 evidence commit carrying the final summary below; six library checkpoint SHAs recorded | C4 settled/no resend, corrected check passed; five remaining saves ok; all six exact deps/value/body checks passed; six new remote branches, verified local=remote and clean | Prior stop preserved. Verification exception and whole-branch approvals retained; switch and its review still owed, Task 9 not complete/review-ready |
+| 9 Step 4 switch | Implemented; separate switch review pending | Base `8da3890f2c4f2ac6199324163346f72eb13818f8`; `docs: switch ticket dogfooding to the CLI` commit carrying this entry | Documentation-only: 8 built CLI help contracts, 2 JSON input examples, nullable input variants, frontmatter/scope/whitespace checks passed; no mutations or Rust gates | Controller owns independent switch SPEC/QUALITY review after return; Task 9 not complete/review-ready, ticket open |
+| 9 final authorized scope / Step 5 | Complete, REVIEW-READY | Switch `297bd7810190dc099d174648d582f81134b16fab`; review-ready evidence commit carrying the final section below | Owner verification exception accepted; 43-target full-suite history **4528/1/1 exit 101**, exact **1** and module **46 distinct** passes plus check/fmt/clippy; six saves/checks/pushes complete; no new build/test run | All Task 0–8 reviews complete; whole-branch and separate switch SPEC/QUALITY APPROVED. No unresolved implementation findings. Step 6/PR/merge/closure/cleanup/native CI require separate authorization; ticket open |
+
+## Part A approval and Task 5 preflight
+
+Recorded **2026-10-25T04:49:56Z**. The owner's fresh Task 5 brief explicitly
+conveys **Part A spec and quality APPROVED** at
+`452f031fd06d3a39e2c5de6cfe711b74256ab8a1`, including the P2 follow-up.
+The six checkpoint gates and **536 passing tests** are retained as recorded
+evidence, not rerun for this approval entry. This supersedes the pending
+review statuses in the historical Task 4 rows. All earlier owner approvals,
+decisions 1–7, R-1–R-18 and narrow rulings remain binding.
+
+Task 5 starts from that exact clean HEAD in the specified ticket worktree and
+branch, with no agents. Fetched origin/main, read its AGENTS.md, and merged
+origin/main into the ticket: already up to date. Main remains
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; ancestry passes and merge-tree
+succeeds with tree `8ef96859a1ac9d284f181c8dc514cbb3950c26f7`.
+Canonical Part A approval comment: `01M5RP9NH3G8KA9BA4JF3QR05R`, allocated
+by the built CLI; timestamp from the UTC clock. Task 5 only is authorized
+in this session, with focused tests, task commit and ticket-only push.
+
+## Task 1: path observe and ticket check
+
+Checkpoint recorded **2026-10-25T03:36:25Z**. Fresh implementer worked only
+in the ticket worktree/branch; no subagents. The supplied Task 1 specification
+was the execution brief. Task 2 was not started.
+
+### Preflight and authority
+
+- Initial clean HEAD was `7368902a677a8228813f21da8f74d3cafff68ec3`.
+  Fetched origin, read `git show origin/main:AGENTS.md`, and merged
+  `origin/main`: already up to date; HEAD unchanged.
+- Read the handoff, ticket/comments, Cycle/design and this ledger's five
+  approved corrections. Final Task 0 quality approval is recorded above.
+- Before this checkpoint, fetched again. `origin/main` remains
+  `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; its ancestry check passed.
+  `git merge-tree --write-tree HEAD origin/main` succeeded with tree
+  `2d628583a17bdf4d0e006477e7359e6be8b5d693` (committed task base).
+
+### Implementation and red/green evidence
+
+1. Added `a_c3_verbs_usage_error_never_echoes_a_value`, then made
+   `ticket check` available before the red run, as required to bypass
+   planned-command argument swallowing. The exact prescribed no-feature
+   command failed **0 passed / 1 failed / 172 filtered**, printing
+   `unexpected argument 'SECRET-VALUE' found`.
+2. Regenerated E1 with only `ticket check` made available. The help filter
+   passed **9** tests. Read its diff: only that verb's availability,
+   repository rule and options changed in the three authorized fixtures.
+3. Made `path observe` available; changed the usage mask from C2-only to
+   non-C1, and added the ticket-check proposal requirement. The same privacy
+   command passed **1 / 172 filtered**. Regenerated E1 again, adding only
+   path observe's metadata. Help again passed **9**. Both summaries and
+   `delivered_by: C3` are preserved; no other old fixture changed.
+4. Added ten real-binary cases before dispatch/formatters. The authoring-read
+   filter failed **0 passed / 10 failed / 177 filtered**, all on the expected
+   missing dispatch (`internal_error`, exit 1). Added the two thin F1 adapters
+   and escaped human formatters, with four formatter unit cases.
+5. The new fixtures were generated only with `MANYHANDS_UPDATE_GOLDEN=1`.
+   All ten authoring-read cases passed during generation and again without
+   the update variable. Reviewed all four new JSON and two new text fixtures;
+   only roots, refresh times and HEAD OIDs are substituted. Observation
+   tokens and relationship/rejection IDs remain exact.
+
+The read harness uses `CliEnv` and its detached terminal/config/data isolation,
+with test-home `core.autocrlf=false` and no home identity. Every invocation,
+including errors and human mode, snapshots root and linked-worktree bytes/state
+and runs isolated `git for-each-ref` before/after. All comparisons passed.
+The cases cover absent/file tokens, another item's file with a relative context,
+inactive context and escaping paths, control escaping, dependency and parent
+cycles, unresolved IDs, complete-proposal semantics, malformed/empty IDs, usage
+refusal, scopes, schemas, human goldens and empty JSON stderr. Rejections remain
+successful reads with exit 0. Incomplete/stale/never-refreshed notes reuse C1's
+helpers and are covered by the new formatter tests.
+
+### Final verification
+
+All commands ran through Devenv in this worktree; no broad/background suite.
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --bin manyhands-cli` | **177 passed**, 0 failed/ignored/filtered (172 existing + 5 new). |
+| `devenv shell -- cargo test --all-features --locked --test cli authoring_reads` | **10 passed**, 0 failed/ignored, 177 filtered. |
+| `devenv shell -- cargo test --all-features --locked --test cli help` | **9 passed**, 0 failed/ignored, 178 filtered. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed. |
+| `devenv shell -- cargo check --all-features --locked` | Passed. |
+| `devenv shell -- cargo fmt --check` | Passed, after `devenv shell -- cargo fmt`. |
+
+### Files and self-review
+
+- Created `src/bin/manyhands-cli/human_authoring.rs`, its adjacent
+  `human_authoring_tests.rs`, and `tests/cli/authoring_reads.rs`.
+- Changed only Task 1's named existing Rust files: binary module declaration,
+  catalog, parser, dispatch, two human-helper visibilities, appended parser
+  test, integration module registration and golden-name registration.
+- Created `tests/fixtures/cli_v1/{path_observe_ok,path_observe_invalid_path,
+  ticket_check_ok,ticket_check_invalid_id}.json` and
+  `{path_observe_text,ticket_check_text}.txt`.
+- E1 only: `help_root.json`, `help_root_text.txt`, `help_resource_ticket.json`.
+- Updated this ledger and canonical comment `01M5RJ31V8TA9KFF44GJZD77H6`.
+  Its ID came from `./target/debug/manyhands-cli id new`, timestamp from
+  `date -u`; no dogfooding save was performed.
+
+Self-review checked the thin adapters against the specified F1 calls, scope
+construction and privacy, the test coverage above, all golden content, and the
+complete task diff. `git diff --check` passed. Existing tests are unchanged
+apart from the authorized E1 fixtures; source-test files only add new tests or
+registrations. No library, Cargo, output-schema or new-test-target change.
+No unresolved blocker. Ticket-only commit/push is authorized. Independent
+review of this task is the next gate; no Cycle closure or approval is claimed.
+
+## Task 2: index refresh, index rebuild and folder create
+
+Checkpoint recorded **2026-10-25T03:48:25Z**. The owner's fresh Task 2 brief
+explicitly reports **Task 1 spec and quality both APPROVED** at
+`8ae22ab9b34e52cf3404f74841cc5e1348ad393a`; the task table now records that
+approval. Fresh implementer, sequential work confined to this ticket worktree
+and branch, no subagents. Task 3 has not started.
+
+### Preflight and authority
+
+- Clean initial HEAD exactly matched the supplied base `8ae22ab9b34e52cf3404f74841cc5e1348ad393a`.
+  Fetched origin, read `git show origin/main:AGENTS.md`, and merged
+  `origin/main`: already up to date, HEAD unchanged. Worktree registration and
+  main ancestry were checked.
+- Read the handoff, ticket and all comments, Cycle, design, Task 2 plan and
+  execution ledger, retaining all five approved Task 0 corrections.
+- Checkpoint fetch and merge again found main unchanged at
+  `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`.
+  `git merge-tree --write-tree HEAD origin/main` succeeded, tree
+  `8c97e736aeb0810c6d56217b626be7138b6784d5` (committed task base).
+
+### Implementation and source facts
+
+- Added the three public bin-private adapters in `authoring.rs`, its module
+  declaration and adjacent `cfg(test)` module, three dispatch arms, and literal
+  `Available("C3")` catalog entries preserving the planned summaries.
+- Both index adapters parse flags first, then `admin::mutation_root`, and
+  build the corresponding root-only mutation through `mutate::run` with
+  `identity_prompt: false`, `retry: true`, root cloning and the sleep hook.
+  They refuse input and ID selectors. Folder creation checks the closed input
+  object's required string `path` before root selection and builds
+  `FolderCreateInput` through the same driver. Admin changes are only the two
+  prescribed helper visibilities.
+- Added the closed draft-2020-12 `folder_create` input schema and example.
+  The actual example bytes run through the binary in the success fixture.
+  No new input-holding type or diagnostic formatting was introduced.
+- Task 0's index source facts remain authoritative: successful index mutations
+  have null data and discovery current (`mutation/bind/index.rs:80–88`), and
+  rebuild restores an unavailable index before binding (`mutation/execute.rs:83–141`).
+  The adapter passes through the approved rebuild root-selection exception.
+  Folder source inspected at `mutation/bind/folder.rs:100–177` maps invalid
+  paths, occupied paths and already-present folders as the binary tests assert.
+- Request replay checks use the published stored-result DTO, not an envelope:
+  `tests/fixtures/cli_v1/request_show.json` demonstrates the distinction. The
+  replay envelope is still compared in full to the original invocation.
+
+### Red/green and golden evidence
+
+1. Added eight index binary tests before implementation. The prescribed index
+   filter ran **5 existing passed / 8 new failed / 187 filtered**, each new
+   failure on `command_unavailable`. Both cache-loss tests first verified the
+   prescribed read refusal/recovery before reaching unavailable rebuild.
+2. Added five folder binary tests: **1 existing passed / 5 new failed / 194
+   filtered**, all on `command_unavailable`. Added the closed-input/privacy
+   case before implementation too; rerun **1 passed / 6 failed / 194 filtered**,
+   again only expected unavailable-command failures.
+3. Implemented the adapters. E1 was regenerated using only
+   `MANYHANDS_UPDATE_GOLDEN=1`, one newly available verb at a time: refresh,
+   rebuild, folder create. The help filter passed **9** each time. Read every
+   diff before enabling the next verb: only availability, repository rules and
+   options changed; summaries and `delivered_by: C3` stayed exact.
+   `help_resource_ticket.json` regenerated byte-identically.
+4. First index generation run had **11 passed / 2 failed**: the new replay and
+   human tests incorrectly treated `request show.data.result` as a full
+   envelope. Systematic debugging compared its actual DTO to the existing
+   request-show golden. Corrected only the new tests to compare the stored
+   result fields and use the replay envelope's operation ID. No production or
+   old-test fix was needed; no library/contract gap was found.
+5. Generated all nine new goldens (six JSON, three human text) using the update
+   variable. Read all nine files; only repository/request/operation IDs are
+   substituted. Generation passed **13 index / 7 folders**. Repeated both
+   filters without the variable: both passed.
+6. Self-review strengthened replay evidence: an unindexed new document stays
+   undiscovered after replay of either index verb, and an externally removed
+   empty folder is not recreated by finished-request replay. This proves no
+   second effect independently of clock granularity. Final scoped reruns
+   passed, with the original envelopes and request records unchanged.
+
+Every fixture uses `contract_repository`, an isolated `CliEnv` data directory
+and home with `core.autocrlf=false`, and detached-terminal CLI children.
+Services are dropped before children run or SQLite sidecars/database are
+removed. Cache tests remove WAL/SHM first, then delete the database or replace
+it with exactly 4096 bytes of `0xA5`. They pin respectively
+`repository_not_registered` with empty recovery and `index_unavailable` with
+`index.rebuild`, then recover both fixture documents and both tickets.
+Canonical/worktree snapshots and isolated `git for-each-ref` output stay equal.
+The bare-remote test supplies a branch absent locally and proves remote refs
+do not change. Folder tests prove actual emptiness, listing, no commit, the
+existing `docs/notes` fresh-request no-op, occupied/outside-docs refusals,
+replay, human output and malformed/duplicate/unknown/mistyped input privacy.
+
+### Final verification
+
+Only Task 2's integration filters and E1 help filter ran, all through Devenv
+with one positional filter per command. No full suite or native CI.
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --test cli index` | **13 passed**, 0 failed/ignored, 188 filtered; 8 new + 5 existing. |
+| `devenv shell -- cargo test --all-features --locked --test cli folders` | **7 passed**, 0 failed/ignored, 194 filtered; 6 new + 1 existing. |
+| `devenv shell -- cargo test --all-features --locked --test cli input_schemas` | **7 passed**, 0 failed/ignored, 194 filtered; includes the new schema/example automatically. |
+| `devenv shell -- cargo test --all-features --locked --test cli help` | **9 passed**, 0 failed/ignored, 192 filtered, final run without the update variable. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, including the final new replay assertions and the bin's cfg(test) module. |
+| `devenv shell -- cargo check --all-features --locked` | Passed. |
+| `devenv shell -- cargo fmt --check` | Passed after formatting. |
+
+Total: **36 passing integration tests**, including **14 new**. The one new
+adjacent unit case pins confirmation-flag grammar; it was compiled/linted by
+all-target clippy, but not executed because Task 2 authorizes only the named
+integration filters. Its execution remains with the planned CLI-unit checkpoint;
+it is not included in the 36 passing count.
+
+### Files and self-review
+
+- Created `src/bin/manyhands-cli/{authoring,authoring_tests}.rs`,
+  `tests/cli/{index,folders}.rs`, the folder schema/example and nine registered
+  output goldens.
+- Changed the specified binary module/admin/catalog/dispatch files and test
+  module/golden registrations, plus the two root-help E1 fixtures. The third
+  E1 fixture has no resulting diff.
+- Updated this ledger and canonical comment `01M5RJS0SF0XY1BYSADTTG5HEB`, whose
+  ID came from `./target/debug/manyhands-cli id new` and timestamp from `date -u`.
+- Self-review checked the adapter ordering and plans, closed input and error
+  privacy, actual filesystem/Git invariance, complete fixture item recovery,
+  finished replay effects, exact golden registrations and all E1 diffs.
+  No library, Cargo, output schema, new test target or unrelated old-test edit.
+  No unresolved blocker. Independent spec/quality review is the next gate.
+
+Task-only commit and ticket-only push are authorized. No PR, main integration,
+closure, cleanup, native CI, dogfooding or Task 3 work was performed.
+
+## Task 3 Step 0: interrupted-save checkpoint stopped
+
+Recorded **2026-10-25T03:57:05Z**. The controller's fresh Task 3 brief reports
+**Task 2 spec and quality both APPROVED** at
+`66efd0629d73fa8d762921fd987d143604178175`. Only Step 0 was authorized for this
+session segment, with a mandatory return before the remaining task.
+
+### Preflight and test scope
+
+- Work stayed in the named ticket worktree and branch. Initial status was clean
+  and HEAD matched the supplied base. Read handoff, current main AGENTS via
+  `git show origin/main:AGENTS.md`, ticket/comments, Cycle, design, Step 0 plan
+  and ledger. Worktree registration and main ancestry were checked.
+- Initial and checkpoint fetch/merge found `origin/main` unchanged at
+  `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; both merges answered already up
+  to date. HEAD remains the base. Checkpoint merge-tree succeeded with tree
+  `97a1668b094b6f87a28664248164abb992973546`.
+- Added only `tests/cli/documents.rs` and its module registration in the
+  existing `tests/cli.rs` target. The single test
+  `interrupted_saves_follow_the_required_outcomes` contains all five table
+  cases, with row 5 split into restoration after each refusal (six fixtures
+  planned). Execution is sequential and stops on the first failed assertion.
+- Each fixture uses library `DocumentCreate` to create the saved document
+  and a second contextual document, then arms `FailOnce` at
+  `BeforeIndexTransactionCommit` for a body-changing save. Assertions prove
+  partial/Incomplete, checkpoint committed, bytes equal to the Git blob,
+  accepted request and one pending journal row. A plain reopened service over
+  the same data drives retries through `support::mutation::execute_with`.
+- The omitted-title retry fills title from one `show_item` call, sends the
+  requested body, and preserves the original observation. The all-fields retry
+  sends the original full draft without a read. Other-work probes are index
+  refresh and a body-changing save of the second contextual document, not
+  early no-ops/refusals or finished replay. Snapshots include canonical and
+  linked-worktree bytes, HEADs, refs, indexes and status.
+
+### Commands and actual evidence
+
+`devenv shell -- cargo fmt` ran. The first exact test invocation did not
+compile because the new diagnostic attempted to serialize `RequestRecord`,
+which derives Debug/PartialEq but not Serialize. Source inspection at
+`mutation/records.rs:213–235` identified this as a new-test logging error.
+Only the diagnostic changed to print state/attempt/result; no assertion changed.
+Formatting and the exact command were repeated:
+
+```sh
+devenv shell -- cargo test --all-features --locked --test cli interrupted_saves_follow_the_required_outcomes
+```
+
+Result: **0 passed, 1 failed, 0 ignored, 201 filtered**, runtime **3.06s**.
+
+| Row | Observed evidence before stopping |
+| --- | --- |
+| 1: no further edit | Both new index refresh and another-item save returned `blocked` / `recovery_required`, class Blocked (CLI mapping 3). Full snapshots unchanged; original request Accepted, attempt 1, no result, one pending row. Both other request records absent. Original document branch stayed at two commits (create plus interrupted save). |
+| 2: unchanged omitted-field retry | Returned `success` / `ok`, discovery current; original request Finished, attempt 2, pending rows zero. Same branch tip, two commits, exact committed bytes retained; full snapshot also reported unchanged. Subsequent new refresh and another-item save both succeeded and finished their own records. Other document gained exactly one save commit. |
+| 3: edit omitted title then retry omitted | Returned `partial` / `request_mismatch`, **Incomplete**, with historical written/committed/pending effects. Snapshot unchanged; original request Accepted, attempt 1, result absent; one pending row. This matches the table's stated code/no-new-write/accepted-state outcome, but the new test additionally asserted **Input** and failed there. |
+| 4: edited file, all original fields | Authored, not executed. |
+| 5: restore after row 3 or 4 | Both variants authored, not executed. |
+
+Captured Git/file evidence from this run:
+
+| Row | Primary HEAD | Saved document branch checkpoint | File bytes after actor |
+| --- | --- | --- | --- |
+| 1 | `b2da376de44ffaafcfb6bffc65dd945f91d0c969` | `3cbbbc5af0dd1f0ad6c7d7f231dabc2e56491d91` | 157, equal to committed blob |
+| 2 | `636f38bc0fa1e507ef9dfe1e6d4337de6a27e584` | `96543ea8de0283e6a2b03f437b939a67729c1e10` | 157, equal to committed blob |
+| 3 | `2dd38bf4d481851a39e9e8a0781d8c33ec8bb75f` | `93c3a5168c97c2dae1575fee01d5b2f5cf791200` | 157, equal to committed blob before the deliberate title edit |
+
+The interrupted request ID is `01ARZ3NDEKTSV4RRFFQ69G5FX3`; other-work request
+IDs end in `FX4` and `FX5`. Row 2's other-document save checkpoint is
+`29f9b3a941c236aff83147e608475d817db78ad7`. Row 3's mismatch has no operation
+ID or recovery actions and reports commit `93c3a5168c97c2dae1575fee01d5b2f5cf791200`.
+These are temporary-fixture OIDs, not ticket-branch commits. Temporary fixture
+directories are dropped by the test harness; the evidence is retained here
+and in the failed-run transcript, not as retained runtime databases.
+
+### Diagnosis, self-review and controller question
+
+No genuine library/table discrepancy has yet been demonstrated. The new test
+over-specified row 3 by treating the code's Input classification as the
+envelope's class. `src/repository/mutation/replay.rs:123–153` explicitly carries
+durable effects from an accepted request into a mismatched reply, producing
+partial. `src/results.rs:273–288` gives Partial precedence as Incomplete;
+the existing CLI renderer maps this to exit 4. The actor itself has no process
+exit. The design row specifies `request_mismatch`, nothing written, record
+accepted; it does not specify Input or exit 2. Those stated facts held in the
+captured diagnostics, but the assertion stopped before their following checks.
+
+**Question for the controller/owner:** may the extra row-3 classification
+assertion (including the row-5 replay of that path) be corrected to the existing
+partial/Incomplete envelope rule, then the exact Step 0 test rerun with every
+approved table expectation unchanged? The test and table have not been changed
+to fit the runtime answer. The full-field path's extra class assertion has not
+been exercised and also awaits the controller's direction.
+
+Self-review compared all five authored cases to the table and reviewed the
+diagnostic source above. Final `git diff --check` and
+`devenv shell -- cargo fmt --check` passed; status confirmed exactly the four
+intended files and HEAD unchanged.
+No document-save implementation, library/Cargo/output-schema changes, other
+Task 3 steps, subagents, broader tests, native CI, commit or push. The new test,
+registration, this ledger and canonical comment `01M5RK8WM0C2S94ZZS19A7RXVQ`
+are left uncommitted. The comment ID came from the built CLI's `id new` and
+its timestamp from the actual UTC clock. This checkpoint is **STOPPED**, not
+READY, pending controller direction.
+
+## Task 3 Step 0 resumed: owner ruling and passing checkpoint
+
+Recorded **2026-10-25T04:01:33Z**. The owner explicitly approved correcting the
+extra failure-class assertions to the existing Partial/Incomplete precedence,
+including the unexecuted full-field path according to source, and rerunning
+only Step 0. Every approved table expectation must remain unchanged. The
+preceding stopped checkpoint and its diagnosis are retained as history; its
+controller question is now resolved.
+
+### Authorized correction and source check
+
+Only four class values changed in the test: the row-3 mismatch and its row-5
+restoration precondition changed Input to Incomplete; the row-4 full-draft
+refusal and its row-5 restoration precondition changed Blocked to Incomplete.
+No result code, file/HEAD/commit assertion, request-state assertion, fixture,
+table or production code changed.
+
+The full-field source trace was checked before editing:
+
+- `mutation/bind/document.rs:916–933` delegates re-entry/rerun to shared save
+  handling.
+- `mutation/bind/save.rs:388–496` reports the domain error together with
+  recorded commit evidence. Its stopped-effects helper (`:548–568`) retains
+  the checkpoint while the operation is in flight.
+- `mutation/outcome.rs:521–542` maps that checkpoint to written/committed/
+  discovery-pending effects. `mutation/reply.rs:154–161` classifies the
+  envelope from code and effects, and `results.rs:273–288` maps Partial to
+  Incomplete regardless of the code. The mismatch trace from the preceding
+  checkpoint remains applicable to the omitted-field path.
+
+### Verification and all-row evidence
+
+Ran exactly:
+
+```sh
+devenv shell -- cargo test --all-features --locked --test cli interrupted_saves_follow_the_required_outcomes
+```
+
+**Passed: 1 test, 0 failed, 0 ignored, 0 measured, 201 filtered; 5.72s.**
+This one sequential test executed **five table rows / six independent
+interruption fixtures**, covering both restoration paths in row 5.
+
+| Row | Passing assertions |
+| --- | --- |
+| 1 | New index refresh and another-item save both return recovery_required / Blocked (renderer class for exit 3). Full canonical/worktree snapshots unchanged; original request accepted and one pending row; original checkpoint/primary HEAD unchanged. |
+| 2 | Same request with omitted title filled by show_item returns success/ok and discovery current. Request finishes, pending count becomes zero, committed file bytes and checkpoint stay unchanged, and both subsequent new-work requests succeed. The other document gains its one new save commit. |
+| 3 | Uncommitted title edit followed by omitted-title retry returns request_mismatch / Incomplete. Full snapshot unchanged; request stays accepted with one pending row and unchanged checkpoint. |
+| 4 | The same edit followed by every original draft field returns external_change / Incomplete. Full snapshot unchanged; request stays accepted with one pending row and unchanged checkpoint. |
+| 5 | After each of rows 3 and 4, restoring the exact committed bytes then retrying with title omitted completes discovery and finishes the request, with zero pending rows and no second save commit. |
+
+Every fixture first proves the actor's partial/Incomplete result, committed
+checkpoint, file equality with the committed Git blob, accepted request and
+one pending operation. Saved-document commit count stays **two** (create plus
+interrupted save) through each retry; primary HEAD remains unchanged. The
+actor has no process exit. Step 12's binary retry evidence remains owed.
+
+### Return state and self-review
+
+- Resumed/checkpoint fetch and merge both found main unchanged at `e49f978`;
+  HEAD remains `66efd0629d73fa8d762921fd987d143604178175`. Merge-tree succeeded
+  with tree `97a1668b094b6f87a28664248164abb992973546`.
+- `devenv shell -- cargo fmt --check` and `git diff --check` passed. Self-review
+  confirms the sole Rust changes in this resumed segment are the four
+  owner-authorized class values; all approved table assertions are preserved.
+- Added canonical passing-checkpoint comment `01M5RKH2MWH74YBP39KX97MQBZ`,
+  using the built CLI's `id new` and the actual UTC clock. The earlier stop
+  comment remains as history.
+- Five files remain uncommitted: the new document test module, its existing
+  target registration, this ledger, and the two checkpoint comments. No
+  commit/push, broader test run, subagent or remaining Task 3 work occurred.
+
+**READY:** Step 0 passed, with no unresolved checkpoint issue. Return to the
+controller now; continue remaining Task 3 only when this same session is resumed.
+
+## Task 3 remaining steps: stopped on primary-only move-to-self
+
+Recorded **2026-10-25T04:11:35Z**. The controller authorized remaining Steps
+1–13 in this same session, with the Step 0 assertions (including the approved
+Incomplete correction) retained, Task 3 commit/ticket-only push after passing
+checks, and independent controller reviews before Task 4. The earlier Task 2
+approvals and Step 0 owner ruling remain recorded above.
+
+### Work completed before the stop
+
+- Added bin-private `fill.rs` and four pure tests in `fill_tests.rs`, plus the
+  module declaration. The prescribed red command
+  `devenv shell -- cargo test --locked --bin manyhands-cli fill::` failed on
+  the absent fill types/functions. After implementation the same command
+  passed **4 / 0 failed / 178 filtered**. The read wrapper was not yet called
+  by dispatch, so that intermediate run reported three dead-code warnings;
+  subsequent adapter compilation had no warnings.
+- Fill tests cover complete input/no read, omitted title, omitted body with
+  exact CRLF/lone-CR/non-BMP/no-final-newline bytes and empty body, and
+  wrong-kind/unfillable reads. The wrapper preserves read errors and request
+  IDs, scopes wrong-kind/missing-field refusals to the item, and sets all
+  refusal effects to not_requested.
+- Added 26 binary tests beside the existing Step 0 test. Exact red run:
+  `devenv shell -- cargo test --all-features --locked --test cli documents`:
+  **1 passed / 26 failed / 201 filtered**, 8.73s. All 26 new tests failed on
+  command_unavailable; the original Step 0 test passed.
+- Implemented the three authoring adapters/dispatch arms, closed input schemas
+  and examples. Flags precede input; save fills only omitted draft fields once
+  before the driver, preserves the caller's observation, and clones the full
+  draft for bounded retries. No identity prompts or library workaround.
+- Delivered literal catalog entries and regenerated E1 one verb at a time:
+  create, save, move. Each exact help-filter generation command used
+  `MANYHANDS_UPDATE_GOLDEN=1` and passed **9 tests / 219 filtered**. Inspected
+  each cumulative diff before enabling the next verb. Only the three document
+  commands' availability/repository/options changed in root JSON/text;
+  summaries and C3 delivery remain exact. Ticket help is byte-identical.
+- Converted Step 0's retries and other-new-work probes to isolated CLI children.
+  Its assertions are unchanged. A test-only BinaryAnswer decodes code,
+  outcome and discovery from schema-checked JSON, retains the raw envelope in
+  diagnostics, and maps the actual process status to the asserted failure
+  class. It does not execute a second library request. The interrupted actor
+  still uses FailOnce/DocumentCreate and plain services for state inspection.
+
+### First implemented run and mandatory stop
+
+```sh
+MANYHANDS_UPDATE_GOLDEN=1 devenv shell -- cargo test --all-features --locked --test cli documents
+```
+
+Result: **24 passed / 3 failed / 0 ignored / 201 filtered**, 11.20s.
+The binary `interrupted_saves_follow_the_required_outcomes` passed, including
+all five rows and both restoration paths; no Step 0 regression occurred.
+
+**Genuine contract discrepancy:**
+`documents::a_move_to_its_own_path_is_a_noop` first passes the contextual no-op
+case, then sends a fresh request for primary-only document
+`01ARZ3NDEKTSV4RRFFQ69G5FD0` (`docs/guide.md`) to its own path. The approved
+design Fact 15, implementation Step 8 and controller brief require
+external_change / exit 3 for this primary-only case. Actual binary output:
+
+```json
+{
+  "command": "document move",
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX3",
+  "operation_id": null,
+  "outcome": "noop",
+  "code": "already_applied",
+  "scope": {
+    "repository": "/tmp/.tmpNwXXU5",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FD0",
+    "branch": null,
+    "worktree": null,
+    "remote": null
+  },
+  "effects": {
+    "write": "unchanged",
+    "checkpoint": "unchanged",
+    "discovery": "not_requested",
+    "publication": "not_requested",
+    "integration": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null
+  },
+  "data": { "id": "01ARZ3NDEKTSV4RRFFQ69G5FD0", "path": "docs/guide.md" },
+  "recovery": []
+}
+```
+
+Actual process status **0**, expected **3**. The error is returned from the
+test's existing checked helper before its final snapshot comparison, so no
+post-refusal snapshot assertion is claimed for this failed primary-only call.
+The contextual no-op snapshot assertion immediately before it passed.
+
+Source diagnosis confirms this is not a fixture's accidental editing context:
+
+1. `tests/support/items.rs:252–293` commits DOCUMENT_A on primary and refreshes;
+   it creates no item worktree. This test creates only DOCUMENT_NEW, a
+   different ID, before the primary-only call.
+2. `mutation/bind/document.rs:550–552` detects move-to-self and calls
+   `only_at`, then the already-applied rule.
+3. `only_at` (`:512–526`) calls `Position::of` for the document branch and
+   reads files from the returned base OID.
+4. Crucially, `mutation/evidence.rs:19–44` explicitly falls back to primary
+   HEAD when that branch does not exist (`:34–38`). Thus a missing document
+   branch does **not** make `only_at` false; it examines primary's committed
+   file. This detail was missed by the earlier Fact 15 audit.
+5. `document.rs:381–388` then applies the committed-content no-op rule in the
+   item's primary context. No new context/operation is reported.
+
+**Owner ruling requested:** approve documenting and testing the existing
+primary-only committed move-to-self no-op (and narrowly correcting Fact 15
+and directly dependent plan/Cycle/audit wording), or provide the intended
+resolution of this library/contract discrepancy. No production workaround,
+library change or expectation/table edit has been made to fit this answer.
+
+### The other two new-test failures in that same run
+
+These are recorded separately from the genuine contract discrepancy. No fix
+was made after the mandatory stop:
+
+- `document_verbs_have_human_success_refusal_and_noop_output` expects the
+  literal code `already_applied` in human stdout. Existing
+  `human_admin.rs:139–147` prints **“Already applied; nothing changed.”** and
+  metadata/data, not the code. The first (create) success golden was written;
+  the test stops on its human no-op assertion before save/move text cases.
+  This is a new-test output assumption, not a required-contract failure.
+- `document_create_replays_and_refuses_a_used_or_escaping_path` reaches the
+  malformed item_id case and correctly gets invalid_input, but incorrectly
+  expects JSON `message` to contain `item_id`. The existing refusal adapter
+  (`mutate.rs:273–301`, `render.rs:124–133`) passes the field-specific detail
+  only to human output; JSON keeps the fixed envelope message. The adapter
+  uses the existing InputError::InvalidValue with field item_id. The new test
+  should check the field-only detail in human output on resume, while keeping
+  the JSON invalid_input/request-ID/privacy assertions. No C2 driver change.
+
+### Preserved state, remaining work and self-review
+
+- Initial/resumed/checkpoint fetches and merges leave main at `e49f978`, HEAD
+  at `66efd0629d73fa8d762921fd987d143604178175`. Checkpoint merge-tree succeeds
+  with tree `97a1668b094b6f87a28664248164abb992973546`.
+- `git diff --check` passed. Self-review traced the genuine mismatch through
+  source and distinguished the two test-output assumptions above. Full final
+  fmt/check/clippy and the Step 12 input_schemas/fill reruns have **not** run
+  after these changes; the task is not review-ready.
+- Seven new JSON goldens and create's text golden were generated. The two
+  save/move text goldens are still owed. New output goldens have not completed
+  final review. The three input examples exist; create's actual example ran
+  through the binary, while save/move example runtime evidence remains owed
+  to the planned example checks. No output schema changed.
+- All work is uncommitted; no Task 3 commit/push. The Step 0 comments remain
+  preserved, and this stop adds canonical comment `01M5RM3EP5798TPZQQRB2H3456`,
+  ID from the built CLI and timestamp from the actual UTC clock.
+- No subagent, broad test suite, native CI, PR, main integration, ticket
+  closure, cleanup or Task 4 work occurred. No existing test body changed;
+  existing-test changes are registrations/additions and E1 only.
+
+Resume this same implementer only after the owner resolves the genuine
+primary-only move-to-self discrepancy. Do not change its expected outcome or
+the approved documents without that ruling.
+
+## Task 3 completion: owner ruling resolved, local gates passed
+
+Recorded **2026-10-25T04:19:30Z**. The owner explicitly approved accepting the
+existing **primary-only committed move-to-self `already_applied`/`noop`, exit
+0**, correcting Fact 15 and dependent wording/tests, with no library workaround.
+The owner also authorized correcting the two new-test output assumptions using
+the existing human/JSON contract and continuing the remaining Task 3 gates,
+goldens, ledger/comment, task commit and ticket-only push. This resolves the
+stop immediately above; its original source/binary evidence remains history.
+
+### Narrow corrections and verification
+
+- Corrected design Fact 15, the implementation plan's Review Focus 3 and
+  Step 8 bullet, the API audit's move no-op/inventory wording, and this ledger's
+  fact inventory. Added a superseding owner note beside the Cycle's historical
+  review record. No other approved policy or code-set count changed.
+- The primary-only test now requires the approved noop/exit 0, no commit OID,
+  no document branch or worktree before/after, and an identical repository/
+  linked-worktree snapshot. Its contextual no-op assertions remain intact.
+  This adds executed state evidence beyond the original stopped-run output.
+- Human no-op tests now require the existing exact leading message,
+  “Already applied; nothing changed.” Malformed item_id retains the JSON
+  invalid_input/request-ID/privacy checks and verifies the item_id-only detail
+  through human stderr. No production behavior changed for these corrections.
+- Regenerated the document goldens only with `MANYHANDS_UPDATE_GOLDEN=1`:
+  **27 passed / 0 failed / 201 filtered**, 10.41s, including the two previously
+  owed human cases. Read all **7 JSON + 3 text** goldens. Only root, request ID,
+  operation ID and checkpoint OID are replaced; item IDs, paths, effects,
+  outcome/code and recovery remain literal. All are registered.
+- The next input-schema run found an in-scope new-schema error: this task had
+  added a regex `pattern` on item_id, unsupported by the existing schema
+  checker's keyword set (`tests/support/schema.rs:99–166`). Result was **4
+  passed / 3 failed / 221 filtered**. Removed only that added keyword from
+  the new schema, retaining the planned required-string shape and the CLI's
+  canonical ItemId validation. The checker and every old test are unchanged.
+  The same filter then passed all 7 tests.
+- All-target clippy identified one needless borrow in the new fill read-error
+  wrapper. Removed that borrow only; the repeated prescribed clippy passed.
+  No pre-existing test lint or outside-file fix was needed.
+
+### Final commands and counts
+
+All Rust commands ran through Devenv in this ticket worktree. Tests used only
+the task's named targets/filters, one positional filter per command. Final
+golden-checking runs had no update variable.
+
+| Command | Final result |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --test cli documents` | **27 passed**, 0 failed/ignored, 201 filtered; final post-lint run 10.24s. Includes the binary Step 0 test and all five required rows/six fixtures, plus Step 7's separately named interruption case. |
+| `devenv shell -- cargo test --all-features --locked --test cli input_schemas` | **7 passed**, 0 failed/ignored, 221 filtered; includes all three new closed schemas and examples. |
+| `devenv shell -- cargo test --locked --bin manyhands-cli fill::` | **4 passed**, 0 failed/ignored, 178 filtered; final post-lint run. |
+| `devenv shell -- cargo test --all-features --locked --test cli help` | **9 passed**, 0 failed/ignored, 219 filtered; final run without regeneration. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed. |
+| `devenv shell -- cargo check --all-features --locked` | Passed. |
+| `devenv shell -- cargo fmt --check` | Passed after formatting. |
+
+Total **47 passing tests** in these final filters: 43 integration + 4 unit;
+**31 new tests** in Task 3 (27 document integration + 4 fill unit). Earlier
+baseline/task tests are not counted again. No broad/full suite or native CI.
+
+### Self-review, scope and return
+
+- Reviewed the thin adapters, flag/input/root/ID/fill ordering, one show read
+  only when needed, caller-token preservation, draft cloning before retries,
+  no identity prompts, closed input schemas and all ten output goldens.
+- The source-level fill tests remain repository-free. Binary tests cover
+  offline checkpoints, metadata/body preservation, exact unusual body bytes,
+  normalization, stale observations, replay/mismatch, wrong-kind scope and
+  request ID, both missing-registration paths, cache-loss replay, interrupted
+  saves, move collisions/context tokens, primary-only moves, malformed input,
+  human success/refusal/no-op and progress. Snapshots prove required refusal/
+  replay/no-op invariance; explicit branch/count/byte assertions prove no
+  second checkpoint. Step 0's approved assertions survived binary conversion.
+- The three input examples validate. Create's actual example bytes also run
+  through the binary. Task 7 owns the full R-13 examples table/runtime checks,
+  including the token-placeholder save/move examples; this is not claimed as
+  completed ahead of that task.
+- Reviewed E1's per-verb generation diffs and final golden reads: only the
+  root-help JSON/text files changed; ticket help remained identical. Existing
+  Rust tests/support only gained module/golden registrations. No library,
+  Cargo, output-schema, shared mutation-driver, old-test semantic edit, or
+  new integration target.
+- Final checkpoint fetch/merge leaves `origin/main` at
+  `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; merge already current.
+  `git merge-tree --write-tree HEAD origin/main` succeeds with tree
+  `97a1668b094b6f87a28664248164abb992973546` at the unchanged task base.
+  Status, diff, whitespace and last ten commits inspected before committing.
+- This completion includes all earlier uncommitted Step 0 evidence/comments,
+  Task 2's reported spec/quality approvals, both owner rulings and canonical
+  completion comment `01M5RMHYBJED90MVAY9KR0S6PZ`. ID allocated by the built
+  CLI; timestamp taken from the actual UTC clock.
+
+No unresolved Task 3 blocker. Commit message:
+`feat(cli): document create, save and move with the save patch`, with the
+required co-author trailer. Publication is restricted to this ticket branch.
+Independent controller spec/quality reviews are next; Task 4 remains unstarted.
+No subagents, PR, main merge, ticket closure, cleanup or dogfooding operation.
+
+## Task 4: Part A evidence and checkpoint
+
+Recorded **2026-10-25T04:35:48Z**. Fresh implementer, working only in the named
+ticket worktree/branch, without subagents. The controller's brief explicitly
+reports Task 3 spec and quality **APPROVED** at
+`90c8e3ae15f9085c74b283c95bc557d60a7abc00`; the task log now records those
+approvals. They are not approval of Task 4 or of the complete Part A range.
+
+### Preflight and brief clarification
+
+- Clean initial HEAD matched the supplied Task 4 base. Read current main
+  AGENTS with `git show origin/main:AGENTS.md`, handoff, ticket and comments,
+  Cycle/design/Task 4 plan, audit and the ledger's approved rulings.
+- Initial and resumed fetch/merge both answered already up to date. Main
+  remains `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`.
+- Before editing, stopped on the brief's phrase “expected all capable.” The
+  controller clarified that this was an erroneous summary subordinate to the
+  approved audit, not a requirement or contract change. Followed the existing
+  audit: all six Part A mutations, **four capable / two incapable**. This is
+  a **controller-brief clarification**, not a new owner ruling. Approved
+  Cycle/design/plan/audit documents are unchanged.
+
+### Test artifacts and evidence boundaries
+
+Added `tests/cli/authoring_exits.rs` and its registration in `tests/cli.rs`:
+
+- Separate C3 `ROWS`, `REASONS`, `How` and `CLI_ONLY`; C2's table is unchanged.
+  The audit's fenced union is read with `include_str!`. Exact set equality
+  proves **40 library / 42 CLI-inclusive codes**, **25 binary-backed rows +
+  17 reasons**, with unique and disjoint row/reason codes.
+- Every binary row names an existing `#[test]` function in `tests/cli/*.rs`.
+  New binary cases cover root selection, configuration, dirty configuration,
+  wrong branch, missing identity and unopenable application data; existing
+  Part A cases supply the remaining normal codes. These reachable cases are
+  not padded with unreachable-code reasons.
+- Binary classes **0, 1, 2, 3 and 5** are represented. Exit 4 remains the
+  explicit decision-6 actor/CLI-completion reason referencing
+  `commit_success_refresh_failure_is_completed_by_the_same_request`.
+  Registration failure is a source-backed library-seam reason. **15** Part B
+  obligations are labeled Task 5 or Task 6, including PTY cancellation/130.
+  Reason membership is accounting, not a claim those binary cases passed.
+- `busy_is_reached_with_the_lease_held` obtains a valid observation, sends a
+  complete document draft (avoiding an earlier fill-read refusal), holds the
+  repository lease in the existing child helper, and asserts busy/exit 5,
+  request ID, unchanged repository/worktree snapshot and elapsed retry time
+  of at least 700 ms and below the helper's ten-second deadline.
+- `c3_confirmed_flags_match_prepare` enumerates delivered available C3
+  mutations via JSON help's `--request-id` option, not a nonexistent kind
+  field. Each of the six gets a fresh isolated fixture and valid input;
+  save/move observations come from actual reads. All answer not_confirmable,
+  exit 2, without canonical/worktree changes.
+- `c3_noop_inventory_accounts_for_part_a` compares the same help inventory
+  against all six entries, checks each capability against its audit row,
+  verifies four existing no-op test references, and supplies binding-source
+  reasons for index refresh/rebuild. Fresh explicit index work is ok, not noop.
+
+The new tests characterize existing approved behavior; no production behavior
+was written. The focused first run passed **10 / 0 failed / 228 filtered**,
+2.65s. No intentional failing production regression is claimed for this
+test-only evidence task. Formatting touched only the new module via
+`devenv shell -- rustfmt --edition 2024 tests/cli/authoring_exits.rs`.
+
+### Checkpoint gate
+
+All six prescribed commands ran in this worktree:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | Passed, 0.36s. |
+| `devenv shell -- cargo fmt --check` | Passed across the tree. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, 1.09s; no old-test lint or other outside-C3 failure. |
+| `devenv shell -- cargo check --locked --bin manyhands-cli` | Passed, 18.52s; no features. |
+| `devenv shell -- sh scripts/check-cli-no-gpui.sh` | Passed; locked no-default-feature normal dependency tree contains no GPUI package. |
+| `devenv shell -- cargo test --all-features --locked --bin manyhands-cli --test cli --test read_contract --test mutation_contract` | Completed retry passed **182 CLI unit + 238 CLI integration + 71 read-contract + 44 mutation-contract = 535**, zero failed/ignored/measured/filtered in every target. Target durations: 0.23s / 58.49s / 9.85s / 8.62s respectively. |
+
+The first combined gate tool call hit the shell's **120-second timeout** during
+mutation-contract tests, after the first five gates and both CLI targets had
+passed (182 and 238). No assertion failure was reported, and a process probe
+confirmed no remaining Cargo/test process. Only the incomplete exact test-gate
+command was retried, with a 600-second tool budget; that completed as above.
+The five completed gates were not repeated. The 535 total counts the completed
+run once, not the interrupted run or focused run again. No full Cargo suite or
+native CI ran. Task 2's previously unexecuted adjacent unit case passed in the
+182-test CLI-unit target.
+
+### Self-review and delivery for controller review
+
+- Reviewed the complete new module, all referenced test assertions, source
+  reasons, audit equality, catalog filtering, valid prepare fixtures, child
+  lease lifetime, retry bounds, isolation and effect assertions. Exit-4
+  actor evidence is distinguished from a binary exit; pending Part B cases
+  remain explicit. No unresolved implementation issue found in self-review.
+- Checkpoint `git fetch origin` and `git merge origin/main` again left main
+  unchanged and already current. `git merge-tree --write-tree HEAD origin/main`
+  succeeded at the task base with tree
+  `b78fb7a25e93aa1f768186dd09843e83323fcef8`. A final check on the actual
+  checkpoint commit is reported with its returned SHA.
+- Intended changed files are the new test module, module registration, this
+  ledger and canonical Part A comment `01M5RNFS864VQHTB7HHC81ES4P`. The comment's
+  ULID came from `devenv shell -- ./target/debug/manyhands-cli id new`; the
+  timestamp is from `date -u`. Status, diff, whitespace and last ten commits
+  inspected before staging only these paths.
+- Task base: `90c8e3ae15f9085c74b283c95bc557d60a7abc00`. Task head: the commit
+  carrying this section, `test(cli): C3 Part A exit table and inventories`,
+  whose full SHA is returned to the controller. **Independent Part A spec and
+  quality review is pending**, over the actual range
+  `7368902a677a8228813f21da8f74d3cafff68ec3..Task4HEAD` (Tasks 1–4).
+  The controller owns review and post-review bookkeeping after return.
+
+Commit/push authorization is restricted to the ticket branch. Only the new
+tests/registration and checkpoint records changed; no library, Cargo, output
+schema, existing-test semantics or approved-document changes. Task 5 was not
+started. No subagents, PR, main integration, closure, cleanup, dogfooding or
+native CI. This is a locally verified Part A checkpoint for independent review,
+not a review approval or whole-Cycle completion claim.
+
+## Task 4 review follow-up: SPEC P2, C3 index-unavailable provenance
+
+Recorded **2026-10-25T04:44:19Z**, base
+`329a1436f3671586382ca4c1f41b2c9a8ab8a699`. The controller reported SPEC P2:
+the `index_unavailable` row referenced
+`index_rebuild_restores_a_database_replaced_by_other_bytes`, but that test
+asserts the refusal on **C1 `document list`** (`tests/cli/index.rs:211–216`)
+and subsequently succeeds with C3 rebuild. Verified the finding directly.
+The original 535-test gate was green, but did not establish C3 provenance
+for this row; the prior coverage claim is corrected by this follow-up.
+
+### Resolution and red/green evidence
+
+- Added only the new Task 4 test
+  `index_refresh_on_a_corrupt_database_is_index_unavailable` in
+  `tests/cli/authoring_exits.rs`, and repointed its existing exit-table row.
+  Task 2's `tests/cli/index.rs` is unchanged.
+- The fixture closes its service, removes SQLite WAL/SHM first, then replaces
+  the database with exactly 4096 bytes of `0xA5`. The binary invokes C3
+  `index refresh` with a valid request ID. It asserts code index_unavailable,
+  exit 3, exact command identity, retained request ID, index.rebuild recovery,
+  identical canonical/worktree snapshot and identical `refs/` output.
+- **Red:** initially exercised the existing row's C1 `document list`
+  invocation in the new fixture, retaining the required `command ==
+  "index refresh"` assertion. Ran
+  `devenv shell -- cargo test --all-features --locked --test cli authoring_exits::index_refresh_on_a_corrupt_database_is_index_unavailable`.
+  Result: **0 passed / 1 failed / 238 filtered**, 0.23s, exactly at command
+  identity: actual `document list`, expected `index refresh`. This is an
+  evidence-attribution regression demonstration, not a production defect or
+  library gap; code/exit alone would have passed the misleading old invocation.
+- **Green:** changed only the new fixture's invocation to `index refresh`
+  with `--request-id`; retained its assertions. After formatting the new
+  module, `devenv shell -- cargo test --all-features --locked --test cli authoring_exits`
+  passed **11 / 0 failed / 228 filtered**, 2.79s.
+
+### Revised-tree checkpoint gate
+
+The test artifact changed, so the plan's checkpoint gate was rerun **once** on
+the revised tree, with a 600-second tool timeout. All six commands passed:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | Passed, 0.38s. |
+| `devenv shell -- cargo fmt --check` | Passed. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, 1.14s. |
+| `devenv shell -- cargo check --locked --bin manyhands-cli` | Passed, 0.27s. |
+| `devenv shell -- sh scripts/check-cli-no-gpui.sh` | Passed. |
+| `devenv shell -- cargo test --all-features --locked --bin manyhands-cli --test cli --test read_contract --test mutation_contract` | **182 CLI unit + 239 CLI integration + 71 read-contract + 44 mutation-contract = 536 passed**; zero failed/ignored/measured/filtered. Durations respectively 0.25s / 51.19s / 11.22s / 8.62s. |
+
+The prior checkpoint had **535** tests; this adds exactly **one**, now **536**.
+The focused run is not added again to that total. No further broad run, full
+suite or native CI was performed.
+
+### Self-review and return boundary
+
+Self-review checked the precise command/result attribution, valid request ID,
+whole-file corruption boundary, recovery assertion, snapshot/ref invariance,
+row reference and additive test-only scope. Initial and checkpoint fetch/merge
+left main at `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`, already current.
+Precommit merge-tree succeeded with tree
+`40154382afcb645ef95b13ccacfaec64a2460664`; status/diff/log and whitespace checks
+are inspected before the separate follow-up commit. Canonical comment
+`01M5RNZCK3GCXM70AN3DZXGTG7` uses the built CLI's ID and actual UTC clock.
+
+The follow-up commit contains this ledger, that comment and only
+`tests/cli/authoring_exits.rs`. SPEC P2 is implemented and locally verified;
+**independent re-review/acceptance remains pending**. The controller reviews
+the follow-up from `329a143` and the complete Part A range from `7368902` to
+the returned follow-up SHA. Ticket-only commit/push with the required co-author
+trailer; no Task 5, subagents, library/Cargo/schema/approved-document changes,
+completed Task 2 test edits, PR, main integration, closure, cleanup or dogfooding.
+
+## Task 5: list readers and ticket authoring
+
+Checkpoint recorded **2026-10-25T04:59:47Z**, exact task base
+`452f031fd06d3a39e2c5de6cfe711b74256ab8a1`. Part A spec/quality approval and
+its six-gate, 536-test evidence were recorded before Task 5 in the approval
+section above and canonical comment `01M5RP9NH3G8KA9BA4JF3QR05R`.
+All earlier owner decisions and approvals are retained. This task used no agents.
+
+### Implementation and contract evidence
+
+- Added `ListChange` and both list readers, with missing/null distinction,
+  order and repetitions preserved, and wrong-type errors naming only the
+  field. `tristate_list` calls `optional_string_list` for its non-null path;
+  both are used in production, without dead-code allowances or diagnostic
+  formatting/serialization on input-holding types.
+- Added `TicketFields`, `needs_read_ticket` and `ticket_draft`. Only omitted
+  draft fields come from the one read; nullable project/team retain absence
+  or clear on null. Wrong-kind/missing required DTO fields are unfillable.
+  Relationships remain library patches, never filled from the read.
+- Added the three adapters using existing `mutate::run` with
+  `identity_prompt: false`, `retry: true`. Flags and input precede selection
+  and optional fill; the computed draft is cloned across bounded retries.
+  The caller's observation is unchanged. Relationship strings go to the
+  library without CLI ID validation; create's typed item ID is parsed as
+  canonical input, while save/slug selectors retain invalid_id.
+- Literal C3 catalog entries and dispatch, three closed input schemas and
+  examples, seven JSON goldens and three human goldens. Create's example is
+  executed as supplied; save and slug examples run verbatim and deliberately
+  return external_change for their documented placeholder observations.
+- The 31 isolated binary tests use `relationship_repository`, and the
+  contract fixture's TICKET_A for project/metadata preservation. They cover
+  both relationship cycle kinds before create context creation and on save,
+  complete-proposal check agreement, self-reference and deduplication,
+  unresolved targets, all six draft fields, nullable relationships, status
+  versus lifecycle closure, short codes, stale tokens, fresh no-ops, replay,
+  omitted-field mismatch and cache-loss retry without a second commit.
+  The fixed comparison set contains all 15 design fields; body comparisons
+  preserve unusual bytes. Dynamic read fields are excluded as approved.
+- The quoted project-format fixture is created through the CLI, rewritten
+  and committed with git2 in its context, refreshed, then saved with only
+  observation and deps. It is absent from primary and retains every other
+  compared value, unknown wave/cycle keys and exact body bytes. This is an
+  isolated fixture, not a dogfooding save.
+- Both identity cases call `require_no_system_identity`. Homes contain only
+  autocrlf=false configuration. Identity-required save leaves a context and
+  frees its request; CLI identity-set prepare/confirm followed by a fresh
+  show observation and the same save request succeeds. Initials refusal also
+  frees the ID; explicit initials recover the same request.
+- Per the Task 5 brief, interrupted-refresh evidence remains the approved
+  document actor/CLI test `commit_success_refresh_failure_is_completed_by_the_same_request`
+  and the interrupted-saves table, already passing in Part A. No extra actor
+  seam or new ticket interruption feature was introduced; this is retained
+  Part A evidence, not a newly executed ticket-interruption claim.
+- Extended only the planned Task 4 tables/inventories. Six codes moved from
+  pending reasons to actual C3 ticket binary sources: initials_required,
+  invalid_slug_configuration, invalid_relationship, relationship_cycle,
+  slug_already_assigned and ticket_closed. Exact accounting remains **42**
+  (now **31 binary rows / 11 reasons**). Prepare and no-op inventories now
+  cover all nine delivered mutations, **7 capable / 2 incapable**, retaining
+  their equality/assertions. Repair obligations remain explicit for Task 6.
+
+### Red/green, debugging and goldens
+
+1. Added two list-reader and four ticket-fill unit tests before implementation.
+   Both prescribed no-feature commands (`input::` and `fill::`, separately)
+   failed to compile on the missing interfaces: 21 missing-symbol/method
+   errors, no tests executed. Implemented those interfaces; **27 input / 8
+   fill passed** (six new unit tests).
+2. Added the first 28 ticket binary cases before the adapters/catalog. The
+   exact ticket-authoring filter ran **0 passed / 28 failed / 239 filtered**,
+   all on command_unavailable. The temporary unused-interface warnings
+   disappeared once the wrappers called them; no allowance was added.
+3. Implemented the adapters, then enabled and regenerated E1 one verb at a
+   time: create, save, slug-assign. Each help run passed **9**. Read each
+   cumulative diff before the next verb: only the new verb's availability,
+   repository rule and options changed; summaries and C3 delivery stayed exact.
+4. First ticket golden-generation run: **20 passed / 8 failed**. Diagnosed
+   new-test assumptions against the existing API: show relationships are
+   `{id,state}` DTOs rather than bare IDs; an unconfigured prefix yields
+   `vh-…`, not `mh-vh-…`; editing the one-letter D title must match its title
+   line rather than every D in the source. A different held slug is refused
+   before stale-token validation, so human stale refusal uses the same code
+   and an edited, uncommitted file. The explicit different-code test retains
+   slug_already_assigned. Only the new tests were corrected.
+5. The new identity test also overasserted that the fresh token must differ.
+   Source precedent requires reading it again, not inequality; an unindexed
+   provisioned context can still leave show reading primary. Removed only
+   that unsupported extra assertion, retaining the fresh binary read. The
+   focused identity filter then passed **1 / 266 filtered**, and its actual
+   same-ID retry succeeded. No recovery workaround or contract change.
+6. Golden generation then passed **28 / 0 failed / 239 filtered**. Read all
+   **7 JSON + 3 text** outputs; only repository/request/operation/commit IDs
+   are substituted. Exact item IDs, short codes, relationships and effects
+   remain literal. Added three further characterization/coverage cases for
+   invalid slug configuration, complete-draft fields and optional/ID grammar.
+   The full ticket filter without the update environment passed **31**.
+
+### Final commands and counts
+
+All commands ran from this ticket worktree through Devenv. Each test command
+had exactly one positional filter. Final golden checks used no update variable.
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --bin manyhands-cli input::` | **27 passed**, 0 failed/ignored, 161 filtered. |
+| `devenv shell -- cargo test --locked --bin manyhands-cli fill::` | **8 passed**, 0 failed/ignored, 180 filtered. |
+| `devenv shell -- cargo test --all-features --locked --test cli ticket_authoring` | **31 passed**, 0 failed/ignored, 239 filtered. |
+| `devenv shell -- cargo test --all-features --locked --test cli input_schemas` | **7 passed**, 0 failed/ignored, 263 filtered. |
+| `devenv shell -- cargo test --all-features --locked --test cli authoring_exits` | **11 passed**, 0 failed/ignored, 259 filtered. |
+| `devenv shell -- cargo test --all-features --locked --test cli help` | **9 passed**, 0 failed/ignored, 261 filtered. |
+| `devenv shell -- cargo check --all-features --locked` | Passed. |
+| `devenv shell -- cargo fmt --check` | Passed after `devenv shell -- cargo fmt`. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, no warnings. |
+
+Total **93 distinct passing tests** in the named filters: 35 unit + 58
+integration; **37 new tests** (6 unit + 31 integration). No broad suite or
+native CI. The historical Part A 536-test gate is not added to this total.
+
+### Files, self-review and return
+
+Changed **33 files**, confined to Task 5:
+
+- `src/bin/manyhands-cli/{input,input_tests,fill,fill_tests,authoring,catalog,dispatch}.rs`;
+- `tests/cli.rs`, new `tests/cli/ticket_authoring.rs`, the planned extensions
+  in `tests/cli/authoring_exits.rs`, and new registrations in `tests/support/cli.rs`;
+- `schemas/input/v1/{ticket_create,ticket_save,ticket_slug_assign}.schema.json`;
+- `tests/fixtures/cli_input_v1/{ticket_create,ticket_save,ticket_slug_assign}.json`;
+- seven new JSON and three text goldens under `tests/fixtures/cli_v1/`, plus
+  only E1's `help_root.json`, `help_root_text.txt`, `help_resource_ticket.json`;
+- this ledger and canonical comments `01M5RP9NH3G8KA9BA4JF3QR05R` (Part A
+  approval) and `01M5RPVPKTJ5B6F7HVRX3BVTFW` (Task 5 checkpoint), both IDs
+  allocated with the built CLI and timestamps from the UTC clock.
+
+Self-review checked every adapter's input/fill ordering, observation and
+request-ID preservation, closed schema types, library relationship ownership,
+refusal/no-op/replay snapshots, one-checkpoint/no-second-commit assertions,
+identity isolation, all output goldens and the complete task diff. Existing
+tests gain only additions, E1 regeneration and the specifically planned Task 4
+extensions. No library, Cargo, output-schema, shared-driver or new test target
+change. The unchanged interrupted-save evidence is explicitly carried above.
+
+Checkpoint fetch retained main at `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`;
+the preflight merge was already current, and merge-tree at the committed base
+succeeded with tree `8ef96859a1ac9d284f181c8dc514cbb3950c26f7`. Status, full diff,
+last ten commits and whitespace checked before staging only owned paths.
+The actual task commit's SHA and final merge-tree result are returned to the
+controller. No unresolved blocker was found. Independent Task 5 spec/quality
+reviews are next; this is not whole-Cycle approval. Only the task commit and
+ticket-branch push are authorized. Task 6 remains unstarted; no agents, PR,
+main integration, closure, cleanup, native CI or dogfooding.
+
+## Task 6: document and ticket repair
+
+Checkpoint recorded **2026-10-25T05:13:46Z**. The fresh Task 6 brief explicitly
+conveys **Task 5 spec and quality APPROVED** at the exact supplied base
+`6d0ec5191bf4282e099b0d28dac4b37bb26112f3`. That approval supersedes the
+historical pending status above. Earlier owner rulings remain binding.
+
+### Preflight and scope
+
+- Clean starting HEAD matched the supplied base. Worktree registration and
+  branch were confirmed. Read the handoff, current main's AGENTS.md via
+  `git show origin/main:AGENTS.md`, the Cycle/design/plan and this ledger's
+  Task 0 rulings. Work ran inline without subagents in the specified worktree.
+- Initial and checkpoint fetch succeeded; `git merge origin/main` answered
+  already up to date both times. Main remains
+  `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`. Ancestry passed; both merge-tree
+  checks at the task base returned `38cb41dafc6a32cde566c5491410afdec14072dd`.
+- Implemented only the two repair adapters, catalog/dispatch, two closed
+  three-string input schemas/examples, the new repair test module and its
+  registrations, planned C3 exit/inventory extensions, E1 and task records.
+  Task 7's full inventory work and renaming remain for Task 7.
+
+### Implementation and binary evidence
+
+- Both adapters parse flags, then the required closed input object
+  (`path`, `observation`, `source`), then the root. A shared bin-private helper
+  builds the existing DocumentRepair/TicketRepair inputs through unchanged
+  `mutate::run`, with identity_prompt false and retry true. No input-holding
+  diagnostic/serialization type was introduced.
+- Both prepare previews validate against the existing repair_preview schema,
+  declare adoption and the supplied ID, and leave canonical/Git state unchanged.
+  Confirmed executions validate against repair_mutation, create one context
+  and one checkpoint under that ID, preserve source bytes exactly, and leave
+  primary bytes/HEAD unchanged. Both documented examples run with only their
+  observation placeholder replaced by a binary path-observe token.
+- Binary refusals distinguish invalid corrected sources (including malformed,
+  marker-only and wrong-kind source) as invalid_input; current conforming or
+  wrong-kind files, non-place paths and another ticket-directory ID as
+  not_repairable; missing files as path_not_found; escaping paths as invalid_path.
+  Existing canonical paths use real observations so staleness does not mask
+  those checks. ID collision returns identity_ambiguous without any context.
+  Closed-ticket repair preserves the closure byte-for-byte, and attempts to
+  drop or change it are refused.
+- Both stale-confirm cases return external_change with unchanged snapshots.
+  Missing consent returns confirmation_required. Changed input and consumed
+  consent under another request return confirmation_mismatch/confirmation_used.
+  The cache-loss fixture closes all service handles, removes WAL/SHM first,
+  deletes the database, rebuilds, then gets confirmation_not_found with
+  request.prepare; canonical/Git snapshots remain equal.
+- **Actor contract held unchanged.** A scoped FailOnce actor over the CLI data
+  directory prepared and executed document repair at
+  AfterOwnedWriteBeforeLifecyclePersistence: internal_error, partial,
+  FailureClass::Incomplete, written/pending, accepted request and zero commits.
+  This is actor evidence of envelope-to-exit-4 classification, not a process
+  exit claim. After that actor dropped, the CLI used the same input, request
+  and confirmation and completed the same operation with one commit and ID.
+  Finished replay returned the identical envelope with an unchanged snapshot.
+- Both repairs replay through the real CLI. Fresh-request no-ops use a second,
+  distinct confirmation prepared before the first repair: a new request
+  returns already_applied/noop with no commit or snapshot change. A subsequent
+  prepare also returns the no-op without a confirmation. This supplies reusable
+  Task 7 evidence without treating finished replay as a fresh no-op.
+- Unix-only PTY test and import: JSON source is piped on stdin; terminal `n`
+  gives cancelled/130, no request record or canonical/context changes; terminal
+  `y` succeeds for both repairs. Human success goldens and refusal split-stream
+  checks pass; human success has progress on stderr. JSON stderr is empty.
+  Isolated homes contain only autocrlf=false; Shelf and explicit cache-fixture
+  request-store scans reject source/file sentinels. No real application data,
+  keys, Git configuration or terminal was used.
+
+### Red/green and golden review
+
+1. Added all **16 new repair tests** before production changes. First compile
+   found one test-only type mismatch: failure_class returns Option. Wrapped
+   the expected Incomplete in Some, retaining the approved classification.
+2. The exact prescribed `repair` filter then ran **0 passed / 16 failed /
+   270 filtered**. Fifteen failures exposed command_unavailable; the PTY test
+   observed the unavailable child closing before its prompt. No pre-existing
+   test matched this filter at this base. The actor's partial-state assertions
+   passed before its unavailable CLI retry failed.
+3. Enabled document repair, regenerated E1 with MANYHANDS_UPDATE_GOLDEN=1,
+   and read the full diff; then enabled ticket repair and repeated. Each help
+   filter passed **9**. Only those verbs' availability, repository rule and
+   options changed; original summaries and C3 delivery remained exact. Root
+   help now has no planned C3 verb.
+4. First new-golden run: **14 passed / 2 failed**. Both were new-test setup
+   mistakes: the conforming-path case's synthetic token got external_change
+   before the content check (`bind/repair.rs:446–454`), and the human helper
+   incorrectly expected request-show's DTO to expose operation_id. Corrected
+   the first to a path-observe token, and the second to use the replay envelope
+   for operation/commit placeholders. Source inspection also placed wrong-kind
+   corrected source with invalid_input and wrong-kind current content with
+   not_repairable, as `bridges/repair.rs:146–198` distinguishes them. No library
+   behavior, required actor/replay outcome or pre-existing test was changed.
+5. Regeneration then passed **16 / 0 failed / 270 filtered**. Read all eight
+   new goldens (six JSON, two text), generated only through the update variable.
+   Only root, request, operation, commit, confirmation and expiry are replaced;
+   item IDs, adoption, paths, effects and recovery stay literal. Final runs
+   below passed without the update environment.
+
+### Exit and capability accounting
+
+Eight reached codes moved from reasons to C3 binary rows: cancelled,
+confirmation_required, confirmation_not_found, confirmation_mismatch,
+confirmation_used, identity_ambiguous, not_repairable and path_not_found.
+Linux accounting is **39 binary rows + 3 reasons = 42 codes**, still equal
+to **40 library codes union CLI_ONLY**, with disjointness and exact equality.
+The remaining reasons are discovery_pending (actor then CLI),
+registration_pending (failure seam) and confirmation_expired (library-only
+clock seam; no synthetic child expiry). On non-Unix, cancelled is explicitly
+a reason rather than fabricated executed PTY evidence (**38 + 4**).
+
+The existing internal_error binary row still means startup exit 1; the repair
+actor's partial internal_error is separately cited as exit-4 classification,
+never masquerading as a process row. The prepare inventory covers **all eleven
+mutations**: two repair previews and nine not_confirmable answers. The existing
+help-driven no-op inventory now covers **9 capable / 2 incapable** and retains
+the audit equality and all prior assertions. Task 7 owns its final rename and
+the complete human/privacy/examples inventories.
+
+### Final verification
+
+All Rust commands ran through Devenv with locked dependencies except fmt.
+Each test command had one positional filter; final golden checks had no update
+variable. No broad suite or native CI was run.
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --test cli repair` | **16 passed**, 0 failed/ignored, 270 filtered, 6.10s. |
+| `devenv shell -- cargo test --all-features --locked --test cli authoring_exits` | **11 passed**, 0 failed/ignored, 275 filtered, 4.01s. |
+| `devenv shell -- cargo test --all-features --locked --test cli input_schemas` | **7 passed**, 0 failed/ignored, 279 filtered, 0.76s; both new closed schemas/examples included. |
+| `devenv shell -- cargo test --all-features --locked --test cli help` | **9 passed**, 0 failed/ignored, 277 filtered, 0.09s. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, no warnings. |
+| `devenv shell -- cargo check --all-features --locked` | Passed. |
+| `devenv shell -- cargo fmt --check` | Passed after formatting. |
+
+Total **43 distinct passing integration tests**, including **16 new tests**.
+Historical Task 5 and Part A results are retained, not recounted.
+
+### Self-review and return
+
+Reviewed the complete task diff for ordering, thin-adapter boundaries,
+confirmation reuse, scoped interruption, byte/commit/context invariants,
+input/source privacy, cfg-gated PTY portability, all eight new goldens and E1.
+The **24 changed files** are the three production modules; tests/cli.rs,
+tests/cli/repair.rs, tests/cli/authoring_exits.rs and tests/support/cli.rs;
+two input schemas and two examples; eight new output goldens and three E1
+goldens; this ledger and canonical comment `01M5RQNAFG9BHKQCWGGY2REGW8`.
+Its ID came from the built CLI's id new and timestamp from the UTC clock.
+
+No unresolved blocker or required-contract discrepancy was found. Existing
+test changes are registrations, explicitly planned C3 extensions and E1 only;
+no library, Cargo, output-schema, shared driver or test-target changes. Status,
+diff and last ten commits were inspected before staging owned paths. The task
+commit carries the required co-author trailer and is pushed only to this ticket
+branch. Independent controller reviews are next. Task 7 remains unstarted;
+no agents, PR, main integration, closure, cleanup, native CI or dogfooding.
+
+## Task 7: Part B evidence and checkpoint
+
+Recorded **2026-10-25T05:28:07Z**. The owner's fresh Task 7 brief explicitly
+conveys **Task 6 spec and quality APPROVED** at
+`aab0e795d5245d0e0932d8ceff2501d06846d963`. The baseline and task table now
+record that approval, superseding the historical pending row. All previous
+decisions, approvals and narrow owner rulings remain in force.
+
+### Preflight and evidence
+
+- Began at the exact clean supplied base, in the specified ticket worktree and
+  branch. Read the handoff, current main's AGENTS.md, Cycle/design/Task 7 plan,
+  ledger rulings and preceding checkpoint evidence. Initial fetch succeeded;
+  merging origin/main into the ticket answered already up to date.
+- Preserved Task 6's complete exit accounting: **39 binary rows + 3 reasons**
+  on Unix, **38 + 4** otherwise. The exact union remains **40 library codes
+  plus the six CLI_ONLY entries = 42 unique codes**. Only discovery_pending,
+  registration_pending and confirmation_expired remain reasons on Unix.
+  Exit 4 retains decision-6 actor/CLI-completion evidence; the repair actor's
+  partial internal_error is not misrepresented as a binary exit. The C3
+  index_unavailable row retains the approved refresh provenance correction.
+- Renamed the no-op inventory to
+  `c3_noop_inventory_accounts_for_all_eleven_mutations`; preserved all eleven
+  rows, **9 capable / 2 index-incapable**, audit equality and test references.
+- Added the malformed-input matrix: **nine verbs × two malformed shapes ×
+  two modes = 36 binary calls**. Unknown fields and wrong types are
+  invalid_input/2. Human stderr names the field without its value; JSON retains
+  the fixed ResultCode message and request ID, with empty stderr. Canonical/
+  linked-worktree snapshots, Git refs and absent request records prove refusal
+  has no authoring effect.
+- Added the human inventory: help filtered by delivered_by C3 equals exactly
+  the design's thirteen verbs, all available, each naming its actual existing
+  human binary test. Inspected the referenced loops: every named verb executes,
+  including both reads. The checkpoint runs those tests and their goldens.
+- Added R-17 privacy: **18 successful executions**, nine verbs independently
+  in each mode, plus **18 CLI-built refusals** and **two fill-read refusals**.
+  Repairs prepare then execute with consent; previews do not count. Finished
+  request records must be ok, and all eight content mutations must checkpoint;
+  folder creation must produce its directory. Each content mutation's actual
+  owned file contains MANYHANDS-SENTINEL-7f3a, proving non-vacuous planting.
+  That content is absent from stdout/stderr and all eight request stores via
+  assert_request_stores_exclude. Title/path/initials/deps use distinct valid
+  sentinels and diagnostic-only checks, retaining the approved public data/read
+  exemptions. Ticket repair's path uses a separate canonical-ULID sentinel.
+  The fill-refusal case is ticket save of DOCUMENT_A with title omitted:
+  item_not_found/2, item scope/request ID retained, no record or file change.
+- Added R-13's authoritative nine-row outcome table beside EXAMPLES in
+  tests/cli/authoring_exits.rs. Every example validates before and after runtime
+  observation replacement, executes in a fresh fixture and returns **ok/0**.
+  Both repairs are confirmed executions. Fixture files fit the example IDs,
+  paths and corrected sources; a restored-object equality assertion proves
+  every non-observation field remains unchanged. Destination observation is
+  obtained from path observe too. Task 8 copies/links this table.
+
+All helpers stay in the owned file and reuse Fixture/CliEnv isolation, including
+autocrlf=false and an identity-free home. Services used to seed/refresh fixtures
+are dropped before CLI children execute. No shared mutation driver was changed.
+
+### Verification
+
+This is test-only evidence for already approved behavior. The first focused run
+passed **15 / 0 failed / 275 filtered** (15.19s); no intentional production-red
+claim. Self-review then added a valid distinct ticket-path sentinel and positive
+owned-file content checks. The final focused run passed **15 / 0 failed / 275
+filtered** (15.25s). Four tests are new; all eleven earlier C3 tests remain.
+
+The six checkpoint commands ran once on that final Rust tree, through Devenv,
+with a 600-second tool budget. All passed:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | Passed, 0.38s. |
+| `devenv shell -- cargo fmt --check` | Passed across the whole tree. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, 1.35s; no warnings or outside-file failure. |
+| `devenv shell -- cargo check --locked --bin manyhands-cli` | Passed, 0.67s. |
+| `devenv shell -- sh scripts/check-cli-no-gpui.sh` | Passed. |
+| `devenv shell -- cargo test --all-features --locked --bin manyhands-cli --test cli --test read_contract --test mutation_contract` | **188 CLI unit + 290 CLI integration + 71 read-contract + 44 mutation-contract = 593 passed**; zero failed/ignored/measured/filtered. Durations 0.28s / 125.83s / 10.80s / 9.92s. |
+
+Counts above count the completed gate once; focused runs are not added again.
+No full suite ran. After the gate, fetch/merge-tree and merge again found main
+unchanged at `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; merge already current.
+Merge-tree at the task base returned `cc0f419dd8db68a9e623b26d6d2920e7519720c0`.
+
+### Self-review and return
+
+Reviewed the task diff against all seven steps, output-mode distinctions,
+example immutability, actual successful execution counts, request-store privacy,
+refusal state and fixture isolation. Status/diff/last ten commits and whitespace
+were inspected. Only tests/cli/authoring_exits.rs, this ledger and canonical
+Part B comment `01M5RRFKFH7190Z50S4WNDB4RZ` change. Comment ID came from the built
+CLI's id new through Devenv; timestamp from the UTC clock.
+
+No unresolved implementation blocker was found. The controller owns independent
+Part B spec/quality review **after return**, over
+`452f031fd06d3a39e2c5de6cfe711b74256ab8a1..Task7HEAD`; review is **pending**.
+Task-only commit and ticket-only push are authorized, with the prescribed message
+and co-author trailer. Task 8 has not started. No agents, PR, main integration,
+closure, cleanup, native CI or other-branch dogfooding operation occurred.
+
+## Part B approval and Task 8: document amendments
+
+Recorded **2026-10-25T05:43:16Z**. The owner's fresh Task 8 implementer brief
+explicitly conveys **Part B spec and quality APPROVED** at
+`9a2a5170c4704ef03420ef2276911c6b1bfa3959`, with the six checkpoint gates and
+**593 tests** recorded under Task 7. This supersedes its historical pending
+review status. Those results are retained evidence, not a Task 8 rerun.
+Decisions 1–7, R-1–R-18 and all narrow Task 0/3 owner rulings remain binding.
+
+### Preflight and scope
+
+- Started from the exact clean supplied base in the named ticket worktree and
+  branch. Read the handoff, current main's AGENTS.md, ticket and all comments,
+  Cycle/design/Task 8 plan, ledger and the four amendment files. Worked inline
+  with no agents.
+- Initial fetch/merge and the pre-checkpoint fetch/merge retained
+  `origin/main` at `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; merging it into
+  the ticket was already current. HEAD before/after remains the supplied base.
+  Ancestry passed; `git merge-tree --write-tree HEAD origin/main` returned
+  `55ddf7d3ced176ad5c9c5bdc94a0beaef11daed0` at that committed base.
+- The F1/F2 library, results/runtime and Cargo tree compare unchanged to the
+  Task 0 baseline. The actual C3 catalog, parser, dispatch, authoring/fill
+  adapters, read signatures, rebuild root path, schemas and Task 7 example
+  fixture/table were source-inspected. No signature/code-set discrepancy or
+  new contract decision was found.
+
+### Amendments
+
+1. `docs/RFC/cli-contract.md`: all eleven items of the design's amendment list
+   carry the specified date marker. The thirteen verbs' taxonomy and nine
+   closed schema/example rows match built inputs/selectors. Save fill/replay,
+   decision-7 refusals, read proposals/context paths, index request IDs,
+   identity recovery and primary-only folders are explicit. The cache-loss
+   paragraph uses F2 codes and links its Departures section. The evidence
+   paragraph copies Task 7's exact nine-case preparation/outcome table, all
+   ok/0, with observation-only substitutions and unchanged example source.
+2. `docs/RFC/ticket-relationships-and-short-codes.md`: available ticket-check
+   flags, complete-proposal/exit-0 rejection semantics, and create/save
+   omitted/null/empty-list relationship rules.
+3. `docs/Waves/wave-03-dogfooding.md`: only the C3 section amended, recording
+   decisions 1–7, delivered capability, retained checkpoint evidence, known
+   limits and the approved runtime qualifications: primary-only committed
+   move-to-self, HEAD-equal save no-ops, partial/exit-4 precedence, the
+   new-domain-operation fence and the rebuild root exception. Dogfooding is
+   explicitly **OWED** with Task 9 authorization still required.
+4. `docs/research/wave-03-api-audit.md`: all thirteen C3 rows updated in place
+   with built CLI adapters/selectors/availability and evidence references.
+   The Task 0 **40 library / 42 CLI-inclusive** union and every row's result
+   expression are byte-identical. C3 cache-loss examples now point to the
+   delivered binary tests; historical non-C3 inventory rows remain historical.
+
+### Validation and self-review
+
+- `git diff --check` passed. The complete four-file diff was reviewed against
+  the design's Document Amendments and Task 8's five steps.
+- A read-only Node assertion command passed: **38** added/changed relative
+  file links and heading/line anchors resolve; **11** CLI amendment markers;
+  **9** schema required/property inventories match their RFC rows and example
+  shapes; **9** outcome rows exactly equal the Task 7 source table; **13**
+  audit rows equal the available C3 catalog set, with unchanged per-row codes
+  and the **40/42** union. It also checked the specified stale phrases and
+  absence of the old generic cache-loss refusal in the CLI paragraph.
+  This is source/document validation, not execution of the Rust schema tests.
+- The first attempt to invoke that validation with `python3` could not start
+  because Python is absent from this shell. The equivalent stdlib-only Node
+  check above ran successfully; no environment or repository fix was made.
+- `git diff --exit-code 9a2a5170c4704ef03420ef2276911c6b1bfa3959 -- src tests schemas Cargo.toml Cargo.lock AGENTS.md .agents`
+  passed. No Rust, schema, test, AGENTS.md or skill edit; no Rust gate ran.
+- Canonical checkpoint comment: `01M5RSBAYZPZYR4G10ZAEF13YE`. Its ID came from
+  `devenv shell -- ./target/debug/manyhands-cli id new`, and its timestamp
+  from `date -u`. No new build was needed.
+
+Only the four named documents, this ledger and that new canonical comment
+are included in the task commit, with the prescribed co-author trailer.
+Status, diff and the last ten commits are inspected before staging those exact
+paths. Task-only commit and ticket-only push are authorized. Self-review found
+no unresolved Task 8 blocker; independent review belongs to the controller.
+Task 9 is not started. Full verification, whole-branch review and dogfooding
+remain owed; there is no Cycle-complete, native CI, PR, main integration,
+closure or cleanup claim.
+
+## Task 8 approval and Task 9: full-gate checkpoint
+
+Blocker recorded **2026-10-25T13:27:02Z**. The fresh Task 9 brief explicitly
+conveys Task 8 **spec and quality APPROVED** at
+`f9618f76ce9608c9ccc42018701647d7b98bb642`. This supersedes Task 8's historical
+pending status; all earlier approvals and owner rulings remain binding.
+
+Scope is the full gate and checkpoint evidence only, in the named ticket
+worktree/branch, without subagents. The controller owns whole-branch reviews.
+Dogfooding preflight has not started. No implementation fix is authorized.
+
+### Tested tree and commands
+
+- Initial and tested HEAD: `f9618f76ce9608c9ccc42018701647d7b98bb642`.
+- Commit tree: `036c882cfbf7b765025b1b48c06d2c4eda49339c`.
+- `HEAD:src`: `1cc7a955979ede82b1a779cfad8557925db5d531`.
+- `HEAD:tests`: `6126b2040a21cf4350c6eac68569426ca7ba7c18`.
+- Worktree was clean before the gate. Only this ledger and the canonical
+  checkpoint comment are tracked changes for this substep. Temporary harness
+  artifacts live in ignored `target/`.
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | Exit 0; Cargo 0.35s. |
+| `devenv shell -- cargo fmt --check` | Exit 0. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Exit 0; Cargo 1.05s. |
+| `devenv shell -- cargo test --all-features --locked --no-fail-fast` | One invocation, detached; exit **101**, **4528 passed / 1 failed / 1 ignored**, 43 targets; 6239s wall time. |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | Exit 0; printed usage/catalog, opened no window. Cargo 4m 34s including an observed build-directory lock wait. |
+| `devenv shell -- sh scripts/check-cli-no-gpui.sh` | Exit 0. |
+
+The approved `/tmp/claude-1000` parent was verified with `ls`. Log path is
+**`/tmp/claude-1000/c3-full-suite.log`**, without substitution. An initial
+launcher attempted `nohup setsid python3 target/c3-task9-gate.py` and failed
+before Devenv/Cargo started: Python is absent (log line 1). It is not a test
+invocation or test retry. Replaced only that agent-owned temporary wrapper
+with Bash, using `apply_patch`.
+
+Actual launch:
+`nohup setsid bash target/c3-task9-gate.sh >> /tmp/claude-1000/c3-full-suite.log 2>&1 &`.
+The wrapper runs the exact test command above under GNU
+`timeout --verbose --kill-after=10s 7200s`, preserves its actual return code
+without a pipeline, and records start/end/status/duration in
+`target/c3-task9-{start,actual-exit,result}.txt`. Its exclusive start marker
+prevents a second invocation. Only its own timeout-managed process group may
+be terminated if the budget expires.
+
+Start: **2026-10-25T12:53:46Z**, wrapper PID/PGID/SID **3498233**, verified
+detached with PPID 1. The two-hour deadline is **2026-10-25T14:53:46Z**.
+The independent smoke command visibly waited for the build lock; no assumption
+of compilation independence is made.
+
+### Outside-C3 blocker: stop for the owner
+
+`repository::closure::checkpoint::tests::mismatched_confirmed_identity_persists_nothing`
+failed at **`src/repository/closure/checkpoint_tests.rs:1183:5`**:
+`assert_eq!(f.reload(&r), r)`. Log evidence: first failure at line 117,
+assertion and printed records at **1305–1311**, failure summary at
+**1313–1319**. The two redacted Debug renderings look identical; this does
+not establish which equality field differs, and no root cause is claimed.
+The earlier ExternalChange/config/file-image assertions at source lines
+1175–1182 had passed before that assertion.
+
+Library target: **1269 passed / 1 failed / 0 ignored / 0 measured / 0 filtered**,
+718.34s. This is outside C3's authorized files. No test was retried, changed,
+ignored or weakened; no library or Cargo fix was attempted. The already-running
+`--no-fail-fast` invocation is allowed to finish solely to preserve its final
+status and all target counts. Subsequent Task 9 work is blocked for the owner.
+
+### Checkpoint and evidence boundary
+
+At **2026-10-25T13:26:25Z**, `git fetch origin` succeeded; `origin/main` remains
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`. `git merge-tree --write-tree HEAD origin/main`
+succeeded with tree `036c882cfbf7b765025b1b48c06d2c4eda49339c`; main is already
+an ancestor of HEAD. No new main merge or gate reassessment is needed.
+Current main's AGENTS.md was read. `git diff --exit-code origin/main --
+src/repository.rs src/repository src/lib.rs src/results.rs src/runtime.rs
+Cargo.toml Cargo.lock` passed, confirming the failing library and Cargo tree
+match main exactly.
+
+Canonical checkpoint comment **`01M5SKWGAZBNRQ73CPQ8J4EWZ1`**, allocated with
+`devenv shell -- ./target/debug/manyhands-cli id new`; `created_at` is the actual
+UTC clock above. Final suite status/counts and self-review follow. Ledger/comment
+remain uncommitted for the controller's eventual Task 9 commit. No review-ready,
+Task 9 completion, dogfooding, switch, closure, main integration or native-CI claim.
+
+### Final result of the sole full-suite invocation
+
+Ended **2026-10-25T14:37:45Z**, **6239 seconds (1h 43m 59s)** after launch,
+within the two-hour budget. No timeout or process termination was required.
+`target/c3-task9-actual-exit.txt` records **actual_exit_status=101**;
+`target/c3-task9-result.txt` independently records wrapper status **101**, end
+time and duration. Log **4956–4958** reports the sole failed target `--lib`
+and the wrapper's final status. A post-run session probe
+`ps -s 3498233 -o pid,ppid,pgid,sid,etime,args` found no remaining process.
+
+Log SHA-256:
+`d194d2c5ce3fcc336595de6503c4599991ea87c3d5e9bc3e20121a3991f6b454`.
+The complete 4958-line log, ignored wrapper, exclusive start marker, actual
+exit file and final status file are retained. No full-suite or failed-test
+rerun occurred.
+
+**43 targets: 4528 passed / 1 failed / 1 ignored = 4530 reported cases.**
+Standard-harness targets report zero measured/filtered. SSH entries are the
+custom harness's completed case totals (Cargo.toml declares `harness = false`),
+not invented libtest summaries; they reported no failed or skipped cases.
+The following rows count this invocation only. References are result-line
+numbers in `/tmp/claude-1000/c3-full-suite.log`.
+
+| Target | Passed | Failed | Ignored | Result log line |
+| --- | ---: | ---: | ---: | ---: |
+| Library (`src/lib.rs`) | 1269 | 1 | 0 | 1317 |
+| Desktop unit (`src/main.rs`) | 520 | 0 | 0 | 1846 |
+| CLI unit (`src/bin/manyhands-cli.rs`) | 188 | 0 | 0 | 2041 |
+| canonical_foundation | 65 | 0 | 0 | 2112 |
+| cli | 290 | 0 | 0 | 2412 |
+| cli_remote (SSH) | 31 | 0 | 0 | 2446 |
+| comment_publication (SSH) | 41 | 0 | 0 | 2491 |
+| discovery_rebuild | 79 | 0 | 0 | 2575 |
+| document_promotion (SSH) | 74 | 0 | 0 | 2711 |
+| drafts | 48 | 0 | 0 | 2764 |
+| editor_feasibility | 9 | 0 | 0 | 2779 |
+| journal_rejection | 26 | 0 | 0 | 2811 |
+| key_material | 39 | 0 | 0 | 2856 |
+| key_storage | 2 | 0 | 0 | 2864 |
+| local_authoring | 140 | 0 | 0 | 3010 |
+| mutation_bridges | 129 | 0 | 0 | 3145 |
+| mutation_confirmation | 183 | 0 | 0 | 3334 |
+| mutation_contract | 44 | 0 | 0 | 3384 |
+| mutation_relationships | 27 | 0 | 0 | 3417 |
+| mutation_remote (SSH) | 88 | 0 | 0 | 3509 |
+| mutation_replay | 308 | 0 | 0 | 3827 |
+| read_boundary | 20 | 0 | 0 | 3853 |
+| read_characterization | 0 | 0 | 1 | 3860 |
+| read_comments | 23 | 0 | 0 | 3889 |
+| read_contract | 71 | 0 | 0 | 3966 |
+| read_credentials | 25 | 0 | 0 | 3997 |
+| read_items | 76 | 0 | 0 | 4079 |
+| read_relationships | 17 | 0 | 0 | 4102 |
+| read_repository | 33 | 0 | 0 | 4141 |
+| read_status | 24 | 0 | 0 | 4171 |
+| recovery_foundation_gate | 52 | 0 | 0 | 4229 |
+| remote_merge_recovery (SSH) | 25 | 0 | 0 | 4257 |
+| remote_observation (SSH) | 15 | 0 | 0 | 4274 |
+| remote_polling (SSH) | 84 | 0 | 0 | 4362 |
+| remote_reservation | 13 | 0 | 0 | 4380 |
+| remote_synchronization (SSH) | 63 | 0 | 0 | 4447 |
+| repository_enablement | 95 | 0 | 0 | 4547 |
+| session_credentials | 11 | 0 | 0 | 4564 |
+| shared_key_registry | 39 | 0 | 0 | 4609 |
+| ssh_fixture (SSH) | 35 | 0 | 0 | 4663 |
+| ssh_transport (SSH) | 123 | 0 | 0 | 4789 |
+| ticket_closure (SSH) | 73 | 0 | 0 | 4938 |
+| manyhands doc-tests | 11 | 0 | 0 | 4954 |
+| **Total** | **4528** | **1** | **1** | |
+
+The sole ignored case is the existing
+`reads_of_a_thousand_item_repository_are_characterized`, explicitly described
+as an on-request characterization (`--ignored --nocapture`), log **3858**.
+It was not enabled or rerun. Desktop unit tests ran as part of the mandated
+all-features suite; no desktop application launch was performed.
+
+### Final self-review and blocked return
+
+At **2026-10-25T14:42:22Z**, post-suite `git fetch origin` again succeeded.
+HEAD/main/merge-tree remain the exact SHAs above, and main ancestry passed.
+Main did not move; no merge or gate reassessment is required. The Rust/test/
+schema/Cargo/AGENTS/skill tree is unchanged from the tested HEAD. Whitespace,
+full ledger diff, canonical comment and final status were self-reviewed.
+
+Only the ledger and comment are left as uncommitted evidence. No commit or
+push was made. **Task 9 is blocked, not complete or review-ready.** The owner/
+controller must disposition the outside-C3 failure before further Task 9 work;
+whole-branch spec/quality reviews remain pending with the controller.
+Dogfooding preflight has not run. All later Task 9 steps remain owed.
+
+## Task 9 follow-up: owner-authorized persisted test baseline
+
+Recorded **2026-10-25T15:23:28Z**. The owner explicitly authorized a narrow
+exception to the frozen-library/pre-existing-test restriction: correct only
+`src/repository/closure/checkpoint_tests.rs::mismatched_confirmed_identity_persists_nothing`
+by reloading its persisted record immediately after `confirmed_record`, before
+the observations and hook, retaining every no-effect assertion. The owner also
+authorized the exact failing test followed by the checkpoint test module,
+fmt/check/clippy, a separate fix/evidence commit and ticket-only push. No other
+test or library correction and **no second full-suite run** is authorized.
+
+This supersedes the earlier stop only for that correction and scoped verification.
+The original full run remains **4528 passed / 1 failed / 1 ignored**, exit **101**,
+6239s, on `f9618f76ce9608c9ccc42018701647d7b98bb642`; it has not been rerun or
+relabeled passing. Task 8 spec/quality approval remains recorded above. The
+controller independently reviews this fix and the whole branch, then asks the
+owner for full-gate disposition. Task 9 is not complete or review-ready.
+
+### Source verification and uncertainty
+
+Verified the supplied read-only diagnosis against unchanged production source:
+
+- `confirmed_record` (`checkpoint_tests.rs:1040–1058`) inserts/reads the record,
+  changes `context_oid` and `step`, saves it, then returns that in-memory value
+  without reloading the save's persisted timestamp.
+- `record.rs:514–515` inserts with `parent::now()` and reads it back.
+  `save_record` takes `&ClosureRecord` (`:520–524`) and updates the database's
+  `updated_at=max(updated_at, now)` (`:557–560`), without updating that input.
+  `promotion/lifecycle_record.rs:90–92` supplies whole Unix seconds. Crossing a
+  second boundary during fixture setup can therefore leave its returned record
+  older than the persisted baseline, even when the operation writes nothing.
+- `ClosureRecord` derives `PartialEq` including `updated_at`
+  (`record.rs:165–185`), but its custom Debug omits it (`:207–223`). Identical
+  displayed records do not imply full equality.
+- The identity-mismatch path returns `ExternalChange` before identity persistence
+  or `begin_closing` (`checkpoint.rs:624–656`).
+- Existing precedent `309c9e071994f55eb0b1fa9f44546cc2722d0398` added the same
+  persisted-baseline reload to `existing_closure_writes_no_checkpoint`.
+
+This is a high-confidence source-supported mechanism, **not proof of the original
+failure's hidden timestamp values**. Those values were not captured. No diagnostic
+reproduction or historical-cause confirmation is claimed. Scoped passes below
+verify the corrected test, not the old run's exact cause.
+
+### Minimal correction and scoped verification
+
+Only two Rust lines were added, at `checkpoint_tests.rs:1164–1165`: a comment
+explaining the setup timestamp and `let r = f.reload(&r);`, before the observation.
+All existing assertions are byte-for-byte retained: ExternalChange, identical
+configuration bytes, absent config lock, unchanged repository image, and full
+persisted-record equality. Production code, helper, equality and Debug behavior,
+other tests and Cargo are unchanged. No broad refactor or assertion weakening.
+
+Commands ran once each, in order, through Devenv on this two-line correction:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --lib repository::closure::checkpoint::tests::mismatched_confirmed_identity_persists_nothing -- --exact` | Exit 0; **1 passed / 0 failed / 0 ignored / 1269 filtered**, 0.39s test time; build 6.91s. |
+| `devenv shell -- cargo test --all-features --locked --lib repository::closure::checkpoint::tests` | Exit 0; **46 passed / 0 failed / 0 ignored / 1224 filtered**, 10.15s test time. Includes the exact test above; these are not 47 distinct tests. |
+| `devenv shell -- cargo fmt --check` | Exit 0. |
+| `devenv shell -- cargo check --all-features --locked` | Exit 0; 0.46s. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Exit 0; 6.41s. |
+
+Both test runs report zero measured tests. No other test command ran; the sole
+full-suite result and its preserved log/status files are unchanged.
+
+### Checkpoint, evidence preservation and delivery
+
+Resumed in the same C3 ticket worktree/branch at `f9618f7`. Inspected and preserved
+the uncommitted Task 9 ledger and comment `01M5SKWGAZBNRQ73CPQ8J4EWZ1`; both are
+included as original gate evidence in this fix/evidence checkpoint. The old
+comment is unchanged. The ledger retains the failed run and marks the narrow
+follow-up separately. New canonical comment **`01M5STHPHER7K005JYRSD3PC52`** uses
+the built CLI's `id new` and actual UTC clock above.
+
+Initial fetch/merge found main already current; current main's AGENTS.md was
+read. After scoped verification, fetch again retained `origin/main` at
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`. Precommit merge-tree at the unchanged
+HEAD succeeded, tree `036c882cfbf7b765025b1b48c06d2c4eda49339c`. The resulting
+commit's merge-tree/status/push are checked in the delivery return. No main
+movement requires a merge or gate reassessment.
+
+Commit scope: the two-line test correction, this ledger, original gate comment,
+and new owner-exception/scoped-verification comment. Status, complete diff,
+whitespace and recent ten commits are inspected before staging only those four
+paths, with the required co-author trailer. Ticket-only publication is authorized.
+Independent fix/whole-branch reviews and owner full-gate disposition remain
+pending. No subagents, dogfood preflight, switch, PR, main integration, closure,
+cleanup or native CI.
+
+## Task 9 whole-branch SPEC and QUALITY approvals
+
+Recorded **2026-10-25T15:33:13Z**, on clean HEAD
+`806057d3223b9ac2e71fa3a28c3eba83de5c63ef`. The controller explicitly reports
+both independent whole-branch reviews **APPROVED** over the actual range
+`ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a..806057d3223b9ac2e71fa3a28c3eba83de5c63ef`:
+
+- **SPEC: APPROVED.** Includes the owner-authorized test-baseline exception.
+- **QUALITY: APPROVED.** Includes the same correction and evidence.
+- **No actionable findings or new gaps** were reported by either review.
+
+These are controller-conveyed independent approvals, not new reviews performed
+by this implementer. They supersede the historical pending review statuses above
+for that exact range. Task 8's previously recorded approvals remain intact.
+
+### Remaining gates and unchanged evidence
+
+- **Owner full-suite disposition is still pending.** The sole full run at
+  `f9618f76ce9608c9ccc42018701647d7b98bb642` remains **4528 passed / 1 failed /
+  1 ignored**, exit **101**, 6239s. It is not relabeled green by review approval.
+- The authorized post-fix verification remains **46 distinct passing tests**
+  in the checkpoint module; its separate exact-test pass overlaps that set.
+  The historical failure's hidden timestamps remain unknown.
+- **Dogfooding and the switch remain owed.** No dogfood preflight has run.
+- **Not review-ready, not full-gate complete, not Task 9 complete.** The
+  controller will ask the owner for full-gate disposition next.
+
+This is a documentation-only evidence checkpoint. No Rust gate or full-suite
+command was rerun. The canonical comment **`01M5SV3J6G8XQJRGN56KCWE68Z`** uses
+an ID from `devenv shell -- ./target/debug/manyhands-cli id new` and the actual
+UTC clock above. Only this ledger and that comment change.
+
+`git fetch origin` succeeded; main remains
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`. Precommit merge-tree passed with tree
+`3aa0a99452e5a693f0a4cac9146e5b0b2af08aad`; no main movement requires a merge.
+Status, diff, whitespace and the recent ten commits are inspected before the
+evidence-only commit with the required co-author trailer and ticket-only push.
+Postcommit merge-tree, remote HEAD and clean state are verified in the return.
+
+## Task 9 verification exception and read-only dogfooding preflight
+
+Recorded **2026-10-25T15:41:38Z**, from clean C3 HEAD
+`a79a3bd6d3ac0453726d00908c286f69f2c30a8d`. The owner answered **YES** to the
+controller's stated interpretation: accept the original full-suite evidence
+plus scoped post-fix results as an **explicit Task 9 verification exception**.
+This resolves the previously pending owner verification disposition only:
+
+- Original full suite at `f9618f7`: **4528 passed / 1 failed / 1 ignored**,
+  exit **101**, 6239s, retained historically. No claim that this run was green.
+- Authorized correction at `806057d3`: **46 distinct passing checkpoint tests**,
+  including the separately run exact test, plus passing check/fmt/clippy.
+- No second full-suite invocation. The historical hidden values remain unknown.
+- Whole-branch SPEC and QUALITY approvals over `ad4d3f0..806057d3`, recorded in
+  `a79a3bd6`, remain approved with no actionable findings or new gaps.
+
+The exception does **not** authorize dogfooding saves or target-branch pushes.
+Only design Dogfooding steps **1 (build)** and **2 (read-only preflight)** were
+performed. Dogfooding and switch remain **OWED**, with a separate go-ahead
+awaited. Task 9 remains incomplete and is not marked review-ready.
+
+### Build, default data path and repository inspection
+
+First ran, from the C3 worktree:
+
+`devenv shell -- cargo build --locked --bin manyhands-cli`
+
+**Exit 0**, Cargo dev-profile build finished in **0.28s**. Then invoked exactly:
+
+`/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMV81DFRGJ4Z76489XM/target/debug/manyhands-cli --json repo inspect --repo /home/vhodges/work/src/manyhands`
+
+**Exit 0**, `outcome: success`, `code: ok`, empty recovery; selected path and
+resolved root both **`/home/vhodges/work/src/manyhands`**. Inspection reports:
+
+- registered **true**, HEAD branch **main**;
+- configuration **valid**, primary branch **main**, publication remote **origin**,
+  no configuration problems;
+- identity **available**;
+- origin publication-eligible and selected;
+- all six effect categories **not_requested**, commit OID null, request and
+  operation IDs null. No index refresh or mutation was requested.
+
+Default application data directory: **`/home/vhodges/.local/share/manyhands`**.
+Resolved from the actual invocation environment (`HOME=/home/vhodges`,
+`XDG_DATA_HOME` unset, `MANYHANDS_DATA_DIR` unset) and source:
+`src/bin/manyhands-cli.rs:64–69` selects `open_default` without an override;
+`src/repository.rs:7217–7221` uses
+`ProjectDirs::from("com", "manyhands", "Manyhands").data_local_dir()`.
+The locked Linux directories mapping is documented in the C1 ledger fact 13
+and its implementation plan's default-directory test. The inspect DTO does not
+itself expose the data path. No other real-data CLI operation was performed.
+Only the explicit repo-inspect call may have touched default service/cache data;
+no body/source, credentials or secret contents were read or recorded.
+
+### Six target worktrees and refs
+
+Fetched origin first. `git worktree list --porcelain` mapped each target to
+its actual registered worktree. Every path below is absolute after prefixing
+**`/home/vhodges/work/src/manyhands/.manyhands/worktrees/`** to the full ticket ID.
+Every target branch is **`manyhands/ticket/<ID>`**. Read-only probes used
+`git -C <actual-worktree> status --porcelain`, `git for-each-ref`,
+`git rev-parse`, `git log --oneline origin/main..<branch>` and `git rev-list`;
+`GIT_OPTIONAL_LOCKS=0` prevented optional status index writes. All commands ran
+from the C3 workdir. No target body/source was read or target file changed.
+
+| Target | Ticket ID / worktree suffix | Local tip | Status | Origin tip | Upstream | Existing commits to publish |
+| --- | --- | --- | --- | --- | --- | ---: |
+| C4 | `01M4CC0VMWEQQ9G4W0DAG7ADPY` | `aac4217cfa6a951d3fb83ad26fd31e1030804dcb` | Clean (empty porcelain) | Absent | None | 2 |
+| C5 | `01M4CC0VMXTNXNH78C11DYXS8H` | `01d8a26e9d34a5821038ddb4cd4ea0653d571adc` | Clean (empty porcelain) | Absent | None | 2 |
+| D4 | `01M4CC0VN1KTQFSVR99378TDHV` | `f4513256a36aab6b0b0c50118ef76bed5f362ff6` | Clean (empty porcelain) | Absent | None | 1 |
+| D5 | `01M4CC0VN2K8DBHNMZ46NTX5JJ` | `03176b71e6072eb8380211cea2f677424350140c` | Clean (empty porcelain) | Absent | None | 3 |
+| D6 | `01M4CC0VN3VPVVQ3RNWJKXWEVX` | `e877e4b21747b77acddb6682b65287ffb480159a` | Clean (empty porcelain) | Absent | None | 1 |
+| G1 | `01M4CC0VN4H9AC0Q3KA6E1QERC` | `7b306d1f9542737155a25988fd8b6b726387a4be` | Clean (empty porcelain) | Absent | None | 1 |
+
+All six branches are **865 commits behind origin/main**. They were inspected
+only, not merged. The ten existing commits that target pushes would publish,
+in each branch's `git log --oneline origin/main..<branch>` order:
+
+```text
+C4:
+aac4217 Checkpoint ticket 01M4CC0VMWEQQ9G4W0DAG7ADPY
+6078dfa Checkpoint ticket 01M4CC0VMWEQQ9G4W0DAG7ADPY
+C5:
+01d8a26 Checkpoint ticket 01M4CC0VMXTNXNH78C11DYXS8H
+71aee19 Checkpoint ticket 01M4CC0VMXTNXNH78C11DYXS8H
+D4:
+f451325 Checkpoint ticket 01M4CC0VN1KTQFSVR99378TDHV
+D5:
+03176b7 Checkpoint ticket 01M4CC0VN2K8DBHNMZ46NTX5JJ
+6157418 Checkpoint ticket 01M4CC0VN2K8DBHNMZ46NTX5JJ
+81a2198 Checkpoint ticket 01M4CC0VN2K8DBHNMZ46NTX5JJ
+D6:
+e877e4b Checkpoint ticket 01M4CC0VN3VPVVQ3RNWJKXWEVX
+G1:
+7b306d1 Checkpoint ticket 01M4CC0VN4H9AC0Q3KA6E1QERC
+```
+
+### Proposed saves and separate owner go-ahead
+
+The proposed `deps` sets are exactly the approved design/owner list, not
+observed current ticket values; target ticket bodies/source were not read:
+
+| Target | Proposed dependency IDs |
+| --- | --- |
+| C4 | `01M4CC0VMV81DFRGJ4Z76489XM`, `01M57SKVF6TQ3QM6AXJ35JGGSY` |
+| C5 | `01M4CC0VMWEQQ9G4W0DAG7ADPY`, `01M57SKVF6TQ3QM6AXJ35JGGSY` |
+| D4 | `01M4CC0VN0MFTGKQ4HGTTC5H63` |
+| D5 | `01M4CC0VN1KTQFSVR99378TDHV`, `01M57SKVF6TQ3QM6AXJ35JGGSY` |
+| D6 | `01M4CC0VN2K8DBHNMZ46NTX5JJ` |
+| G1 | `01M4CC0VMXTNXNH78C11DYXS8H`, `01M4CC0VN3VPVVQ3RNWJKXWEVX` |
+
+**No preflight blocker found.** Separate go-ahead must name the main root and
+default data directory above, the explicit index refresh, six ticket saves and
+six pushes creating **`origin/manyhands/ticket/<ID>`** for the listed targets.
+Those pushes also publish the **ten existing commits** above, plus any new save
+checkpoints. Each save re-emits the whole front matter in the library's order
+and style; other values are preserved while `deps` changes. Approved checks
+compare values, including body digest/length, rather than front-matter bytes.
+
+The owner must also see the approved interrupted-save risk: a save stopped
+part-way, followed by an edit to its ticket, can leave a pending operation that
+blocks new domain work on this repository until the request's bytes are restored
+or C4's `operation abandon` becomes available. Early no-op/refusal and finished
+replay answers retain their existing behavior. Verification acceptance alone
+does not authorize these operations.
+
+### Evidence checkpoint
+
+Canonical comment **`01M5SVJZAQ75PHG9TM53X1S1AP`** was allocated with the absolute
+branch-built CLI's `--json id new`; timestamp from the actual UTC clock above.
+Only this ledger and the new comment change. No further Rust gates ran.
+Post-preflight `git fetch origin` and merge-tree passed; main remains
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`, merge-tree at the base is
+`73d1c80d6ca471f335987841a2dc580f43d21557`. The evidence commit uses the required
+co-author trailer and is pushed only to C3's ticket branch after diff/status/
+whitespace/recent-log review. Postcommit clean state and merge-tree are checked
+in the return. No actual refresh, saves, target pushes/merges, switch,
+AGENTS/skill edits, closure, cleanup, PR or native CI. Owner go-ahead awaits.
+
+## Task 9 authorized dogfooding execution: steps 4–7
+
+Owner explicitly said **Proceed** to the presented preflight and go-ahead,
+authorizing the refresh, six saves and six target pushes creating the branches
+and publishing the ten listed existing commits plus checkpoints. Root:
+`/home/vhodges/work/src/manyhands`; default data:
+`/home/vhodges/.local/share/manyhands`. This is the explicit exception for these
+CLI effects and target pushes. Switch waits for the controller's next resume;
+Task 9 is not complete/review-ready. Prior verification exception and independent
+reviews remain accepted without rewriting the historical failed full-suite result.
+
+At **2026-10-25T20:08:44Z**, clean C3 HEAD is
+`5cba600b562062d6809d9ce916e26b65ea1e204e`; the already-built absolute CLI is
+executable. HOME and both data override variables still match preflight (HOME
+`/home/vhodges`, XDG_DATA_HOME/MANYHANDS_DATA_DIR unset). No rebuild or test rerun.
+Temporary ignored `target/c3-dogfood.cjs` reads CLI JSON in memory, omits source,
+replaces body with SHA-256/UTF-8 byte length and compares only the design's
+specified fields. It writes no files; canonical evidence is persisted with
+apply_patch before each request. Failed comparisons disclose field names only.
+
+### Refresh request, persisted before execution
+
+```json
+{"record":"dogfood_refresh_request","request_id":"01M5TAW1PY4TAXJ3W3MGK9GYV8","command":"index refresh","input":{"root":"/home/vhodges/work/src/manyhands"},"recorded_at":"2026-10-25T20:08:44Z"}
+```
+
+Refresh exit **0**, full returned mutation envelope:
+
+```json
+{"schema_version":1,"command":"index refresh","request_id":"01M5TAW1PY4TAXJ3W3MGK9GYV8","operation_id":"01M5TAY453A8MNV3FMCCMEV4TD","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":null,"branch":null,"worktree":null,"remote":null},"effects":{"write":"not_requested","checkpoint":"not_requested","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":null},"data":null,"recovery":[]}
+```
+
+### C4: pre-save record
+
+Read succeeded; actual target worktree porcelain status empty. Persisted before
+sending; the save driver repeats the clean/tip checks immediately before sending.
+
+```json
+{"record":"dogfood_pre_save","cycle":"C4","target_id":"01M4CC0VMWEQQ9G4W0DAG7ADPY","request_id":"01M5TAYKVT3P51QDSY8SM93PGV","input":{"observation":"v1:b5e7eb1268d71c39d7e03a904b349483f740301d914aef290066ee105431fe84","deps":["01M4CC0VMV81DFRGJ4Z76489XM","01M57SKVF6TQ3QM6AXJ35JGGSY"]},"compared":{"id":"01M4CC0VMWEQQ9G4W0DAG7ADPY","kind":"ticket","path":".manyhands/tickets/01M4CC0VMWEQQ9G4W0DAG7ADPY/ticket.md","title":"Wave 03 C4: CLI Discussion, Synchronization And Conflict Recovery","type":"cycle","status":"open","project":"manyhands","team":"core","closure":{"state":"open","closed_at":null,"closed_by":null},"slug":null,"parent":null,"deps":[],"unknown_metadata":{"cycle":"C4","wave":"03"},"problems":[],"body":{"sha256":"e79f0a7156242d6e4e6d0ea249e5f9442c3ef4da07f906b862ee595a2ee7144b","byte_length":1704}},"local_tip_before":"aac4217cfa6a951d3fb83ad26fd31e1030804dcb","primary_tip_before":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","recorded_at":"2026-10-25T20:10:08.642Z"}
+```
+
+Save exit **0**, stderr empty, full mutation envelope:
+
+```json
+{"schema_version":1,"command":"ticket save","request_id":"01M5TAYKVT3P51QDSY8SM93PGV","operation_id":"01M5TAZAVWXW6TR739JVZXQH0N","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":"01M4CC0VMWEQQ9G4W0DAG7ADPY","branch":"manyhands/ticket/01M4CC0VMWEQQ9G4W0DAG7ADPY","worktree":"/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMWEQQ9G4W0DAG7ADPY","remote":null},"effects":{"write":"written","checkpoint":"committed","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":"9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7"},"data":{"id":"01M4CC0VMWEQQ9G4W0DAG7ADPY","path":".manyhands/tickets/01M4CC0VMWEQQ9G4W0DAG7ADPY/ticket.md","slug":null,"unresolved":[],"rejected":[]},"recovery":[]}
+```
+
+### STOP: C4 dependency value checker used the wrong DTO shape
+
+At **2026-10-25T20:10:54.294Z**, the post-save read succeeded, but the temporary
+verification helper reported a failed `deps` comparison. Its exact safe result:
+
+```json
+{"record":"dogfood_value_check","cycle":"C4","request_id":"01M5TAYKVT3P51QDSY8SM93PGV","passed":false,"mismatched_fields":["deps"],"deps":[{"id":"01M4CC0VMV81DFRGJ4Z76489XM","state":"open"},{"id":"01M57SKVF6TQ3QM6AXJ35JGGSY","state":"open"}],"body":{"sha256":"e79f0a7156242d6e4e6d0ea249e5f9442c3ef4da07f906b862ee595a2ee7144b","byte_length":1704},"local_tip":"9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7","primary_tip":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","new_commits":1,"status_porcelain":"","checked_at":"2026-10-25T20:10:54.294Z"}
+```
+
+This is an **implementer verification-tool error**: `ticket show` returns
+dependency DTO objects containing `id` and `state`; the temporary helper sorted
+and compared those objects directly with the proposed ID strings. It should
+compare the dependency **IDs**, as the design requires. The two returned IDs
+above exactly match the proposal. Every other compared field, including body
+SHA-256/length, matched; C4 has exactly one new commit and remains clean, and
+primary HEAD is unchanged. This is not evidence of a library mutation defect.
+Nevertheless, the checker failed, so the explicit stop rule was honored:
+
+- No helper correction, value-check rerun or resave was attempted.
+- C4's successful mutation envelope is settled and recorded; no replacement
+  request ID is allocated for it. Do not repeat its save merely to fix checking.
+- The combined `verify C4 && prepare C5` command stopped at its first command;
+  **C5 was never read/prepared and no C5 request ID was allocated**.
+- C5, D4, D5, D6 and G1 saves remain unstarted. **No target push occurred.**
+- No switch or other implementation was performed.
+
+At **2026-10-25T20:11:27Z**, recorded canonical stop comment
+**`01M5TB10S056PP9AADF50Q1VHG`**, ID from absolute CLI `--json id new` and timestamp
+from UTC. Fetch/merge-tree passed; C3 HEAD stays `5cba600b562062d6809d9ce916e26b65ea1e204e`,
+main stays `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; merge-tree is
+`bcfa0fe7b9652c49d6501c4bb171d628924db32b`. Fresh C4 ref/status probes confirm
+local `9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7`, no origin ref or upstream, and
+empty porcelain. The ledger and stop comment are left uncommitted to preserve
+the stop before any further push; ignored helper retained for diagnosis.
+
+**Controller/owner disposition needed:** authorize correcting only the temporary
+checker to compare dependency IDs, and the design's resumed preflight/go-ahead
+and remaining sequence. Do not infer resumed mutation/publication authorization
+from the original go-ahead after this stop. Full-suite exception and whole-branch
+review approvals remain unchanged; dogfooding/switch and Task 9 are incomplete.
+
+### Fresh preflight, owner go-ahead and checker correction
+
+The controller acknowledged the implementer checker bug, not a product failure.
+Before requesting fresh go-ahead, read-only preflight was repeated at
+**2026-10-25T20:14:21.954Z** after fetch. All six target worktrees were clean,
+all six origin refs/upstreams absent. Only C4 advanced to
+`9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7`; the other five tips match the original
+preflight table. Commits to publish were C4 **3** (`9b26717`, `aac4217`, `6078dfa`),
+C5 **2**, D4 **1**, D5 **3**, D6 **1**, G1 **1**: **11 existing commits** total.
+Every subject remains `Checkpoint ticket <target ID>`. Repo inspect was ok/0,
+registered main, valid config, available identity, no problems/recovery/effects;
+root and default data environment were unchanged.
+
+Read-only `request show --request-id 01M5TAYKVT3P51QDSY8SM93PGV` confirmed C4
+**finished**, stored **success/ok**, accepted `2026-10-25T20:10:32Z`, finished
+`2026-10-25T20:10:38Z`, checkpoint `9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7`,
+publication not_requested. An initial request-show call with unsupported `--repo`
+returned usage_error/2 without effects; the correct read omitted that flag.
+C4 is **settled: NO RESEND**. No comparator correction or mutation happened
+during that read-only preflight; original stop evidence remains intact above.
+
+The owner then explicitly answered **YES** to fresh go-ahead: correct only the
+temporary comparator to extract dependency DTO IDs, recheck C4, save the other
+five in order and push all six target branches, publishing the **11 existing
+commits plus five new checkpoints**. Switch still waits for the controller's
+next resume. At **2026-10-25T21:33:05Z**, C3 HEAD is still `5cba600b`, with the
+prior ledger/comment preserved uncommitted. The absolute branch binary remains
+executable; HOME and default data overrides are unchanged.
+
+Applied only the temporary checker correction: extract each dependency object's
+`id` and compare sorted ID lists (retaining duplicate sensitivity), both for
+post-save deps and the existing no-op baseline predicate. Every other field
+comparison and body digest/length check is unchanged. No product code change,
+no refresh, no new C4 request and no test-gate rerun.
+
+C4 recheck **PASSED** at `2026-10-25T21:33:42.605Z`: exact proposed IDs,
+all other compared fields equal, body SHA-256/1704-byte length unchanged,
+one checkpoint `9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7`, clean worktree,
+primary unchanged at e49f978. No save was resent; the failed checker result above
+is preserved as history, not erased.
+
+### C5: pre-save record
+
+Read succeeded, target clean; persisted before sending. Clean/tip rechecked at send.
+
+```json
+{"record":"dogfood_pre_save","cycle":"C5","target_id":"01M4CC0VMXTNXNH78C11DYXS8H","request_id":"01M5TFQMDVT12772Y9HD35MRMW","input":{"observation":"v1:ab8938152b3d243ccc7335becada6e064400fba3b4a0d75a4d99bab41c0473bd","deps":["01M4CC0VMWEQQ9G4W0DAG7ADPY","01M57SKVF6TQ3QM6AXJ35JGGSY"]},"compared":{"id":"01M4CC0VMXTNXNH78C11DYXS8H","kind":"ticket","path":".manyhands/tickets/01M4CC0VMXTNXNH78C11DYXS8H/ticket.md","title":"Wave 03 C5: CLI Completion And One-Shot Polling","type":"cycle","status":"open","project":"manyhands","team":"core","closure":{"state":"open","closed_at":null,"closed_by":null},"slug":null,"parent":null,"deps":[],"unknown_metadata":{"cycle":"C5","wave":"03"},"problems":[],"body":{"sha256":"ab7654e2a2cf5f9c483e8e0e07c7eceb0bad35f9199d5d8444c9e7d3f98e93a8","byte_length":1472}},"local_tip_before":"01d8a26e9d34a5821038ddb4cd4ea0653d571adc","primary_tip_before":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","recorded_at":"2026-10-25T21:33:42.723Z"}
+```
+
+C5 save exit **0**, stderr empty; full mutation envelope:
+
+```json
+{"schema_version":1,"command":"ticket save","request_id":"01M5TFQMDVT12772Y9HD35MRMW","operation_id":"01M5TFR3M3GBPR32KG7FS2PYDQ","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":"01M4CC0VMXTNXNH78C11DYXS8H","branch":"manyhands/ticket/01M4CC0VMXTNXNH78C11DYXS8H","worktree":"/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMXTNXNH78C11DYXS8H","remote":null},"effects":{"write":"written","checkpoint":"committed","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":"f3985a26cb4220d3076135b55e47e9556f3d56db"},"data":{"id":"01M4CC0VMXTNXNH78C11DYXS8H","path":".manyhands/tickets/01M4CC0VMXTNXNH78C11DYXS8H/ticket.md","slug":null,"unresolved":[],"rejected":[]},"recovery":[]}
+```
+
+C5 value check **PASSED** at `2026-10-25T21:34:19.492Z`: exact proposed deps IDs,
+all other compared fields equal, body digest/1472-byte length unchanged, one new
+checkpoint `f3985a26cb4220d3076135b55e47e9556f3d56db`, clean target, primary unchanged.
+
+### D4: pre-save record
+
+Read succeeded, target clean; persisted before sending. Clean/tip rechecked at send.
+
+```json
+{"record":"dogfood_pre_save","cycle":"D4","target_id":"01M4CC0VN1KTQFSVR99378TDHV","request_id":"01M5TFRREYPJ8MSW62M5CDDVP1","input":{"observation":"v1:c455c1609a07820eac3ba14376131ecc4979e8072825708b14dde008b2e37897","deps":["01M4CC0VN0MFTGKQ4HGTTC5H63"]},"compared":{"id":"01M4CC0VN1KTQFSVR99378TDHV","kind":"ticket","path":".manyhands/tickets/01M4CC0VN1KTQFSVR99378TDHV/ticket.md","title":"Wave 03 D4: Desktop Discussion And Deliberate Synchronization","type":"cycle","status":"open","project":"manyhands","team":"core","closure":{"state":"open","closed_at":null,"closed_by":null},"slug":null,"parent":null,"deps":[],"unknown_metadata":{"cycle":"D4","wave":"03"},"problems":[],"body":{"sha256":"0da75450dcfa29b91e7c9a89579042716a62e5dcd65d816fbb386f4e88fd4d07","byte_length":1061}},"local_tip_before":"f4513256a36aab6b0b0c50118ef76bed5f362ff6","primary_tip_before":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","recorded_at":"2026-10-25T21:34:19.622Z"}
+```
+
+D4 save exit **0**, stderr empty; full mutation envelope:
+
+```json
+{"schema_version":1,"command":"ticket save","request_id":"01M5TFRREYPJ8MSW62M5CDDVP1","operation_id":"01M5TFS9H6SEPBXY3T6HXA46ZR","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":"01M4CC0VN1KTQFSVR99378TDHV","branch":"manyhands/ticket/01M4CC0VN1KTQFSVR99378TDHV","worktree":"/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VN1KTQFSVR99378TDHV","remote":null},"effects":{"write":"written","checkpoint":"committed","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":"e4b48dd352d2603f9dc7e1e487e0339888f591d2"},"data":{"id":"01M4CC0VN1KTQFSVR99378TDHV","path":".manyhands/tickets/01M4CC0VN1KTQFSVR99378TDHV/ticket.md","slug":null,"unresolved":[],"rejected":[]},"recovery":[]}
+```
+
+D4 value check **PASSED** at `2026-10-25T21:35:04.857Z`: exact proposed deps IDs,
+all other compared fields equal, body digest/1061-byte length unchanged, one new
+checkpoint `e4b48dd352d2603f9dc7e1e487e0339888f591d2`, clean target, primary unchanged.
+
+### D5: pre-save record
+
+Read succeeded, target clean; persisted before sending. Clean/tip rechecked at send.
+
+```json
+{"record":"dogfood_pre_save","cycle":"D5","target_id":"01M4CC0VN2K8DBHNMZ46NTX5JJ","request_id":"01M5TFT4RG7D87TQHCA3FTN4V3","input":{"observation":"v1:ca3b9ec6f1402ce90f7b94c1fc62fb03ad3e20fafa87ec4fbb512a8fc6037d00","deps":["01M4CC0VN1KTQFSVR99378TDHV","01M57SKVF6TQ3QM6AXJ35JGGSY"]},"compared":{"id":"01M4CC0VN2K8DBHNMZ46NTX5JJ","kind":"ticket","path":".manyhands/tickets/01M4CC0VN2K8DBHNMZ46NTX5JJ/ticket.md","title":"Wave 03 D5: Desktop Conflict Recovery, Promotion And Closure","type":"cycle","status":"open","project":"manyhands","team":"core","closure":{"state":"open","closed_at":null,"closed_by":null},"slug":null,"parent":null,"deps":[],"unknown_metadata":{"cycle":"D5","wave":"03"},"problems":[],"body":{"sha256":"16d5988d4fd94d1beeafdc7aeea806f8957b47b6342a79a86aae415fb3dfd020","byte_length":1929}},"local_tip_before":"03176b71e6072eb8380211cea2f677424350140c","primary_tip_before":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","recorded_at":"2026-10-25T21:35:04.985Z"}
+```
+
+D5 save exit **0**, stderr empty; full mutation envelope:
+
+```json
+{"schema_version":1,"command":"ticket save","request_id":"01M5TFT4RG7D87TQHCA3FTN4V3","operation_id":"01M5TFTM1S2GEHGVJJFTN07FNJ","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":"01M4CC0VN2K8DBHNMZ46NTX5JJ","branch":"manyhands/ticket/01M4CC0VN2K8DBHNMZ46NTX5JJ","worktree":"/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VN2K8DBHNMZ46NTX5JJ","remote":null},"effects":{"write":"written","checkpoint":"committed","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":"7b2822c4a6fed76d64497de7e7524829b239a987"},"data":{"id":"01M4CC0VN2K8DBHNMZ46NTX5JJ","path":".manyhands/tickets/01M4CC0VN2K8DBHNMZ46NTX5JJ/ticket.md","slug":null,"unresolved":[],"rejected":[]},"recovery":[]}
+```
+
+D5 value check **PASSED** at `2026-10-25T21:35:43.565Z`: exact proposed deps IDs,
+all other compared fields equal, body digest/1929-byte length unchanged, one new
+checkpoint `7b2822c4a6fed76d64497de7e7524829b239a987`, clean target, primary unchanged.
+
+### D6: pre-save record
+
+Read succeeded, target clean; persisted before sending. Clean/tip rechecked at send.
+
+```json
+{"record":"dogfood_pre_save","cycle":"D6","target_id":"01M4CC0VN3VPVVQ3RNWJKXWEVX","request_id":"01M5TFVAJ2TSGKGVW0WANG1N04","input":{"observation":"v1:76ccf748b020adbd51557b974054c05f3aa20c3f5ea76836eceae50de4ae280a","deps":["01M4CC0VN2K8DBHNMZ46NTX5JJ"]},"compared":{"id":"01M4CC0VN3VPVVQ3RNWJKXWEVX","kind":"ticket","path":".manyhands/tickets/01M4CC0VN3VPVVQ3RNWJKXWEVX/ticket.md","title":"Wave 03 D6: Desktop Background Polling And Shutdown","type":"cycle","status":"open","project":"manyhands","team":"core","closure":{"state":"open","closed_at":null,"closed_by":null},"slug":null,"parent":null,"deps":[],"unknown_metadata":{"cycle":"D6","wave":"03"},"problems":[],"body":{"sha256":"f6185af661eba2b8d7d84147f79157a250f5b541553ca0a51c0f6fedf0e0f856","byte_length":1366}},"local_tip_before":"e877e4b21747b77acddb6682b65287ffb480159a","primary_tip_before":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","recorded_at":"2026-10-25T21:35:43.691Z"}
+```
+
+D6 save exit **0**, stderr empty; full mutation envelope:
+
+```json
+{"schema_version":1,"command":"ticket save","request_id":"01M5TFVAJ2TSGKGVW0WANG1N04","operation_id":"01M5TFVSEBBVK1T0VM5MB57JRP","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":"01M4CC0VN3VPVVQ3RNWJKXWEVX","branch":"manyhands/ticket/01M4CC0VN3VPVVQ3RNWJKXWEVX","worktree":"/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VN3VPVVQ3RNWJKXWEVX","remote":null},"effects":{"write":"written","checkpoint":"committed","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":"48e7a1df93f2c293c71e9eee62a7623823c01f8d"},"data":{"id":"01M4CC0VN3VPVVQ3RNWJKXWEVX","path":".manyhands/tickets/01M4CC0VN3VPVVQ3RNWJKXWEVX/ticket.md","slug":null,"unresolved":[],"rejected":[]},"recovery":[]}
+```
+
+D6 value check **PASSED** at `2026-10-25T21:36:20.517Z`: exact proposed deps IDs,
+all other compared fields equal, body digest/1366-byte length unchanged, one new
+checkpoint `48e7a1df93f2c293c71e9eee62a7623823c01f8d`, clean target, primary unchanged.
+
+### G1: pre-save record
+
+Read succeeded, target clean; persisted before sending. Clean/tip rechecked at send.
+
+```json
+{"record":"dogfood_pre_save","cycle":"G1","target_id":"01M4CC0VN4H9AC0Q3KA6E1QERC","request_id":"01M5TFWEMG2VCZ5TRJD84GHMWY","input":{"observation":"v1:492a9d7362c44fc79542a870b36ba203880a9a2cab8517f96ba755b22e47179d","deps":["01M4CC0VMXTNXNH78C11DYXS8H","01M4CC0VN3VPVVQ3RNWJKXWEVX"]},"compared":{"id":"01M4CC0VN4H9AC0Q3KA6E1QERC","kind":"ticket","path":".manyhands/tickets/01M4CC0VN4H9AC0Q3KA6E1QERC/ticket.md","title":"Wave 03 G1: Native Journeys And Dogfooding Gate","type":"cycle","status":"open","project":"manyhands","team":"core","closure":{"state":"open","closed_at":null,"closed_by":null},"slug":null,"parent":null,"deps":[],"unknown_metadata":{"cycle":"G1","wave":"03"},"problems":[],"body":{"sha256":"399fb8c229efacce96a9aa50222757299775efcd2f5635bebd2d58dceb250f12","byte_length":1041}},"local_tip_before":"7b306d1f9542737155a25988fd8b6b726387a4be","primary_tip_before":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","recorded_at":"2026-10-25T21:36:20.632Z"}
+```
+
+G1 save exit **0**, stderr empty; full mutation envelope:
+
+```json
+{"schema_version":1,"command":"ticket save","request_id":"01M5TFWEMG2VCZ5TRJD84GHMWY","operation_id":"01M5TFWYQDSJYXVH5VMT6YR2JG","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":"01M4CC0VN4H9AC0Q3KA6E1QERC","branch":"manyhands/ticket/01M4CC0VN4H9AC0Q3KA6E1QERC","worktree":"/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VN4H9AC0Q3KA6E1QERC","remote":null},"effects":{"write":"written","checkpoint":"committed","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":"31a2b0f4ff3c71cfca4ff47dffca1de20f410c28"},"data":{"id":"01M4CC0VN4H9AC0Q3KA6E1QERC","path":".manyhands/tickets/01M4CC0VN4H9AC0Q3KA6E1QERC/ticket.md","slug":null,"unresolved":[],"rejected":[]},"recovery":[]}
+```
+
+G1 value check **PASSED** at `2026-10-25T21:36:58.911Z`: exact proposed deps IDs,
+all other compared fields equal, body digest/1041-byte length unchanged, one new
+checkpoint `31a2b0f4ff3c71cfca4ff47dffca1de20f410c28`, clean target, primary unchanged.
+
+All six value checks have passed before **any** target push. Every save was
+success/ok, exactly one checkpoint, discovery current; no noop, unresolved or
+rejected dependency. C4 was not resent. Subsequent fetch leaves origin/main at
+e49f978; C3 merge-tree succeeds (`bcfa0fe7b9652c49d6501c4bb171d628924db32b`).
+Step 7 now pushes the six exact authorized ticket refs in order, rechecking
+clean worktrees and expected tips before each push; any rejection stops the loop.
+
+### Step 7 completed: six new remote branches verified
+
+All six `git push origin manyhands/ticket/<ID>` commands succeeded, sequentially
+C4, C5, D4, D5, D6, G1, at `2026-10-25T21:37:35.921Z` through
+`2026-10-25T21:37:44.424Z`. Each created its previously absent remote branch.
+No force push, target-branch merge or amendment of library checkpoint commits.
+Each push was preceded by an empty-porcelain check and expected-local-tip check.
+
+At **2026-10-25T21:37:58.235Z**, one `git ls-remote --heads origin` request for
+the six exact refs verified the actual remote tips (not just cached refs).
+All matched local tips, and every target worktree remained clean. Primary
+stays `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`.
+
+| Target | Save request ID | Checkpoint = local tip = actual remote tip | Value check | Push | Target status |
+| --- | --- | --- | --- | --- | --- |
+| C4 | `01M5TAYKVT3P51QDSY8SM93PGV` | `9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7` | Pass after authorized checker fix; no resend | New branch, success | Clean |
+| C5 | `01M5TFQMDVT12772Y9HD35MRMW` | `f3985a26cb4220d3076135b55e47e9556f3d56db` | Pass | New branch, success | Clean |
+| D4 | `01M5TFRREYPJ8MSW62M5CDDVP1` | `e4b48dd352d2603f9dc7e1e487e0339888f591d2` | Pass | New branch, success | Clean |
+| D5 | `01M5TFT4RG7D87TQHCA3FTN4V3` | `7b2822c4a6fed76d64497de7e7524829b239a987` | Pass | New branch, success | Clean |
+| D6 | `01M5TFVAJ2TSGKGVW0WANG1N04` | `48e7a1df93f2c293c71e9eee62a7623823c01f8d` | Pass | New branch, success | Clean |
+| G1 | `01M5TFWEMG2VCZ5TRJD84GHMWY` | `31a2b0f4ff3c71cfca4ff47dffca1de20f410c28` | Pass | New branch, success | Clean |
+
+All six save envelopes are success/ok, exit 0, stderr empty; each reports
+written/committed/current, null slug, empty unresolved/rejected/recovery and
+publication not_requested. Publication was then done by the separately authorized
+Git pushes above; the envelopes are not retrospectively changed. No request
+is unsettled. The one refresh also succeeded and was not repeated on resume.
+
+Exact post-save deps IDs are the proposal table and each pre-send input above:
+C4→C3+gate, C5→C4+gate, D4→D3, D5→D4+gate, D6→D5, G1→C5+D6. All other design
+comparison fields matched by value; body digest and UTF-8 byte length matched
+each recorded baseline. Source/body text was kept in memory only. Baseline
+inputs, complete mutation envelopes, per-target value-check evidence and the
+original failed checker result remain durable in this ledger.
+
+The published branch histories contain **16 commits beyond origin/main** in
+total: C4 **3**, C5 **3**, D4 **2**, D5 **4**, D6 **2**, G1 **2**. This is the
+fresh preflight's **11 existing commits plus five remaining save checkpoints**,
+equivalently the original ten existing commits plus six total saves. All
+checkpoint commits retain their library-written messages; none was amended.
+
+### C3 evidence checkpoint and remaining boundary
+
+Canonical completion comment **`01M5TFZE029WM8KQV9V7BX1BWA`**, ID allocated by
+the absolute branch CLI's `--json id new`, UTC timestamp
+**2026-10-25T21:37:58Z**. This commit includes only this C3 ledger, the preserved
+stop comment `01M5TB10S056PP9AADF50Q1VHG` and the new completion comment. The
+stop comment is preserved unchanged. The corrected helper stays ignored in
+`target/`; no product/library/Cargo/test/AGENTS/skill change and no Rust gate run.
+
+Fetch and C3 merge-tree passed; origin/main remains e49f978, precommit tree
+`bcfa0fe7b9652c49d6501c4bb171d628924db32b`. Status, diff, whitespace and recent
+ten commits are inspected before staging only the three evidence paths and
+committing with the required co-author trailer; only C3 bookkeeping is then
+pushed. Final C3 SHA, clean state and merge-tree are checked in the return.
+
+**Dogfooding refresh/saves/value checks/target pushes are complete.** No remaining
+blocker in steps 4–7. **Switch and separate switch review remain owed**; the
+controller resumes that work after this outcome. No review-ready, Task 9 complete,
+PR, main integration, closure, cleanup or native-CI claim. The explicit Task 9
+verification exception and approved whole-branch reviews remain unchanged;
+historical full suite remains **4528/1/1, exit 101**, with scoped **46 distinct
+passing** tests and check/fmt/clippy accepted, and no second full run.
+
+## Task 9 Step 4: switch ticket dogfooding to the CLI
+
+Recorded **2026-10-25T21:45:05Z**, clean starting HEAD
+`8da3890f2c4f2ac6199324163346f72eb13818f8`. The controller authorized the approved
+switch after the six saves/value checks/pushes succeeded and were recorded in
+that commit. The prior stop, corrected checker, fresh go-ahead and all six
+request/checkpoint/publication records remain intact. Only C3 worktree files
+are changed here; there are no new real ticket mutations or target pushes.
+
+### Switch implementation
+
+- **AGENTS.md, Dogfooding Workflow only:** ticket create/save against the
+  registered main checkout `/home/vhodges/work/src/manyhands`, run from an
+  up-to-date main via `devenv shell -- cargo run --locked --bin manyhands-cli -- …`.
+  Explicitly effective **after C3 is merged**; main is not claimed to have C3
+  already. Before saving one's own Cycle ticket, commit owned ticket.md edits
+  because the CLI checkpoints into that active worktree. Comments remain
+  canonical until C4, closure until C5; `closed` status text is not closure.
+  The `working-on-a-ticket` sandbox-clone status/closure exception is named;
+  its procedure is unchanged.
+- **`.agents/skills/file-ticket/SKILL.md`:** rewritten around CLI id new,
+  create, show and save, with a create/update trigger. Retains classification,
+  open/manyhands/core defaults, duplicate search, unrelated-edit preservation,
+  Cycle-before-plan/entry-gate context, canonical comment schema and separate
+  publication/lifecycle authorization. Distinguishes ticket/request/comment
+  IDs, input versus selector fields, JSON-string bodies through stdin, nullable
+  relationship/save metadata semantics, no mutation context or confirmation,
+  commit-first/clean checks, request-state recovery and the sandbox exception.
+  The closed create schema has no wave/cycle metadata inputs: new Cycle identity
+  and entry-gate context go in the body; existing unknown metadata survives saves.
+  No unsupported input key or hand-edit workaround is introduced.
+- **C3 ticket:** both planning boxes checked; Added Scope now says main was
+  merged into the ticket, identifies initials/prefix on repository verbs as C2,
+  retains C3 relationships/slug assignment, and cites successful dependency
+  dogfooding at `8da3890`. Its entire front matter is unchanged, status **open**,
+  no closure fields. This local ticket-body edit is the specifically authorized
+  Task 9 documentation correction, not an uncommitted cross-repository CLI save.
+
+### Validation and skill-workflow evidence
+
+Loaded writing-skills and skill-creator guidance; applied trigger/frontmatter,
+clear examples, preservation of scope and scenario review inline. The approved
+design already settles policy. No subagents, agent-pressure evaluations, global
+skill edits or OpenCode configuration changes were performed; the controller
+provides the separate independent review after this return.
+
+Baseline inspection identified the obsolete instructions before editing:
+manual Node ULID generation, git worktree creation, hand-written ticket files
+and uncommitted-new-ticket expectations. It also exposed the old wave/cycle
+metadata instruction's incompatibility with C3's closed create schema. This is
+source/document baseline evidence, **not** an independently executed failing
+agent evaluation.
+
+Read-only checks on the final docs:
+
+- Five initial direct help reads checked create/save/show/id-new/request-show
+  selectors. The final ignored Node documentation validator checked **8 verbs**
+  using the absolute built CLI with `--json --non-interactive … --help`:
+  ticket create/save/show/list, repo inspect/identity-set, id new and request
+  show. All return available/ok and support the documented flags. It confirmed
+  id new/request show refuse --repo and mutation verbs expose no --context.
+- **Two JSON examples** parse and validate against the actual closed create/save
+  schemas after replacing their labeled ID/token placeholders with representative
+  strings; also checked **four nullable/nonempty relationship variants** and
+  nullable project/team on save. These are schema/help checks, **not runtime
+  ticket-create/save executions**; no additional real mutation was run.
+- Frontmatter checks: skill name preserved, only name/description, trigger
+  starts Use when, header under 1024 chars; C3 ticket front matter byte-identical,
+  open, no closure fields, exactly two planning boxes checked.
+- Scope checks: AGENTS prefix/suffix outside Dogfooding Workflow byte-identical;
+  src/tests/schemas/Cargo and working-on-a-ticket/implementing-a-cycle/
+  planning-a-cycle skills unchanged from `8da3890`; no Rust gates rerun.
+- Inline scenario walkthrough: new defect uses distinct ticket/request IDs and
+  create checkpoint; Cycle placeholder preserves classification/entry-gate
+  context without unsupported metadata keys; owned Cycle edit is committed before
+  show/clean/save; accepted request is inspected without --repo and not bypassed
+  with a new ID; sandbox status/closure follows its existing skill. These are
+  self-review outcomes, not independent review approvals.
+- `git diff --check` passed. Temporary ignored validator:
+  `target/c3-switch-validate.cjs`; it performs only local document/schema reads,
+  Git comparisons and CLI help. No viewer, eval agent or broad test run.
+
+### Checkpoint and independent-review boundary
+
+Initial fetch/merge found main already current; current main AGENTS.md was read.
+Post-validation fetch retained `origin/main` at
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; precommit merge-tree passed with tree
+`633cb67698f351da3f396b56ad9108f4df41e7a4`. Canonical switch comment
+**`01M5TGCERSDK7Q8RF5X62VKGFQ`** uses an ID from the absolute built CLI's
+`--json id new` and actual UTC timestamp above.
+
+Separate commit **`docs: switch ticket dogfooding to the CLI`**, with the required
+co-author trailer, stages only AGENTS.md, file-ticket/SKILL.md, the C3 ticket,
+this ledger and that comment after status/diff/whitespace/recent-ten-log review.
+Push is only to the C3 ticket branch; postcommit merge-tree and clean/local-remote
+HEAD checks are returned to the controller.
+
+**Independent switch SPEC and QUALITY review is pending** over
+`8da3890f2c4f2ac6199324163346f72eb13818f8..SwitchHEAD`. Task 9 is not yet complete
+or review-ready. The owner-accepted verification exception remains the original
+**4528/1/1, exit 101** plus scoped **46 distinct passing** and check/fmt/clippy;
+no claim of a green full-suite run and no second full run. No PR, main merge,
+closure, cleanup or native CI.
+
+## Task 9 Step 5: REVIEW-READY handoff
+
+Recorded **2026-10-25T21:51:15Z** at clean starting HEAD
+`297bd7810190dc099d174648d582f81134b16fab`. The controller explicitly conveys
+independent switch **SPEC APPROVED** and **QUALITY APPROVED** for
+`8da3890f2c4f2ac6199324163346f72eb13818f8..297bd7810190dc099d174648d582f81134b16fab`,
+with no findings or questions, and authorizes marking review-ready. These are
+conveyed independent reviews, not new reviews by this implementer.
+
+**All authorized implementation, verification, review, dogfooding and handoff
+work is complete through Task 9 Step 5.** Task 0–8 approvals stand. Whole-branch
+SPEC/QUALITY approval remains
+`ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a..806057d3223b9ac2e71fa3a28c3eba83de5c63ef`,
+including the narrow authorized closure-test baseline correction, with no
+actionable findings or new gaps. The switch approvals above complete the final
+independent review gate. Historical pending/owed entries retain their dates and
+are superseded by this current status, not erased.
+
+### Final evidence and explicit verification exception
+
+- Sole full-suite invocation, tested HEAD **`f9618f76ce9608c9ccc42018701647d7b98bb642`**:
+  **43 targets; 4528 passed / 1 failed / 1 ignored**, exit **101**, **6239s**.
+  Log `/tmp/claude-1000/c3-full-suite.log`; the full per-target table, original
+  assertion/source references and actual-exit files are retained above.
+- Authorized correction **`806057d3223b9ac2e71fa3a28c3eba83de5c63ef`**: exact test
+  **1 passed**, then checkpoint module **46 passed**, zero failures/ignored in
+  both, plus check/fmt/clippy. The exact test overlaps the module: **46 distinct**,
+  not 47. The historical failure's hidden timestamps remain unknown.
+- Owner explicitly accepted the combined evidence as the **Task 9 verification
+  exception**, recorded in **`5cba600b562062d6809d9ce916e26b65ea1e204e`**. The
+  original full run is not relabeled green; **no second full run** occurred.
+  CLI smoke and no-GPUI checks passed in the original gate. Native CI is not
+  claimed and remains post-merge, separately authorized.
+- Six authorized dependency saves/value checks and pushes completed in the
+  evidence at **`8da3890f2c4f2ac6199324163346f72eb13818f8`**. All intended deps IDs
+  and other compared fields/body digests matched, each save committed once,
+  all six remote heads matched local tips and all target worktrees were clean.
+  Retained checkpoint/publication record:
+
+| Target | Checkpoint = verified local/remote tip |
+| --- | --- |
+| C4 | `9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7` |
+| C5 | `f3985a26cb4220d3076135b55e47e9556f3d56db` |
+| D4 | `e4b48dd352d2603f9dc7e1e487e0339888f591d2` |
+| D5 | `7b2822c4a6fed76d64497de7e7524829b239a987` |
+| D6 | `48e7a1df93f2c293c71e9eee62a7623823c01f8d` |
+| G1 | `31a2b0f4ff3c71cfca4ff47dffca1de20f410c28` |
+
+These are retained verified dogfooding results, not new target operations at this
+docs-only checkpoint. Request IDs, full mutation envelopes and pre-send inputs/
+compared values remain above. The C4 dependency-DTO comparator error, mandated
+stop, repeated read-only preflight, finished-request confirmation, fresh owner
+go-ahead and corrected successful recheck remain recorded. **C4 was never resent.**
+
+Switch commit **`297bd7810190dc099d174648d582f81134b16fab`** and its separate
+approved range complete the dogfooding workflow change. It applies on up-to-date
+main after merge; current main is not claimed to contain C3. No dogfooding or
+switch implementation remains owed.
+
+### Documentation checkpoint and lifecycle boundary
+
+Before marking review-ready, fetched origin and merged origin/main into C3:
+already up to date. Main remains `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`, HEAD
+unchanged; merge-tree succeeded with tree
+`66b4225954d64214ba8f2c05ed8a744b6ebd8c81`. No moved-main impact or contract
+question arose. Final fetch/merge-tree and remote-head verification follow the
+documentation commit.
+
+Cycle/design/ledger current statuses are review-ready; the design no longer says
+nothing is implemented. The Wave's current C3 owed-status statements are updated,
+retaining the dated Task 8 checkpoint history. Design contracts, Known Limits,
+planning approval/review history and the original handoff remain unchanged.
+Documentation links, whitespace, allowed-file scope and unchanged/open ticket
+are checked; no build/test/Rust gate reruns for these documentation changes.
+The read-only `node target/c3-review-ready-validate.cjs` check passed: three
+review-ready document statuses, both added/changed relative links, unchanged
+design contract/Known Limits and Cycle scope/contract, Wave changes confined to
+C3 with its known limits intact, byte-preserved ledger history, unchanged open
+ticket and unchanged original handoff. Git whitespace and source/Cargo/skill/
+ticket scope comparisons also passed.
+
+Canonical review-ready comment **`01M5TGQR7ZBBJTMPEJ615G2HCY`**, from absolute CLI
+`--json id new`, uses the actual UTC timestamp above. Only Cycle, design, ledger,
+Wave C3 status and that comment are staged after status/diff/recent-ten-log
+inspection. Commit `docs: mark C3 review-ready` carries the required co-author
+trailer and is pushed only to C3. Final HEAD/remote equality and clean status are
+verified in the return.
+
+**No unresolved implementation findings or unfulfilled authorized-work gates.**
+The ticket remains **OPEN** with no closure fields. Task 9 Step 6 is **not
+authorized** and awaits owner lifecycle approval; it is not an implementation
+debt. Final owner acceptance, PR creation, merge, closure, cleanup and each native
+CI dispatch require their applicable separate approvals. No such action is
+performed or implied by review-ready status.

@@ -1,0 +1,12 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"Manyhands JSON v1 explicit local conflict side content",
+  "description":"Ephemeral immutable recorded blob sides. Historical sides remain readable after accepted resolution writes. No mutable current-file read and no stored mutation source.",
+  "type":"object","additionalProperties":false,
+  "required":["operation_id","token","base","local","incoming","historical"],
+  "properties":{
+    "operation_id":{"type":"string"},"token":{"type":"string"},
+    "base":{"type":["string","null"]},"local":{"type":["string","null"]},"incoming":{"type":["string","null"]},
+    "historical":{"type":"boolean"}
+  }
+}

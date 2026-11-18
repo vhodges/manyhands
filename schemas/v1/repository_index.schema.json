@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 repository index state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["state", "refreshed_at"],
+  "properties": {
+    "state": {
+      "type": "string",
+      "enum": ["current", "stale", "never_refreshed"]
+    },
+    "refreshed_at": {
+      "type": ["string", "null"]
+    }
+  }
+}

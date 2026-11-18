@@ -1,6 +1,8 @@
 //! Operation-local callback policy. No SQL, prompts, or inherited credentials.
 use super::{
     HostKeyIdentity, PreparedSshAttempt, SshTransportErrorKind,
+    agent::AgentSigner,
+    agent_credential,
     endpoint::parse_ssh_endpoint,
     trust::{approval_matches, valid_identity},
 };
@@ -13,9 +15,21 @@ pub(super) struct CallbackAttempt {
     passthrough: Cell<bool>,
     key_submissions: Cell<u8>,
     username_submissions: Cell<u8>,
+    poll_stopped: Cell<bool>,
 }
 
 impl CallbackAttempt {
+    pub(super) fn poll_progress(&self, keep_going: impl FnOnce() -> bool) -> bool {
+        if self.poll_stopped.get() {
+            return false;
+        }
+        let continuing = keep_going();
+        self.poll_stopped.set(!continuing);
+        continuing
+    }
+    pub(super) fn poll_stopped(&self) -> bool {
+        self.poll_stopped.get()
+    }
     pub(super) fn failure(&self) -> Option<SshTransportErrorKind> {
         self.failure.borrow().clone()
     }
@@ -36,6 +50,7 @@ impl CallbackAttempt {
         &self,
         prepared: &PreparedSshAttempt,
         passphrase: Option<&str>,
+        agent: Option<&AgentSigner>,
         url: &str,
         username: Option<&str>,
         allowed: git2::CredentialType,
@@ -56,12 +71,17 @@ impl CallbackAttempt {
             && self.key_submissions.get() == 0
         {
             self.key_submissions.set(1);
-            git2::Cred::ssh_key(
-                expected_username,
-                None,
-                &prepared.registration.private_key_path,
-                passphrase,
-            )
+            match agent {
+                // Offers exactly the selected key; the agent's others are never
+                // listed to the server or asked to sign.
+                Some(signer) => agent_credential::credential(expected_username, signer),
+                None => git2::Cred::ssh_key(
+                    expected_username,
+                    None,
+                    &prepared.registration.private_key_path,
+                    passphrase,
+                ),
+            }
         } else if allowed == git2::CredentialType::USERNAME && self.username_submissions.get() == 0
         {
             self.username_submissions.set(1);
@@ -144,14 +164,35 @@ fn certificate_identity(certificate: &git2::cert::Cert<'_>) -> Option<HostKeyIde
 pub(super) fn build_callbacks<'a>(
     prepared: &'a PreparedSshAttempt,
     passphrase: Option<&'a str>,
+    agent: Option<&'a AgentSigner>,
     attempt: &'a CallbackAttempt,
 ) -> git2::RemoteCallbacks<'a> {
     let mut callbacks = git2::RemoteCallbacks::new();
     callbacks.credentials(move |url, username, allowed| {
-        attempt.credentials(prepared, passphrase, url, username, allowed)
+        attempt.credentials(prepared, passphrase, agent, url, username, allowed)
     });
     callbacks.certificate_check(move |certificate, host| {
         attempt.check_host(prepared, host, certificate_identity(certificate))
     });
     callbacks
+}
+
+/// Locked libgit2 uses src=current remote OID and dst=new OID, even though
+/// a deletion has an empty source refname. Refuse before sending any command.
+pub(super) fn guard_delete<'a>(
+    callbacks: &mut git2::RemoteCallbacks<'a>,
+    reference: &'a str,
+    expected: git2::Oid,
+) {
+    callbacks.push_negotiation(move |updates| {
+        if updates.len() != 1
+            || expected.is_zero()
+            || updates[0].src() != expected
+            || !updates[0].dst().is_zero()
+            || updates[0].dst_refname() != Some(reference)
+        {
+            return Err(git2::Error::from_str("SSH deletion precondition rejected"));
+        }
+        Ok(())
+    });
 }

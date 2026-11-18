@@ -1,0 +1,51 @@
+{
+  "code": "ok",
+  "command": "folder list",
+  "data": {
+    "complete": true,
+    "index": {
+      "refreshed_at": "<refreshed-at>",
+      "state": "current"
+    },
+    "items": [
+      {
+        "empty": true,
+        "path": "docs/empty"
+      },
+      {
+        "empty": false,
+        "path": "docs/notes"
+      },
+      {
+        "empty": false,
+        "path": "docs/outer"
+      },
+      {
+        "empty": true,
+        "path": "docs/outer/inner"
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

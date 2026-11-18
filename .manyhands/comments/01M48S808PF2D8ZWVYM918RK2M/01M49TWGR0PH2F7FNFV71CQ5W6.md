@@ -1,9 +1,10 @@
 ---
+id: 01M49TWGR0PH2F7FNFV71CQ5W6
+item_id: 01M48S808PF2D8ZWVYM918RK2M
+created_at: 2026-10-07T00:05:49Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M49TWGR0PH2F7FNFV71CQ5W6"
-item_id: "01M48S808PF2D8ZWVYM918RK2M"
-created_at: "2026-10-07T00:05:49Z"
 ---
 
 User approved scroll-performance continuation: release-mode same-document

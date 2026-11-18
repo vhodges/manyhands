@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 repository removal preview",
+  "description": "The data of a prepare envelope that gives a preview of repo remove: what the removal will do, and the confirmation an execute of the same command and repository presents to do it. A prepare that gives no preview carries no preview data: a rejection, and a no-op for a repository that is not registered.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["confirmation_id", "expires_at", "command", "scope", "effects", "details"],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "The registration that will be removed. The command removes the repository from the repository list and drops what Manyhands cached of it, and nothing else.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "enabled_at", "files_changed", "git_state_changed"],
+      "properties": {
+        "root": {
+          "description": "The registered root, as the repository list gives it.",
+          "type": "string"
+        },
+        "enabled_at": {
+          "description": "When the repository was registered, as the repository list gives it.",
+          "type": ["string", "null"]
+        },
+        "files_changed": {
+          "description": "Whether the command changes or removes any file under the root, the directory Manyhands keeps its worktrees in among them. It never does: this is false.",
+          "type": "boolean"
+        },
+        "git_state_changed": {
+          "description": "Whether the command changes anything Git holds: a commit, a branch, a worktree, the index or the configuration. It never does: this is false.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "code": "ok",
+  "command": "item republish",
+  "data": null,
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": "<commit-oid>",
+    "discovery": "current",
+    "integration": "not_requested",
+    "publication": "published",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": "<operation-id>",
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAW"
+  }
+}

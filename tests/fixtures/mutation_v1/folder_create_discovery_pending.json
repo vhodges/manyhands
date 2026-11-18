@@ -1,0 +1,35 @@
+{
+  "code": "discovery_pending",
+  "command": "folder create",
+  "data": null,
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "pending",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The change is recorded; the index has not been updated yet.",
+  "operation_id": "<operation>",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "index.refresh",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

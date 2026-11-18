@@ -1,0 +1,27 @@
+{
+  "code": "confirmation_used",
+  "command": "repo enable",
+  "data": null,
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The confirmation was already used.",
+  "operation_id": null,
+  "outcome": "blocked",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX2",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

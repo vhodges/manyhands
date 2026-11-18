@@ -1,9 +1,10 @@
 ---
+id: 01M475MF1JNWZ2XKG7FGRJE46F
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DB
+created_at: 2026-10-05T23:15:57Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M475MF1JNWZ2XKG7FGRJE46F"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DB"
-created_at: "2026-10-05T23:15:57Z"
 ---
 
 Run 37385680755 on b0f9594 passed both Linux and both Windows targets. macOS passed the full suite, then failed renewed rejection at probe 13. Numeric evidence shows GenericError/Os before host/key callbacks, with the server having accepted all three TCP connections. The user's settling/socket-reuse hypothesis prompted a readiness and lifecycle audit: port zero is bound before readiness; the failure is a reconnect to the same listener. Old helper cleanup overlaps the reconnect.

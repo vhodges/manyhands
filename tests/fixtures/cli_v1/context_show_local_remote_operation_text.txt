@@ -1,0 +1,5 @@
+--- stderr
+error: The request input is not valid.
+code: invalid_input
+next: manyhands-cli conflict show --repo '<repository>' --operation-id 01ARZ3NDEKTSV4RRFFQ69G5FZX
+--- exit 2

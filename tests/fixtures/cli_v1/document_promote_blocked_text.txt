@@ -1,0 +1,6 @@
+--- stderr
+error: Recovery is required before this can continue.
+code: recovery_required
+Blockers: primary_dirty
+next: repo.inspect root=<repository>
+--- exit 3

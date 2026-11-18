@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 repository configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["state", "primary_branch", "publication_remote", "problems"],
+  "properties": {
+    "state": {
+      "type": "string",
+      "enum": ["valid", "invalid", "missing"]
+    },
+    "primary_branch": {
+      "type": ["string", "null"]
+    },
+    "publication_remote": {
+      "type": ["string", "null"]
+    },
+    "problems": {
+      "type": "array",
+      "items": {
+        "$ref": "problem.schema.json"
+      }
+    }
+  }
+}

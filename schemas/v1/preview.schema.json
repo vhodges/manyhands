@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 preview",
+  "description": "The data of a prepare envelope that gives a preview of repo create or repo enable: what the command will do, and the confirmation an execute of the same command, repository, target and input presents to do it. A prepare that gives no preview carries no data: a rejection, and a no-op for a command whose end state already holds.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["confirmation_id", "expires_at", "command", "scope", "effects", "details"],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "The command's own fields. For repo create and repo enable: the repository's root, the primary branch, the identity that will author the initialization commit, and the short code prefix.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "primary_branch", "identity", "slug_prefix"],
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "primary_branch": {
+          "type": "string"
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "email", "source", "written_locally"],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "email": {
+              "type": "string"
+            },
+            "source": {
+              "description": "Where the identity comes from: supplied with the request, or the level of Git configuration that holds it.",
+              "type": "string",
+              "enum": [
+                "supplied",
+                "repository",
+                "global",
+                "xdg",
+                "system",
+                "program_data",
+                "application"
+              ]
+            },
+            "written_locally": {
+              "description": "Whether the command writes the identity to the repository's own Git configuration. No other configuration is written.",
+              "type": "boolean"
+            }
+          }
+        },
+        "slug_prefix": {
+          "description": "The short code prefix the configuration will hold. Null when the request supplies none.",
+          "type": ["string", "null"]
+        }
+      }
+    }
+  }
+}

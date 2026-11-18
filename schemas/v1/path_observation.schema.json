@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 path observation",
+  "description": "What path observe found at a path in a context. It never holds what the file contains.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["path", "exists", "observation", "context"],
+  "properties": {
+    "path": {
+      "description": "Relative to the context, with forward slashes.",
+      "type": "string"
+    },
+    "exists": {
+      "description": "Whether a file is at the path.",
+      "type": "boolean"
+    },
+    "observation": {
+      "description": "The token a write takes as its precondition: the file's, as the item reads give it, or the absent token of the context's branch and the path.",
+      "type": "string"
+    },
+    "context": {
+      "$ref": "item_context.schema.json"
+    }
+  }
+}

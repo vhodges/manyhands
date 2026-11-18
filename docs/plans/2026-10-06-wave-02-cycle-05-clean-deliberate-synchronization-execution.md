@@ -1,3 +1,12 @@
+---
+title: "Wave 02 Cycle 05 execution ledger"
+date: 2026-10-06
+author: "Vince Hodges <vince@imbas.ca>"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J8VB4X53H4TFNFXAA3"
+---
+
 # Wave 02 Cycle 05 execution ledger
 
 Ticket: `01K7F6H9J2N4Q6S8V0X2Z4B6DD`

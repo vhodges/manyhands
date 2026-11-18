@@ -1,0 +1,91 @@
+{
+  "code": "ok",
+  "command": "ticket show",
+  "data": {
+    "body": "Body of Open ticket.\n",
+    "change_source": "git_commit",
+    "changed_at": "2023-11-14T22:15:00Z",
+    "closure": {
+      "closed_at": null,
+      "closed_by": null,
+      "state": "open"
+    },
+    "context": {
+      "branch": "main",
+      "head_oid": "<head-oid>",
+      "kind": "primary",
+      "worktree": "<repository>"
+    },
+    "deps": [
+      {
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FC1",
+        "state": "closed"
+      },
+      {
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FCZ",
+        "state": "unresolved"
+      }
+    ],
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "index": {
+      "refreshed_at": "<refreshed-at>",
+      "state": "current"
+    },
+    "kind": "ticket",
+    "observation": "v1:1828b7d8e368fb7b42435b8e9cab9db6015f5e07499710a32e5455f95ed95224",
+    "parent": {
+      "id": "01ARZ3NDEKTSV4RRFFQ69G5FC1",
+      "state": "closed"
+    },
+    "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC0/ticket.md",
+    "problems": [],
+    "project": "manyhands",
+    "readiness": {
+      "reasons": [
+        {
+          "code": "unresolved_dependency",
+          "complete": true,
+          "ids": [
+            "01ARZ3NDEKTSV4RRFFQ69G5FCZ"
+          ]
+        }
+      ],
+      "state": "blocked"
+    },
+    "slug": "mh-vh-k9x2b",
+    "source": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FC0\ntitle: Open ticket\ntype: task\nstatus: open\nproject: manyhands\nteam: core\npriority: 2\nlabels: [one, two]\nslug: mh-vh-k9x2b\nparent: 01ARZ3NDEKTSV4RRFFQ69G5FC1\ndeps:\n  - 01ARZ3NDEKTSV4RRFFQ69G5FC1\n  - 01ARZ3NDEKTSV4RRFFQ69G5FCZ\n---\nBody of Open ticket.\n",
+    "status": "open",
+    "team": "core",
+    "title": "Open ticket",
+    "type": "task",
+    "unknown_metadata": {
+      "labels": [
+        "one",
+        "two"
+      ],
+      "priority": 2
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

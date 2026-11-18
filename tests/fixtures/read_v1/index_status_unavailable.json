@@ -1,0 +1,35 @@
+{
+  "code": "ok",
+  "command": "index status",
+  "data": {
+    "context_count": null,
+    "item_count": null,
+    "pending_operations": [],
+    "problem_count": null,
+    "problems": [],
+    "refreshed_at": null,
+    "state": "unavailable"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

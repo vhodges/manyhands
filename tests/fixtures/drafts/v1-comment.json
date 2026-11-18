@@ -1,0 +1,22 @@
+{
+  "base": null,
+  "created_at": "2026-10-14T17:46:40Z",
+  "current": {
+    "body": "hello",
+    "kind": "comment"
+  },
+  "flushed_at": "2026-10-14T17:48:20Z",
+  "format": "manyhands-draft",
+  "id": "01J9ZQ6V0Y8K3N4M5P6Q7R8S9T",
+  "revision": 3,
+  "target": {
+    "comment": {
+      "comment_id": "01M5CS4MJ0G7B0MPJD0KN0QMYB",
+      "parent_id": "01M5CS4MJ0G7B0MPJD0KN0QMYC"
+    },
+    "item_id": "01M5CS4MJ0G7B0MPJD0KN0QMYA",
+    "item_kind": "ticket",
+    "repository": "/home/u/work/project"
+  },
+  "version": 1
+}

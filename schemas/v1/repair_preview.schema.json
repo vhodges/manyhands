@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 repair preview",
+  "description": "The data of a prepare envelope that gives a preview of document repair or ticket repair: the nonconforming file that will be corrected, the identity the corrected source gives it, and the confirmation an execute of the same command, repository, path and input presents to make the repair. A prepare that gives no preview carries no preview data: a rejection, and a no-op for a repair whose item's context already holds the corrected source, committed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["confirmation_id", "expires_at", "command", "scope", "effects", "details"],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it: context_created when the item has no editing context, id_adopted when the file holds no valid ID, then source_written and checkpoint_committed. source_written is listed whenever the context will hold the source once the command is done, also when an earlier request that stopped part of the way has written it there already and this one only commits it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "The file that will be corrected and the identity the corrected source gives it. The confirmation is for the file as it is on the primary branch, committed there, and for an ID no other item holds: a request that finds the file changed, or the ID held, by the time it runs is external_change. Nothing the file or the source holds is here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "path", "id", "adoption", "primary_changed"],
+      "properties": {
+        "root": {
+          "description": "The repository's root, as the request's records name it.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The file, relative to the repository, with forward slashes.",
+          "type": "string"
+        },
+        "id": {
+          "description": "The ID the corrected source carries: the item's identity once the repair is made, and what names its editing context. The caller supplies it; the library never makes one.",
+          "type": "string"
+        },
+        "adoption": {
+          "description": "Whether the ID is being assigned: the file holds no valid ID, and the source's becomes the item's. False for a file that holds this ID already, which the repair keeps.",
+          "type": "boolean"
+        },
+        "primary_changed": {
+          "description": "Whether the command writes the primary worktree or moves the primary branch. It never does: this is false. The corrected source is written and committed in the item's editing context, and the file stays on primary as it is until that context is merged.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

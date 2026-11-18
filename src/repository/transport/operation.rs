@@ -1,5 +1,6 @@
 //! Prepare, authenticate, recheck, use, and drop one selected-key operation.
 use super::{
+    agent::AgentSigner,
     callbacks::{CallbackAttempt, build_callbacks},
     endpoint::configured_remote_endpoint,
     remote::{AuthenticatedSshRemote, backend_failure},
@@ -61,7 +62,10 @@ impl RepositoryService {
         )
     }
 
-    fn with_authenticated_remote_policy_expected<P: SessionCredentialProvider, T>(
+    pub(in super::super) fn with_authenticated_remote_policy_expected<
+        P: SessionCredentialProvider,
+        T,
+    >(
         &self,
         request: VerifySshTransportRequest,
         session: &mut SessionCredentials<P>,
@@ -105,9 +109,46 @@ impl RepositoryService {
         session.reconcile_source(&unlock);
         let mut use_remote = Some(use_remote);
         let mut may_prompt = false;
-        if !cached {
-            match self.connect_ssh(&prepared, &context, None, &mut use_remote, &mut may_prompt) {
+        // An agent that holds the selected key signs for it: no passphrase, no
+        // prompt. Anything else about the agent (unset, unreachable, key absent,
+        // refusing to sign, rejected by the server) leaves today's flow as it
+        // was. A failure that is not about the key (host trust, the network)
+        // would repeat in that flow, so it ends here.
+        if let Ok(signer) = super::agent::lookup(
+            self.agent_socket.as_deref(),
+            &prepared.registration.private_key_path,
+        ) {
+            match self.connect_ssh(
+                &prepared,
+                &context,
+                None,
+                Some(&signer),
+                &mut use_remote,
+                &mut false,
+            ) {
                 Ok(result) => return result,
+                Err(error) if !authentication_failure(&error.kind) => return Err(error),
+                Err(_) => {}
+            }
+        }
+        if !cached {
+            match self.connect_ssh(
+                &prepared,
+                &context,
+                None,
+                None,
+                &mut use_remote,
+                &mut may_prompt,
+            ) {
+                Ok(result) => return result,
+                // A key stored without a passphrase has none to ask for: the
+                // failure is the answer, and a prompt could never succeed.
+                Err(error)
+                    if may_prompt
+                        && !source_may_need_passphrase(&prepared.registration.private_key_path) =>
+                {
+                    return Err(error);
+                }
                 Err(_) if may_prompt => {}
                 Err(error) => return Err(error),
             }
@@ -134,12 +175,14 @@ impl RepositoryService {
                 &prepared,
                 &context,
                 Some(passphrase),
+                None,
                 &mut use_remote,
                 &mut may_prompt,
             )
             .map_err(|error| {
-                connection_error = Some(error);
-                PassphraseUseFailure::Unavailable
+                let failure = passphrase_use_failure(cached, &error.kind);
+                connection_error = Some(blame_for_cached(cached, error));
+                failure
             })
         });
         // Cancellation/unavailability can also race state changes in the provider.
@@ -154,11 +197,11 @@ impl RepositoryService {
             Ok(result) => {
                 if result
                     .as_ref()
-                    .is_err_and(|error| invalidates_secret(&error.kind))
+                    .is_err_and(|error| invalidates_secret(cached, &error.kind))
                 {
                     session.invalidate(prepared.registration.id);
                 }
-                result
+                result.map_err(|error| blame_for_cached(cached, error))
             }
             Err(failure) => Err(context.with_kind(match failure {
                 SessionUnlockFailure::Cancelled => SshTransportErrorKind::UnlockCancelled,
@@ -248,6 +291,7 @@ impl RepositoryService {
         prepared: &PreparedSshAttempt,
         context: &SshTransportError,
         passphrase: Option<&str>,
+        agent: Option<&AgentSigner>,
         use_remote: &mut Option<
             impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
         >,
@@ -264,7 +308,7 @@ impl RepositoryService {
         // match the raw configured spelling. Validate this actual handle too.
         let effective = match context.direction {
             SshDirection::Fetch => remote.url(),
-            SshDirection::Push => remote.pushurl().or_else(|| remote.url()),
+            SshDirection::Push | SshDirection::Delete => remote.pushurl().or_else(|| remote.url()),
         };
         if effective
             .and_then(|url| super::endpoint::parse_ssh_endpoint(url).ok())
@@ -278,9 +322,9 @@ impl RepositoryService {
             .connect_auth(
                 match context.direction {
                     SshDirection::Fetch => git2::Direction::Fetch,
-                    SshDirection::Push => git2::Direction::Push,
+                    SshDirection::Push | SshDirection::Delete => git2::Direction::Push,
                 },
-                Some(build_callbacks(prepared, passphrase, &attempt)),
+                Some(build_callbacks(prepared, passphrase, agent, &attempt)),
                 None,
             )
             .map_err(|error| {
@@ -311,12 +355,15 @@ impl RepositoryService {
             prepared.approval.as_ref(),
         )
         .map_err(|kind| context.with_kind(kind))?;
+        #[cfg(test)]
+        super::operation_tests::checkpoint(super::operation_tests::Checkpoint::HostTrustFinalized);
         let mut adapter = AuthenticatedSshRemote::new(
             connection.remote(),
             self,
             prepared,
             context,
             passphrase,
+            agent,
             observed,
         );
         Ok(use_remote.take().expect("one authenticated operation")(
@@ -365,16 +412,44 @@ pub(super) fn authentication_failure(kind: &SshTransportErrorKind) -> bool {
             | SshTransportErrorKind::UnlockFailed
     )
 }
-fn invalidates_secret(kind: &SshTransportErrorKind) -> bool {
-    authentication_failure(kind)
-        || matches!(
-            kind,
-            SshTransportErrorKind::SelectionChanged
-                | SshTransportErrorKind::KeySourceChanged
-                | SshTransportErrorKind::EndpointChanged
-                | SshTransportErrorKind::HostTrustChanged
-        )
+/// Whether a failed attempt means the cached or just-supplied passphrase must
+/// go. A passphrase that already unlocked the key (`cached`) is not at fault
+/// when a server rejects the key or cannot be reached, and another repository
+/// shares it, so only a change under it evicts. A new passphrase is on trial:
+/// any rejection counts against it.
+fn invalidates_secret(cached: bool, kind: &SshTransportErrorKind) -> bool {
+    changed_under_secret(kind) || (!cached && authentication_failure(kind))
 }
+fn changed_under_secret(kind: &SshTransportErrorKind) -> bool {
+    matches!(
+        kind,
+        SshTransportErrorKind::SelectionChanged
+            | SshTransportErrorKind::KeySourceChanged
+            | SshTransportErrorKind::EndpointChanged
+            | SshTransportErrorKind::HostTrustChanged
+    )
+}
+/// What a failed connection says about the passphrase it used.
+fn passphrase_use_failure(cached: bool, kind: &SshTransportErrorKind) -> PassphraseUseFailure {
+    if cached && !changed_under_secret(kind) {
+        PassphraseUseFailure::Unrelated
+    } else {
+        PassphraseUseFailure::Unavailable
+    }
+}
+/// A server's rejection of a key whose passphrase already worked is not an
+/// unlock failure, and reads as one only because a passphrase was supplied.
+fn blame_for_cached(cached: bool, error: SshTransportError) -> SshTransportError {
+    if cached && error.kind == SshTransportErrorKind::UnlockFailed {
+        error.with_kind(SshTransportErrorKind::KeyRejected)
+    } else {
+        error
+    }
+}
+
+#[cfg(test)]
+#[path = "operation_passphrase_tests.rs"]
+mod passphrase_tests;
 impl SshTransportError {
     pub(super) fn with_kind(&self, kind: SshTransportErrorKind) -> Self {
         Self {

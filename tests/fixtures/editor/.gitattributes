@@ -1,0 +1,4 @@
+# Exact bytes: the loads are compared byte for byte, line endings included.
+* -text
+# CR is a deliberate line-ending byte here, not trailing space.
+n1_*.md whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

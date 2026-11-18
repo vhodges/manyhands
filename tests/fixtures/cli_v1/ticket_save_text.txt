@@ -1,0 +1,9 @@
+The request completed.
+request: <request-id>
+operation: <operation-id>
+effects: write=written checkpoint=committed discovery=current commit=<commit-oid>
+Id: 01ARZ3NDEKTSV4RRFFQ69G5FT0
+Path: .manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FT0/ticket.md
+Rejected: none
+Slug: vh-cbpe1
+Unresolved: none

@@ -285,7 +285,7 @@ pub(super) fn plan_clean_integration<E>(
     })
 }
 
-fn clean_descendant<E>(
+pub(super) fn clean_descendant<E>(
     local: Oid,
     remote: Oid,
     is_ancestor: &mut impl FnMut(Oid, Oid) -> Result<bool, E>,

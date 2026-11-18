@@ -1,0 +1,35 @@
+{
+  "code": "discovery_pending",
+  "command": "ticket update",
+  "data": {
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FC0"
+  },
+  "effects": {
+    "checkpoint": "committed",
+    "cleanup": "not_requested",
+    "commit_oid": "0123456789abcdef0123456789abcdef01234567",
+    "discovery": "pending",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "written"
+  },
+  "message": "The change is recorded; the index has not been updated yet.",
+  "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA1",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "operation.resume",
+      "arguments": {},
+      "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA1"
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FA0",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "/projects/example",
+    "worktree": "/projects/example"
+  }
+}

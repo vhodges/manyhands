@@ -1,0 +1,59 @@
+{
+  "code": "ok",
+  "command": "ticket repair",
+  "data": {
+    "command": "ticket repair",
+    "confirmation_id": "<confirmation>",
+    "details": {
+      "adoption": true,
+      "id": "01ARZ3NDEKTSV4RRFFQ69G5FM4",
+      "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FM4/ticket.md",
+      "primary_changed": false,
+      "root": "<root>"
+    },
+    "effects": [
+      {
+        "effect": "context_created"
+      },
+      {
+        "effect": "id_adopted"
+      },
+      {
+        "effect": "source_written"
+      },
+      {
+        "effect": "checkpoint_committed"
+      }
+    ],
+    "expires_at": "<expires>",
+    "scope": {
+      "branch": null,
+      "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FM4",
+      "remote": null,
+      "repository": "<root>",
+      "worktree": null
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FM4",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

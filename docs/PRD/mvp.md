@@ -4,17 +4,51 @@ date: 2026-10-05
 status: approved
 author: "Vince Hodges <vhodges@gmail.com> && Codex"
 manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J983933AB0G40DK90W"
 ---
 
 # Manyhands Product Requirements Document
 
 **Status:** Approved MVP/Dogfooding release
 
-**Version:** 0.5
+**Version:** 0.7
 
 **Owner:** The product owner maintains this document. Requirement IDs are stable once published; changes to intent or acceptance criteria require an updated version and changelog entry.
 
 ## Changelog
+
+### 0.8 - 2026-11-09
+
+- Wave 03 D6 (owner decisions 16 to 21): the desktop's background polling also
+  retires, per item, the local context of a ticket closed or a document
+  promoted elsewhere, through an ordinary guarded `context retire` after each
+  completed poll. It holds back any item being edited or with a draft, never
+  prompts, and never publishes, checkpoints, merges or deletes a remote
+  branch. This amends the release scope, `MH-COLLAB-004`, `MH-COLLAB-006`,
+  `MH-INDEX-002` and `MH-NFR-007` where they reserve retirement to explicit
+  invocation. The CLI's explicit entrypoints are unchanged.
+
+### 0.7 - 2026-11-06
+
+- Amend `MH-COLLAB-006`'s exclusive lifecycle-cleanup rule for deliberate,
+  guarded retirement of a peer-completed local context. The owner approved
+  [completed-context retirement](../Cycles/wave-03-completed-context-retirement.md)
+  D1–D14 on 2026-11-04 and the independent, live-pass-only loop in D15 on
+  2026-11-06. Explicit `context retire` and `poll once --retire-completed` are
+  the only new entrypoints; default/background cleanup remains prohibited.
+- Reconcile polling/index boundaries with that exception. Closure alone is not
+  removal consent or preservation proof. Release, navigation, draft retention
+  and read precedence are unchanged; the desktop Retire action remains D6 work.
+
+### 0.6 - 2026-10-07
+
+- Added `MH-CONTENT-005`: tickets can record blocking dependencies and a
+  parent, and Manyhands answers which work is ready or blocked.
+- Added `MH-CONTENT-006`: tickets carry a short code for people. The
+  canonical identifier is unchanged and remains the only identity.
+- Added the Ticket Graph And Workflow Enhancements roadmap entry for the
+  related work that is deferred.
 
 ### 0.5 - 2026-10-05
 
@@ -73,7 +107,7 @@ An enabled repository is a local Git repository that its user has opted into man
 
 ## Scope
 
-The dogfooding release supports enabled local repositories and trusted Git collaborators only. It includes repository onboarding; basic SSH key generation and management; managed-document and ticket creation, editing, and discovery; threaded comments on both item types; isolated branches and worktrees; an automatic checkpoint commit on save; deliberate synchronization and safe background remote polling; confirmed managed-document promotion; and explicit ticket closure that merges work and cleans up its isolated workspace.
+The dogfooding release supports enabled local repositories and trusted Git collaborators only. It includes repository onboarding; basic SSH key generation and management; managed-document and ticket creation, editing, and discovery; threaded comments on both item types; isolated branches and worktrees; an automatic checkpoint commit on save; deliberate synchronization and safe background remote polling; confirmed managed-document promotion; explicit ticket closure that merges work and cleans up its isolated workspace; and deliberate, guarded local retirement of peer-completed contexts under `MH-COLLAB-006`, which the desktop also performs per item after each completed poll (0.8).
 
 ### MH-PROD-001: Git-Backed Local Collaboration
 
@@ -254,6 +288,40 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 - Nonconforming discovered content remains visible in lists with its nonconforming state and recovery guidance.
 - Primary-branch suggestion and same-item identification remain RFC-owned; primary-branch selection occurs during repository enablement.
 
+### MH-CONTENT-005: Relate Tickets and Find Ready Work
+
+**Priority:** Should
+
+**Rationale:** People and agents need to know which work can start now and what is holding the rest back, without keeping that order in their heads or in prose.
+
+**Acceptance Criteria:**
+
+- A ticket may record the tickets that block it and may record one parent ticket.
+- A user can list the tickets that are ready to start and the tickets that are blocked, with the reason each blocked ticket is blocked.
+- A ticket is ready only when every ticket blocking it has completed the close lifecycle; status text alone does not unblock it.
+- A user can view what a ticket depends on, what depends on it, its parent and its children.
+- A user can view open tickets as ordered batches that can be worked in parallel, and the longest chain of dependent open tickets.
+- A parent groups tickets and does not block them. No progress or status rollup is required.
+- A dependency that would form a cycle is rejected when it is saved. A cycle, or a reference to a ticket that cannot be found, that arrives another way is displayed with guidance and is not silently repaired.
+- Closing a ticket reports the tickets that became ready as a result.
+- Exact fields, validation and query definitions remain RFC-owned.
+
+### MH-CONTENT-006: Refer to Tickets by a Short Code
+
+**Priority:** Should
+
+**Rationale:** A 26-character identifier is safe for automation but hard for people to read, say or type.
+
+**Acceptance Criteria:**
+
+- A newly created ticket receives a short code made of an optional project prefix, the creator's initials and a short code derived from its identifier.
+- A ticket's short code does not change after it is assigned.
+- The short code is displayed wherever a ticket is named, alongside access to the canonical identifier.
+- A user can find tickets by short code. When more than one ticket has the same short code, all are shown with enough context to choose between them.
+- The short code is never an identity: operations that change a ticket select it by canonical identifier, and a short code is not accepted in its place.
+- A ticket without a short code remains valid, and a user can assign one explicitly.
+- The exact format and derivation remain RFC-owned.
+
 ## Comments
 
 ### MH-COMMENT-001: Create Comments and Replies
@@ -350,7 +418,8 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 - When background polling discovers a new recognized and conforming Manyhands item-context branch, Manyhands automatically creates its local tracking branch and worktree, then indexes the managed item folder and comments it contains.
 - Background polling preserves dirty, divergent, conflicted, deleted, renamed, malformed, inaccessible, or unrecognized contexts; it identifies the state and provides recovery guidance without removing a local worktree.
 - Background polling is serialized with manual synchronization, primary-branch synchronization, managed-document promotion, and ticket closure for the same repository. A manual lifecycle operation takes precedence and polling waits or stops at a safe point before that operation changes Git state.
-- Background polling never pushes, commits, merges, rebases, stashes, overwrites, discards, deletes a branch, or deletes a worktree. Other remote Git operations occur only in response to a direct synchronization request, an RFC-defined synchronization-triggering user action, an explicitly confirmed managed-document promotion, or an explicitly confirmed ticket-close action.
+- Background polling never pushes, commits, merges, rebases, stashes, overwrites, discards, deletes a branch, or deletes a worktree. Other remote Git operations occur only in response to a direct synchronization request, an RFC-defined synchronization-triggering user action, an explicitly confirmed managed-document promotion, an explicitly confirmed ticket-close action, or the fresh read-only observation required by explicit peer-context retirement under `MH-COLLAB-006`.
+- Amended in 0.8 (Wave 03 D6, decision 16): the desktop's background polling may also retire a proven-completed local context per item through an ordinary guarded `context retire`, held back by any edit or draft of the item; it removes no other worktree or branch.
 
 ### MH-COLLAB-005: Close Tickets Through a Confirmed Lifecycle
 
@@ -373,12 +442,31 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 
 **Acceptance Criteria:**
 
-- Only a direct synchronization request, an RFC-defined synchronization-triggering user action, an explicitly confirmed managed-document promotion, or an explicitly confirmed ticket-close action may publish, merge, or perform branch and worktree cleanup. Synchronization alone never performs destructive branch or worktree cleanup.
+- Only a direct synchronization request, an RFC-defined synchronization-triggering user action, an explicitly confirmed managed-document promotion, or an explicitly confirmed ticket-close action may publish or merge. Branch and worktree cleanup requires the applicable confirmed completion lifecycle, except for the explicit guarded local peer-context retirement below. Synchronization alone never performs destructive branch or worktree cleanup.
 - Configured background polling may fetch remote state, fast-forward clean local primary or item contexts, and provision a recognized new item worktree. It never publishes, creates checkpoints, merges, rebases, stashes, overwrites, discards, or performs cleanup.
-- Integration of a ticket into the configured primary branch and removal of its local or remote branch and worktree state occur only as part of an explicitly confirmed ticket-close action after its prerequisites succeed. Integration and cleanup of a managed document occur only as part of an explicitly confirmed managed-document promotion after its prerequisites succeed.
+- Integration of a ticket into the configured primary branch and its remote branch deletion occur only as part of an explicitly confirmed ticket-close action after its prerequisites succeed. Integration and remote branch deletion of a managed document occur only as part of an explicitly confirmed managed-document promotion after its prerequisites succeed. Their local cleanup follows those lifecycles, with the deliberate peer-context retirement exception below; retirement does not introduce document closure.
+- A user may explicitly invoke `context retire`, or opt an explicit one-shot
+  poll into `--retire-completed`, to check and retire only a proven-safe local
+  peer context. For a present context this requires a fresh authenticated,
+  complete Fetch observation of a previously known remote context now absent;
+  valid same-ID completion on committed local primary; positive preservation
+  proof of the local content; and independent cleanliness, resource-identity
+  and lifetime checks. Ticket closure alone, primary document presence, a
+  missing tracking ref, or unknown publication history is insufficient.
+- Retirement never publishes, deletes a remote branch, implicitly merges,
+  changes canonical source or deletes a recoverable draft. Unmatched content,
+  dirt, malformed or ambiguous resources and changed authority are preserved
+  and refused. Initial all-absent state may settle local discovery as an
+  observed no-op without claiming a removal. Default/automatic polling only
+  recognizes completion and preserves contexts; it never opts into retirement.
+- The existing `context release` contract and its desktop navigation/discard
+  callers are unchanged. Retirement does not change read precedence: an old
+  own-worktree copy may mask primary completion until retirement and discovery
+  settlement. The separate latest-copy work owns that read change.
 - Long-running lifecycle work reports progress and outcome while keeping the interface responsive.
 - A user may cancel long-running lifecycle work only at a safe point; Manyhands reports whether cancellation completed or work must continue to a safe recovery state.
 - Lifecycle failures name the affected item, repository, and context and offer next actions to retry, recover, or inspect the problem.
+- Amended in 0.8 (Wave 03 D6, decision 16): the desktop's background polling may also retire a proven-completed local context per item through an ordinary guarded `context retire`, held back by any edit or draft of the item; it removes no other worktree or branch.
 
 ### MH-COLLAB-007: Promote Managed Documents Through a Confirmed Lifecycle
 
@@ -425,7 +513,13 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
   fast-forwards only clean primary and item contexts, and materializes a newly
   discovered recognized item context as a worktree before it invokes an
   index-only refresh of the managed item folder and comments.
-- Polling leaves dirty, divergent, conflicted, deleted, renamed, malformed, inaccessible, or unrecognized contexts unchanged locally and surfaces them with recovery guidance.
+- Default/background polling leaves dirty, divergent, conflicted, deleted,
+  renamed, malformed, inaccessible, or unrecognized contexts unchanged locally
+  and surfaces them with recovery guidance. Only explicit
+  `poll once --retire-completed` may additionally perform the guarded local
+  retirement allowed by `MH-COLLAB-006`, with per-item outcomes and discovery
+  settlement; recognition alone does not authorize removal.
+- Amended in 0.8 (Wave 03 D6, decision 16): the desktop's background polling may also retire a proven-completed local context per item through an ordinary guarded `context retire`, held back by any edit or draft of the item; it removes no other worktree or branch.
 
 ### MH-INDEX-003: Surface External and Malformed Changes
 
@@ -552,7 +646,11 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 - A remote poll is distinct from an index-only refresh. It may perform only the
   fetch, clean fast-forward, and recognized-context materialization explicitly
   permitted by `MH-COLLAB-004` before it invokes the non-mutating index refresh.
+  Explicit `poll once --retire-completed` additionally allows only the guarded
+  per-context retirement and subsequent discovery settlement in `MH-COLLAB-006`;
+  it does not give the index scan itself mutation authority.
 - The behavior remains consistent with `MH-INDEX-001` and `MH-INDEX-003` when canonical content is malformed or inaccessible.
+- Amended in 0.8 (Wave 03 D6, decision 16): the desktop's background polling may also retire a proven-completed local context per item through an ordinary guarded `context retire`, held back by any edit or draft of the item; it removes no other worktree or branch.
 
 ### MH-NFR-008: Prevent Silent Data Loss
 
@@ -653,6 +751,18 @@ The first milestone is a collaboration-complete dogfooding release: trusted coll
 ### Planning and Rollups
 
 Follow-on work adds planning and board views, scorecards, team rollups, and project rollups.
+
+### Ticket Graph And Workflow Enhancements
+
+Follow-on work may build on ticket relationships and short codes:
+
+- Importance and bottleneck analytics over the dependency graph, such as
+  ranking tickets by how much downstream work they block.
+- Typed non-blocking links between tickets, such as related, discovered-from
+  and supersedes.
+- A ticket priority and priority ordering of ready work.
+- Assigning tickets and claiming a ticket to work on.
+- Full-text search across tickets and documents.
 
 ### Templates and Scaffolding
 

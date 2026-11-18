@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 lifecycle preview",
+  "description": "The data of a prepare envelope that gives a preview of document promote or ticket close: the context and primary commits consented to, the whole-branch path changes, what is planned for integration, publication and cleanup, and for a closure who it records. It holds names, commits and paths, and no title, body or content. A prepare contacts no remote. The confirmation binds what the domain's expectation binds: a change to any of it before the request is accepted is external_change.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "confirmation_id",
+    "expires_at",
+    "command",
+    "scope",
+    "effects",
+    "details"
+  ],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "kind",
+        "item_id",
+        "slug",
+        "branch",
+        "primary_branch",
+        "remote",
+        "context_oid",
+        "primary_oid",
+        "changes",
+        "integration",
+        "publication",
+        "cleanup",
+        "closure"
+      ],
+      "properties": {
+        "root": {
+          "description": "The repository's root, as the request's records name it.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "document",
+            "ticket"
+          ]
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "slug": {
+          "description": "The ticket's short code, when the index holds one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "description": "The item's editing branch, as its short name.",
+          "type": "string"
+        },
+        "primary_branch": {
+          "type": "string"
+        },
+        "remote": {
+          "description": "The publication remote, by its name. Null for a repository with none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context_oid": {
+          "type": "string"
+        },
+        "primary_oid": {
+          "type": "string"
+        },
+        "changes": {
+          "description": "Every path the branch changes against primary, relative to the repository with forward slashes.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "change"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "change": {
+                "type": "string",
+                "enum": [
+                  "added",
+                  "modified",
+                  "deleted"
+                ]
+              }
+            }
+          }
+        },
+        "integration": {
+          "type": "string",
+          "enum": [
+            "merge_commit",
+            "already_contained"
+          ]
+        },
+        "publication": {
+          "type": "string",
+          "enum": [
+            "publish",
+            "pending_no_remote"
+          ]
+        },
+        "cleanup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "remote_branch",
+            "worktree",
+            "local_branch"
+          ],
+          "properties": {
+            "remote_branch": {
+              "type": "boolean"
+            },
+            "worktree": {
+              "type": "boolean"
+            },
+            "local_branch": {
+              "type": "boolean"
+            }
+          }
+        },
+        "closure": {
+          "description": "What a closure records. Null for a promotion. closed_by is the configured identity, or the value the ticket already holds.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "recording",
+            "closed_by"
+          ],
+          "properties": {
+            "recording": {
+              "type": "string",
+              "enum": [
+                "record",
+                "existing"
+              ]
+            },
+            "closed_by": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 document folders",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items", "complete", "index"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "description": "Every directory under docs/ in the primary worktree that the last refresh listed, ordered by path. No directory is listed to answer the read.",
+      "items": {
+        "$ref": "document_folder.schema.json"
+      }
+    },
+    "complete": {
+      "type": "boolean",
+      "description": "False when the last refresh could not read, or stopped part of the way through, docs or a directory under it in the primary worktree: one it could not open, one deeper than it goes, a symbolic link, or the place where it met its limit on entries. Folders may then be missing while index.state is current."
+    },
+    "index": {
+      "$ref": "repository_index.schema.json"
+    }
+  }
+}

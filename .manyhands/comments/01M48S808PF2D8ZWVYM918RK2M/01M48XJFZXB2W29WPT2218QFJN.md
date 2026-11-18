@@ -1,9 +1,10 @@
 ---
+id: 01M48XJFZXB2W29WPT2218QFJN
+item_id: 01M48S808PF2D8ZWVYM918RK2M
+created_at: 2026-10-06T15:33:32Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M48XJFZXB2W29WPT2218QFJN"
-item_id: "01M48S808PF2D8ZWVYM918RK2M"
-created_at: "2026-10-06T15:33:32Z"
 ---
 
 Task 2's three accepted inventory findings are corrected in `0906c3e`, sole-file

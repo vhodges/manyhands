@@ -83,6 +83,54 @@ fn successful_unlock_prompts_once_per_session() {
 }
 
 #[test]
+fn an_unrelated_failure_keeps_a_cached_passphrase_and_caches_nothing_new() {
+    let (_source, request) = observed_request("primary");
+    let (provider, calls) = CountingProvider::new([supplied("one"), supplied("two")]);
+    let mut session = SessionCredentials::new(provider);
+
+    // Never cached: the first attempt failed before it proved the passphrase.
+    assert_eq!(
+        session.with_passphrase(request.clone(), |_| {
+            Err::<(), _>(PassphraseUseFailure::Unrelated)
+        }),
+        Err(SessionUnlockFailure::Unavailable)
+    );
+    assert!(!session.has_cached_passphrase(&request));
+    assert!(session.with_passphrase(request.clone(), |_| Ok(())).is_ok());
+    assert_eq!(calls.get(), 2);
+
+    // Cached by that success: a failure unrelated to it leaves it in place.
+    assert_eq!(
+        session.with_passphrase(request.clone(), |_| {
+            Err::<(), _>(PassphraseUseFailure::Unrelated)
+        }),
+        Err(SessionUnlockFailure::Unavailable)
+    );
+    assert!(session.has_cached_passphrase(&request));
+    assert!(session.with_passphrase(request.clone(), |_| Ok(())).is_ok());
+    assert_eq!(calls.get(), 2);
+
+    // The other failures still evict it.
+    for failure in [
+        PassphraseUseFailure::Rejected,
+        PassphraseUseFailure::SourceChanged,
+        PassphraseUseFailure::Unavailable,
+    ] {
+        assert!(session.with_passphrase(request.clone(), |_| Ok(())).is_ok());
+        assert!(session.has_cached_passphrase(&request));
+        assert!(
+            session
+                .with_passphrase(request.clone(), |_| Err::<(), _>(failure))
+                .is_err()
+        );
+        assert!(!session.has_cached_passphrase(&request), "{failure:?}");
+        let (provider, _) = CountingProvider::new([supplied("again")]);
+        session = SessionCredentials::new(provider);
+        assert!(session.with_passphrase(request.clone(), |_| Ok(())).is_ok());
+    }
+}
+
+#[test]
 fn failed_validation_is_not_cached() {
     let (_source, request) = observed_request("primary");
     let (provider, calls) = CountingProvider::new([supplied("wrong"), supplied("correct")]);

@@ -1,3 +1,11 @@
+---
+title: "SSH Keys"
+date: 2026-09-29
+author: "Vince Hodges <vince@imbas.ca>"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J9GCJ6CDND7VA5YSBS"
+---
 
 Since you are building the tool itself, you do not need to rely on CLI helpers like bkt. 
 

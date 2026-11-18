@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 SSH key registration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "label",
+    "ownership",
+    "selected",
+    "fingerprint",
+    "private_source_state",
+    "public_metadata_state",
+    "private_key_path",
+    "public_key_path"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "label": {
+      "type": "string"
+    },
+    "ownership": {
+      "type": "string",
+      "enum": ["imported", "generated"]
+    },
+    "selected": {
+      "type": "boolean"
+    },
+    "fingerprint": {
+      "type": ["string", "null"]
+    },
+    "private_source_state": {
+      "type": "string",
+      "enum": ["available", "missing", "unavailable"]
+    },
+    "public_metadata_state": {
+      "type": "string",
+      "enum": ["not_provided", "available", "unavailable"]
+    },
+    "private_key_path": {
+      "type": "string"
+    },
+    "public_key_path": {
+      "type": ["string", "null"]
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "code": "transport_unavailable",
+  "command": "ticket close",
+  "data": {
+    "blockers": [],
+    "checkpoint_oid": null,
+    "cleanup": null,
+    "cleanup_pending": null,
+    "integration": null,
+    "integration_oid": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "kind": "ticket",
+    "made_ready": [],
+    "made_ready_state": "not_computed",
+    "publication": null,
+    "publication_oid": null,
+    "publication_pending": null,
+    "recording": null,
+    "type": "lifecycle"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The transport is not available; try again.",
+  "operation_id": "<operation>",
+  "outcome": "error",
+  "recovery": [
+    {
+      "action": "request.retry",
+      "arguments": {
+        "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FJ1"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FJ1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

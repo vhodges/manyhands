@@ -1,0 +1,937 @@
+---
+title: "Wave 02 Cycle 07 Comment Publication Execution Ledger"
+date: 2026-10-07
+status: approved
+author: "Codex"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M4B2JBSQQTM8011VSM1XJCT1"
+---
+
+# Comment Publication Execution Ledger
+
+## Planning Authorization And Preflight — 2026-10-07
+
+User requested the Wave 02 Cycle 07 Cycle, design, detailed implementation plan
+and skill-based self-review for existing ticket `01K7F6H9J2N4Q6S8V0X2Z4B6DF`.
+At the initial request, authorization was planning only, pending user review.
+No implementation, delegation, publication, merge, closure or cleanup was
+authorized/performed. The later document approval and local planning-commit
+authorization are recorded below.
+
+- Repository: `/home/vhodges/work/src/manyhands`.
+- Verified registered ticket worktree:
+  `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01K7F6H9J2N4Q6S8V0X2Z4B6DF`.
+- Branch: `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DF`.
+- Ticket worktree was clean before rebase. Main had unrelated untracked
+  `.superpowers/` and `devenv.nix~`; left untouched. Other worktrees untouched.
+  At final inspection main also showed modified `scripts/ticket-front-matter`
+  and `tests/interim-ticket-scripts.sh`; this planning session did not edit
+  either file and left those unrelated changes untouched.
+- Fresh `git fetch origin main` succeeded; local main and fetched origin/main
+  agreed at `b666c1e1f0a708562ff4cc25b0dfb18dc99dd6a9`.
+- Before ticket HEAD: `92a3646ed1b5915713e68fdf2158e4a5ca49f7c2`.
+- Ticket rebase onto fetched base succeeded without conflicts.
+- After ticket HEAD: `c98127ed1203ff77c9a4a3658741fba256bdce1f`.
+- `merge-base --is-ancestor` passed; post-rebase ticket status was clean.
+- Re-read rebased `AGENTS.md`. Starting-cycle preflight makes the rebase
+  direction unambiguous: ticket onto main; main was never rebased/switched.
+- CLI inspection found startup initialization only, no supported ticket/comment
+  operations. Canonical filesystem updates are therefore the approved fallback.
+
+## Grounding
+
+Read `starting-a-cycle` and its preflight reference, `review-cycle-docs` and its
+review matrix, repository instructions and ticket; inspected Wave 02, PRD/MVP
+and relevant schema/Git/index/authentication/test RFC sections, Wave 01 local
+comment/recovery contracts, Cycle 05 artifacts/evidence, Wave 03 API audit,
+local comment/checkpoint/recovery source, remote synchronization/reservation
+source, SSH fixture/test architecture, Cargo test declarations and native CI.
+
+Main contains Cycles 01–05; normal comment submit still reports `SyncDeferred`.
+Cycle 06 documents/merge-conflict code are absent from this base. Its approved
+merged contract and actual evidence are required at implementation Task 0.
+No unmerged worktree's code/documents were copied or presumed approved.
+
+## Artifacts
+
+- [Cycle](../Cycles/wave-02-cycle-07-comment-publication.md)
+- [Design](2026-10-07-wave-02-cycle-07-comment-publication-design.md)
+- [Detailed implementation plan](2026-10-07-wave-02-cycle-07-comment-publication-implementation.md)
+
+The user approved all three on 2026-10-07. Ticket remains `open`; implementation
+is not authorized. Proposed execution: direct sequential tasks with checkpoint
+comments and code review; do not infer delegation approval.
+
+## Skill-Based Self-Review
+
+| Source | Concern / promised behavior | Classification | Resolution / ruling | Proof or follow-up |
+| --- | --- | --- | --- | --- |
+| Wave 02 Cycle 07; Git RFC | Scope could absorb missing merge/conflict implementation | Settled | Delegate Cycles 05/06; Cycle 06 absent is an implementation gate, not reduced acceptance or new merge scope | Task 0 approved-source/evidence reconciliation; Task 5 real merge/conflict integration |
+| Existing submit API; Wave 03 API audit | A second normal submit could leave a silent `SyncDeferred` bypass | Ruling | Ruling: change public normal submit to compound and extract a private local helper — required headless policy — cost if wrong: in-repository API/test migration; revisit newly merged consumers at Task 0 | Task 1 consumer scan, local regressions and audit update |
+| Reservation `validate_index_identity`; local recovery | Reusing submit ID as sync ID violates action identity | Ruling | Ruling: persist one distinct child before any canonical write — preserve existing cross-action guards — cost if wrong: additive binding migration and receipt tests | Task 2 transaction/concurrency/collision tests; never loosen reservation identity |
+| Local authoring/recovery RFC | Body-free retry and commit-before-receipt crash could duplicate a checkpoint | Settled | Actual Git tree/diff/ancestry and immutable ID/time prove original receipt; no body/hash persistence; ambiguity stops safely | Task 2 fault/reopen and negative proof tests; Task 4 receiptless retry |
+| Publication receipt vs branch sync authority | External branch move/removal or conflict resolution could sync a tree excluding the original comment | Ruling | Ruling: prove checkpoint ancestry and original blob at delegated authority OID — branch success alone is insufficient — cost if wrong: conservative recovery instead of false publication | Self-review correction propagated to all three artifacts; Tasks 3 and 5 exclusion/replacement negative cases |
+| Index RFC; `require_no_pending_local` | Immediate sync could bypass pending local recovery or cache failure could be mistaken for unsaved work | Ruling | Ruling: immediately attempt local discovery, repair pending handoff before child, return saved/index-pending if blocked — preserve existing recovery ordering — cost if wrong: delayed publication until repair | Tasks 3–4 ordering, independent local/remote index-failure tests |
+| MVP local-only amendment; Cycle 05 local-only terminal replay | Freezing a no-remote child would prevent later configured-remote publication | Ruling | Ruling: return local pending without starting child — preserve same-receipt later publication — cost if wrong: one binding lookup rather than frozen local-sync replay | Task 4 remote-added-after-submit case; no prompt/network/reservation assertions |
+| Scoped checkpoint RFC; desktop discussion contract | Whole context sync could accidentally checkpoint buffers/unrelated index or hide other committed publication | Settled | Only comment path checkpoints; whole already-committed context can publish; unrelated dirty state blocks unsafe sync after receipt | Tasks 1/5 live-index/status snapshots, prior-commit vs unsaved tests |
+| Authentication RFC; approved transport limits | New composition might bypass selected key/trust, leak body/URL/secret or imply a total timeout | Settled | Existing caller-owned session/HostApproval and fixed typed errors; per-address/per-call budgets and safe points, no automatic retry/total deadline | Tasks 2/5 persistence/output privacy scans and existing transport timeout tests |
+| Cycle 05/06 push and conflict recovery | Restart/cancel/ambiguous push might invent consent or duplicate merge/push/checkpoint | Settled | Delegate explicit fencing/re-observation/resolution; parent binding never grants ownership or republish consent | Tasks 4–5 cancelled, conflict, accepted-push-disconnect and terminal index-only replay |
+| Migration/rebuild authority | Old rows or lost correlation might be auto-posted on reopen | Settled | Additive migration, no auto-publication/guessed adoption; missing binding is recovery; ordinary deliberate sync available for legacy comments | Task 2 old-database and corrupt/missing binding tests |
+| Test RFC; Cargo/harness/CI | A bare remote, fixture wiring or Linux result could be called native SSH proof | Settled | Custom pre-thread real SSH/private-output target; exact-ref/effect snapshots; manual workflow remains disabled automatically | Task 5 real two-clone target; Task 6 native results pending authorized runs or explicit owner deferral |
+| Dogfooding lifecycle | Planning approval might imply implementation, push or premature closure | Settled | Planning only; open ticket; code-review/PR approval before closure, normally final authorized pre-merge checkpoint; separate publication/merge/cleanup permission | Task checkpoints, final gate, review-ready and later delivery comments |
+
+No unresolved product/security/recovery/scope question was identified after the
+matrix audit. Approved authorities settle local-first behavior, trust, shared
+branch/whole-context publication, conflict preservation and privacy. The rulings
+are implementation mechanisms within that policy. Dependency availability and
+native evidence remain explicitly open **gates**, not hidden product decisions.
+
+### Corrections Made During Self-Review
+
+The initial draft required verified context synchronization but did not explicitly
+prove the original comment was still in that published tree. Added original
+checkpoint ancestry and canonical blob proof at the delegated authority OID,
+plus negative tests for external branch movement/removal/replacement, to Cycle,
+design and Tasks 3/5. Rechecked the three artifacts for consistent receipt,
+index-pending, no-remote-child, explicit restart and approval semantics.
+
+## Verification And Approval Checkpoints
+
+Planning verification at `2026-10-07T11:49:26Z`: six then-written
+artifacts/ticket/comments and 25 relative links checked; zero missing links,
+invalid/duplicate ULIDs or unresolved drafting placeholders. `git diff --check`
+passed for tracked changes; a separate scan of all new/modified artifact lines
+found no trailing whitespace. Cross-artifact decision/acceptance/task consistency
+was rechecked after the self-review correction. Final review comment is added
+at the review-ready checkpoint and included in the final documentation recheck.
+
+These are documentation checks only. No Cargo command or platform test has been
+run for this planning change; baseline/final Rust verification remains in
+Tasks 0/6. No source, Cargo dependency, lockfile or workflow was changed during
+planning. Drafts were uncommitted at the review handoff; the user subsequently
+authorized approval-state updates and a local planning commit.
+
+Implementation checkpoints: Task 0 base/dependency/baseline; Task 1 API/local
+regression; Task 2 durable identity/receipt; Task 3 compound ordering/outcomes;
+Task 4 body-free retry/index/cancel; Task 5 real SSH/privacy/recovery/native
+wiring; Task 6 full Devenv gate/code review/review-ready. Each gets a ticket
+comment with results and blockers. Ticket closure is not a Task 6 automatic
+side effect and precedes merge only after review and explicit authorization.
+
+## Document Approval And Commit Authorization — 2026-10-07T14:38:23Z
+
+User decision: "The documents are approved, update the state and commit".
+
+- Marked the Cycle, design and detailed implementation plan approved; updated
+  this ledger's planning state and the ticket's approval checklist.
+- Recorded approval in a canonical ticket comment using the filesystem fallback;
+  the CLI still does not support the required operation on this ticket's base.
+- Authorized scope is approval-state updates and one local planning commit on
+  `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DF`.
+- Ticket stays open. Implementation, push/PR, native CI dispatch, merge, closure
+  and cleanup remain unauthorized. Cycle 06 and baseline gates are unchanged.
+- Documentation-only checkpoint: recheck links, canonical IDs, state consistency
+  and staged `git diff --check` before committing. No Rust source, dependency,
+  lockfile or workflow changes; no Rust/native tests claimed.
+
+## Rebase Onto Merged Cycle 06 And Plan Amendment — 2026-10-09T22:29:58Z
+
+Owner request: rebase this ticket onto current main and review the approved plan
+against the merged Cycle 06; then, "lets make the ammendments and push the branch
+to origin".
+
+- Fresh fetch observed origin/main at `5e4fad636fd7aad332b9221cf157a7558c32e375`
+  (merge of pull request 14, Wave 02 Cycle 06).
+- Before ticket HEAD `56ed280`; rebased without conflicts to `1de99c6`. The
+  diff against main was only this Cycle's planning files. A local backup ref
+  `backup/cycle07-pre-rebase-56ed280` was kept.
+- The origin ticket branch still held only the original checkpoint `92a3646`,
+  whose ticket content is identical to the rebased checkpoint commit. Publishing
+  therefore replaced that single commit with a lease-checked push.
+
+Review method: read the Cycle, design and plan in full and checked each
+dependency claim against the merged source (synchronization request and error
+types, conflict scope, cancellation, callers, schemas, registry rules, fixtures).
+No Rust command was run; this is a documentation change.
+
+| Finding against merged Cycle 06 | Classification | Resolution |
+| --- | --- | --- |
+| A comment checkpoint leaves the Git index stale and the immediate context synchronization then refuses the worktree as not clean; every Cycle 06 SSH fixture refreshes the index by hand | Blocker | New entry-gate prerequisite: ticket `01M4GD0KKXW684QBA49F6EX3WE` merged first; no workaround in production or fixtures |
+| A pending conflict in any context returns `Busy` to every other synchronization; no abandon path (ticket `01M4H33R34Z7C7EEKTY1ZCT950`) | Accepted limit | Stated in the Cycle; mapped to saved-local; one acceptance case added |
+| Cancellation with a pending conflict is a recoverable stop; cancel is a no-op on a child parked after a released conflict | Contract change | Design cancellation paragraph and Task 4 tests amended |
+| `SynchronizeRemoteRequest.confirmed_identity` and opaque `ExpectedConfiguration` on `IdentityRequired` | Ruling | Ruling: both compound requests forward an optional confirmation to the child only — keeps a later merge completable without resubmission — cost if wrong: one unused optional field |
+| New typed errors `ConflictPending`, `ExternalResolutionRequired`, continuing `PushRejected` | Settled | Mapped by name in design and Task 3, one test per category |
+| A terminally cancelled bound child cannot be reused | Ruling | Ruling: the comment stays saved-local and publishes through a later ordinary context synchronization — avoids allocating a second child for one receipt — cost if wrong: retry reports recovery where a fresh child could have published |
+| Resolution APIs are keyed by the synchronization operation ID | Settled | The receipt's bound child ID is that key; Task 5 resolves through it |
+| `submit_comment` has more callers; the read boundary and `operation.schema.json` name the action; `SyncDeferred` is in no schema | Settled | Design caller list updated; action name kept |
+| New table must follow Cycle 06 registry rules | Settled | Task 2 amended: all-or-nothing migration, startup validation, table inventory, uniqueness against remote records |
+| Windows path headroom of about 40 characters; comment files are the longest paths | Settled | Task 5 fixture guidance amended |
+| Planning-time statements that Cycle 06 is absent | Stale | Dated update notes added; originals kept as the planning record |
+
+The Cycle 06 dependency gate is met. Implementation remains unauthorized and is
+now gated on the index ticket. The owner approved both rulings above on 2026-10-09 ("I approve those two
+choices"): forwarding an optional identity confirmation, and not reusing a
+terminally cancelled child. Ticket stays
+open; no implementation, pull request, native CI dispatch, merge, closure or
+cleanup is authorized by this checkpoint.
+
+## Task 0: Implementation Entry Checkpoint — 2026-10-10
+
+The owner's hand-off authorizes Task 0 rebase, implementation of Tasks 1–6,
+local commits, local gates and canonical ticket comments. Execution remains
+direct and sequential, with independent read-only review per task. Publishing
+the rebased branch (force-with-lease pinned to the original published HEAD),
+later pushes, CI dispatch, PR, closure, merge and cleanup require separate
+authorization. The owner subsequently approved the validated creation timestamp
+field already required by the design when asked to reconcile it with the
+hand-off's narrower persistence list. This is a narrowly scoped timestamp
+exception; bodies, body hashes, secrets, endpoints and arbitrary paths remain
+excluded from new recovery metadata and diagnostics.
+
+### Base and dependencies
+
+- Ticket worktree clean before rebase; main had unrelated untracked
+  `.superpowers/`, left untouched. No other ticket worktree or branch changed.
+- Fresh `git fetch origin main`: `f87ce81001f75ff6fc21192b71019b0bcaef6ea6`.
+- Original published ticket HEAD:
+  `59f27a94b1358bdc7172d10610ae08969b09ff90`.
+- Rebase completed without conflicts; new planning HEAD:
+  `424c60f03037761db9bbbeec4c9c53a53b607daa`. Ancestry check passed;
+  post-rebase worktree clean. No push performed.
+- Re-read rebased AGENTS, Cycle, design, plan, ledger, ticket/comments and
+  merged Cycle 06 Task 7 evidence. The remote production modules are unchanged
+  since the approved amendment's base `5e4fad6`; confirmed identity, child-keyed
+  resolution, repository-wide publication conflict block, recoverable conflict
+  cancellation and terminal cancellation rulings remain applicable.
+- PR #16 (`842fd16`, implementation `2215834`) is an ancestor of this branch.
+  `devenv shell -- cargo test --locked --test remote_synchronization
+  context_first_current_fast_forward_local_ahead` passed: one real-SSH case.
+  It invokes public save then public synchronization without fixture index repair.
+
+### Compatibility review
+
+Independent read-only code review at `424c60f` found no blocking behavioral
+incompatibility from PRs #15/#16. The reviewer inspected code, approved documents,
+operation schemas/read DTOs, rejection regressions and remote identity/replay
+guards; it did not run Rust or change files.
+
+| Finding | Classification | Implementation consequence |
+| --- | --- | --- |
+| PR #15 keeps an effect-free rejected local row as completed/rejected; same-ID same-target reuse resets that row to a new call, while mismatch checks run first | Compatible lifecycle refinement | Rejected-row reset does not reset compound identity: lookup existing binding independently of `RecoveryRecord.is_new`; retain the child across rejection, refresh, reopen and exact retry. Pin this in Task 2 tests. |
+| Written/uncertain effects remain pending; completed/rejected is not checkpoint proof | Existing contract | Do not start a child or invent a receipt from journal status. Prove immutable Git evidence; preserve Saved on every post-checkpoint failure. |
+| A rejected parent ID still occupies local identity and cannot become a remote ID | Existing guard | Generated child uniqueness includes every local row, rejected rows included, plus remote and binding identities. |
+| PR #16 refreshes only committed owned live-index entries, including no-change repair, preserving unrelated entries | Prerequisite satisfied | No index-refresh workaround; foreign lock/collision still maps to saved-local publication recovery. |
+| Additional normal submit caller: `tests/journal_rejection.rs:250` | Caller-list correction | Migrate with `tests/local_authoring.rs`, `tests/recovery_foundation_gate.rs`, `tests/remote_merge_recovery.rs` and `src/repository/remote/sync_tests.rs`. No desktop or CLI submit caller exists. |
+| Wave 03 DTO/schema explains completed/rejected; action name unchanged | Documentation correction | Preserve `submit_comment` operation identity and rejection read semantics. Retiring SyncDeferred changes no published schema. |
+
+The conflict-block amendment describes publication of every context. Existing
+local authoring still refuses a write inside the context owned by a pending
+merge; composition preserves that guard rather than weakening Cycle 06.
+
+### Baseline evidence
+
+All commands from the ticket worktree via Devenv at unchanged `424c60f`:
+
+| Gate | Result |
+| --- | --- |
+| `cargo check --all-features --locked` | PASS |
+| `cargo fmt --check` | PASS |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `cargo test --all-features --locked` | PASS on rerun with 3,600,000 ms tool budget |
+| `cargo run --locked --bin manyhands-cli` | PASS; no window |
+
+The first full test attempt hit the 1,200,000 ms tool limit during the SSH
+synchronization suite after 38 passing cases. No test failure was reported;
+the next case (`remote_change_during_fetch`) passed in isolation. The rerun
+completed all suites, including lib 468, local authoring 131, journal rejection
+18, foundation recovery 51, real-SSH merge recovery 25, remote observation 15,
+synchronization 63, SSH fixture 31, transport 105 and doctests 9. One existing
+read-characterization test is intentionally ignored. No existing baseline
+failure found. Full rerun output is in the session tool log
+`tool_125cf44d8001yWWQ9isW7Y6AJm`; interrupted attempt in
+`tool_125c05f8b001DT1z27ko2T9hSl`. Native evidence for this Cycle remains pending
+authorized publication/dispatch. No Rust, Cargo, lockfile or CI edit at Task 0.
+
+### Task 0 follow-up: affected contract wording awaiting owner approval
+
+The PR #15/#16 compatibility review passes, but its final conflict-scope note
+identifies a semantic discrepancy in the approved Cycle's amendment point 2.
+The earlier entry above describes the existing guard; it is not approval to
+correct the stronger promise in the approved Cycle. Task 0 remains blocked
+on owner approval of this affected paragraph before Rust edits.
+
+The approved Cycle (`wave-02-cycle-07-comment-publication.md:159–164`) says:
+"A comment submitted meanwhile is saved locally with publication pending for
+every item, not only the conflicted one." Actual public local authoring rejects
+submission into the context owned by the pending synchronization merge before
+its canonical write (`src/repository.rs:2219–2224`, with a second guard at
+`:2259`). Other contexts can still author; their synchronization gets Busy.
+This is not a change introduced by PR #15/#16, and no relaxation of Cycle 06's
+guard is proposed. It is a correction to a behavioral promise in an approved
+document, rather than a name-only difference.
+
+Runtime evidence: `devenv shell -- cargo test --locked --lib
+review_resolution_releases_parent_after_verified_cleanup_and_replays_original_attempt`
+passes one test. It asserts public `submit_comment` in the matching pending
+context returns `RepositoryErrorKind::RecoveryRequired` before resolution and
+works after the parent's local release (`src/repository/remote/sync_tests.rs:
+2447–2449,2511–2516`). An earlier attempt with `-- --exact` selected zero tests;
+that invocation is not evidence and was corrected by the command above.
+
+**Proposed replacement for Cycle amendment point 2, pending approval:**
+
+> **Repository-wide conflict block.** A pending synchronization conflict in any
+> context makes every other synchronization in the repository return `Busy`,
+> and there is no abandon path yet (ticket `01M4H33R34Z7C7EEKTY1ZCT950`). A
+> comment that can be checkpointed in another writable context is saved locally
+> with publication pending/`Busy`. Existing local authoring refuses a new comment
+> in the context owned by the pending merge before writing/checkpointing it;
+> that pre-checkpoint refusal returns local recovery, not a saved receipt. This
+> Cycle preserves both guards; contract point 6 maps delegated `Busy` after a
+> proven checkpoint to saved-local.
+
+The design replay table already specifies "Another context's conflict is
+pending" and Task 5 already asks for the Busy case in another context. No
+redesign of synchronization, cancellation, binding or conflict resolution is
+requested. The approved Cycle paragraph has not been edited. No Rust edit,
+branch push, CI dispatch, PR or closure performed. Next action: owner approves
+the affected Cycle wording, then apply it and finish Task 0 before Task 1.
+
+### Task 0 approval — 2026-10-10T13:10:42Z
+
+The owner answered "Yes" to approval of the exact proposed replacement for
+Cycle amendment point 2. Applied the qualification to that approved paragraph;
+the existing Cycle 06 local guard and saved-local/Busy mapping stand. Task 0
+is complete. No additional implementation, publication or lifecycle authority
+is inferred from this document approval.
+
+## Task 1: Compound API and Local Checkpoint Extraction — 2026-10-10
+
+Task review base: `4d69314` (approved Task 0 qualification). Direct controller
+implementation; independent read-only review and re-review of the actual diff.
+
+- Added the compound requests, original receipt, independent publication/index
+  states and redacted submission error in `repository/comment_publication.rs`.
+  Requests carry host/confirmed-identity controls but no endpoint/refspec/key/
+  passphrase/force controls. Large receipt/recovery/error values are boxed;
+  Debug never renders drafts, roots, paths or backend text.
+- Extracted existing validation/identity/owned-path/scoped-checkpoint behavior
+  into the crate-private `checkpoint_comment_locally`. No public local-only
+  submission bypass; the identity-config test seam also takes a compound request
+  and caller-owned session. Retired normal `SyncDeferred`.
+- Migrated local-authoring/foundation/journal callers through an explicit test
+  session adapter calling the public API. Source-included Cycle 06 setup uses
+  the crate-private helper to arrange independently synchronized history. This
+  is fixture setup, not a public authoring bypass or index repair.
+- Updated the Wave 03 API audit with a dated current-signature/receipt/retry
+  update and acceptance limits while retaining its historical source evidence.
+- A coherent public Saved receipt requires stable child correlation. The
+  minimum binding/receipt/delegation foundation from Tasks 2–4 is therefore
+  included in this API checkpoint rather than returning an ephemeral child or
+  exposing a temporary bypass. Their migration/collision/fault/transport and
+  retry acceptance remains separate work; this does not complete Tasks 2–4.
+
+### Review and fixes
+
+Initial independent Task 1 review requested changes. Confirmed each finding
+against code and failing tests, then re-reviewed the fixes:
+
+| Finding | Resolution/evidence |
+| --- | --- |
+| Missing-identity retry after an intervening context save could commit, then lose Saved because its frozen pre-OID no longer matched | Added failing regression using an intervening public document save. Now check frozen pre-OID before canonical writes; refusal leaves HEAD and missing comment unchanged. Known postcommit effects always retain Saved/local recovery. |
+| Receiptless body-bearing replay could recreate an externally deleted comment | Added failing receipt-persistence/deletion/replay test. Reconcile existing binding against immutable Git before entering the writer; return the original OID and recovery without recreating the file. |
+| Original receipt persisted after discovery rather than before it | Persist validated OID/time before discovery. On journal/receipt failure retain in-memory binding and known commit so the public result remains Saved. |
+| Journal observation failure left body-free retry unable to claim local indexing | Added failing handoff-repair regression. A short-lease conditional update advances only pre-index states; existing active indexing owner state/epoch is preserved. Then reuse normal refresh after releasing the lease. |
+| API audit stale and outcome assertions too broad | Dated audit update; exact NoPublicationRemote assertions; configured-remote regression requires delegated Transport(RuntimeUninitialized). |
+| New binding FK blocked deliberate registration removal | Binding cascades with its local operation record, matching existing explicit registration-removal recovery deletion. Missing correlation subsequently requires recovery, never inferred adoption. Journal rejection regression passes. |
+
+Re-review found no remaining Task 1 blocker by source inspection. It carried
+these explicit Task 2 acceptance debts: reciprocal child-ID collision checks at
+local and remote consuming transactions; strict substituted-schema/root/target
+startup validation; table-inventory update; receiptless original checkpoint made
+unreachable by a reset back to its pre-OID (must not create a replacement).
+
+### Verification
+
+Red type/API compilation established the missing compound signature and types;
+fixture ULID spelling was corrected before the second red run. The two review
+regressions and the journal-repair assertion were observed failing before fixes.
+The new fixture constructs its born canonical initial commit before service
+calls and performs no index repair after any save or comment.
+
+Focused green checks via Devenv: library `comment_publication` 7; local-authoring
+`comment_` 17; foundation recovery 51; journal rejection 18. All-target,
+all-feature locked Cargo check and clippy (`-D warnings`) pass. Cargo fmt and
+`git diff --check` pass. Clippy initially flagged large values; boxed them and
+reran clippy plus focused library/authoring tests green. Full final and native
+Cycle evidence is still owed by Tasks 5–6. The exact table inventory is a known
+Task 2 regression migration, not a claimed passing full suite.
+
+## Task 2: Durable Binding and Receipt Recovery — 2026-10-10
+
+Review base: `82623fa`. Added strict binding-table/marker migration in the
+**existing operation-record transaction**, including startup root-digest,
+parent matcher and child root/action/item checks and the exact table inventory.
+The allocation transaction rechecks its parent row identity and all local/
+remote/binding ID collisions. Reciprocal consuming guards prevent another
+local action, plain refresh or remote target from taking an unused child; only
+its authoritative ordinary refresh may coexist.
+
+Receipt proof checks immutable commit/tree/path, one owned added path, the
+recorded direct pre-parent, original canonical IDs/time and context ancestry.
+Receiptless reconciliation finds unique matching objects including unreachable
+ones; an unreadable plausible candidate or competing checkpoint requires
+recovery. Fresh new writes do not perform that replay ODB scan under the lease.
+
+### Review and crash evidence
+
+Independent review found one remaining replacement path after receipt failure,
+reset and pruning/missing Git authority. Reproduced it in a red test, then added
+fixed categories to the existing local journal:
+
+- `comment_destination_prepared`: validated creation time is persisted before
+  the first canonical write, never a body or fingerprint. A prepared/observed
+  missing file requires recovery rather than another creation timestamp.
+- `comment_checkpoint_intent`: durable before actual Git checkpoint execution.
+  Without proved Git authority an exact retry cannot create a replacement,
+  even when original objects have disappeared. The existing known injected
+  precommit stop fires before this intent and still resumes its retained file.
+- Two hidden failure points following the existing test-seam pattern pin the
+  prepared-before-write and intent-before-commit windows. Both reopen into
+  typed recovery with unchanged file observation, timestamp, HEAD and binding.
+
+The existing binding timestamp field is now independent of checkpoint nullness:
+it is validated from canonical serialization before write; checkpoint authority
+is stored only after proof. This implements the owner's timestamp exception and
+preserves one observed creation time. An ephemeral `receipt_recorded` flag
+distinguishes stored authority from in-memory postcommit evidence; no extra
+remote phase or reservation is persisted in the binding.
+
+Review re-runs approved the production fixes and, after the two intent-window
+tests, found no remaining Task 2 blocker or acceptance gap. Other covered cases:
+pending local/interrupted remote rows preserved through legacy migration,
+failure after binding DDL rolling back both table and marker, rejected-row
+refresh/reopen identity, valid authoritative child/refresh/reopen coexistence,
+missing commit/tree/blob with and without retained file, multiple plausible
+checkpoints, cross-root/target/body/ID mismatch, concurrent services, and
+body/endpoint/passphrase/server/body-hash canaries absent from database sidecars.
+The authoritative-refresh unit case arranges durable metadata; it is not real
+SSH publication proof.
+
+Interim Task 1 registry definitions are intentionally not upgraded under the
+owner's explicit hand-off ruling: no running instances and no earlier-branch
+registry upgrade requirement. Main's legacy databases remain additive migrations
+with no inferred correlation/publication. An early schema placement broke the
+existing rollback regression; moved the new table/marker into the operation
+transaction and proved rollback after DDL as well as during legacy import.
+
+### Verification and next debts
+
+Devenv: full library **493 passed**, including 25 comment-publication tests;
+foundation recovery 51, enablement 78, remote reservation 9; full local authoring
+131 and journal rejection 18 passed during the task, with comment-authoring 17
+rerun after intent/timestamp changes. All-target/all-feature locked clippy with
+warnings denied, fmt and `git diff --check` pass. The first concurrency fixture
+used a resolution-only temp hook and timed out; switched to the actual normal
+writer Replace boundary and verified it green. No sleeps or index workaround.
+
+Carry to Task 3: live canonical-worktree validation can mask the child's typed
+pending conflict recovery; missing-registration discovery must remain independent
+index-pending evidence. Real SSH, remaining mapping/retry/cancel acceptance and
+final native gates remain Tasks 3–6. No push, dispatch or closure performed.
+
+## Task 3: Immediate Context Synchronization and Independent Indexing — 2026-10-10
+
+Review base `41422f1`. Delegation uses the original receipt's one persisted child
+and only `SynchronizationTarget::Context`, caller-owned credentials, optional
+host approval and opaque identity confirmation. Publication relays verified
+Published/AlreadyCurrent only with the original checkpoint ancestry and original
+blob/mode at the authority OID. Fixed-category mapping preserves child recovery
+payloads, including ExpectedConfiguration; repository backend diagnostics are
+replaced with fixed text.
+
+Resolved carried source debts:
+- Context containment checks deterministic worktree/branch/common-directory
+  identity without requiring malformed live conflict source to parse as an item.
+  Committed ancestry/blob proof remains mandatory. The child supplies its own
+  materialization/conflict recovery rather than losing it behind a generic error.
+- Missing registration is independent local index-pending evidence. The original
+  local record parks as completed/comment_registration_pending so explicit enable
+  remains admissible; recovery inspection, compound pending detection and the
+  remote pending-local guard still recognize the unfinished handoff. Only a
+  proved original receipt can restore its pre-index state after registration.
+  No implicit registration or replacement comment/checkpoint is performed.
+- Initial review found a deadlock if receipt or parking metadata failed before
+  successful parking. Reproduced red; proved-receipt retry now retries the eligible
+  parking transition while registration is absent. It excludes live indexing
+  owner states/epochs. Both interruption windows now enable and repair using the
+  original identity without requiring a body.
+
+Independent re-review approves Task 3 source with no remaining blocker. Targeted
+assertions now cover both leases released at discovery, competing retry preserving
+an active index owner, recorded-receipt reset/removal/replacement negatives,
+named recovery mapping/redaction, opaque identity and missing-registration repair.
+
+### Real SSH evidence and early Task 5 infrastructure
+
+Created the planned custom-host `comment_publication` target and wired it into
+the existing five-target manual workflow now so Task 3 ordering/delegation has
+actual transport evidence. Fixtures seed a born canonical repository before
+service calls, use two short-path clones and a one-round protected fixture key,
+and perform no index refresh after authoring. No dependency/lockfile changes.
+
+Eight real-SSH cases pass through the public API:
+- document and ticket roots plus nested replies, three original checkpoints,
+  discovery thread membership, exact remote ancestry/blob proof and historical
+  no-transport terminal replay;
+- local-only zero prompts/helpers/reservations, then configure and publish with
+  the same body-free receipt/child;
+- dirty context preserves saved receipt and unrelated bytes;
+- credential prompt observes checkpoint and completed discovery with Git/cache
+  leases available;
+- another context's active reservation yields Busy after the scoped checkpoint;
+- verified publication plus remote index failure stays Published/index-pending;
+  reopen/retry repairs discovery only, with unchanged transport/push counters;
+- dirty local-only context also proves zero remote work and byte preservation.
+
+The Busy fixture must use a properly initialized endpoint scope; initial synthetic
+reservation before endpoint initialization legitimately gave HistoryUnknown.
+Prime deliberate primary observation/sync first for that case, preserving Cycle
+06's policy rather than changing its production preflight. The unit no-key/runtime
+fixture is not used as Busy transport proof.
+
+Devenv green: focused publication library 32, comment authoring 17, full local
+authoring 131, foundation recovery 51, remote reservation 9; real SSH target 8.
+All-target/all-feature locked clippy and fmt pass; `git diff --check` passes.
+No CI dispatch/native-pass claim. Full merge/conflict, cancellation/restart,
+identity-removal/confirmation, collaborator AlreadyCurrent and comprehensive
+transport/crash acceptance remain Tasks 4–5; final gates/review remain Task 6.
+
+## Task 4: Retry and Cancellation — Blocked 2026-10-10
+
+Task review base `b07ca41`. Added public-API acceptance for explicit restart after
+a real SSH disconnect, terminal cancellation followed by a later ordinary context
+synchronization, historical replay against the original committed blob despite
+edited live text/changed Push URL, receiptless/unknown retry refusal and unused
+child cancellation. The previous eight SSH cases plus these three pass (11);
+focused publication library 34 passes. Current all-target/all-feature locked
+clippy and fmt pass. No Task 4 completion/final-gate claim.
+
+### Real SSH blocker: applied-but-unreleased resolution cancellation
+
+The new `conflict_cancel_resolution_retries_original_comment` case is a deliberate
+failing regression of the approved cancellation contract. Actual public sequence:
+
+1. Two clones checkpoint incompatible document titles; B publishes its context.
+2. A compound comment checkpoints locally and receives ConflictPending through
+   its bound child. Parked-parent cancellation is correctly a no-op; deliberate
+   restart still reports ConflictPending.
+3. Resolve by the receipt's child ID, retaining the identical request. Inject
+   `ResolutionBeforeMetadataRetirement`: the resolution commit/checkpoint is
+   durably applied, but owned merge metadata and index/sentinel cleanup remain.
+4. Parent cancellation is accepted; body-free explicit restart reports Saved /
+   pending Interrupted, **but the child journal becomes terminal `cancelled`**.
+   Numeric output category 201 proves that phase; the test requires interrupted
+   and fails. No comment or child is recreated.
+
+Independent read-only diagnosis confirms the defect is in existing Cycle 06:
+`remote/reservation.rs::pending_recovery_stage` recognizes conflict_pending,
+resolution_prepared and commit_prepared, but not an applied resolution whose
+release evidence is unfinished. `acknowledge` therefore takes terminal cancel.
+`remote/state.rs::integration_resolution_released` separately proves that applied
+is not released: the artifact is still published here. Exact resolution
+reacquisition allows only Interrupted/Reconciling, so the terminal child cannot
+finish cleanup through the current public API. New ordinary synchronization is
+not an immediate escape while retained merge metadata/sentinel remain.
+
+This differs from the approved recoverable-stop promise for an owned resolution
+and the Cycle 06 owner ruling for a resolve that failed midway. Existing tests
+cover cancellation at resolution_prepared/commit_prepared, completing resolve
+that clears cancellation, and applied-before-retirement failure without cancel;
+they do not cover this combination. It is not the recorded applying/unrecorded
+conflict exception.
+
+### Proposed bounded repair, awaiting owner scope authorization
+
+Extend the existing recoverable-cancellation predicate, in this operation's
+newest window only, to recognize an applied step with its own recorded resolution
+attempt whose **existing resolution-release proof is not complete**. Preserve
+terminal cancellation for ordinary clean applied merges and completed/released
+resolutions. The same candidate and identical resolution request then finish
+owned cleanup after one acknowledged recoverable stop, followed by normal
+body-free publication retry. Keep the failing public SSH regression and add
+focused predicate/terminal-negative coverage.
+
+This is a change to shared Cycle 06 behavior, beyond this Cycle's delegation-only
+scope. Stop before shared Rust behavior edits. Ask the owner to authorize this
+narrow scope exception here, or a separate prerequisite defect repair. Upon
+authorization, clarify the existing design/Cycle cancellation wording that
+"owned resolution" includes applied-but-unreleased cleanup and qualify the
+Cycle 06 evidence ledger with this newly uncovered combination. No abandonment,
+second bound child, broad cancelled-child revival, merge algorithm or ownership
+bypass is proposed.
+
+Current branch contains the failing regression as a local blocker checkpoint;
+ticket remains open and not review-ready. Task 5 comprehensive acceptance and
+Task 6 final/native gates remain pending. No push, CI dispatch, PR or closure.
+
+### Bounded repair authorized — 2026-10-10T17:36:53Z
+
+The owner answered "Yes" to the narrow shared predicate repair in this branch,
+focused regression coverage and the corresponding document clarification.
+Applied the approved clarification to the Cycle/design/plan and qualified the
+historical Cycle 06 evidence record. Resume Task 4 at `6605588`. The source repair
+must use existing resolution-attempt/release proof, retain the same child and
+candidate and preserve clean/released terminal negatives. Publication and
+lifecycle permissions are unchanged; no force push or dispatch is authorized.
+
+### Task 4 completion and authorized repair — 2026-10-10T17:58:44Z
+
+Extended the existing predicate using the latest integration window and its two
+fixed slots. An applied step is recoverable only if it has its own resolution
+attempt and the existing release proof is unfinished. Ownership, generation,
+epoch, cancellation acknowledgment, candidate and child identity are unchanged.
+
+Red evidence: added applied resolution stops after checkpoint observation and
+before metadata retirement to the existing cancellation regression; it produced
+Cancelled/request-retained instead of Interrupted/request-cleared. Repaired it
+and proved identical resolution cleanup and expected parents/clean state. The
+new released-artifact negative and existing ordinary clean-applied negatives
+remain terminal. The public two-clone SSH blocker now passes through the same
+child and original comment checkpoint (numeric phase 202 = interrupted).
+
+Independent read-only Task 4 review approves source, fencing and bounded release
+proof with no blocker; retry/cancel/original-blob/historical replay meet scoped
+requirements. Full SSH target **12 passes**; focused cancellation positives and
+terminal negatives pass; clippy all targets/features with warnings denied and
+fmt pass. A full library run reported 502 passes and one bounded-history guard
+failure: Task 3's registration-pending OR scanned 4,000 retained completed rows.
+Split it into two indexed EXISTS checks and added its partial-root index in the
+atomic operation migration. The performance test plus registration/parking
+regressions pass; independent re-review approves equal semantics and atomic
+backward-compatible index creation. Full final-suite proof remains Task 6.
+
+The owner-authorized shared repair is complete. Task 4 is complete; ticket is
+open, not review-ready. Continue Task 5 complete public SSH fault/privacy/
+collaborator/identity/transport acceptance, then Task 6 final local and native
+gates. No push, dispatch or lifecycle authorization inferred.
+
+## Task 5: Public SSH Acceptance and Fault Matrix — 2026-10-10
+
+Review base `c5dfb13`; direct sequential controller implementation with independent
+read-only review/re-reviews. Resumption fetch confirms origin/main remains
+`f87ce81001f75ff6fc21192b71019b0bcaef6ea6`, already an ancestor. Retained the
+identified Task 5 working changes; no stash or unrelated worktree mutation.
+
+Expanded the custom target from 12 to **41 real-SSH cases**, with two fixture-free
+negative output-capture controls. Ordinary services and public compound/retry/
+resolution APIs exercise canonical document/ticket roots and nested replies,
+local-only discovery/later publication, collaborator AlreadyCurrent, clean merge,
+explicit owned resolution, exact external repair, other-context conflict Busy,
+identity confirmation, authentication/trust/endpoint/deletion/push failures,
+durable local/remote boundaries and independent discovery failures. No post-save
+fixture index refresh, extra bound child or no-upgrade service bypass.
+
+Review required stronger proof, rather than a production redesign:
+
+- Genuine local discovery INSERT failure blocks prompts/transport/child until
+  reopened body-free repair; the older registry-marker fault is retained as a
+  distinct durable window. Added an existing-pattern hidden stop after completed
+  local handoff and before child start; compile/runtime red then green were
+  observed. Original unused child is retained.
+- Faults compare original action/comment/child/time/OID and retained canonical
+  bytes; complete ODB checks and total child counts exclude duplicate effects.
+  Roots/replies check request/receipt/canonical identities and exactly three
+  correctly targeted context children.
+- Negative public calls cover root/item/kind/comment/parent/action mismatches,
+  missing binding/OID, committed removal/replacement and checkpoint-excluding
+  reset with file/index/ref preservation and no transport.
+- A live second endpoint proves generation/digest fencing before authentication;
+  shared-selection changes retain the original fenced child and publish through
+  later ordinary synchronization. Wrong selected-key acceptance originally
+  cancelled unlock: the strengthened assertion failed, then supplied credentials
+  proved actual attempted/rejected authentication with the selected registration.
+- Applied/unreleased resolution drops/reopens before cancel/restart, retaining
+  candidate/attempt and exact two-parent commit through cleanup/publication.
+- Accepted push effects use the exact receive-update wait and bounded Condvar
+  relay-audit barriers before/after counter comparisons. Terminal index replay
+  preserves all commit objects, integration journals, HEAD and transport counts
+  while restoring discovery membership.
+- Preservation includes index stat timestamps, primary/FETCH_HEAD/tracking state,
+  published prior item content and non-context remote refs. Privacy scans the
+  complete probe union, raw/hex body digest, nonempty WAL/backup surfaces and
+  failed public diagnostic formatting plus unfiltered captured stdout/stderr.
+
+Independent final Task 5 re-review approves all five original P1 and three P2
+proof findings; no remaining scoped source-review blocker. Latest focused target
+**41 passes**; all-target/all-feature locked clippy with warnings denied, fmt and
+`git diff --check` pass. Workflow wiring remains manual on all five native targets.
+No native path-length/ABI execution or total-deadline claim is inferred. Canonical
+comment paths add 125 characters to each short clone root; actual native temp,
+resolution staging and Windows temporary-path evidence remain owed.
+
+Task 5 is complete. Task 6 full run passed library **503** (including the restored
+bounded-history guard), publication **41**, local authoring **131** and preceding
+suites, then failed one existing concurrent-opening read test with RecoveryRequired
+at `tests/read_items.rs:3852`. Isolated rerun and the complete read-items target
+**67 pass**. Investigate the Cycle 07 migration write before declaring the final
+gate green; full output `tool_1276d4955001KtBRJwOt42xU7e`. Ticket remains open and
+not review-ready. Push, native dispatch, PR, closure, merge and cleanup remain
+separately gated.
+
+## Task 6: Final Local Gates and Whole-Branch Review — 2026-10-10T20:51:07Z
+
+Task 5 committed as `daf5020ff3c7ce959bfad751909c834a89095e97`. With its working
+changes safely checkpointed, the resumption rebase onto freshly fetched
+`f87ce81001f75ff6fc21192b71019b0bcaef6ea6` was a clean no-op; ancestry and clean
+status verified. No shared stash, other branch/worktree or remote publication.
+
+### Concurrent-opening regression and bounded correction
+
+The first full gate's RecoveryRequired was reproduced deterministically: a WAL
+read snapshot establishes the already-present migration marker; another opener
+commits a write; the unnecessary `INSERT OR IGNORE` of the existing Cycle 07
+marker promotes that stale reader to a writer and yields SQLITE_BUSY_SNAPSHOT.
+The regression explicitly proves that SQLite category, then was observed failing
+in the real binding migration audit. Removed only the redundant marker write:
+insert when `!migrated`, audit schema/columns/rows otherwise. New migrations and
+their marker still share the existing atomic operation transaction, and substituted
+or missing schemas still fail closed. No retry loop, longer budget or weakened
+identity audit. Focused publication library **35** and the original concurrent
+opening regression pass. This is a correction to this Cycle's additive migration,
+not a new shared migration policy.
+
+### Final verification
+
+Verified the final Rust tree at `daf5020` plus the two reviewed concurrency-fix
+files. All commands from the ticket worktree via Devenv; full output
+`tool_1277b1033001ZkPN1e3c1ZE5EP`:
+
+| Gate | Result |
+| --- | --- |
+| `cargo check --all-features --locked` | PASS |
+| `cargo fmt --check` | PASS |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `cargo test --all-features --locked` | PASS; no failures; one pre-existing intentionally ignored read characterization |
+| `cargo run --locked --bin manyhands-cli` | PASS; opens no window; CLI still has no ticket/comment commands |
+| `git diff --check` | PASS |
+
+Full counts: library **504**; canonical 43; discovery 78; editor 9; rejection 18;
+key material 39; key storage 2; local authoring **131**; read boundary 18, comments
+20, contract 64, credentials 25, items **67**, relationships 17, repository 32,
+status 23; foundation **51**; reservation 9; enablement 78; session credentials
+11; shared-key registry 39; doctests 9. Real SSH: publication **41**, merge recovery
+**25**, observation **15**, synchronization **63**, fixture **31**, transport
+**105**. This full run also completes Task 5's existing synchronization/transport/
+authoring/foundation regression commands without redundant unchanged-tree reruns.
+
+Cargo/dependency inputs unchanged. SHA-256:
+- `Cargo.lock`: `8a20e8ba089f63bddfa9b87a08d5d4308404b4c2440c050453654e422a9549f8`
+- `devenv.lock`: `d4a78b8259525e7dcf66814477b0f96282e6570c9a21ebc84eda7d7fb8950d6e`
+
+Desktop display variables are present, but no desktop launch was run: approved
+Task 6 is headless and desktop startup paths are unchanged. Desktop builds/checks
+are covered by the all-feature gates; no GUI behavior is claimed.
+
+Independent read-only whole-branch review against the base above approves
+`daf5020` plus the concurrency fix, with **no actionable P1/P2 findings**. It
+examined all commits and the approved contract, binding/receipt/schema/privacy,
+handoff/authority/ownership/fencing, narrow cancellation repair and native wiring.
+The reviewer ran no Rust; the execution results above are controller evidence.
+
+### Remaining delivery gate
+
+Local implementation, local verification and code review are complete. Task 6's
+native/handoff gate remains pending: all five manual jobs (Linux x86_64/aarch64,
+Windows x86_64/aarch64, macOS aarch64) require authorized publication and dispatch
+on the tested revision, including actual native path-length/ABI evidence. Local
+Linux results and workflow wiring are not native matrix proof. No owner deferral
+has been granted. Keep the ticket open and not review-ready until that gate is
+met or explicitly deferred.
+
+Next authorization request: publish this rebased ticket branch using
+`--force-with-lease` pinned to original published ticket HEAD
+`59f27a94b1358bdc7172d10610ae08969b09ff90`, then dispatch the existing manual
+five-target workflow. Fetch/compare remote ticket history before any authorized
+push; a moved ref is a stop, not permission to overwrite it. PR, closure, merge
+and cleanup remain separate stages.
+
+## Authorized Publication, First Native Run and Windows Correction — 2026-10-11T11:23:16Z
+
+The owner approved the pinned-lease push and five-target dispatch. Fresh fetch
+found the original remote ticket HEAD unchanged at
+`59f27a94b1358bdc7172d10610ae08969b09ff90`; range-diff proved its four planning
+commits identical to their rebased counterparts. The authorized pinned
+`--force-with-lease` published `bac4903fa6d6e7b283422fa524c4f7c4e149bef0`.
+Manual [Build run 38085850884](https://github.com/vhodges/manyhands/actions/runs/38085850884)
+checked that exact revision:
+
+| Native target | Build and binary verification | Headless contracts / artifacts |
+| --- | --- | --- |
+| Linux x86_64 | PASS | PASS / uploaded |
+| Linux aarch64 | PASS | PASS / uploaded |
+| macOS aarch64 | PASS | PASS / uploaded |
+| Windows aarch64 | PASS | PASS / uploaded |
+| Windows x86_64 | PASS | FAIL at existing read-boundary snapshot; later targets not executed, artifacts not uploaded |
+
+All **41 comment-publication SSH cases passed on all five targets**, including
+the owned resolution, original-comment, selected-key and path-dependent cases.
+Windows x86_64 also passed library 468 and local authoring 107 before failing
+`item_reads_change_nothing_in_the_repository_or_its_worktrees`:
+`tests/support/credentials.rs` asserted that `manyhands.sqlite3-shm` was byte
+identical. Full native logs: `tool_127eaa24a001CfXpMEbXQqrvt0`; failed job
+[114312065894](https://github.com/vhodges/manyhands/actions/runs/38085850884/job/114312065894).
+The overall run failed; do not infer a complete native gate from publication-only
+success. The ARM job completed in 1h24m; a watcher budget expired earlier without
+cancelling the run. An attempted job rerun while the original run was active
+was refused; no new run resulted.
+
+### Deterministic fixture diagnosis and review
+
+Reproduced the exact SHM assertion locally using a real WAL writer and a
+`SQLITE_OPEN_READ_ONLY` connection that only executes SELECT and reports itself
+read-only. Its shared-memory differences are nonempty and exclusively in the
+five transient WAL-index read marks, offsets **100..120**. The original
+preservation helper failed this case before the correction. SQLite documents
+that layout for both Unix and Windows in
+[WAL-index header details](https://www.sqlite.org/walformat.html#the_wal_index_header).
+
+The helper now permits only those five marks in an existing equal-length SHM
+image. Main DB, WAL, other files and every other SHM byte remain exact, with the
+existing removal/appearance checks intact. A real subsequent committed writer
+is a negative control and must still fail the preservation oracle. No production
+behavior, privacy scan, dependency or scoped-authoring guard changed.
+
+Independent read-only review approved the two-file fixture correction with no
+P1/P2 findings. Focused read-boundary 19, credential reads 25, item reads 67,
+status reads 23 and contract reads 64 pass. The owner paused execution during a
+subsequent full run; that interrupted attempt (`tool_127edb0be001lm8LjUYDfEcfli`)
+is not full verification evidence.
+
+### Resume and current local evidence
+
+The owner directed Windows-only workflow iteration on this branch until Windows
+works, followed by restoration of all five targets and a final native run, then
+requested a pause. "I am ready to continue" resumes that authorized sequence,
+including its correction/workflow commits, normal pushes and manual runs. It
+does not authorize PR, closure, merge or cleanup.
+
+At resume HEAD and fetched remote ticket agree at `bac4903`; freshly fetched main
+is still `f87ce81001f75ff6fc21192b71019b0bcaef6ea6`, already an ancestor. The only
+working changes are the reviewed controller-owned fixture files. Preserve them
+in this checkpoint before the clean no-op rebase and new workflow edit; no stash
+or unrelated worktree mutation.
+
+Completed all required Devenv gates on this fixture-corrected Rust tree: locked
+all-feature check, fmt, all-target/all-feature clippy with warnings denied, full
+all-feature tests and CLI smoke **PASS**, plus `git diff --check`. Output
+`tool_12a8b46590016KiUrVOXk0RBZn`: library **504**, publication SSH **41**, read
+boundary **19**; other full counts equal the preceding final local gate, with
+one existing intentionally ignored characterization. Cargo/devenv lock inputs
+and hashes unchanged. Corrected Windows/native evidence remains pending.
+
+### Windows-only iteration passed — 2026-10-11T12:26:47Z
+
+Fixture correction committed as `4f7c263`; the subsequent clean rebase onto
+freshly fetched main was a no-op and ancestry/status checks passed. Commit
+`6f77b707ba91ff4c9a6c0491720c9b2485b9c658` temporarily reduced the workflow matrix
+to its two existing Windows jobs, preserving the complete test command and manual
+trigger. Normal fast-forward push after fetched remote-history inspection.
+
+[Windows-only run 38135479344](https://github.com/vhodges/manyhands/actions/runs/38135479344)
+checked that exact revision and **passed both Windows x86_64 and aarch64**, with
+release build, verification of both binaries, the full headless contract command
+and artifact uploads successful. Logs `tool_12aee1b71001xAamVv8zPI54F9` confirm
+publication **41** and read boundary **19** on each architecture, including both
+the original previously failing test and the actual read-only/read-mark plus
+committed-writer negative-control regression. No further Rust change was needed.
+
+Restore the workflow byte-for-byte to its pre-iteration five-target version and
+run the final matrix as requested. The validated Rust tree is unchanged from
+the complete resumed local gate. The final all-target native gate and review-ready
+handoff remain pending; ticket stays open.
+
+## Task 6 Complete: Final Native Gate and Review-Ready Handoff — 2026-10-11T13:35:19Z
+
+Restoration commit `b3715e1ad09d63c3709a76979bdcf5e049281145` restores the original
+five-target workflow **byte-for-byte**; `git diff --exit-code bac4903 --
+.github/workflows/build.yml` passes. Manual-only triggering and every original
+native build/test/artifact step remain intact. `git diff --exit-code 4f7c263 --
+src tests Cargo.toml Cargo.lock devenv.nix devenv.lock` proves the final checked
+Rust/toolchain tree is identical to the fully locally verified fixture-corrected
+tree. Changes since then are workflow iteration/restoration and ticket evidence.
+
+The requested final
+[Build run 38139344507](https://github.com/vhodges/manyhands/actions/runs/38139344507)
+checked exact HEAD `b3715e1ad09d63c3709a76979bdcf5e049281145` and **passed all five
+native targets**. Inspected individual job/step conclusions and complete logs,
+not just the overall badge. Both release binaries were built and verified, the
+complete headless contract command passed, and both artifacts were uploaded for
+every target:
+
+| Target / job | Release build / binary verification | Headless contracts | Artifacts | Publication SSH / read boundary |
+| --- | --- | --- | --- | --- |
+| [Linux x86_64](https://github.com/vhodges/manyhands/actions/runs/38139344507/job/114469789361) | PASS / PASS | PASS | uploaded | 41 / 19 |
+| [Linux aarch64](https://github.com/vhodges/manyhands/actions/runs/38139344507/job/114469789541) | PASS / PASS | PASS | uploaded | 41 / 19 |
+| [Windows x86_64](https://github.com/vhodges/manyhands/actions/runs/38139344507/job/114469789492) | PASS / PASS | PASS | uploaded | 41 / 19 |
+| [Windows aarch64](https://github.com/vhodges/manyhands/actions/runs/38139344507/job/114469789495) | PASS / PASS | PASS | uploaded | 41 / 19 |
+| [macOS aarch64](https://github.com/vhodges/manyhands/actions/runs/38139344507/job/114469789444) | PASS / PASS | PASS | uploaded | 41 / 19 |
+
+Full final native log `tool_12b2cdbf40011WSzn9LsCG2Baq` confirms the original SHM
+preservation regression and new real read-only/write-negative-control case pass
+on each target. Applied/unreleased resolution cancellation reports the intended
+recoverable phase (fixed observation 202) on all five. Windows library **468**
+and local authoring **107** pass on each architecture; Linux library **504** and
+local authoring **131** pass on each architecture. OS-conditioned suite counts
+differ normally. Canonical comments and owned resolution staging/index/reflog
+paths are exercised on the actual native runner paths; no fixture path failure
+occurred. These are native execution results, not cross-compilation claims.
+
+### Final acceptance and review state
+
+Tasks 0–6 implementation, recovery/preservation/privacy acceptance, required full
+local gates and the five-target native gate are complete. The independent
+whole-branch review and bounded fixture-correction review approvals remain valid:
+no implementation changed after those reviews. The restored workflow matches
+the already-reviewed version. Original checkpoint/blob/time/child and resolution
+candidate/attempt invariants are covered by the 41-case target on every native
+platform; original writer/read-preservation guarantees remain intact.
+
+No new Cargo/devenv input or lockfile change. The resumed local full gate
+`tool_12a8b46590016KiUrVOXk0RBZn` remains the final local Rust evidence (library 504,
+publication 41, read boundary 19 and all other suites/doctests passing; one existing
+intentionally ignored characterization). The earlier interrupted run is retained
+as interrupted history. Final evidence updates are documentation/ticket-only and
+do not require another unchanged-code full run.
+
+**Review-ready; ticket remains open.** Record this handoff as a canonical comment
+and publish the documentation-only checkpoint with a normal fast-forward push.
+The tested source revision is `b3715e1`; any following evidence commit changes no
+Rust, dependency or workflow file. PR creation, closure, merge and worktree cleanup
+remain their separately authorized lifecycle stages.
+
+## Owner-Authorized Closure and PR Delivery — 2026-10-11T13:41:04Z
+
+Owner request: "Mark the ticket as closed, commit and push to github. open a pr".
+This authorizes closure, its commit/push and a pull request against main. It does
+not authorize merge or worktree cleanup. Independent whole-branch and bounded
+fixture reviews already approve the implementation; local gates and the final
+five-target native run pass.
+
+Preflight: clean ticket worktree at `851944ff9e065955922a170bb68854ebad61dec9`,
+matching the freshly fetched remote ticket. Origin/main remains
+`f87ce81001f75ff6fc21192b71019b0bcaef6ea6`; clean ticket rebase is a no-op. Inspected
+the complete branch commit list and base diff, and confirmed no existing open PR
+for this branch. Fresh GitHub inspection reconfirms final native run 38139344507
+is completed/successful with all five jobs successful at tested source `b3715e1`.
+Source, tests, dependencies and the restored workflow are identical to that
+revision; closure updates are ticket/documentation-only.
+
+Marked the canonical ticket closed with the timestamp above and
+`closed_by: "Vince Hodges <vince@imbas.ca>"`, matching the repository's closure
+convention and configured author identity. Added the closure comment using the
+canonical filesystem fallback: the current CLI still only initializes startup
+and has no ticket/comment mutation commands. Publish this checkpoint with a
+normal fast-forward push, then open the owner-requested PR. No unchanged-code
+full test repetition is needed for this metadata-only delivery update.

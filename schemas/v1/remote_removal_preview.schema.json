@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 remote removal preview",
+  "description": "The data of a prepare envelope that gives a preview of remote remove: what the removal will do, and the confirmation an execute of the same command, repository and remote presents to do it. A prepare that gives no preview carries no preview data: a rejection, as for the publication remote, and a no-op for a repository that has no such remote.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["confirmation_id", "expires_at", "command", "scope", "effects", "details"],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "The remote that will be removed from the repository's own Git configuration, and what its removal touches.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "name", "fetch_location", "push_location", "publication_affected", "polling_affected"],
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "fetch_location": {
+          "description": "Where the remote fetches from, redacted as the remote list redacts it: not a location to connect to. Null for a remote whose location that list does not give.",
+          "type": ["string", "null"]
+        },
+        "push_location": {
+          "description": "Where the remote pushes to, redacted in the same way.",
+          "type": ["string", "null"]
+        },
+        "publication_affected": {
+          "description": "Whether the remote is the one the repository publishes to. A preview is given only of a remote that is not, so this is false.",
+          "type": "boolean"
+        },
+        "polling_affected": {
+          "description": "Whether the repository's polling state names this remote, and so has nothing to observe once it is removed.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "code": "ok",
+  "command": "poll status",
+  "data": {
+    "active_operation_id": null,
+    "backoff_seconds": null,
+    "enabled": true,
+    "interval_seconds": 300,
+    "latest_observed_at": null,
+    "latest_outcome": null,
+    "next_eligible_at": null,
+    "paused": false,
+    "recovery_suspended": false
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "code": "already_applied",
+  "command": "ticket create",
+  "data": {
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FCN",
+    "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FCN/ticket.md",
+    "rejected": [],
+    "slug": "mt-zqbsn",
+    "unresolved": []
+  },
+  "effects": {
+    "checkpoint": "unchanged",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "unchanged"
+  },
+  "message": "The request was already applied; nothing changed.",
+  "operation_id": null,
+  "outcome": "noop",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX2",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FCN",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

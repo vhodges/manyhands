@@ -1,9 +1,10 @@
 ---
+id: 01M49JS2B4AE1VB1Z5DVF8D01P
+item_id: 01M48S808PF2D8ZWVYM918RK2M
+created_at: 2026-10-06T21:44:08Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M49JS2B4AE1VB1Z5DVF8D01P"
-item_id: "01M48S808PF2D8ZWVYM918RK2M"
-created_at: "2026-10-06T21:44:08Z"
 ---
 
 Running-spike S2 corrections accepted, S3 real startup/user visibility recorded,

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 registered repositories",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items", "complete"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "repository_summary.schema.json"
+      }
+    },
+    "complete": {
+      "type": "boolean"
+    }
+  }
+}

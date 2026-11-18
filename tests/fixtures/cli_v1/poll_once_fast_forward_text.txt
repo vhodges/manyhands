@@ -1,0 +1,16 @@
+The request completed.
+request: 01ARZ3NDEKTSV4RRFFQ69G5FR3
+operation: <id>
+effects: discovery=current
+Completed at: <time>
+Completion: completed
+Next eligible at: <time>
+Operation id: <id>
+target: refs/heads/main kind=none item=none disposition=fast_forwarded before=<oid> after=<oid>
+  Clean local state was fast-forwarded.
+target: refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW kind=ticket item=01ARZ3NDEKTSV4RRFFQ69G5FAW disposition=current before=<oid> after=<oid>
+  Local state is current.
+--- stderr
+progress: accepted
+progress: connecting
+--- exit 0

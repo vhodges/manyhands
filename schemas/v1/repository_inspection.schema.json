@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 repository inspection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "selected_path",
+    "root",
+    "registered",
+    "head_branch",
+    "local_branches",
+    "configuration",
+    "identity_state",
+    "remotes"
+  ],
+  "properties": {
+    "selected_path": {
+      "type": "string"
+    },
+    "root": {
+      "type": "string"
+    },
+    "registered": {
+      "type": "boolean"
+    },
+    "head_branch": {
+      "type": ["string", "null"]
+    },
+    "local_branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "configuration": {
+      "$ref": "repository_configuration.schema.json"
+    },
+    "identity_state": {
+      "type": "string",
+      "enum": ["available", "required"]
+    },
+    "remotes": {
+      "type": "array",
+      "items": {
+        "$ref": "remote.schema.json"
+      }
+    }
+  }
+}

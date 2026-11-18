@@ -1,3 +1,12 @@
+---
+title: "Manyhands PRD Design"
+date: 2026-09-28
+author: "Vince Hodges <vince@imbas.ca>"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J67CY5DWAHGDYZ642M"
+---
+
 # Manyhands PRD Design
 
 ## Goal

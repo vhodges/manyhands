@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 progress event",
+  "description": "One step of a request's progress, as the request's sink is sent it. It names the request and where it works, and holds nothing of what the request carries or meets: no body or source, no commit message, no remote location, no credential and no text a server sent. stage is what the request is about to do. accepted is the request recorded, before anything is done for it; writing and indexing are what a local command then does. A command written in one transaction with its record reports writing only, since it is never recorded before it is done. The rest are a synchronization's: connecting before it opens a connection, fetching before it fetches, observing while it compares what it has with what the remote holds, updating_local before it moves a local branch, pushing before it pushes, verifying once the push has returned and before the remote is asked what it now holds, and indexing once that is known. An operation resume reports observing before it looks at the operation it names, then indexing before an index hand-off it runs, or the stages of a synchronization it takes up. A promotion or a closure reports observing before its run, then the stages of the steps it runs: connecting when it starts its context's synchronization, and that synchronization's fetching, updating_local and pushing; recording before it writes a closure's checkpoint; integrating before it moves primary to a merge; publishing once, when it starts primary's publication; and cleaning_up before it retires the context. A step it does not run reports nothing. stopping is a cancellation the request has seen and is about to honor. effects is what the request has completed so far. Every event of a call is sent before the call returns its result, and the result is what a caller acts on.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_id", "operation_id", "command", "scope", "stage", "effects"],
+  "properties": {
+    "request_id": {
+      "type": "string"
+    },
+    "operation_id": {
+      "description": "Null for a request that has no operation.",
+      "type": ["string", "null"]
+    },
+    "command": {
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "accepted",
+        "observing",
+        "writing",
+        "connecting",
+        "fetching",
+        "updating_local",
+        "pushing",
+        "verifying",
+        "indexing",
+        "recording",
+        "integrating",
+        "publishing",
+        "cleaning_up",
+        "stopping"
+      ]
+    },
+    "effects": {
+      "description": "What the request has completed so far. A promotion's or a closure's stage events carry none, as not_requested throughout (D5 decision 11): its result is what reports its effects.",
+      "$ref": "effects.schema.json"
+    }
+  }
+}

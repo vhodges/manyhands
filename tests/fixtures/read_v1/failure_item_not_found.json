@@ -1,0 +1,35 @@
+{
+  "code": "item_not_found",
+  "command": "document show",
+  "data": null,
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "No item has that ID.",
+  "operation_id": null,
+  "outcome": "error",
+  "recovery": [
+    {
+      "action": "index.refresh",
+      "arguments": {
+        "root": "<repository>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FD0",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

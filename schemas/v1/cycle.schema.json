@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 ticket cycle",
+  "description": "The tickets that can each reach itself through the others by the links of one field. ids ascend: they are a set, not a path.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "ids"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["deps", "parent"]
+    },
+    "ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

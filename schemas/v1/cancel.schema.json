@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 request cancellation",
+  "description": "What request cancel reports of the request it asked to stop. The envelope of this call reports the call itself, so it is a success whatever became of the request. state is where the request stood when it was asked. requested says the request was asked to stop: it is accepted, and its command has a safe point to stop at, which is a synchronization. It is false for a request that is finished and for one of a command that cannot be stopped once it is accepted; neither is changed in any way. acknowledged says the request has stopped for a cancellation: its result is cancelled, or its operation has ended cancelled and the request's next call returns that. A request that was asked and has not reached a safe point since, because a transport call has not returned or because no call of it is running, is requested and not acknowledged.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_id", "state", "requested", "acknowledged"],
+  "properties": {
+    "request_id": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["accepted", "finished"]
+    },
+    "requested": {
+      "type": "boolean"
+    },
+    "acknowledged": {
+      "type": "boolean"
+    }
+  }
+}

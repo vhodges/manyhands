@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands CLI v1 key import input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["label", "private_key_path"],
+  "properties": {
+    "label": {"type": "string"},
+    "private_key_path": {"type": "string"},
+    "public_key_path": {"type": "string"}
+  }
+}

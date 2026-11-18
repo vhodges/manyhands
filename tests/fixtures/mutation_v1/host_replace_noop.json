@@ -1,0 +1,34 @@
+{
+  "code": "already_applied",
+  "command": "host replace",
+  "data": {
+    "algorithm": "ssh-ed25519",
+    "fingerprint": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA",
+    "host": "git.example.invalid",
+    "port": 2222,
+    "presented_algorithm": null,
+    "presented_fingerprint": null
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request was already applied; nothing changed.",
+  "operation_id": null,
+  "outcome": "noop",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX2",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

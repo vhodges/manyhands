@@ -1,9 +1,10 @@
 ---
+id: 01M479C8BVJZXXMGJZEFDK89N3
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DB
+created_at: 2026-10-06T00:21:22Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M479C8BVJZXXMGJZEFDK89N3"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DB"
-created_at: "2026-10-06T00:21:22Z"
 ---
 
 PR #9 merged into `main` as `5f5bac0` on 2026-10-06. The final published head

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 problem stored in the index",
+  "description": "A content problem with the working tree it was found in. Both path and worktree are null for a problem about the registration as a whole. path is relative to worktree when the refresh could make it so and absolute otherwise.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "path", "worktree", "guidance"],
+  "properties": {
+    "code": {
+      "type": "string",
+      "enum": [
+        "invalid_path",
+        "missing_front_matter",
+        "malformed_front_matter",
+        "malformed_configuration",
+        "missing_field",
+        "invalid_field",
+        "kind_path_mismatch",
+        "duplicate_id",
+        "missing_comment_item",
+        "missing_parent",
+        "cross_item_parent",
+        "comment_cycle",
+        "source_unreadable",
+        "context_problem",
+        "branch_problem",
+        "retry_required",
+        "relationship_wrong_type",
+        "relationship_invalid_id",
+        "relationship_self_reference",
+        "duplicate_dependency",
+        "invalid_slug",
+        "metadata_not_representable",
+        "relationship_not_a_ticket",
+        "dependency_cycle",
+        "parent_cycle",
+        "unknown_problem"
+      ]
+    },
+    "path": {
+      "type": ["string", "null"]
+    },
+    "worktree": {
+      "type": ["string", "null"]
+    },
+    "guidance": {
+      "type": "string"
+    }
+  }
+}

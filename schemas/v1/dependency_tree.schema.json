@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 dependency trees of one ticket",
+  "description": "The tree of what the ticket depends on and the tree of what depends on it, each written line by line, depth first, with every ticket's neighbors in ID order. The tree of a direction that was not asked for is empty.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ticket",
+    "direction",
+    "depth",
+    "dependencies",
+    "dependents",
+    "complete",
+    "index"
+  ],
+  "properties": {
+    "ticket": {
+      "$ref": "dependency_tree_node.schema.json"
+    },
+    "direction": {
+      "type": "string",
+      "enum": ["down", "up", "both"]
+    },
+    "depth": {
+      "type": ["integer", "null"]
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "$ref": "dependency_tree_node.schema.json"
+      }
+    },
+    "dependents": {
+      "type": "array",
+      "items": {
+        "$ref": "dependency_tree_node.schema.json"
+      }
+    },
+    "complete": {
+      "type": "boolean",
+      "description": "False when the last refresh could not read, or stopped part of the way through, .manyhands/tickets, .manyhands or .manyhands/worktrees. Tickets may then be missing from what this was made from while index.state is current."
+    },
+    "index": {
+      "$ref": "repository_index.schema.json"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 reason a ticket cannot be planned",
+  "description": "ids is the dependency for unresolved_dependency and unplannable_dependency. For dependency_cycle it is the open tickets that wait for each other: their lowest IDs, at most sixteen, and complete is false when there are more.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "ids", "complete"],
+  "properties": {
+    "code": {
+      "type": "string",
+      "enum": ["unresolved_dependency", "unplannable_dependency", "dependency_cycle"]
+    },
+    "ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "complete": {
+      "type": "boolean"
+    }
+  }
+}

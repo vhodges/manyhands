@@ -1,0 +1,37 @@
+{
+  "code": "ok",
+  "command": "path observe",
+  "data": {
+    "context": {
+      "branch": "main",
+      "head_oid": "<head-oid>",
+      "kind": "primary",
+      "worktree": "<repository>"
+    },
+    "exists": false,
+    "observation": "v1:3139e51f91a685fa0b03db97649421e75a9a926867abf837c59bfdad9d0b13d7",
+    "path": "docs/absent.md"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

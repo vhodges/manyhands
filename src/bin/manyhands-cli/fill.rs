@@ -1,0 +1,169 @@
+use std::path::Path;
+
+use manyhands::{
+    canonical::ItemId,
+    repository::{
+        DocumentDraft, ItemDto, ItemDtoKind, ReadError, RepositoryService, RequestId,
+        ResolvedRepository, TicketDraft,
+    },
+    results::{Effects, ResultCode},
+};
+
+use crate::{
+    admin,
+    catalog::CommandSpec,
+    input::Tristate,
+    mutate::Session,
+    render::{self, Output},
+};
+
+pub struct DocumentFields {
+    pub title: Option<String>,
+    pub body: Option<String>,
+}
+
+pub struct TicketFields {
+    pub title: Option<String>,
+    pub ticket_type: Option<String>,
+    pub status: Option<String>,
+    pub body: Option<String>,
+    pub project: Tristate,
+    pub team: Tristate,
+}
+
+pub fn needs_read_ticket(fields: &TicketFields) -> bool {
+    fields.title.is_none()
+        || fields.ticket_type.is_none()
+        || fields.status.is_none()
+        || fields.body.is_none()
+        || matches!(fields.project, Tristate::Missing)
+        || matches!(fields.team, Tristate::Missing)
+}
+
+pub fn ticket_draft(
+    fields: TicketFields,
+    read: Option<&ItemDto>,
+) -> Result<TicketDraft, FillError> {
+    if read.is_some_and(|item| item.kind != ItemDtoKind::Ticket) {
+        return Err(FillError::Unfillable);
+    }
+    let nullable = |field, current: fn(&ItemDto) -> Option<String>| match field {
+        Tristate::Missing => read.map(current).ok_or(FillError::Unfillable),
+        Tristate::Null => Ok(None),
+        Tristate::Value(value) => Ok(Some(value)),
+    };
+    Ok(TicketDraft {
+        title: fields
+            .title
+            .or_else(|| read.and_then(|item| item.title.clone()))
+            .ok_or(FillError::Unfillable)?,
+        ticket_type: fields
+            .ticket_type
+            .or_else(|| read.and_then(|item| item.ticket_type.clone()))
+            .ok_or(FillError::Unfillable)?,
+        status: fields
+            .status
+            .or_else(|| read.and_then(|item| item.status.clone()))
+            .ok_or(FillError::Unfillable)?,
+        body: fields
+            .body
+            .or_else(|| read.and_then(|item| item.body.clone()))
+            .ok_or(FillError::Unfillable)?,
+        project: nullable(fields.project, |item| item.project.clone())?,
+        team: nullable(fields.team, |item| item.team.clone())?,
+    })
+}
+
+pub enum FillError {
+    Unfillable,
+}
+
+pub fn needs_read_document(fields: &DocumentFields) -> bool {
+    fields.title.is_none() || fields.body.is_none()
+}
+
+pub fn document_draft(
+    fields: DocumentFields,
+    read: Option<&ItemDto>,
+) -> Result<DocumentDraft, FillError> {
+    if read.is_some_and(|item| item.kind != ItemDtoKind::Document) {
+        return Err(FillError::Unfillable);
+    }
+    Ok(DocumentDraft {
+        title: fields
+            .title
+            .or_else(|| read.and_then(|item| item.title.clone()))
+            .ok_or(FillError::Unfillable)?,
+        body: fields
+            .body
+            .or_else(|| read.and_then(|item| item.body.clone()))
+            .ok_or(FillError::Unfillable)?,
+    })
+}
+
+pub fn read_item(
+    service: &RepositoryService,
+    session: &Session,
+    spec: &CommandSpec,
+    root: &Path,
+    id: &ItemId,
+    kind: ItemDtoKind,
+    request_id: Option<RequestId>,
+) -> Result<(ResolvedRepository, ItemDto), Output> {
+    let (repo, item) = read_any_item(service, session, spec, root, id, request_id)?;
+    if item.kind != kind {
+        return Err(item_not_found(session, spec, &repo, id, request_id));
+    }
+    Ok((repo, item))
+}
+
+/// One `show_item` read of the item `id`, of either kind: the fill read,
+/// and the kind lookup of the `--id` verbs that need one (R-2): `item
+/// sync`, `item republish` and `comment add`. A refusal of the read is the
+/// verb's, with its request ID and no effect.
+pub fn read_any_item(
+    service: &RepositoryService,
+    session: &Session,
+    spec: &CommandSpec,
+    root: &Path,
+    id: &ItemId,
+    request_id: Option<RequestId>,
+) -> Result<(ResolvedRepository, ItemDto), Output> {
+    let failure = |error: ReadError| read_failure(session, spec, request_id, error);
+    let repo = service.resolve_repository(root).map_err(failure)?;
+    let item = service.show_item(&repo, id).map_err(failure)?;
+    Ok((repo, item))
+}
+
+pub fn item_not_found(
+    session: &Session,
+    spec: &CommandSpec,
+    repo: &ResolvedRepository,
+    id: &ItemId,
+    request_id: Option<RequestId>,
+) -> Output {
+    let mut scope = repo.scope();
+    scope.item_id = Some(id.to_string());
+    read_failure(
+        session,
+        spec,
+        request_id,
+        ReadError::new(ResultCode::ItemNotFound).with_scope(scope),
+    )
+}
+
+fn read_failure(
+    session: &Session,
+    spec: &CommandSpec,
+    request_id: Option<RequestId>,
+    error: ReadError,
+) -> Output {
+    let mut envelope = error.to_envelope(admin::name(spec));
+    envelope.request_id = request_id.map(|id| id.to_string());
+    envelope.effects = Effects::not_requested();
+    render::failure_output(session.json, &envelope, None)
+}
+
+#[cfg(test)]
+#[path = "fill_tests.rs"]
+mod tests;

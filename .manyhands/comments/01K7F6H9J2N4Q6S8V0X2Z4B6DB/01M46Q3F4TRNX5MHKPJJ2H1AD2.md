@@ -1,9 +1,10 @@
 ---
+id: 01M46Q3F4TRNX5MHKPJJ2H1AD2
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DB
+created_at: 2026-10-05T19:02:00Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M46Q3F4TRNX5MHKPJJ2H1AD2"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DB"
-created_at: "2026-10-05T19:02:00Z"
 ---
 
 Task 2 implemented in e68561b..0a184b4 and independently approved for spec
