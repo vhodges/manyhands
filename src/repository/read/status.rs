@@ -993,19 +993,26 @@ impl RepositoryService {
 
     /// The operation `blocker` names, in its own journal, as `show_operation`
     /// reads it, and whether the list includes it: whether it is still
-    /// unfinished. `None` when it is not there, or cannot be read in
-    /// `BLOCKER_READS` tries: the read waits a moment at most for the
-    /// index's guard, and the writer the blocker names may hold it then. The
-    /// repository is the one registered at `root`, the root its rows name;
-    /// a root with no registration has local rows only.
+    /// unfinished. `Unreadable` when it cannot be read in `BLOCKER_READS`
+    /// tries: the read waits a moment at most for the index's guard, and the
+    /// writer the blocker names may hold it then. The repository is the one
+    /// registered at `root`, the root its rows name; a root with no
+    /// registration has local rows only.
     pub(crate) fn blocking_operation(
         &self,
         root: &std::path::Path,
         blocker: &crate::repository::Blocker,
-    ) -> Option<(OperationDto, bool)> {
+    ) -> crate::repository::BlockerRow {
+        use crate::repository::BlockerRow;
         (0..BLOCKER_READS)
             .find_map(|_| self.read_blocking_operation(root, blocker).ok())
-            .flatten()
+            .map_or(BlockerRow::Unreadable, |found| match found {
+                Some((operation, unfinished)) => BlockerRow::Found {
+                    operation: Box::new(operation),
+                    unfinished,
+                },
+                None => BlockerRow::Gone,
+            })
     }
 
     /// One try of `blocking_operation`.

@@ -49,6 +49,7 @@ mod comment_publication_tests;
 mod discovery;
 mod integration;
 pub mod keys;
+pub(crate) use blocker::BlockerRow;
 pub use blocker::{Blocker, Sleeper, WaitPolicy};
 mod liveness;
 #[doc(hidden)]

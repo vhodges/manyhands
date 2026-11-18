@@ -979,7 +979,18 @@ impl OperationResumeBinding {
             operation_id,
             live: None,
         };
-        let (operation, unfinished) = service.blocking_operation(root, &blocker)?;
+        let (operation, unfinished) = match service.blocking_operation(root, &blocker) {
+            crate::repository::BlockerRow::Found {
+                operation,
+                unfinished,
+            } => (operation, unfinished),
+            crate::repository::BlockerRow::Gone => return None,
+            // What cannot be read cannot be shown to be no one's: the resume
+            // does not go ahead on it, and nothing is recorded.
+            crate::repository::BlockerRow::Unreadable => {
+                return Some(Answer::stopped(ResultCode::Busy));
+            }
+        };
         // A row this process holds is left to the domain, which takes it
         // up or refuses it as it always has: this process's own call that
         // claimed it may have just ended, and its claim's last beat is

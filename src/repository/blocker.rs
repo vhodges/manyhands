@@ -64,6 +64,36 @@ impl Blocker {
     }
 }
 
+/// What the read of a blocker's row found.
+#[derive(Debug)]
+pub(crate) enum BlockerRow {
+    /// Its row, and whether that row is still unfinished.
+    Found {
+        operation: Box<super::OperationDto>,
+        unfinished: bool,
+    },
+    /// No row of the operation is there.
+    Gone,
+    /// The row could not be read, in every try.
+    Unreadable,
+}
+
+/// How a waiting writer finds the operation in its way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Judged {
+    /// Its row is unfinished and its holder still works.
+    Live,
+    /// Its row is unfinished and nothing works under it.
+    Stale,
+    /// Its row has finished, or is gone, since the refusal: the next look
+    /// finds the way clear, or another operation in it.
+    Away,
+    /// Its row could not be read. That says nothing of its holder, so it is
+    /// waited for as a live one is: a writer never goes past a row it
+    /// could not judge.
+    Unreadable,
+}
+
 /// How long a writer waits for a live holder, and how long it sleeps
 /// between two looks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,50 +165,84 @@ impl RepositoryService {
         }
     }
 
-    /// Whether the holder of `blocker`'s row still works, as the read of
-    /// it at `root` judges it. A row that has finished since the call was
-    /// refused is as good as live: the next look finds it out of the way.
-    /// One that cannot be read, or names no holder, is not live.
-    pub(crate) fn blocker_is_live(&self, root: &Path, blocker: &Blocker) -> bool {
+    /// How the operation `blocker` names is found by the read of its row at
+    /// `root`; see `Judged`.
+    pub(crate) fn judge_blocker(&self, root: &Path, blocker: &Blocker) -> Judged {
         match self.blocking_operation(root, blocker) {
-            Some((_, false)) => true,
-            Some((operation, true)) => operation.attribution.live == Some(true),
-            None => false,
+            BlockerRow::Found {
+                operation,
+                unfinished: true,
+            } => {
+                if operation.attribution.live == Some(true) {
+                    Judged::Live
+                } else {
+                    Judged::Stale
+                }
+            }
+            BlockerRow::Found {
+                operation: _,
+                unfinished: false,
+            }
+            | BlockerRow::Gone => Judged::Away,
+            BlockerRow::Unreadable => Judged::Unreadable,
         }
     }
 
     /// What a writer that was refused with `error` does next. The caller
     /// holds nothing: its lease is let go and its transaction ended.
+    pub(crate) fn waited(&self, root: &Path, wait: &mut Wait, error: RepositoryError) -> Waited {
+        self.waited_judging(wait, error, |blocker| self.judge_blocker(root, blocker))
+    }
+
+    /// `waited`, with the blocker judged by `judge`.
     ///
     /// An error that names no blocker, or that is not `recovery_required`,
-    /// is answered as it is. A blocker whose holder still works is slept
-    /// on, `WaitPolicy::poll` at a time, until the budget is spent; then
-    /// the answer is `busy`, naming it, live. Any other blocker is named,
-    /// stale, and the answer stays `recovery_required`.
-    pub(crate) fn waited(&self, root: &Path, wait: &mut Wait, error: RepositoryError) -> Waited {
+    /// is answered as it is. A stale blocker is named, stale, and the
+    /// answer stays `recovery_required`, with no wait. Any other, live, gone
+    /// since or unreadable, is slept on, `WaitPolicy::poll` at a time (at
+    /// least `SHORTEST_POLL`), and looked at again, until the budget is spent
+    /// by the service's clock or by the count of looks, so that a clock that
+    /// does not move cannot make it endless. Then the answer is `busy`,
+    /// naming the blocker live when it was last found live, and with no
+    /// judgment otherwise.
+    fn waited_judging(
+        &self,
+        wait: &mut Wait,
+        error: RepositoryError,
+        judge: impl FnOnce(&Blocker) -> Judged,
+    ) -> Waited {
         let Some(blocker) = error.blocker().cloned() else {
             return Waited::Refused(error);
         };
         if error.kind != RepositoryErrorKind::RecoveryRequired {
             return Waited::Refused(error);
         }
-        if !self.blocker_is_live(root, &blocker) {
+        let judged = judge(&blocker);
+        if judged == Judged::Stale {
             return Waited::Refused(error.with_blocker(Some(blocker.judged(false))));
         }
+        let blocker = Blocker {
+            live: (judged == Judged::Live).then_some(true),
+            ..blocker
+        };
         let policy = self.wait_policy;
-        let poll = policy.poll.max(Duration::from_nanos(1));
+        let poll = policy.poll.max(SHORTEST_POLL);
         let polls = policy.budget.as_nanos() / poll.as_nanos();
         let elapsed = (self.clock.now() - wait.started).whole_nanoseconds();
         if wait.polls >= polls
             || elapsed >= i128::try_from(policy.budget.as_nanos()).unwrap_or(i128::MAX)
         {
-            return Waited::Refused(busy(error, blocker.judged(true)));
+            return Waited::Refused(busy(error, blocker));
         }
         self.sleeper.sleep(poll);
         wait.polls += 1;
         Waited::Again
     }
 }
+
+/// The shortest sleep between two looks, whatever a policy asks: a writer
+/// does not spin on the index.
+const SHORTEST_POLL: Duration = Duration::from_millis(1);
 
 /// `busy`, for the operation and root `error` names, naming `blocker`.
 fn busy(error: RepositoryError, blocker: Blocker) -> RepositoryError {
@@ -194,6 +258,222 @@ fn busy(error: RepositoryError, blocker: Blocker) -> RepositoryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// A clock that moves, by `step` for each sleep, only when the writer
+    /// sleeps on it; `step` zero is a clock that never moves.
+    struct TestTime {
+        nanos: AtomicU64,
+        step: Duration,
+        slept: AtomicU64,
+    }
+
+    impl super::super::mutation::Clock for TestTime {
+        fn now(&self) -> OffsetDateTime {
+            OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap()
+                + time::Duration::nanoseconds(
+                    i64::try_from(self.nanos.load(Ordering::SeqCst)).unwrap(),
+                )
+        }
+    }
+
+    impl Sleeper for TestTime {
+        fn sleep(&self, _duration: Duration) {
+            self.nanos.fetch_add(
+                u64::try_from(self.step.as_nanos()).unwrap(),
+                Ordering::SeqCst,
+            );
+            self.slept.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn blocker() -> Blocker {
+        Blocker {
+            family: OperationFamily::Local,
+            operation_id: OperationId::new(),
+            live: None,
+        }
+    }
+
+    fn refused(kind: RepositoryErrorKind, blocker: Option<Blocker>) -> RepositoryError {
+        RepositoryError::new(
+            super::super::RepositoryOperation::SaveTicket,
+            None,
+            kind,
+            "refused",
+        )
+        .with_blocker(blocker)
+    }
+
+    /// What a writer refused with `error` comes to, its blocker judged in
+    /// turn as `judgments` says (the last one again once they run out): the
+    /// error it is answered with, how often it slept and how often it judged.
+    fn wait_out(
+        policy: WaitPolicy,
+        step: Duration,
+        error: impl Fn() -> RepositoryError,
+        judgments: &[Judged],
+    ) -> (RepositoryError, u64, usize) {
+        let data = tempfile::tempdir().unwrap();
+        let time = Arc::new(TestTime {
+            nanos: AtomicU64::new(0),
+            step,
+            slept: AtomicU64::new(0),
+        });
+        let service = RepositoryService::open_at(data.path())
+            .unwrap()
+            .with_clock_for_testing(time.clone())
+            .with_sleeper_for_testing(time.clone())
+            .with_wait_policy_for_testing(policy);
+        let mut wait = service.start_wait();
+        let judged = std::cell::Cell::new(0_usize);
+        for _ in 0..10_000 {
+            let judge = |_: &Blocker| {
+                let at = judged.get();
+                judged.set(at + 1);
+                judgments[at.min(judgments.len() - 1)]
+            };
+            match service.waited_judging(&mut wait, error(), judge) {
+                Waited::Again => {}
+                Waited::Refused(error) => {
+                    return (error, time.slept.load(Ordering::SeqCst), judged.get());
+                }
+            }
+        }
+        panic!("the wait did not end");
+    }
+
+    #[test]
+    fn a_waiting_writer_looks_again_until_its_budget_is_spent_and_only_for_a_blocker_not_stale() {
+        use RepositoryErrorKind::{RecoveryRequired, RepositoryBusy};
+        let short = WaitPolicy {
+            budget: Duration::from_millis(250),
+            poll: Duration::from_millis(50),
+        };
+        let frozen = Duration::ZERO;
+        let named = blocker();
+        let blocked = || refused(RecoveryRequired, Some(named.clone()));
+        // (case, policy, clock step per sleep, error, judgments, answered
+        // kind, its blocker's `live` (`None` inside for no judgment, outer
+        // `None` for no blocker), sleeps, judgments made)
+        type Row<'a> = (
+            &'a str,
+            WaitPolicy,
+            Duration,
+            &'a dyn Fn() -> RepositoryError,
+            &'a [Judged],
+            RepositoryErrorKind,
+            Option<Option<bool>>,
+            u64,
+            usize,
+        );
+        let rows: [Row<'_>; 8] = [
+            (
+                "live, with a clock that never moves: budget / poll looks",
+                short,
+                frozen,
+                &blocked,
+                &[Judged::Live],
+                RepositoryBusy,
+                Some(Some(true)),
+                5,
+                6,
+            ),
+            (
+                "live, the clock moving 100 ms a sleep: the clock ends it",
+                short,
+                Duration::from_millis(100),
+                &blocked,
+                &[Judged::Live],
+                RepositoryBusy,
+                Some(Some(true)),
+                3,
+                4,
+            ),
+            (
+                "stale: no sleep, recovery_required naming it stale",
+                short,
+                frozen,
+                &blocked,
+                &[Judged::Stale],
+                RecoveryRequired,
+                Some(Some(false)),
+                0,
+                1,
+            ),
+            (
+                "unreadable: looked at again, then busy with no judgment",
+                short,
+                frozen,
+                &blocked,
+                &[Judged::Unreadable],
+                RepositoryBusy,
+                Some(None),
+                5,
+                6,
+            ),
+            (
+                "gone since, then stale: one sleep, then recovery_required",
+                short,
+                frozen,
+                &blocked,
+                &[Judged::Away, Judged::Stale],
+                RecoveryRequired,
+                Some(Some(false)),
+                1,
+                2,
+            ),
+            (
+                "a poll of zero sleeps a millisecond a look",
+                WaitPolicy {
+                    budget: Duration::from_millis(3),
+                    poll: Duration::ZERO,
+                },
+                frozen,
+                &blocked,
+                &[Judged::Live],
+                RepositoryBusy,
+                Some(Some(true)),
+                3,
+                4,
+            ),
+            (
+                "an error other than recovery_required: as it is",
+                short,
+                frozen,
+                &|| refused(RepositoryBusy, Some(named.clone())),
+                &[Judged::Live],
+                RepositoryBusy,
+                Some(None),
+                0,
+                0,
+            ),
+            (
+                "no blocker: as it is",
+                short,
+                frozen,
+                &|| refused(RecoveryRequired, None),
+                &[Judged::Live],
+                RecoveryRequired,
+                None,
+                0,
+                0,
+            ),
+        ];
+        for (case, policy, step, error, judgments, kind, live, slept, judged) in rows {
+            let (answered, sleeps, judgments_made) = wait_out(policy, step, error, judgments);
+            assert_eq!(answered.kind, kind, "{case}");
+            assert_eq!(
+                answered.blocker().map(|blocker| blocker.live),
+                live,
+                "{case}"
+            );
+            if let Some(blocker) = answered.blocker() {
+                assert_eq!(blocker.operation_id, named.operation_id, "{case}");
+            }
+            assert_eq!((sleeps, judgments_made), (slept, judged), "{case}");
+        }
+    }
 
     #[test]
     fn a_writer_waits_five_seconds_looking_again_every_fifty_milliseconds() {

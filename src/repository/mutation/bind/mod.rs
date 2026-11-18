@@ -368,13 +368,17 @@ impl Answer {
         if !matches!(self.code, ResultCode::Busy | ResultCode::RecoveryRequired) {
             return self;
         }
-        let Some((operation, _)) = service.blocking_operation(root, blocker) else {
+        let crate::repository::BlockerRow::Found { operation, .. } =
+            service.blocking_operation(root, blocker)
+        else {
             return self;
         };
         let mut named = BlockerDto::of(&operation, blocker.operation_id.to_string());
-        // The judgment the domain answered on, when it made one.
-        if let Some(live) = blocker.live {
-            named.live = Some(live);
+        // The domain's finding that the holder still works is what the
+        // answer is `busy` for, and stands. Any other judgment is this read's
+        // own, made now.
+        if blocker.live == Some(true) {
+            named.live = Some(true);
         }
         if named.live == Some(true) {
             self.code = ResultCode::Busy;
