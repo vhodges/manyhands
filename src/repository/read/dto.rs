@@ -155,7 +155,9 @@ pub struct IndexStateDto {
 /// who started each, from where, and whether that holder still works. It
 /// leaves out the application's key-material operations, which belong to no
 /// repository. It is empty for a repository with none, and for one that is
-/// not registered, which has no remote operation to hold.
+/// not registered, which has no remote operation to hold. When the rows
+/// cannot be read it is empty and `configuration.problems` holds
+/// `operations_unreadable`, so an empty list is not taken for none.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RepositoryInspectionDto {
     pub selected_path: String,

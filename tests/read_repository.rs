@@ -10,7 +10,7 @@ use git2::{Config, ConfigLevel, Repository, RepositoryInitOptions, Signature, Ti
 use manyhands::{
     repository::{
         Accessibility, ConfigurationState, IdentityAvailability, IdentitySource, IndexState,
-        InitialsSource, ReadError, RepositoryService,
+        InitialsSource, ProblemDto, ReadError, RepositoryService,
     },
     results::{ProblemCode, ResultCode},
 };
@@ -534,6 +534,90 @@ fn repo_inspect_lists_unfinished_operations_with_attribution() {
     );
     let json = serde_json::to_value(&inspection).unwrap();
     assert_eq!(json["operations"].as_array().unwrap().len(), 2);
+    assert_git_transport_uninitialized();
+}
+
+/// `repo inspect` is where every `recovery_required` points, so it answers
+/// when the operations cannot be read: an empty list and a problem that says
+/// so, which a person does not mistake for nothing being unfinished.
+/// `operation list` refuses the same registry.
+#[test]
+fn repo_inspect_answers_with_a_problem_when_the_operations_cannot_be_read() {
+    use support::{items, operations};
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let service = &enabled.service;
+    let data = enabled.data_directory.path();
+    let repo = service.resolve_repository(&fixture.root).unwrap();
+    let healthy = service.inspect_repository(&fixture.root).unwrap();
+    assert!(healthy.configuration.problems.is_empty());
+
+    type Damage<'a> = (&'a str, &'a dyn Fn(&rusqlite::Connection), ResultCode);
+    let damaged: [Damage; 2] = [
+        (
+            "a row that cannot be valid",
+            &|index| {
+                operations::insert_local_into(
+                    index,
+                    Some(operations::OPERATION_A),
+                    "other",
+                    "created",
+                    None,
+                )
+            },
+            ResultCode::InternalError,
+        ),
+        (
+            "a registry that fails the audit",
+            &|index| {
+                index
+                    .execute(
+                        "DELETE FROM registry_migrations
+                          WHERE name = 'local_context_sync_child_cascade_v2'",
+                        [],
+                    )
+                    .unwrap();
+            },
+            ResultCode::RecoveryRequired,
+        ),
+    ];
+    for (case, damage, refused) in damaged {
+        let index = items::index(data);
+        damage(&index);
+        drop(index);
+
+        assert_eq!(
+            service.list_operations(&repo).map(drop).unwrap_err().code(),
+            refused,
+            "{case}"
+        );
+        let inspection = service.inspect_repository(&fixture.root).unwrap();
+        assert!(inspection.operations.is_empty(), "{case}");
+        assert_eq!(
+            inspection.configuration.problems,
+            [ProblemDto {
+                code: ProblemCode::OperationsUnreadable,
+                path: None,
+                target_id: None,
+            }],
+            "{case}"
+        );
+        // Everything else the inspection says is unchanged.
+        assert_eq!(inspection.registered, healthy.registered, "{case}");
+        assert_eq!(inspection.local_branches, healthy.local_branches, "{case}");
+        assert_eq!(inspection.remotes, healthy.remotes, "{case}");
+
+        // Restore for the next case.
+        let index = items::index(data);
+        index.execute("DELETE FROM operation_records", []).unwrap();
+        index
+            .execute(
+                "INSERT OR IGNORE INTO registry_migrations (name)
+                 VALUES ('local_context_sync_child_cascade_v2')",
+                [],
+            )
+            .unwrap();
+    }
     assert_git_transport_uninitialized();
 }
 

@@ -291,7 +291,7 @@ impl RepositoryService {
         ) else {
             return Err(ReadError::invalid_path());
         };
-        let configuration = inspected_configuration(inspection.configuration);
+        let mut configuration = inspected_configuration(inspection.configuration);
         // The inspection opened the root; it is opened again here only to
         // ask whether each remote has a helper configured.
         let repository = open_exactly(Path::new(&root)).map_err(|error| {
@@ -299,7 +299,28 @@ impl RepositoryService {
         })?;
         // The root as the registry stores it, which is the one the
         // registration was looked up by.
-        let operations = self.inspected_operations(Path::new(&root), registration)?;
+        //
+        // This is the verb every `recovery_required` points at, so rows that
+        // cannot be read do not refuse it: the list is empty and a problem
+        // says why, so that an empty list is not taken for nothing being
+        // unfinished. A busy or unavailable index is still refused.
+        let operations = match self.inspected_operations(Path::new(&root), registration) {
+            Ok(operations) => operations,
+            Err(error)
+                if matches!(
+                    error.code(),
+                    ResultCode::RecoveryRequired | ResultCode::InternalError
+                ) =>
+            {
+                configuration.problems.push(ProblemDto {
+                    code: ProblemCode::OperationsUnreadable,
+                    path: None,
+                    target_id: None,
+                });
+                Vec::new()
+            }
+            Err(error) => return Err(error),
+        };
         Ok(RepositoryInspectionDto {
             selected_path,
             root,

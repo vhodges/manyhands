@@ -835,6 +835,8 @@ problem_codes! {
         "Break the cycle between the tickets' dependencies.";
     ParentCycle => "parent_cycle", None,
         "Break the cycle between the tickets' parents.";
+    OperationsUnreadable => "operations_unreadable", None,
+        "The repository's unfinished operations could not be read; run operation list for the reason.";
     UnknownProblem => "unknown_problem", None,
         "Refresh the index; if the problem remains, inspect the file.";
 }
