@@ -6,6 +6,8 @@ type: task
 status: superseded
 project: manyhands
 team: core
+closed_at: 2026-11-18T20:44:30Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
