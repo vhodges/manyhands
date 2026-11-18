@@ -989,7 +989,7 @@ impl RepositoryService {
         let Some(root_text) = root.to_str() else {
             return Ok(None);
         };
-        self.read_session(RepositoryOperation::Read, |connection| {
+        self.writer_read_session(RepositoryOperation::Read, |connection| {
             let registration: Option<i64> = connection
                 .query_row(
                     "SELECT id FROM repositories WHERE root_path = ?1",

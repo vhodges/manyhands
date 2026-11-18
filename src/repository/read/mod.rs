@@ -458,6 +458,31 @@ impl RepositoryService {
         result
     }
 
+    /// `read_session`, for a writer that reads about the operation in its
+    /// way: the same guard, checks and refusal of writes, on a connection
+    /// opened as a writer opens one. A read-only connection that is the
+    /// last to close leaves the index's write-ahead files behind; a writer
+    /// that was refused leaves nothing.
+    pub(super) fn writer_read_session<T>(
+        &self,
+        operation: RepositoryOperation,
+        read: impl FnOnce(&Connection) -> Result<T, ReadError>,
+    ) -> Result<T, ReadError> {
+        let data_directory = self
+            .registry_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        let _cache_guard = cache_read_guard(&self.registry_path, data_directory, operation)?;
+        self.require_index_available(operation, None)?;
+        let connection = super::open_registry(&self.registry_path, &mut |_| {})?;
+        connection.pragma_update(None, "query_only", true)?;
+        forbid_attached_databases(&connection);
+        let transaction = Transaction::new_unchecked(&connection, TransactionBehavior::Deferred)?;
+        let result = read(&transaction);
+        let _ = transaction.rollback();
+        result
+    }
+
     #[doc(hidden)]
     pub fn read_session_for_testing<T>(
         &self,
