@@ -172,13 +172,20 @@ Also:
   branch's implementation does not make C3 available on main before merge.
 - Before `ticket save` of your own Cycle ticket, commit your owned edits to its
   `ticket.md`: the CLI save checkpoints into that ticket's active worktree.
-- Comments remain canonical `.manyhands/comments/<item-id>/<comment-id>.md`
-  edits until C4's `comment add`. Close a ticket with `manyhands-cli ticket close
+- Add comments with `manyhands-cli comment add --repo
+  /home/vhodges/work/src/manyhands --id <ID> --input <file> --non-interactive
+  --json --request-id <ULID>`: it saves the comment, merges main into the ticket
+  branch if main moved, and publishes the branch. With a passphrase-protected
+  key, load the key into ssh-agent first (`ssh-add`, with `SSH_AUTH_SOCK` set in
+  the environment the agent runs in): Manyhands then signs through the agent and
+  a non-interactive run publishes. Without it the comment is saved and its
+  publication stays pending until it is resumed at the owner's terminal. Close a ticket with `manyhands-cli ticket close
   --repo /home/vhodges/work/src/manyhands --id <ID>` from the registered main
   checkout, after review approval: it records `closed_at`/`closed_by`, merges the
   ticket's branch into main, publishes main, and removes the branch and worktree,
   so it replaces the separate merge and cleanup. With a passphrase-protected key it
-  runs at the owner's terminal, since a non-interactive run answers
+  runs at the owner's terminal, or with the key loaded in ssh-agent, since
+  otherwise a non-interactive run answers
   `unlock_required` (switched 2026-11-04 after the first real close,
   `01M6KD8E25BWXQKF4REYM1DZMC`; C5 decision 9). Saving status text `closed` is not
   lifecycle closure.

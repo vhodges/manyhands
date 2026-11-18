@@ -36,6 +36,7 @@ pub(crate) struct AuthenticatedSshRemote<'repo, 'a> {
     prepared: &'a PreparedSshAttempt,
     context: &'a SshTransportError,
     passphrase: Option<&'a str>,
+    agent: Option<&'a super::agent::AgentSigner>,
     observed: HostKeyIdentity,
     trust: super::trust::HostTrustSnapshot,
 }
@@ -46,6 +47,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         prepared: &'a PreparedSshAttempt,
         context: &'a SshTransportError,
         passphrase: Option<&'a str>,
+        agent: Option<&'a super::agent::AgentSigner>,
         observed: HostKeyIdentity,
     ) -> Self {
         let mut trust = prepared.trust.clone();
@@ -63,6 +65,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             prepared,
             context,
             passphrase,
+            agent,
             observed,
             trust,
         }
@@ -295,6 +298,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             prepared: self.prepared,
             context: self.context,
             passphrase: self.passphrase,
+            agent: self.agent,
             observed: self.observed.clone(),
             trust: self.trust.clone(),
         };
@@ -414,6 +418,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                 Some(super::callbacks::build_callbacks(
                     self.prepared,
                     self.passphrase,
+                    self.agent,
                     &attempt,
                 )),
                 None,
@@ -556,7 +561,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         }
         let rejected = std::cell::Cell::new(false);
         let mut callbacks =
-            super::callbacks::build_callbacks(self.prepared, self.passphrase, &attempt);
+            super::callbacks::build_callbacks(self.prepared, self.passphrase, self.agent, &attempt);
         if let TransferAction::Delete(expected) = action {
             super::callbacks::guard_delete(
                 &mut callbacks,
