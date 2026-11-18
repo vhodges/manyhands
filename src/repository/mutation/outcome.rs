@@ -1166,7 +1166,11 @@ fn with_host_action(
 /// `pending` is the operation IDs of the repository's pending local rows
 /// that nothing is seen against abandoning, oldest first: a row a call
 /// is at work under, or one the remote or key journal also holds, is
-/// not in it, and so is not offered under either rule. `resumable` is
+/// not in it, and so is not offered under either rule. After them come,
+/// under the first rule, the synchronizations of the remote journal that
+/// `operation abandon` closes and that no process works under: a stale
+/// remote operation is offered its way out as a local one is, its resume
+/// before it where a resume would take it up. `resumable` is
 /// those of them that are not the request's own and that a resume would
 /// take up as things are; see `resume::takes_up`.
 ///
@@ -1472,7 +1476,9 @@ impl RepositoryService {
     /// alone, no call is at work under it with a heartbeat, and no call
     /// holds the repository's lease or its bootstrap lease, which is
     /// looked at without waiting and let go at once. The look is taken
-    /// last, and only when there is something to offer.
+    /// last, and only when there is something to offer. A synchronization
+    /// is offered when its abandon closes it and no process of this host
+    /// is at work under it; see `abandonable_remote_operations`.
     ///
     /// An operation offered so that is another request's is asked, with
     /// the question a resume itself asks, whether a resume would take
@@ -1506,6 +1512,11 @@ impl RepositoryService {
                 {
                     pending.push(operation_id);
                 }
+            }
+            // And the synchronizations its abandon closes that no process
+            // works under, under the first rule.
+            if inspects {
+                pending.extend(self.abandonable_remote_operations(connection, &root)?);
             }
             // Whether the request's record was left accepted, holding
             // that operation as a local one.

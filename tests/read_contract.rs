@@ -706,6 +706,19 @@ const LOCAL_ACTIONS: [OperationAction; 16] = [
     OperationAction::ContextSyncLocal,
 ];
 
+/// What `operation abandon` closes: every local action, and a
+/// synchronization of the remote journal.
+fn abandoned_actions() -> Vec<&'static str> {
+    LOCAL_ACTIONS
+        .iter()
+        .chain(&[
+            OperationAction::SynchronizeContext,
+            OperationAction::SynchronizePrimary,
+        ])
+        .map(|action| action.as_str())
+        .collect()
+}
+
 /// Every published string enumeration, pinned to Rust values or the explicitly
 /// documented retirement phase vocabulary, by file and property.
 fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
@@ -1133,12 +1146,12 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         (
             "operation_abandon_preview.schema.json",
             "details.action",
-            LOCAL_ACTIONS.map(OperationAction::as_str).to_vec(),
+            abandoned_actions(),
         ),
         (
             "operation_mutation.schema.json",
             "action",
-            LOCAL_ACTIONS.map(OperationAction::as_str).to_vec(),
+            abandoned_actions(),
         ),
         (
             "preview.schema.json",

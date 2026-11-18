@@ -1021,6 +1021,11 @@ fn a_resume_of_a_remote_operation_that_has_ended_is_a_no_op() {
     }
 }
 
+/// A synchronization cancelled after a restart recorded its reconciliation
+/// as owed is still listed, and nothing resumes it: the repository is what
+/// is looked at, and its abandon is the way out. Confirmed, the abandon
+/// lets the reconciliation go, and the operation is then one that has
+/// ended.
 #[test]
 fn a_resume_of_a_cancelled_synchronization_that_left_work_says_to_look_at_the_repository() {
     let world = remote_world();
@@ -1036,8 +1041,35 @@ fn a_resume_of_a_cancelled_synchronization_that_left_work_says_to_look_at_the_re
         Outcome::Blocked,
         ResultCode::RecoveryRequired,
     );
-    assert_eq!(recovery_actions(&left), ["repo.inspect"]);
+    assert_eq!(
+        recovery_actions(&left),
+        ["repo.inspect", "operation.abandon"]
+    );
+    assert_eq!(left.recovery[1].operation_id.as_deref(), Some(OPERATION_A));
     assert_eq!(stored_remote(&world, OPERATION_A), before);
+
+    let abandon = || {
+        Mutation::OperationAbandon(manyhands::repository::OperationAbandonInput {
+            root: world.root.clone(),
+            operation_id: OperationId::parse(OPERATION_A).unwrap(),
+        })
+    };
+    let previewed = crate::support::confirmation::prepare_with(&world.service, &abandon());
+    assert_eq!(previewed.code, ResultCode::Ok, "{}", previewed.message);
+    let confirmation = previewed.data.expect("a preview").confirmation_id;
+    let abandoned =
+        mutation::execute_confirmed(&world.service, REQUEST_2, &confirmation, abandon());
+    assert_eq!(abandoned.code, ResultCode::Ok, "{}", abandoned.message);
+    let reconciliation: i64 = items::index(world.data.path())
+        .query_row(
+            "SELECT reconciliation_required FROM remote_operation_records WHERE operation_ulid = ?1",
+            [OPERATION_A],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reconciliation, 0);
+    let ended = world.execute(REQUEST_3, resume(&world, OPERATION_A));
+    assert_eq!(ended.code, ResultCode::AlreadyApplied, "{}", ended.message);
 }
 
 /// The record of the synchronization that holds `operation_id`,
@@ -1221,7 +1253,28 @@ fn a_resume_of_a_comment_s_synchronization_is_the_comment_s_publication() {
     );
     assert_eq!(pending.operation_id, None);
     assert!(world.record(REQUEST_1).is_none(), "a request record");
-    assert_eq!(recovery_actions(&pending), ["repo.inspect"]);
+    // Both synchronizations that stopped are offered their way on and their
+    // way out, as every pending operation no process works under is.
+    assert_eq!(
+        recovery_actions(&pending),
+        [
+            "operation.resume",
+            "operation.resume",
+            "repo.inspect",
+            "operation.abandon",
+            "operation.abandon"
+        ]
+    );
+    let named = |at: usize| pending.recovery[at].operation_id.as_deref();
+    assert_eq!(
+        [named(0), named(1), named(3), named(4)],
+        [
+            Some(synchronization.as_str()),
+            Some(OPERATION_C),
+            Some(synchronization.as_str()),
+            Some(OPERATION_C)
+        ]
+    );
     assert_eq!(stored_remote(&world, &synchronization), before);
 }
 

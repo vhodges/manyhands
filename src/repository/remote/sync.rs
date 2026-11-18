@@ -7204,10 +7204,16 @@ fn push_absence(
                 && evidence.push_oid.is_some()
                 && evidence.push_advertised_oid == evidence.push_oid;
         // A push the remote refused, as its operation ended, was answered:
-        // nothing of it is on the remote (`acknowledge_refused_push`).
+        // nothing of it is on the remote (`acknowledge_refused_push`). So
+        // was one whose operation the person abandoned, having seen what
+        // the row last saw of the remote (`close_abandoned`): only that
+        // records a push at `push_returned` refused.
         let refused = record.phase == RemoteOperationPhase::Cancelled
             && record.outcome == Some(RemoteOutcomeCategory::ProtocolRejected)
-            && record.sync_checkpoint == Some(Checkpoint::PushPrepared);
+            && matches!(
+                record.sync_checkpoint,
+                Some(Checkpoint::PushPrepared | Checkpoint::PushReturned)
+            );
         let retried = Some(operation) == unissued
             && never_published
             && attempt.is_none()

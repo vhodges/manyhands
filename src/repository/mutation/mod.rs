@@ -142,17 +142,17 @@ pub use dto::{
     LifecyclePathChangeDto, LifecyclePathChangeKind, LifecyclePlannedCleanupDto,
     LifecyclePlannedClosureDto, LifecyclePlannedIntegration, LifecyclePlannedPublication,
     LifecyclePreviewDto, LifecyclePublicationPendingReason, LifecyclePublicationState,
-    LifecycleRecording, LocalIdentityDto, MutationDataDto, OperationAbandonPreviewDto,
-    OperationMutationDto, PollMutationCompletion, PollMutationDto, PollPolicyMutationDto,
-    PollRetirementCompletion, PollRetirementDebt, PollRetirementItemDto, PollRetirementItemState,
-    PollRetirementMutationDto, PollRetirementMutationType, PollTargetDisposition, PollTargetDto,
-    PrepareDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto,
-    PreviewIdentityDto, PreviewIdentitySource, RemoteHistoryChoicesDto, RemoteHistoryDto,
-    RemoteHistoryEntryDto, RemoteMutationDto, RemoteRemovalPreviewDto,
-    RemoteResolveHistoryPreviewDto, RepairMutationDto, RepairPreviewDto, RepositoryPreviewDto,
-    RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
-    SynchronizationConflictMutationDto, SynchronizationConflictType, SynchronizationMutationDto,
-    TicketMutationDto,
+    LifecycleRecording, LocalIdentityDto, MutationDataDto, OperationAbandonEvidenceDto,
+    OperationAbandonPreviewDto, OperationMutationDto, PollMutationCompletion, PollMutationDto,
+    PollPolicyMutationDto, PollRetirementCompletion, PollRetirementDebt, PollRetirementItemDto,
+    PollRetirementItemState, PollRetirementMutationDto, PollRetirementMutationType,
+    PollTargetDisposition, PollTargetDto, PrepareDataDto, PreviewDetailsDto, PreviewDto,
+    PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
+    RemoteHistoryChoicesDto, RemoteHistoryDto, RemoteHistoryEntryDto, RemoteMutationDto,
+    RemoteRemovalPreviewDto, RemoteResolveHistoryPreviewDto, RepairMutationDto, RepairPreviewDto,
+    RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
+    RequestResultDto, RequestState, SynchronizationConflictMutationDto,
+    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -209,7 +209,9 @@ pub(in super::super) fn finish_recorded_retirement(
     Ok(())
 }
 pub(super) use records::migrate as migrate_request_tables;
-pub(super) use records::{operation_owner, release_operation_owner};
+pub(super) use records::{
+    operation_holder, operation_owner, release_operation_holder, release_operation_owner,
+};
 pub use way_out::{
     HistoryWayOut, LifecycleWayOut, clear_cache_loss_way_out, lifecycle_prepare_way_out,
     lifecycle_way_out, resolve_history_way_out,

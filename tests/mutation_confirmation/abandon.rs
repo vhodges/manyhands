@@ -726,11 +726,12 @@ fn an_unknown_operation_is_operation_not_found_and_an_ended_one_is_a_no_op() {
     stranded.assert_goes_on(&before, "the previews");
 }
 
-/// Only local operations are abandoned. A synchronization's reservation
-/// has its own cancellation, and a key operation completes on its next
-/// call.
+/// A key operation is not abandoned: it completes on its next call. A
+/// synchronization no process is at work under is, with the person's
+/// consent: it is given a preview, and with no confirmation neither is
+/// run. Nothing is changed by either.
 #[test]
-fn a_remote_or_a_key_operation_is_refused_with_nothing_changed() {
+fn a_key_operation_is_refused_and_a_synchronization_needs_its_confirmation() {
     let world = World::new();
     let connection = items::index(world.data.path());
     connection
@@ -764,16 +765,39 @@ fn a_remote_or_a_key_operation_is_refused_with_nothing_changed() {
         count("request_records"),
     );
 
+    let refused = prepare_with(&world.service, &abandon(&world.root, &key.to_string()));
+    assert_eq!(refused.code, ResultCode::InvalidInput);
+    assert_eq!(refused.outcome, Outcome::Error);
+    assert_eq!(refused.data, None);
+    // The reservation was made by this process, whose call that made it has
+    // ended: no call is at work under it, and its abandon is previewed.
+    let previewed = prepare_with(&world.service, &abandon(&world.root, &remote.to_string()));
+    assert_eq!(previewed.code, ResultCode::Ok, "{}", previewed.message);
+    let preview = previewed.data.expect("a preview");
+    let details = abandon_preview(&preview);
+    assert_eq!(details.action, Some(OperationAction::SynchronizeContext));
+    assert_eq!(details.state, "reserved");
+    // It recorded no push, and the remote was not looked at.
+    assert_eq!(
+        details.evidence.as_ref().map(|evidence| (
+            evidence.remote_ref_present,
+            evidence.remote_oid.as_deref(),
+            evidence.push_oid.as_deref()
+        )),
+        Some((None, None, None))
+    );
+    assert_eq!(
+        effects(&preview),
+        [PreviewEffect::OperationClosed],
+        "no push to record as refused, and no request to release"
+    );
+    // With no confirmation neither is run.
     for (what, operation_id) in [("remote", remote), ("key", key)] {
-        let mutation = abandon(&world.root, &operation_id.to_string());
-        let refused = prepare_with(&world.service, &mutation);
-        assert_eq!(refused.code, ResultCode::InvalidInput, "{what}");
-        assert_eq!(refused.outcome, Outcome::Error, "{what}");
-        assert_eq!(refused.data, None, "{what}");
-        // And with no preview there is no confirmation to run it with.
-        let unconfirmed = world.execute(REQUEST_2, mutation);
+        let unconfirmed = world.execute(REQUEST_2, abandon(&world.root, &operation_id.to_string()));
         assert_eq!(unconfirmed.code, ResultCode::ConfirmationRequired, "{what}");
     }
+    // The one record the preview made is its confirmation.
+    let before = (before.0, before.1, before.2, before.3 + 1, before.4);
 
     assert_eq!(
         before,
@@ -803,6 +827,468 @@ fn a_remote_or_a_key_operation_is_refused_with_nothing_changed() {
     );
     // The reservation is of one item's context: another item is written.
     assert_another_operation_succeeds(&world, "the refused abandons");
+}
+
+// ---------------------------------------------------------------------
+// A synchronization's row
+// ---------------------------------------------------------------------
+
+/// A pid the process table of `probing` holds, and one it does not.
+const LIVE_PID: u32 = 4242;
+const DEAD_PID: u32 = 4243;
+
+/// The service of `world`, asking `table` whether a process exists.
+fn probing(world: &mut World, table: Vec<u32>) {
+    world.service = RepositoryService::open_at(world.data.path())
+        .unwrap()
+        .with_process_probe_for_testing(std::sync::Arc::new(support::operations::ProcessTable(
+            table,
+        )));
+}
+
+/// Names `pid`, of this host, as the process that holds the remote row
+/// `operation`, which the `item sync` of `REQUEST_2` began.
+fn held_by(world: &World, operation: OperationId, pid: u32) {
+    let host = manyhands::repository::this_host();
+    support::operations::attribute_remote(
+        world.data.path(),
+        &operation.to_string(),
+        &support::operations::Attribution {
+            request: Some(REQUEST_2),
+            command: Some("item sync"),
+            author: Some("Ada <ada@example.com>"),
+            host: Some(&host),
+            pid: Some(i64::from(pid)),
+            started_at: Some(support::operations::STORED_AT),
+        },
+    );
+}
+
+/// The record of `REQUEST_2`, the `item sync` that holds the remote
+/// operation `operation`, accepted and not finished.
+fn accept_synchronization(world: &World, operation: OperationId) {
+    use manyhands::repository::{
+        OperationFamily, RequestId,
+        request_store::{DigestSalt, IntentDigest, NewRequest, RequestOperation, ScopeKey},
+    };
+    let scope = ScopeKey::for_repository(&world.root).unwrap();
+    let request_id = RequestId::parse(REQUEST_2).unwrap();
+    world
+        .service
+        .insert_request(&NewRequest {
+            request_id,
+            intent_digest: IntentDigest::builder(
+                DigestSalt::Request(request_id),
+                "item sync",
+                &scope,
+                TICKET_A,
+            )
+            .finish(),
+            scope,
+            command: "item sync".to_owned(),
+            target: TICKET_A.to_owned(),
+            confirmation: None,
+            base_ref: None,
+            base_oid: None,
+            expected_digest: None,
+            operations: vec![RequestOperation {
+                family: OperationFamily::Remote,
+                operation_id: operation,
+            }],
+        })
+        .unwrap();
+}
+
+/// A synchronization of the open ticket's context, as a process of this
+/// host that is `pid` left it when it was killed: at `checkpoint` with the
+/// reservation held, its push of the context's tip recorded. A context at
+/// `push_prepared` holds a push not known to have returned, of a context
+/// the remote was seen not to hold; one at `push_verified` holds a push the
+/// remote was seen to hold, its publication not yet recorded. The `item
+/// sync` of `REQUEST_2` holds it. Returns its ID and the commit it pushed.
+fn stranded_push(world: &World, checkpoint: &str, pid: u32) -> (OperationId, git2::Oid) {
+    let token = world.token(TICKET_A);
+    let saved = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(saved.code, ResultCode::Ok, "{}", saved.message);
+    let tip = world.branch_tip(TICKET_A).expect("the save's checkpoint");
+    let connection = items::index(world.data.path());
+    connection
+        .execute_batch("UPDATE remote_polling_state SET remote_name='origin',primary_branch='main'")
+        .unwrap();
+    let operation = OperationId::new();
+    let reserved = world
+        .service
+        .reserve_remote_operation(&world.root, operation, &reserved_target())
+        .unwrap();
+    assert!(matches!(reserved, RemoteReservationOutcome::Reserved(_)));
+    let (step, advertised) = match checkpoint {
+        "push_prepared" => ("before_push", None),
+        "push_verified" => ("after_push_verification", Some(tip.to_string())),
+        other => panic!("no fixture of {other}"),
+    };
+    let changed = connection
+        .execute(
+            "UPDATE remote_operation_records
+                SET phase = ?2, sync_checkpoint = ?2, completed_step = ?3, expected_oid = ?4,
+                    local_oid = ?4, primary_tracking_oid = ?5, push_oid = ?4,
+                    push_advertised_oid = ?6
+              WHERE operation_ulid = ?1",
+            rusqlite::params![
+                operation.to_string(),
+                checkpoint,
+                step,
+                tip.to_string(),
+                world.primary_head().to_string(),
+                advertised
+            ],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+    held_by(world, operation, pid);
+    accept_synchronization(world, operation);
+    (operation, tip)
+}
+
+/// The remote row of `operation`, as an abandon changes it, and its
+/// attribution, which it keeps.
+type StoredRemote = (
+    String,
+    Option<String>,
+    Option<String>,
+    i64,
+    i64,
+    Option<String>,
+    Option<i64>,
+);
+
+fn stored_remote(world: &World, operation: OperationId) -> StoredRemote {
+    items::index(world.data.path())
+        .query_row(
+            "SELECT phase, outcome, sync_checkpoint, owner_epoch, reconciliation_required,
+                    request_ulid, pid
+               FROM remote_operation_records WHERE operation_ulid = ?1",
+            [operation.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .unwrap()
+}
+
+/// The incident's way out: a synchronization killed after it recorded its
+/// push intent holds the reservation for good, refusing writes of its item,
+/// and its resume cannot say what became of the push. The refusal offers
+/// its abandon. The preview names what the person decides with: the remote
+/// branch as the row last saw it, absent, the context's tip, and the commit
+/// the push was of; and that the push will be recorded as refused, so it
+/// no longer counts as one nothing answered. The confirmed abandon closes
+/// the operation and releases its request, keeps the row's attribution and
+/// touches nothing Git holds, and the repository goes on: the item is
+/// written and a new synchronization of it is reserved.
+#[test]
+fn abandon_of_a_remote_push_prepared_row_previews_the_evidence_then_clears_it() {
+    let mut world = World::new();
+    probing(&mut world, vec![LIVE_PID]);
+    let (operation, tip) = stranded_push(&world, "push_prepared", DEAD_PID);
+    let operation_id = operation.to_string();
+    let stranded = stored_remote(&world, operation);
+
+    // A save of the item with a title of its own.
+    let rewrite = |world: &World| {
+        Mutation::TicketSave(TicketSaveInput {
+            draft: World::draft("Written again", BODY),
+            ..world.save_input(TICKET_A, &world.token(TICKET_A))
+        })
+    };
+    // In the way: a save of the item is refused, naming the operation, and
+    // offered its abandon.
+    let blocked = world.execute(REQUEST_3, rewrite(&world));
+    assert_eq!(
+        blocked.code,
+        ResultCode::RecoveryRequired,
+        "{}",
+        blocked.message
+    );
+    assert_eq!(blocked.outcome, Outcome::Blocked);
+    let blocker = &serde_json::to_value(&blocked).unwrap()["data"]["blocker"];
+    assert_eq!(
+        (
+            &blocker["operation_id"],
+            &blocker["family"],
+            &blocker["live"]
+        ),
+        (
+            &serde_json::json!(operation_id),
+            &serde_json::json!("remote"),
+            &serde_json::json!(false)
+        )
+    );
+    // Its resume, the way on, comes first; it is the abandon that the
+    // resume's own refusal leaves.
+    assert_eq!(
+        recovery_actions(&blocked),
+        [
+            "operation.resume",
+            "repo.inspect",
+            "operation.show",
+            "operation.abandon"
+        ]
+    );
+    assert_eq!(
+        blocked.recovery[0].operation_id.as_deref(),
+        Some(operation_id.as_str())
+    );
+    let offered = &blocked.recovery[3];
+    assert_eq!(offered.operation_id.as_deref(), Some(operation_id.as_str()));
+    assert_eq!(
+        offered.arguments.get("root").and_then(|root| root.as_str()),
+        world.root.to_str()
+    );
+    assert_eq!(world.record(REQUEST_3), None);
+    let before = Everything::of(&world);
+
+    // The preview, which changes nothing.
+    let mutation = || abandon(&world.root, &operation_id);
+    let previewed = prepare_with(&world.service, &mutation());
+    assert_eq!(previewed.code, ResultCode::Ok, "{}", previewed.message);
+    let preview = previewed.data.expect("a preview");
+    assert_eq!(
+        effects(&preview),
+        [
+            PreviewEffect::OperationClosed,
+            PreviewEffect::PushMarkedRejected,
+            PreviewEffect::RequestReleased
+        ]
+    );
+    let details = abandon_preview(&preview);
+    assert_eq!(details.operation_id, operation_id);
+    assert_eq!(details.action, Some(OperationAction::SynchronizeContext));
+    assert_eq!(
+        (details.state.as_str(), details.step.as_deref()),
+        ("push_prepared", Some("before_push"))
+    );
+    assert_eq!(details.item_id.as_deref(), Some(TICKET_A));
+    assert_eq!(details.request_id.as_deref(), Some(REQUEST_2));
+    assert_eq!(
+        (
+            details.worktree.as_deref(),
+            details.paths.len(),
+            details.paths_complete,
+            details.committed,
+            details.files_changed,
+            details.git_state_changed
+        ),
+        (None, 0, true, false, false, false)
+    );
+    assert_eq!(
+        details.evidence,
+        Some(manyhands::repository::OperationAbandonEvidenceDto {
+            remote_ref_present: Some(false),
+            local_oid: Some(tip.to_string()),
+            remote_oid: None,
+            push_oid: Some(tip.to_string()),
+        })
+    );
+    assert_eq!(stored_remote(&world, operation), stranded);
+    before.assert_unchanged(&world, "the preview");
+
+    let abandoned = execute_confirmed(
+        &world.service,
+        REQUEST_4,
+        &preview.confirmation_id,
+        mutation(),
+    );
+    assert_eq!(abandoned.code, ResultCode::Ok, "{}", abandoned.message);
+    assert_eq!(abandoned.outcome, Outcome::Success);
+    assert_eq!(abandoned.effects, Effects::not_requested());
+    let data = operation_data(&abandoned);
+    assert_eq!(data.operation_id, operation_id);
+    assert_eq!(data.action, Some(OperationAction::SynchronizeContext));
+    assert_eq!(
+        (data.state.as_str(), data.step.as_deref()),
+        ("push_prepared", Some("before_push"))
+    );
+    assert_eq!(data.released_request_id.as_deref(), Some(REQUEST_2));
+    // Closed, its push recorded as refused, its checkpoint and attribution
+    // as they were.
+    let (_, _, checkpoint, epoch, _, request, pid) = stranded.clone();
+    assert_eq!(
+        stored_remote(&world, operation),
+        (
+            "cancelled".to_owned(),
+            Some("protocol_rejected".to_owned()),
+            checkpoint,
+            epoch,
+            0,
+            request,
+            pid
+        )
+    );
+    assert_eq!(world.record(REQUEST_2), None, "the request it released");
+    assert_eq!(
+        world.record(REQUEST_4).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    before.assert_unchanged(&world, "the abandon");
+
+    // The repository goes on: nothing lists the operation, the item is
+    // written, and a new synchronization of it is reserved.
+    assert!(
+        !world
+            .service
+            .list_operations(&world.resolved())
+            .unwrap()
+            .items
+            .iter()
+            .any(|listed| listed.operation_id.as_deref() == Some(operation_id.as_str()))
+    );
+    let saved = world.execute(REQUEST_5, rewrite(&world));
+    assert_eq!(saved.code, ResultCode::Ok, "{}", saved.message);
+    assert_eq!(saved.effects.checkpoint, CheckpointEffect::Committed);
+    assert!(matches!(
+        world
+            .service
+            .reserve_remote_operation(&world.root, OperationId::new(), &reserved_target())
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+}
+
+/// An operation another process still works under is not taken from it:
+/// no preview is given while its holder works, and a confirmation given
+/// while it did not is refused `busy` once it does again, naming it, with
+/// nothing recorded or changed. Once the holder is gone, the same
+/// confirmation closes the operation.
+#[test]
+fn abandon_of_a_live_owned_remote_row_is_refused() {
+    let mut world = World::new();
+    probing(&mut world, vec![LIVE_PID]);
+    let (operation, _) = stranded_push(&world, "push_prepared", LIVE_PID);
+    let operation_id = operation.to_string();
+    let mutation = || abandon(&world.root, &operation_id);
+    let confirmations = || -> i64 {
+        items::index(world.data.path())
+            .query_row("SELECT COUNT(*) FROM confirmation_records", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    };
+    let stranded = stored_remote(&world, operation);
+    let before = Everything::of(&world);
+
+    let refused = prepare_with(&world.service, &mutation());
+    assert_eq!(
+        (refused.code, refused.outcome),
+        (ResultCode::Busy, Outcome::Error)
+    );
+    assert_eq!(refused.data, None);
+    // A preview names no request to send again, and no blocker: what a
+    // prepare refuses for is its own.
+    assert_eq!(recovery_actions(&refused), [] as [&str; 0]);
+    assert_eq!(confirmations(), 0, "no confirmation");
+
+    // Previewed while its holder was gone.
+    held_by(&world, operation, DEAD_PID);
+    let previewed = prepare_with(&world.service, &mutation());
+    assert_eq!(previewed.code, ResultCode::Ok, "{}", previewed.message);
+    let confirmation = previewed.data.expect("a preview").confirmation_id;
+    // The holder works under it again.
+    held_by(&world, operation, LIVE_PID);
+    let busy = execute_confirmed(&world.service, REQUEST_3, &confirmation, mutation());
+    assert_eq!(
+        (busy.code, busy.outcome, busy.failure_class()),
+        (
+            ResultCode::Busy,
+            Outcome::Error,
+            Some(manyhands::results::FailureClass::Transient)
+        )
+    );
+    assert_eq!(recovery_actions(&busy), ["request.retry", "operation.show"]);
+    let data = serde_json::to_value(&busy).unwrap()["data"].clone();
+    schema::check_published("blocked.schema.json", &data).unwrap();
+    assert_eq!(
+        (
+            &data["blocker"]["operation_id"],
+            &data["blocker"]["family"],
+            &data["blocker"]["pid"],
+            &data["blocker"]["live"]
+        ),
+        (
+            &serde_json::json!(operation_id),
+            &serde_json::json!("remote"),
+            &serde_json::json!(LIVE_PID),
+            &serde_json::json!(true)
+        )
+    );
+    assert_eq!(world.record(REQUEST_3), None, "nothing recorded");
+    assert_eq!(
+        world.record(REQUEST_2).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+    assert_eq!(stored_remote(&world, operation), stranded);
+    before.assert_unchanged(&world, "the refused abandon");
+
+    // Its holder is gone: the same confirmation closes it.
+    held_by(&world, operation, DEAD_PID);
+    let abandoned = execute_confirmed(&world.service, REQUEST_3, &confirmation, mutation());
+    assert_eq!(abandoned.code, ResultCode::Ok, "{}", abandoned.message);
+    assert_eq!(stored_remote(&world, operation).0, "cancelled");
+}
+
+/// A push the remote was seen to hold, whose operation was killed before
+/// it recorded the publication, and whose context has moved on since: its
+/// resume refuses a tip that is not the one it pushed. The preview says
+/// the remote branch is there, at the commit the push was of, and the
+/// context's tip is past it. That push is answered, so the abandon does not
+/// record it as refused.
+#[test]
+fn abandon_preview_reports_the_remote_ref_when_the_push_landed() {
+    let mut world = World::new();
+    probing(&mut world, vec![LIVE_PID]);
+    let (operation, pushed) = stranded_push(&world, "push_verified", DEAD_PID);
+    let moved = world.commit_in_context(
+        TICKET_A,
+        &items::ticket_path(TICKET_A),
+        &items::ticket_source(TICKET_A, "Moved on", ""),
+    );
+    assert_ne!(moved, pushed);
+
+    let previewed = prepare_with(
+        &world.service,
+        &abandon(&world.root, &operation.to_string()),
+    );
+    assert_eq!(previewed.code, ResultCode::Ok, "{}", previewed.message);
+    let preview = previewed.data.expect("a preview");
+    let details = abandon_preview(&preview);
+    assert_eq!(
+        (details.state.as_str(), details.step.as_deref()),
+        ("push_verified", Some("after_push_verification"))
+    );
+    assert_eq!(
+        details.evidence,
+        Some(manyhands::repository::OperationAbandonEvidenceDto {
+            remote_ref_present: Some(true),
+            local_oid: Some(moved.to_string()),
+            remote_oid: Some(pushed.to_string()),
+            push_oid: Some(pushed.to_string()),
+        })
+    );
+    assert_eq!(
+        effects(&preview),
+        [
+            PreviewEffect::OperationClosed,
+            PreviewEffect::RequestReleased
+        ],
+        "the push was answered: nothing is recorded of it"
+    );
 }
 
 /// A recorded change to the key registry is an operation of the key

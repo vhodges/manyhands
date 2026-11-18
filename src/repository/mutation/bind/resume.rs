@@ -756,6 +756,50 @@ fn named(
     })
 }
 
+/// The refusal of a call that would take up, or close, the operation
+/// `blocker` names while another process is still at work under it: its
+/// row, unfinished, names a holder of another process that still works,
+/// as an operation read judges it. Such an operation is not taken from
+/// it: the answer is `busy`, naming it, and nothing is recorded. `None` for
+/// an operation no one is at work under, one whose row is gone, and one
+/// this process holds, which the domain takes up or refuses as before. A
+/// row that cannot be read cannot be shown to be no one's: that is `busy`
+/// too, naming nothing.
+pub(crate) fn held_by_another_process(
+    service: &RepositoryService,
+    root: &Path,
+    blocker: Blocker,
+) -> Option<Answer> {
+    let (operation, unfinished) = match service.blocking_operation(root, &blocker) {
+        crate::repository::BlockerRow::Found {
+            operation,
+            unfinished,
+        } => (operation, unfinished),
+        crate::repository::BlockerRow::Gone => return None,
+        crate::repository::BlockerRow::Unreadable => {
+            return Some(Answer::stopped(ResultCode::Busy));
+        }
+    };
+    // A row this process holds is left to the domain, which takes it
+    // up or refuses it as it always has: this process's own call that
+    // claimed it may have just ended, and its claim's last beat is
+    // fresh for a moment after.
+    let this_process = operation.attribution.host.as_deref()
+        == Some(super::super::super::this_host().as_str())
+        && operation.attribution.pid == Some(i64::from(std::process::id()));
+    if !unfinished || this_process || operation.attribution.live != Some(true) {
+        return None;
+    }
+    Some(Answer::stopped(ResultCode::Busy).naming(
+        service,
+        root,
+        Some(&Blocker {
+            live: Some(true),
+            ..blocker
+        }),
+    ))
+}
+
 /// Whether a resume of the operation would take it up now: the one
 /// question that decides both what a resume does and whether a result
 /// offers one. `false` for an operation it would refuse, and when the
@@ -974,42 +1018,16 @@ impl OperationResumeBinding {
             | Named::Unowned
             | Named::NotResumable => return None,
         };
-        let blocker = Blocker {
-            family,
-            operation_id,
-            live: None,
-            seen: None,
-        };
-        let (operation, unfinished) = match service.blocking_operation(root, &blocker) {
-            crate::repository::BlockerRow::Found {
-                operation,
-                unfinished,
-            } => (operation, unfinished),
-            crate::repository::BlockerRow::Gone => return None,
-            // What cannot be read cannot be shown to be no one's: the resume
-            // does not go ahead on it, and nothing is recorded.
-            crate::repository::BlockerRow::Unreadable => {
-                return Some(Answer::stopped(ResultCode::Busy));
-            }
-        };
-        // A row this process holds is left to the domain, which takes it
-        // up or refuses it as it always has: this process's own call that
-        // claimed it may have just ended, and its claim's last beat is
-        // fresh for a moment after.
-        let this_process = operation.attribution.host.as_deref()
-            == Some(super::super::super::this_host().as_str())
-            && operation.attribution.pid == Some(i64::from(std::process::id()));
-        if !unfinished || this_process || operation.attribution.live != Some(true) {
-            return None;
-        }
-        Some(Answer::stopped(ResultCode::Busy).naming(
+        held_by_another_process(
             service,
             root,
-            Some(&Blocker {
-                live: Some(true),
-                ..blocker
-            }),
-        ))
+            Blocker {
+                family,
+                operation_id,
+                live: None,
+                seen: None,
+            },
+        )
     }
 
     /// The request whose unfinished record holds the operation

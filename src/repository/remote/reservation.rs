@@ -266,6 +266,11 @@ impl RemoteReservation {
     }
 }
 
+/// Whether an operation in `phase` holds its registration's reservation.
+pub(in super::super) fn holds_reservation(phase: RemoteOperationPhase) -> bool {
+    active(phase)
+}
+
 fn active(phase: RemoteOperationPhase) -> bool {
     matches!(
         phase,
@@ -694,6 +699,209 @@ fn acknowledge(
         crate::repository::context_retirement::source::close_stopped(tx, record)?;
     }
     Ok(result)
+}
+
+/// Records a cancellation asked of the operation `record_id`, as `request
+/// cancel` records one: the operation's next safe point, or a restart, or
+/// an abandon, acknowledges it.
+fn request_cancel(tx: &Transaction<'_>, record_id: i64) -> Result<(), RepositoryError> {
+    tx.execute(
+        "UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",
+        params![record_id, now()],
+    )
+    .map_err(|_| state::recovery_required())?;
+    Ok(())
+}
+
+/// Records, on the operation `record_id` that has just ended `cancelled`,
+/// that the push it intended was answered as refused: its outcome is
+/// `protocol_rejected`, the category a poll records a refused push under.
+/// The intent itself is immutable history and is kept; the outcome is what
+/// tells `push_absence` that it was answered. The remote's own refusal is
+/// recorded so (`acknowledge_refused_push`), and so is a person's, by a
+/// confirmed `operation abandon` (`close_abandoned`).
+fn record_refused_push(tx: &Transaction<'_>, record_id: i64) -> Result<(), RepositoryError> {
+    tx.execute(
+        "UPDATE remote_operation_records SET outcome=?2 WHERE id=?1 AND phase='cancelled'",
+        params![
+            record_id,
+            state::outcome_name(RemoteOutcomeCategory::ProtocolRejected)
+        ],
+    )
+    .map_err(|_| state::recovery_required())?;
+    Ok(())
+}
+
+/// What the remote journal holds of the push a synchronization intended,
+/// for the preview of its abandon. Nothing is fetched: what the remote holds
+/// is what the row last saw of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) struct AbandonEvidence {
+    /// The commit the operation set out to push: its newest publication
+    /// attempt's candidate, else its push intent. `None` for an operation
+    /// that recorded no push.
+    pub(in super::super) push_oid: Option<git2::Oid>,
+    /// What the row last saw at the ref it publishes to: `Some(None)` for a
+    /// ref it saw absent, `None` for an operation that recorded no look.
+    /// It is the push endpoint's advertisement, the newest look, for an
+    /// operation that recorded a push (the newest attempt's when it
+    /// recorded one, else the one the push intent was written with, which
+    /// a reconcile refreshes); else what its fetch recorded of the ref.
+    pub(in super::super) observed: Option<Option<git2::Oid>>,
+    /// Whether that push is one nothing answered, as `push_absence` counts
+    /// one: an intent at `push_prepared` or `push_returned` that no
+    /// publication proved. A confirmed abandon records it refused.
+    pub(in super::super) unanswered: bool,
+}
+
+/// Whether `operation abandon` may close the remote operation `record`,
+/// which has not ended: a synchronization of the primary branch or of a
+/// context, with no authority recorded and no index hand-off owed. Not one
+/// with a row of the local journal under its ID, nor one a promotion, a
+/// closure, a retirement or a local synchronization is bound to: each of
+/// those has its own way on, and its own way out. Not one that holds
+/// integration or resolution work of its own, a merge applied or a
+/// conflict left for the conflict verbs: that work is the operation's own
+/// to finish or to give up through them.
+pub(in super::super) fn abandonable(
+    db: &rusqlite::Connection,
+    record: &state::StoredRemoteOperation,
+) -> Result<bool, RepositoryError> {
+    let sqlite = |_| state::recovery_required();
+    let operation = record.operation_id.to_string();
+    if !is_sync(&record.target) || record.authority.is_some() || record.index_pending {
+        return Ok(false);
+    }
+    let local: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1)",
+            [&operation],
+            |row| row.get(0),
+        )
+        .map_err(sqlite)?;
+    if local {
+        return Ok(false);
+    }
+    for table in ["document_promotions", "ticket_closures"] {
+        if crate::repository::recovery::has_table(db, table).map_err(|_| state::recovery_required())?
+            && db
+                .query_row(
+                    &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1)"),
+                    [&operation],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(sqlite)?
+        {
+            return Ok(false);
+        }
+    }
+    if crate::repository::local_sync::record::require_foreign_id_available(db, record.operation_id)
+        .is_err()
+    {
+        return Ok(false);
+    }
+    Ok(!retains_promotion_child(db, record)?)
+}
+
+/// What a preview of the abandon of `record` names of its push; see
+/// `AbandonEvidence`.
+pub(in super::super) fn abandon_evidence(
+    db: &rusqlite::Connection,
+    record: &state::StoredRemoteOperation,
+) -> Result<AbandonEvidence, RepositoryError> {
+    use state::SynchronizationCheckpoint as C;
+    let evidence = &record.sync_evidence;
+    let attempt = state::latest_publication_attempt(db, record)?;
+    let push_oid = attempt
+        .as_ref()
+        .and_then(|attempt| attempt.candidate_oid)
+        .or(evidence.push_oid);
+    let pushed = evidence.push_oid.is_some()
+        && matches!(
+            record.sync_checkpoint,
+            Some(C::PushPrepared | C::PushReturned | C::PushVerified)
+        );
+    let observed = match &attempt {
+        Some(attempt) if attempt.phase != state::PublicationPhase::Open => {
+            Some(attempt.advertised_oid.or(attempt.previous_advertised_oid))
+        }
+        _ if pushed => Some(evidence.push_advertised_oid),
+        _ if record
+            .sync_checkpoint
+            .is_some_and(|checkpoint| checkpoint != C::FetchPrepared) =>
+        {
+            Some(evidence.tracking_oid)
+        }
+        _ => None,
+    };
+    let proven = record.authority.is_some()
+        || attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.phase == state::PublicationPhase::Verified)
+        || record.sync_checkpoint == Some(C::PushVerified)
+            && evidence.push_oid.is_some()
+            && evidence.push_advertised_oid == evidence.push_oid;
+    let unanswered = !proven
+        && evidence.push_oid.is_some()
+        && matches!(
+            record.sync_checkpoint,
+            Some(C::PushPrepared | C::PushReturned)
+        );
+    Ok(AbandonEvidence {
+        push_oid,
+        observed,
+        unanswered,
+    })
+}
+
+/// Closes the remote operation `record` of the registration
+/// `repository_id`, which `abandonable` allows, in the caller's
+/// transaction: as a cancellation ends it, `cancelled`, its cancellation
+/// asked and acknowledged at the last step it recorded (one already
+/// cancelled stays so). A push it intended
+/// that nothing answered is recorded refused (`record_refused_push`), so a
+/// later synchronization of the context no longer counts it as unanswered.
+/// The reconciliation a restart recorded as owed is let go: what the
+/// operation left in Git stays where it is, for its user, as an abandon of
+/// a local operation leaves its files. The row's attribution and owner
+/// epoch are kept, and so are its evidence and every publication attempt:
+/// they are history. Returns whether a push was recorded refused.
+pub(in super::super) fn close_abandoned(
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    record: &state::StoredRemoteOperation,
+) -> Result<bool, RepositoryError> {
+    let unanswered = abandon_evidence(tx, record)?.unanswered;
+    // One a cancellation already ended owes only its reconciliation.
+    if record.phase != RemoteOperationPhase::Cancelled {
+        request_cancel(tx, record.id)?;
+        let current = state::read_operation(tx, repository_id, record.operation_id)?
+            .ok_or_else(state::recovery_required)?;
+        let decision = acknowledge(
+            tx,
+            &current,
+            current
+                .completed_step
+                .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
+        )?;
+        if decision != RemoteSafePointOutcome::Cancelled {
+            return Err(state::recovery_required());
+        }
+    }
+    if unanswered {
+        record_refused_push(tx, record.id)?;
+    }
+    tx.execute(
+        "UPDATE remote_operation_records SET reconciliation_required=0 WHERE id=?1 AND phase='cancelled'",
+        [record.id],
+    )
+    .map_err(|_| state::recovery_required())?;
+    // The row reads as the store keeps it: an abandon leaves none that its
+    // next reader would refuse.
+    state::read_operation(tx, repository_id, record.operation_id)?
+        .filter(|closed| closed.phase == RemoteOperationPhase::Cancelled)
+        .ok_or_else(state::recovery_required)?;
+    Ok(unanswered)
 }
 
 /// Read-only, bounded progress probe. Never migrates, takes a lease or writes.
@@ -1436,11 +1644,7 @@ impl RepositoryService {
                 .map_err(|_| state::recovery_required())?;
                 return Ok(false);
             }
-            tx.execute(
-                "UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",
-                params![record.id, now()],
-            )
-            .map_err(|_| state::recovery_required())?;
+            request_cancel(tx, record.id)?;
             let record =
                 state::read_operation(tx, id, child)?.ok_or_else(state::recovery_required)?;
             acknowledge(
@@ -1463,7 +1667,7 @@ impl RepositoryService {
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             if active(record.phase) {
-                tx.execute("UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
+                request_cancel(tx, record.id)?;
             }
             Ok(())
         })
@@ -1484,8 +1688,7 @@ impl RepositoryService {
         )?;
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
-            tx.execute("UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
-            Ok(())
+            request_cancel(tx, record.id)
         })
     }
 
@@ -1889,14 +2092,7 @@ impl RepositoryService {
                     .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
             )?;
             if refused && decision == RemoteSafePointOutcome::Cancelled {
-                tx.execute(
-                    "UPDATE remote_operation_records SET outcome=?2 WHERE id=?1 AND phase='cancelled'",
-                    params![
-                        record.id,
-                        state::outcome_name(RemoteOutcomeCategory::ProtocolRejected)
-                    ],
-                )
-                .map_err(|_| state::recovery_required())?;
+                record_refused_push(tx, record.id)?;
             }
             Ok(decision)
         })

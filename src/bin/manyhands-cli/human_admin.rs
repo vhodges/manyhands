@@ -101,11 +101,15 @@ pub fn preview(preview: &PreviewDto) -> String {
         PreviewDetailsDto::RepositoryRemoval(d) => fields(d),
         PreviewDetailsDto::KeyDeletion(d) => fields(d),
         PreviewDetailsDto::OperationAbandon(d) => {
-            if d.retirement.is_some() {
-                fields(d)
-            } else {
-                fields_without(d, &["retirement"])
-            }
+            // What a local operation has no part in is left out.
+            let absent: Vec<&str> = [
+                ("retirement", d.retirement.is_none()),
+                ("evidence", d.evidence.is_none()),
+            ]
+            .into_iter()
+            .filter_map(|(key, none)| none.then_some(key))
+            .collect();
+            fields_without(d, &absent)
         }
         PreviewDetailsDto::Identity(d) => fields(d),
         PreviewDetailsDto::Host(d) => fields(d),
@@ -179,6 +183,7 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::PublicKeyFileDeleted => "delete the public key file",
         PreviewEffect::KeyUnregistered => "unregister the key",
         PreviewEffect::OperationClosed => "close the operation",
+        PreviewEffect::PushMarkedRejected => "record its push as refused",
         PreviewEffect::RequestReleased => "release the request",
         PreviewEffect::HostPinned => "pin the host key",
         PreviewEffect::HostPinReplaced => "replace the host pin",

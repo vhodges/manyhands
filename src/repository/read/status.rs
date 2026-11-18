@@ -367,7 +367,7 @@ fn local_operations(
     Ok(operations)
 }
 
-fn remote_action(action: RemoteOperationAction) -> OperationAction {
+pub(crate) fn remote_action(action: RemoteOperationAction) -> OperationAction {
     match action {
         RemoteOperationAction::Poll => OperationAction::Poll,
         RemoteOperationAction::SynchronizeContext => OperationAction::SynchronizeContext,
@@ -379,7 +379,7 @@ fn remote_action(action: RemoteOperationAction) -> OperationAction {
 
 /// The contract name of a remote operation's phase, and whether an
 /// operation in that phase holds the registration's reservation.
-fn remote_phase(phase: RemoteOperationPhase) -> (&'static str, bool) {
+pub(crate) fn remote_phase(phase: RemoteOperationPhase) -> (&'static str, bool) {
     match phase {
         RemoteOperationPhase::Reserved => ("reserved", true),
         RemoteOperationPhase::Advertising => ("advertising", true),
@@ -399,7 +399,7 @@ fn remote_phase(phase: RemoteOperationPhase) -> (&'static str, bool) {
     }
 }
 
-fn remote_step(step: RemoteOperationSafePoint) -> &'static str {
+pub(crate) fn remote_step(step: RemoteOperationSafePoint) -> &'static str {
     match step {
         RemoteOperationSafePoint::BeforeTransport => "before_transport",
         RemoteOperationSafePoint::AfterAdvertisement => "after_advertisement",

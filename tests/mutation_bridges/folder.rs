@@ -1141,13 +1141,25 @@ mod boundary {
         assert_eq!(journal(&world), rows);
         assert_eq!(listed(&world).1, IndexState::Current);
         // What is offered is to look at the repository, which shows the
-        // synchronization, and at the synchronization. No refresh is
+        // synchronization, and at the synchronization, and, since no call
+        // is at work under it, its way on and its way out. No refresh is
         // offered: one would be refused, as this request's own would have
         // been.
         assert_eq!(
             recovery_actions(&refused),
-            ["repo.inspect", "operation.show"]
+            [
+                "operation.resume",
+                "repo.inspect",
+                "operation.show",
+                "operation.abandon"
+            ]
         );
+        for at in [0, 3] {
+            assert_eq!(
+                refused.recovery[at].operation_id.as_deref(),
+                Some(synchronization.as_str())
+            );
+        }
         let own = world.execute(REQUEST_2, refresh(&world));
         assert_eq!(own.code, ResultCode::RecoveryRequired, "{own:?}");
         let inspected = world.service.inspect_repository(&world.root);

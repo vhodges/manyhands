@@ -797,7 +797,7 @@ pub(in super::super) fn operation_owner(
 /// takes the operation up with the input it was begun with. With
 /// `command`, only a request of that command is named: `None` when the
 /// one that holds the operation is of another.
-pub(super) fn operation_holder(
+pub(in super::super) fn operation_holder(
     connection: &Connection,
     family: OperationFamily,
     scope_key: &str,
@@ -867,7 +867,19 @@ pub(in super::super) fn release_operation_owner(
     scope_key: &str,
     operation_id: OperationId,
 ) -> rusqlite::Result<Option<String>> {
-    let Some(owner) = operation_owner(transaction, scope_key, operation_id)? else {
+    release_operation_holder(transaction, OperationFamily::Local, scope_key, operation_id)
+}
+
+/// `release_operation_owner`, for an operation of any journal: the record
+/// of the unfinished request that holds the operation `operation_id` of
+/// `family` is deleted, and its confirmation released.
+pub(in super::super) fn release_operation_holder(
+    transaction: &Transaction<'_>,
+    family: OperationFamily,
+    scope_key: &str,
+    operation_id: OperationId,
+) -> rusqlite::Result<Option<String>> {
+    let Some(owner) = operation_holder(transaction, family, scope_key, operation_id, None)? else {
         return Ok(None);
     };
     transaction.execute(

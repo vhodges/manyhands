@@ -180,6 +180,7 @@ fn every_details_shape_renders_its_fields() {
             request_id: Some("request".into()),
             files_changed: false,
             git_state_changed: false,
+            evidence: None,
         }),
         PreviewDetailsDto::Identity(IdentityPreviewDto {
             root: "root".into(),

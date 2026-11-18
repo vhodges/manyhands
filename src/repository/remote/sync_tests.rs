@@ -5907,6 +5907,138 @@ fn an_unreturned_first_push_with_no_publication_evidence_is_retryable_not_ambigu
     }
 }
 
+/// The two pushes the table above leaves ambiguous for good, each an
+/// operation's own that its resume refuses: one that returned, and one
+/// whose context the remote has been seen to hold. Only the person can say
+/// what became of them, and a confirmed `operation abandon` is how they do:
+/// it closes the operation with its push recorded as refused
+/// (`protocol_rejected`), as a push the remote refused is recorded. A new
+/// synchronization of the context then counts that push as answered, so an
+/// absent branch at the push endpoint is no longer ambiguous for it; the
+/// table's foreign row shows that the same row, left as it was, would be.
+/// The abandon keeps the row's attribution and its owner epoch.
+#[test]
+fn a_confirmed_abandon_answers_the_push_so_a_new_synchronization_is_not_ambiguous() {
+    use state::SynchronizationCheckpoint as C;
+    for (label, checkpoint, published) in [
+        ("push_returned, never published", C::PushReturned, false),
+        ("push_prepared, publication evidence", C::PushPrepared, true),
+    ] {
+        let (root, data, service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let head = repository.head().unwrap().target().unwrap();
+        repository
+            .remote("origin", "ssh://example.invalid/fixture.git")
+            .unwrap();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let ticket: crate::canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            AuthoringKind::Ticket,
+            ticket.clone(),
+        )
+        .unwrap();
+        let reserve = || {
+            let RemoteReservationOutcome::Reserved(owner) = service
+                .reserve_remote_operation(root.path(), OperationId::new(), &target)
+                .unwrap()
+            else {
+                panic!("{label}: reservation")
+            };
+            owner
+        };
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let stranded = reserve();
+        journal_unanswered_context_push(&service, root.path(), &plan, &stranded, head, checkpoint);
+        if published {
+            let context = target.context_ref().unwrap();
+            db.execute(
+                "INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,last_advertised_oid,publication_evidence,state,observed_at) SELECT id,?1,?2,'ticket',?3,?4,'observed_published','remotely_deleted',1 FROM repositories",
+                rusqlite::params![
+                    context.remote_ref(),
+                    context.tracking_ref(),
+                    ticket.to_string(),
+                    head.to_string()
+                ],
+            )
+            .unwrap();
+        }
+        let operation = stranded.operation_id().to_string();
+        let kept = || -> (i64, Option<String>, Option<String>, Option<i64>, Option<String>) {
+            db.query_row(
+                "SELECT owner_epoch, request_ulid, host, pid, command FROM remote_operation_records WHERE operation_ulid=?1",
+                [&operation],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap()
+        };
+        let attribution = kept();
+        // Its own resume finds the branch absent at the push endpoint
+        // ambiguous: nothing says what became of the push.
+        assert!(
+            matches!(
+                service
+                    .synchronization_push_absence_boundary(root.path(), &stranded, true)
+                    .unwrap(),
+                Some(PushAbsenceBoundary::Ambiguous)
+            ),
+            "{label}: the resume is refused before the abandon"
+        );
+
+        let abandoned = service
+            .abandon_remote_operation(root.path(), stranded.operation_id(), None)
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+        assert!(
+            matches!(
+                abandoned,
+                crate::repository::bridges::abandon::RemoteAbandonOutcome::Abandoned(_)
+            ),
+            "{label}: {abandoned:?}"
+        );
+        let closed: (String, Option<String>, Option<String>, i64) = db
+            .query_row(
+                "SELECT phase, outcome, sync_checkpoint, reconciliation_required FROM remote_operation_records WHERE operation_ulid=?1",
+                [&operation],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            closed,
+            (
+                "cancelled".to_owned(),
+                Some("protocol_rejected".to_owned()),
+                Some(checkpoint.name().to_owned()),
+                0
+            ),
+            "{label}"
+        );
+        assert_eq!(kept(), attribution, "{label}: attribution and epoch kept");
+
+        // A new synchronization of the context is reserved, and the push the
+        // abandoned operation left is answered for it.
+        let next = reserve();
+        let boundary = service
+            .synchronization_push_absence_boundary(root.path(), &next, false)
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+        assert!(
+            !matches!(boundary, Some(PushAbsenceBoundary::Ambiguous)),
+            "{label}: the new synchronization is not ambiguous"
+        );
+        // A second abandon finds it ended, and changes nothing.
+        assert!(matches!(
+            service
+                .abandon_remote_operation(root.path(), stranded.operation_id(), None)
+                .unwrap(),
+            crate::repository::bridges::abandon::RemoteAbandonOutcome::AlreadyEnded
+        ));
+    }
+}
+
 /// D: a context target's own gitdir is the linked worktree's. Merge metadata
 /// in the shared common directory belongs to another worktree and is never
 /// tolerated, retired or adopted, even beside this operation's own remnant.

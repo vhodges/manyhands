@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 operation abandon preview",
-  "description": "The data of a prepare envelope that gives a preview of operation abandon: the pending local operation that will be closed, what it has left on disk, and the confirmation an execute of the same command, repository and operation presents to close it. A prepare that gives no preview carries no preview data: a rejection, as for an operation ID no journal holds (operation_not_found) or one that is a synchronization's or a key operation's (invalid_input), and a no-op for a local operation that has ended. The preview does not say whether a call is still working under the operation: the execute finds that out, and is busy when one is.",
+  "description": "The data of a prepare envelope that gives a preview of operation abandon: the pending operation that will be closed, what it has left, and the confirmation an execute of the same command, repository and operation presents to close it. The operation is a pending local one, or a pending synchronization of the remote journal that no process of this host works under: one that is not bound to a promotion, a closure, a retirement or a local synchronization, has recorded no authority, owes no index hand-off and holds no integration or resolution work of its own. Its abandon is a hand-over: a person confirms it, having seen evidence. A prepare that gives no preview carries no preview data: a rejection, as for an operation ID no journal holds (operation_not_found), or one that is a key operation's or a remote operation's that is no such synchronization (invalid_input), busy for a synchronization another process of this host still works under, and a no-op for an operation that has ended. For a local operation the preview does not say whether a call is still working under it: the execute finds that out, and is busy when one is. For a synchronization the execute asks again, and is busy, naming the holder in data.blocker, when one works under it again.",
   "type": "object",
   "additionalProperties": false,
   "required": ["confirmation_id", "expires_at", "command", "scope", "effects", "details"],
@@ -29,7 +29,7 @@
       }
     },
     "details": {
-      "description": "The operation that will be closed. Generic abandonment closes the local row and releases its unfinished request. Retirement instead retains that request identity, fences deletion, preserves remaining resources and settles local discovery before atomically recording abandonment. The confirmation binds state and step, plus retirement epochs, removal flags and retained resources when retirement is not null; a changed snapshot is external_change.",
+      "description": "The operation that will be closed. Generic abandonment closes the local row and releases its unfinished request. Retirement instead retains that request identity, fences deletion, preserves remaining resources and settles local discovery before atomically recording abandonment. A synchronization ends cancelled, its push recorded refused when nothing answered it (the effect push_marked_rejected), and releases its unfinished request; it touches no file, nothing Git holds and no remote. The confirmation binds state and step, plus retirement epochs, removal flags and retained resources when retirement is not null, and for a synchronization its checkpoint, owner epoch and evidence; a changed snapshot is external_change.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -46,7 +46,8 @@
         "committed",
         "request_id",
         "files_changed",
-        "git_state_changed"
+        "git_state_changed",
+        "evidence"
       ],
       "properties": {
         "retirement": {
@@ -94,6 +95,8 @@
             "submit_comment",
             "repair_item",
             "context_sync_local",
+            "synchronize_context",
+            "synchronize_primary",
             null
           ]
         },
@@ -110,11 +113,11 @@
           "type": ["string", "null"]
         },
         "worktree": {
-          "description": "The worktree the operation writes in, relative to the repository's root with forward slashes: an item's own, or . for the primary worktree. Null for an operation that writes no file of a worktree, and for an item whose worktree is not there.",
+          "description": "The worktree the operation writes in, relative to the repository's root with forward slashes: an item's own, or . for the primary worktree. Null for an operation that writes no file of a worktree, a synchronization among them, and for an item whose worktree is not there.",
           "type": ["string", "null"]
         },
         "paths": {
-          "description": "The paths of the operation's target that differ from the head of their branch, uncommitted and untracked alike, relative to the repository's root with forward slashes: for an operation that writes an item, every such path of the item's worktree; for one that writes the configuration file, that file when it differs. The command leaves every one of them exactly as it is, for its user to commit or restore with Git. No content is given.",
+          "description": "The paths of the operation's target that differ from the head of their branch, uncommitted and untracked alike, relative to the repository's root with forward slashes: for an operation that writes an item, every such path of the item's worktree; for one that writes the configuration file, that file when it differs; none for a synchronization. The command leaves every one of them exactly as it is, for its user to commit or restore with Git. No content is given.",
           "type": "array",
           "items": {
             "type": "string"
@@ -125,7 +128,7 @@
           "type": "boolean"
         },
         "committed": {
-          "description": "Whether the operation recorded that it passed the point where its work is committed: for a save, its checkpoint; for an enablement, its initialization commit. The command leaves that commit where it is: abandoning undoes nothing.",
+          "description": "Whether the operation recorded that it passed the point where its work is committed: for a save, its checkpoint; for an enablement, its initialization commit. False for a synchronization, which commits nothing of its own: what it moved is in evidence. The command leaves that commit where it is: abandoning undoes nothing.",
           "type": "boolean"
         },
         "request_id": {
@@ -139,6 +142,30 @@
         "git_state_changed": {
           "description": "Whether the command changes anything Git holds: a commit, a branch, a worktree, the index or the configuration. It never does: this is false.",
           "type": "boolean"
+        },
+        "evidence": {
+          "description": "Null for a local operation. For a synchronization, what the person decides with: what its row last saw of the remote, the local branch now and the push it intended. Nothing is fetched and no remote is contacted for it. A push at push_prepared with the branch absent may still have reached the remote: the row says what it saw before the push.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["remote_ref_present", "local_oid", "remote_oid", "push_oid"],
+          "properties": {
+            "remote_ref_present": {
+              "description": "Whether the remote branch the operation publishes to was there when the row last looked: at the push endpoint for an operation that recorded a push, else at its fetch. Null for a row that recorded no look.",
+              "type": ["boolean", "null"]
+            },
+            "local_oid": {
+              "description": "The commit the operation's local branch names now, read from Git. Null when the branch is not there.",
+              "type": ["string", "null"]
+            },
+            "remote_oid": {
+              "description": "The commit the remote branch named when the row last looked. Null when it was absent, or the row recorded no look.",
+              "type": ["string", "null"]
+            },
+            "push_oid": {
+              "description": "The commit the operation set out to push: its newest publication attempt's, else its push intent's. Null when it recorded no push.",
+              "type": ["string", "null"]
+            }
+          }
         }
       }
     }

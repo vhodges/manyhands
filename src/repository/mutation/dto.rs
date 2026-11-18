@@ -108,12 +108,15 @@ contract_enum!(
     /// `key_unregistered` is the key taken out of the key list, with the
     /// record that Manyhands made its files.
     ///
-    /// `operation_closed` is a pending local operation closed as
-    /// abandoned, so that it no longer refuses other operations on its
-    /// repository. With it goes the record of the unfinished request
-    /// that began the operation, `request_released`, listed when there
-    /// is one: that request's ID is then free. Neither touches a file
-    /// under the repository's root or anything Git holds.
+    /// `operation_closed` is a pending operation closed as abandoned, so
+    /// that it no longer refuses other operations on its repository. For a
+    /// synchronization whose push nothing answered, `push_marked_rejected`
+    /// follows: the push is recorded as refused, so that a later
+    /// synchronization of its branch no longer counts it as unanswered.
+    /// With them goes the record of the unfinished request that began the
+    /// operation, `request_released`, listed when there is one: that
+    /// request's ID is then free. None of the three touches a file under
+    /// the repository's root or anything Git holds, or contacts a remote.
     ///
     /// `host_pinned` is a host that has no pin given one: the key the
     /// request names, once the host is seen to present it.
@@ -174,6 +177,7 @@ contract_enum!(
         PublicKeyFileDeleted => "public_key_file_deleted",
         KeyUnregistered => "key_unregistered",
         OperationClosed => "operation_closed",
+        PushMarkedRejected => "push_marked_rejected",
         RequestReleased => "request_released",
         HostPinned => "host_pinned",
         HostPinReplaced => "host_pin_replaced",
@@ -735,6 +739,29 @@ pub struct OperationAbandonPreviewDto {
     /// branch, a worktree, the index or the configuration. It never
     /// does: this is false.
     pub git_state_changed: bool,
+    /// What the remote journal shows of the push a synchronization left,
+    /// for the person to decide with. Null for an operation of the local
+    /// journal.
+    pub evidence: Option<OperationAbandonEvidenceDto>,
+}
+
+/// What the preview of the abandon of a synchronization shows of the push
+/// it left. The remote is not contacted: what is said of it is what the
+/// operation's row last saw. Each is null where there is nothing to say.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OperationAbandonEvidenceDto {
+    /// Whether the branch the operation publishes to was on the remote when
+    /// the row last looked. Null for a row that recorded no look.
+    pub remote_ref_present: Option<bool>,
+    /// The commit the operation's local branch names now. Null when the
+    /// branch is not there.
+    pub local_oid: Option<String>,
+    /// The commit the remote branch named when the row last looked. Null
+    /// when it was not there, or the row recorded no look.
+    pub remote_oid: Option<String>,
+    /// The commit the operation set out to push. Null when it recorded no
+    /// push.
+    pub push_oid: Option<String>,
 }
 
 /// What a preview of `key delete` shows: the key, and the files that

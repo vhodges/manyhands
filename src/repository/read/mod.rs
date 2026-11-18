@@ -69,7 +69,7 @@ pub use local_sync::{
     LocalContextSyncNextAction, LocalContextSyncReason, LocalContextSyncState,
 };
 pub use resolve::ResolvedRepository;
-pub(crate) use status::local_action;
+pub(crate) use status::{local_action, remote_action, remote_phase, remote_step};
 
 /// The argument of a recovery action that names a repository root. The
 /// conflict read places its failures with it too.
