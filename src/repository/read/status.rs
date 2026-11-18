@@ -33,6 +33,9 @@ use crate::{
 /// The longest state or step name a local operation is taken to have.
 const LONGEST_STORED_NAME: usize = 64;
 
+/// How many times the read of a blocker is tried before it is given up.
+const BLOCKER_READS: usize = 3;
+
 /// The state a local operation has once nothing remains to be done.
 const LOCAL_COMPLETED: &str = "completed";
 
@@ -962,7 +965,9 @@ impl RepositoryService {
 
     /// The operation `blocker` names, in its own journal, as `show_operation`
     /// reads it, and whether the list includes it: whether it is still
-    /// unfinished. `None` when it cannot be read or is not there. The
+    /// unfinished. `None` when it is not there, or cannot be read in
+    /// `BLOCKER_READS` tries: the read waits a moment at most for the
+    /// index's guard, and the writer the blocker names may hold it then. The
     /// repository is the one registered at `root`, the root its rows name;
     /// a root with no registration has local rows only.
     pub(crate) fn blocking_operation(
@@ -970,7 +975,20 @@ impl RepositoryService {
         root: &std::path::Path,
         blocker: &crate::repository::Blocker,
     ) -> Option<(OperationDto, bool)> {
-        let root_text = root.to_str()?;
+        (0..BLOCKER_READS)
+            .find_map(|_| self.read_blocking_operation(root, blocker).ok())
+            .flatten()
+    }
+
+    /// One try of `blocking_operation`.
+    fn read_blocking_operation(
+        &self,
+        root: &std::path::Path,
+        blocker: &crate::repository::Blocker,
+    ) -> Result<Option<(OperationDto, bool)>, ReadError> {
+        let Some(root_text) = root.to_str() else {
+            return Ok(None);
+        };
         self.read_session(RepositoryOperation::Read, |connection| {
             let registration: Option<i64> = connection
                 .query_row(
@@ -1013,8 +1031,6 @@ impl RepositoryService {
                 .next()
                 .map(|operation| (operation.dto, operation.listed)))
         })
-        .ok()
-        .flatten()
     }
 
     /// The operation with this ID, whether or not it has finished: one of
