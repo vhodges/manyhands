@@ -6,6 +6,8 @@ type: task
 status: done
 project: manyhands
 team: core
+closed_at: 2026-11-18T03:31:47Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
