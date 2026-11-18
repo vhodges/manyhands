@@ -920,8 +920,12 @@ impl BlockerDto {
 }
 
 /// The `data` of a `busy` or `recovery_required` answer refused for
-/// another operation's unfinished row: that operation, in place of the
-/// command's own data.
+/// another operation's unfinished row: that operation. It replaces the
+/// command's own data in that answer (a ticket save's, a comment's, a
+/// synchronization's), as `lifecycle_blocked.schema.json` is the data of a
+/// lifecycle preview refused for what stands in its way; `blocked.schema.json`
+/// publishes it. A lifecycle's answer keeps its own data and names none. It
+/// is never stored: a finished record keeps the command's own data.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct BlockedDto {
     pub blocker: BlockerDto,
