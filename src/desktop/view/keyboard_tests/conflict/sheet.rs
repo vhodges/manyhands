@@ -10,7 +10,7 @@ use gpui_kit::{FocusHandle, Focusable, TestAppContext};
 use manyhands::repository::OperationId;
 
 use super::{
-    PENDING_REVIEW, SYNCHRONIZATION, TICKET, Walk,
+    SYNCHRONIZATION, TICKET, Walk,
     canned::{external_read, repaired_read},
     shared_banner,
 };
@@ -46,7 +46,7 @@ async fn check_again_by_keyboard_keeps_focus_in_the_sheet(cx: &mut TestAppContex
     walk.enter(cx);
     walk.sheet_drawn("conflict-resume", cx).await;
     assert!(!walk.shell.present("conflict-check-again", cx));
-    walk.in_dialog("conflict-sheet", cx);
+    walk.in_sheet("conflict-sheet", cx);
     walk.tab_in_sheet("conflict-resume".into(), cx);
     walk.enter(cx);
     let operation = OperationId::parse(SYNCHRONIZATION).unwrap();
@@ -62,8 +62,8 @@ async fn check_again_by_keyboard_keeps_focus_in_the_sheet(cx: &mut TestAppContex
 }
 
 /// A local conflict whose title and body both sides changed, real, after a
-/// restart: `secondary-4`, Tab and Enter on its pending row's Review
-/// changes open the sheet, with nothing chosen. Gives the walk and the
+/// restart: `secondary-4`, the arrows and the row menu's Review changes open
+/// the sheet, with nothing chosen. Gives the walk and the
 /// Result editor's own focus.
 async fn body_sheet(cx: &mut TestAppContext) -> (Walk, FocusHandle) {
     cx.executor().allow_parking();
@@ -71,10 +71,7 @@ async fn body_sheet(cx: &mut TestAppContext) -> (Walk, FocusHandle) {
     let a = fixture.create_repository("a");
     fixture.conflict_locally_with_body(&a, TICKET, "Mine", Some("Mine body.\n"), "Theirs");
     let walk = Walk::over(Shell::open(fixture, cx), a);
-    walk.keys("secondary-4", cx);
-    walk.until_drawn((PENDING_REVIEW, 0usize), cx).await;
-    walk.tab_to("tab", (PENDING_REVIEW, 0usize), cx);
-    walk.enter(cx);
+    walk.to_pending_review("context_sync_local", cx).await;
     walk.sheet_drawn("conflict-save", cx).await;
     assert_eq!(
         walk.shell.label("conflict-progress", cx).as_deref(),
@@ -97,8 +94,8 @@ fn in_editor(walk: &Walk, handle: &FocusHandle, cx: &mut TestAppContext) -> bool
         .frame(cx, |window, cx| handle.contains_focused(window, cx))
 }
 
-/// R-31: Tab reaches the Result's tab stop, which holds focus while no
-/// region does; Enter on it puts focus in the editor, the sheet open.
+/// R-31: Tab reaches the Result's tab stop, which holds focus inside the
+/// Content region; Enter on it puts focus in the editor, the sheet open.
 fn into_the_result(walk: &Walk, handle: &FocusHandle, cx: &mut TestAppContext) {
     walk.tab_in_sheet(RESULT.into(), cx);
     assert!(!in_editor(walk, handle, cx), "the stop, not the editor");
@@ -114,8 +111,9 @@ fn into_the_result(walk: &Walk, handle: &FocusHandle, cx: &mut TestAppContext) {
 /// body's Keep both are chosen by Tab and Enter; Tab then reaches the
 /// Result's tab stop, after the choices, and Enter goes into the editor,
 /// where typing edits the Result. Escape comes back to the stop and leaves
-/// the sheet open; Tab goes on to Save resolution, and Enter saves the
-/// edited Result, which applies.
+/// the sheet open; Tab goes on to the footer's Cancel, then Save resolution
+/// (Wave 04 Cycle 05b decision 4, E-12), and Enter saves the edited Result,
+/// which applies.
 #[gpui_kit::test]
 async fn edit_the_result_by_keyboard(cx: &mut TestAppContext) {
     let (walk, handle) = body_sheet(cx).await;
@@ -132,10 +130,12 @@ async fn edit_the_result_by_keyboard(cx: &mut TestAppContext) {
     walk.type_text("Added by keyboard", cx);
     walk.keys("escape", cx);
     assert!(walk.shell.present("conflict-sheet", cx), "the sheet stays");
-    walk.in_dialog(RESULT, cx);
+    walk.in_sheet(RESULT, cx);
 
     walk.keys("tab", cx);
-    walk.in_dialog("conflict-save", cx);
+    walk.in_sheet("conflict-cancel", cx);
+    walk.keys("tab", cx);
+    walk.in_sheet("conflict-save", cx);
     walk.enter(cx);
     let sent = walk.shell.requests(cx, |request| {
         matches!(request.intent, Intent::LocalContextResolve { .. })

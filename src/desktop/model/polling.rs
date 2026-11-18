@@ -53,6 +53,22 @@ pub(crate) struct AttentionEntry {
     pub roots: Vec<Root>,
 }
 
+/// A check that brought something in (Wave 04 Cycle 03b design A5): an
+/// automatic one or a Check now, kept for the session and never pruned. Its
+/// row is Activity's S2.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Brought {
+    /// The order they were applied in, from this schedule's counter.
+    pub seq: u64,
+    pub root: Root,
+    /// How many items it brought in (`AttemptSummary::brought_in`), never 0.
+    pub count: u32,
+    /// The time the check was applied (`Now::utc`).
+    pub at: OffsetDateTime,
+    /// An automatic check, not a Check now.
+    pub automatic: bool,
+}
+
 /// What a clock event came to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ClockEvent {
@@ -80,6 +96,12 @@ pub(crate) struct PollSchedule {
     /// unshared list). A completed check that landed later replays those
     /// heard after it completed.
     changes: BTreeMap<Root, Vec<(Change, OffsetDateTime)>>,
+    /// The checks that brought something in, for the session (A5, K-4).
+    brought: Vec<Brought>,
+    /// How many completed attempts were applied to each repository, for the
+    /// session (`completed_attempts`). Kept when a repository is removed, so
+    /// a count only grows.
+    completed: BTreeMap<Root, u64>,
 }
 
 /// Registration and reads.
@@ -107,9 +129,24 @@ impl PollSchedule {
         self.repos.get(root)
     }
 
+    /// How many completed attempts, automatic or Check now, were applied to
+    /// `root` this session: what a failed Check now compares to see that a
+    /// later check completed (Activity N22 clause 4).
+    pub fn completed_attempts(&self, root: &Root) -> u64 {
+        self.completed.get(root).copied().unwrap_or_default()
+    }
+
+    /// The checks that brought something in, in the order they were applied.
+    /// Never pruned within a session, whatever becomes of the repository
+    /// (A5, K-4).
+    pub fn brought(&self) -> &[Brought] {
+        &self.brought
+    }
+
     /// Each repository's last recorded attempt and the retirements since,
     /// in the order of the roots: what the attempt entries of the operation
     /// area are made from (R-23, E3).
+    #[cfg(test)] // Only tests list the attempts now (F4).
     pub fn attempts(&self) -> impl Iterator<Item = (&Root, &AttemptSummary, &[RetireLine])> {
         self.repos.iter().filter_map(|(root, repo)| {
             Some((root, repo.last.as_ref()?, repo.retirements.as_slice()))
@@ -391,6 +428,8 @@ impl PollSchedule {
         let repo = self.repos.get_mut(&attempt.root)?;
         let summary = repo.apply(&attempt.root, now, attempt);
         self.unshared_after(&attempt.root, &summary);
+        self.note_brought(&attempt.root, &summary, now, true);
+        self.note_completed(attempt);
         Some(summary)
     }
 
@@ -413,7 +452,32 @@ impl PollSchedule {
         };
         // Both branches follow the same rules for the unshared list (rule 5).
         self.unshared_after(&attempt.root, &summary);
+        self.note_brought(&attempt.root, &summary, now, false);
+        self.note_completed(attempt);
         Some(summary)
+    }
+
+    /// Counts an applied attempt that completed.
+    fn note_completed(&mut self, attempt: &PollAttempt) {
+        if attempt.answer == Answer::Completed {
+            *self.completed.entry(attempt.root.clone()).or_default() += 1;
+        }
+    }
+
+    /// Keeps a check that brought something in (A5), at the reading its
+    /// caller applied it with. The list is never pruned (K-4), so the next
+    /// sequence number is its length.
+    fn note_brought(&mut self, root: &Root, summary: &AttemptSummary, now: &Now, automatic: bool) {
+        if summary.brought_in == 0 {
+            return;
+        }
+        self.brought.push(Brought {
+            seq: self.brought.len() as u64,
+            root: root.clone(),
+            count: summary.brought_in,
+            at: now.utc,
+            automatic,
+        });
     }
 
     /// The user lane is empty: every preempted poll goes again with no

@@ -40,8 +40,10 @@ use crate::desktop::{
     },
     test_support::fixtures::{Fixture, NoPassphrase, item_id},
     view::{
+        activity_support::{offered, refresh, row, until_offered, until_pending},
         harness::{Shell, is_save, key},
         item::LIFECYCLE_ACTION,
+        operations::RESUME,
         workspace::QuitPhase,
     },
 };
@@ -275,13 +277,7 @@ async fn a17_a_stranded_close_is_not_resumed_without_consent(cx: &mut TestAppCon
     assert_eq!(step(&shell, &root).as_deref(), Some("closing"));
 
     open(&shell, ticket(&root), cx);
-    shell
-        .until_drawn(cx, "the close's row", |shell, cx| {
-            shell
-                .rows("pending-command", cx)
-                .contains(&OperationAction::Close.as_str().to_owned())
-        })
-        .await;
+    until_pending(&shell, &key(&root), OperationAction::Close.as_str(), cx).await;
     shell.select(&root, cx);
     shell.keys("tab tab tab escape", cx);
     shell.keys("secondary-w", cx);
@@ -371,25 +367,25 @@ async fn a17_a_conflict_waiting_after_a_restart_is_not_resumed_or_resolved(
 
     let shell = Shell::launch(fixture, |_| {}, cx);
     let operations = shell.operations(cx);
-    let sync = OperationAction::ContextSyncLocal.as_str().to_owned();
-    let row = |shell: &Shell, cx: &mut TestAppContext| {
-        shell
-            .rows("pending-command", cx)
-            .iter()
-            .position(|listed| *listed == sync)
-    };
-    shell
-        .until_drawn(cx, "the synchronization's Resume", |shell, cx| {
-            row(shell, cx).is_some_and(|at| shell.present(("pending-resume", at), cx))
-        })
-        .await;
+    let pending = until_pending(
+        &shell,
+        &key(&root),
+        OperationAction::ContextSyncLocal.as_str(),
+        cx,
+    )
+    .await;
+    until_offered(&shell, &pending, RESUME, cx).await;
 
     open(&shell, ticket(&root), cx);
     shell.select(&root, cx);
     shell.keys("tab tab tab escape", cx);
     shell.run(cx);
-    let at = row(&shell, cx).expect("still listed");
-    assert!(shell.present(("pending-resume", at), cx), "still offered");
+    refresh(&shell, cx);
+    assert!(row(&shell, &pending, cx).is_some(), "still listed");
+    assert!(
+        offered(&shell, &pending, RESUME, cx).is_some_and(|offer| offer.enabled),
+        "still offered"
+    );
     shell.keys("secondary-w", cx);
     until_idle(&shell, cx).await;
     shell.keys("secondary-q", cx);

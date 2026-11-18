@@ -2,9 +2,13 @@
 // replacement approval. Operations are infrequent; keep that typed value API.
 #![allow(clippy::result_large_err)]
 
+mod agent;
+mod agent_credential;
 mod callbacks;
 pub(super) mod endpoint;
 mod error;
+#[cfg(all(test, unix))]
+pub(crate) mod fake_agent;
 mod operation;
 #[cfg(test)]
 pub(crate) mod operation_tests;

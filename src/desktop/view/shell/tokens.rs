@@ -4,6 +4,8 @@
 //! shell draws are here; the closed Kit theme does not carry them, so they
 //! follow the theme's mode, as the item view's colours do. `accent` and
 //! `faint` are also the item view's (`ItemColors` reads them from here).
+//! The Kit theme's own slots that the app sets (`frame::theme`) take theirs
+//! from here too.
 
 use gpui_kit::{App, Hsla, component::ActiveTheme, rgb};
 
@@ -20,6 +22,8 @@ pub(crate) struct ChromeColors {
     pub border_strong: Hsla,
     /// Hover, secondary buttons, toggles on.
     pub hover: Hsla,
+    /// Hover on hover: a secondary button's own hover.
+    pub hover_strong: Hsla,
     /// Hidden-dock icons and the unfocused tab line.
     pub faint: Hsla,
     /// Counts, ages, placeholder text.
@@ -32,6 +36,10 @@ pub(crate) struct ChromeColors {
     pub selection: Hsla,
     /// Brand amber: the focused tab line and the active tab icon.
     pub accent: Hsla,
+    /// The primary button's hover.
+    pub accent_hover: Hsla,
+    /// Text on primary buttons.
+    pub on_accent: Hsla,
     /// Links, the focus ring, in-progress.
     pub teal: Hsla,
     /// Success, ready, up to date.
@@ -53,12 +61,15 @@ pub(crate) fn colors(dark: bool) -> ChromeColors {
         border: pick(0x2e3238, 0xdedbd5),
         border_strong: pick(0x3a3f46, 0xcfcbc4),
         hover: pick(0x2a2e34, 0xebe9e5),
+        hover_strong: pick(0x353a41, 0xe2dfda),
         faint: pick(0x4a5059, 0xb5b0a8),
         muted: pick(0x646b75, 0x767a82),
         secondary: pick(0x8d949e, 0x575c64),
         text: pick(0xd5d8dd, 0x1f2328),
         selection: pick(0x29363a, 0xfbefd6),
         accent: pick(0xe9ad36, 0xa86f00),
+        accent_hover: pick(0xf2bd4f, 0x8f5e00),
+        on_accent: pick(0x1a1c20, 0xffffff),
         teal: pick(0x5fb4c3, 0x07596a),
         green: pick(0x7cc28f, 0x2c7a43),
         red: pick(0xe3787a, 0xb3393c),

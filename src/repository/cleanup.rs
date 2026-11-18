@@ -17,7 +17,6 @@ use std::{
 pub(super) enum Precheck {
     Ok,
     Changed,
-    IgnoredFiles,
     Locked,
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -31,8 +30,8 @@ pub(super) enum WorktreeRemoval {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ReleaseCheck {
     Clean,
-    /// A change, an untracked or ignored file, a hidden index bit or a
-    /// submodule change: something of the user's that removal would lose.
+    /// A change, an untracked file, a hidden index bit or a submodule
+    /// change: something of the user's that removal would lose.
     NotClean,
     /// The worktree is not the context's as it is registered: another
     /// identity or HEAD, a lock, or a tree that is no context's.
@@ -232,7 +231,7 @@ impl ContextCleanup {
         }
         // The recorded clean OID is canonical authority. Do not invoke the
         // filesystem canonical-context scanner while this capability owns the
-        // common lease; materialization/status/ignored checks remain below.
+        // common lease; materialization/status checks remain below.
         if super::validate_context_tree_items(
             &linked,
             &context,
@@ -571,24 +570,15 @@ fn require_cleanup_clean(
     options
         .include_untracked(true)
         .recurse_untracked_dirs(true)
-        .include_ignored(true)
-        .recurse_ignored_dirs(true);
+        .include_ignored(false);
     let statuses = repository
         .statuses(Some(&mut options))
         .map_err(|_| Precheck::Changed)?;
     if !statuses.is_empty() {
-        return Err(
-            if statuses
-                .iter()
-                .any(|entry| entry.status().contains(git2::Status::IGNORED))
-            {
-                Precheck::IgnoredFiles
-            } else {
-                Precheck::Changed
-            },
-        );
+        return Err(Precheck::Changed);
     }
     drop(statuses);
+    ignored_dirs_hold_no_repository(repository)?;
     let workdir = repository.workdir().ok_or(Precheck::Changed)?;
     for entry in gitlinks {
         let path = std::str::from_utf8(&entry.path).map_err(|_| Precheck::Changed)?;
@@ -640,6 +630,83 @@ fn require_cleanup_clean(
         }
     }
     Ok(())
+}
+
+/// Ignored files are build output and go with the worktree, but a Git
+/// repository nested in an ignored directory (a clone under `vendor/`) may
+/// hold commits nothing else has. Nothing is followed through a symlink, and
+/// a directory that cannot be read counts as one that might hold a repository.
+fn ignored_dirs_hold_no_repository(repository: &git2::Repository) -> Result<(), Precheck> {
+    let workdir = repository.workdir().ok_or(Precheck::Changed)?;
+    let mut options = git2::StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(false)
+        .include_ignored(true)
+        .recurse_ignored_dirs(false);
+    // libgit2 reports an untracked directory that holds nothing but ignored
+    // files (or nothing at all, like a fresh `git init`) as IGNORED only when
+    // untracked entries are asked for; without them it is dropped unseen.
+    let statuses = repository
+        .statuses(Some(&mut options))
+        .map_err(|_| Precheck::Changed)?;
+    let mut pending = Vec::new();
+    for entry in statuses
+        .iter()
+        .filter(|entry| entry.status().contains(git2::Status::IGNORED))
+    {
+        let path = std::str::from_utf8(entry.path_bytes()).map_err(|_| Precheck::Changed)?;
+        pending.push(workdir.join(path));
+    }
+    match tree_holds_git_entry(pending) {
+        Ok(false) => Ok(()),
+        Ok(true) | Err(_) => Err(Precheck::Changed),
+    }
+}
+
+/// Whether any directory under `roots` holds a `.git` entry. Symlinks are not
+/// followed. A path that vanishes mid-walk (a build tool renaming its output)
+/// has nothing left to lose; any other read error is returned.
+fn tree_holds_git_entry(mut pending: Vec<std::path::PathBuf>) -> std::io::Result<bool> {
+    let gone = |error: std::io::Error| match error.kind() {
+        std::io::ErrorKind::NotFound => Ok(()),
+        _ => Err(error),
+    };
+    while let Some(path) = pending.pop() {
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => continue,
+            Err(error) => {
+                gone(error)?;
+                continue;
+            }
+        }
+        let children = match std::fs::read_dir(&path) {
+            Ok(children) => children,
+            Err(error) => {
+                gone(error)?;
+                continue;
+            }
+        };
+        for child in children {
+            let child = match child {
+                Ok(child) => child,
+                Err(error) => {
+                    gone(error)?;
+                    continue;
+                }
+            };
+            if child.file_name() == ".git" {
+                return Ok(true);
+            }
+            match child.file_type() {
+                Ok(kind) if kind.is_dir() => pending.push(child.path()),
+                Ok(_) => {}
+                Err(error) => gone(error)?,
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Complete registration/HEAD inventory shared by cleanup and metadata-only

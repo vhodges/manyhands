@@ -23,7 +23,7 @@ use crate::desktop::{
     view::harness::{Shell, key},
 };
 
-pub(super) struct Rig {
+pub(in crate::desktop::view) struct Rig {
     pub shell: Shell,
     pub services: Services,
     pub backend: Arc<PollingBackend>,
@@ -35,7 +35,10 @@ pub(super) struct Rig {
 impl Rig {
     /// The repositories `repositories` (named, and published over SSH when
     /// the flag is set), polled by nothing until `list`.
-    pub(super) fn new(repositories: &[(&str, bool)], cx: &mut TestAppContext) -> Self {
+    pub(in crate::desktop::view) fn new(
+        repositories: &[(&str, bool)],
+        cx: &mut TestAppContext,
+    ) -> Self {
         cx.executor().allow_parking();
         let fixture = Fixture::new();
         let backend = Arc::new(PollingBackend::new(fixture.delaying_backend()));
@@ -67,20 +70,20 @@ impl Rig {
 
     /// A key whose passphrase every poll asks the session for, as the
     /// transport does for a protected key.
-    pub(super) fn lock(&self) -> UnlockRequest {
+    pub(in crate::desktop::view) fn lock(&self) -> UnlockRequest {
         let request = unlock_request(self.keys.path(), SharedKeyId::new());
         self.backend.ask_unlock(request.clone());
         request
     }
 
     /// A key, for a failure that names one.
-    pub(super) fn key(&self) -> SharedKeyId {
+    pub(in crate::desktop::view) fn key(&self) -> SharedKeyId {
         SharedKeyId::new()
     }
 
     /// The repositories are listed: the scheduler reads them and polls the
     /// due ones.
-    pub(super) fn list(&self, cx: &mut TestAppContext) {
+    pub(in crate::desktop::view) fn list(&self, cx: &mut TestAppContext) {
         let services = self.services.clone();
         let roots = self.roots.clone();
         cx.update(|cx| services.repositories_listed(&roots, cx));
@@ -88,7 +91,10 @@ impl Rig {
     }
 
     /// The scheduler's entries as `(reason, roots)`, roots sorted.
-    pub(super) fn entries(&self, cx: &mut TestAppContext) -> Vec<(Reason, Vec<String>)> {
+    pub(in crate::desktop::view) fn entries(
+        &self,
+        cx: &mut TestAppContext,
+    ) -> Vec<(Reason, Vec<String>)> {
         self.services.scheduler().read_with(cx, |scheduler, _| {
             scheduler
                 .schedule()
@@ -104,14 +110,18 @@ impl Rig {
     }
 
     /// Waits until the scheduler holds `count` entries.
-    pub(super) async fn until_entries(&self, count: usize, cx: &mut TestAppContext) {
+    pub(in crate::desktop::view) async fn until_entries(
+        &self,
+        count: usize,
+        cx: &mut TestAppContext,
+    ) {
         self.shell
             .until_drawn(cx, "the entries", |_, cx| self.entries(cx).len() == count)
             .await;
     }
 
     /// The requests of the user lane that `pick` picks, oldest first.
-    pub(super) fn sent(
+    pub(in crate::desktop::view) fn sent(
         &self,
         cx: &mut TestAppContext,
         pick: impl Fn(&Intent) -> bool,
@@ -130,7 +140,7 @@ impl Rig {
     }
 
     /// The Check now requests sent so far, as roots.
-    pub(super) fn checks(&self, cx: &mut TestAppContext) -> Vec<PathBuf> {
+    pub(in crate::desktop::view) fn checks(&self, cx: &mut TestAppContext) -> Vec<PathBuf> {
         self.sent(cx, |intent| matches!(intent, Intent::PollOnce { .. }))
             .into_iter()
             .filter_map(|request| match request.intent {

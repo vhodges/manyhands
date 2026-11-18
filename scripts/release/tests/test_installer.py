@@ -109,6 +109,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(installer.main(), 0)
         managed = Path(json.loads(parameters.read_text())['managed_files'])
         self.assertEqual(managed.read_text(encoding='utf-8-sig').splitlines(), installer.managed_file_list(verified_files))
+        self.assertIn('skills\\README.md', managed.read_text(encoding='utf-8-sig').splitlines())
         digests = Path(json.loads(parameters.read_text())['managed_digests'])
         self.assertEqual(digests.read_text(encoding='utf-8-sig').splitlines(),
                          installer.managed_digest_list(verified_files, managed.read_bytes(),
@@ -139,6 +140,17 @@ class InstallerTests(unittest.TestCase):
         destination = self.root / 'managed-files.txt'
         installer.write_managed_file_list(destination, paths)
         self.assertEqual(destination.read_bytes(), ('\ufeff' + '\r\n'.join(expected) + '\r\n').encode('utf-8'))
+
+    def test_skills_files_are_managed_in_canonical_case(self):
+        base = ['bin/manyhands.exe', 'bin/manyhands-cli.exe', 'licenses/README.md']
+        managed = installer.managed_file_list(
+            base + ['release.json', 'skills/README.md', 'skills/manyhands-overview/SKILL.md'])
+        self.assertIn('skills\\README.md', managed)
+        self.assertIn('skills\\manyhands-overview\\SKILL.md', managed)
+        self.assertEqual([name for name in managed if not name.startswith('skills\\')],
+                         installer.managed_file_list(base))
+        with self.assertRaisesRegex(ValueError, 'canonical case'):
+            installer.managed_file_list(base + ['Skills/README.md'])
 
     def test_managed_manifest_cannot_overwrite_an_existing_or_linked_input(self):
         paths = ['bin/manyhands.exe', 'bin/manyhands-cli.exe', 'licenses/README.md']

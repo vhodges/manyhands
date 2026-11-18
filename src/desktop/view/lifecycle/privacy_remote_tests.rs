@@ -26,8 +26,8 @@ use manyhands::{
 
 use super::{
     privacy_tests::{
-        BASE, BODY, Seen, THEIRS, TITLE, commit_sentinel_comment, shows_body_and_comment,
-        ticket_with_body,
+        BASE, BODY, MENU_ITEM, POPOVER, ROW_MENU, Seen, THEIRS, TITLE, commit_sentinel_comment,
+        shows_body_and_comment, ticket_with_body,
     },
     tests::{closes, open, shell, until_present},
 };
@@ -36,10 +36,12 @@ use crate::desktop::{
     services::{JobKind, requests::Intent},
     test_support::fixtures::{item_id, ticket_path},
     view::{
+        activity_support::to_row,
         conflict::{answer_tests::applied, entry_tests, tests as conflict},
         harness::{Shell, key},
         item::LIFECYCLE_ACTION,
         operations::republish::tests as republish,
+        privacy_layers_tests::{is_open, open_popover},
     },
 };
 
@@ -86,6 +88,38 @@ fn sentinel_path() -> ConflictPathDto {
     }
 }
 
+/// The Needs attention popover and the menu of its row, open and swept
+/// (Task 12, E-14). The item's own row needs attention, so both name it by
+/// its title, which is allowed there, and by nothing else of it: the body and
+/// the comment, planted in the same item, are on screen in its tab.
+fn layers(shell: &Shell, seen: &mut Seen, cx: &mut TestAppContext) {
+    open_popover(shell, cx);
+    seen.window(shell, cx);
+    assert!(
+        seen.allowed_holding(POPOVER, TITLE),
+        "the popover's row names the item by its title"
+    );
+    let key = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.attention_popover_rows())
+        .first()
+        .map(|row| row.row.key.clone())
+        .expect("a row that needs attention");
+    shell.keys("escape", cx);
+    assert!(!is_open(shell, cx), "Escape closes the popover");
+    to_row(shell, &key, cx);
+    shell.keys("shift-f10", cx);
+    shell.frame(cx, |_, _| ());
+    seen.window(shell, cx);
+    for at in [ROW_MENU, MENU_ITEM] {
+        assert!(
+            seen.allowed_holding(at, TITLE),
+            "the row's menu names the item by its title ({at})"
+        );
+    }
+    shell.keys("escape", cx);
+}
+
 /// A16, canned (decision 9): a share of the ticket stopped on a conflict
 /// (`entry_tests::share_conflict`) raises the conflict banner; Review
 /// changes opens the sheet on a remote conflict (`conflict::canned`) whose
@@ -107,6 +141,7 @@ async fn a16_a_shared_conflict_and_its_resolution_show_no_item_text(cx: &mut Tes
     entry_tests::fabricate(&shell, 1, share, entry_tests::share_conflict(), cx);
     until_present(&shell, "item-review-changes", cx).await;
     seen.window(&shell, cx);
+    layers(&shell, &mut seen, cx);
     let operation = OperationId::parse(SYNCHRONIZATION).unwrap();
     shell
         .backend
@@ -148,6 +183,13 @@ async fn a16_a_shared_conflict_and_its_resolution_show_no_item_text(cx: &mut Tes
         "operation area",
         "banner",
         "sheet message",
+        "popover row",
+        "popover tooltip",
+        "popover description",
+        "popover",
+        "popover copy",
+        "row menu",
+        "menu item",
         "drawn",
     ]);
     assert!(seen.read_at("banner", "safe"));

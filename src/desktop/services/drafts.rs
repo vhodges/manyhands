@@ -435,6 +435,25 @@ impl DraftRegistry {
             .map(|live| live.session.recovery_state())
     }
 
+    /// Each session whose last write failed, as `flush_failures` gives it,
+    /// with the draft's target: what Activity's recovery rows name (S11).
+    pub(crate) fn flush_failure_items(
+        &self,
+    ) -> Vec<(DraftId, DraftTarget, String, DraftErrorKind)> {
+        self.sessions
+            .values()
+            .filter_map(|live| match live.session.recovery_state() {
+                RecoveryState::Failed(kind) => Some((
+                    live.session.id(),
+                    live.session.target().clone(),
+                    live.session.item_title().to_owned(),
+                    kind,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Each session whose last write failed: its ID, its item's title as
     /// read and why.
     pub(crate) fn flush_failures(&self) -> Vec<(DraftId, String, DraftErrorKind)> {

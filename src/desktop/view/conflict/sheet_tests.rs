@@ -32,7 +32,7 @@ async fn the_note_follows_the_source(cx: &mut TestAppContext) {
         assert_eq!(shell.label("conflict-note", cx), Some(note));
         shell
             .visual(cx)
-            .update(gpui_kit::component::WindowExt::close_dialog);
+            .update(gpui_kit::component::WindowExt::close_sheet);
         shell.run(cx);
         assert!(!shell.present("conflict-sheet", cx));
     }

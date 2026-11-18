@@ -14,7 +14,6 @@ use gpui_kit::{
         ActiveTheme, Disableable,
         button::{Button, ButtonVariants},
         dialog::Confirm,
-        h_flex,
         input::{Input, InputState},
         v_flex,
     },
@@ -24,7 +23,10 @@ use gpui_kit::{
 use super::{CANCEL, CREATE, CreateDialog, FILE_NAME, FOLDER, Inputs, TITLE, TYPE};
 use crate::desktop::{
     model::edit::fields::{Field, required_message},
-    view::item::text,
+    view::{
+        frame::{self, Footer},
+        item::text,
+    },
 };
 
 /// A labelled field `id`: its label, the Kit input `input` in the element
@@ -191,8 +193,9 @@ pub(in crate::desktop::view) fn focus_the_note(
     }
 }
 
-/// The dialog: its fields, each with its note, what the last Create said,
-/// and Cancel and Create.
+/// The dialog: its fields, each with its note, and what the last Create
+/// said, in the body; Cancel and Create in the footer, the last child of
+/// the body element (R-19).
 impl Render for CreateDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let fields = self.fields(cx);
@@ -203,27 +206,22 @@ impl Render for CreateDialog {
             Inputs::Document(place) => self.path_note().is_some().then_some(&place.file_name),
         };
         focus_the_note(&self.primary, noted, window, cx);
-        let body = v_flex()
-            .id("create-dialog")
-            .test_support()
-            .track_focus(&self.focus)
-            .gap_3()
-            .child(field(
-                "create-title",
-                TITLE,
-                &self.title,
-                note(Field::Title),
-                cx,
-            ));
-        let body = match &self.inputs {
-            Inputs::Ticket { ticket_type } => body.child(field(
+        let fields_column = v_flex().gap_3().child(field(
+            "create-title",
+            TITLE,
+            &self.title,
+            note(Field::Title),
+            cx,
+        ));
+        let fields_column = match &self.inputs {
+            Inputs::Ticket { ticket_type } => fields_column.child(field(
                 "create-type",
                 TYPE,
                 ticket_type,
                 note(Field::Type),
                 cx,
             )),
-            Inputs::Document(place) => body
+            Inputs::Document(place) => fields_column
                 .child(field("create-folder", FOLDER, &place.folder, None, cx))
                 .child(field(
                     "create-file",
@@ -264,7 +262,17 @@ impl Render for CreateDialog {
                 });
             },
         );
-        body.children(failure)
-            .child(h_flex().gap_2().justify_end().child(cancel).child(create))
+        v_flex()
+            .id("create-dialog")
+            .test_support()
+            .track_focus(&self.focus)
+            .child(frame::body(fields_column.children(failure)))
+            .child(frame::footer(
+                Footer {
+                    hint: None,
+                    buttons: vec![cancel.into_any_element(), create.into_any_element()],
+                },
+                cx,
+            ))
     }
 }

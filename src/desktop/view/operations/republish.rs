@@ -34,10 +34,10 @@ use crate::desktop::{
     },
 };
 
-pub(crate) const REPUBLISH: &str = "Republish\u{2026}";
-pub(crate) const STOP_AND_REPUBLISH: &str = "Stop and republish\u{2026}";
-/// A share's deleted branch whose republish is queued or running.
-pub(crate) const REPUBLISHING: &str = "Republishing\u{2026}";
+// The words live in the model, where Activity's rows read them (R-44).
+pub(crate) use crate::desktop::model::activity::copy::{
+    REPUBLISH, REPUBLISHING, STOP_AND_REPUBLISH,
+};
 
 /// The item to republish, and how its lifecycle goes on once it is done:
 /// `None` for a share's, which nothing follows.
@@ -195,8 +195,10 @@ impl Workspace {
     /// share's entry, only with no dialog open. Another dialog's answer
     /// closes the top dialog, which would then be this one (R-32), so it
     /// waits in `republish_deferred` until they have closed
-    /// (`open_deferred_republish`). One of the item already queued, running
-    /// or waiting to send its lifecycle on is not asked for again.
+    /// (`open_deferred_republish`); it waits there while Resolve conflict
+    /// is open too, whose choices it would cover (Wave 04 Cycle 05b R-18).
+    /// One of the item already queued, running or waiting to send its
+    /// lifecycle on is not asked for again.
     fn republish_once_stopped(
         &mut self,
         target: Republishing,
@@ -208,7 +210,7 @@ impl Workspace {
         if self.services().republishing(&target.root, &target.id) {
             return;
         }
-        if !over_dialog && window.has_active_dialog(cx) {
+        if (!over_dialog && window.has_active_dialog(cx)) || self.resolve_open(window, cx) {
             self.republish_deferred.push((target, origin));
             cx.notify();
             return;
@@ -216,13 +218,17 @@ impl Workspace {
         self.republish(target, origin, window, cx);
     }
 
-    /// Each Republish… that waited for a dialog opens once none is open.
+    /// Each Republish… that waited for a dialog, or for Resolve conflict,
+    /// opens once neither is open (R-18).
     pub(in crate::desktop::view) fn open_deferred_republish(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.republish_deferred.is_empty() || window.has_active_dialog(cx) {
+        if self.republish_deferred.is_empty()
+            || window.has_active_dialog(cx)
+            || self.resolve_open(window, cx)
+        {
             return;
         }
         let (target, origin) = self.republish_deferred.remove(0);

@@ -1,22 +1,15 @@
 //! The Repositories panel's body: the state of the repositories read above
-//! the list, which is drawn in every state (C2 R-34), and the Settings
-//! button below it until Cycle 04 (decision 15). No heading: the panel's
-//! header names it (fact 2).
+//! the list, which is drawn in every state (C2 R-34). No heading: the
+//! panel's header names it (fact 2). The panel has no Settings button
+//! (Wave 04 Cycle 04, Part F); the footer's Settings item and `secondary-,`
+//! open Settings.
 //!
 //! The states are Part C's table, drawn by Cycle 02's helpers (R-10):
 //! skeleton rows on the first load; an alert row when a read stayed busy
 //! or failed, or the list is incomplete, over the rows kept; an empty
 //! state when the list gives none. Retry reads the list again.
 
-use gpui_kit::{
-    App, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt, Window,
-    component::{
-        button::{Button, ButtonVariants},
-        v_flex,
-    },
-    div,
-};
+use gpui_kit::{App, Context, IntoElement, ParentElement, Styled, Window, component::v_flex};
 
 use super::{
     ADD_OR_CREATE, LIST_INCOMPLETE, LOADING_REPOSITORIES, NO_REPOSITORIES, NOT_UPDATED_BUSY,
@@ -27,16 +20,12 @@ use crate::desktop::{
         list_state::ListState,
         list_view::{Alert, AlertTone, ListAction},
         navigation::{Navigation, NotReloaded},
-        stamp::SettingsPage,
     },
     view::{
         rows::{EmptyAction, alert_row, empty_state, skeleton_rows},
-        workspace::Workspace,
+        workspace::{AddRoute, Workspace},
     },
 };
-
-/// The panel's entry to the settings.
-const SETTINGS: &str = "Settings";
 
 /// The skeleton's rows on a first load.
 const SKELETON_ROWS: usize = 3;
@@ -108,9 +97,10 @@ pub(crate) fn body(
         State::Empty => {
             let add: EmptyAction = (
                 ADD_OR_CREATE.into(),
+                // The Add repository sheet (Wave 04 Cycle 05a AW-1).
                 Box::new(move |window: &mut Window, cx: &mut App| {
                     let _ = workspace.update(cx, |workspace, cx| {
-                        workspace.open_settings(SettingsPage::Repositories, window, cx)
+                        workspace.show_add_repository(AddRoute::New, None, window, cx)
                     });
                 }),
             );
@@ -126,18 +116,4 @@ pub(crate) fn body(
         .size_full()
         .children(shown)
         .child(pane.render())
-        .child(
-            div()
-                .id("sidebar-settings")
-                .test_support()
-                .aria_label(SETTINGS)
-                .child(
-                    Button::new("sidebar-settings-button")
-                        .ghost()
-                        .label(SETTINGS)
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.open_settings(SettingsPage::Repositories, window, cx)
-                        })),
-                ),
-        )
 }

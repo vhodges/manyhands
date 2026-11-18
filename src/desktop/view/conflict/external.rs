@@ -9,10 +9,12 @@
 use gpui_kit::{
     AnyElement, ClickEvent, Context, IntoElement, ParentElement, Styled,
     component::{ActiveTheme, Disableable, Sizable, button::Button, h_flex, v_flex},
-    px,
 };
 
-use super::{ResolveSheet, render::text};
+use super::{
+    ResolveSheet,
+    render::{card_frame, text},
+};
 use crate::desktop::{
     model::conflict::{ConflictModel, ExternalPath, ExternalReason},
     view::{
@@ -67,9 +69,10 @@ fn reason_words(reason: ExternalReason) -> &'static str {
 }
 
 impl ResolveSheet {
-    /// An external set's cards, one per path, and the way on.
+    /// An external set's cards, one per path, in a part's card frame, and
+    /// the way on: Open folder and Check again stay one row below them all,
+    /// since both act on the whole set (Wave 04 Cycle 05b B5, R-14).
     pub(super) fn external_cards(&self, paths: &[ExternalPath], cx: &Context<Self>) -> AnyElement {
-        let border = cx.theme().border;
         let muted = cx.theme().muted_foreground;
         // Two closures: nothing to commit and check again (local, the
         // library offers no way on).
@@ -86,12 +89,7 @@ impl ResolveSheet {
             .as_ref()
             .is_some_and(ConflictModel::changed_outside);
         let cards = paths.iter().enumerate().map(|(index, path)| {
-            v_flex()
-                .gap_1()
-                .p_2()
-                .border_1()
-                .border_color(border)
-                .rounded(px(6.))
+            card_frame(cx)
                 .child(
                     text(
                         ("conflict-external", index),

@@ -167,6 +167,17 @@ impl Resends {
         self.lock().resent.remove(&id);
     }
 
+    /// Whether dismissing the request `id` would make `forget` drop something:
+    /// a chain link from it or to it, or a republish waiting under its ID
+    /// (Activity's `RequestFacts.resend_waits`; R-47). A republish that waits
+    /// on `id` as its run stays through `forget`, so it does not count.
+    pub(crate) fn waits_on(&self, id: DesktopRequestId) -> bool {
+        let registry = self.lock();
+        registry.resent.contains_key(&id)
+            || registry.resent.values().any(|next| *next == id)
+            || registry.republishes.contains_key(&id)
+    }
+
     /// The request `id` was dismissed: its link in a chain goes, and so
     /// does what waits on it as a republish. What waits on it as the run a
     /// republish sends on stays (ruling (b)).

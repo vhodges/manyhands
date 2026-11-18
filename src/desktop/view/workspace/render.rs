@@ -4,17 +4,18 @@
 use super::{Region, Workspace};
 use crate::desktop::{
     keys::{
-        CloseTab, DockPanel, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
-        FocusRepositories, JumpToDiscussion, NewItem, NextRegion, NextTab, OpenDockMenu,
-        OpenDrafts, OpenRepositoryMenu, OpenSelected, OpenSettings, PreviousRegion, PreviousTab,
-        Quit, QuitNow, Rebuild, Refresh, RepositoryMenuChoice, ScrollPageDown, ScrollPageUp,
-        ScrollToBottom, ScrollToTop, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
+        ActivityDown, ActivityEnd, ActivityEnter, ActivityHome, ActivityMenuChoice, ActivityUp,
+        AttentionDown, AttentionEnd, AttentionEnter, AttentionHome, AttentionNext,
+        AttentionPrevious, AttentionUp, ClearFinished, CloseAttention, CloseTab, DockPanel,
+        Find as FindKey, FocusContent, FocusNavigation, FocusOperations, FocusRepositories,
+        JumpToDiscussion, NewItem, NextRegion, NextTab, OpenActivityMenu, OpenDockMenu, OpenDrafts,
+        OpenRepositoryMenu, OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow,
+        Rebuild, Refresh, RepositoryMenuChoice, ScrollPageDown, ScrollPageUp, ScrollToBottom,
+        ScrollToTop, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
     },
-    model::{
-        layout::{PanelKind, Side},
-        stamp::SettingsPage,
-    },
+    model::layout::{PanelKind, Side},
     view::{
+        activity::Step,
         dock::Slot,
         repositories,
         scroll::ContentScroll,
@@ -24,7 +25,7 @@ use crate::desktop::{
 use gpui_kit::{
     AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
-    component::{ActiveTheme, Root, WindowExt, h_flex, v_flex},
+    component::{ActiveTheme, Root, WindowExt, v_flex},
     deferred, div,
 };
 
@@ -72,48 +73,31 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// Quit now, the session and the pending sections. Their bookkeeping
-    /// goes with them (R-33): while Activity is not displayed, no handle is
-    /// pruned.
+    /// The layout notices, the quit row and the list (C1, R-18). The list's
+    /// container keeps the id `"operation-area"` (R-20), and the rows are
+    /// applied to it after the frame.
     fn activity_region(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let finishing = self.finishing(window, cx);
-        let session = self.session_section(window, cx);
-        let pending = self.pending_section(window, cx);
-        self.prune_abandon_focus();
-        // The layout file's notices sit above the operation area (R-21).
+        // The layout file's notices sit above the list (R-21).
         let notices = self.layout_notices(window, cx);
+        let list = self.activity_list(window, cx);
         self.region(
             Region::Operations,
             window,
             cx,
-            v_flex().size_full().gap_2().children(notices).child(
-                v_flex()
-                    .id("operation-area")
-                    .test_support()
-                    .gap_2()
-                    .w_full()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(self.operations_scroll().handle())
-                    .children(finishing)
-                    .child(
-                        h_flex()
-                            .gap_4()
-                            .items_start()
-                            // Each column may be narrower than its longest
-                            // row, which then wraps inside it (W-6).
-                            .child(session.flex_1().min_w_0())
-                            .child(pending.flex_1().min_w_0()),
-                    ),
-            ),
+            v_flex()
+                .size_full()
+                .gap_2()
+                .children(notices)
+                .children(finishing)
+                .child(list),
         )
         .size_full()
         .into_any_element()
     }
 
-    /// The content region with its tab strip, item view, Settings and Drafts
-    /// pages and Root's sheet layer.
+    /// The content region with its tab strip, item view, Drafts page and
+    /// Root's sheet layer, which draws the details sheet or Settings.
     fn item_area_region(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let item_shown = self.shown_item(cx).is_some();
         // The region's per-frame focus note, which its scroll-into-view
@@ -128,13 +112,21 @@ impl Workspace {
             .overflow_y_scroll()
             .track_scroll(self.content_scroll().handle());
         // Root's sheet layer is drawn inside the content region, whose item
-        // tab opens the sheet: its focus then counts as the region's, and
-        // its keys pass the region's context before the workspace's, where
-        // R-60 refuses them. The sheet places itself over the whole window
+        // tab opens the details sheet: a sheet's focus then counts as the
+        // region's, and its keys pass the region's context before the
+        // workspace's, where R-60 refuses them; Settings' frame takes the
+        // page keys first (B2). The sheet places itself over the whole window
         // (fact 61); deferred, it is painted above the rest of the window
         // and below dialogs, popups and tooltips, which are deferred higher.
-        let sheet = Root::render_sheet_layer(window, cx)
-            .map(|layer| div().absolute().child(deferred(layer)));
+        // The layer's own focus tells focus inside the sheet from focus
+        // behind it (design A3, "The sheet keeps focus").
+        let sheet_layer = self.content.settings.read(cx).layer().clone();
+        let sheet = Root::render_sheet_layer(window, cx).map(|layer| {
+            div()
+                .absolute()
+                .track_focus(&sheet_layer)
+                .child(deferred(layer))
+        });
         let content = content
             .children(self.content_body(window, cx))
             .children(sheet);
@@ -142,8 +134,8 @@ impl Workspace {
             .region(Region::Content, window, cx, content)
             .size_full();
         // An item tab lies flush with the region's border (owner,
-        // 2026-10-30). Settings, the Drafts page and the empty pane keep
-        // the regions' padding.
+        // 2026-10-30). The Drafts page and the empty pane keep the regions'
+        // padding.
         if item_shown {
             content.p_0().into_any_element()
         } else {
@@ -152,13 +144,14 @@ impl Workspace {
     }
 }
 
-/// Whether a dialog or the details sheet is open (R-60).
+/// Whether a dialog or a sheet, the details sheet or Settings, is open
+/// (R-60).
 pub(in crate::desktop::view) fn modal_open(window: &mut Window, cx: &mut App) -> bool {
     window.has_active_dialog(cx) || window.has_active_sheet(cx)
 }
 
 /// Except Quit, workspace actions must not escape a dialog's focus trap,
-/// nor act behind the details sheet (R-60).
+/// nor act behind a sheet (R-60). Ctrl+, has a guard of its own (A5).
 pub(in crate::desktop::view) fn unless_dialog<A: 'static>(
     cx: &mut Context<Workspace>,
     f: impl Fn(&mut Workspace, &A, &mut Window, &mut Context<Workspace>) + 'static,
@@ -172,11 +165,30 @@ pub(in crate::desktop::view) fn unless_dialog<A: 'static>(
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.settings_return.tick();
         self.apply_filter_reset(window, cx);
         self.sync_tickets(window, cx);
         self.apply_review(window, cx);
         self.open_deferred_republish(window, cx);
+        self.run_waiting_add_close(window, cx);
+        self.run_waiting_resolve_close(window, cx);
         self.sync_sheet(window, cx);
+        if self.sheet_held(window, cx) {
+            // After the frame, which it reads: focus a view moved while it
+            // drew is seen too, and a move this makes asks for its own frame
+            // (A3, "The sheet keeps focus"). `on_next_frame` is no hook:
+            // tests never run it.
+            cx.defer_in(window, |this, window, cx| {
+                this.keep_focus_in_sheet(window, cx)
+            });
+        }
+        // Resolve conflict keeps focus on its own handle, as Settings does
+        // on its first control (Wave 04 Cycle 05b B3, R-11).
+        if self.resolve_open(window, cx) {
+            cx.defer_in(window, |this, window, cx| {
+                this.keep_focus_in_resolve(window, cx)
+            });
+        }
         if self.dock.queue_clamp() {
             // The area records its bounds as this frame is drawn, so the
             // clamp runs after it (R-37). `on_next_frame` is no hook: tests
@@ -210,6 +222,9 @@ impl Render for Workspace {
             .child(self.dock_area().clone());
         let footer = self.footer(window, cx);
         let dock_menu = self.dock_menu_layer(window, cx);
+        let activity_menu = self.activity_menu_layer(window, cx);
+        let activity_more = self.activity_more_layer(window, cx);
+        let attention = self.attention_layer(window, cx);
         // Root's first child draws its dialog and notification layers.
         v_flex()
             .id("workspace")
@@ -259,9 +274,11 @@ impl Render for Workspace {
             .on_action(unless_dialog(cx, |this, _: &FocusContent, window, cx| {
                 this.focus_region(Region::Content, window, cx)
             }))
-            .on_action(unless_dialog(cx, |this, _: &OpenSettings, window, cx| {
-                this.open_settings(SettingsPage::Repositories, window, cx)
-            }))
+            // Its own guard: Ctrl+, opens Settings over the details sheet
+            // (A5).
+            .on_action(
+                cx.listener(|this, _: &OpenSettings, window, cx| this.settings_key(window, cx)),
+            )
             .on_action(unless_dialog(cx, |this, _: &OpenDrafts, window, cx| {
                 this.open_drafts(None, window, cx)
             }))
@@ -320,6 +337,63 @@ impl Render for Workspace {
             .on_action(unless_dialog(cx, |this, action: &DockPanel, window, cx| {
                 this.dock_chosen(action.panel, action.side, window, cx)
             }))
+            // Activity's list, in its own key context (C2).
+            .on_action(unless_dialog(cx, |this, _: &ActivityUp, _, cx| {
+                this.activity_step(Step::Up, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &ActivityDown, _, cx| {
+                this.activity_step(Step::Down, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &ActivityHome, _, cx| {
+                this.activity_step(Step::First, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &ActivityEnd, _, cx| {
+                this.activity_step(Step::Last, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &ActivityEnter, window, cx| {
+                this.activity_enter(window, cx)
+            }))
+            .on_action(unless_dialog(
+                cx,
+                |this, _: &OpenActivityMenu, window, cx| {
+                    this.open_focused_activity_menu(window, cx)
+                },
+            ))
+            .on_action(unless_dialog(
+                cx,
+                |this, action: &ActivityMenuChoice, window, cx| {
+                    this.activity_menu_chosen(action, window, cx)
+                },
+            ))
+            .on_action(unless_dialog(cx, |this, _: &ClearFinished, _, cx| {
+                this.clear_finished(cx)
+            }))
+            // The Needs attention popover, in its own key context (E2).
+            .on_action(unless_dialog(cx, |this, _: &AttentionUp, window, cx| {
+                this.attention_step(Step::Up, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &AttentionDown, window, cx| {
+                this.attention_step(Step::Down, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &AttentionHome, window, cx| {
+                this.attention_step(Step::First, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &AttentionEnd, window, cx| {
+                this.attention_step(Step::Last, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &AttentionEnter, window, cx| {
+                this.attention_enter(window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &AttentionNext, window, cx| {
+                this.attention_cycle(true, window, cx)
+            }))
+            .on_action(unless_dialog(
+                cx,
+                |this, _: &AttentionPrevious, window, cx| this.attention_cycle(false, window, cx),
+            ))
+            .on_action(unless_dialog(cx, |this, _: &CloseAttention, window, cx| {
+                this.close_attention_popover(window, cx)
+            }))
             .on_action(unless_dialog(
                 cx,
                 |this, _: &OpenRepositoryMenu, window, cx| {
@@ -340,6 +414,9 @@ impl Render for Workspace {
             .child(footer)
             .children(dock_menu)
             .children(repository_menu)
+            .children(activity_menu)
+            .children(activity_more)
+            .children(attention)
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }

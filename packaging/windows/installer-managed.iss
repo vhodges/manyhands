@@ -114,6 +114,7 @@ begin
   SetArrayLength(Existing, 0);
   CollectManagedFiles('bin', True, Existing);
   CollectManagedFiles('licenses', True, Existing);
+  CollectManagedFiles('skills', True, Existing);
   if not ValidManagedPaths(Existing) then RaiseException('Colliding installed managed-file paths.');
 end;
 
@@ -132,6 +133,7 @@ begin
   SetArrayLength(Existing, 0);
   CollectManagedFiles('bin', False, Existing);
   CollectManagedFiles('licenses', False, Existing);
+  CollectManagedFiles('skills', False, Existing);
   if not ValidManagedPaths(Existing) then RaiseException('Colliding installed managed-file paths.');
   SortManagedStrings(Existing, False);
   for I := 0 to Length(IncomingManagedFiles) - 1 do begin

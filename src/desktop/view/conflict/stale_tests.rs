@@ -8,13 +8,15 @@ use manyhands::{
 };
 
 use super::{
-    CHANGED, CHOOSE_ONE, KEEPING_THEIRS, SheetSource,
+    CHANGED, CHOOSE_ONE, CHOSEN, PartAt, SheetSource,
     tests::{
         OTHER, TICKET, canned, canned_path, code, open_sheet, remote_shell, resolves, same_body,
         until_long, until_present,
     },
 };
-use crate::desktop::{services::JobKind, test_support::fixtures::ticket_source};
+use crate::desktop::{
+    model::conflict::BodyChoice, services::JobKind, test_support::fixtures::ticket_source,
+};
 
 /// P11, canned (decision 9; Task 11b review, R-26): a side changes while
 /// the sheet is open, so its observation is stale. No real local trigger
@@ -79,7 +81,12 @@ async fn a_stale_observation_refreshes_the_comparison(cx: &mut TestAppContext) {
     );
     assert_eq!(
         shell.label(("conflict-choice", 0usize), cx).as_deref(),
-        Some(KEEPING_THEIRS)
+        Some(CHOSEN)
+    );
+    assert_eq!(
+        sheet.read_with(cx, |sheet, _| sheet.choice_of(PartAt::Field(0))),
+        Some(BodyChoice::Theirs),
+        "the unchanged part keeps Keep theirs"
     );
     assert_eq!(
         shell.label(("conflict-choice", 1usize), cx).as_deref(),

@@ -64,7 +64,6 @@ pub(super) const CASES: &[ssh_harness::Case] = &[
     ("blocker_remote_deleted", || blocker(6)),
     ("preserve_edited_context_then_supersede", || preservation(0)),
     ("preserve_untracked_then_supersede", || preservation(1)),
-    ("preserve_ignored_then_supersede", || preservation(2)),
     ("preserve_locked_then_supersede", || preservation(3)),
     ("retained_r1_unknown_history_and_consumption", retained_r1),
     ("r1_verified_push_consumes_before_authority", || {
@@ -700,17 +699,6 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
             ))?;
         }
         1 => fixed(std::fs::write(p.a.worktree().join("u"), b"user\n"))?,
-        2 => {
-            let repo = p.a.repo()?;
-            let path = repo.commondir().join("info/exclude");
-            let mut bytes = fixed(std::fs::read(&path))?;
-            bytes.extend_from_slice(b"\nprivate-ignored\n");
-            fixed(std::fs::write(path, bytes))?;
-            fixed(std::fs::write(
-                p.a.worktree().join("private-ignored"),
-                b"user\n",
-            ))?;
-        }
         3 => {
             fixed(p.a.repo()?.find_worktree(DOC))?
                 .lock(Some("owned fixture lock"))
@@ -724,11 +712,7 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
     assert_eq!(
         outcome.cleanup(),
         PromotionCleanup::Pending {
-            reason: if mode == 2 {
-                PromotionCleanupPending::IgnoredFiles
-            } else {
-                PromotionCleanupPending::ContextChanged
-            }
+            reason: PromotionCleanupPending::ContextChanged
         }
     );
     assert_eq!(server_oid(&p, CONTEXT)?, context);
@@ -741,7 +725,6 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
             p.save_body(&p.a, &(BODY.to_owned() + "resolved user edit\n"))?;
         }
         1 => fixed(std::fs::remove_file(p.a.worktree().join("u")))?,
-        2 => fixed(std::fs::remove_file(p.a.worktree().join("private-ignored")))?,
         3 => fixed(fixed(p.a.repo()?.find_worktree(DOC))?.unlock())?,
         _ => unreachable!(),
     }

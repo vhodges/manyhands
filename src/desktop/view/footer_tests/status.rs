@@ -22,7 +22,10 @@ use crate::desktop::{
         polling::{PollSchedule, TargetKind, TestClock},
         stamp::{RepoKey, SettingsPage},
     },
-    services::{JobKind, Services, requests::Intent},
+    services::{
+        JobKind, Services,
+        requests::{DesktopRequestId, Intent},
+    },
     test_support::fixtures::{Fixture, item_id},
     view::{
         footer::Control,
@@ -357,6 +360,27 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
         "focus moved to Needs attention"
     );
 
+    // Needs attention hiding while it has focus passes focus on to the
+    // right, as the others do (P26, R-37): the right dock group's first
+    // control.
+    focus(&shell, Control::Attention, cx);
+    assert!(focused(&shell, Control::Attention.id(), cx));
+    shell.operations(cx).update(cx, |operations, cx| {
+        operations.dismiss(DesktopRequestId(1));
+        cx.notify();
+    });
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    assert!(
+        !shell.present(Control::Attention.id(), cx),
+        "Needs attention is hidden at 0"
+    );
+    assert!(
+        focused(&shell, Control::Panel(Tickets).id(), cx),
+        "focus moved to the next shown control to its right"
+    );
+
     // Two folders of the same name: the name carries the parent. `sub/a`
     // has a schedule and no completed check, and one save counts at once
     // (P41, P44).
@@ -407,6 +431,10 @@ pub(super) async fn journey(cx: &mut TestAppContext) {
         .workspace
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
     assert_eq!(shown, Shown::Settings(SettingsPage::Polling));
+    assert!(
+        shell.holds_focus(("settings-page", 2usize), cx),
+        "W-3 lands on the page's entry (Part D)"
+    );
 }
 
 fn clock_now(clock: &TestClock) -> OffsetDateTime {

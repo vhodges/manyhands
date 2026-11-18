@@ -213,5 +213,6 @@ impl Workspace {
             titles.tries.insert(key, tries);
         }
         cx.notify();
+        self.refresh_activity(cx);
     }
 }

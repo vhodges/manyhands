@@ -1108,12 +1108,11 @@ fn release_with_an_unknown_publication_history_and_no_tracking_ref_is_ok() {
 }
 
 #[test]
-fn release_of_an_untracked_modified_or_ignored_file_is_worktree_not_clean_and_discards_the_row() {
+fn release_of_an_untracked_or_modified_file_is_worktree_not_clean_and_discards_the_row() {
     git_home::isolated();
-    let changes: [(&str, &str); 3] = [
+    let changes: [(&str, &str); 2] = [
         ("notes.txt", "untracked\n"),
         (".gitignore", "scratch.log\nmodified\n"),
-        ("scratch.log", "ignored\n"),
     ];
     for (path, text) in changes {
         let world = World::new();

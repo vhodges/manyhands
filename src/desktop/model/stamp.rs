@@ -25,6 +25,27 @@ pub(crate) enum SettingsPage {
     Polling,
 }
 
+/// The Settings menu's three entries (Wave 04 Cycle 04 design B1; R-4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SettingsNav {
+    Repositories,
+    SharingAndKeys,
+    Checking,
+}
+
+impl SettingsPage {
+    /// The menu entry that shows this page: Repositories and Remotes under
+    /// Repositories; Keys and Hosts under Sharing & keys; Polling under
+    /// Checking for updates.
+    pub(crate) fn nav(self) -> SettingsNav {
+        match self {
+            Self::Repositories | Self::Remotes => SettingsNav::Repositories,
+            Self::Keys | Self::Hosts => SettingsNav::SharingAndKeys,
+            Self::Polling => SettingsNav::Checking,
+        }
+    }
+}
+
 /// What asked for a result.
 ///
 /// Not `Copy`: a repository's scope holds its root.
@@ -40,6 +61,9 @@ pub(crate) enum ViewScope {
     /// The Find input's search. One scope: a new search drops the last.
     Find,
     Settings(SettingsPage),
+    /// The Add repository forms' folder check (Wave 04 Cycle 05a, R-9). The
+    /// forms keep their own generations.
+    AddRepository,
     Operations(RepoKey),
     /// A confirmation dialog's preview. Each dialog keeps its own
     /// generations, so one scope serves them all.
@@ -51,6 +75,10 @@ pub(crate) enum ViewScope {
     /// The draft registry's listing of the store. One scope: a new listing
     /// drops the last.
     Drafts,
+    /// The Unlock key dialog's read of the key list, for its key's
+    /// fingerprint (Wave 04 Cycle 05a, Part D). Each dialog keeps its own
+    /// generations, so one scope serves them all.
+    Unlock,
     /// The lifecycle dialog's reads of the titles of the tickets a closure
     /// made ready (D5 design, A3). Each dialog keeps its own generations,
     /// so one scope serves them all.
