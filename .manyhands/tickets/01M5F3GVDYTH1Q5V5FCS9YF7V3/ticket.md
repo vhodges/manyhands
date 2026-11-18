@@ -1,12 +1,12 @@
 ---
+id: 01M5F3GVDYTH1Q5V5FCS9YF7V3
+title: 'Desktop follow-up: settings UX from the D1 reviews'
+type: task
+status: superseded
+project: manyhands
+team: core
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M5F3GVDYTH1Q5V5FCS9YF7V3"
-title: "Desktop follow-up: settings UX from the D1 reviews"
-type: "task"
-status: "open"
-project: "manyhands"
-team: "core"
 ---
 
 ## Origin and delivery order
