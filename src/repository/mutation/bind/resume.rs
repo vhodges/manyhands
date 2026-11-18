@@ -939,11 +939,12 @@ impl OperationResumeBinding {
         })
     }
 
-    /// The refusal of a resume of an operation a call is still at work
-    /// under: its row, unfinished, names a holder that still works, as an
-    /// operation read judges it. Such an operation is not taken over: the
-    /// answer is `busy`, naming it, and nothing is recorded. `None` for an
-    /// operation no one is at work under, which is taken up as before. The
+    /// The refusal of a resume of an operation another process is still at
+    /// work under: its row, unfinished, names a holder of another process
+    /// that still works, as an operation read judges it. Such an operation
+    /// is not taken over: the answer is `busy`, naming it, and nothing is
+    /// recorded. `None` for an operation no one is at work under, or one
+    /// this process holds, which is taken up, or refused, as before. The
     /// row looked at is the one a resume would take up: a local hand-off's
     /// own, or the remote row of a synchronization, of a comment's
     /// publication or of a lifecycle's reservation.
@@ -979,7 +980,14 @@ impl OperationResumeBinding {
             live: None,
         };
         let (operation, unfinished) = service.blocking_operation(root, &blocker)?;
-        if !unfinished || operation.attribution.live != Some(true) {
+        // A row this process holds is left to the domain, which takes it
+        // up or refuses it as it always has: this process's own call that
+        // claimed it may have just ended, and its claim's last beat is
+        // fresh for a moment after.
+        let this_process = operation.attribution.host.as_deref()
+            == Some(super::super::super::this_host().as_str())
+            && operation.attribution.pid == Some(i64::from(std::process::id()));
+        if !unfinished || this_process || operation.attribution.live != Some(true) {
             return None;
         }
         Some(Answer::stopped(ResultCode::Busy).naming(

@@ -674,25 +674,10 @@ fn a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it() {
     for now in [HEARTBEAT, HEARTBEAT + 3] {
         clock.set(now);
         let busy = world.execute(REQUEST_2, resume(&world, &operation_id));
-        assert_eq!(busy.command, "operation resume");
-        assert_eq!(
-            (busy.outcome, busy.code, busy.failure_class()),
-            (
-                Outcome::Error,
-                ResultCode::Busy,
-                Some(FailureClass::Transient)
-            )
-        );
-        assert_eq!(busy.effects, Effects::not_requested());
-        assert_eq!(busy.operation_id, None);
-        assert!(world.record(REQUEST_2).is_none(), "a request record");
-        // It names the operation the call indexes under, live by its
-        // heartbeat.
-        let blocker = serde_json::to_value(&busy).unwrap()["data"]["blocker"].clone();
-        assert_eq!(blocker["operation_id"], operation_id.as_str());
-        assert_eq!(blocker["live"], true);
+        assert_refused(&world, REQUEST_2, &busy, Outcome::Error, ResultCode::Busy);
+        assert_eq!(busy.failure_class(), Some(FailureClass::Transient));
         // The same resume is what to send again.
-        assert_eq!(recovery_actions(&busy), ["request.retry", "operation.show"]);
+        assert_eq!(recovery_actions(&busy), ["request.retry"]);
         assert_eq!(busy.recovery[0].arguments["request_id"], REQUEST_2);
         assert_eq!(stored(&world, &operation_id), before);
     }
