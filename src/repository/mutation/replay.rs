@@ -38,7 +38,20 @@ impl RepositoryService {
         // A result that names a commit is given again only while that
         // commit can be reached from the branch the request committed to,
         // or from primary once that branch is gone.
-        if let Some(commit) = result.effects.commit_oid.as_deref() {
+        let local_result = matches!(
+            Command::parse(&record.command),
+            Some(
+                Command::LocalContextSync | Command::LocalContextResolve | Command::OperationResume
+            )
+        ) && result
+            .data
+            .as_ref()
+            .and_then(|d| d.get("type"))
+            .and_then(|t| t.as_str())
+            == Some("local_context_sync");
+        if let Some(commit) = result.effects.commit_oid.as_deref()
+            && !local_result
+        {
             let reachable = git2::Oid::from_str(commit).is_ok_and(|commit| {
                 record.scope.repository().is_some_and(|root| {
                     evidence::still_reachable(

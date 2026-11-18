@@ -204,7 +204,7 @@ fn spec_p2_create_folder_authoritative_child_keeps_exact_refresh_handoff() {
         let (data, root, service) = promotion_folder_fixture();
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let r = state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)?;
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)?;
             let mut r = begin_record(
                 tx,
                 id,
@@ -563,7 +563,7 @@ fn schema_rejects_free_text_categories_steps_and_refusal_payloads() {
         "publication_category='ssh://endpoint'",
         "cleanup_category='path sentinel'",
         "refusal_category='title sentinel'",
-        "refusal_blockers=65536",
+        "refusal_blockers=131072",
         "expectation=x'01'",
         "context_attempt=-1",
     ] {
@@ -686,14 +686,14 @@ fn service_fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService
             tx,
             id,
             Some(&RemoteRefPlan::from_configuration("origin", "main").unwrap()),
-            false,
+            state::ConfigurationChange::Plan,
         )
     })
     .unwrap();
     (data, root, service)
 }
 #[test]
-fn promotion_status_reports_parent_step_once_and_never_offers_boundary_resume() {
+fn promotion_status_reports_parent_step_once_and_offers_resume() {
     let (_data, root, service) = service_fixture();
     git2::Repository::init(root.path()).unwrap();
     let resolved = service.resolve_repository(root.path()).unwrap();
@@ -711,7 +711,7 @@ fn promotion_status_reports_parent_step_once_and_never_offers_boundary_resume() 
     let shown = service.show_operation(&resolved, r.operation_id).unwrap();
     assert_eq!(shown.state, "confirmed");
     assert_eq!(shown.completed_step.as_deref(), Some("confirmed"));
-    assert!(shown.next_action.is_none());
+    assert_eq!(shown.next_action, Some(OperationNextAction::Resume));
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     service
         .reserve_remote_operation(
@@ -825,7 +825,7 @@ fn audit_rejects_foreign_child_scope_instead_of_treating_it_as_absence() {
     let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)",[other.path().to_str().unwrap()]).unwrap();
     state::with_transaction(&service, other.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let child = OperationId::new();
@@ -986,7 +986,7 @@ fn parent_and_child_ids_cross_scope_but_own_promote_reservation_is_accepted() {
     let other = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     Connection::open(&service.registry_path).unwrap().execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)",[other.path().to_str().unwrap()]).unwrap();
     state::with_transaction(&service, other.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     assert_eq!(
@@ -1107,7 +1107,7 @@ fn final_sql_rollback_preserves_history_parent_reservation_and_tracking_guard() 
         .unwrap();
     let op = OperationId::new();
     state::with_transaction(&service,root.path(),|tx,id| {
-        state::configure(tx,id,Some(&plan),false)?;
+        state::configure(tx,id,Some(&plan),state::ConfigurationChange::Plan)?;
         let mut r=begin_record(tx,id,op,&item,PromotionExpectation::from_bytes([7;32]),Some("origin"))?;
         through_integration(tx,&mut r);
         r.step=PromotionStep::Published; r.publication=Some(PublicationCategory::Published); save_record(tx,id,&r)?;
@@ -1284,7 +1284,7 @@ fn finalization_without_applicable_reservation_does_not_fabricate_history() {
         let plan = remote.then(|| RemoteRefPlan::from_configuration("origin", "main").unwrap());
         let op = OperationId::new();
         let r = state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, plan.as_ref(), false)?;
+            state::configure(tx, id, plan.as_ref(), state::ConfigurationChange::Plan)?;
             let mut r = begin_record(
                 tx,
                 id,
@@ -1356,4 +1356,100 @@ fn finalization_without_applicable_reservation_does_not_fabricate_history() {
             0
         );
     }
+}
+
+fn refused_promotion(
+    tx: &rusqlite::Transaction<'_>,
+    blockers: Vec<PromotionBlocker>,
+) -> PromotionRecord {
+    refuse_record(
+        tx,
+        1,
+        OperationId::new(),
+        &ITEM.parse().unwrap(),
+        PromotionExpectation::from_bytes([7; 32]),
+        None,
+        &Refusal::Blocked(blockers),
+    )
+    .unwrap()
+}
+#[test]
+fn blocker_mask_round_trips_all_17() {
+    assert_eq!(BLOCKERS.len(), 17);
+    assert!(BLOCKERS.windows(2).all(|p| p[0] < p[1]));
+    assert_eq!(BLOCKERS[16], PromotionBlocker::HistoryUnresolved);
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    for (bit, blocker) in BLOCKERS.iter().enumerate() {
+        let r = refused_promotion(&tx, vec![*blocker]);
+        let mask: i64 = tx
+            .query_row(
+                "SELECT refusal_blockers FROM document_promotions WHERE operation_id=?1",
+                [r.operation_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mask, 1 << bit);
+        assert_eq!(
+            read_record(&tx, 1, r.operation_id)
+                .unwrap()
+                .unwrap()
+                .refusal,
+            Some(Refusal::Blocked(vec![*blocker]))
+        );
+    }
+    let every = refused_promotion(&tx, BLOCKERS.to_vec());
+    assert_eq!(
+        read_record(&tx, 1, every.operation_id)
+            .unwrap()
+            .unwrap()
+            .refusal,
+        Some(Refusal::Blocked(BLOCKERS.to_vec()))
+    );
+}
+/// A registry from before the widened mask CHECK is rebuilt once, keeping
+/// its rows, and then takes the new bit.
+#[test]
+fn promotion_refusal_blockers_v2_rebuilds_an_old_bound_table_once() {
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let old = refused_promotion(&tx, vec![PromotionBlocker::ContextDirty]);
+    let sql: String = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='document_promotions'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    tx.execute_batch(&format!(
+        "DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO before; {}; {INDEX}; INSERT INTO document_promotions SELECT * FROM before; DROP TABLE before; DELETE FROM registry_migrations WHERE name='promotion_refusal_blockers_v2';",
+        sql.replace("131071", "65535")
+    ))
+    .unwrap();
+    assert!(
+        tx.execute("UPDATE document_promotions SET refusal_blockers=65536", [])
+            .is_err()
+    );
+    for _ in 0..2 {
+        migrate(&tx).unwrap();
+        assert_eq!(
+            read_record(&tx, 1, old.operation_id)
+                .unwrap()
+                .unwrap()
+                .refusal,
+            old.refusal
+        );
+        let marked: i64 = tx
+            .query_row("SELECT count(*) FROM registry_migrations WHERE name='promotion_refusal_blockers_v2'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(marked, 1);
+    }
+    let new = refused_promotion(&tx, vec![PromotionBlocker::HistoryUnresolved]);
+    assert_eq!(
+        read_record(&tx, 1, new.operation_id)
+            .unwrap()
+            .unwrap()
+            .refusal,
+        new.refusal
+    );
 }

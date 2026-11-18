@@ -361,6 +361,51 @@ fn author_is_created_by_which_is_never_unknown_metadata() {
 }
 
 #[test]
+fn unknown_metadata_is_in_key_order_whatever_order_the_file_has_it_in() {
+    let (fixture, enabled) = repository_with_ticket();
+    let root = &fixture.root;
+    // `created_by` sits among the unknown keys. The parser takes the first
+    // comment's as its author. The second's names nobody, so the parser
+    // leaves it among the unknown keys and the read takes it out.
+    write_comment(
+        root,
+        TICKET_A,
+        COMMENT_A,
+        None,
+        &time(1),
+        &format!("zeta: last\ncreated_by: {ADA}\nmood: calm\nalpha: first\n"),
+    );
+    write_comment(
+        root,
+        TICKET_A,
+        COMMENT_B,
+        None,
+        &time(2),
+        "zeta: last\ncreated_by: 7\nmood: calm\nalpha: first\n",
+    );
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let list = comments(&enabled.service, &repo, TICKET_A);
+
+    assert_eq!(ids(&list.items), [Some(COMMENT_A), Some(COMMENT_B)]);
+    for comment in &list.items {
+        assert_eq!(
+            comment.unknown_metadata.keys().collect::<Vec<_>>(),
+            ["alpha", "mood", "zeta"],
+            "{comment:?}"
+        );
+        assert_eq!(
+            Value::Object(comment.unknown_metadata.clone()),
+            json!({"alpha": "first", "mood": "calm", "zeta": "last"})
+        );
+    }
+    assert_eq!(list.items[0].author.as_deref(), Some(ADA));
+    assert_eq!(codes(&list.items[1]), [ProblemCode::InvalidField]);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
 fn files_that_are_not_comments_end_the_root_list_with_null_ids_paths_and_codes() {
     let (fixture, enabled) = repository_with_ticket();
     let root = &fixture.root;

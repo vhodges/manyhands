@@ -14,6 +14,7 @@ fn every_command_of_this_target_keeps_the_rules_of_the_boundary() {
         .chain(super::key_generation::CONFORMANCE)
         .chain(super::keys::CONFORMANCE)
         .chain(super::resume::CONFORMANCE)
+        .chain(super::local_sync::CONFORMANCE)
         .collect();
     run(
         Home::Replay,

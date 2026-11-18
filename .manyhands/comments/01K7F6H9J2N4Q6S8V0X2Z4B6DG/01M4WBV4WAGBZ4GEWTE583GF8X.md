@@ -1,9 +1,10 @@
 ---
+id: 01M4WBV4WAGBZ4GEWTE583GF8X
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-14T04:48:30Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4WBV4WAGBZ4GEWTE583GF8X"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-14T04:48:30Z"
 ---
 
 Task 6 spec ses_ec74e7b1cffe52NiF8TdyiLNkR BLOCKED four findings; quality not

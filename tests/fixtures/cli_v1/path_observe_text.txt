@@ -1,0 +1,4 @@
+path: docs/absent.md
+exists: no
+observation: v1:3139e51f91a685fa0b03db97649421e75a9a926867abf837c59bfdad9d0b13d7
+context: <repository> (main)

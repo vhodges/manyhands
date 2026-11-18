@@ -1,9 +1,10 @@
 ---
+id: 01M4E0YBBJNMNHFVKHV6AXNGZS
+item_id: 01M4CC0VMQ7R15A7M9SPN3KB67
+created_at: 2026-10-08T15:08:39Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4E0YBBJNMNHFVKHV6AXNGZS"
-item_id: "01M4CC0VMQ7R15A7M9SPN3KB67"
-created_at: "2026-10-08T15:08:39Z"
 ---
 
 Task 9 checkpoint (relationship queries): complete at `2873ee2`, range

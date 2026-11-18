@@ -1,0 +1,43 @@
+{
+  "code": "ok",
+  "command": "ticket close",
+  "data": {
+    "blockers": [],
+    "checkpoint_oid": null,
+    "cleanup": "complete",
+    "cleanup_pending": null,
+    "integration": "already_contained",
+    "integration_oid": "<commit-oid>",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "kind": "ticket",
+    "made_ready": [],
+    "made_ready_state": "not_applicable",
+    "publication": "pending",
+    "publication_oid": null,
+    "publication_pending": "no_publication_remote",
+    "recording": "existing",
+    "type": "lifecycle"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "complete",
+    "commit_oid": "<commit-oid>",
+    "discovery": "current",
+    "integration": "complete",
+    "publication": "pending",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": "<operation-id>",
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

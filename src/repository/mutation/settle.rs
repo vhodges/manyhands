@@ -2,7 +2,7 @@
 //! answer. The record is finished with the result, deleted so that the
 //! request ID is free again, or left accepted for a retry to continue.
 
-use crate::results::{Envelope, Outcome, ResultCode};
+use crate::results::{Envelope, Outcome};
 
 use super::{
     super::{
@@ -74,6 +74,27 @@ impl Settlement {
     }
 }
 
+/// What a record stores of `answer`, and the outcome it stores, worked out here
+/// and nowhere else. The outcome is derived from the code and the effects
+/// exactly as an envelope's is. `None` for an answer whose data cannot be stored.
+pub(super) fn stored_result(answer: &Answer) -> Option<RequestResult> {
+    let data = match &answer.data {
+        Some(data) => Some(serde_json::to_value(data).ok()?),
+        None => None,
+    };
+    Some(RequestResult {
+        outcome: Outcome::of_mutation(
+            answer.cancelled_outcome(),
+            answer.code,
+            &answer.effects,
+            answer.local_change,
+        ),
+        code: answer.code,
+        effects: answer.effects.clone(),
+        data,
+    })
+}
+
 impl RepositoryService {
     /// The envelope of what a call found or did, with its record settled
     /// from it.
@@ -83,6 +104,15 @@ impl RepositoryService {
         accepted: &Accepted,
         ran: Ran,
     ) -> Envelope<MutationDataDto> {
+        if super::local_control::effects(self, accepted.request_id)
+            .ok()
+            .flatten()
+            .is_some()
+            && let Ok(Some(record)) = self.request_record(accepted.request_id)
+            && record.state == RequestState::Finished
+        {
+            return self.replay(reply, record);
+        }
         let Ran { answer, standing } = ran;
         let settlement = Settlement::of(&standing);
         let applied = self.settle(accepted, settlement, &answer);
@@ -124,10 +154,9 @@ impl RepositoryService {
 
     /// Stores `answer` as the result of the request `request_id` and
     /// marks its record finished, if the record is still accepted with
-    /// `attempt`. This is the one writer of a finished result: what a
-    /// record stores of an answer, and the outcome it stores, are worked
-    /// out here and nowhere else. The outcome is derived from the code
-    /// and the effects exactly as an envelope's is.
+    /// `attempt`. A finished result has two writers, this and the
+    /// one-transaction path of `execute`, and what a record stores of an
+    /// answer is worked out for both by `stored_result`.
     ///
     /// Returns whether the record was finished. `Ok(false)` for a record
     /// that another call has since entered, finished or deleted, and for
@@ -139,28 +168,10 @@ impl RepositoryService {
         attempt: u64,
         answer: &Answer,
     ) -> Result<bool, ReadError> {
-        let data = match &answer.data {
-            Some(data) => match serde_json::to_value(data) {
-                Ok(data) => Some(data),
-                Err(_) => return Ok(false),
-            },
-            None => None,
+        let Some(result) = stored_result(answer) else {
+            return Ok(false);
         };
-        self.finish_request(
-            request_id,
-            attempt,
-            &RequestResult {
-                outcome: Outcome::of_mutation(
-                    answer.code == ResultCode::Cancelled,
-                    answer.code,
-                    &answer.effects,
-                    answer.local_change,
-                ),
-                code: answer.code,
-                effects: answer.effects.clone(),
-                data,
-            },
-        )
+        self.finish_request(request_id, attempt, &result)
     }
 
     /// Changes the record as `settlement` says, and returns whether the

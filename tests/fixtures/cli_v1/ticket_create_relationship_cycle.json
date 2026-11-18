@@ -1,0 +1,36 @@
+{
+  "code": "relationship_cycle",
+  "command": "ticket create",
+  "data": {
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FCZ",
+    "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FCZ/ticket.md",
+    "rejected": [
+      "01ARZ3NDEKTSV4RRFFQ69G5FCZ",
+      "01ARZ3NDEKTSV4RRFFQ69G5FR3"
+    ],
+    "slug": null,
+    "unresolved": []
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "Those relationships would form a cycle.",
+  "operation_id": null,
+  "outcome": "error",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FCZ",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

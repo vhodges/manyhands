@@ -36,7 +36,7 @@ impl ResolvedRepository {
         root_scope(&self.root)
     }
 
-    pub(super) fn registration_id(&self) -> i64 {
+    pub(in super::super) fn registration_id(&self) -> i64 {
         self.registration_id
     }
 

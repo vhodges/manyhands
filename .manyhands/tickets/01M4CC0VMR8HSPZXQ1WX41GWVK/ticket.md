@@ -1,16 +1,16 @@
 ---
+cycle: F2
+wave: '03'
+id: 01M4CC0VMR8HSPZXQ1WX41GWVK
+title: 'Wave 03 F2: Request Replay, Confirmation And Shared Mutation Bridges'
+type: cycle
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-13T22:46:47Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CC0VMR8HSPZXQ1WX41GWVK"
-title: "Wave 03 F2: Request Replay, Confirmation And Shared Mutation Bridges"
-type: "cycle"
-status: "closed"
-closed_at: "2026-10-13T22:46:47Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
-wave: "03"
-cycle: "F2"
 ---
 
 Provide the shared safety boundary every mutation adapter consumes,

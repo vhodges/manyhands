@@ -1,0 +1,5 @@
+{
+  "primary_branch": "main",
+  "identity": { "name": "Repository Person", "email": "repository@example.invalid" },
+  "ticket_slug_prefix": "mh"
+}

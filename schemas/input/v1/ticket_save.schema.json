@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ticket save patch input",
+  "type": "object",
+  "properties": {
+    "observation": { "type": "string" },
+    "title": { "type": "string" },
+    "type": { "type": "string" },
+    "status": { "type": "string" },
+    "body": { "type": "string" },
+    "project": { "type": ["string", "null"] },
+    "team": { "type": ["string", "null"] },
+    "deps": { "type": ["array", "null"], "items": { "type": "string" } },
+    "parent": { "type": ["string", "null"] }
+  },
+  "required": ["observation"],
+  "additionalProperties": false
+}

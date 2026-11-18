@@ -20,20 +20,28 @@ use super::{
 /// be the same request.
 pub(super) struct RequestIdentity {
     pub(super) request_id: RequestId,
-    /// `None` when the request names a repository whose root cannot be
-    /// resolved to a canonical path: no record can be of this request
-    /// then.
+    /// `None` when the call cannot establish its scope. Removal can recover
+    /// an exact persisted root without filesystem resolution; other repository
+    /// commands still require the live canonical path.
     pub(super) scope: Option<ScopeKey>,
     pub(super) digest: Option<IntentDigest>,
 }
 
 impl RequestIdentity {
     pub(super) fn of(request_id: RequestId, binding: &dyn Binding) -> Self {
-        let scope = match binding.place() {
-            Place::Repository(root) => ScopeKey::for_repository(root),
-            Place::NewRepository(root) => ScopeKey::for_new_repository(root),
-            Place::Application => Some(ScopeKey::application()),
-        };
+        Self::with_scope(
+            request_id,
+            binding,
+            super::confirm::scope_key(binding.place()),
+        )
+    }
+
+    /// The scope has already been resolved and frozen by the binding.
+    pub(super) fn with_scope(
+        request_id: RequestId,
+        binding: &dyn Binding,
+        scope: Option<ScopeKey>,
+    ) -> Self {
         let digest = scope.as_ref().map(|scope| {
             binding
                 .fields(IntentDigest::builder(
@@ -112,6 +120,7 @@ impl Reply<'_> {
         accepted: Option<&Accepted>,
         kept: Kept,
     ) -> Envelope<MutationDataDto> {
+        let cancelled = answer.cancelled_outcome();
         let Answer {
             code,
             effects,
@@ -121,6 +130,7 @@ impl Reply<'_> {
             offers_nothing,
             // Of a preview that is refused, and of no request.
             host_replacement: _,
+            lifecycle_blocked: _,
         } = answer;
         let scope = self.scope(accepted.map(|accepted| &accepted.position));
         // A request with no operation names none.
@@ -143,14 +153,26 @@ impl Reply<'_> {
                 .and_then(MutationDataDto::authority)
                 .as_deref(),
         );
-        let mut envelope = Envelope::classified_mutation(
-            self.binding.command().name(),
-            scope,
-            code == ResultCode::Cancelled,
-            code,
-            effects,
-            local_change,
-        )
+        let mut envelope = if code == ResultCode::Cancelled && !cancelled {
+            // Q1 retirement-only partial cancellation. Keep the generic
+            // classifier's legacy cancelled/code invariant for every other call.
+            Envelope::mutation(
+                self.binding.command().name(),
+                scope,
+                crate::results::Outcome::of_mutation(false, code, &effects, local_change),
+                code,
+            )
+            .with_effects(effects)
+        } else {
+            Envelope::classified_mutation(
+                self.binding.command().name(),
+                scope,
+                cancelled,
+                code,
+                effects,
+                local_change,
+            )
+        }
         .with_request_id(self.identity.request_id.to_string())
         .with_recovery(recovery);
         if let Some(operation) = operation {

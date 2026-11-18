@@ -1,9 +1,10 @@
 ---
+id: 01M4CHKY343YRKYARJVYT8MBB0
+item_id: 01M4CGDANTBDR4T8AGFZP8ZGP7
+created_at: 2026-10-08T01:21:34Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4CHKY343YRKYARJVYT8MBB0"
-item_id: "01M4CGDANTBDR4T8AGFZP8ZGP7"
-created_at: "2026-10-08T01:21:34Z"
 ---
 
 Approval checkpoint: the product owner approved the RFC, PRD v0.6, the RFC

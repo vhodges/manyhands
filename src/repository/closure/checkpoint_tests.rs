@@ -998,6 +998,8 @@ fn existing_closure_writes_no_checkpoint() {
     write(&f.context, &ticket(), closed);
     commit(&f.context);
     let r = f.record(ClosureKind::Existing);
+    // Saving the fixture can advance the persisted timestamp before either operation.
+    let r = f.reload(&r);
     let before = image(f.root.path(), &f.repo);
     assert_eq!(f.hook(&r).unwrap(), PreIntegration::None);
     assert_eq!(f.resume(&r).unwrap(), None);
@@ -1159,6 +1161,8 @@ fn mismatched_confirmed_identity_persists_nothing() {
     f.missing_identity();
     let confirmation = f.confirmation();
     let r = f.confirmed_record(&confirmation);
+    // Saving the fixture can advance the persisted timestamp before the operation.
+    let r = f.reload(&r);
     let observation = f.observation_with(Some(confirmation.clone()));
     let other = ConfirmedCommitIdentity {
         identity: CommitIdentity {

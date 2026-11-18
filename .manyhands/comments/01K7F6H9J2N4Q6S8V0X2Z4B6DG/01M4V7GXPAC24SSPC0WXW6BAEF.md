@@ -1,9 +1,10 @@
 ---
+id: 01M4V7GXPAC24SSPC0WXW6BAEF
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-13T18:13:46Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4V7GXPAC24SSPC0WXW6BAEF"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-13T18:13:46Z"
 ---
 
 Task 3 atomic-absence blocker technically corrected, awaiting independent

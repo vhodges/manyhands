@@ -30,7 +30,8 @@ const ENVELOPE_FIELDS: [&str; 11] = [
 /// Every result code with its class: the codes reads return, in their
 /// order, then the mutation codes of the design's Result Mapping table,
 /// class by class in its order.
-const DESIGN_CODES: [(&str, Option<FailureClass>); 68] = [
+/// The two CLI codes follow `invalid_input`.
+const DESIGN_CODES: [(&str, Option<FailureClass>); 70] = [
     ("ok", None),
     ("invalid_path", Some(FailureClass::Input)),
     ("not_repository", Some(FailureClass::Input)),
@@ -52,6 +53,8 @@ const DESIGN_CODES: [(&str, Option<FailureClass>); 68] = [
     ("busy", Some(FailureClass::Transient)),
     ("internal_error", Some(FailureClass::Internal)),
     ("invalid_input", Some(FailureClass::Input)),
+    ("usage_error", Some(FailureClass::Input)),
+    ("command_unavailable", Some(FailureClass::Input)),
     ("request_mismatch", Some(FailureClass::Input)),
     ("request_not_found", Some(FailureClass::Input)),
     ("confirmation_mismatch", Some(FailureClass::Input)),
@@ -171,6 +174,8 @@ fn result_code_messages_are_fixed() {
         "The repository is busy; try again.",
         "An internal error occurred.",
         "The request input is not valid.",
+        "The command line is not valid; see --help.",
+        "That command is not available in this version of the CLI.",
         "That request ID was already used for a different request.",
         "No request has that ID.",
         "The confirmation was prepared for a different request.",
@@ -1556,7 +1561,7 @@ fn a_host_with_an_empty_port_is_not_a_host() {
 }
 
 /// Every recovery action, with the keys of its arguments.
-const RECOVERY_ACTIONS: [(&str, &[&str]); 11] = [
+const RECOVERY_ACTIONS: [(&str, &[&str]); 12] = [
     ("index.rebuild", &["root"]),
     ("index.refresh", &["root"]),
     ("repo.inspect", &["root"]),
@@ -1568,6 +1573,7 @@ const RECOVERY_ACTIONS: [(&str, &[&str]); 11] = [
     ("repo.identity_set", &["root"]),
     ("host.approve", &["authority", "root"]),
     ("host.replace", &["authority", "root"]),
+    ("remote.history", &["root"]),
 ];
 
 #[test]

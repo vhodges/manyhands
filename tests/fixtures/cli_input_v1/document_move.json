@@ -1,0 +1,5 @@
+{
+  "observation": "v1:caller-observation",
+  "destination_path": "docs/moved.md",
+  "destination_observation": "v1:destination-observation"
+}

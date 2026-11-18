@@ -1,9 +1,10 @@
 ---
+id: 01M4X3ER7B21PNX7DZNQ0RMZ55
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-14T11:42:40Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4X3ER7B21PNX7DZNQ0RMZ55"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-14T11:42:40Z"
 ---
 
 Task 8 IN PROGRESS, authorized inline with no subagents at clean base

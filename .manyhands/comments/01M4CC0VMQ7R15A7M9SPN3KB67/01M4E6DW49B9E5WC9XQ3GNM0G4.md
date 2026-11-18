@@ -1,9 +1,10 @@
 ---
+id: 01M4E6DW49B9E5WC9XQ3GNM0G4
+item_id: 01M4CC0VMQ7R15A7M9SPN3KB67
+created_at: 2026-10-08T16:44:30Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4E6DW49B9E5WC9XQ3GNM0G4"
-item_id: "01M4CC0VMQ7R15A7M9SPN3KB67"
-created_at: "2026-10-08T16:44:30Z"
 ---
 
 Task 10 checkpoint and handoff: F1 is review-ready at `8d05ab2`.

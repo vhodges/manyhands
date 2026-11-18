@@ -1,9 +1,10 @@
 ---
+id: 01M4W4GZ1NQT9JYSJP1YM2ZEJQ
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-14T02:40:36Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4W4GZ1NQT9JYSJP1YM2ZEJQ"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-14T02:40:36Z"
 ---
 
 Controller resolves prior atomic-batch interface/file-map issue: minimal shared

@@ -413,7 +413,10 @@ recovery_actions! {
     /// Prepare the command again for a new confirmation.
     RequestPrepare => "request.prepare", [];
     /// Cancel the request `request_id`, then submit it once more: that
-    /// call ends it cancelled and lets go of what it holds.
+    /// call ends it cancelled and lets go of what it holds. A `document
+    /// promote` or `ticket close` that answers `cancelled` lets go of a child
+    /// it has stopped but is not ended: its record stays, and the same request
+    /// submitted again continues it.
     RequestCancel => "request.cancel", ["request_id"];
     /// Abandon the operation the action names, in the repository at `root`.
     OperationAbandon => "operation.abandon", ["root"];
@@ -423,6 +426,9 @@ recovery_actions! {
     HostApprove => "host.approve", ["authority", "root"];
     /// Replace the pin of the host `authority` for the repository at `root`.
     HostReplace => "host.replace", ["authority", "root"];
+    /// List the contexts of the repository at `root` whose publication
+    /// history is unknown, and choose a repair for each.
+    RemoteHistory => "remote.history", ["root"];
 }
 
 impl Serialize for RecoveryActionKind {
@@ -574,6 +580,10 @@ result_codes! {
         "An internal error occurred.";
     InvalidInput => "invalid_input", Some(FailureClass::Input),
         "The request input is not valid.";
+    UsageError => "usage_error", Some(FailureClass::Input),
+        "The command line is not valid; see --help.";
+    CommandUnavailable => "command_unavailable", Some(FailureClass::Input),
+        "That command is not available in this version of the CLI.";
     RequestMismatch => "request_mismatch", Some(FailureClass::Input),
         "That request ID was already used for a different request.";
     RequestNotFound => "request_not_found", Some(FailureClass::Input),

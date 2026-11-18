@@ -159,6 +159,33 @@ preserving and replacing the database, then releases it before an explicit-root
 rebuild acquires its repository lease and scans canonical state. This prevents
 database replacement races without globally serializing Git work or scans.
 
+### Unavailable-repository registration removal
+
+Amendment for ticket `01M4R19P943QZKHHKRXV2D2TP2` (2026-10-19): removing an
+exact stored-root registration is a narrow exception to the common-Git lease
+requirement when the root is positively absent, or an exact Git open finds no
+repository and `.git` is positively absent. Permission/I/O errors, damaged Git
+metadata and dangling indirection do not qualify. This changes no other
+repository resolver or mutation's lease requirements.
+
+Removal acquires the root-keyed application-data bootstrap lease, the Git
+lease when a repository is present, and then the exclusive cache guard, in
+that order. It reobserves the root and held lease identity after acquiring the
+guards. If a repository appears or its lease file has been replaced, removal
+returns busy and releases the guards rather than taking a Git lease under the
+cache guard. Existing per-lock wait bounds apply; there is no internal retry
+loop and no claim that their sum is one lock's timeout.
+
+The registration stamp is compared before journal creation and in the deletion
+transaction. Root-keyed local journal rows and the registration's dependent
+rows are removed atomically. Durable request/confirmation records remain for
+matching replay, as do draft files and application-global key and trust state.
+The registry-only route preserves unrelated unfinished recovery evidence and
+accepted requests, even when their original Git lease pathname is gone. Only
+the matching removal's own pending operation can continue this way; removal is
+not implicit abandonment. See the [CLI contract](cli-contract.md#registration-removal-targeting)
+for selection, consent and replay behavior.
+
 ## Remote Polling And Reservation
 
 Wave 2 adds repository-scoped remote-operation reservations for polling, item

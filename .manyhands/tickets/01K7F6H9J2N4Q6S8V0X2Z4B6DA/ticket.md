@@ -1,14 +1,16 @@
 ---
+cycle: '02'
+wave: '02'
+id: 01K7F6H9J2N4Q6S8V0X2Z4B6DA
+title: 'Wave 02 Cycle 02: Generated Keys And Session Unlock'
+type: cycle
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-05T15:31:04Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01K7F6H9J2N4Q6S8V0X2Z4B6DA"
-title: "Wave 02 Cycle 02: Generated Keys And Session Unlock"
-type: "cycle"
-status: "closed"
-project: "manyhands"
-team: "core"
-wave: "02"
-cycle: "02"
 ---
 
 Create and safely use generated or imported key material while retaining

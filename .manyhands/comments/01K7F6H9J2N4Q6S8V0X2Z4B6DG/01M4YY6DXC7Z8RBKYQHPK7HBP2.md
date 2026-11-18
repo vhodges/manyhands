@@ -1,9 +1,10 @@
 ---
+id: 01M4YY6DXC7Z8RBKYQHPK7HBP2
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-15T04:47:43Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4YY6DXC7Z8RBKYQHPK7HBP2"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-15T04:47:43Z"
 ---
 
 Native matrix green on the ticket branch. Owner authorized a Windows

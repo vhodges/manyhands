@@ -1,0 +1,27 @@
+{
+  "code": "ticket_closed",
+  "command": "comment add",
+  "data": null,
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The ticket is closed.",
+  "operation_id": "<operation-id>",
+  "outcome": "blocked",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC1",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC1",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC1"
+  }
+}

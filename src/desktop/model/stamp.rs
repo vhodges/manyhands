@@ -1,0 +1,136 @@
+//! Stamps: which view asked for a result, and whether it still wants it.
+//!
+//! Each model keeps a generation per scope and moves it on whenever the
+//! scope's inputs change. A completion carries the stamp it was asked
+//! under; `apply` drops it when the stamp is no longer current, so an old
+//! result never replaces a newer view.
+
+use std::collections::HashMap;
+
+/// A registration root as the repository list returned it.
+pub(crate) type RepoKey = String;
+
+/// An open tab, by the number it was opened under.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub(crate) struct TabId(pub u64);
+
+/// A page of the settings window.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum SettingsPage {
+    Repositories,
+    Remotes,
+    Keys,
+    Hosts,
+    /// "Checking for updates" (D6 C2).
+    Polling,
+}
+
+/// The Settings menu's three entries (Wave 04 Cycle 04 design B1; R-4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SettingsNav {
+    Repositories,
+    SharingAndKeys,
+    Checking,
+}
+
+impl SettingsPage {
+    /// The menu entry that shows this page: Repositories and Remotes under
+    /// Repositories; Keys and Hosts under Sharing & keys; Polling under
+    /// Checking for updates.
+    pub(crate) fn nav(self) -> SettingsNav {
+        match self {
+            Self::Repositories | Self::Remotes => SettingsNav::Repositories,
+            Self::Keys | Self::Hosts => SettingsNav::SharingAndKeys,
+            Self::Polling => SettingsNav::Checking,
+        }
+    }
+}
+
+/// What asked for a result.
+///
+/// Not `Copy`: a repository's scope holds its root.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ViewScope {
+    Repositories,
+    /// The selected repository's resolution. One scope for every
+    /// repository: selecting another drops the last one's resolution.
+    Selection,
+    Documents(RepoKey),
+    Tickets(RepoKey),
+    Tab(TabId),
+    /// The Find input's search. One scope: a new search drops the last.
+    Find,
+    Settings(SettingsPage),
+    /// The Add repository forms' folder check (Wave 04 Cycle 05a, R-9). The
+    /// forms keep their own generations.
+    AddRepository,
+    Operations(RepoKey),
+    /// A confirmation dialog's preview. Each dialog keeps its own
+    /// generations, so one scope serves them all.
+    Confirmation,
+    /// A create dialog's path check and new ID, and Move…'s checks and
+    /// reads (Task 24). Each dialog keeps its own generations, so one
+    /// scope serves them all.
+    Create,
+    /// The draft registry's listing of the store. One scope: a new listing
+    /// drops the last.
+    Drafts,
+    /// The Unlock key dialog's read of the key list, for its key's
+    /// fingerprint (Wave 04 Cycle 05a, Part D). Each dialog keeps its own
+    /// generations, so one scope serves them all.
+    Unlock,
+    /// The lifecycle dialog's reads of the titles of the tickets a closure
+    /// made ready (D5 design, A3). Each dialog keeps its own generations,
+    /// so one scope serves them all.
+    MadeReady,
+    /// The Workspace's read of the titles of the items a repository has not
+    /// shared yet (Cycle 03a, R-9). Its answer is merged whatever the
+    /// generation: a title is a fact.
+    ShareTitles(RepoKey),
+    /// The resolve conflict sheet's reads of its conflict (D5 B1). Each
+    /// sheet keeps its own generations, so one scope serves them all.
+    Conflict,
+    /// The resolve conflict sheet's read of its item's work folder (B4).
+    ConflictFolder,
+    /// Which of a repository's pending rows hold a conflict to review
+    /// (D5 B5), read once its rows have landed.
+    PendingConflicts(RepoKey),
+    /// One Drafts page row's reads of its item. A new listing, or Retry,
+    /// moves it on, so a late read never lands on a newer row.
+    DraftRow(manyhands::drafts::DraftId),
+}
+
+/// A scope and the generation it was at when the request was made.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct Stamp {
+    pub scope: ViewScope,
+    pub generation: u64,
+}
+
+/// The current generation of each scope a model has asked under.
+#[derive(Default)]
+pub(crate) struct Generations {
+    current: HashMap<ViewScope, u64>,
+}
+
+impl Generations {
+    /// Moves `scope` on and returns the stamp for a request made now.
+    /// Every stamp issued for `scope` before this one stops being current.
+    pub(crate) fn next(&mut self, scope: ViewScope) -> Stamp {
+        let generation = self.current.entry(scope.clone()).or_insert(0);
+        *generation += 1;
+        Stamp {
+            scope,
+            generation: *generation,
+        }
+    }
+
+    /// Whether `stamp` is the last one issued for its scope.
+    pub(crate) fn is_current(&self, stamp: &Stamp) -> bool {
+        self.current.get(&stamp.scope) == Some(&stamp.generation)
+    }
+}
+
+#[cfg(test)]
+#[path = "stamp_tests.rs"]
+mod tests;

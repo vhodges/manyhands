@@ -1,9 +1,10 @@
 ---
+id: 01M4KCQJ71E7FVNABR1PN3MNM7
+item_id: 01M4CC0VMR8HSPZXQ1WX41GWVK
+created_at: 2026-10-10T17:10:51Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4KCQJ71E7FVNABR1PN3MNM7"
-item_id: "01M4CC0VMR8HSPZXQ1WX41GWVK"
-created_at: "2026-10-10T17:10:51Z"
 ---
 
 Part A checkpoint (Tasks 1–4: short codes and initials, relationship writers,

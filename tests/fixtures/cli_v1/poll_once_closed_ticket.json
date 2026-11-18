@@ -1,0 +1,50 @@
+{
+  "code": "ok",
+  "command": "poll once",
+  "data": {
+    "completed_at": "<time>",
+    "completion": "completed",
+    "next_eligible_at": "<time>",
+    "operation_id": "<operation-id>",
+    "targets": [
+      {
+        "after_oid": "<oid>",
+        "before_oid": "<oid>",
+        "disposition": "current",
+        "item_id": null,
+        "kind": null,
+        "target": "refs/heads/main"
+      },
+      {
+        "after_oid": null,
+        "before_oid": null,
+        "disposition": "current",
+        "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+        "kind": "ticket",
+        "target": "refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW"
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "current",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": "<operation-id>",
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

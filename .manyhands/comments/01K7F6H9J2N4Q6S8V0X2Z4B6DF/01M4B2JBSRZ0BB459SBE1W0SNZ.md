@@ -1,9 +1,10 @@
 ---
+id: 01M4B2JBSRZ0BB459SBE1W0SNZ
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DF
+created_at: 2026-10-07T11:49:26Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4B2JBSRZ0BB459SBE1W0SNZ"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DF"
-created_at: "2026-10-07T11:49:26Z"
 ---
 
 Plan-ready/self-review checkpoint. Applied `review-cycle-docs` and its full

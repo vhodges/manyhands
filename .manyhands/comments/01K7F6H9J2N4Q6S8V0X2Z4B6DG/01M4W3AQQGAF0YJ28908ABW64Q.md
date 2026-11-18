@@ -1,9 +1,10 @@
 ---
+id: 01M4W3AQQGAF0YJ28908ABW64Q
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-14T02:19:44Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4W3AQQGAF0YJ28908ABW64Q"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-14T02:19:44Z"
 ---
 
 Task 5 spec P2 ses_ec7f49995ffeVTGZBqRN4rzEoX technically corrected, awaiting

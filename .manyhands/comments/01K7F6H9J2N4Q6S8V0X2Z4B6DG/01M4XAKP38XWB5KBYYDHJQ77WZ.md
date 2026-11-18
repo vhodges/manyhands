@@ -1,9 +1,10 @@
 ---
+id: 01M4XAKP38XWB5KBYYDHJQ77WZ
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-14T13:46:11Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4XAKP38XWB5KBYYDHJQ77WZ"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-14T13:46:11Z"
 ---
 
 Task 8 whole-branch review correction entry, inline, no subagents, clean exact

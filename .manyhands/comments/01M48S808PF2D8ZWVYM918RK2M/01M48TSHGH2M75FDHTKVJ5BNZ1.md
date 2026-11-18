@@ -1,9 +1,10 @@
 ---
+id: 01M48TSHGH2M75FDHTKVJ5BNZ1
+item_id: 01M48S808PF2D8ZWVYM918RK2M
+created_at: 2026-10-06T14:44:58Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M48TSHGH2M75FDHTKVJ5BNZ1"
-item_id: "01M48S808PF2D8ZWVYM918RK2M"
-created_at: "2026-10-06T14:44:58Z"
 ---
 
 The user explicitly authorized execution: "Lets execute the plan using subagent

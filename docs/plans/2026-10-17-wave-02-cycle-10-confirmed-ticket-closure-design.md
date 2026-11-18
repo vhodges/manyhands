@@ -456,6 +456,34 @@ context branch must never receive the checkpoint (C1). The same-ID resume
 then adopts the merged tip: the record keeps `closure_oid` as the checkpoint
 commit and stores the tip in `adopted_context_oid` (see Records).
 
+**Amended 2026-10-27 (closure-recovery gate, ticket branch `03a27cb`).** The local
+merge now has a supported production library path: observe the existing context
+with `observe_local_context_sync`, execute `Mutation::LocalContextSync` with that
+observation, inspect with `inspect_local_context_sync`, and, for an eligible
+canonical conflict, read immutable sides with `read_local_context_conflict` and
+submit the complete token/source set through `Mutation::LocalContextResolve`.
+Then explicitly retry the **original closure** through `close_ticket`; local sync
+does not resume it or grant new consent. The original `closure_oid`, `closed_at`
+and `closed_by` remain authoritative; the adopted descendant is recorded separately.
+
+Special admission requires the exact written closure at `Closing`; it is not
+available for new synchronization during `Integrating` or cleanup. Unfinished
+local synchronization fences closure advancement. Sync freezes `[context, local
+primary]` at acceptance, even with a remote configured. A later primary advance
+requires another explicit sync, and remote closure readiness may still require
+separate primary synchronization. This API performs no network work or primary
+mutation. Known incompatible closures refuse before local effects/ownership;
+unsupported conflicts and ambiguous backend artifacts retain their explicit
+external-repair limits, so this is not a cure for every possible refusal.
+
+The [API audit](../research/wave-03-api-audit.md#closure-recovery-library-amendment-2026-10-27)
+describes exact retry, cancellation and source-retention obligations. No CLI command,
+human-mode recovery artifact or desktop conflict UI is delivered here. C5/D5's
+lifecycle bindings remain owed. Final controller gates and independent whole-branch
+review are pending; the Wave prerequisite remains until approval, closure and merge.
+Cycle 10's original manual-helper execution results remain historical. Task 8's two
+authorized E3 tests now prove the public local workflow and explicit closure resume.
+
 ### Reconciliation of `closing` and `integrating`
 
 | Observed | Resume |

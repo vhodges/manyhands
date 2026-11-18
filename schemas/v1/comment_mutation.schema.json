@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 comment mutation data",
+  "description": "The data of a comment add envelope whose comment was checkpointed in its item's editing context, or of an operation resume envelope that took up the publication of such a comment: the comment, the synchronization that publishes it, and how far that got. The effects of the envelope say what the request wrote and committed, which for an operation resume is nothing, and what was published and merged. A request that stopped before its comment was checkpointed carries no data. It holds no body.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "item_id",
+    "comment_id",
+    "parent_id",
+    "created_by",
+    "synchronization_id",
+    "publication",
+    "pending_reason",
+    "conflict"
+  ],
+  "properties": {
+    "type": {
+      "description": "The one value that tells this data apart.",
+      "type": "string",
+      "enum": ["comment"]
+    },
+    "item_id": {
+      "description": "The item the comment is filed under.",
+      "type": "string"
+    },
+    "comment_id": {
+      "type": "string"
+    },
+    "parent_id": {
+      "description": "The comment this one replies to. Null for a root comment.",
+      "type": ["string", "null"]
+    },
+    "created_by": {
+      "description": "The comment's created_by, as its checkpoint holds it: the author the request gave, written verbatim, or else the name and email of the identity that checkpointed it, as Name <email>. Null when the checkpoint cannot be read.",
+      "type": ["string", "null"]
+    },
+    "synchronization_id": {
+      "description": "The synchronization that publishes the comment: the ID its conflict is inspected, resolved and resumed by.",
+      "type": "string"
+    },
+    "publication": {
+      "description": "As the envelope's publication effect says: published, current when the remote already held the comment, or pending.",
+      "type": "string",
+      "enum": ["published", "current", "pending"]
+    },
+    "pending_reason": {
+      "description": "Why the publication is pending, set exactly when it is: no_publication_remote for a repository with none, where a later item sync publishes the comment; recovery_required when the comment's own index hand-off, or the proof of its checkpoint, is to be done first; synchronization when its synchronization stopped, as the envelope's code says.",
+      "type": ["string", "null"],
+      "enum": ["no_publication_remote", "recovery_required", "synchronization", null]
+    },
+    "conflict": {
+      "description": "The next step of the conflict the synchronization stopped on, in a merge of its own left in the item's editing worktree. Null when it stopped on none. It names no path and holds no content.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["operation_id", "next_action"],
+      "properties": {
+        "operation_id": {
+          "description": "The synchronization the conflict is of: synchronization_id.",
+          "type": "string"
+        },
+        "next_action": {
+          "description": "resolve when every conflicted path is canonical content of one item, which can be resolved in Manyhands; external_repair when any is not, so the merge is finished in Git outside Manyhands.",
+          "type": "string",
+          "enum": ["resolve", "external_repair"]
+        }
+      }
+    }
+  }
+}

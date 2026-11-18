@@ -990,6 +990,10 @@ fn an_abandon_whose_result_was_lost_is_a_no_op_and_not_external_change() {
     );
     assert_eq!(stranded.world.record(REQUEST_1), None);
     stranded.assert_goes_on(&before, "the abandon and its retry");
+    creation_abandon_reentry(
+        FailurePoint::BeforeRequestSettlement,
+        ResultCode::AlreadyApplied,
+    );
 }
 
 /// The abandon is cut off before its transaction. Its retry finds the
@@ -1017,6 +1021,55 @@ fn an_abandon_interrupted_before_its_transaction_is_completed_by_its_retry() {
     );
     assert_eq!(stranded.world.record(REQUEST_1), None);
     stranded.assert_goes_on(&before, "the abandon");
+    creation_abandon_reentry(FailurePoint::BeforeRequestDomainCall, ResultCode::Ok);
+}
+
+/// A creation's local journal exists before registration, even if its directory
+/// later disappears. Generic abandon reentry needs that journal, not registration.
+fn creation_abandon_reentry(point: FailurePoint, expected: ResultCode) {
+    for removed in [false, true] {
+        let mut desk = Desk::new();
+        let site = Site::new();
+        let (confirmation, _) = desk.preview(&killed_create(site.parent.path()));
+        killed_at(
+            &desk,
+            site.parent.path(),
+            false,
+            &confirmation,
+            FailurePoint::BeforeRepositoryInitialization,
+        );
+        desk.reopen();
+        assert!(!desk.registered(&site.root));
+        let operation = desk.record(REQUEST_1).unwrap().operations[0]
+            .operation_id
+            .to_string();
+        if removed {
+            fs::remove_dir_all(&site.root).unwrap();
+        }
+        let mutation = || abandon(&site.root, &operation);
+        let (confirmation, _) = desk.preview(&mutation());
+        let before = tree(site.parent.path());
+        desk.fail_once_at(point);
+        assert_eq!(
+            desk.execute(REQUEST_2, &confirmation, mutation()).code,
+            ResultCode::InternalError
+        );
+        assert_eq!(
+            desk.record(REQUEST_2).unwrap().state,
+            RequestState::Accepted
+        );
+        desk.reopen();
+        let retry = desk.execute(REQUEST_2, &confirmation, mutation());
+        assert_eq!(retry.code, expected, "removed={removed}: {retry:?}");
+        assert_eq!(
+            desk.record(REQUEST_2).unwrap().state,
+            RequestState::Finished
+        );
+        assert_eq!(desk.record(REQUEST_1), None);
+        assert_eq!(desk.pending_journal_rows(), 0);
+        assert!(!desk.registered(&site.root));
+        assert_eq!(before, tree(site.parent.path()));
+    }
 }
 
 /// A call that holds the repository's lease may be the one working under

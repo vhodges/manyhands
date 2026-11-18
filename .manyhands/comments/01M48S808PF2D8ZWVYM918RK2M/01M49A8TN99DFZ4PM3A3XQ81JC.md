@@ -1,9 +1,10 @@
 ---
+id: 01M49A8TN99DFZ4PM3A3XQ81JC
+item_id: 01M48S808PF2D8ZWVYM918RK2M
+created_at: 2026-10-06T19:15:27Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M49A8TN99DFZ4PM3A3XQ81JC"
-item_id: "01M48S808PF2D8ZWVYM918RK2M"
-created_at: "2026-10-06T19:15:27Z"
 ---
 
 User authorizes the running-spike continuation: "I might be okay with the editor

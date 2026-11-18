@@ -1,0 +1,63 @@
+{
+  "code": "ok",
+  "command": "conflict show",
+  "data": {
+    "comment_operation_id": null,
+    "eligibility": "eligible_canonical",
+    "historical": false,
+    "incoming_parent": "<incoming-parent>",
+    "item_id": null,
+    "local_parent": "<local-parent>",
+    "next_action": "resolve",
+    "observation": "<observation>",
+    "operation_id": "<operation-id>",
+    "paths": [
+      {
+        "base": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAW\ntitle: Shared\ntype: task\nstatus: open\n---\nBody of Shared.\n",
+        "content_available": true,
+        "display_path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAW/ticket.md",
+        "incoming": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAW\ntitle: Alpha\ntype: task\nstatus: open\n---\nBody of Alpha.\n",
+        "kind": "ticket",
+        "local": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAW\ntitle: Beta\ntype: task\nstatus: open\n---\nBody of Beta.\n",
+        "structure": "regular",
+        "token": "<token-1>"
+      },
+      {
+        "base": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAX\ntitle: Other\ntype: task\nstatus: open\n---\nBody of Other.\n",
+        "content_available": true,
+        "display_path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAX/ticket.md",
+        "incoming": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAX\ntitle: Alpha\ntype: task\nstatus: open\n---\nBody of Alpha.\n",
+        "kind": "ticket",
+        "local": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAX\ntitle: Beta\ntype: task\nstatus: open\n---\nBody of Beta.\n",
+        "structure": "regular",
+        "token": "<token-2>"
+      }
+    ],
+    "request_id": null,
+    "stage": "primary",
+    "state": "conflict_pending",
+    "target": "primary"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

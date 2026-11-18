@@ -1,9 +1,10 @@
 ---
+id: 01M55P5R55D0C0XT6ZDTA41YTX
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DJ
+created_at: 2026-10-17T19:42:13Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M55P5R55D0C0XT6ZDTA41YTX"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DJ"
-created_at: "2026-10-17T19:42:13Z"
 ---
 
 Task 0 checkpoint: base, characterizations and baseline. **Blocked on one

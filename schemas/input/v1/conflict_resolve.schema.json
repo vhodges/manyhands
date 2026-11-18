@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Conflict resolve input",
+  "type": "object",
+  "properties": {
+    "observation": { "type": "string" },
+    "resolutions": {
+      "type": "array",
+      "description": "One resolution for every conflicted path, and at least one.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string" },
+          "source": { "type": "string" }
+        },
+        "required": ["token", "source"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["observation", "resolutions"],
+  "additionalProperties": false
+}

@@ -1351,7 +1351,8 @@ fn status_lists_closure_parent_and_hides_its_reservation() {
     assert_eq!(operation.action, OperationAction::Close);
     assert_eq!(operation.state, "closing");
     assert_eq!(operation.completed_step.as_deref(), Some("closing"));
-    assert_eq!(operation.next_action, None);
+    // An unfinished parent is offered resume (D5 decision 10, E-1).
+    assert_eq!(operation.next_action, Some(OperationNextAction::Resume));
     assert_eq!(operation.item_id.as_deref(), Some(TICKET_A));
     assert_eq!(operation.failure_code, None);
     assert_eq!(&service.show_operation(&repo, id).unwrap(), operation);
@@ -1692,5 +1693,203 @@ fn an_index_problem_with_an_empty_stored_path_has_none() {
     assert_eq!(problem.code, ProblemCode::ContextProblem);
     assert_eq!(problem.path, None);
     assert_eq!(problem.worktree.as_deref(), repo.root().to_str());
+    assert_git_transport_uninitialized();
+}
+
+/// A promotion parent's own journal row, at `step`, as a run that stopped
+/// there leaves it. `refusal` is the category a consent refusal stored.
+fn insert_promotion(data: &std::path::Path, id: OperationId, step: &str, refusal: Option<&str>) {
+    items::index(data)
+        .execute(
+            "INSERT INTO document_promotions (
+                repository_id, operation_id, item_id, expectation, remote_name, step,
+                base_oid, updated_at, refusal_category
+             ) SELECT id, ?1, ?2, zeroblob(32), 'origin', ?3,
+                      '2222222222222222222222222222222222222222', ?4, ?5
+                 FROM repositories",
+            rusqlite::params![
+                id.to_string(),
+                DOCUMENT_A,
+                step,
+                operations::STORED_AT,
+                refusal
+            ],
+        )
+        .unwrap();
+}
+
+/// A closure parent's own journal row, at `step` (before `closing`, so no
+/// closure checkpoint), as a run that stopped there leaves it. `refusal` is
+/// the category a consent refusal stored.
+fn insert_closure(data: &std::path::Path, id: OperationId, step: &str, refusal: Option<&str>) {
+    items::index(data)
+        .execute(
+            "INSERT INTO ticket_closures (
+                repository_id, operation_id, item_id, expectation, remote_name, step,
+                context_oid, base_oid, updated_at, refusal_category, closure_kind
+             ) SELECT id, ?1, ?2, zeroblob(32), 'origin', ?3,
+                      '1111111111111111111111111111111111111111',
+                      '2222222222222222222222222222222222222222', ?4, ?5, 'record'
+                 FROM repositories",
+            rusqlite::params![
+                id.to_string(),
+                TICKET_A,
+                step,
+                operations::STORED_AT,
+                refusal
+            ],
+        )
+        .unwrap();
+}
+
+/// The one operation the list holds, and the same one shown by its ID.
+fn the_one_listed(
+    service: &manyhands::repository::RepositoryService,
+    repo: &ResolvedRepository,
+    id: OperationId,
+) -> OperationDto {
+    let list = service.list_operations(repo).unwrap();
+    let [operation] = &list.items[..] else {
+        panic!("{list:?}");
+    };
+    assert_eq!(operation.operation_id, Some(id.to_string()));
+    assert_eq!(&service.show_operation(repo, id).unwrap(), operation);
+    operation.clone()
+}
+
+#[test]
+fn an_unfinished_promotion_lists_resume() {
+    let (_fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let id = OperationId::new();
+    insert_promotion(data, id, "confirmed", None);
+
+    let operation = the_one_listed(service, &repo, id);
+    assert_eq!(operation.action, OperationAction::Promote);
+    assert_eq!(operation.state, "confirmed");
+    // The run stopped; `operation resume` continues it (D5 decision 10).
+    assert_eq!(operation.next_action, Some(OperationNextAction::Resume));
+
+    // A finished promotion owes nothing: shown by its ID, nothing offered.
+    // `complete` carries the columns its record requires of that step.
+    for (step, columns) in [
+        (
+            "complete",
+            "context_oid = '1111111111111111111111111111111111111111',
+             integration_kind = 'merged',
+             integration_oid = '3333333333333333333333333333333333333333',
+             publication_category = 'published'",
+        ),
+        ("superseded", "updated_at = updated_at"),
+    ] {
+        items::index(data)
+            .execute(
+                &format!("UPDATE document_promotions SET step = ?1, {columns}"),
+                [step],
+            )
+            .unwrap();
+        assert!(service.list_operations(&repo).unwrap().items.is_empty());
+        let shown = service.show_operation(&repo, id).unwrap();
+        assert_eq!(shown.state, step);
+        assert_eq!(shown.next_action, None);
+    }
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn an_unfinished_closure_lists_resume() {
+    let (_fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let id = OperationId::new();
+    insert_closure(data, id, "context_synchronized", None);
+
+    let operation = the_one_listed(service, &repo, id);
+    assert_eq!(operation.action, OperationAction::Close);
+    assert_eq!(operation.state, "context_synchronized");
+    assert_eq!(operation.next_action, Some(OperationNextAction::Resume));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_held_parent_still_lists_resume() {
+    use manyhands::repository::{
+        RequestId,
+        request_store::{DigestSalt, IntentDigest, NewRequest, RequestOperation, ScopeKey},
+    };
+    let (fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let id = OperationId::new();
+    insert_closure(data, id, "confirmed", None);
+    // The request that began the closure is still accepted, as a stop, a
+    // quit or a crash leaves it: it holds the parent.
+    let request_id = RequestId::parse("01M4CC0VN2K8DBHNMZ46NTX5JK").unwrap();
+    let scope = ScopeKey::for_repository(&fixture.root).unwrap();
+    service
+        .insert_request(&NewRequest {
+            request_id,
+            scope: scope.clone(),
+            command: "ticket close".to_owned(),
+            target: TICKET_A.to_owned(),
+            intent_digest: IntentDigest::builder(
+                DigestSalt::Request(request_id),
+                "ticket close",
+                &scope,
+                TICKET_A,
+            )
+            .finish(),
+            confirmation: None,
+            base_ref: None,
+            base_oid: None,
+            expected_digest: None,
+            operations: vec![RequestOperation {
+                family: OperationFamily::Remote,
+                operation_id: id,
+            }],
+        })
+        .unwrap();
+    assert_eq!(
+        items::index(data)
+            .query_row(
+                "SELECT count(*) FROM request_records WHERE state = 'accepted'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+
+    // Listed with resume all the same: the resume names the holding
+    // request (`original_request_required`), which is what goes on.
+    let operation = the_one_listed(service, &repo, id);
+    assert_eq!(operation.action, OperationAction::Close);
+    assert_eq!(operation.next_action, Some(OperationNextAction::Resume));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn an_abandoned_refused_parent_lists_no_resume() {
+    let (_fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let promotion = OperationId::new();
+    let closure = OperationId::new();
+    // A refused parent is always abandoned: the schema ties the two.
+    insert_promotion(data, promotion, "abandoned", Some("external_change"));
+    insert_closure(data, closure, "abandoned", Some("reconfirmation_required"));
+
+    // A consent refusal ended each: nothing is left to continue.
+    assert!(service.list_operations(&repo).unwrap().items.is_empty());
+    for (id, action) in [
+        (promotion, OperationAction::Promote),
+        (closure, OperationAction::Close),
+    ] {
+        let shown = service.show_operation(&repo, id).unwrap();
+        assert_eq!(shown.action, action);
+        assert_eq!(shown.state, "abandoned");
+        assert_eq!(shown.next_action, None);
+    }
     assert_git_transport_uninitialized();
 }

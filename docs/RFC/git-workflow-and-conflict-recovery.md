@@ -229,6 +229,46 @@ Merge primary into <kind> <ULID>
 Resolve synchronization <kind> <ULID>
 ```
 
+Amended 2026-10-30 by C4 (decisions 3, 7 and 11):
+- **The bindings merge.** Wave 03's `item sync` and `repo sync` bindings
+  merge divergent history as this section and primary synchronization
+  describe. Until C4 they refused it, with `merge_required`, which they no
+  longer return.
+- **Republish is its own confirmed command.** The explicit republish
+  confirmation of step 3 is not an option of item synchronization, whose
+  consent is fixed per command; item synchronization always returns the
+  remote-branch-deleted outcome there. `item republish` is confirmed. Its
+  preview is built from stored evidence of the deletion, and its execution
+  fetches, refuses a context advertised again or a local tip that moved,
+  and then pushes exactly the previewed local commit with an ordinary
+  non-force push. It integrates nothing: steps 1 and 2 do not run, so the
+  pushed commit is the one the caller saw. The next item synchronization
+  integrates primary as usual.
+
+### Dedicated Local-Primary Into Context Synchronization
+
+**Amendment, 2026-10-27:** the [closure-recovery library gate](../Cycles/wave-03-closure-recovery-gate.md)
+implements a distinct local operation on its ticket branch at `03a27cb`, pending
+final controller gates, whole-branch review and merge. Observe an existing registered
+document/ticket context, then execute the unconfirmed F2 `context sync-local`
+identity with that observation. This consumes **committed local primary**, including
+when a publication remote is configured. It does not fetch, push, refresh primary,
+create a context or use uncommitted primary content as merge input.
+
+The target must name its registered branch and initially be clean. Equal/contained
+input is a no-op plus discovery settlement; a behind context fast-forwards; clean
+divergence creates one merge with ordered parents `[context, primary]`. Accepted
+retries retain those exact parents rather than silently incorporating a newer primary.
+A fresh operation incorporates subsequent primary commits. Missing effective commit
+identity requires explicit identity setting and retry, never implicit config writes.
+
+Matching written ticket closure at `Closing` is a narrow admission exception;
+integrating/cleanup or unrelated lifecycle owners are not. Local completion does
+not resume closure: an explicit original closure continuation adopts the validated
+descendant while preserving its checkpoint and closure provenance. The
+[API audit](../research/wave-03-api-audit.md#closure-recovery-library-amendment-2026-10-27)
+names the actual Rust entry points. CLI and desktop adapters remain downstream.
+
 ### Deliberate Primary Synchronization
 
 Primary synchronization requires a clean, non-conflicted primary worktree. It
@@ -250,9 +290,91 @@ branch and deterministic worktree for that context. It then invokes the
 non-mutating index refresh.
 
 Polling MUST NOT push, checkpoint, merge, rebase, force-update, stash,
-overwrite, discard, or clean up state. A dirty, divergent, conflicted,
+overwrite or discard. Default and automatic polling MUST NOT clean up state.
+Only explicit `poll once --retire-completed` may perform the guarded local
+retirement below (owner D7/D8, 2026-11-04; D15, 2026-11-06).
+A dirty, divergent, conflicted,
 malformed, inaccessible, renamed, unrecognized, unmaterialized, or remotely
-deleted context remains locally preserved and visible with recovery guidance.
+deleted context otherwise remains locally preserved and visible with recovery guidance.
+
+Amended 2026-11-09 by Wave 03 D6 (decision 16): the desktop also follows each
+completed poll with one ordinary `context retire` per reported `closed` or
+`promoted` item, held back by any edit or draft of that item. No other
+background cleanup.
+
+### Explicit Peer-Context Retirement
+
+**Amendment, 2026-11-06:** the owner-approved
+[Cycle](../Cycles/wave-03-completed-context-retirement.md), D1–D14
+(2026-11-04) and D15 (2026-11-06), adds `context retire` and explicit
+`poll once --retire-completed`. This is local retirement after another clone's
+completion, not a new close/promote lifecycle, synchronization or force option.
+The [CLI contract](cli-contract.md#completed-context-retirement) specifies
+delivered data, numeric exits and item-owned recovery.
+
+- **Recognition is not deletion authority.** A complete authenticated Fetch
+  advertisement must establish that a previously Fetch-known published context
+  is now absent. Missing tracking refs, push-only evidence and unknown history
+  do not establish deletion. Stale tracking refs may remain; retirement neither
+  treats them as live server refs nor prunes them. With a valid same-ID ticket
+  closure on committed local primary, poll may report `closed` even when dirt
+  or unmatched content prevents retirement. For a document, `promoted` requires
+  the matching primary document **and** preservation proof, not mere presence
+  or a document completion marker (none exists).
+- **Fresh input and cost.** Standalone `context retire` makes an additional
+  authenticated read-only observation even after a preceding poll. It transfers
+  no objects and does not fast-forward or otherwise update primary; if local
+  primary lacks completion, first poll/synchronize it deliberately. An opted-in
+  pass reuses its ONE authoritative Fetch input for all initial children, not
+  N fresh child observations. This is a provenance/observation guarantee, not
+  a one-wire-connection promise: current Fetch authentication and reconnect use
+  two `git-upload-pack` commands for an ordinary poll and for the measured
+  two-child opted-in pass. No transport refactor or latency guarantee is implied.
+- **Positive preservation proof.** The local tip equal to or an ancestor of
+  committed local primary is sufficient, subject to positive completion and
+  safety checks. Otherwise require one unique merge base and exact primary
+  representation of the full base→local changed-entry set, including code,
+  comments, deletions, object kind and Git mode; a rename is delete plus add.
+  Only the target ticket file may compare canonically with `closed_at` and
+  `closed_by` cleared, and only for an older open copy versus valid closed
+  primary with equal regular-file modes and all other fields/unknown metadata/
+  body equal. No comment, status, relationship or executable-bit exception.
+  Shallow, missing-object, unrelated/multiple-base or unmatched evidence refuses.
+- **Independent local safety.** Primary must be checked out at the registered
+  root and its item file must match committed proof. Recheck current
+  configuration/endpoint/observation, frozen tip, registered-instance nonce,
+  complete checkout inventory and cleanup cleanliness, including ignored and
+  untracked content and unsafe submodules. Mixed, malformed, redirected,
+  inaccessible, locked or changed resources refuse; matching OIDs alone do not
+  establish lifetime. The admin nonce ends with worktree removal. A later
+  executor MUST NOT delete a surviving tokenless/branch-only branch under an
+  old request, even at the same tip (R-7). Existing cooperative-writer and
+  external-filesystem limitations remain; no atomicity with later server writes.
+- **Effects and settlement.** Guarded worktree removal precedes local branch
+  deletion. No remote branch deletion/push, checkpoint, implicit merge, canonical
+  source or draft mutation is permitted. Consume only the exact captured old
+  completed materialization intent when owned local absence is proved; preserve
+  a new/foreign intent and current observation/tracking state. Initial all-absent
+  state is an index-settled `already_absent` no-op, not evidence of an earlier
+  owned deletion. Existing promotion/closure cleanup is not changed here.
+
+The original uninterrupted eligible opted-in pass is a sequential loop of
+ordinary `context retire` requests: one stable request/local operation per item,
+each ordinary index handoff completed before the next. Settled refusals continue;
+real cleanup/index/integration debt stops later items without rolling back prior
+success. All selected same-pass outcomes settled, success **or** refusal, means
+completed mixed success, exit 0. A settled prefix with not-reached items is a
+non-success stopped report. The parent may be Final while its child remains Owed.
+
+An old selected pass settles/replays an immutable as-of-cut report only: no fresh
+observation, reselection, child acceptance or loop restart. Current child recovery
+does not rewrite that report or run another item. A durably selected original
+present worktree may use ordinary fresh-observation/proof/nonce reentry where
+allowed; owned absence/index debt is metadata/index-only. A reserved unaccepted
+child is not reached, and acceptance proved never locally claimed settles only
+metadata. Missing companion evidence fails closed. Real pending item debt has
+the confirmed preserving `operation abandon` escape; a completed child is not a
+whole-pass abandon handle. A new explicit pass handles remaining current contexts.
 
 ## Promotion, Closure, and Cleanup
 
@@ -312,14 +434,23 @@ discard local changes, or conceal conflict markers. The desktop and CLI RFCs
 define the interaction that edits a resolution and creates its recovery
 checkpoint before retrying the pending operation.
 
+Amended 2026-10-30 by C4 (decision 8): a synchronization that stops on a
+conflict answers `recovery_required`, and its data names the conflict's
+operation and next step, `resolve` for an all-canonical set or
+`external_repair` otherwise. No recovery action or result code is added for
+it.
+
 The operation record has enough state to identify the repository, item when
 applicable, branch, worktree, action, publication remote, affected local and
 tracking refs, observed local and remote object IDs, completed steps,
 reservation/cancellation state, and redacted error category. It contains no
 credentials, passphrases, private-key data, remote response body, or Markdown
 draft. On the next use, reconciliation compares that record with actual Git
-refs, worktrees, commits, and canonical Markdown. Git state wins over a stale
-record.
+refs, worktrees, commits, and canonical Markdown. Actual Git state determines
+whether a recorded effect happened; it does not manufacture missing journal
+authority or authorize adoption of foreign state. The dedicated local operation
+records local refs/frozen parents and typed companion evidence, not a fake
+publication remote or remote operation row.
 
 Conflict resolution requires a caller-supplied resolution and expected
 observations for every conflicted canonical path. After acquiring the short
@@ -328,6 +459,75 @@ only the conflicted owned paths, creates the deterministic resolution checkpoint
 and resumes only the recorded incomplete synchronization step. A changed
 observation returns external-change or recovery-required without overwriting
 the worktree.
+
+**Local recovery amendment, 2026-10-27,** scoped to the local operation on
+2026-10-30 by C4 (decision 20): local inspection and explicit immutable
+side reads issue opaque tokens; resolution submits a complete `{token, source}`
+set with a top-level observation through `context resolve-local`. Display paths
+are presentation text, not writable input. The starting request S and resolution
+request R have separate durable identities. After R is accepted, exact R retry
+reconciles owned progress before fresh-token validation; in the local
+operation, partial R without a fully prepared candidate requires its original
+source bytes. `operation resume` names R through `original_request_required`
+rather than inventing source. Finished receipts are immutable; the local
+operation's recoverable cancellation retains Accepted requests and acknowledges
+observed cancellation generations. Local abandonment requires fresh
+artifact-free proof and atomically settles all associated Accepted S/R/U
+requests without deleting IDs.
+
+Amended 2026-10-30 by C4 (decisions 13, 18 and 20), the remote rule beside
+it. A remote synchronization's conflict is resolved with `conflict resolve`,
+which also submits a complete `{token, source}` set with a top-level
+observation. The same request reconciles its recorded attempt before any
+live token is checked, and finishes an interrupted resolution with the same
+commit.
+- A new request may supersede a remote attempt that has only written paths,
+  while every path it wrote still holds exactly what it wrote. The old
+  attempt is closed. The local rule has no such supersede.
+- With a written path since changed, a new request answers
+  `original_request_required`, naming the attempt's request. The resume rule
+  above applies to remote too: `operation resume` on an attempt with only
+  written paths names its request through `original_request_required`.
+- `operation resume` finishes an attempt whose candidate commit is
+  prepared, from durable state, with no input.
+- A remote cancellation is final: a new request completes the work.
+  Amended 2026-11-03 by C5 (decision 8): a `document promote` or
+  `ticket close` cancellation is not final. It answers `cancelled`, exit
+  130, and leaves the lifecycle record unfinished, so the same request
+  continues it under its operation ID; a new request ID would meet the
+  unfinished parent. A child synchronization with nothing to lose is let go
+  (decision 18); a retained conflict or a resolution still to publish stays.
+- An outside repair is refused while an attempt is unfinished, and accepted
+  again once none is.
+
+For fresh conflicts, distinct nonempty parsed closure pairs across **all three
+sides** make the whole set external-only. Known incompatible pairs in local
+preparation refuse before retaining an owner or installing conflicts. External-only
+is not a winning-closure policy: an external resolution still needs a clean commit
+with the exact ordered recorded parents and all canonical invariants preserved.
+Removing markers, staging arbitrary files or choosing one incompatible closure is
+not proof of completion.
+
+Amended 2026-10-30 by C4 (its design's fact 85 and ruling R-40, decision 6): the
+same limit holds on remote. A ticket that two clones closed differently
+makes a remote synchronization's conflict external-only
+(`incompatible_closures`), and an outside repair that chooses one closure is
+not promised to be accepted. Abandoning a pending remote conflict stays on
+`01M4H33R34Z7C7EEKTY1ZCT950`, so until it lands such a conflict may have no
+in-product way out.
+
+Recovery assumes cooperative Manyhands writers using the common-Git lease. Observed
+foreign edits are preserved and refused; arbitrary concurrent filesystem namespace
+replacement is outside that guarantee. Interrupted coarse checkout or backend
+ref/log/lock effects resume only from an exact recorded baseline or fully proven
+result. Ambiguity requires operator preservation/quiescence/repair and subsequent
+proof on retry, not automatic lock deletion, reset or rollback. Proven owned
+metadata members retire independently: already-absent members count as retired,
+exact-owned remnants can retire, and foreign remnants refuse. Journal destruction
+does not reconstruct request identity from Git; dirty/conflicted/lock-bearing
+states remain blocked. These are library guarantees, not delivered CLI/human
+artifacts or an in-app editing workflow. Historical Cycle ledgers retain their
+original results; local Linux evidence does not establish Windows/macOS execution.
 
 ## Approved Wave 03 Request And Consent Boundaries
 
@@ -352,6 +552,14 @@ with external-tool guidance. After external repair, re-observe actual Git state
 and require deliberate resume of eligible remaining work; do not stage arbitrary
 code or treat removal of text markers as proof of resolved Git conflict state.
 This does not expand the existing owned-path write boundary.
+
+Amended 2026-10-30 by C4 (decision 12): the CLI's `conflict show` reports
+each conflicted path's kind and structure, and resolution stays set-wide, so
+a conflict with any path not resolvable in-app is repaired outside as a
+whole. A noncanonical path's structure is the shared classifier's reading of
+the index stages, not a claim about the file's type: a text code file edited
+on both sides reads `binary`, and an add/add reads `delete`. After an outside
+repair, `conflict show` reports it, and `operation resume` continues it.
 
 ## Wave 1 Acceptance
 

@@ -1,0 +1,213 @@
+# Windows release signing
+
+The release uses a persistent self-signed Authenticode code-signing
+certificate supplied by the maintainer. Both executables are signed and
+RFC 3161-timestamped with SHA-256. `signing.json` contains the timestamp
+endpoint. There is no unsigned fallback and no per-run certificate creation.
+
+The reviewed RFC 3161 endpoint is **`http://timestamp.digicert.com/`**, as
+shown in [Microsoft's SignTool examples](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool#examples).
+The v0.1.3 native trial using Windows SDK 10.0.26100.0 rejected the previous
+HTTPS URL with `SignTool Error: Invalid Timestamp URL`. The helper validates
+and normalizes only this reviewed HTTP endpoint; changing the provider,
+transport, or URL path requires an explicit policy update. The root slash
+added by URI normalization is expected.
+
+HTTP transports the timestamp request/response, but the RFC 3161 timestamp
+token itself is cryptographically signed. Both `/fd SHA256` and `/td SHA256`
+remain required, as do native verification of the signatures, expected
+publisher identity, and presence of a verified timestamp. There is no
+untimestamped fallback. This correction does not change the persistent
+publisher certificate or signing secrets.
+
+Self-signing preserves a stable publisher identity but does **not** make
+Windows trust it or eliminate SmartScreen warnings. The package contains
+only the public `.cer`, its fingerprints, and an explanation. It never
+installs a trust certificate on a user's machine.
+
+## One-time maintainer provisioning
+
+Run these commands in **PowerShell 7 on your own Windows machine**, with
+GitHub CLI authenticated to the repository. They create a real persistent
+signing identity; choose the subject you want users to see. Keep the PFX
+and its password private and retain a protected backup for future releases.
+
+```powershell
+$certificate = New-SelfSignedCertificate `
+    -Type CodeSigningCert `
+    -Subject 'CN=Vince Hodges (Manyhands)' `
+    -FriendlyName 'Manyhands release signing' `
+    -CertStoreLocation 'Cert:\CurrentUser\My' `
+    -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 `
+    -KeyExportPolicy Exportable `
+    -NotAfter (Get-Date).AddYears(3)
+$password = Read-Host 'Choose a PFX password' -AsSecureString
+$pfxPath = Join-Path $HOME 'manyhands-signing.pfx'
+Export-PfxCertificate -Cert $certificate -FilePath $pfxPath -Password $password | Out-Null
+[Convert]::ToBase64String([IO.File]::ReadAllBytes($pfxPath)) | `
+    gh secret set WINDOWS_SIGNING_PFX_BASE64 --repo vhodges/manyhands
+gh secret set WINDOWS_SIGNING_PFX_PASSWORD --repo vhodges/manyhands
+```
+
+Enter the same PFX password at the final command's secret prompt. Do not
+paste the PFX, base64 text, or password into repository files, release
+notes, logs, or chat. Base64 is an encoding, not encryption.
+
+Before expiry, replace both secrets with a renewed/new valid identity.
+If the key changes, the public fingerprint changes; disclose that in the
+release notes. Timestamped old signatures are verified against their
+signing time; the verification path does not simply reject an expired
+certificate that has an otherwise valid timestamped signature.
+
+## Native build requirements
+
+Use the release's pinned Rust and build both binaries with:
+
+```powershell
+$env:RUSTFLAGS = '-C target-feature=+crt-static'
+cargo build --locked --release --no-default-features --bin manyhands-cli --target x86_64-pc-windows-msvc
+cargo build --locked --release --no-default-features --features desktop --bin manyhands --target x86_64-pc-windows-msvc
+```
+
+The existing Windows dependency configuration vendors OpenSSL. MSVC
+builds require native Windows Perl with `IPC::Cmd`, not Git's MSYS Perl.
+The native workflow must verify that prerequisite before building. The
+release import audit uses MSVC `dumpbin`, checks both x86_64 headers,
+normal/delay imports, and rejects dynamic CRT or non-system DLL imports.
+`system-libraries.txt` is the exact reviewed OS/API-set baseline. Ordinary
+modules must also exist in the native OS System directory; finding an
+arbitrary vendor DLL there does not make it an approved OS dependency.
+Unreviewed DLLs are not silently collected from the runner's PATH.
+Audit failures list every rejected import for the executable being checked,
+so additional missing contracts can be reviewed together. The DPI contract
+`api-ms-win-shcore-scaling-l1-1-1.dll` is an explicitly reviewed Windows
+Shcore forwarding alias, documented by Microsoft for `GetDpiForMonitor`.
+The desktop also imports OS-provided GDI+ (`gdiplus.dll`), ICU common C APIs
+(`icuuc.dll`), and UI Automation (`uiautomationcore.dll`). These exact names
+are reviewed with Microsoft documentation linked in the policy file; their
+presence in the native OS System directory is still required. System ICU
+was introduced in Windows 10 version 1703. The package records that runtime
+requirement and does not collect replacement DLLs from developer-tool PATHs.
+
+## Signing and extracted verification
+
+With the two secrets available as environment variables in the signing
+step, on an elevated, disposable **GitHub-hosted Windows runner**:
+
+```powershell
+pwsh -NoProfile -File scripts/release/windows-sign.ps1 -Mode Sign -Staging $staging
+```
+
+The helper validates the certificate's private key, code-signing EKU,
+validity dates, and self-signed identity, imports it into the runner's
+current-user My store, signs and timestamps both executables, and verifies
+the exact expected identity with SignTool and Authenticode APIs. It adds
+temporary public trust in **`Cert:\LocalMachine\Root`** only for runner
+verification. The private identity remains in `Cert:\CurrentUser\My`.
+Current-user root imports can require Windows security UI; the v0.1.5 trial
+stalled at that import even though both signing/timestamp calls succeeded.
+The machine-root path passed the `v0.1.6` hosted Windows native trial,
+including signing and extracted verification. Installer signing is new
+Stage 2 work and still needs its own native trial.
+
+Sign, Verify, and BuildInstaller modes fail preflight before private-key handling
+unless the process is Windows, `GITHUB_ACTIONS=true`,
+`RUNNER_ENVIRONMENT=github-hosted`, and running with an elevated administrator
+token. There is no fallback to current-user roots, other providers, or skipped
+verification. These environment checks prevent accidental use on persistent
+machines; they are not a boundary against malicious code already running as
+administrator. This helper is release automation, not a consumer trust setup.
+
+The helper validates the public `.cer` against the expected identity before
+import. It preserves an existing matching root certificate and records an
+owned exact thumbprint path before mutation so partial imports are cleaned.
+Owned private files, the imported private key, and newly added trust are
+removed in `finally`; unrelated/pre-existing certificates are preserved.
+Trust removal verifies disappearance. Its failure still fails the job but
+does not prevent subsequent private-key/file cleanup. No trust certificate
+is installed on users' machines, and runner trust is not public publisher trust.
+
+The Windows helper-test step runs a separate native import/preservation/removal
+fixture before signing secrets are available. That fixture uses a unique,
+one-hour test certificate, keeps its private key only in memory, and cleans
+its public machine-root entry in caller `finally`. It is not a new publisher
+identity. Portable policy/ownership tests use stubbed store APIs; Linux runs
+explicitly skip the real Windows fixture. The fixture child has the existing
+180-second native deadline and the helper step has a ten-minute backstop.
+
+### Progress and deadlines
+
+UTC progress messages identify the start and completion of PFX loading and
+store import, public certificate export, runtime auditing, signing/timestamping
+each executable, both verification APIs, metadata finalization, the CLI smoke
+test, and cleanup. They use PowerShell's information stream, so assignments
+and `Out-Null` do not hide them or mix them into parsed native-tool results.
+Messages do not print private material, passwords, environment contents, or
+complete argument lists. The last operation with a start but no completion
+message identifies the boundary to investigate; it is not proof of a cause.
+
+Ordinary native tools have a **180-second deadline**, including stdout/stderr
+collection. ISCC has an explicit **1,800-second deadline** for compression and
+its mandatory signing/verification callbacks. Both pipes drain concurrently.
+Expiry fails the operation, kills
+the live process tree, allows up to five seconds for process exit, and throws
+through the existing signing cleanup. Nonzero exit codes still fail with
+captured tool output. If a tool has already exited but a detached child keeps
+its output pipes open, the output-drain deadline still fails promptly; the old
+parent handle cannot guarantee termination of that detached child. Such jobs
+must continue to use disposable runners, not persistent signing machines.
+
+The Windows helper-test, application signing, and extracted-verification steps
+also have a **ten-minute limit**. The installer step has a **45-minute limit**:
+30 minutes for ISCC, leaving 15 minutes for surrounding verification, the CLI
+smoke test, and cleanup. These are backstops for in-process certificate cmdlets
+and cumulative work, not extensions of individual native-tool deadlines.
+A workflow hard cancellation can interrupt `finally`; only the ordinary
+native-tool timeout is designed to return through normal cleanup. Hosted
+runner teardown remains the isolation backstop for hard cancellation. No
+timeout permits unsigned or untimestamped output, bypasses identity checks,
+or publishes an incomplete release.
+
+After archive creation and extraction to a fresh directory, repeat:
+
+```powershell
+pwsh -NoProfile -File scripts/release/windows-sign.ps1 -Mode Verify -Staging $extractedPayload
+```
+
+Verification uses the public certificate and recorded fingerprints; it
+does not need signing secrets. It repeats import/signature/timestamp
+checks and runs the packaged CLI from an isolated directory with only
+Windows system directories on its PATH. Linux-hosted parser/metadata
+tests do not establish that these native signing operations succeeded.
+
+## Inno Setup component signing
+
+After the ZIP's extracted verification, `windows-sign.ps1 -Mode BuildInstaller`
+uses that retained extraction, the exact ZIP, and the pinned Inno compiler.
+It repeats the existing publisher import/trust/cleanup lifecycle, validates
+the packaged public identity, and does **not** re-sign or rewrite the payload.
+`installer.py` compares all extracted source files against the ZIP before and
+after compilation, then records the final installer hash and its source ZIP
+hash in an internal inventory for assembly.
+
+Inno's `SignTool=manyhands` and `SignedUninstaller=yes` are mandatory. Its
+callback invokes `windows-sign-file.ps1` with the exact public store thumbprint
+and SignTool path, never a PFX or password. The callback selects the already
+imported `CurrentUser\My` key, signs with SHA-256/RFC 3161, and requires both
+the shared SignTool and Authenticode verifiers before returning. This covers
+the embedded uninstaller and temporary setup self-copies as well as the outer
+installer; signing only the final EXE after compilation would miss those.
+The parent verifies the completed installer independently before handoff.
+Inno permits **two signing retries with a 2,000 ms delay** (three attempts in
+total), still inside the compiler deadline. Every successful attempt must
+pass the same mandatory signature, exact-identity and RFC 3161 timestamp
+checks; exhausted retries fail rather than producing unsigned output.
+
+The callback borrows the parent's temporary hosted-runner trust. It neither
+imports a certificate nor deletes the parent's key/trust. The parent removes
+only its owned material in `finally`, even after compiler/callback failure.
+Callback native tools retain their 180-second deadlines; the compiler has
+1,800 seconds and the installer workflow step has a 45-minute backstop.
+A timeout, missing timestamp, wrong identity,
+verification failure, or cleanup failure fails the job. No `/NS`, public trust
+installation on consumers, new publisher identity, or unsigned fallback is added.

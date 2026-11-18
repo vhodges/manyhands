@@ -1,9 +1,10 @@
 ---
+id: 01M4VEKEC2JMK9AD1DH3NFFHCW
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-13T20:17:29Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4VEKEC2JMK9AD1DH3NFFHCW"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-13T20:17:29Z"
 ---
 
 New Task 4 behavior RED under owner-approved one-way agreement, before helper

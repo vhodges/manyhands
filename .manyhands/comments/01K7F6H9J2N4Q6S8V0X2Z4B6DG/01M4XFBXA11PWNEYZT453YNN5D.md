@@ -1,9 +1,10 @@
 ---
+id: 01M4XFBXA11PWNEYZT453YNN5D
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-14T15:09:20Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4XFBXA11PWNEYZT453YNN5D"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-14T15:09:20Z"
 ---
 
 **Final LOCAL review-ready handoff approved. Task 8 ticked; ticket stays OPEN.**

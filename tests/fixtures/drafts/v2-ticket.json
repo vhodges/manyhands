@@ -1,0 +1,50 @@
+{
+  "future_field": true,
+  "base": {
+    "context": {
+      "branch": "main",
+      "head_oid": "abc123",
+      "kind": "primary",
+      "worktree": "/home/u/work/project"
+    },
+    "fields": {
+      "body": "Line one\nLine \"two\"\n",
+      "deps": [],
+      "kind": "ticket",
+      "parent": null,
+      "project": null,
+      "status": "open",
+      "team": "core",
+      "title": "Old",
+      "type": "task"
+    },
+    "observation": "obs-1",
+    "path": ".manyhands/tickets/01M5CS4MJ0G7B0MPJD0KN0QMYA/ticket.md",
+    "source": "---\ntitle: Old\n---\n"
+  },
+  "created_at": "2026-10-14T17:46:40Z",
+  "current": {
+    "body": "Line one\nLine \"two\"\n",
+    "deps": [
+      "01M5B0Z6PNP7X4WH4JV3N0VQJ6"
+    ],
+    "kind": "ticket",
+    "parent": null,
+    "project": null,
+    "status": "open",
+    "team": "core",
+    "title": "New",
+    "type": "task"
+  },
+  "flushed_at": "2026-10-14T17:52:09Z",
+  "format": "manyhands-draft",
+  "id": "01J9ZQ6V0Y8K3N4M5P6Q7R8S9T",
+  "revision": 7,
+  "target": {
+    "comment": null,
+    "item_id": "01M5CS4MJ0G7B0MPJD0KN0QMYA",
+    "item_kind": "ticket",
+    "repository": "/home/u/work/project"
+  },
+  "version": 2
+}

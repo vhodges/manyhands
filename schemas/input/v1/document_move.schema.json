@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Document move input",
+  "type": "object",
+  "properties": {
+    "observation": { "type": "string" },
+    "destination_path": { "type": "string" },
+    "destination_observation": { "type": "string" }
+  },
+  "required": ["observation", "destination_path", "destination_observation"],
+  "additionalProperties": false
+}

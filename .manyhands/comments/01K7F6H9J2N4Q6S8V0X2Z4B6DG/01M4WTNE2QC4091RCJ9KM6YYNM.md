@@ -1,9 +1,10 @@
 ---
+id: 01M4WTNE2QC4091RCJ9KM6YYNM
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-14T09:07:32Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4WTNE2QC4091RCJ9KM6YYNM"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-14T09:07:32Z"
 ---
 
 Task 7 implemented for independent spec then quality review, full review base

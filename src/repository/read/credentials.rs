@@ -269,8 +269,10 @@ impl RepositoryService {
         pins.into_iter().next().ok_or_else(not_found)
     }
 
-    /// Where the index is, and the reapproval marker beside it.
-    fn data_directory(&self) -> &Path {
+    /// The data directory the service was opened at: where the index is,
+    /// the reapproval marker beside it, and the stores the desktop keeps
+    /// beside them.
+    pub fn data_directory(&self) -> &Path {
         self.registry_path
             .parent()
             .unwrap_or_else(|| Path::new("."))

@@ -1,3 +1,12 @@
+---
+title: "Wave 02 Cycle 06 — fresh-session handoff"
+date: 2026-10-07
+author: "Vince Hodges <vince@imbas.ca>"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J8SE6R13CXFPMJYNR7"
+---
+
 # Wave 02 Cycle 06 — fresh-session handoff
 
 ## Current: implementation complete and review-ready — 2026-10-09

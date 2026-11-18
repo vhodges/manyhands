@@ -1,3 +1,12 @@
+---
+title: "Wave 02 Cycle 09: Fresh-Session Handoff"
+date: 2026-10-15
+author: "Vince Hodges <vince@imbas.ca>"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J8VFNYSP9HFZ3C1V5S"
+---
+
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
 ## Closure And Main Merge Authorized — 2026-10-17

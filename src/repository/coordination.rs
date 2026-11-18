@@ -19,6 +19,53 @@ pub(super) struct BootstrapLease(File);
 pub(super) struct CacheReadGuard(File);
 pub(super) struct CacheWriteGuard(File);
 
+impl RepositoryLease {
+    /// Reopening Git after taking the cache guard must still name this lease's
+    /// file, not a replacement at the same pathname. Metadata reads do not read
+    /// the locked bytes (important for Windows mandatory byte-range locks).
+    pub(super) fn still_names(&self, repository: &Repository) -> io::Result<bool> {
+        let current = match File::open(repository.commondir().join(REPOSITORY_LOCK_FILE)) {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        Ok(file_identity(&self.0)? == file_identity(&current)?)
+    }
+}
+
+#[cfg(unix)]
+fn file_identity(file: &File) -> io::Result<(u64, u128)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = file.metadata()?;
+    Ok((metadata.dev(), u128::from(metadata.ino())))
+}
+
+#[cfg(windows)]
+fn file_identity(file: &File) -> io::Result<(u64, u128)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,
+    };
+    let mut id: FILE_ID_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: the live file owns the handle; the buffer is sized and aligned
+    // for FILE_ID_INFO and remains valid until the synchronous call returns.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            (&mut id as *mut FILE_ID_INFO).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((
+        id.VolumeSerialNumber,
+        u128::from_le_bytes(id.FileId.Identifier),
+    ))
+}
+
 macro_rules! unlock_on_drop {
     ($guard:ident) => {
         impl Drop for $guard {

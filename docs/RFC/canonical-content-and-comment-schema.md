@@ -46,9 +46,9 @@ source modes. Viewing, switching modes and no-change saves preserve original
 source. Rich-text editing retains unsupported constructs and untouched source;
 it does not silently reserialize or simplify an entire document. Actual metadata
 edits preserve unknown values even when YAML formatting changes. As amended on
-2026-10-07, a desktop save after an actual edit may also write the selected
-editor's recorded, meaning-preserving load normalization of the body; the
-desktop/editor RFC bounds that exception. It does not apply to the CLI or the
+2026-10-07 and by Wave 03 D3 on 2026-10-26, a desktop save after an actual
+edit may also write the selected editor's recorded load normalization of the
+body (desktop RFC); the desktop/editor RFC bounds that exception. It does not apply to the CLI or the
 headless library.
 
 Browsing and repair MUST NOT silently change identity. Adoption of marker-only
@@ -213,6 +213,18 @@ same form as a ticket's `closed_by`. It is set when the comment is created and
 never rewritten. It is optional: a comment without it is conforming, and its
 author is reported as unknown. Manyhands does not derive an author from Git
 history.
+
+Amended 2026-10-30 by C4 (Wave 03 C4 decision 9): `created_by` comes from
+the caller's validated input when the caller gives one, else from the Git
+identity as above. `comment add` takes an optional `created_by` of the form
+`Name <email>`, at most 256 bytes. The name and the email are each
+non-empty, hold no `<` or `>` and no control character, and have no leading
+or trailing white space; the email holds an `@`; and a Git signature made
+from them gives both back unchanged. It is written verbatim, once, at
+creation, and never rewritten. A commit identity is still needed for the
+comment's checkpoint. A supplied value is not authenticated: any caller can
+claim any author, as a hand-written file already can. Agents pass their
+noreply identity; people omit it.
 
 Comments form a tree of arbitrary depth. Root comments sort by `created_at`,
 then `id`; direct replies use the same ordering beneath their parent. A missing

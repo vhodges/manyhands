@@ -1,0 +1,25 @@
+Active resolution request id: none
+Can start resolution: true
+Cancel acknowledged: false
+Cancel requested: false
+Cancellation request id: 01ARZ3NDEKTSV4RRFFQ69G5FX2
+Context head: <oid>
+Context parent: <oid>
+Context ref: refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0
+Eligibility: eligible_canonical
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Kind: ticket
+Next action: resolve
+Observation: <observation>
+Operation id: <id>
+Primary parent: <oid>
+Primary ref: refs/heads/main
+Reason: canonical_conflict
+Required request id: none
+Result oid: none
+Starting request id: 01ARZ3NDEKTSV4RRFFQ69G5FX2
+State: conflict_pending
+path: .manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC0/ticket.md token=<token> content_available=true
+--- stderr
+note: context show-local --token <token> --json reads a path's sides.
+--- exit 0

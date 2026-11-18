@@ -281,6 +281,22 @@ impl TicketGraph {
         })
     }
 
+    /// The direct dependents of `id` that are open with every dependency
+    /// closed, in ID order, and whether the graph reads `id` as closed. While
+    /// `id` reads open, no dependent is ready. `None` for an ID that is no
+    /// ticket's.
+    pub(super) fn made_ready(&self, id: &str) -> Option<(Vec<&str>, bool)> {
+        let ticket = self.position(id)?;
+        let mut found: Vec<&str> = self.dependents[ticket]
+            .iter()
+            .filter(|dependent| self.is_ready(**dependent))
+            .map(|dependent| self.ids[*dependent].as_str())
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        Some((found, self.closed[ticket]))
+    }
+
     /// The ticket's readiness with its reasons, which only a blocked
     /// ticket has.
     pub(super) fn readiness(&self, id: &str) -> Option<ReadinessDto> {
@@ -775,6 +791,23 @@ fn parent_cycles(parents: &[Option<usize>]) -> Vec<Vec<usize>> {
     cycles
 }
 
+/// A ticket a closure made ready, as a report holds it: no title.
+pub(crate) struct MadeReadyTicket {
+    pub(crate) id: String,
+    pub(crate) slug: Option<String>,
+}
+
+/// What the index says a closure made ready.
+pub(crate) struct MadeReady {
+    pub(crate) tickets: Vec<MadeReadyTicket>,
+    /// Whether the answer can be relied on: every ticket was seen, the closed
+    /// one among them. When not, `tickets` is empty.
+    pub(crate) complete: bool,
+    /// Whether the index reads the ticket as closed. It may not: its copy may
+    /// be behind the closure, or a peer may have reopened it.
+    pub(crate) target_closed: bool,
+}
+
 /// What one relationship read has to answer from: the effective copy of
 /// every ticket the index holds, and what they are to each other.
 pub(super) struct Tickets<'a> {
@@ -868,6 +901,38 @@ impl RepositoryService {
             })
         })
         .map_err(|error| repo.failure(error))
+    }
+
+    /// What closing `id` made ready, by the index's effective copy, now.
+    /// Readiness is lifecycle closure, and a status text plays no part.
+    pub(crate) fn tickets_made_ready(
+        &self,
+        repo: &ResolvedRepository,
+        id: &ItemId,
+    ) -> Result<MadeReady, ReadError> {
+        let id = id.to_string();
+        self.read_tickets(repo, |tickets| {
+            let found = tickets
+                .complete
+                .then(|| tickets.graph().made_ready(&id))
+                .flatten();
+            let complete = found.is_some();
+            let (found, target_closed) = found.unwrap_or_default();
+            Ok(MadeReady {
+                complete,
+                target_closed,
+                tickets: found
+                    .into_iter()
+                    .map(|ticket| MadeReadyTicket {
+                        id: ticket.to_owned(),
+                        slug: tickets
+                            .by_id
+                            .get(ticket)
+                            .and_then(|row| row.relationships.slug.clone()),
+                    })
+                    .collect(),
+            })
+        })
     }
 
     /// The open tickets `filter` matches, in the ticket list ordering:

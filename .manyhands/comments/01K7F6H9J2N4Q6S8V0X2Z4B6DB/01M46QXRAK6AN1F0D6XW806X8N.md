@@ -1,9 +1,10 @@
 ---
+id: 01M46QXRAK6AN1F0D6XW806X8N
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DB
+created_at: 2026-10-05T19:16:21Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M46QXRAK6AN1F0D6XW806X8N"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DB"
-created_at: "2026-10-05T19:16:21Z"
 ---
 
 Task 3 completed in 04e1100..98998e9 and independently approved for spec and

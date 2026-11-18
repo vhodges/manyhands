@@ -1,9 +1,10 @@
 ---
+id: 01M4XAKP3A86SHJNACTQEHBQH3
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-14T13:55:34Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4XAKP3A86SHJNACTQEHBQH3"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-14T13:55:34Z"
 ---
 
 All four whole-branch findings now have meaningful regression RED **before any

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 conflict resolution mutation data",
+  "description": "The data of a conflict resolve envelope: the synchronization whose conflict the request resolved, the resolution commit, how far the publication that continued it got, and the next step of a conflict. A request that resolved and checkpointed the conflict names its commit; one refused because the conflict is to be repaired outside Manyhands names none, and its conflict says so. It holds no source and names no path.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "operation_id", "commit_oid", "publication", "conflict"],
+  "properties": {
+    "type": {
+      "description": "The one value that tells this data apart.",
+      "type": "string",
+      "enum": ["conflict_resolution"]
+    },
+    "operation_id": {
+      "description": "The synchronization, whichever ID the request named: its own, or the operation of a comment it publishes.",
+      "type": "string"
+    },
+    "commit_oid": {
+      "description": "The resolution commit, whose parents are the conflict's local and incoming parents, in that order. Null when the request made none.",
+      "type": ["string", "null"]
+    },
+    "publication": {
+      "description": "As the envelope's publication effect says: published, current when the remote held the commit already, pending while the publication is still to be made, or not_requested for a request that resolved nothing.",
+      "type": "string",
+      "enum": ["not_requested", "published", "current", "pending"]
+    },
+    "conflict": {
+      "description": "The next step of a conflict: one the publication met in a merge of its own, left in the target worktree, or the conflict this request could not resolve in Manyhands. Null otherwise. It names no path and holds no content.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["operation_id", "next_action"],
+      "properties": {
+        "operation_id": {
+          "description": "The synchronization the conflict is of: operation_id.",
+          "type": "string"
+        },
+        "next_action": {
+          "description": "resolve when every conflicted path is canonical content of one item, which can be resolved in Manyhands; external_repair when any is not, so the merge is finished in Git outside Manyhands.",
+          "type": "string",
+          "enum": ["resolve", "external_repair"]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 conflict next step",
+  "description": "The next step of a synchronization that stopped on a conflict in a merge of its own: the synchronization's operation, whose merge is left in its target worktree with the branch where the merge began, and what that merge needs. It names no path and holds no content. The recovery array of the envelope is unchanged by it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation_id", "next_action"],
+  "properties": {
+    "operation_id": {
+      "description": "The synchronization the conflict is of: the ID the conflict is inspected, resolved and resumed by.",
+      "type": "string"
+    },
+    "next_action": {
+      "description": "resolve when every conflicted path is canonical content of one item, which can be resolved in Manyhands; external_repair when any is not, so the merge is finished in Git outside Manyhands and the synchronization is then taken up again. The set is one or the other as a whole.",
+      "type": "string",
+      "enum": ["resolve", "external_repair"]
+    }
+  }
+}

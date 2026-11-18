@@ -1,0 +1,143 @@
+"""Shared workflow arguments must not depend on Bash/PowerShell syntax."""
+
+import contextlib
+import io
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from workflow import command_for_stage, emit_tools, main
+
+
+class WorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="workflow arguments ")
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name)
+        self.env = {"TARGET": "x86_64-pc-windows-msvc", "STAGING": "staging path with spaces",
+                    "EXTRACTED": "extracted path with spaces", "ARCHIVE": "dist path/archive.zip",
+                    "INVENTORY": "dist path/archive.zip.json", "GITHUB_ENV": "job environment"}
+
+    def test_shared_paths_are_single_arguments_without_shell_expansion(self):
+        command = command_for_stage("stage", self.env, self.repo)
+        self.assertEqual(command[command.index("--output") + 1], self.env["STAGING"])
+        self.assertEqual(command[command.index("--target") + 1], self.env["TARGET"])
+        self.assertFalse(any("$env:" in argument or "$TARGET" in argument for argument in command))
+
+    def test_cargo_builds_use_the_native_tool_and_production_features(self):
+        cli = command_for_stage("build-cli", self.env, self.repo)
+        desktop = command_for_stage("build-desktop", self.env, self.repo)
+        self.assertEqual(cli[0], "cargo")
+        self.assertIn("--release", cli)
+        self.assertNotIn("--features", cli)
+        self.assertEqual(desktop[desktop.index("--features") + 1], "desktop")
+        self.assertNotIn("--all-features", desktop)
+
+    def test_windows_signing_and_extracted_verification_use_powershell(self):
+        for stage, mode, variable in (("windows-sign", "Sign", "STAGING"), ("windows-verify", "Verify", "EXTRACTED")):
+            with self.subTest(stage=stage):
+                command = command_for_stage(stage, self.env, self.repo)
+                self.assertEqual(command[0], "pwsh")
+                self.assertEqual(command[command.index("-Mode") + 1], mode)
+                self.assertEqual(command[-1], self.env[variable])
+
+    def test_windows_certificate_steps_have_ten_minute_step_backstops(self):
+        workflow = Path(__file__).resolve().parents[3] / ".github/workflows/release.yml"
+        steps = workflow.read_text(encoding="utf-8").split("      - name: ")
+        for name in ("Test Windows release helpers", "Audit and self-sign Windows executables",
+                     "Verify extracted Windows signatures without signing secrets"):
+            with self.subTest(step=name):
+                matches = [step for step in steps if step.startswith(name + "\n")]
+                self.assertEqual(len(matches), 1)
+                self.assertRegex(matches[0], r"(?m)^        timeout-minutes: 10$")
+                self.assertIn("if: matrix.os == 'windows'", matches[0])
+
+    def test_installer_budget_leaves_verification_and_cleanup_after_explicit_compiler_deadline(self):
+        repo = Path(__file__).resolve().parents[3]
+        workflow = (repo / '.github/workflows/release.yml').read_text(encoding='utf-8')
+        step = next(step for step in workflow.split('      - name: ') if step.startswith('Build and sign Windows installer\n'))
+        self.assertIn("if: matrix.os == 'windows'", step)
+        self.assertRegex(step, r'(?m)^        timeout-minutes: 45$')
+        compiler = (repo / 'scripts/release/windows-installer.ps1').read_text(encoding='utf-8')
+        self.assertIn('Invoke-ReleaseTool $Path $Arguments -TimeoutSeconds 1800', compiler)
+        self.assertIn('Invoke-InnoCompiler $Compiler $arguments', compiler)
+        workflow_minutes = int(re.search(r'timeout-minutes: (\d+)', step)[1])
+        compiler_seconds = int(re.search(r'Invoke-ReleaseTool \$Path \$Arguments -TimeoutSeconds (\d+)', compiler)[1])
+        self.assertEqual(workflow_minutes * 60 - compiler_seconds, 15 * 60)
+        self.assertIn('15 minutes for verification, smoke tests and cleanup', step)
+
+    def test_all_windows_helper_suites_run_before_signing_secrets_are_available(self):
+        workflow = Path(__file__).resolve().parents[3] / ".github/workflows/release.yml"
+        text = workflow.read_text(encoding="utf-8")
+        steps = text.split("      - name: ")
+        matches = [step for step in steps if step.startswith("Test Windows ")]
+        self.assertEqual(len(matches), 1)
+        for name in ("test_windows_tools.ps1", "test_windows_process.ps1", "test_windows_signing.ps1", "test_windows_trust.ps1", "test_windows_installer.ps1"):
+            self.assertIn(f"./scripts/release/tests/{name}", matches[0])
+        self.assertIn("if: matrix.os == 'windows'", matches[0])
+        self.assertNotIn("WINDOWS_SIGNING_", matches[0])
+        self.assertLess(text.index(matches[0]), text.index("Audit and self-sign Windows executables"))
+
+    def test_installer_build_consumes_extracted_verified_payload_and_pinned_compiler(self):
+        env = {**self.env, 'INNO_COMPILER': 'pinned compiler path/ISCC.exe'}
+        command = command_for_stage('windows-installer', env, self.repo)
+        self.assertEqual(command[command.index('-Mode') + 1], 'BuildInstaller')
+        self.assertEqual(command[command.index('-Staging') + 1], env['EXTRACTED'])
+        self.assertEqual(command[command.index('-Archive') + 1], env['ARCHIVE'])
+        self.assertEqual(command[command.index('-Compiler') + 1], env['INNO_COMPILER'])
+        workflow = (Path(__file__).resolve().parents[3] / '.github/workflows/release.yml').read_text()
+        self.assertLess(workflow.index('Install pinned Inno Setup compiler'), workflow.index('Test Windows release helpers'))
+        self.assertLess(workflow.index('Verify extracted Windows signatures without signing secrets'), workflow.index('Build and sign Windows installer'))
+        self.assertLess(workflow.index('Build and sign Windows installer'), workflow.index('Hand off verified archives'))
+        step = next(step for step in workflow.split('      - name: ') if step.startswith('Build and sign Windows installer\n'))
+        self.assertIn('WINDOWS_SIGNING_PFX_BASE64:', step)
+        self.assertIn('WINDOWS_SIGNING_PFX_PASSWORD:', step)
+
+    def test_handoff_does_not_resolve_the_tag_again(self):
+        command = command_for_stage("prepare", self.env, self.repo)
+        self.assertIn("--manifest-env", command)
+        self.assertNotIn("--tag", command)
+        self.assertEqual(command[command.index("--github-env") + 1], self.env["GITHUB_ENV"])
+
+    def test_archive_verification_retains_smoke_and_inventory_checks(self):
+        command = command_for_stage("verify", self.env, self.repo)
+        self.assertIn("--smoke-cli", command)
+        self.assertEqual(command[command.index("--archive") + 1], self.env["ARCHIVE"])
+        self.assertEqual(command[command.index("--inventory") + 1], self.env["INVENTORY"])
+
+    def test_invalid_tool_config_does_not_emit_partial_outputs(self):
+        packaging = self.repo / "packaging"
+        packaging.mkdir()
+        (packaging / "tool-versions.env").write_text("RUST_VERSION=1.98.1\nCARGO_ABOUT_VERSION=not-a-version\n", encoding="utf-8")
+        output = self.repo / "outputs"
+        with self.assertRaisesRegex(ValueError, "version"):
+            emit_tools(self.repo, output)
+        self.assertFalse(output.exists())
+
+    def test_missing_required_environment_fails_before_running_a_tool(self):
+        with self.assertRaisesRegex(ValueError, "TARGET"):
+            command_for_stage("stage", {}, self.repo)
+
+    def test_pinned_tools_are_emitted_without_shell_specific_redirection(self):
+        packaging = self.repo / "packaging"
+        packaging.mkdir()
+        (packaging / "tool-versions.env").write_text("# Pinned tools\nRUST_VERSION=1.98.1\nCARGO_ABOUT_VERSION=0.9.3\n", encoding="utf-8")
+        output = self.repo / "outputs"
+        emit_tools(self.repo, output)
+        self.assertEqual(output.read_text(), "rust=1.98.1\ncargo-about=0.9.3\n")
+
+    def test_failed_child_exit_code_is_preserved(self):
+        with patch.dict(os.environ, self.env), patch("workflow.subprocess.run", side_effect=subprocess.CalledProcessError(23, ["cargo"])):
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(main(["build-cli"]), 23)
+
+
+if __name__ == "__main__":
+    unittest.main()

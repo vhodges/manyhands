@@ -1,9 +1,10 @@
 ---
+id: 01M4VTCVFT1CJHJ0YQ3WC77KTR
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-13T23:43:36Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4VTCVFT1CJHJ0YQ3WC77KTR"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-13T23:43:36Z"
 ---
 
 Fresh Task 5-only implementer verified clean assigned worktree/branch at exact

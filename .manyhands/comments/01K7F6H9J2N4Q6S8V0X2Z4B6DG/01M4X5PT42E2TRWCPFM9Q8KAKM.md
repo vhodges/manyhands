@@ -1,9 +1,10 @@
 ---
+id: 01M4X5PT42E2TRWCPFM9Q8KAKM
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-14T12:29:00Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4X5PT42E2TRWCPFM9Q8KAKM"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-14T12:29:00Z"
 ---
 
 Task 8 LOCAL VERIFICATION CHECKPOINT, **IN PROGRESS / controller review pending**.
