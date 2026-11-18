@@ -1729,6 +1729,9 @@ This part is the copy the owner reviews.
 - **Labels** (R-44). Today's offer and recovery labels are kept verbatim,
   even where they open a page without "…" ("Open Sharing & keys", "Set
   identity", "Set up sharing"). New labels follow the "…" rule.
+  *Amended 2026-11-15 by Wave 04 Cycle 05b (its decisions 5 and 12):*
+  "Review changes…", "Open Sharing & keys…" and "Check host…" now take
+  the "…", as each opens a sheet or Settings.
 
 ### B0. Today's Area, Mapped
 

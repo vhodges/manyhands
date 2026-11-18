@@ -23,8 +23,7 @@ use crate::desktop::{
     },
     view::{
         rows::{EmptyAction, alert_row, empty_state, skeleton_rows},
-        settings::SettingsRoute,
-        workspace::Workspace,
+        workspace::{AddRoute, Workspace},
     },
 };
 
@@ -98,10 +97,10 @@ pub(crate) fn body(
         State::Empty => {
             let add: EmptyAction = (
                 ADD_OR_CREATE.into(),
-                // On the Add folder (W-5; Wave 04 Cycle 04 design Part D).
+                // The Add repository sheet (Wave 04 Cycle 05a AW-1).
                 Box::new(move |window: &mut Window, cx: &mut App| {
                     let _ = workspace.update(cx, |workspace, cx| {
-                        workspace.show_settings(SettingsRoute::AddRepository, None, window, cx)
+                        workspace.show_add_repository(AddRoute::New, None, window, cx)
                     });
                 }),
             );

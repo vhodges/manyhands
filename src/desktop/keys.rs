@@ -1,7 +1,7 @@
 //! Actions and key bindings, defined once here (design, Layout And
 //! Keyboard). `secondary` is Ctrl on Linux and Windows, Cmd on macOS.
 
-use gpui_kit::{App, KeyBinding, NoAction};
+use gpui_kit::{App, KeyBinding};
 
 use crate::desktop::model::{
     activity::rows::{ActivityAction, RowKey},
@@ -457,11 +457,6 @@ pub(crate) fn bind(cx: &mut App) {
             SaveResolution,
             Some(RESOLVE_SHEET_CONTEXT),
         ),
-        // The dialog's Enter (its Confirm, which the sheet ignores) is
-        // taken back inside the sheet, so Enter presses the focused button,
-        // as Space does (A21); the Result editor's Enter, bound deeper, is
-        // still its newline.
-        KeyBinding::new("enter", NoAction, Some(RESOLVE_SHEET_CONTEXT)),
         KeyBinding::new("escape", LeaveResult, Some(RESOLVE_SHEET_EDITOR)),
     ]);
 }

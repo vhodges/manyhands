@@ -171,7 +171,7 @@ pub(super) fn pending_rows() {
                     .desc("Resume finishes it.")
                     .repo("demo")
                     .button(resume(), "Resume", true)
-                    .then(review(), "Review changes", true)
+                    .then(review(), "Review changes…", true)
                     .then(abandon(), "Abandon", true)
                     .detail(&lines(&raw("refresh", "prepared", "resume")))
                     .group(pending_group(true, Some(OPERATION))),
@@ -194,7 +194,7 @@ pub(super) fn pending_rows() {
                     )
                     .desc("Review it again.")
                     .repo("demo")
-                    .button(review(), "Review changes", true)
+                    .button(review(), "Review changes…", true)
                     .then(abandon(), "Abandon", true)
                     .detail(&lines(&raw("refresh", "prepared", "review_deletion_again")))
                     .group(pending_group(true, Some(OPERATION))),

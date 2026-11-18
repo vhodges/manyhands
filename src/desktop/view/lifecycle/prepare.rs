@@ -364,19 +364,18 @@ impl LifecycleDialog {
         cx.notify();
     }
 
-    /// The held item's one way on, as a button; while the item's lifecycle
-    /// is in flight, that it is still running.
+    /// The held item's one way on, as a primary button; while the item's
+    /// lifecycle is in flight, that it is still running, in its place.
     pub(super) fn held_action(
         &self,
         way_out: &LifecycleWayOut,
         cx: &Context<Self>,
-    ) -> Option<AnyElement> {
+    ) -> Option<(bool, AnyElement)> {
         if self.in_flight(cx) {
-            return Some(
-                text("lifecycle-still-running", STILL_RUNNING)
-                    .text_sm()
-                    .into_any_element(),
-            );
+            let waiting = text("lifecycle-still-running", STILL_RUNNING)
+                .text_sm()
+                .into_any_element();
+            return Some((false, waiting));
         }
         match way_out {
             LifecycleWayOut::RetryRequest { request_id } => {
@@ -394,8 +393,9 @@ impl LifecycleDialog {
     }
 
     /// A blocked prepare's rows: each blocker in words, then each way out
-    /// that is guidance, and its code; and its buttons: Repair locally…,
-    /// Open folder for a dirty main and Share main when it is a way out.
+    /// that is guidance, and its code; and its buttons, none primary:
+    /// Repair locally…, Open folder for a dirty main and Share main when it
+    /// is a way out.
     pub(super) fn blocked_body(
         &self,
         code: ResultCode,
@@ -403,7 +403,7 @@ impl LifecycleDialog {
         way_out: &[LifecycleWayOut],
         shared: bool,
         cx: &Context<Self>,
-    ) -> (impl IntoElement + use<>, Vec<AnyElement>) {
+    ) -> (impl IntoElement + use<>, Vec<(bool, AnyElement)>) {
         let item = match self.heading.kind {
             manyhands::repository::ItemDtoKind::Ticket => "ticket",
             manyhands::repository::ItemDtoKind::Document => "document",

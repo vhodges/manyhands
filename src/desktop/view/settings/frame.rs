@@ -1,14 +1,14 @@
 //! The Settings sheet's frame (Wave 04 Cycle 04 design B1 and B2): the Kit
-//! sheet, 720 px wide on the right, with the heading and its description in
-//! the header and no footer; the page list down the left; and the shown
+//! sheet, at least 720 px wide on the right, with the heading and its description in
+//! the header (`frame::sheet_header`, Wave 04 Cycle 05a R-20) and no footer; the page list down the left; and the shown
 //! page in a scroll of its own laid over the Kit's body, as the details
 //! sheet does. The frame's root, which holds the list and the body, takes
 //! the page keys and moves the body: the keys are bound in the content
 //! region's context, which the sheet's focus is inside.
 
 use gpui_kit::{
-    AnyElement, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Role, StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    AnyElement, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Role,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{ActiveTheme, h_flex, scroll::Scrollbar, sheet::Sheet, v_flex},
     div, px,
 };
@@ -17,17 +17,19 @@ use super::{PAGES, SETTINGS_HEADING, SETTINGS_NOTE, SettingsHost, Shown, page_ti
 use crate::desktop::{
     keys::{ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop},
     model::stamp::{SettingsNav, SettingsPage},
-    view::{rows::icon, scroll::ContentScroll},
+    view::{
+        frame::{self, Header},
+        rows::icon,
+        scroll::ContentScroll,
+    },
 };
 
-/// The sheet's width (`05`, Settings sheet).
+/// The sheet's narrowest width (`05`, Settings sheet).
 const WIDTH: f32 = 720.;
 /// The page list's width (`05`'s left nav).
 const MENU_WIDTH: f32 = 214.;
 /// An entry's icon size, as the mockup's nav.
 const ICON_SIZE: f32 = 14.;
-/// The heading's size, as the details sheet's title.
-const TITLE_SIZE: f32 = 15.;
 
 /// The icon of a menu entry (`06`'s nav).
 fn nav_icon(nav: SettingsNav) -> &'static str {
@@ -54,33 +56,20 @@ impl SettingsHost {
         };
         let views = self.views(shown, window, cx);
         let entries = self.entries(shown, window, cx);
-        let muted = cx.theme().muted_foreground;
         let handle = self.scroll.handle().clone();
         sheet
-            .size(px(WIDTH))
-            .title(
-                v_flex()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .id("settings-heading")
-                            .test_support()
-                            .aria_label(SETTINGS_HEADING)
-                            .text_size(px(TITLE_SIZE))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(SETTINGS_HEADING),
-                    )
-                    .child(
-                        div()
-                            .id("settings-note")
-                            .test_support()
-                            .aria_label(SETTINGS_NOTE)
-                            .text_sm()
-                            .font_weight(FontWeight::NORMAL)
-                            .text_color(muted)
-                            .child(SETTINGS_NOTE),
-                    ),
-            )
+            .size(frame::sheet_width(window, WIDTH))
+            // The heading and its note, on the common frame (Wave 04 Cycle
+            // 05a design A5, R-20).
+            .title(frame::sheet_header(
+                Header {
+                    icon: None,
+                    title: SETTINGS_HEADING.into(),
+                    description: Some(SETTINGS_NOTE.into()),
+                    ids: ("settings-heading", Some("settings-note")),
+                },
+                cx,
+            ))
             .child(
                 h_flex()
                     .id("settings")

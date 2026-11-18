@@ -6,6 +6,7 @@ mod activity_facts;
 mod activity_menu;
 mod activity_more;
 mod activity_panel;
+mod add_sheet;
 mod content;
 mod docks;
 mod find;
@@ -20,14 +21,16 @@ mod render;
 mod repositories;
 mod repository_menu;
 mod requests;
+mod resolve_sheet;
 mod settings_sheet;
 mod titles;
 
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
-    AppContext, Context, Entity, FocusHandle, Subscription, Task, WeakEntity, Window,
+    App, AppContext, Context, Entity, FocusHandle, Subscription, Task, WeakEntity, Window,
     component::{
+        Root,
         dock::DockArea,
         input::{InputEvent, InputState},
         list::ListEvent,
@@ -59,12 +62,11 @@ use crate::desktop::{
     },
     services::{Services, pending_conflicts::PendingConflict},
 };
+pub(in crate::desktop::view) use add_sheet::AddRoute;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use focus::REGIONS;
 pub(crate) use focus::Region;
 pub(in crate::desktop::view) use focus::ToolbarButton;
-#[cfg(all(test, feature = "desktop-test-support"))]
-use gpui_kit::App;
 use manyhands::drafts::DraftId;
 pub(in crate::desktop::view) use render::{modal_open, unless_dialog};
 
@@ -93,6 +95,9 @@ struct ContentArea {
     /// Who keeps Root's sheet open: Settings, or the tab whose details
     /// sheet it is, which closes once another is shown.
     sheet: Option<content::SheetOwner>,
+    /// Resolve conflict's applied resolution that landed under a dialog,
+    /// whose close waits for none to be open (Wave 04 Cycle 05b R-26).
+    resolve_waiting: Option<resolve_sheet::ResolveWaiting>,
 }
 
 pub(crate) struct Workspace {
@@ -147,10 +152,14 @@ pub(crate) struct Workspace {
     /// handler call: where focus goes back when that handler opens Settings
     /// (Wave 04 Cycle 04 design A2, "The origin"; R-43).
     settings_origin: Option<FocusHandle>,
-    /// The region of the control Settings opened from, recorded at the open
-    /// and armed by its close: a lost focus goes there when that control is
-    /// no longer drawn (design A3; R-45).
+    /// The region of the control Settings, or the Add repository sheet,
+    /// opened from, recorded at the open and armed by its close: a lost
+    /// focus goes there when that control is no longer drawn (design A3;
+    /// R-45; Wave 04 Cycle 05a B3 step 3).
     settings_return: settings_sheet::SettingsReturn,
+    /// The Add repository sheet, its open and the adds it confirmed (Wave 04
+    /// Cycle 05a B1 to B4, B10).
+    add: add_sheet::AddState,
     _drafts_events: Subscription,
     /// Fallback when the control holding focus is no longer drawn.
     last_region: Option<Region>,
@@ -304,8 +313,13 @@ impl Workspace {
             window,
             |this, _, event: &SettingsEvent, window, cx| match event {
                 SettingsEvent::ShowActivity => this.settings_show_activity(window, cx),
+                // AW-3: the Add repository sheet in Settings' place (B11).
+                SettingsEvent::AddRepository => {
+                    this.show_add_repository(AddRoute::New, None, window, cx)
+                }
             },
         );
+        let add = add_sheet::AddState::new(services.clone(), tabs.scroll(), window, cx);
         let drafts_page = {
             let services = services.clone();
             let scroll = tabs.scroll().clone();
@@ -366,10 +380,12 @@ impl Workspace {
                 landed_refocus: false,
                 details: None,
                 sheet: None,
+                resolve_waiting: None,
             },
             _settings_events: settings_events,
             settings_origin: None,
             settings_return: Default::default(),
+            add,
             _drafts_events: drafts_events,
             last_region: Some(start),
             window_title: String::new(),
@@ -488,6 +504,16 @@ impl Workspace {
     pub(crate) fn tickets_list_focus(&self, cx: &App) -> FocusHandle {
         gpui_kit::Focusable::focus_handle(self.tickets_pane.list().read(cx), cx)
     }
+}
+
+/// The window's workspace: the view Root shows. `None` in a window whose
+/// view is something else.
+pub(in crate::desktop::view) fn window_workspace(
+    window: &Window,
+    cx: &App,
+) -> Option<Entity<Workspace>> {
+    let root = window.root::<Root>()??;
+    root.read(cx).view().clone().downcast::<Workspace>().ok()
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]

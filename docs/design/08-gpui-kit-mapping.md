@@ -22,11 +22,11 @@ Decided for the Repositories panel on 2026-11-12 (Wave 04 Cycle 03a design, R-7 
 | Tickets list | `Table` / `DataTable` (sortable columns), or `VirtualList` with a custom header. Needs keyboard row navigation. Built as a Kit `List` with app rows and an app column header (2026-11-11, above). |
 | Documents tree | `Tree` (the base `Tree` with app rows, 2026-11-11) |
 | Status pills, tags | `Tag` / `Badge` |
-| Segmented Open/Closed/All | `Tabs` (segmented variant) or a `Toggle` group (the app's own choices, 2026-11-11) |
+| Segmented Open/Closed/All | `Tabs` (segmented variant) or a `Toggle` group (the app's own choices, 2026-11-11). *Amended 2026-11-14 by Wave 04 Cycle 05a (its design fact 39): the Add repository sheet's mode control is the same app-owned segmented choice, since the Kit's `ToggleGroup` has no keyboard path.* |
 | Item tabs + split | `Dock` center tab groups, or `Tabs` with close buttons |
-| Banners, outcome boxes | `Alert` |
+| Banners, outcome boxes | `Alert`. *Amended 2026-11-15 by Wave 04 Cycle 05b (its design A6): the lifecycle dialog's outcome box is the app's own tinted box.* |
 | Footer | `StatusBar` |
-| Sheets | `Sheet` (right placement) via `Root::render_sheet_layer` |
+| Sheets | `Sheet` (right placement) via `Root::render_sheet_layer`. *Amended 2026-11-15 by Wave 04 Cycle 05b (its design B1): Resolve conflict is a sheet too, which the workspace keeps as `SheetOwner::Resolve`.* |
 | Dialogs | `Dialog` / `AlertDialog` via `Root::render_dialog_layer` |
 | Needs attention | `Popover` anchored to the footer item. *Amended 2026-11-13 by Wave 04 Cycle 03b (its design R-10 and fact 32): a Workspace-owned layer, following the app's dock and repository menus, not the Kit `Popover`, whose controlled mode would split its rules across two mechanisms.* |
 | Settings layout | `Settings` component or `Sidebar` + content. *As built, Wave 04 Cycle 04:* plain controls, not the `Settings` component (D1 ruling R-T12a) |

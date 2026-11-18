@@ -5,11 +5,11 @@
 //!
 //! - **At each open** (R-14): the route's repository, when it names one;
 //!   else the Repositories panel's selection, when it has changed since the
-//!   last open; else the previous choice, kept with its typed text. An
-//!   `Inspect` open never changes the choice: its folder may not be
-//!   registered, and choosing anything would empty another repository's
-//!   typed identity text (R-55). Every open, `Inspect`'s included, records
-//!   the panel's selection it saw.
+//!   last open; else the previous choice, kept with its typed text. Every
+//!   open records the panel's selection it saw, and so does every open of
+//!   the Add repository sheet, which never changes the choice: its folder
+//!   may not be registered, and choosing anything would empty another
+//!   repository's typed identity text (R-55; Wave 04 Cycle 05a Ruling 15).
 //! - **Manage** on a row chooses its repository (R-15).
 //! - **Choosing the chosen repository** leaves its identity form as it is,
 //!   so text being typed is kept (Cycle 03a's R5-2 lesson).
@@ -23,9 +23,8 @@ use gpui_kit::{Context, Window};
 use super::{RepositoriesEvent, SettingsHost, SettingsRoute};
 
 impl SettingsRoute {
-    /// The repository the route chooses: none for a page, the Add form,
-    /// the key list or a retry; and none for `Inspect`, whose folder may
-    /// not be registered (R-55).
+    /// The repository the route chooses: none for a page, the Add or create
+    /// a repository… button, the key list or a retry.
     fn chosen_root(&self) -> Option<&PathBuf> {
         match self {
             Self::Manage(root)
@@ -33,11 +32,7 @@ impl SettingsRoute {
             | Self::Remotes(root)
             | Self::Hosts(root)
             | Self::CheckHost(root, _) => Some(root),
-            Self::Page(_)
-            | Self::AddRepository
-            | Self::Inspect(_)
-            | Self::Keys
-            | Self::RetryGeneration(_) => None,
+            Self::Page(_) | Self::AddButton | Self::Keys | Self::RetryGeneration(_) => None,
         }
     }
 }
@@ -46,8 +41,7 @@ impl SettingsHost {
     /// Settings opens at `route`, the Repositories panel's selection being
     /// `panel` (A2 step 6; R-14): the route's repository is chosen, else
     /// the panel's selection when it has changed since the last open; else
-    /// the choice stays. A panel with no selection chooses nothing, and an
-    /// `Inspect` open chooses nothing, whatever the panel did (R-55); the
+    /// the choice stays. A panel with no selection chooses nothing; the
     /// selection is recorded either way.
     pub(crate) fn choose_on_open(
         &mut self,
@@ -56,14 +50,21 @@ impl SettingsHost {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let changed =
-            panel.is_some() && panel != self.seen && !matches!(route, SettingsRoute::Inspect(_));
+        let changed = panel.is_some() && panel != self.seen;
         self.seen = panel.clone();
         if let Some(root) = route.chosen_root() {
             self.choose(Some(root.clone()), window, cx);
         } else if changed {
             self.choose(panel, window, cx);
         }
+    }
+
+    /// The Add repository sheet opened, the Repositories panel's selection
+    /// being `panel`: it records the selection, as every open of Settings
+    /// does, and chooses nothing, so the next plain open finds nothing
+    /// newer (R-55, carried over to the sheet; Wave 04 Cycle 05a Ruling 15).
+    pub(crate) fn saw_panel(&mut self, panel: Option<PathBuf>) {
+        self.seen = panel;
     }
 
     /// Chooses `root` for every page that works on one repository. The one
@@ -109,6 +110,7 @@ impl SettingsHost {
                 self.choose(None, window, cx)
             }
             RepositoriesEvent::Forgot(_) => {}
+            RepositoriesEvent::AddRepository => cx.emit(super::SettingsEvent::AddRepository),
         }
     }
 }

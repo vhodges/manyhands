@@ -284,8 +284,9 @@ impl Workspace {
     /// working (A21).
     pub(super) fn focus_lost(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let target = window.focus_lost_restore_target(cx);
-        // Settings open, with no dialog over it: focus stays in the sheet.
-        if self.settings_keeps_lost_focus(target.as_ref(), window, cx) {
+        // Settings or the Add repository sheet open, with no dialog over
+        // it: focus stays in the sheet.
+        if self.sheet_keeps_lost_focus(target.as_ref(), window, cx) {
             return;
         }
         if window.has_active_dialog(cx) || window.has_active_sheet(cx) {

@@ -13,7 +13,10 @@
 //! act on (a request it does not hold, a root or host it cannot read) is
 //! shown as text, unavailable.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    path::PathBuf,
+};
 
 use manyhands::{
     repository::{HostObservationDto, MutationDataDto, OperationId, OperationListDto},
@@ -376,6 +379,12 @@ impl Operations {
                     )),
                     _ => None,
                 });
+                // The root the answer names: for an add, the one the library
+                // registered (R-29).
+                if let Some(request) = self.request_mut(id) {
+                    request.registered_root =
+                        envelope.scope.repository.as_deref().map(PathBuf::from);
+                }
                 self.set(
                     id,
                     RequestState::Finished(

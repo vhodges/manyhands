@@ -15,7 +15,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from assemble import ApiError, GitHub, assemble, parse_api_response, preflight, release_notes, source_marker
+from assemble import DRAFT_VISIBILITY_DELAYS, ApiError, GitHub, assemble, parse_api_response, preflight, release_notes, source_marker
 from common import TARGETS, archive_inventory, payload_name
 from installer import installer_inventory, installer_name
 from package import archive_payload, refresh_documents
@@ -34,6 +34,8 @@ class FakeGitHub:
         self.fail_on = None
         self.publish_after_upload = False
         self.lookup_error = None
+        self.hidden_lookups = 0
+        self.pending_lookups = 0
 
     def resolve_tag(self, tag):
         return self.remote_commit
@@ -41,6 +43,9 @@ class FakeGitHub:
     def get_release(self, tag):
         if self.lookup_error:
             raise self.lookup_error
+        if self.pending_lookups:
+            self.pending_lookups -= 1
+            return None
         return copy.deepcopy(self.release)
 
     def read_manifest(self, release):
@@ -49,6 +54,7 @@ class FakeGitHub:
 
     def create(self, release, notes):
         self.creates += 1
+        self.pending_lookups = self.hidden_lookups
         self.release = {"id": 1, "draft": True, "prerelease": release["prerelease"], "tag_name": release["tag"],
                         "body": notes.read_text(), "html_url": "https://github.com/example/repo/releases/tag/v0.1.0"}
 
@@ -133,6 +139,23 @@ class AssemblyTests(unittest.TestCase):
 
     def run_assembly(self):
         return assemble(self.release, self.assets, self.github)
+
+    def test_new_draft_that_appears_late_is_awaited_not_recreated(self):
+        self.github.hidden_lookups = 4
+        delays = []
+        assemble(self.release, self.assets, self.github, sleep=delays.append)
+        self.assertEqual(self.github.creates, 1)
+        self.assertEqual(delays, list(DRAFT_VISIBILITY_DELAYS[:4]))
+        self.assertIn("SHA256SUMS", self.github.files)
+
+    def test_draft_that_never_appears_fails_after_bounded_waits_without_uploading(self):
+        self.github.hidden_lookups = 10**6
+        delays = []
+        with self.assertRaisesRegex(ApiError, "not visible after creation"):
+            assemble(self.release, self.assets, self.github, sleep=delays.append)
+        self.assertEqual(self.github.creates, 1)
+        self.assertEqual(delays, list(DRAFT_VISIBILITY_DELAYS))
+        self.assertEqual(self.github.uploads, [])
 
     def existing_draft(self):
         self.github.release = {"id": 1, "draft": True, "prerelease": False, "tag_name": self.release["tag"],

@@ -48,6 +48,7 @@ fn running(shell: &Shell, n: u64, intent: Intent, cx: &mut TestAppContext) -> De
         lane: Lane::User,
         attempt: 1,
         state: RequestState::Queued,
+        registered_root: None,
     };
     let queued = request.clone();
     shell.operations(cx).update(cx, |operations, cx| {

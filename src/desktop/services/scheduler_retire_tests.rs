@@ -510,6 +510,7 @@ fn retire_record_state_reaches_the_answer() {
             lane: Lane::Background,
             attempt: 1,
             state: RequestState::Queued,
+            registered_root: None,
         }));
         let event = WorkerEvent::Finished(id, Box::new(refused()));
         note_record(&event, &mut operations, |asked| {

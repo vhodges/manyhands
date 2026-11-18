@@ -392,3 +392,36 @@ fn retirement_proof_empty_tree_entries_are_not_silently_omitted() {
     let primary = commit(&repo, &files(true), &[base]);
     assert_eq!(prove(&repo, local, primary), Err(ContentMismatch));
 }
+
+#[test]
+fn retirement_pass_encoding_sorts_keys_whatever_serde_json_features() {
+    // A pass's image and candidates are compared byte for byte when a later
+    // process opens the registry. Cargo turns on `serde_json`'s
+    // `preserve_order` only for the desktop build, so the encoding must not
+    // depend on it. This row was written by a CLI built without the feature.
+    use super::pass::{Candidate, encode};
+    let candidate = Candidate {
+        poll_ordinal: 22,
+        kind: "ticket".into(),
+        item_id: "01M57SKVF6TQ3QM6AXJ35JGGSY".into(),
+        resources: "present".into(),
+        tip: Some("a372edbef143f3a9b7201f2d040bf82d34e087e2".into()),
+        nonce: Some("01M7P5HAZS9P1EVDYEZTA977JE".into()),
+        materialization: None,
+        refusal: None,
+        child_request: "01M7P5HAGKJC6HCDXAJ6W0F30M".into(),
+    };
+    let stored = r#"{"child_request":"01M7P5HAGKJC6HCDXAJ6W0F30M","item_id":"01M57SKVF6TQ3QM6AXJ35JGGSY","kind":"ticket","materialization":null,"nonce":"01M7P5HAZS9P1EVDYEZTA977JE","poll_ordinal":22,"refusal":null,"resources":"present","tip":"a372edbef143f3a9b7201f2d040bf82d34e087e2"}"#;
+    assert_eq!(encode(&candidate).unwrap(), stored);
+    assert_eq!(
+        encode(&std::slice::from_ref(&candidate)).unwrap(),
+        format!("[{stored}]")
+    );
+    assert_eq!(Candidate::decode(stored).unwrap(), candidate);
+
+    // The pass's frozen poll report, cut to its first two targets.
+    let report = r#"{"completed_at":1794966601,"completion":"Completed","local_changes":false,"next_eligible_at":1794966901,"operation_id":"01M7P5H4XNXCFF8EVPM97GW144","outcome":"Completed","targets":[{"after_oid":"661fba186601e11f7b026f518a2663b74fa78134","before_oid":"661fba186601e11f7b026f518a2663b74fa78134","disposition":"Current","item_id":null,"kind":null,"target":"refs/heads/main","tracking":"refs/remotes/origin/main"},{"after_oid":"3ec17b90f79a97c4fa2bb20d4765caccb007a702","before_oid":"3ec17b90f79a97c4fa2bb20d4765caccb007a702","disposition":"Current","item_id":"01M4B4GSW8J262NA8WPBANSRN1","kind":"Ticket","target":"refs/heads/manyhands/ticket/01M4B4GSW8J262NA8WPBANSRN1","tracking":"refs/remotes/origin/manyhands/ticket/01M4B4GSW8J262NA8WPBANSRN1"}],"version":1}"#;
+    let plan = crate::repository::RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let decoded = crate::repository::RemotePollReport::decode_frozen(report, &plan).unwrap();
+    assert_eq!(super::handoff::report_image(&decoded).unwrap(), report);
+}

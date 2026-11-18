@@ -407,9 +407,8 @@ impl Intent {
     /// the lifecycle dialog does; every other command is its `label`.
     pub(crate) fn label_in(&self, primary: Option<&str>) -> String {
         match self {
-            Self::RepoSync { .. } => format!(
-                "Share {}",
-                crate::desktop::model::operations::primary_name(primary)
+            Self::RepoSync { .. } => crate::desktop::model::activity::copy::share_main(
+                crate::desktop::model::operations::primary_name(primary),
             ),
             _ => self.label().to_owned(),
         }
@@ -837,6 +836,10 @@ pub(crate) struct DesktopRequest {
     /// the same attempt.
     pub attempt: u32,
     pub state: RequestState,
+    /// Once finished, the repository its answer's scope names: the root as
+    /// the library registered it, for an add (Wave 04 Cycle 05a R-29).
+    /// `None` until then, and for an answer that names none.
+    pub registered_root: Option<PathBuf>,
 }
 
 /// Where a request stands.

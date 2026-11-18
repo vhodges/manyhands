@@ -167,6 +167,7 @@ fn retire(
         lane: Lane::User,
         attempt: 1,
         state: RequestState::Queued,
+        registered_root: None,
     }));
     world.operations.apply(WorkerEvent::Started(id));
     world.operations.record_stood(id, record);

@@ -1,9 +1,10 @@
 //! The conflict banner's Review changes (D5 design, B5; decision 16; E-7,
 //! E-8): a share or a post of the item that stopped on a conflict raises
 //! the banner, which says the work is safe and offers Review changes. It
-//! opens the resolve conflict sheet on that synchronization, naming the
-//! item's work context as its folder; focus comes back to the button when
-//! the sheet closes. It does not wait for the item's lifecycle lock:
+//! asks the workspace for the resolve conflict sheet on that
+//! synchronization (`ItemRoute::Resolve`; Wave 04 Cycle 05b B2), naming
+//! the item's work context as its folder; focus comes back to the button
+//! when the sheet closes. It does not wait for the item's lifecycle lock:
 //! resolving the conflict changes no text the tab holds.
 
 use std::path::PathBuf;
@@ -16,9 +17,9 @@ use gpui_kit::{
 };
 use manyhands::{canonical::ItemId, repository::OperationId};
 
-use super::{ItemPane, header::repository_name};
+use super::{ItemPane, ItemRoute, header::repository_name};
 use crate::desktop::view::{
-    conflict::{self, Opening, REVIEW_CHANGES, SheetSource},
+    conflict::{Opening, REVIEW_CHANGES, SheetSource},
     lifecycle::Heading,
 };
 
@@ -77,7 +78,8 @@ impl ItemPane {
     }
 
     /// Review changes pressed: the sheet on the conflict, for the item as
-    /// the tab read it.
+    /// the tab read it. The workspace opens it once this update has ended,
+    /// unless a dialog opened meanwhile, as one open now refuses it.
     fn review_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
@@ -107,6 +109,6 @@ impl ItemPane {
             folder: (!folder.is_empty()).then(|| PathBuf::from(folder)),
             origin: self.review_focus.clone(),
         };
-        conflict::open(opening, &self.services, window, cx);
+        cx.emit(ItemRoute::Resolve(Box::new(opening)));
     }
 }

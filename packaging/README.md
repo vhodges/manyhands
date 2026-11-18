@@ -99,9 +99,11 @@ reviewed. The workflow itself never publishes a draft.
 
 The new asset contract applies to a new source version/tag containing this
 checkpoint, not the existing `v0.1.6` draft. Never retrofit or clobber an
-existing immutable source manifest to add channels. The observed initial
-draft-visibility failure still requires an assembly-only failed-job rerun;
-automatic post-create retries are deliberately deferred during Stage 2.
+existing immutable source manifest to add channels. GitHub lists a new draft
+only some time after creating it. Assembly waits for it, polling with a
+bounded backoff of about two minutes, and fails only if it never appears; a
+failed-job rerun then repairs the draft without rebuilding. This applies to
+a source tag containing the polling, not to `v0.2.0-rc.1`, which needed that rerun.
 
 ## Homebrew personal cask
 
@@ -122,6 +124,16 @@ alter quarantine/Gatekeeper, and makes no Developer ID/notarization claim.
 It defines no user-data removal (`zap`) action; normal uninstall preserves
 settings, credentials, repositories, and Manyhands data.
 
+macOS quarantines everything a cask installs, and an ad-hoc-signed build is
+blocked until approved. The CLI needs every file it loads approved, not only
+its executable: with `libssl.3.dylib` quarantined it fails with "Library load
+disallowed by system policy". The caveats therefore print an `xattr -dr
+com.apple.quarantine` command for the whole Caskroom directory, and say the
+app needs "Open Anyway" under Privacy & Security, which asks for an
+administrator (found on `v0.2.0-rc.1`). The caveats only explain; no stanza
+removes quarantine. A `livecheck` stanza follows the latest stable GitHub
+release, so a prerelease is never offered as an upgrade.
+
 For local generation from an existing matching release input and ZIP:
 
 ```sh
@@ -136,18 +148,18 @@ candidate directory are rejected. No cross-repository write token is needed.
 
 ### Manual tap update and native acceptance
 
-The proposed repository is `vhodges/homebrew-tap`, but its name, existence,
-and access still need owner confirmation. No external tap is created or
-modified by this implementation. After an authorized release run, review
-and publish the release manually before updating the tap: draft downloads
-are not publicly installable.
+The tap is `vhodges/homebrew-tap` and is updated by hand. No cross-repository
+write token exists. After an authorized release run, review and publish the
+release manually before updating the tap: draft downloads are not publicly
+installable.
 
 After publication, download `manyhands.rb`, `SHA256SUMS`, and the matching
-macOS archive, and verify their checksums. With separate tap authorization,
-copy the generated file to `Casks/m/manyhands.rb` in the confirmed tap.
-On Apple Silicon macOS, set `TAP` to that tap's Homebrew name and run:
+macOS archive, and verify their checksums. Copy the generated file to
+`Casks/m/manyhands.rb` in the tap. On Apple Silicon macOS, set `TAP` to that
+tap's Homebrew name and run:
 
 ```sh
+brew tap --trust "$TAP"
 brew style --cask Casks/m/manyhands.rb
 brew audit --cask --online "$TAP/manyhands"
 brew install --cask "$TAP/manyhands"
@@ -160,7 +172,9 @@ Validate the CLI **through Homebrew's symlink**, with inherited `DYLD_*`
 overrides unset, to check real relative-library loading. Confirm installed
 app/CLI notices are readable, normal macOS approval/security behavior is
 accurately documented, and uninstall preserves user data. These native
-checks, `brew style`, and the cask audit are pending; Linux generation,
+checks, `brew style`, and the cask audit passed on Apple Silicon for
+`v0.2.0-rc.1`, apart from the audit's prerelease and livecheck errors, which
+an RC always raises (`--online` rejects GitHub prereleases). Linux generation,
 synthetic archive tests, and Ruby syntax do not establish Homebrew acceptance.
 
 ## Windows per-user installer

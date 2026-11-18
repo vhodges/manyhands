@@ -696,6 +696,7 @@ impl WorkerHandle {
             lane,
             attempt,
             state: RequestState::Queued,
+            registered_root: None,
         }));
         let (intent, cancel) = (Box::new(intent), CancellationToken::new());
         let work = if give_up {
@@ -1030,6 +1031,7 @@ fn submit(
         lane,
         attempt: 1,
         state: RequestState::Queued,
+        registered_root: None,
     }));
     let work = Work::Execute {
         request_id,

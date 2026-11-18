@@ -44,9 +44,10 @@ use manyhands::repository::transport::SshAuthority;
 pub(crate) use arrive::SettingsRoute;
 pub(crate) use hosts::HostsPage;
 pub(crate) use keys::KeysPage;
+pub(crate) use kit_button::{footer_kit, wrapped_kit};
 pub(crate) use polling::{PollingEvent, PollingPage};
 pub(crate) use remotes::RemotesPage;
-pub(crate) use repositories::{RepositoriesEvent, RepositoriesPage};
+pub(crate) use repositories::{EMAIL, NAME, RepositoriesEvent, RepositoriesPage};
 
 use super::scroll::ContentScroll;
 use crate::desktop::{
@@ -97,7 +98,9 @@ pub(crate) enum Shown {
 pub(crate) struct OpenFlag(Rc<Cell<bool>>);
 
 impl OpenFlag {
-    fn set(&self, open: bool) {
+    /// Open (`true`), or closed (`false`): what Settings' host, and the Add
+    /// repository sheet for its own flag (Wave 04 Cycle 05a B4), set.
+    pub(crate) fn set(&self, open: bool) {
         self.0.set(open);
     }
 
@@ -109,6 +112,11 @@ impl OpenFlag {
 
         self.0.get() && window.has_active_sheet(cx)
     }
+
+    /// The flag alone, without the active sheet `is_open` also asks for.
+    pub(crate) fn get(&self) -> bool {
+        self.0.get()
+    }
 }
 
 /// What the settings ask of the workspace.
@@ -117,6 +125,9 @@ pub(crate) enum SettingsEvent {
     /// holds it: Settings closes, and the operation area, which lists it,
     /// takes focus (design C3).
     ShowActivity,
+    /// Repositories' Add or create a repository…: the Add repository sheet
+    /// opens in Settings' place (Wave 04 Cycle 05a AW-3, B11).
+    AddRepository,
 }
 
 pub(crate) struct SettingsHost {
@@ -268,17 +279,13 @@ impl SettingsHost {
     }
 
     /// Settings closed. The pages are kept, with what they hold, except
-    /// the Keys page's typed passphrase, emptied now (design B3), and an
-    /// Add waiting for its folder's check, which no longer goes on (R-48).
+    /// the Keys page's typed passphrase, emptied now (design B3).
     pub(crate) fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_shown() {
             self.shown = Shown::Tabs;
             cx.notify();
         }
         self.forget_passphrase(window, cx);
-        if let Some(repositories) = &self.repositories {
-            repositories.update(cx, |page, _| page.forget_pending_submit());
-        }
     }
 
     /// Settings opens (`true`) or has closed (`false`): what every page's
@@ -322,9 +329,7 @@ impl SettingsHost {
         if self.repositories.is_none() {
             let sharing = self.remotes(window, cx).into();
             let (services, scroll) = (self.services.clone(), self.scroll.clone());
-            let open = self.open.clone();
-            let page =
-                cx.new(|cx| RepositoriesPage::new(services, scroll, open, sharing, window, cx));
+            let page = cx.new(|cx| RepositoriesPage::new(services, scroll, sharing, window, cx));
             self._repositories_events = Some(cx.subscribe_in(
                 &page,
                 window,

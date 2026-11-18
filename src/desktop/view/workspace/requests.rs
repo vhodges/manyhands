@@ -1,6 +1,6 @@
 //! Worker completions, pending reads and explicit request/recovery actions.
 
-use super::{Region, Workspace};
+use super::{Region, Workspace, add_sheet::AddRoute};
 use crate::desktop::{
     model::{
         activity::rows::RowKey,
@@ -42,6 +42,7 @@ fn owned(route: &ItemRoute) -> ItemRoute {
             root: root.clone(),
             request: *request,
         },
+        ItemRoute::Resolve(opening) => ItemRoute::Resolve(opening.clone()),
     }
 }
 
@@ -130,6 +131,9 @@ impl Workspace {
         // Confirmation observers close their dialogs before a prompt opens.
         // The Kit closes the top dialog only.
         cx.defer_in(window, |this, window, cx| this.show_prompt(window, cx));
+        // Before the confirmations' observers close them; each add handled
+        // after they have (Wave 04 Cycle 05a R-25).
+        self.adds_changed(window, cx);
         self.stops_to_republish_answered(window, cx);
         self.quit_if_finished(cx);
         let changed = self
@@ -194,7 +198,8 @@ impl Workspace {
     /// Sharing & keys, the Keys page; Check host, the host named, or with
     /// none the repository's Hosts page (K-3); Set identity, its identity
     /// form; Show it, the entry of the request that may hold the
-    /// repository, or with none its pending operations.
+    /// repository, or with none its pending operations; the conflict
+    /// banner's Review changes, Resolve conflict (Wave 04 Cycle 05b B2).
     pub(in crate::desktop::view) fn open_route(
         &mut self,
         route: ItemRoute,
@@ -214,6 +219,9 @@ impl Workspace {
             } => self.open_hosts(root, window, cx),
             ItemRoute::SetIdentity(root) => self.identity_in_settings(root, window, cx),
             ItemRoute::Holder { root, request } => self.show_holder(root, request, window, cx),
+            ItemRoute::Resolve(opening) => {
+                self.show_resolve(*opening, window, cx);
+            }
         }
     }
 
@@ -595,7 +603,9 @@ impl Workspace {
             Some(RecoveryStep::Cancel(id)) => {
                 self.services.worker().cancel(id);
             }
-            Some(RecoveryStep::Inspect(root)) => self.inspect_in_settings(root, window, cx),
+            Some(RecoveryStep::Inspect(root)) => {
+                self.show_add_repository(AddRoute::Inspect(root), None, window, cx)
+            }
             Some(RecoveryStep::IdentitySet(root)) => self.identity_in_settings(root, window, cx),
             Some(RecoveryStep::CheckHost { root, authority }) => {
                 self.check_host_in_settings(root, authority, window, cx)

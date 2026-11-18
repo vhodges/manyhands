@@ -20,7 +20,6 @@ use crate::desktop::{
         navigation::{NotReloaded, Resolution},
         polling::{Answer, Clock as _, PollAttempt},
         repository_state::{CANT_OPEN, UP_TO_DATE, to_share},
-        stamp::SettingsPage,
     },
     services::{JobKind, ReadKind, poll_convert::Library, requests::Intent},
     test_support::fixtures::{enable_through, remove_registration},
@@ -144,17 +143,19 @@ async fn rows_and_list_states(cx: &mut TestAppContext) {
         Some(ADD_OR_CREATE)
     );
     shell.click(child("repositories-empty", "action"), cx);
+    // The Add repository sheet, not Settings (Wave 04 Cycle 05a AW-1; E-6).
     assert_eq!(
         shell
             .workspace
             .read_with(cx, |workspace, cx| workspace.settings_shown(cx)),
-        Shown::Settings(SettingsPage::Repositories)
+        Shown::Tabs
     );
+    assert!(shell.present("add-sheet", cx), "AW-1 opens the Add sheet");
     assert!(
         shell.holds_focus("add-path", cx),
-        "W-5 lands on the Add folder (Part D)"
+        "AW-1 lands on the Add folder (G1)"
     );
-    // Settings is a sheet: it closes before the panel is used again.
+    // The sheet closes before the panel is used again.
     shell.keys("escape", cx);
 
     // Two repositories with a shared copy, and polling on: each launch poll

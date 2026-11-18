@@ -89,7 +89,6 @@ impl Workspace {
             short: short_id(&row.item),
             title: None,
             repository: scope_name(Some(std::path::Path::new(root))),
-            branch: None,
             primary,
             remote,
         };

@@ -61,6 +61,9 @@ pub(crate) enum ViewScope {
     /// The Find input's search. One scope: a new search drops the last.
     Find,
     Settings(SettingsPage),
+    /// The Add repository forms' folder check (Wave 04 Cycle 05a, R-9). The
+    /// forms keep their own generations.
+    AddRepository,
     Operations(RepoKey),
     /// A confirmation dialog's preview. Each dialog keeps its own
     /// generations, so one scope serves them all.
@@ -72,6 +75,10 @@ pub(crate) enum ViewScope {
     /// The draft registry's listing of the store. One scope: a new listing
     /// drops the last.
     Drafts,
+    /// The Unlock key dialog's read of the key list, for its key's
+    /// fingerprint (Wave 04 Cycle 05a, Part D). Each dialog keeps its own
+    /// generations, so one scope serves them all.
+    Unlock,
     /// The lifecycle dialog's reads of the titles of the tickets a closure
     /// made ready (D5 design, A3). Each dialog keeps its own generations,
     /// so one scope serves them all.

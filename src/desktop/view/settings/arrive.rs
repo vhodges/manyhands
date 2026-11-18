@@ -15,14 +15,13 @@ use crate::desktop::{model::stamp::SettingsPage, services::requests::DesktopRequ
 pub(crate) enum SettingsRoute {
     /// A page, focused on its menu entry.
     Page(SettingsPage),
-    /// The Repositories page, on its Add folder field (W-5, W-6).
-    AddRepository,
+    /// The Repositories page, on its Add or create a repository… button
+    /// (Wave 04 Cycle 05a B11; R-6): where the Add repository sheet, opened
+    /// from Settings, gives focus back.
+    AddButton,
     /// The Repositories page managing `root` (the repository menu's
     /// Settings…).
     Manage(PathBuf),
-    /// The Repositories page, checking `root` in its Add folder
-    /// (repo.inspect).
-    Inspect(PathBuf),
     /// The Repositories page's identity form for `root`.
     Identity(PathBuf),
     /// Repositories › Sharing for `root`, on the add-remote Name field.
@@ -38,8 +37,8 @@ pub(crate) enum SettingsRoute {
 }
 
 impl SettingsHost {
-    /// Switches to the route's page and applies it: checks a folder or a
-    /// host, asks again for a passphrase. Moves no focus now; a Keys route
+    /// Switches to the route's page and applies it: checks a host, asks
+    /// again for a passphrase. Moves no focus now; a Keys route
     /// arms the key list's one retarget, which moves it once, when the
     /// keys' read lands, if it is still where the route put it (R-22).
     /// Gives the control Part D names, only when the page draws it in the
@@ -63,15 +62,9 @@ impl SettingsHost {
                 self.open(SettingsPage::Repositories, window, cx);
                 None
             }
-            SettingsRoute::AddRepository => {
+            SettingsRoute::AddButton => {
                 self.open(SettingsPage::Repositories, window, cx);
-                Some(self.repositories(window, cx).read(cx).add_path_focus(cx))
-            }
-            SettingsRoute::Inspect(root) => {
-                self.open(SettingsPage::Repositories, window, cx);
-                let page = self.repositories(window, cx);
-                page.update(cx, |page, cx| page.inspect_root(root.clone(), window, cx));
-                Some(page.read(cx).add_path_focus(cx))
+                Some(self.repositories(window, cx).read(cx).add_button_focus())
             }
             SettingsRoute::Identity(_) => {
                 self.open(SettingsPage::Repositories, window, cx);

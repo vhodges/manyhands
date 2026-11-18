@@ -2,8 +2,9 @@
 //! the row of a request whose answer stopped on a conflict (a share, a
 //! post, a local synchronization or a lifecycle's child), and on a pending
 //! row whose conflict waits to be resolved, after a restart too. Either
-//! opens the resolve conflict sheet on that conflict; focus goes back to
-//! the button when it closes. Neither waits for an item's lifecycle lock:
+//! opens the resolve conflict sheet on that conflict, through
+//! `show_resolve` (Wave 04 Cycle 05b B2); focus goes back to the button
+//! when it closes. Neither waits for an item's lifecycle lock:
 //! resolving the conflict is how a stopped lifecycle goes on (P8, P9).
 
 use std::path::PathBuf;
@@ -79,8 +80,7 @@ impl Workspace {
             .to_str()
             .map(|root| self.known(root))
             .unwrap_or_default();
-        let services = self.services().clone();
-        entry.open(known, origin, &services, window, cx);
+        self.show_resolve(entry.opening(known, origin), window, cx);
     }
 
     /// Review changes on the pending row `operation_id` of `root`, giving
@@ -101,7 +101,6 @@ impl Workspace {
         };
         let entry = Entry::of_pending(PathBuf::from(root), &conflict);
         let known = self.known(root);
-        let services = self.services().clone();
-        entry.open(known, origin, &services, window, cx);
+        self.show_resolve(entry.opening(known, origin), window, cx);
     }
 }

@@ -27,7 +27,7 @@ use manyhands::repository::{
     transport::SshAuthority,
 };
 
-use super::{CANCEL, REFUSED, UNLOCK, label_for};
+use super::{CANCEL, NOT_NOW_NOTE, PASSPHRASE, REFUSED, UNLOCK};
 use crate::desktop::{
     keys::Quit,
     services::{
@@ -150,9 +150,9 @@ fn focused(shell: &Shell, cx: &mut TestAppContext) -> Option<FocusHandle> {
     shell.frame(cx, |window, cx| window.focused(cx))
 }
 
-/// The dialog shows "Passphrase for <label>" over a masked input; Enter
-/// supplies exactly one passphrase. The input is emptied and released,
-/// and the dialog with it.
+/// The dialog shows "Passphrase" over a masked input; Enter supplies
+/// exactly one passphrase. The input is emptied and released, and the
+/// dialog with it.
 #[gpui_kit::test]
 async fn submit_supplies_the_passphrase_and_releases_the_input(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -164,9 +164,9 @@ async fn submit_supplies_the_passphrase_and_releases_the_input(cx: &mut TestAppC
 
     assert_eq!(
         shell.label("passphrase-label", cx).as_deref(),
-        Some(label_for("primary").as_str())
+        Some(PASSPHRASE)
     );
-    assert_eq!(label_for("primary"), "Passphrase for primary");
+    assert_eq!(PASSPHRASE, "Passphrase");
     assert_eq!(
         shell.label("passphrase-reason", cx).as_deref(),
         Some(UnlockReason::ProtectedKey.guidance())
@@ -535,7 +535,7 @@ async fn a_prompt_while_finishing_is_answered_unavailable(cx: &mut TestAppContex
 
 /// Every piece of text a test can read off the window: each observed
 /// element's label and accessibility value.
-fn window_text(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
+pub(in crate::desktop::view) fn window_text(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
     shell.frame(cx, |window, _| {
         gpui_kit::base::test_support::snapshots(window)
             .iter()
@@ -674,7 +674,11 @@ async fn a_finished_confirmation_and_a_prompt_in_one_batch_close_only_the_confir
     assert!(shell.present("passphrase-dialog", cx));
     assert_eq!(
         shell.label("passphrase-label", cx).as_deref(),
-        Some(label_for("next").as_str())
+        Some(PASSPHRASE)
+    );
+    assert_eq!(
+        shell.label("passphrase-key-label", cx).as_deref(),
+        Some("next")
     );
     assert!(matches!(answer.try_recv(), Ok(None)), "not yet answered");
     type_text(&shell, SENTINEL, cx);
@@ -688,8 +692,9 @@ async fn a_finished_confirmation_and_a_prompt_in_one_batch_close_only_the_confir
 }
 
 /// A prompt raised while a share of repository `a` runs names what
-/// waits, and Cancel reads Not now, with a note on what it leaves; Not
-/// now answers `Cancelled`. A prompt with no share waiting names none.
+/// waits, and Cancel reads Not now, with the note on what it leaves; Not
+/// now answers `Cancelled`. A prompt with no share waiting names none, and
+/// shows the note too.
 #[gpui_kit::test]
 async fn the_dialog_names_what_waits_and_says_not_now(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -702,7 +707,7 @@ async fn the_dialog_names_what_waits_and_says_not_now(cx: &mut TestAppContext) {
     let asked = ask(&shell, "primary", cx);
     until_shown(&shell, cx).await;
     assert!(!shell.present("passphrase-subtitle", cx));
-    assert!(!shell.present("passphrase-note", cx));
+    assert!(shell.present("passphrase-note", cx));
     shell.click("passphrase-cancel", cx);
     assert_eq!(asked.answered(), "cancelled");
 
@@ -732,10 +737,7 @@ async fn the_dialog_names_what_waits_and_says_not_now(cx: &mut TestAppContext) {
     );
     assert_eq!(
         shell.label("passphrase-note", cx).as_deref(),
-        Some(
-            "If you choose Not now, your work stays saved on this computer. \
-             Unlock later from the waiting share, or stop trying to share it."
-        )
+        Some(NOT_NOW_NOTE)
     );
     assert_eq!(CANCEL, "Not now");
     assert_eq!(
@@ -751,8 +753,8 @@ async fn the_dialog_names_what_waits_and_says_not_now(cx: &mut TestAppContext) {
 }
 
 /// A prompt raised while a Check now runs is not a share's: the dialog
-/// names no share and keeps the plain Cancel (Check now may prompt, and
-/// "Sharing a is waiting" would be wrong for it).
+/// names no share (Check now may prompt, and "Sharing a is waiting" would
+/// be wrong for it). The note is shown, as on every prompt.
 #[gpui_kit::test]
 async fn a_prompt_for_a_check_now_names_no_share(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -782,10 +784,14 @@ async fn a_prompt_for_a_check_now_names_no_share(cx: &mut TestAppContext) {
     let asked = ask(&shell, "primary", cx);
     until_shown(&shell, cx).await;
     assert!(!shell.present("passphrase-subtitle", cx));
-    assert!(!shell.present("passphrase-note", cx));
+    assert!(shell.present("passphrase-note", cx));
     shell.click("passphrase-cancel", cx);
     assert_eq!(asked.answered(), "cancelled");
 
     held.release();
     shell.until_ended(id, cx).await;
 }
+
+// Part D's key card and refusal (P18, P19).
+#[path = "passphrase_tests/unlock.rs"]
+mod unlock;

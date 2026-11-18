@@ -82,6 +82,7 @@ pub(super) fn queue(operations: &mut Operations, n: u64, intent: Intent) {
         lane: Lane::User,
         attempt: 1,
         state: RequestState::Queued,
+        registered_root: None,
     }));
 }
 

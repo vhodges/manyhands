@@ -194,13 +194,35 @@ Settings, footer, content-area or keymap files (planning sweep,
   decision 10). This Cycle's sheet owner has no case for that, so Cycle 05
   adds:
   - an owner variant for the Add repository sheet, so `sync_sheet` neither
-    keeps it as Settings nor closes it;
+    keeps it as Settings nor closes it; **Done in Cycle 05a**
+    (`SheetOwner::AddRepository` and `SheetOwnerKind::AddRepository`, with
+    `sync_sheet`'s three cases; Cycle 05a ledger, Task 4);
   - emptying a typed passphrase when Add repository replaces Settings;
+    **Done in Cycle 05a** (`show_add_repository` closes Settings with
+    `settings_closed(true)`, which empties it; Cycle 05a P6 row G3, ledger
+    Task 4);
   - reopening Settings at Repositories after Cancel or Add, with the
-    origin recorded when Settings first opened.
+    origin recorded when Settings first opened; **Done in Cycle 05a, with
+    two changes** (ledger, Task 4 design checkpoint): "opened from
+    Settings" is carried separately from the origin handle, so the return
+    holds when Settings recorded no origin and Settings' own close then
+    goes to the content region (Ruling 16); and after a successful add
+    Settings comes back at Repositories with the new repository chosen,
+    through the `Manage` route (Cycle 05a decision 12).
 
-  The routes that move are W-5, W-6, W-22 and W-27. Cycle 05's common
-  frame keeps Settings' Escape rule (decision 6; design Amendment 2).
+  The routes that move are W-5, W-6, W-22 and W-27. **Done in Cycle 05a:**
+  W-5 and W-6 open the Add sheet (its AW-1 and AW-2) instead of Settings'
+  Add form, and W-22 and W-27 open it with the folder checked (AW-4 and
+  AW-5); `SettingsRoute::Inspect` and `inspect_in_settings` were removed and
+  `SettingsRoute::AddRepository` was renamed `AddButton` (Cycle 05a R-5 and
+  R-6; ledger, Task 4). Cycle 05's common frame keeps Settings' Escape rule
+  (decision 6; design Amendment 2). **Done in Cycle 05a:** the Add sheet
+  closes on Escape as Cancel, also while a request runs (Cycle 05a decision
+  7).
+
+  *Annotated 2026-11-15 (Cycle 05a, design Amendment 4; Cycle 05a is "Cycle
+  05" in these lines, and 05b takes none of them). The text above is
+  unchanged.*
 
 ## Required Contract
 

@@ -170,14 +170,23 @@ impl Render for Workspace {
         self.sync_tickets(window, cx);
         self.apply_review(window, cx);
         self.open_deferred_republish(window, cx);
+        self.run_waiting_add_close(window, cx);
+        self.run_waiting_resolve_close(window, cx);
         self.sync_sheet(window, cx);
-        if self.settings_open(window, cx) {
+        if self.sheet_held(window, cx) {
             // After the frame, which it reads: focus a view moved while it
             // drew is seen too, and a move this makes asks for its own frame
             // (A3, "The sheet keeps focus"). `on_next_frame` is no hook:
             // tests never run it.
             cx.defer_in(window, |this, window, cx| {
-                this.keep_focus_in_settings(window, cx)
+                this.keep_focus_in_sheet(window, cx)
+            });
+        }
+        // Resolve conflict keeps focus on its own handle, as Settings does
+        // on its first control (Wave 04 Cycle 05b B3, R-11).
+        if self.resolve_open(window, cx) {
+            cx.defer_in(window, |this, window, cx| {
+                this.keep_focus_in_resolve(window, cx)
             });
         }
         if self.dock.queue_clamp() {

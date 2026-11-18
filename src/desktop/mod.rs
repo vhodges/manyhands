@@ -61,6 +61,8 @@ pub(crate) fn run() {
             #[cfg(target_os = "linux")]
             fonts::register(cx);
             gpui_kit::init(cx);
+            // The Kit theme's slots the frame sets, in both modes (design A2).
+            view::frame::theme::apply(cx);
             cx.set_global(PollingOn);
             bind_all_keys(cx);
             let opener: Opener = Rc::new(RepositoryService::open_default);

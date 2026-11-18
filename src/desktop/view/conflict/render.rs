@@ -1,13 +1,16 @@
-//! The resolve conflict sheet drawn (handoff 2g): title, note and progress;
-//! one card per part with Before, Yours and Theirs and its choices; each
-//! body's Result editor; and Cancel · Save resolution. Text and buttons
-//! carry their words as labels, for the tests to read.
+//! The resolve conflict sheet drawn (handoff 2g; Wave 04 Cycle 05b B4 to
+//! B6): its title and description on the common frame, in the Kit sheet's
+//! title slot; the meta line, note and status, then one card per part,
+//! named in words, with Before, Yours and Theirs and its choices, and each
+//! body's Result editor; and the Git line, Cancel and the primary action on
+//! the common frame, in its footer slot. Text and buttons carry their words
+//! as labels, for the tests to read.
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement,
     ParentElement, Render, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
-        ActiveTheme, Disableable, Icon, Selectable, Sizable, WindowExt,
+        ActiveTheme, Disableable, Icon, Sizable,
         button::{Button, ButtonVariants},
         h_flex, v_flex,
     },
@@ -17,8 +20,8 @@ use gpui_kit::{
 use manyhands::repository::ItemDtoKind;
 
 use super::{
-    BodyEditors, CANCEL, DESCRIPTION_REMOTE, LOST, NOT_READ, READ_AGAIN, READING, RESULT_NOTE,
-    RESUME, RESUME_LEAD, RETRY, ResolveSheet, SAVE_RESOLUTION, SETTLED, SheetSource,
+    BodyEditors, CANCEL, DESCRIPTION_REMOTE, KEEP_MINE, LOST, NOT_READ, READ_AGAIN, READING,
+    RESULT_NOTE, RESUME, RESUME_LEAD, RETRY, ResolveSheet, SAVE_RESOLUTION, SETTLED, SheetSource,
     description_local, external::REPAIRED,
 };
 use crate::desktop::{
@@ -27,25 +30,25 @@ use crate::desktop::{
     model::{
         conflict::{
             BodyChoice, BodyPart, Choice, ConflictSet, PathConflict, PathResult,
-            STANDARD_LAYOUT_NOTE,
+            STANDARD_LAYOUT_NOTE, names::field_name,
         },
         operations::primary_name,
     },
+    view::frame::{self, Footer, Header},
 };
 
 mod pieces;
 
-pub(super) use pieces::text;
-use pieces::{Lines, before_column, body_state, field_state, marked_column, state, taken_words};
+use pieces::{
+    Lines, body_state, choice_button, columns, field_state, header_row, kind_words, state,
+    taken_words,
+};
+pub(super) use pieces::{card_frame, text};
 
 /// What a part is called in its card: the body is the Description.
 const DESCRIPTION: &str = "Description";
-const KEEP_MINE: &str = "Keep mine";
-const KEEP_THEIRS: &str = "Keep theirs";
+pub(super) const KEEP_THEIRS: &str = "Keep theirs";
 const KEEP_BOTH: &str = "Keep both";
-const BEFORE: &str = "Before";
-const YOURS: &str = "Yours";
-const THEIRS: &str = "Theirs";
 const RESULT: &str = "Result";
 
 impl ResolveSheet {
@@ -63,12 +66,31 @@ impl ResolveSheet {
         }
     }
 
-    fn header(&self, cx: &App) -> impl IntoElement + use<> {
+    /// A footer button's press: as `on`, after focusing the sheet's own
+    /// handle, as `LifecycleDialog::on` does, so a footer control that goes
+    /// with its press leaves focus in the sheet (Wave 04 Cycle 05b B3).
+    fn on_footer<F>(
+        &self,
+        cx: &Context<Self>,
+        f: F,
+    ) -> impl Fn(&ClickEvent, &mut Window, &mut App) + use<F>
+    where
+        F: Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    {
+        let entity = cx.entity().downgrade();
+        move |_, window, cx| {
+            let _ = entity.update(cx, |sheet, cx| {
+                window.focus(&sheet.focus, cx);
+                f(sheet, window, cx)
+            });
+        }
+    }
+
+    /// The body's first lines (B4): the meta line, with the item's kind,
+    /// short code, repository and progress, and the note of what Saving
+    /// does.
+    fn lead(&self, cx: &App) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
-        let title = match &self.heading.title {
-            Some(title) => format!("Choose what to keep \u{b7} {title}"),
-            None => "Choose what to keep".to_owned(),
-        };
         // Amber while parts wait for a choice, green once all are chosen.
         let progress = self.model.as_ref().and_then(|model| {
             matches!(model.set(), ConflictSet::Canonical(_)).then(|| {
@@ -86,12 +108,6 @@ impl ResolveSheet {
         let (icon, kind) = match self.heading.kind {
             ItemDtoKind::Ticket => ("ticket", "ticket"),
             ItemDtoKind::Document => ("file-text", "document"),
-        };
-        // The primary branch, as the sheet's heading knows it (R-35).
-        let primary = primary_name(self.heading.primary.as_deref()).to_owned();
-        let description = match self.source {
-            SheetSource::Local => description_local(&primary),
-            _ => DESCRIPTION_REMOTE.to_owned(),
         };
         let meta = h_flex()
             .gap_2()
@@ -114,20 +130,21 @@ impl ResolveSheet {
                     .text_color(muted),
             )
             .children(progress);
-        v_flex()
-            .gap_1()
-            .child(text("conflict-title", title).font_weight(FontWeight::SEMIBOLD))
-            .child(text("conflict-description", description).text_sm())
-            .child(meta)
-            .child(
-                text("conflict-note", self.source.note(&primary))
-                    .text_sm()
-                    .text_color(muted),
-            )
+        v_flex().gap_1().child(meta).child(
+            text("conflict-note", self.source.note(&self.primary_branch()))
+                .text_sm()
+                .text_color(muted),
+        )
+    }
+
+    /// The primary branch, as the sheet's heading knows it (R-35).
+    fn primary_branch(&self) -> String {
+        primary_name(self.heading.primary.as_deref()).to_owned()
     }
 
     /// The footer's Git detail (handoff 2g): the conflicted paths and both
-    /// sides' commits, in mono, cut short when long.
+    /// sides' commits, in mono, filling the footer's left and cut short when
+    /// long (B6, R-15).
     fn git_line(&self, cx: &App) -> Option<impl IntoElement + use<>> {
         let model = self.model.as_ref()?;
         let paths: Vec<&str> = match model.set() {
@@ -150,6 +167,8 @@ impl ResolveSheet {
                     short(theirs),
                 ),
             )
+            .flex_1()
+            .min_w_0()
             .text_xs()
             .font_family("monospace")
             .text_color(cx.theme().muted_foreground)
@@ -259,7 +278,7 @@ impl ResolveSheet {
             card = card.child(
                 text(
                     ("conflict-taken", *taken),
-                    format!("{}: {}", row.key, taken_words(row.from)),
+                    format!("{}: {}", field_name(&row.key), taken_words(row.from)),
                 )
                 .text_sm()
                 .text_color(muted),
@@ -276,55 +295,44 @@ impl ResolveSheet {
                 .text_color(muted),
             );
         }
+        let kind = kind_words(path.item_kind());
         for (at, part) in path.fields().iter().enumerate() {
             let k = *field;
             *field += 1;
             let chooser = |id: &'static str, label: &'static str, choice: Choice| {
-                Button::new((id, k))
-                    .label(label)
-                    .small()
-                    .selected(part.choice == Some(choice))
+                choice_button((id, k), label, part.choice == Some(choice))
                     .disabled(self.saving())
                     .on_click(self.on(cx, move |sheet, _, cx| {
                         sheet.choose_field(index, at, choice, cx)
                     }))
             };
+            // The field's name in words (Part C), its kind and its state.
+            let words = [
+                text(("conflict-field", k), field_name(&part.key))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .into_any_element(),
+                text(("conflict-field-kind", k), kind)
+                    .text_xs()
+                    .text_color(muted)
+                    .into_any_element(),
+                state(("conflict-choice", k), field_state(part.choice), cx).into_any_element(),
+            ];
             card = card.child(
-                v_flex()
-                    .gap_1()
-                    .p_2()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .rounded(px(6.))
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                text(("conflict-field", k), part.key.clone())
-                                    .font_weight(FontWeight::SEMIBOLD),
-                            )
-                            .child(chooser("conflict-keep-mine", KEEP_MINE, Choice::Mine))
-                            .child(chooser("conflict-keep-theirs", KEEP_THEIRS, Choice::Theirs))
-                            .child(state(("conflict-choice", k), field_state(part.choice), cx)),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(before_column(BEFORE, part.base.as_deref(), &line.before))
-                            .child(marked_column(
-                                YOURS,
-                                part.lines[0].as_ref(),
-                                &line.marked,
-                                cx,
-                            ))
-                            .child(marked_column(
-                                THEIRS,
-                                part.lines[1].as_ref(),
-                                &line.marked,
-                                cx,
-                            )),
-                    ),
+                card_frame(cx)
+                    .child(header_row(
+                        words,
+                        [
+                            chooser("conflict-keep-mine", KEEP_MINE, Choice::Mine),
+                            chooser("conflict-keep-theirs", KEEP_THEIRS, Choice::Theirs),
+                        ],
+                    ))
+                    .child(columns(
+                        part.base.as_deref(),
+                        part.lines[0].as_ref(),
+                        part.lines[1].as_ref(),
+                        line,
+                        cx,
+                    )),
             );
         }
         if let (Some(body), Some(editors)) = (
@@ -386,55 +394,35 @@ impl ResolveSheet {
         line: &Lines,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
-        let border = cx.theme().border;
         let choice = body.choice;
         let chooser = |id: &'static str, label: &'static str, kept: BodyChoice| {
-            Button::new((id, index))
-                .label(label)
-                .small()
-                .selected(choice == Some(kept))
+            choice_button((id, index), label, choice == Some(kept))
                 .disabled(self.saving())
                 .on_click(self.on(cx, move |sheet, _, cx| sheet.choose_body(index, kept, cx)))
         };
-        v_flex()
-            .gap_1()
-            .p_2()
-            .border_1()
-            .border_color(border)
-            .rounded(px(6.))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        text(("conflict-body", index), DESCRIPTION)
-                            .font_weight(FontWeight::SEMIBOLD),
-                    )
-                    .child(chooser("conflict-body-mine", KEEP_MINE, BodyChoice::Mine))
-                    .child(chooser(
-                        "conflict-body-theirs",
-                        KEEP_THEIRS,
-                        BodyChoice::Theirs,
-                    ))
-                    .child(chooser("conflict-body-both", KEEP_BOTH, BodyChoice::Both))
-                    .child(state(
-                        ("conflict-body-choice", index),
-                        body_state(choice),
-                        cx,
-                    )),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(before_column(BEFORE, Some(&body.base), &line.before))
-                    .child(marked_column(YOURS, Some(&body.lines[0]), &line.marked, cx))
-                    .child(marked_column(
-                        THEIRS,
-                        Some(&body.lines[1]),
-                        &line.marked,
-                        cx,
-                    )),
-            )
+        // The body is one part, already named Description: no kind (K-14).
+        let words = [
+            text(("conflict-body", index), DESCRIPTION)
+                .font_weight(FontWeight::SEMIBOLD)
+                .into_any_element(),
+            state(("conflict-body-choice", index), body_state(choice), cx).into_any_element(),
+        ];
+        card_frame(cx)
+            .child(header_row(
+                words,
+                [
+                    chooser("conflict-body-mine", KEEP_MINE, BodyChoice::Mine),
+                    chooser("conflict-body-theirs", KEEP_THEIRS, BodyChoice::Theirs),
+                    chooser("conflict-body-both", KEEP_BOTH, BodyChoice::Both),
+                ],
+            ))
+            .child(columns(
+                Some(&body.base),
+                Some(&body.lines[0]),
+                Some(&body.lines[1]),
+                line,
+                cx,
+            ))
             .child(div().text_xs().child(RESULT))
             .child(self.result_stop(index, editors, cx))
             .child(
@@ -444,56 +432,109 @@ impl ResolveSheet {
             )
     }
 
-    /// Resume, Retry or Save resolution, and Cancel.
-    fn buttons(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
-        let origin = self.origin.clone();
-        let mut row = h_flex().gap_2().justify_end();
+    /// The footer's last element (B6): exactly one of Resume, Retry, the
+    /// lost line, or Save resolution, enabled once every part is chosen;
+    /// none for a set with nothing to save here.
+    fn primary_action(&self, cx: &Context<Self>) -> Option<AnyElement> {
         if self.resumable() {
-            row = row.child(
+            return Some(
                 Button::new("conflict-resume")
                     .label(RESUME)
                     .primary()
                     .small()
-                    .on_click(self.on(cx, |sheet, window, cx| sheet.resume(window, cx))),
+                    .on_click(self.on_footer(cx, |sheet, window, cx| sheet.resume(window, cx)))
+                    .into_any_element(),
             );
-        } else if self.kept.is_some() {
-            row = row.child(
+        }
+        if self.kept.is_some() {
+            return Some(
                 Button::new("conflict-retry")
                     .label(RETRY)
                     .primary()
                     .small()
                     .disabled(self.waiting())
-                    .on_click(self.on(cx, |sheet, window, cx| sheet.save(window, cx))),
-            );
-        } else if self.lost() {
-            row = row.child(text("conflict-lost", LOST).text_sm());
-        } else if matches!(
-            self.model.as_ref().map(|model| model.set()),
-            Some(ConflictSet::Canonical(_))
-        ) {
-            let ready = !self.waiting()
-                && self
-                    .model
-                    .as_ref()
-                    .is_some_and(|model| model.resolutions().is_some());
-            row = row.child(
-                Button::new("conflict-save")
-                    .label(SAVE_RESOLUTION)
-                    .primary()
-                    .small()
-                    .disabled(!ready)
-                    .on_click(self.on(cx, |sheet, window, cx| sheet.save(window, cx))),
+                    .on_click(self.on_footer(cx, |sheet, window, cx| sheet.save(window, cx)))
+                    .into_any_element(),
             );
         }
-        row.child(
-            Button::new("conflict-cancel")
-                .label(CANCEL)
+        if self.lost() {
+            return Some(text("conflict-lost", LOST).text_sm().into_any_element());
+        }
+        let model = self.model.as_ref()?;
+        let ConflictSet::Canonical(_) = model.set() else {
+            return None;
+        };
+        let ready = !self.waiting() && model.resolutions().is_some();
+        Some(
+            Button::new("conflict-save")
+                .label(SAVE_RESOLUTION)
+                .primary()
                 .small()
-                .on_click(move |_, window, cx| {
-                    window.close_dialog(cx);
-                    window.focus(&origin, cx);
-                }),
+                .disabled(!ready)
+                .on_click(self.on_footer(cx, |sheet, window, cx| sheet.save(window, cx)))
+                .into_any_element(),
         )
+    }
+
+    /// The Kit sheet's title slot (B4): the title and description on the
+    /// common frame, with no tile, inside `conflict-header`, which takes the
+    /// row's width beside the Kit's close button (B2).
+    pub(super) fn header_slot(&self, cx: &App) -> impl IntoElement + use<> {
+        let title = match &self.heading.title {
+            Some(title) => format!("Choose what to keep \u{b7} {title}"),
+            None => "Choose what to keep".to_owned(),
+        };
+        let description = match self.source {
+            SheetSource::Local => description_local(&self.primary_branch()),
+            _ => DESCRIPTION_REMOTE.to_owned(),
+        };
+        let header = Header {
+            icon: None,
+            title: title.into(),
+            description: Some(description.into()),
+            ids: ("conflict-title", Some("conflict-description")),
+        };
+        div()
+            .id("conflict-header")
+            .test_support()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .child(frame::sheet_header(header, cx))
+    }
+
+    /// The Kit sheet's footer slot (B6, R-15): the Git line filling the
+    /// left, Cancel, then the primary action, on the common frame, inside
+    /// `conflict-footer`, which tracks the footer's own focus and saves on
+    /// Ctrl+Enter from its buttons, as the body does (B2, R-8).
+    pub(super) fn footer_slot(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
+        let cancel = Button::new("conflict-cancel")
+            .label(CANCEL)
+            .small()
+            .on_click(self.on_footer(cx, |sheet, window, cx| {
+                sheet.close(window, cx);
+            }));
+        let mut buttons: Vec<AnyElement> = self
+            .git_line(cx)
+            .map(IntoElement::into_any_element)
+            .into_iter()
+            .collect();
+        buttons.push(cancel.into_any_element());
+        buttons.extend(self.primary_action(cx));
+        v_flex()
+            .id("conflict-footer")
+            .test_support()
+            .track_focus(&self.footer_focus)
+            .key_context(RESOLVE_SHEET_CONTEXT)
+            .on_action(cx.listener(|sheet, _: &SaveResolution, window, cx| sheet.save(window, cx)))
+            .w_full()
+            .child(frame::sheet_footer(
+                Footer {
+                    hint: None,
+                    buttons,
+                },
+                cx,
+            ))
     }
 }
 
@@ -507,12 +548,12 @@ impl Render for ResolveSheet {
             .key_context(RESOLVE_SHEET_CONTEXT)
             .on_action(cx.listener(|sheet, _: &SaveResolution, window, cx| sheet.save(window, cx)))
             .gap_3()
-            .max_h(px(720.))
+            .size_full()
+            .px_4()
+            .pb_4()
             .overflow_y_scroll()
-            .child(self.header(cx))
+            .child(self.lead(cx))
             .child(self.status(cx))
             .child(self.cards(cx))
-            .children(self.git_line(cx))
-            .child(self.buttons(cx))
     }
 }
