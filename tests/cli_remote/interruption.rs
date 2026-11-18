@@ -1175,6 +1175,20 @@ mod pressed {
         operations[0]["operation_id"].as_str().unwrap().to_owned()
     }
 
+    /// `request show` of a comment request: the comment's own operation,
+    /// which the request linked, then the synchronization its submission
+    /// reserved, which names the request. Returns the comment's.
+    fn the_comment_operation(clone: &CliClone, request: &str) -> String {
+        let shown = request_show(clone, request);
+        let operations = shown["operations"].as_array().unwrap();
+        let families: Vec<_> = operations
+            .iter()
+            .map(|operation| operation["family"].as_str().unwrap())
+            .collect();
+        assert_eq!(families, ["local", "remote"], "{shown}");
+        operations[0]["operation_id"].as_str().unwrap().to_owned()
+    }
+
     /// `args` in human mode at a terminal, with `--non-interactive`, and
     /// `input` on stdin.
     fn at_a_terminal(env: &CliEnv, args: &[&str], input: &[u8]) -> PtyCli {
@@ -1292,7 +1306,7 @@ mod pressed {
         pressed_while_held(&mut pty, hold)?;
         let stderr = cancelled(pty);
         let checkpoint = a.tip(CONTEXT)?.ok_or(FixtureError)?;
-        let operation = the_operation(a, R1);
+        let operation = the_comment_operation(a, R1);
         assert!(
             stderr.starts_with(&format!(
                 "{}{CANCELLED}request: {R1}\noperation: {operation}\n\
