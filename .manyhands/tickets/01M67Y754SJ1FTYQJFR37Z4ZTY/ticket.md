@@ -3,7 +3,7 @@ slug: vh-z2d7f
 id: 01M67Y754SJ1FTYQJFR37Z4ZTY
 title: Let the SSH transport authenticate through a running ssh-agent
 type: task
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
