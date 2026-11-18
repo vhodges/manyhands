@@ -1640,10 +1640,10 @@ impl RepositoryService {
                 self.clock.now().unix_timestamp(),
             )?
             .id;
-            // The row may be one an earlier call left: it is touched
-            // before the lease is let go, so that it shows this call at
-            // work from then on.
-            touch_rebuild_operation(&self.registry_path, record_id, &root)?;
+            // The row may be one an earlier call left: it is claimed
+            // before the lease is let go, so that it shows this call, and
+            // this process, at work from then on.
+            claim_rebuild_operation(&self.registry_path, record_id, &root)?;
             record_id
         };
         // The repository is observed with no lease held, for as long as
@@ -5968,6 +5968,22 @@ fn set_rebuild_operation(
     advance_after_observation(&connection, operation_id, state, None, None)
         .map_err(|error| error.for_operation(RepositoryOperation::RebuildRepository, root))?;
     Ok(())
+}
+
+/// Marks a rebuild's pending row as touched now and held by this process,
+/// as the rebuild takes it up; see `recovery::claim_pending`.
+fn claim_rebuild_operation(
+    registry_path: &Path,
+    record_id: i64,
+    root: &Path,
+) -> Result<(), RepositoryError> {
+    let operation = RepositoryOperation::RebuildRepository;
+    let holder = recovery::Holder::this_process();
+    let _cache_guard = cache_read_guard(registry_path, root, operation)?;
+    let connection = open_registry(registry_path, &mut |_| {})
+        .map_err(|error| error.for_operation(operation, root))?;
+    recovery::claim_pending(&connection, record_id, &holder)
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))
 }
 
 /// Marks a rebuild's pending row as touched now; see

@@ -819,13 +819,33 @@ fn migrate_operation_attribution(db: &Connection) -> Result<(), RepositoryError>
     Ok(())
 }
 
+/// The process that holds a row: this one, on this host. A row records
+/// it when it is begun, and again whenever a call takes it over: a resume,
+/// an index claim, a restart. Only these two columns move then; the
+/// request that began the row, its command, the author and the start are
+/// left as they were, and keep naming where the row came from.
+pub(super) struct Holder {
+    pub(super) host: String,
+    pub(super) pid: i64,
+}
+
+impl Holder {
+    /// This process. Reading it never fails: a host name that cannot be
+    /// read is `unknown`.
+    pub(super) fn this_process() -> Self {
+        Self {
+            host: super::liveness::this_host(),
+            pid: i64::from(std::process::id()),
+        }
+    }
+}
+
 /// Whose a row is as it is begun: this process, on this host, at
 /// `started_at` by the service's clock, under the commit identity the
 /// repository's configuration gives. Reading it never fails: what cannot be
 /// read is recorded as unknown.
 pub(super) struct RowOrigin {
-    host: String,
-    pid: i64,
+    holder: Holder,
     started_at: i64,
     author: Option<String>,
 }
@@ -835,12 +855,23 @@ impl RowOrigin {
     /// `started_at`.
     pub(super) fn here(root: &Path, started_at: i64) -> Self {
         Self {
-            host: super::liveness::this_host(),
-            pid: i64::from(std::process::id()),
+            holder: Holder::this_process(),
             started_at,
             author: configured_author(root),
         }
     }
+}
+
+/// Records on the local row `id` that `holder` holds it now. Nothing else of
+/// the row changes. A row an index owner holds is left to its claim, which
+/// records the holder itself, so a call that only finds the row is never
+/// named in the owner's place.
+pub(super) fn hold_local_row(db: &Connection, id: i64, holder: &Holder) -> rusqlite::Result<()> {
+    db.execute(
+        "UPDATE operation_records SET host = ?2, pid = ?3 WHERE id = ?1 AND state != 'indexing'",
+        params![id, holder.host, holder.pid],
+    )?;
+    Ok(())
 }
 
 /// The commit identity the repository at `root` commits with, as the text
@@ -882,10 +913,13 @@ fn linked_request(
 }
 
 /// Records on the local row `id` whose it is: `origin`, and the request
-/// that began it with its command, when a request's record holds the row's
-/// operation. A row begun again, after it was rejected, is the new call's:
-/// its host, process and start are replaced, and a request it already
-/// names is kept when none holds it now.
+/// that began it with its command. That is the request whose record holds
+/// the row's operation; else, for a row begun under a remote operation's
+/// ID, as a synchronization's index hand-off is, the request that remote
+/// row names, which has already resolved a lifecycle's or a comment's.
+/// A row begun again, after it was rejected, is a fresh begin and the new
+/// call's: its host, process and start are replaced, and a request it
+/// already names is kept when none holds it now.
 pub(super) fn attribute_local_row(
     db: &Connection,
     id: i64,
@@ -896,10 +930,24 @@ pub(super) fn attribute_local_row(
         [id],
         |row| row.get(0),
     )?;
-    let request = match operation {
-        Some(operation) => linked_request(db, "local", &operation)?,
+    let mut request = match &operation {
+        Some(operation) => linked_request(db, "local", operation)?,
         None => None,
     };
+    if let Some(operation) = &operation
+        && request.is_none()
+        && has_table(db, REMOTE_JOURNAL_TABLE)?
+    {
+        request = db
+            .query_row(
+                "SELECT request_ulid, command FROM remote_operation_records
+                  WHERE operation_ulid = ?1 AND request_ulid IS NOT NULL AND command IS NOT NULL
+                  ORDER BY id DESC LIMIT 1",
+                [operation],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+    }
     let (request_id, command) = request.unzip();
     db.execute(
         "UPDATE operation_records
@@ -911,8 +959,8 @@ pub(super) fn attribute_local_row(
             request_id,
             command,
             origin.author,
-            origin.host,
-            origin.pid,
+            origin.holder.host,
+            origin.holder.pid,
             origin.started_at
         ],
     )?;
@@ -978,8 +1026,8 @@ pub(super) fn attribute_remote_row(
             request_id,
             command,
             origin.author,
-            origin.host,
-            origin.pid,
+            origin.holder.host,
+            origin.holder.pid,
             origin.started_at
         ],
     )?;
@@ -1195,6 +1243,9 @@ fn begin_or_reconcile(
     match pending {
         Pending::Another => return Err(recovery_required(operation, root)),
         Pending::Own(id) => {
+            // Taken up by this call, which every caller makes under the
+            // repository's lease: the row is held by this process now.
+            hold_local_row(&transaction, id, &origin.holder).map_err(RepositoryError::sqlite)?;
             transaction.commit().map_err(RepositoryError::sqlite)?;
             return Ok(RecoveryRecord {
                 id,
@@ -1212,7 +1263,8 @@ fn begin_or_reconcile(
         // A refresh may borrow any operation ID; it must not erase the marker.
         if listed(completed_step.as_deref()) == Some(LocalStep::Rejected) && action != "refresh" {
             // The earlier call left nothing behind, so this one begins again.
-            // Its row was kept so that the ID stays bound to its target.
+            // Its row was kept so that the ID stays bound to its target. It
+            // is a fresh begin: it is attributed anew, as a new row is.
             transaction
                 .execute(
                     "UPDATE operation_records SET state = 'created', completed_step = NULL, observed_at = ?2 WHERE id = ?1",
@@ -2327,6 +2379,22 @@ pub(super) fn touch_pending(connection: &Connection, record_id: i64) -> rusqlite
     Ok(())
 }
 
+/// `touch_pending`, by a call that takes the row over as it begins to work
+/// under it, as a rebuild does: the row is touched now and held by
+/// `holder`.
+pub(super) fn claim_pending(
+    connection: &Connection,
+    record_id: i64,
+    holder: &Holder,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "UPDATE operation_records SET observed_at = ?2, host = ?3, pid = ?4
+          WHERE id = ?1 AND state != 'completed'",
+        params![record_id, now(), holder.host, holder.pid],
+    )?;
+    Ok(())
+}
+
 pub(super) fn claim_indexing(
     connection: &Connection,
     record_id: i64,
@@ -2335,15 +2403,19 @@ pub(super) fn claim_indexing(
     // Request-bound retirement uses its private, current-F2 claim, never this
     // generic claim which can mint only an unscoped index owner.
     super::context_retirement::request_scope::validate_index(connection, record_id, None, None)?;
+    // The claim takes the row over, a stale owner's among them: it records
+    // this process as the row's holder. A live owner's row is not claimed.
+    let holder = Holder::this_process();
     let claimed = connection
         .execute(
-            "UPDATE operation_records SET state = 'indexing', index_owner_epoch = index_owner_epoch + 1, observed_at = ?2
+            "UPDATE operation_records SET state = 'indexing', index_owner_epoch = index_owner_epoch + 1, observed_at = ?2,
+                    host = ?4, pid = ?5
               WHERE id = ?1 AND state IN (
                  'created', 'worktree_observed', 'authoring_checkpoint_observed', 'remote_changed',
                  'publication_committed', 'initialization_committed', 'authoritative_observed',
                   'failed', 'observed', 'persisted', 'retry', 'index_invalidated'
              ) OR (id = ?1 AND state = 'indexing' AND observed_at < ?3)",
-            params![record_id, now(), stale_before],
+            params![record_id, now(), stale_before, holder.host, holder.pid],
         )
         .map_err(RepositoryError::sqlite)?;
     if claimed != 1 {
@@ -3277,8 +3349,10 @@ mod attribution_tests {
 
     fn origin() -> RowOrigin {
         RowOrigin {
-            host: "host-a".to_owned(),
-            pid: 42,
+            holder: Holder {
+                host: "host-a".to_owned(),
+                pid: 42,
+            },
             started_at: 7,
             author: Some("A <a@example.invalid>".to_owned()),
         }
@@ -3344,6 +3418,10 @@ mod attribution_tests {
     /// promotion or closure it is a child of; else, for a comment's
     /// synchronization, the request the comment's row names. A row no
     /// request began names none, and still records its process.
+    ///
+    /// A local row begun under a remote operation's ID, as a
+    /// synchronization's index hand-off is, is the request's that remote
+    /// row names, unless a request's record holds it as a local operation.
     #[test]
     fn a_remote_row_is_the_request_s_that_began_it_or_its_parent_s() {
         let db = Connection::open_in_memory().unwrap();
@@ -3432,6 +3510,59 @@ mod attribution_tests {
                 "{operation}"
             );
         }
+        for (operation, request) in [
+            ("sync", Some(("sync-request", "item sync"))),
+            (
+                "promote-context",
+                Some(("promote-request", "document promote")),
+            ),
+            ("comment-sync", Some(("comment-request", "comment add"))),
+            ("poll", None),
+            ("unknown", None),
+        ] {
+            db.execute(
+                "INSERT INTO operation_records (operation_ulid) VALUES (?1)",
+                [operation],
+            )
+            .unwrap();
+            let id = db.last_insert_rowid();
+            attribute_local_row(&db, id, &origin()).unwrap();
+            let stored: (Option<String>, Option<String>, String, i64) = db
+                .query_row(
+                    "SELECT request_ulid, command, host, pid FROM operation_records WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                stored,
+                (
+                    request.map(|(id, _)| id.to_owned()),
+                    request.map(|(_, command)| command.to_owned()),
+                    "host-a".to_owned(),
+                    42
+                ),
+                "local {operation}"
+            );
+        }
+        // A local link is preferred: the comment's own row is the
+        // comment's request's, not a remote row's under its ID.
+        db.execute(
+            "INSERT INTO remote_operation_records (repository_id, operation_ulid, request_ulid, command)
+             VALUES (1, 'comment', 'sync-request', 'item sync')",
+            [],
+        )
+        .unwrap();
+        attribute_local_row(&db, 1, &origin()).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT request_ulid FROM operation_records WHERE id = 1",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "comment-request"
+        );
     }
 
     /// Only a ticket's save and a comment's submission name their item,

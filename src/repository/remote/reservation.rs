@@ -999,6 +999,9 @@ impl RepositoryService {
         operation_id: OperationId,
         target: &RemoteOperationTarget,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        // A restart takes the row over: it records this process as the row's
+        // holder, read before the registry transaction begins.
+        let holder = crate::repository::recovery::Holder::this_process();
         state::with_transaction(self, root, |tx, id| {
             crate::repository::promotion::record::validate_remote_identity(
                 tx,
@@ -1047,7 +1050,7 @@ impl RepositoryService {
                 .owner_epoch
                 .checked_add(1)
                 .ok_or_else(state::recovery_required)?;
-            tx.execute("UPDATE remote_operation_records SET phase='reserved',completed_step=NULL,outcome=NULL,cancel_requested=0,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",params![record.id,epoch,now()]).map_err(|_|state::recovery_required())?;
+            tx.execute("UPDATE remote_operation_records SET phase='reserved',completed_step=NULL,outcome=NULL,cancel_requested=0,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3),host=?4,pid=?5 WHERE id=?1",params![record.id,epoch,now(),holder.host,holder.pid]).map_err(|_|state::recovery_required())?;
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             Ok(RemoteReservationOutcome::Reserved(token(self, id, &record)))
@@ -1587,6 +1590,9 @@ impl RepositoryService {
         target: &RemoteOperationTarget,
         poll_kind: state::PollKind,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        // A restart takes the row over: it records this process as the row's
+        // holder, read before the registry transaction begins.
+        let holder = crate::repository::recovery::Holder::this_process();
         state::with_transaction(self, root, |tx, id| {
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
@@ -1649,8 +1655,8 @@ impl RepositoryService {
                     .owner_epoch
                     .checked_add(1)
                     .ok_or_else(state::recovery_required)?;
-                tx.execute("UPDATE remote_operation_records SET phase='reserved',completed_step=NULL,outcome=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",
-                    params![record.id,epoch,now()]).map_err(|_| state::recovery_required())?;
+                tx.execute("UPDATE remote_operation_records SET phase='reserved',completed_step=NULL,outcome=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3),host=?4,pid=?5 WHERE id=?1",
+                    params![record.id,epoch,now(),holder.host,holder.pid]).map_err(|_| state::recovery_required())?;
                 let restarted = state::read_operation(tx, id, operation_id)?
                     .ok_or_else(state::recovery_required)?;
                 // Normal P restart fences only its exact old source hold. It
@@ -2274,6 +2280,9 @@ impl RepositoryService {
         ordinal: u8,
         conflict_digest: [u8; 32],
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        // A restart takes the row over: it records this process as the row's
+        // holder, read before the registry transaction begins.
+        let holder = crate::repository::recovery::Holder::this_process();
         state::with_transaction(self, root, |tx, id| {
             crate::repository::local_sync::record::require_no_pending(tx, id)?;
             let record = state::read_operation(tx, id, operation_id)?
@@ -2312,8 +2321,8 @@ impl RepositoryService {
                 .checked_add(1)
                 .ok_or_else(state::recovery_required)?;
             tx.execute(
-                "UPDATE remote_operation_records SET phase='reconciling',reconciliation_required=1,completed_step=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",
-                params![record.id, epoch, now()],
+                "UPDATE remote_operation_records SET phase='reconciling',reconciliation_required=1,completed_step=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3),host=?4,pid=?5 WHERE id=?1",
+                params![record.id, epoch, now(), holder.host, holder.pid],
             )
             .map_err(|_| state::recovery_required())?;
             let reacquired = state::read_operation(tx, id, operation_id)?
@@ -2758,6 +2767,9 @@ impl RepositoryService {
         target: &RemoteOperationTarget,
         execution: Option<&crate::repository::promotion::record::ChildExecution>,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        // A restart takes the row over: it records this process as the row's
+        // holder, read before the registry transaction begins.
+        let holder = crate::repository::recovery::Holder::this_process();
         state::with_transaction(self, root, |tx, id| {
             if let Some(execution) = execution {
                 execution.validate(tx, id, operation_id)?;
@@ -2830,7 +2842,7 @@ impl RepositoryService {
                 .owner_epoch
                 .checked_add(1)
                 .ok_or_else(state::recovery_required)?;
-            tx.execute("UPDATE remote_operation_records SET phase='reconciling',reconciliation_required=1,completed_step=NULL,outcome=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",params![record.id,epoch,now()]).map_err(|_| state::recovery_required())?;
+            tx.execute("UPDATE remote_operation_records SET phase='reconciling',reconciliation_required=1,completed_step=NULL,outcome=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3),host=?4,pid=?5 WHERE id=?1",params![record.id,epoch,now(),holder.host,holder.pid]).map_err(|_| state::recovery_required())?;
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             Ok(RemoteReservationOutcome::Reserved(token(self, id, &record)))

@@ -737,6 +737,7 @@ impl RepositoryService {
         if changed != 1 {
             return Err(ReadError::new(ResultCode::RecoveryRequired));
         }
+        hold_envelope(&tx, current.operation_id).map_err(sql_error)?;
         tx.commit().map_err(sql_error)?;
         Ok(current)
     }
@@ -901,6 +902,19 @@ impl RepositoryService {
 fn operation_collision(db: &Connection, id: &str) -> Result<bool, ReadError> {
     Ok(foreign_id_collision(db, id, None).map_err(recovery_error)?
         || owned_identity(db, id).map_err(recovery_error)?)
+}
+
+/// Records that this process holds the envelope row of the local
+/// synchronization `operation`, as a call that takes over its ownership
+/// does: the row names the process at work on it. Nothing else changes.
+pub(super) fn hold_envelope(db: &Connection, operation: OperationId) -> rusqlite::Result<()> {
+    let holder = recovery::Holder::this_process();
+    db.execute(
+        "UPDATE operation_records SET host=?2, pid=?3
+          WHERE id=(SELECT local_record_id FROM local_context_sync_records WHERE operation_ulid=?1)",
+        params![operation.to_string(), holder.host, holder.pid],
+    )?;
+    Ok(())
 }
 
 // Only local-sync identities are excluded here. Old remote/local index handoffs

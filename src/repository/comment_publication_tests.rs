@@ -2190,3 +2190,218 @@ fn a_new_authoring_row_records_request_host_pid_item_and_comment() {
         whose(commenting, "comment add", COMMENTED_AT)
     );
 }
+
+/// What a row says of whose it is: the request that began it, its command,
+/// the author and the start, then the host and the process that hold it.
+type Whose = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    Option<i64>,
+);
+
+fn whose(connection: &rusqlite::Connection, table: &str, operation: OperationId) -> Whose {
+    connection
+        .query_row(
+            &format!(
+                "SELECT request_ulid, command, author, started_at, host, pid
+                   FROM {table} WHERE operation_ulid=?1"
+            ),
+            [operation.to_string()],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )
+        .unwrap()
+}
+
+/// A call that takes a row over records this process as the row's holder,
+/// and changes nothing else of whose the row is: the request that began
+/// it, its command, the author and the start keep naming where it came
+/// from. A row from an older build, which says nothing, gains only its
+/// holder. A live index owner's row is not taken over, and keeps its own.
+#[test]
+fn a_takeover_records_this_process_as_holder_and_keeps_the_row_s_origin() {
+    const NOW: i64 = 1_700_000_000;
+    enum Row {
+        /// A comment's submission that stopped before its checkpoint, taken
+        /// up by the same submission sent again.
+        PendingComment,
+        /// A refresh's row an index owner claimed, with its last heartbeat
+        /// at `heartbeat`, taken up by a refresh under the same ID.
+        Indexing { heartbeat: i64 },
+        /// An interrupted synchronization, restarted.
+        InterruptedSynchronization,
+    }
+    let foreign: Whose = (
+        Some("01ARZ3NDEKTSV4RRFFQ69G5FX9".to_owned()),
+        Some("comment add".to_owned()),
+        Some("Someone <someone@example.invalid>".to_owned()),
+        Some(111),
+        Some("elsewhere".to_owned()),
+        Some(i64::from(std::process::id()) + 1),
+    );
+    let legacy: Whose = (None, None, None, None, None, None);
+    for (case, row, before, taken_over) in [
+        (
+            "a resumed submission whose process died",
+            Row::PendingComment,
+            foreign.clone(),
+            true,
+        ),
+        (
+            "a resumed submission an older build began",
+            Row::PendingComment,
+            legacy,
+            true,
+        ),
+        (
+            "a stale index owner's row",
+            Row::Indexing { heartbeat: 0 },
+            foreign.clone(),
+            true,
+        ),
+        (
+            "a live index owner's row",
+            Row::Indexing { heartbeat: NOW },
+            foreign.clone(),
+            false,
+        ),
+        (
+            "a restarted synchronization",
+            Row::InterruptedSynchronization,
+            foreign.clone(),
+            true,
+        ),
+    ] {
+        let f = Fixture::new();
+        let service = RepositoryService::open_at(f.data.path())
+            .unwrap()
+            .with_clock_for_testing(Arc::new(SetClock(std::sync::atomic::AtomicI64::new(NOW))));
+        type Act = Box<dyn Fn(&RepositoryService)>;
+        let (table, operation, act): (&str, OperationId, Act) = match row {
+            Row::PendingComment => {
+                let request = f.request();
+                let failing = RepositoryService::open_at_with_failure_point_for_testing(
+                    f.data.path(),
+                    FailurePoint::BeforeCheckpointCommit,
+                )
+                .unwrap();
+                assert!(
+                    failing
+                        .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+                        .is_err(),
+                    "{case}"
+                );
+                let operation = request.comment.target.operation_id;
+                let act: Act = Box::new(move |service| {
+                    saved(
+                        service
+                            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+                            .unwrap(),
+                    );
+                });
+                ("operation_records", operation, act)
+            }
+            Row::Indexing { heartbeat } => {
+                let operation = OperationId::new();
+                f.db()
+                    .execute(
+                        "INSERT INTO operation_records
+                            (repository_id, root_path, operation_ulid, action, target, state,
+                             observed_at, index_owner_epoch)
+                         SELECT id, root_path, ?1, 'refresh', '', 'indexing', ?2, 1 FROM repositories",
+                        params![operation.to_string(), heartbeat],
+                    )
+                    .unwrap();
+                let root: PathBuf = f.root.path().into();
+                let act: Act = Box::new(move |service| {
+                    service
+                        .refresh_repository(RefreshRepositoryRequest {
+                            root: root.clone(),
+                            operation_id: operation,
+                        })
+                        .unwrap();
+                });
+                ("operation_records", operation, act)
+            }
+            Row::InterruptedSynchronization => {
+                f.configure_remote();
+                let operation = OperationId::new();
+                let target = RemoteOperationTarget::for_context(
+                    &RemoteRefPlan::from_configuration("origin", "main").unwrap(),
+                    RemoteOperationAction::SynchronizeContext,
+                    AuthoringKind::Document,
+                    f.item.clone(),
+                )
+                .unwrap();
+                assert!(matches!(
+                    f.service
+                        .reserve_remote_operation(f.root.path(), operation, &target)
+                        .unwrap(),
+                    RemoteReservationOutcome::Reserved(_)
+                ));
+                f.db()
+                    .execute(
+                        "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+                        [operation.to_string()],
+                    )
+                    .unwrap();
+                let root: PathBuf = f.root.path().into();
+                let act: Act = Box::new(move |service| {
+                    assert!(matches!(
+                        service
+                            .restart_remote_synchronization(&root, operation, &target)
+                            .unwrap(),
+                        RemoteReservationOutcome::Reserved(_)
+                    ));
+                });
+                ("remote_operation_records", operation, act)
+            }
+        };
+        let (request, command, author, started_at, host, pid) = before.clone();
+        f.db()
+            .execute(
+                &format!(
+                    "UPDATE {table} SET request_ulid=?2, command=?3, author=?4, started_at=?5,
+                            host=?6, pid=?7
+                      WHERE operation_ulid=?1"
+                ),
+                params![
+                    operation.to_string(),
+                    request,
+                    command,
+                    author,
+                    started_at,
+                    host,
+                    pid
+                ],
+            )
+            .unwrap();
+
+        act(&service);
+
+        let expected = if taken_over {
+            (
+                before.0,
+                before.1,
+                before.2,
+                before.3,
+                Some(liveness::this_host()),
+                Some(i64::from(std::process::id())),
+            )
+        } else {
+            before
+        };
+        assert_eq!(whose(&f.db(), table, operation), expected, "{case}");
+    }
+}
