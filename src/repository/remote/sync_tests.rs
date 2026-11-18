@@ -5602,6 +5602,188 @@ fn released_checkpoint_descendant_after_old_push_intent_opens_a_continuation_att
     assert_eq!(legacy(&db), frozen);
 }
 
+/// Journal one context synchronization up to a Push intent at `checkpoint`
+/// (`PushPrepared`, or `PushReturned` after the `BeforePush` safe point), as a
+/// real first push of a context branch the remote has never had.
+fn journal_unanswered_context_push(
+    service: &RepositoryService,
+    root: &Path,
+    plan: &RemoteRefPlan,
+    owner: &RemoteReservation,
+    head: git2::Oid,
+    checkpoint: state::SynchronizationCheckpoint,
+) {
+    use state::SynchronizationCheckpoint as C;
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(head),
+        local_oid: Some(head),
+        ..Default::default()
+    };
+    service
+        .checkpoint_synchronization(root, owner, C::FetchPrepared, &evidence)
+        .unwrap();
+    git2::Repository::open(root)
+        .unwrap()
+        .reference(plan.primary().tracking_ref(), head, true, "fixture")
+        .unwrap();
+    service
+        .remote_safe_point(root, owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let observation =
+        RemoteRefObservation::from_advertisement(plan, "refs/heads/main", head, Some(head))
+            .unwrap();
+    commit_observation_batch(service, root, owner, plan, &[observation], 1).unwrap();
+    let evidence = state::SynchronizationEvidence {
+        primary_tracking_oid: Some(head),
+        push_oid: Some(head),
+        ..evidence
+    };
+    service
+        .checkpoint_synchronization(root, owner, C::PushPrepared, &evidence)
+        .unwrap();
+    if checkpoint == C::PushReturned {
+        service
+            .remote_safe_point(root, owner, RemoteOperationSafePoint::BeforePush)
+            .unwrap();
+        service
+            .checkpoint_synchronization(root, owner, C::PushReturned, &evidence)
+            .unwrap();
+    }
+}
+
+/// A synchronization that resumes after its own first push of a context
+/// branch the remote has never had. The push endpoint advertises no context
+/// ref. Whether that is ambiguous depends on whether the push could have
+/// reached the remote: an intent still at `PushPrepared` (the push was never
+/// issued, so nothing of it can be there) with no evidence the context was ever
+/// published is retried; one at `PushReturned`, one the remote has been seen to
+/// hold, or one another operation left behind is not ours to retry and stays
+/// ambiguous.
+#[test]
+fn an_unreturned_first_push_with_no_publication_evidence_is_retryable_not_ambiguous() {
+    use state::SynchronizationCheckpoint as C;
+    struct Row {
+        label: &'static str,
+        own: C,
+        published: bool,
+        foreign: bool,
+        ambiguous: bool,
+    }
+    let rows = [
+        Row {
+            label: "own push_prepared, never published: retried",
+            own: C::PushPrepared,
+            published: false,
+            foreign: false,
+            ambiguous: false,
+        },
+        Row {
+            label: "own push_returned, never published: still ambiguous",
+            own: C::PushReturned,
+            published: false,
+            foreign: false,
+            ambiguous: true,
+        },
+        Row {
+            label: "own push_prepared, publication evidence: still ambiguous",
+            own: C::PushPrepared,
+            published: true,
+            foreign: false,
+            ambiguous: true,
+        },
+        Row {
+            label: "foreign push_prepared, never published: still ambiguous",
+            own: C::PushPrepared,
+            published: false,
+            foreign: true,
+            ambiguous: true,
+        },
+    ];
+    for row in rows {
+        let (root, data, service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let head = repository.head().unwrap().target().unwrap();
+        repository
+            .remote("origin", "ssh://example.invalid/fixture.git")
+            .unwrap();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let ticket: crate::canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            AuthoringKind::Ticket,
+            ticket.clone(),
+        )
+        .unwrap();
+        let reserve = || {
+            let RemoteReservationOutcome::Reserved(owner) = service
+                .reserve_remote_operation(root.path(), OperationId::new(), &target)
+                .unwrap()
+            else {
+                panic!("{}: reservation", row.label)
+            };
+            owner
+        };
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        if row.foreign {
+            // Another operation's push intent, left behind when it stopped.
+            let earlier = reserve();
+            journal_unanswered_context_push(
+                &service,
+                root.path(),
+                &plan,
+                &earlier,
+                head,
+                C::PushPrepared,
+            );
+            db.execute(
+                "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+                [earlier.operation_id().to_string()],
+            )
+            .unwrap();
+        }
+        let owner = reserve();
+        if !row.foreign {
+            journal_unanswered_context_push(&service, root.path(), &plan, &owner, head, row.own);
+        }
+        if row.published {
+            // The remote was seen to hold the branch, and no longer does.
+            let context = target.context_ref().unwrap();
+            db.execute(
+                "INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,last_advertised_oid,publication_evidence,state,observed_at) SELECT id,?1,?2,'ticket',?3,?4,'observed_published','remotely_deleted',1 FROM repositories",
+                rusqlite::params![
+                    context.remote_ref(),
+                    context.tracking_ref(),
+                    ticket.to_string(),
+                    head.to_string()
+                ],
+            )
+            .unwrap();
+        }
+        // A resumed synchronization counts its own journaled push as inherited;
+        // another operation's is counted whatever the resumer is.
+        let boundary = service
+            .synchronization_push_absence_boundary(root.path(), &owner, !row.foreign)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", row.label));
+        assert_eq!(
+            matches!(boundary, Some(PushAbsenceBoundary::Ambiguous)),
+            row.ambiguous,
+            "{}: boundary was {}",
+            row.label,
+            match boundary {
+                None => "none (push retried)",
+                Some(PushAbsenceBoundary::Ambiguous) => "ambiguous (recovery_required)",
+                Some(PushAbsenceBoundary::Deleted) => "deleted",
+                Some(PushAbsenceBoundary::Unknown) => "unknown",
+            }
+        );
+    }
+}
+
 /// D: a context target's own gitdir is the linked worktree's. Merge metadata
 /// in the shared common directory belongs to another worktree and is never
 /// tolerated, retired or adopted, even beside this operation's own remnant.
