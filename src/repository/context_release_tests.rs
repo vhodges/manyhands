@@ -1011,9 +1011,24 @@ fn a_failed_hand_off_is_index_pending_and_a_refresh_under_its_id_finishes_it() {
         .unwrap();
     assert_eq!(row.step.as_deref(), Some("context_branch_released"));
     assert!(row.owes_only_its_hand_off(), "state {}", row.state);
+    // The row holds its own item, and work on the whole repository: a
+    // release of the item under another ID and a refresh under a new ID
+    // are refused for it. It holds no other item: a release of one goes
+    // on, and finds nothing to release.
     assert_eq!(
-        kind_of(f.release(OTHER)),
+        kind_of(f.release(TICKET)),
         RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(
+        kind_of(f.service.refresh_repository(RefreshRepositoryRequest {
+            root: f.root(),
+            operation_id: OperationId::new(),
+        })),
+        RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(
+        f.release(OTHER).unwrap(),
+        ContextReleaseOutcome::AlreadyAbsent
     );
 
     let refreshed = f
