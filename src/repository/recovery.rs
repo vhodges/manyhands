@@ -767,8 +767,13 @@ fn attribution_error() -> RepositoryError {
 /// replaced, and is not repaired here. The marker is recorded only once
 /// both journals have the columns, so a registry whose remote journal has
 /// not been created yet gains them when it is.
+///
+/// A SQLite failure is reported as one, as the migrations around this one
+/// do: a conflict with another process opening the same registry
+/// (`SQLITE_BUSY`) is transient and a retry succeeds, so it must not read as
+/// damage. Only a marked registry that lacks a column is `recovery_required`.
 fn migrate_operation_attribution(db: &Connection) -> Result<(), RepositoryError> {
-    let failure = |_| attribution_error();
+    let failure = RepositoryError::sqlite;
     let migrated: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
@@ -3651,6 +3656,41 @@ mod attribution_tests {
             RepositoryErrorKind::RecoveryRequired
         );
         assert!(!has_column(&db, REMOTE_JOURNAL_TABLE, "host"));
+    }
+
+    /// A conflict with another process that holds the registry's write lock
+    /// is a SQLite failure carrying `SQLITE_BUSY`, which is transient: the
+    /// same as the sibling migrations give, not `recovery_required`.
+    #[test]
+    fn a_busy_registry_fails_the_attribution_migration_as_sqlite_not_as_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("registry.sqlite3");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(
+            "CREATE TABLE registry_migrations (name TEXT PRIMARY KEY);
+             CREATE TABLE operation_records (id INTEGER PRIMARY KEY, action TEXT);",
+        )
+        .unwrap();
+        let other = Connection::open(&path).unwrap();
+        other.busy_timeout(std::time::Duration::ZERO).unwrap();
+        db.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+        let error = migrate_operation_attribution(&other).unwrap_err();
+
+        assert_eq!(error.kind, RepositoryErrorKind::Sqlite, "{error:?}");
+        let source = error
+            .source
+            .as_deref()
+            .and_then(|source| source.downcast_ref::<rusqlite::Error>())
+            .expect("the SQLite error is the source");
+        assert_eq!(
+            source.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::DatabaseBusy)
+        );
+        // Once the other process is done a retry migrates.
+        db.execute_batch("ROLLBACK").unwrap();
+        migrate_operation_attribution(&other).unwrap();
+        assert!(has_column(&other, "operation_records", "comment_id"));
     }
 
     fn has_column(db: &Connection, table: &str, column: &str) -> bool {
