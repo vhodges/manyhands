@@ -1514,9 +1514,25 @@ impl RepositoryService {
                 }
             }
             // And the synchronizations its abandon closes that no process
-            // works under, under the first rule.
+            // works under, under the first rule; with them the remote
+            // operation the envelope names as the one in its way, which the
+            // list leaves out when a cancellation ended it.
             if inspects {
                 pending.extend(self.abandonable_remote_operations(connection, &root)?);
+                for action in &envelope.recovery {
+                    let Some(named) = action
+                        .operation_id
+                        .as_deref()
+                        .filter(|_| action.action == RecoveryActionKind::OperationShow)
+                    else {
+                        continue;
+                    };
+                    if !pending.iter().any(|pending| pending == named)
+                        && self.closes_named_remote_operation(connection, &root, named)?
+                    {
+                        pending.push(named.to_owned());
+                    }
+                }
             }
             // Whether the request's record was left accepted, holding
             // that operation as a local one.

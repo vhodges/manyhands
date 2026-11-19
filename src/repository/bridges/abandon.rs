@@ -678,7 +678,6 @@ impl RepositoryService {
             )?
             .query_map([id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
             .collect::<Result<_, _>>()?;
-        let host = super::super::this_host();
         let invalid = |_| ReadError::new(ResultCode::RecoveryRequired);
         let mut offered = Vec::new();
         for (operation, holder_host, holder_pid) in candidates {
@@ -689,13 +688,72 @@ impl RepositoryService {
             else {
                 continue;
             };
-            if reservation::abandonable(connection, &record).map_err(invalid)?
-                && !self.remote_holder_works(&host, holder_host, holder_pid, record.phase)
-            {
+            if self.closes_now(connection, &record, holder_host, holder_pid)? {
                 offered.push(operation);
             }
         }
         Ok(offered)
+    }
+
+    /// Whether `abandon_remote_operation` would close the remote operation
+    /// `operation` of the repository whose journals name it `root_key`
+    /// now: as `abandonable_remote_operations` asks of each it lists, for an
+    /// operation a result names as the one in its way. That is how a
+    /// synchronization a cancellation ended with its push unanswered, which
+    /// the list leaves out, is offered: where it is what a later
+    /// synchronization was refused for. `false` for an ID no remote row of
+    /// the repository holds.
+    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+    pub(crate) fn closes_named_remote_operation(
+        &self,
+        connection: &rusqlite::Connection,
+        root_key: &str,
+        operation: &str,
+    ) -> Result<bool, ReadError> {
+        if !recovery::has_table(connection, recovery::REMOTE_JOURNAL_TABLE)? {
+            return Ok(false);
+        }
+        let Some(id) = registration(connection, root_key)? else {
+            return Ok(false);
+        };
+        let Ok(operation_id) = OperationId::parse(operation) else {
+            return Ok(false);
+        };
+        let invalid = |_| ReadError::new(ResultCode::RecoveryRequired);
+        let Some(record) = state::read_operation(connection, id, operation_id).map_err(invalid)?
+        else {
+            return Ok(false);
+        };
+        let (holder_host, holder_pid): (Option<String>, Option<i64>) = connection.query_row(
+            "SELECT host, pid FROM remote_operation_records WHERE id = ?1",
+            [record.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        self.closes_now(connection, &record, holder_host, holder_pid)
+    }
+
+    /// Whether the abandon closes `record` now: it has not ended, it is one
+    /// the abandon closes, and no process works under it.
+    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+    fn closes_now(
+        &self,
+        connection: &rusqlite::Connection,
+        record: &StoredRemoteOperation,
+        holder_host: Option<String>,
+        holder_pid: Option<i64>,
+    ) -> Result<bool, ReadError> {
+        let invalid = |_| ReadError::new(ResultCode::RecoveryRequired);
+        let unanswered = reservation::abandon_evidence(connection, record)
+            .map_err(invalid)?
+            .unanswered;
+        Ok(ended(record, unanswered).is_none()
+            && reservation::abandonable(connection, record).map_err(invalid)?
+            && !self.remote_holder_works(
+                &super::super::this_host(),
+                holder_host,
+                holder_pid,
+                record.phase,
+            ))
     }
 
     /// Closes the pending remote operation `operation_id` of the

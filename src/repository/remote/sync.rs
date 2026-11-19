@@ -465,14 +465,32 @@ impl From<SshTransportError> for SynchronizationError {
 enum PushAbsenceBoundary {
     Deleted,
     Unknown,
-    Ambiguous,
+    /// A push was intended that nothing answered. `blocker` is the newest
+    /// operation whose push that is, when it is not the caller's own.
+    Ambiguous {
+        blocker: Option<OperationId>,
+    },
 }
 impl PushAbsenceBoundary {
+    /// What a synchronization meeting the boundary is answered with. An
+    /// ambiguity of another operation's push is `recovery_required` naming
+    /// that operation, which only the person can answer, by its abandon;
+    /// one of the caller's own names nothing, as before.
     fn error(self) -> SynchronizationError {
         match self {
             Self::Deleted => SynchronizationError::RemoteContextDeleted,
             Self::Unknown => SynchronizationError::HistoryUnknown,
-            Self::Ambiguous => SynchronizationError::RecoveryRequired,
+            Self::Ambiguous {
+                blocker: Some(operation_id),
+            } => SynchronizationError::Repository(state::recovery_required().with_blocker(Some(
+                crate::repository::Blocker {
+                    family: crate::repository::OperationFamily::Remote,
+                    operation_id,
+                    live: None,
+                    seen: None,
+                },
+            ))),
+            Self::Ambiguous { blocker: None } => SynchronizationError::RecoveryRequired,
         }
     }
 }
@@ -7174,6 +7192,9 @@ fn push_absence(
         .map_err(|_| state::recovery_required())?;
     let mut verified = false;
     let mut ambiguous = false;
+    // The row and the ID of the newest operation not the caller's whose
+    // push made the absence ambiguous.
+    let mut ambiguous_by: Option<(i64, OperationId)> = None;
     let mut incompatible = false;
     // The row and the commit of the newest proven publication.
     let mut newest: Option<(i64, git2::Oid)> = None;
@@ -7252,6 +7273,10 @@ fn push_absence(
                 }
             } else {
                 ambiguous = true;
+                let foreign = Some(operation) != own && Some(operation) != unissued;
+                if foreign && ambiguous_by.is_none_or(|(at, _)| record.id > at) {
+                    ambiguous_by = Some((record.id, operation));
+                }
             }
         }
     }
@@ -7259,7 +7284,9 @@ fn push_absence(
         if verified {
             Some(PushAbsenceBoundary::Deleted)
         } else if ambiguous {
-            Some(PushAbsenceBoundary::Ambiguous)
+            Some(PushAbsenceBoundary::Ambiguous {
+                blocker: ambiguous_by.map(|(_, operation)| operation),
+            })
         } else if incompatible {
             Some(PushAbsenceBoundary::Unknown)
         } else {
@@ -7399,7 +7426,9 @@ impl RepositoryService {
                 None
             };
             Ok(match (boundary, fetched) {
-                (Some(PushAbsenceBoundary::Ambiguous), _) => none(DeletionEvidence::Ambiguous),
+                (Some(PushAbsenceBoundary::Ambiguous { .. }), _) => {
+                    none(DeletionEvidence::Ambiguous)
+                }
                 (Some(PushAbsenceBoundary::Unknown), _) => none(DeletionEvidence::Unknown),
                 (Some(PushAbsenceBoundary::Deleted) | None, Some((state, advertised)))
                     if state == "remotely_deleted" =>

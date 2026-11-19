@@ -5585,7 +5585,10 @@ fn released_checkpoint_descendant_after_old_push_intent_opens_a_continuation_att
             .synchronization_push_absence_boundary(root.path(), &owner, true)
             .unwrap()
     };
-    assert!(matches!(boundary(), Some(PushAbsenceBoundary::Ambiguous)));
+    assert!(matches!(
+        boundary(),
+        Some(PushAbsenceBoundary::Ambiguous { .. })
+    ));
     service
         .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforePush)
         .unwrap();
@@ -5597,7 +5600,10 @@ fn released_checkpoint_descendant_after_old_push_intent_opens_a_continuation_att
             None,
         )
         .unwrap();
-    assert!(matches!(boundary(), Some(PushAbsenceBoundary::Ambiguous)));
+    assert!(matches!(
+        boundary(),
+        Some(PushAbsenceBoundary::Ambiguous { .. })
+    ));
     service
         .remote_safe_point(
             root.path(),
@@ -5893,13 +5899,13 @@ fn an_unreturned_first_push_with_no_publication_evidence_is_retryable_not_ambigu
             .synchronization_push_absence_boundary(root.path(), &owner, !row.foreign)
             .unwrap_or_else(|error| panic!("{}: {error:?}", row.label));
         assert_eq!(
-            matches!(boundary, Some(PushAbsenceBoundary::Ambiguous)),
+            matches!(boundary, Some(PushAbsenceBoundary::Ambiguous { .. })),
             row.ambiguous,
             "{}: boundary was {}",
             row.label,
             match boundary {
                 None => "none (push retried)",
-                Some(PushAbsenceBoundary::Ambiguous) => "ambiguous (recovery_required)",
+                Some(PushAbsenceBoundary::Ambiguous { .. }) => "ambiguous (recovery_required)",
                 Some(PushAbsenceBoundary::Deleted) => "deleted",
                 Some(PushAbsenceBoundary::Unknown) => "unknown",
             }
@@ -6045,11 +6051,46 @@ fn a_confirmed_abandon_answers_the_push_so_a_new_synchronization_is_not_ambiguou
         let before = match &next {
             Some(next) => service.synchronization_push_absence_boundary(root.path(), next, false),
             None => service.synchronization_push_absence_boundary(root.path(), &stranded, true),
-        };
+        }
+        .unwrap();
         assert!(
-            matches!(before.unwrap(), Some(PushAbsenceBoundary::Ambiguous)),
+            matches!(before, Some(PushAbsenceBoundary::Ambiguous { .. })),
             "{label}: ambiguous before the abandon"
         );
+        // The new synchronization's refusal names the operation whose push it
+        // counts, which is not its own: `recovery_required`, naming it, so
+        // that its abandon can be offered. The resume of its own is refused
+        // naming nothing.
+        let error = before.unwrap().error();
+        let named = error
+            .blocker()
+            .map(|blocker| (blocker.family, blocker.operation_id));
+        if cancelled {
+            assert!(
+                matches!(
+                    &error,
+                    SynchronizationError::Repository(RepositoryError {
+                        kind: RepositoryErrorKind::RecoveryRequired,
+                        ..
+                    })
+                ),
+                "{label}: {error:?}"
+            );
+            assert_eq!(
+                named,
+                Some((
+                    crate::repository::OperationFamily::Remote,
+                    stranded.operation_id()
+                )),
+                "{label}"
+            );
+        } else {
+            assert!(
+                matches!(error, SynchronizationError::RecoveryRequired),
+                "{label}"
+            );
+            assert_eq!(named, None, "{label}");
+        }
 
         let abandoned = service
             .abandon_remote_operation(root.path(), stranded.operation_id(), None)
@@ -6087,7 +6128,7 @@ fn a_confirmed_abandon_answers_the_push_so_a_new_synchronization_is_not_ambiguou
             .synchronization_push_absence_boundary(root.path(), &next, false)
             .unwrap_or_else(|error| panic!("{label}: {error:?}"));
         assert!(
-            !matches!(boundary, Some(PushAbsenceBoundary::Ambiguous)),
+            !matches!(boundary, Some(PushAbsenceBoundary::Ambiguous { .. })),
             "{label}: the new synchronization is not ambiguous"
         );
         // A second abandon finds it ended, and changes nothing.
