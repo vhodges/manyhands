@@ -5,6 +5,8 @@ title: Refresh the installed skills in .agents/skills
 type: task
 status: done
 project: manyhands
+closed_at: 2026-11-19T20:31:46Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
