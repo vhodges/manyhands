@@ -36,6 +36,7 @@ fn row(id: &str, family: OperationFamily, action: OperationAction, item: &str) -
         worktree: None,
         updated_at: None,
         failure_code: None,
+        attribution: Default::default(),
     }
 }
 

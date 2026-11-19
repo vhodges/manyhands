@@ -38,6 +38,7 @@ fn row(step: &str, updated: &str) -> OperationDto {
         worktree: None,
         updated_at: Some(updated.to_owned()),
         failure_code: None,
+        attribution: Default::default(),
     }
 }
 

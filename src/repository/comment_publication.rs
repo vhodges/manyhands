@@ -131,6 +131,11 @@ impl CommentSubmissionError {
     pub fn external_change(&self) -> Option<&ExternalChangeDiagnostic> {
         self.error.external_change()
     }
+    /// The operation whose row the submission was refused for, when
+    /// another's row is why; see `RepositoryError::blocker`.
+    pub fn blocker(&self) -> Option<&crate::repository::Blocker> {
+        self.error.blocker()
+    }
 }
 impl From<RepositoryError> for CommentSubmissionError {
     fn from(error: RepositoryError) -> Self {
@@ -230,16 +235,21 @@ pub(super) fn recovery_error() -> RepositoryError {
 pub(crate) type Synchronizer<'a> = dyn FnMut(SynchronizeRemoteRequest) -> Option<Result<SynchronizationResult, SynchronizationError>>
     + 'a;
 
+/// A comment's publication left pending by `error`, its synchronization's.
+/// A repository error is told as the submission's, of the same kind and
+/// with nothing of its text, and keeps the operation in its way, which the
+/// comment's answer names.
 pub(super) fn pending_synchronization(error: SynchronizationError) -> CommentPublicationState {
     let error = match error {
-        SynchronizationError::Repository(error) => {
-            SynchronizationError::Repository(RepositoryError::new(
+        SynchronizationError::Repository(error) => SynchronizationError::Repository(
+            RepositoryError::new(
                 RepositoryOperation::SubmitComment,
                 None,
                 error.kind,
                 "context synchronization requires recovery",
-            ))
-        }
+            )
+            .with_blocker(error.blocker().cloned()),
+        ),
         error => error,
     };
     CommentPublicationState::Pending {

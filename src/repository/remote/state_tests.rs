@@ -322,10 +322,14 @@ fn retirement_preserves_pinned_sync_window_pass_when_retiring_current_observatio
     drop(repository);
 }
 
-fn poll_kind_row(db: &Connection) -> Vec<rusqlite::types::Value> {
+/// The whole row, by column name: a migration that adds a column back to a
+/// reconstructed table appends it, so a column's position is no part of
+/// what the row holds.
+fn poll_kind_row(db: &Connection) -> std::collections::BTreeMap<String, rusqlite::types::Value> {
     db.query_row("SELECT * FROM remote_operation_records", [], |row| {
-        (0..row.as_ref().column_count())
-            .map(|i| row.get(i))
+        let columns = row.as_ref().column_names();
+        (0..columns.len())
+            .map(|i| Ok((columns[i].to_owned(), row.get(i)?)))
             .collect()
     })
     .unwrap()
@@ -2275,6 +2279,17 @@ fn cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication()
         .unwrap();
     // Reconstruct pre-disposition history, not marked loss of its whole envelope.
     assert_eq!(connection.execute("DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'", []).unwrap(), 1);
+    // Nor marked loss of the attribution columns, which a cycle-04 journal
+    // predates: startup adds them to the reconstructed table again.
+    assert_eq!(
+        connection
+            .execute(
+                "DELETE FROM registry_migrations WHERE name='cycle_operation_attribution'",
+                [],
+            )
+            .unwrap(),
+        1
+    );
     connection.execute_batch(CYCLE04_OPERATION_SCHEMA).unwrap();
     let cases = [
         ("completed", "after_batch_commit", Some("completed"), 0, 0),

@@ -298,10 +298,13 @@ impl ContextPrepareBinding {
             },
             // Only the kind of an error is read: its text can hold a
             // path.
-            Err(error) => Ran {
-                answer: refused(error),
-                standing: left(service, accepted),
-            },
+            Err(error) => {
+                let blocker = error.blocker().cloned();
+                Ran {
+                    answer: refused(error).naming(service, &accepted.root(), blocker.as_ref()),
+                    standing: left(service, accepted),
+                }
+            }
         }
     }
 
@@ -492,10 +495,13 @@ impl ContextReleaseBinding {
             },
             // Only the kind of an error is read: its text can hold a
             // path.
-            Err(error) => Ran {
-                answer: refused(error),
-                standing: left(service, accepted),
-            },
+            Err(error) => {
+                let blocker = error.blocker().cloned();
+                Ran {
+                    answer: refused(error).naming(service, &accepted.root(), blocker.as_ref()),
+                    standing: left(service, accepted),
+                }
+            }
         }
     }
 }

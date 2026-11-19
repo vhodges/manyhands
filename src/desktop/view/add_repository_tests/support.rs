@@ -79,6 +79,7 @@ pub(super) fn canned(root: &Path) -> RepositoryInspectionDto {
         },
         identity_state: IdentityAvailability::Available,
         remotes: Vec::new(),
+        operations: Vec::new(),
     }
 }
 

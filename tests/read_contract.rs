@@ -11,11 +11,11 @@ use manyhands::{
         DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
         IndexProblemDto, IndexState, IndexStatusState, InitialsSource, ItemContextKind, ItemDto,
         ItemDtoKind, KeyDeletionState, KeyGenerationState, KeyOwnership, KeyPrivateSourceState,
-        KeyPublicMetadataState, OperationAction, OperationFamily, OperationNextAction,
-        OperationOwner, PollingInterval, PollingOutcome, PreviewEffect, PreviewIdentitySource,
-        ProblemDto, ProgressStage, ProposedRelationships, ReadinessFilter, ReadinessReasonCode,
-        ReadinessState, RelationshipRejectionDto, RepositoryService, RequestState,
-        ResolvedRepository, SharedKeyId, TicketFilter, UnplannableReasonCode,
+        KeyPublicMetadataState, OperationAction, OperationAttributionDto, OperationFamily,
+        OperationNextAction, OperationOwner, PollingInterval, PollingOutcome, PreviewEffect,
+        PreviewIdentitySource, ProblemDto, ProgressStage, ProposedRelationships, ReadinessFilter,
+        ReadinessReasonCode, ReadinessState, RelationshipRejectionDto, RepositoryService,
+        RequestState, ResolvedRepository, SharedKeyId, TicketFilter, UnplannableReasonCode,
         transport::SshAuthority,
     },
     results::{
@@ -706,6 +706,19 @@ const LOCAL_ACTIONS: [OperationAction; 16] = [
     OperationAction::ContextSyncLocal,
 ];
 
+/// What `operation abandon` closes: every local action, and a
+/// synchronization of the remote journal.
+fn abandoned_actions() -> Vec<&'static str> {
+    LOCAL_ACTIONS
+        .iter()
+        .chain(&[
+            OperationAction::SynchronizeContext,
+            OperationAction::SynchronizePrimary,
+        ])
+        .map(|action| action.as_str())
+        .collect()
+}
+
 /// Every published string enumeration, pinned to Rust values or the explicitly
 /// documented retirement phase vocabulary, by file and property.
 fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
@@ -1063,6 +1076,16 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             OperationAction::ALL.map(OperationAction::as_str).to_vec(),
         ),
         (
+            "blocker.schema.json",
+            "family",
+            OperationFamily::ALL.map(OperationFamily::as_str).to_vec(),
+        ),
+        (
+            "blocker.schema.json",
+            "action",
+            OperationAction::ALL.map(OperationAction::as_str).to_vec(),
+        ),
+        (
             "operation.schema.json",
             "next_action",
             OperationNextAction::ALL
@@ -1123,12 +1146,12 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         (
             "operation_abandon_preview.schema.json",
             "details.action",
-            LOCAL_ACTIONS.map(OperationAction::as_str).to_vec(),
+            abandoned_actions(),
         ),
         (
             "operation_mutation.schema.json",
             "action",
-            LOCAL_ACTIONS.map(OperationAction::as_str).to_vec(),
+            abandoned_actions(),
         ),
         (
             "preview.schema.json",
@@ -3028,10 +3051,29 @@ fn remote_history_matches_its_schema_and_golden() {
     );
 }
 
+/// The process id the probe of `repository_with_operations` finds, and one
+/// it does not.
+const LIVE_PID: i64 = 4242;
+const DEAD_PID: i64 = 4243;
+/// The comment row's index claim beats at `STORED_AT`; the service's clock
+/// reads one second later.
+const COMMENT_OPERATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FA3";
+const COMMENT_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FCC";
+const REQUEST_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR1";
+
 /// A repository with an operation in each store: a key generation kept for
 /// inspection, the poll that holds the reservation, a document save part of
-/// the way through, an interrupted synchronization of a ticket, and a
-/// refresh from before operations had IDs.
+/// the way through, a comment whose indexing claim beats, an interrupted
+/// synchronization of a ticket, and a refresh from before operations had
+/// IDs.
+///
+/// The service reads the process table through `operations::ProcessTable`
+/// and the time from a clock set at `STORED_AT + 1`. Three rows are
+/// attributed: the document save to this host and a process that is gone,
+/// the poll, which holds the reservation, and the interrupted
+/// synchronization to this host and a live process, and the comment to
+/// another host with a fresh indexing heartbeat. The refresh is a legacy
+/// row with no attribution.
 fn repository_with_operations() -> (
     support::TestRepository,
     support::EnabledRepository,
@@ -3039,7 +3081,17 @@ fn repository_with_operations() -> (
 ) {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
+    let enabled = support::EnabledRepository {
+        service: enabled
+            .service
+            .with_clock_for_testing(support::mutation::TestClock::at(operations::STORED_AT + 1))
+            .with_process_probe_for_testing(std::sync::Arc::new(operations::ProcessTable(vec![
+                u32::try_from(LIVE_PID).unwrap(),
+            ]))),
+        data_directory: enabled.data_directory,
+    };
     let data = enabled.data_directory.path();
+    let host = manyhands::repository::this_host();
     operations::configure_remote(data);
     operations::insert_local(data, None, "refresh", "failed", None);
     operations::insert_local(
@@ -3056,7 +3108,58 @@ fn repository_with_operations() -> (
             [items::DOCUMENT_A, OPERATION_C],
         )
         .unwrap();
+    operations::attribute_local(
+        data,
+        OPERATION_C,
+        &operations::Attribution {
+            request: Some(REQUEST_ID),
+            command: Some("document save"),
+            author: Some("Ada Lovelace <ada@example.invalid>"),
+            host: Some(&host),
+            pid: Some(DEAD_PID),
+            started_at: Some(operations::STORED_AT - 50),
+        },
+        None,
+    );
+    operations::insert_local(
+        data,
+        Some(COMMENT_OPERATION),
+        "submit_comment",
+        "indexing",
+        Some("authoritative_observed"),
+    );
+    items::index(data)
+        .execute(
+            "UPDATE operation_records SET item_id = ?1 WHERE operation_ulid = ?2",
+            [items::TICKET_A, COMMENT_OPERATION],
+        )
+        .unwrap();
+    operations::attribute_local(
+        data,
+        COMMENT_OPERATION,
+        &operations::Attribution {
+            request: Some(REQUEST_ID),
+            command: Some("comment add"),
+            author: Some("Grace Hopper <grace@example.invalid>"),
+            host: Some("elsewhere"),
+            pid: Some(1),
+            started_at: Some(operations::STORED_AT - 40),
+        },
+        Some(COMMENT_ID),
+    );
     operations::insert_remote_poll(data, OPERATION_B, "reserved", None, None);
+    operations::attribute_remote(
+        data,
+        OPERATION_B,
+        &operations::Attribution {
+            request: Some(REQUEST_ID),
+            command: Some("poll once"),
+            author: None,
+            host: Some(&host),
+            pid: Some(LIVE_PID),
+            started_at: Some(operations::STORED_AT - 30),
+        },
+    );
     operations::insert_remote_synchronization(
         data,
         "01ARZ3NDEKTSV4RRFFQ69G5FA4",
@@ -3064,6 +3167,18 @@ fn repository_with_operations() -> (
         "interrupted",
         Some("before_fetch"),
         None,
+    );
+    operations::attribute_remote(
+        data,
+        "01ARZ3NDEKTSV4RRFFQ69G5FA4",
+        &operations::Attribution {
+            request: Some(REQUEST_ID),
+            command: Some("comment add"),
+            author: Some("Grace Hopper <grace@example.invalid>"),
+            host: Some(&host),
+            pid: Some(LIVE_PID),
+            started_at: Some(operations::STORED_AT - 40),
+        },
     );
     operations::insert_key_material(
         data,
@@ -3081,7 +3196,16 @@ fn operation_list_matches_its_schema_and_golden() {
     let (_fixture, enabled, repo) = repository_with_operations();
 
     let list = enabled.service.list_operations(&repo).unwrap();
-    let envelope = Envelope::read_success("operation list", repo.scope(), list.clone());
+    // The name of the machine the test runs on is no part of the golden,
+    // and a host name is too short to be given a placeholder.
+    let host = manyhands::repository::this_host();
+    let mut named = list.clone();
+    for item in &mut named.items {
+        if item.attribution.host.as_deref() == Some(host.as_str()) {
+            item.attribution.host = Some("<this-host>".to_owned());
+        }
+    }
+    let envelope = Envelope::read_success("operation list", repo.scope(), named);
 
     let families: Vec<_> = list.items.iter().map(|item| item.family).collect();
     assert_eq!(
@@ -3090,9 +3214,24 @@ fn operation_list_matches_its_schema_and_golden() {
             OperationFamily::KeyMaterial,
             OperationFamily::Remote,
             OperationFamily::Local,
+            OperationFamily::Local,
             OperationFamily::Remote,
             OperationFamily::Local,
         ]
+    );
+    // Whether each row's holder still works, as the injected process table
+    // and clock judge it: a live process holding the reservation, a process
+    // that is gone, a fresh indexing heartbeat of another host, a live
+    // process whose remote row was interrupted, and rows that name no
+    // holder.
+    let live: Vec<_> = list
+        .items
+        .iter()
+        .map(|item| item.attribution.live)
+        .collect();
+    assert_eq!(
+        live,
+        [None, Some(true), Some(false), Some(true), Some(false), None]
     );
     // The key is a new one each run.
     let key_id = list.items[0].key_id.as_deref().unwrap();
@@ -3159,6 +3298,27 @@ fn operation_show_matches_its_schema_and_golden() {
         &envelope,
     );
     assert_eq!(not_found.code(), ResultCode::OperationNotFound);
+    // A legacy row names no one: every attribution field is null.
+    assert_eq!(operation.attribution, OperationAttributionDto::default());
+    // An attributed row shows whose it is, and whether that holder works.
+    let attributed = enabled
+        .service
+        .show_operation(&repo, operations::operation_id(COMMENT_OPERATION))
+        .unwrap()
+        .attribution;
+    assert_eq!(
+        attributed,
+        OperationAttributionDto {
+            request_id: Some(REQUEST_ID.to_owned()),
+            command: Some("comment add".to_owned()),
+            author: Some("Grace Hopper <grace@example.invalid>".to_owned()),
+            host: Some("elsewhere".to_owned()),
+            pid: Some(1),
+            started_at: Some("2023-11-14T22:12:40Z".to_owned()),
+            comment_id: Some(COMMENT_ID.to_owned()),
+            live: Some(true),
+        }
+    );
     golden::assert_contract(
         &ContractCase {
             name: "failure_operation_not_found",
@@ -3200,7 +3360,7 @@ fn every_stored_operation_shape_matches_the_operation_schema() {
         );
     }
 
-    assert_eq!(shapes.len(), 7);
+    assert_eq!(shapes.len(), 8);
     for operation in shapes {
         let value = serde_json::to_value(&operation).unwrap();
         schema::check_published("operation.schema.json", &value).unwrap();

@@ -8107,20 +8107,34 @@ fn context_git_failure_after_branch_creation_stays_pending_until_exact_retry() {
         RepositoryErrorKind::Git
     );
     let fresh = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    // The pending row holds its own item: a preparation of the item under
+    // another operation ID is refused for it.
     assert_eq!(
         context_error(fresh.prepare_context(target(
             &fixture.root,
-            AuthoringKind::Ticket,
-            support::ticket_id(),
+            AuthoringKind::Document,
+            support::document_id(),
             ContextIntent::Create,
         )))
         .kind,
         RepositoryErrorKind::RecoveryRequired,
     );
+    // It holds no other item: another item's preparation goes on.
+    assert!(matches!(
+        fresh.prepare_context(target(
+            &fixture.root,
+            AuthoringKind::Ticket,
+            support::ticket_id(),
+            ContextIntent::Create,
+        )),
+        Ok(ContextProvisionOutcome::Created(_))
+    ));
+    // The exact retry finishes the row.
     assert!(matches!(
         fresh.prepare_context(request()),
         Ok(ContextProvisionOutcome::Created(_))
     ));
+    assert!(fresh.recovery_inspection(&fixture.root).unwrap().is_empty());
 }
 
 const FIXTURE_AUTHOR: &str = "Manyhands Test <manyhands-test@example.invalid>";

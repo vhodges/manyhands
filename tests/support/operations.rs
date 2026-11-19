@@ -347,3 +347,73 @@ impl LiveIndexOwner {
             .unwrap();
     }
 }
+
+/// Whose an operation row is, as the attribution columns record it.
+pub struct Attribution<'a> {
+    pub request: Option<&'a str>,
+    pub command: Option<&'a str>,
+    pub author: Option<&'a str>,
+    pub host: Option<&'a str>,
+    pub pid: Option<i64>,
+    pub started_at: Option<i64>,
+}
+
+/// Writes `attribution` on the local row `id` and, when given, its
+/// `comment_id`.
+pub fn attribute_local(
+    data_directory: &Path,
+    id: &str,
+    attribution: &Attribution<'_>,
+    comment_id: Option<&str>,
+) {
+    let changed = items::index(data_directory)
+        .execute(
+            "UPDATE operation_records
+                SET request_ulid = ?2, command = ?3, author = ?4, host = ?5, pid = ?6,
+                    started_at = ?7, comment_id = ?8
+              WHERE operation_ulid = ?1",
+            params![
+                id,
+                attribution.request,
+                attribution.command,
+                attribution.author,
+                attribution.host,
+                attribution.pid,
+                attribution.started_at,
+                comment_id
+            ],
+        )
+        .unwrap();
+    assert_eq!(changed, 1, "the local row {id}");
+}
+
+/// Writes `attribution` on the remote row `id`.
+pub fn attribute_remote(data_directory: &Path, id: &str, attribution: &Attribution<'_>) {
+    let changed = items::index(data_directory)
+        .execute(
+            "UPDATE remote_operation_records
+                SET request_ulid = ?2, command = ?3, author = ?4, host = ?5, pid = ?6,
+                    started_at = ?7
+              WHERE operation_ulid = ?1",
+            params![
+                id,
+                attribution.request,
+                attribution.command,
+                attribution.author,
+                attribution.host,
+                attribution.pid,
+                attribution.started_at
+            ],
+        )
+        .unwrap();
+    assert_eq!(changed, 1, "the remote row {id}");
+}
+
+/// Stands in for the system's process table: only the listed pids exist.
+pub struct ProcessTable(pub Vec<u32>);
+
+impl manyhands::repository::ProcessProbe for ProcessTable {
+    fn exists(&self, pid: u32) -> bool {
+        self.0.contains(&pid)
+    }
+}

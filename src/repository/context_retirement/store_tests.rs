@@ -596,6 +596,7 @@ fn retirement_selected_identity_cannot_be_borrowed_for_refresh() {
         RepositoryOperation::RefreshRepository,
         operation,
         "",
+        0,
     );
     assert!(
         matches!(begin, Err(ref e) if e.kind == RepositoryErrorKind::RecoveryRequired),
@@ -660,6 +661,7 @@ fn retirement_reserved_observer_cannot_be_replayed_restarted_or_used_as_local_id
         RepositoryOperation::SaveTicket,
         observer,
         "unrelated",
+        0,
     );
     assert!(
         local.is_err(),
@@ -719,6 +721,7 @@ fn retirement_refresh_requires_exact_due_handoff_and_intact_companion() {
             RepositoryOperation::RefreshRepository,
             operation,
             "",
+            0,
         );
         assert_eq!(preflight.is_ok(), case == "due", "{case}: preflight");
         assert_eq!(begin.is_ok(), case == "due", "{case}: transactional begin");

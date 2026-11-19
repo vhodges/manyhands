@@ -698,6 +698,15 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
             put("Committed", Some(flag(operation.committed)));
             put("Files changed", Some(flag(operation.files_changed)));
             put("Git changed", Some(flag(operation.git_state_changed)));
+            // What a synchronization's row last saw, for the person to
+            // decide with.
+            if let Some(evidence) = &operation.evidence {
+                put("Remote branch seen", evidence.remote_ref_present.map(flag));
+                put("Remote branch at", evidence.remote_oid.clone());
+                put("Local branch at", evidence.local_oid.clone());
+                put("Push of", evidence.push_oid.clone());
+                put("Push returned", Some(flag(evidence.push_returned)));
+            }
             if let Some(retirement) = &operation.retirement {
                 put("Request retained", retirement.request_id.clone());
                 put("Retirement phase", Some(retirement.phase.clone()));

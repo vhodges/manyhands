@@ -108,12 +108,15 @@ contract_enum!(
     /// `key_unregistered` is the key taken out of the key list, with the
     /// record that Manyhands made its files.
     ///
-    /// `operation_closed` is a pending local operation closed as
-    /// abandoned, so that it no longer refuses other operations on its
-    /// repository. With it goes the record of the unfinished request
-    /// that began the operation, `request_released`, listed when there
-    /// is one: that request's ID is then free. Neither touches a file
-    /// under the repository's root or anything Git holds.
+    /// `operation_closed` is a pending operation closed as abandoned, so
+    /// that it no longer refuses other operations on its repository. For a
+    /// synchronization whose push nothing answered, `push_marked_rejected`
+    /// follows: the push is recorded as refused, so that a later
+    /// synchronization of its branch no longer counts it as unanswered.
+    /// With them goes the record of the unfinished request that began the
+    /// operation, `request_released`, listed when there is one: that
+    /// request's ID is then free. None of the three touches a file under
+    /// the repository's root or anything Git holds, or contacts a remote.
     ///
     /// `host_pinned` is a host that has no pin given one: the key the
     /// request names, once the host is seen to present it.
@@ -174,6 +177,7 @@ contract_enum!(
         PublicKeyFileDeleted => "public_key_file_deleted",
         KeyUnregistered => "key_unregistered",
         OperationClosed => "operation_closed",
+        PushMarkedRejected => "push_marked_rejected",
         RequestReleased => "request_released",
         HostPinned => "host_pinned",
         HostPinReplaced => "host_pin_replaced",
@@ -735,6 +739,36 @@ pub struct OperationAbandonPreviewDto {
     /// branch, a worktree, the index or the configuration. It never
     /// does: this is false.
     pub git_state_changed: bool,
+    /// What the remote journal shows of the push a synchronization left,
+    /// for the person to decide with. Null for an operation of the local
+    /// journal.
+    pub evidence: Option<OperationAbandonEvidenceDto>,
+}
+
+/// What the preview of the abandon of a synchronization shows of the push
+/// it left. The remote is not contacted: what is said of it is what the
+/// operation's row last saw. Each is null where there is nothing to say.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OperationAbandonEvidenceDto {
+    /// Whether the branch the operation publishes to was on the remote when
+    /// the row last looked. Null for a row that recorded no look, and for
+    /// one whose push the remote took after its last look.
+    pub remote_ref_present: Option<bool>,
+    /// The commit the operation's local branch names now. Null when the
+    /// branch is not there.
+    pub local_oid: Option<String>,
+    /// The commit the remote branch named when the row last looked. Null
+    /// when it was not there, when the row recorded no look, and when the
+    /// push returned after that look.
+    pub remote_oid: Option<String>,
+    /// The commit the operation set out to push. Null when it recorded no
+    /// push.
+    pub push_oid: Option<String>,
+    /// Whether that push returned after the row's last look: the remote
+    /// took it, and nothing is said of the branch for that reason. A
+    /// cancellation acknowledged as the push returned records the step
+    /// before the push as its last, so this alone says the push went out.
+    pub push_returned: bool,
 }
 
 /// What a preview of `key delete` shows: the key, and the files that
@@ -847,7 +881,7 @@ pub(crate) fn authority_text(host: &str, port: u16) -> String {
     }
 }
 
-/// The `data` of a `prepare` envelope: the preview, or, for the two
+/// The `data` of a `prepare` envelope: the preview, or, for the
 /// refusals that report any, what the refusal is about. A `prepare`
 /// that gives neither carries no data: every other rejection, and a
 /// no-op for a command whose end state already holds.
@@ -859,6 +893,11 @@ pub enum PrepareDataDto {
     HostReplacement(HostReplacementDto),
     /// Of `document promote` and `ticket close`, refused for their blockers.
     LifecycleBlocked(LifecycleBlockedDto),
+    /// Of a preview refused `busy` or `recovery_required` because another
+    /// operation's row is unfinished: that operation, as an execute's data
+    /// names it (`blocked.schema.json`). An `operation abandon` of a
+    /// synchronization another process still works under is one.
+    Blocked(BlockedDto),
 }
 
 impl PrepareDataDto {
@@ -866,7 +905,7 @@ impl PrepareDataDto {
     pub fn preview(&self) -> Option<&PreviewDto> {
         match self {
             Self::Preview(preview) => Some(preview),
-            Self::HostReplacement(_) | Self::LifecycleBlocked(_) => None,
+            Self::HostReplacement(_) | Self::LifecycleBlocked(_) | Self::Blocked(_) => None,
         }
     }
 
@@ -874,9 +913,81 @@ impl PrepareDataDto {
     pub fn into_preview(self) -> Option<PreviewDto> {
         match self {
             Self::Preview(preview) => Some(*preview),
-            Self::HostReplacement(_) | Self::LifecycleBlocked(_) => None,
+            Self::HostReplacement(_) | Self::LifecycleBlocked(_) | Self::Blocked(_) => None,
         }
     }
+}
+
+/// The operation whose unfinished row stands in a request's way, and
+/// whose it is: the fields `operation show` gives of it, with the same
+/// names and the same meaning of `live`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BlockerDto {
+    pub operation_id: String,
+    pub family: OperationFamily,
+    /// Null only when the answer could not read the operation's row and
+    /// names it by what the wait knew of it: its ID, its family and that
+    /// its holder still worked. Every other field is then null too.
+    pub action: Option<OperationAction>,
+    pub item_id: Option<String>,
+    pub request_id: Option<String>,
+    pub author: Option<String>,
+    pub host: Option<String>,
+    pub pid: Option<i64>,
+    /// When the request began the operation, in UTC.
+    pub started_at: Option<String>,
+    /// Whether its holder still worked when the request was answered: the
+    /// judgment that made the answer `busy` (true) or `recovery_required`
+    /// (false). Null when the row names neither a host nor a process.
+    pub live: Option<bool>,
+}
+
+impl BlockerDto {
+    /// The blocker as the domain knew it alone: its operation and its
+    /// journal, and whether its holder worked. Every other field is null.
+    pub(crate) fn known(blocker: &crate::repository::Blocker) -> Self {
+        Self {
+            operation_id: blocker.operation_id.to_string(),
+            family: blocker.family,
+            action: None,
+            item_id: None,
+            request_id: None,
+            author: None,
+            host: None,
+            pid: None,
+            started_at: None,
+            live: blocker.live,
+        }
+    }
+
+    /// The blocker as `operation show` reads `operation`.
+    pub(crate) fn of(operation: &crate::repository::OperationDto, fallback_id: String) -> Self {
+        let attribution = &operation.attribution;
+        Self {
+            operation_id: operation.operation_id.clone().unwrap_or(fallback_id),
+            family: operation.family,
+            action: Some(operation.action),
+            item_id: operation.item_id.clone(),
+            request_id: attribution.request_id.clone(),
+            author: attribution.author.clone(),
+            host: attribution.host.clone(),
+            pid: attribution.pid,
+            started_at: attribution.started_at.clone(),
+            live: attribution.live,
+        }
+    }
+}
+
+/// The `data` of a `busy` or `recovery_required` answer refused for
+/// another operation's unfinished row: that operation. It replaces the
+/// command's own data in that answer (a ticket save's, a comment's, a
+/// synchronization's), as `lifecycle_blocked.schema.json` is the data of a
+/// lifecycle preview refused for what stands in its way; `blocked.schema.json`
+/// publishes it. A lifecycle's answer keeps its own data and names none. It
+/// is never stored: a finished record keeps the command's own data.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BlockedDto {
+    pub blocker: BlockerDto,
 }
 
 /// The `data` of a mutation's envelope: the shape of the command's family.
@@ -904,6 +1015,9 @@ pub enum MutationDataDto {
     Poll(PollMutationDto),
     PollRetirement(PollRetirementMutationDto),
     ResolveHistory(ItemResolveHistoryMutationDto),
+    /// Of a `busy` or `recovery_required` answer that names the operation
+    /// in its way. It is never stored: a record keeps the command's own.
+    Blocked(BlockedDto),
 }
 
 contract_enum!(
@@ -2286,7 +2400,10 @@ impl MutationDataDto {
             | Self::PollRetirement(_)
             | Self::ContextRetirement(_)
             // A history resolution never reaches the host.
-            | Self::ResolveHistory(_) => None,
+            | Self::ResolveHistory(_)
+            // Nor is a request refused for another operation's row
+            // refused for its host.
+            | Self::Blocked(_) => None,
         }
     }
 
