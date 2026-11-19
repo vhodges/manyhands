@@ -436,7 +436,11 @@ pub(super) fn confirmed_as(
     schema::check_published("envelope.schema.json", &value).expect("the envelope schema");
     // A republish carries data only for a host it stopped for, as a
     // synchronization does.
-    if !value["data"].is_null() {
+    // One refused for another operation's unfinished row names that
+    // operation instead.
+    if value["data"]["blocker"].is_object() {
+        schema::check_published(BLOCKED_SCHEMA, &value["data"]).expect("the blocked schema");
+    } else if !value["data"].is_null() {
         schema::check_published(SYNCHRONIZATION_SCHEMA, &value["data"])
             .expect("the synchronization data schema");
     }
@@ -1074,7 +1078,7 @@ fn c4_republish_busy() -> Result<(), FixtureError> {
 fn c4_republish_local_sync_unfinished() -> Result<(), FixtureError> {
     let (w, _) = deleted(Recorded::ByFetch, true)?;
     let (confirmation, _) = previewed(&w)?;
-    leave_local_sync_conflict(&w);
+    let local_sync = leave_local_sync_conflict(&w);
     let pushes = accepted(&w.server);
     let refused = confirmed(&w, REPUBLISH, &confirmation);
     assert_eq!(
@@ -1084,7 +1088,15 @@ fn c4_republish_local_sync_unfinished() -> Result<(), FixtureError> {
         refused.message
     );
     assert_eq!(refused.outcome, Outcome::Blocked);
-    assert_eq!(actions(&refused), [RecoveryActionKind::RepoInspect]);
+    // The local synchronization in its way is named, and offered to show.
+    assert_eq!(
+        actions(&refused),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationShow
+        ]
+    );
+    assert_blocked_by_local_sync(&refused, local_sync);
     assert!(record(&w, REPUBLISH).is_none());
     assert_eq!(accepted(&w.server), pushes);
     assert_eq!(served(&w)?, None);

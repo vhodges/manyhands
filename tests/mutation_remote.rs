@@ -784,13 +784,15 @@ fn call_before_the_stores_hold_anything(
     // A resume that took up a synchronization carries that
     // synchronization's data: a host's, or a conflict's, by its tag. One
     // that took up a comment's publication carries the comment's, and one
-    // of a local-context sync the gate's (R-20).
+    // of a local-context sync the gate's (R-20). One refused for another
+    // operation's unfinished row names that operation instead.
     let synchronization = matches!(
         envelope.command.as_str(),
         "item sync" | "repo sync" | "operation resume"
     );
     if synchronization && !value["data"].is_null() {
         let data_schema = match value["data"]["type"].as_str() {
+            _ if value["data"]["blocker"].is_object() => BLOCKED_SCHEMA,
             Some("synchronization_conflict") => CONFLICT_SCHEMA,
             Some("comment") => COMMENT_SCHEMA,
             Some("local_context_sync") => LOCAL_CONTEXT_SYNC_SCHEMA,
@@ -1295,6 +1297,21 @@ fn leave_local_sync_conflict(w: &World) -> OperationId {
     assert_eq!(stopped.code, ResultCode::RecoveryRequired);
     OperationId::parse(stopped.operation_id.as_deref().expect("its operation"))
         .expect("an operation ID")
+}
+
+/// The data of an answer refused for another operation's unfinished row.
+const BLOCKED_SCHEMA: &str = "blocked.schema.json";
+
+/// Asserts that `envelope` was refused for the local synchronization
+/// `operation` that `leave_local_sync_conflict` left: its data names that
+/// operation, which no call is at work under, in place of the command's
+/// own.
+fn assert_blocked_by_local_sync(envelope: &Envelope<MutationDataDto>, operation: OperationId) {
+    let data = serde_json::to_value(envelope).expect("an envelope serializes")["data"].clone();
+    schema::check_published(BLOCKED_SCHEMA, &data).expect("the blocked schema");
+    assert_eq!(data["blocker"]["operation_id"], operation.to_string());
+    assert_eq!(data["blocker"]["family"], "local");
+    assert_eq!(data["blocker"]["live"], false);
 }
 
 /// A synchronization that stops with an error after it reserved.
