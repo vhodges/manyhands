@@ -1639,6 +1639,46 @@ impl RepositoryService {
         })
     }
 
+    /// What `reserve` comes to, tried again while it answers `Busy` and
+    /// another operation that holds the reservation of the repository at
+    /// `root` (`reservation_holder`, not `own`) has a live holder: the call
+    /// waits for it as a writer waits for a live peer's row, a poll at a
+    /// time, for as long as `WaitPolicy` lets it (`slept`).
+    ///
+    /// Only the reservation of a new operation, one with no row yet, is
+    /// given to it: nothing of the call is recorded before it, so an
+    /// attempt that is refused leaves nothing to undo, and the next is
+    /// the first. Between two attempts the call holds nothing: each
+    /// attempt is one registry transaction, which has ended when it
+    /// answers, and no lease or guard is taken around it.
+    ///
+    /// Any other answer, or an error, is given back as it is. So is a
+    /// `Busy` that no live holder explains: no operation holds the
+    /// reservation (a closure that holds the item, or another item's
+    /// waiting conflict, refused it), or the one that does is stale or
+    /// cannot be read; and the last `Busy` once the budget is spent. The
+    /// caller then answers it as it answers a `Busy` it was given at once.
+    pub(crate) fn reserving(
+        &self,
+        root: &Path,
+        own: OperationId,
+        mut reserve: impl FnMut() -> Result<RemoteReservationOutcome, RepositoryError>,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        let mut wait = self.start_wait();
+        loop {
+            let outcome = reserve()?;
+            if !matches!(outcome, RemoteReservationOutcome::Busy) {
+                return Ok(outcome);
+            }
+            let live = self.reservation_holder(root, own).is_some_and(|holder| {
+                self.judge_blocker(root, &holder).judged == crate::repository::blocker::Judged::Live
+            });
+            if !live || !self.slept(&mut wait) {
+                return Ok(outcome);
+            }
+        }
+    }
+
     /// Read-only correlation adapter: existence and historical authority, never
     /// a reservation token or permission to restart.
     pub(crate) fn comment_child_authority(

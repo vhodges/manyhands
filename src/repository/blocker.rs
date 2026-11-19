@@ -15,6 +15,12 @@
 //! finish. Still refused once `WaitPolicy::budget` has passed, it answers
 //! `busy`, naming the holder. A stale holder is not waited for: the
 //! refusal stays `recovery_required` and names it. Neither leaves a row.
+//!
+//! A new synchronization, the publication of a comment, an `item sync`, a
+//! `repo sync` or a republish, waits the same way, with the same budget,
+//! for another operation that holds the repository's remote reservation
+//! while that operation's holder is live; see
+//! `RepositoryService::reserving`.
 
 use std::{path::Path, sync::Arc, time::Duration};
 
@@ -268,6 +274,19 @@ impl RepositoryService {
             seen: if live { wait.seen_live.clone() } else { None },
             ..blocker
         };
+        if !self.slept(wait) {
+            return Waited::Refused(busy(error, blocker));
+        }
+        Waited::Again
+    }
+
+    /// One more sleep of the writer waiting `wait`, while its budget lasts:
+    /// it sleeps `WaitPolicy::poll` (at least `SHORTEST_POLL`), with nothing
+    /// held, counts it, and is told to look again. Once the budget is spent,
+    /// by the service's clock or by the count of looks, so that a clock that
+    /// does not move cannot make it endless, it does not sleep and is told
+    /// to answer.
+    pub(crate) fn slept(&self, wait: &mut Wait) -> bool {
         let policy = self.wait_policy;
         let poll = policy.poll.max(SHORTEST_POLL);
         let polls = policy.budget.as_nanos() / poll.as_nanos();
@@ -275,11 +294,11 @@ impl RepositoryService {
         if wait.polls >= polls
             || elapsed >= i128::try_from(policy.budget.as_nanos()).unwrap_or(i128::MAX)
         {
-            return Waited::Refused(busy(error, blocker));
+            return false;
         }
         self.sleeper.sleep(poll);
         wait.polls += 1;
-        Waited::Again
+        true
     }
 }
 

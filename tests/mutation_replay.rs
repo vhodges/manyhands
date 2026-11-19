@@ -2230,6 +2230,9 @@ mod cache_loss;
 #[path = "mutation_replay/reenter.rs"]
 mod reenter;
 
+#[path = "mutation_replay/publication_wait.rs"]
+mod publication_wait;
+
 #[path = "mutation_replay/slug_assign.rs"]
 mod slug_assign;
 

@@ -6031,6 +6031,15 @@ impl RepositoryService {
             }
             prior = Some(record.clone().into());
             RemoteReservationOutcome::Reserved(owner)
+        } else if existing.is_none() && execution.is_none() {
+            // A new synchronization has done nothing yet that a refusal
+            // would leave half done: it waits for a live holder of the
+            // reservation. One that takes up its own row, which holds what
+            // an earlier call did, and a promotion's child, which answers
+            // for its parent, are answered at once.
+            self.reserving(&root, request.operation_id, || {
+                self.synchronization_reserve_owned(&root, request.operation_id, &target, None)
+            })?
         } else {
             self.synchronization_reserve_owned(&root, request.operation_id, &target, execution)?
         };
@@ -7545,9 +7554,11 @@ impl RepositoryService {
         let prior: Option<reservation::RemoteOperationInspection> =
             existing.clone().map(Into::into);
         let reservation = match &existing {
-            None => {
-                self.synchronization_reserve_owned(&root, request.operation_id, &target, None)?
-            }
+            // A new operation waits for a live holder of the reservation,
+            // as a new synchronization does.
+            None => self.reserving(&root, request.operation_id, || {
+                self.synchronization_reserve_owned(&root, request.operation_id, &target, None)
+            })?,
             Some(record) => {
                 if record.target != target {
                     return Err(SynchronizationError::RecoveryRequired);

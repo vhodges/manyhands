@@ -16486,3 +16486,175 @@ fn unresolved_history_ends_the_operation_and_frees_the_reservation() {
         );
     }
 }
+
+/// A new synchronization waits for a live holder of the reservation, a
+/// poll at a time, and is answered `Busy` once the budget is spent. A call
+/// that takes up its own stopped operation does not wait: that operation
+/// holds what an earlier call did (here a checkpointed fetch), so a
+/// reservation refused there is answered `Busy` at once and never tried
+/// again. Neither begins or changes a row.
+#[test]
+fn only_a_new_synchronization_waits_for_a_live_reservation_holder() {
+    use std::sync::atomic::AtomicU64;
+
+    /// A clock that moves only when the waiting call sleeps on it.
+    struct StepTime {
+        nanos: AtomicU64,
+        slept: AtomicU64,
+    }
+    impl crate::repository::mutation::Clock for StepTime {
+        fn now(&self) -> time::OffsetDateTime {
+            time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap()
+                + time::Duration::nanoseconds(
+                    i64::try_from(self.nanos.load(Ordering::SeqCst)).unwrap(),
+                )
+        }
+    }
+    impl Sleeper for StepTime {
+        fn sleep(&self, duration: std::time::Duration) {
+            self.nanos.fetch_add(
+                u64::try_from(duration.as_nanos()).unwrap(),
+                Ordering::SeqCst,
+            );
+            self.slept.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    /// A process table that holds only `LIVE_PID`.
+    struct OnlyLive;
+    impl ProcessProbe for OnlyLive {
+        fn exists(&self, pid: u32) -> bool {
+            pid == LIVE_PID
+        }
+    }
+    const LIVE_PID: u32 = 4242;
+
+    for restart in [false, true] {
+        let (root, data, service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        repository
+            .remote("origin", "ssh://example.invalid/fixture.git")
+            .unwrap();
+        fs::write(
+            root.path().join(".manyhands/config.toml"),
+            "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+        )
+        .unwrap();
+        let head = commit_all(&repository);
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let configuration = service
+            .observation_configuration(root.path(), &plan)
+            .unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())
+        })
+        .unwrap();
+        let own = OperationId::new();
+        if restart {
+            // An earlier call of `own` reserved, checkpointed its fetch and
+            // was interrupted.
+            let RemoteReservationOutcome::Reserved(owner) = service
+                .reserve_remote_operation(
+                    root.path(),
+                    own,
+                    &RemoteOperationTarget::for_primary_synchronization(&plan),
+                )
+                .unwrap()
+            else {
+                panic!("the earlier call's reservation")
+            };
+            service
+                .checkpoint_synchronization(
+                    root.path(),
+                    &owner,
+                    state::SynchronizationCheckpoint::FetchPrepared,
+                    &state::SynchronizationEvidence {
+                        expected_oid: Some(head),
+                        local_oid: Some(head),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+                .unwrap()
+                .execute(
+                    "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+                    [own.to_string()],
+                )
+                .unwrap();
+        }
+        // Another operation holds the reservation, for a process of this
+        // host that exists.
+        let holder = OperationId::new();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            AuthoringKind::Ticket,
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            service
+                .reserve_remote_operation(root.path(), holder, &target)
+                .unwrap(),
+            RemoteReservationOutcome::Reserved(_)
+        ));
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        db.execute(
+            "UPDATE remote_operation_records SET host=?2, pid=?3 WHERE operation_ulid=?1",
+            rusqlite::params![holder.to_string(), this_host(), LIVE_PID],
+        )
+        .unwrap();
+        let rows = || {
+            db.prepare("SELECT operation_ulid, phase, sync_checkpoint, owner_epoch FROM remote_operation_records ORDER BY id")
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let before = rows();
+
+        let time = Arc::new(StepTime {
+            nanos: AtomicU64::new(0),
+            slept: AtomicU64::new(0),
+        });
+        let waiting = RepositoryService::open_at(data.path())
+            .unwrap()
+            .with_clock_for_testing(time.clone())
+            .with_sleeper_for_testing(time.clone())
+            .with_wait_policy_for_testing(WaitPolicy {
+                budget: std::time::Duration::from_millis(250),
+                poll: std::time::Duration::from_millis(50),
+            })
+            .with_process_probe_for_testing(Arc::new(OnlyLive));
+        let result = waiting.synchronize_remote(
+            SynchronizeRemoteRequest {
+                operation_id: own,
+                restart,
+                ..request(root.path())
+            },
+            &mut SessionCredentials::new(NoPrompt),
+        );
+        assert!(
+            matches!(result, Err(SynchronizationError::Busy)),
+            "restart={restart}: {result:?}"
+        );
+        assert_eq!(
+            time.slept.load(Ordering::SeqCst),
+            if restart { 0 } else { 5 },
+            "restart={restart}"
+        );
+        assert_eq!(rows(), before, "restart={restart}");
+    }
+}
