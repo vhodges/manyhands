@@ -423,3 +423,138 @@ fn a_local_synchronization_target_names_what_was_synchronized() {
         assert_eq!(error.code(), ResultCode::InternalError, "{rest:?}");
     }
 }
+
+/// A process table that holds exactly these processes.
+struct Table(Vec<u32>);
+
+impl crate::repository::ProcessProbe for Table {
+    fn exists(&self, pid: u32) -> bool {
+        self.0.contains(&pid)
+    }
+}
+
+/// Processes of this host other than this one: two that exist and one
+/// that is gone.
+const LIVE_A: u32 = 4_000_001;
+const LIVE_B: u32 = 4_000_002;
+const GONE: u32 = 4_000_009;
+
+/// Who a writer refused for a lease or the index's lock is told is at
+/// work. A row a call works under by its own evidence, a fresh index
+/// heartbeat, comes first; then, of the rows a call may be at work under
+/// only because the repository's lease is held, the newest, in a state a
+/// call holds the lease in. A row whose call has ended, `failed` or a
+/// stale `indexing`, is never named for the lease, so a lease whose holder
+/// has no row of its own is answered with nothing at work.
+#[test]
+fn a_writer_held_off_by_a_lease_is_told_of_the_row_a_call_holding_it_works_under() {
+    const A: &str = "01ARZ3NDEKTSV4RRFFQ69G5F0A";
+    const B: &str = "01ARZ3NDEKTSV4RRFFQ69G5F0B";
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    // (case, rows: (operation, state, pid, touched at), whether the
+    // repository's lease is held, the operation named)
+    type Row<'a> = (
+        &'a str,
+        &'a [(&'a str, &'a str, u32, i64)],
+        bool,
+        Option<&'a str>,
+    );
+    let rows: [Row<'_>; 8] = [
+        (
+            "a lease whose holder has no row, beside an older failed row",
+            &[(A, "failed", LIVE_A, 1)],
+            true,
+            None,
+        ),
+        (
+            "a failed row, then a row a call works under the lease in",
+            &[(A, "failed", LIVE_A, 1), (B, "created", LIVE_B, 1)],
+            true,
+            Some(B),
+        ),
+        (
+            "two rows a call may work under the lease in: the newest",
+            &[(A, "created", LIVE_A, 1), (B, "created", LIVE_B, 1)],
+            true,
+            Some(B),
+        ),
+        (
+            "a fresh heartbeat before a newer row of the lease",
+            &[(A, "indexing", LIVE_A, now), (B, "created", LIVE_B, 1)],
+            true,
+            Some(A),
+        ),
+        (
+            "a fresh heartbeat after an older row of the lease",
+            &[(A, "created", LIVE_A, 1), (B, "indexing", LIVE_B, now)],
+            true,
+            Some(B),
+        ),
+        (
+            "a stale heartbeat, the lease held",
+            &[(A, "indexing", LIVE_A, 1)],
+            true,
+            None,
+        ),
+        (
+            "a row of a process that is gone",
+            &[(A, "created", GONE, 1)],
+            true,
+            None,
+        ),
+        (
+            "the lease free: the index's lock was in the way",
+            &[(A, "created", LIVE_A, 1)],
+            false,
+            None,
+        ),
+    ];
+    for (case, stored, held, named) in rows {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let git = git2::Repository::init(&root_path).unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path())
+            .unwrap()
+            .with_process_probe_for_testing(std::sync::Arc::new(Table(vec![LIVE_A, LIVE_B])));
+        let db = Connection::open(data.path().join(crate::repository::REGISTRY_FILE)).unwrap();
+        db.execute(
+            "INSERT INTO repositories(root_path, enabled_at, accessibility, refresh_required)
+             VALUES(?1, 7, 'accessible', 0)",
+            [root_path.to_str().unwrap()],
+        )
+        .unwrap();
+        for (operation, state, pid, touched) in stored {
+            db.execute(
+                "INSERT INTO operation_records
+                    (repository_id, root_path, operation_ulid, action, target, state,
+                     observed_at, host, pid)
+                 VALUES (1, ?1, ?2, 'save_ticket', '', ?3, ?4, ?5, ?6)",
+                params![
+                    root_path.to_str().unwrap(),
+                    operation,
+                    state,
+                    touched,
+                    crate::repository::liveness::this_host(),
+                    i64::from(*pid)
+                ],
+            )
+            .unwrap();
+        }
+        let lease = held.then(|| {
+            crate::repository::repository_lease(&git, &root_path, RepositoryOperation::Read)
+                .unwrap()
+        });
+
+        let found = match service.live_holder(&root_path) {
+            crate::repository::LiveHolder::Live(blocker) => {
+                assert_eq!(blocker.live, Some(true), "{case}");
+                Some(blocker.operation_id.to_string())
+            }
+            crate::repository::LiveHolder::Nothing => None,
+            crate::repository::LiveHolder::Unreadable => panic!("{case}: unreadable"),
+        };
+        drop(lease);
+        assert_eq!(found.as_deref(), named, "{case}");
+    }
+}

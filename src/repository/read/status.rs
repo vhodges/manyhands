@@ -90,6 +90,16 @@ impl<'a> Holders<'a> {
         }
     }
 
+    /// `of`, judging every local row as if no call held the repository's
+    /// lease: a row reads live only by its own evidence, a fresh index
+    /// heartbeat, or, for a remote row, a held reservation.
+    fn without_lease(service: &'a RepositoryService) -> Self {
+        Self {
+            lease_held: std::cell::OnceCell::from(false),
+            ..Self::of(service)
+        }
+    }
+
     /// The attribution a row names. `heartbeat` is whether the row shows a
     /// call at work under it by the heartbeat; `local` is the root of a
     /// local row, whose call works under that repository's lease, and
@@ -179,6 +189,21 @@ impl<'a> Holders<'a> {
         self.attribution(stored, false, None, open && holds_reservation)
     }
 }
+
+/// The states of a local row no call holding the repository's lease works
+/// under: a comment's, completed, that waits for its registration; one an
+/// index owner works under with no lease (`indexing`, judged by its
+/// heartbeat alone) or that a promotion fenced (`index_invalidated`); and
+/// one whose hand-off ended without the index (`failed`, `retry`). A call
+/// takes the lease up again only to take such a row over, which moves it
+/// out of these states first.
+const LEASELESS_STATES: [&str; 5] = [
+    "completed",
+    "indexing",
+    "index_invalidated",
+    "failed",
+    "retry",
+];
 
 /// A time a store recorded, in seconds. One that cannot be written as a
 /// timestamp was not written by any store.
@@ -1042,13 +1067,25 @@ impl RepositoryService {
         })
     }
 
-    /// The first unfinished operation of the repository at `root` whose
-    /// holder still works, as `list_operations` judges it, for a writer
-    /// that could not take a lease or the index's lock in time: that is
-    /// what such a refusal is for while one is at work. `Nothing` when the
-    /// repository has none, `Unreadable` when it cannot be read in
-    /// `BLOCKER_READS` tries. The repository is the one registered at
-    /// `root`; a root with no registration has local rows only.
+    /// The unfinished operation of the repository at `root` whose holder is
+    /// at work, for a writer that could not take a lease or the index's
+    /// lock in time: what such a refusal is for while one is at work.
+    ///
+    /// The writer was refused the lease, so it is nearly always held, and
+    /// by the rule `list_operations` judges with, every local row of
+    /// another process that exists then reads live, a row whose call has
+    /// ended among them. So a row live by its own evidence comes first: a
+    /// fresh index heartbeat, or a held reservation, the newest such.
+    /// Then, of the local rows live only because the lease is held, the
+    /// newest, the lease's holder being most likely the last to begin, and
+    /// only one in a state a call holds the lease in (not
+    /// `LEASELESS_STATES`). A lease whose holder has no row of its own, as
+    /// a snapshot's lease has none, so finds nothing at work.
+    ///
+    /// `Nothing` when no row is at work, `Unreadable` when the repository
+    /// cannot be read in `BLOCKER_READS` tries. The repository is the one
+    /// registered at `root`; a root with no registration has local rows
+    /// only.
     pub(crate) fn live_holder(&self, root: &std::path::Path) -> crate::repository::LiveHolder {
         use crate::repository::LiveHolder;
         (0..BLOCKER_READS)
@@ -1076,18 +1113,19 @@ impl RepositoryService {
                 .optional()?;
             let repo =
                 ResolvedRepository::registered(registration.unwrap_or_default(), root.to_owned());
-            let holders = Holders::of(self);
-            let mut items: Vec<OperationDto> =
-                repository_operations(connection, &repo, &holders, registration.is_some())?
-                    .into_iter()
-                    .filter(|operation| operation.listed)
-                    .map(|operation| operation.dto)
-                    .collect();
-            sort_operations(&mut items);
-            Ok(items.into_iter().find_map(|operation| {
-                if operation.attribution.live != Some(true) {
-                    return None;
-                }
+            // The listed operations, judged by `holders`, newest first.
+            let listed = |holders: &Holders<'_>| -> Result<Vec<OperationDto>, ReadError> {
+                let mut items: Vec<OperationDto> =
+                    repository_operations(connection, &repo, holders, registration.is_some())?
+                        .into_iter()
+                        .filter(|operation| operation.listed)
+                        .map(|operation| operation.dto)
+                        .collect();
+                sort_operations(&mut items);
+                items.reverse();
+                Ok(items)
+            };
+            let named = |operation: OperationDto| {
                 let operation_id = OperationId::parse(operation.operation_id.as_deref()?).ok()?;
                 Some(crate::repository::Blocker {
                     family: operation.family,
@@ -1095,7 +1133,22 @@ impl RepositoryService {
                     live: Some(true),
                     seen: Some(Box::new(operation)),
                 })
-            }))
+            };
+            let by_evidence = listed(&Holders::without_lease(self))?
+                .into_iter()
+                .filter(|operation| operation.attribution.live == Some(true))
+                .find_map(named);
+            if by_evidence.is_some() {
+                return Ok(by_evidence);
+            }
+            Ok(listed(&Holders::of(self))?
+                .into_iter()
+                .filter(|operation| {
+                    operation.family == OperationFamily::Local
+                        && operation.attribution.live == Some(true)
+                        && !LEASELESS_STATES.contains(&operation.state.as_str())
+                })
+                .find_map(named))
         })
     }
 
