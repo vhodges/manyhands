@@ -2461,3 +2461,32 @@ fn a_takeover_records_this_process_as_holder_and_keeps_the_row_s_origin() {
         assert_eq!(whose(&f.db(), table, operation), expected, "{case}");
     }
 }
+
+/// A comment's publication left pending by its synchronization keeps what
+/// that synchronization was refused for: the operation in its way, which
+/// the comment's own answer names. The error is told as the submission's,
+/// with nothing of its text kept, and of the same kind.
+#[test]
+fn a_pending_publication_keeps_the_operation_its_synchronization_was_refused_for() {
+    let blocker = crate::repository::Blocker {
+        family: crate::repository::OperationFamily::Remote,
+        operation_id: OperationId::new(),
+        live: None,
+        seen: None,
+    };
+    let publication = pending_synchronization(SynchronizationError::Repository(
+        remote::state::recovery_required().with_blocker(Some(blocker.clone())),
+    ));
+    let CommentPublicationState::Pending {
+        reason: CommentPublicationPendingReason::Synchronization(error),
+    } = publication
+    else {
+        panic!("a pending publication");
+    };
+    let SynchronizationError::Repository(error) = *error else {
+        panic!("the synchronization's error");
+    };
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(error.operation, RepositoryOperation::SubmitComment);
+    assert_eq!(error.blocker(), Some(&blocker));
+}
