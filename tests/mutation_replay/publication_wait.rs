@@ -9,7 +9,7 @@
 //! this test process never sets up. A publication that completes needs the
 //! SSH targets.
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use manyhands::{
     repository::{
@@ -329,4 +329,258 @@ fn a_publication_whose_reservation_holder_finishes_inside_the_wait_goes_on() {
             "{entry:?}"
         );
     }
+}
+
+/// The peer's synchronization lets the reservation go and its index
+/// hand-off is at work, as a synchronization that published leaves them:
+/// its remote row is `completed` with its outcome and its index hand-off
+/// owed (as `classify_synchronization` writes it), and its local
+/// `refresh` row under the same operation is `indexing` under its index
+/// owner's first epoch, with a heartbeat fresh by the waiting service's
+/// clock, for the process `pid` of this host. `data` is the world's data
+/// directory.
+fn hand_off(data: &Path, holder: &str, pid: u32) {
+    let changed = items::index(data)
+        .execute(
+            "UPDATE remote_operation_records
+                SET phase = 'completed', outcome = 'completed',
+                    sync_checkpoint = 'discovery_pending', completed_step = 'before_discovery',
+                    expected_oid = ?2, local_oid = ?2, tracking_oid = ?2,
+                    primary_tracking_oid = ?2, push_oid = ?2, push_advertised_oid = ?2,
+                    authoritative_kind = 'published', authoritative_oid = ?2, index_pending = 1
+              WHERE operation_ulid = ?1",
+            [holder, operations::PUBLISHED_OID],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+    operations::insert_local(data, Some(holder), "refresh", "indexing", None);
+    let claimed = items::index(data)
+        .execute(
+            "UPDATE operation_records SET target = '', index_owner_epoch = 1
+              WHERE operation_ulid = ?1",
+            [holder],
+        )
+        .unwrap();
+    assert_eq!(claimed, 1);
+    operations::attribute_local(
+        data,
+        holder,
+        &operations::Attribution {
+            request: Some(PEER_REQUEST),
+            command: Some("comment add"),
+            author: None,
+            host: Some(&manyhands::repository::this_host()),
+            pid: Some(i64::from(pid)),
+            started_at: Some(operations::STORED_AT),
+        },
+        None,
+    );
+}
+
+/// `hand_off`, to run inside a sleep of the waiting call.
+fn hand_off_begins(world: &World, holder: &str, pid: u32) -> impl FnOnce() + Send + 'static {
+    let data = world.data.path().to_owned();
+    let holder = holder.to_owned();
+    move || hand_off(&data, &holder, pid)
+}
+
+/// What ends the peer's hand-off, to run inside a sleep of the waiting call.
+fn hand_off_ends(world: &World, holder: &str) -> impl FnOnce() + Send + 'static {
+    let data = world.data.path().to_owned();
+    let holder = holder.to_owned();
+    move || {
+        let changed = items::index(&data)
+            .execute(
+                "UPDATE operation_records SET state = 'completed'
+                  WHERE operation_ulid = ?1 AND action = 'refresh'",
+                [&holder],
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+    }
+}
+
+/// Asserts that `answer` names the peer's hand-off row as its blocker, held
+/// by `pid`, `live` as given.
+fn assert_names_the_hand_off(
+    answer: &Envelope<MutationDataDto>,
+    holder: &str,
+    pid: u32,
+    live: bool,
+    what: &str,
+) {
+    let blocker = blocker_of(answer);
+    assert_eq!(blocker["operation_id"], holder, "{what}: {answer:?}");
+    assert_eq!(blocker["family"], "local", "{what}");
+    assert_eq!(blocker["action"], "refresh", "{what}");
+    assert_eq!(blocker["request_id"], PEER_REQUEST, "{what}");
+    assert_eq!(blocker["pid"], pid, "{what}");
+    assert_eq!(blocker["live"], live, "{what}");
+}
+
+/// A publication whose reservation is refused because a peer's local row is
+/// unfinished, here the index hand-off of a peer's synchronization just
+/// after it let the reservation go, waits for it as a writer's begin waits
+/// for a live row: it goes on once the hand-off ends inside its first
+/// sleep; while the hand-off stays live it answers `busy` naming the row
+/// after the whole budget, reserving nothing; and behind a row whose holder
+/// is gone it is answered `recovery_required` at once, naming it stale.
+#[test]
+fn a_publication_refused_for_a_peer_s_hand_off_waits_while_its_holder_is_live() {
+    for entry in [Entry::ItemSync, Entry::RepoSync] {
+        let action = match entry {
+            Entry::CommentAdd | Entry::ItemSync => "synchronize_context",
+            Entry::RepoSync => "synchronize_primary",
+        };
+        let holder_only = |world: &World, holder: &str| {
+            assert_eq!(
+                left(world, holder).remote,
+                [(
+                    true,
+                    "synchronize_context".to_owned(),
+                    "completed".to_owned()
+                )],
+                "{entry:?}: nothing reserved"
+            );
+        };
+
+        // The hand-off ends inside the first sleep: the call goes on, past
+        // the reservation, to the transport.
+        let (world, clock, holder) = held(entry, LIVE_PID);
+        hand_off(world.data.path(), &holder, LIVE_PID);
+        clock.at_sleep(1, hand_off_ends(&world, &holder));
+        let answer = world.execute(REQUEST, entry.mutation(&world));
+        assert_eq!(clock.slept(), 1, "{entry:?}: {answer:?}");
+        assert_eq!(
+            answer.code,
+            ResultCode::InternalError,
+            "{entry:?}: {answer:?}"
+        );
+        assert_eq!(
+            left(&world, &holder).remote,
+            [
+                (false, action.to_owned(), "fetch_prepared".to_owned()),
+                (
+                    true,
+                    "synchronize_context".to_owned(),
+                    "completed".to_owned()
+                ),
+            ],
+            "{entry:?}"
+        );
+
+        // The hand-off stays live: `busy` after the whole budget.
+        let (world, clock, holder) = held(entry, LIVE_PID);
+        hand_off(world.data.path(), &holder, LIVE_PID);
+        let busy = world.execute(REQUEST, entry.mutation(&world));
+        assert_eq!(clock.slept(), 5, "{entry:?}: {busy:?}");
+        assert_eq!(
+            (busy.outcome, busy.code),
+            (Outcome::Error, ResultCode::Busy),
+            "{entry:?}: {busy:?}"
+        );
+        assert_eq!(
+            recovery_actions(&busy),
+            ["request.retry", "operation.show"],
+            "{entry:?}"
+        );
+        assert_names_the_hand_off(&busy, &holder, LIVE_PID, true, "live");
+        assert_eq!(world.record(REQUEST).map(|record| record.state), None);
+        holder_only(&world, &holder);
+
+        // The hand-off's holder is gone: `recovery_required` at once.
+        let (world, clock, holder) = held(entry, LIVE_PID);
+        hand_off(world.data.path(), &holder, DEAD_PID);
+        let refused = world.execute(REQUEST, entry.mutation(&world));
+        assert_eq!(clock.slept(), 0, "{entry:?}: {refused:?}");
+        assert_eq!(
+            (refused.outcome, refused.code),
+            (Outcome::Blocked, ResultCode::RecoveryRequired),
+            "{entry:?}: {refused:?}"
+        );
+        assert!(
+            recovery_actions(&refused).contains(&"operation.show"),
+            "{entry:?}: {refused:?}"
+        );
+        assert_names_the_hand_off(&refused, &holder, DEAD_PID, false, "stale");
+        holder_only(&world, &holder);
+    }
+}
+
+/// The incident, in full: two writers comment on two items, and the second
+/// one's publication meets the first one's synchronization. It waits while
+/// that synchronization holds the reservation; inside its first sleep the
+/// peer lets the reservation go and begins its index hand-off, and the next
+/// look is refused for the hand-off's row, which it waits for in turn, on
+/// the same budget. If the hand-off ends inside the second sleep the
+/// publication goes on; if it stays live the comment is answered `partial`
+/// / `busy` naming the hand-off, after five sleeps in all. Sent again, the
+/// same request (as the CLI's retry, or a person, sends it) waits the same
+/// way and goes on once the hand-off ends, and the comment is written once.
+#[test]
+fn a_comment_s_publication_waits_through_a_peer_s_synchronization_and_its_hand_off() {
+    let entry = Entry::CommentAdd;
+
+    // The hand-off ends inside the second sleep.
+    let (world, clock, holder) = held(entry, LIVE_PID);
+    clock.at_sleep(1, hand_off_begins(&world, &holder, LIVE_PID));
+    clock.at_sleep(2, hand_off_ends(&world, &holder));
+    let answer = world.execute(REQUEST, entry.mutation(&world));
+    assert_eq!(clock.slept(), 2, "{answer:?}");
+    assert_eq!(
+        (answer.outcome, answer.code),
+        (Outcome::Partial, ResultCode::InternalError),
+        "{answer:?}"
+    );
+    assert_eq!(
+        left(&world, &holder).remote,
+        [
+            (
+                false,
+                "synchronize_context".to_owned(),
+                "fetch_prepared".to_owned()
+            ),
+            (
+                true,
+                "synchronize_context".to_owned(),
+                "completed".to_owned()
+            ),
+        ]
+    );
+
+    // The hand-off stays live: `partial` / `busy` naming it.
+    let (mut world, clock, holder) = held(entry, LIVE_PID);
+    clock.at_sleep(1, hand_off_begins(&world, &holder, LIVE_PID));
+    let busy = world.execute(REQUEST, entry.mutation(&world));
+    assert_eq!(clock.slept(), 5, "{busy:?}");
+    assert_eq!(
+        (busy.outcome, busy.code),
+        (Outcome::Partial, ResultCode::Busy),
+        "{busy:?}"
+    );
+    assert_eq!(recovery_actions(&busy), ["request.retry", "operation.show"]);
+    assert_names_the_hand_off(&busy, &holder, LIVE_PID, true, "live");
+    let saved = left(&world, &holder);
+    assert_eq!(saved.commits, 1, "the comment is saved");
+    assert_eq!(saved.record, Some(RequestState::Accepted));
+
+    // Sent again: it waits for the hand-off, which ends inside its first
+    // sleep, and goes on; nothing is written again.
+    let again = StepClock::new();
+    world.service = mutation::waiting_service(world.data.path(), &again)
+        .with_process_probe_for_testing(Arc::new(operations::ProcessTable(vec![LIVE_PID])));
+    again.at_sleep(1, hand_off_ends(&world, &holder));
+    let resent = world.execute(REQUEST, entry.mutation(&world));
+    assert_eq!(again.slept(), 1, "{resent:?}");
+    assert_eq!(
+        (resent.outcome, resent.code),
+        (Outcome::Partial, ResultCode::InternalError),
+        "{resent:?}"
+    );
+    let after = left(&world, &holder);
+    assert_eq!(
+        (after.commits, after.bindings),
+        (saved.commits, saved.bindings)
+    );
+    assert_eq!(after.remote.len(), 2, "{after:?}");
 }

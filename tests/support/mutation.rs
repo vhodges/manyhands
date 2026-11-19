@@ -71,12 +71,12 @@ pub fn service_with_clock(data_directory: &Path, clock: &Arc<TestClock>) -> Repo
 /// sleeps on it, and the sleeper it sleeps with: a test's wait takes no
 /// real time. It starts at `STEP_CLOCK_START`, before any real heartbeat,
 /// so a heartbeat a call keeps is always fresh by it. What `at_first_sleep`
-/// is given runs inside the first sleep, while the waiting writer holds
-/// nothing.
+/// is given runs inside the next sleep, and what `at_sleep` is given inside
+/// the sleep it names, while the waiting writer holds nothing.
 pub struct StepClock {
     nanos: std::sync::atomic::AtomicU64,
     slept: std::sync::atomic::AtomicU64,
-    at_first_sleep: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    at_sleep: std::sync::Mutex<std::collections::BTreeMap<u64, Box<dyn FnOnce() + Send>>>,
 }
 
 /// 2023-11-14T22:13:20Z.
@@ -87,12 +87,17 @@ impl StepClock {
         Arc::new(Self {
             nanos: std::sync::atomic::AtomicU64::new(0),
             slept: std::sync::atomic::AtomicU64::new(0),
-            at_first_sleep: std::sync::Mutex::new(None),
+            at_sleep: std::sync::Mutex::new(std::collections::BTreeMap::new()),
         })
     }
 
     pub fn at_first_sleep(&self, run: impl FnOnce() + Send + 'static) {
-        *self.at_first_sleep.lock().unwrap() = Some(Box::new(run));
+        self.at_sleep(self.slept() + 1, run);
+    }
+
+    /// Runs `run` inside the `sleep`th sleep on this clock, counted from 1.
+    pub fn at_sleep(&self, sleep: u64, run: impl FnOnce() + Send + 'static) {
+        self.at_sleep.lock().unwrap().insert(sleep, Box::new(run));
     }
 
     /// How many times a writer has slept on it.
@@ -114,8 +119,8 @@ impl manyhands::repository::Sleeper for StepClock {
             u64::try_from(duration.as_nanos()).unwrap(),
             Ordering::SeqCst,
         );
-        self.slept.fetch_add(1, Ordering::SeqCst);
-        let run = self.at_first_sleep.lock().unwrap().take();
+        let sleep = self.slept.fetch_add(1, Ordering::SeqCst) + 1;
+        let run = self.at_sleep.lock().unwrap().remove(&sleep);
         if let Some(run) = run {
             run();
         }

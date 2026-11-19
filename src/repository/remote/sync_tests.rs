@@ -16487,12 +16487,14 @@ fn unresolved_history_ends_the_operation_and_frees_the_reservation() {
     }
 }
 
-/// A new synchronization waits for a live holder of the reservation, a
-/// poll at a time, and is answered `Busy` once the budget is spent. A call
-/// that takes up its own stopped operation does not wait: that operation
-/// holds what an earlier call did (here a checkpointed fetch), so a
-/// reservation refused there is answered `Busy` at once and never tried
-/// again. Neither begins or changes a row.
+/// A new synchronization waits for another operation in its way while that
+/// operation's holder is live, a poll at a time: a holder of the
+/// reservation (`Busy` once the budget is spent), or a live local row that
+/// refuses the reservation (`busy` naming it once the budget is spent). A
+/// call that takes up its own stopped operation does not wait for either:
+/// that operation holds what an earlier call did (here a checkpointed
+/// fetch), so a reservation refused there is answered at once and never
+/// tried again. None begins or changes a row.
 #[test]
 fn only_a_new_synchronization_waits_for_a_live_reservation_holder() {
     use std::sync::atomic::AtomicU64;
@@ -16528,7 +16530,7 @@ fn only_a_new_synchronization_waits_for_a_live_reservation_holder() {
     }
     const LIVE_PID: u32 = 4242;
 
-    for restart in [false, true] {
+    for (restart, local) in [(false, false), (true, false), (false, true), (true, true)] {
         let (root, data, service) = fixture();
         let repository = git2::Repository::open(root.path()).unwrap();
         repository
@@ -16586,28 +16588,40 @@ fn only_a_new_synchronization_waits_for_a_live_reservation_holder() {
                 )
                 .unwrap();
         }
-        // Another operation holds the reservation, for a process of this
-        // host that exists.
         let holder = OperationId::new();
-        let target = RemoteOperationTarget::for_context(
-            &plan,
-            RemoteOperationAction::SynchronizeContext,
-            AuthoringKind::Ticket,
-            "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
-        )
-        .unwrap();
-        assert!(matches!(
-            service
-                .reserve_remote_operation(root.path(), holder, &target)
-                .unwrap(),
-            RemoteReservationOutcome::Reserved(_)
-        ));
         let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-        db.execute(
-            "UPDATE remote_operation_records SET host=?2, pid=?3 WHERE operation_ulid=?1",
-            rusqlite::params![holder.to_string(), this_host(), LIVE_PID],
-        )
-        .unwrap();
+        if local {
+            // Another operation's local row is unfinished, for a process of
+            // this host that exists: an index hand-off at work, its
+            // heartbeat fresh by the waiting call's clock.
+            db.execute(
+                "INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at,index_owner_epoch,host,pid)
+                 SELECT id,root_path,?1,'refresh','','indexing',1700000000,1,?2,?3 FROM repositories",
+                rusqlite::params![holder.to_string(), this_host(), LIVE_PID],
+            )
+            .unwrap();
+        } else {
+            // Another operation holds the reservation, for a process of
+            // this host that exists.
+            let target = RemoteOperationTarget::for_context(
+                &plan,
+                RemoteOperationAction::SynchronizeContext,
+                AuthoringKind::Ticket,
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+            )
+            .unwrap();
+            assert!(matches!(
+                service
+                    .reserve_remote_operation(root.path(), holder, &target)
+                    .unwrap(),
+                RemoteReservationOutcome::Reserved(_)
+            ));
+            db.execute(
+                "UPDATE remote_operation_records SET host=?2, pid=?3 WHERE operation_ulid=?1",
+                rusqlite::params![holder.to_string(), this_host(), LIVE_PID],
+            )
+            .unwrap();
+        }
         let rows = || {
             db.prepare("SELECT operation_ulid, phase, sync_checkpoint, owner_epoch FROM remote_operation_records ORDER BY id")
                 .unwrap()
@@ -16646,15 +16660,29 @@ fn only_a_new_synchronization_waits_for_a_live_reservation_holder() {
             },
             &mut SessionCredentials::new(NoPrompt),
         );
-        assert!(
-            matches!(result, Err(SynchronizationError::Busy)),
-            "restart={restart}: {result:?}"
-        );
+        let case = format!("restart={restart} local={local}: {result:?}");
+        match (restart, local) {
+            (_, false) => assert!(matches!(result, Err(SynchronizationError::Busy)), "{case}"),
+            (false, true) => assert!(
+                matches!(
+                    &result,
+                    Err(SynchronizationError::Repository(error))
+                        if error.kind == RepositoryErrorKind::RepositoryBusy
+                            && error.blocker().map(|blocker| (blocker.operation_id, blocker.live))
+                                == Some((holder, Some(true)))
+                ),
+                "{case}"
+            ),
+            (true, true) => assert!(
+                matches!(result, Err(SynchronizationError::RecoveryRequired)),
+                "{case}"
+            ),
+        }
         assert_eq!(
             time.slept.load(Ordering::SeqCst),
             if restart { 0 } else { 5 },
-            "restart={restart}"
+            "{case}"
         );
-        assert_eq!(rows(), before, "restart={restart}");
+        assert_eq!(rows(), before, "{case}");
     }
 }

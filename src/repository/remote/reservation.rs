@@ -1639,11 +1639,26 @@ impl RepositoryService {
         })
     }
 
-    /// What `reserve` comes to, tried again while it answers `Busy` and
-    /// another operation that holds the reservation of the repository at
-    /// `root` (`reservation_holder`, not `own`) has a live holder: the call
-    /// waits for it as a writer waits for a live peer's row, a poll at a
-    /// time, for as long as `WaitPolicy` lets it (`slept`).
+    /// What `reserve` comes to, tried again while another operation is in
+    /// its way and that operation's holder still works: the call waits for
+    /// it as a writer waits for a live peer's row, a poll at a time, for as
+    /// long as `WaitPolicy` lets it (`slept`), one budget for both ways in
+    /// which another operation refuses it:
+    ///
+    /// - `Busy` while another operation holds the reservation of the
+    ///   repository at `root` (`reservation_holder`, not `own`) and its
+    ///   holder is live. A `Busy` that no live holder explains is given
+    ///   back at once: no operation holds the reservation (a closure that
+    ///   holds the item, or another item's waiting conflict, refused it),
+    ///   or the one that does is stale or cannot be read; so is the last
+    ///   `Busy` once the budget is spent. The caller answers it as it
+    ///   answers a `Busy` it was given at once.
+    /// - `recovery_required` naming another operation's unfinished local
+    ///   row, as a peer's index hand-off leaves one just after it lets the
+    ///   reservation go: as `waited` judges it for a writer's begin. A live
+    ///   or unreadable row is slept on and the budget then ends in `busy`
+    ///   naming it; a stale one is answered at once, `recovery_required`
+    ///   naming it stale.
     ///
     /// Only the reservation of a new operation, one with no row yet, is
     /// given to it: nothing of the call is recorded before it, so an
@@ -1652,12 +1667,7 @@ impl RepositoryService {
     /// attempt is one registry transaction, which has ended when it
     /// answers, and no lease or guard is taken around it.
     ///
-    /// Any other answer, or an error, is given back as it is. So is a
-    /// `Busy` that no live holder explains: no operation holds the
-    /// reservation (a closure that holds the item, or another item's
-    /// waiting conflict, refused it), or the one that does is stale or
-    /// cannot be read; and the last `Busy` once the budget is spent. The
-    /// caller then answers it as it answers a `Busy` it was given at once.
+    /// Any other answer, and any other error, is given back as it is.
     pub(crate) fn reserving(
         &self,
         root: &Path,
@@ -1666,7 +1676,13 @@ impl RepositoryService {
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         let mut wait = self.start_wait();
         loop {
-            let outcome = reserve()?;
+            let outcome = match reserve() {
+                Ok(outcome) => outcome,
+                Err(error) => match self.waited(root, &mut wait, error) {
+                    crate::repository::blocker::Waited::Again => continue,
+                    crate::repository::blocker::Waited::Refused(error) => return Err(error),
+                },
+            };
             if !matches!(outcome, RemoteReservationOutcome::Busy) {
                 return Ok(outcome);
             }
