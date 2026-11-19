@@ -10,6 +10,10 @@
 //!   R-13, R-17).
 //! - Retry sends the same request again; Stop trying to share gives it up
 //!   (decision 8).
+//! - An item whose shared copy was deleted offers Republish…, confirmed,
+//!   or, while the share's record is accepted, Stop and republish…, which
+//!   gives the share up and then opens Republish… (D5 Part C,
+//!   `republish.rs`).
 //! - The rest open a place in the workspace (`ItemRoute`): Open Sharing &
 //!   keys, Check host (the host the outcome names, or the repository's
 //!   Hosts page, K-3), Set identity, Set up sharing (Remotes), and Show it,
@@ -20,81 +24,36 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::{AnyElement, App, ClickEvent, Context, Window};
+use gpui_kit::{App, Context, FocusHandle, Window};
 
-use super::{button, request_id};
+use super::republish::{REPUBLISHING, Republishing};
 use crate::desktop::{
     model::{
-        item::SHARE,
-        operations::sync_text,
+        operations::{may_be_waiting_for, share_text},
         publication::{ShareTarget, SyncOffer, SyncOutcome, SyncResult},
     },
     services::{
         Services,
-        requests::{DesktopRequestId, RequestState},
-        worker::{GaveUp, RecordState},
+        requests::{DesktopRequestId, Intent, RequestState},
+        worker::GaveUp,
     },
-    view::{item::ItemRoute, sidebar::RETRY, workspace::Workspace},
+    view::{item::ItemRoute, workspace::Workspace},
 };
 
-pub(crate) const UNLOCK: &str = "Unlock…";
-/// Give up (decision 8).
-pub(crate) const GIVE_UP: &str = "Stop trying to share";
-/// A Give up that found its request's record already finished: nothing
-/// was cancelled, and the entry shows the stored answer (decision 8).
-pub(crate) const ALREADY_FINISHED: &str = "Already finished";
-pub(crate) const OPEN_SHARING_AND_KEYS: &str = "Open Sharing & keys";
-pub(crate) const CHECK_HOST: &str = "Check host";
-pub(crate) const SET_IDENTITY: &str = "Set identity";
-pub(crate) const SHOW_IT: &str = "Show it";
-pub(crate) const SET_UP_SHARING: &str = "Set up sharing";
+// The offers' words live in the model, where Activity's rows read them
+// (R-44); each keeps its old path where a test still names it.
+#[cfg(test)]
+pub(crate) use crate::desktop::model::activity::copy::offer_label;
 
-/// An offer's label.
-pub(crate) fn offer_label(offer: SyncOffer) -> &'static str {
-    match offer {
-        SyncOffer::Share => SHARE,
-        SyncOffer::Retry => RETRY,
-        SyncOffer::GiveUp => GIVE_UP,
-        SyncOffer::Unlock => UNLOCK,
-        SyncOffer::OpenSharingAndKeys => OPEN_SHARING_AND_KEYS,
-        SyncOffer::CheckHost => CHECK_HOST,
-        SyncOffer::SetIdentity => SET_IDENTITY,
-        SyncOffer::ShowHolder => SHOW_IT,
-        SyncOffer::SetUpSharing => SET_UP_SHARING,
-    }
-}
-
-/// The part of an entry's element ids an offer's control takes. Share's
-/// is the stopped share's (design, Outcomes and routes).
-pub(crate) fn offer_part(offer: SyncOffer) -> &'static str {
-    match offer {
-        SyncOffer::Share => "share",
-        SyncOffer::Retry => "share-retry",
-        SyncOffer::GiveUp => "give-up",
-        SyncOffer::Unlock => "unlock",
-        SyncOffer::OpenSharingAndKeys => "sharing-and-keys",
-        SyncOffer::CheckHost => "check-host",
-        SyncOffer::SetIdentity => "set-identity",
-        SyncOffer::ShowHolder => "show-holder",
-        SyncOffer::SetUpSharing => "set-up-sharing",
-    }
-}
-
-/// The outcome of the finished share `id`, under where its record stood
-/// after its last attempt (unknown when the worker kept none) and whether
-/// that attempt was a Give up's.
+/// The outcome of the finished share `id`, classified once when it
+/// finished from where its record stood after its last attempt (unknown
+/// when the worker kept none) and whether that attempt was a Give up's.
 pub(crate) fn share_result(
     services: &Services,
     id: DesktopRequestId,
     cx: &App,
 ) -> Option<SyncResult> {
-    let worker = services.worker();
-    let record = worker.record_state(id).unwrap_or(RecordState::Unknown);
-    let after_give_up = worker.gave_up(id).is_some();
-    services
-        .operations()
-        .read(cx)
-        .share_result(id, record, after_give_up)
+    services.operations().read(cx).share_result(id).cloned()
 }
 
 /// Whether the last Give up of the request `id` found its record already
@@ -117,20 +76,83 @@ pub(crate) fn busy_holder(
         .busy_holder(id, |holder| worker.record_state(holder))
 }
 
-/// What the finished share `id`, of outcome `result`, says; `None` for a
-/// failure, whose message and code the entry shows.
-pub(crate) fn share_words(
+/// Whether the share `id` is of an item a republish of which is queued or
+/// running, or, with `waiting`, waits to be done from a lifecycle's way out
+/// (R-30; review 4).
+fn republishing(services: &Services, id: DesktopRequestId, waiting: bool, cx: &App) -> bool {
+    match services
+        .operations()
+        .read(cx)
+        .request(id)
+        .map(|request| &request.intent)
+    {
+        Some(Intent::ItemSync { root, id, .. }) if waiting => services.republishing(root, id),
+        Some(Intent::ItemSync { root, id, .. }) => services.republish_running(root, id),
+        _ => false,
+    }
+}
+
+/// The offers the finished share `id`, of outcome `result`, shows: its
+/// own, but for Republish… and Stop and republish… while a republish of
+/// its item is queued, running, or waits to be done (R-30; review 4).
+pub(crate) fn shown_offers(
+    services: &Services,
+    id: DesktopRequestId,
+    result: &SyncResult,
+    cx: &App,
+) -> Vec<SyncOffer> {
+    let republishing = republishing(services, id, true, cx);
+    result
+        .offers()
+        .into_iter()
+        .filter(|offer| {
+            !(republishing && matches!(offer, SyncOffer::Republish | SyncOffer::StopAndRepublish))
+        })
+        .collect()
+}
+
+/// What Activity's row of the finished share `id` is told of what only the
+/// Workspace knows (R-9): that a republish of its deleted branch is queued
+/// or running, or the words naming the request that may hold a busy
+/// repository. Any `Some` for a deleted branch means "republish running".
+pub(in crate::desktop::view) fn facts_words(
     services: &Services,
     id: DesktopRequestId,
     result: &SyncResult,
     cx: &App,
 ) -> Option<String> {
+    match result.outcome {
+        SyncOutcome::BranchDeleted => {
+            republishing(services, id, false, cx).then(|| REPUBLISHING.to_owned())
+        }
+        SyncOutcome::Busy => busy_holder(services, id, cx)
+            .and_then(|holder| services.operations().read(cx).request(holder))
+            .map(|holder| may_be_waiting_for(holder.intent.label())),
+        _ => None,
+    }
+}
+
+/// What the finished share `id`, of outcome `result`, says; `None` for a
+/// failure, whose message and code the entry shows. A deleted branch
+/// whose republish is queued or running says so, on the entry and the
+/// item's pill. A share of the primary branch names it `primary`, when
+/// known (R-35).
+pub(crate) fn share_words(
+    services: &Services,
+    id: DesktopRequestId,
+    result: &SyncResult,
+    primary: Option<&str>,
+    cx: &App,
+) -> Option<String> {
+    if result.outcome == SyncOutcome::BranchDeleted && republishing(services, id, false, cx) {
+        return Some(REPUBLISHING.to_owned());
+    }
     let holder = matches!(result.outcome, SyncOutcome::Busy)
         .then(|| busy_holder(services, id, cx))
         .flatten()
         .and_then(|holder| services.operations().read(cx).request(holder))
         .map(|holder| holder.intent.label());
-    sync_text(&result.outcome, holder)
+    share_text(&result.outcome, result.attempt.target, holder, primary)
 }
 
 /// Where the offer `offer` of the finished share `id` goes in the
@@ -168,7 +190,12 @@ pub(crate) fn share_route(
             root: root()?,
             request: busy_holder(services, id, cx),
         },
-        SyncOffer::Share | SyncOffer::Retry | SyncOffer::GiveUp | SyncOffer::Unlock => {
+        SyncOffer::Share
+        | SyncOffer::Retry
+        | SyncOffer::GiveUp
+        | SyncOffer::Unlock
+        | SyncOffer::Republish
+        | SyncOffer::StopAndRepublish => {
             return None;
         }
     })
@@ -186,37 +213,33 @@ impl Workspace {
         share_result(self.services(), id, cx)
     }
 
-    /// An offer's control on the entry of the finished share `id`.
-    pub(super) fn share_offer(
-        &mut self,
-        id: DesktopRequestId,
-        offer: SyncOffer,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let part = request_id(id, offer_part(offer));
-        let focus = self.control_focus_for(part.clone(), cx);
-        button(
-            part,
-            offer_label(offer),
-            Some(&focus),
-            cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.run_share_offer(id, offer, window, cx)
+    /// The item the share `id` is of, to republish: no lifecycle follows.
+    fn share_republished(&self, id: DesktopRequestId, cx: &App) -> Option<Republishing> {
+        match &self.services().operations().read(cx).request(id)?.intent {
+            Intent::ItemSync { root, kind, id } => Some(Republishing {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+                after: None,
             }),
-        )
+            _ => None,
+        }
     }
 
-    /// Runs the offer `offer` of the finished share `id`.
+    /// Runs the offer `offer` of the finished share `id`. Republish…'s
+    /// dialog gives focus back to `origin`.
     pub(in crate::desktop::view) fn run_share_offer(
         &mut self,
         id: DesktopRequestId,
         offer: SyncOffer,
+        origin: FocusHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(result) = self.finished_share(id, cx) else {
             return;
         };
-        if !result.offers().contains(&offer) {
+        if !shown_offers(self.services(), id, &result, cx).contains(&offer) {
             return;
         }
         let worker = self.services().worker().clone();
@@ -237,6 +260,16 @@ impl Workspace {
             SyncOffer::GiveUp => {
                 worker.give_up(id);
             }
+            SyncOffer::Republish | SyncOffer::StopAndRepublish => {
+                let Some(target) = self.share_republished(id, cx) else {
+                    return;
+                };
+                if offer == SyncOffer::Republish {
+                    self.republish(target, origin, window, cx);
+                } else {
+                    self.stop_and_republish(id, target, origin, None, cx);
+                }
+            }
             _ => {
                 if let Some(route) = share_route(self.services(), id, &result, offer, cx) {
                     self.open_route(route, window, cx);
@@ -249,7 +282,7 @@ impl Workspace {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "outcomes_tests.rs"]
-mod tests;
+pub(in crate::desktop::view) mod tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "outcomes_route_tests.rs"]

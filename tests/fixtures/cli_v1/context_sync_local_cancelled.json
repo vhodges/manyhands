@@ -1,0 +1,40 @@
+{
+  "code": "cancelled",
+  "command": "context sync-local",
+  "data": {
+    "cancel_acknowledged": true,
+    "eligibility": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "kind": "ticket",
+    "next_action": "none",
+    "operation_id": "<operation-id>",
+    "reason": "cancelled",
+    "required_request_id": null,
+    "resolution_request_id": null,
+    "result_oid": null,
+    "state": "cancelled",
+    "type": "local_context_sync"
+  },
+  "effects": {
+    "checkpoint": "unchanged",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "pending",
+    "integration": "pending",
+    "publication": "not_requested",
+    "write": "unchanged"
+  },
+  "message": "The request was cancelled.",
+  "operation_id": "<operation-id>",
+  "outcome": "cancelled",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FR3",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAW"
+  }
+}

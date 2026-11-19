@@ -4,7 +4,7 @@
 //! item's comment drafts reopen in their threads when its tab opens and
 //! while it is open.
 
-use gpui_kit::{TestAppContext, px, size};
+use gpui_kit::TestAppContext;
 use manyhands::{
     drafts::{CommentTarget, DraftFields, DraftId, DraftTarget, Held, ItemKind},
     repository::ItemDtoKind,
@@ -139,7 +139,7 @@ async fn a_draft_begins_on_the_first_keystroke_after_the_listing(cx: &mut TestAp
         |backend| listing = Some(backend.hold_read(ReadKind::Drafts)),
         cx,
     );
-    shell.visual(cx).simulate_resize(size(px(1440.), px(1400.)));
+    shell.resize_keeping_content(1440., 1400., cx);
     let target_item = OpenTarget::Item {
         repo: key(&root),
         kind: ItemDtoKind::Ticket,

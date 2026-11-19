@@ -67,6 +67,82 @@ pub fn service_with_clock(data_directory: &Path, clock: &Arc<TestClock>) -> Repo
         .with_clock_for_testing(clock.clone())
 }
 
+/// A clock that moves only when a writer waiting for another operation
+/// sleeps on it, and the sleeper it sleeps with: a test's wait takes no
+/// real time. It starts at `STEP_CLOCK_START`, before any real heartbeat,
+/// so a heartbeat a call keeps is always fresh by it. What `at_first_sleep`
+/// is given runs inside the next sleep, and what `at_sleep` is given inside
+/// the sleep it names, while the waiting writer holds nothing.
+pub struct StepClock {
+    nanos: std::sync::atomic::AtomicU64,
+    slept: std::sync::atomic::AtomicU64,
+    at_sleep: std::sync::Mutex<std::collections::BTreeMap<u64, Box<dyn FnOnce() + Send>>>,
+}
+
+/// 2023-11-14T22:13:20Z.
+pub const STEP_CLOCK_START: i64 = 1_700_000_000;
+
+impl StepClock {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            nanos: std::sync::atomic::AtomicU64::new(0),
+            slept: std::sync::atomic::AtomicU64::new(0),
+            at_sleep: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+        })
+    }
+
+    pub fn at_first_sleep(&self, run: impl FnOnce() + Send + 'static) {
+        self.at_sleep(self.slept() + 1, run);
+    }
+
+    /// Runs `run` inside the `sleep`th sleep on this clock, counted from 1.
+    pub fn at_sleep(&self, sleep: u64, run: impl FnOnce() + Send + 'static) {
+        self.at_sleep.lock().unwrap().insert(sleep, Box::new(run));
+    }
+
+    /// How many times a writer has slept on it.
+    pub fn slept(&self) -> u64 {
+        self.slept.load(Ordering::SeqCst)
+    }
+}
+
+impl Clock for StepClock {
+    fn now(&self) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(STEP_CLOCK_START).unwrap()
+            + time::Duration::nanoseconds(i64::try_from(self.nanos.load(Ordering::SeqCst)).unwrap())
+    }
+}
+
+impl manyhands::repository::Sleeper for StepClock {
+    fn sleep(&self, duration: std::time::Duration) {
+        self.nanos.fetch_add(
+            u64::try_from(duration.as_nanos()).unwrap(),
+            Ordering::SeqCst,
+        );
+        let sleep = self.slept.fetch_add(1, Ordering::SeqCst) + 1;
+        let run = self.at_sleep.lock().unwrap().remove(&sleep);
+        if let Some(run) = run {
+            run();
+        }
+    }
+}
+
+/// What `waiting_service` waits: five looks, 50 ms apart by its clock.
+pub const SHORT_WAIT: manyhands::repository::WaitPolicy = manyhands::repository::WaitPolicy {
+    budget: std::time::Duration::from_millis(250),
+    poll: std::time::Duration::from_millis(50),
+};
+
+/// A service over `data_directory` that times its records and its waits
+/// by `clock`, sleeps on it, and waits as `SHORT_WAIT` says.
+pub fn waiting_service(data_directory: &Path, clock: &Arc<StepClock>) -> RepositoryService {
+    RepositoryService::open_at(data_directory)
+        .unwrap()
+        .with_clock_for_testing(clock.clone())
+        .with_sleeper_for_testing(clock.clone())
+        .with_wait_policy_for_testing(SHORT_WAIT)
+}
+
 /// The three request tables, the three journals, the recorded key
 /// registry changes and the bindings of comment submissions: every store
 /// a request, or a submission made through the service, leaves a row in.
@@ -596,6 +672,13 @@ impl World {
 pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
     match envelope.data.as_ref().expect("ticket data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
+        MutationDataDto::ResolveHistory(_) => panic!("a history resolution's data"),
+        MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
+        MutationDataDto::PollPolicy(_)
+        | MutationDataDto::Poll(_)
+        | MutationDataDto::PollRetirement(_) => {
+            panic!("a polling policy's data")
+        }
         MutationDataDto::Comment(_) => panic!("a comment's data"),
         MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Ticket(data) => data,
@@ -611,6 +694,8 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
         MutationDataDto::Context(_) => panic!("a context's data"),
+        MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
+        MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
     }
 }
 
@@ -618,6 +703,13 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
 pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationDto {
     match envelope.data.as_ref().expect("document data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
+        MutationDataDto::ResolveHistory(_) => panic!("a history resolution's data"),
+        MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
+        MutationDataDto::PollPolicy(_)
+        | MutationDataDto::Poll(_)
+        | MutationDataDto::PollRetirement(_) => {
+            panic!("a polling policy's data")
+        }
         MutationDataDto::Comment(_) => panic!("a comment's data"),
         MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Document(data) => data,
@@ -633,6 +725,8 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
         MutationDataDto::Context(_) => panic!("a context's data"),
+        MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
+        MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
     }
 }
 
@@ -744,6 +838,13 @@ impl World {
 pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
     match envelope.data.as_ref().expect("remote data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
+        MutationDataDto::ResolveHistory(_) => panic!("a history resolution's data"),
+        MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
+        MutationDataDto::PollPolicy(_)
+        | MutationDataDto::Poll(_)
+        | MutationDataDto::PollRetirement(_) => {
+            panic!("a polling policy's data")
+        }
         MutationDataDto::Comment(_) => panic!("a comment's data"),
         MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Remote(data) => data,
@@ -759,6 +860,8 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
         MutationDataDto::Context(_) => panic!("a context's data"),
+        MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
+        MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
     }
 }
 
@@ -766,6 +869,13 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
 pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutationDto {
     match envelope.data.as_ref().expect("operation data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
+        MutationDataDto::ResolveHistory(_) => panic!("a history resolution's data"),
+        MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
+        MutationDataDto::PollPolicy(_)
+        | MutationDataDto::Poll(_)
+        | MutationDataDto::PollRetirement(_) => {
+            panic!("a polling policy's data")
+        }
         MutationDataDto::Comment(_) => panic!("a comment's data"),
         MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Operation(data) => data,
@@ -781,6 +891,8 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
         MutationDataDto::Context(_) => panic!("a context's data"),
+        MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
+        MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
     }
 }
 
@@ -788,6 +900,13 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
 pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
     match envelope.data.as_ref().expect("key data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
+        MutationDataDto::ResolveHistory(_) => panic!("a history resolution's data"),
+        MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
+        MutationDataDto::PollPolicy(_)
+        | MutationDataDto::Poll(_)
+        | MutationDataDto::PollRetirement(_) => {
+            panic!("a polling policy's data")
+        }
         MutationDataDto::Comment(_) => panic!("a comment's data"),
         MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Key(data) => data,
@@ -803,6 +922,8 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
         MutationDataDto::Context(_) => panic!("a context's data"),
+        MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
+        MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
     }
 }
 
@@ -810,6 +931,13 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
 pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationDto {
     match envelope.data.as_ref().expect("identity data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
+        MutationDataDto::ResolveHistory(_) => panic!("a history resolution's data"),
+        MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
+        MutationDataDto::PollPolicy(_)
+        | MutationDataDto::Poll(_)
+        | MutationDataDto::PollRetirement(_) => {
+            panic!("a polling policy's data")
+        }
         MutationDataDto::Comment(_) => panic!("a comment's data"),
         MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Identity(data) => data,
@@ -825,6 +953,8 @@ pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationD
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
         MutationDataDto::Context(_) => panic!("a context's data"),
+        MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
+        MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
     }
 }
 

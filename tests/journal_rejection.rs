@@ -901,10 +901,17 @@ fn an_operation_a_call_is_working_under_is_not_abandoned() {
         rejection(stranded.abandon(stranded.operation_id(), None)),
         RepositoryErrorKind::RepositoryBusy
     );
+    // Another writer waits for that owner, on a clock of its own that moves
+    // only when it sleeps, by which the heartbeat stays fresh; and when its
+    // wait is over it is busy.
+    let clock = support::mutation::StepClock::new();
+    let waiting = support::mutation::waiting_service(stranded.data_directory.path(), &clock);
     assert_eq!(
-        probe_remote(&stranded.service, &root),
-        Some(RepositoryErrorKind::RecoveryRequired)
+        probe_remote(&waiting, &root),
+        Some(RepositoryErrorKind::RepositoryBusy)
     );
+    assert_eq!(clock.slept(), 5);
+    drop(waiting);
 
     // Its owner died: the heartbeat is stale, and the row is closed.
     assert_eq!(set("CAST(strftime('%s', 'now') AS INTEGER) - 60"), 1);

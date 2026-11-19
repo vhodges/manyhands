@@ -659,14 +659,14 @@ async fn sentinels_reach_no_surface_through_create_move_and_repair(cx: &mut Test
         assert!(seen.surfaces(surface) > 0, "{surface} was read");
     }
     seen.holds_none();
-    for place in ["repair-source", "item-source"] {
-        assert!(
-            seen.allowed
-                .iter()
-                .any(|(at, text)| *at == place && text.contains(BODY)),
-            "the scan sees drawn text: {place} shows the file"
-        );
-    }
+    // The read view's text is the editor's, which the scan cannot read, so
+    // the repair text area is the place it proves it can see the file.
+    assert!(
+        seen.allowed
+            .iter()
+            .any(|(at, text)| *at == "repair-source" && text.contains(BODY)),
+        "the scan sees drawn text: repair-source shows the file"
+    );
 }
 
 /// D4's comment sentinels (Cycle contract 10, A15; design, Privacy): a
@@ -764,7 +764,6 @@ fn comment_dialog(seen: &mut Seen, shell: &Shell, dialog: &'static str, cx: &mut
 /// answer's rendering. The pending row is drawn in the discussion only.
 #[gpui_kit::test]
 async fn comment_text_never_reaches_an_entry_quit_dialog_or_message(cx: &mut TestAppContext) {
-    use gpui_kit::{px, size};
     use manyhands::results::{CheckpointEffect, Effects, Envelope, Scope, WriteEffect};
 
     use super::quit::QuitPhase;
@@ -776,7 +775,7 @@ async fn comment_text_never_reaches_an_entry_quit_dialog_or_message(cx: &mut Tes
     fixture.commit_ticket(&a, DISCUSSED, "Discussed", "");
     fixture.refresh(&a);
     let shell = Shell::open(fixture, cx);
-    shell.visual(cx).simulate_resize(size(px(1440.), px(1400.)));
+    shell.resize_keeping_content(1440., 1400., cx);
     shell.run(cx);
     open(&shell, ticket(&a, DISCUSSED), cx);
     let mut seen = Seen::default();

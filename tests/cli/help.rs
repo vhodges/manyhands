@@ -57,12 +57,8 @@ fn root_help_and_bare_call_match_in_both_modes_without_data() {
         .iter()
         .map(|command| command["repository"].as_str())
         .collect();
-    let expected: BTreeSet<_> = CLI_REPOSITORY_VALUES
-        .iter()
-        .copied()
-        .map(Some)
-        .chain([None])
-        .collect();
+    // Only a planned verb has no repository rule, and nothing stays planned (R-8).
+    let expected: BTreeSet<_> = CLI_REPOSITORY_VALUES.iter().copied().map(Some).collect();
     assert_eq!(repositories, expected);
     let bare_json = run(&["--json"], &env);
     assert_eq!(bare_json.status, 0);
@@ -274,35 +270,86 @@ fn mutation_only_options_on_reads_are_usage_errors_in_both_modes() {
 }
 
 #[test]
-fn planned_command_recognizes_trailing_json_and_names_its_cycle_in_human_mode() {
+fn document_promote_help_is_its_own_golden() {
     let temp = tempfile::tempdir().unwrap();
     let env = CliEnv::new(temp.path().join("absent-data"));
+    let output = run(&["document", "promote", "--help", "--json"], &env);
+    assert_eq!(output.status, 0);
+    let value = checked(
+        &output,
+        "cli help",
+        ResultCode::Ok,
+        Some("cli_help.schema.json"),
+    );
+    assert_cli_golden("help_document_promote", &value, &[]);
+    assert!(!env.data.exists());
+}
+
+#[test]
+fn ticket_close_reaches_its_handler_in_both_modes() {
+    let temp = tempfile::tempdir().unwrap();
+    let env = CliEnv::new(temp.path().join("data"));
     let args = [
         "ticket",
         "close",
+        "--repo",
+        temp.path().to_str().unwrap(),
         "--id",
-        "01K7F6H9J2N4Q6S8V0X2Z4B6DJ",
+        "not-a-ulid",
         "--prepare",
     ];
     let human = run(&args, &env);
     assert_eq!(human.status, 2);
     assert!(human.stdout.is_empty());
     let stderr = std::str::from_utf8(&human.stderr).unwrap();
-    assert!(stderr.contains(ResultCode::CommandUnavailable.message()));
-    assert!(stderr.contains("code: command_unavailable\n"));
-    assert!(stderr.contains("ticket close arrives with C5."));
+    assert!(stderr.contains("code: invalid_id\n"), "{stderr}");
     let mut args = args.to_vec();
     args.push("--json");
     let output = run(&args, &env);
     assert_eq!(output.status, 2);
-    let value = checked(
-        &output,
-        "ticket close",
-        ResultCode::CommandUnavailable,
-        None,
-    );
-    assert_cli_golden("unavailable_ticket_close", &value, &[]);
+    checked(&output, "ticket close", ResultCode::InvalidId, None);
+}
+
+#[test]
+fn the_poll_verbs_help_is_available_and_is_its_own_golden() {
+    let temp = tempfile::tempdir().unwrap();
+    let env = CliEnv::new(temp.path().join("absent-data"));
+    for verb in ["once", "configure", "pause", "resume"] {
+        let output = run(&["poll", verb, "--help", "--json"], &env);
+        assert_eq!(output.status, 0);
+        let value = checked(
+            &output,
+            "cli help",
+            ResultCode::Ok,
+            Some("cli_help.schema.json"),
+        );
+        assert_cli_golden(&format!("help_poll_{verb}"), &value, &[]);
+    }
     assert!(!env.data.exists());
+}
+
+#[test]
+fn poll_once_reaches_its_handler_in_both_modes() {
+    let temp = tempfile::tempdir().unwrap();
+    let env = CliEnv::new(temp.path().join("data"));
+    let args = [
+        "poll",
+        "once",
+        "--repo",
+        temp.path().to_str().unwrap(),
+        "--request-id",
+        "not-a-ulid",
+    ];
+    let human = run(&args, &env);
+    assert_eq!(human.status, 2);
+    assert!(human.stdout.is_empty());
+    let stderr = std::str::from_utf8(&human.stderr).unwrap();
+    assert!(stderr.contains("code: invalid_id\n"), "{stderr}");
+    let mut args = args.to_vec();
+    args.push("--json");
+    let output = run(&args, &env);
+    assert_eq!(output.status, 2);
+    checked(&output, "poll once", ResultCode::InvalidId, None);
 }
 
 #[test]

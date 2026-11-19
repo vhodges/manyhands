@@ -888,7 +888,15 @@ fn c4_resume_cancelled_with_work_owed() -> Result<(), FixtureError> {
     );
     assert_eq!(left.effects, Effects::not_requested());
     assert!(left.data.is_none());
-    assert_eq!(actions(&left), [RecoveryActionKind::RepoInspect]);
+    // Its abandon lets the work it owes go.
+    assert_eq!(
+        actions(&left),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(left.recovery[1].operation_id, Some(operation.to_string()));
     assert_no_record_of(&w, LATER, &left);
     assert_eq!(phase(&w, operation)?, "cancelled");
     assert_eq!(connections(&w), opened);

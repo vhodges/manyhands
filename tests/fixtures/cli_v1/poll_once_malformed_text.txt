@@ -1,0 +1,16 @@
+The request completed.
+request: 01ARZ3NDEKTSV4RRFFQ69G5FR2
+operation: <id>
+effects: discovery=current
+Completed at: <time>
+Completion: completed
+Next eligible at: <time>
+Operation id: <id>
+target: refs/heads/main kind=none item=none disposition=current before=<oid> after=<oid>
+  Local state is current.
+target: none kind=none item=none disposition=malformed before=none after=none
+  Repair the remote context's branch name.
+--- stderr
+progress: accepted
+progress: connecting
+--- exit 0

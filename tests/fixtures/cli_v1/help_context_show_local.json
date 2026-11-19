@@ -1,0 +1,57 @@
+{
+  "code": "ok",
+  "command": "cli help",
+  "data": {
+    "commands": [
+      {
+        "available": true,
+        "command": "context show-local",
+        "delivered_by": "C5",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--operation-id",
+            "required": true,
+            "summary": "Canonical operation ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--token",
+            "required": false,
+            "summary": "A conflict path's token, to read its sides. Needs --json.",
+            "value": "token"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show a local synchronization, or a conflict's sides with --token and --json."
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": null,
+    "worktree": null
+  }
+}

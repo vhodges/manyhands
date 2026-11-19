@@ -40,24 +40,30 @@ impl ItemPane {
     ) -> Option<AnyElement> {
         let label = if adopt { ADOPT } else { REPAIR };
         Some(match self.repair_offer(item)? {
-            Offer::Repair => div()
-                .id("item-repair")
-                .test_support()
-                .aria_label(label)
-                .flex_none()
-                .child(
-                    Button::new("item-repair-button")
-                        .label(label)
-                        .small()
-                        .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
-                            if adopt {
-                                pane.open_adopt(window, cx)
-                            } else {
-                                pane.open_repair(window, cx)
-                            }
-                        })),
-                )
-                .into_any_element(),
+            Offer::Repair => {
+                let button = div()
+                    .id("item-repair")
+                    .test_support()
+                    .aria_label(label)
+                    .flex_none()
+                    .child(
+                        Button::new("item-repair-button")
+                            .label(label)
+                            .small()
+                            // While the item's close or merge is unfinished,
+                            // Repair… waits, saying so (R-23).
+                            .disabled(self.edits_wait(cx))
+                            .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
+                                if adopt {
+                                    pane.open_adopt(window, cx)
+                                } else {
+                                    pane.open_repair(window, cx)
+                                }
+                            })),
+                    )
+                    .into_any_element();
+                self.locked_note("item-repair-locked", button, cx)
+            }
             Offer::NotUtf8 => text("item-repair-not-utf8", REPAIR_NOT_UTF8)
                 .text_color(cx.theme().muted_foreground)
                 .into_any_element(),

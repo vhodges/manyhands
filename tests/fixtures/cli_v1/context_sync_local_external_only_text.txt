@@ -1,0 +1,17 @@
+--- stderr
+progress: observing
+error: Recovery is required before this can continue.
+code: recovery_required
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX1
+operation: <id>
+effects: write=written checkpoint=pending discovery=pending integration=pending
+Eligibility: external_resolution_required
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Kind: ticket
+Next action: external_repair
+Operation id: <id>
+Reason: unsupported_conflict
+State: conflict_pending
+next: repo.inspect root=<repository>
+note: Manyhands can't resolve this: it takes a repair outside it, with Git. After the repair, send this same request again (01ARZ3NDEKTSV4RRFFQ69G5FX1).
+--- exit 4

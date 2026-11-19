@@ -6,6 +6,16 @@
 #[path = "../src/lib.rs"]
 mod production;
 pub use production::*;
+#[path = "mutation_remote/c5_cancel.rs"]
+mod c5_cancel;
+#[path = "mutation_remote/c5_lifecycle.rs"]
+mod c5_lifecycle;
+#[path = "mutation_remote/c5_made_ready.rs"]
+mod c5_made_ready;
+#[path = "mutation_remote/c5_poll.rs"]
+mod c5_poll;
+#[path = "mutation_remote/c5_resume.rs"]
+mod c5_resume;
 #[path = "mutation_remote/comment.rs"]
 mod comment;
 #[path = "mutation_remote/comment_domain.rs"]
@@ -14,11 +24,17 @@ mod comment_domain;
 mod conflict_read;
 #[path = "support/conformance.rs"]
 mod conformance;
+#[path = "mutation_remote/context_retirement.rs"]
+mod context_retirement;
+#[path = "mutation_remote/d5_progress.rs"]
+mod d5_progress;
 #[allow(dead_code)]
 #[path = "support/golden.rs"]
 mod golden;
 #[path = "mutation_remote/host.rs"]
 mod host;
+#[path = "support/lifecycle_world.rs"]
+mod lifecycle_world;
 #[path = "mutation_remote/merging.rs"]
 mod merging;
 #[allow(dead_code)]
@@ -59,11 +75,19 @@ fn main() {
         .chain(host::CASES)
         .chain(merging::CASES)
         .chain(comment_domain::CASES)
+        .chain(context_retirement::CASES)
         .chain(comment::CASES)
         .chain(conflict_read::CASES)
         .chain(resolution::CASES)
         .chain(resume::CASES)
         .chain(republish::CASES)
+        .chain(c5_lifecycle::CASES)
+        .chain(c5_resume::CASES)
+        .chain(c5_cancel::CASES)
+        .chain(c5_cancel::CHILD_CONFLICT)
+        .chain(c5_made_ready::CASES)
+        .chain(c5_poll::CASES)
+        .chain(d5_progress::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS
@@ -760,13 +784,15 @@ fn call_before_the_stores_hold_anything(
     // A resume that took up a synchronization carries that
     // synchronization's data: a host's, or a conflict's, by its tag. One
     // that took up a comment's publication carries the comment's, and one
-    // of a local-context sync the gate's (R-20).
+    // of a local-context sync the gate's (R-20). One refused for another
+    // operation's unfinished row names that operation instead.
     let synchronization = matches!(
         envelope.command.as_str(),
         "item sync" | "repo sync" | "operation resume"
     );
     if synchronization && !value["data"].is_null() {
         let data_schema = match value["data"]["type"].as_str() {
+            _ if value["data"]["blocker"].is_object() => BLOCKED_SCHEMA,
             Some("synchronization_conflict") => CONFLICT_SCHEMA,
             Some("comment") => COMMENT_SCHEMA,
             Some("local_context_sync") => LOCAL_CONTEXT_SYNC_SCHEMA,
@@ -1273,6 +1299,21 @@ fn leave_local_sync_conflict(w: &World) -> OperationId {
         .expect("an operation ID")
 }
 
+/// The data of an answer refused for another operation's unfinished row.
+const BLOCKED_SCHEMA: &str = "blocked.schema.json";
+
+/// Asserts that `envelope` was refused for the local synchronization
+/// `operation` that `leave_local_sync_conflict` left: its data names that
+/// operation, which no call is at work under, in place of the command's
+/// own.
+fn assert_blocked_by_local_sync(envelope: &Envelope<MutationDataDto>, operation: OperationId) {
+    let data = serde_json::to_value(envelope).expect("an envelope serializes")["data"].clone();
+    schema::check_published(BLOCKED_SCHEMA, &data).expect("the blocked schema");
+    assert_eq!(data["blocker"]["operation_id"], operation.to_string());
+    assert_eq!(data["blocker"]["family"], "local");
+    assert_eq!(data["blocker"]["live"], false);
+}
+
 /// A synchronization that stops with an error after it reserved.
 struct Stopped {
     mutation: fn(&World) -> Mutation,
@@ -1378,10 +1419,21 @@ fn pin_a_held_reservation(
         assert!(record(w, REQUEST_2).is_none());
     }
 
-    // Another synchronization.
+    // Another synchronization, which names the operation that holds the
+    // reservation.
     let other = execute(w, REQUEST_3, repo_sync(w));
     assert_eq!(other.code, ResultCode::Busy);
-    assert_eq!(actions(&other), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(
+        actions(&other),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::OperationShow
+        ]
+    );
+    assert_eq!(
+        other.recovery[1].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
     assert!(record(w, REQUEST_3).is_none());
 
     // The same request, with the cause still there.
@@ -2398,14 +2450,16 @@ fn an_interrupted_synchronization_is_cancelled_only_when_its_row_says_so()
     let operation = OperationId::parse(interrupted.operation_id.as_deref().ok_or(FixtureError)?)
         .map_err(|_| FixtureError)?;
     assert_eq!(phase(&w, operation)?, "interrupted");
-    // Interrupted, and not cancelled: the row is what says which.
+    // Interrupted, and not cancelled: the row is what says which. The
+    // same request is the way on, and the abandon the way out.
     assert_eq!(interrupted.code, ResultCode::RecoveryRequired);
     assert_eq!(interrupted.outcome, Outcome::Blocked);
     assert_eq!(
         actions(&interrupted),
         [
             RecoveryActionKind::RequestRetry,
-            RecoveryActionKind::RepoInspect
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
         ]
     );
     assert_eq!(accepted(&w.server), pushes);
@@ -3105,7 +3159,8 @@ fn a_synchronization_fenced_with_its_push_unaccounted_for_is_not_confirmed()
     let opened = connections(&w);
 
     // The push may have been taken. Nothing says it was, and nothing
-    // says it was not: the answer is neither.
+    // says it was not: the answer is neither, and the person, who can
+    // look, is offered the abandon.
     let fenced = execute(&w, REQUEST_1, repo_sync(&w));
     assert_eq!(fenced.code, ResultCode::RecoveryRequired);
     assert_eq!(fenced.outcome, Outcome::Blocked);
@@ -3116,7 +3171,14 @@ fn a_synchronization_fenced_with_its_push_unaccounted_for_is_not_confirmed()
             ..Effects::not_requested()
         }
     );
-    assert_eq!(actions(&fenced), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(&fenced),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(fenced.recovery[1].operation_id, lost.operation_id);
     assert_eq!(fenced.operation_id, lost.operation_id);
     assert_eq!(connections(&w), opened);
     assert_final(&w, REQUEST_1, &fenced)
@@ -3196,7 +3258,9 @@ fn a_row_cancelled_as_its_push_returns_says_the_push_returned() -> Result<(), Fi
 /// The final answer of a request that was stopped, or fenced, with a
 /// push intended and nothing known of it: not confirmed, which is
 /// neither published nor not published. It offers a look at the
-/// repository and not the same request, and replays as it is.
+/// repository and, since no call is at work under the operation, its
+/// abandon, the person's way out; not the same request. It replays as it
+/// is.
 fn assert_not_confirmed(
     w: &World,
     id: &str,
@@ -3211,7 +3275,14 @@ fn assert_not_confirmed(
             ..Effects::not_requested()
         }
     );
-    assert_eq!(actions(answer), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(answer),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(answer.recovery[1].operation_id, answer.operation_id);
     assert_final(w, id, answer)
 }
 
@@ -3940,12 +4011,22 @@ fn a_resume_stopped_by_its_token_ends_the_synchronization_it_took_up() -> Result
     assert_eq!(accepted(&w.server), pushes);
     // A cancelled operation is never taken up again. Its row says that
     // Git may hold something of what it began, so the repository is
-    // what is looked at.
+    // what is looked at, and its abandon lets that go.
     let opened = connections(&w);
     let left = execute(&w, REQUEST_3, resume(&w, &operation));
     assert_eq!(left.outcome, Outcome::Blocked);
     assert_eq!(left.code, ResultCode::RecoveryRequired);
-    assert_eq!(actions(&left), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(&left),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(
+        left.recovery[1].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
     assert_no_record_of(&w, REQUEST_3, &left);
     assert_eq!(
         phase(&w, OperationId::parse(&operation).unwrap())?,
@@ -4196,7 +4277,18 @@ fn a_resume_cancelled_with_the_remote_unreachable_confirms_nothing_and_is_replay
             ..Effects::not_requested()
         }
     );
-    assert_eq!(actions(&ended), [RecoveryActionKind::RepoInspect]);
+    // No call is at work under it: its abandon is offered.
+    assert_eq!(
+        actions(&ended),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(
+        ended.recovery[1].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
     assert!(!reserved(&w));
     assert_eq!(
         phase(&w, OperationId::parse(&operation).unwrap())?,
@@ -4668,7 +4760,7 @@ fn conforming(
 /// need a finished request each make a conflict to resolve, and that of
 /// `item republish` is `republish::c4_republish_conformance`, whose rules
 /// each make a deleted branch to republish.
-const CONFORMANCE: [conformance::Row; 5] = [
+const CONFORMANCE: [conformance::Row; 8] = [
     conformance::Row::new("item sync", false, "item_not_found", |rule| {
         conforming(
             |w, ask| match ask {
@@ -4740,6 +4832,24 @@ const CONFORMANCE: [conformance::Row; 5] = [
         true,
         "confirmation_not_found",
         republish::conforming,
+    ),
+    conformance::Row::new(
+        "document promote",
+        true,
+        "confirmation_not_found",
+        c5_lifecycle::conforming_promote,
+    ),
+    conformance::Row::new(
+        "ticket close",
+        true,
+        "confirmation_not_found",
+        c5_lifecycle::conforming_close,
+    ),
+    conformance::Row::new(
+        "poll once",
+        false,
+        "not_repository",
+        c5_poll::conforming_once,
     ),
 ];
 

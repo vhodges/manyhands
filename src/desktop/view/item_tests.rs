@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::{TestAppContext, px};
+use gpui_kit::{TestAppContext, component::WindowExt, px};
 use manyhands::{
     repository::{ItemDto, ItemDtoKind, TicketFilter},
     results::{ProblemCode, ResultCode},
@@ -15,11 +15,12 @@ use time::OffsetDateTime;
 use super::{
     NONCONFORMING_FILE, SOURCE_NOT_UTF8,
     discussion::{REPLY_INDENT, offset_at, shown_time},
+    header::LIFECYCLE_ACTION,
 };
 use crate::desktop::{
     model::{
         item::{
-            KIND_ACTIVE, KIND_PRIMARY, LATER, LATER_NOTE, NOT_REPRESENTABLE, UNKNOWN_AUTHOR,
+            CLOSE_TICKET, KIND_ACTIVE, KIND_PRIMARY, NOT_REPRESENTABLE, UNKNOWN_AUTHOR,
             provenance_label,
         },
         navigation::OpenTarget,
@@ -447,21 +448,19 @@ fn a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_offered(
         shell.rows("item-problem-guidance", cx),
         [ProblemCode::MalformedFrontMatter.guidance()]
     );
-    // Its source is still shown, and it has no discussion.
-    assert!(present(&shell, "item-source", cx));
+    // Its file is shown, in the read view, and it has no discussion.
+    assert!(present(&shell, "item-read", cx));
+    assert!(!present(&shell, "item-source", cx));
     assert!(!present(&shell, "comments-state", cx));
 
-    // The header's later actions are shown, and each says it is not
-    // available yet. The header's primary action is the ticket's, Close
-    // ticket…. Repair is not one of them.
-    let later: Vec<&str> = LATER
-        .into_iter()
-        .filter(|action| !["Approve and merge…"].contains(action))
-        .collect();
-    assert_eq!(shell.rows("later-action", cx), later);
-    let notes = shell.rows("later-note", cx);
-    assert_eq!(notes.len(), later.len());
-    assert!(notes.iter().all(|note| note == LATER_NOTE));
+    // No action waits for a later release (E-4): the header's action is
+    // the ticket's, Close ticket…, live. Repair is not it.
+    assert!(!present(&shell, ("later-action", 0usize), cx));
+    assert!(!present(&shell, ("later-note", 0usize), cx));
+    assert_eq!(
+        shell.label(LIFECYCLE_ACTION, cx).as_deref(),
+        Some(CLOSE_TICKET)
+    );
     // Repair is offered from the "Needs fixing" banner: pressed, it opens
     // the repair view, and the problem is still shown.
     assert_eq!(shell.label("item-repair", cx).as_deref(), Some("Repair…"));
@@ -677,6 +676,117 @@ fn opening_an_item_writes_nothing(cx: &mut TestAppContext) {
 
     assert_eq!(RepositorySnapshot::take(&root), before);
     assert_eq!(RepositorySnapshot::take(&worktree), worktree_before);
+}
+
+/// A nonconforming file reads in the same read view as an item's body,
+/// with its Git details out of the page: a header button opens them in a
+/// read-only sheet.
+#[gpui_kit::test]
+fn a_nonconforming_file_reads_in_the_read_view_with_its_git_details_in_a_sheet(
+    cx: &mut TestAppContext,
+) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_nonconforming_ticket(root, BROKEN);
+    });
+    let service = shell.fixture.service();
+    let repo = service.resolve_repository(&root).unwrap();
+    let list = service
+        .list_tickets(&repo, &TicketFilter::default())
+        .unwrap();
+    let entry = list.items.iter().find(|item| item.id.is_none()).unwrap();
+    open(&shell, OpenTarget::for_item(&key(&root), entry), cx);
+
+    // The file is the read view's text, and nothing of Git is on the page.
+    shell.frame(cx, |_, _| ());
+    let pane = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.item_pane())
+        .expect("an item tab is shown");
+    let (source, text) = pane.read_with(cx, |pane, cx| {
+        let source = pane
+            .model
+            .item()
+            .rows()
+            .and_then(|item| item.source.clone());
+        let text = pane
+            .page
+            .read()
+            .map(|read| read.read(cx).editor().read(cx).text().to_owned());
+        (source, text)
+    });
+    assert!(source.is_some(), "the file was read");
+    assert_eq!(text, source, "the whole file");
+    for id in [
+        "provenance",
+        "provenance-kind",
+        "provenance-branch",
+        "provenance-worktree",
+        "provenance-head",
+    ] {
+        assert!(!present(&shell, id, cx), "{id} is not on the page");
+    }
+
+    // One button for them in the header, which opens a read-only sheet.
+    assert!(present(&shell, "item-git-details", cx));
+    assert!(!shell.frame(cx, |window, cx| window.has_active_sheet(cx)));
+    shell.click("item-git-details", cx);
+    assert!(shell.frame(cx, |window, cx| window.has_active_sheet(cx)));
+    shell.frame(cx, |_, _| ());
+    let head = shell.label("provenance-head", cx);
+    assert_eq!(
+        shell.label("provenance-kind", cx).as_deref(),
+        Some(KIND_PRIMARY)
+    );
+    assert_eq!(
+        shell.label("provenance-branch", cx).as_deref(),
+        Some("main")
+    );
+    assert_eq!(shell.label("provenance-worktree", cx), Some(key(&root)));
+    assert!(head.is_some(), "the head commit");
+    assert!(!present(&shell, "sheet-inspect", cx), "no Inspect link");
+}
+
+/// A file read by its path that is repaired elsewhere reads as a conforming
+/// file the next time: the raw source view takes the page, and the read
+/// view the file had is dropped, so it cannot take a press.
+#[gpui_kit::test]
+fn a_file_repaired_elsewhere_drops_the_read_view_it_had(cx: &mut TestAppContext) {
+    const PATH: &str = "docs/mended.md";
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_file(
+            root,
+            PATH,
+            b"---\nmanyhands_managed: true\n---\nOnly a marker.\n",
+        );
+    });
+    let target = OpenTarget::Inspect {
+        repo: key(&root),
+        worktree: key(&root),
+        path: PATH.to_owned(),
+    };
+    open(&shell, target, cx);
+    let pane = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.item_pane())
+        .expect("an item tab is shown");
+    assert!(pane.read_with(cx, |pane, _| pane.read_view().is_some()));
+
+    let mended = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {DOCUMENT}\ntitle: Mended\n---\nOnly a marker.\n"
+    );
+    shell.fixture.commit_file(&root, PATH, mended.as_bytes());
+    shell.fixture.refresh(&root);
+    pane.update(cx, |pane, cx| {
+        pane.reload(cx);
+    });
+    shell.run(cx);
+
+    assert!(present(&shell, "item-source", cx), "the raw source");
+    assert!(!present(&shell, "item-read", cx));
+    assert!(
+        pane.read_with(cx, |pane, _| pane.read_view().is_none()),
+        "no read view is kept"
+    );
 }
 
 /// Refresh that is emptied from the queue on quit has ended: the item

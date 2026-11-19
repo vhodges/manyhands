@@ -3,11 +3,12 @@
 //! End to its top and bottom, and a control that takes focus outside the
 //! visible part is scrolled into view.
 //!
-//! Settings, the Drafts page and the empty pane scroll the content
-//! region's own column, as in D1. An item tab scrolls its own region below
-//! its fixed tab strip and header (R-47): each item pane holds a
-//! `ContentScroll` of its own, made by `region`, which shares the focus
-//! the frame saw with the column's, so a control is revealed once, by the
+//! The Drafts page and the empty pane scroll the content region's own
+//! column, as in D1. An item tab scrolls its own region below its fixed
+//! tab strip and header (R-47), and the Settings sheet its body (B2): each
+//! item pane holds a `ContentScroll` of its own, made by `region`, and the
+//! Settings host one made by `region_keeping`. Each shares the focus the
+//! frame saw with the column's, so a control is revealed once, by the
 //! region that draws it.
 //!
 //! GPUI scrolls a `div` by the wheel only, and nothing in GPUI 0.3.6 or the
@@ -18,8 +19,17 @@
 //! control is the one focused, the marker compares its bounds with the
 //! region's and moves the region's offset the least that shows the
 //! control, or its top when it is taller than the region. The next frame
-//! draws the region at that offset. Focus that has not moved is never
-//! revealed again, so scrolling away from a focused control is left alone.
+//! draws the region at that offset. Focus that has not moved is not
+//! revealed again, so scrolling away from a focused control is left alone,
+//! except in the Settings sheet's region, below.
+//!
+//! The Settings sheet's region keeps its control in view (`region_keeping`;
+//! A6 F1, R-24): a route focuses a field while the page's reads are still
+//! drawn as short lines, and what lands above it pushes it down. So while
+//! focus stays put and the offset is the one the region's last check left,
+//! the focused control is checked again each frame. A wheel, a page key,
+//! the scrollbar or anything else that moves the offset ends that until
+//! focus moves.
 
 use std::{
     cell::{Cell, RefCell},
@@ -45,6 +55,8 @@ pub(crate) struct ContentScroll {
     /// A press landed in the region since it was last laid out
     /// (`note_press`).
     pressed: Rc<Cell<bool>>,
+    /// The region keeps its focused control in view (`region_keeping`).
+    keep: bool,
 }
 
 #[derive(Default)]
@@ -53,6 +65,9 @@ struct Reveal {
     focused: Option<WeakFocusHandle>,
     /// Focus moved and is not yet brought into view.
     pending: bool,
+    /// The offset a keeping region's last check of the focused control
+    /// left, while nothing else has moved it.
+    kept: Option<Pixels>,
 }
 
 impl ContentScroll {
@@ -64,6 +79,18 @@ impl ContentScroll {
             handle: ScrollHandle::new(),
             reveal: self.reveal.clone(),
             pressed: Rc::default(),
+            keep: false,
+        }
+    }
+
+    /// `region`, which also keeps the control focus moved to in view as
+    /// the layout moves it, until its offset is moved some other way: the
+    /// Settings sheet's body (B2; A6 F1). Not for a region whose markers
+    /// wrap an editor taller than it, which `editor::CaretInView` scrolls.
+    pub(crate) fn region_keeping(&self) -> Self {
+        Self {
+            keep: true,
+            ..self.region()
         }
     }
 
@@ -132,6 +159,7 @@ impl ContentScroll {
         if moved {
             reveal.focused = focused.map(FocusHandle::downgrade);
             reveal.pending = focused.is_some();
+            reveal.kept = None;
         }
     }
 
@@ -203,6 +231,7 @@ impl ContentScroll {
         window: &mut Window,
         cx: &mut gpui_kit::App,
     ) {
+        let offset = self.handle.offset();
         {
             let mut reveal = self.reveal.borrow_mut();
             let focused = if within {
@@ -210,21 +239,30 @@ impl ContentScroll {
             } else {
                 focus.is_focused(window)
             };
-            if !reveal.pending || !focused {
+            if !focused {
                 return;
             }
-            reveal.pending = false;
+            if reveal.pending {
+                reveal.pending = false;
+            } else if !(self.keep && reveal.kept.take() == Some(offset.y)) {
+                // Focus has not moved, and this region does not keep it in
+                // view, or its offset was moved since: left alone.
+                return;
+            }
         }
         let viewport = self.handle.bounds();
-        let offset = self.handle.offset();
         let y = if bounds.size.height >= viewport.size.height || bounds.top() < viewport.top() {
-            offset.y + (viewport.top() - bounds.top())
+            Some(offset.y + (viewport.top() - bounds.top()))
         } else if bounds.bottom() > viewport.bottom() {
-            offset.y - (bounds.bottom() - viewport.bottom())
+            Some(offset.y - (bounds.bottom() - viewport.bottom()))
         } else {
-            return;
+            None
         };
-        if self.scroll_to(y) {
+        let moved = y.is_some_and(|y| self.scroll_to(y));
+        if self.keep {
+            self.reveal.borrow_mut().kept = Some(self.handle.offset().y);
+        }
+        if moved {
             // The frame that draws the new offset.
             redraw(window, cx);
         }

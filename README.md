@@ -58,6 +58,10 @@ Manager selection, installed licences/source disclosures, and runtime checks.
 `v0.1.6` predates the flake; remote installation needs a later published tag
 containing it. Devenv remains the development environment.
 
+## Agent skills
+
+The [`skills/`](skills/README.md) directory holds Agent Skills that teach an AI coding agent (Claude Code, Codex and similar) to use `manyhands-cli`: setting up keys and repositories, working with tickets, documents and comments, sharing, and recovery. Release archives ship it too. The [skills README](skills/README.md) lists the skills and explains how to install the whole set.
+
 ## Repository Layout
 
 - `src/lib.rs`: domain logic shared by the desktop and CLI front ends.

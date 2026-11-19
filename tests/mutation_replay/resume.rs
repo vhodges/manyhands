@@ -7,10 +7,12 @@
 use manyhands::{
     repository::{
         AbandonOperationOutcome, AbandonOperationRequest, CancellationToken, FailurePoint,
-        Mutation, MutationCall, MutationDataDto, OperationId, OperationResumeInput, ProgressStage,
-        RemoteAddInput, RequestId, RequestState,
+        Mutation, MutationCall, MutationDataDto, OperationFamily, OperationId,
+        OperationResumeInput, ProgressStage, RemoteAddInput, RequestId, RequestState,
         keys::SessionCredentials,
-        request_store::{FinalKind, JournalRow},
+        request_store::{
+            DigestSalt, FinalKind, IntentDigest, JournalRow, NewRequest, RequestOperation, ScopeKey,
+        },
     },
     results::{
         CheckpointEffect, DiscoveryEffect, Effects, Envelope, FailureClass, Outcome, ResultCode,
@@ -33,6 +35,9 @@ use crate::support::{
 /// An operation ID no journal holds.
 const UNKNOWN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZZ";
 
+/// A request ID beyond the support module's three, for a resume.
+const RESUME_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
+
 fn resume_in(root: &std::path::Path, operation_id: &str) -> Mutation {
     Mutation::OperationResume(OperationResumeInput {
         root: root.to_owned(),
@@ -42,6 +47,16 @@ fn resume_in(root: &std::path::Path, operation_id: &str) -> Mutation {
 
 fn resume(world: &World, operation_id: &str) -> Mutation {
     resume_in(&world.root, operation_id)
+}
+
+/// A remote added to the repository: work on the whole repository, which
+/// a pending row of any item is in the way of.
+fn probe_remote(world: &World) -> Mutation {
+    Mutation::RemoteAdd(RemoteAddInput {
+        root: world.root.clone(),
+        name: "probe".to_owned(),
+        url: "https://example.invalid/probe.git".to_owned(),
+    })
 }
 
 /// A local row as the journal stores it: its state, its step, when it
@@ -208,7 +223,12 @@ fn a_resume_finishes_an_invalidated_authoritative_hand_off_after_executor_loss()
     assert_eq!(blocked.code, ResultCode::RecoveryRequired);
     assert_eq!(
         recovery_actions(&blocked),
-        ["operation.resume", "repo.inspect", "operation.abandon"]
+        [
+            "operation.resume",
+            "repo.inspect",
+            "operation.show",
+            "operation.abandon"
+        ]
     );
     assert_eq!(
         blocked.recovery[0].operation_id.as_deref(),
@@ -654,20 +674,56 @@ fn a_resume_runs_the_hand_off_a_remote_that_was_added_owes() {
 
 #[test]
 fn a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it() {
-    let (world, _token, owed) = save_owing_its_hand_off();
+    const HEARTBEAT: i64 = 1_700_000_000;
+    let (mut world, _token, owed) = save_owing_its_hand_off();
     let operation_id = operation_of(&owed);
-    // An index owner claimed the hand-off a moment ago and is at work.
-    let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    set_state(&world, &operation_id, "indexing", now);
+    // Freeze admission after the ordinary save setup: an owner is live even
+    // when its heartbeat equals the three-second stale cutoff.
+    let clock = mutation::TestClock::at(HEARTBEAT);
+    world.service = mutation::service_with_clock(world.data.path(), &clock);
+    set_state(&world, &operation_id, "indexing", HEARTBEAT);
     let before = stored(&world, &operation_id);
 
-    let busy = world.execute(REQUEST_2, resume(&world, &operation_id));
-    assert_refused(&world, REQUEST_2, &busy, Outcome::Error, ResultCode::Busy);
-    assert_eq!(busy.failure_class(), Some(FailureClass::Transient));
-    // The same resume is what to send again.
-    assert_eq!(recovery_actions(&busy), ["request.retry"]);
-    assert_eq!(busy.recovery[0].arguments["request_id"], REQUEST_2);
-    assert_eq!(stored(&world, &operation_id), before);
+    for now in [HEARTBEAT, HEARTBEAT + 3] {
+        clock.set(now);
+        let busy = world.execute(REQUEST_2, resume(&world, &operation_id));
+        assert_refused(&world, REQUEST_2, &busy, Outcome::Error, ResultCode::Busy);
+        assert_eq!(busy.failure_class(), Some(FailureClass::Transient));
+        // The same resume is what to send again.
+        assert_eq!(recovery_actions(&busy), ["request.retry"]);
+        assert_eq!(busy.recovery[0].arguments["request_id"], REQUEST_2);
+        assert_eq!(stored(&world, &operation_id), before);
+    }
+
+    // Only a strictly older heartbeat can be reclaimed by that same request.
+    clock.set(HEARTBEAT + 4);
+    let resumed = world.execute(REQUEST_2, resume(&world, &operation_id));
+    assert_eq!(
+        (resumed.outcome, resumed.code, resumed.failure_class()),
+        (Outcome::Success, ResultCode::Ok, None)
+    );
+    assert_eq!(resumed.effects, current());
+    assert_eq!(resumed.request_id.as_deref(), Some(REQUEST_2));
+    assert_eq!(resumed.operation_id, None);
+    assert_eq!(resumed.data, None);
+    assert!(resumed.recovery.is_empty());
+    let after = stored(&world, &operation_id);
+    assert_eq!(after.0, "completed");
+    assert_eq!(after.1, before.1);
+    assert_eq!(after.3, before.3 + 1);
+    assert_eq!(
+        world.journal_row(&operation_id),
+        JournalRow::Final {
+            kind: FinalKind::Completed,
+            owes_work: false,
+            checkpointed: true,
+        }
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+    let record = world.record(REQUEST_2).expect("the resume's record");
+    assert_eq!(record.state, RequestState::Finished);
+    assert_eq!(record.target, operation_id);
+    assert!(record.operations.is_empty());
 }
 
 #[test]
@@ -978,6 +1034,11 @@ fn a_resume_of_a_remote_operation_that_has_ended_is_a_no_op() {
     }
 }
 
+/// A synchronization cancelled after a restart recorded its reconciliation
+/// as owed is still listed, and nothing resumes it: the repository is what
+/// is looked at, and its abandon is the way out. Confirmed, the abandon
+/// lets the reconciliation go, and the operation is then one that has
+/// ended.
 #[test]
 fn a_resume_of_a_cancelled_synchronization_that_left_work_says_to_look_at_the_repository() {
     let world = remote_world();
@@ -993,8 +1054,35 @@ fn a_resume_of_a_cancelled_synchronization_that_left_work_says_to_look_at_the_re
         Outcome::Blocked,
         ResultCode::RecoveryRequired,
     );
-    assert_eq!(recovery_actions(&left), ["repo.inspect"]);
+    assert_eq!(
+        recovery_actions(&left),
+        ["repo.inspect", "operation.abandon"]
+    );
+    assert_eq!(left.recovery[1].operation_id.as_deref(), Some(OPERATION_A));
     assert_eq!(stored_remote(&world, OPERATION_A), before);
+
+    let abandon = || {
+        Mutation::OperationAbandon(manyhands::repository::OperationAbandonInput {
+            root: world.root.clone(),
+            operation_id: OperationId::parse(OPERATION_A).unwrap(),
+        })
+    };
+    let previewed = crate::support::confirmation::prepare_with(&world.service, &abandon());
+    assert_eq!(previewed.code, ResultCode::Ok, "{}", previewed.message);
+    let confirmation = previewed.data.expect("a preview").confirmation_id;
+    let abandoned =
+        mutation::execute_confirmed(&world.service, REQUEST_2, &confirmation, abandon());
+    assert_eq!(abandoned.code, ResultCode::Ok, "{}", abandoned.message);
+    let reconciliation: i64 = items::index(world.data.path())
+        .query_row(
+            "SELECT reconciliation_required FROM remote_operation_records WHERE operation_ulid = ?1",
+            [OPERATION_A],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reconciliation, 0);
+    let ended = world.execute(REQUEST_3, resume(&world, OPERATION_A));
+    assert_eq!(ended.code, ResultCode::AlreadyApplied, "{}", ended.message);
 }
 
 /// The record of the synchronization that holds `operation_id`,
@@ -1178,7 +1266,28 @@ fn a_resume_of_a_comment_s_synchronization_is_the_comment_s_publication() {
     );
     assert_eq!(pending.operation_id, None);
     assert!(world.record(REQUEST_1).is_none(), "a request record");
-    assert_eq!(recovery_actions(&pending), ["repo.inspect"]);
+    // Both synchronizations that stopped are offered their way on and their
+    // way out, as every pending operation no process works under is.
+    assert_eq!(
+        recovery_actions(&pending),
+        [
+            "operation.resume",
+            "operation.resume",
+            "repo.inspect",
+            "operation.abandon",
+            "operation.abandon"
+        ]
+    );
+    let named = |at: usize| pending.recovery[at].operation_id.as_deref();
+    assert_eq!(
+        [named(0), named(1), named(3), named(4)],
+        [
+            Some(synchronization.as_str()),
+            Some(OPERATION_C),
+            Some(synchronization.as_str()),
+            Some(OPERATION_C)
+        ]
+    );
     assert_eq!(stored_remote(&world, &synchronization), before);
 }
 
@@ -1189,8 +1298,9 @@ fn a_resume_of_a_poll_that_has_not_ended_is_not_taken_up() {
     let before = stored_remote(&world, OPERATION_A);
 
     let refused = world.execute(REQUEST_1, resume(&world, OPERATION_A));
-    // No request begins a poll, and nothing takes one up under its ID:
-    // the ID is not one this command is for.
+    // No accepted record holds this poll, and nothing takes one up under its
+    // ID: the ID is not one this command is for. A record that holds it is
+    // named, in the row below.
     assert_refused(
         &world,
         REQUEST_1,
@@ -1199,6 +1309,59 @@ fn a_resume_of_a_poll_that_has_not_ended_is_not_taken_up() {
         ResultCode::InvalidInput,
     );
     assert!(refused.recovery.is_empty());
+    assert_eq!(stored_remote(&world, OPERATION_A), before);
+}
+
+/// E-10: what a request record holds is named, a poll's as any other's.
+#[test]
+fn a_resume_of_a_poll_an_accepted_request_holds_names_that_request() {
+    let world = remote_world();
+    operations::insert_remote_poll(world.data.path(), OPERATION_A, "interrupted", None, None);
+    let before = stored_remote(&world, OPERATION_A);
+    let holder = RequestId::parse(REQUEST_2).unwrap();
+    let scope = ScopeKey::for_repository(&world.root).unwrap();
+    world
+        .service
+        .insert_request(&NewRequest {
+            request_id: holder,
+            command: "poll once".to_owned(),
+            target: OPERATION_A.to_owned(),
+            intent_digest: IntentDigest::builder(
+                DigestSalt::Request(holder),
+                "poll once",
+                &scope,
+                OPERATION_A,
+            )
+            .finish(),
+            scope,
+            confirmation: None,
+            base_ref: None,
+            base_oid: None,
+            expected_digest: None,
+            operations: vec![RequestOperation {
+                family: OperationFamily::Remote,
+                operation_id: OperationId::parse(OPERATION_A).unwrap(),
+            }],
+        })
+        .unwrap();
+
+    let refused = world.execute(REQUEST_1, resume(&world, OPERATION_A));
+    assert_refused(
+        &world,
+        REQUEST_1,
+        &refused,
+        Outcome::Blocked,
+        ResultCode::OriginalRequestRequired,
+    );
+    assert_eq!(recovery_actions(&refused), ["request.retry"]);
+    assert!(
+        refused.recovery[0]
+            .arguments
+            .values()
+            .any(|value| value == REQUEST_2),
+        "names the request: {:?}",
+        refused.recovery
+    );
     assert_eq!(stored_remote(&world, OPERATION_A), before);
 }
 
@@ -1371,31 +1534,49 @@ fn a_resume_of_a_pending_key_operation_no_request_holds_names_no_request() {
 }
 
 /// A save that committed and owes its index hand-off stands in the way
-/// of every other request on the repository. A request it refuses is
-/// offered the resume of that operation, which finishes it, before the
-/// abandon, which gives it up; and it is not offered the save's own
-/// request, which is another caller's to send.
+/// of every other request of its item and of every request on the whole
+/// repository, such as a remote's addition; another item's request goes
+/// on. A request it refuses is offered the resume of that operation,
+/// which finishes it, before the abandon, which gives it up; and it is not
+/// offered the save's own request, which is another caller's to send.
 #[test]
 fn a_request_refused_for_a_hand_off_another_request_owes_is_offered_its_resume_first() {
     let (world, _token, owed) = save_owing_its_hand_off();
     let operation_id = operation_of(&owed);
 
-    let blocked = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));
+    let other_item = world.execute(REQUEST_3, world.create(mutation::TICKET_NEW));
+    assert_eq!(
+        (other_item.outcome, other_item.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{other_item:?}"
+    );
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    let blocked = world.execute(REQUEST_2, probe_remote(&world));
     assert_eq!(
         (blocked.outcome, blocked.code),
         (Outcome::Blocked, ResultCode::RecoveryRequired)
     );
     assert_eq!(
         recovery_actions(&blocked),
-        ["operation.resume", "repo.inspect", "operation.abandon"]
+        [
+            "operation.resume",
+            "repo.inspect",
+            "operation.show",
+            "operation.abandon"
+        ]
     );
-    for action in [&blocked.recovery[0], &blocked.recovery[2]] {
+    for action in [
+        &blocked.recovery[0],
+        &blocked.recovery[2],
+        &blocked.recovery[3],
+    ] {
         assert_eq!(action.operation_id.as_deref(), Some(operation_id.as_str()));
     }
     assert!(world.record(REQUEST_2).is_none());
 
     // The offered resume, taken, runs the hand-off.
-    let resumed = world.execute(REQUEST_3, resume(&world, &operation_id));
+    let resumed = world.execute(RESUME_REQUEST, resume(&world, &operation_id));
     assert_eq!(
         (resumed.outcome, resumed.code),
         (Outcome::Success, ResultCode::Ok)
@@ -1404,12 +1585,208 @@ fn a_request_refused_for_a_hand_off_another_request_owes_is_offered_its_resume_f
     assert_eq!(world.pending_journal_rows(), 0);
 
     // And the request that was refused then succeeds.
-    let created = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));
+    let added = world.execute(REQUEST_2, probe_remote(&world));
     assert_eq!(
-        (created.outcome, created.code),
+        (added.outcome, added.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{added:?}"
+    );
+    assert!(added.recovery.is_empty());
+}
+
+/// Names `pid` on this host as the holder of the local row `operation_id`,
+/// with the request and command that began it.
+fn held_by(world: &World, operation_id: &str, pid: i64) {
+    let host = manyhands::repository::this_host();
+    operations::attribute_local(
+        world.data.path(),
+        operation_id,
+        &operations::Attribution {
+            request: Some(REQUEST_1),
+            command: Some("ticket save"),
+            author: Some("Ada <ada@example.com>"),
+            host: Some(&host),
+            pid: Some(pid),
+            started_at: Some(operations::STORED_AT),
+        },
+        None,
+    );
+}
+
+/// The service of `world`, asking `table` whether a process exists.
+fn probing(world: &mut World, table: Vec<u32>) {
+    world.service = manyhands::repository::RepositoryService::open_at(world.data.path())
+        .unwrap()
+        .with_process_probe_for_testing(std::sync::Arc::new(operations::ProcessTable(table)));
+}
+
+/// A pid the process table of `probing` holds, and one it does not.
+const LIVE_PID: u32 = 4242;
+const DEAD_PID: u32 = 4243;
+
+/// A row in the way whose holder is gone is not waited for: the request is
+/// refused `recovery_required` at once, naming the operation and its
+/// holder, with the ways on and out a stale row has always been offered,
+/// and `operation.show` for the operation. No row is begun for it.
+#[test]
+fn a_stale_row_answers_recovery_required_naming_the_operation() {
+    let (mut world, _token, owed) = save_owing_its_hand_off();
+    let operation_id = operation_of(&owed);
+    held_by(&world, &operation_id, i64::from(DEAD_PID));
+    let clock = mutation::StepClock::new();
+    world.service = manyhands::repository::RepositoryService::open_at(world.data.path())
+        .unwrap()
+        .with_process_probe_for_testing(std::sync::Arc::new(operations::ProcessTable(vec![
+            LIVE_PID,
+        ])))
+        .with_sleeper_for_testing(clock.clone());
+
+    // A request on the whole repository: the row is in its way.
+    let blocked = world.execute(REQUEST_2, probe_remote(&world));
+    assert_eq!(
+        (blocked.outcome, blocked.code),
+        (Outcome::Blocked, ResultCode::RecoveryRequired)
+    );
+    assert_eq!(
+        recovery_actions(&blocked),
+        [
+            "operation.resume",
+            "repo.inspect",
+            "operation.show",
+            "operation.abandon"
+        ]
+    );
+    assert_eq!(
+        blocked.recovery[2].operation_id.as_deref(),
+        Some(operation_id.as_str())
+    );
+    let data = serde_json::to_value(&blocked).unwrap()["data"].clone();
+    crate::support::schema::check_published("blocked.schema.json", &data).unwrap();
+    let host = manyhands::repository::this_host();
+    assert_eq!(
+        data,
+        serde_json::json!({
+            "blocker": {
+                "operation_id": operation_id,
+                "family": "local",
+                "action": "save_ticket",
+                "item_id": TICKET_A,
+                "request_id": REQUEST_1,
+                "author": "Ada <ada@example.com>",
+                "host": host,
+                "pid": DEAD_PID,
+                "started_at": operations::STORED_AT_TEXT,
+                "live": false,
+            }
+        })
+    );
+    assert_eq!(clock.slept(), 0, "a stale row is not waited for");
+    assert!(world.record(REQUEST_2).is_none());
+    assert_eq!(world.pending_journal_rows(), 1);
+}
+
+/// A resume of an operation whose holder, another process, still works is
+/// refused `busy`, naming it, and takes nothing up: the row is as it was.
+/// Once the holder is gone the same operation is resumed as before.
+#[test]
+fn resume_of_a_live_owned_row_is_refused_with_the_blocker() {
+    let (mut world, _token, owed) = save_owing_its_hand_off();
+    let operation_id = operation_of(&owed);
+    // Another process of this host indexes under the row: it claimed it,
+    // and its heartbeat is fresh.
+    held_by(&world, &operation_id, i64::from(LIVE_PID));
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    set_state(&world, &operation_id, "indexing", now);
+    probing(&mut world, vec![LIVE_PID]);
+    let before = stored(&world, &operation_id);
+
+    let refused = world.execute(REQUEST_3, resume(&world, &operation_id));
+    assert_eq!(
+        (refused.outcome, refused.code, refused.failure_class()),
+        (
+            Outcome::Error,
+            ResultCode::Busy,
+            Some(FailureClass::Transient)
+        )
+    );
+    assert_eq!(refused.effects, Effects::not_requested());
+    assert_eq!(
+        recovery_actions(&refused),
+        ["request.retry", "operation.show"]
+    );
+    let mut golden = serde_json::to_value(&refused).unwrap();
+    let blocker = &mut golden["data"]["blocker"];
+    assert_eq!(blocker["operation_id"], operation_id.as_str());
+    assert_eq!(blocker["pid"], LIVE_PID);
+    assert_eq!(blocker["live"], true);
+    // The host is this machine's, and is replaced in the golden alone: a
+    // short name could stand anywhere in the envelope.
+    assert_eq!(blocker["host"], manyhands::repository::this_host());
+    blocker["host"] = "<this-host>".into();
+    mutation::assert_contract_at(
+        "operation_resume_busy_blocked",
+        world.root.to_str().unwrap(),
+        Some("blocked.schema.json"),
+        &[(operation_id.as_str(), "<blocker>")],
+        &golden,
+    );
+    assert_eq!(stored(&world, &operation_id), before);
+    assert!(world.record(REQUEST_3).is_none());
+
+    // The holder is gone, and so, a moment later, is its heartbeat: the
+    // resume takes the row up.
+    probing(&mut world, Vec::new());
+    set_state(&world, &operation_id, "indexing", operations::STORED_AT);
+    let resumed = world.execute(REQUEST_3, resume(&world, &operation_id));
+    assert_eq!(
+        (resumed.outcome, resumed.code),
         (Outcome::Success, ResultCode::Ok)
     );
-    assert!(created.recovery.is_empty());
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+/// A resume of an operation whose row cannot be read, to say whose it is,
+/// does not go ahead: it is `busy`, and nothing is recorded or run. The
+/// row is damaged here only where the resume's own reading of it does not
+/// look: the item it names is no ID.
+#[test]
+fn resume_of_a_row_that_cannot_be_read_is_refused_and_runs_nothing() {
+    let (world, _token, owed) = save_owing_its_hand_off();
+    let operation_id = operation_of(&owed);
+    let damage = |item: &str| {
+        let changed = items::index(world.data.path())
+            .execute(
+                "UPDATE operation_records SET item_id = ?2 WHERE operation_ulid = ?1",
+                [operation_id.as_str(), item],
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+    };
+    damage("not-an-item");
+    let before = stored(&world, &operation_id);
+
+    let refused = world.execute(REQUEST_3, resume(&world, &operation_id));
+    assert_eq!(
+        (refused.outcome, refused.code, refused.failure_class()),
+        (
+            Outcome::Error,
+            ResultCode::Busy,
+            Some(FailureClass::Transient)
+        )
+    );
+    assert_eq!(refused.effects, Effects::not_requested());
+    assert_eq!(refused.data, None);
+    assert_eq!(recovery_actions(&refused), ["request.retry"]);
+    assert_eq!(stored(&world, &operation_id), before);
+    assert!(world.record(REQUEST_3).is_none());
+
+    // Readable again, it is taken up.
+    damage(TICKET_A);
+    let resumed = world.execute(REQUEST_3, resume(&world, &operation_id));
+    assert_eq!(
+        (resumed.outcome, resumed.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
 }
 
 /// The row of `operation resume` in the conformance table: the resume

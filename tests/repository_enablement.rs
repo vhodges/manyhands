@@ -584,6 +584,15 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "comment_publication_bindings",
             "configuration_observations",
             "confirmation_records",
+            "context_retirement_absence_receipts",
+            "context_retirement_attempts",
+            "context_retirement_effect_intents",
+            "context_retirement_index_claims",
+            "context_retirement_preservation_claims",
+            "context_retirement_preservations",
+            "context_retirement_records",
+            "context_retirement_reentries",
+            "context_retirement_worktree_resumptions",
             "contexts",
             "discovered_comments",
             "discovered_folders",
@@ -604,6 +613,10 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "operation_record_contexts",
             "operation_records",
             "owned_generated_keys",
+            "poll_retirement_candidates",
+            "poll_retirement_child_sources",
+            "poll_retirement_passes",
+            "poll_retirement_targets",
             "problems",
             "registry_migrations",
             "remote_context_states",
@@ -627,6 +640,10 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "request_operations",
             "request_records",
             "retired_contexts",
+            "retirement_advertisement_provenance",
+            "retirement_observation_pin_releases",
+            "retirement_observation_pins",
+            "retirement_observation_receipts",
             "shared_ssh_keys",
             "ssh_host_pins",
             "ticket_closures",
@@ -3813,7 +3830,7 @@ fn assert_recovery_before_publication_configuration_commit(fixture: support::Tes
         panic!("expected the unfinished publication commit");
     };
     assert_eq!(commit_count(&fixture.repository), commits_before + 1);
-    assert_eq!(support::index_bytes(&fixture.repository), index_before);
+    enablement_index::assert_configuration_current(&fixture.root);
     assert_eq!(remote_names(&fixture.repository), remotes_before);
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
     assert_eq!(

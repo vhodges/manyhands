@@ -35,14 +35,25 @@ pub use closure::{
 };
 mod comment_publication;
 mod context_release;
+mod context_retirement;
 pub use context_release::{ContextReleaseOutcome, ReleaseContextRequest};
+pub use context_retirement::{
+    ContextRetirementOutcome, ContextRetirementReport, ReenterContextRetirementRequest,
+    RetireContextRequest, RetirementAbandonMetadata, RetirementDisposition, RetirementRemoval,
+};
 mod coordination;
 pub use comment_publication::*;
+mod blocker;
 #[cfg(test)]
 mod comment_publication_tests;
 mod discovery;
 mod integration;
 pub mod keys;
+pub use blocker::{Blocker, Sleeper, WaitPolicy};
+pub(crate) use blocker::{BlockerRow, LiveHolder};
+mod liveness;
+#[doc(hidden)]
+pub use liveness::{ProcessProbe, this_host};
 mod local_sync;
 mod mutation;
 #[cfg(unix)]
@@ -85,6 +96,8 @@ pub use keys::{
     UnregisterSharedKeyOutcome,
 };
 pub use local_sync::LocalContextSyncObservationDto;
+#[cfg(test)]
+pub(crate) use mutation::Accepted as RetirementAccepted;
 pub use mutation::*;
 pub use promotion::*;
 pub use read::*;
@@ -94,6 +107,8 @@ use recovery::{
     record_owned_persisted_context, record_persisted_context as record_recovery_context,
     touch_indexing, transition_indexing,
 };
+#[doc(hidden)]
+pub use remote::POLL_PROGRESS_THROTTLE;
 pub use remote::{
     AutomaticBackoff, AutomaticPollEligibility, ConfirmedCommitIdentity, ConflictDto,
     ConflictEligibility, ConflictObservation, ConflictPathDto, ConflictPathKind,
@@ -102,7 +117,8 @@ pub use remote::{
     ExpectedConfiguration, ObservePublicationRemoteRequest, PollCompletion, PollDisposition,
     PollIneligibility, PollPublicationRemoteRequest, PollTargetReport, PollingInterval,
     PublishPendingReason, RedactedConflictBytes, RemoteContextSnapshot, RemoteContextState,
-    RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
+    RemoteHistoryChoices, RemoteHistoryEntry, RemoteHistoryError, RemoteHistoryRelation,
+    RemoteHistoryReport, RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
     RemoteOperationInspection, RemoteOperationPhase, RemoteOperationPriority,
     RemoteOperationSafePoint, RemoteOperationTarget, RemoteOperationTargetError,
     RemoteOutcomeCategory, RemotePollError, RemotePollInvocation, RemotePollOutcome,
@@ -370,6 +386,9 @@ impl<T> IndexPending<T> {
 
 pub struct RepositoryService {
     registry_path: PathBuf,
+    /// The ssh-agent socket (SSH_AUTH_SOCK as the process had it when the
+    /// service opened), used only to sign for the selected key.
+    agent_socket: Option<PathBuf>,
     remote_reservation_scope: Arc<()>,
     availability: Mutex<IndexAvailability>,
     failure_point: Mutex<Option<FailurePoint>>,
@@ -395,6 +414,12 @@ pub struct RepositoryService {
     identity_lock_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// What the request records read the time from.
     clock: Arc<dyn mutation::Clock>,
+    /// What an operation read asks whether a holder's process exists.
+    process_probe: Arc<dyn liveness::ProcessProbe>,
+    /// How long a writer waits for a live holder of the row in its way.
+    wait_policy: WaitPolicy,
+    /// What that wait lets its time pass with.
+    sleeper: Arc<dyn Sleeper>,
 }
 
 struct IndexOwnerHeartbeat {
@@ -411,7 +436,7 @@ impl IndexOwnerHeartbeat {
     ) -> Self {
         Self::beating(heartbeat_hook, move || {
             // Heartbeats use their own brief cache guard so scans remain unguarded.
-            let _ = touch_refresh_index_owner(&registry_path, owner, &root);
+            let _ = touch_refresh_index_owner(&registry_path, owner.clone(), &root);
         })
     }
 
@@ -666,6 +691,22 @@ pub struct TicketWriteOptions {
     /// did. Otherwise what the retry would write differs from the file by
     /// its `slug`, and the retry is refused as an external change.
     pub slug: Option<String>,
+}
+
+impl TicketWriteOptions {
+    /// How far a save with these options reached: a save that sets `deps`
+    /// or `parent` to anything was checked against the other tickets and
+    /// items the index holds, for cycles and kinds, as
+    /// `check_ticket_relationships` checks them; one that leaves both, or
+    /// clears them, read nothing of another item.
+    fn reach(&self) -> recovery::CallReach {
+        let sets_deps = matches!(&self.deps, RelationshipWrite::Set(deps) if !deps.is_empty());
+        if sets_deps || matches!(self.parent, RelationshipWrite::Set(_)) {
+            recovery::CallReach::OtherItems
+        } else {
+            recovery::CallReach::OwnItem
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -935,6 +976,12 @@ pub enum FailurePoint {
     AfterCompletion,
     RefreshFailure,
     PollBeforeTarget,
+    /// Inside the owned observation batch transaction, after advertisement and
+    /// capture writes and the old disposition DELETE, before the first INSERT.
+    PollBeforeDispositionInsert,
+    /// Inside the owned local-target transaction, after Git effects and target
+    /// capture, immediately before its disposition UPDATE. Refresh debt is durable.
+    PollBeforeDispositionWrite,
     PollBeforeDiscovery,
     PollAfterCompletion,
     PollAfterMaterializationIntent,
@@ -967,6 +1014,9 @@ pub enum FailurePoint {
     /// the branch and the row holding the step before it.
     AfterInitializationCommit,
     BeforePublicationConfigurationCommit,
+    /// `set_publication_remote`, after the commit and the step that records
+    /// it, before the Git index is brought up to it.
+    AfterPublicationConfigurationCommit,
     BeforeContextBranchCreation,
     AfterContextBranchBeforeWorktreeGitFailure,
     BeforeWorktreeCreation,
@@ -1071,6 +1121,7 @@ pub enum RepositoryOperation {
     SetPublicationRemote,
     PrepareContext,
     ReleaseContext,
+    RetireContext,
     SaveDocument,
     SaveTicket,
     SubmitComment,
@@ -1205,6 +1256,9 @@ pub struct RepositoryError {
     message: String,
     source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     external_change: Option<Box<ExternalChangeDiagnostic>>,
+    /// The operation whose row the call was refused for, when that is
+    /// why it was refused: see `Blocker`.
+    blocker: Option<Box<Blocker>>,
 }
 
 impl RepositoryError {
@@ -1238,6 +1292,7 @@ impl RepositoryError {
             message: error.to_string(),
             source: None,
             external_change: None,
+            blocker: None,
         }
     }
 
@@ -1254,6 +1309,7 @@ impl RepositoryError {
             message: error.to_string(),
             source: Some(Box::new(error)),
             external_change: None,
+            blocker: None,
         }
     }
 
@@ -1271,11 +1327,24 @@ impl RepositoryError {
             message: "an owned path changed after it was observed".to_owned(),
             source: None,
             external_change: Some(Box::new(diagnostic)),
+            blocker: None,
         }
     }
 
     pub fn external_change(&self) -> Option<&ExternalChangeDiagnostic> {
         self.external_change.as_deref()
+    }
+
+    /// The operation whose unfinished row the call was refused for, when
+    /// another operation's row is why it was refused.
+    pub fn blocker(&self) -> Option<&Blocker> {
+        self.blocker.as_deref()
+    }
+
+    /// The same error, naming `blocker` as what it was refused for.
+    pub(crate) fn with_blocker(mut self, blocker: Option<Blocker>) -> Self {
+        self.blocker = blocker.map(Box::new);
+        self
     }
 }
 
@@ -1371,7 +1440,17 @@ impl RepositoryService {
         &self,
         request: RefreshRepositoryRequest,
     ) -> Result<RefreshOutcome, RepositoryError> {
-        self.refresh_repository_target(request, "")
+        self.refresh_repository_target(request, "", true)
+    }
+
+    /// `refresh_repository`, whose row records no author: the refresh a
+    /// promotion or a closure hands its result to the index with, under an
+    /// ID of its own. Whoever closed or promoted is kept by the index alone.
+    pub(crate) fn refresh_repository_unauthored(
+        &self,
+        request: RefreshRepositoryRequest,
+    ) -> Result<RefreshOutcome, RepositoryError> {
+        self.refresh_repository_target(request, "", false)
     }
 
     // Only synchronization's validated local-only identity may use a nonempty
@@ -1380,6 +1459,7 @@ impl RepositoryService {
         &self,
         request: RefreshRepositoryRequest,
         target: &str,
+        authored: bool,
     ) -> Result<RefreshOutcome, RepositoryError> {
         let root = &request.root;
         let operation = RepositoryOperation::RefreshRepository;
@@ -1389,7 +1469,7 @@ impl RepositoryService {
             let _repository_lease = repository_lease(&repository, &root, operation)?;
             let repository_id = registered_repository_id(&self.registry_path, &root, operation)?;
             let Some((_record, owner)) =
-                self.claim_refresh_indexing(&root, request.operation_id, target)?
+                self.claim_refresh_indexing(&root, request.operation_id, target, authored)?
             else {
                 return Ok(RefreshOutcome::IndexPending { root });
             };
@@ -1397,7 +1477,7 @@ impl RepositoryService {
         };
         let heartbeat = IndexOwnerHeartbeat::start(
             self.registry_path.clone(),
-            owner,
+            owner.clone(),
             root.clone(),
             self.take_index_owner_heartbeat_hook(),
         );
@@ -1410,8 +1490,12 @@ impl RepositoryService {
             ));
         }
         self.run_refresh_claim_hook();
-        let result =
-            self.refresh_repository_claimed(&repository, root.clone(), repository_id, owner);
+        let result = self.refresh_repository_claimed(
+            &repository,
+            root.clone(),
+            repository_id,
+            owner.clone(),
+        );
         drop(heartbeat);
         if result
             .as_ref()
@@ -1432,8 +1516,12 @@ impl RepositoryService {
         repository_id: i64,
         owner: IndexOwner,
     ) -> Result<RefreshOutcome, RepositoryError> {
-        let first =
-            self.refresh_repository_observed(repository, root.clone(), repository_id, owner);
+        let first = self.refresh_repository_observed(
+            repository,
+            root.clone(),
+            repository_id,
+            owner.clone(),
+        );
         if !first
             .as_ref()
             .is_err_and(|e| e.kind == RepositoryErrorKind::RecoveryRequired)
@@ -1457,12 +1545,16 @@ impl RepositoryService {
         // prompt or transport is performed while holding the claim guards.
         let heartbeat = IndexOwnerHeartbeat::start(
             self.registry_path.clone(),
-            fresh,
+            fresh.clone(),
             root.clone(),
             self.take_index_owner_heartbeat_hook(),
         );
-        let result =
-            self.refresh_repository_observed(repository, root.clone(), repository_id, fresh);
+        let result = self.refresh_repository_observed(
+            repository,
+            root.clone(),
+            repository_id,
+            fresh.clone(),
+        );
         drop(heartbeat);
         if result
             .as_ref()
@@ -1508,7 +1600,7 @@ impl RepositoryService {
             hook();
         }
         let after = observe_root(repository, &root);
-        touch_refresh_index_owner(&self.registry_path, owner, &root)?;
+        touch_refresh_index_owner(&self.registry_path, owner.clone(), &root)?;
         if let Some(hook) = self
             .refresh_persist_hook
             .lock()
@@ -1535,7 +1627,7 @@ impl RepositoryService {
             persist_context_refresh(
                 &self.registry_path,
                 repository_id,
-                owner,
+                owner.clone(),
                 &before,
                 &before.context,
                 &before.head,
@@ -1550,7 +1642,7 @@ impl RepositoryService {
                 persist_context_refresh(
                     &self.registry_path,
                     repository_id,
-                    owner,
+                    owner.clone(),
                     &before,
                     &active.context,
                     &active.head,
@@ -1562,7 +1654,13 @@ impl RepositoryService {
             }
         }
         if let Some(context) = changed.pop_first() {
-            persist_retry_problem(&self.registry_path, repository_id, &context, owner, &root)?;
+            persist_retry_problem(
+                &self.registry_path,
+                repository_id,
+                &context,
+                owner.clone(),
+                &root,
+            )?;
             return Ok(RefreshOutcome::RetryRequired {
                 root,
                 context: Some(context),
@@ -1590,12 +1688,18 @@ impl RepositoryService {
         self.replace_corrupt_cache(operation, &root)?;
         let operation_id = {
             let _repository_lease = repository_lease(&repository, &root, operation)?;
-            let record_id =
-                begin_operation(&self.registry_path, &root, operation, request.operation_id)?.id;
-            // The row may be one an earlier call left: it is touched
-            // before the lease is let go, so that it shows this call at
-            // work from then on.
-            touch_rebuild_operation(&self.registry_path, record_id, &root)?;
+            let record_id = begin_operation(
+                &self.registry_path,
+                &root,
+                operation,
+                request.operation_id,
+                self.clock.now().unix_timestamp(),
+            )?
+            .id;
+            // The row may be one an earlier call left: it is claimed
+            // before the lease is let go, so that it shows this call, and
+            // this process, at work from then on.
+            claim_rebuild_operation(&self.registry_path, record_id, &root)?;
             record_id
         };
         // The repository is observed with no lease held, for as long as
@@ -2475,12 +2579,13 @@ impl RepositoryService {
             &request.target.item_id,
             operation,
         )?;
-        let (lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle_reaching(
             &root_repository,
             &root,
             operation,
             request.target.operation_id,
             &authoring_write_target(&request.target, &[]),
+            options.reach(),
         )?;
         // As for a document's save: a row a call is indexing under is
         // that call's to finish.
@@ -3448,7 +3553,12 @@ impl RepositoryService {
                 _ => None,
             };
             remote::state::with_transaction(self, root, |tx, id| {
-                remote::state::configure(tx, id, plan.as_ref(), false)
+                remote::state::configure(
+                    tx,
+                    id,
+                    plan.as_ref(),
+                    remote::state::ConfigurationChange::Plan,
+                )
             })?;
         }
         Ok(())
@@ -3462,9 +3572,55 @@ impl RepositoryService {
         operation_id: OperationId,
         target: &str,
     ) -> Result<(RepositoryLease, RecoveryRecord), RepositoryError> {
-        let lease = repository_lease(repository, root, operation)?;
-        let record = self.begin_lifecycle_record(root, operation, operation_id, target)?;
-        Ok((lease, record))
+        self.begin_lifecycle_reaching(
+            repository,
+            root,
+            operation,
+            operation_id,
+            target,
+            recovery::CallReach::OwnItem,
+        )
+    }
+
+    /// `begin_lifecycle`, for a call that reached as far as `reach` says
+    /// before it began; see `recovery::CallReach`.
+    fn begin_lifecycle_reaching(
+        &self,
+        repository: &Repository,
+        root: &Path,
+        operation: RepositoryOperation,
+        operation_id: OperationId,
+        target: &str,
+        reach: recovery::CallReach,
+    ) -> Result<(RepositoryLease, RecoveryRecord), RepositoryError> {
+        // Another operation's row in the way is waited for while its holder
+        // works: the lease is let go, and the begin's registry transaction
+        // has ended, before the wait sleeps, and both are taken again for
+        // the next look. Nothing a peer needs to finish is held meanwhile.
+        //
+        // A call checked against other items before it began is not: its
+        // check was made before the peer's own change reached the index,
+        // and a wait that saw the peer finish would go on with it. It is
+        // answered at once, and the request, sent again, is checked anew.
+        let mut wait = match reach {
+            recovery::CallReach::OwnItem => self.start_wait(),
+            recovery::CallReach::OtherItems => self.no_wait(),
+        };
+        loop {
+            // A lease that cannot be taken in time is waited for as the row
+            // of a live holder is, when one is at work; see `waited`.
+            let begun = repository_lease(repository, root, operation).and_then(|lease| {
+                self.begin_lifecycle_record_reaching(root, operation, operation_id, target, reach)
+                    .map(|record| (lease, record))
+            });
+            match begun {
+                Ok(begun) => return Ok(begun),
+                Err(error) => match self.waited(root, &mut wait, error) {
+                    blocker::Waited::Again => {}
+                    blocker::Waited::Refused(error) => return Err(error),
+                },
+            }
+        }
     }
 
     fn begin_lifecycle_record(
@@ -3473,6 +3629,23 @@ impl RepositoryService {
         operation: RepositoryOperation,
         operation_id: OperationId,
         target: &str,
+    ) -> Result<RecoveryRecord, RepositoryError> {
+        self.begin_lifecycle_record_reaching(
+            root,
+            operation,
+            operation_id,
+            target,
+            recovery::CallReach::OwnItem,
+        )
+    }
+
+    fn begin_lifecycle_record_reaching(
+        &self,
+        root: &Path,
+        operation: RepositoryOperation,
+        operation_id: OperationId,
+        target: &str,
+        reach: recovery::CallReach,
     ) -> Result<RecoveryRecord, RepositoryError> {
         // Preserve authoritative local-Git behavior when the optional cache is unavailable.
         if self.registry_path.is_dir() {
@@ -3487,9 +3660,16 @@ impl RepositoryService {
         let mut connection = open_registry(&self.registry_path, &mut |_| {})
             .map_err(|error| error.for_operation(operation, root))?;
         migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
-        let record =
-            begin_or_reconcile_operation(&mut connection, root, operation, operation_id, target)
-                .map_err(|error| error.for_operation(operation, root))?;
+        let record = recovery::begin_or_reconcile_operation_reaching(
+            &mut connection,
+            root,
+            operation,
+            operation_id,
+            target,
+            self.clock.now().unix_timestamp(),
+            reach,
+        )
+        .map_err(|error| error.for_operation(operation, root))?;
         Ok(record)
     }
 
@@ -3638,6 +3818,8 @@ impl RepositoryService {
             // A release's steps follow a removal, and no write of an item.
             | LocalStep::ContextWorktreeReleased
             | LocalStep::ContextBranchReleased
+            | LocalStep::ContextRetirementAbsent
+            | LocalStep::ContextRetirementPreserved
             | LocalStep::AuthoritativeObserved
             | LocalStep::RemoteChanged
             | LocalStep::PublicationConfigurationWritten
@@ -3844,7 +4026,7 @@ impl RepositoryService {
         };
         let heartbeat = IndexOwnerHeartbeat::start(
             self.registry_path.clone(),
-            owner,
+            owner.clone(),
             root.to_owned(),
             self.take_index_owner_heartbeat_hook(),
         );
@@ -3852,14 +4034,14 @@ impl RepositoryService {
         let refresh = (|| {
             let repository_id = registered_repository_id(&self.registry_path, root, operation)?;
             let (repository, root) = canonical_repository_root(root, operation)?;
-            self.refresh_repository_claimed(&repository, root, repository_id, owner)
+            self.refresh_repository_claimed(&repository, root, repository_id, owner.clone())
         })();
         drop(heartbeat);
         if refresh
             .as_ref()
             .is_err_and(|error| error.kind != RepositoryErrorKind::RepositoryNotRegistered)
         {
-            let _ = set_refresh_operation(&self.registry_path, owner, "failed", None, root);
+            let _ = set_refresh_operation(&self.registry_path, owner.clone(), "failed", None, root);
         }
         match refresh {
             Ok(RefreshOutcome::Refreshed { .. }) => Ok(true),
@@ -3907,19 +4089,31 @@ impl RepositoryService {
         root: &Path,
         operation_id: OperationId,
         target: &str,
+        authored: bool,
     ) -> Result<Option<(RecoveryRecord, IndexOwner)>, RepositoryError> {
         let operation = RepositoryOperation::RefreshRepository;
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
         let mut connection = open_registry(&self.registry_path, &mut |_| {})
             .map_err(|error| error.for_operation(operation, root))?;
         migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
-        let record =
-            begin_or_reconcile_operation(&mut connection, root, operation, operation_id, target)
-                .map_err(|error| error.for_operation(operation, root))?;
+        let begin = if authored {
+            begin_or_reconcile_operation
+        } else {
+            recovery::begin_or_reconcile_unauthored_operation
+        };
+        let record = begin(
+            &mut connection,
+            root,
+            operation,
+            operation_id,
+            target,
+            self.clock.now().unix_timestamp(),
+        )
+        .map_err(|error| error.for_operation(operation, root))?;
         Ok(claim_indexing(
             &connection,
             record.id,
-            OffsetDateTime::now_utc().unix_timestamp() - INDEX_OWNER_STALE_AFTER,
+            self.clock.now().unix_timestamp() - INDEX_OWNER_STALE_AFTER,
         )
         .map_err(|error| error.for_operation(operation, root))?
         .map(|owner| (record, owner)))
@@ -4069,7 +4263,8 @@ impl RepositoryService {
         let availability =
             match open_registry(&registry_path, &mut observer).and_then(|mut connection| {
                 migrate_registry(&mut connection)?;
-                remote::state::audit_registry(&mut connection)
+                remote::state::audit_registry(&mut connection)?;
+                context_retirement::record::audit_registry(&mut connection)
             }) {
                 Ok(()) => IndexAvailability::Ready,
                 Err(error) if is_structural_sqlite_corruption(&error) => {
@@ -4080,6 +4275,9 @@ impl RepositoryService {
 
         Ok(Self {
             registry_path,
+            agent_socket: std::env::var_os("SSH_AUTH_SOCK")
+                .filter(|socket| !socket.is_empty())
+                .map(PathBuf::from),
             remote_reservation_scope: Arc::new(()),
             availability: Mutex::new(availability),
             failure_point: Mutex::new(None),
@@ -4098,6 +4296,9 @@ impl RepositoryService {
             acceptance_hook: Mutex::new(None),
             identity_lock_hook: Mutex::new(None),
             clock: Arc::new(mutation::SystemClock),
+            process_probe: Arc::new(liveness::SystemProbe),
+            wait_policy: WaitPolicy::default(),
+            sleeper: Arc::new(blocker::SystemSleeper),
         })
     }
 
@@ -4498,6 +4699,10 @@ impl RepositoryService {
         }
         self.run_lifecycle_lease_hook(LifecycleLeasePhase::SetPublicationRemoteExisting);
         if config.publication_remote == request.name {
+            // A selection already made may have stopped before its index
+            // update, or come from a version that made none. The checks above
+            // showed the file matches HEAD and the entry only lags behind it.
+            publish_configuration_index(&repository, &root, operation)?;
             self.reconcile_registration(&repository, &root, operation)
                 .map_err(|error| registry_refresh_pending(operation, &root, error))?;
             if !record.is_pending
@@ -4626,6 +4831,12 @@ impl RepositoryService {
             }
         };
         self.advance_lifecycle(&root, operation, record, LocalStep::PublicationCommitted)?;
+        self.check_failure(
+            FailurePoint::AfterPublicationConfigurationCommit,
+            operation,
+            &root,
+        )?;
+        publish_configuration_index(&repository, &root, operation)?;
         match self.reconcile_registration(&repository, &root, operation) {
             Ok(()) => {
                 if self.handoff_post_authoritative(
@@ -4644,6 +4855,14 @@ impl RepositoryService {
             }
             Err(_) => Ok(PublicationRemoteOutcome::RegistrationPending { commit_oid }),
         }
+    }
+
+    /// Use `socket` as the ssh-agent socket instead of the one in the
+    /// environment. `None` means no agent.
+    #[doc(hidden)]
+    pub fn with_agent_socket_for_testing(mut self, socket: Option<PathBuf>) -> Self {
+        self.agent_socket = socket;
+        self
     }
 
     #[doc(hidden)]
@@ -5823,12 +6042,20 @@ fn begin_operation(
     root: &Path,
     operation: RepositoryOperation,
     operation_id: OperationId,
+    started_at: i64,
 ) -> Result<recovery::RecoveryRecord, RepositoryError> {
     let _cache_guard = cache_read_guard(registry_path, root, operation)?;
     let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(operation, root))?;
-    begin_or_reconcile_operation(&mut connection, root, operation, operation_id, "")
-        .map_err(|error| error.for_operation(operation, root))
+    begin_or_reconcile_operation(
+        &mut connection,
+        root,
+        operation,
+        operation_id,
+        "",
+        started_at,
+    )
+    .map_err(|error| error.for_operation(operation, root))
 }
 
 fn registered_repository_id(
@@ -5871,6 +6098,22 @@ fn set_rebuild_operation(
     advance_after_observation(&connection, operation_id, state, None, None)
         .map_err(|error| error.for_operation(RepositoryOperation::RebuildRepository, root))?;
     Ok(())
+}
+
+/// Marks a rebuild's pending row as touched now and held by this process,
+/// as the rebuild takes it up; see `recovery::claim_pending`.
+fn claim_rebuild_operation(
+    registry_path: &Path,
+    record_id: i64,
+    root: &Path,
+) -> Result<(), RepositoryError> {
+    let operation = RepositoryOperation::RebuildRepository;
+    let holder = recovery::Holder::this_process();
+    let _cache_guard = cache_read_guard(registry_path, root, operation)?;
+    let connection = open_registry(registry_path, &mut |_| {})
+        .map_err(|error| error.for_operation(operation, root))?;
+    recovery::claim_pending(&connection, record_id, &holder)
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))
 }
 
 /// Marks a rebuild's pending row as touched now; see
@@ -6189,7 +6432,7 @@ fn persist_context_refresh(
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
-    require_index_owner(&transaction, owner, root)?;
+    require_index_owner(&transaction, owner.clone(), root)?;
     transaction
         .execute(
             "DELETE FROM contexts WHERE repository_id = ?1 AND worktree_path = ?2",
@@ -6285,7 +6528,7 @@ fn persist_retry_problem(
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
-    require_index_owner(&transaction, owner, root)?;
+    require_index_owner(&transaction, owner.clone(), root)?;
     let context_id: Option<i64> = transaction
         .query_row(
             "SELECT id FROM contexts WHERE repository_id = ?1 AND worktree_path = ?2",
@@ -6335,7 +6578,7 @@ fn reconcile_disappeared_contexts(
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
-    require_index_owner(&transaction, owner, root)?;
+    require_index_owner(&transaction, owner.clone(), root)?;
     let paths = std::iter::once(observation.context.worktree.clone())
         .chain(
             observation
@@ -6383,8 +6626,15 @@ fn reconcile_disappeared_contexts(
     // transaction, and records the time from which the refresh observed.
     // A refresh that fails or must be retried never reaches it.
     transaction.execute("UPDATE repositories SET accessibility = 'accessible', refresh_required = 0, refreshed_at = ?2 WHERE id = ?1", params![repository_id, observed_from]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-    if !transition_indexing(&transaction, owner, "completed", None)
-        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
+    let retirement_completed = context_retirement::record::finalize_index(
+        &transaction,
+        owner.clone(),
+        repository_id,
+        root,
+    )?;
+    if !retirement_completed
+        && !transition_indexing(&transaction, owner, "completed", None)
+            .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
     {
         return Err(nonowner_error(root));
     }
@@ -8817,6 +9067,39 @@ fn refresh_configuration_index(
     )
 }
 
+/// Brings the live index's configuration entry up to HEAD's, leaving every
+/// other entry alone. An entry already there writes nothing, and takes no
+/// lock. A failure is the caller's: the same request heals it.
+fn publish_configuration_index(
+    repository: &Repository,
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
+    let git = |error| RepositoryError::git(operation, Some(root.to_owned()), error);
+    let head = repository
+        .head()
+        .and_then(|head| head.peel_to_commit())
+        .map_err(git)?;
+    let committed = configuration_entry_from_tree(&head.tree().map_err(git)?);
+    let mut index = repository.index().map_err(git)?;
+    index.read(false).map_err(git)?;
+    let current = index
+        .get_path(Path::new(canonical::CONFIG_PATH), 0)
+        .map(|entry| (entry.id, entry.mode));
+    if current == committed {
+        return Ok(());
+    }
+    refresh_configuration_index(repository, head.id(), IndexRefreshPolicy::ReplaceOwned).map_err(
+        |_| {
+            RepositoryError::io(
+                operation,
+                Some(root.to_owned()),
+                std::io::Error::other("the Git index could not be updated"),
+            )
+        },
+    )
+}
+
 fn refresh_missing_configuration_index(
     repository: &Repository,
     root: &Path,
@@ -11036,6 +11319,7 @@ fn registry_refresh_pending(
             .to_owned(),
         source: Some(Box::new(error)),
         external_change: None,
+        blocker: None,
     }
 }
 

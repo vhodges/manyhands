@@ -64,6 +64,7 @@ mod restored;
 mod review;
 mod review_view;
 mod save;
+mod save_first;
 mod save_view;
 mod saved;
 
@@ -71,6 +72,7 @@ pub(crate) use self::leave::{CloseThisTab, Leaving};
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(super) use self::recovery_off::{CONTINUE, message as recovery_off_message};
 use self::restored::{Continuing, Then};
+pub(crate) use self::save_first::SaveFirst;
 pub(crate) use self::save_view::InitialsInSettings;
 
 use futures::{channel::oneshot, future::Shared};
@@ -310,6 +312,30 @@ impl ItemPane {
         Some(self.edit.session.as_ref()?.host.clone())
     }
 
+    /// Whether the tab keeps a session after Done, or for the lock.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn edit_session_kept(&self) -> bool {
+        self.session_kept()
+    }
+
+    /// Presses what the banners' Resume and Retry do, past their buttons:
+    /// a prepare's Resume or Retry, a checkpoint's Retry and a save's
+    /// Resume, whichever is owed. For a test of the lock's gate in the
+    /// handlers themselves, which a disabled button never reaches.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn press_owed_for_test(&mut self, cx: &mut Context<Self>) {
+        self.resume(cx);
+        if let Some(Stopped::Refused {
+            retry: Some(request),
+            ..
+        }) = self.edit.stopped
+        {
+            self.retry_prepare(request, cx);
+        }
+        self.retry_save(cx);
+        self.resume_save(cx);
+    }
+
     /// Where the tab stands.
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn edit_phase(&self) -> Phase {
@@ -378,7 +404,7 @@ impl ItemPane {
     pub(super) fn edit_requested(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         // A dialog in front of the tab takes every key (controller ruling,
         // 2026-10-27).
-        if window.has_active_dialog(cx) || !self.edit_available(cx) {
+        if window.has_active_dialog(cx) || !self.edit_available(cx) || self.edits_wait(cx) {
             return false;
         }
         // R-58: a kept session shows its editor again; nothing is prepared.
@@ -422,6 +448,44 @@ impl ItemPane {
                 Some(item) => edit_offered(self.model.target(), item),
                 None => self.continued_not_created(cx),
             }
+    }
+
+    /// A run of the item, or its record, locks the tab (D5 A2, R-23): a
+    /// session shown ends if clean, its context left as it is, and is kept
+    /// if it holds unsaved text. Nothing happens while a save, a claim, a
+    /// prepare or the review runs; the next change of the lock tries again.
+    /// The ended session's draft is discarded without telling release on
+    /// leave, so the context stays as it is.
+    pub(super) fn lock_session(&mut self, cx: &mut Context<Self>) {
+        if self.edit.phase != Phase::Editing
+            || self.shown_session().is_none()
+            || self.lifecycle_busy(cx)
+            || self.save_in_flight(cx)
+            || self.edit.save.run.is_some()
+        {
+            return;
+        }
+        if self.edit_dirty(cx) {
+            self.keep_session(cx);
+            return;
+        }
+        // A clean session whose draft D2 still holds discards it, as Done
+        // does (D3 Done, step 5): the closed item must not show "Restored
+        // draft" for text it no longer differs by. Release on leave is told
+        // nothing. A draft still beginning waits: the next change of the
+        // lock, or its landing, tries again.
+        if self
+            .edit
+            .session
+            .as_ref()
+            .is_some_and(|session| session.draft == DraftLink::Beginning)
+        {
+            return;
+        }
+        match self.live_draft(cx) {
+            Some(draft) => self.end_locked_session(draft, cx),
+            None => self.end_session(None, cx),
+        }
     }
 
     /// The edit session while its editor is shown, not kept.

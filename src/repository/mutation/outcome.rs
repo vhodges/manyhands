@@ -229,6 +229,7 @@ pub(crate) fn synchronization_error_code(error: &SynchronizationError) -> Result
         }
         | SynchronizationError::Interrupted
         | SynchronizationError::HistoryUnknown
+        | SynchronizationError::HistoryUnresolved
         | SynchronizationError::RecoveryRequired => ResultCode::RecoveryRequired,
     }
 }
@@ -582,6 +583,58 @@ pub(crate) fn inspect_the_root_it_lies_in(root: &Path) -> Vec<RecoveryAction> {
         .collect()
 }
 
+/// What a result that names the operation in its way offers: what it
+/// offered, and `operation.show` of that operation after it, once. The
+/// actions that take a pending row up or give it up are added around it
+/// afterwards, as for every result; see `offering_abandon`.
+pub(crate) fn showing(
+    mut recovery: Vec<RecoveryAction>,
+    operation_id: &str,
+) -> Vec<RecoveryAction> {
+    let shown = recovery.iter().any(|action| {
+        action.action == RecoveryActionKind::OperationShow
+            && action.operation_id.as_deref() == Some(operation_id)
+    });
+    if !shown {
+        recovery.push(RecoveryAction::for_operation(
+            RecoveryActionKind::OperationShow,
+            operation_id,
+            [],
+        ));
+    }
+    recovery
+}
+
+/// The refresh of the index of the repository at `root`.
+pub(crate) fn refresh_the_root(root: &str) -> RecoveryAction {
+    RecoveryAction::new(
+        RecoveryActionKind::IndexRefresh,
+        [(ROOT_ARGUMENT, root.into())],
+    )
+}
+
+/// The codes of a failure that passes by itself: a poll giving way, a lease
+/// another call holds, a remote or a network that could not be reached.
+macro_rules! passes_by_itself {
+    () => {
+        ResultCode::Busy
+            | ResultCode::PollYielding
+            | ResultCode::RemoteUnavailable
+            | ResultCode::TransportUnavailable
+    };
+}
+
+/// Whether `code` is of a failure that passes by itself.
+pub(crate) fn passes_by_itself(code: ResultCode) -> bool {
+    matches!(code, passes_by_itself!())
+}
+
+/// The action that asks for a new preview, offered when a request's own record
+/// has gone, so that a new prepare is what follows.
+pub(crate) fn prepare_again() -> RecoveryAction {
+    RecoveryAction::new(RecoveryActionKind::RequestPrepare, [])
+}
+
 /// What a result names, for the actions it offers.
 pub(crate) struct Named<'a> {
     pub(crate) code: ResultCode,
@@ -738,7 +791,6 @@ fn recovery(
             .into_iter()
             .collect()
     };
-    let prepare_again = || vec![RecoveryAction::new(RecoveryActionKind::RequestPrepare, [])];
     let mut actions = match code {
         // A hand-off that is no operation's to owe: nothing is pending
         // under the request's operation ID, and any refresh brings the
@@ -778,7 +830,7 @@ fn recovery(
         // one.
         ResultCode::ConfirmationRequired
         | ResultCode::ConfirmationExpired
-        | ResultCode::ConfirmationNotFound => prepare_again(),
+        | ResultCode::ConfirmationNotFound => vec![prepare_again()],
         // A result that names no repository has none to inspect: it is
         // of a request of the application, as a key generation is. When
         // its record was left accepted, as that of a generation that was
@@ -832,18 +884,23 @@ fn recovery(
             retry,
             root,
         ) {
-            (true, false, _) => prepare_again(),
+            (true, false, _) => vec![prepare_again()],
             (true, true, Some(_)) => vec![at_root(RecoveryActionKind::RepoInspect)],
             (true, true, None) | (false, _, _) => Vec::new(),
         },
+        // A poll's transport stop is final: its record is finished, so the
+        // same request would only read the stored failure again, and a new
+        // request is what polls. `replay` asks this too.
+        ResultCode::RemoteUnavailable | ResultCode::TransportUnavailable
+            if final_transport_stop(command, retry) =>
+        {
+            Vec::new()
+        }
         // Nothing was accepted, or what was accepted is still there:
         // either way the same request is the one to send. So it is for
         // a failure that passes by itself: a poll that is giving way, a
         // remote or a network that could not be reached.
-        ResultCode::Busy
-        | ResultCode::PollYielding
-        | ResultCode::RemoteUnavailable
-        | ResultCode::TransportUnavailable => retry_request(),
+        passes_by_itself!() => retry_request(),
         // The commit exists and the registry write failed: the same
         // request completes the registration.
         ResultCode::RegistrationPending => retry_request(),
@@ -997,8 +1054,15 @@ fn recovery(
     actions
 }
 
-/// Whether `code`, from a synchronization, is one the same request
-/// never gets past; see the closing rule of `recovery`.
+/// Whether a transport code is a final answer that offers nothing: of `poll
+/// once`, whose record was not left accepted (design, Polling Verbs).
+fn final_transport_stop(command: Option<Command>, retry: bool) -> bool {
+    matches!(command, Some(Command::PollOnce)) && !retry
+}
+
+/// Whether `code` is one the same request never gets past, of a command that
+/// stops at safe points: a synchronization's, or a lifecycle's child's. See the
+/// closing rule of `recovery`.
 fn never_finished_by_the_same_request(code: ResultCode, command: Option<Command>) -> bool {
     command.is_some_and(Command::stops_at_safe_points) && never_gets_past(code)
 }
@@ -1102,7 +1166,11 @@ fn with_host_action(
 /// `pending` is the operation IDs of the repository's pending local rows
 /// that nothing is seen against abandoning, oldest first: a row a call
 /// is at work under, or one the remote or key journal also holds, is
-/// not in it, and so is not offered under either rule. `resumable` is
+/// not in it, and so is not offered under either rule. After them come,
+/// under the first rule, the synchronizations of the remote journal that
+/// `operation abandon` closes and that no process works under: a stale
+/// remote operation is offered its way out as a local one is, its resume
+/// before it where a resume would take it up. `resumable` is
 /// those of them that are not the request's own and that a resume would
 /// take up as things are; see `resume::takes_up`.
 ///
@@ -1244,25 +1312,32 @@ impl RepositoryService {
                     return false;
                 };
                 let active = active.operation_id();
-                active.to_string() == operation_id
-                    || OperationId::parse(operation_id).is_ok_and(|operation_id| {
-                        let bound = self.read_session(RepositoryOperation::Read, |connection| {
-                            comment::comment_synchronization(
-                                connection,
-                                Path::new(root),
-                                operation_id,
-                            )
-                        });
-                        // An envelope carries no second error: a registry
-                        // that cannot say whose the reservation is offers
-                        // no cancellation of it.
-                        match bound {
-                            Ok(Some((comment, synchronization))) => {
-                                comment == operation_id && synchronization == active
-                            }
-                            Ok(None) | Err(_) => false,
-                        }
-                    })
+                if active.to_string() == operation_id {
+                    return true;
+                }
+                let Ok(operation) = OperationId::parse(operation_id) else {
+                    return false;
+                };
+                if super::bind::lifecycle::held_by_its_child(
+                    self,
+                    Command::parse(&envelope.command),
+                    Path::new(root),
+                    operation,
+                    active,
+                ) {
+                    return true;
+                }
+                let bound = self.read_session(RepositoryOperation::Read, |connection| {
+                    comment::comment_synchronization(connection, Path::new(root), operation)
+                });
+                // An envelope carries no second error: a registry that cannot
+                // say whose the reservation is offers no cancellation of it.
+                match bound {
+                    Ok(Some((comment, synchronization))) => {
+                        comment == operation && synchronization == active
+                    }
+                    Ok(None) | Err(_) => false,
+                }
             });
         if !own {
             // A request with no operation of its own, as `conflict resolve`
@@ -1301,10 +1376,26 @@ impl RepositoryService {
         else {
             return false;
         };
+        let repository_id = self
+            .resolve_repository(Path::new(root))
+            .ok()
+            .map(|repository| repository.registration_id());
         self.read_session(RepositoryOperation::Read, |connection| {
-            if records::operation_holder(connection, OperationFamily::Remote, root, active, None)?
-                .is_some_and(|holder| holder == named)
-            {
+            // A lifecycle's context child is held by the request that holds
+            // its parent (decision 34).
+            let holder = match repository_id {
+                Some(repository_id) => {
+                    records::operation_or_parent_holder(connection, root, repository_id, active)?
+                }
+                None => records::operation_holder(
+                    connection,
+                    OperationFamily::Remote,
+                    root,
+                    active,
+                    None,
+                )?,
+            };
+            if holder.is_some_and(|holder| holder == named) {
                 return Ok(true);
             }
             let Some((comment, _)) =
@@ -1385,7 +1476,9 @@ impl RepositoryService {
     /// alone, no call is at work under it with a heartbeat, and no call
     /// holds the repository's lease or its bootstrap lease, which is
     /// looked at without waiting and let go at once. The look is taken
-    /// last, and only when there is something to offer.
+    /// last, and only when there is something to offer. A synchronization
+    /// is offered when its abandon closes it and no process of this host
+    /// is at work under it; see `abandonable_remote_operations`.
     ///
     /// An operation offered so that is another request's is asked, with
     /// the question a resume itself asks, whether a resume would take
@@ -1418,6 +1511,27 @@ impl RepositoryService {
                     && !recovery::held_by_another_journal(connection, &operation_id)?
                 {
                     pending.push(operation_id);
+                }
+            }
+            // And the synchronizations its abandon closes that no process
+            // works under, under the first rule; with them the remote
+            // operation the envelope names as the one in its way, which the
+            // list leaves out when a cancellation ended it.
+            if inspects {
+                pending.extend(self.abandonable_remote_operations(connection, &root)?);
+                for action in &envelope.recovery {
+                    let Some(named) = action
+                        .operation_id
+                        .as_deref()
+                        .filter(|_| action.action == RecoveryActionKind::OperationShow)
+                    else {
+                        continue;
+                    };
+                    if !pending.iter().any(|pending| pending == named)
+                        && self.closes_named_remote_operation(connection, &root, named)?
+                    {
+                        pending.push(named.to_owned());
+                    }
                 }
             }
             // Whether the request's record was left accepted, holding

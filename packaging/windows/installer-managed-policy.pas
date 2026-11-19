@@ -1,4 +1,4 @@
-{ Shared by the actual Inno adapter and FPC/engine fixtures. Only these two
+{ Shared by the actual Inno adapter and FPC/engine fixtures. Only these three
   trees belong to the installer. Root files and user data are never pruned. }
 function ValidManagedPath(Value: String): Boolean;
 var
@@ -9,7 +9,7 @@ begin
   Result := False;
   Parts := SplitPolicyString(Value, '\');
   if Length(Parts) < 2 then Exit;
-  if (Parts[0] <> 'bin') and (Parts[0] <> 'licenses') then Exit;
+  if (Parts[0] <> 'bin') and (Parts[0] <> 'licenses') and (Parts[0] <> 'skills') then Exit;
   for I := 0 to Length(Parts) - 1 do begin
     Part := Parts[I];
     if (Part = '') or (Part = '.') or (Part = '..') then Exit;

@@ -1,0 +1,48 @@
+{
+  "code": "invalid_input",
+  "command": "context resolve-local",
+  "data": {
+    "cancel_acknowledged": false,
+    "eligibility": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "kind": "ticket",
+    "next_action": "external_repair",
+    "operation_id": "<operation-id>",
+    "reason": "foreign_change",
+    "required_request_id": null,
+    "resolution_request_id": null,
+    "result_oid": null,
+    "state": "conflict_pending",
+    "type": "local_context_sync"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request input is not valid.",
+  "operation_id": null,
+  "outcome": "error",
+  "recovery": [
+    {
+      "action": "repo.inspect",
+      "arguments": {
+        "root": "<repository>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX3",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

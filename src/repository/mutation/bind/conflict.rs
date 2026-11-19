@@ -42,6 +42,15 @@
 //! the checkpoint, with the synchronization left resolved for `operation
 //! resume`.
 //!
+//! **A lifecycle's child (decision 34).** A promotion's or a closure's ID
+//! names its context child, as a comment's names its synchronization, so the
+//! request is the same whichever of the two IDs names it. Nothing of the
+//! parent's is taken: the resolution reacquires the child's conflict and its
+//! continuation restarts the child as C4's do, and the parent's runner then
+//! adopts the published child. No record holds the child, so the request that
+//! holds the parent is its holder, whose `request cancel` stops the
+//! continuation.
+//!
 //! The input types derive no `Debug`, `Display` or `Serialize`: they hold
 //! sources. No source reaches a result, a record or a diagnostic.
 
@@ -168,6 +177,27 @@ pub(crate) fn attempt_for(
     bytes.copy_from_slice(&hash.finalize().as_bytes()[..16]);
     OperationId::parse(&ulid::Ulid::from_bytes(bytes).to_string())
         .expect("a ULID's own text is canonical")
+}
+
+/// The synchronization `operation_id` names (R-5, decision 34): a comment's
+/// synchronization, a promotion's or a closure's context child, or else the
+/// ID itself. `None` for a lifecycle that has no context child yet.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+fn synchronization_named(
+    db: &rusqlite::Connection,
+    root: &Path,
+    repository_id: i64,
+    operation_id: OperationId,
+) -> Result<Option<OperationId>, ReadError> {
+    if let Some((_, synchronization)) = comment_synchronization(db, root, operation_id)? {
+        return Ok(Some(synchronization));
+    }
+    Ok(
+        match state::lifecycle_context_child(db, repository_id, operation_id)? {
+            Some(child) => child,
+            None => Some(operation_id),
+        },
+    )
 }
 
 /// What a request with no operation leaves of its record when it stops:
@@ -404,21 +434,25 @@ impl Resolving<'_> {
     /// operation and not its synchronization (fact 79). `None` when no
     /// unfinished record holds it.
     fn holder(&self, comment: Option<OperationId>) -> Result<Option<RequestId>, Answer> {
-        let (family, operation_id) = match comment {
-            Some(comment) => (OperationFamily::Local, comment),
-            None => (OperationFamily::Remote, self.synchronization),
-        };
         let scope = self.accepted.scope.as_str();
+        let repository_id = self.repository.registration_id();
         let holder = self
             .service()
-            .read_session(RepositoryOperation::Read, |db| {
-                Ok(records::operation_holder(
+            .read_session(RepositoryOperation::Read, |db| match comment {
+                Some(comment) => Ok(records::operation_holder(
                     db,
-                    family,
+                    OperationFamily::Local,
                     scope,
-                    operation_id,
+                    comment,
                     None,
-                )?)
+                )?),
+                // A lifecycle's child is held through its parent (decision 34).
+                None => records::operation_or_parent_holder(
+                    db,
+                    scope,
+                    repository_id,
+                    self.synchronization,
+                ),
             })
             .map_err(|error| Answer::of_read(&error))?;
         holder
@@ -481,14 +515,20 @@ impl ConflictResolveBinding {
             Synchronization(OperationId, SynchronizationTarget),
         }
         let root = repository.root().to_owned();
+        let repository_id = repository.registration_id();
         let operation_id = self.operation_id;
         let found = service
             .read_session(RepositoryOperation::Read, |db| {
                 if local_sync::record::owned_identity(db, &operation_id.to_string())? {
                     return Ok(Found::LocalSync);
                 }
-                let synchronization = comment_synchronization(db, &root, operation_id)?
-                    .map_or(operation_id, |(_, synchronization)| synchronization);
+                let Some(synchronization) =
+                    synchronization_named(db, &root, repository_id, operation_id)?
+                else {
+                    // A lifecycle with no context child yet: nothing of it
+                    // is a synchronization (decision 34).
+                    return Ok(Found::NotSynchronization);
+                };
                 // A root that is not UTF-8 cannot have been stored.
                 let Some(root) = root.to_str() else {
                     return Ok(Found::Missing);
@@ -1161,11 +1201,16 @@ impl Binding for ConflictResolveBinding {
         let operation_id = self.operation_id;
         let bound = service
             .read_session(RepositoryOperation::Read, |db| {
-                comment_synchronization(db, repository.root(), operation_id)
+                synchronization_named(
+                    db,
+                    repository.root(),
+                    repository.registration_id(),
+                    operation_id,
+                )
             })
             .map_err(|error| Answer::of_read(&error))?;
-        self.synchronization =
-            Some(bound.map_or(operation_id, |(_, synchronization)| synchronization));
+        // A lifecycle with no child is refused when the request is prepared.
+        self.synchronization = Some(bound.unwrap_or(operation_id));
         Ok(())
     }
 

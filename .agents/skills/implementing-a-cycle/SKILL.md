@@ -9,6 +9,14 @@ Complete the approved Cycle in its ticket branch/worktree, with evidence that
 survives session changes and a clear distinction between local and native CI
 verification.
 
+**Required:** follow [Manyhands operations](references/manyhands-operations.md).
+Load `manyhands-overview` first; use `manyhands-finding-work` for ticket reads,
+`manyhands-tickets` for saves and closure, and `manyhands-comments` for
+checkpoint comments. Use `manyhands-sharing-and-sync` for item publication
+and `manyhands-recovery` for blocked or interrupted CLI operations. The shared
+reference distinguishes ticket-owned Cycle artifacts from independently
+managed documents, which use `manyhands-documents`.
+
 ## 1. Resume from evidence
 
 Read current `AGENTS.md`, the ticket/comments, approved Cycle/design/plan, and
@@ -48,8 +56,9 @@ Avoid duplicate broad test runs without a changed tree, failure, or concrete dou
 If a worker stalls, retrieve its diff and command state and resume or reassign the
 remaining work; do not silently abandon it or redo verified tasks.
 
-At plan checkpoints update the ticket/comments using supported CLI operations,
-or the canonical filesystem schema while those commands are unavailable. Record
+At plan checkpoints update the ticket with `manyhands-tickets` and add comments
+with `manyhands-comments` from the registered main checkout. Do not fall back
+to canonical filesystem writes when the CLI is blocked or unavailable. Record
 progress, decisions, blockers, test evidence, and review readiness. Keep the ticket
 open through implementation and unresolved review findings.
 
@@ -68,8 +77,10 @@ approves dispatching it.
 - Report native limitations honestly. Workflow YAML and Linux success do not
   prove Windows or macOS behavior.
 
-Carry authorized work through review fixes. Push/create a PR,
-merge, close the ticket, and remove the worktree only at their applicable
-authorization/lifecycle stages. Skill invocation or plan approval alone does not
-grant those permissions; existing explicit authorization need not be requested
-again. End with concrete links, verified results, and any remaining gates.
+Carry authorized work through review fixes. Push/create a PR only at its
+authorization stage. Close through `manyhands-tickets` after review approval
+and lifecycle preview approval; the close performs the merge and cleanup, not
+a separate PR merge or worktree removal. Skill invocation or plan approval
+alone does not grant those permissions; existing explicit authorization need
+not be requested again. End with concrete links, verified results, and any
+remaining gates.

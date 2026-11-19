@@ -1,5 +1,9 @@
 # 09 · Suggested implementation plan
 
+> Superseded 2026-11-07: [Wave 04](../Waves/wave-04-workspace-design.md) sets the
+> Cycles and their order for this design, following the owner's priorities.
+> Where this plan and the Wave disagree, the Wave governs.
+
 Follow `AGENTS.md`'s dogfooding workflow. Each Cycle below gets a Manyhands ticket before its plan, works in the ticket's worktree, records checkpoints as ticket comments, and passes the Devenv gates (`check`, `fmt`, `clippy`, relevant tests). Keep each Cycle reviewable on its own.
 
 ## Cycle 0: Decisions (no code)

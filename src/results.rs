@@ -408,12 +408,18 @@ recovery_actions! {
     RepoInspect => "repo.inspect", ["root"];
     /// Resume the operation the action names.
     OperationResume => "operation.resume", [];
+    /// Show the operation the action names: the one whose unfinished row
+    /// stands in the result's way, and whose it is.
+    OperationShow => "operation.show", [];
     /// Submit the request `request_id` again.
     RequestRetry => "request.retry", ["request_id"];
     /// Prepare the command again for a new confirmation.
     RequestPrepare => "request.prepare", [];
     /// Cancel the request `request_id`, then submit it once more: that
-    /// call ends it cancelled and lets go of what it holds.
+    /// call ends it cancelled and lets go of what it holds. A `document
+    /// promote` or `ticket close` that answers `cancelled` lets go of a child
+    /// it has stopped but is not ended: its record stays, and the same request
+    /// submitted again continues it.
     RequestCancel => "request.cancel", ["request_id"];
     /// Abandon the operation the action names, in the repository at `root`.
     OperationAbandon => "operation.abandon", ["root"];
@@ -423,6 +429,9 @@ recovery_actions! {
     HostApprove => "host.approve", ["authority", "root"];
     /// Replace the pin of the host `authority` for the repository at `root`.
     HostReplace => "host.replace", ["authority", "root"];
+    /// List the contexts of the repository at `root` whose publication
+    /// history is unknown, and choose a repair for each.
+    RemoteHistory => "remote.history", ["root"];
 }
 
 impl Serialize for RecoveryActionKind {
@@ -826,6 +835,8 @@ problem_codes! {
         "Break the cycle between the tickets' dependencies.";
     ParentCycle => "parent_cycle", None,
         "Break the cycle between the tickets' parents.";
+    OperationsUnreadable => "operations_unreadable", None,
+        "The repository's unfinished operations could not be read; run operation list for the reason.";
     UnknownProblem => "unknown_problem", None,
         "Refresh the index; if the problem remains, inspect the file.";
 }

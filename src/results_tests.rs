@@ -1073,6 +1073,7 @@ fn problem_codes_have_unique_snake_case_strings_and_fixed_guidance() {
             "relationship_not_a_ticket",
             "dependency_cycle",
             "parent_cycle",
+            "operations_unreadable",
             "unknown_problem",
         ]
     );
@@ -1561,11 +1562,12 @@ fn a_host_with_an_empty_port_is_not_a_host() {
 }
 
 /// Every recovery action, with the keys of its arguments.
-const RECOVERY_ACTIONS: [(&str, &[&str]); 11] = [
+const RECOVERY_ACTIONS: [(&str, &[&str]); 13] = [
     ("index.rebuild", &["root"]),
     ("index.refresh", &["root"]),
     ("repo.inspect", &["root"]),
     ("operation.resume", &[]),
+    ("operation.show", &[]),
     ("request.retry", &["request_id"]),
     ("request.prepare", &[]),
     ("request.cancel", &["request_id"]),
@@ -1573,6 +1575,7 @@ const RECOVERY_ACTIONS: [(&str, &[&str]); 11] = [
     ("repo.identity_set", &["root"]),
     ("host.approve", &["authority", "root"]),
     ("host.replace", &["authority", "root"]),
+    ("remote.history", &["root"]),
 ];
 
 #[test]

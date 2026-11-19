@@ -991,7 +991,12 @@ impl RepoBinding {
             Ok(EnableRepositoryOutcome::RegistrationPending { commit_oid: _ }) => {
                 SaveReport::RegistrationPending { claimed: None }
             }
-            Err(error) => return self.stopped(service, accepted, &root, error.kind),
+            Err(error) => {
+                let blocker = error.blocker().cloned();
+                let mut ran = self.stopped(service, accepted, &root, error.kind);
+                ran.answer = ran.answer.naming(service, &root, blocker.as_ref());
+                return ran;
+            }
         };
         // The commit is made and the hand-off or the registration is
         // owed: the same request completes it. A hand-off owed with no

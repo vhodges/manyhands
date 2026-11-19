@@ -149,6 +149,15 @@ pub struct IndexStateDto {
 
 /// `selected_path` is the canonical path the caller gave; `root` is the
 /// repository it selects, which differs for a linked worktree.
+///
+/// `operations` are the repository's unfinished operations, as `operation
+/// list` lists them for it and in its order, with the same attribution:
+/// who started each, from where, and whether that holder still works. It
+/// leaves out the application's key-material operations, which belong to no
+/// repository. It is empty for a repository with none, and for one that is
+/// not registered, which has no remote operation to hold. When the rows
+/// cannot be read it is empty and `configuration.problems` holds
+/// `operations_unreadable`, so an empty list is not taken for none.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RepositoryInspectionDto {
     pub selected_path: String,
@@ -159,6 +168,7 @@ pub struct RepositoryInspectionDto {
     pub configuration: ConfigurationDto,
     pub identity_state: IdentityAvailability,
     pub remotes: Vec<RemoteDto>,
+    pub operations: Vec<OperationDto>,
 }
 
 contract_enum!(
@@ -720,8 +730,8 @@ pub struct PollingStatusDto {
     /// The remote operation that holds the registration's reservation now,
     /// whatever its action, and null when none does.
     pub active_operation_id: Option<String>,
-    /// Null when it is not known when the next attempt is due. Nothing
-    /// stores that so far, so no read fills it.
+    /// The stored deadline of the next attempt. Null when none is stored;
+    /// a null or past deadline is due.
     pub next_eligible_at: Option<String>,
 }
 
@@ -764,6 +774,7 @@ contract_enum!(
         Rebuild => "rebuild",
         PrepareContext => "prepare_context",
         ReleaseContext => "release_context",
+        RetireContext => "retire_context",
         SaveDocument => "save_document",
         SaveTicket => "save_ticket",
         SubmitComment => "submit_comment",
@@ -878,6 +889,53 @@ pub struct OperationDto {
     /// Why a remote or key-material operation did not complete. Always
     /// null for a local operation, which stores no reason.
     pub failure_code: Option<OperationFailureCode>,
+    /// Whose the operation is. It serializes as eight more fields of the
+    /// operation, flat.
+    #[serde(flatten)]
+    pub attribution: OperationAttributionDto,
+}
+
+/// Whose an operation is: the request that began it, who ran it, where, and
+/// whether that process still works. Every field is null for an operation
+/// recorded before operations were attributed, and for a key-material
+/// operation, whose store records none of it.
+///
+/// `request_id`, `command`, `author` and `started_at` name the call that
+/// began the operation and stay as they were when another call takes it
+/// up. `host` and `pid` name the process that last held it, which is the
+/// one that began it until another takes it over. The two are not changed
+/// by merely reading the operation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct OperationAttributionDto {
+    /// The request that began the operation: the one `request show` lists
+    /// it under, or, for a synchronization a comment's submission
+    /// reserved, the comment's own request.
+    pub request_id: Option<String>,
+    /// The command of that request, as its envelope names it.
+    pub command: Option<String>,
+    /// The identity the operation committed as, as `Name <email>`. Null
+    /// when the repository had none.
+    pub author: Option<String>,
+    /// The name of the host that last held the operation.
+    pub host: Option<String>,
+    /// The process ID that last held it on that host.
+    pub pid: Option<i64>,
+    /// When the request began the operation, in UTC.
+    pub started_at: Option<String>,
+    /// The comment a comment submission publishes. Null for every other
+    /// operation.
+    pub comment_id: Option<String>,
+    /// Whether the holder still works, as this read found it: true when
+    /// the operation names this host and a process that exists on it, or,
+    /// naming no process of this host, when its indexing heartbeat is
+    /// fresh, and false otherwise. Null when the operation names neither a
+    /// host nor a process; one that names a host but no process is judged,
+    /// and is false. It is a judgment of this read and is not
+    /// stored; a process ID the system has since given to another process
+    /// makes a dead holder look live. A row naming the reading process
+    /// itself is judged by its heartbeat alone, since that process always
+    /// exists; see `holder_liveness`.
+    pub live: Option<bool>,
 }
 
 contract_enum!(

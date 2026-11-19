@@ -373,9 +373,9 @@ pub(in super::super) fn revalidate_under_lease(
     .map_err(|refusal| refusal.blockers))
 }
 
-/// C12. `operation_records.item_id` is null for lifecycle rows: a row's
-/// ticket comes from its target (R-T0-4), parsed by the abandon bridge's own
-/// parser. A comment binding is unfinished while its local row or its
+/// C12. `operation_records.item_id` is null for most lifecycle rows, and for
+/// every row an older build wrote: a row's ticket comes from its target
+/// (R-T0-4), parsed by the abandon bridge's own parser. A comment binding is unfinished while its local row or its
 /// publication's remote row is.
 fn pending_work(
     tx: &rusqlite::Transaction<'_>,
@@ -786,9 +786,10 @@ fn observe_git(
             }
         }
     }
-    // D5: an absent tracking context that was published means another clone
-    // deleted it. Only a context child could recreate it, and none runs for a
-    // contained context.
+    // D5: an absent tracking context that was published, and that a fetch has
+    // seen gone, means another clone deleted it; published and not seen gone
+    // is unknown (decision 35). Only a context child could recreate it, and
+    // none runs for a contained context.
     if config.publication_remote.is_some()
         && tracking_context.is_none()
         && !contained
@@ -800,6 +801,9 @@ fn observe_git(
             }
             RemoteContextHistory::Unknown => {
                 blockers.insert(HistoryUnknown);
+            }
+            RemoteContextHistory::Unresolved => {
+                blockers.insert(HistoryUnresolved);
             }
             RemoteContextHistory::NeverPublished => {}
         }

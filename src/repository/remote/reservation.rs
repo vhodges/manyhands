@@ -11,8 +11,8 @@ use super::{
     RemoteOperationTarget, RemoteOutcomeCategory, state,
 };
 use crate::repository::{
-    OperationId, RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
-    promotion::lifecycle::LifecycleKind,
+    Blocker, OperationId, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+    RepositoryService, promotion::lifecycle::LifecycleKind,
 };
 
 #[cfg(test)]
@@ -42,9 +42,34 @@ pub struct RemoteReservation {
     repository_id: i64,
     generation: i64,
     epoch: i64,
+    retirement: Option<Box<crate::repository::context_retirement::record::ObserverExecution>>,
+    original_source: Option<Box<crate::repository::context_retirement::source::OriginalPollSource>>,
 }
 
 impl RemoteReservation {
+    pub(in super::super) fn capture_retirement_target(
+        &self,
+        service: &RepositoryService,
+        git: &git2::Repository,
+        cleanup: &crate::repository::cleanup::ContextCleanup,
+        ordinal: usize,
+        row: &super::PollTargetReport,
+    ) -> Result<(), RepositoryError> {
+        if let Some(source) = &self.original_source {
+            source.capture_target(service, git, cleanup, ordinal, row)?;
+        }
+        Ok(())
+    }
+    pub(in super::super) fn set_retirement_cancellation(
+        &mut self,
+        cancel: crate::repository::CancellationToken,
+    ) -> Result<(), RepositoryError> {
+        self.retirement
+            .as_deref_mut()
+            .ok_or_else(state::recovery_required)?
+            .set_cancellation(cancel);
+        Ok(())
+    }
     pub fn operation_id(&self) -> OperationId {
         self.operation_id
     }
@@ -214,7 +239,36 @@ fn token(
         repository_id,
         generation: record.generation,
         epoch: record.owner_epoch,
+        retirement: None,
+        original_source: None,
     }
+}
+
+pub(in super::super) fn retirement_token(
+    service: &RepositoryService,
+    repository_id: i64,
+    record: &state::StoredRemoteOperation,
+    execution: crate::repository::context_retirement::record::ObserverExecution,
+) -> RemoteReservation {
+    let mut owner = token(service, repository_id, record);
+    owner.retirement = Some(Box::new(execution));
+    owner
+}
+
+impl RemoteReservation {
+    pub(in super::super) fn retirement_execution(
+        &self,
+    ) -> Result<&crate::repository::context_retirement::record::ObserverExecution, RepositoryError>
+    {
+        self.retirement
+            .as_deref()
+            .ok_or_else(state::recovery_required)
+    }
+}
+
+/// Whether an operation in `phase` holds its registration's reservation.
+pub(in super::super) fn holds_reservation(phase: RemoteOperationPhase) -> bool {
+    active(phase)
 }
 
 fn active(phase: RemoteOperationPhase) -> bool {
@@ -241,6 +295,58 @@ pub(in super::super) fn owned(
     repository_id: i64,
     owner: &RemoteReservation,
 ) -> Result<state::StoredRemoteOperation, RepositoryError> {
+    let record = owned_record(service, tx, repository_id, owner)?;
+    if let Some(source) = &owner.original_source {
+        source.validate(service, tx, repository_id, &record)?;
+    } else if let Some(execution) = &owner.retirement {
+        execution.validate_observer(service, tx, repository_id, &record)?;
+    } else {
+        if record.poll_kind == Some(state::PollKind::Update) {
+            crate::repository::context_retirement::record::require_update_poll_id_available(
+                tx,
+                repository_id,
+                owner.operation_id,
+                record.priority,
+            )?;
+        } else {
+            crate::repository::context_retirement::record::require_foreign_id_available(
+                tx,
+                owner.operation_id,
+            )?;
+        }
+        crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+    }
+    Ok(record)
+}
+
+/// Only STOP-aware entry points use this path. It preserves full source ownership
+/// validation, but routes CURRENT-F2 cancellation into normal acknowledgement.
+/// All other owned mutations remain continuation-strict; ordinary owners retain
+/// their existing predicates and request handling unchanged.
+fn owned_for_acknowledgement(
+    service: &RepositoryService,
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    owner: &RemoteReservation,
+) -> Result<state::StoredRemoteOperation, RepositoryError> {
+    if let Some(source) = &owner.original_source {
+        let mut record = owned_record(service, tx, repository_id, owner)?;
+        record.cancel_requested |=
+            source.validate_ownership(service, tx, repository_id, &record)?;
+        Ok(record)
+    } else {
+        owned(service, tx, repository_id, owner)
+    }
+}
+
+// Only verifies the immutable reservation token. Source sealing and the STOP
+// adapter independently apply the complete A0 ownership predicate afterward.
+fn owned_record(
+    service: &RepositoryService,
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    owner: &RemoteReservation,
+) -> Result<state::StoredRemoteOperation, RepositoryError> {
     if !Arc::ptr_eq(&service.remote_reservation_scope, &owner.scope) {
         return Err(state::recovery_required());
     }
@@ -254,7 +360,6 @@ pub(in super::super) fn owned(
     {
         return Err(state::recovery_required());
     }
-    crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
     Ok(record)
 }
 
@@ -590,7 +695,275 @@ fn acknowledge(
             .map_err(|_| state::recovery_required())?;
         state::record_poll_completion(tx, id, record.operation_id, now())?;
     }
+    if result != RemoteSafePointOutcome::Continue {
+        crate::repository::context_retirement::source::close_stopped(tx, record)?;
+    }
     Ok(result)
+}
+
+/// Records a cancellation asked of the operation `record_id`, as `request
+/// cancel` records one: the operation's next safe point, or a restart, or
+/// an abandon, acknowledges it.
+fn request_cancel(tx: &Transaction<'_>, record_id: i64) -> Result<(), RepositoryError> {
+    tx.execute(
+        "UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",
+        params![record_id, now()],
+    )
+    .map_err(|_| state::recovery_required())?;
+    Ok(())
+}
+
+/// Records, on the operation `record_id` that has just ended `cancelled`,
+/// that the push it intended was answered as refused: its outcome is
+/// `protocol_rejected`, the category a poll records a refused push under.
+/// The intent itself is immutable history and is kept; the outcome is what
+/// tells `push_absence` that it was answered. The remote's own refusal is
+/// recorded so (`acknowledge_refused_push`), and so is a person's, by a
+/// confirmed `operation abandon` (`close_abandoned`).
+fn record_refused_push(tx: &Transaction<'_>, record_id: i64) -> Result<(), RepositoryError> {
+    tx.execute(
+        "UPDATE remote_operation_records SET outcome=?2 WHERE id=?1 AND phase='cancelled'",
+        params![
+            record_id,
+            state::outcome_name(RemoteOutcomeCategory::ProtocolRejected)
+        ],
+    )
+    .map_err(|_| state::recovery_required())?;
+    Ok(())
+}
+
+/// What the remote journal holds of the push a synchronization intended,
+/// for the preview of its abandon. Nothing is fetched: what the remote holds
+/// is what the row last saw of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) struct AbandonEvidence {
+    /// The commit the operation set out to push: its newest publication
+    /// attempt's candidate, else its push intent. `None` for an operation
+    /// that recorded no push.
+    pub(in super::super) push_oid: Option<git2::Oid>,
+    /// What the row last saw at the ref it publishes to: `Some(None)` for a
+    /// ref it saw absent, `None` for an operation that recorded no look, or
+    /// whose push returned after its newest look; see `last_look`. It is
+    /// the push endpoint's advertisement, the newest look, for an operation
+    /// that recorded a push (the newest attempt's when it is past `open`,
+    /// else the one the push intent was written with, which a reconcile
+    /// refreshes); else what its fetch recorded of the ref.
+    pub(in super::super) observed: Option<Option<git2::Oid>>,
+    /// Whether that push is one nothing answered, as `push_absence` counts
+    /// one: an intent at `push_prepared` or `push_returned` that no
+    /// publication proved. A confirmed abandon records it refused.
+    pub(in super::super) unanswered: bool,
+    /// Whether the push returned after the row's newest look; see
+    /// `push_returned`. `observed` is then `None`.
+    pub(in super::super) push_returned: bool,
+}
+
+/// Whether `operation abandon` may close the remote operation `record`,
+/// which has not ended: a synchronization of the primary branch or of a
+/// context, with no authority recorded and no index hand-off owed. Not one
+/// with a row of the local journal under its ID, nor one a promotion, a
+/// closure, a retirement or a local synchronization is bound to: each of
+/// those has its own way on, and its own way out. Not one that holds
+/// integration or resolution work of its own, a merge applied or a
+/// conflict left for the conflict verbs: that work is the operation's own
+/// to finish or to give up through them.
+pub(in super::super) fn abandonable(
+    db: &rusqlite::Connection,
+    record: &state::StoredRemoteOperation,
+) -> Result<bool, RepositoryError> {
+    let sqlite = |_| state::recovery_required();
+    let operation = record.operation_id.to_string();
+    if !is_sync(&record.target) || record.authority.is_some() || record.index_pending {
+        return Ok(false);
+    }
+    let local: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1)",
+            [&operation],
+            |row| row.get(0),
+        )
+        .map_err(sqlite)?;
+    if local {
+        return Ok(false);
+    }
+    for table in ["document_promotions", "ticket_closures"] {
+        if crate::repository::recovery::has_table(db, table).map_err(|_| state::recovery_required())?
+            && db
+                .query_row(
+                    &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1)"),
+                    [&operation],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(sqlite)?
+        {
+            return Ok(false);
+        }
+    }
+    if crate::repository::local_sync::record::require_foreign_id_available(db, record.operation_id)
+        .is_err()
+    {
+        return Ok(false);
+    }
+    Ok(!retains_promotion_child(db, record)?)
+}
+
+/// What the newest publication attempt of a synchronization recorded of the
+/// push endpoint, for `last_look`.
+#[derive(Clone, Copy, Debug)]
+struct LookedAt {
+    phase: state::PublicationPhase,
+    advertised_oid: Option<git2::Oid>,
+}
+
+/// What a synchronization's row last saw at the ref it publishes to: see
+/// `AbandonEvidence::observed`. `attempt` is its newest publication
+/// attempt, `checkpoint` and `evidence` its legacy envelope.
+///
+/// Once an attempt is past `open`, its advertisement is the newest look,
+/// and a ref absent there was absent, whatever an earlier look, the legacy
+/// intent's or the one the attempt was opened with, saw. A push that returned, an attempt's or the legacy
+/// intent's, was taken by the remote after the newest look, which then says
+/// nothing of what the remote holds: nothing is said.
+fn last_look(
+    attempt: Option<LookedAt>,
+    checkpoint: Option<state::SynchronizationCheckpoint>,
+    evidence: &state::SynchronizationEvidence,
+) -> Option<Option<git2::Oid>> {
+    use state::{PublicationPhase as A, SynchronizationCheckpoint as C};
+    if push_returned(attempt, checkpoint, evidence) {
+        return None;
+    }
+    let pushed = evidence.push_oid.is_some()
+        && matches!(
+            checkpoint,
+            Some(C::PushPrepared | C::PushReturned | C::PushVerified)
+        );
+    match attempt {
+        Some(LookedAt {
+            phase: A::Prepared | A::Verified,
+            advertised_oid,
+        }) => Some(advertised_oid),
+        _ if pushed => Some(evidence.push_advertised_oid),
+        _ if checkpoint.is_some_and(|checkpoint| checkpoint != C::FetchPrepared) => {
+            Some(evidence.tracking_oid)
+        }
+        _ => None,
+    }
+}
+
+/// Whether the push a synchronization recorded returned after its newest
+/// look at the push endpoint: its newest publication attempt returned, or,
+/// with none past `open`, its legacy intent is at `push_returned`. The
+/// remote took that push then; whatever the row saw before says nothing of
+/// what it holds now. A cancellation acknowledged as the push returned
+/// leaves the step before the push the last recorded, so this is what says
+/// the push went out.
+fn push_returned(
+    attempt: Option<LookedAt>,
+    checkpoint: Option<state::SynchronizationCheckpoint>,
+    evidence: &state::SynchronizationEvidence,
+) -> bool {
+    use state::{PublicationPhase as A, SynchronizationCheckpoint as C};
+    match attempt {
+        Some(LookedAt {
+            phase: A::Returned, ..
+        }) => true,
+        Some(LookedAt {
+            phase: A::Prepared | A::Verified,
+            ..
+        }) => false,
+        _ => evidence.push_oid.is_some() && checkpoint == Some(C::PushReturned),
+    }
+}
+
+/// What a preview of the abandon of `record` names of its push; see
+/// `AbandonEvidence`.
+pub(in super::super) fn abandon_evidence(
+    db: &rusqlite::Connection,
+    record: &state::StoredRemoteOperation,
+) -> Result<AbandonEvidence, RepositoryError> {
+    use state::SynchronizationCheckpoint as C;
+    let evidence = &record.sync_evidence;
+    let attempt = state::latest_publication_attempt(db, record)?;
+    let push_oid = attempt
+        .as_ref()
+        .and_then(|attempt| attempt.candidate_oid)
+        .or(evidence.push_oid);
+    let looked = attempt.as_ref().map(|attempt| LookedAt {
+        phase: attempt.phase,
+        advertised_oid: attempt.advertised_oid,
+    });
+    let observed = last_look(looked, record.sync_checkpoint, evidence);
+    let returned = push_returned(looked, record.sync_checkpoint, evidence);
+    let proven = record.authority.is_some()
+        || attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.phase == state::PublicationPhase::Verified)
+        || record.sync_checkpoint == Some(C::PushVerified)
+            && evidence.push_oid.is_some()
+            && evidence.push_advertised_oid == evidence.push_oid;
+    let unanswered = !proven
+        && evidence.push_oid.is_some()
+        && matches!(
+            record.sync_checkpoint,
+            Some(C::PushPrepared | C::PushReturned)
+        );
+    Ok(AbandonEvidence {
+        push_oid,
+        observed,
+        unanswered,
+        push_returned: returned,
+    })
+}
+
+/// Closes the remote operation `record` of the registration
+/// `repository_id`, which `abandonable` allows, in the caller's
+/// transaction: as a cancellation ends it, `cancelled`, its cancellation
+/// asked and acknowledged at the last step it recorded (one already
+/// cancelled stays so). A push it intended
+/// that nothing answered is recorded refused (`record_refused_push`), so a
+/// later synchronization of the context no longer counts it as unanswered.
+/// The reconciliation a restart recorded as owed is let go: what the
+/// operation left in Git stays where it is, for its user, as an abandon of
+/// a local operation leaves its files. The row's attribution and owner
+/// epoch are kept, and so are its evidence and every publication attempt:
+/// they are history. Returns whether a push was recorded refused.
+pub(in super::super) fn close_abandoned(
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    record: &state::StoredRemoteOperation,
+) -> Result<bool, RepositoryError> {
+    let unanswered = abandon_evidence(tx, record)?.unanswered;
+    // One a cancellation already ended owes only its reconciliation.
+    if record.phase != RemoteOperationPhase::Cancelled {
+        request_cancel(tx, record.id)?;
+        let current = state::read_operation(tx, repository_id, record.operation_id)?
+            .ok_or_else(state::recovery_required)?;
+        let decision = acknowledge(
+            tx,
+            &current,
+            current
+                .completed_step
+                .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
+        )?;
+        if decision != RemoteSafePointOutcome::Cancelled {
+            return Err(state::recovery_required());
+        }
+    }
+    if unanswered {
+        record_refused_push(tx, record.id)?;
+    }
+    tx.execute(
+        "UPDATE remote_operation_records SET reconciliation_required=0 WHERE id=?1 AND phase='cancelled'",
+        [record.id],
+    )
+    .map_err(|_| state::recovery_required())?;
+    // The row reads as the store keeps it: an abandon leaves none that its
+    // next reader would refuse.
+    state::read_operation(tx, repository_id, record.operation_id)?
+        .filter(|closed| closed.phase == RemoteOperationPhase::Cancelled)
+        .ok_or_else(state::recovery_required)?;
+    Ok(unanswered)
 }
 
 /// Read-only, bounded progress probe. Never migrates, takes a lease or writes.
@@ -688,7 +1061,7 @@ pub(super) fn commit_observation_batch_with_capture<T>(
     capture: impl FnOnce(&Transaction<'_>, i64, RemoteSafePointOutcome) -> Result<T, RepositoryError>,
 ) -> Result<T, RepositoryError> {
     state::with_transaction(service, root, |tx, id| {
-        let record = owned(service, tx, id, owner)?;
+        let record = owned_for_acknowledgement(service, tx, id, owner)?;
         let synchronization = is_sync(&record.target);
         if synchronization {
             if record.authority.is_some()
@@ -715,7 +1088,7 @@ pub(super) fn commit_observation_batch_with_capture<T>(
         if decision != RemoteSafePointOutcome::Continue {
             return capture(tx, id, decision);
         }
-        if synchronization || record.poll_kind == Some(state::PollKind::Update) {
+        let batch = if synchronization || record.poll_kind == Some(state::PollKind::Update) {
             state::persist_complete_advertisement(
                 tx,
                 id,
@@ -723,9 +1096,15 @@ pub(super) fn commit_observation_batch_with_capture<T>(
                 owner.generation,
                 observations,
                 observed_at,
-            )?;
+            )?
         } else {
-            state::complete_batch(tx, id, plan, owner.generation, observations, observed_at)?;
+            state::complete_batch(tx, id, plan, owner.generation, observations, observed_at)?
+        };
+        if let Some(execution) = &owner.retirement {
+            execution.capture_advertisement(service, tx, id, &record, batch)?;
+        }
+        if let Some(source) = &owner.original_source {
+            source.capture(service, tx, id, &record, batch)?;
         }
         write(tx, id)?;
         let decision = if synchronization {
@@ -747,6 +1126,21 @@ fn finish(
     record: &state::StoredRemoteOperation,
     category: RemoteOutcomeCategory,
 ) -> Result<(), RepositoryError> {
+    finish_at(
+        tx,
+        id,
+        record,
+        category,
+        time::OffsetDateTime::from_unix_timestamp(now()).map_err(|_| state::recovery_required())?,
+    )
+}
+fn finish_at(
+    tx: &Transaction<'_>,
+    id: i64,
+    record: &state::StoredRemoteOperation,
+    category: RemoteOutcomeCategory,
+    completed_at: time::OffsetDateTime,
+) -> Result<(), RepositoryError> {
     let phase = match category {
         RemoteOutcomeCategory::Completed => "completed",
         RemoteOutcomeCategory::Cancelled => "cancelled",
@@ -754,8 +1148,6 @@ fn finish(
     };
     // Persist future automatic retry policy, without scheduling or delaying this
     // call. Attention states and explicit failures retain the existing policy.
-    let completed_at =
-        time::OffsetDateTime::from_unix_timestamp(now()).map_err(|_| state::recovery_required())?;
     if !is_sync(&record.target) {
         let snapshot = state::read_snapshot(tx, id)?;
         let policy = snapshot.polling();
@@ -877,6 +1269,9 @@ impl RepositoryService {
         operation_id: OperationId,
         target: &RemoteOperationTarget,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        // A restart takes the row over: it records this process as the row's
+        // holder, read before the registry transaction begins.
+        let holder = crate::repository::recovery::Holder::this_process();
         state::with_transaction(self, root, |tx, id| {
             crate::repository::promotion::record::validate_remote_identity(
                 tx,
@@ -925,13 +1320,12 @@ impl RepositoryService {
                 .owner_epoch
                 .checked_add(1)
                 .ok_or_else(state::recovery_required)?;
-            tx.execute("UPDATE remote_operation_records SET phase='reserved',completed_step=NULL,outcome=NULL,cancel_requested=0,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",params![record.id,epoch,now()]).map_err(|_|state::recovery_required())?;
+            tx.execute("UPDATE remote_operation_records SET phase='reserved',completed_step=NULL,outcome=NULL,cancel_requested=0,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3),host=?4,pid=?5 WHERE id=?1",params![record.id,epoch,now(),holder.host,holder.pid]).map_err(|_|state::recovery_required())?;
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             Ok(RemoteReservationOutcome::Reserved(token(self, id, &record)))
         })
     }
-    #[allow(dead_code)] // Full-poll orchestration is introduced in Task 6.
     pub(crate) fn reserve_remote_poll(
         &self,
         root: &Path,
@@ -952,7 +1346,6 @@ impl RepositoryService {
         )
     }
 
-    #[allow(dead_code)] // Full-poll orchestration is introduced in Task 6.
     pub(crate) fn restart_remote_poll(
         &self,
         root: &Path,
@@ -1041,16 +1434,34 @@ impl RepositoryService {
         }
         #[cfg(test)]
         promotion_reservation_checkpoint(operation_id);
+        // Read before the registry transaction begins, so no Git
+        // configuration is read while it holds the database's write lock.
+        let origin =
+            crate::repository::recovery::RowOrigin::here(root, self.clock.now().unix_timestamp());
         state::with_transaction(self, root, |tx, repository_id| {
+            if poll_kind == Some(state::PollKind::Update) {
+                crate::repository::context_retirement::record::require_update_poll_id_available(
+                    tx,
+                    repository_id,
+                    operation_id,
+                    priority,
+                )?;
+            } else {
+                crate::repository::context_retirement::record::require_foreign_id_available(
+                    tx,
+                    operation_id,
+                )?;
+            }
             if let Some(execution) = execution {
                 execution.validate(tx, repository_id, operation_id)?;
             }
-            crate::repository::promotion::record::validate_remote_identity(
+            crate::repository::promotion::record::validate_poll_identity(
                 tx,
                 repository_id,
                 operation_id,
                 target,
                 priority,
+                poll_kind,
             )?;
             let binding = tx.query_row("SELECT b.kind,b.item_ulid,b.checkpoint_oid,o.root_path,o.state,o.completed_step FROM comment_publication_bindings b
                 JOIN operation_records o ON o.id=b.local_record_id WHERE b.synchronization_ulid=?1", [operation_id.to_string()],
@@ -1176,7 +1587,7 @@ impl RepositoryService {
                     RemoteReservationOutcome::Busy,
                 ));
             }
-            if poll_kind == Some(state::PollKind::Update) {
+            let inserted = if poll_kind == Some(state::PollKind::Update) {
                 state::insert_operation_with_kind(
                     tx,
                     repository_id,
@@ -1185,10 +1596,12 @@ impl RepositoryService {
                     priority,
                     poll_kind,
                     now(),
-                )?;
+                )?
             } else {
-                state::insert_operation(tx, repository_id, operation_id, target, priority, now())?;
-            }
+                state::insert_operation(tx, repository_id, operation_id, target, priority, now())?
+            };
+            crate::repository::recovery::attribute_remote_row(tx, inserted, &origin)
+                .map_err(|_| state::recovery_required())?;
             let record = state::read_operation(tx, repository_id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             Ok(RemotePollReservationOutcome::Reservation(
@@ -1209,6 +1622,87 @@ impl RepositoryService {
         })
     }
 
+    /// The remote operation that holds the reservation of the repository at
+    /// `root`, when it is not `own`: what a reservation that answered
+    /// `Busy` because another operation holds the reservation was refused
+    /// for. It is read after the refusal, so an operation that let the
+    /// reservation go since is not named. `None` also when nothing can be
+    /// read.
+    pub(crate) fn reservation_holder(&self, root: &Path, own: OperationId) -> Option<Blocker> {
+        let active = self.active_remote_operation(root).ok().flatten()?;
+        let operation_id = active.operation_id();
+        (operation_id != own).then_some(Blocker {
+            family: crate::repository::OperationFamily::Remote,
+            operation_id,
+            live: None,
+            seen: None,
+        })
+    }
+
+    /// What `reserve` comes to, tried again while another operation is in
+    /// its way and that operation's holder still works: the call waits for
+    /// it as a writer waits for a live peer's row, a poll at a time, for as
+    /// long as `WaitPolicy` lets it (`slept`). The budget is a fresh one
+    /// (`start_wait`), under the same policy, not what is left of the
+    /// budget of a `begin_lifecycle` before it; one budget serves both ways
+    /// in which another operation refuses the call:
+    ///
+    /// - `Busy`. The reservation is refused for one of three reasons that
+    ///   `reserve` does not tell apart: another operation holds the
+    ///   reservation, a closure holds the item's context
+    ///   (`closure_holds_context`), or another item's conflict waits for an
+    ///   answer (`has_pending_conflict`). The call then asks whether a live
+    ///   operation holds the reservation (`reservation_holder`, not `own`).
+    ///   If one does, it waits, whatever else refused the call, and when the
+    ///   budget is spent, or the holder is gone, it gives the last `Busy`
+    ///   back. If none does (no holder, or a stale one, or one that cannot
+    ///   be read), the `Busy` is given back at once, with no wait. So a
+    ///   `Busy` for a closure or a conflict is not waited on for itself,
+    ///   only for a live holder that happens to be there; the answer is the
+    ///   same either way, and the caller answers it as it answers a `Busy`
+    ///   it was given at once.
+    /// - `recovery_required` naming another operation's unfinished local
+    ///   row, as a peer's index hand-off leaves one just after it lets the
+    ///   reservation go: as `waited` judges it for a writer's begin. A live
+    ///   or unreadable row is slept on and the budget then ends in `busy`
+    ///   naming it; a stale one is answered at once, `recovery_required`
+    ///   naming it stale.
+    ///
+    /// Only the reservation of a new operation, one with no row yet, is
+    /// given to it: nothing of the call is recorded before it, so an
+    /// attempt that is refused leaves nothing to undo, and the next is
+    /// the first. Between two attempts the call holds nothing: each
+    /// attempt is one registry transaction, which has ended when it
+    /// answers, and no lease or guard is taken around it.
+    ///
+    /// Any other answer, and any other error, is given back as it is.
+    pub(crate) fn reserving(
+        &self,
+        root: &Path,
+        own: OperationId,
+        mut reserve: impl FnMut() -> Result<RemoteReservationOutcome, RepositoryError>,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        let mut wait = self.start_wait();
+        loop {
+            let outcome = match reserve() {
+                Ok(outcome) => outcome,
+                Err(error) => match self.waited(root, &mut wait, error) {
+                    crate::repository::blocker::Waited::Again => continue,
+                    crate::repository::blocker::Waited::Refused(error) => return Err(error),
+                },
+            };
+            if !matches!(outcome, RemoteReservationOutcome::Busy) {
+                return Ok(outcome);
+            }
+            let live = self.reservation_holder(root, own).is_some_and(|holder| {
+                self.judge_blocker(root, &holder).judged == crate::repository::blocker::Judged::Live
+            });
+            if !live || !self.slept(&mut wait) {
+                return Ok(outcome);
+            }
+        }
+    }
+
     /// Read-only correlation adapter: existence and historical authority, never
     /// a reservation token or permission to restart.
     pub(crate) fn comment_child_authority(
@@ -1222,6 +1716,74 @@ impl RepositoryService {
         })
     }
 
+    /// Answers a cancellation that stopped a promotion's or a closure's parent
+    /// for its child `child`, in one immediate transaction, so that no owner
+    /// passes a checkpoint between the guards and the write. It returns whether
+    /// the child was let go.
+    ///
+    /// A child with nothing to lose ends `cancelled` here, with no connection,
+    /// and the reservation is free: unfinished, under the current generation,
+    /// with no authority, no retained or released resolution, no reconciliation
+    /// owed, no integration begun, no publication attempt or recorded push, and
+    /// a checkpoint no further than its fetch. Any other child keeps all of that
+    /// for the same request, and only the flag `request cancel` set on its row
+    /// goes, since the cancellation has been answered: left, it would end the
+    /// row at the next restart.
+    ///
+    /// Whether an owner is alive isn't known. One that is finds its row ended,
+    /// or goes on, and is fenced by a restart as for any other retry.
+    pub(in super::super) fn release_promotion_child(
+        &self,
+        root: &Path,
+        child: OperationId,
+        execution: &crate::repository::promotion::record::ChildExecution,
+    ) -> Result<bool, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            execution.validate(tx, id, child)?;
+            let Some(record) = state::read_operation(tx, id, child)? else {
+                return Ok(false);
+            };
+            if !active(record.phase) {
+                return Ok(false);
+            }
+            use state::SynchronizationCheckpoint as C;
+            let window = state::latest_integration_window(tx, &record)?;
+            let nothing_to_lose = record.authority.is_none()
+                && record.generation == state::generation(tx, id)?
+                && !record.reconciliation_required
+                && record.sync_evidence.push_oid.is_none()
+                && matches!(
+                    record.sync_checkpoint,
+                    None | Some(C::FetchPrepared | C::FetchObserved)
+                )
+                && !retains_promotion_child(tx, &record)?
+                && !promotion_child_has_resolution(tx, &record)?
+                && window.intent.is_none()
+                && state::integration_step_in_window(tx, record.id, window.number, 0)?.is_none()
+                && state::integration_step_in_window(tx, record.id, window.number, 1)?.is_none()
+                && state::latest_publication_attempt(tx, &record)?.is_none();
+            if !nothing_to_lose {
+                tx.execute(
+                    "UPDATE remote_operation_records SET cancel_requested=0,updated_at=max(updated_at,?2) WHERE id=?1",
+                    params![record.id, now()],
+                )
+                .map_err(|_| state::recovery_required())?;
+                return Ok(false);
+            }
+            request_cancel(tx, record.id)?;
+            let record =
+                state::read_operation(tx, id, child)?.ok_or_else(state::recovery_required)?;
+            acknowledge(
+                tx,
+                &record,
+                record
+                    .completed_step
+                    .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
+            )?;
+            Ok(true)
+        })
+    }
+
     pub fn cancel_remote_operation(
         &self,
         root: &Path,
@@ -1231,7 +1793,7 @@ impl RepositoryService {
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             if active(record.phase) {
-                tx.execute("UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
+                request_cancel(tx, record.id)?;
             }
             Ok(())
         })
@@ -1252,13 +1814,12 @@ impl RepositoryService {
         )?;
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
-            tx.execute("UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
-            Ok(())
+            request_cancel(tx, record.id)
         })
     }
 
-    /// Also usable by future transfer-progress callbacks; Cycle 04 invokes only
-    /// these non-transfer boundaries. Returns only after the durable transition.
+    /// Invoked at non-transfer boundaries only: a transfer's callback uses
+    /// `poll_progress`. Returns only after the durable transition.
     pub fn remote_safe_point(
         &self,
         root: &Path,
@@ -1280,7 +1841,7 @@ impl RepositoryService {
         ) -> Result<T, RepositoryError>,
     ) -> Result<T, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
-            let record = owned(self, tx, id, owner)?;
+            let record = owned_for_acknowledgement(self, tx, id, owner)?;
             if is_sync(&record.target) {
                 if let Some(attempt) = state::latest_publication_attempt(tx, &record)? {
                     // The legacy push checkpoint is frozen behind this attempt
@@ -1375,9 +1936,25 @@ impl RepositoryService {
         target: &RemoteOperationTarget,
         poll_kind: state::PollKind,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        // A restart takes the row over: it records this process as the row's
+        // holder, read before the registry transaction begins.
+        let holder = crate::repository::recovery::Holder::this_process();
         state::with_transaction(self, root, |tx, id| {
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
+            if poll_kind == state::PollKind::Update {
+                crate::repository::context_retirement::record::require_update_poll_id_available(
+                    tx,
+                    id,
+                    operation_id,
+                    record.priority,
+                )?;
+            } else {
+                crate::repository::context_retirement::record::require_foreign_id_available(
+                    tx,
+                    operation_id,
+                )?;
+            }
             if &record.target != target
                 || target.action() == RemoteOperationAction::Poll
                     && record.poll_kind != Some(poll_kind)
@@ -1424,10 +2001,15 @@ impl RepositoryService {
                     .owner_epoch
                     .checked_add(1)
                     .ok_or_else(state::recovery_required)?;
-                tx.execute("UPDATE remote_operation_records SET phase='reserved',completed_step=NULL,outcome=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",
-                    params![record.id,epoch,now()]).map_err(|_| state::recovery_required())?;
+                tx.execute("UPDATE remote_operation_records SET phase='reserved',completed_step=NULL,outcome=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3),host=?4,pid=?5 WHERE id=?1",
+                    params![record.id,epoch,now(),holder.host,holder.pid]).map_err(|_| state::recovery_required())?;
                 let restarted = state::read_operation(tx, id, operation_id)?
                     .ok_or_else(state::recovery_required)?;
+                // Normal P restart fences only its exact old source hold. It
+                // never reinstalls capture or retirement authority.
+                if poll_kind == state::PollKind::Update {
+                    crate::repository::context_retirement::source::close_stopped(tx, &restarted)?;
+                }
                 return Ok(RemoteReservationOutcome::Reserved(token(
                     self, id, &restarted,
                 )));
@@ -1436,6 +2018,28 @@ impl RepositoryService {
                 .ok_or_else(state::recovery_required)?;
             Ok(RemoteReservationOutcome::Replay(record.into()))
         })
+    }
+
+    /// Original-live producer seam. A real P token, exact current accepted
+    /// request and durable opted pass are required; public IDs confer no opt-in.
+    pub(in super::super) fn seal_original_poll_source(
+        &self,
+        root: &Path,
+        mut owner: RemoteReservation,
+        accepted: &crate::repository::mutation::Accepted,
+    ) -> Result<RemoteReservation, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            if owner.retirement.is_some() || owner.original_source.is_some() {
+                return Err(state::recovery_required());
+            }
+            let record = owned_record(self, tx, id, &owner)?;
+            let source = crate::repository::context_retirement::source::OriginalPollSource::seal(
+                self, tx, id, root, &record, accepted,
+            )?;
+            owner.original_source = Some(Box::new(source));
+            Ok(())
+        })?;
+        Ok(owner)
     }
 
     /// A transport failure completes only at a previously acknowledged boundary.
@@ -1460,9 +2064,38 @@ impl RepositoryService {
             RemoteSafePointOutcome,
         ) -> Result<T, RepositoryError>,
     ) -> Result<T, RepositoryError> {
+        self.finish_remote_operation_capturing(root, owner, category, None, capture)
+            .map(|(result, _)| result)
+    }
+
+    pub(super) fn finish_remote_operation_capturing<T>(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        category: RemoteOutcomeCategory,
+        pass: Option<&super::poll::FullPass<'_>>,
+        capture: impl FnOnce(
+            &Transaction<'_>,
+            i64,
+            RemoteSafePointOutcome,
+        ) -> Result<T, RepositoryError>,
+    ) -> Result<
+        (
+            T,
+            Option<crate::repository::context_retirement::handoff::Capture>,
+        ),
+        RepositoryError,
+    > {
         state::with_transaction(self, root, |tx, id| {
-            let record = owned(self, tx, id, owner)?;
+            let record = owned_for_acknowledgement(self, tx, id, owner)?;
             let point = record.completed_step.ok_or_else(state::recovery_required)?;
+            // Unbound A1 is not A2 manifest/finalization authority.
+            if owner.original_source.is_some()
+                && category == RemoteOutcomeCategory::Completed
+                && pass.is_none()
+            {
+                return Err(state::recovery_required());
+            }
             let completion_point = if record.poll_kind == Some(state::PollKind::Update) {
                 RemoteOperationSafePoint::BeforeDiscovery
             } else {
@@ -1476,15 +2109,39 @@ impl RepositoryService {
             }
             let decision = acknowledge(tx, &record, point)?;
             if decision != RemoteSafePointOutcome::Continue {
-                return capture(tx, id, decision);
+                return Ok((capture(tx, id, decision)?, None));
             }
-            finish(tx, id, &record, category)?;
+            let at = time::OffsetDateTime::from_unix_timestamp(now())
+                .map_err(|_| state::recovery_required())?;
+            let token = if let Some(source) = &owner.original_source {
+                if category == RemoteOutcomeCategory::Completed {
+                    let report = pass.ok_or_else(state::recovery_required)?.report(
+                        tx,
+                        id,
+                        owner.operation_id,
+                        at,
+                    )?;
+                    Some(source.freeze(self, tx, id, &record, &report)?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            finish_at(tx, id, &record, category, at)?;
+            if owner.original_source.is_some() && token.is_none() {
+                crate::repository::context_retirement::source::close_stopped(tx, &record)?;
+            }
             let decision = if category == RemoteOutcomeCategory::Cancelled {
                 RemoteSafePointOutcome::Cancelled
             } else {
                 RemoteSafePointOutcome::Continue
             };
-            capture(tx, id, decision)
+            let result = capture(tx, id, decision)?;
+            if token.is_some() {
+                crate::repository::context_retirement::record::audit_connection(tx)?;
+            }
+            Ok((result, token))
         })
     }
 }
@@ -1561,14 +2218,7 @@ impl RepositoryService {
                     .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
             )?;
             if refused && decision == RemoteSafePointOutcome::Cancelled {
-                tx.execute(
-                    "UPDATE remote_operation_records SET outcome=?2 WHERE id=?1 AND phase='cancelled'",
-                    params![
-                        record.id,
-                        state::outcome_name(RemoteOutcomeCategory::ProtocolRejected)
-                    ],
-                )
-                .map_err(|_| state::recovery_required())?;
+                record_refused_push(tx, record.id)?;
             }
             Ok(decision)
         })
@@ -1969,6 +2619,9 @@ impl RepositoryService {
         ordinal: u8,
         conflict_digest: [u8; 32],
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        // A restart takes the row over: it records this process as the row's
+        // holder, read before the registry transaction begins.
+        let holder = crate::repository::recovery::Holder::this_process();
         state::with_transaction(self, root, |tx, id| {
             crate::repository::local_sync::record::require_no_pending(tx, id)?;
             let record = state::read_operation(tx, id, operation_id)?
@@ -2007,8 +2660,8 @@ impl RepositoryService {
                 .checked_add(1)
                 .ok_or_else(state::recovery_required)?;
             tx.execute(
-                "UPDATE remote_operation_records SET phase='reconciling',reconciliation_required=1,completed_step=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",
-                params![record.id, epoch, now()],
+                "UPDATE remote_operation_records SET phase='reconciling',reconciliation_required=1,completed_step=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3),host=?4,pid=?5 WHERE id=?1",
+                params![record.id, epoch, now(), holder.host, holder.pid],
             )
             .map_err(|_| state::recovery_required())?;
             let reacquired = state::read_operation(tx, id, operation_id)?
@@ -2453,6 +3106,9 @@ impl RepositoryService {
         target: &RemoteOperationTarget,
         execution: Option<&crate::repository::promotion::record::ChildExecution>,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        // A restart takes the row over: it records this process as the row's
+        // holder, read before the registry transaction begins.
+        let holder = crate::repository::recovery::Holder::this_process();
         state::with_transaction(self, root, |tx, id| {
             if let Some(execution) = execution {
                 execution.validate(tx, id, operation_id)?;
@@ -2525,7 +3181,7 @@ impl RepositoryService {
                 .owner_epoch
                 .checked_add(1)
                 .ok_or_else(state::recovery_required)?;
-            tx.execute("UPDATE remote_operation_records SET phase='reconciling',reconciliation_required=1,completed_step=NULL,outcome=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",params![record.id,epoch,now()]).map_err(|_| state::recovery_required())?;
+            tx.execute("UPDATE remote_operation_records SET phase='reconciling',reconciliation_required=1,completed_step=NULL,outcome=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3),host=?4,pid=?5 WHERE id=?1",params![record.id,epoch,now(),holder.host,holder.pid]).map_err(|_| state::recovery_required())?;
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             Ok(RemoteReservationOutcome::Reserved(token(self, id, &record)))
@@ -2566,10 +3222,15 @@ impl RepositoryService {
                 return Err(state::recovery_required());
             }
             // No effect was prepared: actual graph planning remains Task 4's job.
-            let (checkpoint, phase) = if matches!(
+            // Before any effect was prepared, a row that never recorded where
+            // the operation began (a restart skips `FetchPrepared`) began at
+            // the local tip proved here. Recording it keeps the row and the
+            // evidence read back from it agreeing for every later checkpoint.
+            let before_effect = matches!(
                 record.sync_checkpoint,
                 None | Some(C::FetchPrepared | C::FetchObserved)
-            ) {
+            );
+            let (checkpoint, phase) = if before_effect {
                 if evidence
                     .expected_oid
                     .is_some_and(|expected| expected != local_oid)
@@ -2612,8 +3273,8 @@ impl RepositoryService {
             if decision != RemoteSafePointOutcome::Continue {
                 return Ok(decision);
             }
-            tx.execute("UPDATE remote_operation_records SET phase=?2,sync_checkpoint=?3,reconciliation_required=0,local_oid=?4,push_advertised_oid=?5 WHERE id=?1",
-                params![record.id,phase,checkpoint.name(),local_oid.to_string(),push_advertised_oid.map(|v|v.to_string())]).map_err(|_|state::recovery_required())?;
+            tx.execute("UPDATE remote_operation_records SET phase=?2,sync_checkpoint=?3,reconciliation_required=0,local_oid=?4,push_advertised_oid=?5,expected_oid=CASE WHEN ?6 THEN COALESCE(expected_oid,?4) ELSE expected_oid END WHERE id=?1",
+                params![record.id,phase,checkpoint.name(),local_oid.to_string(),push_advertised_oid.map(|v|v.to_string()),before_effect]).map_err(|_|state::recovery_required())?;
             if checkpoint == C::PushVerified {
                 state::consume_retirement_on_publication(tx, &record)?;
             }

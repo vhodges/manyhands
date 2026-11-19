@@ -214,3 +214,70 @@ fn error(kind: KeyMaterialErrorKind) -> KeyMaterialError {
         kind,
     }
 }
+
+/// Whether a passphrase could unlock the key at `path`. False only for an
+/// OpenSSH private key whose header names no cipher. An unreadable file or any
+/// other format may be protected, so it answers true.
+///
+/// Reads only the file's first bytes, and only the cipher name in them, so it
+/// holds no private key material and works for any key algorithm.
+pub(crate) fn source_may_need_passphrase(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    // The armor line, then 32 base64 characters: the magic, the cipher name's
+    // length and the name "none" are the first 23 bytes.
+    const HEAD: u64 = 256;
+    let mut head = zeroize::Zeroizing::new(Vec::new());
+    let read = std::fs::File::open(path).and_then(|file| file.take(HEAD).read_to_end(&mut head));
+    read.is_err() || !openssh_cipher_is_none(&head)
+}
+
+fn openssh_cipher_is_none(head: &[u8]) -> bool {
+    const ARMOR: &[u8] = b"-----BEGIN OPENSSH PRIVATE KEY-----";
+    const MAGIC: &[u8] = b"openssh-key-v1\0";
+    let Some(body) = head.trim_ascii_start().strip_prefix(ARMOR) else {
+        return false;
+    };
+    let encoded: Vec<u8> = body
+        .iter()
+        .copied()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .take(32)
+        .collect();
+    let decoded = decode_base64_prefix(&encoded);
+    decoded.len() >= MAGIC.len() + 8
+        && decoded.starts_with(MAGIC)
+        && decoded[MAGIC.len()..].starts_with(&[0, 0, 0, 4])
+        && &decoded[MAGIC.len() + 4..MAGIC.len() + 8] == b"none"
+}
+
+/// Decodes whole four-character groups of standard base64, stopping at the
+/// first character outside the alphabet.
+fn decode_base64_prefix(encoded: &[u8]) -> Vec<u8> {
+    let value = |byte: u8| match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let mut decoded = Vec::new();
+    for group in encoded.as_chunks::<4>().0 {
+        let Some(values) = group
+            .iter()
+            .map(|byte| value(*byte))
+            .collect::<Option<Vec<_>>>()
+        else {
+            break;
+        };
+        let word = values
+            .iter()
+            .fold(0u32, |word, bits| (word << 6) | u32::from(*bits));
+        decoded.extend_from_slice(&word.to_be_bytes()[1..]);
+    }
+    decoded
+}
+
+#[cfg(test)]
+#[path = "passphrase_need_tests.rs"]
+mod passphrase_need_tests;

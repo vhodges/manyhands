@@ -56,8 +56,7 @@ prove the resulting behavior and preserve DNS/control-call/teardown caveats.
 ## Scope
 
 - SSH URL normalization and action-specific fetch/push endpoint resolution.
-- Selected-key-only callbacks; no agent, default-key, helper, password, or
-  anonymous authentication success.
+- Selected-key-only callbacks; no default-key, helper, password, or anonymous authentication success. Amended 2026-11-17 by ticket `01M67Y754SJ1FTYQJFR37Z4ZTY`: an ssh-agent reached through SSH_AUTH_SOCK may sign for the selected key, and for no other key.
 - First-use imported-key backend validation, protected-key provider handoff,
   successful-authentication caching, and rejection/source-change eviction.
 - Application-local host pins, exact first-contact approval and exact old/new
@@ -91,7 +90,7 @@ Every future reconnect must create fresh callbacks under this same policy.
 
 | Contract | Required evidence |
 | --- | --- |
-| Selected key | Real fetch and push with selected generated/imported keys; wrong/absent keys fail even with a usable default key, helper, or agent environment. |
+| Selected key | Real fetch and push with selected generated/imported keys; wrong/absent keys fail even with a usable default key or helper, and an agent that holds only other keys is never asked to sign. |
 | Unlock | Encrypted key authenticates with one successful prompt per unchanged session/source; wrong secret is not cached; rejection evicts cached state; cancellation/unavailable provider stops without repeated prompting. |
 | Host trust | Unknown host produces exact challenge; stale approval fails; changed host requires old/new approval; pin wins over matching known_hosts; port separates authorities; no known_hosts writes. Corrupt-registry recovery follows the explicit Q3 decision. |
 | State preservation | Authentication/trust/access failures preserve refs, worktrees, key registrations, key bytes, and existing pins; an approved pin is the only intentional persistent transport-authentication change. |

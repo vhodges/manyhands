@@ -25,6 +25,11 @@
 //!   create runs, when Cancel is disabled as Create is (Part E review, M5);
 //!   focus goes back where it was.
 //!
+//! The dialog is on the common frame (Wave 04 Cycle 05a design A3): its
+//! heading in the Kit's title slot, the explanation, the name, the path
+//! and the answer in the body, and Cancel and Create in the footer, the
+//! body element's last child.
+//!
 //! The name is the user's text, so nothing here derives `Debug`; the
 //! request carries it to the library and nothing else does.
 
@@ -34,7 +39,7 @@ use gpui_kit::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, Render, Styled, Subscription, TestSupportExt, Window,
     component::{
-        ActiveTheme, WindowExt, h_flex,
+        ActiveTheme, WindowExt,
         input::{InputEvent, InputState},
         v_flex,
     },
@@ -43,6 +48,7 @@ use manyhands::results::ResultCode;
 
 use super::{
     create::{CANCEL, CREATE, button, field, focus_the_note, held_button, keep_focus_in},
+    frame::{self, Footer, Header},
     item::text,
     workspace::Workspace,
 };
@@ -55,6 +61,8 @@ use crate::desktop::{
 };
 
 pub(crate) const NEW_FOLDER_HEADING: &str = "New folder";
+/// The header's title: the heading, as the Kit's title slot drew it.
+const HEADING_ID: &str = "new-folder-heading";
 /// The ruled words (pre-flight ruling, Task 24).
 pub(crate) const FOLDER_NAME: &str = "Folder name";
 pub(crate) const FOLDER_STAYS_LOCAL: &str =
@@ -118,10 +126,16 @@ fn open(
     }
     let dialog = cx.new(|cx| NewFolderDialog::new(root, parent, services.clone(), window, cx));
     let built = dialog.clone();
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let creating = built.clone();
         let cancelling = built.clone();
-        base.title(NEW_FOLDER_HEADING)
+        let header = Header {
+            icon: None,
+            title: NEW_FOLDER_HEADING.into(),
+            description: None,
+            ids: (HEADING_ID, None),
+        };
+        frame::dialog(base, header, cx)
             .close_button(false)
             .overlay_closable(false)
             .child(built.clone())
@@ -315,7 +329,8 @@ impl NewFolderDialog {
 }
 
 /// The dialog: what a new folder is, the Folder name with its note, the
-/// full path, what the last Create was answered, and Cancel and Create.
+/// full path and what the last Create was answered, in the body; Cancel
+/// and Create in the footer, the last child of the body element.
 impl Render for NewFolderDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (danger, muted) = (cx.theme().danger, cx.theme().muted_foreground);
@@ -361,10 +376,7 @@ impl Render for NewFolderDialog {
                 });
             },
         );
-        v_flex()
-            .id("new-folder-dialog")
-            .test_support()
-            .track_focus(&self.focus)
+        let content = v_flex()
             .gap_3()
             .child(
                 text("new-folder-explain", FOLDER_STAYS_LOCAL)
@@ -377,8 +389,19 @@ impl Render for NewFolderDialog {
                     .text_xs()
                     .text_color(muted),
             )
-            .children(answer)
-            .child(h_flex().gap_2().justify_end().child(cancel).child(create))
+            .children(answer);
+        v_flex()
+            .id("new-folder-dialog")
+            .test_support()
+            .track_focus(&self.focus)
+            .child(frame::body(content))
+            .child(frame::footer(
+                Footer {
+                    hint: None,
+                    buttons: vec![cancel.into_any_element(), create.into_any_element()],
+                },
+                cx,
+            ))
     }
 }
 

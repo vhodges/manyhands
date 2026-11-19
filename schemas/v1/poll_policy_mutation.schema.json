@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 polling policy mutation data",
+  "description": "The data of a poll configure, poll pause or poll resume envelope, on success and on a no-op: the registration's polling policy as the request's transaction left it. A replay gives it as it was then; poll status reads what is stored now.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "enabled",
+    "paused",
+    "interval_seconds",
+    "backoff_seconds",
+    "recovery_suspended",
+    "next_eligible_at"
+  ],
+  "properties": {
+    "enabled": {
+      "type": "boolean"
+    },
+    "paused": {
+      "type": "boolean"
+    },
+    "interval_seconds": {
+      "description": "From 60 to 3600.",
+      "type": "integer",
+      "minimum": 60
+    },
+    "backoff_seconds": {
+      "description": "The stored doubling state. A poll resume leaves it.",
+      "type": ["integer", "null"]
+    },
+    "recovery_suspended": {
+      "description": "Automatic polls stay blocked while this is true. A poll resume does not lift it.",
+      "type": "boolean"
+    },
+    "next_eligible_at": {
+      "description": "The stored deadline. Null when none is stored, so an eligible poll is due.",
+      "type": ["string", "null"]
+    }
+  }
+}

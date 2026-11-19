@@ -162,10 +162,6 @@ impl Fixture {
             base,
         };
         if remote {
-            rusqlite::Connection::open(f.data.path().join(REGISTRY_FILE))
-                .unwrap()
-                .execute("UPDATE remote_polling_state SET history_unknown=0", [])
-                .unwrap();
             f.tracking(base);
         }
         // Include the already-created coordination file in byte-preservation images.

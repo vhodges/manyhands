@@ -1,0 +1,16 @@
+The request completed.
+request: 01ARZ3NDEKTSV4RRFFQ69G5FR4
+operation: <id>
+effects: discovery=current
+Completed at: <time>
+Completion: completed
+Next eligible at: <time>
+Operation id: <id>
+target: refs/heads/main kind=none item=none disposition=current before=<oid> after=<oid>
+  Local state is current.
+target: refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW kind=ticket item=01ARZ3NDEKTSV4RRFFQ69G5FAW disposition=dirty before=<oid> after=<oid>
+  Save or otherwise handle local changes before polling again.
+--- stderr
+progress: accepted
+progress: connecting
+--- exit 0

@@ -545,6 +545,7 @@ fn drive(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
     owner.transaction(|tx,row| {
         let next=row.owner_epoch.checked_add(1).ok_or_else(||ReadError::new(ResultCode::RecoveryRequired))?;
         if tx.execute("UPDATE local_context_sync_records SET owner_epoch=?2 WHERE operation_ulid=?1 AND owner_epoch=?3 AND generation=?4",params![row.operation_id.to_string(),next,row.owner_epoch,row.generation])?!=1 {return Err(ReadError::new(ResultCode::RecoveryRequired));}
+        super::record::hold_envelope(tx, row.operation_id)?;
         Ok(())
     })?;
     boundary(owner, FailurePoint::LocalSyncAfterIntent)?;

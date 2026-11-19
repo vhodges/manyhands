@@ -72,7 +72,7 @@ state without copying, parsing, unlocking, or deleting private-key material.
   synchronization, merge, promotion, ticket closure, or network operations.
 - Any tracked configuration, canonical Markdown, Git configuration, remote, or
   worktree mutation.
-- SSH-agent, default-key, credential-helper, system-Git, or HTTP(S) fallback.
+- Default-key, credential-helper, system-Git, or HTTP(S) fallback, or an SSH-agent fallback to a key other than the selected one (an agent may sign for the selected key since 2026-11-17, ticket `01M67Y754SJ1FTYQJFR37Z4ZTY`).
 - Persisted deletion authorization, durable deletion recovery, or background
   source monitoring. Cycle 02 owns generated material and destructive deletion;
   Cycle 03 owns first transport validation.

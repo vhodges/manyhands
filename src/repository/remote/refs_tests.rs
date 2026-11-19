@@ -27,7 +27,7 @@ fn retired_context_real_sql_evidence_permits_first_publication_under_unknown_his
     db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)",[root.path().to_str().unwrap()]).unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), true)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Credentials)
     })
     .unwrap();
     db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
