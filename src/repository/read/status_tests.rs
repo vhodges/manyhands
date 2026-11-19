@@ -439,6 +439,17 @@ const LIVE_A: u32 = 4_000_001;
 const LIVE_B: u32 = 4_000_002;
 const GONE: u32 = 4_000_009;
 
+/// The service's clock in these cases, which stands still: a heartbeat is
+/// judged fresh or stale against it alone, whatever time the machine
+/// takes to make each case's repository.
+struct Still(OffsetDateTime);
+
+impl crate::repository::mutation::Clock for Still {
+    fn now(&self) -> OffsetDateTime {
+        self.0
+    }
+}
+
 /// Who a writer refused for a lease or the index's lock is told is at
 /// work. A row a call works under by its own evidence, a fresh index
 /// heartbeat, comes first; then, of the rows a call may be at work under
@@ -450,7 +461,12 @@ const GONE: u32 = 4_000_009;
 fn a_writer_held_off_by_a_lease_is_told_of_the_row_a_call_holding_it_works_under() {
     const A: &str = "01ARZ3NDEKTSV4RRFFQ69G5F0A";
     const B: &str = "01ARZ3NDEKTSV4RRFFQ69G5F0B";
-    let now = OffsetDateTime::now_utc().unix_timestamp();
+    // The service's time; a heartbeat at the edge of freshness by its
+    // clock, and one a second past it.
+    const NOW: i64 = 1_700_000_000;
+    let now = NOW;
+    let edge = NOW - crate::repository::INDEX_OWNER_STALE_AFTER;
+    let past = edge - 1;
     // (case, rows: (operation, state, pid, touched at), whether the
     // repository's lease is held, the operation named)
     type Row<'a> = (
@@ -459,7 +475,7 @@ fn a_writer_held_off_by_a_lease_is_told_of_the_row_a_call_holding_it_works_under
         bool,
         Option<&'a str>,
     );
-    let rows: [Row<'_>; 8] = [
+    let rows: [Row<'_>; 10] = [
         (
             "a lease whose holder has no row, beside an older failed row",
             &[(A, "failed", LIVE_A, 1)],
@@ -491,6 +507,18 @@ fn a_writer_held_off_by_a_lease_is_told_of_the_row_a_call_holding_it_works_under
             Some(B),
         ),
         (
+            "a heartbeat at the edge of freshness before a newer row of the lease",
+            &[(A, "indexing", LIVE_A, edge), (B, "created", LIVE_B, 1)],
+            true,
+            Some(A),
+        ),
+        (
+            "a heartbeat a second too old before a newer row of the lease",
+            &[(A, "indexing", LIVE_A, past), (B, "created", LIVE_B, 1)],
+            true,
+            Some(B),
+        ),
+        (
             "a stale heartbeat, the lease held",
             &[(A, "indexing", LIVE_A, 1)],
             true,
@@ -516,6 +544,9 @@ fn a_writer_held_off_by_a_lease_is_told_of_the_row_a_call_holding_it_works_under
         let data = tempfile::tempdir().unwrap();
         let service = RepositoryService::open_at(data.path())
             .unwrap()
+            .with_clock_for_testing(std::sync::Arc::new(Still(
+                OffsetDateTime::from_unix_timestamp(NOW).unwrap(),
+            )))
             .with_process_probe_for_testing(std::sync::Arc::new(Table(vec![LIVE_A, LIVE_B])));
         let db = Connection::open(data.path().join(crate::repository::REGISTRY_FILE)).unwrap();
         db.execute(
