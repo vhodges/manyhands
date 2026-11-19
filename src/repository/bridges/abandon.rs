@@ -422,7 +422,8 @@ impl RemoteStanding {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RemoteAbandonEvidence {
     /// Whether the ref the operation publishes to was there when the row
-    /// last looked; `None` for a row that recorded no look.
+    /// last looked; `None` for a row that recorded no look, and for one
+    /// whose push the remote took after that look.
     pub(crate) remote_ref_present: Option<bool>,
     /// The commit the ref named then.
     pub(crate) remote_oid: Option<git2::Oid>,

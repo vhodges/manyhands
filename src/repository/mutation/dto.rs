@@ -751,7 +751,8 @@ pub struct OperationAbandonPreviewDto {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct OperationAbandonEvidenceDto {
     /// Whether the branch the operation publishes to was on the remote when
-    /// the row last looked. Null for a row that recorded no look.
+    /// the row last looked. Null for a row that recorded no look, and for
+    /// one whose push the remote took after its last look.
     pub remote_ref_present: Option<bool>,
     /// The commit the operation's local branch names now. Null when the
     /// branch is not there.

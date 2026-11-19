@@ -742,11 +742,12 @@ pub(in super::super) struct AbandonEvidence {
     /// that recorded no push.
     pub(in super::super) push_oid: Option<git2::Oid>,
     /// What the row last saw at the ref it publishes to: `Some(None)` for a
-    /// ref it saw absent, `None` for an operation that recorded no look.
-    /// It is the push endpoint's advertisement, the newest look, for an
-    /// operation that recorded a push (the newest attempt's when it
-    /// recorded one, else the one the push intent was written with, which
-    /// a reconcile refreshes); else what its fetch recorded of the ref.
+    /// ref it saw absent, `None` for an operation that recorded no look, or
+    /// whose push returned after its newest look; see `last_look`. It is
+    /// the push endpoint's advertisement, the newest look, for an operation
+    /// that recorded a push (the newest attempt's when it is past `open`,
+    /// else the one the push intent was written with, which a reconcile
+    /// refreshes); else what its fetch recorded of the ref.
     pub(in super::super) observed: Option<Option<git2::Oid>>,
     /// Whether that push is one nothing answered, as `push_absence` counts
     /// one: an intent at `push_prepared` or `push_returned` that no
@@ -803,6 +804,51 @@ pub(in super::super) fn abandonable(
     Ok(!retains_promotion_child(db, record)?)
 }
 
+/// What the newest publication attempt of a synchronization recorded of the
+/// push endpoint, for `last_look`.
+#[derive(Clone, Copy, Debug)]
+struct LookedAt {
+    phase: state::PublicationPhase,
+    advertised_oid: Option<git2::Oid>,
+}
+
+/// What a synchronization's row last saw at the ref it publishes to: see
+/// `AbandonEvidence::observed`. `attempt` is its newest publication
+/// attempt, `checkpoint` and `evidence` its legacy envelope.
+///
+/// Once an attempt is past `open`, its advertisement is the newest look,
+/// and a ref absent there was absent, whatever an earlier look, the legacy
+/// intent's or the one the attempt was opened with, saw. A push that returned, an attempt's or the legacy
+/// intent's, was taken by the remote after the newest look, which then says
+/// nothing of what the remote holds: nothing is said.
+fn last_look(
+    attempt: Option<LookedAt>,
+    checkpoint: Option<state::SynchronizationCheckpoint>,
+    evidence: &state::SynchronizationEvidence,
+) -> Option<Option<git2::Oid>> {
+    use state::{PublicationPhase as A, SynchronizationCheckpoint as C};
+    let pushed = evidence.push_oid.is_some()
+        && matches!(
+            checkpoint,
+            Some(C::PushPrepared | C::PushReturned | C::PushVerified)
+        );
+    match attempt {
+        Some(LookedAt {
+            phase: A::Returned, ..
+        }) => None,
+        Some(LookedAt {
+            phase: A::Prepared | A::Verified,
+            advertised_oid,
+        }) => Some(advertised_oid),
+        _ if pushed && checkpoint == Some(C::PushReturned) => None,
+        _ if pushed => Some(evidence.push_advertised_oid),
+        _ if checkpoint.is_some_and(|checkpoint| checkpoint != C::FetchPrepared) => {
+            Some(evidence.tracking_oid)
+        }
+        _ => None,
+    }
+}
+
 /// What a preview of the abandon of `record` names of its push; see
 /// `AbandonEvidence`.
 pub(in super::super) fn abandon_evidence(
@@ -816,24 +862,14 @@ pub(in super::super) fn abandon_evidence(
         .as_ref()
         .and_then(|attempt| attempt.candidate_oid)
         .or(evidence.push_oid);
-    let pushed = evidence.push_oid.is_some()
-        && matches!(
-            record.sync_checkpoint,
-            Some(C::PushPrepared | C::PushReturned | C::PushVerified)
-        );
-    let observed = match &attempt {
-        Some(attempt) if attempt.phase != state::PublicationPhase::Open => {
-            Some(attempt.advertised_oid.or(attempt.previous_advertised_oid))
-        }
-        _ if pushed => Some(evidence.push_advertised_oid),
-        _ if record
-            .sync_checkpoint
-            .is_some_and(|checkpoint| checkpoint != C::FetchPrepared) =>
-        {
-            Some(evidence.tracking_oid)
-        }
-        _ => None,
-    };
+    let observed = last_look(
+        attempt.as_ref().map(|attempt| LookedAt {
+            phase: attempt.phase,
+            advertised_oid: attempt.advertised_oid,
+        }),
+        record.sync_checkpoint,
+        evidence,
+    );
     let proven = record.authority.is_some()
         || attempt
             .as_ref()
