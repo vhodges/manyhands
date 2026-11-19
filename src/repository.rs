@@ -49,8 +49,8 @@ mod comment_publication_tests;
 mod discovery;
 mod integration;
 pub mod keys;
-pub(crate) use blocker::BlockerRow;
 pub use blocker::{Blocker, Sleeper, WaitPolicy};
+pub(crate) use blocker::{BlockerRow, LiveHolder};
 mod liveness;
 #[doc(hidden)]
 pub use liveness::{ProcessProbe, this_host};
@@ -3607,17 +3607,18 @@ impl RepositoryService {
             recovery::CallReach::OtherItems => self.no_wait(),
         };
         loop {
-            let lease = repository_lease(repository, root, operation)?;
-            match self.begin_lifecycle_record_reaching(root, operation, operation_id, target, reach)
-            {
-                Ok(record) => return Ok((lease, record)),
-                Err(error) => {
-                    drop(lease);
-                    match self.waited(root, &mut wait, error) {
-                        blocker::Waited::Again => {}
-                        blocker::Waited::Refused(error) => return Err(error),
-                    }
-                }
+            // A lease that cannot be taken in time is waited for as the row
+            // of a live holder is, when one is at work; see `waited`.
+            let begun = repository_lease(repository, root, operation).and_then(|lease| {
+                self.begin_lifecycle_record_reaching(root, operation, operation_id, target, reach)
+                    .map(|record| (lease, record))
+            });
+            match begun {
+                Ok(begun) => return Ok(begun),
+                Err(error) => match self.waited(root, &mut wait, error) {
+                    blocker::Waited::Again => {}
+                    blocker::Waited::Refused(error) => return Err(error),
+                },
             }
         }
     }

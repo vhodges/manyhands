@@ -80,12 +80,37 @@ impl Blocker {
         })
     }
 
+    /// The operation of `operation`, a row a look found live, named live.
+    /// `None` for a row that names no operation.
+    fn seen_live(operation: &super::OperationDto) -> Option<Self> {
+        Some(Self {
+            family: operation.family,
+            operation_id: OperationId::parse(operation.operation_id.as_deref()?).ok()?,
+            live: Some(true),
+            seen: Some(Box::new(operation.clone())),
+        })
+    }
+
     fn judged(self, live: bool) -> Self {
         Self {
             live: Some(live),
             ..self
         }
     }
+}
+
+/// Who is at work in a repository, as a writer that could not take a
+/// lease or the index's lock in time finds it; see
+/// `RepositoryService::live_holder`.
+#[derive(Debug)]
+pub(crate) enum LiveHolder {
+    /// The first unfinished operation whose holder still works, named live,
+    /// with its row as the read found it.
+    Live(Blocker),
+    /// No unfinished operation has a holder at work.
+    Nothing,
+    /// The repository's operations could not be read.
+    Unreadable,
 }
 
 /// What the read of a blocker's row found.
@@ -242,8 +267,46 @@ impl RepositoryService {
 
     /// What a writer that was refused with `error` does next. The caller
     /// holds nothing: its lease is let go and its transaction ended.
+    ///
+    /// A `busy` that names nothing is a lease or the index's lock that could
+    /// not be taken in time. While an unfinished operation's holder works,
+    /// that holder may be what holds it, as an index owner's heartbeat holds
+    /// the index's lock for a moment: it is waited for, and named, as a live
+    /// blocker is; see `waited_holding`.
     pub(crate) fn waited(&self, root: &Path, wait: &mut Wait, error: RepositoryError) -> Waited {
+        if error.kind == RepositoryErrorKind::RepositoryBusy && error.blocker().is_none() {
+            return self.waited_holding(wait, error, || self.live_holder(root));
+        }
         self.waited_judging(wait, error, |blocker| self.judge_blocker(root, blocker))
+    }
+
+    /// `waited`, for a `busy` that names nothing, with who is at work found
+    /// by `find`. With no unfinished operation at work it is answered as it
+    /// is, at once: nothing is waited for. With one, it is slept on as a
+    /// live blocker is, and the budget then ends in `busy` naming it. One
+    /// that cannot be read is slept on too, and is then named by the row
+    /// the last look that could read one found live, if any.
+    fn waited_holding(
+        &self,
+        wait: &mut Wait,
+        error: RepositoryError,
+        find: impl FnOnce() -> LiveHolder,
+    ) -> Waited {
+        let blocker = match find() {
+            LiveHolder::Nothing => return Waited::Refused(error),
+            LiveHolder::Live(blocker) => {
+                wait.seen_live.clone_from(&blocker.seen);
+                Some(blocker)
+            }
+            LiveHolder::Unreadable => wait.seen_live.as_deref().and_then(Blocker::seen_live),
+        };
+        if !self.slept(wait) {
+            return Waited::Refused(match blocker {
+                Some(blocker) => busy(error, blocker),
+                None => error,
+            });
+        }
+        Waited::Again
     }
 
     /// `waited`, with the blocker judged by `judge`.
@@ -584,6 +647,111 @@ mod tests {
                 assert_eq!(blocker.seen.is_some(), blocker.live == Some(true), "{case}");
             }
             assert_eq!((sleeps, judgments_made), (slept, judged), "{case}");
+        }
+    }
+
+    /// What a writer refused with a `busy` that names nothing comes to,
+    /// who is at work found in turn as `finds` says (the last one again
+    /// once they run out): the error it is answered with and how often it
+    /// slept. `Some(true)` in `finds` is a live holder, `Some(false)` none,
+    /// `None` an unreadable repository.
+    fn hold_out(finds: &[Option<bool>], named: &Blocker) -> (RepositoryError, u64) {
+        let data = tempfile::tempdir().unwrap();
+        let time = Arc::new(TestTime {
+            nanos: AtomicU64::new(0),
+            step: Duration::ZERO,
+            slept: AtomicU64::new(0),
+        });
+        let service = RepositoryService::open_at(data.path())
+            .unwrap()
+            .with_clock_for_testing(time.clone())
+            .with_sleeper_for_testing(time.clone())
+            .with_wait_policy_for_testing(WaitPolicy {
+                budget: Duration::from_millis(250),
+                poll: Duration::from_millis(50),
+            });
+        let mut wait = service.start_wait();
+        for look in 0..10_000 {
+            let find = || match finds[look.min(finds.len() - 1)] {
+                Some(true) => LiveHolder::Live(named.clone()),
+                Some(false) => LiveHolder::Nothing,
+                None => LiveHolder::Unreadable,
+            };
+            let error = refused(RepositoryErrorKind::RepositoryBusy, None);
+            match service.waited_holding(&mut wait, error, find) {
+                Waited::Again => {}
+                Waited::Refused(error) => return (error, time.slept.load(Ordering::SeqCst)),
+            }
+        }
+        panic!("the wait did not end");
+    }
+
+    /// A `busy` that names nothing, a lease or the index's lock not taken
+    /// in time, is waited on while an unfinished operation's holder works,
+    /// and the budget then ends in `busy` naming that operation, live, with
+    /// its row. With none at work it is answered as it is, at once.
+    #[test]
+    fn a_busy_that_names_nothing_waits_for_a_holder_at_work_and_names_it() {
+        let named = Blocker {
+            live: Some(true),
+            seen: Some(Box::new(super::super::OperationDto {
+                operation_id: Some(OperationId::new().to_string()),
+                ..*seen()
+            })),
+            ..blocker()
+        };
+        let named = Blocker {
+            operation_id: OperationId::parse(
+                named
+                    .seen
+                    .as_ref()
+                    .unwrap()
+                    .operation_id
+                    .as_deref()
+                    .unwrap(),
+            )
+            .unwrap(),
+            ..named
+        };
+        // (case, what each look finds, the blocker named (`None` for
+        // none), sleeps)
+        let rows: [(&str, &[Option<bool>], Option<&Blocker>, u64); 5] = [
+            (
+                "nothing at work: as it is, at once",
+                &[Some(false)],
+                None,
+                0,
+            ),
+            (
+                "a holder at work: the budget, then named",
+                &[Some(true)],
+                Some(&named),
+                5,
+            ),
+            (
+                "at work, then unreadable: named by the last read that worked",
+                &[Some(true), None],
+                Some(&named),
+                5,
+            ),
+            (
+                "unreadable throughout: the budget, then as it is",
+                &[None],
+                None,
+                5,
+            ),
+            (
+                "at work, then nothing: one sleep, then as it is",
+                &[Some(true), Some(false)],
+                None,
+                1,
+            ),
+        ];
+        for (case, finds, expected, sleeps) in rows {
+            let (answered, slept) = hold_out(finds, &named);
+            assert_eq!(answered.kind, RepositoryErrorKind::RepositoryBusy, "{case}");
+            assert_eq!(answered.blocker(), expected, "{case}");
+            assert_eq!(slept, sleeps, "{case}");
         }
     }
 

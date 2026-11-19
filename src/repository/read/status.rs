@@ -1042,6 +1042,63 @@ impl RepositoryService {
         })
     }
 
+    /// The first unfinished operation of the repository at `root` whose
+    /// holder still works, as `list_operations` judges it, for a writer
+    /// that could not take a lease or the index's lock in time: that is
+    /// what such a refusal is for while one is at work. `Nothing` when the
+    /// repository has none, `Unreadable` when it cannot be read in
+    /// `BLOCKER_READS` tries. The repository is the one registered at
+    /// `root`; a root with no registration has local rows only.
+    pub(crate) fn live_holder(&self, root: &std::path::Path) -> crate::repository::LiveHolder {
+        use crate::repository::LiveHolder;
+        (0..BLOCKER_READS)
+            .find_map(|_| self.read_live_holder(root).ok())
+            .map_or(LiveHolder::Unreadable, |found| {
+                found.map_or(LiveHolder::Nothing, LiveHolder::Live)
+            })
+    }
+
+    /// One try of `live_holder`.
+    fn read_live_holder(
+        &self,
+        root: &std::path::Path,
+    ) -> Result<Option<crate::repository::Blocker>, ReadError> {
+        let Some(root_text) = root.to_str() else {
+            return Ok(None);
+        };
+        self.writer_read_session(RepositoryOperation::Read, |connection| {
+            let registration: Option<i64> = connection
+                .query_row(
+                    "SELECT id FROM repositories WHERE root_path = ?1",
+                    [root_text],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let repo =
+                ResolvedRepository::registered(registration.unwrap_or_default(), root.to_owned());
+            let holders = Holders::of(self);
+            let mut items: Vec<OperationDto> =
+                repository_operations(connection, &repo, &holders, registration.is_some())?
+                    .into_iter()
+                    .filter(|operation| operation.listed)
+                    .map(|operation| operation.dto)
+                    .collect();
+            sort_operations(&mut items);
+            Ok(items.into_iter().find_map(|operation| {
+                if operation.attribution.live != Some(true) {
+                    return None;
+                }
+                let operation_id = OperationId::parse(operation.operation_id.as_deref()?).ok()?;
+                Some(crate::repository::Blocker {
+                    family: operation.family,
+                    operation_id,
+                    live: Some(true),
+                    seen: Some(Box::new(operation)),
+                })
+            }))
+        })
+    }
+
     /// The operation `blocker` names, in its own journal, as `show_operation`
     /// reads it, and whether the list includes it: whether it is still
     /// unfinished. `Unreadable` when it cannot be read in `BLOCKER_READS`

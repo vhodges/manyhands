@@ -1051,8 +1051,16 @@ fn a_concurrent_duplicate_is_busy_and_a_third_call_finishes_the_record() {
 
 /// A save of `TICKET_A` under `REQUEST_1`, on a service of its own, held
 /// inside its operation once it has let the repository lease go: in its
-/// index hand-off, while its row is `indexing` and its heartbeat beats.
-/// Returns the call, the sender that lets it go on, and its operation.
+/// index hand-off, while its row is `indexing` with the heartbeat of its
+/// claim. Returns the call, the sender that lets it go on, and its
+/// operation.
+///
+/// Its heartbeat does not beat again while it is held: each beat takes the
+/// index's lock for a moment, and on a loaded machine that moment can
+/// outlast the lock's timeout for the writer under test, which would make
+/// what that writer is answered depend on the load. The row stays live by
+/// the clock of a `waiting_service`, which reads its claim's heartbeat as
+/// fresh. Once let go, the heartbeat beats as ever.
 fn first_writer_held_in_its_hand_off(
     world: &World,
     token: &str,
@@ -1077,10 +1085,18 @@ fn writer_held_in_its_hand_off(
 
     let (entered, has_entered) = mpsc::channel::<()>();
     let (release, released) = mpsc::channel::<()>();
+    let (beat, beats) = mpsc::channel::<()>();
     let service = manyhands::repository::RepositoryService::open_at(world.data.path()).unwrap();
+    // Run by the heartbeat before its first beat: it waits for the hold to
+    // end, which drops the sender.
+    service.set_index_owner_heartbeat_hook_for_testing(move || {
+        let _ = beats.recv();
+    });
     service.set_observation_hook_for_testing(move || {
         entered.send(()).unwrap();
-        released.recv().unwrap();
+        // A test that failed while it was held drops the sender too.
+        let _ = released.recv();
+        drop(beat);
     });
     let call = std::thread::spawn(move || {
         crate::support::mutation::execute_with(&service, REQUEST_1, mutation)
@@ -1091,6 +1107,61 @@ fn writer_held_in_its_hand_off(
         .to_string();
     assert!(world.journal_row(&operation).in_flight());
     (call, release, operation)
+}
+
+/// A writer that cannot take the repository's lease in time while a live
+/// peer's operation is unfinished waits for that peer, as it waits for the
+/// peer's row in its way, and when the wait is over answers `busy` naming
+/// it. Here the lease is held for the second writer's first look only;
+/// its later looks find the peer's row.
+#[cfg(unix)]
+#[test]
+fn a_second_writer_held_off_by_the_lease_waits_for_the_live_peer_and_names_it() {
+    use manyhands::repository::{LeaseKind, RepositoryService};
+
+    let mut world = World::new();
+    let token = world.token(TICKET_A);
+    let clock = crate::support::mutation::StepClock::new();
+    world.service = crate::support::mutation::waiting_service(world.data.path(), &clock);
+    let (first, release, held) = first_writer_held_in_its_hand_off(&world, &token);
+    let lease = RepositoryService::hold_lease_for_testing(
+        &world.root,
+        world.data.path(),
+        LeaseKind::Repository,
+    )
+    .unwrap();
+    let lease = std::sync::Mutex::new(Some(lease));
+    let lease = std::sync::Arc::new(lease);
+    {
+        let lease = lease.clone();
+        clock.at_first_sleep(move || drop(lease.lock().unwrap().take()));
+    }
+    let rows = journal_rows(&world);
+
+    let second = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    assert_eq!(
+        (second.outcome, second.code, second.failure_class()),
+        (
+            Outcome::Error,
+            ResultCode::Busy,
+            Some(FailureClass::Transient)
+        ),
+        "{second:?}"
+    );
+    assert!(lease.lock().unwrap().is_none(), "the lease was not let go");
+    assert_eq!(
+        recovery_actions(&second),
+        ["request.retry", "operation.show"]
+    );
+    let blocker = blocker_of(&second);
+    assert_eq!(blocker["operation_id"], held.as_str());
+    assert_eq!(blocker["live"], true);
+    assert_eq!(clock.slept(), 5);
+    assert_eq!(journal_rows(&world), rows);
+    assert!(world.record(REQUEST_2).is_none());
+
+    release.send(()).unwrap();
+    assert_eq!(first.join().unwrap().code, ResultCode::Ok);
 }
 
 /// How many rows the local journal holds, whatever their state.
