@@ -1165,8 +1165,10 @@ fn abandon_of_a_remote_push_prepared_row_previews_the_evidence_then_clears_it() 
 /// An operation another process still works under is not taken from it:
 /// no preview is given while its holder works, and a confirmation given
 /// while it did not is refused `busy` once it does again, naming it, with
-/// nothing recorded or changed. Once the holder is gone, the same
-/// confirmation closes the operation.
+/// nothing recorded or changed. A row that moved on after its preview, by
+/// a resume that took it over or by a step it recorded, is not what the
+/// confirmation was of: `external_change`, with nothing recorded. Once the
+/// holder is gone, the same confirmation closes the operation.
 #[test]
 fn abandon_of_a_live_owned_remote_row_is_refused() {
     let mut world = World::new();
@@ -1181,7 +1183,6 @@ fn abandon_of_a_live_owned_remote_row_is_refused() {
             })
             .unwrap()
     };
-    let stranded = stored_remote(&world, operation);
     let before = Everything::of(&world);
 
     let refused = support::confirmation::prepare_whole_with(&world.service, &mutation());
@@ -1214,6 +1215,47 @@ fn abandon_of_a_live_owned_remote_row_is_refused() {
         Some(operation_id.as_str())
     );
     assert_eq!(confirmations(), 0, "no confirmation");
+
+    // Each is a change to the row after its preview, which the digest
+    // binds: a resume's takeover gives the row a new owner epoch, as a
+    // restart does; a step moves its phase and checkpoint.
+    for (what, change) in [
+        ("a resume took it over", "owner_epoch = owner_epoch + 1"),
+        (
+            "it recorded that its push returned",
+            "phase = 'push_returned', sync_checkpoint = 'push_returned'",
+        ),
+    ] {
+        held_by(&world, operation, DEAD_PID);
+        let previewed = prepare_with(&world.service, &mutation());
+        assert_eq!(
+            previewed.code,
+            ResultCode::Ok,
+            "{what}: {}",
+            previewed.message
+        );
+        let confirmation = previewed.data.expect("a preview").confirmation_id;
+        items::index(world.data.path())
+            .execute(
+                &format!("UPDATE remote_operation_records SET {change} WHERE operation_ulid = ?1"),
+                [&operation_id],
+            )
+            .unwrap();
+        let moved = stored_remote(&world, operation);
+        let changed = execute_confirmed(&world.service, REQUEST_3, &confirmation, mutation());
+        assert_eq!(changed.code, ResultCode::ExternalChange, "{what}");
+        assert_eq!(recovery_actions(&changed), ["request.prepare"], "{what}");
+        assert_eq!(world.record(REQUEST_3), None, "{what}: nothing recorded");
+        assert_eq!(stored_remote(&world, operation), moved, "{what}");
+        assert_eq!(
+            world.record(REQUEST_2).map(|record| record.state),
+            Some(RequestState::Accepted),
+            "{what}"
+        );
+    }
+    // The row as it stands now, its holder at work under it.
+    held_by(&world, operation, LIVE_PID);
+    let stranded = stored_remote(&world, operation);
 
     // Previewed while its holder was gone.
     held_by(&world, operation, DEAD_PID);
