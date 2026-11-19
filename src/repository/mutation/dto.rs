@@ -874,7 +874,7 @@ pub(crate) fn authority_text(host: &str, port: u16) -> String {
     }
 }
 
-/// The `data` of a `prepare` envelope: the preview, or, for the two
+/// The `data` of a `prepare` envelope: the preview, or, for the
 /// refusals that report any, what the refusal is about. A `prepare`
 /// that gives neither carries no data: every other rejection, and a
 /// no-op for a command whose end state already holds.
@@ -886,6 +886,11 @@ pub enum PrepareDataDto {
     HostReplacement(HostReplacementDto),
     /// Of `document promote` and `ticket close`, refused for their blockers.
     LifecycleBlocked(LifecycleBlockedDto),
+    /// Of a preview refused `busy` or `recovery_required` because another
+    /// operation's row is unfinished: that operation, as an execute's data
+    /// names it (`blocked.schema.json`). An `operation abandon` of a
+    /// synchronization another process still works under is one.
+    Blocked(BlockedDto),
 }
 
 impl PrepareDataDto {
@@ -893,7 +898,7 @@ impl PrepareDataDto {
     pub fn preview(&self) -> Option<&PreviewDto> {
         match self {
             Self::Preview(preview) => Some(preview),
-            Self::HostReplacement(_) | Self::LifecycleBlocked(_) => None,
+            Self::HostReplacement(_) | Self::LifecycleBlocked(_) | Self::Blocked(_) => None,
         }
     }
 
@@ -901,7 +906,7 @@ impl PrepareDataDto {
     pub fn into_preview(self) -> Option<PreviewDto> {
         match self {
             Self::Preview(preview) => Some(*preview),
-            Self::HostReplacement(_) | Self::LifecycleBlocked(_) => None,
+            Self::HostReplacement(_) | Self::LifecycleBlocked(_) | Self::Blocked(_) => None,
         }
     }
 }

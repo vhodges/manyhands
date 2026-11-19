@@ -1184,15 +1184,35 @@ fn abandon_of_a_live_owned_remote_row_is_refused() {
     let stranded = stored_remote(&world, operation);
     let before = Everything::of(&world);
 
-    let refused = prepare_with(&world.service, &mutation());
+    let refused = support::confirmation::prepare_whole_with(&world.service, &mutation());
     assert_eq!(
         (refused.code, refused.outcome),
         (ResultCode::Busy, Outcome::Error)
     );
-    assert_eq!(refused.data, None);
-    // A preview names no request to send again, and no blocker: what a
-    // prepare refuses for is its own.
-    assert_eq!(recovery_actions(&refused), [] as [&str; 0]);
+    // The prepare names the holder it is refused for, as an execute does,
+    // and offers to show it; it names no request to send again, since a
+    // prepare is of none.
+    let data = serde_json::to_value(&refused).unwrap()["data"].clone();
+    schema::check_published("blocked.schema.json", &data).unwrap();
+    assert_eq!(
+        (
+            &data["blocker"]["operation_id"],
+            &data["blocker"]["family"],
+            &data["blocker"]["pid"],
+            &data["blocker"]["live"]
+        ),
+        (
+            &serde_json::json!(operation_id),
+            &serde_json::json!("remote"),
+            &serde_json::json!(LIVE_PID),
+            &serde_json::json!(true)
+        )
+    );
+    assert_eq!(recovery_actions(&refused), ["operation.show"]);
+    assert_eq!(
+        refused.recovery[0].operation_id.as_deref(),
+        Some(operation_id.as_str())
+    );
     assert_eq!(confirmations(), 0, "no confirmation");
 
     // Previewed while its holder was gone.

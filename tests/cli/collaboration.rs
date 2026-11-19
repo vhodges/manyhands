@@ -627,8 +627,18 @@ fn an_abandon_of_a_remote_operation_needs_its_holder_gone_and_a_confirmation() {
         args.push("--json");
         args
     };
-    let busy = checked(&args(&["--prepare"]), &env, &[], 5, "busy", None);
-    assert!(busy["data"].is_null());
+    let busy = checked(
+        &args(&["--prepare"]),
+        &env,
+        &[],
+        5,
+        "busy",
+        Some("blocked.schema.json"),
+    );
+    assert_eq!(busy["data"]["blocker"]["operation_id"], remote.as_str());
+    assert_eq!(busy["data"]["blocker"]["live"], true);
+    assert_eq!(busy["recovery"][0]["action"], "operation.show");
+    assert_eq!(busy["recovery"][0]["operation_id"], remote.as_str());
     assert_eq!(count("confirmation_records"), 0, "no confirmation");
 
     connection

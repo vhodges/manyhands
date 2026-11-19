@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 blocked request",
-  "description": "The data of a busy or recovery_required answer of a mutation that was refused because another operation's row is unfinished: that operation, in place of the command's own data. Its recovery offers operation.show for it. A busy answer of this shape waited for the operation's holder for a bounded time first; the same request may be sent again. A lifecycle answer keeps its own data, the list of what stands in its way.",
+  "description": "The data of a busy or recovery_required answer of a mutation that was refused because another operation's row is unfinished: that operation, in place of the command's own data. A prepare refused so, as an operation abandon of a synchronization another process still works under is, carries it in place of a preview. Its recovery offers operation.show for it. A busy answer of this shape waited for the operation's holder for a bounded time first; the same request may be sent again. A lifecycle answer keeps its own data, the list of what stands in its way.",
   "type": "object",
   "additionalProperties": false,
   "required": [

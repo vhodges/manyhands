@@ -282,6 +282,8 @@ pub(super) fn prepared(
             schema::check_published(BLOCKED, &value["data"]).expect("the blocked schema");
         }
         Some(PrepareDataDto::HostReplacement(_)) => panic!("no host is named"),
+        // A lifecycle's preview names what is in its way in its own list.
+        Some(PrepareDataDto::Blocked(_)) => panic!("a lifecycle names its own blockers"),
         None => {}
     }
     assert_eq!(envelope.command, verb.command());
