@@ -147,7 +147,7 @@
           "description": "Null for a local operation. For a synchronization, what the person decides with: what its row last saw of the remote, the local branch now and the push it intended. Nothing is fetched and no remote is contacted for it. A push at push_prepared with the branch absent may still have reached the remote: the row says what it saw before the push. A push that returned (the state push_returned, or a publication attempt that returned) was taken by the remote after the row's last look, so nothing is said of the remote branch for it.",
           "type": ["object", "null"],
           "additionalProperties": false,
-          "required": ["remote_ref_present", "local_oid", "remote_oid", "push_oid"],
+          "required": ["remote_ref_present", "local_oid", "remote_oid", "push_oid", "push_returned"],
           "properties": {
             "remote_ref_present": {
               "description": "Whether the remote branch the operation publishes to was there when the row last looked: at the push endpoint for an operation that recorded a push (its newest publication attempt's look, once there is one past open), else at its fetch. Null for a row that recorded no look, and for one whose push returned after its last look.",
@@ -158,12 +158,16 @@
               "type": ["string", "null"]
             },
             "remote_oid": {
-              "description": "The commit the remote branch named when the row last looked. Null when it was absent, or the row recorded no look.",
+              "description": "The commit the remote branch named when the row last looked. Null when it was absent, when the row recorded no look, and when the push returned after that look (push_returned).",
               "type": ["string", "null"]
             },
             "push_oid": {
               "description": "The commit the operation set out to push: its newest publication attempt's, else its push intent's. Null when it recorded no push.",
               "type": ["string", "null"]
+            },
+            "push_returned": {
+              "description": "Whether that push returned after the row's last look at the remote: its newest publication attempt returned, or, with none past open, its push intent is at push_returned. The remote took the push then, so nothing is said of the remote branch for it (remote_ref_present and remote_oid are null). A cancellation acknowledged as the push returned records the step before the push as its last, so the state and step do not say the push went out; this does.",
+              "type": "boolean"
             }
           }
         }

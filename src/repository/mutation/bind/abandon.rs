@@ -248,6 +248,7 @@ impl OperationAbandonBinding {
                     "push_oid",
                     evidence.push_oid.map(|oid| oid.to_string()),
                 )
+                .text("push_returned", &evidence.push_returned.to_string())
             }
             Found::Remote(AbandonableRemote::Ended { cancelled }) => observation.text(
                 "standing",
@@ -901,6 +902,7 @@ impl OperationAbandonBinding {
                     local_oid: evidence.local_oid.map(|oid| oid.to_string()),
                     remote_oid: evidence.remote_oid.map(|oid| oid.to_string()),
                     push_oid: evidence.push_oid.map(|oid| oid.to_string()),
+                    push_returned: evidence.push_returned,
                 }),
             }),
         })

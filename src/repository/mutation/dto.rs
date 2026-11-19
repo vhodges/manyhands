@@ -758,11 +758,17 @@ pub struct OperationAbandonEvidenceDto {
     /// branch is not there.
     pub local_oid: Option<String>,
     /// The commit the remote branch named when the row last looked. Null
-    /// when it was not there, or the row recorded no look.
+    /// when it was not there, when the row recorded no look, and when the
+    /// push returned after that look.
     pub remote_oid: Option<String>,
     /// The commit the operation set out to push. Null when it recorded no
     /// push.
     pub push_oid: Option<String>,
+    /// Whether that push returned after the row's last look: the remote
+    /// took it, and nothing is said of the branch for that reason. A
+    /// cancellation acknowledged as the push returned records the step
+    /// before the push as its last, so this alone says the push went out.
+    pub push_returned: bool,
 }
 
 /// What a preview of `key delete` shows: the key, and the files that

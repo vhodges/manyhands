@@ -705,6 +705,7 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
                 put("Remote branch at", evidence.remote_oid.clone());
                 put("Local branch at", evidence.local_oid.clone());
                 put("Push of", evidence.push_oid.clone());
+                put("Push returned", Some(flag(evidence.push_returned)));
             }
             if let Some(retirement) = &operation.retirement {
                 put("Request retained", retirement.request_id.clone());

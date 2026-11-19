@@ -431,6 +431,9 @@ pub(crate) struct RemoteAbandonEvidence {
     pub(crate) local_oid: Option<git2::Oid>,
     /// The commit the operation set out to push.
     pub(crate) push_oid: Option<git2::Oid>,
+    /// Whether that push returned after the row's last look: the remote
+    /// took it, whatever the row last saw.
+    pub(crate) push_returned: bool,
 }
 
 /// What a pending synchronization has left, as an abandon names it.
@@ -551,6 +554,7 @@ fn remote_remains(
             remote_oid: push.observed.flatten(),
             local_oid: None,
             push_oid: push.push_oid,
+            push_returned: push.push_returned,
         },
         answers_push: push.unanswered,
         owner,

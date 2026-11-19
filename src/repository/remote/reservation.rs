@@ -753,6 +753,9 @@ pub(in super::super) struct AbandonEvidence {
     /// one: an intent at `push_prepared` or `push_returned` that no
     /// publication proved. A confirmed abandon records it refused.
     pub(in super::super) unanswered: bool,
+    /// Whether the push returned after the row's newest look; see
+    /// `push_returned`. `observed` is then `None`.
+    pub(in super::super) push_returned: bool,
 }
 
 /// Whether `operation abandon` may close the remote operation `record`,
@@ -827,6 +830,9 @@ fn last_look(
     evidence: &state::SynchronizationEvidence,
 ) -> Option<Option<git2::Oid>> {
     use state::{PublicationPhase as A, SynchronizationCheckpoint as C};
+    if push_returned(attempt, checkpoint, evidence) {
+        return None;
+    }
     let pushed = evidence.push_oid.is_some()
         && matches!(
             checkpoint,
@@ -834,18 +840,39 @@ fn last_look(
         );
     match attempt {
         Some(LookedAt {
-            phase: A::Returned, ..
-        }) => None,
-        Some(LookedAt {
             phase: A::Prepared | A::Verified,
             advertised_oid,
         }) => Some(advertised_oid),
-        _ if pushed && checkpoint == Some(C::PushReturned) => None,
         _ if pushed => Some(evidence.push_advertised_oid),
         _ if checkpoint.is_some_and(|checkpoint| checkpoint != C::FetchPrepared) => {
             Some(evidence.tracking_oid)
         }
         _ => None,
+    }
+}
+
+/// Whether the push a synchronization recorded returned after its newest
+/// look at the push endpoint: its newest publication attempt returned, or,
+/// with none past `open`, its legacy intent is at `push_returned`. The
+/// remote took that push then; whatever the row saw before says nothing of
+/// what it holds now. A cancellation acknowledged as the push returned
+/// leaves the step before the push the last recorded, so this is what says
+/// the push went out.
+fn push_returned(
+    attempt: Option<LookedAt>,
+    checkpoint: Option<state::SynchronizationCheckpoint>,
+    evidence: &state::SynchronizationEvidence,
+) -> bool {
+    use state::{PublicationPhase as A, SynchronizationCheckpoint as C};
+    match attempt {
+        Some(LookedAt {
+            phase: A::Returned, ..
+        }) => true,
+        Some(LookedAt {
+            phase: A::Prepared | A::Verified,
+            ..
+        }) => false,
+        _ => evidence.push_oid.is_some() && checkpoint == Some(C::PushReturned),
     }
 }
 
@@ -862,14 +889,12 @@ pub(in super::super) fn abandon_evidence(
         .as_ref()
         .and_then(|attempt| attempt.candidate_oid)
         .or(evidence.push_oid);
-    let observed = last_look(
-        attempt.as_ref().map(|attempt| LookedAt {
-            phase: attempt.phase,
-            advertised_oid: attempt.advertised_oid,
-        }),
-        record.sync_checkpoint,
-        evidence,
-    );
+    let looked = attempt.as_ref().map(|attempt| LookedAt {
+        phase: attempt.phase,
+        advertised_oid: attempt.advertised_oid,
+    });
+    let observed = last_look(looked, record.sync_checkpoint, evidence);
+    let returned = push_returned(looked, record.sync_checkpoint, evidence);
     let proven = record.authority.is_some()
         || attempt
             .as_ref()
@@ -887,6 +912,7 @@ pub(in super::super) fn abandon_evidence(
         push_oid,
         observed,
         unanswered,
+        push_returned: returned,
     })
 }
 

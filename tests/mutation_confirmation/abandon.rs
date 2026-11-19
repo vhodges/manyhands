@@ -904,8 +904,13 @@ fn accept_synchronization(world: &World, operation: OperationId) {
 /// reservation held, its push of the context's tip recorded. A context at
 /// `push_prepared` holds a push not known to have returned, of a context
 /// the remote was seen not to hold; one at `push_verified` holds a push the
-/// remote was seen to hold, its publication not yet recorded. The `item
-/// sync` of `REQUEST_2` holds it. Returns its ID and the commit it pushed.
+/// remote was seen to hold, its publication not yet recorded. One
+/// `cancelled_at_push_returned` was asked to cancel while its push was in
+/// flight, and ended `cancelled` when the push returned; one
+/// `cancelled_before_push` ended so at the safe point before the push, which
+/// was never issued. Both last recorded the step before the push, as a
+/// cancellation's acknowledgement does. The `item sync` of `REQUEST_2`
+/// holds it. Returns its ID and the commit it pushed.
 fn stranded_push(world: &World, checkpoint: &str, pid: u32) -> (OperationId, git2::Oid) {
     let token = world.token(TICKET_A);
     let saved = world.execute(REQUEST_1, world.save(TICKET_A, &token));
@@ -921,25 +926,47 @@ fn stranded_push(world: &World, checkpoint: &str, pid: u32) -> (OperationId, git
         .reserve_remote_operation(&world.root, operation, &reserved_target())
         .unwrap();
     assert!(matches!(reserved, RemoteReservationOutcome::Reserved(_)));
-    let (step, advertised) = match checkpoint {
-        "push_prepared" => ("before_push", None),
-        "push_verified" => ("after_push_verification", Some(tip.to_string())),
+    let (phase, recorded, step, advertised, outcome) = match checkpoint {
+        "push_prepared" => ("push_prepared", "push_prepared", "before_push", None, None),
+        "push_verified" => (
+            "push_verified",
+            "push_verified",
+            "after_push_verification",
+            Some(tip.to_string()),
+            None,
+        ),
+        "cancelled_at_push_returned" => (
+            "cancelled",
+            "push_returned",
+            "before_push",
+            None,
+            Some("cancelled"),
+        ),
+        "cancelled_before_push" => (
+            "cancelled",
+            "push_prepared",
+            "before_push",
+            None,
+            Some("cancelled"),
+        ),
         other => panic!("no fixture of {other}"),
     };
     let changed = connection
         .execute(
             "UPDATE remote_operation_records
-                SET phase = ?2, sync_checkpoint = ?2, completed_step = ?3, expected_oid = ?4,
-                    local_oid = ?4, primary_tracking_oid = ?5, push_oid = ?4,
-                    push_advertised_oid = ?6
+                SET phase = ?2, sync_checkpoint = ?3, completed_step = ?4, expected_oid = ?5,
+                    local_oid = ?5, primary_tracking_oid = ?6, push_oid = ?5,
+                    push_advertised_oid = ?7, outcome = ?8
               WHERE operation_ulid = ?1",
             rusqlite::params![
                 operation.to_string(),
-                checkpoint,
+                phase,
+                recorded,
                 step,
                 tip.to_string(),
                 world.primary_head().to_string(),
-                advertised
+                advertised,
+                outcome
             ],
         )
         .unwrap();
@@ -1095,6 +1122,7 @@ fn abandon_of_a_remote_push_prepared_row_previews_the_evidence_then_clears_it() 
             local_oid: Some(tip.to_string()),
             remote_oid: None,
             push_oid: Some(tip.to_string()),
+            push_returned: false,
         })
     );
     assert_eq!(stored_remote(&world, operation), stranded);
@@ -1305,6 +1333,56 @@ fn abandon_of_a_live_owned_remote_row_is_refused() {
     assert_eq!(stored_remote(&world, operation).0, "cancelled");
 }
 
+/// A synchronization a cancellation ended reads `cancelled` at the step
+/// before its push either way. What the person decides on is whether the
+/// push returned: one that did was taken by the remote after the row last
+/// looked, so nothing is said of the remote branch, and `push_returned`
+/// says why; one cancelled before the push was issued shows the look the
+/// intent was written with, the branch absent. Either push is unanswered,
+/// and the abandon records it refused.
+#[test]
+fn abandon_preview_says_whether_a_cancelled_push_returned() {
+    for (fixture, returned, present) in [
+        ("cancelled_at_push_returned", true, serde_json::Value::Null),
+        ("cancelled_before_push", false, serde_json::json!(false)),
+    ] {
+        let mut world = World::new();
+        probing(&mut world, vec![LIVE_PID]);
+        let (operation, pushed) = stranded_push(&world, fixture, DEAD_PID);
+        let previewed = prepare_with(
+            &world.service,
+            &abandon(&world.root, &operation.to_string()),
+        );
+        assert_eq!(
+            previewed.code,
+            ResultCode::Ok,
+            "{fixture}: {}",
+            previewed.message
+        );
+        let preview = previewed.data.expect("a preview");
+        let details = abandon_preview(&preview);
+        assert_eq!(
+            (details.state.as_str(), details.step.as_deref()),
+            ("cancelled", Some("before_push")),
+            "{fixture}"
+        );
+        let evidence = serde_json::to_value(&details.evidence).unwrap();
+        assert_eq!(evidence["push_returned"], returned, "{fixture}");
+        assert_eq!(evidence["remote_ref_present"], present, "{fixture}");
+        assert_eq!(evidence["remote_oid"], serde_json::Value::Null, "{fixture}");
+        assert_eq!(evidence["push_oid"], pushed.to_string(), "{fixture}");
+        assert_eq!(
+            effects(&preview),
+            [
+                PreviewEffect::OperationClosed,
+                PreviewEffect::PushMarkedRejected,
+                PreviewEffect::RequestReleased
+            ],
+            "{fixture}"
+        );
+    }
+}
+
 /// A push the remote was seen to hold, whose operation was killed before
 /// it recorded the publication, and whose context has moved on since: its
 /// resume refuses a tip that is not the one it pushed. The preview says
@@ -1341,6 +1419,7 @@ fn abandon_preview_reports_the_remote_ref_when_the_push_landed() {
             local_oid: Some(moved.to_string()),
             remote_oid: Some(pushed.to_string()),
             push_oid: Some(pushed.to_string()),
+            push_returned: false,
         })
     );
     assert_eq!(
