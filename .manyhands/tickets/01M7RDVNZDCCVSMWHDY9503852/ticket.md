@@ -51,16 +51,18 @@ A save, a comment's local checkpoint, a promote, a close and a prepare each cost
 
 ## Acceptance
 
-- `ticket save`, `document save`, `comment add`, `ticket create`, `document promote`, `ticket close` and a prepare measured before and after on this repository with a release build; the owner sets the target when this is planned.
+- `ticket save`, `document save`, `comment add`, `ticket create`, `document promote`, `ticket close` and a prepare measured before and after on this repository with a release build. Targets (owner, 2026-11-19): a local save, create or comment checkpoint under 1 s; `item sync` and `comment add` 2–4 s; `document promote` and `ticket close` under 10 s.
 - Every item's `activity_at` and `activity_source` are unchanged, pinned by a table-driven library unit test.
 - A unit test pins how many commits or tree diffs one refresh performs, so a per-item walk cannot return unnoticed.
 - A profile of a save, a promote and a close no longer shows `latest_commit_touching`, a second full observation or the image-proof audit, and the concurrent-change detection that the before and after observations give today is kept or replaced by an equivalent.
-- No recovery or index behaviour changes.
+- No recovery behaviour changes, and the index gives today's results except that a change made outside Manyhands to another item is seen at the next refresh, poll or desktop start, or flagged stale when read (amended by the owner, 2026-11-19; the design changes how the index is kept, not what it reports).
 
 ## Related
 
 - vh-44q1k (01M7TEA2VE70AC3AAA3VHM2R8K): performance of operation attribution, the blocker wait and its retries, left by vh-bhepg. A separate fix in the concurrent-writers code, but its wait and retry numbers depend on how long a write holds the lease, which this ticket sets, so measure it after this one lands. Its item (3) shares the image-proof audit above.
 - Evidence for the promote and close numbers (from vh-z9ep3): found by Wave 03 C5 (ticket 01M4CC0VMXTNXNH78C11DYXS8H); docs/RFC/cli-contract.md, "C5 evidence and known limits", follow-up list; docs/plans/2026-10-31-wave-03-cli-05-completion-and-polling-execution.md (C5 execution ledger).
+
+Design: `docs/plans/2026-11-19-fast-writes-design.md` on this ticket's branch.
 
 ## How to measure
 
