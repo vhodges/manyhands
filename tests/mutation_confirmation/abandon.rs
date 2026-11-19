@@ -249,12 +249,21 @@ fn abandon_preview(preview: &PreviewDto) -> &OperationAbandonPreviewDto {
     }
 }
 
-/// What another request on the repository is answered with while the
+/// A refresh of the whole index: work on the whole repository, which an
+/// unfinished row of any item is in the way of. A request of another item
+/// is not: the stranded save holds its own item alone.
+fn refresh(world: &World) -> Mutation {
+    Mutation::IndexRefresh(IndexRefreshInput {
+        root: world.root.clone(),
+    })
+}
+
+/// What a request on the whole repository is answered with while the
 /// operation is pending: it is refused, and offered the abandon of the
 /// operation that is in its way.
 fn assert_blocked_and_offered_the_abandon(stranded: &Stranded, request_id: &str) {
     let world = &stranded.world;
-    let blocked = world.execute(request_id, world.create(TICKET_NEW));
+    let blocked = world.execute(request_id, refresh(world));
     assert_eq!(blocked.code, ResultCode::RecoveryRequired);
     assert_eq!(blocked.outcome, Outcome::Blocked);
     assert_eq!(
@@ -276,7 +285,7 @@ fn assert_blocked_and_offered_the_abandon(stranded: &Stranded, request_id: &str)
         world.root.to_str()
     );
     assert_eq!(world.record(request_id), None);
-    assert!(!world.root.join(items::ticket_path(TICKET_NEW)).exists());
+    assert_eq!(world.pending_journal_rows(), 1);
 }
 
 /// The abandon of the stranded save, confirmed as `request_id`: it
@@ -1739,18 +1748,18 @@ fn an_abandon_is_busy_while_a_call_holds_the_repository_lease() {
     drop(held);
     before.assert_unchanged(world, "the busy abandon");
 
-    // A creation holds the bootstrap lease of the root, which a save
-    // does not take: another request reaches the journal and is refused
-    // for the pending operation, as ever. It is told to look, and is not
-    // told to abandon, for one reason alone: a lease is held, and its
-    // holder may be the call at work under the operation.
+    // A creation holds the bootstrap lease of the root, which a refresh
+    // does not take: a refresh reaches the journal and is refused for the
+    // pending operation, as ever. It is told to look, and is not told to
+    // abandon, for one reason alone: a lease is held, and its holder may
+    // be the call at work under the operation.
     let held = RepositoryService::hold_lease_for_testing(
         &world.root,
         world.data.path(),
         LeaseKind::Bootstrap,
     )
     .unwrap();
-    let blocked = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    let blocked = world.execute(REQUEST_2, refresh(world));
     assert_eq!(blocked.code, ResultCode::RecoveryRequired);
     assert_eq!(
         recovery_actions(&blocked),

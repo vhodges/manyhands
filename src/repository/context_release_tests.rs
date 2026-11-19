@@ -746,18 +746,16 @@ fn ownership_a_closed_ticket_is_ticket_closed() {
     assert_refused_and_left(&f, TICKET, RepositoryErrorKind::TicketClosed);
 }
 
+/// A pending row of the whole repository, here a refresh that stopped
+/// before it stored the index, is in the way of every release.
 #[test]
 fn another_pending_row_on_the_root_is_recovery_required() {
     let f = Fixture::new();
     f.edit(TICKET);
-    // A preparation of another item, stopped before its worktree.
     let stopped = f
-        .failing(FailurePoint::BeforeWorktreeCreation)
-        .prepare_context(AuthoringTarget {
+        .failing(FailurePoint::BeforeIndexTransactionCommit)
+        .refresh_repository(RefreshRepositoryRequest {
             root: f.root(),
-            kind: AuthoringKind::Ticket,
-            item_id: OTHER.parse().unwrap(),
-            intent: ContextIntent::Edit,
             operation_id: OperationId::new(),
         });
     assert_eq!(
@@ -771,6 +769,35 @@ fn another_pending_row_on_the_root_is_recovery_required() {
         RepositoryErrorKind::RecoveryRequired
     );
     assert_eq!(f.state(AuthoringKind::Ticket, TICKET), before);
+}
+
+/// A pending row of another item, here a preparation stopped before its
+/// worktree, holds that item alone: the release goes on, and the row is
+/// left as it was.
+#[test]
+fn another_item_s_pending_row_does_not_stop_the_release() {
+    let f = Fixture::new();
+    f.edit(TICKET);
+    let preparation = OperationId::new();
+    let stopped = f
+        .failing(FailurePoint::BeforeWorktreeCreation)
+        .prepare_context(AuthoringTarget {
+            root: f.root(),
+            kind: AuthoringKind::Ticket,
+            item_id: OTHER.parse().unwrap(),
+            intent: ContextIntent::Edit,
+            operation_id: preparation,
+        });
+    assert_eq!(
+        kind_of(stopped.map(|_| ())),
+        RepositoryErrorKind::InjectedFailure
+    );
+    let left = f.row(preparation);
+    assert_ne!(left.0, "completed");
+
+    assert_eq!(f.release(TICKET).unwrap(), ContextReleaseOutcome::Released);
+    assert_eq!(f.state(AuthoringKind::Ticket, TICKET), GONE);
+    assert_eq!(f.row(preparation), left);
 }
 
 // Re-entry.
@@ -794,10 +821,22 @@ fn interrupted_before_the_branch_release_the_same_operation_deletes_the_branch()
             Some("context_worktree_released".to_owned())
         )
     );
-    // Every other operation waits for the row.
+    // Another operation of the item waits for the row, and so does work on
+    // the whole repository. Another item's does not.
     assert_eq!(
-        kind_of(f.release(OTHER)),
+        kind_of(f.release(TICKET)),
         RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(
+        kind_of(f.service.refresh_repository(RefreshRepositoryRequest {
+            root: f.root(),
+            operation_id: OperationId::new(),
+        })),
+        RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(
+        f.release(OTHER).unwrap(),
+        ContextReleaseOutcome::AlreadyAbsent
     );
 
     let finished = f.release_with(&f.service, AuthoringKind::Ticket, TICKET, operation_id);

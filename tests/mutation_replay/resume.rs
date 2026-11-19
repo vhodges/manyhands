@@ -35,6 +35,9 @@ use crate::support::{
 /// An operation ID no journal holds.
 const UNKNOWN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZZ";
 
+/// A request ID beyond the support module's three, for a resume.
+const RESUME_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
+
 fn resume_in(root: &std::path::Path, operation_id: &str) -> Mutation {
     Mutation::OperationResume(OperationResumeInput {
         root: root.to_owned(),
@@ -44,6 +47,16 @@ fn resume_in(root: &std::path::Path, operation_id: &str) -> Mutation {
 
 fn resume(world: &World, operation_id: &str) -> Mutation {
     resume_in(&world.root, operation_id)
+}
+
+/// A remote added to the repository: work on the whole repository, which
+/// a pending row of any item is in the way of.
+fn probe_remote(world: &World) -> Mutation {
+    Mutation::RemoteAdd(RemoteAddInput {
+        root: world.root.clone(),
+        name: "probe".to_owned(),
+        url: "https://example.invalid/probe.git".to_owned(),
+    })
 }
 
 /// A local row as the journal stores it: its state, its step, when it
@@ -1521,16 +1534,25 @@ fn a_resume_of_a_pending_key_operation_no_request_holds_names_no_request() {
 }
 
 /// A save that committed and owes its index hand-off stands in the way
-/// of every other request on the repository. A request it refuses is
-/// offered the resume of that operation, which finishes it, before the
-/// abandon, which gives it up; and it is not offered the save's own
-/// request, which is another caller's to send.
+/// of every other request of its item and of every request on the whole
+/// repository, such as a remote's addition; another item's request goes
+/// on. A request it refuses is offered the resume of that operation,
+/// which finishes it, before the abandon, which gives it up; and it is not
+/// offered the save's own request, which is another caller's to send.
 #[test]
 fn a_request_refused_for_a_hand_off_another_request_owes_is_offered_its_resume_first() {
     let (world, _token, owed) = save_owing_its_hand_off();
     let operation_id = operation_of(&owed);
 
-    let blocked = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));
+    let other_item = world.execute(REQUEST_3, world.create(mutation::TICKET_NEW));
+    assert_eq!(
+        (other_item.outcome, other_item.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{other_item:?}"
+    );
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    let blocked = world.execute(REQUEST_2, probe_remote(&world));
     assert_eq!(
         (blocked.outcome, blocked.code),
         (Outcome::Blocked, ResultCode::RecoveryRequired)
@@ -1554,7 +1576,7 @@ fn a_request_refused_for_a_hand_off_another_request_owes_is_offered_its_resume_f
     assert!(world.record(REQUEST_2).is_none());
 
     // The offered resume, taken, runs the hand-off.
-    let resumed = world.execute(REQUEST_3, resume(&world, &operation_id));
+    let resumed = world.execute(RESUME_REQUEST, resume(&world, &operation_id));
     assert_eq!(
         (resumed.outcome, resumed.code),
         (Outcome::Success, ResultCode::Ok)
@@ -1563,12 +1585,13 @@ fn a_request_refused_for_a_hand_off_another_request_owes_is_offered_its_resume_f
     assert_eq!(world.pending_journal_rows(), 0);
 
     // And the request that was refused then succeeds.
-    let created = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));
+    let added = world.execute(REQUEST_2, probe_remote(&world));
     assert_eq!(
-        (created.outcome, created.code),
-        (Outcome::Success, ResultCode::Ok)
+        (added.outcome, added.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{added:?}"
     );
-    assert!(created.recovery.is_empty());
+    assert!(added.recovery.is_empty());
 }
 
 /// Names `pid` on this host as the holder of the local row `operation_id`,
@@ -1618,7 +1641,8 @@ fn a_stale_row_answers_recovery_required_naming_the_operation() {
         ])))
         .with_sleeper_for_testing(clock.clone());
 
-    let blocked = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));
+    // A request on the whole repository: the row is in its way.
+    let blocked = world.execute(REQUEST_2, probe_remote(&world));
     assert_eq!(
         (blocked.outcome, blocked.code),
         (Outcome::Blocked, ResultCode::RecoveryRequired)

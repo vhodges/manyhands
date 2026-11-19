@@ -14,11 +14,11 @@ use std::fs;
 use manyhands::{
     repository::{
         AddRemoteRequest, AuthoringKind, CloseTicketRequest, ContextPrepareInput,
-        ContextPrepareIntent, ContextReleaseInput, FailurePoint, Mutation, MutationDataDto,
-        OperationAbandonInput, OperationId, OperationResumeInput, PreviewTicketClosureRequest,
-        RemoteOperationAction, RemoteOperationTarget, RemotePublicationEvidence, RemoteRefPlan,
-        RemoteReservationOutcome, RequestState, SetPublicationRemoteRequest,
-        TicketClosurePreflight, keys::SessionCredentials,
+        ContextPrepareIntent, ContextReleaseInput, FailurePoint, IndexRefreshInput, Mutation,
+        MutationDataDto, OperationAbandonInput, OperationId, OperationResumeInput,
+        PreviewTicketClosureRequest, RemoteOperationAction, RemoteOperationTarget,
+        RemotePublicationEvidence, RemoteRefPlan, RemoteReservationOutcome, RequestState,
+        SetPublicationRemoteRequest, TicketClosurePreflight, keys::SessionCredentials,
     },
     results::{DiscoveryEffect, Effects, Envelope, Outcome, ResultCode},
 };
@@ -39,6 +39,7 @@ const CONTEXT_SCHEMA: &str = "context_mutation.schema.json";
 /// More request IDs than the support module has. No fixture uses them.
 const REQUEST_4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
 const REQUEST_5: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX5";
+const REQUEST_6: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX6";
 
 fn prepare(world: &World, kind: AuthoringKind, id: &str, intent: ContextPrepareIntent) -> Mutation {
     Mutation::ContextPrepare(ContextPrepareInput {
@@ -69,6 +70,14 @@ fn create_document(world: &World, id: &str) -> Mutation {
         id,
         ContextPrepareIntent::Create,
     )
+}
+
+/// A refresh of the whole index: work on the whole repository, which a
+/// pending row of any item is in the way of.
+fn refresh(world: &World) -> Mutation {
+    Mutation::IndexRefresh(IndexRefreshInput {
+        root: world.root.clone(),
+    })
 }
 
 /// A world whose service fails once at `point`.
@@ -517,8 +526,8 @@ fn prepare_interrupted_at_the_domain_call_the_same_request_makes_the_context() {
 }
 
 #[test]
-fn prepare_interrupted_before_the_worktree_other_requests_need_recovery_and_the_same_one_finishes()
-{
+fn prepare_interrupted_before_the_worktree_holds_its_item_and_the_repository_and_the_same_one_finishes()
+ {
     git_home::isolated();
     let world = failing_at(FailurePoint::BeforeWorktreeCreation);
 
@@ -532,11 +541,11 @@ fn prepare_interrupted_before_the_worktree_other_requests_need_recovery_and_the_
     );
     assert_eq!(world.pending_journal_rows(), 1);
 
-    // Another request, of the same item or of another, is stopped by the
-    // pending row.
+    // Another request of the same item, and work on the whole repository,
+    // are stopped by the pending row.
     for (request, mutation) in [
         (REQUEST_2, edit_ticket(&world, items::TICKET_A)),
-        (REQUEST_3, create_ticket(&world, TICKET_NEW)),
+        (REQUEST_3, refresh(&world)),
     ] {
         let other = world.execute(request, mutation);
         assert_eq!(other.code, ResultCode::RecoveryRequired, "{other:?}");
@@ -545,12 +554,24 @@ fn prepare_interrupted_before_the_worktree_other_requests_need_recovery_and_the_
         contexts(&world),
         (vec![World::branch(items::TICKET_A)], vec![])
     );
+    // Another item's is not: the row holds its own item alone.
+    let other = world.execute(REQUEST_4, create_ticket(&world, TICKET_NEW));
+    assert_ok(&other);
+    assert!(created(&other), "{other:?}");
+    assert_eq!(world.pending_journal_rows(), 1);
 
     let retry = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
 
     assert_ok(&retry);
     assert!(created(&retry), "{retry:?}");
-    assert_one_context(&world, items::TICKET_A);
+    assert_eq!(
+        contexts(&world),
+        (
+            vec![World::branch(items::TICKET_A), World::branch(TICKET_NEW)],
+            vec![items::TICKET_A.to_owned(), TICKET_NEW.to_owned()]
+        )
+    );
+    assert!(world.worktree(items::TICKET_A).is_dir());
     assert_eq!(world.pending_journal_rows(), 0);
 }
 
@@ -1201,14 +1222,17 @@ fn release_during_an_unfinished_closure_of_the_item_is_recovery_required() {
     assert_eq!(image(&world, items::TICKET_A), before);
 }
 
+/// A pending row of the whole repository, here a refresh that stopped
+/// before it stored the index, is in the way of the release.
 #[test]
 fn release_with_another_pending_row_on_the_root_is_recovery_required() {
     git_home::isolated();
     let mut world = World::new();
     make(&world, REQUEST_1, items::TICKET_A);
-    fail_once_at(&mut world, FailurePoint::BeforeWorktreeCreation);
-    let stopped = world.execute(REQUEST_2, create_ticket(&world, TICKET_NEW));
-    assert_eq!(stopped.code, ResultCode::InternalError, "{stopped:?}");
+    fail_once_at(&mut world, FailurePoint::BeforeIndexTransactionCommit);
+    let stopped = world.execute(REQUEST_2, refresh(&world));
+    assert_ne!(stopped.code, ResultCode::Ok, "{stopped:?}");
+    assert_eq!(world.pending_journal_rows(), 1);
     world.reopen();
     let before = image(&world, items::TICKET_A);
 
@@ -1220,8 +1244,29 @@ fn release_with_another_pending_row_on_the_root_is_recovery_required() {
     assert_eq!(image(&world, items::TICKET_A), before);
 }
 
+/// A pending row of another item, here a creation stopped before its
+/// worktree, holds that item alone: the release goes on, and the row is
+/// left pending, with its branch.
 #[test]
-fn release_interrupted_before_the_branch_release_other_requests_need_recovery_and_the_same_one_finishes()
+fn release_with_another_item_s_pending_row_releases_and_leaves_that_row() {
+    git_home::isolated();
+    let mut world = World::new();
+    make(&world, REQUEST_1, items::TICKET_A);
+    fail_once_at(&mut world, FailurePoint::BeforeWorktreeCreation);
+    let stopped = world.execute(REQUEST_2, create_ticket(&world, TICKET_NEW));
+    assert_eq!(stopped.code, ResultCode::InternalError, "{stopped:?}");
+    world.reopen();
+
+    let released = world.execute(REQUEST_3, release_ticket(&world, items::TICKET_A));
+
+    assert_released(&released);
+    assert!(!indexed(&world, &World::branch(items::TICKET_A)));
+    assert_eq!(contexts(&world), (vec![World::branch(TICKET_NEW)], vec![]));
+    assert_eq!(world.pending_journal_rows(), 1, "the other row alone");
+}
+
+#[test]
+fn release_interrupted_before_the_branch_release_holds_its_item_and_the_repository_and_the_same_one_finishes()
  {
     git_home::isolated();
     let mut world = World::new();
@@ -1238,21 +1283,27 @@ fn release_interrupted_before_the_branch_release_other_requests_need_recovery_an
     );
     assert_eq!(world.pending_journal_rows(), 1);
     world.reopen();
+    // Another request of the item, and work on the whole repository, wait
+    // for the row.
     for (request, mutation) in [
-        (REQUEST_3, create_ticket(&world, TICKET_NEW)),
-        (
-            REQUEST_4,
-            release(&world, AuthoringKind::Document, mutation::DOCUMENT),
-        ),
+        (REQUEST_3, release_ticket(&world, items::TICKET_A)),
+        (REQUEST_4, refresh(&world)),
     ] {
         let other = world.execute(request, mutation);
         assert_eq!(other.code, ResultCode::RecoveryRequired, "{other:?}");
     }
+    // Another item's request does not.
+    let other = world.execute(REQUEST_5, create_ticket(&world, TICKET_NEW));
+    assert_ok(&other);
+    assert_eq!(world.pending_journal_rows(), 1);
 
     let retry = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
 
     assert_released(&retry);
-    assert_eq!(contexts(&world), (vec![], vec![]));
+    assert_eq!(
+        contexts(&world),
+        (vec![World::branch(TICKET_NEW)], vec![TICKET_NEW.to_owned()])
+    );
     assert!(!indexed(&world, &World::branch(items::TICKET_A)));
     assert_eq!(world.pending_journal_rows(), 0);
 }
@@ -1305,9 +1356,13 @@ fn release_whose_refresh_fails_is_discovery_pending_and_resume_completes_it() {
     assert_eq!(contexts(&world), (vec![], vec![]));
     assert!(indexed(&world, &World::branch(items::TICKET_A)));
     world.reopen();
-    // Other requests wait for the row.
-    let other = world.execute(REQUEST_3, create_ticket(&world, TICKET_NEW));
+    // Work on the whole repository waits for the row; another item's work
+    // does not.
+    let other = world.execute(REQUEST_3, refresh(&world));
     assert_eq!(other.code, ResultCode::RecoveryRequired, "{other:?}");
+    let made = world.execute(REQUEST_5, create_ticket(&world, TICKET_NEW));
+    assert_ok(&made);
+    assert_eq!(world.pending_journal_rows(), 1);
 
     let resumed = world.execute(
         REQUEST_4,
@@ -1325,9 +1380,13 @@ fn release_whose_refresh_fails_is_discovery_pending_and_resume_completes_it() {
     assert_eq!(resumed.effects, discovery(DiscoveryEffect::Current));
     assert_eq!(world.pending_journal_rows(), 0);
     assert!(!indexed(&world, &World::branch(items::TICKET_A)));
-    // And the root is free again.
-    let made = world.execute(REQUEST_5, create_ticket(&world, TICKET_NEW));
-    assert_ok(&made);
+    // And the whole repository is free again.
+    let refreshed = world.execute(REQUEST_6, refresh(&world));
+    assert_eq!(
+        (refreshed.outcome, refreshed.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{refreshed:?}"
+    );
 }
 
 /// Not a row of the table: the request's own retry finishes the hand-off
