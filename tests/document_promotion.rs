@@ -890,6 +890,8 @@ const ROW_POLICY: privacy_rows::RowPolicy<'static> = privacy_rows::RowPolicy {
     ],
     required: "document_promotions",
     exempt: &[("title", TITLE.as_bytes())],
+    // The probes hold no commit identity: no author value is accepted.
+    authors: &[],
 };
 fn scan_workflow_rows(db: &rusqlite::Connection, probes: &[Vec<u8>]) -> Result<(), FixtureError> {
     privacy_rows::scan_workflow_rows(db, probes, &ROW_POLICY)

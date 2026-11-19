@@ -44,7 +44,9 @@ fn workflow_control(
 ) -> Result<(), FixtureError> {
     let exempt = p.exempt();
     let refs = exempt_refs(&exempt);
-    let policy = row_policy(&refs);
+    let authors = p.authors();
+    let author_refs = author_refs(&authors);
+    let policy = row_policy(&refs, &author_refs);
     let cache = cache_probes(&p.probes);
     privacy_rows::scan_workflow_rows(db, &p.probes, &policy)?;
     privacy_rows::scan_rows(db, &cache, true, &policy)?;
@@ -81,6 +83,20 @@ fn workflow_control(
         ))?,
         original
     );
+    // The author exemption is of the exact identity: any other value in an
+    // operation journal's `author` that holds it is a leak.
+    let transaction = fixed(db.unchecked_transaction())?;
+    assert_eq!(
+        fixed(transaction.execute(
+            "UPDATE operation_records SET author=?1 WHERE id=?2",
+            rusqlite::params![format!("fixture/{closed_by}"), id],
+        ))?,
+        1
+    );
+    assert!(privacy_rows::scan_workflow_rows(&transaction, &p.probes, &policy).is_err());
+    assert!(privacy_rows::scan_rows(&transaction, &cache, true, &policy).is_err());
+    fixed(transaction.rollback())?;
+    assert_eq!(operation_rows_snapshot(db)?, before);
     // The exemption is column-scoped: the same value in `title` is a leak.
     let transaction = fixed(db.unchecked_transaction())?;
     assert_eq!(
@@ -93,7 +109,7 @@ fn workflow_control(
     assert!(privacy_rows::scan_rows(&transaction, &cache, true, &policy).is_err());
     fixed(transaction.rollback())?;
     // The bare email outside its exempt `closed_by` cell is a leak too.
-    scan_identity_parts(db, &exempt)?;
+    scan_identity_parts(db, &exempt, &author_refs)?;
     let transaction = fixed(db.unchecked_transaction())?;
     assert_eq!(
         fixed(transaction.execute(
@@ -102,9 +118,9 @@ fn workflow_control(
         ))?,
         1
     );
-    assert!(scan_identity_parts(&transaction, &exempt).is_err());
+    assert!(scan_identity_parts(&transaction, &exempt, &author_refs).is_err());
     fixed(transaction.rollback())?;
-    scan_identity_parts(db, &exempt)?;
+    scan_identity_parts(db, &exempt, &author_refs)?;
     privacy_rows::scan_workflow_rows(db, &p.probes, &policy)?;
     privacy_rows::scan_rows(db, &cache, true, &policy)
 }
