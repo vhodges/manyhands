@@ -929,7 +929,8 @@ pub struct OperationAttributionDto {
     /// the operation names this host and a process that exists on it, or,
     /// naming no process of this host, when its indexing heartbeat is
     /// fresh, and false otherwise. Null when the operation names neither a
-    /// host nor a process. It is a judgment of this read and is not
+    /// host nor a process; one that names a host but no process is judged,
+    /// and is false. It is a judgment of this read and is not
     /// stored; a process ID the system has since given to another process
     /// makes a dead holder look live. A row naming the reading process
     /// itself is judged by its heartbeat alone, since that process always

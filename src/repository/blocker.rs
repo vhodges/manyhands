@@ -17,10 +17,23 @@
 //! refusal stays `recovery_required` and names it. Neither leaves a row.
 //!
 //! A new synchronization, the publication of a comment, an `item sync`, a
-//! `repo sync` or a republish, waits the same way, with the same budget,
-//! for another operation that holds the repository's remote reservation
-//! while that operation's holder is live; see
-//! `RepositoryService::reserving`.
+//! `repo sync` or a republish, waits the same way, under the same
+//! `WaitPolicy`, for another operation that is in the way of the
+//! repository's remote reservation while that operation's holder is live;
+//! see `RepositoryService::reserving`. Two
+//! things are waited for there:
+//!
+//! - the holder of the reservation (another synchronization's row, family
+//!   `remote`), and
+//! - a live peer's unfinished local row, which refuses the new
+//!   publication's reservation `recovery_required`: a peer's index
+//!   hand-off, which it begins just after it lets the reservation go
+//!   (family `local`, action `refresh`).
+//!
+//! The wait of the reservation takes a fresh budget: a comment add that
+//! waited in `begin_lifecycle` may wait again here, up to the budget once
+//! more, not for what was left of the first. A stale holder is answered at
+//! once, as for a begin.
 
 use std::{path::Path, sync::Arc, time::Duration};
 

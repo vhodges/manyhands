@@ -1642,17 +1642,25 @@ impl RepositoryService {
     /// What `reserve` comes to, tried again while another operation is in
     /// its way and that operation's holder still works: the call waits for
     /// it as a writer waits for a live peer's row, a poll at a time, for as
-    /// long as `WaitPolicy` lets it (`slept`), one budget for both ways in
-    /// which another operation refuses it:
+    /// long as `WaitPolicy` lets it (`slept`). The budget is a fresh one
+    /// (`start_wait`), under the same policy, not what is left of the
+    /// budget of a `begin_lifecycle` before it; one budget serves both ways
+    /// in which another operation refuses the call:
     ///
-    /// - `Busy` while another operation holds the reservation of the
-    ///   repository at `root` (`reservation_holder`, not `own`) and its
-    ///   holder is live. A `Busy` that no live holder explains is given
-    ///   back at once: no operation holds the reservation (a closure that
-    ///   holds the item, or another item's waiting conflict, refused it),
-    ///   or the one that does is stale or cannot be read; so is the last
-    ///   `Busy` once the budget is spent. The caller answers it as it
-    ///   answers a `Busy` it was given at once.
+    /// - `Busy`. The reservation is refused for one of three reasons that
+    ///   `reserve` does not tell apart: another operation holds the
+    ///   reservation, a closure holds the item's context
+    ///   (`closure_holds_context`), or another item's conflict waits for an
+    ///   answer (`has_pending_conflict`). The call then asks whether a live
+    ///   operation holds the reservation (`reservation_holder`, not `own`).
+    ///   If one does, it waits, whatever else refused the call, and when the
+    ///   budget is spent, or the holder is gone, it gives the last `Busy`
+    ///   back. If none does (no holder, or a stale one, or one that cannot
+    ///   be read), the `Busy` is given back at once, with no wait. So a
+    ///   `Busy` for a closure or a conflict is not waited on for itself,
+    ///   only for a live holder that happens to be there; the answer is the
+    ///   same either way, and the caller answers it as it answers a `Busy`
+    ///   it was given at once.
     /// - `recovery_required` naming another operation's unfinished local
     ///   row, as a peer's index hand-off leaves one just after it lets the
     ///   reservation go: as `waited` judges it for a writer's begin. A live
