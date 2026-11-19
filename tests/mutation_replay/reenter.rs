@@ -1061,6 +1061,18 @@ fn first_writer_held_in_its_hand_off(
     std::sync::mpsc::Sender<()>,
     String,
 ) {
+    writer_held_in_its_hand_off(world, save_at(&world.root, token))
+}
+
+/// `first_writer_held_in_its_hand_off`, for the request `mutation`.
+fn writer_held_in_its_hand_off(
+    world: &World,
+    mutation: Mutation,
+) -> (
+    std::thread::JoinHandle<manyhands::results::Envelope<MutationDataDto>>,
+    std::sync::mpsc::Sender<()>,
+    String,
+) {
     use std::sync::mpsc;
 
     let (entered, has_entered) = mpsc::channel::<()>();
@@ -1070,13 +1082,9 @@ fn first_writer_held_in_its_hand_off(
         entered.send(()).unwrap();
         released.recv().unwrap();
     });
-    let call = {
-        let root = world.root.clone();
-        let token = token.to_owned();
-        std::thread::spawn(move || {
-            crate::support::mutation::execute_with(&service, REQUEST_1, save_at(&root, &token))
-        })
-    };
+    let call = std::thread::spawn(move || {
+        crate::support::mutation::execute_with(&service, REQUEST_1, mutation)
+    });
     has_entered.recv().unwrap();
     let operation = world.record(REQUEST_1).expect("accepted").operations[0]
         .operation_id
@@ -1281,6 +1289,118 @@ fn writers_on_two_tickets_both_complete_while_one_is_unfinished() {
     assert_eq!(retried.effects.commit_oid, Some(commit));
     assert_eq!(world.pending_journal_rows(), 0);
     assert_eq!(world.branch_commits(TICKET_NEW), 1);
+}
+
+/// A save of `id`, as `World::save` makes it, that makes the ticket
+/// depend on `on`.
+fn depends(world: &World, id: &str, token: &str, on: &str) -> Mutation {
+    Mutation::TicketSave(TicketSaveInput {
+        deps: RelationshipWrite::Set(vec![on.to_owned()]),
+        ..world.save_input(id, token)
+    })
+}
+
+/// A save that sets relationships is checked for cycles and kinds against
+/// the other tickets as the index holds them. One ticket, `TICKET_A`, is
+/// saved to depend on another, `TICKET_NEW`: it commits, and its index
+/// hand-off fails, so the index does not hold the dependency. A save
+/// making `TICKET_NEW` depend on `TICKET_A`, checked against that index,
+/// sees no cycle; it is refused for the unfinished row, which it names,
+/// and writes nothing. Once the first request finishes its hand-off, the
+/// same save is rejected as the cycle it is.
+#[test]
+fn a_save_that_sets_relationships_is_refused_behind_another_item_s_unfinished_save() {
+    let mut world = World::new();
+    let made = world.execute(REQUEST_3, world.create(TICKET_NEW));
+    assert_eq!(made.code, ResultCode::Ok, "{made:?}");
+    world.service =
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(world.data.path());
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, depends(&world, TICKET_A, &token, TICKET_NEW));
+    assert_eq!(first.code, ResultCode::DiscoveryPending, "{first:?}");
+    let unfinished = first.operation_id.clone().expect("an operation");
+    world.reopen();
+
+    let commits = world.branch_commits(TICKET_NEW);
+    let other = world.token(TICKET_NEW);
+    let refused = world.execute(REQUEST_2, depends(&world, TICKET_NEW, &other, TICKET_A));
+    assert_eq!(
+        (refused.outcome, refused.code),
+        (Outcome::Blocked, ResultCode::RecoveryRequired),
+        "{refused:?}"
+    );
+    assert_eq!(blocker_of(&refused)["operation_id"], unfinished.as_str());
+    assert_eq!(world.branch_commits(TICKET_NEW), commits);
+    assert!(world.record(REQUEST_2).is_none());
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    let retried = world.execute(REQUEST_1, depends(&world, TICKET_A, &token, TICKET_NEW));
+    assert_eq!(retried.code, ResultCode::Ok, "{retried:?}");
+    let cycle = world.execute(REQUEST_2, depends(&world, TICKET_NEW, &other, TICKET_A));
+    assert_eq!(cycle.code, ResultCode::RelationshipCycle, "{cycle:?}");
+    assert_eq!(world.branch_commits(TICKET_NEW), commits);
+}
+
+/// A save that sets relationships is not made to wait for a live peer:
+/// its check was made before the peer's own change reached the index, so
+/// a wait that saw the peer finish and went on would write on a stale
+/// check. It answers `busy` at once, naming the peer; the request, sent
+/// again, is checked anew.
+///
+/// The peer saves `TICKET_A` to depend on `TICKET_NEW` and is held in its
+/// index hand-off. Were the second save, making `TICKET_NEW` depend on
+/// `TICKET_A`, to sleep, the peer would finish inside that sleep and the
+/// save would commit the cycle.
+#[cfg(unix)]
+#[test]
+fn a_save_that_sets_relationships_answers_busy_at_once_behind_a_live_peer() {
+    use std::sync::{Arc, Mutex};
+
+    let mut world = World::new();
+    let made = world.execute(REQUEST_3, world.create(TICKET_NEW));
+    assert_eq!(made.code, ResultCode::Ok, "{made:?}");
+    let clock = crate::support::mutation::StepClock::new();
+    world.service = crate::support::mutation::waiting_service(world.data.path(), &clock);
+    let token = world.token(TICKET_A);
+    let (first, release, held) =
+        writer_held_in_its_hand_off(&world, depends(&world, TICKET_A, &token, TICKET_NEW));
+    let peer = Arc::new(Mutex::new(Some((first, release))));
+    let finished = Arc::new(Mutex::new(None));
+    {
+        let (peer, finished) = (peer.clone(), finished.clone());
+        clock.at_first_sleep(move || {
+            let (first, release) = peer.lock().unwrap().take().unwrap();
+            release.send(()).unwrap();
+            *finished.lock().unwrap() = Some(first.join().unwrap());
+        });
+    }
+
+    let commits = world.branch_commits(TICKET_NEW);
+    let other = world.token(TICKET_NEW);
+    let busy = world.execute(REQUEST_2, depends(&world, TICKET_NEW, &other, TICKET_A));
+    assert_eq!(
+        (busy.outcome, busy.code),
+        (Outcome::Error, ResultCode::Busy),
+        "{busy:?}"
+    );
+    assert_eq!(clock.slept(), 0, "the save waited");
+    let blocker = blocker_of(&busy);
+    assert_eq!(blocker["operation_id"], held.as_str());
+    assert_eq!(blocker["live"], true);
+    assert_eq!(world.branch_commits(TICKET_NEW), commits);
+    assert!(world.record(REQUEST_2).is_none());
+
+    // The peer finishes; the same request, sent again, is checked against
+    // an index that holds the peer's dependency.
+    if let Some((first, release)) = peer.lock().unwrap().take() {
+        release.send(()).unwrap();
+        *finished.lock().unwrap() = Some(first.join().unwrap());
+    }
+    let first = finished.lock().unwrap().take().unwrap();
+    assert_eq!(first.code, ResultCode::Ok, "{first:?}");
+    let cycle = world.execute(REQUEST_2, depends(&world, TICKET_NEW, &other, TICKET_A));
+    assert_eq!(cycle.code, ResultCode::RelationshipCycle, "{cycle:?}");
+    assert_eq!(world.branch_commits(TICKET_NEW), commits);
 }
 
 /// A second call reads its evidence before the first commits and makes

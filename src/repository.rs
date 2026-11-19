@@ -693,6 +693,22 @@ pub struct TicketWriteOptions {
     pub slug: Option<String>,
 }
 
+impl TicketWriteOptions {
+    /// How far a save with these options reached: a save that sets `deps`
+    /// or `parent` to anything was checked against the other tickets and
+    /// items the index holds, for cycles and kinds, as
+    /// `check_ticket_relationships` checks them; one that leaves both, or
+    /// clears them, read nothing of another item.
+    fn reach(&self) -> recovery::CallReach {
+        let sets_deps = matches!(&self.deps, RelationshipWrite::Set(deps) if !deps.is_empty());
+        if sets_deps || matches!(self.parent, RelationshipWrite::Set(_)) {
+            recovery::CallReach::OtherItems
+        } else {
+            recovery::CallReach::OwnItem
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct SubmitCommentRequest {
     pub target: AuthoringTarget,
@@ -2563,12 +2579,13 @@ impl RepositoryService {
             &request.target.item_id,
             operation,
         )?;
-        let (lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle_reaching(
             &root_repository,
             &root,
             operation,
             request.target.operation_id,
             &authoring_write_target(&request.target, &[]),
+            options.reach(),
         )?;
         // As for a document's save: a row a call is indexing under is
         // that call's to finish.
@@ -3555,14 +3572,44 @@ impl RepositoryService {
         operation_id: OperationId,
         target: &str,
     ) -> Result<(RepositoryLease, RecoveryRecord), RepositoryError> {
+        self.begin_lifecycle_reaching(
+            repository,
+            root,
+            operation,
+            operation_id,
+            target,
+            recovery::CallReach::OwnItem,
+        )
+    }
+
+    /// `begin_lifecycle`, for a call that reached as far as `reach` says
+    /// before it began; see `recovery::CallReach`.
+    fn begin_lifecycle_reaching(
+        &self,
+        repository: &Repository,
+        root: &Path,
+        operation: RepositoryOperation,
+        operation_id: OperationId,
+        target: &str,
+        reach: recovery::CallReach,
+    ) -> Result<(RepositoryLease, RecoveryRecord), RepositoryError> {
         // Another operation's row in the way is waited for while its holder
         // works: the lease is let go, and the begin's registry transaction
         // has ended, before the wait sleeps, and both are taken again for
         // the next look. Nothing a peer needs to finish is held meanwhile.
-        let mut wait = self.start_wait();
+        //
+        // A call checked against other items before it began is not: its
+        // check was made before the peer's own change reached the index,
+        // and a wait that saw the peer finish would go on with it. It is
+        // answered at once, and the request, sent again, is checked anew.
+        let mut wait = match reach {
+            recovery::CallReach::OwnItem => self.start_wait(),
+            recovery::CallReach::OtherItems => self.no_wait(),
+        };
         loop {
             let lease = repository_lease(repository, root, operation)?;
-            match self.begin_lifecycle_record(root, operation, operation_id, target) {
+            match self.begin_lifecycle_record_reaching(root, operation, operation_id, target, reach)
+            {
                 Ok(record) => return Ok((lease, record)),
                 Err(error) => {
                     drop(lease);
@@ -3582,6 +3629,23 @@ impl RepositoryService {
         operation_id: OperationId,
         target: &str,
     ) -> Result<RecoveryRecord, RepositoryError> {
+        self.begin_lifecycle_record_reaching(
+            root,
+            operation,
+            operation_id,
+            target,
+            recovery::CallReach::OwnItem,
+        )
+    }
+
+    fn begin_lifecycle_record_reaching(
+        &self,
+        root: &Path,
+        operation: RepositoryOperation,
+        operation_id: OperationId,
+        target: &str,
+        reach: recovery::CallReach,
+    ) -> Result<RecoveryRecord, RepositoryError> {
         // Preserve authoritative local-Git behavior when the optional cache is unavailable.
         if self.registry_path.is_dir() {
             return Ok(RecoveryRecord {
@@ -3595,13 +3659,14 @@ impl RepositoryService {
         let mut connection = open_registry(&self.registry_path, &mut |_| {})
             .map_err(|error| error.for_operation(operation, root))?;
         migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
-        let record = begin_or_reconcile_operation(
+        let record = recovery::begin_or_reconcile_operation_reaching(
             &mut connection,
             root,
             operation,
             operation_id,
             target,
             self.clock.now().unix_timestamp(),
+            reach,
         )
         .map_err(|error| error.for_operation(operation, root))?;
         Ok(record)

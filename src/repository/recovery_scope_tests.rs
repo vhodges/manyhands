@@ -33,6 +33,9 @@ struct Seed {
 enum Call {
     /// A local operation of `operation`, under `id`, with `target`.
     Begin(RepositoryOperation, &'static str, Target),
+    /// `Begin`, for a call that was checked against other items as the
+    /// index holds them, as a ticket save that sets relationships is.
+    Across(RepositoryOperation, &'static str, Target),
     /// The question a folder's creation asks before it makes anything:
     /// can a refresh under `id` begin?
     RefreshCanBegin(&'static str),
@@ -151,23 +154,30 @@ fn journal(seeds: &[Seed]) -> Connection {
 fn answer(seeds: &[Seed], call: Call) -> Answer {
     let mut db = journal(seeds);
     let root = Path::new(ROOT);
+    let reach = match call {
+        Call::Across(..) => CallReach::OtherItems,
+        Call::Begin(..) | Call::RefreshCanBegin(_) => CallReach::OwnItem,
+    };
     let result = match call {
-        Call::Begin(operation, id, target) => begin_or_reconcile_operation(
-            &mut db,
-            root,
-            operation,
-            OperationId::parse(id).unwrap(),
-            &target.text(),
-            7,
-        )
-        .map(|record| {
-            if record.is_new {
-                Answer::Begun
-            } else {
-                assert!(record.is_pending, "a call that neither began nor took up");
-                Answer::TakenUp
-            }
-        }),
+        Call::Begin(operation, id, target) | Call::Across(operation, id, target) => {
+            begin_or_reconcile_operation_reaching(
+                &mut db,
+                root,
+                operation,
+                OperationId::parse(id).unwrap(),
+                &target.text(),
+                7,
+                reach,
+            )
+            .map(|record| {
+                if record.is_new {
+                    Answer::Begun
+                } else {
+                    assert!(record.is_pending, "a call that neither began nor took up");
+                    Answer::TakenUp
+                }
+            })
+        }
         Call::RefreshCanBegin(id) => require_refresh_can_begin(
             &db,
             root,
@@ -589,6 +599,67 @@ fn an_unfinished_operation_blocks_its_own_item_and_repository_wide_work_but_not_
             vec![repository_row(None, "refresh", "created")],
             Call::Begin(SaveTicket, CALL, Ticket(ITEM_Y)),
             Refused(None),
+        ),
+        // A save that sets relationships was checked for cycles and kinds
+        // against the other tickets the index holds, and an unfinished row
+        // may hold a change the index has not been told of: every other
+        // pending row is in its way, while a save that sets none is not.
+        (
+            "owing item row, another item's save setting relationships",
+            save_x_owing(),
+            Call::Across(SaveTicket, CALL, Ticket(ITEM_Y)),
+            Refused(Some(ROW_1)),
+        ),
+        (
+            "stopped item row, another item's save setting relationships",
+            save_x_stopped(),
+            Call::Across(SaveTicket, CALL, Ticket(ITEM_Y)),
+            Refused(Some(ROW_1)),
+        ),
+        (
+            "owing item row, another item's plain save",
+            save_x_owing(),
+            Call::Begin(SaveTicket, CALL, Ticket(ITEM_Y)),
+            Begun,
+        ),
+        (
+            "its own row and another item's, setting relationships",
+            vec![
+                item_row(ROW_1, "save_ticket", ITEM_X, "failed"),
+                item_row(
+                    ROW_2,
+                    "save_ticket",
+                    ITEM_Y,
+                    "authoring_checkpoint_observed",
+                ),
+            ],
+            Call::Across(SaveTicket, ROW_2, Ticket(ITEM_Y)),
+            Refused(Some(ROW_1)),
+        ),
+        (
+            "its own row alone, setting relationships",
+            vec![item_row(
+                ROW_2,
+                "save_ticket",
+                ITEM_Y,
+                "authoring_checkpoint_observed",
+            )],
+            Call::Across(SaveTicket, ROW_2, Ticket(ITEM_Y)),
+            TakenUp,
+        ),
+        (
+            "no row, setting relationships",
+            vec![],
+            Call::Across(SaveTicket, CALL, Ticket(ITEM_Y)),
+            Begun,
+        ),
+        // The row such a save leaves is of its own item: a call of
+        // another item is not refused for it.
+        (
+            "a relationship save's own row, another item",
+            vec![item_row(ROW_2, "save_ticket", ITEM_Y, "failed")],
+            Call::Begin(SaveTicket, CALL, Ticket(ITEM_X)),
+            Begun,
         ),
     ];
     for (what, seeds, call, expected) in cases {

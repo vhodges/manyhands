@@ -182,6 +182,18 @@ impl RepositoryService {
         }
     }
 
+    /// A wait that is spent before it begins: a writer that may not wait
+    /// is answered at once, `busy` naming a live blocker and
+    /// `recovery_required` naming a stale one, as a wait whose budget is
+    /// spent answers.
+    pub(crate) fn no_wait(&self) -> Wait {
+        Wait {
+            started: self.clock.now(),
+            polls: u128::MAX,
+            seen_live: None,
+        }
+    }
+
     /// How the operation `blocker` names is found by the read of its row at
     /// `root`; see `Judged`.
     pub(crate) fn judge_blocker(&self, root: &Path, blocker: &Blocker) -> Judgment {

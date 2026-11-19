@@ -1173,6 +1173,7 @@ pub(super) fn begin_or_reconcile_local_synchronization(
         operation_id,
         target,
         true,
+        CallReach::OwnItem,
         RowOrigin::here(root, started_at),
     )
 }
@@ -1189,6 +1190,28 @@ pub(super) fn begin_or_reconcile_operation(
     target: &str,
     started_at: i64,
 ) -> Result<RecoveryRecord, RepositoryError> {
+    begin_or_reconcile_operation_reaching(
+        connection,
+        root,
+        operation,
+        operation_id,
+        target,
+        started_at,
+        CallReach::OwnItem,
+    )
+}
+
+/// `begin_or_reconcile_operation`, for a call that reached as far as
+/// `reach` says before it began; see `CallReach`.
+pub(super) fn begin_or_reconcile_operation_reaching(
+    connection: &mut Connection,
+    root: &Path,
+    operation: RepositoryOperation,
+    operation_id: OperationId,
+    target: &str,
+    started_at: i64,
+    reach: CallReach,
+) -> Result<RecoveryRecord, RepositoryError> {
     begin_or_reconcile(
         connection,
         root,
@@ -1196,6 +1219,7 @@ pub(super) fn begin_or_reconcile_operation(
         operation_id,
         target,
         false,
+        reach,
         RowOrigin::here(root, started_at),
     )
 }
@@ -1219,10 +1243,12 @@ pub(super) fn begin_or_reconcile_unauthored_operation(
         operation_id,
         target,
         false,
+        CallReach::OwnItem,
         RowOrigin::here(root, started_at).unauthored(),
     )
 }
 
+#[allow(clippy::too_many_arguments)] // The one begin every entry point shares.
 fn begin_or_reconcile(
     connection: &mut Connection,
     root: &Path,
@@ -1230,6 +1256,7 @@ fn begin_or_reconcile(
     operation_id: OperationId,
     target: &str,
     tagged_local_binding: bool,
+    reach: CallReach,
     // Read before the registry transaction begins, so no Git configuration
     // is read while it holds the database's write lock.
     origin: RowOrigin,
@@ -1301,6 +1328,7 @@ fn begin_or_reconcile(
         &requested,
         target,
         tagged_local_binding,
+        reach,
     )?;
     let existing = transaction
         .query_row(
@@ -2001,6 +2029,20 @@ fn is_in_the_way(state: &str, scope: &Scope, call: &Scope) -> bool {
         }
 }
 
+/// How far a call that begins or takes up a row reached before it did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CallReach {
+    /// It read nothing of other items: it is of its own item, or of the
+    /// whole repository, as its action and target say; see `Scope`.
+    OwnItem,
+    /// It was checked against other items as the discovery index holds
+    /// them, as a ticket save that sets `deps` or `parent` is for cycles
+    /// and kinds. Any unfinished row may hold a change the index does not
+    /// have yet, so the call is of the whole repository, whatever the
+    /// scope of the row it begins: every other pending row is in its way.
+    OtherItems,
+}
+
 /// What stands in the way of a call that would begin, or take up, the
 /// local operation `requested` of `action` and `target` on `root_path`.
 /// This is the one place that is decided: `begin_or_reconcile` asks it
@@ -2014,11 +2056,12 @@ fn is_in_the_way(state: &str, scope: &Scope, call: &Scope) -> bool {
 /// `RepositoryService`'s checkpoint guard. Otherwise what the local
 /// journal holds pending, of what is in the call's way.
 ///
-/// The call is of the scope of the row it would take up, when there is
-/// one: a refresh under a row's own ID, which is what `operation resume`
-/// runs for a row that owes only its hand-off, is of that row's item.
-/// Otherwise it is of the item its row would name, or of the whole
-/// repository; see `Scope`. A pending row of another item that no index
+/// A call that was checked against other items (`CallReach::OtherItems`)
+/// is of the whole repository. Any other call is of the scope of the row
+/// it would take up, when there is one: a refresh under a row's own ID,
+/// which is what `operation resume` runs for a row that owes only its
+/// hand-off, is of that row's item. Otherwise it is of the item its row
+/// would name, or of the whole repository; see `Scope`. A pending row of another item that no index
 /// owner may be at work under is not in its way, and is passed over.
 fn in_the_way(
     connection: &Connection,
@@ -2027,6 +2070,7 @@ fn in_the_way(
     requested: &str,
     target: &str,
     tagged_local_binding: bool,
+    reach: CallReach,
 ) -> Result<Pending, RepositoryError> {
     let remote_active: Option<String> = connection.query_row(
         &format!("SELECT remote_operation_records.operation_ulid FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN {RESERVATION_PHASES} AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%')) ORDER BY remote_operation_records.id LIMIT 1"),
@@ -2083,10 +2127,13 @@ fn in_the_way(
                     )
         }
     };
-    let call = pending.iter().find(|row| compatible(row)).map_or_else(
-        || Scope::of_call(action, target),
-        |row| Scope::of_row(&row.action, row.item_id.as_deref()),
-    );
+    let call = match reach {
+        CallReach::OtherItems => Scope::Repository,
+        CallReach::OwnItem => pending.iter().find(|row| compatible(row)).map_or_else(
+            || Scope::of_call(action, target),
+            |row| Scope::of_row(&row.action, row.item_id.as_deref()),
+        ),
+    };
     let mut matching = None;
     for row in &pending {
         if compatible(row) {
@@ -2165,6 +2212,7 @@ pub(super) fn require_refresh_can_begin(
         &operation_id.to_string(),
         "",
         false,
+        CallReach::OwnItem,
     )? {
         Pending::Nothing | Pending::Own(_) => Ok(()),
         Pending::Another(blocker) => Err(recovery_required(operation, root).with_blocker(blocker)),
