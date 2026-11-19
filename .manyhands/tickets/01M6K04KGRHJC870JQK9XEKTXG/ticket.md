@@ -3,7 +3,7 @@ slug: vh-z9ep3
 id: 01M6K04KGRHJC870JQK9XEKTXG
 title: Speed up local sync's image-proof audit and discovery's history walk
 type: defect
-status: open
+status: superseded
 project: manyhands
 team: core
 manyhands_managed: true
