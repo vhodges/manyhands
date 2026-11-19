@@ -1419,10 +1419,21 @@ fn pin_a_held_reservation(
         assert!(record(w, REQUEST_2).is_none());
     }
 
-    // Another synchronization.
+    // Another synchronization, which names the operation that holds the
+    // reservation.
     let other = execute(w, REQUEST_3, repo_sync(w));
     assert_eq!(other.code, ResultCode::Busy);
-    assert_eq!(actions(&other), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(
+        actions(&other),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::OperationShow
+        ]
+    );
+    assert_eq!(
+        other.recovery[1].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
     assert!(record(w, REQUEST_3).is_none());
 
     // The same request, with the cause still there.

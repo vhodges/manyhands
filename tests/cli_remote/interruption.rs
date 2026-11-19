@@ -1697,11 +1697,16 @@ mod pressed {
         assert_eq!(items[0]["action"], "synchronize_context");
         assert!(items[0]["failure_code"].is_null());
 
+        // It names the interrupted operation, which holds the reservation.
         let busy = item_sync(b, ITEM, R4, "busy", 5);
         assert_eq!(
             busy["recovery"],
-            serde_json::json!([{"action": "request.retry", "operation_id": null, "arguments": {"request_id": R4}}])
+            serde_json::json!([
+                {"action": "request.retry", "operation_id": null, "arguments": {"request_id": R4}},
+                {"action": "operation.show", "operation_id": operation, "arguments": {}}
+            ])
         );
+        assert_eq!(busy["data"]["blocker"]["operation_id"], operation.as_str());
         assert_eq!(remote_world::accepted(&p.server), pushes);
 
         let merged = item_sync(b, ITEM, R3, "ok", 0);

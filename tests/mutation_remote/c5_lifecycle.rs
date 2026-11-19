@@ -2331,7 +2331,29 @@ fn comment_publication_pending() -> Result<(), FixtureError> {
         blockers_of(&preview),
         [LifecycleBlocker::CommentPublicationPending]
     );
-    assert_eq!(prepare_actions(&preview), [RecoveryActionKind::RepoInspect]);
+    // The comment's interrupted synchronization is offered its resume, and
+    // its abandon after it.
+    assert_eq!(
+        prepare_actions(&preview),
+        [
+            RecoveryActionKind::OperationResume,
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    let synchronization: String = fixed(
+        fixed(rusqlite::Connection::open(w.data().join(REGISTRY_FILE)))?.query_row(
+            "SELECT synchronization_ulid FROM comment_publication_bindings",
+            [],
+            |row| row.get(0),
+        ),
+    )?;
+    for action in [&preview.recovery[0], &preview.recovery[2]] {
+        assert_eq!(
+            action.operation_id.as_deref(),
+            Some(synchronization.as_str())
+        );
+    }
     Ok(())
 }
 

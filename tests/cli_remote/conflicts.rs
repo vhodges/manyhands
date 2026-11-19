@@ -1379,18 +1379,50 @@ fn c4_conflicts_republish_busy_then_confirmed() -> Result<(), FixtureError> {
         .find_map(|line| line.strip_prefix("operation: "))
         .unwrap();
     // C2's bounded retry: three re-runs, each after a `retrying` line; then
-    // C2's refusal, Task 10's note, and the retry line.
+    // C2's refusal naming the operation that holds the reservation (the
+    // refused item sync), Task 10's note, the retry line and the line to
+    // show the operation. The holder's process ID and start are the run's
+    // own, and are compared by their form.
+    let holder = request_show(a, SYNC)["operations"][0]["operation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let shown: String = stderr
+        .lines()
+        .map(|line| {
+            let line = if line.starts_with("Blocker pid: ") {
+                "Blocker pid: <pid>"
+            } else if line.starts_with("Blocker started at: ") {
+                "Blocker started at: <started>"
+            } else {
+                line
+            };
+            format!("{line}\n")
+        })
+        .collect();
+    let host = manyhands::repository::this_host();
     let attempt = progress(&["accepted", "connecting"]);
     assert_eq!(
-        stderr,
+        shown,
         format!(
             "{attempt}progress: retrying\n{attempt}progress: retrying\n{attempt}progress: retrying\n{attempt}\
              error: The repository is busy; try again.\n\
              code: busy\n\
              request: {R3}\n\
              operation: {operation}\n\
+             Blocker action: synchronize_context\n\
+             Blocker author: Clone A <clone-a@example.invalid>\n\
+             Blocker family: remote\n\
+             Blocker host: {host}\n\
+             Blocker item id: {ITEM}\n\
+             Blocker live: false\n\
+             Blocker operation id: {holder}\n\
+             Blocker pid: <pid>\n\
+             Blocker request id: {SYNC}\n\
+             Blocker started at: <started>\n\
              {BUSY_NOTE}\
-             next: request.retry request_id={R3}\n"
+             next: request.retry request_id={R3}\n\
+             next: operation.show\n"
         )
     );
     no_record(a, R3);

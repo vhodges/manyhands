@@ -1057,7 +1057,21 @@ fn c4_republish_busy() -> Result<(), FixtureError> {
     let busy = confirmed(&w, REPUBLISH, &confirmation);
     assert_eq!(busy.code, ResultCode::Busy, "{}", busy.message);
     assert_eq!(busy.outcome, Outcome::Error);
-    assert_eq!(actions(&busy), [RecoveryActionKind::RequestRetry]);
+    // It names the refused synchronization, which holds the reservation.
+    assert_eq!(
+        actions(&busy),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::OperationShow
+        ]
+    );
+    let holder = record(&w, REFUSED).ok_or(FixtureError)?.operations[0]
+        .operation_id
+        .to_string();
+    assert_eq!(
+        busy.recovery[1].operation_id.as_deref(),
+        Some(holder.as_str())
+    );
     assert!(record(&w, REPUBLISH).is_none());
     assert_eq!(accepted(&w.server), pushes);
     assert_eq!(served(&w)?, None);
