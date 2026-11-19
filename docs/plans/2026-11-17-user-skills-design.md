@@ -4,6 +4,22 @@ Status: approved by the owner, 2026-11-17, with the version check changed to a
 minimum version. Reviewed by a builder check; the owner answered its two open
 questions (autonomy policy, key guidance).
 
+Amended 2026-11-18 (ticket vh-bhepg, branch
+`manyhands/ticket/01M7NMJKJG35F3C51JF7EVDSRP`): the interim guidance on other
+writers in a repository (one write at a time, saved request IDs, a baseline
+`operation list`, and the rule that an operation is proven yours only by your
+own request ID) rested on a CLI that did not say whose an operation is. That
+change gave every operation an attribution, a bounded wait and a `busy` answer
+that names its blocker, a per-item hold, and a hand-over `operation abandon`
+of a stale synchronization. The skills now describe it, in
+`manyhands-overview` (CLI conventions, "Other writers in the repository"),
+`manyhands-recovery`, `manyhands-comments` and `manyhands-sharing-and-sync`,
+and keep the interim guidance for older builds in that one place. The minimum
+CLI version stays 0.2.0: the skills say which behaviour needs a build with the
+change, which still reports 0.2.0. The autonomy table below is unchanged; only
+the prose on `operation resume` moved to the attribution. See
+`docs/plans/2026-11-18-concurrent-writers-design.md`.
+
 ## Intent
 
 Manyhands has agent skills for developing Manyhands (`.agents/skills/`), but

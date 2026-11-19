@@ -291,6 +291,8 @@ pub(in super::super) fn claim_scoped(
     nonce: Option<OperationId>,
     scope: Scope,
 ) -> Result<BranchClaim, RepositoryError> {
+    // Whose the rows are, read before the registry's write lock is taken.
+    let origin = recovery::RowOrigin::here(&request.root, service.clock.now().unix_timestamp());
     state::with_transaction(service, &request.root, |tx, id| {
         super::audit_connection(tx)?;
         let operation = request.operation_id.to_string();
@@ -324,6 +326,7 @@ pub(in super::super) fn claim_scoped(
         let report = ContextRetirementReport::refused(crate::results::ResultCode::RecoveryRequired);
         tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,?5,?6)",params![id,request.root.to_str(),operation,format!("authoring-context-v1/{}/{}/Retire",authoring_kind_segment(&request.kind),request.item_id),if valid {"created"}else{"completed"},service.clock.now().unix_timestamp()]).map_err(RepositoryError::sqlite)?;
         let local = tx.last_insert_rowid();
+        recovery::attribute_local_row(tx, local, &origin).map_err(RepositoryError::sqlite)?;
         tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,expected_tip,selection_epoch,instance_verified,remote_name,primary_branch,configuration_generation,endpoint_digest,materialization_capture,materialization_operation_ulid,materialization_oid,materialization_step,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis,final_code,final_result,instance_nonce,request_ulid) VALUES(?1,?2,?3,1,?4,?5,?18,?6,1,0,?7,?8,?9,?10,?11,?12,?13,?14,0,1,?15,'none','none','none',?16,?17,?19,?20)",params![operation,local,id,authoring_kind_segment(&request.kind),request.item_id.to_string(),tip.to_string(),plan.remote_name(),plan.primary_branch(),generation,configuration.endpoint_digest().as_slice(),if !valid {"unverified"}else if captured.is_some(){"complete"}else{"absent"},captured.map(|v|&v.0),captured.map(|v|&v.1),captured.map(|v|&v.2),if valid{"selected"}else{"refused"},(!valid).then_some(report.code.as_str()),if valid{None}else{Some(report.encode()?)},if nonce.is_some(){"present"}else{"branch_only"},nonce.map(|v|v.to_string()),scope.request_id()]).map_err(RepositoryError::sqlite)?;
         tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase,request_attempt) VALUES(?1,1,?2,?3,?4)",params![operation,id,if valid{"active"}else{"ended"},scope.attempt()]).map_err(RepositoryError::sqlite)?;
         if !valid {
@@ -336,7 +339,7 @@ pub(in super::super) fn claim_scoped(
         {
             return Err(recovery_required());
         }
-        state::insert_operation(
+        let observed = state::insert_operation(
             tx,
             id,
             observer,
@@ -344,6 +347,7 @@ pub(in super::super) fn claim_scoped(
             RemoteOperationPriority::Manual,
             service.clock.now().unix_timestamp(),
         )?;
+        recovery::attribute_remote_row(tx, observed, &origin).map_err(|_| recovery_required())?;
         let remote = state::read_operation(tx, id, observer)?.ok_or_else(recovery_required)?;
         if tx.execute("UPDATE context_retirement_attempts SET observer_operation_ulid=?2,observer_owner_epoch=?3 WHERE operation_ulid=?1 AND owner_epoch=1 AND phase='active' AND observer_operation_ulid IS NULL",params![operation,observer.to_string(),remote.owner_epoch]).map_err(RepositoryError::sqlite)?!=1 { return Err(recovery_required()); }
         let execution = ObserverExecution {
@@ -382,6 +386,8 @@ pub(in super::super) fn claim_initial(
     let plan = input.plan().clone();
     let configuration = input.configuration().clone();
     let generation = input.generation();
+    // Whose the rows are, read before the registry's write lock is taken.
+    let origin = recovery::RowOrigin::here(&request.root, service.clock.now().unix_timestamp());
     state::with_transaction(service, &request.root, |tx, id| {
         super::audit_connection(tx)?;
         input.validate(service, tx, id)?;
@@ -401,6 +407,7 @@ pub(in super::super) fn claim_initial(
         let operation = request.operation_id.to_string();
         tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,'created',?5)",params![id,request.root.to_str(),operation,format!("authoring-context-v1/{}/{}/Retire",c.kind,c.item_id),service.clock.now().unix_timestamp()]).map_err(RepositoryError::sqlite)?;
         let local = tx.last_insert_rowid();
+        recovery::attribute_local_row(tx, local, &origin).map_err(RepositoryError::sqlite)?;
         tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,expected_tip,selection_epoch,instance_nonce,instance_verified,remote_name,primary_branch,configuration_generation,endpoint_digest,request_ulid,materialization_capture,materialization_operation_ulid,materialization_oid,materialization_step,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis) VALUES(?1,?2,?3,1,?4,?5,?6,?7,1,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,0,1,'selected','none','none','none')",params![operation,local,id,c.kind,c.item_id,c.resources,c.tip,c.nonce,c.resources=="present",plan.remote_name(),plan.primary_branch(),generation,configuration.endpoint_digest().as_slice(),scope.request_id(),if m.is_some(){"complete"}else{"absent"},m.map(|m|&m.0),m.map(|m|&m.1),m.map(|m|&m.2)]).map_err(RepositoryError::sqlite)?;
         tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,request_attempt,phase) VALUES(?1,1,?2,?3,'active')",params![operation,id,scope.attempt()]).map_err(RepositoryError::sqlite)?;
         input.bind(tx, request, scope)?;
@@ -456,7 +463,7 @@ pub(in super::super) fn bind_reentry_observer(
     {
         return Err(recovery_required());
     }
-    state::insert_operation(
+    let observed = state::insert_operation(
         tx,
         id,
         observer,
@@ -464,6 +471,8 @@ pub(in super::super) fn bind_reentry_observer(
         RemoteOperationPriority::Manual,
         service.clock.now().unix_timestamp(),
     )?;
+    let origin = recovery::RowOrigin::here(&request.root, service.clock.now().unix_timestamp());
+    recovery::attribute_remote_row(tx, observed, &origin).map_err(|_| recovery_required())?;
     let remote = state::read_operation(tx, id, observer)?.ok_or_else(recovery_required)?;
     if tx.execute("UPDATE context_retirement_attempts SET observer_operation_ulid=?3,observer_owner_epoch=?4 WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='active' AND observer_operation_ulid IS NULL",params![request.operation_id.to_string(),epoch,observer.to_string(),remote.owner_epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
     let execution = ObserverExecution {
@@ -493,6 +502,8 @@ pub(in super::super) fn refuse_fresh_scoped(
     code: crate::results::ResultCode,
     scope: Scope,
 ) -> Result<ContextRetirementReport, RepositoryError> {
+    // Whose the rows are, read before the registry's write lock is taken.
+    let origin = recovery::RowOrigin::here(&request.root, service.clock.now().unix_timestamp());
     state::with_transaction(service, &request.root, |tx, id| {
         super::audit_connection(tx)?;
         let operation = request.operation_id.to_string();
@@ -516,6 +527,7 @@ pub(in super::super) fn refuse_fresh_scoped(
         });
         tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,'completed',?5)",params![id,request.root.to_str(),operation,format!("authoring-context-v1/{}/{}/Retire",authoring_kind_segment(&request.kind),request.item_id),service.clock.now().unix_timestamp()]).map_err(RepositoryError::sqlite)?;
         let local = tx.last_insert_rowid();
+        recovery::attribute_local_row(tx, local, &origin).map_err(RepositoryError::sqlite)?;
         tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,selection_epoch,instance_verified,materialization_capture,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis,final_code,final_result,request_ulid) VALUES(?1,?2,?3,1,?4,?5,'invalid',1,0,'unverified',0,1,'refused','none','none','none',?6,?7,?8)",params![operation,local,id,authoring_kind_segment(&request.kind),request.item_id.to_string(),report.code.as_str(),report.encode()?,scope.request_id()]).map_err(RepositoryError::sqlite)?;
         tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase,request_attempt) VALUES(?1,1,?2,'ended',?3)",params![operation,id,scope.attempt()]).map_err(RepositoryError::sqlite)?;
         if cancelled {

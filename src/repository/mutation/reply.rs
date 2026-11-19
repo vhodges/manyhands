@@ -9,7 +9,7 @@ use crate::results::{Envelope, ResultCode, Scope, absolute_path_string};
 use super::{
     super::ReadError,
     bind::{Accepted, Answer, Binding, Place},
-    dto::MutationDataDto,
+    dto::{BlockedDto, MutationDataDto},
     evidence::Position,
     identity::{DigestSalt, IntentDigest, RequestId, ScopeKey},
     outcome,
@@ -131,7 +131,22 @@ impl Reply<'_> {
             // Of a preview that is refused, and of no request.
             host_replacement: _,
             lifecycle_blocked: _,
+            blocker,
         } = answer;
+        // The operation in the request's way is the data of a `busy` or
+        // `recovery_required` answer, in place of the command's own, but
+        // for a lifecycle's, whose data is its own list of what is in its
+        // way.
+        let blocker = blocker.filter(|_| {
+            matches!(code, ResultCode::Busy | ResultCode::RecoveryRequired)
+                && !matches!(data, Some(MutationDataDto::Lifecycle(_)))
+        });
+        let data = match &blocker {
+            Some(blocker) => Some(MutationDataDto::Blocked(BlockedDto {
+                blocker: (**blocker).clone(),
+            })),
+            None => data,
+        };
         let scope = self.scope(accepted.map(|accepted| &accepted.position));
         // A request with no operation names none.
         let operation = accepted.and_then(Accepted::operation);
@@ -153,6 +168,10 @@ impl Reply<'_> {
                 .and_then(MutationDataDto::authority)
                 .as_deref(),
         );
+        let recovery = match &blocker {
+            Some(blocker) => outcome::showing(recovery, &blocker.operation_id),
+            None => recovery,
+        };
         let mut envelope = if code == ResultCode::Cancelled && !cancelled {
             // Q1 retirement-only partial cancellation. Keep the generic
             // classifier's legacy cancelled/code invariant for every other call.

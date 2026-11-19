@@ -583,6 +583,28 @@ pub(crate) fn inspect_the_root_it_lies_in(root: &Path) -> Vec<RecoveryAction> {
         .collect()
 }
 
+/// What a result that names the operation in its way offers: what it
+/// offered, and `operation.show` of that operation after it, once. The
+/// actions that take a pending row up or give it up are added around it
+/// afterwards, as for every result; see `offering_abandon`.
+pub(crate) fn showing(
+    mut recovery: Vec<RecoveryAction>,
+    operation_id: &str,
+) -> Vec<RecoveryAction> {
+    let shown = recovery.iter().any(|action| {
+        action.action == RecoveryActionKind::OperationShow
+            && action.operation_id.as_deref() == Some(operation_id)
+    });
+    if !shown {
+        recovery.push(RecoveryAction::for_operation(
+            RecoveryActionKind::OperationShow,
+            operation_id,
+            [],
+        ));
+    }
+    recovery
+}
+
 /// The refresh of the index of the repository at `root`.
 pub(crate) fn refresh_the_root(root: &str) -> RecoveryAction {
     RecoveryAction::new(
@@ -1144,7 +1166,11 @@ fn with_host_action(
 /// `pending` is the operation IDs of the repository's pending local rows
 /// that nothing is seen against abandoning, oldest first: a row a call
 /// is at work under, or one the remote or key journal also holds, is
-/// not in it, and so is not offered under either rule. `resumable` is
+/// not in it, and so is not offered under either rule. After them come,
+/// under the first rule, the synchronizations of the remote journal that
+/// `operation abandon` closes and that no process works under: a stale
+/// remote operation is offered its way out as a local one is, its resume
+/// before it where a resume would take it up. `resumable` is
 /// those of them that are not the request's own and that a resume would
 /// take up as things are; see `resume::takes_up`.
 ///
@@ -1450,7 +1476,9 @@ impl RepositoryService {
     /// alone, no call is at work under it with a heartbeat, and no call
     /// holds the repository's lease or its bootstrap lease, which is
     /// looked at without waiting and let go at once. The look is taken
-    /// last, and only when there is something to offer.
+    /// last, and only when there is something to offer. A synchronization
+    /// is offered when its abandon closes it and no process of this host
+    /// is at work under it; see `abandonable_remote_operations`.
     ///
     /// An operation offered so that is another request's is asked, with
     /// the question a resume itself asks, whether a resume would take
@@ -1483,6 +1511,27 @@ impl RepositoryService {
                     && !recovery::held_by_another_journal(connection, &operation_id)?
                 {
                     pending.push(operation_id);
+                }
+            }
+            // And the synchronizations its abandon closes that no process
+            // works under, under the first rule; with them the remote
+            // operation the envelope names as the one in its way, which the
+            // list leaves out when a cancellation ended it.
+            if inspects {
+                pending.extend(self.abandonable_remote_operations(connection, &root)?);
+                for action in &envelope.recovery {
+                    let Some(named) = action
+                        .operation_id
+                        .as_deref()
+                        .filter(|_| action.action == RecoveryActionKind::OperationShow)
+                    else {
+                        continue;
+                    };
+                    if !pending.iter().any(|pending| pending == named)
+                        && self.closes_named_remote_operation(connection, &root, named)?
+                    {
+                        pending.push(named.to_owned());
+                    }
                 }
             }
             // Whether the request's record was left accepted, holding

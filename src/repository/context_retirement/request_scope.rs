@@ -325,6 +325,9 @@ impl RepositoryService {
             &request.root,
             crate::repository::RepositoryOperation::RetireContext,
         )?;
+        // The claim takes the row over: it records this process as the
+        // row's holder, read before the registry transaction begins.
+        let holder = crate::repository::recovery::Holder::this_process();
         let (id, owner) = state::with_transaction(self, &root, |tx, id| {
             let scope = Scope::Request(fence);
             scope.validate(tx, &request.operation_id.to_string(), &root)?;
@@ -353,7 +356,7 @@ impl RepositoryService {
                 .checked_add(1)
                 .filter(|_| old >= 0)
                 .ok_or_else(recovery_required)?;
-            let changed=tx.execute("UPDATE operation_records SET state='indexing',index_owner_epoch=?2,observed_at=?3 WHERE id=?1 AND index_owner_epoch=?4 AND state IN ('authoritative_observed','indexing','failed','observed','persisted','retry','index_invalidated')",params![local,next,self.clock.now().unix_timestamp(),old]).map_err(RepositoryError::sqlite)?;
+            let changed=tx.execute("UPDATE operation_records SET state='indexing',index_owner_epoch=?2,observed_at=?3,host=?5,pid=?6 WHERE id=?1 AND index_owner_epoch=?4 AND state IN ('authoritative_observed','indexing','failed','observed','persisted','retry','index_invalidated')",params![local,next,self.clock.now().unix_timestamp(),old,holder.host,holder.pid]).map_err(RepositoryError::sqlite)?;
             if changed == 1 {
                 tx.execute("INSERT INTO context_retirement_index_claims(operation_ulid,repository_id,request_ulid,request_attempt,index_owner_epoch) VALUES(?1,?2,?3,?4,?5)",params![request.operation_id.to_string(),id,fence.id(),fence.attempt(),next]).map_err(RepositoryError::sqlite)?;
             }

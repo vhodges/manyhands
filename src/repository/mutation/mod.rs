@@ -129,28 +129,29 @@ pub use bind::{
 use command::Command;
 pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
-    CancelDto, CommentMutationDto, CommentMutationType, CommentPendingReason, ConflictNextAction,
-    ConflictNextDto, ConflictResolutionMutationDto, ConflictResolutionMutationType,
-    ContextMutationDto, ContextRetirementMutationDto, ContextRetirementMutationType,
-    ContextRetirementState, DocumentMutationDto, HistoryMarkerState, HistoryRelation,
-    HostMutationDto, HostObservationDto, HostPreviewDto, HostReplacementDto, IdentityMutationDto,
-    IdentityPreviewDto, ItemRepublishPreviewDto, ItemResolveHistoryMutationDto,
-    ItemResolveHistoryPreviewDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
-    KeyMutationDto, LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupPendingReason,
-    LifecycleCleanupState, LifecycleIntegrationKind, LifecycleMadeReadyDto,
-    LifecycleMadeReadyState, LifecycleMutationDto, LifecycleMutationType, LifecyclePathChangeDto,
-    LifecyclePathChangeKind, LifecyclePlannedCleanupDto, LifecyclePlannedClosureDto,
-    LifecyclePlannedIntegration, LifecyclePlannedPublication, LifecyclePreviewDto,
-    LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
-    LocalIdentityDto, MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto,
-    PollMutationCompletion, PollMutationDto, PollPolicyMutationDto, PollRetirementCompletion,
-    PollRetirementDebt, PollRetirementItemDto, PollRetirementItemState, PollRetirementMutationDto,
-    PollRetirementMutationType, PollTargetDisposition, PollTargetDto, PrepareDataDto,
-    PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
-    PreviewIdentitySource, RemoteHistoryChoicesDto, RemoteHistoryDto, RemoteHistoryEntryDto,
-    RemoteMutationDto, RemoteRemovalPreviewDto, RemoteResolveHistoryPreviewDto, RepairMutationDto,
-    RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
-    RequestOperationDto, RequestResultDto, RequestState, SynchronizationConflictMutationDto,
+    BlockedDto, BlockerDto, CancelDto, CommentMutationDto, CommentMutationType,
+    CommentPendingReason, ConflictNextAction, ConflictNextDto, ConflictResolutionMutationDto,
+    ConflictResolutionMutationType, ContextMutationDto, ContextRetirementMutationDto,
+    ContextRetirementMutationType, ContextRetirementState, DocumentMutationDto, HistoryMarkerState,
+    HistoryRelation, HostMutationDto, HostObservationDto, HostPreviewDto, HostReplacementDto,
+    IdentityMutationDto, IdentityPreviewDto, ItemRepublishPreviewDto,
+    ItemResolveHistoryMutationDto, ItemResolveHistoryPreviewDto, KeyDeletionPreviewDto,
+    KeyDeletionState, KeyGenerationState, KeyMutationDto, LifecycleBlockedDto, LifecycleBlocker,
+    LifecycleCleanupPendingReason, LifecycleCleanupState, LifecycleIntegrationKind,
+    LifecycleMadeReadyDto, LifecycleMadeReadyState, LifecycleMutationDto, LifecycleMutationType,
+    LifecyclePathChangeDto, LifecyclePathChangeKind, LifecyclePlannedCleanupDto,
+    LifecyclePlannedClosureDto, LifecyclePlannedIntegration, LifecyclePlannedPublication,
+    LifecyclePreviewDto, LifecyclePublicationPendingReason, LifecyclePublicationState,
+    LifecycleRecording, LocalIdentityDto, MutationDataDto, OperationAbandonEvidenceDto,
+    OperationAbandonPreviewDto, OperationMutationDto, PollMutationCompletion, PollMutationDto,
+    PollPolicyMutationDto, PollRetirementCompletion, PollRetirementDebt, PollRetirementItemDto,
+    PollRetirementItemState, PollRetirementMutationDto, PollRetirementMutationType,
+    PollTargetDisposition, PollTargetDto, PrepareDataDto, PreviewDetailsDto, PreviewDto,
+    PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
+    RemoteHistoryChoicesDto, RemoteHistoryDto, RemoteHistoryEntryDto, RemoteMutationDto,
+    RemoteRemovalPreviewDto, RemoteResolveHistoryPreviewDto, RepairMutationDto, RepairPreviewDto,
+    RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
+    RequestResultDto, RequestState, SynchronizationConflictMutationDto,
     SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
@@ -208,7 +209,9 @@ pub(in super::super) fn finish_recorded_retirement(
     Ok(())
 }
 pub(super) use records::migrate as migrate_request_tables;
-pub(super) use records::{operation_owner, release_operation_owner};
+pub(super) use records::{
+    operation_holder, operation_owner, release_operation_holder, release_operation_owner,
+};
 pub use way_out::{
     HistoryWayOut, LifecycleWayOut, clear_cache_loss_way_out, lifecycle_prepare_way_out,
     lifecycle_way_out, resolve_history_way_out,
@@ -287,6 +290,17 @@ impl RepositoryService {
     #[doc(hidden)]
     pub fn with_clock_for_testing(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
+        self
+    }
+
+    /// The same service, asking `probe` whether a process exists when an
+    /// operation read judges whether its holder still works.
+    #[doc(hidden)]
+    pub fn with_process_probe_for_testing(
+        mut self,
+        probe: Arc<dyn crate::repository::ProcessProbe>,
+    ) -> Self {
+        self.process_probe = probe;
         self
     }
 
@@ -517,10 +531,19 @@ impl RepositoryService {
     /// `data.result`.
     pub fn show_request(&self, request_id: RequestId) -> Envelope<RequestDto> {
         let shown = self.request_record(request_id).and_then(|record| {
-            record
-                .map(request_dto)
-                .transpose()?
-                .ok_or_else(|| ReadError::new(ResultCode::RequestNotFound))
+            let Some(mut record) = record else {
+                return Err(ReadError::new(ResultCode::RequestNotFound));
+            };
+            // The record links what the call itself began; rows the
+            // request began under it since name it themselves.
+            record.operations = self.read_session(RepositoryOperation::Read, |connection| {
+                records::started_operations(
+                    connection,
+                    &record.request_id.to_string(),
+                    &record.operations,
+                )
+            })?;
+            request_dto(record)
         });
         match shown {
             Ok((scope, dto)) => Envelope::read_success(REQUEST_SHOW, scope, dto),

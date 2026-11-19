@@ -101,6 +101,9 @@ pub fn prepare_whole_with(
         Some(PrepareDataDto::LifecycleBlocked(_)) => {
             schema::check_published("lifecycle_blocked.schema.json", &value["data"]).unwrap();
         }
+        Some(PrepareDataDto::Blocked(_)) => {
+            schema::check_published("blocked.schema.json", &value["data"]).unwrap();
+        }
         None => {}
     }
     envelope

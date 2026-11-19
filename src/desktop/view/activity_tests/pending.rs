@@ -46,6 +46,7 @@ pub(in crate::desktop::view) fn waiting(
         worktree: None,
         updated_at: None,
         failure_code: None,
+        attribution: Default::default(),
     }
 }
 

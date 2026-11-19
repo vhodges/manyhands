@@ -1049,6 +1049,431 @@ fn a_concurrent_duplicate_is_busy_and_a_third_call_finishes_the_record() {
     assert_eq!(world.record(REQUEST_1).unwrap().attempt, 3);
 }
 
+/// A save of `TICKET_A` under `REQUEST_1`, on a service of its own, held
+/// inside its operation once it has let the repository lease go: in its
+/// index hand-off, while its row is `indexing` with the heartbeat of its
+/// claim. Returns the call, the sender that lets it go on, and its
+/// operation.
+///
+/// Its heartbeat does not beat again while it is held: each beat takes the
+/// index's lock for a moment, and on a loaded machine that moment can
+/// outlast the lock's timeout for the writer under test, which would make
+/// what that writer is answered depend on the load. The row stays live by
+/// the clock of a `waiting_service`, which reads its claim's heartbeat as
+/// fresh. Once let go, the heartbeat beats as ever.
+fn first_writer_held_in_its_hand_off(
+    world: &World,
+    token: &str,
+) -> (
+    std::thread::JoinHandle<manyhands::results::Envelope<MutationDataDto>>,
+    std::sync::mpsc::Sender<()>,
+    String,
+) {
+    writer_held_in_its_hand_off(world, save_at(&world.root, token))
+}
+
+/// `first_writer_held_in_its_hand_off`, for the request `mutation`.
+fn writer_held_in_its_hand_off(
+    world: &World,
+    mutation: Mutation,
+) -> (
+    std::thread::JoinHandle<manyhands::results::Envelope<MutationDataDto>>,
+    std::sync::mpsc::Sender<()>,
+    String,
+) {
+    use std::sync::mpsc;
+
+    let (entered, has_entered) = mpsc::channel::<()>();
+    let (release, released) = mpsc::channel::<()>();
+    let (beat, beats) = mpsc::channel::<()>();
+    let service = manyhands::repository::RepositoryService::open_at(world.data.path()).unwrap();
+    // Run by the heartbeat before its first beat: it waits for the hold to
+    // end, which drops the sender.
+    service.set_index_owner_heartbeat_hook_for_testing(move || {
+        let _ = beats.recv();
+    });
+    service.set_observation_hook_for_testing(move || {
+        entered.send(()).unwrap();
+        // A test that failed while it was held drops the sender too.
+        let _ = released.recv();
+        drop(beat);
+    });
+    let call = std::thread::spawn(move || {
+        crate::support::mutation::execute_with(&service, REQUEST_1, mutation)
+    });
+    has_entered.recv().unwrap();
+    let operation = world.record(REQUEST_1).expect("accepted").operations[0]
+        .operation_id
+        .to_string();
+    assert!(world.journal_row(&operation).in_flight());
+    (call, release, operation)
+}
+
+/// A writer that cannot take the repository's lease in time while a live
+/// peer's operation is unfinished waits for that peer, as it waits for the
+/// peer's row in its way, and when the wait is over answers `busy` naming
+/// it. Here the lease is held for the second writer's first look only;
+/// its later looks find the peer's row.
+#[cfg(unix)]
+#[test]
+fn a_second_writer_held_off_by_the_lease_waits_for_the_live_peer_and_names_it() {
+    use manyhands::repository::{LeaseKind, RepositoryService};
+
+    let mut world = World::new();
+    let token = world.token(TICKET_A);
+    let clock = crate::support::mutation::StepClock::new();
+    world.service = crate::support::mutation::waiting_service(world.data.path(), &clock);
+    let (first, release, held) = first_writer_held_in_its_hand_off(&world, &token);
+    let lease = RepositoryService::hold_lease_for_testing(
+        &world.root,
+        world.data.path(),
+        LeaseKind::Repository,
+    )
+    .unwrap();
+    let lease = std::sync::Mutex::new(Some(lease));
+    let lease = std::sync::Arc::new(lease);
+    {
+        let lease = lease.clone();
+        clock.at_first_sleep(move || drop(lease.lock().unwrap().take()));
+    }
+    let rows = journal_rows(&world);
+
+    let second = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    assert_eq!(
+        (second.outcome, second.code, second.failure_class()),
+        (
+            Outcome::Error,
+            ResultCode::Busy,
+            Some(FailureClass::Transient)
+        ),
+        "{second:?}"
+    );
+    assert!(lease.lock().unwrap().is_none(), "the lease was not let go");
+    assert_eq!(
+        recovery_actions(&second),
+        ["request.retry", "operation.show"]
+    );
+    let blocker = blocker_of(&second);
+    assert_eq!(blocker["operation_id"], held.as_str());
+    assert_eq!(blocker["live"], true);
+    assert_eq!(clock.slept(), 5);
+    assert_eq!(journal_rows(&world), rows);
+    assert!(world.record(REQUEST_2).is_none());
+
+    release.send(()).unwrap();
+    assert_eq!(first.join().unwrap().code, ResultCode::Ok);
+}
+
+/// How many rows the local journal holds, whatever their state.
+fn journal_rows(world: &World) -> i64 {
+    crate::support::items::index(world.data.path())
+        .query_row("SELECT COUNT(*) FROM operation_records", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
+/// The blocker an envelope's data names.
+fn blocker_of(envelope: &Envelope<MutationDataDto>) -> serde_json::Value {
+    serde_json::to_value(envelope).unwrap()["data"]["blocker"].clone()
+}
+
+/// While one writer is inside its operation, a second with another request
+/// waits for it, sleeping with nothing held, and when the wait is over
+/// answers `busy`, naming the operation in its way and its holder, with
+/// the same request to send again. It leaves no row and no record.
+#[cfg(unix)]
+#[test]
+fn a_second_writer_waits_for_a_live_peer_then_answers_busy_naming_it() {
+    let mut world = World::new();
+    let token = world.token(TICKET_A);
+    let clock = crate::support::mutation::StepClock::new();
+    world.service = crate::support::mutation::waiting_service(world.data.path(), &clock);
+    let (first, release, held) = first_writer_held_in_its_hand_off(&world, &token);
+    let rows = journal_rows(&world);
+
+    let second = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    assert_eq!(
+        (second.outcome, second.code, second.failure_class()),
+        (
+            Outcome::Error,
+            ResultCode::Busy,
+            Some(FailureClass::Transient)
+        )
+    );
+    assert_eq!(second.effects, Effects::not_requested());
+    // The whole answer is shown on a failure: once in a while, on a loaded
+    // machine, this busy has named no blocker.
+    assert_eq!(
+        recovery_actions(&second),
+        ["request.retry", "operation.show"],
+        "{second:?}"
+    );
+    assert_eq!(
+        second.recovery[1].operation_id.as_deref(),
+        Some(held.as_str())
+    );
+    let blocker = blocker_of(&second);
+    assert_eq!(blocker["operation_id"], held.as_str());
+    assert_eq!(blocker["family"], "local");
+    assert_eq!(blocker["action"], "save_ticket");
+    assert_eq!(blocker["request_id"], REQUEST_1);
+    assert_eq!(blocker["pid"], i64::from(std::process::id()));
+    assert_eq!(blocker["host"], manyhands::repository::this_host());
+    assert_eq!(blocker["live"], true);
+    // It waited the whole budget, in steps of the poll, and no longer.
+    assert_eq!(clock.slept(), 5);
+    // Nothing of the second request is left.
+    assert_eq!(journal_rows(&world), rows);
+    assert!(world.record(REQUEST_2).is_none());
+    assert!(world.branch_tip(TICKET_NEW).is_none());
+
+    release.send(()).unwrap();
+    let first = first.join().unwrap();
+    assert_eq!(
+        (first.outcome, first.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+}
+
+/// The busy request, sent again with the same request ID once the writer
+/// in its way has finished, completes.
+#[cfg(unix)]
+#[test]
+fn a_busy_request_completes_when_retried_after_the_holder_finishes() {
+    let mut world = World::new();
+    let token = world.token(TICKET_A);
+    let clock = crate::support::mutation::StepClock::new();
+    world.service = crate::support::mutation::waiting_service(world.data.path(), &clock);
+    let (first, release, _held) = first_writer_held_in_its_hand_off(&world, &token);
+
+    let busy = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    assert_eq!(busy.code, ResultCode::Busy);
+    assert_eq!(recovery_actions(&busy), ["request.retry", "operation.show"]);
+
+    release.send(()).unwrap();
+    assert_eq!(first.join().unwrap().code, ResultCode::Ok);
+
+    let retried = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    assert_eq!(
+        (retried.outcome, retried.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert!(recovery_actions(&retried).is_empty());
+    assert_eq!(
+        world.record(REQUEST_2).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+/// A writer in the way that finishes while the second waits lets the
+/// second go on: it sleeps once, with nothing held, the first finishes
+/// meanwhile, and the second's next look finds the way clear.
+#[cfg(unix)]
+#[test]
+fn a_peer_that_finishes_inside_the_wait_lets_the_second_writer_complete() {
+    use std::sync::mpsc;
+
+    let mut world = World::new();
+    let token = world.token(TICKET_A);
+    let clock = crate::support::mutation::StepClock::new();
+    world.service = crate::support::mutation::waiting_service(world.data.path(), &clock);
+    let (first, release, _held) = first_writer_held_in_its_hand_off(&world, &token);
+    let (finished, has_finished) = mpsc::channel();
+    clock.at_first_sleep(move || {
+        // Inside the second writer's sleep: it holds no lease and no
+        // transaction, so the first can finish.
+        release.send(()).unwrap();
+        finished.send(first.join().unwrap()).unwrap();
+    });
+
+    let second = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    assert_eq!(
+        (second.outcome, second.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(clock.slept(), 1);
+    let first = has_finished.recv().unwrap();
+    assert_eq!(
+        (first.outcome, first.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+/// One writer's save of `TICKET_A` is left unfinished: it committed, its
+/// index hand-off failed, and no call is at work under its row. A second
+/// writer, with another request, creates another ticket. The row is of
+/// another item and no index owner is at work under it, so it is not in
+/// the second writer's way: the second completes at once, with no wait.
+/// Work on the whole repository still waits for the row, naming it, and
+/// the first request, sent again, then finishes its hand-off.
+#[test]
+fn writers_on_two_tickets_both_complete_while_one_is_unfinished() {
+    let mut world = failing_at(FailurePoint::BeforeIndexTransactionCommit);
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(first.code, ResultCode::DiscoveryPending, "{first:?}");
+    let unfinished = first.operation_id.clone().expect("an operation");
+    let commit = first.effects.commit_oid.clone().expect("a commit");
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    let clock = crate::support::mutation::StepClock::new();
+    world.service = crate::support::mutation::waiting_service(world.data.path(), &clock);
+    let second = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    assert_eq!(
+        (second.outcome, second.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{second:?}"
+    );
+    assert!(second.recovery.is_empty(), "{second:?}");
+    assert_eq!(clock.slept(), 0, "the second writer waited");
+    assert_eq!(
+        world.record(REQUEST_2).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    assert_eq!(world.branch_commits(TICKET_NEW), 1);
+    // The first writer's row is still the one pending, and its request is
+    // still accepted.
+    assert_eq!(world.pending_journal_rows(), 1);
+    assert!(world.journal_row(&unfinished).in_flight());
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+
+    // A refresh of the whole repository is in its way, and names it.
+    let refresh = world.execute(
+        REQUEST_3,
+        Mutation::IndexRefresh(manyhands::repository::IndexRefreshInput {
+            root: world.root.clone(),
+        }),
+    );
+    assert_eq!(refresh.code, ResultCode::RecoveryRequired, "{refresh:?}");
+    assert_eq!(blocker_of(&refresh)["operation_id"], unfinished.as_str());
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    // The first request, sent again, finishes with its commit.
+    let retried = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &retried, 1, "the retry");
+    assert_eq!(retried.effects.commit_oid, Some(commit));
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_eq!(world.branch_commits(TICKET_NEW), 1);
+}
+
+/// A save of `id`, as `World::save` makes it, that makes the ticket
+/// depend on `on`.
+fn depends(world: &World, id: &str, token: &str, on: &str) -> Mutation {
+    Mutation::TicketSave(TicketSaveInput {
+        deps: RelationshipWrite::Set(vec![on.to_owned()]),
+        ..world.save_input(id, token)
+    })
+}
+
+/// A save that sets relationships is checked for cycles and kinds against
+/// the other tickets as the index holds them. One ticket, `TICKET_A`, is
+/// saved to depend on another, `TICKET_NEW`: it commits, and its index
+/// hand-off fails, so the index does not hold the dependency. A save
+/// making `TICKET_NEW` depend on `TICKET_A`, checked against that index,
+/// sees no cycle; it is refused for the unfinished row, which it names,
+/// and writes nothing. Once the first request finishes its hand-off, the
+/// same save is rejected as the cycle it is.
+#[test]
+fn a_save_that_sets_relationships_is_refused_behind_another_item_s_unfinished_save() {
+    let mut world = World::new();
+    let made = world.execute(REQUEST_3, world.create(TICKET_NEW));
+    assert_eq!(made.code, ResultCode::Ok, "{made:?}");
+    world.service =
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(world.data.path());
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, depends(&world, TICKET_A, &token, TICKET_NEW));
+    assert_eq!(first.code, ResultCode::DiscoveryPending, "{first:?}");
+    let unfinished = first.operation_id.clone().expect("an operation");
+    world.reopen();
+
+    let commits = world.branch_commits(TICKET_NEW);
+    let other = world.token(TICKET_NEW);
+    let refused = world.execute(REQUEST_2, depends(&world, TICKET_NEW, &other, TICKET_A));
+    assert_eq!(
+        (refused.outcome, refused.code),
+        (Outcome::Blocked, ResultCode::RecoveryRequired),
+        "{refused:?}"
+    );
+    assert_eq!(blocker_of(&refused)["operation_id"], unfinished.as_str());
+    assert_eq!(world.branch_commits(TICKET_NEW), commits);
+    assert!(world.record(REQUEST_2).is_none());
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    let retried = world.execute(REQUEST_1, depends(&world, TICKET_A, &token, TICKET_NEW));
+    assert_eq!(retried.code, ResultCode::Ok, "{retried:?}");
+    let cycle = world.execute(REQUEST_2, depends(&world, TICKET_NEW, &other, TICKET_A));
+    assert_eq!(cycle.code, ResultCode::RelationshipCycle, "{cycle:?}");
+    assert_eq!(world.branch_commits(TICKET_NEW), commits);
+}
+
+/// A save that sets relationships is not made to wait for a live peer:
+/// its check was made before the peer's own change reached the index, so
+/// a wait that saw the peer finish and went on would write on a stale
+/// check. It answers `busy` at once, naming the peer; the request, sent
+/// again, is checked anew.
+///
+/// The peer saves `TICKET_A` to depend on `TICKET_NEW` and is held in its
+/// index hand-off. Were the second save, making `TICKET_NEW` depend on
+/// `TICKET_A`, to sleep, the peer would finish inside that sleep and the
+/// save would commit the cycle.
+#[cfg(unix)]
+#[test]
+fn a_save_that_sets_relationships_answers_busy_at_once_behind_a_live_peer() {
+    use std::sync::{Arc, Mutex};
+
+    let mut world = World::new();
+    let made = world.execute(REQUEST_3, world.create(TICKET_NEW));
+    assert_eq!(made.code, ResultCode::Ok, "{made:?}");
+    let clock = crate::support::mutation::StepClock::new();
+    world.service = crate::support::mutation::waiting_service(world.data.path(), &clock);
+    let token = world.token(TICKET_A);
+    let (first, release, held) =
+        writer_held_in_its_hand_off(&world, depends(&world, TICKET_A, &token, TICKET_NEW));
+    let peer = Arc::new(Mutex::new(Some((first, release))));
+    let finished = Arc::new(Mutex::new(None));
+    {
+        let (peer, finished) = (peer.clone(), finished.clone());
+        clock.at_first_sleep(move || {
+            let (first, release) = peer.lock().unwrap().take().unwrap();
+            release.send(()).unwrap();
+            *finished.lock().unwrap() = Some(first.join().unwrap());
+        });
+    }
+
+    let commits = world.branch_commits(TICKET_NEW);
+    let other = world.token(TICKET_NEW);
+    let busy = world.execute(REQUEST_2, depends(&world, TICKET_NEW, &other, TICKET_A));
+    assert_eq!(
+        (busy.outcome, busy.code),
+        (Outcome::Error, ResultCode::Busy),
+        "{busy:?}"
+    );
+    assert_eq!(clock.slept(), 0, "the save waited");
+    let blocker = blocker_of(&busy);
+    assert_eq!(blocker["operation_id"], held.as_str());
+    assert_eq!(blocker["live"], true);
+    assert_eq!(world.branch_commits(TICKET_NEW), commits);
+    assert!(world.record(REQUEST_2).is_none());
+
+    // The peer finishes; the same request, sent again, is checked against
+    // an index that holds the peer's dependency.
+    if let Some((first, release)) = peer.lock().unwrap().take() {
+        release.send(()).unwrap();
+        *finished.lock().unwrap() = Some(first.join().unwrap());
+    }
+    let first = finished.lock().unwrap().take().unwrap();
+    assert_eq!(first.code, ResultCode::Ok, "{first:?}");
+    let cycle = world.execute(REQUEST_2, depends(&world, TICKET_NEW, &other, TICKET_A));
+    assert_eq!(cycle.code, ResultCode::RelationshipCycle, "{cycle:?}");
+    assert_eq!(world.branch_commits(TICKET_NEW), commits);
+}
+
 /// A second call reads its evidence before the first commits and makes
 /// its domain call after: the commit it finds was not there before, and
 /// is the request's. `edited`: someone also edits the file between the

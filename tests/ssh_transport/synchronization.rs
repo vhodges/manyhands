@@ -1184,10 +1184,17 @@ fn ambiguous_cancelled_context_absent() -> Result<(), FixtureError> {
             _ => {}
         }
     });
-    assert!(matches!(
-        reopened.synchronize_remote(context_request(&case)?, &mut session),
-        Err(SynchronizationError::RecoveryRequired)
-    ));
+    // The cancelled operation's push intent is ambiguous to a new
+    // synchronization, which is refused for it, naming it.
+    let refused = reopened.synchronize_remote(context_request(&case)?, &mut session);
+    let Err(SynchronizationError::Repository(error)) = &refused else {
+        panic!("not refused for the cancelled operation: {refused:?}");
+    };
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(
+        error.blocker().map(|blocker| blocker.operation_id),
+        Some(id)
+    );
     drop(hook);
     assert_eq!(pushes.get(), 0);
     assert!(observations.get() > 0);

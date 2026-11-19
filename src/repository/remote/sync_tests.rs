@@ -4176,23 +4176,46 @@ struct PassFixture {
 
 impl PassFixture {
     fn new(local_file: &str, local_bytes: &[u8]) -> Self {
-        Self::build(local_file, local_bytes, false, false)
+        Self::build(local_file, local_bytes, false, false, true)
     }
 
     /// As `new`, in a repository whose base tree already holds a submodule
     /// entry and a seven-line `shared.txt` both sides can change cleanly.
     fn with_gitlink(local_file: &str, local_bytes: &[u8]) -> Self {
-        Self::build(local_file, local_bytes, false, true)
+        Self::build(local_file, local_bytes, false, true, true)
     }
 
     /// As `new`, with the publication remote also selected in the committed
     /// configuration and its endpoints bound, so the public entry point
     /// proceeds past local reconciliation to the transport boundary.
     fn published(local_file: &str, local_bytes: &[u8]) -> Self {
-        Self::build(local_file, local_bytes, true, false)
+        Self::build(local_file, local_bytes, true, false, true)
     }
 
-    fn build(local_file: &str, local_bytes: &[u8], published: bool, gitlink: bool) -> Self {
+    /// As `new`, for an operation that stopped before it recorded anything:
+    /// no `FetchPrepared`, and the row restarted as the explicit restart
+    /// leaves it, for the stored row to be reconciled from.
+    fn restarted_before_any_checkpoint(local_file: &str, local_bytes: &[u8]) -> Self {
+        let mut fixture = Self::build(local_file, local_bytes, false, false, false);
+        // The process died before its first checkpoint.
+        fixture
+            .db()
+            .execute(
+                "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+                [fixture.operation.to_string()],
+            )
+            .unwrap();
+        fixture.restart();
+        fixture
+    }
+
+    fn build(
+        local_file: &str,
+        local_bytes: &[u8],
+        published: bool,
+        gitlink: bool,
+        journaled: bool,
+    ) -> Self {
         let (root, data, service) = fixture();
         let repository = git2::Repository::open(root.path()).unwrap();
         if gitlink {
@@ -4254,18 +4277,20 @@ impl PassFixture {
         else {
             panic!("reservation")
         };
-        service
-            .checkpoint_synchronization(
-                root.path(),
-                &owner,
-                state::SynchronizationCheckpoint::FetchPrepared,
-                &state::SynchronizationEvidence {
-                    expected_oid: Some(local),
-                    local_oid: Some(local),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+        if journaled {
+            service
+                .checkpoint_synchronization(
+                    root.path(),
+                    &owner,
+                    state::SynchronizationCheckpoint::FetchPrepared,
+                    &state::SynchronizationEvidence {
+                        expected_oid: Some(local),
+                        local_oid: Some(local),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
         Self {
             root,
             data,
@@ -5560,7 +5585,10 @@ fn released_checkpoint_descendant_after_old_push_intent_opens_a_continuation_att
             .synchronization_push_absence_boundary(root.path(), &owner, true)
             .unwrap()
     };
-    assert!(matches!(boundary(), Some(PushAbsenceBoundary::Ambiguous)));
+    assert!(matches!(
+        boundary(),
+        Some(PushAbsenceBoundary::Ambiguous { .. })
+    ));
     service
         .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforePush)
         .unwrap();
@@ -5572,7 +5600,10 @@ fn released_checkpoint_descendant_after_old_push_intent_opens_a_continuation_att
             None,
         )
         .unwrap();
-    assert!(matches!(boundary(), Some(PushAbsenceBoundary::Ambiguous)));
+    assert!(matches!(
+        boundary(),
+        Some(PushAbsenceBoundary::Ambiguous { .. })
+    ));
     service
         .remote_safe_point(
             root.path(),
@@ -5600,6 +5631,514 @@ fn released_checkpoint_descendant_after_old_push_intent_opens_a_continuation_att
         state::SynchronizationAuthority::Published(descendant)
     );
     assert_eq!(legacy(&db), frozen);
+}
+
+/// Journal one context synchronization up to a Push intent at `checkpoint`
+/// (`PushPrepared`, or `PushReturned` after the `BeforePush` safe point), as a
+/// real first push of a context branch the remote has never had.
+fn journal_unanswered_context_push(
+    service: &RepositoryService,
+    root: &Path,
+    plan: &RemoteRefPlan,
+    owner: &RemoteReservation,
+    head: git2::Oid,
+    checkpoint: state::SynchronizationCheckpoint,
+) {
+    use state::SynchronizationCheckpoint as C;
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(head),
+        local_oid: Some(head),
+        ..Default::default()
+    };
+    service
+        .checkpoint_synchronization(root, owner, C::FetchPrepared, &evidence)
+        .unwrap();
+    git2::Repository::open(root)
+        .unwrap()
+        .reference(plan.primary().tracking_ref(), head, true, "fixture")
+        .unwrap();
+    service
+        .remote_safe_point(root, owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let observation =
+        RemoteRefObservation::from_advertisement(plan, "refs/heads/main", head, Some(head))
+            .unwrap();
+    commit_observation_batch(service, root, owner, plan, &[observation], 1).unwrap();
+    let evidence = state::SynchronizationEvidence {
+        primary_tracking_oid: Some(head),
+        push_oid: Some(head),
+        ..evidence
+    };
+    service
+        .checkpoint_synchronization(root, owner, C::PushPrepared, &evidence)
+        .unwrap();
+    if checkpoint == C::PushReturned {
+        service
+            .remote_safe_point(root, owner, RemoteOperationSafePoint::BeforePush)
+            .unwrap();
+        service
+            .checkpoint_synchronization(root, owner, C::PushReturned, &evidence)
+            .unwrap();
+    }
+}
+
+/// A restart skips `FetchPrepared`, the only checkpoint that establishes
+/// `expected_oid`, and the reconcile that follows records `local_oid` but not
+/// where the operation began. Left NULL, the row refuses a fast-forward
+/// (`LocalPrepared` moves `local_oid` and is excused only for a row that
+/// began where it stood) and takes a merge application only to become
+/// unreadable. The reconcile records the local tip it proved as the start.
+#[test]
+fn a_restarted_row_records_expected_oid_at_the_reconcile() {
+    use state::SynchronizationCheckpoint as C;
+    // Fast-forward: the remote is ahead of a clean local tip.
+    {
+        let fixture = PassFixture::restarted_before_any_checkpoint("local.txt", b"local\n");
+        let repository = fixture.repository();
+        assert_eq!(fixture.record().sync_evidence.expected_oid, None);
+        let ahead = child_file(&repository, fixture.local, "remote.txt", b"remote\n");
+        fixture.fetch(ahead, 1);
+        fixture
+            .service
+            .reconcile_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                fixture.local,
+                fixture.local,
+                None,
+                false,
+            )
+            .unwrap();
+        let mut evidence = fixture.record().sync_evidence;
+        assert_eq!(evidence.local_oid, Some(fixture.local));
+        assert_eq!(evidence.expected_oid, Some(fixture.local));
+        evidence.local_oid = Some(ahead);
+        evidence.tracking_oid = Some(ahead);
+        evidence.primary_tracking_oid = Some(ahead);
+        fixture
+            .service
+            .checkpoint_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                C::LocalPrepared,
+                &evidence,
+            )
+            .unwrap();
+        assert_eq!(
+            fixture.record().sync_evidence.expected_oid,
+            Some(fixture.local)
+        );
+    }
+    // Divergence: the merge application leaves a row that still reads.
+    {
+        let fixture = PassFixture::restarted_before_any_checkpoint("local.txt", b"local\n");
+        let repository = fixture.repository();
+        let first = child_file(&repository, fixture.base, "remote-one.txt", b"one\n");
+        fixture.fetch(first, 1);
+        fixture
+            .service
+            .reconcile_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                fixture.local,
+                fixture.local,
+                None,
+                false,
+            )
+            .unwrap();
+        fixture.append_window(1, first).unwrap();
+        let merged = fixture.integrate(first).unwrap();
+        let mut evidence = fixture.record().sync_evidence;
+        evidence.local_oid = Some(merged);
+        evidence.tracking_oid = Some(first);
+        evidence.primary_tracking_oid = Some(first);
+        fixture
+            .service
+            .checkpoint_synchronization_merge_applied(
+                fixture.root.path(),
+                &fixture.owner,
+                &evidence,
+            )
+            .unwrap();
+        let record = fixture.record();
+        assert_eq!(record.sync_checkpoint, Some(C::LocalFastForwarded));
+        assert_eq!(record.sync_evidence.expected_oid, Some(fixture.local));
+    }
+    // A recorded start is kept, by the in-memory backstop as by the reconcile.
+    let (local, other) = (
+        git2::Oid::from_bytes(&[1; 20]).unwrap(),
+        git2::Oid::from_bytes(&[2; 20]).unwrap(),
+    );
+    let mut recorded = state::SynchronizationEvidence {
+        expected_oid: Some(other),
+        ..Default::default()
+    };
+    backfill_expected_oid(&mut recorded, local);
+    assert_eq!(recorded.expected_oid, Some(other));
+    let mut missing = state::SynchronizationEvidence::default();
+    backfill_expected_oid(&mut missing, local);
+    assert_eq!(missing.expected_oid, Some(local));
+}
+
+/// A synchronization that resumes after its own first push of a context
+/// branch the remote has never had. The push endpoint advertises no context
+/// ref. Whether that is ambiguous depends on whether the push could have
+/// reached the remote: an intent still at `PushPrepared` (not known to have
+/// returned; the remote is observed before the retry) with no evidence the
+/// context was ever published is retried; one at `PushReturned`, one the remote has been seen to
+/// hold, or one another operation left behind is not ours to retry and stays
+/// ambiguous.
+#[test]
+fn an_unreturned_first_push_with_no_publication_evidence_is_retryable_not_ambiguous() {
+    use state::SynchronizationCheckpoint as C;
+    struct Row {
+        label: &'static str,
+        own: C,
+        published: bool,
+        foreign: bool,
+        ambiguous: bool,
+    }
+    let rows = [
+        Row {
+            label: "own push_prepared, never published: retried",
+            own: C::PushPrepared,
+            published: false,
+            foreign: false,
+            ambiguous: false,
+        },
+        Row {
+            label: "own push_returned, never published: still ambiguous",
+            own: C::PushReturned,
+            published: false,
+            foreign: false,
+            ambiguous: true,
+        },
+        Row {
+            label: "own push_prepared, publication evidence: still ambiguous",
+            own: C::PushPrepared,
+            published: true,
+            foreign: false,
+            ambiguous: true,
+        },
+        Row {
+            label: "foreign push_prepared, never published: still ambiguous",
+            own: C::PushPrepared,
+            published: false,
+            foreign: true,
+            ambiguous: true,
+        },
+    ];
+    for row in rows {
+        let (root, data, service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let head = repository.head().unwrap().target().unwrap();
+        repository
+            .remote("origin", "ssh://example.invalid/fixture.git")
+            .unwrap();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let ticket: crate::canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            AuthoringKind::Ticket,
+            ticket.clone(),
+        )
+        .unwrap();
+        let reserve = || {
+            let RemoteReservationOutcome::Reserved(owner) = service
+                .reserve_remote_operation(root.path(), OperationId::new(), &target)
+                .unwrap()
+            else {
+                panic!("{}: reservation", row.label)
+            };
+            owner
+        };
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        if row.foreign {
+            // Another operation's push intent, left behind when it stopped.
+            let earlier = reserve();
+            journal_unanswered_context_push(
+                &service,
+                root.path(),
+                &plan,
+                &earlier,
+                head,
+                C::PushPrepared,
+            );
+            db.execute(
+                "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+                [earlier.operation_id().to_string()],
+            )
+            .unwrap();
+        }
+        let owner = reserve();
+        if !row.foreign {
+            journal_unanswered_context_push(&service, root.path(), &plan, &owner, head, row.own);
+        }
+        if row.published {
+            // The remote was seen to hold the branch, and no longer does.
+            let context = target.context_ref().unwrap();
+            db.execute(
+                "INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,last_advertised_oid,publication_evidence,state,observed_at) SELECT id,?1,?2,'ticket',?3,?4,'observed_published','remotely_deleted',1 FROM repositories",
+                rusqlite::params![
+                    context.remote_ref(),
+                    context.tracking_ref(),
+                    ticket.to_string(),
+                    head.to_string()
+                ],
+            )
+            .unwrap();
+        }
+        // A resumed synchronization counts its own journaled push as inherited;
+        // another operation's is counted whatever the resumer is.
+        let boundary = service
+            .synchronization_push_absence_boundary(root.path(), &owner, !row.foreign)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", row.label));
+        assert_eq!(
+            matches!(boundary, Some(PushAbsenceBoundary::Ambiguous { .. })),
+            row.ambiguous,
+            "{}: boundary was {}",
+            row.label,
+            match boundary {
+                None => "none (push retried)",
+                Some(PushAbsenceBoundary::Ambiguous { .. }) => "ambiguous (recovery_required)",
+                Some(PushAbsenceBoundary::Deleted) => "deleted",
+                Some(PushAbsenceBoundary::Unknown) => "unknown",
+            }
+        );
+    }
+}
+
+/// The two pushes the table above leaves ambiguous for good, each an
+/// operation's own that its resume refuses: one that returned, and one
+/// whose context the remote has been seen to hold. And a third, a push that
+/// returned as a cancellation the operation was asked for ended it: no
+/// resume takes a cancelled operation up, yet its push makes a new
+/// synchronization ambiguous where the branch is absent. Only the person
+/// can say what became of them, and a confirmed `operation abandon` is how
+/// they do:
+/// it closes the operation with its push recorded as refused
+/// (`protocol_rejected`), as a push the remote refused is recorded. A new
+/// synchronization of the context then counts that push as answered, so an
+/// absent branch at the push endpoint is no longer ambiguous for it; the
+/// table's foreign row shows that the same row, left as it was, would be.
+/// The abandon keeps the row's attribution and its owner epoch.
+#[test]
+fn a_confirmed_abandon_answers_the_push_so_a_new_synchronization_is_not_ambiguous() {
+    use state::SynchronizationCheckpoint as C;
+    for (label, checkpoint, published, cancelled) in [
+        (
+            "push_returned, never published",
+            C::PushReturned,
+            false,
+            false,
+        ),
+        (
+            "push_prepared, publication evidence",
+            C::PushPrepared,
+            true,
+            false,
+        ),
+        (
+            "cancelled as its push returned",
+            C::PushReturned,
+            false,
+            true,
+        ),
+    ] {
+        let (root, data, service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let head = repository.head().unwrap().target().unwrap();
+        repository
+            .remote("origin", "ssh://example.invalid/fixture.git")
+            .unwrap();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let ticket: crate::canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            AuthoringKind::Ticket,
+            ticket.clone(),
+        )
+        .unwrap();
+        let reserve = || {
+            let RemoteReservationOutcome::Reserved(owner) = service
+                .reserve_remote_operation(root.path(), OperationId::new(), &target)
+                .unwrap()
+            else {
+                panic!("{label}: reservation")
+            };
+            owner
+        };
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let stranded = reserve();
+        if cancelled {
+            // `request cancel` while the push is in flight: the push
+            // returns, and the checkpoint that records it acknowledges the
+            // cancellation, as the push's own callback does.
+            journal_unanswered_context_push(
+                &service,
+                root.path(),
+                &plan,
+                &stranded,
+                head,
+                C::PushPrepared,
+            );
+            service
+                .remote_safe_point(root.path(), &stranded, RemoteOperationSafePoint::BeforePush)
+                .unwrap();
+            service
+                .request_synchronization_cancellation(root.path(), &stranded)
+                .unwrap();
+            let evidence = state::SynchronizationEvidence {
+                expected_oid: Some(head),
+                local_oid: Some(head),
+                primary_tracking_oid: Some(head),
+                push_oid: Some(head),
+                ..Default::default()
+            };
+            assert_eq!(
+                service
+                    .checkpoint_synchronization(root.path(), &stranded, C::PushReturned, &evidence)
+                    .unwrap(),
+                RemoteSafePointOutcome::Cancelled
+            );
+        } else {
+            journal_unanswered_context_push(
+                &service,
+                root.path(),
+                &plan,
+                &stranded,
+                head,
+                checkpoint,
+            );
+        }
+        if published {
+            let context = target.context_ref().unwrap();
+            db.execute(
+                "INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,last_advertised_oid,publication_evidence,state,observed_at) SELECT id,?1,?2,'ticket',?3,?4,'observed_published','remotely_deleted',1 FROM repositories",
+                rusqlite::params![
+                    context.remote_ref(),
+                    context.tracking_ref(),
+                    ticket.to_string(),
+                    head.to_string()
+                ],
+            )
+            .unwrap();
+        }
+        let operation = stranded.operation_id().to_string();
+        let kept = || -> (i64, Option<String>, Option<String>, Option<i64>, Option<String>) {
+            db.query_row(
+                "SELECT owner_epoch, request_ulid, host, pid, command FROM remote_operation_records WHERE operation_ulid=?1",
+                [&operation],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap()
+        };
+        let attribution = kept();
+        // Its own resume finds the branch absent at the push endpoint
+        // ambiguous: nothing says what became of the push. A cancelled one is
+        // no resume's, and a new synchronization finds it so.
+        let next = cancelled.then(&reserve);
+        let before = match &next {
+            Some(next) => service.synchronization_push_absence_boundary(root.path(), next, false),
+            None => service.synchronization_push_absence_boundary(root.path(), &stranded, true),
+        }
+        .unwrap();
+        assert!(
+            matches!(before, Some(PushAbsenceBoundary::Ambiguous { .. })),
+            "{label}: ambiguous before the abandon"
+        );
+        // The new synchronization's refusal names the operation whose push it
+        // counts, which is not its own: `recovery_required`, naming it, so
+        // that its abandon can be offered. The resume of its own is refused
+        // naming nothing.
+        let error = before.unwrap().error();
+        let named = error
+            .blocker()
+            .map(|blocker| (blocker.family, blocker.operation_id));
+        if cancelled {
+            assert!(
+                matches!(
+                    &error,
+                    SynchronizationError::Repository(RepositoryError {
+                        kind: RepositoryErrorKind::RecoveryRequired,
+                        ..
+                    })
+                ),
+                "{label}: {error:?}"
+            );
+            assert_eq!(
+                named,
+                Some((
+                    crate::repository::OperationFamily::Remote,
+                    stranded.operation_id()
+                )),
+                "{label}"
+            );
+        } else {
+            assert!(
+                matches!(error, SynchronizationError::RecoveryRequired),
+                "{label}"
+            );
+            assert_eq!(named, None, "{label}");
+        }
+
+        let abandoned = service
+            .abandon_remote_operation(root.path(), stranded.operation_id(), None)
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+        assert!(
+            matches!(
+                abandoned,
+                crate::repository::bridges::abandon::RemoteAbandonOutcome::Abandoned(_)
+            ),
+            "{label}: {abandoned:?}"
+        );
+        let closed: (String, Option<String>, Option<String>, i64) = db
+            .query_row(
+                "SELECT phase, outcome, sync_checkpoint, reconciliation_required FROM remote_operation_records WHERE operation_ulid=?1",
+                [&operation],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            closed,
+            (
+                "cancelled".to_owned(),
+                Some("protocol_rejected".to_owned()),
+                Some(checkpoint.name().to_owned()),
+                0
+            ),
+            "{label}"
+        );
+        assert_eq!(kept(), attribution, "{label}: attribution and epoch kept");
+
+        // A new synchronization of the context is reserved, and the push the
+        // abandoned operation left is answered for it.
+        let next = next.unwrap_or_else(reserve);
+        let boundary = service
+            .synchronization_push_absence_boundary(root.path(), &next, false)
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+        assert!(
+            !matches!(boundary, Some(PushAbsenceBoundary::Ambiguous { .. })),
+            "{label}: the new synchronization is not ambiguous"
+        );
+        // A second abandon finds it ended, and changes nothing.
+        assert!(matches!(
+            service
+                .abandon_remote_operation(root.path(), stranded.operation_id(), None)
+                .unwrap(),
+            crate::repository::bridges::abandon::RemoteAbandonOutcome::AlreadyEnded
+        ));
+    }
 }
 
 /// D: a context target's own gitdir is the linked worktree's. Merge metadata
@@ -15945,5 +16484,205 @@ fn unresolved_history_ends_the_operation_and_frees_the_reservation() {
             ends,
             "{returned:?} push_intent={push_intent}"
         );
+    }
+}
+
+/// A new synchronization waits for another operation in its way while that
+/// operation's holder is live, a poll at a time: a holder of the
+/// reservation (`Busy` once the budget is spent), or a live local row that
+/// refuses the reservation (`busy` naming it once the budget is spent). A
+/// call that takes up its own stopped operation does not wait for either:
+/// that operation holds what an earlier call did (here a checkpointed
+/// fetch), so a reservation refused there is answered at once and never
+/// tried again. None begins or changes a row.
+#[test]
+fn only_a_new_synchronization_waits_for_a_live_reservation_holder() {
+    use std::sync::atomic::AtomicU64;
+
+    /// A clock that moves only when the waiting call sleeps on it.
+    struct StepTime {
+        nanos: AtomicU64,
+        slept: AtomicU64,
+    }
+    impl crate::repository::mutation::Clock for StepTime {
+        fn now(&self) -> time::OffsetDateTime {
+            time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap()
+                + time::Duration::nanoseconds(
+                    i64::try_from(self.nanos.load(Ordering::SeqCst)).unwrap(),
+                )
+        }
+    }
+    impl Sleeper for StepTime {
+        fn sleep(&self, duration: std::time::Duration) {
+            self.nanos.fetch_add(
+                u64::try_from(duration.as_nanos()).unwrap(),
+                Ordering::SeqCst,
+            );
+            self.slept.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    /// A process table that holds only `LIVE_PID`.
+    struct OnlyLive;
+    impl ProcessProbe for OnlyLive {
+        fn exists(&self, pid: u32) -> bool {
+            pid == LIVE_PID
+        }
+    }
+    const LIVE_PID: u32 = 4242;
+
+    for (restart, local) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (root, data, service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        repository
+            .remote("origin", "ssh://example.invalid/fixture.git")
+            .unwrap();
+        fs::write(
+            root.path().join(".manyhands/config.toml"),
+            "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+        )
+        .unwrap();
+        let head = commit_all(&repository);
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let configuration = service
+            .observation_configuration(root.path(), &plan)
+            .unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())
+        })
+        .unwrap();
+        let own = OperationId::new();
+        if restart {
+            // An earlier call of `own` reserved, checkpointed its fetch and
+            // was interrupted.
+            let RemoteReservationOutcome::Reserved(owner) = service
+                .reserve_remote_operation(
+                    root.path(),
+                    own,
+                    &RemoteOperationTarget::for_primary_synchronization(&plan),
+                )
+                .unwrap()
+            else {
+                panic!("the earlier call's reservation")
+            };
+            service
+                .checkpoint_synchronization(
+                    root.path(),
+                    &owner,
+                    state::SynchronizationCheckpoint::FetchPrepared,
+                    &state::SynchronizationEvidence {
+                        expected_oid: Some(head),
+                        local_oid: Some(head),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+                .unwrap()
+                .execute(
+                    "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+                    [own.to_string()],
+                )
+                .unwrap();
+        }
+        let holder = OperationId::new();
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        if local {
+            // Another operation's local row is unfinished, for a process of
+            // this host that exists: an index hand-off at work, its
+            // heartbeat fresh by the waiting call's clock.
+            db.execute(
+                "INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at,index_owner_epoch,host,pid)
+                 SELECT id,root_path,?1,'refresh','','indexing',1700000000,1,?2,?3 FROM repositories",
+                rusqlite::params![holder.to_string(), this_host(), LIVE_PID],
+            )
+            .unwrap();
+        } else {
+            // Another operation holds the reservation, for a process of
+            // this host that exists.
+            let target = RemoteOperationTarget::for_context(
+                &plan,
+                RemoteOperationAction::SynchronizeContext,
+                AuthoringKind::Ticket,
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+            )
+            .unwrap();
+            assert!(matches!(
+                service
+                    .reserve_remote_operation(root.path(), holder, &target)
+                    .unwrap(),
+                RemoteReservationOutcome::Reserved(_)
+            ));
+            db.execute(
+                "UPDATE remote_operation_records SET host=?2, pid=?3 WHERE operation_ulid=?1",
+                rusqlite::params![holder.to_string(), this_host(), LIVE_PID],
+            )
+            .unwrap();
+        }
+        let rows = || {
+            db.prepare("SELECT operation_ulid, phase, sync_checkpoint, owner_epoch FROM remote_operation_records ORDER BY id")
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let before = rows();
+
+        let time = Arc::new(StepTime {
+            nanos: AtomicU64::new(0),
+            slept: AtomicU64::new(0),
+        });
+        let waiting = RepositoryService::open_at(data.path())
+            .unwrap()
+            .with_clock_for_testing(time.clone())
+            .with_sleeper_for_testing(time.clone())
+            .with_wait_policy_for_testing(WaitPolicy {
+                budget: std::time::Duration::from_millis(250),
+                poll: std::time::Duration::from_millis(50),
+            })
+            .with_process_probe_for_testing(Arc::new(OnlyLive));
+        let result = waiting.synchronize_remote(
+            SynchronizeRemoteRequest {
+                operation_id: own,
+                restart,
+                ..request(root.path())
+            },
+            &mut SessionCredentials::new(NoPrompt),
+        );
+        let case = format!("restart={restart} local={local}: {result:?}");
+        match (restart, local) {
+            (_, false) => assert!(matches!(result, Err(SynchronizationError::Busy)), "{case}"),
+            (false, true) => assert!(
+                matches!(
+                    &result,
+                    Err(SynchronizationError::Repository(error))
+                        if error.kind == RepositoryErrorKind::RepositoryBusy
+                            && error.blocker().map(|blocker| (blocker.operation_id, blocker.live))
+                                == Some((holder, Some(true)))
+                ),
+                "{case}"
+            ),
+            (true, true) => assert!(
+                matches!(result, Err(SynchronizationError::RecoveryRequired)),
+                "{case}"
+            ),
+        }
+        assert_eq!(
+            time.slept.load(Ordering::SeqCst),
+            if restart { 0 } else { 5 },
+            "{case}"
+        );
+        assert_eq!(rows(), before, "{case}");
     }
 }

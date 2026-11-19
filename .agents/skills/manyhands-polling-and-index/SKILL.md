@@ -50,7 +50,7 @@ Read `data.targets[]`: `target` (a ref), `kind` (`ticket` or `document`, null fo
 | `publication_remote_required` (3) | No publication remote: nothing to poll ([repositories](../manyhands-repositories/SKILL.md)). |
 | `no_selected_key`, `host_approval_required`, `key_rejected` (3) | A key or host step for the person ([keys and hosts](../manyhands-keys-and-hosts/SKILL.md)). `no_selected_key` and `host_approval_required` were run; `key_rejected` is the same hand-off. |
 | `unlock_required` (3) | A passphrase key: the person runs a new `poll once` at their terminal, with a new request ID ([keys and hosts](../manyhands-keys-and-hosts/SKILL.md)). See "A passphrase key" below. |
-| `recovery_required` (3) | Something unfinished holds the repository (verified with a pending conflict). Find it with `operation list` and take it to [recovery](../manyhands-recovery/SKILL.md). |
+| `recovery_required` (3) | Something unfinished holds the repository (verified with a pending conflict). Find it with `operation list` (on a build with the change the answer's `data.blocker` names it) and take it to [recovery](../manyhands-recovery/SKILL.md). |
 | `busy`, `poll_yielding` (5) | Another request holds the repository. Retry the same request after a pause. Not run here. |
 | `repository_not_enabled` (2) | The repository was never enabled: [repositories](../manyhands-repositories/SKILL.md). |
 | `repository_not_registered` (3) | This data directory does not know the repository. [Recovery](../manyhands-recovery/SKILL.md), "Not registered". Do not run `index rebuild` for it. |

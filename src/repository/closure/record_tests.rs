@@ -990,7 +990,8 @@ fn operation_ids_collide_across_both_parent_tables_and_journals() {
                 root.path(),
                 RepositoryOperation::RefreshRepository,
                 op,
-                ""
+                "",
+                0
             )),
             RepositoryErrorKind::OperationMismatch
         );

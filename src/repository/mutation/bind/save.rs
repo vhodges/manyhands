@@ -245,6 +245,12 @@ pub(crate) fn run<S: Save + ?Sized>(
     let root = accepted.root();
     let expected = save.expected(accepted);
     let result = save.call_domain(service, accepted);
+    // The operation the domain refused the save for, when another's row
+    // is why.
+    let blocker = result
+        .as_ref()
+        .err()
+        .and_then(|error| error.blocker().cloned());
     let file = save.context_file(&root);
     let (code, effects, standing) = match result {
         Ok(report) => {
@@ -315,7 +321,9 @@ pub(crate) fn run<S: Save + ?Sized>(
         }
     };
     Ran {
-        answer: save.answer(code, effects, &root),
+        answer: save
+            .answer(code, effects, &root)
+            .naming(service, &root, blocker.as_ref()),
         standing,
     }
 }
@@ -393,6 +401,10 @@ pub(crate) fn rerun<S: Save + ?Sized>(
 ) -> Ran {
     let root = accepted.root();
     let result = save.call_domain(service, accepted);
+    let blocker = result
+        .as_ref()
+        .err()
+        .and_then(|error| error.blocker().cloned());
     // What Git shows now.
     let after = path_evidence(save, accepted);
     let file = save.context_file(&root);
@@ -491,7 +503,9 @@ pub(crate) fn rerun<S: Save + ?Sized>(
         }
     };
     Ran {
-        answer: save.answer(code, effects, &root),
+        answer: save
+            .answer(code, effects, &root)
+            .naming(service, &root, blocker.as_ref()),
         standing,
     }
 }

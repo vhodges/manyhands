@@ -340,6 +340,9 @@ pub(crate) fn refresh(
     let (git, root) =
         repository::canonical_repository_root(root, RepositoryOperation::AbandonOperation)?;
     let fence = RequestFence::preserving(request, operation)?;
+    // The claim takes the row over: it records this process as the row's
+    // holder, read before the registry transaction begins.
+    let holder = recovery::Holder::this_process();
     let (id, claim) = state::with_transaction(service, &root, |tx, id| {
         record::audit_connection(tx)?;
         accepted(
@@ -368,7 +371,7 @@ pub(crate) fn refresh(
             return Ok((id, None));
         }
         let next = epoch.checked_add(1).ok_or_else(recovery_required)?;
-        if tx.execute("UPDATE operation_records SET state='indexing',index_owner_epoch=?2,observed_at=?3 WHERE id=?1 AND state IN ('authoritative_observed','indexing','failed','observed','persisted','retry','index_invalidated') AND index_owner_epoch=?4",params![local,next,service.clock.now().unix_timestamp(),epoch]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
+        if tx.execute("UPDATE operation_records SET state='indexing',index_owner_epoch=?2,observed_at=?3,host=?5,pid=?6 WHERE id=?1 AND state IN ('authoritative_observed','indexing','failed','observed','persisted','retry','index_invalidated') AND index_owner_epoch=?4",params![local,next,service.clock.now().unix_timestamp(),epoch,holder.host,holder.pid]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
         tx.execute(
             "INSERT INTO context_retirement_preservation_claims VALUES(?1,?2,?3)",
             params![operation.to_string(), request.attempt, next],

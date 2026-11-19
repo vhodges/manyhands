@@ -57,6 +57,7 @@ fn preserving_abandon_confirmation_names_retained_resources_and_request() {
         request_id: Some("old-request".into()),
         files_changed: false,
         git_state_changed: false,
+        evidence: None,
         retirement: Some(RetirementAbandonMetadata {
             request_id: Some("old-request".into()),
             phase: "preserving".into(),

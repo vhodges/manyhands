@@ -281,7 +281,8 @@ impl RepositoryService {
         selected: &Path,
         root: &Path,
     ) -> Result<RepositoryInspectionDto, ReadError> {
-        let registered = self.registration_id(root)?.is_some();
+        let registration = self.registration_id(root)?;
+        let registered = registration.is_some();
         let inspection = self.inspect_reporting_detached_head(root)?;
         // A root that cannot be written as text cannot be enabled either.
         let (Some(selected_path), Some(root)) = (
@@ -290,12 +291,36 @@ impl RepositoryService {
         ) else {
             return Err(ReadError::invalid_path());
         };
-        let configuration = inspected_configuration(inspection.configuration);
+        let mut configuration = inspected_configuration(inspection.configuration);
         // The inspection opened the root; it is opened again here only to
         // ask whether each remote has a helper configured.
         let repository = open_exactly(Path::new(&root)).map_err(|error| {
             ReadError::new(ResultCode::RepositoryInaccessible).with_source(error)
         })?;
+        // The root as the registry stores it, which is the one the
+        // registration was looked up by.
+        //
+        // This is the verb every `recovery_required` points at, so rows that
+        // cannot be read do not refuse it: the list is empty and a problem
+        // says why, so that an empty list is not taken for nothing being
+        // unfinished. A busy or unavailable index is still refused.
+        let operations = match self.inspected_operations(Path::new(&root), registration) {
+            Ok(operations) => operations,
+            Err(error)
+                if matches!(
+                    error.code(),
+                    ResultCode::RecoveryRequired | ResultCode::InternalError
+                ) =>
+            {
+                configuration.problems.push(ProblemDto {
+                    code: ProblemCode::OperationsUnreadable,
+                    path: None,
+                    target_id: None,
+                });
+                Vec::new()
+            }
+            Err(error) => return Err(error),
+        };
         Ok(RepositoryInspectionDto {
             selected_path,
             root,
@@ -312,6 +337,7 @@ impl RepositoryService {
                 configuration.publication_remote.as_deref(),
             ),
             configuration,
+            operations,
         })
     }
 

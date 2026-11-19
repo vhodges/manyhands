@@ -88,6 +88,11 @@ pub fn repository_inspection(data: &RepositoryInspectionDto) -> Human {
     for remote in &data.remotes {
         output.stdout.push_str(&remote_line(remote));
     }
+    for operation in &data.operations {
+        output
+            .stdout
+            .push_str(&format!("Operation: {}", operation_line(operation)));
+    }
     output
 }
 

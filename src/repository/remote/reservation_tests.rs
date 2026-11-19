@@ -1038,6 +1038,7 @@ fn update_local_prepared_journal_guard_yields_without_creating_local_rows() {
                 action,
                 local_id,
                 "local-fixture",
+                0,
             )
             .err()
             .expect("active poll must reject local journal begin");
@@ -1081,6 +1082,7 @@ fn update_local_prepared_journal_guard_yields_without_creating_local_rows() {
                 action,
                 local_id,
                 "local-fixture",
+                0,
             )
             .unwrap();
         }
@@ -1134,6 +1136,75 @@ fn cancellation_attempt_writer_fault_rolls_back_phase_outcome_and_retains_reques
             .latest_attempt_at()
             .is_some()
     );
+}
+
+/// A reservation refused because of another operation names it: a pending
+/// local row refuses it with that row's operation as the blocker, and a
+/// reservation another remote operation holds is `Busy` with that
+/// operation as the holder, never the refused one's own. Neither refusal
+/// begins a row.
+#[test]
+fn a_reservation_refused_for_another_operation_names_it() {
+    let (data, root, service) = fixture();
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let local = OperationId::new();
+    db.execute(
+        "INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at)
+         VALUES(1,?1,?2,'save_ticket','t','created',1)",
+        params![root.path().to_str().unwrap(), local.to_string()],
+    )
+    .unwrap();
+    let refused = service
+        .reserve_remote_operation(root.path(), OperationId::new(), &promote_target())
+        .unwrap_err();
+    assert_eq!(refused.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(
+        refused.blocker(),
+        Some(&Blocker {
+            family: crate::repository::OperationFamily::Local,
+            operation_id: local,
+            live: None,
+            seen: None,
+        })
+    );
+    db.execute("UPDATE operation_records SET state='completed'", [])
+        .unwrap();
+
+    let holder = OperationId::new();
+    assert!(matches!(
+        service
+            .reserve_remote_operation(root.path(), holder, &promote_target())
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    let refused = OperationId::new();
+    assert!(matches!(
+        service
+            .reserve_remote_operation(
+                root.path(),
+                refused,
+                &RemoteOperationTarget::for_poll(&plan())
+            )
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+    assert_eq!(
+        service.reservation_holder(root.path(), refused),
+        Some(Blocker {
+            family: crate::repository::OperationFamily::Remote,
+            operation_id: holder,
+            live: None,
+            seen: None,
+        })
+    );
+    // The holder's own call is not in its own way.
+    assert_eq!(service.reservation_holder(root.path(), holder), None);
+    let rows: i64 = db
+        .query_row("SELECT COUNT(*) FROM remote_operation_records", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(rows, 1, "only the holder's row");
 }
 
 fn fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
@@ -4650,4 +4721,128 @@ fn child_fence_promotion_primary_mismatches_keep_promotion_wording() {
         ChildRole::Primary,
         "the promotion ID is bound to another operation",
     );
+}
+
+/// What the preview of an abandon says the remote held, by what the
+/// synchronization's row last saw there. Once a publication attempt is past
+/// `open`, its advertisement is the newest look, and a ref absent there is
+/// absent, whatever an earlier look saw. A push the remote took after the
+/// newest look, one at `push_returned`, leaves that look saying nothing of
+/// what the remote holds now: it is not shown. Each row is (case, newest
+/// attempt, legacy checkpoint, push intent, push endpoint's advertisement,
+/// fetched tracking oid, what is said: `None` for nothing, `Some(None)`
+/// for a ref seen absent).
+#[test]
+fn the_abandon_evidence_says_what_the_newest_look_saw_and_nothing_older() {
+    use state::{PublicationPhase as A, SynchronizationCheckpoint as C};
+    let [older, newer, pushed] =
+        [1_u8, 2, 3].map(|byte| git2::Oid::from_bytes(&[byte; 20]).unwrap());
+    let attempt = |phase, advertised_oid| {
+        Some(LookedAt {
+            phase,
+            advertised_oid,
+        })
+    };
+    type Row = (
+        &'static str,
+        Option<LookedAt>,
+        Option<C>,
+        Option<git2::Oid>,
+        Option<git2::Oid>,
+        Option<git2::Oid>,
+        Option<Option<git2::Oid>>,
+    );
+    let rows: [Row; 9] = [
+        (
+            "attempt prepared, ref absent now, present at the earlier look",
+            attempt(A::Prepared, None),
+            Some(C::PushPrepared),
+            Some(pushed),
+            Some(older),
+            None,
+            Some(None),
+        ),
+        (
+            "attempt prepared, ref at a newer commit",
+            attempt(A::Prepared, Some(newer)),
+            Some(C::PushPrepared),
+            Some(pushed),
+            Some(older),
+            None,
+            Some(Some(newer)),
+        ),
+        (
+            "attempt verified at its candidate",
+            attempt(A::Verified, Some(pushed)),
+            Some(C::PushPrepared),
+            Some(older),
+            None,
+            None,
+            Some(Some(pushed)),
+        ),
+        (
+            "attempt returned: the remote took the push after the look",
+            attempt(A::Returned, None),
+            Some(C::PushPrepared),
+            Some(pushed),
+            None,
+            None,
+            None,
+        ),
+        (
+            "attempt open: the legacy intent's look",
+            attempt(A::Open, None),
+            Some(C::PushPrepared),
+            Some(pushed),
+            Some(older),
+            None,
+            Some(Some(older)),
+        ),
+        (
+            "push_prepared: the look the intent was written with",
+            None,
+            Some(C::PushPrepared),
+            Some(pushed),
+            None,
+            Some(older),
+            Some(None),
+        ),
+        (
+            "push_returned: the remote took the push after the look",
+            None,
+            Some(C::PushReturned),
+            Some(pushed),
+            None,
+            None,
+            None,
+        ),
+        (
+            "fetched, no push: the fetch's look",
+            None,
+            Some(C::FetchObserved),
+            None,
+            None,
+            Some(older),
+            Some(Some(older)),
+        ),
+        (
+            "no look recorded",
+            None,
+            Some(C::FetchPrepared),
+            None,
+            None,
+            None,
+            None,
+        ),
+    ];
+    for (case, newest, checkpoint, push_oid, push_advertised_oid, tracking_oid, said) in rows {
+        let evidence = state::SynchronizationEvidence {
+            push_oid,
+            push_advertised_oid,
+            tracking_oid,
+            local_oid: push_oid,
+            ..Default::default()
+        };
+        assert_eq!(last_look(newest, checkpoint, &evidence), said, "{case}");
+    }
 }

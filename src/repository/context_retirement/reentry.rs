@@ -95,6 +95,9 @@ impl RepositoryService {
         request.root = root;
         let lease = repository_lease(&git, &request.root, RepositoryOperation::RetireContext)?;
         let cleanup = ContextCleanup::holding(&request.root, lease)?;
+        // The re-entry takes the retirement over: its local row records this
+        // process as the holder, read before the registry transaction begins.
+        let holder = crate::repository::recovery::Holder::this_process();
         let claim = state::with_transaction(self, &request.root, |tx, id| {
             record::audit_connection(tx)?;
             let operation = request.operation_id.to_string();
@@ -213,6 +216,7 @@ impl RepositoryService {
                 && tx.execute("UPDATE remote_operation_records SET owner_epoch=owner_epoch+1,phase=CASE WHEN phase IN ('reserved','advertising','persisting') THEN 'interrupted' ELSE phase END,outcome=CASE WHEN phase IN ('reserved','advertising','persisting') THEN 'repository_unavailable' ELSE outcome END WHERE id=?1 AND owner_epoch=?2 AND poll_kind='observe' AND phase IN ('reserved','advertising','persisting','completed','failed','cancelled','interrupted')",params![remote.id,remote.owner_epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             if tx.execute("UPDATE context_retirement_attempts SET phase='fenced' WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='active'",params![operation,old_epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             if tx.execute("UPDATE context_retirement_records SET owner_epoch=?3 WHERE operation_ulid=?1 AND owner_epoch=?2 AND final_result IS NULL",params![operation,old_epoch,epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+            tx.execute("UPDATE operation_records SET host=?2,pid=?3 WHERE id=(SELECT local_record_id FROM context_retirement_records WHERE operation_ulid=?1)",params![operation,holder.host,holder.pid]).map_err(RepositoryError::sqlite)?;
             tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase,request_attempt) VALUES(?1,?2,?3,'active',?4)",params![operation,epoch,id,scope.attempt()]).map_err(RepositoryError::sqlite)?;
             tx.execute("INSERT INTO context_retirement_reentries(operation_ulid,owner_epoch,previous_epoch,purpose) VALUES(?1,?2,?3,?4)",params![operation,epoch,old_epoch,purpose]).map_err(RepositoryError::sqlite)?;
             if purpose=="resume_worktree" && tx.execute("INSERT INTO context_retirement_worktree_resumptions(operation_ulid,owner_epoch,intent_owner_epoch,intent_resource,intent_receipt_id) SELECT operation_ulid,?2,owner_epoch,resource,receipt_id FROM context_retirement_effect_intents WHERE operation_ulid=?1 AND resource='worktree' AND owner_epoch<?2 AND (observation IS NULL OR observation='incomplete') ORDER BY owner_epoch DESC LIMIT 1",params![operation,epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}

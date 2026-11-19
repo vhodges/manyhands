@@ -457,6 +457,7 @@ fn operation(
         worktree: None,
         updated_at: None,
         failure_code: None,
+        attribution: Default::default(),
     }
 }
 
@@ -718,6 +719,8 @@ fn recovery_actions_map_to_controls() {
         (Kind::RepoInspect, RecoveryControl::Inspect),
         // No button: repair is `manyhands-cli remote history` for now.
         (Kind::RemoteHistory, RecoveryControl::Inspect),
+        // The operation in the way is among the repository's details.
+        (Kind::OperationShow, RecoveryControl::Inspect),
     ];
     assert_eq!(expected.len(), Kind::ALL.len());
     for (kind, control) in expected {

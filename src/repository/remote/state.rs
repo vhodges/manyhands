@@ -2067,7 +2067,7 @@ pub(crate) enum SynchronizationCheckpoint {
     DiscoveryPending,
 }
 impl SynchronizationCheckpoint {
-    pub(super) fn name(self) -> &'static str {
+    pub(in super::super) fn name(self) -> &'static str {
         match self {
             Self::FetchPrepared => "fetch_prepared",
             Self::FetchObserved => "fetch_observed",

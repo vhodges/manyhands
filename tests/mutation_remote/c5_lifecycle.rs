@@ -282,6 +282,8 @@ pub(super) fn prepared(
             schema::check_published(BLOCKED, &value["data"]).expect("the blocked schema");
         }
         Some(PrepareDataDto::HostReplacement(_)) => panic!("no host is named"),
+        // A lifecycle's preview names what is in its way in its own list.
+        Some(PrepareDataDto::Blocked(_)) => panic!("a lifecycle names its own blockers"),
         None => {}
     }
     assert_eq!(envelope.command, verb.command());
@@ -2329,7 +2331,29 @@ fn comment_publication_pending() -> Result<(), FixtureError> {
         blockers_of(&preview),
         [LifecycleBlocker::CommentPublicationPending]
     );
-    assert_eq!(prepare_actions(&preview), [RecoveryActionKind::RepoInspect]);
+    // The comment's interrupted synchronization is offered its resume, and
+    // its abandon after it.
+    assert_eq!(
+        prepare_actions(&preview),
+        [
+            RecoveryActionKind::OperationResume,
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    let synchronization: String = fixed(
+        fixed(rusqlite::Connection::open(w.data().join(REGISTRY_FILE)))?.query_row(
+            "SELECT synchronization_ulid FROM comment_publication_bindings",
+            [],
+            |row| row.get(0),
+        ),
+    )?;
+    for action in [&preview.recovery[0], &preview.recovery[2]] {
+        assert_eq!(
+            action.operation_id.as_deref(),
+            Some(synchronization.as_str())
+        );
+    }
     Ok(())
 }
 

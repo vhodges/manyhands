@@ -53,13 +53,21 @@ manyhands-cli id new
 
 A write without `--request-id` in `--non-interactive` mode answers `usage_error` ("--request-id is required for a non-interactive mutation"). A request ID that is not a ULID answers `invalid_id`.
 
-## Your own writes: one at a time, on record
+## Other writers in the repository: whose operation is it
 
-Manyhands does not yet say whose an unfinished operation is: `operation list` and `operation show` print no request ID, author, process or start time. Until it does, keep the record yourself, so you can tell your operations from another session's ([recovery](../../manyhands-recovery/SKILL.md), "Whose operation is it?").
+Other sessions, the person's included, write to the same repository, so an unfinished operation can be someone else's. What the CLI tells you about it depends on the build. The minimum stays 0.2.0, and the two rows below are the one place that says which behaviour needs which build.
 
-- **One write at a time.** Run a write in a repository, wait for its answer, then run `operation list` and look for anything new compared with the baseline below, before the next write. Do not start a second write while one runs: no parallel commands, no background job, and no second helper writing in the same repository. Two writers at about the same moment have been seen to leave an unfinished operation behind that held the other writer's work; the cause is not yet understood. If anything new appears compared with the baseline, stop the series, start no further write, and go to [recovery](../../manyhands-recovery/SKILL.md), "Whose operation is it?".
-- **Save every request ID you mint for a write** to a file outside the repository, one line each: the ID, the verb and the item ID, and, once the answer is in, its `operation_id` and its `data.synchronization_id` (`comment add`) or `data.conflict.operation_id`, so you can still prove a stalled sync is yours after your context is lost. A stuck or interrupted request is replayed with its own ID ("Request IDs and retrying" in recovery), and the file is also how you later show an operation is yours.
-- **Record a baseline first.** Before a series of writes, run `operation list` and keep the answer next to that file. An operation that is not in the baseline and appears after your writes is a candidate for being yours, not proof: another session may have started it too. If the baseline is not empty before your first write, those operations are not yours: stop and show them to the person.
+| | A build with the concurrent-writers change (ticket vh-bhepg) | Released 0.2.0 and any older build |
+| --- | --- | --- |
+| How to tell | `repo inspect` has `data.operations`. Do not key on `--version`: a build with the change still reports `0.2.0` (verified on the branch's build; not run on a release). | `repo inspect` has no `operations`, and `operation list` items have none of the fields named here. |
+| Whose is an operation | Every operation says: `operation list`, `operation show` and the `data.blocker` of a refusal carry `request_id`, `command`, `author`, `host`, `pid`, `started_at`, `comment_id`, `item_id` and `live`. A row an older build wrote shows them as null (unknown). | The CLI does not say. Keep the record below. |
+| Two writers at once | A writer that meets a live peer's unfinished operation waits up to 5 seconds, then answers `busy` with `data.blocker` (a ticket save or create that sets `deps` or `parent` does not wait and answers `busy` at once); send the same request again. A sync, and a comment's publication, wait the same way for a peer's sync that holds the repository's synchronization reservation; a comment is saved meanwhile and answers `partial` / `busy` if the sync is still running. No second writer needs to be kept out. | Write one thing at a time and do not start a second write while one runs: two writers at about the same moment were seen to leave an unfinished operation that held the other's work. |
+| An unfinished operation | It holds its own item and the repository-wide requests, not writes on other items. | It holds more than its own item (a table in [recovery](../../manyhands-recovery/SKILL.md), step 2). |
+
+On a build with the change, read the fields as [recovery](../../manyhands-recovery/SKILL.md), "Whose operation is it?" says. On an older build, until the CLI attributes operations, keep the record yourself, so you can tell your operations from another session's:
+
+- **Save every request ID you mint for a write** to a file outside the repository, one line each: the ID, the verb and the item ID, and, once the answer is in, its `operation_id` and its `data.synchronization_id` (`comment add`) or `data.conflict.operation_id`, so you can still prove a stalled sync is yours after your context is lost. A stuck or interrupted request is replayed with its own ID ("Request IDs and retrying" in recovery), and the file is also how you later show an operation is yours. Doing it on a newer build costs nothing.
+- **Record a baseline first.** Before a series of writes, run `operation list` and keep the answer next to that file. An operation that is not in the baseline and appears after your writes is a candidate for being yours, not proof: another session may have started it too. If the baseline is not empty before your first write, those operations are not yours: stop and show them to the person. Run `operation list` after each write, and if anything new appears, stop the series and go to recovery.
 
 ```sh
 manyhands-cli --json operation list --repo <repo-root>
@@ -89,7 +97,7 @@ With `--json` every command writes one object to stdout:
 | `outcome` | `success`, `noop`, `blocked`, `error`, `partial` or `cancelled`. |
 | `code` | The result code: `ok`, `already_applied`, or a refusal such as `external_change`. Branch on this. |
 | `message` | A fixed sentence for the code. It never echoes your input. |
-| `data` | The result: the item for a read, ids and path for a write, the preview for a prepare. `null` for most refusals; some blocked answers put `blockers` here. |
+| `data` | The result: the item for a read, ids and path for a write, the preview for a prepare. `null` for most refusals; some blocked answers put `blockers` here. A `busy` or `recovery_required` answer that was refused for another operation puts `blocker` here (build with the change only; "Other writers in the repository" above) in place of the command's own data. |
 | `effects` | What happened: `write`, `checkpoint`, `discovery`, `publication`, `integration`, `cleanup` (each `written`, `committed`, `not_requested`, `unchanged`, `pending`, `complete`, and so on) and `commit_oid`. |
 | `recovery` | A list of next actions, each with an `action` and `arguments`, such as `repo.inspect`. Empty when the answer has none. |
 | `scope` | The repository, item, branch and worktree the command acted on. |

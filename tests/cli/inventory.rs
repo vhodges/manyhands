@@ -99,6 +99,9 @@ const NO_INPUT: &[&str] = &[
 
 /// The output schemas a verb's `data` is published by: a read's, a mutation's
 /// result and its preview's. An empty list is a verb whose data is always null.
+/// `blocked` is the data of a `busy` or `recovery_required` answer that names
+/// the operation in its way, in place of the command's own: listed for every
+/// verb whose answer can name one.
 const DATA: &[(&str, &[&str])] = &[
     ("repo list", &["repository_list"]),
     ("repo inspect", &["repository_inspection"]),
@@ -130,18 +133,18 @@ const DATA: &[(&str, &[&str])] = &[
     ("id new", &["new_id"]),
     // A create or enable answers with its preview and no other data.
     ("repo create", &["preview"]),
-    ("repo enable", &["preview"]),
+    ("repo enable", &["blocked", "preview"]),
     ("repo remove", &["repository_removal_preview"]),
     (
         "repo identity-set",
         &["identity_preview", "identity_mutation"],
     ),
-    ("remote add", &["remote_mutation"]),
+    ("remote add", &["blocked", "remote_mutation"]),
     (
         "remote remove",
-        &["remote_removal_preview", "remote_mutation"],
+        &["blocked", "remote_removal_preview", "remote_mutation"],
     ),
-    ("remote select", &["remote_mutation"]),
+    ("remote select", &["blocked", "remote_mutation"]),
     ("key generate", &["key_mutation"]),
     ("key import", &["key_mutation"]),
     ("key select", &["key_mutation"]),
@@ -159,23 +162,30 @@ const DATA: &[(&str, &[&str])] = &[
     ("host observe", &["host_observation"]),
     ("request show", &["request"]),
     ("request cancel", &["cancel"]),
-    ("folder create", &[]),
-    ("document create", &["document_mutation"]),
-    ("document save", &["document_mutation"]),
-    ("document move", &["document_mutation"]),
-    ("document repair", &["repair_preview", "repair_mutation"]),
-    ("ticket create", &["ticket_mutation"]),
-    ("ticket save", &["ticket_mutation"]),
-    ("ticket repair", &["repair_preview", "repair_mutation"]),
-    ("ticket slug-assign", &["ticket_mutation"]),
-    ("index refresh", &[]),
-    ("index rebuild", &[]),
+    ("folder create", &["blocked"]),
+    ("document create", &["blocked", "document_mutation"]),
+    ("document save", &["blocked", "document_mutation"]),
+    ("document move", &["blocked", "document_mutation"]),
+    (
+        "document repair",
+        &["blocked", "repair_preview", "repair_mutation"],
+    ),
+    ("ticket create", &["blocked", "ticket_mutation"]),
+    ("ticket save", &["blocked", "ticket_mutation"]),
+    (
+        "ticket repair",
+        &["blocked", "repair_preview", "repair_mutation"],
+    ),
+    ("ticket slug-assign", &["blocked", "ticket_mutation"]),
+    ("index refresh", &["blocked"]),
+    ("index rebuild", &["blocked"]),
     ("path observe", &["path_observation"]),
     ("ticket check", &["relationship_check"]),
-    ("comment add", &["comment_mutation"]),
+    ("comment add", &["blocked", "comment_mutation"]),
     (
         "item sync",
         &[
+            "blocked",
             "synchronization_mutation",
             "synchronization_conflict_mutation",
         ],
@@ -183,6 +193,7 @@ const DATA: &[(&str, &[&str])] = &[
     (
         "repo sync",
         &[
+            "blocked",
             "synchronization_mutation",
             "synchronization_conflict_mutation",
         ],
@@ -209,6 +220,7 @@ const DATA: &[(&str, &[&str])] = &[
     (
         "operation resume",
         &[
+            "blocked",
             "comment_mutation",
             "synchronization_conflict_mutation",
             "local_context_sync_mutation",
