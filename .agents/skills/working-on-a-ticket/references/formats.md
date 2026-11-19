@@ -1,10 +1,35 @@
 # Formats
 
-Until `ticket save` (C3), `comment add` (C4) and `ticket close` (C5) arrive in
-the CLI, ticket and comment edits are made by hand in canonical form, in the
-ticket's worktree.
+## Normal registered-checkout mode
 
-## Ticket status
+Use `manyhands-overview`, then `manyhands-tickets` for status changes and
+closure and `manyhands-comments` for comments, following the shared
+[Manyhands operations](../../implementing-a-cycle/references/manyhands-operations.md)
+reference. Read a fresh observation before a ticket save. A status update
+changes only `status`; preserve all other fields. These project values are
+`open`, `implementing`, `waiting`, `review_ready`, and a final resolution
+(`done`, `wontdo`, `duplicate` or `obsolete`). Status text alone never closes
+a ticket.
+
+After review approval, save the resolution, prepare close, show the preview
+and wait for approval before confirming. The CLI writes `closed_at` and
+`closed_by`, merges, publishes and removes the context. Do not hand-write those
+fields in normal mode or merge the PR first.
+
+For comments, put the heading/body described below in the CLI's JSON `body`.
+Use a fresh comment ID and a distinct request ID, with `created_by` set to your
+model's name and vendor `noreply@` address to identify agent comments. Keep
+input files outside the repository. The CLI supplies canonical metadata and
+publishes the item's branch. Do not create comment Markdown files yourself.
+
+## Sandbox-only canonical formats (`MANYHANDS_LOOP=1`)
+
+Only the unregistered sandbox loop uses the manual formats in this section,
+inside the ticket's worktree. This is a retained driver exception, not a
+fallback when a normal CLI operation fails. No registration, CLI write,
+network or driver changes are part of this procedure.
+
+### Ticket status
 
 Change only the value of `status:`, keeping its quoting. Leave every other
 line as it is.
@@ -18,7 +43,7 @@ closure a resolution: `done`, or `wontdo`, `duplicate` or `obsolete`.
 Status is free-form text. A ticket is closed by `closed_at` and `closed_by`,
 not by its status.
 
-## Closing, only after the owner's approval
+### Closing, only after the owner's approval
 
 Set the status to its resolution, normally `status: done`. Add both fields after `team` (or after the last of
 `status`, `project` and `team`), before `manyhands_managed`:
@@ -38,13 +63,13 @@ manyhands_kind: ticket
   in the worktree. That is the owner's identity, the one the closing commit
   is made with; it is not the agent's.
 
-## Comments
+### Comment files
 
 Write each comment to
 `.manyhands/comments/<ticket-id>/<comment-id>.md`.
 
-- **The ID:** use the main checkout's `target/debug/manyhands-cli id new`. If
-  that binary is missing, run
+- **The ID:** use the sandbox clone's `target/debug/manyhands-cli id new`. If
+  that binary is missing, run from the sandbox clone
   `devenv shell -- cargo run --locked --bin manyhands-cli -- id new`.
 - **The time:** take it from `date -u +%Y-%m-%dT%H:%M:%SZ`.
 - **`created_by`:** your model's name and its vendor's `noreply@` address, as
@@ -69,6 +94,11 @@ manyhands_kind: comment
 <Body>
 ```
 
+The driver pushes canonical edits; the owner merges the PR. Never run
+`ticket close` or merge into main in loop mode.
+
+## Comment bodies (both modes)
+
 Each kind of comment opens with a `##` heading, named in bold below with its
 contents:
 
@@ -86,7 +116,7 @@ contents:
     first, and each option's consequence;
   - what is paused, and what is already committed;
   - how to answer: a reply comment with `parent_id` set to this comment's ID,
-    or the chat.
+    or the chat in normal mode only; loop mode accepts ticket/PR comments.
 - **Owner decision (chat, `<date>`):** the owner's words, quoted.
 - **Review-ready:**
   - what changed;
@@ -97,7 +127,9 @@ contents:
   - the review rounds, with their finding counts;
   - proposed follow-ups;
   - the `merge-tree` result.
-- **Closed:** the date and where the owner gave approval.
+- **Closed:** the date and where the owner gave approval. Record this before
+  normal-mode close removes the context; in loop mode include it in the
+  canonical closure commit.
 
 ## Reviewer brief
 

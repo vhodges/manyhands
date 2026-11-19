@@ -18,8 +18,19 @@ copies of AGENTS.md and skills that say rebase; current main says merge.
 (decision, ruling, settled) and the review-record columns. Use it alongside
 this skill.
 
+**Required:** follow the shared
+[Manyhands operations](../implementing-a-cycle/references/manyhands-operations.md)
+reference. Load `manyhands-overview` first, `manyhands-finding-work` to find and
+read the ticket, `manyhands-tickets` for creation and saves, and
+`manyhands-comments` for checkpoint comments. Use `manyhands-documents` only
+for independently managed documents, not to split the Cycle's source artifacts
+out of its ticket branch. Use `manyhands-recovery` for blocked CLI operations.
+
 ## 1. Start from current main
 
+- Find the existing Cycle ticket before creating anything. If none exists,
+  create one with `manyhands-tickets` before the implementation plan; let the
+  CLI create its branch and worktree. Do not create a duplicate placeholder.
 - Find the ticket's existing worktree with `git worktree list --porcelain`.
   Don't create another.
 - An old worktree carries an old AGENTS.md. After fetching, read
@@ -168,7 +179,7 @@ as settled. Don't give them your reasoning. They don't run cargo.
   planning concern, and one per review round with its counts by severity.
 - **Plan Self-Review:** map each acceptance row and ruling to its task.
 - **Ticket comment:** add the planning checkpoint comment and tick the
-  planning boxes.
+  planning boxes using `manyhands-comments` and `manyhands-tickets` respectively.
 - **Present:** follow
   [references/approval-and-handoff.md](references/approval-and-handoff.md),
   then stop.
