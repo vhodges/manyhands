@@ -1223,6 +1223,66 @@ fn a_peer_that_finishes_inside_the_wait_lets_the_second_writer_complete() {
     assert_eq!(world.pending_journal_rows(), 0);
 }
 
+/// One writer's save of `TICKET_A` is left unfinished: it committed, its
+/// index hand-off failed, and no call is at work under its row. A second
+/// writer, with another request, creates another ticket. The row is of
+/// another item and no index owner is at work under it, so it is not in
+/// the second writer's way: the second completes at once, with no wait.
+/// Work on the whole repository still waits for the row, naming it, and
+/// the first request, sent again, then finishes its hand-off.
+#[test]
+fn writers_on_two_tickets_both_complete_while_one_is_unfinished() {
+    let mut world = failing_at(FailurePoint::BeforeIndexTransactionCommit);
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(first.code, ResultCode::DiscoveryPending, "{first:?}");
+    let unfinished = first.operation_id.clone().expect("an operation");
+    let commit = first.effects.commit_oid.clone().expect("a commit");
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    let clock = crate::support::mutation::StepClock::new();
+    world.service = crate::support::mutation::waiting_service(world.data.path(), &clock);
+    let second = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    assert_eq!(
+        (second.outcome, second.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{second:?}"
+    );
+    assert!(second.recovery.is_empty(), "{second:?}");
+    assert_eq!(clock.slept(), 0, "the second writer waited");
+    assert_eq!(
+        world.record(REQUEST_2).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    assert_eq!(world.branch_commits(TICKET_NEW), 1);
+    // The first writer's row is still the one pending, and its request is
+    // still accepted.
+    assert_eq!(world.pending_journal_rows(), 1);
+    assert!(world.journal_row(&unfinished).in_flight());
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+
+    // A refresh of the whole repository is in its way, and names it.
+    let refresh = world.execute(
+        REQUEST_3,
+        Mutation::IndexRefresh(manyhands::repository::IndexRefreshInput {
+            root: world.root.clone(),
+        }),
+    );
+    assert_eq!(refresh.code, ResultCode::RecoveryRequired, "{refresh:?}");
+    assert_eq!(blocker_of(&refresh)["operation_id"], unfinished.as_str());
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    // The first request, sent again, finishes with its commit.
+    let retried = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &retried, 1, "the retry");
+    assert_eq!(retried.effects.commit_oid, Some(commit));
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_eq!(world.branch_commits(TICKET_NEW), 1);
+}
+
 /// A second call reads its evidence before the first commits and makes
 /// its domain call after: the commit it finds was not there before, and
 /// is the request's. `edited`: someone also edits the file between the

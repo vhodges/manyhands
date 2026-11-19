@@ -1067,12 +1067,32 @@ pub(super) fn attribute_remote_row(
     Ok(())
 }
 
-/// The item and the comment a local row names, for the two actions whose
-/// rows name them, read from the target they are begun with:
-/// `authoring-context-v1/<kind>/<item>/<intent>`, then the paths, each
-/// after a NUL; a comment's are `.manyhands/comments` and its ID.
+/// The actions whose rows are each of one item: the authoring operations,
+/// which write the item's editing context and nothing of the primary
+/// worktree, of any other item's context or of the repository's
+/// configuration. A row of one of them that names its item holds only that
+/// item; see `Scope`.
+///
+/// A local synchronization names its item too and is not one of them: its
+/// index step rewrites the whole index without an index claim, and its
+/// resume asks after no other row. Nor is a retirement, which removes a
+/// context and claims the index for its request.
+const ITEM_ACTIONS: [&str; 6] = [
+    "save_ticket",
+    "save_document",
+    "submit_comment",
+    "repair_item",
+    "prepare_context",
+    "release_context",
+];
+
+/// The item and the comment a local row names, read from the target it is
+/// begun with: `authoring-context-v1/<kind>/<item>/<intent>`, then the
+/// paths, each after a NUL; a comment's are `.manyhands/comments` and its
+/// ID. A row of one of the `ITEM_ACTIONS` names its item, and only a
+/// comment's submission names its comment.
 fn authored_ids(action: &str, target: &str) -> (Option<String>, Option<String>) {
-    if !matches!(action, "save_ticket" | "submit_comment") {
+    if !ITEM_ACTIONS.contains(&action) {
         return (None, None);
     }
     let item = super::bridges::abandon::authoring_item(Some(target));
@@ -1916,15 +1936,69 @@ pub(super) const RESERVATION_PHASES: &str = "('reserved','advertising','persisti
 /// begin or take up an operation there reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Pending {
-    /// No row is pending.
+    /// No row is pending that is in the call's way.
     Nothing,
-    /// The pending rows are the call's own to take up: the row `id`.
+    /// The call's own row is pending, the row `id`, and it takes it up.
+    /// Rows of other items that are not in its way may be pending too.
     Own(i64),
-    /// A row is pending that the call may not take up. Every other
-    /// operation on the root is refused until that one is. The blocker
-    /// is that row's operation, the first such row stored; `None` for a
-    /// row recorded before operations had IDs.
+    /// A row is pending that the call may not take up and that is in its
+    /// way; see `Scope`. The call is refused until that row is ended. The
+    /// blocker is that row's operation, the first such row stored; `None`
+    /// for a row recorded before operations had IDs.
     Another(Option<Blocker>),
+}
+
+/// What a row of the local journal holds while it is pending, and what a
+/// call that would begin or take up a row is of.
+///
+/// The hold is per item for the `ITEM_ACTIONS`. Everything else is of
+/// the whole repository: the one discovery index, which a refresh or a
+/// rebuild rewrites for every context; the primary branch and its
+/// checkout, which an item's context is cut from; the registration and
+/// the repository's remotes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Scope {
+    /// One item, by its ID.
+    Item(String),
+    /// The whole repository.
+    Repository,
+}
+
+impl Scope {
+    /// The scope of a row of `action` that names `item_id`. A row of an
+    /// item action that names no item, as each one an older build wrote
+    /// does, may be of any item: it is of the whole repository.
+    fn of_row(action: &str, item_id: Option<&str>) -> Self {
+        match item_id {
+            Some(item) if ITEM_ACTIONS.contains(&action) => Self::Item(item.to_owned()),
+            _ => Self::Repository,
+        }
+    }
+
+    /// The scope of a call of `action` with `target` that takes no row
+    /// up: the item the row it begins would name, or the repository.
+    fn of_call(action: &str, target: &str) -> Self {
+        Self::of_row(action, authored_ids(action, target).0.as_deref())
+    }
+}
+
+/// The states of a row that an index owner may be at work under with no
+/// lease held: one that claimed it, or that a promotion fenced and that
+/// may claim it again. A claim fences only the row it claims, so no other
+/// row's claim stops that owner. Such a row is in every call's way, of
+/// whatever item: two index owners of one repository would each rewrite
+/// the whole index, and lose each other's work.
+const INDEX_OWNER_STATES: [&str; 2] = [INDEXING_STATE, "index_invalidated"];
+
+/// Whether a pending row of `scope` in `state` is in the way of a call of
+/// `call`, which may not take it up. Only a row of one item, in no index
+/// owner's state, is not in the way of a call of another item.
+fn is_in_the_way(state: &str, scope: &Scope, call: &Scope) -> bool {
+    INDEX_OWNER_STATES.contains(&state)
+        || match (scope, call) {
+            (Scope::Item(row), Scope::Item(call)) => row == call,
+            _ => true,
+        }
 }
 
 /// What stands in the way of a call that would begin, or take up, the
@@ -1938,7 +2012,14 @@ enum Pending {
 /// kind and item: other contexts may go on authoring, and the matching
 /// context is rejected again before any owned write by
 /// `RepositoryService`'s checkpoint guard. Otherwise what the local
-/// journal holds pending.
+/// journal holds pending, of what is in the call's way.
+///
+/// The call is of the scope of the row it would take up, when there is
+/// one: a refresh under a row's own ID, which is what `operation resume`
+/// runs for a row that owes only its hand-off, is of that row's item.
+/// Otherwise it is of the item its row would name, or of the whole
+/// repository; see `Scope`. A pending row of another item that no index
+/// owner may be at work under is not in its way, and is passed over.
 fn in_the_way(
     connection: &Connection,
     root_path: &str,
@@ -1955,53 +2036,73 @@ fn in_the_way(
             super::remote::state::recovery_required().with_blocker(Blocker::remote(&operation_id))
         );
     }
+    struct Row {
+        id: i64,
+        operation_id: Option<String>,
+        action: String,
+        target: Option<String>,
+        item_id: Option<String>,
+        state: String,
+    }
     let pending = connection
         .prepare(
-            "SELECT id, operation_ulid, action, target FROM operation_records
+            "SELECT id, operation_ulid, action, target, item_id, state FROM operation_records
              WHERE root_path = ?1 AND state != 'completed' ORDER BY id",
         )
         .and_then(|mut statement| {
             statement
                 .query_map([root_path], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                    ))
+                    Ok(Row {
+                        id: row.get(0)?,
+                        operation_id: row.get(1)?,
+                        action: row.get(2)?,
+                        target: row.get(3)?,
+                        item_id: row.get(4)?,
+                        state: row.get(5)?,
+                    })
                 })?
                 .collect::<Result<Vec<_>, _>>()
         })
         .map_err(RepositoryError::sqlite)?;
-    if pending.is_empty() {
-        return Ok(Pending::Nothing);
-    }
-    let mut matching = None;
-    for (id, existing_id, existing_action, existing_target) in pending {
-        let compatible = if tagged_local_binding {
-            existing_id.as_deref() == Some(requested)
+    // Whether the call takes the row up.
+    let compatible = |row: &Row| {
+        if tagged_local_binding {
+            row.operation_id.as_deref() == Some(requested)
                 && action == "refresh"
-                && existing_action == action
-                && existing_target.as_deref() == Some(target)
+                && row.action == action
+                && row.target.as_deref() == Some(target)
         } else {
-            existing_id.as_deref() == Some(requested)
-                && (same_lifecycle_action(&existing_action, action)
-                    || action == "refresh" && existing_action != "refresh")
-                && (action == "refresh" || existing_target.as_deref() == Some(target))
-                || existing_id.is_none()
+            row.operation_id.as_deref() == Some(requested)
+                && (same_lifecycle_action(&row.action, action)
+                    || action == "refresh" && row.action != "refresh")
+                && (action == "refresh" || row.target.as_deref() == Some(target))
+                || row.operation_id.is_none()
                     && matches!(
-                        (existing_action.as_str(), action),
+                        (row.action.as_str(), action),
                         ("refresh", "refresh") | ("rebuild", "rebuild")
                     )
-        };
-        if compatible {
-            matching = Some(id);
-        } else {
-            return Ok(Pending::Another(Blocker::local(existing_id.as_deref())));
+        }
+    };
+    let call = pending.iter().find(|row| compatible(row)).map_or_else(
+        || Scope::of_call(action, target),
+        |row| Scope::of_row(&row.action, row.item_id.as_deref()),
+    );
+    let mut matching = None;
+    for row in &pending {
+        if compatible(row) {
+            matching = Some(row.id);
+        } else if is_in_the_way(
+            &row.state,
+            &Scope::of_row(&row.action, row.item_id.as_deref()),
+            &call,
+        ) {
+            return Ok(Pending::Another(Blocker::local(
+                row.operation_id.as_deref(),
+            )));
         }
     }
-    // Only compatible rows were found, and at least one: `matching` is set.
-    Ok(matching.map_or(Pending::Another(None), Pending::Own))
+    // Every row found was the call's own or out of its way.
+    Ok(matching.map_or(Pending::Nothing, Pending::Own))
 }
 
 /// Refuses a root on which a refresh under `operation_id` would be
@@ -3665,11 +3766,13 @@ mod attribution_tests {
         );
     }
 
-    /// Only a ticket's save and a comment's submission name their item,
-    /// and only the submission its comment, each read from a target of the
-    /// form it is begun with.
+    /// A row of an authoring action names its item, and only a comment's
+    /// submission its comment, each read from a target of the form it is
+    /// begun with. No other row names an item here: a local
+    /// synchronization names its own when it is begun, and a retirement
+    /// none.
     #[test]
-    fn only_a_ticket_save_and_a_comment_name_their_item_and_comment() {
+    fn an_authoring_row_names_its_item_and_only_a_comment_its_comment() {
         const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
         const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
         let item = || Some(ITEM.to_owned());
@@ -3692,8 +3795,31 @@ mod attribution_tests {
             (
                 "save_document",
                 format!("authoring-context-v1/document/{ITEM}/Edit\0docs/a.md"),
+                (item(), None),
+            ),
+            (
+                "repair_item",
+                format!(
+                    "authoring-context-v1/ticket/{ITEM}/Repair\0.manyhands/tickets/{ITEM}/ticket.md"
+                ),
+                (item(), None),
+            ),
+            (
+                "prepare_context",
+                format!("authoring-context-v1/document/{ITEM}/Create"),
+                (item(), None),
+            ),
+            (
+                "release_context",
+                format!("authoring-context-v1/ticket/{ITEM}/Release"),
+                (item(), None),
+            ),
+            (
+                "retire_context",
+                format!("authoring-context-v1/ticket/{ITEM}/Retire"),
                 (None, None),
             ),
+            ("context_sync_local", "observation".to_owned(), (None, None)),
             ("save_ticket", "remote-v1-0123".to_owned(), (None, None)),
             ("refresh", String::new(), (None, None)),
         ] {
@@ -3705,3 +3831,7 @@ mod attribution_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "recovery_scope_tests.rs"]
+mod scope_tests;
