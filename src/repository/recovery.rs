@@ -3658,15 +3658,27 @@ mod attribution_tests {
              INSERT INTO comment_publication_bindings VALUES ('comment', 1, 'comment-sync');",
         )
         .unwrap();
-        for (operation, request) in [
-            ("sync", Some(("sync-request", "item sync"))),
+        // A promotion's or a closure's child names no author: whoever
+        // promoted or closed is kept by the index alone.
+        let author = Some("A <a@example.invalid>");
+        for (operation, request, author) in [
+            ("sync", Some(("sync-request", "item sync")), author),
             (
                 "promote-context",
                 Some(("promote-request", "document promote")),
+                None,
             ),
-            ("close-primary", Some(("close-request", "ticket close"))),
-            ("comment-sync", Some(("comment-request", "comment add"))),
-            ("poll", None),
+            (
+                "close-primary",
+                Some(("close-request", "ticket close")),
+                None,
+            ),
+            (
+                "comment-sync",
+                Some(("comment-request", "comment add")),
+                author,
+            ),
+            ("poll", None, author),
         ] {
             db.execute(
                 "INSERT INTO remote_operation_records (repository_id, operation_ulid) VALUES (1, ?1)",
@@ -3703,7 +3715,7 @@ mod attribution_tests {
                 (
                     request.map(|(id, _)| id.to_owned()),
                     request.map(|(_, command)| command.to_owned()),
-                    Some("A <a@example.invalid>".to_owned()),
+                    author.map(str::to_owned),
                     "host-a".to_owned(),
                     42,
                     7
