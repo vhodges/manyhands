@@ -3,7 +3,7 @@ slug: vh-bes2b
 id: 01M7TEA2T5YR7B6HWZ8AKCRRG7
 title: Refresh the installed skills in .agents/skills
 type: task
-status: review_ready
+status: done
 project: manyhands
 manyhands_managed: true
 manyhands_kind: ticket
