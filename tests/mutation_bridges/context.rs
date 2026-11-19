@@ -1231,7 +1231,10 @@ fn release_with_another_pending_row_on_the_root_is_recovery_required() {
     make(&world, REQUEST_1, items::TICKET_A);
     fail_once_at(&mut world, FailurePoint::BeforeIndexTransactionCommit);
     let stopped = world.execute(REQUEST_2, refresh(&world));
-    assert_ne!(stopped.code, ResultCode::Ok, "{stopped:?}");
+    // The injected failure is an unclassified one: `internal_error`, not a
+    // refusal, so a different code here means the refresh stopped for another
+    // reason than the failure point this case sets.
+    assert_eq!(stopped.code, ResultCode::InternalError, "{stopped:?}");
     assert_eq!(world.pending_journal_rows(), 1);
     world.reopen();
     let before = image(&world, items::TICKET_A);

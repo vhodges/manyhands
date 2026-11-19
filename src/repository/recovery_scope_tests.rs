@@ -120,6 +120,30 @@ enum Answer {
     /// Refused `recovery_required`, naming the row in the way, or no row
     /// when the one in the way has no ID.
     Refused(Option<&'static str>),
+    /// Refused `operation_mismatch`: the call's ID is that of a row that is
+    /// not this call's, and nothing else is looked at.
+    Mismatch,
+}
+
+/// The rows of the journal, as they stand: what a refused call must leave
+/// as it found it.
+fn rows(db: &Connection) -> Vec<(i64, String, String, String, Option<String>)> {
+    db.prepare(
+        "SELECT id, operation_ulid, action, state, item_id FROM operation_records ORDER BY id",
+    )
+    .unwrap()
+    .query_map([], |row| {
+        Ok((
+            row.get(0)?,
+            row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+        ))
+    })
+    .unwrap()
+    .collect::<Result<_, _>>()
+    .unwrap()
 }
 
 fn journal(seeds: &[Seed]) -> Connection {
@@ -153,6 +177,7 @@ fn journal(seeds: &[Seed]) -> Connection {
 
 fn answer(seeds: &[Seed], call: Call) -> Answer {
     let mut db = journal(seeds);
+    let before = rows(&db);
     let root = Path::new(ROOT);
     let reach = match call {
         Call::Across(..) => CallReach::OtherItems,
@@ -188,12 +213,17 @@ fn answer(seeds: &[Seed], call: Call) -> Answer {
     };
     match result {
         Ok(answer) => answer,
+        Err(error) if error.kind == RepositoryErrorKind::OperationMismatch => {
+            assert_eq!(rows(&db), before, "a refused call wrote");
+            Answer::Mismatch
+        }
         Err(error) => {
             assert_eq!(
                 error.kind,
                 RepositoryErrorKind::RecoveryRequired,
                 "{error:?}"
             );
+            assert_eq!(rows(&db), before, "a refused call wrote");
             let named = error
                 .blocker()
                 .map(|blocker| blocker.operation_id.to_string());
@@ -214,7 +244,7 @@ use RepositoryOperation::{
 
 #[test]
 fn an_unfinished_operation_blocks_its_own_item_and_repository_wide_work_but_not_other_items() {
-    use Answer::{Begun, Clear, Refused, TakenUp};
+    use Answer::{Begun, Clear, Mismatch, Refused, TakenUp};
     use Target::{Document, Empty, Prepare, Release, Remote, Repair, Ticket};
 
     let save_x_stopped = || {
@@ -246,6 +276,22 @@ fn an_unfinished_operation_blocks_its_own_item_and_repository_wide_work_but_not_
             save_x_stopped(),
             Call::Begin(SaveTicket, ROW_1, Ticket(ITEM_X)),
             TakenUp,
+        ),
+        // A call under a pending row's ID is a call for that row. For another
+        // item the row is not in its way, so the ID check answers: the ID is
+        // spent on another item, and nothing is written. (A scope that
+        // judged the row in the way would answer `recovery_required`.)
+        (
+            "item row, its ID for another item",
+            save_x_stopped(),
+            Call::Begin(SaveTicket, ROW_1, Ticket(ITEM_Y)),
+            Mismatch,
+        ),
+        (
+            "item row, its ID for another item's document",
+            save_x_stopped(),
+            Call::Begin(SaveDocument, ROW_1, Document(ITEM_Y)),
+            Mismatch,
         ),
         (
             "item row, another item",
