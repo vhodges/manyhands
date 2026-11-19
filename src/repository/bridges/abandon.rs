@@ -483,12 +483,20 @@ pub(crate) enum RemoteAbandonOutcome {
 /// `Some(true)` when it was cancelled, `Some(false)` when it completed. A
 /// cancelled synchronization that a restart left owing its reconciliation
 /// is still listed, and refuses the retirement of its context: it has not
-/// ended for an abandon, which lets that go.
-fn ended(record: &StoredRemoteOperation) -> Option<bool> {
+/// ended for an abandon, which lets that go. Nor has one whose push nothing
+/// answered (`unanswered`, `reservation::abandon_evidence`), cancelled as
+/// it returned or before it was issued, and not yet recorded refused: a
+/// new synchronization of its context counts that push as unanswered, and
+/// is ambiguous where the branch is absent, until an abandon records it.
+fn ended(record: &StoredRemoteOperation, unanswered: bool) -> Option<bool> {
+    let refused =
+        record.outcome == Some(crate::repository::RemoteOutcomeCategory::ProtocolRejected);
     match record.phase {
         RemoteOperationPhase::Completed if !record.index_pending => Some(false),
         RemoteOperationPhase::Cancelled
-            if !record.index_pending && !record.reconciliation_required =>
+            if !record.index_pending
+                && !record.reconciliation_required
+                && (!unanswered || refused) =>
         {
             Some(true)
         }
@@ -578,7 +586,10 @@ impl RepositoryService {
             else {
                 return Ok(Err(AbandonableRemote::NotFound));
             };
-            if let Some(cancelled) = ended(&record) {
+            let unanswered = reservation::abandon_evidence(connection, &record)
+                .map_err(invalid)?
+                .unanswered;
+            if let Some(cancelled) = ended(&record, unanswered) {
                 return Ok(Err(AbandonableRemote::Ended { cancelled }));
             }
             if !reservation::abandonable(connection, &record).map_err(invalid)? {
@@ -724,7 +735,8 @@ impl RepositoryService {
         let Some(record) = state::read_operation(&transaction, id, operation_id)? else {
             return Ok(RemoteAbandonOutcome::NotFound);
         };
-        if ended(&record).is_some() {
+        let unanswered = reservation::abandon_evidence(&transaction, &record)?.unanswered;
+        if ended(&record, unanswered).is_some() {
             return Ok(RemoteAbandonOutcome::AlreadyEnded);
         }
         if !reservation::abandonable(&transaction, &record)? {

@@ -5909,8 +5909,12 @@ fn an_unreturned_first_push_with_no_publication_evidence_is_retryable_not_ambigu
 
 /// The two pushes the table above leaves ambiguous for good, each an
 /// operation's own that its resume refuses: one that returned, and one
-/// whose context the remote has been seen to hold. Only the person can say
-/// what became of them, and a confirmed `operation abandon` is how they do:
+/// whose context the remote has been seen to hold. And a third, a push that
+/// returned as a cancellation the operation was asked for ended it: no
+/// resume takes a cancelled operation up, yet its push makes a new
+/// synchronization ambiguous where the branch is absent. Only the person
+/// can say what became of them, and a confirmed `operation abandon` is how
+/// they do:
 /// it closes the operation with its push recorded as refused
 /// (`protocol_rejected`), as a push the remote refused is recorded. A new
 /// synchronization of the context then counts that push as answered, so an
@@ -5920,9 +5924,25 @@ fn an_unreturned_first_push_with_no_publication_evidence_is_retryable_not_ambigu
 #[test]
 fn a_confirmed_abandon_answers_the_push_so_a_new_synchronization_is_not_ambiguous() {
     use state::SynchronizationCheckpoint as C;
-    for (label, checkpoint, published) in [
-        ("push_returned, never published", C::PushReturned, false),
-        ("push_prepared, publication evidence", C::PushPrepared, true),
+    for (label, checkpoint, published, cancelled) in [
+        (
+            "push_returned, never published",
+            C::PushReturned,
+            false,
+            false,
+        ),
+        (
+            "push_prepared, publication evidence",
+            C::PushPrepared,
+            true,
+            false,
+        ),
+        (
+            "cancelled as its push returned",
+            C::PushReturned,
+            false,
+            true,
+        ),
     ] {
         let (root, data, service) = fixture();
         let repository = git2::Repository::open(root.path()).unwrap();
@@ -5954,7 +5974,47 @@ fn a_confirmed_abandon_answers_the_push_so_a_new_synchronization_is_not_ambiguou
         };
         let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
         let stranded = reserve();
-        journal_unanswered_context_push(&service, root.path(), &plan, &stranded, head, checkpoint);
+        if cancelled {
+            // `request cancel` while the push is in flight: the push
+            // returns, and the checkpoint that records it acknowledges the
+            // cancellation, as the push's own callback does.
+            journal_unanswered_context_push(
+                &service,
+                root.path(),
+                &plan,
+                &stranded,
+                head,
+                C::PushPrepared,
+            );
+            service
+                .remote_safe_point(root.path(), &stranded, RemoteOperationSafePoint::BeforePush)
+                .unwrap();
+            service
+                .request_synchronization_cancellation(root.path(), &stranded)
+                .unwrap();
+            let evidence = state::SynchronizationEvidence {
+                expected_oid: Some(head),
+                local_oid: Some(head),
+                primary_tracking_oid: Some(head),
+                push_oid: Some(head),
+                ..Default::default()
+            };
+            assert_eq!(
+                service
+                    .checkpoint_synchronization(root.path(), &stranded, C::PushReturned, &evidence)
+                    .unwrap(),
+                RemoteSafePointOutcome::Cancelled
+            );
+        } else {
+            journal_unanswered_context_push(
+                &service,
+                root.path(),
+                &plan,
+                &stranded,
+                head,
+                checkpoint,
+            );
+        }
         if published {
             let context = target.context_ref().unwrap();
             db.execute(
@@ -5979,15 +6039,16 @@ fn a_confirmed_abandon_answers_the_push_so_a_new_synchronization_is_not_ambiguou
         };
         let attribution = kept();
         // Its own resume finds the branch absent at the push endpoint
-        // ambiguous: nothing says what became of the push.
+        // ambiguous: nothing says what became of the push. A cancelled one is
+        // no resume's, and a new synchronization finds it so.
+        let next = cancelled.then(&reserve);
+        let before = match &next {
+            Some(next) => service.synchronization_push_absence_boundary(root.path(), next, false),
+            None => service.synchronization_push_absence_boundary(root.path(), &stranded, true),
+        };
         assert!(
-            matches!(
-                service
-                    .synchronization_push_absence_boundary(root.path(), &stranded, true)
-                    .unwrap(),
-                Some(PushAbsenceBoundary::Ambiguous)
-            ),
-            "{label}: the resume is refused before the abandon"
+            matches!(before.unwrap(), Some(PushAbsenceBoundary::Ambiguous)),
+            "{label}: ambiguous before the abandon"
         );
 
         let abandoned = service
@@ -6021,7 +6082,7 @@ fn a_confirmed_abandon_answers_the_push_so_a_new_synchronization_is_not_ambiguou
 
         // A new synchronization of the context is reserved, and the push the
         // abandoned operation left is answered for it.
-        let next = reserve();
+        let next = next.unwrap_or_else(reserve);
         let boundary = service
             .synchronization_push_absence_boundary(root.path(), &next, false)
             .unwrap_or_else(|error| panic!("{label}: {error:?}"));
