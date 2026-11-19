@@ -1173,7 +1173,15 @@ fn c4_merging_unsettled_push_then_cancelled() -> Result<(), FixtureError> {
         assert_eq!(ended.outcome, Outcome::Partial);
         assert_eq!(ended.effects, merged(publication_pending(), merge));
         assert!(ended.data.is_none());
-        assert_eq!(actions(&ended), [RecoveryActionKind::RepoInspect]);
+        // No call is at work under it: its abandon is offered.
+        assert_eq!(
+            actions(&ended),
+            [
+                RecoveryActionKind::RepoInspect,
+                RecoveryActionKind::OperationAbandon
+            ]
+        );
+        assert_eq!(ended.recovery[1].operation_id, lost.operation_id);
         assert_eq!(ended.operation_id, lost.operation_id);
         assert!(!reserved(&s.w));
         assert_eq!(

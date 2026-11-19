@@ -2422,14 +2422,16 @@ fn an_interrupted_synchronization_is_cancelled_only_when_its_row_says_so()
     let operation = OperationId::parse(interrupted.operation_id.as_deref().ok_or(FixtureError)?)
         .map_err(|_| FixtureError)?;
     assert_eq!(phase(&w, operation)?, "interrupted");
-    // Interrupted, and not cancelled: the row is what says which.
+    // Interrupted, and not cancelled: the row is what says which. The
+    // same request is the way on, and the abandon the way out.
     assert_eq!(interrupted.code, ResultCode::RecoveryRequired);
     assert_eq!(interrupted.outcome, Outcome::Blocked);
     assert_eq!(
         actions(&interrupted),
         [
             RecoveryActionKind::RequestRetry,
-            RecoveryActionKind::RepoInspect
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
         ]
     );
     assert_eq!(accepted(&w.server), pushes);
@@ -3129,7 +3131,8 @@ fn a_synchronization_fenced_with_its_push_unaccounted_for_is_not_confirmed()
     let opened = connections(&w);
 
     // The push may have been taken. Nothing says it was, and nothing
-    // says it was not: the answer is neither.
+    // says it was not: the answer is neither, and the person, who can
+    // look, is offered the abandon.
     let fenced = execute(&w, REQUEST_1, repo_sync(&w));
     assert_eq!(fenced.code, ResultCode::RecoveryRequired);
     assert_eq!(fenced.outcome, Outcome::Blocked);
@@ -3140,7 +3143,14 @@ fn a_synchronization_fenced_with_its_push_unaccounted_for_is_not_confirmed()
             ..Effects::not_requested()
         }
     );
-    assert_eq!(actions(&fenced), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(&fenced),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(fenced.recovery[1].operation_id, lost.operation_id);
     assert_eq!(fenced.operation_id, lost.operation_id);
     assert_eq!(connections(&w), opened);
     assert_final(&w, REQUEST_1, &fenced)
@@ -3220,7 +3230,9 @@ fn a_row_cancelled_as_its_push_returns_says_the_push_returned() -> Result<(), Fi
 /// The final answer of a request that was stopped, or fenced, with a
 /// push intended and nothing known of it: not confirmed, which is
 /// neither published nor not published. It offers a look at the
-/// repository and not the same request, and replays as it is.
+/// repository and, since no call is at work under the operation, its
+/// abandon, the person's way out; not the same request. It replays as it
+/// is.
 fn assert_not_confirmed(
     w: &World,
     id: &str,
@@ -3235,7 +3247,14 @@ fn assert_not_confirmed(
             ..Effects::not_requested()
         }
     );
-    assert_eq!(actions(answer), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(answer),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(answer.recovery[1].operation_id, answer.operation_id);
     assert_final(w, id, answer)
 }
 
@@ -3964,12 +3983,22 @@ fn a_resume_stopped_by_its_token_ends_the_synchronization_it_took_up() -> Result
     assert_eq!(accepted(&w.server), pushes);
     // A cancelled operation is never taken up again. Its row says that
     // Git may hold something of what it began, so the repository is
-    // what is looked at.
+    // what is looked at, and its abandon lets that go.
     let opened = connections(&w);
     let left = execute(&w, REQUEST_3, resume(&w, &operation));
     assert_eq!(left.outcome, Outcome::Blocked);
     assert_eq!(left.code, ResultCode::RecoveryRequired);
-    assert_eq!(actions(&left), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(&left),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(
+        left.recovery[1].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
     assert_no_record_of(&w, REQUEST_3, &left);
     assert_eq!(
         phase(&w, OperationId::parse(&operation).unwrap())?,
@@ -4220,7 +4249,18 @@ fn a_resume_cancelled_with_the_remote_unreachable_confirms_nothing_and_is_replay
             ..Effects::not_requested()
         }
     );
-    assert_eq!(actions(&ended), [RecoveryActionKind::RepoInspect]);
+    // No call is at work under it: its abandon is offered.
+    assert_eq!(
+        actions(&ended),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(
+        ended.recovery[1].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
     assert!(!reserved(&w));
     assert_eq!(
         phase(&w, OperationId::parse(&operation).unwrap())?,

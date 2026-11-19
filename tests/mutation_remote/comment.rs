@@ -1168,7 +1168,15 @@ fn c4_comment_unsettled_push_then_cancelled() -> Result<(), FixtureError> {
     let checkpoint = checkpoint_of(&w, CONTEXT, COMMENT)?;
     assert_eq!(ended.effects, saved(checkpoint, PublicationEffect::Pending));
     assert_eq!(ended.operation_id, lost.operation_id);
-    assert_eq!(actions(&ended), [RecoveryActionKind::RepoInspect]);
+    // Its synchronization, which no call is at work under, is offered its
+    // abandon.
+    assert_eq!(
+        actions(&ended),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
     assert!(!reserved(&w));
     assert_eq!(state(&w, REQUEST_1), Some(RequestState::Finished));
     // A new `item sync` verifies and completes it.
