@@ -28,7 +28,7 @@ manyhands-cli --json repo identity --repo <repo-root>
 manyhands-cli --json remote list --repo <repo-root>
 ```
 
-`repo inspect` works on a repository that is not registered: `data.registered` is false, `data.configuration.publication_remote` is the selected remote or null, `data.identity_state` is `available` or `required`, `data.remotes` lists the remotes. `repo list` lists only registered repositories (`data.items[].root`, `accessibility`, `configuration`, `problem_count`). Neither shows an SSH key: the selected key is global, see [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
+`repo inspect` works on a repository that is not registered: `data.registered` is false, `data.configuration.publication_remote` is the selected remote or null, `data.identity_state` is `available` or `required`, `data.remotes` lists the remotes, and on a build with the concurrent-writers change `data.operations` lists the unfinished operations (see [recovery](../manyhands-recovery/SKILL.md)). `repo list` lists only registered repositories (`data.items[].root`, `accessibility`, `configuration`, `problem_count`). Neither shows an SSH key: the selected key is global, see [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
 
 ## `repo create` and `repo enable`
 
