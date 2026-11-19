@@ -55,7 +55,7 @@ A save, a comment's local checkpoint, a promote, a close and a prepare each cost
 - Every item's `activity_at` and `activity_source` are unchanged, pinned by a table-driven library unit test.
 - A unit test pins how many commits or tree diffs one refresh performs, so a per-item walk cannot return unnoticed.
 - A profile of a save, a promote and a close no longer shows `latest_commit_touching`, a second full observation or the image-proof audit, and the concurrent-change detection that the before and after observations give today is kept or replaced by an equivalent.
-- No recovery behaviour changes, and the index gives today's results except that a change made outside Manyhands to another item is seen at the next refresh, poll or desktop start, or flagged stale when read (amended by the owner, 2026-11-19; the design changes how the index is kept, not what it reports).
+- No recovery behaviour changes beyond the per-item index holds the owner accepted (design ruling R-3: a write's index step holds only its item, and a crashed write whose commit landed no longer blocks refresh and poll), and the index gives today's results except that a change made outside Manyhands to another item is seen at the next refresh, poll or desktop start, or flagged stale when read (amended by the owner, 2026-11-19).
 
 ## Related
 
