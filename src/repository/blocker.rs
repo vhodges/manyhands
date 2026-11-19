@@ -715,7 +715,8 @@ mod tests {
         };
         // (case, what each look finds, the blocker named (`None` for
         // none), sleeps)
-        let rows: [(&str, &[Option<bool>], Option<&Blocker>, u64); 5] = [
+        type Row<'a> = (&'a str, &'a [Option<bool>], Option<&'a Blocker>, u64);
+        let rows: [Row<'_>; 5] = [
             (
                 "nothing at work: as it is, at once",
                 &[Some(false)],
