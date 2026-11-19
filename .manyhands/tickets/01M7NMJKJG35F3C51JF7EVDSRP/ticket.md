@@ -3,7 +3,7 @@ slug: vh-bhepg
 id: 01M7NMJKJG35F3C51JF7EVDSRP
 title: 'Concurrent writers in one clone: attribute operations, serialize writers, scope the hold per item, name the blocker, and test it'
 type: defect
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
