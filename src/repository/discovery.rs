@@ -727,7 +727,14 @@ fn read_primary(
     };
     let mut sources = Vec::new();
     let mut folders = Vec::new();
-    collect_recorded_root_sources(root, &mut sources, &mut folders, &mut problems, recording);
+    collect_recorded_root_sources(
+        root,
+        &mut sources,
+        &mut folders,
+        &mut problems,
+        &GitIgnores::of(repository),
+        recording,
+    );
     let validation = canonical::validate_context(sources.clone());
     let history = match (head.oid, activity) {
         (Some(head), Some(activity)) => match activity.advance(repository, head) {
@@ -887,6 +894,7 @@ fn read_item_context(
         item_id,
         &mut sources,
         &mut context_problems,
+        &GitIgnores::of(&repository),
         recording,
     );
     let validation = canonical::validate_context(sources.clone());
@@ -1422,21 +1430,21 @@ fn collect_authoring_item_sources(
     item_id: &canonical::ItemId,
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
+    ignores: &GitIgnores<'_>,
     recording: &mut Recording,
 ) {
     match kind {
         crate::repository::AuthoringKind::Ticket => {
+            let tickets = root.join(".manyhands/tickets");
             let directory = root.join(item_ticket_directory(item_id));
-            if directory_exists(&root.join(".manyhands/tickets"), problems, recording)
+            let ticket = directory.join("ticket.md");
+            if !ignores.pass_over(root, &tickets, true)
+                && directory_exists(&tickets, problems, recording)
+                && !ignores.pass_over(root, &directory, true)
                 && directory_exists(&directory, problems, recording)
+                && !ignores.pass_over(root, &ticket, false)
             {
-                collect_source(
-                    root,
-                    &directory.join("ticket.md"),
-                    sources,
-                    problems,
-                    recording,
-                );
+                collect_source(root, &ticket, sources, problems, recording);
             }
         }
         crate::repository::AuthoringKind::Document => {
@@ -1454,6 +1462,7 @@ fn collect_authoring_item_sources(
                 &mut documents,
                 &mut Vec::new(),
                 &mut Vec::new(),
+                ignores,
                 recording,
             );
             documents.retain(|(path, source)| {
@@ -1463,17 +1472,29 @@ fn collect_authoring_item_sources(
             sources.append(&mut documents);
         }
     }
+    let comments = root.join(".manyhands/comments");
     let directory = root.join(item_comment_directory(item_id));
-    if directory_exists(&root.join(".manyhands/comments"), problems, recording)
+    if !ignores.pass_over(root, &comments, true)
+        && directory_exists(&comments, problems, recording)
+        && !ignores.pass_over(root, &directory, true)
         && directory_exists(&directory, problems, recording)
     {
         let mut entries = 0;
-        collect_comment_directory(root, &directory, &mut entries, sources, problems, recording);
+        collect_comment_directory(
+            root,
+            &directory,
+            &mut entries,
+            sources,
+            problems,
+            ignores,
+            recording,
+        );
     }
     sources.sort_by(|left, right| left.0.cmp(&right.0));
 }
 
-/// `collect_recorded_root_sources`, with what it reads recorded nowhere.
+/// `collect_recorded_root_sources`, with what it reads recorded nowhere and
+/// no repository to ask what Git ignores.
 #[cfg(test)]
 fn collect_root_sources(
     root: &Path,
@@ -1486,6 +1507,7 @@ fn collect_root_sources(
         sources,
         folders,
         problems,
+        &GitIgnores::none(),
         &mut Recording::reading(root),
     );
 }
@@ -1495,12 +1517,13 @@ fn collect_recorded_root_sources(
     sources: &mut Vec<(PathBuf, String)>,
     folders: &mut Vec<ObservedFolder>,
     problems: &mut Vec<RootObservationProblem>,
+    ignores: &GitIgnores<'_>,
     recording: &mut Recording,
 ) {
-    collect_documents(root, sources, folders, problems, recording);
-    collect_tickets(root, sources, problems, recording);
-    collect_comments(root, sources, problems, recording);
-    collect_managed_out_of_path_sources(root, sources, problems, recording);
+    collect_documents(root, sources, folders, problems, ignores, recording);
+    collect_tickets(root, sources, problems, ignores, recording);
+    collect_comments(root, sources, problems, ignores, recording);
+    collect_managed_out_of_path_sources(root, sources, problems, ignores, recording);
     sources.sort_by(|left, right| left.0.cmp(&right.0));
 }
 
@@ -1508,6 +1531,7 @@ fn collect_managed_out_of_path_sources(
     root: &Path,
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
+    ignores: &GitIgnores<'_>,
     recording: &mut Recording,
 ) {
     let mut directories = vec![(root.to_owned(), 0)];
@@ -1521,6 +1545,9 @@ fn collect_managed_out_of_path_sources(
         for entry in directory_entries {
             let path = entry.path();
             let Some(file_type) = entry.file_type() else {
+                if ignores.pass_over(root, &path, false) {
+                    continue;
+                }
                 recording.keep(&entry);
                 problems.push(source_problem(
                     path,
@@ -1532,7 +1559,7 @@ fn collect_managed_out_of_path_sources(
                 continue;
             }
             if file_type.is_dir() {
-                if is_excluded_directory(&path) {
+                if is_excluded_directory(&path) || ignores.pass_over(root, &path, true) {
                     continue;
                 }
                 recording.keep(&entry);
@@ -1545,6 +1572,9 @@ fn collect_managed_out_of_path_sources(
                     directories.push((path, depth + 1));
                 }
             } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
+                if ignores.pass_over(root, &path, false) {
+                    continue;
+                }
                 recording.keep(&entry);
                 if file_declares_managed_marker(&path, recording) {
                     collect_source(root, &path, sources, problems, recording);
@@ -1616,10 +1646,11 @@ fn collect_documents(
     sources: &mut Vec<(PathBuf, String)>,
     folders: &mut Vec<ObservedFolder>,
     problems: &mut Vec<RootObservationProblem>,
+    ignores: &GitIgnores<'_>,
     recording: &mut Recording,
 ) {
     let docs = root.join("docs");
-    if !directory_exists(&docs, problems, recording) {
+    if ignores.pass_over(root, &docs, true) || !directory_exists(&docs, problems, recording) {
         return;
     }
     let mut directories = vec![(docs.clone(), 0)];
@@ -1661,6 +1692,9 @@ fn collect_documents(
         for entry in directory_entries {
             let path = entry.path();
             let Some(file_type) = entry.file_type() else {
+                if ignores.pass_over(root, &path, false) {
+                    continue;
+                }
                 recording.keep(&entry);
                 problems.push(source_problem(
                     path,
@@ -1669,13 +1703,16 @@ fn collect_documents(
                 continue;
             };
             if file_type.is_symlink() {
+                if ignores.pass_over(root, &path, false) {
+                    continue;
+                }
                 recording.keep(&entry);
                 problems.push(source_problem(
                     path,
                     "symbolic links are not canonical sources",
                 ));
             } else if file_type.is_dir() {
-                if is_excluded_directory(&path) {
+                if is_excluded_directory(&path) || ignores.pass_over(root, &path, true) {
                     continue;
                 }
                 recording.keep(&entry);
@@ -1688,6 +1725,9 @@ fn collect_documents(
                     directories.push((path, depth + 1));
                 }
             } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
+                if ignores.pass_over(root, &path, false) {
+                    continue;
+                }
                 recording.keep(&entry);
                 collect_source(root, &path, sources, problems, recording);
             }
@@ -1713,7 +1753,11 @@ pub(super) fn count_document_entries(root: &Path) -> Option<usize> {
     let mut problems = Vec::new();
     // Counting is no observation: what it stats is not kept.
     let recording = &mut Recording::stat_only(root, None);
-    if !directory_exists(&docs, &mut problems, recording) {
+    let repository = Repository::open(root).ok();
+    let ignores = repository
+        .as_ref()
+        .map_or_else(GitIgnores::none, GitIgnores::of);
+    if ignores.pass_over(root, &docs, true) || !directory_exists(&docs, &mut problems, recording) {
         return Some(0);
     }
     let mut directories = vec![(docs, 0)];
@@ -1729,7 +1773,8 @@ pub(super) fn count_document_entries(root: &Path) -> Option<usize> {
                 .file_type()
                 .is_some_and(|kind| kind.is_dir() && !kind.is_symlink())
                 && !is_excluded_directory(&path)
-                && depth < MAX_DOCUMENT_DIRECTORY_DEPTH;
+                && depth < MAX_DOCUMENT_DIRECTORY_DEPTH
+                && !ignores.pass_over(root, &path, true);
             if goes_into {
                 directories.push((path, depth + 1));
             }
@@ -1756,16 +1801,22 @@ fn collect_tickets(
     root: &Path,
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
+    ignores: &GitIgnores<'_>,
     recording: &mut Recording,
 ) {
     let directory = root.join(".manyhands/tickets");
-    if !directory_exists(&directory, problems, recording) {
+    if ignores.pass_over(root, &directory, true)
+        || !directory_exists(&directory, problems, recording)
+    {
         return;
     }
     let mut entries = 0;
     for entry in read_managed_directory(&directory, &mut entries, problems, recording) {
         let path = entry.path();
         let Some(file_type) = entry.file_type() else {
+            if ignores.pass_over(root, &path, false) {
+                continue;
+            }
             recording.keep(&entry);
             problems.push(source_problem(
                 path,
@@ -1774,14 +1825,23 @@ fn collect_tickets(
             continue;
         };
         if file_type.is_symlink() {
+            if ignores.pass_over(root, &path, false) {
+                continue;
+            }
             recording.keep(&entry);
             problems.push(source_problem(
                 path,
                 "symbolic links are not canonical sources",
             ));
         } else if file_type.is_dir() && !is_excluded_directory(&path) {
+            if ignores.pass_over(root, &path, true) {
+                continue;
+            }
             recording.keep(&entry);
-            collect_source(root, &path.join("ticket.md"), sources, problems, recording);
+            let ticket = path.join("ticket.md");
+            if !ignores.pass_over(root, &ticket, false) {
+                collect_source(root, &ticket, sources, problems, recording);
+            }
         }
     }
 }
@@ -1790,16 +1850,22 @@ fn collect_comments(
     root: &Path,
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
+    ignores: &GitIgnores<'_>,
     recording: &mut Recording,
 ) {
     let directory = root.join(".manyhands/comments");
-    if !directory_exists(&directory, problems, recording) {
+    if ignores.pass_over(root, &directory, true)
+        || !directory_exists(&directory, problems, recording)
+    {
         return;
     }
     let mut entries = 0;
     for entry in read_managed_directory(&directory, &mut entries, problems, recording) {
         let path = entry.path();
         let Some(file_type) = entry.file_type() else {
+            if ignores.pass_over(root, &path, false) {
+                continue;
+            }
             recording.keep(&entry);
             problems.push(source_problem(
                 path,
@@ -1808,14 +1874,28 @@ fn collect_comments(
             continue;
         };
         if file_type.is_symlink() {
+            if ignores.pass_over(root, &path, false) {
+                continue;
+            }
             recording.keep(&entry);
             problems.push(source_problem(
                 path,
                 "symbolic links are not canonical sources",
             ));
         } else if file_type.is_dir() && !is_excluded_directory(&path) {
+            if ignores.pass_over(root, &path, true) {
+                continue;
+            }
             recording.keep(&entry);
-            collect_comment_directory(root, &path, &mut entries, sources, problems, recording);
+            collect_comment_directory(
+                root,
+                &path,
+                &mut entries,
+                sources,
+                problems,
+                ignores,
+                recording,
+            );
         }
     }
 }
@@ -1826,11 +1906,15 @@ fn collect_comment_directory(
     entries: &mut usize,
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
+    ignores: &GitIgnores<'_>,
     recording: &mut Recording,
 ) {
     for entry in read_managed_directory(directory, entries, problems, recording) {
         let path = entry.path();
         let Some(file_type) = entry.file_type() else {
+            if ignores.pass_over(root, &path, false) {
+                continue;
+            }
             recording.keep(&entry);
             problems.push(source_problem(
                 path,
@@ -1839,15 +1923,94 @@ fn collect_comment_directory(
             continue;
         };
         if file_type.is_symlink() {
+            if ignores.pass_over(root, &path, false) {
+                continue;
+            }
             recording.keep(&entry);
             problems.push(source_problem(
                 path,
                 "symbolic links are not canonical sources",
             ));
         } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
+            if ignores.pass_over(root, &path, false) {
+                continue;
+            }
             recording.keep(&entry);
             collect_source(root, &path, sources, problems, recording);
         }
+    }
+}
+
+/// What Git ignores and does not track in the worktree of one context: a
+/// source walk neither reads it nor records it in the context's basis. It
+/// is asked only of an entry the walk would use.
+///
+/// The ignore rules are Git's own, the context's: every `.gitignore` of its
+/// worktree, `info/exclude` and `core.excludesFile`. A tracked file is not
+/// passed over even when a pattern matches it, nor is a directory that holds
+/// one; inside it, an untracked entry is ignored with its directory, as in
+/// Git. "Tracked" is what the context's index holds.
+struct GitIgnores<'repository> {
+    repository: Option<&'repository Repository>,
+    /// The context's index, read the first time an ignored entry is met.
+    /// `None` when it cannot be read: then nothing is passed over.
+    index: std::cell::OnceCell<Option<git2::Index>>,
+}
+
+impl<'repository> GitIgnores<'repository> {
+    /// The rules of the context whose repository this is; the walk's root is
+    /// its workdir.
+    fn of(repository: &'repository Repository) -> Self {
+        Self {
+            repository: Some(repository),
+            index: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// No rules: for a walk of a directory that is no repository's.
+    fn none() -> Self {
+        Self {
+            repository: None,
+            index: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// Whether the walk of the worktree at `root` passes over `path`, a
+    /// directory when `directory` is set.
+    fn pass_over(&self, root: &Path, path: &Path, directory: bool) -> bool {
+        let Some(repository) = self.repository else {
+            return false;
+        };
+        let Ok(relative) = path.strip_prefix(root) else {
+            return false;
+        };
+        if relative.as_os_str().is_empty() {
+            return false;
+        }
+        // The path as Git writes it: with forward slashes, and, for a
+        // directory, ending in one, which a pattern for directories only,
+        // such as `/target/`, needs to match.
+        let mut git_path = relative.iter().collect::<Vec<_>>().join(OsStr::new("/"));
+        if directory {
+            git_path.push("/");
+        }
+        let git_path = Path::new(&git_path);
+        if !repository.is_path_ignored(git_path).unwrap_or(false) {
+            return false;
+        }
+        let Some(index) = self
+            .index
+            .get_or_init(|| git2::Index::open(&repository.path().join("index")).ok())
+        else {
+            return false;
+        };
+        let tracked = if directory {
+            index.find_prefix(git_path).is_ok()
+        } else {
+            // At any stage, so that a file in conflict is tracked too.
+            (0..=3).any(|stage| index.get_path(git_path, stage).is_some())
+        };
+        !tracked
     }
 }
 
@@ -2493,6 +2656,7 @@ mod tests {
         canonical,
         repository::{
             DiscoveryActivitySource, DiscoveryContextKind, MAX_DOCUMENT_DIRECTORY_DEPTH,
+            basis::{BasisCheck, RACY_WINDOW_NS, check},
             git_fixtures::{
                 active_worktree_at, checkpoint, checkpoint_reference, repository_on_main,
             },
@@ -3433,6 +3597,299 @@ mod tests {
             item.activity_at,
             OffsetDateTime::from_unix_timestamp(10).unwrap()
         );
+    }
+
+    /// A managed document with this ID.
+    fn document_with_id(id: &str) -> String {
+        format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {id}\ntitle: Fixture document\n---\n"
+        )
+    }
+
+    /// A primary whose committed `.gitignore` ignores `/target/`, a pattern
+    /// for directories only, `build`, one for anything of that name, and two
+    /// documents.
+    fn repository_ignoring() -> (tempfile::TempDir, Repository) {
+        let (directory, repository) = repository_on_main();
+        write_config(
+            directory.path(),
+            "format_version = 1\nprimary_branch = \"main\"\n",
+        );
+        fs::write(
+            directory.path().join(".gitignore"),
+            "/target/\nbuild\ndocs/ignored.md\ndocs/forced.md\n",
+        )
+        .unwrap();
+        checkpoint(&repository, Path::new(".gitignore"), 10);
+        (directory, repository)
+    }
+
+    fn observe_primary(repository: &Repository, root: &Path) -> ContextObservation {
+        observe_context(
+            repository,
+            root,
+            &ListedContext::primary(root),
+            &mut PrimaryActivityMap::default(),
+        )
+    }
+
+    /// Whether anything of the observation, or of its basis, is at or under
+    /// `prefix` of the worktree at `root`.
+    fn touches(observation: &ContextObservation, root: &Path, prefix: &str) -> bool {
+        let prefix = Path::new(prefix);
+        observation
+            .sources
+            .iter()
+            .any(|(path, _)| path.starts_with(prefix))
+            || observation.problems.iter().any(|problem| {
+                matches!(
+                    problem,
+                    RootObservationProblem::Source { path, .. }
+                        if path.starts_with(root.join(prefix))
+                )
+            })
+            || observation
+                .basis
+                .files
+                .iter()
+                .any(|file| file.path.starts_with(prefix))
+            || observation
+                .basis
+                .dirs
+                .iter()
+                .any(|dir| dir.path.starts_with(prefix))
+    }
+
+    fn holds_item(observation: &ContextObservation, id: &str) -> bool {
+        observation
+            .items
+            .iter()
+            .any(|item| item.id.to_string() == id)
+    }
+
+    #[test]
+    fn the_source_walks_skip_what_git_ignores_and_does_not_track() {
+        /// A row's name, and the row, which makes its case and asserts on it.
+        type Row = (&'static str, fn(&str));
+        let rows: [Row; 8] = [
+            ("a managed file under an ignored target/", |row| {
+                let (directory, repository) = repository_ignoring();
+                let root = directory.path();
+                let notes = root.join("target/debug/notes.md");
+                fs::create_dir_all(notes.parent().unwrap()).unwrap();
+                fs::write(&notes, document_with_id("01ARZ3NDEKTSV4RRFFQ69G5FB0")).unwrap();
+
+                let observation = observe_primary(&repository, root);
+
+                assert!(
+                    !touches(&observation, root, "target"),
+                    "{row}: {observation:#?}"
+                );
+                assert!(
+                    !holds_item(&observation, "01ARZ3NDEKTSV4RRFFQ69G5FB0"),
+                    "{row}"
+                );
+            }),
+            ("a build adding a directory under target/", |row| {
+                let (directory, repository) = repository_ignoring();
+                let root = directory.path();
+                fs::create_dir_all(root.join("target/debug/incremental")).unwrap();
+                let listed = ListedContext::primary(root);
+                let observation = observe_primary(&repository, root);
+                let stored = &observation.basis;
+                let clean_at = observation.started_at_ns + RACY_WINDOW_NS;
+
+                fs::create_dir(root.join("target/debug/incremental/new")).unwrap();
+
+                for (form, now) in [
+                    (
+                        "every directory listed",
+                        stat_basis(&repository, root, &listed, None, 0),
+                    ),
+                    (
+                        "from the stored basis",
+                        stat_basis(&repository, root, &listed, Some(stored), clean_at),
+                    ),
+                ] {
+                    assert_eq!(
+                        check(stored, &now, clean_at),
+                        BasisCheck::Same,
+                        "{row}: {form}"
+                    );
+                }
+            }),
+            ("an unreadable directory under target/", |row| {
+                #[cfg(not(unix))]
+                let _ = row;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+
+                    let (directory, repository) = repository_ignoring();
+                    let root = directory.path();
+                    let unreadable = root.join("target/debug/incremental");
+                    fs::create_dir_all(&unreadable).unwrap();
+                    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+                    // A user who can read a mode-000 directory cannot make
+                    // this case.
+                    let readable = fs::read_dir(&unreadable).is_ok();
+
+                    let observation = observe_primary(&repository, root);
+
+                    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o755)).unwrap();
+                    if !readable {
+                        assert!(
+                            !touches(&observation, root, "target"),
+                            "{row}: {observation:#?}"
+                        );
+                    }
+                }
+            }),
+            ("an ignored, untracked document", |row| {
+                let (directory, repository) = repository_ignoring();
+                let root = directory.path();
+                fs::create_dir_all(root.join("docs")).unwrap();
+                fs::write(
+                    root.join("docs/ignored.md"),
+                    document_with_id("01ARZ3NDEKTSV4RRFFQ69G5FB1"),
+                )
+                .unwrap();
+
+                let observation = observe_primary(&repository, root);
+
+                assert!(!touches(&observation, root, "docs/ignored.md"), "{row}");
+                assert!(
+                    !holds_item(&observation, "01ARZ3NDEKTSV4RRFFQ69G5FB1"),
+                    "{row}"
+                );
+            }),
+            ("a tracked document an ignore pattern matches", |row| {
+                let (directory, repository) = repository_ignoring();
+                let root = directory.path();
+                fs::create_dir_all(root.join("docs")).unwrap();
+                fs::write(
+                    root.join("docs/forced.md"),
+                    document_with_id("01ARZ3NDEKTSV4RRFFQ69G5FB2"),
+                )
+                .unwrap();
+                // As `git add --force` adds it.
+                checkpoint(&repository, Path::new("docs/forced.md"), 20);
+
+                let observation = observe_primary(&repository, root);
+
+                assert!(
+                    holds_item(&observation, "01ARZ3NDEKTSV4RRFFQ69G5FB2"),
+                    "{row}"
+                );
+            }),
+            ("an ignored directory holding a tracked file", |row| {
+                let (directory, repository) = repository_ignoring();
+                let root = directory.path();
+                fs::create_dir_all(root.join("build")).unwrap();
+                fs::write(
+                    root.join("build/kept.md"),
+                    document_with_id("01ARZ3NDEKTSV4RRFFQ69G5FB3"),
+                )
+                .unwrap();
+                checkpoint(&repository, Path::new("build/kept.md"), 20);
+                fs::write(
+                    root.join("build/scratch.md"),
+                    document_with_id("01ARZ3NDEKTSV4RRFFQ69G5FB4"),
+                )
+                .unwrap();
+
+                let observation = observe_primary(&repository, root);
+
+                let read = |path: &str| {
+                    observation
+                        .sources
+                        .iter()
+                        .any(|(source, _)| source == Path::new(path))
+                };
+                assert!(read("build/kept.md"), "{row}: {:?}", observation.sources);
+                assert!(
+                    !read("build/scratch.md"),
+                    "{row}: {:?}",
+                    observation.sources
+                );
+                assert!(!touches(&observation, root, "build/scratch.md"), "{row}");
+            }),
+            (
+                "a pattern only in an item worktree's own .gitignore",
+                |row| {
+                    let (directory, repository) = repository_ignoring();
+                    let root = directory.path();
+                    let worktree = active_worktree(
+                        &repository,
+                        root,
+                        "document",
+                        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    );
+                    fs::create_dir_all(worktree.join("docs")).unwrap();
+                    fs::write(worktree.join("docs/document.md"), document_source()).unwrap();
+                    // A second copy of its document, which it ignores: were it
+                    // read, the duplicate would make the context invalid.
+                    fs::write(worktree.join("docs/copy.md"), document_source()).unwrap();
+                    let ignore = worktree.join(".gitignore");
+                    let rules = fs::read_to_string(&ignore).unwrap();
+                    fs::write(&ignore, format!("{rules}docs/copy.md\n")).unwrap();
+                    // The primary has no such rule, so it reads its own copy.md.
+                    fs::create_dir_all(root.join("docs")).unwrap();
+                    fs::write(
+                        root.join("docs/copy.md"),
+                        document_with_id("01ARZ3NDEKTSV4RRFFQ69G5FB5"),
+                    )
+                    .unwrap();
+                    let listed = list_contexts(&repository, root).unwrap();
+
+                    let item = observe_context(
+                        &repository,
+                        root,
+                        &listed[1],
+                        &mut PrimaryActivityMap::default(),
+                    );
+                    let primary = observe_primary(&repository, root);
+
+                    assert!(item.valid, "{row}: {:?}", item.problems);
+                    assert!(!touches(&item, &worktree, "docs/copy.md"), "{row}");
+                    assert!(holds_item(&primary, "01ARZ3NDEKTSV4RRFFQ69G5FB5"), "{row}");
+                },
+            ),
+            ("the worktree base is listed whatever ignores it", |row| {
+                let (directory, repository) = repository_ignoring();
+                let root = directory.path();
+                fs::write(
+                    repository.path().join("info/exclude"),
+                    ".manyhands/worktrees/\n",
+                )
+                .unwrap();
+                let worktree =
+                    active_worktree(&repository, root, "document", "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+                fs::create_dir_all(worktree.join("docs")).unwrap();
+                fs::write(worktree.join("docs/document.md"), document_source()).unwrap();
+
+                assert_eq!(
+                    list_contexts(&repository, root).unwrap(),
+                    [
+                        ListedContext::primary(root),
+                        ListedContext {
+                            key: ContextKey::Item("01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap()),
+                            worktree: worktree.clone(),
+                        },
+                    ],
+                    "{row}"
+                );
+                assert_eq!(
+                    observe_root(&repository, root).active_contexts.len(),
+                    1,
+                    "{row}"
+                );
+            }),
+        ];
+
+        for (row, assert_row) in rows {
+            assert_row(row);
+        }
     }
 
     #[test]
