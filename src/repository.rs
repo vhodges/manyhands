@@ -48,6 +48,8 @@ mod blocker;
 #[cfg(test)]
 mod comment_publication_tests;
 mod discovery;
+#[cfg(test)]
+mod git_fixtures;
 mod integration;
 pub mod keys;
 pub use blocker::{Blocker, Sleeper, WaitPolicy};

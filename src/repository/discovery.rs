@@ -1976,13 +1976,18 @@ mod tests {
     use std::os::unix::fs::symlink;
     use std::{fs, path::Path};
 
-    use git2::{Repository, RepositoryInitOptions, Signature, Time, WorktreeAddOptions};
+    use git2::{Repository, RepositoryInitOptions, Signature, Time};
     use time::OffsetDateTime;
 
     use super::*;
     use crate::{
         canonical,
-        repository::{DiscoveryActivitySource, DiscoveryContextKind, MAX_DOCUMENT_DIRECTORY_DEPTH},
+        repository::{
+            DiscoveryActivitySource, DiscoveryContextKind, MAX_DOCUMENT_DIRECTORY_DEPTH,
+            git_fixtures::{
+                active_worktree_at, checkpoint, checkpoint_reference, repository_on_main,
+            },
+        },
     };
 
     fn column_names(connection: &Connection, table: &str) -> Vec<String> {
@@ -2686,24 +2691,6 @@ mod tests {
         assert_eq!(count(&connection, "item_problems"), 0);
     }
 
-    fn repository_on_main() -> (tempfile::TempDir, Repository) {
-        let directory = tempfile::tempdir().unwrap();
-        let mut options = RepositoryInitOptions::new();
-        options.initial_head("main");
-        let repository = Repository::init_opts(directory.path(), &options).unwrap();
-        fs::write(directory.path().join("fixture.txt"), "fixture\n").unwrap();
-        let mut index = repository.index().unwrap();
-        index.add_path(Path::new("fixture.txt")).unwrap();
-        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
-        let signature = Signature::new("Test", "test@example.invalid", &Time::new(0, 0)).unwrap();
-        repository
-            .commit(Some("HEAD"), &signature, &signature, "Initial", &tree, &[])
-            .unwrap();
-        drop(tree);
-        index.write().unwrap();
-        (directory, repository)
-    }
-
     fn write_config(root: &Path, source: &str) {
         let path = root.join(canonical::CONFIG_PATH);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -2729,56 +2716,6 @@ mod tests {
         format!(
             "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: \"{id}\"\nitem_id: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\n{parent_id}created_at: {created_at}\n---\n"
         )
-    }
-
-    fn checkpoint(repository: &Repository, path: &Path, timestamp: i64) -> git2::Oid {
-        let mut index = repository.index().unwrap();
-        index.add_path(path).unwrap();
-        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
-        let parent = repository.head().unwrap().peel_to_commit().unwrap();
-        let signature =
-            Signature::new("Test", "test@example.invalid", &Time::new(timestamp, 0)).unwrap();
-        let oid = repository
-            .commit(
-                Some("HEAD"),
-                &signature,
-                &signature,
-                "Checkpoint",
-                &tree,
-                &[&parent],
-            )
-            .unwrap();
-        drop(tree);
-        index.write().unwrap();
-        oid
-    }
-
-    fn checkpoint_reference(
-        repository: &Repository,
-        path: &Path,
-        reference: &str,
-        parent: git2::Oid,
-        timestamp: i64,
-    ) -> git2::Oid {
-        let mut index = repository.index().unwrap();
-        index.add_path(path).unwrap();
-        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
-        let parent = repository.find_commit(parent).unwrap();
-        let signature =
-            Signature::new("Test", "test@example.invalid", &Time::new(timestamp, 0)).unwrap();
-        let oid = repository
-            .commit(
-                Some(reference),
-                &signature,
-                &signature,
-                "Side checkpoint",
-                &tree,
-                &[&parent],
-            )
-            .unwrap();
-        drop(tree);
-        index.write().unwrap();
-        oid
     }
 
     fn observed_document(observation: &RootObservation) -> &ObservedItem {
@@ -3119,29 +3056,6 @@ mod tests {
 
     fn active_worktree(repository: &Repository, root: &Path, kind: &str, item_id: &str) -> PathBuf {
         active_worktree_at(repository, root, kind, item_id, item_id)
-    }
-
-    fn active_worktree_at(
-        repository: &Repository,
-        root: &Path,
-        kind: &str,
-        branch_item_id: &str,
-        worktree_item_id: &str,
-    ) -> PathBuf {
-        let branch = format!("manyhands/{kind}/{branch_item_id}");
-        let head = repository.head().unwrap().peel_to_commit().unwrap();
-        let reference = repository
-            .branch(&branch, &head, false)
-            .unwrap()
-            .into_reference();
-        let worktree = root.join(".manyhands/worktrees").join(worktree_item_id);
-        fs::create_dir_all(worktree.parent().unwrap()).unwrap();
-        let mut options = WorktreeAddOptions::new();
-        options.reference(Some(&reference));
-        repository
-            .worktree(worktree_item_id, &worktree, Some(&options))
-            .unwrap();
-        worktree
     }
 
     #[test]
