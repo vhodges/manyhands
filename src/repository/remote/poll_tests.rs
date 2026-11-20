@@ -5810,3 +5810,166 @@ fn absent_target_is_classified_from_its_previous_evidence() {
         );
     }
 }
+
+/// Table B of the fast-writes design ("Table B: what a pending row holds")
+/// at a poll's guard (`require_no_pending_local`, poll.rs ~1674), through
+/// `poll_publication_remote`. Written before the behaviour and ignored
+/// until the design checkpoint (Task 3). The fixture's automatic poll still
+/// holds the reservation, so an explicit poll the guard lets through asks it
+/// to yield (`PollYielding`) before any transport; a held one is refused
+/// `recovery_required`. A whole-repository refresh, a poll and a rebuild wait
+/// for a row mid-write and for the rows of the whole repository, and go on
+/// past a row that owes only its hand-off.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_poll_s_guard_behind_each_pending_row() {
+    const X: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    const OID: &str = "0123456789abcdef0123456789abcdef01234567";
+    let ticket = format!("authoring-context-v1/ticket/{X}/Edit\0.manyhands/tickets/{X}/ticket.md");
+    /// A row of the table: (row, action, target, item, state, step, held).
+    type Seeded = (
+        &'static str,
+        &'static str,
+        String,
+        Option<&'static str>,
+        &'static str,
+        Option<&'static str>,
+        bool,
+    );
+    let rows: Vec<Seeded> = vec![
+        (
+            "R1/R2 mid-write",
+            "save_ticket",
+            ticket.clone(),
+            Some(X),
+            "authoring_destination_observed",
+            Some("authoring_destination_observed"),
+            true,
+        ),
+        (
+            "R3 owes only its hand-off (authoritative_observed)",
+            "save_ticket",
+            ticket.clone(),
+            Some(X),
+            "authoritative_observed",
+            Some("authoring_checkpoint_observed"),
+            false,
+        ),
+        (
+            "R3 owes only its hand-off (indexing)",
+            "save_ticket",
+            ticket.clone(),
+            Some(X),
+            "indexing",
+            Some("authoring_checkpoint_observed"),
+            false,
+        ),
+        (
+            "R3 owes only its hand-off (index_invalidated)",
+            "save_ticket",
+            ticket.clone(),
+            Some(X),
+            "index_invalidated",
+            Some("authoring_checkpoint_observed"),
+            false,
+        ),
+        (
+            "R3 owes only its hand-off (failed)",
+            "save_ticket",
+            ticket.clone(),
+            Some(X),
+            "failed",
+            Some("authoring_checkpoint_observed"),
+            false,
+        ),
+        (
+            "R4 a sync's hand-off",
+            "refresh",
+            format!("synchronization-index-v1/ticket/{X}/{OID}"),
+            Some(X),
+            "indexing",
+            Some("authoritative_observed"),
+            false,
+        ),
+        (
+            "R4/Q2 a primary sync's hand-off",
+            "refresh",
+            format!("synchronization-index-v1/primary/{OID}"),
+            None,
+            "indexing",
+            Some("authoritative_observed"),
+            false,
+        ),
+        (
+            "R3 a comment waiting for its registration",
+            "submit_comment",
+            format!(
+                "authoring-context-v1/ticket/{X}/Edit\0.manyhands/comments\001ARZ3NDEKTSV4RRFFQ69G5FCA"
+            ),
+            Some(X),
+            "completed",
+            Some("comment_registration_pending"),
+            false,
+        ),
+        (
+            "R5 a running whole-repository refresh",
+            "refresh",
+            String::new(),
+            None,
+            "indexing",
+            None,
+            true,
+        ),
+        (
+            "R6 a crashed whole-repository refresh",
+            "refresh",
+            String::new(),
+            None,
+            "failed",
+            None,
+            true,
+        ),
+        (
+            "R6 a rebuild",
+            "rebuild",
+            String::new(),
+            None,
+            "retry",
+            None,
+            true,
+        ),
+    ];
+    let mut session = crate::repository::keys::SessionCredentials::new(PanicCredentials);
+    let mut mismatches = Vec::new();
+    for (row, action, target, item, state, step, held) in rows {
+        let f = PollFixture::new();
+        let pending = crate::repository::OperationId::new();
+        f.db()
+            .execute(
+                "INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,item_id,state,completed_step,observed_at)
+                 SELECT id,root_path,?1,?2,?3,?4,?5,?6,1 FROM repositories",
+                params![pending.to_string(), action, target, item, state, step],
+            )
+            .unwrap();
+        let got = match f.local.service.poll_publication_remote(
+            poll_request(&f, RemotePollInvocation::Explicit),
+            &mut session,
+        ) {
+            Err(RemotePollError::PollYielding) => "proceeds".to_owned(),
+            Err(RemotePollError::Repository(e))
+                if e.kind == crate::repository::RepositoryErrorKind::RecoveryRequired
+                    && e.blocker().map(|b| b.operation_id) == Some(pending) =>
+            {
+                "held".to_owned()
+            }
+            other => format!("{other:?}"),
+        };
+        let expected = if held { "held" } else { "proceeds" };
+        if got != expected {
+            mismatches.push(format!(
+                "{row} | C3 a poll: expected {expected}, today {got}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}

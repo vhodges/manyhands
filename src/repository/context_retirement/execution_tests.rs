@@ -1707,3 +1707,369 @@ fn retirement_specfix_s3_active_observer_still_blocks_before_claim() {
         0
     );
 }
+
+// Table B of the fast-writes design ("Table B: what a pending row holds")
+// at the retirement's checks, written before the behaviour and ignored until
+// the design checkpoint (Task 3). A retirement waits for a row mid-write of
+// any item and for the rows of the whole repository; it goes on past a row
+// of another item that owes only its hand-off (a synchronization's hand-off
+// and its remote `index_pending` debt included), and is refused behind such
+// a row of its own item.
+
+/// Another item than the one the fixture retires.
+pub(super) const TABLE_B_OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FYA";
+
+/// A pending row of Table B, of the retired item or of another one.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum TableBRow {
+    /// No row: the control, which proceeds.
+    Nothing,
+    MidWrite,
+    Owing(&'static str),
+    /// A classified synchronization (remote row completed, `index_pending`)
+    /// and its index hand-off row (P-4).
+    SyncHandOff,
+    /// The same remote row before its hand-off row is written.
+    SyncIndexPendingOnly,
+    PrimaryHandOff,
+    RegisteringComment,
+    RunningRefresh,
+    CrashedRefresh,
+    Rebuild,
+}
+
+impl TableBRow {
+    pub(super) fn all() -> Vec<Self> {
+        vec![
+            Self::Nothing,
+            Self::MidWrite,
+            Self::Owing("authoritative_observed"),
+            Self::Owing("indexing"),
+            Self::Owing("index_invalidated"),
+            Self::Owing("failed"),
+            Self::SyncHandOff,
+            Self::SyncIndexPendingOnly,
+            Self::PrimaryHandOff,
+            Self::RegisteringComment,
+            Self::RunningRefresh,
+            Self::CrashedRefresh,
+            Self::Rebuild,
+        ]
+    }
+
+    /// Whether the row, of `item`, holds a retirement of `retired`
+    /// (`None`: a retirement pass, of no one item yet).
+    pub(super) fn holds_retirement(self, item: &str, retired: Option<&str>) -> bool {
+        let own = retired == Some(item);
+        match self {
+            Self::Nothing | Self::PrimaryHandOff => false,
+            Self::MidWrite | Self::RunningRefresh | Self::CrashedRefresh | Self::Rebuild => true,
+            Self::Owing(_)
+            | Self::SyncHandOff
+            | Self::SyncIndexPendingOnly
+            | Self::RegisteringComment => own,
+        }
+    }
+
+    /// Whether the row names an item: the rows of the primary and of the
+    /// whole repository do not.
+    pub(super) fn of_an_item(self) -> bool {
+        !matches!(
+            self,
+            Self::Nothing
+                | Self::PrimaryHandOff
+                | Self::RunningRefresh
+                | Self::CrashedRefresh
+                | Self::Rebuild
+        )
+    }
+
+    /// Whether the row has a remote half, which can be written only while no
+    /// reservation is held.
+    pub(super) fn is_remote_only(self) -> bool {
+        matches!(self, Self::SyncIndexPendingOnly)
+    }
+}
+
+/// A synchronization of `target` driven through its real checkpoints to a
+/// verified push and classified, as `assert_retirement_preserves_remote_debt`
+/// drives one: its remote row is completed and owes only its index hand-off.
+fn table_b_classified_sync(
+    service: &RepositoryService,
+    root: &Path,
+    target: &RemoteOperationTarget,
+) -> (OperationId, git2::Oid) {
+    use crate::repository::remote::{reservation::commit_observation_batch, state};
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let operation = OperationId::new();
+    let owner = match service
+        .reserve_remote_operation(root, operation, target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("fixture reservation: {other:?}"),
+    };
+    let oid = git2::Repository::open(root)
+        .unwrap()
+        .head()
+        .unwrap()
+        .target()
+        .unwrap();
+    service
+        .checkpoint_synchronization(
+            root,
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &state::SynchronizationEvidence::default(),
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root, &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let observation =
+        RemoteRefObservation::from_advertisement(&plan, "refs/heads/main", oid, Some(oid)).unwrap();
+    commit_observation_batch(service, root, &owner, &plan, &[observation], 1).unwrap();
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(oid),
+        local_oid: Some(oid),
+        tracking_oid: Some(oid),
+        primary_tracking_oid: Some(oid),
+        push_oid: Some(oid),
+        push_advertised_oid: Some(oid),
+    };
+    service
+        .checkpoint_synchronization(
+            root,
+            &owner,
+            state::SynchronizationCheckpoint::PushVerified,
+            &evidence,
+        )
+        .unwrap();
+    service
+        .classify_synchronization(
+            root,
+            &owner,
+            state::SynchronizationAuthority::AlreadyCurrent(oid),
+        )
+        .unwrap();
+    (operation, oid)
+}
+
+/// Writes `row`, of `item`, into the registry of the repository at `root`:
+/// with `remote`, the remote half of a synchronization's row through the
+/// real reservation (the publication remote's plan configured first); its
+/// local row by SQL. Without `remote`, a synchronization's hand-off row is
+/// written alone, under an ID of its own (a held reservation leaves no slot
+/// for its remote half). Returns the local row's operation, if any.
+pub(super) fn table_b_seed(
+    service: &RepositoryService,
+    root: &Path,
+    row: TableBRow,
+    item: &str,
+    remote: bool,
+) -> Option<OperationId> {
+    use crate::repository::remote::state;
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    if remote {
+        state::with_transaction(service, root, |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+    }
+    let sync = |target: RemoteOperationTarget| {
+        if remote {
+            table_b_classified_sync(service, root, &target)
+        } else {
+            (
+                OperationId::new(),
+                git2::Oid::from_str("0123456789abcdef0123456789abcdef01234567").unwrap(),
+            )
+        }
+    };
+    let context = || {
+        SynchronizationTarget::Context {
+            kind: AuthoringKind::Ticket,
+            item_id: item.parse().unwrap(),
+        }
+        .operation_target(&plan)
+    };
+    let ticket =
+        format!("authoring-context-v1/ticket/{item}/Edit\0.manyhands/tickets/{item}/ticket.md");
+    let (id, action, target, row_item, state, step) = match row {
+        TableBRow::Nothing => return None,
+        TableBRow::MidWrite => (
+            OperationId::new(),
+            "save_ticket",
+            ticket,
+            Some(item),
+            "authoring_destination_observed",
+            Some("authoring_destination_observed"),
+        ),
+        TableBRow::Owing(state) => (
+            OperationId::new(),
+            "save_ticket",
+            ticket,
+            Some(item),
+            state,
+            Some("authoring_checkpoint_observed"),
+        ),
+        TableBRow::SyncHandOff => {
+            let (id, oid) = sync(context());
+            (
+                id,
+                "refresh",
+                format!("synchronization-index-v1/ticket/{item}/{oid}"),
+                Some(item),
+                "indexing",
+                Some("authoritative_observed"),
+            )
+        }
+        TableBRow::SyncIndexPendingOnly => {
+            assert!(remote, "a remote half needs the reservation's slot");
+            sync(context());
+            return None;
+        }
+        TableBRow::PrimaryHandOff => {
+            let (id, oid) = sync(RemoteOperationTarget::for_primary_synchronization(&plan));
+            (
+                id,
+                "refresh",
+                format!("synchronization-index-v1/primary/{oid}"),
+                None,
+                "indexing",
+                Some("authoritative_observed"),
+            )
+        }
+        TableBRow::RegisteringComment => (
+            OperationId::new(),
+            "submit_comment",
+            format!(
+                "authoring-context-v1/ticket/{item}/Edit\0.manyhands/comments\001ARZ3NDEKTSV4RRFFQ69G5FCA"
+            ),
+            Some(item),
+            "completed",
+            Some("comment_registration_pending"),
+        ),
+        TableBRow::RunningRefresh => (
+            OperationId::new(),
+            "refresh",
+            String::new(),
+            None,
+            "indexing",
+            None,
+        ),
+        TableBRow::CrashedRefresh => (
+            OperationId::new(),
+            "refresh",
+            String::new(),
+            None,
+            "failed",
+            None,
+        ),
+        TableBRow::Rebuild => (
+            OperationId::new(),
+            "rebuild",
+            String::new(),
+            None,
+            "retry",
+            None,
+        ),
+    };
+    Connection::open(service.registry_path.clone())
+        .unwrap()
+        .execute(
+            "INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,item_id,state,completed_step,observed_at)
+             SELECT id,root_path,?1,?2,?3,?4,?5,?6,1 FROM repositories",
+            params![id.to_string(), action, target, row_item, state, step],
+        )
+        .unwrap();
+    Some(id)
+}
+
+/// The retirement of an initially absent context (`retire_context`):
+/// `require_no_pending_local` (execution.rs ~330) and the remote debt check
+/// after it (~334).
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_the_retirement_of_an_absent_context_behind_each_pending_row() {
+    let mut mismatches = Vec::new();
+    for row in TableBRow::all() {
+        for item in [ITEM, TABLE_B_OTHER] {
+            if item == ITEM && !row.of_an_item() {
+                continue;
+            }
+            let f = Fixture::new();
+            table_b_seed(&f.service, f.root.path(), row, item, true);
+            let request = RetireContextRequest {
+                root: f.root.path().into(),
+                kind: AuthoringKind::Ticket,
+                item_id: ITEM.parse().unwrap(),
+                operation_id: OperationId::new(),
+            };
+            let got = match f.service.retire_context(request.clone()) {
+                Ok(ContextRetirementOutcome::Final(report))
+                    if report.code == crate::results::ResultCode::AlreadyApplied =>
+                {
+                    "proceeds".to_owned()
+                }
+                Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired => {
+                    let claimed: i64 = f
+                        .db()
+                        .query_row(
+                            "SELECT count(*) FROM context_retirement_records WHERE operation_ulid=?1",
+                            [request.operation_id.to_string()],
+                            |r| r.get(0),
+                        )
+                        .unwrap();
+                    if claimed == 0 {
+                        "held".to_owned()
+                    } else {
+                        "claimed, then recovery_required".to_owned()
+                    }
+                }
+                other => format!("{other:?}"),
+            };
+            let expected = if row.holds_retirement(item, Some(ITEM)) {
+                "held"
+            } else {
+                "proceeds"
+            };
+            if got != expected {
+                let whose = if !row.of_an_item() {
+                    ""
+                } else if item == ITEM {
+                    " of its own item"
+                } else {
+                    " of another item"
+                };
+                mismatches.push(format!(
+                    "{row:?}{whose} | C4 the retirement: expected {expected}, today {got}"
+                ));
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// The blocking-debt question a poll's retirement pass asks before it
+/// retires anything (`pass.rs` `blocking_debt`, ~382, through
+/// `has_blocking_debt`). It is of no one item: a row that owes only its
+/// hand-off is not debt that blocks the pass; the per-candidate claim asks
+/// after its own item.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_retirement_pass_s_blocking_debt_behind_each_pending_row() {
+    let mut mismatches = Vec::new();
+    for row in TableBRow::all() {
+        let f = Fixture::new();
+        table_b_seed(&f.service, f.root.path(), row, TABLE_B_OTHER, true);
+        let got = super::pass::has_blocking_debt(&f.service, f.root.path()).unwrap();
+        let expected = row.holds_retirement(TABLE_B_OTHER, None);
+        if got != expected {
+            mismatches.push(format!(
+                "{row:?} | C4 a retirement pass: expected blocking {expected}, today {got}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}

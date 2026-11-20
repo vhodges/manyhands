@@ -4846,3 +4846,513 @@ fn the_abandon_evidence_says_what_the_newest_look_saw_and_nothing_older() {
         assert_eq!(last_look(newest, checkpoint, &evidence), said, "{case}");
     }
 }
+
+// Table B of the fast-writes design ("Table B: what a pending row holds"),
+// at the reservation's checks: the guard `require_no_pending_local` as a new
+// reservation (`reserve_remote_operation_kind`), a held reservation's next
+// write (`owned`) and each restart ask it. Written before the behaviour and
+// ignored until the design checkpoint (Task 3). A held call is refused
+// `recovery_required` naming the row; whether it would have waited first is
+// the caller's liveness judgement, after this check.
+
+/// The item the seeded rows are of: the branch `observation` advertises.
+const TABLE_B_X: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+/// Another item.
+const TABLE_B_Y: &str = "01ARZ3NDEKTSV4RRFFQ69G5FYA";
+/// The item a promotion or a closure is of.
+const TABLE_B_Z: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZA";
+
+/// A pending row of Table B, as each check meets it.
+#[derive(Clone, Copy, Debug)]
+enum TableBRow {
+    /// R1/R2: a save of X stopped before its commit was observed.
+    MidWrite,
+    /// R3: a save of X whose commit is observed, owing only its hand-off in
+    /// the state.
+    Owing(&'static str),
+    /// R4: a synchronization of X whose push landed and was classified (its
+    /// remote row completed with `index_pending`), and its index hand-off
+    /// row (P-4).
+    SyncHandOff,
+    /// R4: the same remote row, before its hand-off row is written: the
+    /// remote row whose only debt is `index_pending`.
+    SyncIndexPendingOnly,
+    /// R4, Owner question 2: the same for a synchronization of the primary.
+    PrimaryHandOff,
+    /// R3: a comment of X in `comment_registration_pending`.
+    RegisteringComment,
+    /// R5: a running whole-repository refresh.
+    RunningRefresh,
+    /// R6: a crashed whole-repository refresh, the row a close, a promotion
+    /// or a folder's creation indexes under.
+    CrashedRefresh,
+    /// R6: a rebuild.
+    Rebuild,
+}
+
+fn table_b_rows() -> Vec<TableBRow> {
+    use TableBRow::*;
+    vec![
+        MidWrite,
+        Owing("authoritative_observed"),
+        Owing("indexing"),
+        Owing("index_invalidated"),
+        Owing("failed"),
+        SyncHandOff,
+        SyncIndexPendingOnly,
+        PrimaryHandOff,
+        RegisteringComment,
+        RunningRefresh,
+        CrashedRefresh,
+        Rebuild,
+    ]
+}
+
+fn table_b_context_target(item: &str) -> RemoteOperationTarget {
+    crate::repository::SynchronizationTarget::Context {
+        kind: crate::repository::AuthoringKind::Ticket,
+        item_id: item.parse().unwrap(),
+    }
+    .operation_target(&plan())
+}
+
+/// A synchronization of `target` through its real checkpoints to a verified
+/// push, classified: its remote row is completed and owes only its index
+/// hand-off. Returns its operation and the commit it published.
+fn table_b_classified_sync(
+    service: &RepositoryService,
+    root: &Path,
+    target: &RemoteOperationTarget,
+) -> (OperationId, git2::Oid) {
+    let owner = match service
+        .reserve_remote_operation(root, OperationId::new(), target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    sync_push_prepared(service, root, &owner);
+    let mut evidence = sync_evidence();
+    evidence.push_advertised_oid = evidence.push_oid;
+    service
+        .checkpoint_synchronization(
+            root,
+            &owner,
+            state::SynchronizationCheckpoint::PushVerified,
+            &evidence,
+        )
+        .unwrap();
+    let oid = evidence.push_oid.unwrap();
+    service
+        .classify_synchronization(
+            root,
+            &owner,
+            state::SynchronizationAuthority::Published(oid),
+        )
+        .unwrap();
+    (owner.operation_id(), oid)
+}
+
+/// The remote half of `row`, written before any reservation the case makes:
+/// a classified synchronization, for the rows that have one.
+fn table_b_seed_remote(
+    service: &RepositoryService,
+    root: &Path,
+    row: TableBRow,
+) -> Option<(OperationId, git2::Oid)> {
+    match row {
+        TableBRow::SyncHandOff | TableBRow::SyncIndexPendingOnly => Some(table_b_classified_sync(
+            service,
+            root,
+            &table_b_context_target(TABLE_B_X),
+        )),
+        TableBRow::PrimaryHandOff => Some(table_b_classified_sync(service, root, &sync_target())),
+        _ => None,
+    }
+}
+
+/// The local row of `row`, written by SQL as the journal holds it. Returns
+/// the operation a refusal for it names: the row's, or for a remote row
+/// with no local row yet, the synchronization's.
+fn table_b_seed_local(
+    db: &Connection,
+    root: &Path,
+    row: TableBRow,
+    sync: Option<(OperationId, git2::Oid)>,
+) -> Option<OperationId> {
+    use TableBRow::*;
+    let ticket = format!(
+        "authoring-context-v1/ticket/{TABLE_B_X}/Edit\0.manyhands/tickets/{TABLE_B_X}/ticket.md"
+    );
+    let comment = format!(
+        "authoring-context-v1/ticket/{TABLE_B_X}/Edit\0.manyhands/comments\001ARZ3NDEKTSV4RRFFQ69G5FCA"
+    );
+    let (id, action, target, item, state, step) = match row {
+        MidWrite => (
+            OperationId::new(),
+            "save_ticket",
+            ticket,
+            Some(TABLE_B_X),
+            "authoring_destination_observed",
+            Some("authoring_destination_observed"),
+        ),
+        Owing(state) => (
+            OperationId::new(),
+            "save_ticket",
+            ticket,
+            Some(TABLE_B_X),
+            state,
+            Some("authoring_checkpoint_observed"),
+        ),
+        SyncHandOff => {
+            let (id, oid) = sync.unwrap();
+            (
+                id,
+                "refresh",
+                format!("synchronization-index-v1/ticket/{TABLE_B_X}/{oid}"),
+                Some(TABLE_B_X),
+                "indexing",
+                Some("authoritative_observed"),
+            )
+        }
+        PrimaryHandOff => {
+            let (id, oid) = sync.unwrap();
+            (
+                id,
+                "refresh",
+                format!("synchronization-index-v1/primary/{oid}"),
+                None,
+                "indexing",
+                Some("authoritative_observed"),
+            )
+        }
+        // A refusal for it names the synchronization.
+        SyncIndexPendingOnly => return sync.map(|(id, _)| id),
+        RegisteringComment => (
+            OperationId::new(),
+            "submit_comment",
+            comment,
+            Some(TABLE_B_X),
+            "completed",
+            Some("comment_registration_pending"),
+        ),
+        RunningRefresh => (
+            OperationId::new(),
+            "refresh",
+            String::new(),
+            None,
+            "indexing",
+            None,
+        ),
+        CrashedRefresh => (
+            OperationId::new(),
+            "refresh",
+            String::new(),
+            None,
+            "failed",
+            None,
+        ),
+        Rebuild => (
+            OperationId::new(),
+            "rebuild",
+            String::new(),
+            None,
+            "retry",
+            None,
+        ),
+    };
+    db.execute(
+        "INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,item_id,state,completed_step,observed_at)
+         VALUES(1,?1,?2,?3,?4,?5,?6,?7,1)",
+        params![root.to_str().unwrap(), id.to_string(), action, target, item, state, step],
+    )
+    .unwrap();
+    Some(id)
+}
+
+/// How a reservation's check answered.
+#[derive(Debug, PartialEq, Eq)]
+enum TableBAnswer {
+    /// It went on: reserved, or at a write, continued.
+    Proceeds,
+    /// Refused `recovery_required`, naming the row (`None`: no row).
+    Held(Option<OperationId>),
+    /// Anything else.
+    Other(String),
+}
+
+fn table_b_answer<T: std::fmt::Debug>(
+    result: Result<T, RepositoryError>,
+    proceeds: impl Fn(&T) -> bool,
+) -> TableBAnswer {
+    match result {
+        Ok(outcome) if proceeds(&outcome) => TableBAnswer::Proceeds,
+        Ok(outcome) => TableBAnswer::Other(format!("{outcome:?}")),
+        Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired => {
+            TableBAnswer::Held(error.blocker().map(|blocker| blocker.operation_id))
+        }
+        Err(error) => TableBAnswer::Other(format!("{:?}", error.kind)),
+    }
+}
+
+/// What Table B answers for `row` against a call of `scope`: `Some(true)`
+/// when the row holds it. A call's scope is the item it is of (`None`: the
+/// primary) and whether it is of the whole repository (a poll; a close or a
+/// promotion, which also write the primary).
+fn table_b_holds(row: TableBRow, own: Option<&str>, repository_wide: bool) -> bool {
+    use TableBRow::*;
+    let of_x = own == Some(TABLE_B_X);
+    match row {
+        MidWrite => of_x || repository_wide,
+        Owing(_) | SyncHandOff | SyncIndexPendingOnly | RegisteringComment => of_x,
+        PrimaryHandOff => own.is_none(),
+        RunningRefresh | CrashedRefresh | Rebuild => true,
+    }
+}
+
+fn table_b_expected(
+    row: TableBRow,
+    own: Option<&str>,
+    wide: bool,
+    named: Option<OperationId>,
+) -> TableBAnswer {
+    if table_b_holds(row, own, wide) {
+        TableBAnswer::Held(named)
+    } else {
+        TableBAnswer::Proceeds
+    }
+}
+
+/// The calls a new reservation is made for: (name, target, the item it is
+/// of, `None` for the primary, and whether it is of the whole repository).
+fn table_b_reservations() -> Vec<(
+    &'static str,
+    RemoteOperationTarget,
+    Option<&'static str>,
+    bool,
+)> {
+    vec![
+        (
+            "a sync of X",
+            table_b_context_target(TABLE_B_X),
+            Some(TABLE_B_X),
+            false,
+        ),
+        (
+            "a sync of Y",
+            table_b_context_target(TABLE_B_Y),
+            Some(TABLE_B_Y),
+            false,
+        ),
+        ("a sync of the primary", sync_target(), None, false),
+        (
+            "a poll",
+            RemoteOperationTarget::for_poll(&plan()),
+            Some(""),
+            true,
+        ),
+        (
+            "a promotion of Z",
+            RemoteOperationTarget::for_context(
+                &plan(),
+                RemoteOperationAction::Promote,
+                crate::repository::AuthoringKind::Document,
+                TABLE_B_Z.parse().unwrap(),
+            )
+            .unwrap(),
+            None,
+            true,
+        ),
+        (
+            "a close of Z",
+            RemoteOperationTarget::for_context(
+                &plan(),
+                RemoteOperationAction::Close,
+                crate::repository::AuthoringKind::Ticket,
+                TABLE_B_Z.parse().unwrap(),
+            )
+            .unwrap(),
+            None,
+            true,
+        ),
+    ]
+}
+
+/// `reserve_remote_operation_kind` (reservation.rs ~1557): a new reservation
+/// of a synchronization, a poll, a promotion or a close behind each row.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_new_reservation_behind_each_pending_row() {
+    let mut mismatches = Vec::new();
+    for row in table_b_rows() {
+        for (call, target, own, wide) in table_b_reservations() {
+            let (data, root, service) = fixture();
+            let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+            let sync = table_b_seed_remote(&service, root.path(), row);
+            let named = table_b_seed_local(&db, root.path(), row, sync);
+            let got = table_b_answer(
+                service.reserve_remote_operation(root.path(), OperationId::new(), &target),
+                |outcome| matches!(outcome, RemoteReservationOutcome::Reserved(_)),
+            );
+            let expected = table_b_expected(row, own, wide, named);
+            if got != expected {
+                mismatches.push(format!(
+                    "{row:?} | {call}: expected {expected:?}, today {got:?}"
+                ));
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// `owned` (reservation.rs ~317): the next write of a synchronization of
+/// another item that held its reservation before the row was written. (A row
+/// of the synchronization's own item, or any row while a poll holds the
+/// reservation, cannot begin: the local begin refuses it.)
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_held_reservation_s_next_write_behind_each_pending_row() {
+    let mut mismatches = Vec::new();
+    for row in table_b_rows() {
+        let (data, root, service) = fixture();
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let sync = table_b_seed_remote(&service, root.path(), row);
+        let owner = match service
+            .reserve_remote_operation(
+                root.path(),
+                OperationId::new(),
+                &table_b_context_target(TABLE_B_Y),
+            )
+            .unwrap()
+        {
+            RemoteReservationOutcome::Reserved(owner) => owner,
+            other => panic!("{other:?}"),
+        };
+        let named = table_b_seed_local(&db, root.path(), row, sync);
+        // A synchronization's first write after its reservation.
+        let got = table_b_answer(
+            service.checkpoint_synchronization(
+                root.path(),
+                &owner,
+                state::SynchronizationCheckpoint::FetchPrepared,
+                &state::SynchronizationEvidence::default(),
+            ),
+            |outcome| *outcome == RemoteSafePointOutcome::Continue,
+        );
+        let expected = table_b_expected(row, Some(TABLE_B_Y), false, named);
+        if got != expected {
+            mismatches.push(format!(
+                "{row:?} | the next write of a sync of Y: expected {expected:?}, today {got:?}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// A restart of an interrupted reservation behind each row: a
+/// synchronization's (`restart_synchronization_guarded`, ~3153), a poll's
+/// (`restart_remote_operation_kind`, ~1970) and a promotion's
+/// (`restart_remote_lifecycle`, ~1308).
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_restart_behind_each_pending_row() {
+    #[derive(Clone, Copy)]
+    enum Restart {
+        Sync,
+        Poll,
+        Promotion,
+    }
+    let calls: Vec<(&str, Restart, RemoteOperationTarget, Option<&str>, bool)> = vec![
+        (
+            "the restart of a sync of X",
+            Restart::Sync,
+            table_b_context_target(TABLE_B_X),
+            Some(TABLE_B_X),
+            false,
+        ),
+        (
+            "the restart of a sync of Y",
+            Restart::Sync,
+            table_b_context_target(TABLE_B_Y),
+            Some(TABLE_B_Y),
+            false,
+        ),
+        (
+            "the restart of a sync of the primary",
+            Restart::Sync,
+            sync_target(),
+            None,
+            false,
+        ),
+        (
+            "the restart of a poll",
+            Restart::Poll,
+            RemoteOperationTarget::for_poll(&plan()),
+            Some(""),
+            true,
+        ),
+        (
+            "the restart of a promotion of Z",
+            Restart::Promotion,
+            RemoteOperationTarget::for_context(
+                &plan(),
+                RemoteOperationAction::Promote,
+                crate::repository::AuthoringKind::Document,
+                TABLE_B_Z.parse().unwrap(),
+            )
+            .unwrap(),
+            None,
+            true,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for row in table_b_rows() {
+        for (call, restart, target, own, wide) in &calls {
+            // A row of X cannot stand while X's own sync is restarted from
+            // a classified one: that sync replays.
+            if matches!(
+                row,
+                TableBRow::SyncHandOff | TableBRow::SyncIndexPendingOnly
+            ) && *own == Some(TABLE_B_X)
+            {
+                continue;
+            }
+            let (data, root, service) = fixture();
+            let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+            let sync = table_b_seed_remote(&service, root.path(), row);
+            let operation = OperationId::new();
+            match service
+                .reserve_remote_operation(root.path(), operation, target)
+                .unwrap()
+            {
+                RemoteReservationOutcome::Reserved(_) => {}
+                other => panic!("{other:?}"),
+            }
+            db.execute(
+                "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+                [operation.to_string()],
+            )
+            .unwrap();
+            let named = table_b_seed_local(&db, root.path(), row, sync);
+            let result = match restart {
+                Restart::Sync => {
+                    service.restart_remote_synchronization(root.path(), operation, target)
+                }
+                Restart::Poll => service.restart_remote_observation(root.path(), operation, target),
+                Restart::Promotion => {
+                    service.restart_remote_promotion(root.path(), operation, target)
+                }
+            };
+            let got = table_b_answer(result, |outcome| {
+                matches!(outcome, RemoteReservationOutcome::Reserved(_))
+            });
+            let expected = table_b_expected(row, *own, *wide, named);
+            if got != expected {
+                mismatches.push(format!(
+                    "{row:?} | {call}: expected {expected:?}, today {got:?}"
+                ));
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
